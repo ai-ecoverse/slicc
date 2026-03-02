@@ -456,7 +456,7 @@ async function main() {
         const preview = String(data).slice(0, 200);
         console.log(`[cdp-proxy] Chrome→Client: ${preview}`);
         if (activeClientWs && activeClientWs.readyState === WebSocket.OPEN) {
-          activeClientWs.send(data);
+          activeClientWs.send(String(data));
         }
       });
 
