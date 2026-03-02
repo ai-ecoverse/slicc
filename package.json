@@ -1,0 +1,34 @@
+{
+  "name": "browser-coding-agent",
+  "version": "0.1.0",
+  "description": "Browser-based coding agent with thin CLI server",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run build:ui && npm run build:cli",
+    "build:ui": "vite build",
+    "build:cli": "tsc -p tsconfig.cli.json",
+    "start": "node dist/cli/index.js",
+    "typecheck": "tsc --noEmit -p tsconfig.cli.json && tsc --noEmit -p tsconfig.json",
+    "dev:full": "npx tsx src/cli/index.ts --dev",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "express": "^4.21.2",
+    "just-bash": "2.11.6",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.13.0",
+    "@types/ws": "^8.5.14",
+    "fake-indexeddb": "6.2.5",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0",
+    "vitest": "4.0.18"
+  }
+}

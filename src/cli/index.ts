@@ -348,6 +348,16 @@ async function main() {
     // For non-/cdp paths, do nothing — let Vite handle HMR upgrades
   });
 
+  // ---------------------------------------------------------------------------
+  // Shared CDP proxy state — Chrome's browser-level debugger URL only accepts
+  // ONE concurrent WebSocket connection. We keep a single chromeWs and swap
+  // out the active client when a new one connects.
+  // ---------------------------------------------------------------------------
+  let cdpUrl: string | null = null;
+  let chromeWs: WebSocket | null = null;
+  let activeClientWs: WebSocket | null = null;
+  let messageBuffer: unknown[] | null = null;
+
   // Ensure everything is cleaned up when CLI exits
   let shuttingDown = false;
   const gracefulShutdown = async () => {
@@ -355,7 +365,15 @@ async function main() {
     shuttingDown = true;
     console.log('\nShutting down...');
 
-    // Close all WebSocket proxy connections
+    // Close the shared Chrome WebSocket and all client connections
+    if (chromeWs) {
+      try { chromeWs.close(); } catch { /* ignore */ }
+      chromeWs = null;
+    }
+    if (activeClientWs) {
+      try { activeClientWs.close(); } catch { /* ignore */ }
+      activeClientWs = null;
+    }
     for (const client of wss.clients) {
       client.close();
     }
@@ -408,8 +426,52 @@ async function main() {
     }
   });
 
-  // Wait for CDP to be ready before accepting proxy connections
-  let cdpUrl: string | null = null;
+  function ensureChromeConnection(url: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (chromeWs && chromeWs.readyState === WebSocket.OPEN) {
+        resolve();
+        return;
+      }
+      // Clean up old connection
+      if (chromeWs) {
+        try { chromeWs.close(); } catch { /* ignore */ }
+      }
+
+      messageBuffer = [];
+      chromeWs = new WebSocket(url);
+
+      chromeWs.on('open', () => {
+        console.log('[cdp-proxy] chromeWs open');
+        // Flush buffered messages
+        if (messageBuffer) {
+          for (const msg of messageBuffer) {
+            chromeWs!.send(String(msg));
+          }
+          messageBuffer = null;
+        }
+        resolve();
+      });
+
+      chromeWs.on('message', (data) => {
+        const preview = String(data).slice(0, 200);
+        console.log(`[cdp-proxy] Chrome→Client: ${preview}`);
+        if (activeClientWs && activeClientWs.readyState === WebSocket.OPEN) {
+          activeClientWs.send(data);
+        }
+      });
+
+      chromeWs.on('close', (code, reason) => {
+        console.log(`[cdp-proxy] Chrome WS closed. code=${code}, reason=${String(reason)}`);
+        chromeWs = null;
+      });
+
+      chromeWs.on('error', (err) => {
+        console.log(`[cdp-proxy] Chrome WS error: ${err}`);
+        chromeWs = null;
+        reject(err);
+      });
+    });
+  }
 
   wss.on('connection', async (clientWs) => {
     try {
@@ -418,68 +480,48 @@ async function main() {
         console.log(`[cdp-proxy] CDP available at: ${cdpUrl}`);
       }
 
-      console.log(`[cdp-proxy] Client connected. cdpUrl=${cdpUrl}, existing chromeWs=none (creating new)`);
+      // Close previous client connection — only one client active at a time
+      if (activeClientWs && activeClientWs.readyState === WebSocket.OPEN) {
+        console.log('[cdp-proxy] Closing previous client connection');
+        activeClientWs.close();
+      }
+      activeClientWs = clientWs;
 
-      // Connect to Chrome's CDP WebSocket
-      const chromeWs = new WebSocket(cdpUrl);
+      console.log('[cdp-proxy] New client connected');
 
-      console.log(`[cdp-proxy] Opening chromeWs to ${cdpUrl}, readyState=${chromeWs.readyState}`);
-
-      // Buffer messages from the client while chromeWs is still connecting.
-      // Once connected, messageBuffer is set to null to switch to direct relay.
-      let messageBuffer: unknown[] | null = [];
-
-      chromeWs.on('open', () => {
-        const bufferedCount = messageBuffer ? messageBuffer.length : 0;
-        console.log(`[cdp-proxy] chromeWs open. readyState=${chromeWs.readyState}, flushing ${bufferedCount} buffered messages`);
-        // Flush all buffered messages
-        if (messageBuffer) {
-          for (const msg of messageBuffer) {
-            chromeWs.send(msg as Parameters<typeof chromeWs.send>[0]);
-          }
-          messageBuffer = null;
-        }
-      });
-
-      // Relay messages in both directions
+      // Register message handler BEFORE connecting to Chrome,
+      // so messages that arrive during connection are buffered
       clientWs.on('message', (data) => {
         const preview = String(data).slice(0, 200);
-        if (messageBuffer !== null) {
+        if (chromeWs && chromeWs.readyState === WebSocket.OPEN) {
+          console.log(`[cdp-proxy] Client→Chrome: ${preview}`);
+          chromeWs.send(String(data));
+        } else if (messageBuffer !== null) {
           messageBuffer.push(data);
-          console.log(`[cdp-proxy] Client→Chrome (buffered, bufLen=${messageBuffer.length}): ${preview}`);
+          console.log(`[cdp-proxy] Client→Chrome (buffered): ${preview}`);
         } else {
-          console.log(`[cdp-proxy] Client→Chrome (direct, chromeWs.readyState=${chromeWs.readyState}): ${preview}`);
-          chromeWs.send(data);
+          // Chrome not connected and no buffer — this shouldn't happen but log it
+          console.log(`[cdp-proxy] Client→Chrome (DROPPED — no connection): ${preview}`);
         }
       });
 
-      chromeWs.on('message', (data) => {
-        const preview = String(data).slice(0, 200);
-        console.log(`[cdp-proxy] Chrome→Client (clientWs.readyState=${clientWs.readyState}): ${preview}`);
-        if (clientWs.readyState === WebSocket.OPEN) {
-          clientWs.send(data);
-        }
-      });
-
-      // Handle disconnections
       clientWs.on('close', () => {
-        console.log(`[cdp-proxy] Client WS closed. chromeWs.readyState=${chromeWs.readyState}`);
-        chromeWs.close();
-      });
-
-      chromeWs.on('close', (code, reason) => {
-        console.log(`[cdp-proxy] Chrome WS closed. code=${code}, reason=${String(reason)}, clientWs.readyState=${clientWs.readyState}`);
-        clientWs.close();
+        console.log('[cdp-proxy] Client disconnected');
+        if (activeClientWs === clientWs) {
+          activeClientWs = null;
+        }
+        // Don't close chromeWs — keep it alive for the next client
       });
 
       clientWs.on('error', (err) => {
         console.log(`[cdp-proxy] Client WS error: ${err}`);
-        chromeWs.close();
+        if (activeClientWs === clientWs) {
+          activeClientWs = null;
+        }
       });
-      chromeWs.on('error', (err) => {
-        console.log(`[cdp-proxy] Chrome WS error: ${err}, readyState=${chromeWs.readyState}`);
-        clientWs.close();
-      });
+
+      // NOW connect to Chrome — messages arriving during this await are buffered
+      await ensureChromeConnection(cdpUrl);
     } catch (err) {
       console.error('[cdp-proxy] Connection error:', err);
       clientWs.close();

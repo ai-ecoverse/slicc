@@ -80,6 +80,7 @@ function toAnthropicMessages(messages: LlmContext['messages']): Anthropic.Messag
     } else if (msg.role === 'assistant') {
       const blocks: Anthropic.ContentBlockParam[] = msg.content
         .filter((c) => c.type === 'text' || c.type === 'toolCall')
+        .filter((c) => !(c.type === 'text' && !(c as any).text))
         .map((c) => {
           if (c.type === 'text') return { type: 'text' as const, text: c.text };
           if (c.type === 'toolCall') {
@@ -167,214 +168,250 @@ export function createAnthropicStreamFn(opts: {
 
         log.debug('API request', { model, messageCount: messages.length, toolCount: tools?.length ?? 0, hasSystemPrompt: !!context.systemPrompt });
 
-        const sdkStream = client.messages.stream(
-          {
-            model,
-            max_tokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
-            system: context.systemPrompt ?? undefined,
-            temperature: opts.temperature ?? 0,
-            messages,
-            tools: tools && tools.length > 0 ? tools : undefined,
-          },
-          { signal: options.signal },
-        );
+        // Retry loop for overloaded errors (status 529)
+        const MAX_RETRIES = 3;
+        const RETRY_DELAYS = [1000, 2000, 4000];
 
-        // Build partial AssistantMessage as we receive events
-        const contentBlocks: (TextContent | ThinkingContent | ToolCall)[] = [];
-        const usage = emptyUsage();
-        let currentBlockIndex = -1;
-        // Track partial tool call JSON for streaming
-        const partialToolJson = new Map<number, string>();
+        for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+          try {
+            const sdkStream = client.messages.stream(
+              {
+                model,
+                max_tokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
+                system: context.systemPrompt ?? undefined,
+                temperature: opts.temperature ?? 0,
+                messages,
+                tools: tools && tools.length > 0 ? tools : undefined,
+              },
+              { signal: options.signal },
+            );
 
-        const makePartial = (): AssistantMessage => ({
-          role: 'assistant',
-          content: [...contentBlocks],
-          api: 'anthropic-messages',
-          provider: 'anthropic',
-          model,
-          usage: { ...usage, cost: { ...usage.cost } },
-          stopReason: 'stop',
-          timestamp: Date.now(),
-        });
+            // Build partial AssistantMessage as we receive events
+            const contentBlocks: (TextContent | ThinkingContent | ToolCall)[] = [];
+            const usage = emptyUsage();
+            let currentBlockIndex = -1;
+            // Track partial tool call JSON for streaming
+            const partialToolJson = new Map<number, string>();
 
-        // Process raw SSE events via streamEvent for correct ordering.
-        // The high-level callbacks (on('contentBlock'), on('text')) fire in
-        // wrong order: 'contentBlock' fires on content_block_stop (after
-        // the block finishes) while 'text' fires during content_block_delta
-        // (before contentBlock). Using streamEvent gives us events in the
-        // correct SSE order.
-        let startEmitted = false;
+            const makePartial = (): AssistantMessage => ({
+              role: 'assistant',
+              content: [...contentBlocks],
+              api: 'anthropic-messages',
+              provider: 'anthropic',
+              model,
+              usage: { ...usage, cost: { ...usage.cost } },
+              stopReason: 'stop',
+              timestamp: Date.now(),
+            });
 
-        sdkStream.on('streamEvent', (event: { type: string; [key: string]: any }) => {
-          // Emit 'start' on the very first event
-          if (!startEmitted) {
-            startEmitted = true;
-            stream.push({ type: 'start', partial: makePartial() });
-          }
+            // Process raw SSE events via streamEvent for correct ordering.
+            // The high-level callbacks (on('contentBlock'), on('text')) fire in
+            // wrong order: 'contentBlock' fires on content_block_stop (after
+            // the block finishes) while 'text' fires during content_block_delta
+            // (before contentBlock). Using streamEvent gives us events in the
+            // correct SSE order.
+            let startEmitted = false;
 
-          switch (event.type) {
-            case 'content_block_start': {
-              currentBlockIndex++;
-              const block = event.content_block as { type: string; id?: string; name?: string };
-              log.debug('Content block', { type: block.type, index: currentBlockIndex });
+            sdkStream.on('streamEvent', (event: { type: string; [key: string]: any }) => {
+              // Emit 'start' on the very first event
+              if (!startEmitted) {
+                startEmitted = true;
+                stream.push({ type: 'start', partial: makePartial() });
+              }
+
+              switch (event.type) {
+                case 'content_block_start': {
+                  currentBlockIndex++;
+                  const block = event.content_block as { type: string; id?: string; name?: string };
+                  log.debug('Content block', { type: block.type, index: currentBlockIndex });
+                  if (block.type === 'text') {
+                    contentBlocks.push({ type: 'text', text: '' });
+                    stream.push({
+                      type: 'text_start',
+                      contentIndex: currentBlockIndex,
+                      partial: makePartial(),
+                    });
+                  } else if (block.type === 'tool_use') {
+                    contentBlocks.push({
+                      type: 'toolCall',
+                      id: (block as any).id ?? '',
+                      name: (block as any).name ?? '',
+                      arguments: {},
+                    });
+                    partialToolJson.set(currentBlockIndex, '');
+                    stream.push({
+                      type: 'toolcall_start',
+                      contentIndex: currentBlockIndex,
+                      partial: makePartial(),
+                    });
+                  } else if (block.type === 'thinking') {
+                    contentBlocks.push({ type: 'thinking', thinking: '' });
+                    stream.push({
+                      type: 'thinking_start',
+                      contentIndex: currentBlockIndex,
+                      partial: makePartial(),
+                    });
+                  }
+                  break;
+                }
+
+                case 'content_block_delta': {
+                  const delta = event.delta as { type: string; text?: string; partial_json?: string; thinking?: string };
+                  if (delta.type === 'text_delta' && delta.text !== undefined) {
+                    const idx = contentBlocks.findLastIndex((b: any) => b.type === 'text');
+                    if (idx >= 0) {
+                      (contentBlocks[idx] as any).text += delta.text;
+                      stream.push({
+                        type: 'text_delta',
+                        contentIndex: idx,
+                        delta: delta.text,
+                        partial: makePartial(),
+                      });
+                    }
+                  } else if (delta.type === 'input_json_delta' && delta.partial_json !== undefined) {
+                    const idx = contentBlocks.findLastIndex((b: any) => b.type === 'toolCall');
+                    if (idx >= 0) {
+                      const existing = partialToolJson.get(idx) ?? '';
+                      partialToolJson.set(idx, existing + delta.partial_json);
+                      stream.push({
+                        type: 'toolcall_delta',
+                        contentIndex: idx,
+                        delta: delta.partial_json,
+                        partial: makePartial(),
+                      });
+                    }
+                  } else if (delta.type === 'thinking_delta' && delta.thinking !== undefined) {
+                    const idx = contentBlocks.findLastIndex((b: any) => b.type === 'thinking');
+                    if (idx >= 0) {
+                      (contentBlocks[idx] as any).thinking += delta.thinking;
+                      stream.push({
+                        type: 'thinking_delta',
+                        contentIndex: idx,
+                        delta: delta.thinking,
+                        partial: makePartial(),
+                      });
+                    }
+                  }
+                  break;
+                }
+
+                // content_block_stop, message_start, message_stop, message_delta
+                // are handled by finalMessage() below — no action needed here
+              }
+            });
+
+            // Wait for final message
+            const finalMessage = await sdkStream.finalMessage();
+            if (!startEmitted) {
+              startEmitted = true;
+              stream.push({ type: 'start', partial: makePartial() });
+            }
+
+            // Build the final AssistantMessage
+            const finalContent: (TextContent | ThinkingContent | ToolCall)[] = [];
+            for (const block of finalMessage.content) {
               if (block.type === 'text') {
-                contentBlocks.push({ type: 'text', text: '' });
-                stream.push({
-                  type: 'text_start',
-                  contentIndex: currentBlockIndex,
-                  partial: makePartial(),
-                });
+                finalContent.push({ type: 'text', text: block.text });
               } else if (block.type === 'tool_use') {
-                contentBlocks.push({
+                finalContent.push({
                   type: 'toolCall',
-                  id: (block as any).id ?? '',
-                  name: (block as any).name ?? '',
-                  arguments: {},
-                });
-                partialToolJson.set(currentBlockIndex, '');
-                stream.push({
-                  type: 'toolcall_start',
-                  contentIndex: currentBlockIndex,
-                  partial: makePartial(),
+                  id: block.id,
+                  name: block.name,
+                  arguments: block.input as Record<string, any>,
                 });
               } else if (block.type === 'thinking') {
-                contentBlocks.push({ type: 'thinking', thinking: '' });
+                finalContent.push({ type: 'thinking', thinking: block.thinking });
+              }
+            }
+
+            const finalUsage: Usage = {
+              input: finalMessage.usage?.input_tokens ?? 0,
+              output: finalMessage.usage?.output_tokens ?? 0,
+              cacheRead: (finalMessage.usage as any)?.cache_read_input_tokens ?? 0,
+              cacheWrite: (finalMessage.usage as any)?.cache_creation_input_tokens ?? 0,
+              totalTokens: (finalMessage.usage?.input_tokens ?? 0) + (finalMessage.usage?.output_tokens ?? 0),
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            };
+
+            const hasToolUse = finalContent.some((c) => c.type === 'toolCall');
+            const stopReason: 'stop' | 'length' | 'toolUse' =
+              finalMessage.stop_reason === 'tool_use' || hasToolUse
+                ? 'toolUse'
+                : finalMessage.stop_reason === 'max_tokens'
+                  ? 'length'
+                  : 'stop';
+
+            const result: AssistantMessage = {
+              role: 'assistant',
+              content: finalContent,
+              api: 'anthropic-messages',
+              provider: 'anthropic',
+              model,
+              usage: finalUsage,
+              stopReason,
+              timestamp: Date.now(),
+            };
+
+            // Emit end events for any remaining content blocks
+            for (let i = 0; i < finalContent.length; i++) {
+              const block = finalContent[i];
+              if (block.type === 'text') {
                 stream.push({
-                  type: 'thinking_start',
-                  contentIndex: currentBlockIndex,
-                  partial: makePartial(),
+                  type: 'text_end',
+                  contentIndex: i,
+                  content: block.text,
+                  partial: result,
+                });
+              } else if (block.type === 'toolCall') {
+                stream.push({
+                  type: 'toolcall_end',
+                  contentIndex: i,
+                  toolCall: block,
+                  partial: result,
+                });
+              } else if (block.type === 'thinking') {
+                stream.push({
+                  type: 'thinking_end',
+                  contentIndex: i,
+                  content: block.thinking,
+                  partial: result,
                 });
               }
-              break;
             }
 
-            case 'content_block_delta': {
-              const delta = event.delta as { type: string; text?: string; partial_json?: string; thinking?: string };
-              if (delta.type === 'text_delta' && delta.text !== undefined) {
-                const idx = contentBlocks.findLastIndex((b: any) => b.type === 'text');
-                if (idx >= 0) {
-                  (contentBlocks[idx] as any).text += delta.text;
-                  stream.push({
-                    type: 'text_delta',
-                    contentIndex: idx,
-                    delta: delta.text,
-                    partial: makePartial(),
-                  });
-                }
-              } else if (delta.type === 'input_json_delta' && delta.partial_json !== undefined) {
-                const idx = contentBlocks.findLastIndex((b: any) => b.type === 'toolCall');
-                if (idx >= 0) {
-                  const existing = partialToolJson.get(idx) ?? '';
-                  partialToolJson.set(idx, existing + delta.partial_json);
-                  stream.push({
-                    type: 'toolcall_delta',
-                    contentIndex: idx,
-                    delta: delta.partial_json,
-                    partial: makePartial(),
-                  });
-                }
-              } else if (delta.type === 'thinking_delta' && delta.thinking !== undefined) {
-                const idx = contentBlocks.findLastIndex((b: any) => b.type === 'thinking');
-                if (idx >= 0) {
-                  (contentBlocks[idx] as any).thinking += delta.thinking;
-                  stream.push({
-                    type: 'thinking_delta',
-                    contentIndex: idx,
-                    delta: delta.thinking,
-                    partial: makePartial(),
-                  });
-                }
-              }
-              break;
+            log.info('API response', { model, stopReason, usage: { input: finalUsage.input, output: finalUsage.output, cacheRead: finalUsage.cacheRead }, contentBlocks: finalContent.length });
+
+            stream.push({ type: 'done', reason: stopReason, message: result });
+            break; // Success — exit retry loop
+          } catch (retryError: any) {
+            const isOverloaded = retryError?.status === 529 ||
+              retryError?.error?.type === 'overloaded_error' ||
+              (retryError?.message && retryError.message.includes('Overloaded'));
+
+            if (isOverloaded && attempt < MAX_RETRIES) {
+              log.warn('API overloaded, retrying', { attempt: attempt + 1, maxRetries: MAX_RETRIES });
+              stream.push({
+                type: 'text_delta',
+                contentIndex: 0,
+                delta: `\n[Retrying due to API overload... attempt ${attempt + 2}/${MAX_RETRIES + 1}]\n`,
+                partial: {
+                  role: 'assistant',
+                  content: [{ type: 'text', text: '' }],
+                  api: 'anthropic-messages',
+                  provider: 'anthropic',
+                  model,
+                  usage: emptyUsage(),
+                  stopReason: 'stop',
+                  timestamp: Date.now(),
+                },
+              });
+              await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[attempt]));
+              continue;
             }
-
-            // content_block_stop, message_start, message_stop, message_delta
-            // are handled by finalMessage() below — no action needed here
-          }
-        });
-
-        // Wait for final message
-        const finalMessage = await sdkStream.finalMessage();
-        if (!startEmitted) {
-          startEmitted = true;
-          stream.push({ type: 'start', partial: makePartial() });
-        }
-
-        // Build the final AssistantMessage
-        const finalContent: (TextContent | ThinkingContent | ToolCall)[] = [];
-        for (const block of finalMessage.content) {
-          if (block.type === 'text') {
-            finalContent.push({ type: 'text', text: block.text });
-          } else if (block.type === 'tool_use') {
-            finalContent.push({
-              type: 'toolCall',
-              id: block.id,
-              name: block.name,
-              arguments: block.input as Record<string, any>,
-            });
-          } else if (block.type === 'thinking') {
-            finalContent.push({ type: 'thinking', thinking: block.thinking });
+            // Not overloaded or out of retries — rethrow to outer catch
+            throw retryError;
           }
         }
-
-        const finalUsage: Usage = {
-          input: finalMessage.usage?.input_tokens ?? 0,
-          output: finalMessage.usage?.output_tokens ?? 0,
-          cacheRead: (finalMessage.usage as any)?.cache_read_input_tokens ?? 0,
-          cacheWrite: (finalMessage.usage as any)?.cache_creation_input_tokens ?? 0,
-          totalTokens: (finalMessage.usage?.input_tokens ?? 0) + (finalMessage.usage?.output_tokens ?? 0),
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        };
-
-        const hasToolUse = finalContent.some((c) => c.type === 'toolCall');
-        const stopReason: 'stop' | 'length' | 'toolUse' =
-          finalMessage.stop_reason === 'tool_use' || hasToolUse
-            ? 'toolUse'
-            : finalMessage.stop_reason === 'max_tokens'
-              ? 'length'
-              : 'stop';
-
-        const result: AssistantMessage = {
-          role: 'assistant',
-          content: finalContent,
-          api: 'anthropic-messages',
-          provider: 'anthropic',
-          model,
-          usage: finalUsage,
-          stopReason,
-          timestamp: Date.now(),
-        };
-
-        // Emit end events for any remaining content blocks
-        for (let i = 0; i < finalContent.length; i++) {
-          const block = finalContent[i];
-          if (block.type === 'text') {
-            stream.push({
-              type: 'text_end',
-              contentIndex: i,
-              content: block.text,
-              partial: result,
-            });
-          } else if (block.type === 'toolCall') {
-            stream.push({
-              type: 'toolcall_end',
-              contentIndex: i,
-              toolCall: block,
-              partial: result,
-            });
-          } else if (block.type === 'thinking') {
-            stream.push({
-              type: 'thinking_end',
-              contentIndex: i,
-              content: block.thinking,
-              partial: result,
-            });
-          }
-        }
-
-        log.info('API response', { model, stopReason, usage: { input: finalUsage.input, output: finalUsage.output, cacheRead: finalUsage.cacheRead }, contentBlocks: finalContent.length });
-
-        stream.push({ type: 'done', reason: stopReason, message: result });
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
         const isAborted = errorMessage.includes('aborted') ||
@@ -384,7 +421,7 @@ export function createAnthropicStreamFn(opts: {
 
         const errorResult: AssistantMessage = {
           role: 'assistant',
-          content: [{ type: 'text', text: '' }],
+          content: [{ type: 'text', text: `[Error: ${errorMessage}]` }],
           api: 'anthropic-messages',
           provider: 'anthropic',
           model: options.model || DEFAULT_MODEL,
