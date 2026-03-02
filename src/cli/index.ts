@@ -475,11 +475,6 @@ async function main() {
 
   wss.on('connection', async (clientWs) => {
     try {
-      if (!cdpUrl) {
-        cdpUrl = await waitForCDP(CDP_PORT);
-        console.log(`[cdp-proxy] CDP available at: ${cdpUrl}`);
-      }
-
       // Close previous client connection — only one client active at a time
       if (activeClientWs && activeClientWs.readyState === WebSocket.OPEN) {
         console.log('[cdp-proxy] Closing previous client connection');
@@ -489,11 +484,16 @@ async function main() {
 
       console.log('[cdp-proxy] New client connected');
 
-      // Register message handler BEFORE connecting to Chrome,
-      // so messages that arrive during connection are buffered
+      // Initialize buffer BEFORE any await so messages arriving during
+      // waitForCDP or ensureChromeConnection are captured, not dropped.
+      if (messageBuffer === null) {
+        messageBuffer = [];
+      }
+
+      // Register ALL handlers BEFORE any async work so no messages are lost
       clientWs.on('message', (data) => {
         const preview = String(data).slice(0, 200);
-        if (chromeWs && chromeWs.readyState === WebSocket.OPEN) {
+        if (chromeWs && chromeWs.readyState === WebSocket.OPEN && messageBuffer === null) {
           console.log(`[cdp-proxy] Client→Chrome: ${preview}`);
           chromeWs.send(String(data));
         } else if (messageBuffer !== null) {
@@ -520,7 +520,12 @@ async function main() {
         }
       });
 
-      // NOW connect to Chrome — messages arriving during this await are buffered
+      // NOW do async work — messages arriving during these awaits are buffered
+      if (!cdpUrl) {
+        cdpUrl = await waitForCDP(CDP_PORT);
+        console.log(`[cdp-proxy] CDP available at: ${cdpUrl}`);
+      }
+
       await ensureChromeConnection(cdpUrl);
     } catch (err) {
       console.error('[cdp-proxy] Connection error:', err);
