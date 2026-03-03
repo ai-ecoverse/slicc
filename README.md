@@ -48,9 +48,9 @@ The ultimate recursive dev tool.
 
 slicc is a dual-process system: a thin CLI server and a rich browser application.
 
-**CLI Server** (Node.js/Express) — launches a headless Chrome instance, establishes a CDP (Chrome DevTools Protocol) WebSocket proxy, and serves the UI assets.
+**CLI Server** (Node.js/Express) — launches a headless Chrome instance, establishes a CDP (Chrome DevTools Protocol) WebSocket proxy, provides a CORS proxy for LLM API calls, and serves the UI assets.
 
-**Browser App** (Vite/TypeScript) — the agent loop, tool execution, chat UI, integrated terminal, and embedded browser preview all run client-side.
+**Browser App** (Vite/TypeScript) — the agent loop (powered by [pi-mono](https://github.com/badlogic/pi-mono)), tool execution, chat UI, integrated terminal, and embedded browser preview all run client-side.
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -70,7 +70,7 @@ slicc is a dual-process system: a thin CLI server and a rich browser application
                │ WebSocket (CDP proxy)
 ┌──────────────▼──────────────────────────────────────┐
 │           CLI Server (Node.js/Express)               │
-│  Chrome launcher  ·  CDP proxy  ·  Static server     │
+│  Chrome launcher  ·  CDP proxy  ·  CORS proxy  ·  Static server  │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -80,7 +80,7 @@ Source layout:
 |-----------|---------|
 | `src/cli/` | CLI server — Chrome launch, CDP proxy, Express |
 | `src/ui/` | Browser UI — chat, terminal, browser panels |
-| `src/core/` | Agent loop and message handling |
+| `src/core/` | Agent types, tool registry, session management (core loop provided by pi-mono) |
 | `src/tools/` | Tool implementations (file ops, search, browser) |
 | `src/fs/` | Virtual filesystem (OPFS/IndexedDB) |
 | `src/shell/` | WebAssembly Bash shell integration |
@@ -104,7 +104,8 @@ The `dev:full` command starts both the CLI server and Vite dev server, launches 
 
 | Dependency | Role |
 |-----------|------|
-| [@anthropic-ai/sdk](https://github.com/anthropics/anthropic-sdk-typescript) | Claude API client |
+| [@mariozechner/pi-agent-core](https://github.com/badlogic/pi-mono) | Agent loop, tool execution, event system |
+| [@mariozechner/pi-ai](https://github.com/badlogic/pi-mono) | Unified LLM API (Anthropic provider) |
 | [express](https://expressjs.com/) | CLI server framework |
 | [just-bash](https://github.com/nicolo-ribaudo/just-bash) | WebAssembly Bash shell |
 | [ws](https://github.com/websockets/ws) | WebSocket for CDP proxy |
