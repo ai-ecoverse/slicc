@@ -4,7 +4,8 @@
  * Allows the agent to resume conversations across page reloads.
  */
 
-import type { AgentMessage, SessionData } from './types.js';
+import type { AgentMessage } from '@mariozechner/pi-agent-core';
+import type { SessionData } from './types.js';
 
 const DB_NAME = 'agent-sessions';
 const DB_VERSION = 1;

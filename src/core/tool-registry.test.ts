@@ -46,15 +46,11 @@ describe('ToolRegistry', () => {
     expect(registry.unregister('x')).toBe(false);
   });
 
-  it('converts to Anthropic tool format', () => {
+  it('converts to array', () => {
     registry.register(makeTool('my_tool'));
-    const tools = registry.toAnthropicTools();
+    const tools = registry.toArray();
     expect(tools).toHaveLength(1);
-    expect(tools[0]).toEqual({
-      name: 'my_tool',
-      description: 'Test tool: my_tool',
-      input_schema: { type: 'object', properties: { x: { type: 'string' } } },
-    });
+    expect(tools[0].name).toBe('my_tool');
   });
 
   it('executes a tool successfully', async () => {

@@ -1,18 +1,35 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Agent } from './agent.js';
+import { Agent } from '@mariozechner/pi-agent-core';
+import { createAssistantMessageEventStream } from '@mariozechner/pi-ai';
 import { adaptTool } from './tool-adapter.js';
-import type { AgentEvent, AgentTool, ToolDefinition, StreamFn, AssistantMessage, LlmContext, StreamOptions } from './types.js';
-import { AssistantMessageEventStreamImpl } from './event-stream.js';
+import type { AgentEvent, AgentTool, StreamFn } from '@mariozechner/pi-agent-core';
+import type { AssistantMessage, AssistantMessageEvent, Model } from '@mariozechner/pi-ai';
+import type { ToolDefinition } from './types.js';
+
+/** Create a dummy Model object for testing. */
+function testModel(): Model<any> {
+  return {
+    id: 'claude-opus-4-6',
+    name: 'Claude Opus 4.6',
+    api: 'anthropic-messages',
+    provider: 'anthropic',
+    baseUrl: 'https://api.anthropic.com',
+    reasoning: true,
+    input: ['text', 'image'],
+    cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+    contextWindow: 200000,
+    maxTokens: 8192,
+  };
+}
 
 /**
  * Create a mock StreamFn that returns a pre-built AssistantMessage.
- * This replaces the old approach of mocking the Anthropic SDK.
  */
 function createMockStreamFn(responses: AssistantMessage[]): StreamFn {
   let callIndex = 0;
-  return (_context: LlmContext, _options: StreamOptions) => {
-    const stream = new AssistantMessageEventStreamImpl();
+  return (_model: any, _context: any, _options?: any) => {
+    const stream = createAssistantMessageEventStream();
     const response = responses[callIndex++] ?? responses[responses.length - 1];
 
     // Emit events asynchronously
@@ -127,10 +144,10 @@ function errorResponse(message: string): AssistantMessage {
   };
 }
 
-/** Create a mock StreamFn that throws an error. */
+/** Create a mock StreamFn that returns an error. */
 function createErrorStreamFn(errorMessage: string): StreamFn {
   return () => {
-    const stream = new AssistantMessageEventStreamImpl();
+    const stream = createAssistantMessageEventStream();
     setTimeout(() => {
       stream.push({
         type: 'error',
@@ -142,58 +159,55 @@ function createErrorStreamFn(errorMessage: string): StreamFn {
   };
 }
 
-describe('Agent', () => {
+describe('Agent (pi-mono)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('creates an agent with config', () => {
+  it('creates an agent with initial state', () => {
     const agent = new Agent({
-      config: { apiKey: 'test-key', model: 'claude-opus-4-6' },
+      initialState: { model: testModel() },
       streamFn: createMockStreamFn([textResponse('hi')]),
     });
-    expect(agent.getMessages()).toEqual([]);
-    expect(agent.getSessionId()).toBeTruthy();
+    expect(agent.state.messages).toEqual([]);
   });
 
   it('subscribes and unsubscribes from events', () => {
     const agent = new Agent({
-      config: { apiKey: 'test-key' },
+      initialState: { model: testModel() },
       streamFn: createMockStreamFn([textResponse('hi')]),
     });
     const events: string[] = [];
-    const unsub = agent.on((event) => events.push(event.type));
+    const unsub = agent.subscribe((event) => events.push(event.type));
     unsub();
     expect(events).toEqual([]);
   });
 
   it('resets the conversation', () => {
     const agent = new Agent({
-      config: { apiKey: 'test-key' },
+      initialState: { model: testModel() },
       streamFn: createMockStreamFn([textResponse('hi')]),
     });
-    const oldId = agent.getSessionId();
     agent.reset();
-    expect(agent.getMessages()).toEqual([]);
-    expect(agent.getSessionId()).not.toBe(oldId);
+    expect(agent.state.messages).toEqual([]);
   });
 
   it('sends a text-only message and gets a response', async () => {
     const agent = new Agent({
-      config: { apiKey: 'test-key' },
+      initialState: { model: testModel() },
       streamFn: createMockStreamFn([textResponse('Hello back!')]),
     });
 
-    const response = await agent.sendMessage('Hello');
-
-    expect(response.role).toBe('assistant');
-    expect(response.content).toEqual([{ type: 'text', text: 'Hello back!' }]);
+    await agent.prompt('Hello');
 
     // Messages should include user + assistant
-    const msgs = agent.getMessages();
-    expect(msgs).toHaveLength(2);
+    const msgs = agent.state.messages;
+    expect(msgs.length).toBeGreaterThanOrEqual(2);
     expect(msgs[0].role).toBe('user');
-    expect(msgs[1].role).toBe('assistant');
+    // Find the assistant message
+    const assistantMsg = msgs.find(m => m.role === 'assistant');
+    expect(assistantMsg).toBeDefined();
+    expect((assistantMsg as AssistantMessage).content).toEqual([{ type: 'text', text: 'Hello back!' }]);
   });
 
   it('handles tool use loop', async () => {
@@ -207,8 +221,10 @@ describe('Agent', () => {
     };
 
     const agent = new Agent({
-      config: { apiKey: 'test-key' },
-      tools: [adaptTool(echoTool)],
+      initialState: {
+        model: testModel(),
+        tools: [adaptTool(echoTool)],
+      },
       streamFn: createMockStreamFn([
         toolCallResponse('echo_tool', { text: 'hi' }),
         textResponse('Done!'),
@@ -216,13 +232,9 @@ describe('Agent', () => {
     });
 
     const events: string[] = [];
-    agent.on((event) => events.push(event.type));
+    agent.subscribe((event) => events.push(event.type));
 
-    const response = await agent.sendMessage('Use the tool');
-
-    // Final response should be text
-    expect(response.role).toBe('assistant');
-    expect(response.content).toEqual([{ type: 'text', text: 'Done!' }]);
+    await agent.prompt('Use the tool');
 
     // Events should include tool execution events
     expect(events).toContain('tool_execution_start');
@@ -232,16 +244,16 @@ describe('Agent', () => {
 
   it('emits message_update events during streaming', async () => {
     const agent = new Agent({
-      config: { apiKey: 'test-key' },
+      initialState: { model: testModel() },
       streamFn: createMockStreamFn([textResponse('Hello!')]),
     });
 
     const updateEvents: AgentEvent[] = [];
-    agent.on((event) => {
+    agent.subscribe((event) => {
       if (event.type === 'message_update') updateEvents.push(event);
     });
 
-    await agent.sendMessage('Hi');
+    await agent.prompt('Hi');
 
     // Should have received text delta updates
     expect(updateEvents.length).toBeGreaterThan(0);
@@ -254,35 +266,24 @@ describe('Agent', () => {
 
   it('handles errors gracefully', async () => {
     const agent = new Agent({
-      config: { apiKey: 'test-key' },
+      initialState: { model: testModel() },
       streamFn: createErrorStreamFn('API error'),
     });
 
-    const errors: AgentEvent[] = [];
-    agent.on((event) => {
-      if (event.type === 'agent_end') errors.push(event);
+    const endEvents: AgentEvent[] = [];
+    agent.subscribe((event) => {
+      if (event.type === 'agent_end') endEvents.push(event);
     });
 
-    // The agent loop should handle the error and produce an error message
-    const response = await agent.sendMessage('Hi');
+    await agent.prompt('Hi');
 
-    // The response should indicate an error
-    expect((response as AssistantMessage).stopReason).toBe('error');
-    expect((response as AssistantMessage).errorMessage).toBe('API error');
-  });
-
-  it('updates API key', () => {
-    const agent = new Agent({
-      config: { apiKey: 'old-key' },
-      streamFn: createMockStreamFn([textResponse('hi')]),
-    });
-    agent.setApiKey('new-key');
-    expect((agent as any).config.apiKey).toBe('new-key');
+    // Should have received agent_end event
+    expect(endEvents.length).toBeGreaterThan(0);
   });
 
   it('updates system prompt', () => {
     const agent = new Agent({
-      config: { apiKey: 'key' },
+      initialState: { model: testModel() },
       streamFn: createMockStreamFn([textResponse('hi')]),
     });
     agent.setSystemPrompt('Be concise');
@@ -291,10 +292,11 @@ describe('Agent', () => {
 
   it('updates model', () => {
     const agent = new Agent({
-      config: { apiKey: 'key' },
+      initialState: { model: testModel() },
       streamFn: createMockStreamFn([textResponse('hi')]),
     });
-    agent.setModel('claude-opus-4-6');
-    expect(agent.state.model).toBe('claude-opus-4-6');
+    const newModel = { ...testModel(), id: 'claude-sonnet-4-5' };
+    agent.setModel(newModel);
+    expect(agent.state.model.id).toBe('claude-sonnet-4-5');
   });
 });

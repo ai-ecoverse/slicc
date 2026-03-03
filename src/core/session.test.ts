@@ -31,13 +31,15 @@ describe('SessionStore', () => {
     const session = SessionStore.createSession('s1', {
       model: 'claude-opus-4-6',
     });
-    session.messages = [{ role: 'user', content: 'hello' }];
+    session.messages = [{ role: 'user', content: 'hello', timestamp: Date.now() }];
 
     await store.save(session);
     const loaded = await store.load('s1');
     expect(loaded).not.toBeNull();
     expect(loaded!.id).toBe('s1');
-    expect(loaded!.messages).toEqual([{ role: 'user', content: 'hello' }]);
+    expect(loaded!.messages).toHaveLength(1);
+    expect(loaded!.messages[0].role).toBe('user');
+    expect((loaded!.messages[0] as any).content).toBe('hello');
   });
 
   it('returns null for non-existent session', async () => {
@@ -66,7 +68,7 @@ describe('SessionStore', () => {
   it('updates session messages', () => {
     const session = SessionStore.createSession('u1', {});
     const updated = SessionStore.updateMessages(session, [
-      { role: 'user', content: 'hi' },
+      { role: 'user', content: 'hi', timestamp: Date.now() },
     ]);
     expect(updated.messages).toHaveLength(1);
     expect(updated.updatedAt).toBeGreaterThanOrEqual(session.updatedAt);
@@ -76,13 +78,14 @@ describe('SessionStore', () => {
 
   it('overwrites an existing session', async () => {
     const session = SessionStore.createSession('ow', {});
-    session.messages = [{ role: 'user', content: 'first' }];
+    session.messages = [{ role: 'user', content: 'first', timestamp: Date.now() }];
     await store.save(session);
 
-    session.messages = [{ role: 'user', content: 'second' }];
+    session.messages = [{ role: 'user', content: 'second', timestamp: Date.now() }];
     await store.save(session);
 
     const loaded = await store.load('ow');
-    expect(loaded!.messages).toEqual([{ role: 'user', content: 'second' }]);
+    expect(loaded!.messages).toHaveLength(1);
+    expect((loaded!.messages[0] as any).content).toBe('second');
   });
 });

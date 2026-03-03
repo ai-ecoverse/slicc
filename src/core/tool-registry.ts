@@ -1,11 +1,9 @@
 /**
  * Tool registry — registers tools and dispatches tool calls.
  *
- * Converts internal ToolDefinition format to the Anthropic API's Tool format
- * and dispatches tool execution when the LLM requests a tool call.
+ * Manages ToolDefinition objects and dispatches tool execution by name.
  */
 
-import type Anthropic from '@anthropic-ai/sdk';
 import type { ToolDefinition, ToolResult } from './types.js';
 
 export class ToolRegistry {
@@ -46,13 +44,9 @@ export class ToolRegistry {
     return Array.from(this.tools.keys());
   }
 
-  /** Convert all registered tools to the Anthropic API format. */
-  toAnthropicTools(): Anthropic.Tool[] {
-    return Array.from(this.tools.values()).map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      input_schema: tool.inputSchema,
-    }));
+  /** Get all registered tools as an array. */
+  toArray(): ToolDefinition[] {
+    return Array.from(this.tools.values());
   }
 
   /**

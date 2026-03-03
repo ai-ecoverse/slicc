@@ -1,4 +1,5 @@
 import { createServer } from 'http';
+import https from 'https';
 import { spawn, type ChildProcess } from 'child_process';
 import { existsSync } from 'fs';
 import { join, resolve } from 'path';
@@ -305,6 +306,77 @@ async function main() {
   // 3. Set up express app with request logging
   const app = express();
   app.use(requestLogger);
+
+  // ---------------------------------------------------------------------------
+  // CORS proxy — forwards /cors/:hostname/* to https://<hostname>/<path>
+  // ---------------------------------------------------------------------------
+  app.all('/cors/:hostname/*', (req: Request, res: Response) => {
+    // Handle CORS preflight
+    if (req.method === 'OPTIONS') {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', '*');
+      res.setHeader('Access-Control-Allow-Headers', '*');
+      res.setHeader('Access-Control-Max-Age', '86400');
+      res.status(204).end();
+      return;
+    }
+
+    const hostname = req.params.hostname as string;
+    // Express puts the wildcard remainder in params[0]
+    const remainingPath = (req.params as Record<string, string>)[0] || '';
+    // Preserve the original query string
+    const queryString = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+
+    // Build outgoing headers from the incoming request, removing hop-by-hop headers
+    const outgoingHeaders: Record<string, string> = {};
+    for (const [key, value] of Object.entries(req.headers)) {
+      const lower = key.toLowerCase();
+      if (lower === 'host' || lower === 'connection') continue;
+      if (typeof value === 'string') {
+        outgoingHeaders[key] = value;
+      } else if (Array.isArray(value)) {
+        outgoingHeaders[key] = value.join(', ');
+      }
+    }
+
+    const options: https.RequestOptions = {
+      hostname,
+      port: 443,
+      path: `/${remainingPath}${queryString}`,
+      method: req.method,
+      headers: outgoingHeaders,
+    };
+
+    const proxyReq = https.request(options, (proxyRes) => {
+      // Add CORS headers so the browser accepts the response
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', '*');
+      res.setHeader('Access-Control-Allow-Headers', '*');
+      res.setHeader('Access-Control-Expose-Headers', '*');
+
+      // Forward upstream response headers
+      for (const [key, value] of Object.entries(proxyRes.headers)) {
+        if (value !== undefined) {
+          res.setHeader(key, value as string | string[]);
+        }
+      }
+
+      res.statusCode = proxyRes.statusCode ?? 200;
+
+      // Stream the response body directly — supports SSE and chunked transfer
+      proxyRes.pipe(res);
+    });
+
+    proxyReq.on('error', (err) => {
+      console.error(`[cors-proxy] Error proxying to https://${hostname}/${remainingPath}:`, err.message);
+      if (!res.headersSent) {
+        res.status(502).json({ error: 'Proxy error', message: err.message });
+      }
+    });
+
+    // Pipe the incoming request body to the proxy request (for POST/PUT/etc.)
+    req.pipe(proxyReq);
+  });
 
   // Create the HTTP server BEFORE Vite so we can register our upgrade handler first
   const server = createServer(app);
