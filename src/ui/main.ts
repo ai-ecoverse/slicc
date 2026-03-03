@@ -9,12 +9,24 @@
 import { Layout } from './layout.js';
 import { getApiKey, showApiKeyDialog } from './api-key-dialog.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent } from './types.js';
-import { Agent, adaptTools, createLogger } from '../core/index.js';
-import type { AgentEvent as CoreAgentEvent, AssistantMessage, AssistantMessageEvent, TextContent, ToolCall } from '../core/index.js';
+import { Agent, adaptTools, createLogger, getModel } from '../core/index.js';
+import type { AgentEvent as CoreAgentEvent, AssistantMessage, AssistantMessageEvent, TextContent, Model } from '../core/index.js';
 import { createFileTools, createBashTool, createBrowserTool, createSearchTools } from '../tools/index.js';
 import { BrowserAPI } from '../cdp/index.js';
 
 const log = createLogger('main');
+
+const DEFAULT_MODEL_ID = 'claude-opus-4-6';
+
+/** Resolve a model ID string to a pi-ai Model object. */
+function resolveModel(modelId: string): Model<any> {
+  try {
+    return getModel('anthropic', modelId as any);
+  } catch {
+    // Fallback to default if the model ID isn't in the registry
+    return getModel('anthropic', DEFAULT_MODEL_ID as any);
+  }
+}
 
 /**
  * Adapt pi-style AgentEvent stream to UI AgentEvent stream.
@@ -183,15 +195,25 @@ async function main(): Promise<void> {
   log.info('Tools ready', tools.map((t) => t.name));
 
   // Create the pi-style agent
-  const selectedModel = localStorage.getItem('selected-model') || 'claude-opus-4-6';
+  const selectedModelId = localStorage.getItem('selected-model') || DEFAULT_MODEL_ID;
+  const model = resolveModel(selectedModelId);
+
   const agent = new Agent({
-    config: { apiKey, model: selectedModel },
-    tools,
+    initialState: {
+      model,
+      tools,
+      systemPrompt: `You are a helpful coding assistant running in a browser-based development environment.
+You have access to a virtual filesystem, a shell, and browser automation tools.
+Use the tools available to help the user with their tasks.`,
+    },
+    getApiKey: () => apiKey,
   });
   log.info('Agent created');
 
   // Wire model picker changes to agent
-  layout.onModelChange = (model) => agent.setModel(model);
+  layout.onModelChange = (modelId) => {
+    agent.setModel(resolveModel(modelId));
+  };
 
   // Build the real AgentHandle that bridges agent core ↔ chat UI
   const eventListeners = new Set<(event: UIAgentEvent) => void>();
@@ -209,13 +231,13 @@ async function main(): Promise<void> {
 
   // Wire the event adapter: pi agent events → UI events
   const adapter = createEventAdapter(emitToUI);
-  agent.on(adapter);
+  agent.subscribe(adapter);
 
   const agentHandle: AgentHandle = {
     sendMessage(text: string): void {
-      // Fire-and-forget: the UI's sendMessage is void, but Agent's is async.
+      // Fire-and-forget: the UI's sendMessage is void, but Agent's prompt is async.
       // Errors are communicated via the event system.
-      agent.sendMessage(text).catch((err) => {
+      agent.prompt(text).catch((err) => {
         const message = err instanceof Error ? err.message : String(err);
         emitToUI({ type: 'error', error: message });
       });

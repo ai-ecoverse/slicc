@@ -1,50 +1,53 @@
-export { Agent } from './agent.js';
-export type { AgentOptions } from './agent.js';
-export { SessionStore } from './session.js';
-export { EventStream, AssistantMessageEventStreamImpl } from './event-stream.js';
-export { agentLoop, agentLoopContinue } from './agent-loop.js';
-export { createAnthropicStreamFn } from './stream.js';
-export { adaptTool, adaptTools } from './tool-adapter.js';
-export { ToolRegistry } from './tool-registry.js';
-export { createLogger, setLogLevel, getLogLevel, LogLevel } from './logger.js';
-export type { Logger } from './logger.js';
+// Re-export from pi-mono packages
+export { Agent } from '@mariozechner/pi-agent-core';
+export type { AgentOptions } from '@mariozechner/pi-agent-core';
+export { agentLoop, agentLoopContinue } from '@mariozechner/pi-agent-core';
 export type {
-  // Content types
+  AgentTool,
+  AgentToolResult,
+  AgentToolUpdateCallback,
+  AgentContext,
+  AgentState,
+  AgentEvent,
+  AgentLoopConfig,
+  AgentMessage,
+  StreamFn,
+  ThinkingLevel,
+} from '@mariozechner/pi-agent-core';
+
+export { EventStream, stream, streamSimple, getModel, getModels, getProviders } from '@mariozechner/pi-ai';
+export type {
   TextContent,
   ThinkingContent,
   ImageContent,
   ToolCall,
-  // Message types
   UserMessage,
   AssistantMessage,
   ToolResultMessage,
   Message,
-  AgentMessage,
   StopReason,
   Usage,
-  // Tool types
-  ToolInputSchema,
   Tool,
-  AgentTool,
-  AgentToolResult,
-  AgentToolUpdateCallback,
-  // Context types
-  AgentContext,
-  LlmContext,
-  // State
-  AgentState,
-  // Events
+  Context,
   AssistantMessageEvent,
-  AgentEvent,
-  AgentEventListener,
-  // Config
-  AgentLoopConfig,
-  StreamFn,
-  StreamOptions,
   AssistantMessageEventStream,
+  Model,
+  StreamOptions,
+  SimpleStreamOptions,
+} from '@mariozechner/pi-ai';
+
+// Local utilities
+export { SessionStore } from './session.js';
+export { adaptTool, adaptTools } from './tool-adapter.js';
+export { ToolRegistry } from './tool-registry.js';
+export { createLogger, setLogLevel, getLogLevel, LogLevel } from './logger.js';
+export type { Logger } from './logger.js';
+
+// Local types
+export type {
   AgentConfig,
   SessionData,
-  // Legacy compat
   ToolDefinition,
   ToolResult,
+  ToolInputSchema,
 } from './types.js';
