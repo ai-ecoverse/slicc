@@ -17,6 +17,13 @@ export default defineConfig(({ mode }) => ({
       // Alias to empty stubs so the bundled JS never tries to fetch them.
       'node:zlib': resolve(__dirname, 'src/shims/empty.ts'),
       'node:module': resolve(__dirname, 'src/shims/empty.ts'),
+      // @smithy/node-http-handler imports named exports from Node builtins
+      // (without node: prefix). Vite's browser-external can't provide named
+      // exports, so alias to stubs with the required exports.
+      'stream': resolve(__dirname, 'src/shims/stream.ts'),
+      'http': resolve(__dirname, 'src/shims/http.ts'),
+      'https': resolve(__dirname, 'src/shims/https.ts'),
+      'http2': resolve(__dirname, 'src/shims/http2.ts'),
     },
   },
   esbuild: {
