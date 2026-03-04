@@ -147,8 +147,7 @@ export class GroupsPanel {
       jid,
       name,
       folder,
-      trigger: '@Andy',
-      requiresTrigger: !isMain,
+      requiresTrigger: false, // Direct chat UI — no trigger needed (triggers are for multi-user channels)
       isMain,
       addedAt: new Date().toISOString(),
     };
