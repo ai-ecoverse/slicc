@@ -1,11 +1,12 @@
 export { ChatPanel } from './chat-panel.js';
 export { TerminalPanel } from './terminal-panel.js';
-export { BrowserPanel } from './browser-panel.js';
+export { FileBrowserPanel } from './file-browser-panel.js';
 export { Layout } from './layout.js';
 export type { LayoutPanels } from './layout.js';
 export { SessionStore } from './session-store.js';
 export { renderMessageContent, renderToolInput, escapeHtml } from './message-renderer.js';
-export { getApiKey, setApiKey, clearApiKey, showApiKeyDialog } from './api-key-dialog.js';
+export { getApiKey, setApiKey, clearApiKey, getProvider, setProvider, clearProvider, showApiKeyDialog } from './api-key-dialog.js';
+export type { ApiProvider } from './api-key-dialog.js';
 export type {
   AgentHandle,
   AgentEvent,

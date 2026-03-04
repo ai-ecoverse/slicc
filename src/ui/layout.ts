@@ -1,5 +1,5 @@
 /**
- * Layout — resizable split-pane layout for chat, terminal, and browser preview.
+ * Layout — resizable split-pane layout for chat, terminal, and file browser.
  *
  * Structure:
  *   ┌─────────────┬───┬───────────────┐
@@ -7,25 +7,25 @@
  *   ├─────────────┬───┬───────────────┤
  *   │             │ ║ │  Terminal      │
  *   │  Chat       │ ║ ├───────────────┤
- *   │  Panel      │ ║ │  Browser      │
- *   │             │ ║ │  Preview      │
+ *   │  Panel      │ ║ │  Files        │
+ *   │             │ ║ │               │
  *   ├─────────────┴───┴───────────────┤
  *   └─────────────────────────────────┘
  *
  * The vertical divider (║) between left/right is draggable.
- * The horizontal divider between terminal/browser is draggable.
+ * The horizontal divider between terminal/files is draggable.
  */
 
 import { ChatPanel } from './chat-panel.js';
 import { TerminalPanel } from './terminal-panel.js';
-import { BrowserPanel } from './browser-panel.js';
-import { getApiKey, clearApiKey } from './api-key-dialog.js';
+import { FileBrowserPanel } from './file-browser-panel.js';
+import { getApiKey, clearApiKey, clearAzureResource, clearProvider } from './api-key-dialog.js';
 import type { ChatMessage } from './types.js';
 
 export interface LayoutPanels {
   chat: ChatPanel;
   terminal: TerminalPanel;
-  browser: BrowserPanel;
+  fileBrowser: FileBrowserPanel;
 }
 
 export class Layout {
@@ -35,13 +35,13 @@ export class Layout {
   private verticalDivider!: HTMLElement;
   private horizontalDivider!: HTMLElement;
   private terminalContainer!: HTMLElement;
-  private browserContainer!: HTMLElement;
+  private fileBrowserContainer!: HTMLElement;
 
   public panels!: LayoutPanels;
   public onModelChange?: (model: string) => void;
 
   private leftWidth = 0.55; // fraction of total width
-  private topHeight = 0.5;  // fraction of right panel height
+  private topHeight = 0.65; // fraction of right panel height
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -57,7 +57,7 @@ export class Layout {
 
     const title = document.createElement('div');
     title.className = 'header__title';
-    title.textContent = 'Browser Coding Agent';
+    title.textContent = 'slicc';
     header.appendChild(title);
 
     // Model picker
@@ -97,6 +97,14 @@ export class Layout {
       location.reload();
     });
     actions.appendChild(clearChatBtn);
+
+    const clearTermBtn = document.createElement('button');
+    clearTermBtn.className = 'header__btn';
+    clearTermBtn.textContent = 'Clear Terminal';
+    clearTermBtn.addEventListener('click', () => {
+      this.panels.terminal.clearTerminal();
+    });
+    actions.appendChild(clearTermBtn);
 
     if (__DEV__) {
       const clearFsBtn = document.createElement('button');
@@ -142,6 +150,8 @@ export class Layout {
     apiKeyBtn.addEventListener('click', () => {
       if (getApiKey()) {
         clearApiKey();
+        clearAzureResource();
+        clearProvider();
         location.reload();
       }
     });
@@ -164,21 +174,23 @@ export class Layout {
     this.verticalDivider.className = 'layout__divider';
     layout.appendChild(this.verticalDivider);
 
-    // Right panel (terminal + browser)
+    // Right panel (terminal)
     this.rightEl = document.createElement('div');
     this.rightEl.className = 'layout__right';
 
     this.terminalContainer = document.createElement('div');
-    this.terminalContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0;';
+    this.terminalContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: none;';
     this.rightEl.appendChild(this.terminalContainer);
 
+    // Horizontal divider (between terminal and file browser)
     this.horizontalDivider = document.createElement('div');
     this.horizontalDivider.className = 'layout__right-divider';
     this.rightEl.appendChild(this.horizontalDivider);
 
-    this.browserContainer = document.createElement('div');
-    this.browserContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0;';
-    this.rightEl.appendChild(this.browserContainer);
+    // File browser container
+    this.fileBrowserContainer = document.createElement('div');
+    this.fileBrowserContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: none;';
+    this.rightEl.appendChild(this.fileBrowserContainer);
 
     layout.appendChild(this.rightEl);
     this.root.appendChild(layout);
@@ -187,13 +199,8 @@ export class Layout {
     this.panels = {
       chat: new ChatPanel(this.leftEl),
       terminal: new TerminalPanel(this.terminalContainer),
-      browser: new BrowserPanel(this.browserContainer),
+      fileBrowser: new FileBrowserPanel(this.fileBrowserContainer),
     };
-
-    // Wire screenshot events from chat to browser panel
-    this.panels.chat.onScreenshot((base64, url) => {
-      this.panels.browser.setScreenshot(base64, url);
-    });
 
     // Apply initial sizes
     this.applySizes();
@@ -215,14 +222,14 @@ export class Layout {
     this.leftEl.style.width = leftW + 'px';
     this.rightEl.style.width = rightW + 'px';
 
-    // Right panel vertical split
+    // Horizontal split within right panel
     const rightH = this.rightEl.clientHeight;
     const hDividerH = 4;
     const topH = Math.round(rightH * this.topHeight);
     const bottomH = rightH - topH - hDividerH;
 
     this.terminalContainer.style.height = topH + 'px';
-    this.browserContainer.style.height = bottomH + 'px';
+    this.fileBrowserContainer.style.height = bottomH + 'px';
   }
 
   private setupVerticalDrag(): void {
@@ -263,7 +270,7 @@ export class Layout {
       if (!dragging) return;
       const rect = this.rightEl.getBoundingClientRect();
       const y = e.clientY - rect.top;
-      this.topHeight = Math.max(0.15, Math.min(0.85, y / rect.height));
+      this.topHeight = Math.max(0.2, Math.min(0.8, y / rect.height));
       this.applySizes();
     };
 
@@ -291,7 +298,8 @@ export class Layout {
   dispose(): void {
     this.panels.chat.dispose();
     this.panels.terminal.dispose();
-    this.panels.browser.dispose();
-    this.root.innerHTML = '';
+    this.panels.fileBrowser.dispose();
+    // Safe: clearing own root element, not untrusted content
+    while (this.root.firstChild) this.root.removeChild(this.root.firstChild);
   }
 }
