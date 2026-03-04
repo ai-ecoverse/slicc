@@ -249,8 +249,8 @@ Use the tools available to help the user with their tasks.`,
     for (const cb of eventListeners) {
       try {
         cb(event);
-      } catch {
-        // Don't let one listener break others
+      } catch (err) {
+        log.error('Listener error', { eventType: event.type, error: err instanceof Error ? err.message : String(err) });
       }
     }
   };

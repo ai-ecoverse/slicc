@@ -210,11 +210,13 @@ export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
           '*',
         );
       } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        log.error('VFS bridge error', { op: msg.op, path: msg.args[0], error: errMsg });
         iframe?.contentWindow?.postMessage(
           {
             type: 'vfs_response',
             id: msg.id,
-            error: err instanceof Error ? err.message : String(err),
+            error: errMsg,
           } satisfies VfsResponse,
           '*',
         );

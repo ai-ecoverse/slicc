@@ -35,6 +35,13 @@ function createProxiedFetch(): SecureFetch {
     const resp = await fetch('/api/fetch-proxy', init);
     const body = await resp.text();
 
+    // If the proxy itself failed (not the upstream), throw so curl reports an error
+    if (resp.status === 502 || resp.status === 400) {
+      let errorMsg = `Proxy error ${resp.status}`;
+      try { errorMsg = JSON.parse(body).error ?? errorMsg; } catch { /* not JSON */ }
+      throw new Error(errorMsg);
+    }
+
     const respHeaders: Record<string, string> = {};
     resp.headers.forEach((v, k) => { respHeaders[k] = v; });
 
@@ -456,8 +463,8 @@ export class WasmShell {
           if (back > 0) this.terminal.write(`\x1b[${back}D`);
         }
       }
-    } catch {
-      // compgen failed — ignore
+    } catch (err) {
+      console.warn('[Shell] Tab completion failed:', err instanceof Error ? err.message : String(err));
     }
   }
 

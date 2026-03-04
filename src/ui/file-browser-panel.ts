@@ -40,8 +40,8 @@ export class FileBrowserPanel {
     const tmp = document.createElement('div');
     try {
       await this.renderDir('/', tmp, 0);
-    } catch {
-      // FS may not be ready yet
+    } catch (err) {
+      console.warn('[FileBrowser] Refresh failed:', err instanceof Error ? err.message : String(err));
       return;
     }
     // Only touch the DOM if the tree actually changed
@@ -71,7 +71,8 @@ export class FileBrowserPanel {
     let entries;
     try {
       entries = await this.fs.readDir(path);
-    } catch {
+    } catch (err) {
+      console.warn('[FileBrowser] readDir failed:', path, err instanceof Error ? err.message : String(err));
       return;
     }
 
@@ -141,8 +142,8 @@ export class FileBrowserPanel {
           size.className = 'file-browser__size';
           size.textContent = formatSize(stats.size);
           row.appendChild(size);
-        } catch {
-          // stat failed, skip size
+        } catch (err) {
+          console.warn('[FileBrowser] stat failed:', fullPath, err instanceof Error ? err.message : String(err));
         }
 
         // Click to download
@@ -167,8 +168,8 @@ export class FileBrowserPanel {
       a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
-    } catch {
-      // read failed, ignore
+    } catch (err) {
+      console.error('[FileBrowser] Download failed:', path, err instanceof Error ? err.message : String(err));
     }
   }
 
