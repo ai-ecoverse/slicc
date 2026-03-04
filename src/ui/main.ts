@@ -268,14 +268,19 @@ async function main(): Promise<void> {
     let totalChars = estimateSize(result);
 
     // Keep dropping oldest non-system messages until under limit (preserve first 2 and last 10)
-    while (totalChars > MAX_CONTEXT_CHARS && result.length > 12) {
-      // Insert a compaction marker at position 2 (after initial exchange)
+    // Safety limit to prevent infinite loop if compaction can't reduce size enough
+    let compactionRounds = 0;
+    while (totalChars > MAX_CONTEXT_CHARS && result.length > 12 && compactionRounds < 50) {
+      compactionRounds++;
       const compactedMsg = {
         role: 'user' as const,
         content: [{ type: 'text' as const, text: '[Earlier conversation messages were compacted to save context space]' }],
       };
       result = [result[0], result[1], compactedMsg as any, ...result.slice(result.length - 10)];
       totalChars = estimateSize(result);
+    }
+    if (compactionRounds >= 50) {
+      log.warn('Context compaction hit iteration limit', { finalChars: totalChars, finalMessages: result.length });
     }
 
     if (totalChars !== estimateSize(messages)) {

@@ -47,9 +47,21 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
 
   /** Resolve the user's active tab. Returns targetId or null. */
   async function getActiveTab(): Promise<string | null> {
-    const pages = await browser.listPages();
-    const active = pages.find((p) => p.active && !isAppTab(p.targetId));
-    return active?.targetId ?? null;
+    try {
+      const pages = await browser.listPages();
+      const active = pages.find((p) => p.active && !isAppTab(p.targetId));
+      if (!active) {
+        log.debug('No active user tab found', {
+          totalPages: pages.length,
+          activeTabs: pages.filter((p) => p.active).length,
+          appTabId,
+        });
+      }
+      return active?.targetId ?? null;
+    } catch (err) {
+      log.error('Failed to resolve active tab', { error: err instanceof Error ? err.message : String(err) });
+      return null;
+    }
   }
 
   return {
@@ -267,7 +279,11 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
               }
               base64 = btoa(base64);
               const ext = imagePath.split('.').pop()?.toLowerCase() ?? 'png';
-              const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'svg' ? 'image/svg+xml' : 'image/png';
+              const mime = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
+                : ext === 'svg' ? 'image/svg+xml'
+                : ext === 'webp' ? 'image/webp'
+                : ext === 'gif' ? 'image/gif'
+                : 'image/png';
               const sizeKB = Math.round(data.length / 1024);
               return { content: `Showing ${imagePath} (${sizeKB} KB)\n<img:data:${mime};base64,${base64}>` };
             } catch (err) {
