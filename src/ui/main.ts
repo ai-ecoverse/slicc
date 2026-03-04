@@ -515,6 +515,7 @@ Use the tools available to help the user with their tasks.`,
         emitToUI({ type: 'message_start', messageId });
         emitToUI({ type: 'content_delta', messageId, text: msg.content });
         emitToUI({ type: 'content_done', messageId });
+        emitToUI({ type: 'turn_end', messageId }); // Reset streaming state after each replayed message
       } else {
         // User message - add directly to chat panel
         layout.panels.chat.addUserMessage(msg.content);
