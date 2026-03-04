@@ -23,6 +23,11 @@ export class TerminalPanel {
     await shell.mount(this.bodyEl);
   }
 
+  /** Clear the terminal screen. */
+  clearTerminal(): void {
+    this.shell?.clearTerminal();
+  }
+
   /** Get the body element (for direct terminal mounting). */
   getBodyElement(): HTMLElement {
     return this.bodyEl;

@@ -1,5 +1,4 @@
 import { createServer } from 'http';
-import https from 'https';
 import { spawn, type ChildProcess } from 'child_process';
 import { existsSync } from 'fs';
 import { join, resolve } from 'path';
@@ -307,75 +306,53 @@ async function main() {
   const app = express();
   app.use(requestLogger);
 
-  // ---------------------------------------------------------------------------
-  // CORS proxy — forwards /cors/:hostname/* to https://<hostname>/<path>
-  // ---------------------------------------------------------------------------
-  app.all('/cors/:hostname/*', (req: Request, res: Response) => {
-    // Handle CORS preflight
-    if (req.method === 'OPTIONS') {
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', '*');
-      res.setHeader('Access-Control-Allow-Headers', '*');
-      res.setHeader('Access-Control-Max-Age', '86400');
-      res.status(204).end();
+  // Fetch proxy — forwards cross-origin requests from the browser to bypass CORS.
+  // Used by just-bash's curl which calls the browser's fetch() API.
+  app.all('/api/fetch-proxy', express.raw({ type: '*/*', limit: '10mb' }), async (req, res) => {
+    const targetUrl = req.headers['x-target-url'] as string;
+    if (!targetUrl) {
+      res.status(400).json({ error: 'Missing X-Target-URL header' });
       return;
     }
-
-    const hostname = req.params.hostname as string;
-    // Express puts the wildcard remainder in params[0]
-    const remainingPath = (req.params as Record<string, string>)[0] || '';
-    // Preserve the original query string
-    const queryString = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
-
-    // Build outgoing headers from the incoming request, removing hop-by-hop headers
-    const outgoingHeaders: Record<string, string> = {};
-    for (const [key, value] of Object.entries(req.headers)) {
-      const lower = key.toLowerCase();
-      if (lower === 'host' || lower === 'connection') continue;
-      if (typeof value === 'string') {
-        outgoingHeaders[key] = value;
-      } else if (Array.isArray(value)) {
-        outgoingHeaders[key] = value.join(', ');
-      }
-    }
-
-    const options: https.RequestOptions = {
-      hostname,
-      port: 443,
-      path: `/${remainingPath}${queryString}`,
-      method: req.method,
-      headers: outgoingHeaders,
-    };
-
-    const proxyReq = https.request(options, (proxyRes) => {
-      // Add CORS headers so the browser accepts the response
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', '*');
-      res.setHeader('Access-Control-Allow-Headers', '*');
-      res.setHeader('Access-Control-Expose-Headers', '*');
-
-      // Forward upstream response headers
-      for (const [key, value] of Object.entries(proxyRes.headers)) {
-        if (value !== undefined) {
-          res.setHeader(key, value as string | string[]);
+    try {
+      const fetchInit: RequestInit = {
+        method: req.method,
+        redirect: 'manual',
+      };
+      // Forward relevant headers (excluding hop-by-hop and proxy headers)
+      const skipHeaders = new Set(['host', 'connection', 'x-target-url', 'content-length', 'transfer-encoding']);
+      const headers: Record<string, string> = {};
+      for (const [key, value] of Object.entries(req.headers)) {
+        if (!skipHeaders.has(key) && typeof value === 'string') {
+          headers[key] = value;
         }
       }
-
-      res.statusCode = proxyRes.statusCode ?? 200;
-
-      // Stream the response body directly — supports SSE and chunked transfer
-      proxyRes.pipe(res);
-    });
-
-    proxyReq.on('error', (err) => {
-      console.error(`[cors-proxy] Error proxying to https://${hostname}/${remainingPath}:`, err.message);
-      if (!res.headersSent) {
-        res.status(502).json({ error: 'Proxy error', message: err.message });
+      if (Object.keys(headers).length > 0) fetchInit.headers = headers;
+      if (req.body && req.body.length > 0 && !['GET', 'HEAD'].includes(req.method)) {
+        fetchInit.body = req.body;
       }
-    });
 
-    // Pipe the incoming request body to the proxy request (for POST/PUT/etc.)
-    req.pipe(proxyReq);
+      const upstream = await fetch(targetUrl, fetchInit);
+
+      // Forward status, prevent browser caching of proxy responses
+      res.status(upstream.status);
+      res.setHeader('Cache-Control', 'no-store, no-cache');
+
+      // Forward response headers
+      upstream.headers.forEach((v, k) => {
+        const lower = k.toLowerCase();
+        if (lower !== 'transfer-encoding' && lower !== 'content-encoding') {
+          res.setHeader(k, v);
+        }
+      });
+
+      // Stream body
+      const body = await upstream.arrayBuffer();
+      res.send(Buffer.from(body));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(502).json({ error: `Proxy fetch failed: ${message}` });
+    }
   });
 
   // Create the HTTP server BEFORE Vite so we can register our upgrade handler first
@@ -501,6 +478,13 @@ async function main() {
   function ensureChromeConnection(url: string): Promise<void> {
     return new Promise((resolve, reject) => {
       if (chromeWs && chromeWs.readyState === WebSocket.OPEN) {
+        // Already connected — flush any buffered messages and go direct
+        if (messageBuffer) {
+          for (const msg of messageBuffer) {
+            chromeWs.send(String(msg));
+          }
+          messageBuffer = null;
+        }
         resolve();
         return;
       }
@@ -608,6 +592,19 @@ async function main() {
   server.listen(SERVE_PORT, () => {
     console.log(`Serving UI at http://localhost:${SERVE_PORT}`);
     console.log(`CDP proxy at ws://localhost:${SERVE_PORT}/cdp`);
+
+    // Pre-connect to Chrome's CDP so the proxy is warm when the first client connects.
+    // Without this, the first browser tool call has to wait for CDP discovery + WS handshake.
+    (async () => {
+      try {
+        cdpUrl = await waitForCDP(CDP_PORT);
+        console.log(`[cdp-proxy] Pre-connected: CDP available at ${cdpUrl}`);
+        await ensureChromeConnection(cdpUrl);
+        console.log('[cdp-proxy] Chrome WebSocket ready (pre-warmed)');
+      } catch (err) {
+        console.log('[cdp-proxy] Pre-connect failed (will retry on first client):', err);
+      }
+    })();
 
     // Attach console forwarder after a delay to let Chrome load the page
     setTimeout(() => {
