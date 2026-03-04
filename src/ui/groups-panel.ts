@@ -62,7 +62,7 @@ export class GroupsPanel {
     }
 
     for (const group of groups) {
-      const status = this.groupStatuses.get(group.jid) ?? 'initializing';
+      const status = this.groupStatuses.get(group.jid) ?? 'inactive';
       const isSelected = group.jid === this.selectedGroupJid;
 
       const item = document.createElement('div');

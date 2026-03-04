@@ -111,6 +111,11 @@ export class Orchestrator {
 
     log.info('Orchestrator initialized', { groupCount: this.groups.size });
 
+    // Initialize all group contexts
+    for (const group of this.groups.values()) {
+      await this.createGroupTab(group.jid);
+    }
+
     // Start polling for pending messages
     this.startMessageLoop();
   }
@@ -185,6 +190,9 @@ When you learn something important:
     this.groups.set(group.jid, group);
     this.messageQueues.set(group.jid, []);
     log.info('Group registered', { jid: group.jid, name: group.name });
+    
+    // Auto-initialize the group context
+    await this.createGroupTab(group.jid);
   }
 
   /** Unregister a group */
