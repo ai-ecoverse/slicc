@@ -55,10 +55,19 @@ CDPTransport interface (`transport.ts`) abstracts the underlying protocol. Two i
 - **CDPClient**: WebSocket-based, used in CLI mode. Connects through ws://localhost:3000/cdp proxy.
 - **DebuggerClient** (`debugger-client.ts`): Uses `chrome.debugger` API in extension mode. Intercepts `Target.*` commands and maps them to `chrome.tabs`/`chrome.debugger`. Manages tab attach/detach lifecycle with session-to-tab mapping.
 
-BrowserAPI: high-level Playwright-style API built on either transport (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree). Auto-selects transport based on extension detection.
+BrowserAPI: high-level Playwright-style API built on either transport (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree). Auto-selects transport based on extension detection. TargetInfo and PageInfo types include `active` field (boolean, extension mode only) to identify the user's currently focused tab, enabling intelligent tool auto-dispatch.
 
 ### Tools (src/tools/)
 All tools use the legacy ToolDefinition interface (name, description, inputSchema, execute). Seven tools: bash, read_file, write_file, edit_file, grep, find, browser (with sub-actions), javascript (sandboxed iframe with VFS bridge). Factory functions take their dependency (VirtualFS, WasmShell, or BrowserAPI).
+
+**Browser tool enhancements:**
+- `screenshot` action now supports `path` (save PNG to VFS), `fullPage` (capture entire scrollable page), and `selector` (capture just one element)
+- `show_image` action displays image files from VFS inline in the chat with automatic base64 encoding
+- Auto-resolves to the user's active/focused tab when targetId is omitted (CDP types TargetInfo/PageInfo now include `active` field)
+- VFS access via `path` parameter to save results without bloating conversation history
+
+**JavaScript tool enhancement:**
+- `fs.readFileBinary(path)` now returns `Uint8Array` directly instead of encoded string, enabling efficient binary file operations (e.g., canvas image processing)
 
 ### Core Agent (src/core/)
 Uses @mariozechner/pi-agent-core for the agent loop and @mariozechner/pi-ai for unified LLM streaming. Key types re-exported from pi packages: AgentMessage, AgentTool, AgentEvent, Model, StreamFn.
@@ -83,6 +92,13 @@ Chrome Manifest V3 extension files. Service worker opens the side panel on actio
 
 ### CLI Server (src/cli/index.ts)
 Express server that launches Chrome with remote debugging, serves the UI (Vite middleware in dev, static files in prod), and runs a WebSocket proxy at /cdp. Provides `/api/fetch-proxy` endpoint for cross-origin fetch (replaces CORS proxy). Single shared Chrome WebSocket connection with client message buffering. Console forwarder pipes in-page console output to CLI stdout.
+
+### Context Compaction (src/ui/main.ts)
+To prevent context overflow (200K token limit), the agent applies two-phase message compaction before each API call:
+1. **Result truncation**: Tool results larger than 8000 chars (~2K tokens) are truncated with a marker
+2. **Message dropping**: If total context exceeds ~150K tokens, old messages (except first 2 and last 10) are dropped and replaced with a compaction marker message
+
+This preserves recent context and the initial exchange while preventing runaway token usage.
 
 ### Data Flow
 ```
