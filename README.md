@@ -6,7 +6,7 @@
 
 > *An AI coding agent that builds itself. The snake that eats its own tail, but productive.*
 
-A browser-based coding agent with a thin CLI server. Runs Claude directly in the browser with full filesystem access, a WebAssembly shell, browser automation via CDP, and a complete suite of code editing tools — all without leaving your browser tab.
+A browser-based coding agent that runs as a **Chrome extension** or with a thin CLI server. Runs Claude directly in the browser with full filesystem access, a WebAssembly shell, browser automation via CDP, and a complete suite of code editing tools — all without leaving your browser.
 
 ---
 
@@ -24,19 +24,19 @@ Part of the **[AI Ecoverse](https://github.com/trieloff/ai-ecoverse)** — a com
 
 ## Features
 
+- :puzzle_piece: **Chrome Extension** — runs as a side panel in Chrome, no server required. Tabbed UI (Chat/Terminal/Files) optimized for the side panel form factor
 - :globe_with_meridians: **Browser-Native** — runs entirely in the browser, no Electron, no desktop app
-- :satellite: **CLI Server** — thin Node.js/Express server launches Chrome and proxies CDP connections
-- :file_folder: **Virtual Filesystem** — OPFS + IndexedDB-backed filesystem right in the browser
+- :satellite: **CLI Server** — alternative mode: thin Node.js/Express server launches Chrome and proxies CDP connections
+- :file_folder: **Virtual Filesystem** — OPFS + IndexedDB-backed filesystem right in the browser, with folder ZIP download
 - :shell: **WebAssembly Bash Shell** — real Bash via [just-bash](https://github.com/nicolo-ribaudo/just-bash) compiled to WASM
-- :robot: **Browser Automation** — screenshots, navigation, JS eval, element clicking via Chrome DevTools Protocol, tab management with app tab protection
+- :robot: **Browser Automation** — screenshots, navigation, JS eval, element clicking via Chrome DevTools Protocol (chrome.debugger in extension, WebSocket in CLI)
 - :pencil2: **File Operations** — read, write, edit files with syntax-aware tools
 - :mag: **Search Tools** — grep and find across your virtual codebase
-- :globe_with_meridians: **Networking** — curl and fetch support via proxied fetch through `/api/fetch-proxy`
-- :wrench: **JavaScript Tool** — sandboxed JS execution in an iframe with VFS bridge and persistent context
+- :globe_with_meridians: **Networking** — curl and fetch support with binary-safe downloads
+- :wrench: **JavaScript Tool** — sandboxed JS execution with VFS bridge and persistent context
 - :key: **Multi-Provider Auth** — Anthropic (direct), Azure AI Foundry, and AWS Bedrock with segmented control
 - :zap: **Real-Time Streaming** — responses stream token-by-token as Claude thinks
 - :floppy_disk: **Session Persistence** — conversations and files survive page reloads via IndexedDB
-- :window: **Split-Pane UI** — chat panel + terminal + file browser, all in one view
 - :crescent_moon: **Dark Theme** — syntax-highlighted code with a dark-first design
 
 ## Why "slicc"?
@@ -49,32 +49,28 @@ The ultimate recursive dev tool.
 
 ## Architecture
 
-slicc is a dual-process system: a thin CLI server and a rich browser application.
+slicc runs in two modes: as a **Chrome extension** (side panel) or as a **standalone CLI** with a browser window.
 
-**CLI Server** (Node.js/Express) — launches a headless Chrome instance, establishes a CDP (Chrome DevTools Protocol) WebSocket proxy, provides a fetch proxy (`/api/fetch-proxy`) for cross-origin requests, and serves the UI assets.
+**Chrome Extension** (Manifest V3) — the agent runs entirely in Chrome's side panel. Uses `chrome.debugger` API for browser automation and `host_permissions` for cross-origin fetch. No server needed.
 
-**Browser App** (Vite/TypeScript) — the agent loop (powered by [pi-mono](https://github.com/badlogic/pi-mono)), tool execution, chat UI, integrated terminal, and embedded browser preview all run client-side.
+**CLI Server** (Node.js/Express) — launches a headless Chrome instance, establishes a CDP WebSocket proxy, provides a fetch proxy for cross-origin requests, and serves the UI assets.
+
+**Browser App** (Vite/TypeScript) — the agent loop (powered by [pi-mono](https://github.com/badlogic/pi-mono)), tool execution, chat UI, integrated terminal, and file browser all run client-side in both modes.
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                   Browser Window                     │
-│                                                      │
-│  ┌──────────────┬──────────────┬──────────────────┐  │
-│  │              │              │                  │  │
-│  │    Chat      │   Terminal   │  File Browser    │  │
-│  │    Panel     │   (xterm)    │  (VFS tree)      │  │
-│  │              │              │                  │  │
-│  │  Claude AI   │  WASM Bash   │  Live VFS view   │  │
-│  │  responses   │  shell       │  + download      │  │
-│  │              │              │                  │  │
-│  └──────────────┴──────────────┴──────────────────┘  │
-│                                                      │
-└──────────────┬──────────────────────────────────────┘
-               │ WebSocket (CDP proxy)
-┌──────────────▼──────────────────────────────────────┐
-│           CLI Server (Node.js/Express)               │
-│  Chrome launcher  ·  CDP proxy  ·  Fetch proxy  ·  Static server  │
-└─────────────────────────────────────────────────────┘
+Chrome Extension Mode:                    CLI Mode:
+
+┌─ Chrome Side Panel ──────┐    ┌─────────────────────────────────────┐
+│  ┌─ [Chat][Term][Files] ┐│    │  ┌──────────┬────────┬───────────┐ │
+│  │                       ││    │  │  Chat    │Terminal│  Files    │ │
+│  │  Active tab panel     ││    │  │  Panel   │(xterm) │  Browser  │ │
+│  │  (full height)        ││    │  │          │        │           │ │
+│  │                       ││    │  └──────────┴────────┴───────────┘ │
+│  └───────────────────────┘│    └──────────────┬──────────────────────┘
+│  chrome.debugger → tabs   │                   │ WebSocket (CDP proxy)
+└──────────────────────────┘    ┌──────────────▼──────────────────────┐
+                                │     CLI Server (Node.js/Express)     │
+                                └──────────────────────────────────────┘
 ```
 
 Source layout:
@@ -87,15 +83,25 @@ Source layout:
 | `src/tools/` | Tool implementations (file ops, search, browser, javascript) |
 | `src/fs/` | Virtual filesystem (OPFS/IndexedDB) |
 | `src/shell/` | WebAssembly Bash shell integration |
-| `src/cdp/` | Chrome DevTools Protocol client |
+| `src/cdp/` | Chrome DevTools Protocol client (WebSocket + chrome.debugger) |
+| `src/extension/` | Chrome extension service worker and type declarations |
 
 ## Getting Started
 
-```bash
-# Install dependencies
-npm install
+### Chrome Extension (recommended)
 
-# Start the dev server (launches Chrome + Vite)
+```bash
+npm install
+npm run build:extension
+
+# Load dist/extension/ as unpacked extension in chrome://extensions
+# Click the slicc icon → side panel opens
+```
+
+### Standalone CLI
+
+```bash
+npm install
 npm run dev:full
 
 # Open the URL printed in the terminal
@@ -111,8 +117,9 @@ The `dev:full` command starts both the CLI server and Vite dev server, launches 
 | [@mariozechner/pi-ai](https://github.com/badlogic/pi-mono) | Unified LLM API (Anthropic provider) |
 | [express](https://expressjs.com/) | CLI server framework |
 | [just-bash](https://github.com/nicolo-ribaudo/just-bash) | WebAssembly Bash shell |
-| [ws](https://github.com/websockets/ws) | WebSocket for CDP proxy |
+| [ws](https://github.com/websockets/ws) | WebSocket for CDP proxy (CLI mode) |
 | [@xterm/xterm](https://xtermjs.org/) | Terminal emulator in the browser |
+| [fflate](https://github.com/101arrowz/fflate) | ZIP file creation for folder downloads |
 | [vite](https://vitejs.dev/) | Build tool and dev server |
 | [vitest](https://vitest.dev/) | Test runner |
 | [TypeScript](https://typescriptlang.org/) | Type safety across CLI and browser |
@@ -128,6 +135,9 @@ npm run dev
 
 # Build everything (UI + CLI)
 npm run build
+
+# Build Chrome extension
+npm run build:extension
 
 # Type-check both CLI and browser code
 npm run typecheck

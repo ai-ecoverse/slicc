@@ -5,29 +5,40 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build and Development Commands
 
 ```bash
+# Standalone CLI mode
 npm run dev:full        # Full dev mode: Vite HMR + Chrome + CDP proxy (port 3000)
 npm run dev             # Vite dev server only (no Chrome/CDP)
 npm run build           # Production build (UI via Vite + CLI via TSC)
 npm run build:ui        # Vite build only into dist/ui/
 npm run build:cli       # TSC build only into dist/cli/
-npm run typecheck       # Typecheck both tsconfig targets
 npm run start           # Run production CLI (requires build first)
 
+# Chrome extension
+npm run build:extension # Build extension into dist/extension/ (load in chrome://extensions)
+
+# Shared
+npm run typecheck       # Typecheck both tsconfig targets
 npm run test            # Vitest run (all tests)
 npm run test:watch      # Vitest watch mode
 npx vitest run src/fs/virtual-fs.test.ts  # Run a single test file
 ```
 
-Ports: 3000 (UI server), 9222 (Chrome CDP), 24679 (Vite HMR WebSocket)
+Ports (CLI mode only): 3000 (UI server), 9222 (Chrome CDP), 24679 (Vite HMR WebSocket)
 
 ## Architecture
 
-Browser-based AI coding agent: a self-contained development environment where Claude writes code, runs shell commands, and automates browser tabs entirely within Chrome, without touching the host filesystem.
+Browser-based AI coding agent: a self-contained development environment where Claude writes code, runs shell commands, and automates browser tabs entirely within Chrome, without touching the host filesystem. Runs as a **Chrome extension** (side panel) or as a **standalone CLI** server.
 
-### Two Build Targets
+### Two Deployment Modes
+
+- **Chrome extension** (Manifest V3): Side panel UI with tabbed layout (Chat/Terminal/Files). Uses `chrome.debugger` API for browser automation. Built via `npm run build:extension` → `dist/extension/`. Load as unpacked extension in `chrome://extensions`.
+- **Standalone CLI**: Express server launches Chrome, proxies CDP over WebSocket. Resizable 3-panel split layout. Built via `npm run build` → `dist/ui/` + `dist/cli/`.
+
+### Three Build Targets
 
 - **Browser bundle** (tsconfig.json): Everything in src/ except src/cli/. Bundled by Vite, module resolution: bundler. Runs in Chrome.
 - **CLI server** (tsconfig.cli.json): Only src/cli/. Compiled by TSC to dist/cli/, module resolution: NodeNext. Runs in Node.
+- **Extension bundle** (vite.config.extension.ts): Same browser bundle with extension-specific entry points (service-worker.js, sandbox.html, manifest.json). Output: dist/extension/.
 
 ### Layer Stack (bottom-up)
 
@@ -37,10 +48,14 @@ Virtual Filesystem (src/fs/) -> Shell (src/shell/) -> CDP (src/cdp/) -> Tools (s
 POSIX-like async filesystem backed by OPFS (preferred) or IndexedDB (fallback). VirtualFS is the facade; StorageBackend is the interface both backends implement. FsError carries POSIX error codes (ENOENT, EISDIR, etc.). All paths are absolute, forward-slash, normalized.
 
 ### Shell (src/shell/)
-WasmShell wraps just-bash 2.11.7 (WASM Bash interpreter) and connects it to VirtualFS via VfsAdapter (implements just-bash's IFileSystem). The shell maintains env/cwd state across calls. Terminal UI via xterm.js with dynamic imports (so tests run in Node without xterm). Supports 78+ commands, escape sequences (arrow keys, Home/End/Delete), multi-line editing with continuation buffer, and proxied fetch for curl/networking via `/api/fetch-proxy`.
+WasmShell wraps just-bash 2.11.7 (WASM Bash interpreter) and connects it to VirtualFS via VfsAdapter (implements just-bash's IFileSystem). The shell maintains env/cwd state across calls. Terminal UI via xterm.js with dynamic imports (so tests run in Node without xterm). Supports 78+ commands, escape sequences (arrow keys, Home/End/Delete), multi-line editing with continuation buffer, and proxied fetch for curl/networking (via `/api/fetch-proxy` in CLI mode, direct fetch with `host_permissions` in extension mode). Binary response handling: `readResponseBody()` detects content-type and uses latin1 encoding for binary types to preserve byte fidelity through just-bash's string-typed FetchResult. A binary cache (`binary-cache.ts`) stores raw Uint8Array for VfsAdapter to bypass string encoding on write.
 
 ### CDP (src/cdp/)
-CDPClient: low-level WebSocket protocol (send/on/off/once with pending-command tracking). BrowserAPI: high-level Playwright-style API built on CDPClient (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree). Connects through the CLI's WebSocket proxy at ws://localhost:3000/cdp.
+CDPTransport interface (`transport.ts`) abstracts the underlying protocol. Two implementations:
+- **CDPClient**: WebSocket-based, used in CLI mode. Connects through ws://localhost:3000/cdp proxy.
+- **DebuggerClient** (`debugger-client.ts`): Uses `chrome.debugger` API in extension mode. Intercepts `Target.*` commands and maps them to `chrome.tabs`/`chrome.debugger`. Manages tab attach/detach lifecycle with session-to-tab mapping.
+
+BrowserAPI: high-level Playwright-style API built on either transport (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree). Auto-selects transport based on extension detection.
 
 ### Tools (src/tools/)
 All tools use the legacy ToolDefinition interface (name, description, inputSchema, execute). Seven tools: bash, read_file, write_file, edit_file, grep, find, browser (with sub-actions), javascript (sandboxed iframe with VFS bridge). Factory functions take their dependency (VirtualFS, WasmShell, or BrowserAPI).
@@ -53,9 +68,18 @@ Uses @mariozechner/pi-agent-core for the agent loop and @mariozechner/pi-ai for 
 - types.ts: self-contained type definitions (ToolDefinition, ToolResult, AgentConfig, SessionData)
 
 ### UI (src/ui/)
-Vanilla TypeScript, no framework. Layout creates a resizable three-panel split: chat (left), terminal (top-right), file browser (bottom-right). main.ts bootstraps everything and contains the event adapter that maps core AgentEvent to UI AgentEvent. Assistant label is "sliccy".
+Vanilla TypeScript, no framework. Two layout modes selected by `isExtension` detection:
+- **Extension mode**: Tabbed interface (Chat/Terminal/Files tabs) with context-sensitive header buttons per tab. Full-height single panel.
+- **Standalone mode**: Resizable three-panel split: chat (left), terminal (top-right), file browser (bottom-right).
+
+main.ts bootstraps everything and contains the event adapter that maps core AgentEvent to UI AgentEvent. Message IDs use session-unique prefixes to prevent collision after side panel close/reopen. Assistant label is "sliccy".
+
+File browser supports clicking files to download and a ZIP button on folders (uses fflate) to download entire directories.
 
 Two separate IndexedDB session stores: UI-level (browser-coding-agent DB in session-store.ts) and core agent-level (agent-sessions DB in core/session.ts).
+
+### Extension (src/extension/)
+Chrome Manifest V3 extension files. Service worker opens the side panel on action click. `chrome.d.ts` provides minimal typed declarations for the Chrome APIs used (debugger, tabs, sidePanel, runtime). `sandbox.html` (project root) provides an isolated execution environment for the JavaScript tool — exempt from extension CSP, allows Function constructor. Cross-origin fetch from sandbox is proxied through the parent page via postMessage.
 
 ### CLI Server (src/cli/index.ts)
 Express server that launches Chrome with remote debugging, serves the UI (Vite middleware in dev, static files in prod), and runs a WebSocket proxy at /cdp. Provides `/api/fetch-proxy` endpoint for cross-origin fetch (replaces CORS proxy). Single shared Chrome WebSocket connection with client message buffering. Console forwarder pipes in-page console output to CLI stdout.
@@ -74,3 +98,4 @@ User -> ChatPanel -> Agent.prompt() -> pi-agent-core loop -> Anthropic API (stre
 - **Logging**: createLogger('namespace') from src/core/logger.ts. Level-filtered, DEBUG in dev, ERROR in prod. Uses __DEV__ global (set by Vite define).
 - **Node shims**: src/shims/empty.ts stubs out node:zlib and node:module for the browser bundle (just-bash references them).
 - **Multi-provider auth**: API key stored in localStorage. Provider selector supports Anthropic (direct), Azure AI Foundry, and AWS Bedrock. Provider/resource/region stored in localStorage. Model resolved via `getModel()` from pi-ai with baseUrl override for Azure/Bedrock.
+- **Extension detection**: `typeof chrome !== 'undefined' && !!chrome?.runtime?.id` — used throughout to select CDP transport, layout mode, fetch strategy, and JS tool sandbox mechanism.
