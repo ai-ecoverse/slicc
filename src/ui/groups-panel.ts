@@ -75,7 +75,7 @@ export class GroupsPanel {
           <div class="group-name">${this.escapeHtml(group.name)}</div>
           <div class="group-meta">
             <span class="group-status">${status}</span>
-            ${group.requiresTrigger ? `<span class="group-trigger">${group.trigger || '@Andy'}</span>` : ''}
+            ${group.requiresTrigger ? `<span class="group-trigger">${this.escapeHtml(group.trigger || '@Andy')}</span>` : ''}
           </div>
         </div>
         <button class="group-delete" title="Delete group">&times;</button>

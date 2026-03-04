@@ -340,17 +340,24 @@ Use the tools available to help the user with their tasks.`,
       onSendMessage: (targetJid, text) => {
         log.debug('Send message requested', { targetJid, textLength: text.length });
         // Route to the target group
+        const msgId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const msg: ChannelMessage = {
-          id: `msg-${Date.now()}`,
+          id: msgId,
           chatJid: targetJid,
           senderId: 'assistant',
-          senderName: 'Andy',
+          senderName: 'sliccy',
           content: text,
           timestamp: new Date().toISOString(),
           fromAssistant: true,
           channel: 'web',
         };
         orchestrator.handleMessage(msg);
+        // Also render this message into the chat UI for the currently selected group
+        if (selectedGroup?.jid === targetJid) {
+          emitToUI({ type: 'message_start', messageId: msgId });
+          emitToUI({ type: 'content_delta', messageId: msgId, text });
+          emitToUI({ type: 'content_done', messageId: msgId });
+        }
       },
       onStatusChange: (groupJid, status) => {
         layout.panels.groups.updateGroupStatus(groupJid, status);
@@ -422,7 +429,7 @@ Use the tools available to help the user with their tasks.`,
       
       // Create a message and route through orchestrator
       const msg: ChannelMessage = {
-        id: `msg-${Date.now()}`,
+        id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         chatJid: selectedGroup.jid,
         senderId: 'user',
         senderName: 'User',
@@ -445,8 +452,10 @@ Use the tools available to help the user with their tasks.`,
     },
 
     stop(): void {
-      // Stop the current group's processing (TODO: implement in orchestrator)
-      agent.abort();
+      // Stop the current group's processing via the orchestrator
+      if (selectedGroup) {
+        orchestrator.getGroupContext(selectedGroup.jid)?.stop();
+      }
     },
   };
 

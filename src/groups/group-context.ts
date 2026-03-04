@@ -62,6 +62,7 @@ export class GroupContext {
   private agent: Agent | null = null;
   private status: 'initializing' | 'ready' | 'processing' | 'error' = 'initializing';
   private isProcessing = false;
+  private didStreamDeltas = false;
   private unsubscribe: (() => void) | null = null;
 
   constructor(group: RegisteredGroup, callbacks: GroupContextCallbacks) {
@@ -195,6 +196,7 @@ export class GroupContext {
     }
 
     this.isProcessing = true;
+    this.didStreamDeltas = false;
     this.setStatus('processing');
 
     try {
@@ -246,6 +248,7 @@ export class GroupContext {
       case 'message_update': {
         const ame = event.assistantMessageEvent as AssistantMessageEvent;
         if (ame.type === 'text_delta') {
+          this.didStreamDeltas = true;
           this.callbacks.onResponse(ame.delta, true);
         }
         break;
@@ -274,8 +277,8 @@ export class GroupContext {
             .map((c: any) => c.text)
             .join('');
           
-          if (fullText && !this.isProcessing) {
-            // Only emit full text if we haven't been streaming
+          // Only emit full text if we haven't been streaming deltas
+          if (fullText && !this.didStreamDeltas) {
             this.callbacks.onResponse(fullText, false);
           }
         }

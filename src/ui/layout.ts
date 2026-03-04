@@ -312,8 +312,8 @@ export class Layout {
       memory: new MemoryPanel(memoryContainer),
       groups: new GroupsPanel(this.groupsEl, {
         onGroupSelect: (group) => this.onGroupSelect?.(group),
-        onSendMessage: (jid, text) => {
-          console.log('Send to group:', jid, text);
+        onSendMessage: () => {
+          // Placeholder - wired through orchestrator in main.ts
         },
       }),
     };
@@ -466,9 +466,8 @@ export class Layout {
       memory: new MemoryPanel(memoryContainer),
       groups: new GroupsPanel(this.groupsEl, {
         onGroupSelect: (group) => this.onGroupSelect?.(group),
-        onSendMessage: (jid, text) => {
-          // This will be wired to the orchestrator
-          console.log('Send to group:', jid, text);
+        onSendMessage: () => {
+          // Placeholder - wired through orchestrator in main.ts
         },
       }),
     };
@@ -490,8 +489,8 @@ export class Layout {
     const groupsW = Math.round(totalWidth * this.groupsWidth);
     // Chat panel in the middle
     const leftW = Math.round(totalWidth * this.leftWidth);
-    // Right panel gets the rest
-    const rightW = totalWidth - groupsW - leftW - (dividerW * 2);
+    // Right panel gets the rest, clamped to minimum 0
+    const rightW = Math.max(0, totalWidth - groupsW - leftW - (dividerW * 2));
 
     this.groupsEl.style.width = groupsW + 'px';
     this.leftEl.style.width = leftW + 'px';
@@ -551,8 +550,13 @@ export class Layout {
       if (!dragging) return;
       const rect = this.root.getBoundingClientRect();
       const x = e.clientX - rect.left;
-      // Clamp leftWidth to reasonable bounds considering groups panel
-      this.leftWidth = Math.max(0.2, Math.min(0.5, x / rect.width));
+      // Compute leftWidth relative to space after groups panel
+      const xFraction = x / rect.width;
+      const minLeft = 0.2;
+      const minRight = 0.2;
+      const maxLeft = Math.max(minLeft, 1 - this.groupsWidth - minRight);
+      const rawLeft = xFraction - this.groupsWidth;
+      this.leftWidth = Math.max(minLeft, Math.min(maxLeft, rawLeft));
       this.applySizes();
     };
 

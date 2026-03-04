@@ -272,10 +272,7 @@ When you learn something important:
         }
         this.callbacks.onResponseDone(jid);
         this.callbacks.onStatusChange(jid, 'ready');
-        
-        // Update last agent timestamp
-        this.lastAgentTimestamp.set(jid, new Date().toISOString());
-        db.setState(`lastAgentTs_${jid}`, new Date().toISOString());
+        // Note: lastAgentTimestamp is updated in processGroupQueue based on last message processed
       },
       onError: (error) => {
         const tab = this.tabs.get(jid);
@@ -372,6 +369,24 @@ When you learn something important:
     return this.contexts.get(jid);
   }
 
+  /** Wait for a tab to become ready, or timeout */
+  private async waitForTabReady(jid: string, timeoutMs: number = 10000): Promise<boolean> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const tab = this.tabs.get(jid);
+      if (!tab) return false;
+      if (tab.status === 'ready' || tab.status === 'processing') {
+        return true;
+      }
+      if (tab.status === 'error') {
+        return false;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    }
+    log.warn('Timed out waiting for tab to become ready', { jid });
+    return false;
+  }
+
   /** Send a prompt to a group */
   async sendPrompt(jid: string, text: string, senderId: string, senderName: string): Promise<void> {
     let context = this.contexts.get(jid);
@@ -382,11 +397,18 @@ When you learn something important:
       context = this.contexts.get(jid);
     }
 
-    const tab = this.tabs.get(jid);
+    let tab = this.tabs.get(jid);
     if (tab?.status === 'initializing') {
-      // Queue the message, it will be sent when ready
-      log.debug('Context initializing, message queued', { jid });
-      return;
+      // Wait for the context to become ready instead of dropping the message
+      log.debug('Context initializing, waiting to send message', { jid });
+      const ready = await this.waitForTabReady(jid);
+      if (!ready) {
+        log.error('Context did not become ready in time, dropping prompt', { jid });
+        return;
+      }
+      // Refresh context and tab after initialization
+      context = this.contexts.get(jid);
+      tab = this.tabs.get(jid);
     }
 
     if (!context) {
@@ -438,10 +460,14 @@ When you learn something important:
       return `[${time}] ${m.senderName}: ${m.content}`;
     }).join('\n');
 
-    // Clear queue and send
+    // Clear queue and update high-water mark based on last message processed
     this.messageQueues.set(jid, []);
     
     const lastMsg = messages[messages.length - 1];
+    // Update timestamp to last message processed (not "now") to avoid dropping messages
+    this.lastAgentTimestamp.set(jid, lastMsg.timestamp);
+    await db.setState(`lastAgentTs_${jid}`, lastMsg.timestamp);
+    
     await this.sendPrompt(jid, formatted, lastMsg.senderId, lastMsg.senderName);
   }
 
@@ -470,6 +496,10 @@ When you learn something important:
   /** Cleanup */
   async shutdown(): Promise<void> {
     this.stopMessageLoop();
+    
+    // Stop the scheduler
+    this.scheduler?.stop();
+    this.scheduler = null;
     
     for (const jid of this.contexts.keys()) {
       await this.destroyGroupTab(jid);
