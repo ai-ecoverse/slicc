@@ -1,4 +1,4 @@
-![slicc - Browser-Based Coding Agent](hero-banner.jpg)
+![slicc - Browser-Based Coding Agent](hero-banner.png)
 
 # slicc — Self-Licking Ice Cream Cone
 
