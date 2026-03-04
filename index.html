@@ -92,6 +92,12 @@
         max-height: 200px; overflow-y: auto;
       }
       .tool-call__result--error { color: #ff6b6b; }
+      .tool-call__screenshot {
+        max-width: 100%; max-height: 300px; border-radius: 6px;
+        margin-top: 8px; cursor: pointer; border: 1px solid #3a3a5a;
+        transition: border-color .15s;
+      }
+      .tool-call__screenshot:hover { border-color: #e94560; }
 
       /* Code blocks inside messages */
       .msg pre {
