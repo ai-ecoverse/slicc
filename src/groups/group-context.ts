@@ -167,6 +167,35 @@ export class GroupContext {
           systemPrompt,
         },
         getApiKey: () => apiKey,
+        // Context compaction: truncate oversized tool results and drop old messages
+        transformContext: async (messages) => {
+          const MAX_RESULT = 8000;
+          const MAX_TOTAL = 600000;
+          const truncated = messages.map((msg) => {
+            if (msg.role === 'toolResult' && Array.isArray((msg as any).content)) {
+              const content = (msg as any).content as Array<{ type: 'text'; text?: string }>;
+              const needs = content.some((c) => c.type === 'text' && c.text && c.text.length > MAX_RESULT);
+              if (needs) {
+                return { ...msg, content: content.map((c) =>
+                  c.type === 'text' && c.text && c.text.length > MAX_RESULT
+                    ? { ...c, text: c.text.slice(0, MAX_RESULT) + '\n... (truncated)' } : c,
+                ) } as typeof msg;
+              }
+            }
+            return msg;
+          });
+          let result = truncated;
+          const size = (msgs: typeof result) => msgs.reduce((s, m) => s + JSON.stringify(m).length, 0);
+          let total = size(result);
+          let rounds = 0;
+          while (total > MAX_TOTAL && result.length > 12 && rounds < 50) {
+            rounds++;
+            const marker = { role: 'user' as const, content: [{ type: 'text' as const, text: '[Earlier messages compacted]' }] };
+            result = [result[0], result[1], marker as any, ...result.slice(result.length - 10)];
+            total = size(result);
+          }
+          return result;
+        },
       });
 
       // Subscribe to agent events
