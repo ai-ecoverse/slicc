@@ -8,6 +8,8 @@
 
 A browser-based coding agent with a thin CLI server. Runs Claude directly in the browser with full filesystem access, a WebAssembly shell, browser automation via CDP, and a complete suite of code editing tools — all without leaving your browser tab.
 
+> slicc is to Chrome what OpenClaw is to a Mac mini or to put it another way, like NanoClaw just in obese.
+
 ---
 
 Part of the **[AI Ecoverse](https://github.com/trieloff/ai-ecoverse)** — a comprehensive ecosystem of tools for AI-assisted development:
