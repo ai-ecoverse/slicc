@@ -37,6 +37,14 @@ export interface GroupConfig {
   assistantName?: string;
 }
 
+/** Tool call record for persisting tool use in message history. */
+export interface PersistedToolCall {
+  name: string;
+  input: unknown;
+  result?: string;
+  isError?: boolean;
+}
+
 /** Message from any channel */
 export interface ChannelMessage {
   id: string;
@@ -47,6 +55,8 @@ export interface ChannelMessage {
   timestamp: string;
   fromAssistant: boolean;
   channel: string;
+  /** Tool calls made during this assistant response (persisted for history replay). */
+  toolCalls?: PersistedToolCall[];
 }
 
 /** Scheduled task */

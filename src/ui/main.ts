@@ -513,9 +513,20 @@ Use the tools available to help the user with their tasks.`,
       const messageId = msg.id;
       if (msg.fromAssistant) {
         emitToUI({ type: 'message_start', messageId });
-        emitToUI({ type: 'content_delta', messageId, text: msg.content });
+        // Replay tool calls if present
+        if (msg.toolCalls) {
+          for (const tc of msg.toolCalls) {
+            emitToUI({ type: 'tool_use_start', messageId, toolName: tc.name, toolInput: tc.input });
+            if (tc.result !== undefined) {
+              emitToUI({ type: 'tool_result', messageId, toolName: tc.name, result: tc.result, isError: tc.isError });
+            }
+          }
+        }
+        if (msg.content) {
+          emitToUI({ type: 'content_delta', messageId, text: msg.content });
+        }
         emitToUI({ type: 'content_done', messageId });
-        emitToUI({ type: 'turn_end', messageId }); // Reset streaming state after each replayed message
+        emitToUI({ type: 'turn_end', messageId });
       } else {
         // User message - add directly to chat panel
         layout.panels.chat.addUserMessage(msg.content);

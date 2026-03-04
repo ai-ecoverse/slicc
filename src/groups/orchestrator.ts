@@ -17,6 +17,7 @@ import type {
   RegisteredGroup,
   ChannelMessage,
   GroupTabState,
+  PersistedToolCall,
   ScheduledTask,
 } from './types.js';
 import * as db from './db.js';
@@ -60,6 +61,8 @@ export class Orchestrator {
   private lastAgentTimestamp: Map<string, string> = new Map();
   /** Accumulates partial response text per group for saving on completion. */
   private pendingResponses: Map<string, string> = new Map();
+  /** Accumulates tool calls per group for persisting with the response. */
+  private pendingToolCalls: Map<string, PersistedToolCall[]> = new Map();
   private container: HTMLElement;
   private callbacks: OrchestratorCallbacks;
   private config: AssistantConfig;
@@ -274,23 +277,30 @@ When you learn something important:
         this.callbacks.onResponse(jid, text, isPartial);
       },
       onResponseDone: () => {
-        // Save the accumulated response to the DB so it survives group switches
+        // Save the accumulated response + tool calls to the DB so it survives group switches
         const responseText = this.pendingResponses.get(jid);
-        if (responseText) {
+        const toolCalls = this.pendingToolCalls.get(jid);
+        if (responseText || (toolCalls && toolCalls.length > 0)) {
           const responseMsg: ChannelMessage = {
             id: `resp-${jid}-${Date.now()}`,
             chatJid: jid,
             senderId: this.config.name,
             senderName: this.config.name,
-            content: responseText,
+            content: responseText ?? '',
             timestamp: new Date().toISOString(),
             fromAssistant: true,
             channel: 'web',
+            // Strip base64 image data from tool results before persisting
+            toolCalls: toolCalls?.map((tc) => ({
+              ...tc,
+              result: tc.result?.replace(/<img:data:image\/[^>]+>/g, '').trim(),
+            })),
           };
           db.saveMessage(responseMsg).catch((err) => {
             log.error('Failed to persist assistant response', { jid, error: err instanceof Error ? err.message : String(err) });
           });
           this.pendingResponses.delete(jid);
+          this.pendingToolCalls.delete(jid);
         }
 
         const tab = this.tabs.get(jid);
@@ -322,9 +332,19 @@ When you learn something important:
         this.callbacks.onStatusChange(jid, status);
       },
       onToolStart: (toolName, toolInput) => {
+        // Accumulate tool call for persistence
+        const calls = this.pendingToolCalls.get(jid) ?? [];
+        calls.push({ name: toolName, input: toolInput });
+        this.pendingToolCalls.set(jid, calls);
         this.callbacks.onToolStart?.(jid, toolName, toolInput);
       },
       onToolEnd: (toolName, result, isError) => {
+        // Update the last pending tool call with its result
+        const calls = this.pendingToolCalls.get(jid);
+        if (calls) {
+          const last = [...calls].reverse().find((c) => c.name === toolName && c.result === undefined);
+          if (last) { last.result = result; last.isError = isError; }
+        }
         this.callbacks.onToolEnd?.(jid, toolName, result, isError);
       },
       // NanoClaw tools callbacks
