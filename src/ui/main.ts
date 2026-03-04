@@ -7,23 +7,46 @@
  */
 
 import { Layout } from './layout.js';
-import { getApiKey, showApiKeyDialog } from './api-key-dialog.js';
+import { getApiKey, getProvider, getAzureResource, getBedrockRegion, showApiKeyDialog } from './api-key-dialog.js';
+import type { ApiProvider } from './api-key-dialog.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent } from './types.js';
 import { Agent, adaptTools, createLogger, getModel } from '../core/index.js';
 import type { AgentEvent as CoreAgentEvent, AssistantMessage, AssistantMessageEvent, TextContent, Model } from '../core/index.js';
-import { createFileTools, createBashTool, createBrowserTool, createSearchTools } from '../tools/index.js';
+import { createFileTools, createBashTool, createBrowserTool, createSearchTools, createJavaScriptTool } from '../tools/index.js';
 import { BrowserAPI } from '../cdp/index.js';
 
 const log = createLogger('main');
 
 const DEFAULT_MODEL_ID = 'claude-opus-4-6';
 
-/** Resolve a model ID string to a pi-ai Model object. */
+/** Resolve a model ID and override baseUrl for Azure/Bedrock providers. */
 function resolveModel(modelId: string): Model<any> {
   try {
-    return getModel('anthropic', modelId as any);
-  } catch {
-    // Fallback to default if the model ID isn't in the registry
+    let model = getModel('anthropic', modelId as any);
+    const provider = getProvider();
+    if (provider === 'azure') {
+      const resource = getAzureResource();
+      if (resource) {
+        // Azure AI Foundry: resource name → https://{name}.services.ai.azure.com/anthropic
+        const baseUrl = resource.includes('://')
+          ? resource  // full URL provided
+          : `https://${resource}.services.ai.azure.com/anthropic`;
+        model = { ...model, baseUrl };
+      }
+    } else if (provider === 'bedrock') {
+      const endpoint = getBedrockRegion();
+      if (endpoint) {
+        const baseUrl = endpoint.startsWith('https://') ? endpoint : `https://${endpoint}`;
+        model = { ...model, baseUrl };
+      }
+    }
+    return model;
+  } catch (err) {
+    log.error('Failed to resolve model, falling back to default', {
+      modelId,
+      provider: getProvider(),
+      error: err instanceof Error ? err.message : String(err),
+    });
     return getModel('anthropic', DEFAULT_MODEL_ID as any);
   }
 }
@@ -117,7 +140,9 @@ function createEventAdapter(
         if (messages.length > 0) {
           const last = messages[messages.length - 1];
           if (last.role === 'assistant' && (last as AssistantMessage).errorMessage) {
-            emit({ type: 'error', error: (last as AssistantMessage).errorMessage! });
+            const err = (last as AssistantMessage).errorMessage!;
+            log.error('Agent error', err);
+            emit({ type: 'error', error: err });
           }
         }
         break;
@@ -181,6 +206,11 @@ async function main(): Promise<void> {
     }
   }
 
+  if (fs) {
+    layout.panels.fileBrowser.setFs(fs);
+    log.info('File browser wired to VFS');
+  }
+
   // Initialize the BrowserAPI
   const browser = new BrowserAPI();
 
@@ -190,6 +220,7 @@ async function main(): Promise<void> {
     ...(shell ? [createBashTool(shell)] : []),
     createBrowserTool(browser),
     ...(fs ? createSearchTools(fs) : []),
+    ...(fs ? [createJavaScriptTool(fs)] : []),
   ];
   const tools = adaptTools(legacyTools);
   log.info('Tools ready', tools.map((t) => t.name));
@@ -208,7 +239,7 @@ Use the tools available to help the user with their tasks.`,
     },
     getApiKey: () => apiKey,
   });
-  log.info('Agent created');
+  log.info('Agent created', { provider: getProvider(), model: model.id });
 
   // Wire model picker changes to agent
   layout.onModelChange = (modelId) => {
@@ -223,8 +254,8 @@ Use the tools available to help the user with their tasks.`,
     for (const cb of eventListeners) {
       try {
         cb(event);
-      } catch {
-        // Don't let one listener break others
+      } catch (err) {
+        log.error('Listener error', { eventType: event.type, error: err instanceof Error ? err.message : String(err) });
       }
     }
   };

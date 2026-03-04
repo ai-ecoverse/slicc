@@ -17,7 +17,17 @@ export function createBashTool(shell: WasmShell): ToolDefinition {
   return {
     name: 'bash',
     description:
-      'Execute a bash command. Supports pipes (|), redirects (>, >>), chaining (&& and ;), control flow (if/else, for, while), command substitution ($(...)), shell functions, and variable expansion. Includes commands: echo, printf, pwd, cd, ls, cat, mkdir, rm, cp, mv, touch, head, tail, wc, grep, find, sed, awk, sort, uniq, tr, cut, tee, xargs, date, basename, dirname, env, export, and more.',
+      'Execute a bash command in a full Unix-like shell (just-bash with 78+ commands). ' +
+      'Shell features: pipes (|), redirects (>, >>, <, <<), chaining (&& ; ||), subshells, ' +
+      'control flow (if/else, for, while, case), command substitution ($(...)), process substitution, ' +
+      'shell functions, arrays, variable expansion, globs, brace expansion, here-docs. ' +
+      'Text processing: grep, egrep, fgrep, rg (ripgrep), sed, awk, cut, tr, sort, uniq, wc, ' +
+      'head, tail, fold, nl, rev, column, paste, join, comm, expand, strings, od. ' +
+      'Data formats: jq (JSON), yq (YAML), base64, md5sum, sha256sum. ' +
+      'File operations: find, diff, tar, gzip, gunzip, cp, mv, rm, mkdir, touch, chmod, du, file, dirname, basename, tee, xargs. ' +
+      'Networking: curl (full HTTP client — GET, POST, PUT, DELETE with headers, data, auth). ' +
+      'Database: sqlite3 (in-memory or file-backed SQL). ' +
+      'Utilities: seq, date, printf, expr, env, export, test/[, true, false, read.',
     inputSchema: {
       type: 'object',
       properties: {

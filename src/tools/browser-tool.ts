@@ -18,16 +18,37 @@ const log = createLogger('tool:browser');
 
 /** Create the browser tool bound to a BrowserAPI instance. */
 export function createBrowserTool(browser: BrowserAPI): ToolDefinition {
+  let runtimeTabId: string | null = null;
+  let appTabId: string | null = null;
+
+  /** Detect and cache the SLICC app's own tab ID so we can hide/protect it. */
+  async function resolveAppTabId(): Promise<void> {
+    if (appTabId) return;
+    const pages = await browser.listPages();
+    const appOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
+    const appTab = pages.find((p) => p.url.startsWith(appOrigin));
+    if (appTab) appTabId = appTab.targetId;
+  }
+
+  function isAppTab(targetId: string): boolean {
+    return targetId === appTabId;
+  }
+
   return {
     name: 'browser',
     description:
-      'Control browser tabs via Chrome DevTools Protocol. Specify an "action" and relevant parameters. Actions: list_tabs, navigate (url, targetId), screenshot (targetId), evaluate (expression, targetId), click (selector, targetId), type (text, targetId).',
+      'Control browser tabs via Chrome DevTools Protocol. Specify an "action" and relevant parameters. ' +
+      'The app\'s own tab is hidden and protected — you cannot accidentally navigate or modify it. ' +
+      'Actions: list_tabs, new_tab (url — creates a new tab and navigates to the URL, returns targetId), ' +
+      'navigate (url, targetId), screenshot (targetId), evaluate (expression, targetId), ' +
+      'click (selector, targetId), type (text, targetId), evaluate_persistent (expression — runs JS in a persistent ' +
+      'blank tab that preserves variables across calls, no targetId needed).',
     inputSchema: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['list_tabs', 'navigate', 'screenshot', 'evaluate', 'click', 'type'],
+          enum: ['list_tabs', 'new_tab', 'navigate', 'screenshot', 'evaluate', 'click', 'type', 'evaluate_persistent'],
           description: 'The browser action to perform.',
         },
         targetId: {
@@ -58,17 +79,32 @@ export function createBrowserTool(browser: BrowserAPI): ToolDefinition {
       const targetId = input['targetId'] as string | undefined;
       log.debug('Action', { action, targetId, url: input['url'], selector: input['selector'] });
 
+      // Protect the SLICC app tab from being modified
+      await resolveAppTabId();
+      if (targetId && isAppTab(targetId)) {
+        return { content: 'Cannot operate on the SLICC app tab — that would kill the application. Use a different tab or create a new one.', isError: true };
+      }
+
       try {
         switch (action) {
           case 'list_tabs': {
-            const pages = await browser.listPages();
+            await resolveAppTabId();
+            const pages = (await browser.listPages()).filter((p) => !isAppTab(p.targetId));
             if (pages.length === 0) {
-              return { content: 'No browser tabs found.' };
+              return { content: 'No browser tabs found. Use the "navigate" action with a new tab to open a page.' };
             }
             const lines = pages.map(
               (p) => `- ${p.targetId}: ${p.title} (${p.url})`,
             );
             return { content: lines.join('\n') };
+          }
+
+          case 'new_tab': {
+            const url = input['url'] as string || 'about:blank';
+            await resolveAppTabId();
+            const createResult = await browser.cdpClient.send('Target.createTarget', { url });
+            const newTargetId = createResult['targetId'] as string;
+            return { content: `Created new tab (targetId: ${newTargetId}) at ${url}` };
           }
 
           case 'navigate': {
@@ -123,6 +159,34 @@ export function createBrowserTool(browser: BrowserAPI): ToolDefinition {
             await browser.attachToPage(targetId);
             await browser.type(text);
             return { content: `Typed: ${text}` };
+          }
+
+          case 'evaluate_persistent': {
+            const expression = input['expression'] as string;
+            if (!expression) {
+              return { content: 'evaluate_persistent requires expression', isError: true };
+            }
+            // Ensure we have a persistent runtime tab
+            if (runtimeTabId) {
+              try {
+                await browser.attachToPage(runtimeTabId);
+              } catch (err) {
+                log.warn('Runtime tab lost, creating new one', {
+                  runtimeTabId,
+                  error: err instanceof Error ? err.message : String(err),
+                });
+                runtimeTabId = null;
+              }
+            }
+            if (!runtimeTabId) {
+              // listPages ensures CDP connection is established
+              await browser.listPages();
+              const createResult = await browser.cdpClient.send('Target.createTarget', { url: 'about:blank' });
+              runtimeTabId = createResult['targetId'] as string;
+              await browser.attachToPage(runtimeTabId);
+            }
+            const evalResult = await browser.evaluate(expression);
+            return { content: JSON.stringify(evalResult, null, 2) };
           }
 
           default:

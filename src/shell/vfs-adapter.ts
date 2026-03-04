@@ -14,11 +14,14 @@ import type {
   RmOptions,
   CpOptions,
   FileContent,
-  ReadFileOptions,
-  WriteFileOptions,
   BufferEncoding,
-  DirentEntry,
 } from 'just-bash';
+
+// These types are defined in just-bash's fs/interface.d.ts but not re-exported
+// from the package root. Define locally to match IFileSystem's method signatures.
+interface ReadFileOptions { encoding?: BufferEncoding | null }
+interface WriteFileOptions { encoding?: BufferEncoding }
+interface DirentEntry { name: string; isFile: boolean; isDirectory: boolean; isSymbolicLink: boolean }
 
 export class VfsAdapter implements IFileSystem {
   constructor(private vfs: VirtualFS) {}

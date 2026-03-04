@@ -37,34 +37,32 @@ Virtual Filesystem (src/fs/) -> Shell (src/shell/) -> CDP (src/cdp/) -> Tools (s
 POSIX-like async filesystem backed by OPFS (preferred) or IndexedDB (fallback). VirtualFS is the facade; StorageBackend is the interface both backends implement. FsError carries POSIX error codes (ENOENT, EISDIR, etc.). All paths are absolute, forward-slash, normalized.
 
 ### Shell (src/shell/)
-WasmShell wraps just-bash (WASM Bash interpreter) and connects it to VirtualFS via VfsAdapter (implements just-bash's IFileSystem). The shell maintains env/cwd state across calls. Terminal UI via xterm.js with dynamic imports (so tests run in Node without xterm).
+WasmShell wraps just-bash 2.11.7 (WASM Bash interpreter) and connects it to VirtualFS via VfsAdapter (implements just-bash's IFileSystem). The shell maintains env/cwd state across calls. Terminal UI via xterm.js with dynamic imports (so tests run in Node without xterm). Supports 78+ commands, escape sequences (arrow keys, Home/End/Delete), multi-line editing with continuation buffer, and proxied fetch for curl/networking via `/api/fetch-proxy`.
 
 ### CDP (src/cdp/)
 CDPClient: low-level WebSocket protocol (send/on/off/once with pending-command tracking). BrowserAPI: high-level Playwright-style API built on CDPClient (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree). Connects through the CLI's WebSocket proxy at ws://localhost:3000/cdp.
 
 ### Tools (src/tools/)
-All tools use the legacy ToolDefinition interface (name, description, inputSchema, execute). Six tools: bash, read_file, write_file, edit_file, grep, find, browser (with sub-actions). Factory functions take their dependency (VirtualFS, WasmShell, or BrowserAPI).
+All tools use the legacy ToolDefinition interface (name, description, inputSchema, execute). Seven tools: bash, read_file, write_file, edit_file, grep, find, browser (with sub-actions), javascript (sandboxed iframe with VFS bridge). Factory functions take their dependency (VirtualFS, WasmShell, or BrowserAPI).
 
 ### Core Agent (src/core/)
-Ported from pi-mono (@mariozechner/pi-ai). Key types: AgentMessage (union of User/Assistant/ToolResult), AgentTool (pi-compatible execute signature), AgentEvent (fine-grained streaming events).
+Uses @mariozechner/pi-agent-core for the agent loop and @mariozechner/pi-ai for unified LLM streaming. Key types re-exported from pi packages: AgentMessage, AgentTool, AgentEvent, Model, StreamFn.
 
-- Agent class: state management, event listeners, session persistence, sendMessage/prompt/steer/followUp API
-- agent-loop.ts: outer loop (follow-up messages) wrapping inner loop (tool calls + steering interruptions)
-- stream.ts: bridges Anthropic SDK streaming to AssistantMessageEventStream with retry on 529 (overloaded). Runs browser-side with dangerouslyAllowBrowser
-- event-stream.ts: generic async-iterable push-pull queue with result promise
-- tool-adapter.ts: wraps legacy ToolDefinition into AgentTool
+- Agent class (from pi-agent-core): state management, `subscribe()` for events, `prompt()` for messages, `abort()` to stop
+- tool-adapter.ts: wraps legacy ToolDefinition into AgentTool (pi-compatible execute signature)
+- types.ts: self-contained type definitions (ToolDefinition, ToolResult, AgentConfig, SessionData)
 
 ### UI (src/ui/)
-Vanilla TypeScript, no framework. Layout creates a resizable three-panel split: chat (left), terminal (top-right), browser preview (bottom-right). main.ts bootstraps everything and contains the event adapter that maps core AgentEvent to UI AgentEvent.
+Vanilla TypeScript, no framework. Layout creates a resizable three-panel split: chat (left), terminal (top-right), file browser (bottom-right). main.ts bootstraps everything and contains the event adapter that maps core AgentEvent to UI AgentEvent. Assistant label is "sliccy".
 
 Two separate IndexedDB session stores: UI-level (browser-coding-agent DB in session-store.ts) and core agent-level (agent-sessions DB in core/session.ts).
 
 ### CLI Server (src/cli/index.ts)
-Express server that launches Chrome with remote debugging, serves the UI (Vite middleware in dev, static files in prod), and runs a WebSocket proxy at /cdp. Single shared Chrome WebSocket connection with client message buffering. Console forwarder pipes in-page console output to CLI stdout.
+Express server that launches Chrome with remote debugging, serves the UI (Vite middleware in dev, static files in prod), and runs a WebSocket proxy at /cdp. Provides `/api/fetch-proxy` endpoint for cross-origin fetch (replaces CORS proxy). Single shared Chrome WebSocket connection with client message buffering. Console forwarder pipes in-page console output to CLI stdout.
 
 ### Data Flow
 ```
-User -> ChatPanel -> Agent.sendMessage() -> agentLoop() -> Anthropic API (streaming)
+User -> ChatPanel -> Agent.prompt() -> pi-agent-core loop -> Anthropic API (streaming)
   -> AssistantMessageEvent stream -> Agent state -> event adapter -> ChatPanel DOM
   -> Tool calls -> VirtualFS / WasmShell / BrowserAPI -> results -> back to agent loop
 ```
@@ -75,4 +73,4 @@ User -> ChatPanel -> Agent.sendMessage() -> agentLoop() -> Anthropic API (stream
 - **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node.
 - **Logging**: createLogger('namespace') from src/core/logger.ts. Level-filtered, DEBUG in dev, ERROR in prod. Uses __DEV__ global (set by Vite define).
 - **Node shims**: src/shims/empty.ts stubs out node:zlib and node:module for the browser bundle (just-bash references them).
-- **Anthropic SDK**: API key stored in localStorage. Singleton client cached in stream.ts, recreated when key changes.
+- **Multi-provider auth**: API key stored in localStorage. Provider selector supports Anthropic (direct), Azure AI Foundry, and AWS Bedrock. Provider/resource/region stored in localStorage. Model resolved via `getModel()` from pi-ai with baseUrl override for Azure/Bedrock.

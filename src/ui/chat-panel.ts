@@ -30,7 +30,6 @@ export class ChatPanel {
   private currentStreamId: string | null = null;
   private sessionStore: SessionStore;
   private sessionId: string;
-  private screenshotCallback: ((base64: string, url?: string) => void) | null = null;
   private terminalOutputCallback: ((text: string) => void) | null = null;
 
   constructor(container: HTMLElement) {
@@ -46,11 +45,6 @@ export class ChatPanel {
     this.unsubscribe?.();
     this.agent = agent;
     this.unsubscribe = agent.onEvent((ev) => this.handleAgentEvent(ev));
-  }
-
-  /** Set a callback for when a screenshot event arrives. */
-  onScreenshot(cb: (base64: string, url?: string) => void): void {
-    this.screenshotCallback = cb;
   }
 
   /** Set a callback for terminal output events. */
@@ -189,7 +183,6 @@ export class ChatPanel {
         this.handleError(event.error);
         break;
       case 'screenshot':
-        this.screenshotCallback?.(event.base64, event.url);
         break;
       case 'terminal_output':
         this.terminalOutputCallback?.(event.text);
@@ -326,7 +319,7 @@ export class ChatPanel {
     // Role label
     const roleEl = document.createElement('div');
     roleEl.className = 'msg__role';
-    roleEl.textContent = msg.role === 'user' ? 'You' : 'Assistant';
+    roleEl.textContent = msg.role === 'user' ? 'You' : 'sliccy';
     el.appendChild(roleEl);
 
     // Content

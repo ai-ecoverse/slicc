@@ -28,12 +28,15 @@ Part of the **[AI Ecoverse](https://github.com/trieloff/ai-ecoverse)** — a com
 - :satellite: **CLI Server** — thin Node.js/Express server launches Chrome and proxies CDP connections
 - :file_folder: **Virtual Filesystem** — OPFS + IndexedDB-backed filesystem right in the browser
 - :shell: **WebAssembly Bash Shell** — real Bash via [just-bash](https://github.com/nicolo-ribaudo/just-bash) compiled to WASM
-- :robot: **Browser Automation** — screenshots, navigation, JS eval, element clicking via Chrome DevTools Protocol
+- :robot: **Browser Automation** — screenshots, navigation, JS eval, element clicking via Chrome DevTools Protocol, tab management with app tab protection
 - :pencil2: **File Operations** — read, write, edit files with syntax-aware tools
 - :mag: **Search Tools** — grep and find across your virtual codebase
+- :globe_with_meridians: **Networking** — curl and fetch support via proxied fetch through `/api/fetch-proxy`
+- :wrench: **JavaScript Tool** — sandboxed JS execution in an iframe with VFS bridge and persistent context
+- :key: **Multi-Provider Auth** — Anthropic (direct), Azure AI Foundry, and AWS Bedrock with segmented control
 - :zap: **Real-Time Streaming** — responses stream token-by-token as Claude thinks
 - :floppy_disk: **Session Persistence** — conversations and files survive page reloads via IndexedDB
-- :window: **Split-Pane UI** — chat panel + terminal + browser preview, all in one view
+- :window: **Split-Pane UI** — chat panel + terminal + file browser, all in one view
 - :crescent_moon: **Dark Theme** — syntax-highlighted code with a dark-first design
 
 ## Why "slicc"?
@@ -48,7 +51,7 @@ The ultimate recursive dev tool.
 
 slicc is a dual-process system: a thin CLI server and a rich browser application.
 
-**CLI Server** (Node.js/Express) — launches a headless Chrome instance, establishes a CDP (Chrome DevTools Protocol) WebSocket proxy, provides a CORS proxy for LLM API calls, and serves the UI assets.
+**CLI Server** (Node.js/Express) — launches a headless Chrome instance, establishes a CDP (Chrome DevTools Protocol) WebSocket proxy, provides a fetch proxy (`/api/fetch-proxy`) for cross-origin requests, and serves the UI assets.
 
 **Browser App** (Vite/TypeScript) — the agent loop (powered by [pi-mono](https://github.com/badlogic/pi-mono)), tool execution, chat UI, integrated terminal, and embedded browser preview all run client-side.
 
@@ -58,11 +61,11 @@ slicc is a dual-process system: a thin CLI server and a rich browser application
 │                                                      │
 │  ┌──────────────┬──────────────┬──────────────────┐  │
 │  │              │              │                  │  │
-│  │    Chat      │   Terminal   │  Browser Preview │  │
-│  │    Panel     │   (xterm)    │  (CDP-driven)    │  │
+│  │    Chat      │   Terminal   │  File Browser    │  │
+│  │    Panel     │   (xterm)    │  (VFS tree)      │  │
 │  │              │              │                  │  │
-│  │  Claude AI   │  WASM Bash   │  Live page view  │  │
-│  │  responses   │  shell       │  + screenshots   │  │
+│  │  Claude AI   │  WASM Bash   │  Live VFS view   │  │
+│  │  responses   │  shell       │  + download      │  │
 │  │              │              │                  │  │
 │  └──────────────┴──────────────┴──────────────────┘  │
 │                                                      │
@@ -70,7 +73,7 @@ slicc is a dual-process system: a thin CLI server and a rich browser application
                │ WebSocket (CDP proxy)
 ┌──────────────▼──────────────────────────────────────┐
 │           CLI Server (Node.js/Express)               │
-│  Chrome launcher  ·  CDP proxy  ·  CORS proxy  ·  Static server  │
+│  Chrome launcher  ·  CDP proxy  ·  Fetch proxy  ·  Static server  │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -81,7 +84,7 @@ Source layout:
 | `src/cli/` | CLI server — Chrome launch, CDP proxy, Express |
 | `src/ui/` | Browser UI — chat, terminal, browser panels |
 | `src/core/` | Agent types, tool registry, session management (core loop provided by pi-mono) |
-| `src/tools/` | Tool implementations (file ops, search, browser) |
+| `src/tools/` | Tool implementations (file ops, search, browser, javascript) |
 | `src/fs/` | Virtual filesystem (OPFS/IndexedDB) |
 | `src/shell/` | WebAssembly Bash shell integration |
 | `src/cdp/` | Chrome DevTools Protocol client |
