@@ -80,6 +80,24 @@ export class ChatPanel {
     return [...this.messages];
   }
 
+  /** Clear all messages from the display (doesn't affect session store). */
+  clear(): void {
+    this.messages = [];
+    this.renderMessages();
+  }
+
+  /** Add a user message to the display (for history loading). */
+  addUserMessage(content: string): void {
+    const msg: ChatMessage = {
+      id: uid(),
+      role: 'user',
+      content,
+      timestamp: Date.now(),
+    };
+    this.messages.push(msg);
+    this.appendMessageEl(msg);
+  }
+
   private render(): void {
     this.container.innerHTML = '';
     this.container.classList.add('chat');

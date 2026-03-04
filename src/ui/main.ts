@@ -14,6 +14,8 @@ import { Agent, adaptTools, createLogger, getModel } from '../core/index.js';
 import type { AgentEvent as CoreAgentEvent, AssistantMessage, AssistantMessageEvent, TextContent, Model } from '../core/index.js';
 import { createFileTools, createBashTool, createBrowserTool, createSearchTools, createJavaScriptTool } from '../tools/index.js';
 import { BrowserAPI, DebuggerClient } from '../cdp/index.js';
+import { Orchestrator } from '../groups/index.js';
+import type { RegisteredGroup, ChannelMessage } from '../groups/types.js';
 
 const log = createLogger('main');
 
@@ -353,6 +355,202 @@ Use the tools available to help the user with their tasks.`,
 
   layout.panels.chat.setAgent(agentHandle);
   log.info('Agent wired to chat UI — ready');
+
+  // Track currently selected group for routing
+  let selectedGroup: RegisteredGroup | null = null;
+  
+  // Track current message ID per group (unique per response)
+  const groupCurrentMessageId = new Map<string, string>();
+
+  // Initialize the group orchestrator
+  const orchestrator = new Orchestrator(
+    layout.getIframeContainer(),
+    {
+      onResponse: (groupJid, text, isPartial) => {
+        log.debug('Group response', { groupJid, textLength: text.length, isPartial });
+        // Route to chat UI if this is the selected group
+        if (selectedGroup?.jid === groupJid) {
+          // Start a new message if we don't have one
+          let messageId = groupCurrentMessageId.get(groupJid);
+          if (!messageId) {
+            messageId = `group-${groupJid}-${Date.now()}`;
+            groupCurrentMessageId.set(groupJid, messageId);
+            emitToUI({ type: 'message_start', messageId });
+          }
+          
+          if (isPartial) {
+            emitToUI({ type: 'content_delta', messageId, text });
+          } else {
+            // Full response
+            emitToUI({ type: 'content_delta', messageId, text });
+            emitToUI({ type: 'content_done', messageId });
+          }
+        }
+      },
+      onResponseDone: (groupJid) => {
+        log.debug('Group response done', { groupJid });
+        if (selectedGroup?.jid === groupJid) {
+          const messageId = groupCurrentMessageId.get(groupJid);
+          if (messageId) {
+            emitToUI({ type: 'content_done', messageId });
+            emitToUI({ type: 'turn_end', messageId });
+            // Clear for next message
+            groupCurrentMessageId.delete(groupJid);
+          }
+        }
+      },
+      onSendMessage: (targetJid, text) => {
+        log.debug('Send message requested', { targetJid, textLength: text.length });
+        // Route to the target group
+        const msgId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const msg: ChannelMessage = {
+          id: msgId,
+          chatJid: targetJid,
+          senderId: 'assistant',
+          senderName: 'sliccy',
+          content: text,
+          timestamp: new Date().toISOString(),
+          fromAssistant: true,
+          channel: 'web',
+        };
+        orchestrator.handleMessage(msg);
+        // Also render this message into the chat UI for the currently selected group
+        if (selectedGroup?.jid === targetJid) {
+          emitToUI({ type: 'message_start', messageId: msgId });
+          emitToUI({ type: 'content_delta', messageId: msgId, text });
+          emitToUI({ type: 'content_done', messageId: msgId });
+        }
+      },
+      onStatusChange: (groupJid, status) => {
+        layout.panels.groups.updateGroupStatus(groupJid, status);
+      },
+      onError: (groupJid, error) => {
+        log.error('Group error', { groupJid, error });
+        if (selectedGroup?.jid === groupJid) {
+          emitToUI({ type: 'error', error });
+        }
+      },
+      getBrowserAPI: () => browser,
+      onToolStart: (groupJid, toolName, toolInput) => {
+        if (selectedGroup?.jid === groupJid) {
+          const messageId = groupCurrentMessageId.get(groupJid);
+          if (messageId) {
+            emitToUI({ type: 'tool_use_start', messageId, toolName, toolInput });
+          }
+        }
+      },
+      onToolEnd: (groupJid, toolName, result, isError) => {
+        if (selectedGroup?.jid === groupJid) {
+          const messageId = groupCurrentMessageId.get(groupJid);
+          if (messageId) {
+            emitToUI({ type: 'tool_result', messageId, toolName, result, isError });
+          }
+        }
+      },
+    },
+  );
+
+  await orchestrator.init();
+  layout.panels.groups.setOrchestrator(orchestrator);
+  layout.panels.memory.setOrchestrator(orchestrator);
+
+  // Create main group if it doesn't exist
+  const groups = orchestrator.getGroups();
+  const hasMain = groups.some((g) => g.isMain);
+  if (!hasMain) {
+    const mainGroup = await layout.panels.groups.createGroup('Main', true);
+    selectedGroup = mainGroup;
+    log.info('Created main group');
+  } else {
+    // Select the main group by default
+    selectedGroup = groups.find((g) => g.isMain) ?? groups[0];
+  }
+
+  // Set initial group for memory panel
+  if (selectedGroup) {
+    layout.panels.memory.setSelectedGroup(selectedGroup.jid);
+  }
+
+  // Wire group selection to chat and memory panel
+  layout.onGroupSelect = async (group) => {
+    log.info('Group selected', { jid: group.jid, name: group.name });
+    selectedGroup = group;
+    // Create the group's iframe if not already running
+    orchestrator.createGroupTab(group.jid);
+    // Update memory panel
+    layout.panels.memory.setSelectedGroup(group.jid);
+    // Load and display message history for this group
+    await loadGroupChatHistory(group.jid);
+  };
+
+  // Load chat history for a group
+  async function loadGroupChatHistory(jid: string): Promise<void> {
+    const messages = await orchestrator.getMessagesForGroup(jid);
+    // Clear current chat and load history
+    layout.panels.chat.clear();
+    for (const msg of messages) {
+      const messageId = msg.id;
+      if (msg.fromAssistant) {
+        emitToUI({ type: 'message_start', messageId });
+        emitToUI({ type: 'content_delta', messageId, text: msg.content });
+        emitToUI({ type: 'content_done', messageId });
+      } else {
+        // User message - add directly to chat panel
+        layout.panels.chat.addUserMessage(msg.content);
+      }
+    }
+  }
+
+  // Create a group-aware agent handle that routes to orchestrator
+  const groupAgentHandle: AgentHandle = {
+    sendMessage(text: string): void {
+      if (!selectedGroup) {
+        emitToUI({ type: 'error', error: 'No group selected' });
+        return;
+      }
+      
+      // Create a message and route through orchestrator
+      const msg: ChannelMessage = {
+        id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        chatJid: selectedGroup.jid,
+        senderId: 'user',
+        senderName: 'User',
+        content: text,
+        timestamp: new Date().toISOString(),
+        fromAssistant: false,
+        channel: 'web',
+      };
+      
+      // Store and route the message
+      orchestrator.handleMessage(msg);
+      
+      // Also create the group tab if needed
+      orchestrator.createGroupTab(selectedGroup.jid);
+    },
+
+    onEvent(callback: (event: UIAgentEvent) => void): () => void {
+      eventListeners.add(callback);
+      return () => eventListeners.delete(callback);
+    },
+
+    stop(): void {
+      // Stop the current group's processing via the orchestrator
+      if (selectedGroup) {
+        orchestrator.getGroupContext(selectedGroup.jid)?.stop();
+      }
+    },
+  };
+
+  // Use the group-aware agent handle instead of the direct agent handle
+  layout.panels.chat.setAgent(groupAgentHandle);
+
+  // Initialize the selected group's tab
+  if (selectedGroup) {
+    orchestrator.createGroupTab(selectedGroup.jid);
+  }
+
+  // Note: Task scheduler is now managed by the orchestrator
+  log.info('Orchestrator initialized with integrated scheduler', { groupCount: orchestrator.getGroups().length });
 }
 
 main().catch((err) => {

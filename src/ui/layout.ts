@@ -2,14 +2,14 @@
  * Layout — split-pane (standalone) or tabbed (extension) layout.
  *
  * Standalone mode (CLI):
- *   ┌─────────────┬───┬───────────────┐
- *   │  Header (full width)            │
- *   ├─────────────┬───┬───────────────┤
- *   │             │ ║ │  Terminal      │
- *   │  Chat       │ ║ ├───────────────┤
- *   │  Panel      │ ║ │  Files        │
- *   │             │ ║ │               │
- *   └─────────────┴───┴───────────────┘
+ *   ┌───────┬─────────────┬───┬───────────────┐
+ *   │  Header (full width)                    │
+ *   ├───────┬─────────────┬───┬───────────────┤
+ *   │Groups │             │ ║ │  Terminal      │
+ *   │       │  Chat       │ ║ ├───────────────┤
+ *   │       │  Panel      │ ║ │  Files        │
+ *   │       │             │ ║ │               │
+ *   └───────┴─────────────┴───┴───────────────┘
  *
  * Extension mode (side panel):
  *   ┌─ Header ──────────────────────┐
@@ -23,13 +23,18 @@
 import { ChatPanel } from './chat-panel.js';
 import { TerminalPanel } from './terminal-panel.js';
 import { FileBrowserPanel } from './file-browser-panel.js';
+import { MemoryPanel } from './memory-panel.js';
+import { GroupsPanel } from './groups-panel.js';
 import { getApiKey, clearApiKey, clearAzureResource, clearProvider } from './api-key-dialog.js';
 import type { ChatMessage } from './types.js';
+import type { RegisteredGroup } from '../groups/types.js';
 
 export interface LayoutPanels {
   chat: ChatPanel;
   terminal: TerminalPanel;
   fileBrowser: FileBrowserPanel;
+  memory: MemoryPanel;
+  groups: GroupsPanel;
 }
 
 type TabId = 'chat' | 'terminal' | 'files';
@@ -39,12 +44,16 @@ export class Layout {
   private isExtension: boolean;
 
   // Split-layout elements (standalone only)
+  private groupsEl!: HTMLElement;
   private leftEl!: HTMLElement;
   private rightEl!: HTMLElement;
+  private groupsDivider!: HTMLElement;
   private verticalDivider!: HTMLElement;
   private horizontalDivider!: HTMLElement;
+  private bottomSection!: HTMLElement;
   private terminalContainer!: HTMLElement;
   private fileBrowserContainer!: HTMLElement;
+  private iframeContainer!: HTMLElement;
 
   // Tabbed-layout elements (extension only)
   private tabContainers = new Map<TabId, HTMLElement>();
@@ -60,9 +69,11 @@ export class Layout {
 
   public panels!: LayoutPanels;
   public onModelChange?: (model: string) => void;
+  public onGroupSelect?: (group: RegisteredGroup) => void;
 
-  private leftWidth = 0.55;
-  private topHeight = 0.65;
+  private groupsWidth = 0.15; // fraction of total width for groups panel
+  private leftWidth = 0.45; // fraction of total width for chat
+  private topHeight = 0.65; // fraction of right panel height
 
   constructor(root: HTMLElement, isExtension = false) {
     this.root = root;
@@ -168,7 +179,7 @@ export class Layout {
     });
     this.actionsEl.appendChild(this.clearTermBtn);
 
-    // Clear FS
+    // Clear FS (dev mode only)
     this.clearFsBtn = document.createElement('button');
     this.clearFsBtn.className = 'header__btn';
     this.clearFsBtn.textContent = 'Clear FS';
@@ -182,7 +193,29 @@ export class Layout {
       } catch { /* OPFS not available or already empty */ }
       location.reload();
     });
-    this.actionsEl.appendChild(this.clearFsBtn);
+    // Only show in dev mode
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      this.actionsEl.appendChild(this.clearFsBtn);
+    }
+
+    // Clear Groups DB (dev mode only) - clears all group data including global memory
+    const clearGroupsBtn = document.createElement('button');
+    clearGroupsBtn.className = 'header__btn';
+    clearGroupsBtn.textContent = 'Clear Groups';
+    clearGroupsBtn.addEventListener('click', async () => {
+      // Delete all group-related IndexedDB databases
+      const dbs = await indexedDB.databases();
+      for (const db of dbs) {
+        if (db.name?.startsWith('slicc-fs-') || db.name === 'slicc-groups') {
+          indexedDB.deleteDatabase(db.name);
+        }
+      }
+      location.reload();
+    });
+    // Only show in dev mode
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      this.actionsEl.appendChild(clearGroupsBtn);
+    }
 
     // API Key (always visible)
     const apiKeyBtn = document.createElement('button');
@@ -255,11 +288,34 @@ export class Layout {
 
     this.root.appendChild(content);
 
+    // Hidden container for group iframes (needed even in extension mode)
+    this.iframeContainer = document.createElement('div');
+    this.iframeContainer.id = 'group-iframes';
+    this.iframeContainer.style.display = 'none';
+    this.root.appendChild(this.iframeContainer);
+
+    // Create a dummy groups element for extension mode
+    this.groupsEl = document.createElement('div');
+    this.groupsEl.style.display = 'none';
+    this.root.appendChild(this.groupsEl);
+
+    // Create a dummy memory container for extension mode
+    const memoryContainer = document.createElement('div');
+    memoryContainer.style.display = 'none';
+    this.root.appendChild(memoryContainer);
+
     // Create panels in their tab containers
     this.panels = {
       chat: new ChatPanel(this.tabContainers.get('chat')!),
       terminal: new TerminalPanel(this.tabContainers.get('terminal')!),
       fileBrowser: new FileBrowserPanel(this.tabContainers.get('files')!),
+      memory: new MemoryPanel(memoryContainer),
+      groups: new GroupsPanel(this.groupsEl, {
+        onGroupSelect: (group) => this.onGroupSelect?.(group),
+        onSendMessage: () => {
+          // Placeholder - wired through orchestrator in main.ts
+        },
+      }),
     };
 
     this.updateButtonVisibility();
@@ -300,6 +356,16 @@ export class Layout {
     const layout = document.createElement('div');
     layout.className = 'layout';
 
+    // Groups panel (leftmost)
+    this.groupsEl = document.createElement('div');
+    this.groupsEl.className = 'layout__groups';
+    layout.appendChild(this.groupsEl);
+
+    // Groups divider
+    this.groupsDivider = document.createElement('div');
+    this.groupsDivider.className = 'layout__divider';
+    layout.appendChild(this.groupsDivider);
+
     // Left panel (chat)
     this.leftEl = document.createElement('div');
     this.leftEl.className = 'layout__left';
@@ -322,11 +388,74 @@ export class Layout {
     this.horizontalDivider.className = 'layout__right-divider';
     this.rightEl.appendChild(this.horizontalDivider);
 
-    this.fileBrowserContainer = document.createElement('div');
-    this.fileBrowserContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: none;';
-    this.rightEl.appendChild(this.fileBrowserContainer);
+    // Bottom section with tabs for Files/Memory
+    this.bottomSection = document.createElement('div');
+    this.bottomSection.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden;';
+    
+    // Mini tabs
+    const miniTabs = document.createElement('div');
+    miniTabs.className = 'mini-tabs';
+    
+    const filesTab = document.createElement('button');
+    filesTab.className = 'mini-tabs__tab mini-tabs__tab--active';
+    filesTab.textContent = 'Files';
+    filesTab.dataset.tab = 'files';
+    miniTabs.appendChild(filesTab);
+    
+    const memoryTab = document.createElement('button');
+    memoryTab.className = 'mini-tabs__tab';
+    memoryTab.textContent = 'Memory';
+    memoryTab.dataset.tab = 'memory';
+    miniTabs.appendChild(memoryTab);
+    
+    this.bottomSection.appendChild(miniTabs);
 
+    // Tab containers
+    this.fileBrowserContainer = document.createElement('div');
+    this.fileBrowserContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1;';
+    this.bottomSection.appendChild(this.fileBrowserContainer);
+
+    const memoryContainer = document.createElement('div');
+    memoryContainer.style.cssText = 'display: none; flex-direction: column; min-height: 0; flex: 1;';
+    this.bottomSection.appendChild(memoryContainer);
+
+    // Tab switching helper
+    const setBottomTab = (tab: 'files' | 'memory') => {
+      if (tab === 'memory') {
+        memoryTab.classList.add('mini-tabs__tab--active');
+        filesTab.classList.remove('mini-tabs__tab--active');
+        memoryContainer.style.display = 'flex';
+        this.fileBrowserContainer.style.display = 'none';
+        this.panels?.memory?.refresh();
+      } else {
+        filesTab.classList.add('mini-tabs__tab--active');
+        memoryTab.classList.remove('mini-tabs__tab--active');
+        this.fileBrowserContainer.style.display = 'flex';
+        memoryContainer.style.display = 'none';
+      }
+      const url = new URL(window.location.href);
+      url.searchParams.set('bottomTab', tab);
+      history.replaceState(null, '', url.toString());
+    };
+
+    filesTab.addEventListener('click', () => setBottomTab('files'));
+    memoryTab.addEventListener('click', () => setBottomTab('memory'));
+
+    // Restore tab from URL
+    const initialTab = new URL(window.location.href).searchParams.get('bottomTab');
+    if (initialTab === 'memory') {
+      setBottomTab('memory');
+    }
+
+    this.rightEl.appendChild(this.bottomSection);
     layout.appendChild(this.rightEl);
+
+    // Hidden container for group iframes
+    this.iframeContainer = document.createElement('div');
+    this.iframeContainer.id = 'group-iframes';
+    this.iframeContainer.style.display = 'none';
+    layout.appendChild(this.iframeContainer);
+
     this.root.appendChild(layout);
 
     // Create panels
@@ -334,9 +463,19 @@ export class Layout {
       chat: new ChatPanel(this.leftEl),
       terminal: new TerminalPanel(this.terminalContainer),
       fileBrowser: new FileBrowserPanel(this.fileBrowserContainer),
+      memory: new MemoryPanel(memoryContainer),
+      groups: new GroupsPanel(this.groupsEl, {
+        onGroupSelect: (group) => this.onGroupSelect?.(group),
+        onSendMessage: () => {
+          // Placeholder - wired through orchestrator in main.ts
+        },
+      }),
     };
 
     this.applySizes();
+
+    // Setup drag handlers
+    this.setupGroupsDrag();
     this.setupVerticalDrag();
     this.setupHorizontalDrag();
     window.addEventListener('resize', () => this.applySizes());
@@ -345,9 +484,15 @@ export class Layout {
   private applySizes(): void {
     const totalWidth = this.root.clientWidth;
     const dividerW = 4;
+    
+    // Groups panel on the left
+    const groupsW = Math.round(totalWidth * this.groupsWidth);
+    // Chat panel in the middle
     const leftW = Math.round(totalWidth * this.leftWidth);
-    const rightW = totalWidth - leftW - dividerW;
+    // Right panel gets the rest, clamped to minimum 0
+    const rightW = Math.max(0, totalWidth - groupsW - leftW - (dividerW * 2));
 
+    this.groupsEl.style.width = groupsW + 'px';
     this.leftEl.style.width = leftW + 'px';
     this.rightEl.style.width = rightW + 'px';
 
@@ -357,7 +502,45 @@ export class Layout {
     const bottomH = rightH - topH - hDividerH;
 
     this.terminalContainer.style.height = topH + 'px';
-    this.fileBrowserContainer.style.height = bottomH + 'px';
+    if (this.bottomSection) {
+      this.bottomSection.style.height = bottomH + 'px';
+    }
+  }
+
+  /** Get the iframe container for the orchestrator */
+  getIframeContainer(): HTMLElement {
+    return this.iframeContainer;
+  }
+
+  private setupGroupsDrag(): void {
+    let dragging = false;
+
+    const onMouseMove = (e: MouseEvent) => {
+      if (!dragging) return;
+      const rect = this.root.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      this.groupsWidth = Math.max(0.1, Math.min(0.3, x / rect.width));
+      this.applySizes();
+    };
+
+    const onMouseUp = () => {
+      dragging = false;
+      this.groupsDivider.classList.remove('active');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    this.groupsDivider.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      dragging = true;
+      this.groupsDivider.classList.add('active');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', onMouseUp);
+    });
   }
 
   private setupVerticalDrag(): void {
@@ -367,7 +550,13 @@ export class Layout {
       if (!dragging) return;
       const rect = this.root.getBoundingClientRect();
       const x = e.clientX - rect.left;
-      this.leftWidth = Math.max(0.2, Math.min(0.8, x / rect.width));
+      // Compute leftWidth relative to space after groups panel
+      const xFraction = x / rect.width;
+      const minLeft = 0.2;
+      const minRight = 0.2;
+      const maxLeft = Math.max(minLeft, 1 - this.groupsWidth - minRight);
+      const rawLeft = xFraction - this.groupsWidth;
+      this.leftWidth = Math.max(minLeft, Math.min(maxLeft, rawLeft));
       this.applySizes();
     };
 
@@ -428,6 +617,9 @@ export class Layout {
     this.panels.chat.dispose();
     this.panels.terminal.dispose();
     this.panels.fileBrowser.dispose();
+    this.panels.memory.dispose();
+    // Groups panel doesn't have dispose, but we clean up
+    // Safe: clearing own root element, not untrusted content
     while (this.root.firstChild) this.root.removeChild(this.root.firstChild);
   }
 }
