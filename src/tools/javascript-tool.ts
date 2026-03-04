@@ -23,7 +23,7 @@ interface ExecRequest {
 interface VfsRequest {
   type: 'vfs';
   id: string;
-  op: 'readFile' | 'writeFile' | 'writeFileBinary' | 'readDir' | 'exists';
+  op: 'readFile' | 'readFileBinary' | 'writeFile' | 'writeFileBinary' | 'readDir' | 'exists';
   args: string[];
   /** Binary data for writeFileBinary — transferred via structured clone. */
   binaryData?: Uint8Array;
@@ -98,6 +98,7 @@ window.fetch = async (input, init) => {
 // ── VFS bridge ───────────────────────────────────────────────────────────
 const fs = {
   readFile: (path) => vfsCall('readFile', [path]),
+  readFileBinary: (path) => vfsCall('readFileBinary', [path]),
   writeFile: (path, content) => vfsCall('writeFile', [path, content]),
   writeFileBinary: (path, data) => vfsCallBinary('writeFileBinary', [path], data),
   readDir: (path) => vfsCall('readDir', [path]),
@@ -277,6 +278,12 @@ export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
           case 'readFile':
             result = await fs.readFile(msg.args[0]);
             break;
+          case 'readFileBinary': {
+            // Return raw bytes as Uint8Array via structured clone
+            const content = await fs.readFile(msg.args[0], { encoding: 'binary' });
+            result = content instanceof Uint8Array ? content : new TextEncoder().encode(content as string);
+            break;
+          }
           case 'writeFile':
             await fs.writeFile(msg.args[0], msg.args[1]);
             result = true;
@@ -322,8 +329,10 @@ export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
     description:
       'Execute JavaScript code in a persistent sandboxed runtime. ' +
       'Variables and functions persist across calls (same iframe context). ' +
-      'VFS bridge: fs.readFile(path), fs.writeFile(path, content), fs.writeFileBinary(path, uint8Array), ' +
+      'VFS bridge: fs.readFile(path), fs.readFileBinary(path) → Uint8Array, ' +
+      'fs.writeFile(path, content), fs.writeFileBinary(path, uint8Array), ' +
       'fs.readDir(path), fs.exists(path), fs.fetchToFile(url, path) — all async. ' +
+      'Use fs.readFileBinary() to load binary files (images, etc.) as Uint8Array for canvas/Blob operations. ' +
       'fs.fetchToFile(url, path) downloads any URL and saves binary content to the VFS (best way to download files). ' +
       'Top-level await is supported. Console output (log/error/warn) is captured. ' +
       'The return value of the last expression is captured if you use "return <expr>". ' +
