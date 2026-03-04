@@ -6,17 +6,21 @@
  * - Its own WasmShell
  * - Its own Agent instance
  * - Its own session history
+ * - Skills loaded from VFS
+ * - NanoClaw-style tools (send_message, schedule_task, etc.)
  * 
  * This provides data isolation without the complexity of iframes.
  */
 
-import type { RegisteredGroup } from './types.js';
+import type { RegisteredGroup, ScheduledTask } from './types.js';
 import { VirtualFS } from '../fs/index.js';
 import { WasmShell } from '../shell/index.js';
 import { Agent, adaptTools, createLogger } from '../core/index.js';
 import type { AgentEvent as CoreAgentEvent, AssistantMessage, AssistantMessageEvent, TextContent, Model } from '../core/index.js';
 import { createFileTools, createBashTool, createSearchTools } from '../tools/index.js';
 import { getApiKey, getProvider, getAzureResource } from '../ui/api-key-dialog.js';
+import { loadSkills, formatSkillsForPrompt, createDefaultSkills, type Skill } from './skills.js';
+import { createNanoClawTools, type NanoClawToolsConfig } from './nanoclaw-tools.js';
 
 const log = createLogger('group-context');
 
@@ -25,6 +29,20 @@ export interface GroupContextCallbacks {
   onResponseDone: () => void;
   onError: (error: string) => void;
   onStatusChange: (status: 'initializing' | 'ready' | 'processing' | 'error') => void;
+  /** Called when agent uses send_message tool */
+  onSendMessage: (text: string, sender?: string) => void;
+  /** Task scheduling callbacks */
+  onScheduleTask: (task: Omit<ScheduledTask, 'id' | 'nextRun' | 'lastRun' | 'createdAt'>) => Promise<ScheduledTask>;
+  onListTasks: () => Promise<ScheduledTask[]>;
+  onPauseTask: (taskId: string) => Promise<boolean>;
+  onResumeTask: (taskId: string) => Promise<boolean>;
+  onCancelTask: (taskId: string) => Promise<boolean>;
+  /** Get all groups (for main group) */
+  getGroups: () => RegisteredGroup[];
+  /** Register a new group (main group only) */
+  onRegisterGroup?: (group: Omit<RegisteredGroup, 'jid'>) => Promise<RegisteredGroup>;
+  /** Get global CLAUDE.md content (shared across all groups) */
+  getGlobalMemory: () => Promise<string>;
 }
 
 export class GroupContext {
@@ -59,11 +77,32 @@ export class GroupContext {
       this.shell = new WasmShell({ fs: this.fs, cwd: '/workspace/group' });
       log.info('WasmShell initialized', { folder: this.group.folder });
 
+      // Create default skills if needed
+      await createDefaultSkills(this.fs);
+
+      // Load skills from VFS
+      const skills = await loadSkills(this.fs, '/workspace/group/.skills');
+
+      // Create NanoClaw tools (send_message, schedule_task, etc.)
+      const nanoClawToolsConfig: NanoClawToolsConfig = {
+        group: this.group,
+        onSendMessage: this.callbacks.onSendMessage,
+        onScheduleTask: this.callbacks.onScheduleTask,
+        onListTasks: this.callbacks.onListTasks,
+        onPauseTask: this.callbacks.onPauseTask,
+        onResumeTask: this.callbacks.onResumeTask,
+        onCancelTask: this.callbacks.onCancelTask,
+        getGroups: this.callbacks.getGroups,
+        onRegisterGroup: this.callbacks.onRegisterGroup,
+      };
+      const nanoClawTools = createNanoClawTools(nanoClawToolsConfig);
+
       // Create tools
       const legacyTools = [
         ...createFileTools(this.fs),
         createBashTool(this.shell),
         ...createSearchTools(this.fs),
+        ...nanoClawTools,
       ];
       const tools = adaptTools(legacyTools);
 
@@ -75,6 +114,9 @@ export class GroupContext {
       } catch {
         // No memory file yet
       }
+
+      // Load global memory
+      const globalMemory = await this.callbacks.getGlobalMemory();
 
       // Create agent
       const apiKey = getApiKey();
@@ -98,7 +140,7 @@ export class GroupContext {
         }
       }
 
-      const systemPrompt = this.buildSystemPrompt(groupMemory);
+      const systemPrompt = this.buildSystemPrompt(globalMemory, groupMemory, skills);
 
       this.agent = new Agent({
         initialState: {
@@ -267,37 +309,82 @@ ${this.group.isMain ? 'Role: Main/Admin group' : ''}
     }
   }
 
-  private buildSystemPrompt(memory: string): string {
-    const basePrompt = `You are ${this.group.isMain ? 'the main assistant' : 'a helpful assistant'} in the "${this.group.name}" group.
+  private buildSystemPrompt(globalMemory: string, groupMemory: string, skills: import('./skills.js').Skill[]): string {
+    const assistantName = this.group.config?.assistantName || 'Andy';
+    
+    const basePrompt = `# ${assistantName}
+
+You are ${assistantName}, ${this.group.isMain ? 'the main assistant' : 'a helpful assistant'} in the "${this.group.name}" group.
+
+## Your Capabilities
 
 You have access to:
 - A virtual filesystem at /workspace/group (your working directory)
 - A bash shell for running commands (via the bash tool)
 - File reading, writing, and editing tools
 - Search tools (grep, find)
-
-Your memory and preferences are stored in /workspace/group/CLAUDE.md. You can read and update this file to remember important information.
+- **send_message**: Send messages immediately while working (for progress updates)
+- **schedule_task**: Schedule recurring or one-time tasks
+- **list_tasks**, **pause_task**, **resume_task**, **cancel_task**: Manage scheduled tasks
 
 ${this.group.isMain ? `
 As the main assistant, you have elevated privileges:
-- You can manage other groups
-- You can schedule tasks
-- You can access global settings
+- **list_groups**: See all registered groups
+- **register_group**: Add new groups
+- You can schedule tasks for any group
+- You have access to global settings
 ` : `
 You are in a group context. Stay focused on this group's needs.
 `}
 
+## Memory
+
+Your memory is organized hierarchically:
+- **Global memory** (/workspace/global/CLAUDE.md): Read by all groups, ${this.group.isMain ? 'you can write to it' : 'read-only for you'}
+- **Group memory** (/workspace/group/CLAUDE.md): Your group's private memory
+
+When you learn something important:
+- Use group memory for group-specific context
+${this.group.isMain ? '- Use global memory for information that should be shared across all groups' : ''}
+
+## Communication
+
+When using send_message:
+- Use it for progress updates on long tasks
+- Use it when you want to send multiple messages
+- Your final output is also sent, so don't repeat yourself
+
 ${this.group.config?.systemPromptAppend ?? ''}`;
 
-    if (memory) {
-      return `${basePrompt}
+    // Build the full prompt with memories and skills
+    let fullPrompt = basePrompt;
+
+    // Add global memory first (shared context)
+    if (globalMemory) {
+      fullPrompt += `
 
 ---
-GROUP MEMORY (loaded from CLAUDE.md):
-${memory}
+GLOBAL MEMORY (shared across all groups):
+${globalMemory}
 ---`;
     }
 
-    return basePrompt;
+    // Add group memory
+    if (groupMemory) {
+      fullPrompt += `
+
+---
+GROUP MEMORY (${this.group.name}):
+${groupMemory}
+---`;
+    }
+
+    // Add skills
+    const skillsSection = formatSkillsForPrompt(skills);
+    if (skillsSection) {
+      fullPrompt += skillsSection;
+    }
+
+    return fullPrompt;
   }
 }

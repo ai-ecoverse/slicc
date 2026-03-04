@@ -17,10 +17,13 @@ import type {
   RegisteredGroup,
   ChannelMessage,
   GroupTabState,
+  ScheduledTask,
 } from './types.js';
 import * as db from './db.js';
 import { createLogger } from '../core/logger.js';
-import { GroupContext } from './group-context.js';
+import { GroupContext, type GroupContextCallbacks } from './group-context.js';
+import { TaskScheduler } from './scheduler.js';
+import { VirtualFS } from '../fs/index.js';
 
 const log = createLogger('orchestrator');
 
@@ -52,6 +55,9 @@ export class Orchestrator {
   private callbacks: OrchestratorCallbacks;
   private config: AssistantConfig;
   private pollInterval: number | null = null;
+  private scheduler: TaskScheduler | null = null;
+  private globalMemoryCache: string = '';
+  private globalFs: VirtualFS | null = null;
 
   constructor(
     container: HTMLElement,
@@ -77,10 +83,97 @@ export class Orchestrator {
       if (ts) this.lastAgentTimestamp.set(group.jid, ts);
     }
 
+    // Initialize global VFS for shared memory
+    this.globalFs = await VirtualFS.create({ backend: 'indexeddb', dbName: 'slicc-fs-global' });
+    await this.ensureGlobalMemory();
+
+    // Initialize task scheduler
+    this.scheduler = new TaskScheduler({
+      onTaskRun: async (task, group) => {
+        log.info('Running scheduled task', { taskId: task.id, group: group.name });
+        await this.sendPrompt(group.jid, `[SCHEDULED TASK]\n\n${task.prompt}`, 'scheduler', 'Scheduled Task');
+      },
+      getGroup: (folder) => {
+        for (const g of this.groups.values()) {
+          if (g.folder === folder) return g;
+        }
+        return undefined;
+      },
+    });
+    this.scheduler.start();
+
     log.info('Orchestrator initialized', { groupCount: this.groups.size });
 
     // Start polling for pending messages
     this.startMessageLoop();
+  }
+
+  /** Ensure global memory exists with default content */
+  private async ensureGlobalMemory(): Promise<void> {
+    if (!this.globalFs) return;
+
+    try {
+      await this.globalFs.mkdir('/workspace', { recursive: true });
+    } catch {
+      // Already exists
+    }
+
+    try {
+      const content = await this.globalFs.readFile('/workspace/CLAUDE.md', { encoding: 'utf-8' });
+      this.globalMemoryCache = typeof content === 'string' ? content : new TextDecoder().decode(content);
+    } catch {
+      // Create default global memory
+      const defaultContent = `# ${this.config.name}
+
+You are ${this.config.name}, a personal assistant. You help with tasks, answer questions, and can schedule reminders.
+
+## What You Can Do
+
+- Answer questions and have conversations
+- Read and write files in your workspace
+- Run bash commands
+- Schedule tasks to run later or on a recurring basis
+- Send messages immediately with send_message
+
+## Memory
+
+When you learn something important:
+- Create files for structured data
+- Update this file for global preferences
+- Each group also has its own CLAUDE.md for group-specific context
+
+## Communication
+
+Your output is sent to the user. You can also use send_message for immediate updates while working.
+`;
+      await this.globalFs.writeFile('/workspace/CLAUDE.md', defaultContent);
+      this.globalMemoryCache = defaultContent;
+      log.info('Created default global memory');
+    }
+  }
+
+  /** Get global memory content */
+  async getGlobalMemory(): Promise<string> {
+    if (this.globalMemoryCache) return this.globalMemoryCache;
+    
+    if (this.globalFs) {
+      try {
+        const content = await this.globalFs.readFile('/workspace/CLAUDE.md', { encoding: 'utf-8' });
+        this.globalMemoryCache = typeof content === 'string' ? content : new TextDecoder().decode(content);
+      } catch {
+        // No global memory yet
+      }
+    }
+    
+    return this.globalMemoryCache;
+  }
+
+  /** Update global memory */
+  async setGlobalMemory(content: string): Promise<void> {
+    if (!this.globalFs) return;
+    await this.globalFs.writeFile('/workspace/CLAUDE.md', content);
+    this.globalMemoryCache = content;
+    log.info('Global memory updated');
   }
 
   /** Register a new group */
@@ -154,8 +247,8 @@ export class Orchestrator {
 
     const contextId = `group-${group.folder}-${Date.now()}`;
     
-    // Create the group context
-    const context = new GroupContext(group, {
+    // Create the group context with full callbacks
+    const contextCallbacks: GroupContextCallbacks = {
       onResponse: (text, isPartial) => {
         this.callbacks.onResponse(jid, text, isPartial);
       },
@@ -192,7 +285,43 @@ export class Orchestrator {
         }
         this.callbacks.onStatusChange(jid, status);
       },
-    });
+      // NanoClaw tools callbacks
+      onSendMessage: (text, sender) => {
+        // Send message immediately through the channel
+        this.callbacks.onSendMessage(jid, `${sender ? `[${sender}] ` : ''}${text}`);
+      },
+      onScheduleTask: async (task) => {
+        if (!this.scheduler) throw new Error('Scheduler not initialized');
+        return this.scheduler.createTask(task.groupFolder, task.prompt, task.scheduleType, task.scheduleValue);
+      },
+      onListTasks: async () => {
+        return db.getAllTasks();
+      },
+      onPauseTask: async (taskId) => {
+        if (!this.scheduler) return false;
+        return this.scheduler.pauseTask(taskId);
+      },
+      onResumeTask: async (taskId) => {
+        if (!this.scheduler) return false;
+        return this.scheduler.resumeTask(taskId);
+      },
+      onCancelTask: async (taskId) => {
+        if (!this.scheduler) return false;
+        return this.scheduler.deleteTask(taskId);
+      },
+      getGroups: () => this.getGroups(),
+      onRegisterGroup: group.isMain ? async (newGroup) => {
+        const fullGroup: RegisteredGroup = {
+          ...newGroup,
+          jid: `web_${newGroup.folder}_${Date.now()}`,
+        };
+        await this.registerGroup(fullGroup);
+        return fullGroup;
+      } : undefined,
+      getGlobalMemory: () => this.getGlobalMemory(),
+    };
+
+    const context = new GroupContext(group, contextCallbacks);
 
     this.contexts.set(jid, context);
     this.tabs.set(jid, {

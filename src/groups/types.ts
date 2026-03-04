@@ -33,6 +33,8 @@ export interface GroupConfig {
   systemPromptAppend?: string;
   /** Agent timeout (ms) */
   timeout?: number;
+  /** Assistant name override for this group */
+  assistantName?: string;
 }
 
 /** Message from any channel */

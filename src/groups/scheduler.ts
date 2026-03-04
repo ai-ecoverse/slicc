@@ -1,0 +1,299 @@
+/**
+ * Task Scheduler - runs scheduled tasks for groups.
+ * 
+ * Supports:
+ * - Cron expressions (e.g., "0 9 * * 1" = Mondays at 9am)
+ * - Intervals (e.g., 3600000 = every hour)
+ * - One-time tasks (ISO timestamp)
+ */
+
+import type { ScheduledTask, RegisteredGroup } from './types.js';
+import * as db from './db.js';
+import { createLogger } from '../core/logger.js';
+
+const log = createLogger('scheduler');
+
+export interface SchedulerCallbacks {
+  /** Called when a task should be executed */
+  onTaskRun: (task: ScheduledTask, group: RegisteredGroup) => Promise<void>;
+  /** Get a registered group by folder */
+  getGroup: (folder: string) => RegisteredGroup | undefined;
+}
+
+export class TaskScheduler {
+  private callbacks: SchedulerCallbacks;
+  private pollInterval: number | null = null;
+  private running = false;
+
+  constructor(callbacks: SchedulerCallbacks) {
+    this.callbacks = callbacks;
+  }
+
+  /** Start the scheduler */
+  start(): void {
+    if (this.running) return;
+    this.running = true;
+
+    // Poll every minute
+    this.pollInterval = window.setInterval(() => this.checkTasks(), 60000);
+    
+    // Also check immediately
+    this.checkTasks();
+    
+    log.info('Scheduler started');
+  }
+
+  /** Stop the scheduler */
+  stop(): void {
+    if (this.pollInterval) {
+      clearInterval(this.pollInterval);
+      this.pollInterval = null;
+    }
+    this.running = false;
+    log.info('Scheduler stopped');
+  }
+
+  /** Create a new scheduled task */
+  async createTask(
+    groupFolder: string,
+    prompt: string,
+    scheduleType: ScheduledTask['scheduleType'],
+    scheduleValue: string,
+  ): Promise<ScheduledTask> {
+    const task: ScheduledTask = {
+      id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      groupFolder,
+      prompt,
+      scheduleType,
+      scheduleValue,
+      status: 'active',
+      nextRun: this.calculateNextRun(scheduleType, scheduleValue),
+      lastRun: null,
+      createdAt: new Date().toISOString(),
+    };
+
+    await db.saveTask(task);
+    log.info('Task created', { id: task.id, groupFolder, scheduleType });
+    return task;
+  }
+
+  /** Update a task */
+  async updateTask(id: string, updates: Partial<Pick<ScheduledTask, 'prompt' | 'scheduleType' | 'scheduleValue' | 'status'>>): Promise<ScheduledTask | null> {
+    const task = await db.getTask(id);
+    if (!task) return null;
+
+    const updated: ScheduledTask = {
+      ...task,
+      ...updates,
+    };
+
+    // Recalculate next run if schedule changed
+    if (updates.scheduleType || updates.scheduleValue) {
+      updated.nextRun = this.calculateNextRun(
+        updated.scheduleType,
+        updated.scheduleValue,
+      );
+    }
+
+    await db.saveTask(updated);
+    log.info('Task updated', { id, updates: Object.keys(updates) });
+    return updated;
+  }
+
+  /** Pause a task */
+  async pauseTask(id: string): Promise<boolean> {
+    const task = await this.updateTask(id, { status: 'paused' });
+    return task !== null;
+  }
+
+  /** Resume a task */
+  async resumeTask(id: string): Promise<boolean> {
+    const task = await db.getTask(id);
+    if (!task) return false;
+
+    await this.updateTask(id, {
+      status: 'active',
+    });
+    return true;
+  }
+
+  /** Delete a task */
+  async deleteTask(id: string): Promise<boolean> {
+    const task = await db.getTask(id);
+    if (!task) return false;
+
+    await db.deleteTask(id);
+    log.info('Task deleted', { id });
+    return true;
+  }
+
+  /** Get all tasks for a group */
+  async getTasksByGroup(groupFolder: string): Promise<ScheduledTask[]> {
+    const allTasks = await db.getAllTasks();
+    return allTasks.filter((t) => t.groupFolder === groupFolder);
+  }
+
+  /** Get all tasks */
+  async getAllTasks(): Promise<ScheduledTask[]> {
+    return db.getAllTasks();
+  }
+
+  /** Check and run due tasks */
+  private async checkTasks(): Promise<void> {
+    const tasks = await db.getAllTasks();
+    const now = new Date();
+
+    for (const task of tasks) {
+      if (task.status !== 'active') continue;
+      if (!task.nextRun) continue;
+
+      const nextRun = new Date(task.nextRun);
+      if (nextRun > now) continue;
+
+      // Task is due - run it
+      await this.runTask(task);
+    }
+  }
+
+  /** Run a task */
+  private async runTask(task: ScheduledTask): Promise<void> {
+    const group = this.callbacks.getGroup(task.groupFolder);
+    if (!group) {
+      log.warn('Task group not found', { taskId: task.id, groupFolder: task.groupFolder });
+      return;
+    }
+
+    log.info('Running task', { id: task.id, groupFolder: task.groupFolder });
+
+    try {
+      // Update last run and calculate next run
+      const now = new Date().toISOString();
+      const nextRun = this.calculateNextRun(task.scheduleType, task.scheduleValue);
+      
+      // For one-time tasks, mark as completed
+      const status = task.scheduleType === 'once' ? 'completed' : task.status;
+
+      await db.saveTask({
+        ...task,
+        lastRun: now,
+        nextRun,
+        status,
+      });
+
+      // Execute the task
+      await this.callbacks.onTaskRun(task, group);
+
+      log.info('Task completed', { id: task.id });
+    } catch (err) {
+      log.error('Task execution failed', {
+        id: task.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /** Calculate the next run time for a task */
+  private calculateNextRun(
+    scheduleType: ScheduledTask['scheduleType'],
+    scheduleValue: string,
+  ): string | null {
+    const now = new Date();
+
+    switch (scheduleType) {
+      case 'cron': {
+        // Simple cron parsing for common patterns
+        const next = this.getNextCronTime(scheduleValue, now);
+        return next?.toISOString() ?? null;
+      }
+
+      case 'interval': {
+        const ms = parseInt(scheduleValue, 10);
+        if (isNaN(ms) || ms <= 0) return null;
+        return new Date(now.getTime() + ms).toISOString();
+      }
+
+      case 'once': {
+        // For one-time tasks, return the specified timestamp if in future
+        const target = new Date(scheduleValue);
+        return target > now ? scheduleValue : null;
+      }
+
+      default:
+        return null;
+    }
+  }
+
+  /** Parse a cron expression and get the next run time */
+  private getNextCronTime(cron: string, from: Date): Date | null {
+    // Simple cron parser for basic patterns
+    // Format: minute hour day-of-month month day-of-week
+    const parts = cron.trim().split(/\s+/);
+    if (parts.length !== 5) return null;
+
+    const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
+
+    // Start from next minute
+    const next = new Date(from);
+    next.setSeconds(0);
+    next.setMilliseconds(0);
+    next.setMinutes(next.getMinutes() + 1);
+
+    // Try to find next matching time (limit iterations to prevent infinite loop)
+    for (let i = 0; i < 527040; i++) { // ~1 year of minutes
+      if (this.cronMatches(next, minute, hour, dayOfMonth, month, dayOfWeek)) {
+        return next;
+      }
+      next.setMinutes(next.getMinutes() + 1);
+    }
+
+    return null;
+  }
+
+  /** Check if a date matches cron fields */
+  private cronMatches(
+    date: Date,
+    minute: string,
+    hour: string,
+    dayOfMonth: string,
+    month: string,
+    dayOfWeek: string,
+  ): boolean {
+    return (
+      this.cronFieldMatches(date.getMinutes(), minute) &&
+      this.cronFieldMatches(date.getHours(), hour) &&
+      this.cronFieldMatches(date.getDate(), dayOfMonth) &&
+      this.cronFieldMatches(date.getMonth() + 1, month) &&
+      this.cronFieldMatches(date.getDay(), dayOfWeek)
+    );
+  }
+
+  /** Check if a value matches a cron field */
+  private cronFieldMatches(value: number, field: string): boolean {
+    if (field === '*') return true;
+
+    // Handle lists (e.g., "1,3,5")
+    if (field.includes(',')) {
+      return field.split(',').some((f) => this.cronFieldMatches(value, f.trim()));
+    }
+
+    // Handle ranges (e.g., "1-5")
+    if (field.includes('-')) {
+      const [start, end] = field.split('-').map((n) => parseInt(n, 10));
+      return value >= start && value <= end;
+    }
+
+    // Handle step values (e.g., "*/5")
+    if (field.includes('/')) {
+      const [base, step] = field.split('/');
+      const stepNum = parseInt(step, 10);
+      if (base === '*') {
+        return value % stepNum === 0;
+      }
+      const baseNum = parseInt(base, 10);
+      return value >= baseNum && (value - baseNum) % stepNum === 0;
+    }
+
+    // Direct value match
+    return parseInt(field, 10) === value;
+  }
+}
