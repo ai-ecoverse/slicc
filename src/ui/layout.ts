@@ -2,14 +2,14 @@
  * Layout — split-pane (standalone) or tabbed (extension) layout.
  *
  * Standalone mode (CLI):
- *   ┌─────────────┬───┬───────────────┐
- *   │  Header (full width)            │
- *   ├─────────────┬───┬───────────────┤
- *   │             │ ║ │  Terminal      │
- *   │  Chat       │ ║ ├───────────────┤
- *   │  Panel      │ ║ │  Files        │
- *   │             │ ║ │               │
- *   └─────────────┴───┴───────────────┘
+ *   ┌───────┬─────────────┬───┬───────────────┐
+ *   │  Header (full width)                    │
+ *   ├───────┬─────────────┬───┬───────────────┤
+ *   │Groups │             │ ║ │  Terminal      │
+ *   │       │  Chat       │ ║ ├───────────────┤
+ *   │       │  Panel      │ ║ │  Files        │
+ *   │       │             │ ║ │               │
+ *   └───────┴─────────────┴───┴───────────────┘
  *
  * Extension mode (side panel):
  *   ┌─ Header ──────────────────────┐
@@ -23,13 +23,16 @@
 import { ChatPanel } from './chat-panel.js';
 import { TerminalPanel } from './terminal-panel.js';
 import { FileBrowserPanel } from './file-browser-panel.js';
+import { GroupsPanel } from './groups-panel.js';
 import { getApiKey, clearApiKey, clearAzureResource, clearProvider } from './api-key-dialog.js';
 import type { ChatMessage } from './types.js';
+import type { RegisteredGroup } from '../groups/types.js';
 
 export interface LayoutPanels {
   chat: ChatPanel;
   terminal: TerminalPanel;
   fileBrowser: FileBrowserPanel;
+  groups: GroupsPanel;
 }
 
 type TabId = 'chat' | 'terminal' | 'files';
@@ -39,12 +42,15 @@ export class Layout {
   private isExtension: boolean;
 
   // Split-layout elements (standalone only)
+  private groupsEl!: HTMLElement;
   private leftEl!: HTMLElement;
   private rightEl!: HTMLElement;
+  private groupsDivider!: HTMLElement;
   private verticalDivider!: HTMLElement;
   private horizontalDivider!: HTMLElement;
   private terminalContainer!: HTMLElement;
   private fileBrowserContainer!: HTMLElement;
+  private iframeContainer!: HTMLElement;
 
   // Tabbed-layout elements (extension only)
   private tabContainers = new Map<TabId, HTMLElement>();
@@ -60,9 +66,11 @@ export class Layout {
 
   public panels!: LayoutPanels;
   public onModelChange?: (model: string) => void;
+  public onGroupSelect?: (group: RegisteredGroup) => void;
 
-  private leftWidth = 0.55;
-  private topHeight = 0.65;
+  private groupsWidth = 0.15; // fraction of total width for groups panel
+  private leftWidth = 0.45; // fraction of total width for chat
+  private topHeight = 0.65; // fraction of right panel height
 
   constructor(root: HTMLElement, isExtension = false) {
     this.root = root;
@@ -255,11 +263,28 @@ export class Layout {
 
     this.root.appendChild(content);
 
+    // Hidden container for group iframes (needed even in extension mode)
+    this.iframeContainer = document.createElement('div');
+    this.iframeContainer.id = 'group-iframes';
+    this.iframeContainer.style.display = 'none';
+    this.root.appendChild(this.iframeContainer);
+
+    // Create a dummy groups element for extension mode
+    this.groupsEl = document.createElement('div');
+    this.groupsEl.style.display = 'none';
+    this.root.appendChild(this.groupsEl);
+
     // Create panels in their tab containers
     this.panels = {
       chat: new ChatPanel(this.tabContainers.get('chat')!),
       terminal: new TerminalPanel(this.tabContainers.get('terminal')!),
       fileBrowser: new FileBrowserPanel(this.tabContainers.get('files')!),
+      groups: new GroupsPanel(this.groupsEl, {
+        onGroupSelect: (group) => this.onGroupSelect?.(group),
+        onSendMessage: (jid, text) => {
+          console.log('Send to group:', jid, text);
+        },
+      }),
     };
 
     this.updateButtonVisibility();
@@ -300,6 +325,16 @@ export class Layout {
     const layout = document.createElement('div');
     layout.className = 'layout';
 
+    // Groups panel (leftmost)
+    this.groupsEl = document.createElement('div');
+    this.groupsEl.className = 'layout__groups';
+    layout.appendChild(this.groupsEl);
+
+    // Groups divider
+    this.groupsDivider = document.createElement('div');
+    this.groupsDivider.className = 'layout__divider';
+    layout.appendChild(this.groupsDivider);
+
     // Left panel (chat)
     this.leftEl = document.createElement('div');
     this.leftEl.className = 'layout__left';
@@ -327,6 +362,13 @@ export class Layout {
     this.rightEl.appendChild(this.fileBrowserContainer);
 
     layout.appendChild(this.rightEl);
+
+    // Hidden container for group iframes
+    this.iframeContainer = document.createElement('div');
+    this.iframeContainer.id = 'group-iframes';
+    this.iframeContainer.style.display = 'none';
+    layout.appendChild(this.iframeContainer);
+
     this.root.appendChild(layout);
 
     // Create panels
@@ -334,9 +376,19 @@ export class Layout {
       chat: new ChatPanel(this.leftEl),
       terminal: new TerminalPanel(this.terminalContainer),
       fileBrowser: new FileBrowserPanel(this.fileBrowserContainer),
+      groups: new GroupsPanel(this.groupsEl, {
+        onGroupSelect: (group) => this.onGroupSelect?.(group),
+        onSendMessage: (jid, text) => {
+          // This will be wired to the orchestrator
+          console.log('Send to group:', jid, text);
+        },
+      }),
     };
 
     this.applySizes();
+
+    // Setup drag handlers
+    this.setupGroupsDrag();
     this.setupVerticalDrag();
     this.setupHorizontalDrag();
     window.addEventListener('resize', () => this.applySizes());
@@ -345,9 +397,15 @@ export class Layout {
   private applySizes(): void {
     const totalWidth = this.root.clientWidth;
     const dividerW = 4;
+    
+    // Groups panel on the left
+    const groupsW = Math.round(totalWidth * this.groupsWidth);
+    // Chat panel in the middle
     const leftW = Math.round(totalWidth * this.leftWidth);
-    const rightW = totalWidth - leftW - dividerW;
+    // Right panel gets the rest
+    const rightW = totalWidth - groupsW - leftW - (dividerW * 2);
 
+    this.groupsEl.style.width = groupsW + 'px';
     this.leftEl.style.width = leftW + 'px';
     this.rightEl.style.width = rightW + 'px';
 
@@ -360,6 +418,42 @@ export class Layout {
     this.fileBrowserContainer.style.height = bottomH + 'px';
   }
 
+  /** Get the iframe container for the orchestrator */
+  getIframeContainer(): HTMLElement {
+    return this.iframeContainer;
+  }
+
+  private setupGroupsDrag(): void {
+    let dragging = false;
+
+    const onMouseMove = (e: MouseEvent) => {
+      if (!dragging) return;
+      const rect = this.root.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      this.groupsWidth = Math.max(0.1, Math.min(0.3, x / rect.width));
+      this.applySizes();
+    };
+
+    const onMouseUp = () => {
+      dragging = false;
+      this.groupsDivider.classList.remove('active');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    this.groupsDivider.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      dragging = true;
+      this.groupsDivider.classList.add('active');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', onMouseUp);
+    });
+  }
+
   private setupVerticalDrag(): void {
     let dragging = false;
 
@@ -367,7 +461,8 @@ export class Layout {
       if (!dragging) return;
       const rect = this.root.getBoundingClientRect();
       const x = e.clientX - rect.left;
-      this.leftWidth = Math.max(0.2, Math.min(0.8, x / rect.width));
+      // Clamp leftWidth to reasonable bounds considering groups panel
+      this.leftWidth = Math.max(0.2, Math.min(0.5, x / rect.width));
       this.applySizes();
     };
 
@@ -428,6 +523,8 @@ export class Layout {
     this.panels.chat.dispose();
     this.panels.terminal.dispose();
     this.panels.fileBrowser.dispose();
+    // Groups panel doesn't have dispose, but we clean up
+    // Safe: clearing own root element, not untrusted content
     while (this.root.firstChild) this.root.removeChild(this.root.firstChild);
   }
 }
