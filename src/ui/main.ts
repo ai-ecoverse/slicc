@@ -225,7 +225,7 @@ async function main(): Promise<void> {
   const legacyTools = [
     ...(fs ? createFileTools(fs) : []),
     ...(shell ? [createBashTool(shell)] : []),
-    createBrowserTool(browser),
+    createBrowserTool(browser, fs),
     ...(fs ? createSearchTools(fs) : []),
     ...(fs ? [createJavaScriptTool(fs)] : []),
   ];
@@ -236,6 +236,67 @@ async function main(): Promise<void> {
   const selectedModelId = localStorage.getItem('selected-model') || DEFAULT_MODEL_ID;
   const model = resolveModel(selectedModelId);
 
+  // Context compaction: truncate oversized tool results and drop old messages when near token limit.
+  // Rough estimate: 1 token ≈ 4 chars for English text.
+  const MAX_RESULT_CHARS = 8000; // ~2000 tokens per tool result max
+  const MAX_CONTEXT_CHARS = 600000; // ~150K tokens — leave headroom below the 200K limit
+
+  async function compactContext(messages: import('../core/index.js').AgentMessage[]): Promise<import('../core/index.js').AgentMessage[]> {
+    // Step 1: truncate oversized content in tool result messages
+    const truncated = messages.map((msg) => {
+      if (msg.role === 'toolResult' && Array.isArray((msg as any).content)) {
+        const content = (msg as any).content as Array<{ type: 'text'; text?: string }>;
+        const needsTruncation = content.some((c) => c.type === 'text' && c.text && c.text.length > MAX_RESULT_CHARS);
+        if (needsTruncation) {
+          return {
+            ...msg,
+            content: content.map((c) =>
+              c.type === 'text' && c.text && c.text.length > MAX_RESULT_CHARS
+                ? { ...c, text: c.text.slice(0, MAX_RESULT_CHARS) + '\n... (truncated)' }
+                : c,
+            ),
+          } as typeof msg;
+        }
+      }
+      return msg;
+    });
+
+    // Step 2: estimate total size and drop older messages if too large
+    const estimateSize = (msgs: typeof truncated): number => {
+      return msgs.reduce((sum, m) => sum + JSON.stringify(m).length, 0);
+    };
+
+    let result = truncated;
+    let totalChars = estimateSize(result);
+
+    // Keep dropping oldest non-system messages until under limit (preserve first 2 and last 10)
+    // Safety limit to prevent infinite loop if compaction can't reduce size enough
+    let compactionRounds = 0;
+    while (totalChars > MAX_CONTEXT_CHARS && result.length > 12 && compactionRounds < 50) {
+      compactionRounds++;
+      const compactedMsg = {
+        role: 'user' as const,
+        content: [{ type: 'text' as const, text: '[Earlier conversation messages were compacted to save context space]' }],
+      };
+      result = [result[0], result[1], compactedMsg as any, ...result.slice(result.length - 10)];
+      totalChars = estimateSize(result);
+    }
+    if (compactionRounds >= 50) {
+      log.warn('Context compaction hit iteration limit', { finalChars: totalChars, finalMessages: result.length });
+    }
+
+    if (totalChars !== estimateSize(messages)) {
+      log.info('Context compacted', {
+        originalMessages: messages.length,
+        compactedMessages: result.length,
+        originalChars: estimateSize(messages),
+        compactedChars: totalChars,
+      });
+    }
+
+    return result;
+  }
+
   const agent = new Agent({
     initialState: {
       model,
@@ -245,6 +306,7 @@ You have access to a virtual filesystem, a shell, and browser automation tools.
 Use the tools available to help the user with their tasks.`,
     },
     getApiKey: () => apiKey,
+    transformContext: compactContext,
   });
   log.info('Agent created', { provider: getProvider(), model: model.id });
 

@@ -256,7 +256,13 @@ export class ChatPanel {
     // Find the most recent tool call matching this name that has no result yet
     const tc = [...msg.toolCalls].reverse().find((t) => t.name === toolName && t.result === undefined);
     if (tc) {
-      tc.result = result;
+      // Strip inline image data from stored result to avoid bloating conversation history.
+      // The image is rendered by createToolCallEl from a transient property, not persisted.
+      const imgMatch = result.match(/<img:(data:image\/[^>]+)>/);
+      tc.result = result.replace(/<img:data:image\/[^>]+>/g, '').trim();
+      if (imgMatch) {
+        (tc as any)._screenshotDataUrl = imgMatch[1]; // transient, not persisted
+      }
       tc.isError = isError;
     }
     this.updateMessageEl(messageId);
@@ -386,6 +392,27 @@ export class ChatPanel {
       resultEl.className = `tool-call__result${tc.isError ? ' tool-call__result--error' : ''}`;
       resultEl.textContent = tc.result;
       el.appendChild(resultEl);
+    }
+
+    // Render screenshot thumbnail from transient data (not persisted in messages)
+    const screenshotUrl = (tc as any)._screenshotDataUrl as string | undefined;
+    if (screenshotUrl) {
+      const imgEl = document.createElement('img');
+      imgEl.src = screenshotUrl;
+      imgEl.className = 'tool-call__screenshot';
+      imgEl.title = 'Click to view full size';
+      imgEl.addEventListener('click', () => {
+        const w = window.open('about:blank');
+        if (w) {
+          const fullImg = w.document.createElement('img');
+          fullImg.src = screenshotUrl;
+          w.document.title = 'Screenshot';
+          w.document.body.style.margin = '0';
+          w.document.body.style.background = '#1a1a2e';
+          w.document.body.appendChild(fullImg);
+        }
+      });
+      el.appendChild(imgEl);
     }
 
     return el;

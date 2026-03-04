@@ -73,6 +73,7 @@ export class BrowserAPI {
         targetId: t.targetId,
         title: t.title,
         url: t.url,
+        ...(t.active ? { active: true } : {}),
       }));
   }
 
@@ -138,6 +139,7 @@ export class BrowserAPI {
     format?: 'png' | 'jpeg' | 'webp';
     quality?: number;
     fullPage?: boolean;
+    clip?: { x: number; y: number; width: number; height: number; scale?: number };
   }): Promise<string> {
     await this.ensureConnected();
     this.ensureAttached();
@@ -146,7 +148,10 @@ export class BrowserAPI {
       format: options?.format ?? 'png',
     };
     if (options?.quality !== undefined) params['quality'] = options.quality;
-    if (options?.fullPage) {
+    if (options?.clip) {
+      params['clip'] = { ...options.clip, scale: options.clip.scale ?? 1 };
+      params['captureBeyondViewport'] = true;
+    } else if (options?.fullPage) {
       // Get full page metrics for a full-page screenshot
       const metrics = await this.client.send(
         'Page.getLayoutMetrics',

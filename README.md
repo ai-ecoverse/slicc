@@ -31,7 +31,7 @@ Part of the **[AI Ecoverse](https://github.com/trieloff/ai-ecoverse)** — a com
 - :satellite: **CLI Server** — alternative mode: thin Node.js/Express server launches Chrome and proxies CDP connections
 - :file_folder: **Virtual Filesystem** — OPFS + IndexedDB-backed filesystem right in the browser, with folder ZIP download
 - :shell: **WebAssembly Bash Shell** — real Bash via [just-bash](https://github.com/nicolo-ribaudo/just-bash) compiled to WASM
-- :robot: **Browser Automation** — screenshots, navigation, JS eval, element clicking via Chrome DevTools Protocol (chrome.debugger in extension, WebSocket in CLI)
+- :robot: **Browser Automation** — screenshots (full page / element / saved to VFS), inline image display, navigation, JS eval, element clicking via Chrome DevTools Protocol (chrome.debugger in extension, WebSocket in CLI). Auto-detects user's active tab.
 - :pencil2: **File Operations** — read, write, edit files with syntax-aware tools
 - :mag: **Search Tools** — grep and find across your virtual codebase
 - :globe_with_meridians: **Networking** — curl and fetch support with binary-safe downloads

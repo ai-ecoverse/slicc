@@ -40,6 +40,7 @@ window.fetch = proxiedFetch;
 // ── VFS bridge ───────────────────────────────────────────────────────────
 const fs = {
   readFile: (path) => vfsCall('readFile', [path]),
+  readFileBinary: (path) => vfsCall('readFileBinary', [path]),
   writeFile: (path, content) => vfsCall('writeFile', [path, content]),
   writeFileBinary: (path, data) => vfsCallBinary('writeFileBinary', [path], data),
   readDir: (path) => vfsCall('readDir', [path]),
