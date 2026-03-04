@@ -315,11 +315,13 @@ export class GroupContext {
       }
 
       case 'turn_end': {
-        this.callbacks.onResponseDone();
+        // Reset streaming flag for next turn (don't signal UI — agent may continue)
+        this.didStreamDeltas = false;
         break;
       }
 
       case 'agent_end': {
+        // Agent is fully done (all turns complete) — signal UI to unlock input
         const messages = event.messages;
         if (messages.length > 0) {
           const last = messages[messages.length - 1];
@@ -327,6 +329,7 @@ export class GroupContext {
             this.callbacks.onError((last as AssistantMessage).errorMessage!);
           }
         }
+        this.callbacks.onResponseDone();
         break;
       }
     }
