@@ -236,6 +236,7 @@ export class GroupContext {
       this.callbacks.onError(message);
     } finally {
       this.isProcessing = false;
+      this.callbacks.onResponseDone(); // Signal UI to unlock input — guaranteed to run
       this.setStatus('ready');
     }
   }
@@ -321,7 +322,7 @@ export class GroupContext {
       }
 
       case 'agent_end': {
-        // Agent is fully done (all turns complete) — signal UI to unlock input
+        // Check for error in final message (onResponseDone is handled in prompt() finally block)
         const messages = event.messages;
         if (messages.length > 0) {
           const last = messages[messages.length - 1];
@@ -329,7 +330,6 @@ export class GroupContext {
             this.callbacks.onError((last as AssistantMessage).errorMessage!);
           }
         }
-        this.callbacks.onResponseDone();
         break;
       }
     }
