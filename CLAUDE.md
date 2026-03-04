@@ -78,14 +78,16 @@ Uses @mariozechner/pi-agent-core for the agent loop and @mariozechner/pi-ai for 
 
 ### UI (src/ui/)
 Vanilla TypeScript, no framework. Two layout modes selected by `isExtension` detection:
-- **Extension mode**: Tabbed interface (Chat/Terminal/Files tabs) with context-sensitive header buttons per tab. Full-height single panel.
-- **Standalone mode**: Resizable three-panel split: chat (left), terminal (top-right), file browser (bottom-right).
+- **Extension mode**: Tabbed interface (Chat/Terminal/Files/Memory) with group dropdown in header. Group management (create/delete/switch/status) via header controls. Context-sensitive header buttons per tab.
+- **Standalone mode**: Groups panel (left), chat (center), terminal (top-right), file browser + memory tabs (bottom-right).
 
-main.ts bootstraps everything and contains the event adapter that maps core AgentEvent to UI AgentEvent. Message IDs use session-unique prefixes to prevent collision after side panel close/reopen. Assistant label is "sliccy".
+main.ts bootstraps everything: event adapter (core AgentEvent → UI AgentEvent), orchestrator initialization, group wiring (onGroupSelect/onGroupCreate/onGroupDelete), context compaction via `transformContext`. Message IDs use session-unique prefixes to prevent collision after side panel close/reopen. Assistant label is "sliccy".
+
+Layout exposes `updateGroupDropdown(groups, selectedJid)` and `updateGroupStatus(jid, status)` for extension mode group management. Both standalone GroupsPanel and extension dropdown fire `onGroupSelect` for unified group switching.
 
 File browser supports clicking files to download and a ZIP button on folders (uses fflate) to download entire directories.
 
-Two separate IndexedDB session stores: UI-level (browser-coding-agent DB in session-store.ts) and core agent-level (agent-sessions DB in core/session.ts).
+Two separate IndexedDB session stores: UI-level (browser-coding-agent DB in session-store.ts) and core agent-level (agent-sessions DB in core/session.ts). Group data stored in slicc-groups DB. Per-group VFS in slicc-fs-{folder} DBs.
 
 ### Extension (src/extension/)
 Chrome Manifest V3 extension files. Service worker opens the side panel on action click. `chrome.d.ts` provides minimal typed declarations for the Chrome APIs used (debugger, tabs, sidePanel, runtime). `sandbox.html` (project root) provides an isolated execution environment for the JavaScript tool — exempt from extension CSP, allows Function constructor. Cross-origin fetch from sandbox is proxied through the parent page via postMessage.
@@ -110,7 +112,7 @@ User -> ChatPanel -> Agent.prompt() -> pi-agent-core loop -> Anthropic API (stre
 ## Key Conventions
 
 - **Two type systems**: Legacy ToolDefinition/ToolResult (in src/tools/) and pi-compatible AgentTool/AgentToolResult (in src/core/). The adapter in tool-adapter.ts bridges them.
-- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 242 tests across 19 files.
+- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 267 tests across 21 files.
 - **Logging**: createLogger('namespace') from src/core/logger.ts. Level-filtered, DEBUG in dev, ERROR in prod. Uses __DEV__ global (set by Vite define).
 - **Node shims**: src/shims/empty.ts stubs out node:zlib and node:module for the browser bundle (just-bash references them).
 - **Multi-provider auth**: API key stored in localStorage. Provider selector supports Anthropic (direct), Azure AI Foundry, and AWS Bedrock. Provider/resource/region stored in localStorage. Model resolved via `getModel()` from pi-ai with baseUrl override for Azure/Bedrock.

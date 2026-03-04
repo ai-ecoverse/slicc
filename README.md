@@ -12,21 +12,13 @@ A browser-based coding agent that runs as a **Chrome extension** or with a thin 
 
 ---
 
-Part of the **[AI Ecoverse](https://github.com/trieloff/ai-ecoverse)** — a comprehensive ecosystem of tools for AI-assisted development:
-- [ai-aligned-git](https://github.com/trieloff/ai-aligned-git) — Git wrapper for safe AI commit practices
-- [ai-aligned-gh](https://github.com/trieloff/ai-aligned-gh) — GitHub CLI wrapper for proper AI attribution
-- [yolo](https://github.com/trieloff/yolo) — AI CLI launcher with worktree isolation
-- [vibe-coded-badge-action](https://github.com/trieloff/vibe-coded-badge-action) — Badge showing AI-generated code percentage
-- [gh-workflow-peek](https://github.com/trieloff/gh-workflow-peek) — Smarter GitHub Actions log filtering
-- [upskill](https://github.com/trieloff/upskill) — Install Claude/Agent skills from other repositories
-- [as-a-bot](https://github.com/trieloff/as-a-bot) — GitHub App token broker for proper AI attribution
-- **slicc** — Browser-based coding agent (you are here)
+Part of the **[AI Ecoverse](https://github.com/trieloff/ai-ecoverse)** — a comprehensive ecosystem of tools for AI-assisted development.
 
 ---
 
 ## Features
 
-- :puzzle_piece: **Chrome Extension** — runs as a side panel in Chrome, no server required. Tabbed UI (Chat/Terminal/Files) optimized for the side panel form factor
+- **Chrome Extension** — runs as a side panel in Chrome, no server required. Tabbed UI (Chat/Terminal/Files/Memory) with group management dropdown
 - :globe_with_meridians: **Browser-Native** — runs entirely in the browser, no Electron, no desktop app
 - :satellite: **CLI Server** — alternative mode: thin Node.js/Express server launches Chrome and proxies CDP connections
 - :file_folder: **Virtual Filesystem** — OPFS + IndexedDB-backed filesystem right in the browser, with folder ZIP download
@@ -38,7 +30,10 @@ Part of the **[AI Ecoverse](https://github.com/trieloff/ai-ecoverse)** — a com
 - :wrench: **JavaScript Tool** — sandboxed JS execution with VFS bridge and persistent context
 - :key: **Multi-Provider Auth** — Anthropic (direct), Azure AI Foundry, and AWS Bedrock with segmented control
 - :zap: **Real-Time Streaming** — responses stream token-by-token as Claude thinks
+- :busts_in_silhouette: **Multi-Group Agents** — isolated agent contexts with independent VFS, shell, and memory per group. Create, switch, and manage groups from the UI
+- :brain: **Memory System** — per-group and global memory with a dedicated Memory tab for viewing and editing
 - :floppy_disk: **Session Persistence** — conversations and files survive page reloads via IndexedDB
+- :scissors: **Context Compaction** — automatic truncation and message dropping prevents token limit errors in long conversations
 - :crescent_moon: **Dark Theme** — syntax-highlighted code with a dark-first design
 
 ## Why "slicc"?
