@@ -492,6 +492,7 @@ Use the tools available to help the user with their tasks.`,
     return group;
   };
   layout.onGroupDelete = async (jid: string) => {
+    groupCurrentMessageId.delete(jid); // Clean up stale message state
     await orchestrator.unregisterGroup(jid);
     const remaining = orchestrator.getGroups();
     const mainGroup = remaining.find((g) => g.isMain) ?? remaining[0];

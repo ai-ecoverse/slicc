@@ -12,8 +12,8 @@
  *   └───────┴─────────────┴───┴───────────────┘
  *
  * Extension mode (side panel):
- *   ┌─ Header ──────────────────────┐
- *   ├─ Tabs: [Chat] [Term] [Files] ─┤
+ *   ┌─ Header (+ group dropdown) ───┐
+ *   ├─ [Chat] [Term] [Files] [Mem] ─┤
  *   │                                │
  *   │  Active panel (full size)      │
  *   │                                │
@@ -156,10 +156,11 @@ export class Layout {
       addBtn.addEventListener('click', async () => {
         const name = prompt('Enter group name:');
         if (!name?.trim()) return;
-        const group = await this.onGroupCreate?.(name.trim());
-        if (group) {
-          this.updateGroupDropdown(this._groups ?? [], group.jid);
-          this.onGroupSelect?.(group);
+        try {
+          const group = await this.onGroupCreate?.(name.trim());
+          if (group) this.onGroupSelect?.(group);
+        } catch (err) {
+          alert(`Failed to create group: ${err instanceof Error ? err.message : 'Unknown error'}`);
         }
       });
       leftGroup.appendChild(addBtn);
@@ -177,7 +178,11 @@ export class Layout {
         if (!group) return;
         if (group.isMain) { alert('Cannot delete the main group'); return; }
         if (!confirm(`Delete group "${group.name}"?`)) return;
-        await this.onGroupDelete?.(jid);
+        try {
+          await this.onGroupDelete?.(jid);
+        } catch (err) {
+          alert(`Failed to delete group: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        }
       });
       leftGroup.appendChild(delBtn);
     }
