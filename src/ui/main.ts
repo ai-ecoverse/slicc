@@ -13,7 +13,7 @@ import type { AgentHandle, AgentEvent as UIAgentEvent } from './types.js';
 import { Agent, adaptTools, createLogger, getModel } from '../core/index.js';
 import type { AgentEvent as CoreAgentEvent, AssistantMessage, AssistantMessageEvent, TextContent, Model } from '../core/index.js';
 import { createFileTools, createBashTool, createBrowserTool, createSearchTools, createJavaScriptTool } from '../tools/index.js';
-import { BrowserAPI } from '../cdp/index.js';
+import { BrowserAPI, DebuggerClient } from '../cdp/index.js';
 
 const log = createLogger('main');
 
@@ -63,6 +63,8 @@ function createEventAdapter(
   emit: (event: UIAgentEvent) => void,
 ): (event: CoreAgentEvent) => void {
   let currentMessageId = '';
+  // Use timestamp+random to avoid ID collisions with restored session messages
+  const sessionPrefix = Date.now().toString(36);
   let messageCounter = 0;
 
   return (event: CoreAgentEvent) => {
@@ -70,7 +72,7 @@ function createEventAdapter(
     switch (event.type) {
       case 'message_start': {
         if (event.message.role === 'assistant') {
-          currentMessageId = `msg-${++messageCounter}`;
+          currentMessageId = `msg-${sessionPrefix}-${++messageCounter}`;
           emit({ type: 'message_start', messageId: currentMessageId });
         }
         break;
@@ -165,8 +167,9 @@ async function main(): Promise<void> {
     apiKey = await showApiKeyDialog();
   }
 
-  // Build the layout
-  const layout = new Layout(app);
+  // Build the layout — tabbed in extension mode, split panels in standalone
+  const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+  const layout = new Layout(app, isExtension);
 
   // Initialize session persistence
   await layout.panels.chat.initSession();
@@ -211,8 +214,10 @@ async function main(): Promise<void> {
     log.info('File browser wired to VFS');
   }
 
-  // Initialize the BrowserAPI
-  const browser = new BrowserAPI();
+  // Initialize the BrowserAPI — use chrome.debugger in extension mode, WebSocket in CLI mode
+  const browser = isExtension
+    ? new BrowserAPI(new DebuggerClient())
+    : new BrowserAPI();
 
   // Create tools (only include tools for subsystems that initialized)
   const legacyTools = [

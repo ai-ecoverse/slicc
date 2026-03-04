@@ -7,6 +7,7 @@
 
 import type { VirtualFS } from '../fs/index.js';
 import { normalizePath, joinPath } from '../fs/index.js';
+import { consumeCachedBinary } from './binary-cache.js';
 import type {
   IFileSystem,
   FsStat,
@@ -45,7 +46,37 @@ export class VfsAdapter implements IFileSystem {
     _options?: WriteFileOptions | BufferEncoding,
   ): Promise<void> {
     const normalized = normalizePath(path);
-    await this.vfs.writeFile(normalized, content as string | Uint8Array);
+    if (typeof content === 'string') {
+      // Check binary cache first — createProxiedFetch stores original bytes
+      // here for binary responses so we can bypass string encoding entirely.
+      const cachedBytes = consumeCachedBinary(content);
+      if (cachedBytes) {
+        await this.vfs.writeFile(normalized, cachedBytes);
+        return;
+      }
+      // Detect whether the string contains characters above U+00FF.
+      // If so, it's definitely Unicode text (from resp.text()) — use UTF-8 encoding.
+      // If all chars are ≤ 0xFF, it may be latin1-encoded binary data (from curl
+      // fetching images/archives) — use charCodeAt to preserve raw bytes.
+      // ASCII text (all chars ≤ 0x7F) is identical in both encodings.
+      let hasHighCodepoints = false;
+      for (let i = 0; i < content.length; i++) {
+        if (content.charCodeAt(i) > 0xFF) { hasHighCodepoints = true; break; }
+      }
+      if (hasHighCodepoints) {
+        // Unicode text — encode as proper UTF-8
+        await this.vfs.writeFile(normalized, new TextEncoder().encode(content));
+      } else {
+        // ASCII or latin1-encoded binary — charCodeAt preserves byte values
+        const bytes = new Uint8Array(content.length);
+        for (let i = 0; i < content.length; i++) {
+          bytes[i] = content.charCodeAt(i);
+        }
+        await this.vfs.writeFile(normalized, bytes);
+      }
+    } else {
+      await this.vfs.writeFile(normalized, content);
+    }
   }
 
   async appendFile(
@@ -54,14 +85,29 @@ export class VfsAdapter implements IFileSystem {
     _options?: WriteFileOptions | BufferEncoding,
   ): Promise<void> {
     const normalized = normalizePath(path);
-    let existing = '';
+    // Read existing content as binary to avoid encoding corruption
+    let existingBytes = new Uint8Array(0);
     try {
-      existing = await this.vfs.readTextFile(normalized);
+      const existing = await this.vfs.readFile(normalized, { encoding: 'binary' });
+      existingBytes = existing instanceof Uint8Array ? new Uint8Array(existing) : new TextEncoder().encode(existing as string);
     } catch {
       // File doesn't exist yet, start empty
     }
-    const appendStr = typeof content === 'string' ? content : new TextDecoder().decode(content);
-    await this.vfs.writeFile(normalized, existing + appendStr);
+    // Convert new content to bytes
+    let newBytes: Uint8Array;
+    if (typeof content === 'string') {
+      newBytes = new Uint8Array(content.length);
+      for (let i = 0; i < content.length; i++) {
+        newBytes[i] = content.charCodeAt(i) & 0xFF;
+      }
+    } else {
+      newBytes = content instanceof Uint8Array ? content : new Uint8Array(content);
+    }
+    // Concatenate and write
+    const combined = new Uint8Array(existingBytes.length + newBytes.length);
+    combined.set(existingBytes);
+    combined.set(newBytes, existingBytes.length);
+    await this.vfs.writeFile(normalized, combined);
   }
 
   async exists(path: string): Promise<boolean> {

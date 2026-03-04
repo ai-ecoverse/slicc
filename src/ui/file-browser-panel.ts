@@ -6,6 +6,7 @@
  */
 
 import type { VirtualFS } from '../fs/index.js';
+import { zipSync } from 'fflate';
 
 /** Format byte size into human-readable string. */
 function formatSize(bytes: number): string {
@@ -103,6 +104,17 @@ export class FileBrowserPanel {
         name.textContent = entry.name;
         row.appendChild(name);
 
+        // Download folder as ZIP button
+        const zipBtn = document.createElement('button');
+        zipBtn.className = 'file-browser__zip-btn';
+        zipBtn.textContent = 'ZIP';
+        zipBtn.title = 'Download as ZIP';
+        zipBtn.addEventListener('click', (e) => {
+          e.stopPropagation(); // don't toggle expand
+          this.downloadDirAsZip(fullPath, entry.name);
+        });
+        row.appendChild(zipBtn);
+
         row.style.cursor = 'pointer';
         row.addEventListener('click', () => {
           if (this.expandedDirs.has(fullPath)) {
@@ -152,6 +164,43 @@ export class FileBrowserPanel {
 
         parentEl.appendChild(row);
       }
+    }
+  }
+
+  /** Recursively collect all files under a directory as { relativePath: Uint8Array }. */
+  private async collectFiles(dirPath: string, prefix: string): Promise<Record<string, Uint8Array>> {
+    if (!this.fs) return {};
+    const files: Record<string, Uint8Array> = {};
+    const entries = await this.fs.readDir(dirPath);
+    for (const entry of entries) {
+      const fullPath = dirPath === '/' ? '/' + entry.name : dirPath + '/' + entry.name;
+      const relPath = prefix ? prefix + '/' + entry.name : entry.name;
+      if (entry.type === 'directory') {
+        const subFiles = await this.collectFiles(fullPath, relPath);
+        Object.assign(files, subFiles);
+      } else {
+        const content = await this.fs.readFile(fullPath, { encoding: 'binary' });
+        files[relPath] = content instanceof Uint8Array ? content : new TextEncoder().encode(content as string);
+      }
+    }
+    return files;
+  }
+
+  /** Download a directory as a ZIP file. */
+  private async downloadDirAsZip(dirPath: string, dirName: string): Promise<void> {
+    if (!this.fs) return;
+    try {
+      const files = await this.collectFiles(dirPath, '');
+      const zipped = zipSync(files);
+      const blob = new Blob([zipped.buffer as ArrayBuffer], { type: 'application/zip' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = dirName + '.zip';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('[FileBrowser] ZIP download failed:', dirPath, err instanceof Error ? err.message : String(err));
     }
   }
 

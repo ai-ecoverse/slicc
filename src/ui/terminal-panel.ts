@@ -28,6 +28,17 @@ export class TerminalPanel {
     this.shell?.clearTerminal();
   }
 
+  /** Re-fit the terminal to its container (needed after tab switch). */
+  refit(): void {
+    // WasmShell creates a FitAddon internally — trigger resize via ResizeObserver
+    // by forcing a layout recalculation on the body element.
+    if (this.bodyEl) {
+      this.bodyEl.dispatchEvent(new Event('resize'));
+      // Also trigger window resize which the FitAddon's ResizeObserver listens to
+      window.dispatchEvent(new Event('resize'));
+    }
+  }
+
   /** Get the body element (for direct terminal mounting). */
   getBodyElement(): HTMLElement {
     return this.bodyEl;

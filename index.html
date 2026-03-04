@@ -202,6 +202,38 @@
       .file-browser__icon { flex-shrink: 0; font-size: 13px; }
       .file-browser__name { overflow: hidden; text-overflow: ellipsis; }
       .file-browser__size { margin-left: auto; color: #666; font-size: 11px; flex-shrink: 0; padding-left: 8px; }
+      .file-browser__zip-btn {
+        margin-left: auto; background: #2a2a4a; border: 1px solid #3a3a5a;
+        color: #a0a0b0; cursor: pointer; font-size: 11px; padding: 1px 6px;
+        border-radius: 3px; flex-shrink: 0; line-height: 1.4;
+      }
+      .file-browser__zip-btn:hover { background: #e94560; color: #fff; border-color: #e94560; }
+
+      /* ------------------------------------------------------------------ */
+      /* Tab bar (extension mode)                                           */
+      /* ------------------------------------------------------------------ */
+      .tab-bar {
+        display: flex; background: #16162a;
+        border-bottom: 1px solid #2a2a4a; flex-shrink: 0;
+      }
+      .tab-bar__tab {
+        flex: 1; padding: 8px 0; border: none; background: transparent;
+        color: #6a6a8a; font-size: 13px; font-weight: 600;
+        cursor: pointer; text-align: center;
+        border-bottom: 2px solid transparent;
+        transition: color .15s, border-color .15s;
+      }
+      .tab-bar__tab:hover { color: #a0a0b0; }
+      .tab-bar__tab--active {
+        color: #e94560; border-bottom-color: #e94560;
+      }
+      .tab-content {
+        flex: 1; min-height: 0; display: flex; flex-direction: column;
+      }
+      .tab-content__panel {
+        flex: 1; min-height: 0; display: flex; flex-direction: column;
+        overflow: hidden;
+      }
 
       /* ------------------------------------------------------------------ */
       /* API key dialog                                                     */

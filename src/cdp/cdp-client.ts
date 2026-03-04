@@ -16,11 +16,12 @@ import type {
   CDPEventListener,
   ConnectionState,
 } from './types.js';
+import type { CDPTransport } from './transport.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('cdp');
 
-export class CDPClient {
+export class CDPClient implements CDPTransport {
   private ws: WebSocket | null = null;
   private nextId = 1;
   private pending = new Map<number, {
@@ -37,9 +38,12 @@ export class CDPClient {
   /**
    * Connect to a CDP WebSocket endpoint.
    */
-  async connect(options: CDPConnectOptions): Promise<void> {
+  async connect(options?: CDPConnectOptions): Promise<void> {
     if (this._state !== 'disconnected') {
       throw new Error(`Cannot connect: state is ${this._state}`);
+    }
+    if (!options?.url) {
+      throw new Error('CDPClient.connect() requires a WebSocket URL');
     }
 
     const { url, timeout = 5000 } = options;
