@@ -369,6 +369,11 @@ When you learn something important:
     return this.contexts.get(jid);
   }
 
+  /** Get all messages for a group */
+  async getMessagesForGroup(jid: string): Promise<ChannelMessage[]> {
+    return db.getMessagesForGroup(jid);
+  }
+
   /** Wait for a tab to become ready, or timeout */
   private async waitForTabReady(jid: string, timeoutMs: number = 10000): Promise<boolean> {
     const start = Date.now();

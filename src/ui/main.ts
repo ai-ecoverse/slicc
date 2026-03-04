@@ -410,14 +410,34 @@ Use the tools available to help the user with their tasks.`,
   }
 
   // Wire group selection to chat and memory panel
-  layout.onGroupSelect = (group) => {
+  layout.onGroupSelect = async (group) => {
     log.info('Group selected', { jid: group.jid, name: group.name });
     selectedGroup = group;
     // Create the group's iframe if not already running
     orchestrator.createGroupTab(group.jid);
     // Update memory panel
     layout.panels.memory.setSelectedGroup(group.jid);
+    // Load and display message history for this group
+    await loadGroupChatHistory(group.jid);
   };
+
+  // Load chat history for a group
+  async function loadGroupChatHistory(jid: string): Promise<void> {
+    const messages = await orchestrator.getMessagesForGroup(jid);
+    // Clear current chat and load history
+    layout.panels.chat.clear();
+    for (const msg of messages) {
+      const messageId = msg.id;
+      if (msg.fromAssistant) {
+        emitToUI({ type: 'message_start', messageId });
+        emitToUI({ type: 'content_delta', messageId, text: msg.content });
+        emitToUI({ type: 'content_done', messageId });
+      } else {
+        // User message - add directly to chat panel
+        layout.panels.chat.addUserMessage(msg.content);
+      }
+    }
+  }
 
   // Create a group-aware agent handle that routes to orchestrator
   const groupAgentHandle: AgentHandle = {
