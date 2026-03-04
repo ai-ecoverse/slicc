@@ -37,7 +37,7 @@ export interface LayoutPanels {
   groups: GroupsPanel;
 }
 
-type TabId = 'chat' | 'terminal' | 'files';
+type TabId = 'chat' | 'terminal' | 'files' | 'memory';
 
 export class Layout {
   private root: HTMLElement;
@@ -66,6 +66,10 @@ export class Layout {
   private copyChatBtn!: HTMLButtonElement;
   private clearTermBtn!: HTMLButtonElement;
   private clearFsBtn!: HTMLButtonElement;
+
+  // Group dropdown (extension mode only)
+  private groupSelect?: HTMLSelectElement;
+  private _groups?: RegisteredGroup[];
 
   public panels!: LayoutPanels;
   public onModelChange?: (model: string) => void;
@@ -125,6 +129,21 @@ export class Layout {
       this.onModelChange?.(value);
     });
     leftGroup.appendChild(modelSelect);
+
+    // Group picker (extension mode only — standalone uses GroupsPanel instead)
+    if (this.isExtension) {
+      this.groupSelect = document.createElement('select');
+      this.groupSelect.style.cssText =
+        'background: #2a2a3a; color: #e0e0f0; border: 1px solid #444; border-radius: 4px; ' +
+        'padding: 4px 8px; font-size: 13px; cursor: pointer; outline: none; margin-left: 8px;';
+      this.groupSelect.addEventListener('change', () => {
+        const jid = this.groupSelect!.value;
+        const groups = this._groups ?? [];
+        const group = groups.find((g: RegisteredGroup) => g.jid === jid);
+        if (group) this.onGroupSelect?.(group);
+      });
+      leftGroup.appendChild(this.groupSelect);
+    }
 
     header.appendChild(leftGroup);
 
@@ -242,6 +261,20 @@ export class Layout {
     this.clearFsBtn.style.display = t === 'files' ? '' : 'none';
   }
 
+  /** Update the group dropdown in the header (extension mode only). */
+  updateGroupDropdown(groups: RegisteredGroup[], selectedJid?: string): void {
+    if (!this.groupSelect) return;
+    this._groups = groups;
+    this.groupSelect.textContent = '';
+    for (const g of groups) {
+      const opt = document.createElement('option');
+      opt.value = g.jid;
+      opt.textContent = g.name;
+      this.groupSelect.appendChild(opt);
+    }
+    if (selectedJid) this.groupSelect.value = selectedJid;
+  }
+
   // ── Extension: Tabbed Layout ────────────────────────────────────────
 
   private buildTabbedLayout(): void {
@@ -258,6 +291,7 @@ export class Layout {
       ['chat', 'Chat'],
       ['terminal', 'Terminal'],
       ['files', 'Files'],
+      ['memory', 'Memory'],
     ];
 
     for (const [id, label] of tabs) {
@@ -294,22 +328,17 @@ export class Layout {
     this.iframeContainer.style.display = 'none';
     this.root.appendChild(this.iframeContainer);
 
-    // Create a dummy groups element for extension mode
+    // Groups panel: hidden in extension mode (replaced by header dropdown)
     this.groupsEl = document.createElement('div');
     this.groupsEl.style.display = 'none';
     this.root.appendChild(this.groupsEl);
 
-    // Create a dummy memory container for extension mode
-    const memoryContainer = document.createElement('div');
-    memoryContainer.style.display = 'none';
-    this.root.appendChild(memoryContainer);
-
-    // Create panels in their tab containers
+    // Create panels — Memory gets a real tab container, Groups stays hidden (dropdown in header)
     this.panels = {
       chat: new ChatPanel(this.tabContainers.get('chat')!),
       terminal: new TerminalPanel(this.tabContainers.get('terminal')!),
       fileBrowser: new FileBrowserPanel(this.tabContainers.get('files')!),
-      memory: new MemoryPanel(memoryContainer),
+      memory: new MemoryPanel(this.tabContainers.get('memory')!),
       groups: new GroupsPanel(this.groupsEl, {
         onGroupSelect: (group) => this.onGroupSelect?.(group),
         onSendMessage: () => {
