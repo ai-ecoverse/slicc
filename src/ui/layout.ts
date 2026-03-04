@@ -1,7 +1,7 @@
 /**
- * Layout — resizable split-pane layout for chat, terminal, and file browser.
+ * Layout — split-pane (standalone) or tabbed (extension) layout.
  *
- * Structure:
+ * Standalone mode (CLI):
  *   ┌─────────────┬───┬───────────────┐
  *   │  Header (full width)            │
  *   ├─────────────┬───┬───────────────┤
@@ -9,11 +9,15 @@
  *   │  Chat       │ ║ ├───────────────┤
  *   │  Panel      │ ║ │  Files        │
  *   │             │ ║ │               │
- *   ├─────────────┴───┴───────────────┤
- *   └─────────────────────────────────┘
+ *   └─────────────┴───┴───────────────┘
  *
- * The vertical divider (║) between left/right is draggable.
- * The horizontal divider between terminal/files is draggable.
+ * Extension mode (side panel):
+ *   ┌─ Header ──────────────────────┐
+ *   ├─ Tabs: [Chat] [Term] [Files] ─┤
+ *   │                                │
+ *   │  Active panel (full size)      │
+ *   │                                │
+ *   └────────────────────────────────┘
  */
 
 import { ChatPanel } from './chat-panel.js';
@@ -28,8 +32,13 @@ export interface LayoutPanels {
   fileBrowser: FileBrowserPanel;
 }
 
+type TabId = 'chat' | 'terminal' | 'files';
+
 export class Layout {
   private root: HTMLElement;
+  private isExtension: boolean;
+
+  // Split-layout elements (standalone only)
   private leftEl!: HTMLElement;
   private rightEl!: HTMLElement;
   private verticalDivider!: HTMLElement;
@@ -37,28 +46,48 @@ export class Layout {
   private terminalContainer!: HTMLElement;
   private fileBrowserContainer!: HTMLElement;
 
+  // Tabbed-layout elements (extension only)
+  private tabContainers = new Map<TabId, HTMLElement>();
+  private tabButtons = new Map<TabId, HTMLElement>();
+  private activeTab: TabId = 'chat';
+  private actionsEl!: HTMLElement;
+
+  // Button references for tab-sensitive visibility
+  private clearChatBtn!: HTMLButtonElement;
+  private copyChatBtn!: HTMLButtonElement;
+  private clearTermBtn!: HTMLButtonElement;
+  private clearFsBtn!: HTMLButtonElement;
+
   public panels!: LayoutPanels;
   public onModelChange?: (model: string) => void;
 
-  private leftWidth = 0.55; // fraction of total width
-  private topHeight = 0.65; // fraction of right panel height
+  private leftWidth = 0.55;
+  private topHeight = 0.65;
 
-  constructor(root: HTMLElement) {
+  constructor(root: HTMLElement, isExtension = false) {
     this.root = root;
-    this.build();
+    this.isExtension = isExtension;
+    if (isExtension) {
+      this.buildTabbedLayout();
+    } else {
+      this.buildSplitLayout();
+    }
   }
 
-  private build(): void {
-    this.root.innerHTML = '';
+  // ── Shared: Header ──────────────────────────────────────────────────
 
-    // Header
+  private buildHeader(parent: HTMLElement): void {
     const header = document.createElement('div');
     header.className = 'header';
+
+    // Left group: title + model picker (anchored left so actions width changes don't shift it)
+    const leftGroup = document.createElement('div');
+    leftGroup.style.cssText = 'display: flex; align-items: center; gap: 0;';
 
     const title = document.createElement('div');
     title.className = 'header__title';
     title.textContent = 'slicc';
-    header.appendChild(title);
+    leftGroup.appendChild(title);
 
     // Model picker
     const models: [string, string][] = [
@@ -70,7 +99,7 @@ export class Layout {
     const modelSelect = document.createElement('select');
     modelSelect.style.cssText =
       'background: #2a2a3a; color: #e0e0f0; border: 1px solid #444; border-radius: 4px; ' +
-      'padding: 4px 8px; font-size: 13px; cursor: pointer; outline: none; margin: 0 12px;';
+      'padding: 4px 8px; font-size: 13px; cursor: pointer; outline: none; margin-left: 12px;';
     for (const [value, label] of models) {
       const opt = document.createElement('option');
       opt.value = value;
@@ -84,69 +113,81 @@ export class Layout {
       localStorage.setItem('selected-model', value);
       this.onModelChange?.(value);
     });
-    header.appendChild(modelSelect);
+    leftGroup.appendChild(modelSelect);
 
-    const actions = document.createElement('div');
-    actions.className = 'header__actions';
+    header.appendChild(leftGroup);
 
-    const clearChatBtn = document.createElement('button');
-    clearChatBtn.className = 'header__btn';
-    clearChatBtn.textContent = 'Clear Chat';
-    clearChatBtn.addEventListener('click', async () => {
+    // Actions container
+    this.actionsEl = document.createElement('div');
+    this.actionsEl.className = 'header__actions';
+    this.buildButtons();
+    header.appendChild(this.actionsEl);
+
+    parent.appendChild(header);
+  }
+
+  private buildButtons(): void {
+    // Clear Chat
+    this.clearChatBtn = document.createElement('button');
+    this.clearChatBtn.className = 'header__btn';
+    this.clearChatBtn.textContent = 'Clear Chat';
+    this.clearChatBtn.addEventListener('click', async () => {
       await this.panels.chat.clearSession();
       location.reload();
     });
-    actions.appendChild(clearChatBtn);
+    this.actionsEl.appendChild(this.clearChatBtn);
 
-    const clearTermBtn = document.createElement('button');
-    clearTermBtn.className = 'header__btn';
-    clearTermBtn.textContent = 'Clear Terminal';
-    clearTermBtn.addEventListener('click', () => {
-      this.panels.terminal.clearTerminal();
-    });
-    actions.appendChild(clearTermBtn);
-
-    if (__DEV__) {
-      const clearFsBtn = document.createElement('button');
-      clearFsBtn.className = 'header__btn';
-      clearFsBtn.textContent = 'Clear FS';
-      clearFsBtn.addEventListener('click', async () => {
-        indexedDB.deleteDatabase('virtual-fs');
-        try {
-          const root = await navigator.storage.getDirectory();
-          for await (const name of (root as any).keys()) {
-            await (root as any).removeEntry(name, { recursive: true });
-          }
-        } catch { /* OPFS not available or already empty */ }
-        location.reload();
-      });
-      actions.appendChild(clearFsBtn);
-
-      const copyChatBtn = document.createElement('button');
-      copyChatBtn.className = 'header__btn';
-      copyChatBtn.textContent = 'Copy Chat';
-      copyChatBtn.addEventListener('click', async () => {
-        const messages: ChatMessage[] = this.panels.chat.getMessages();
-        let formatted = '';
-        for (const msg of messages) {
-          const heading = msg.role === 'user' ? 'User' : 'Assistant';
-          formatted += `## ${heading}\n${msg.content}\n\n`;
-          if (msg.toolCalls) {
-            for (const tc of msg.toolCalls) {
-              formatted += `### Tool: ${tc.name}\nInput: ${JSON.stringify(tc.input, null, 2)}\nResult: ${tc.result ?? ''}\n\n`;
-            }
+    // Copy Chat
+    this.copyChatBtn = document.createElement('button');
+    this.copyChatBtn.className = 'header__btn';
+    this.copyChatBtn.textContent = 'Copy Chat';
+    this.copyChatBtn.addEventListener('click', async () => {
+      const messages: ChatMessage[] = this.panels.chat.getMessages();
+      let formatted = '';
+      for (const msg of messages) {
+        const heading = msg.role === 'user' ? 'User' : 'Assistant';
+        formatted += `## ${heading}\n${msg.content}\n\n`;
+        if (msg.toolCalls) {
+          for (const tc of msg.toolCalls) {
+            formatted += `### Tool: ${tc.name}\nInput: ${JSON.stringify(tc.input, null, 2)}\nResult: ${tc.result ?? ''}\n\n`;
           }
         }
-        await navigator.clipboard.writeText(formatted);
-        copyChatBtn.textContent = 'Copied!';
-        setTimeout(() => { copyChatBtn.textContent = 'Copy Chat'; }, 2000);
-      });
-      actions.appendChild(copyChatBtn);
-    }
+      }
+      await navigator.clipboard.writeText(formatted);
+      this.copyChatBtn.textContent = 'Copied!';
+      setTimeout(() => { this.copyChatBtn.textContent = 'Copy Chat'; }, 2000);
+    });
+    this.actionsEl.appendChild(this.copyChatBtn);
 
+    // Clear Terminal
+    this.clearTermBtn = document.createElement('button');
+    this.clearTermBtn.className = 'header__btn';
+    this.clearTermBtn.textContent = 'Clear Terminal';
+    this.clearTermBtn.addEventListener('click', () => {
+      this.panels.terminal.clearTerminal();
+    });
+    this.actionsEl.appendChild(this.clearTermBtn);
+
+    // Clear FS
+    this.clearFsBtn = document.createElement('button');
+    this.clearFsBtn.className = 'header__btn';
+    this.clearFsBtn.textContent = 'Clear FS';
+    this.clearFsBtn.addEventListener('click', async () => {
+      indexedDB.deleteDatabase('virtual-fs');
+      try {
+        const root = await navigator.storage.getDirectory();
+        for await (const name of (root as any).keys()) {
+          await (root as any).removeEntry(name, { recursive: true });
+        }
+      } catch { /* OPFS not available or already empty */ }
+      location.reload();
+    });
+    this.actionsEl.appendChild(this.clearFsBtn);
+
+    // API Key (always visible)
     const apiKeyBtn = document.createElement('button');
     apiKeyBtn.className = 'header__btn';
-    apiKeyBtn.textContent = getApiKey() ? 'API Key ✓' : 'API Key';
+    apiKeyBtn.textContent = getApiKey() ? 'API Key \u2713' : 'API Key';
     apiKeyBtn.addEventListener('click', () => {
       if (getApiKey()) {
         clearApiKey();
@@ -155,10 +196,105 @@ export class Layout {
         location.reload();
       }
     });
-    actions.appendChild(apiKeyBtn);
+    this.actionsEl.appendChild(apiKeyBtn);
+  }
 
-    header.appendChild(actions);
-    this.root.appendChild(header);
+  /** Show/hide buttons based on active tab (extension mode only). */
+  private updateButtonVisibility(): void {
+    if (!this.isExtension) return;
+    const t = this.activeTab;
+    this.clearChatBtn.style.display = t === 'chat' ? '' : 'none';
+    this.copyChatBtn.style.display = t === 'chat' ? '' : 'none';
+    this.clearTermBtn.style.display = t === 'terminal' ? '' : 'none';
+    this.clearFsBtn.style.display = t === 'files' ? '' : 'none';
+  }
+
+  // ── Extension: Tabbed Layout ────────────────────────────────────────
+
+  private buildTabbedLayout(): void {
+    // Safe: clearing own root element during initialization
+    while (this.root.firstChild) this.root.removeChild(this.root.firstChild);
+
+    this.buildHeader(this.root);
+
+    // Tab bar
+    const tabBar = document.createElement('div');
+    tabBar.className = 'tab-bar';
+
+    const tabs: [TabId, string][] = [
+      ['chat', 'Chat'],
+      ['terminal', 'Terminal'],
+      ['files', 'Files'],
+    ];
+
+    for (const [id, label] of tabs) {
+      const btn = document.createElement('button');
+      btn.className = 'tab-bar__tab';
+      btn.textContent = label;
+      btn.dataset.tab = id;
+      if (id === this.activeTab) btn.classList.add('tab-bar__tab--active');
+      btn.addEventListener('click', () => this.switchTab(id));
+      tabBar.appendChild(btn);
+      this.tabButtons.set(id, btn);
+    }
+
+    this.root.appendChild(tabBar);
+
+    // Tab content area
+    const content = document.createElement('div');
+    content.className = 'tab-content';
+
+    for (const [id] of tabs) {
+      const container = document.createElement('div');
+      container.className = 'tab-content__panel';
+      container.dataset.tab = id;
+      if (id !== this.activeTab) container.style.display = 'none';
+      content.appendChild(container);
+      this.tabContainers.set(id, container);
+    }
+
+    this.root.appendChild(content);
+
+    // Create panels in their tab containers
+    this.panels = {
+      chat: new ChatPanel(this.tabContainers.get('chat')!),
+      terminal: new TerminalPanel(this.tabContainers.get('terminal')!),
+      fileBrowser: new FileBrowserPanel(this.tabContainers.get('files')!),
+    };
+
+    this.updateButtonVisibility();
+  }
+
+  private switchTab(id: TabId): void {
+    if (id === this.activeTab) return;
+    this.activeTab = id;
+
+    // Update tab buttons
+    for (const [tabId, btn] of this.tabButtons) {
+      btn.classList.toggle('tab-bar__tab--active', tabId === id);
+    }
+
+    // Show/hide panels
+    for (const [tabId, container] of this.tabContainers) {
+      container.style.display = tabId === id ? '' : 'none';
+    }
+
+    // Update context-sensitive buttons
+    this.updateButtonVisibility();
+
+    // Re-fit terminal when switching to it (xterm needs visible container)
+    if (id === 'terminal') {
+      this.panels.terminal.refit?.();
+    }
+  }
+
+  // ── Standalone: Split Layout ────────────────────────────────────────
+
+  private buildSplitLayout(): void {
+    // Safe: clearing own root element during initialization
+    while (this.root.firstChild) this.root.removeChild(this.root.firstChild);
+
+    this.buildHeader(this.root);
 
     // Main layout
     const layout = document.createElement('div');
@@ -174,7 +310,7 @@ export class Layout {
     this.verticalDivider.className = 'layout__divider';
     layout.appendChild(this.verticalDivider);
 
-    // Right panel (terminal)
+    // Right panel
     this.rightEl = document.createElement('div');
     this.rightEl.className = 'layout__right';
 
@@ -182,12 +318,10 @@ export class Layout {
     this.terminalContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: none;';
     this.rightEl.appendChild(this.terminalContainer);
 
-    // Horizontal divider (between terminal and file browser)
     this.horizontalDivider = document.createElement('div');
     this.horizontalDivider.className = 'layout__right-divider';
     this.rightEl.appendChild(this.horizontalDivider);
 
-    // File browser container
     this.fileBrowserContainer = document.createElement('div');
     this.fileBrowserContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: none;';
     this.rightEl.appendChild(this.fileBrowserContainer);
@@ -202,14 +336,9 @@ export class Layout {
       fileBrowser: new FileBrowserPanel(this.fileBrowserContainer),
     };
 
-    // Apply initial sizes
     this.applySizes();
-
-    // Setup drag handlers
     this.setupVerticalDrag();
     this.setupHorizontalDrag();
-
-    // Handle window resize
     window.addEventListener('resize', () => this.applySizes());
   }
 
@@ -222,7 +351,6 @@ export class Layout {
     this.leftEl.style.width = leftW + 'px';
     this.rightEl.style.width = rightW + 'px';
 
-    // Horizontal split within right panel
     const rightH = this.rightEl.clientHeight;
     const hDividerH = 4;
     const topH = Math.round(rightH * this.topHeight);
@@ -294,12 +422,12 @@ export class Layout {
     });
   }
 
-  /** Dispose the entire layout and its panels. */
+  // ── Cleanup ─────────────────────────────────────────────────────────
+
   dispose(): void {
     this.panels.chat.dispose();
     this.panels.terminal.dispose();
     this.panels.fileBrowser.dispose();
-    // Safe: clearing own root element, not untrusted content
     while (this.root.firstChild) this.root.removeChild(this.root.firstChild);
   }
 }

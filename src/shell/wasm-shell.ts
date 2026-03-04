@@ -12,14 +12,74 @@ import type { VirtualFS } from '../fs/index.js';
 import { Bash } from 'just-bash';
 import type { BashExecResult, SecureFetch } from 'just-bash';
 import { VfsAdapter } from './vfs-adapter.js';
+import { cacheBinaryBody } from './binary-cache.js';
+
+/** Check if a content-type header indicates text (safe for UTF-8 decoding). */
+export function isTextContentType(contentType: string): boolean {
+  if (!contentType) return true; // Default to text for unknown types
+  const ct = contentType.toLowerCase();
+  return ct.startsWith('text/') ||
+    ct.includes('json') ||
+    ct.includes('xml') ||
+    ct.includes('javascript') ||
+    ct.includes('ecmascript') ||
+    ct.includes('html') ||
+    ct.includes('css') ||
+    ct.includes('svg');
+}
+
+/**
+ * Read a fetch Response body as a string, preserving binary data.
+ *
+ * For text content types, uses resp.text() (proper UTF-8 decoding).
+ * For binary content types, reads as arrayBuffer and decodes as latin1
+ * (ISO-8859-1) so every byte maps 1:1 to a codepoint 0-255. This
+ * preserves binary data through just-bash's string-typed FetchResult.body.
+ */
+async function readResponseBody(resp: Response): Promise<string> {
+  const contentType = resp.headers.get('content-type') ?? '';
+  if (isTextContentType(contentType)) {
+    return resp.text();
+  }
+  // Binary: read raw bytes and encode as latin1 string for just-bash's
+  // string-typed FetchResult.body. Also cache the original bytes so
+  // VfsAdapter.writeFile can bypass string encoding entirely.
+  const buf = await resp.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  const latin1 = new TextDecoder('iso-8859-1').decode(buf);
+  cacheBinaryBody(latin1, bytes);
+  return latin1;
+}
 
 /**
  * Create a SecureFetch that routes requests through the CLI server's
  * /api/fetch-proxy endpoint, bypassing browser CORS restrictions.
+ * In extension mode, uses direct fetch (CORS bypass via host_permissions).
  * Uses just-bash 2.11.7's custom `fetch` option so curl gets a fresh,
  * stateless fetch per invocation (fixes the multi-curl-in-loop bug).
+ *
+ * Binary responses (images, archives, etc.) are encoded as latin1 strings
+ * to preserve byte fidelity through just-bash's string-typed FetchResult.
  */
 function createProxiedFetch(): SecureFetch {
+  const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+
+  if (isExtension) {
+    // Extension mode — host_permissions grant native CORS bypass
+    return async (url, options) => {
+      const resp = await fetch(url, {
+        method: options?.method ?? 'GET',
+        headers: options?.headers,
+        body: options?.body,
+      });
+      const body = await readResponseBody(resp);
+      const respHeaders: Record<string, string> = {};
+      resp.headers.forEach((v, k) => { respHeaders[k] = v; });
+      return { status: resp.status, statusText: resp.statusText, headers: respHeaders, body, url };
+    };
+  }
+
+  // CLI mode — proxy through /api/fetch-proxy
   return async (url, options) => {
     const method = options?.method ?? 'GET';
     const headers: Record<string, string> = {
@@ -33,15 +93,16 @@ function createProxiedFetch(): SecureFetch {
     }
 
     const resp = await fetch('/api/fetch-proxy', init);
-    const body = await resp.text();
 
-    // If the proxy itself failed (not the upstream), throw so curl reports an error
+    // Check for proxy errors before reading body
     if (resp.status === 502 || resp.status === 400) {
+      const errorText = await resp.text();
       let errorMsg = `Proxy error ${resp.status}`;
-      try { errorMsg = JSON.parse(body).error ?? errorMsg; } catch { /* not JSON */ }
+      try { errorMsg = JSON.parse(errorText).error ?? errorMsg; } catch { /* not JSON */ }
       throw new Error(errorMsg);
     }
 
+    const body = await readResponseBody(resp);
     const respHeaders: Record<string, string> = {};
     resp.headers.forEach((v, k) => { respHeaders[k] = v; });
 

@@ -102,8 +102,7 @@ export function createBrowserTool(browser: BrowserAPI): ToolDefinition {
           case 'new_tab': {
             const url = input['url'] as string || 'about:blank';
             await resolveAppTabId();
-            const createResult = await browser.cdpClient.send('Target.createTarget', { url });
-            const newTargetId = createResult['targetId'] as string;
+            const newTargetId = await browser.createPage(url);
             return { content: `Created new tab (targetId: ${newTargetId}) at ${url}` };
           }
 
@@ -181,8 +180,7 @@ export function createBrowserTool(browser: BrowserAPI): ToolDefinition {
             if (!runtimeTabId) {
               // listPages ensures CDP connection is established
               await browser.listPages();
-              const createResult = await browser.cdpClient.send('Target.createTarget', { url: 'about:blank' });
-              runtimeTabId = createResult['targetId'] as string;
+              runtimeTabId = await browser.createPage();
               await browser.attachToPage(runtimeTabId);
             }
             const evalResult = await browser.evaluate(expression);

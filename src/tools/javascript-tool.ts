@@ -46,7 +46,27 @@ interface ExecResult {
   error?: string;
 }
 
-type IframeMessage = ExecRequest | VfsRequest | VfsResponse | ExecResult;
+/** Message sent from iframe to parent to proxy a cross-origin fetch (extension sandbox CORS bypass). */
+interface FetchProxyRequest {
+  type: 'fetch_proxy';
+  id: string;
+  url: string;
+  init?: { method?: string; headers?: Record<string, string>; body?: string };
+}
+
+/** Message sent from parent to iframe with proxied fetch response. */
+interface FetchProxyResponse {
+  type: 'fetch_proxy_response';
+  id: string;
+  status?: number;
+  statusText?: string;
+  headers?: Record<string, string>;
+  /** Binary body transferred as Uint8Array via structured clone. */
+  body?: Uint8Array;
+  error?: string;
+}
+
+type IframeMessage = ExecRequest | VfsRequest | VfsResponse | ExecResult | FetchProxyRequest | FetchProxyResponse;
 
 // NOTE: The use of Function constructor inside the iframe is intentional —
 // this tool's purpose IS to execute arbitrary user-provided JavaScript code.
@@ -160,10 +180,11 @@ addEventListener('message', async (e) => {
 /** Create the JavaScript runtime tool bound to a VirtualFS instance. */
 export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
   let iframe: HTMLIFrameElement | null = null;
+  let iframeReady: Promise<HTMLIFrameElement> | null = null;
   let execIdCounter = 0;
   let vfsListenerRegistered = false;
 
-  /** Register a single persistent listener for VFS requests from the iframe. */
+  /** Register a single persistent listener for VFS and fetch-proxy requests from the iframe. */
   function ensureVfsListener(): void {
     if (vfsListenerRegistered) return;
     vfsListenerRegistered = true;
@@ -171,23 +192,81 @@ export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
       const msg = event.data as IframeMessage;
       if (msg && msg.type === 'vfs') {
         handleVfsRequest(msg as VfsRequest);
+      } else if (msg && msg.type === 'fetch_proxy') {
+        handleFetchProxy(msg as FetchProxyRequest);
       }
     });
   }
 
-  function ensureIframe(): HTMLIFrameElement {
-    if (iframe && iframe.contentWindow) return iframe;
+  /** Handle fetch proxy requests from the sandboxed iframe (extension CORS bypass). */
+  function handleFetchProxy(msg: FetchProxyRequest): void {
+    (async () => {
+      try {
+        const init: RequestInit = { method: msg.init?.method ?? 'GET', cache: 'no-store' };
+        if (msg.init?.headers) init.headers = msg.init.headers;
+        if (msg.init?.body && !['GET', 'HEAD'].includes(init.method as string)) {
+          init.body = msg.init.body;
+        }
+        const resp = await fetch(msg.url, init);
+        const buf = await resp.arrayBuffer();
+        const headers: Record<string, string> = {};
+        resp.headers.forEach((v, k) => { headers[k] = v; });
+        iframe?.contentWindow?.postMessage(
+          {
+            type: 'fetch_proxy_response',
+            id: msg.id,
+            status: resp.status,
+            statusText: resp.statusText,
+            headers,
+            body: new Uint8Array(buf),
+          } satisfies FetchProxyResponse,
+          '*',
+        );
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        log.error('Fetch proxy error', { url: msg.url, error: errMsg });
+        iframe?.contentWindow?.postMessage(
+          { type: 'fetch_proxy_response', id: msg.id, error: errMsg } satisfies FetchProxyResponse,
+          '*',
+        );
+      }
+    })();
+  }
+
+  /** Get or create the sandboxed iframe, waiting for it to load in extension mode. */
+  function ensureIframe(): Promise<HTMLIFrameElement> {
+    if (iframeReady) return iframeReady;
+
     iframe = document.createElement('iframe');
     iframe.style.display = 'none';
-    iframe.sandbox.add('allow-scripts');
-    iframe.sandbox.add('allow-same-origin');
-    document.body.appendChild(iframe);
-    const doc = iframe.contentDocument!;
-    doc.open();
-    doc.write(IFRAME_HTML);
-    doc.close();
+
+    const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+
+    if (isExtension) {
+      // Extension mode — use sandboxed page (allows Function constructor).
+      // Must wait for load event before posting messages.
+      iframeReady = new Promise<HTMLIFrameElement>((resolve) => {
+        iframe!.addEventListener('load', () => {
+          log.debug('Sandbox iframe loaded');
+          resolve(iframe!);
+        }, { once: true });
+        iframe!.src = chrome.runtime.getURL('sandbox.html');
+        document.body.appendChild(iframe!);
+      });
+    } else {
+      // CLI mode — write inline HTML (synchronous, immediately ready)
+      iframe.sandbox.add('allow-scripts');
+      iframe.sandbox.add('allow-same-origin');
+      document.body.appendChild(iframe);
+      const doc = iframe.contentDocument!;
+      doc.open();
+      doc.write(IFRAME_HTML);
+      doc.close();
+      iframeReady = Promise.resolve(iframe);
+    }
+
     ensureVfsListener();
-    return iframe;
+    return iframeReady;
   }
 
   function handleVfsRequest(msg: VfsRequest): void {
@@ -272,7 +351,7 @@ export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
       log.debug('Execute JS', { codeLength: code.length, timeout });
 
       try {
-        const frame = ensureIframe();
+        const frame = await ensureIframe();
 
         const result = await new Promise<ExecResult>((resolve, reject) => {
           const timer = setTimeout(() => {

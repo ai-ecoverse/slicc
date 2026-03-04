@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script>
+const pendingVfs = new Map();
+const pendingFetch = new Map();
+let vfsIdCounter = 0;
+let fetchIdCounter = 0;
+
+// ── Fetch proxy ──────────────────────────────────────────────────────────
+// In extension sandbox mode, cross-origin fetch is blocked by CORS (null origin).
+// Route through parent page via postMessage — parent has host_permissions.
+const _origFetch = window.fetch.bind(window);
+
+function proxiedFetch(input, init) {
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+  let parsed;
+  try { parsed = new URL(url, location.origin); } catch { return _origFetch(input, init); }
+  // Same-origin requests can go direct
+  if (parsed.origin === location.origin) return _origFetch(input, init);
+
+  // Cross-origin: proxy through parent page
+  return new Promise((resolve, reject) => {
+    const id = 'fp-' + (++fetchIdCounter);
+    pendingFetch.set(id, { resolve, reject });
+    parent.postMessage({
+      type: 'fetch_proxy',
+      id,
+      url,
+      init: init ? {
+        method: init.method,
+        headers: init.headers ? Object.fromEntries(new Headers(init.headers).entries()) : undefined,
+        body: typeof init.body === 'string' ? init.body : undefined,
+      } : undefined,
+    }, '*');
+  });
+}
+window.fetch = proxiedFetch;
+
+// ── VFS bridge ───────────────────────────────────────────────────────────
+const fs = {
+  readFile: (path) => vfsCall('readFile', [path]),
+  writeFile: (path, content) => vfsCall('writeFile', [path, content]),
+  writeFileBinary: (path, data) => vfsCallBinary('writeFileBinary', [path], data),
+  readDir: (path) => vfsCall('readDir', [path]),
+  exists: (path) => vfsCall('exists', [path]),
+  fetchToFile: async (url, path) => {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error('fetch ' + resp.status + ' ' + resp.statusText);
+    const buf = await resp.arrayBuffer();
+    await vfsCallBinary('writeFileBinary', [path], new Uint8Array(buf));
+    return buf.byteLength;
+  },
+};
+
+function vfsCall(op, args) {
+  return new Promise((resolve, reject) => {
+    const id = 'vfs-' + (++vfsIdCounter);
+    pendingVfs.set(id, { resolve, reject });
+    parent.postMessage({ type: 'vfs', id, op, args }, '*');
+  });
+}
+
+function vfsCallBinary(op, args, binaryData) {
+  return new Promise((resolve, reject) => {
+    const id = 'vfs-' + (++vfsIdCounter);
+    pendingVfs.set(id, { resolve, reject });
+    parent.postMessage({ type: 'vfs', id, op, args, binaryData }, '*');
+  });
+}
+
+// Listen for messages from parent
+addEventListener('message', async (e) => {
+  const msg = e.data;
+  if (!msg || !msg.type) return;
+
+  if (msg.type === 'vfs_response') {
+    const pending = pendingVfs.get(msg.id);
+    if (pending) {
+      pendingVfs.delete(msg.id);
+      if (msg.error) pending.reject(new Error(msg.error));
+      else pending.resolve(msg.result);
+    }
+    return;
+  }
+
+  if (msg.type === 'fetch_proxy_response') {
+    const pending = pendingFetch.get(msg.id);
+    if (pending) {
+      pendingFetch.delete(msg.id);
+      if (msg.error) {
+        pending.reject(new Error(msg.error));
+      } else {
+        // Reconstruct a Response object from the proxied data
+        const body = msg.body instanceof Uint8Array ? msg.body.buffer : new ArrayBuffer(0);
+        const resp = new Response(body, {
+          status: msg.status ?? 200,
+          statusText: msg.statusText ?? 'OK',
+          headers: msg.headers ?? {},
+        });
+        pending.resolve(resp);
+      }
+    }
+    return;
+  }
+
+  if (msg.type === 'exec') {
+    const logs = [];
+    const origLog = console.log;
+    const origError = console.error;
+    const origWarn = console.warn;
+    const origInfo = console.info;
+
+    console.log = (...args) => logs.push(args.map(String).join(' '));
+    console.error = (...args) => logs.push('[error] ' + args.map(String).join(' '));
+    console.warn = (...args) => logs.push('[warn] ' + args.map(String).join(' '));
+    console.info = (...args) => logs.push(args.map(String).join(' '));
+
+    try {
+      // Sandboxed page allows Function constructor (exempt from extension CSP)
+      const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+      const fn = AsyncFunction('fs', msg.code);
+      const result = await fn(fs);
+      const resultStr = result !== undefined ? JSON.stringify(result, null, 2) : undefined;
+      parent.postMessage({ type: 'exec_result', id: msg.id, result: resultStr, logs }, '*');
+    } catch (err) {
+      parent.postMessage({
+        type: 'exec_result', id: msg.id,
+        error: err instanceof Error ? err.message : String(err),
+        logs,
+      }, '*');
+    } finally {
+      console.log = origLog;
+      console.error = origError;
+      console.warn = origWarn;
+      console.info = origInfo;
+    }
+  }
+});
+</script>
+</head>
+<body></body>
+</html>

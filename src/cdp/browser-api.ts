@@ -6,6 +6,7 @@
  */
 
 import { CDPClient } from './cdp-client.js';
+import type { CDPTransport } from './transport.js';
 import type {
   CDPConnectOptions,
   PageInfo,
@@ -19,27 +20,35 @@ import type {
 const DEFAULT_CDP_URL = 'ws://localhost:3000/cdp';
 
 export class BrowserAPI {
-  private client: CDPClient;
+  private client: CDPTransport;
   private sessionId: string | null = null;
   private attachedTargetId: string | null = null;
 
-  constructor(client?: CDPClient) {
+  constructor(client?: CDPTransport) {
     this.client = client ?? new CDPClient();
-  }
-
-  /** The underlying CDP client. */
-  get cdpClient(): CDPClient {
-    return this.client;
   }
 
   /**
    * Connect to the CDP proxy.
+   * DebuggerClient (extension mode) accepts but ignores these options.
    */
   async connect(options?: Partial<CDPConnectOptions>): Promise<void> {
     await this.client.connect({
       url: options?.url ?? DEFAULT_CDP_URL,
       timeout: options?.timeout,
     });
+  }
+
+  /**
+   * Create a new browser tab/target.
+   * Returns the targetId of the newly created tab.
+   */
+  async createPage(url?: string): Promise<string> {
+    await this.ensureConnected();
+    const result = await this.client.send('Target.createTarget', {
+      url: url ?? 'about:blank',
+    });
+    return result['targetId'] as string;
   }
 
   /**

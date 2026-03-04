@@ -279,6 +279,10 @@ export class ChatPanel {
     this.sendBtn.style.display = streaming ? 'none' : 'flex';
     this.stopBtn.style.display = streaming ? 'flex' : 'none';
     this.textarea.disabled = streaming;
+    if (!streaming) {
+      // Restore focus after generation completes
+      this.textarea.focus();
+    }
   }
 
   private findMessage(id: string): ChatMessage | undefined {
