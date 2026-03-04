@@ -466,10 +466,11 @@ Use the tools available to help the user with their tasks.`,
     selectedGroup = groups.find((g) => g.isMain) ?? groups[0];
   }
 
-  // Set initial group for memory panel
+  // Set initial group for memory panel and group dropdown (extension mode)
   if (selectedGroup) {
     layout.panels.memory.setSelectedGroup(selectedGroup.jid);
   }
+  layout.updateGroupDropdown(orchestrator.getGroups(), selectedGroup?.jid);
 
   // Wire group selection to chat and memory panel
   layout.onGroupSelect = async (group) => {
