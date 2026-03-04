@@ -15,7 +15,7 @@ import { VfsAdapter } from './vfs-adapter.js';
 import { cacheBinaryBody } from './binary-cache.js';
 
 /** Check if a content-type header indicates text (safe for UTF-8 decoding). */
-function isTextContentType(contentType: string): boolean {
+export function isTextContentType(contentType: string): boolean {
   if (!contentType) return true; // Default to text for unknown types
   const ct = contentType.toLowerCase();
   return ct.startsWith('text/') ||
