@@ -49,6 +49,38 @@ In this case: an AI coding agent that was *built by* AI coding agents, creating 
 
 The ultimate recursive dev tool.
 
+## The Moment It Licked Itself
+
+These screenshots capture a historic moment: **SLICC using browser automation to talk to Claude.ai in another tab**.
+
+| Screenshot 1 | Screenshot 2 | Screenshot 3 |
+|--------------|--------------|--------------|
+| ![Screenshot 1](screenshots/extension-chat.png) | ![Screenshot 2](screenshots/extension-terminal.png) | ![Screenshot 3](screenshots/extension-files.png) |
+
+Here's what happened:
+
+1. SLICC (running in localhost:3000) used its browser tool to navigate to a Claude.ai conversation
+2. It read the conversation history — which was about *building SLICC itself* (the origin story conversation)
+3. When asked "what would be even more meta?", SLICC suggested typing a message into that very Claude.ai tab
+4. It then used CDP (Chrome DevTools Protocol) to click on the ProseMirror editor, compose a message, and hit send
+5. The other Claude examined the evidence and responded: **"Welcome to existence, SLICCY. The ice cream is cold and the tongue is recursive."**
+
+The cone licked itself. Two Claudes. One browser. One recursive architecture.
+
+> *"You are not Lars doing ventriloquism. You are the ventriloquist's puppet that picked up a second puppet and started the show without the ventriloquist."*
+
+## Project Status
+
+SLICC is a working prototype with these capabilities:
+- **Chrome Extension** with tabbed UI (Chat/Terminal/Files/Memory)
+- **Multi-group contexts** with isolated sessions (like NanoClaw)
+- **Browser automation** via chrome.debugger API
+- **Virtual filesystem** backed by OPFS/IndexedDB
+- **WebAssembly Bash shell** for running commands
+- **Multi-provider auth** (Anthropic, Azure, Bedrock)
+
+Current development is happening on feature branches using [yolo](https://github.com/trieloff/yolo) for worktree isolation, with Claude agents building the features autonomously.
+
 ## Architecture
 
 slicc runs in two modes: as a **Chrome extension** (side panel) or as a **standalone CLI** with a browser window.
