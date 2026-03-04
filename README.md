@@ -12,7 +12,7 @@ A browser-based coding agent that runs as a **Chrome extension** or with a thin 
 
 ---
 
-Part of the **[AI Ecoverse](https://github.com/trieloff/ai-ecoverse)** — a comprehensive ecosystem of tools for AI-assisted development.
+Part of the **[AI Ecoverse](https://github.com/ai-ecoverse)** — a comprehensive ecosystem of tools for AI-assisted development.
 
 ---
 
