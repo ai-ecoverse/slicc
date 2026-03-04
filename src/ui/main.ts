@@ -296,6 +296,9 @@ Use the tools available to help the user with their tasks.`,
 
   // Track currently selected group for routing
   let selectedGroup: RegisteredGroup | null = null;
+  
+  // Track current message ID per group (unique per response)
+  const groupCurrentMessageId = new Map<string, string>();
 
   // Initialize the group orchestrator
   const orchestrator = new Orchestrator(
@@ -305,20 +308,33 @@ Use the tools available to help the user with their tasks.`,
         log.debug('Group response', { groupJid, textLength: text.length, isPartial });
         // Route to chat UI if this is the selected group
         if (selectedGroup?.jid === groupJid) {
+          // Start a new message if we don't have one
+          let messageId = groupCurrentMessageId.get(groupJid);
+          if (!messageId) {
+            messageId = `group-${groupJid}-${Date.now()}`;
+            groupCurrentMessageId.set(groupJid, messageId);
+            emitToUI({ type: 'message_start', messageId });
+          }
+          
           if (isPartial) {
-            emitToUI({ type: 'content_delta', messageId: `group-${groupJid}`, text });
+            emitToUI({ type: 'content_delta', messageId, text });
           } else {
-            // Full response - emit as complete message
-            emitToUI({ type: 'message_start', messageId: `group-${groupJid}` });
-            emitToUI({ type: 'content_delta', messageId: `group-${groupJid}`, text });
-            emitToUI({ type: 'content_done', messageId: `group-${groupJid}` });
+            // Full response
+            emitToUI({ type: 'content_delta', messageId, text });
+            emitToUI({ type: 'content_done', messageId });
           }
         }
       },
       onResponseDone: (groupJid) => {
         log.debug('Group response done', { groupJid });
         if (selectedGroup?.jid === groupJid) {
-          emitToUI({ type: 'turn_end', messageId: `group-${groupJid}` });
+          const messageId = groupCurrentMessageId.get(groupJid);
+          if (messageId) {
+            emitToUI({ type: 'content_done', messageId });
+            emitToUI({ type: 'turn_end', messageId });
+            // Clear for next message
+            groupCurrentMessageId.delete(groupJid);
+          }
         }
       },
       onSendMessage: (targetJid, text) => {
@@ -345,11 +361,29 @@ Use the tools available to help the user with their tasks.`,
           emitToUI({ type: 'error', error });
         }
       },
+      getBrowserAPI: () => browser,
+      onToolStart: (groupJid, toolName, toolInput) => {
+        if (selectedGroup?.jid === groupJid) {
+          const messageId = groupCurrentMessageId.get(groupJid);
+          if (messageId) {
+            emitToUI({ type: 'tool_use_start', messageId, toolName, toolInput });
+          }
+        }
+      },
+      onToolEnd: (groupJid, toolName, result, isError) => {
+        if (selectedGroup?.jid === groupJid) {
+          const messageId = groupCurrentMessageId.get(groupJid);
+          if (messageId) {
+            emitToUI({ type: 'tool_result', messageId, toolName, result, isError });
+          }
+        }
+      },
     },
   );
 
   await orchestrator.init();
   layout.panels.groups.setOrchestrator(orchestrator);
+  layout.panels.memory.setOrchestrator(orchestrator);
 
   // Create main group if it doesn't exist
   const groups = orchestrator.getGroups();
@@ -363,12 +397,19 @@ Use the tools available to help the user with their tasks.`,
     selectedGroup = groups.find((g) => g.isMain) ?? groups[0];
   }
 
-  // Wire group selection to chat
+  // Set initial group for memory panel
+  if (selectedGroup) {
+    layout.panels.memory.setSelectedGroup(selectedGroup.jid);
+  }
+
+  // Wire group selection to chat and memory panel
   layout.onGroupSelect = (group) => {
     log.info('Group selected', { jid: group.jid, name: group.name });
     selectedGroup = group;
     // Create the group's iframe if not already running
     orchestrator.createGroupTab(group.jid);
+    // Update memory panel
+    layout.panels.memory.setSelectedGroup(group.jid);
   };
 
   // Create a group-aware agent handle that routes to orchestrator

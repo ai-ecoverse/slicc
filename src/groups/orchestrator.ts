@@ -24,6 +24,7 @@ import { createLogger } from '../core/logger.js';
 import { GroupContext, type GroupContextCallbacks } from './group-context.js';
 import { TaskScheduler } from './scheduler.js';
 import { VirtualFS } from '../fs/index.js';
+import type { BrowserAPI } from '../cdp/index.js';
 
 const log = createLogger('orchestrator');
 
@@ -38,6 +39,12 @@ export interface OrchestratorCallbacks {
   onStatusChange: (groupJid: string, status: GroupTabState['status']) => void;
   /** Called on error */
   onError: (groupJid: string, error: string) => void;
+  /** Get the browser API for browser tool */
+  getBrowserAPI: () => BrowserAPI;
+  /** Called when a tool starts executing */
+  onToolStart?: (groupJid: string, toolName: string, toolInput: unknown) => void;
+  /** Called when a tool finishes executing */
+  onToolEnd?: (groupJid: string, toolName: string, result: string, isError: boolean) => void;
 }
 
 export interface AssistantConfig {
@@ -62,7 +69,7 @@ export class Orchestrator {
   constructor(
     container: HTMLElement,
     callbacks: OrchestratorCallbacks,
-    config: AssistantConfig = { name: 'Andy', triggerPattern: /^@Andy\b/i },
+    config: AssistantConfig = { name: 'sliccy', triggerPattern: /^@sliccy\b/i },
   ) {
     this.container = container;
     this.callbacks = callbacks;
@@ -123,17 +130,17 @@ export class Orchestrator {
       this.globalMemoryCache = typeof content === 'string' ? content : new TextDecoder().decode(content);
     } catch {
       // Create default global memory
-      const defaultContent = `# ${this.config.name}
+      const defaultContent = `# sliccy
 
-You are ${this.config.name}, a personal assistant. You help with tasks, answer questions, and can schedule reminders.
+You are a helpful coding assistant running in a browser-based development environment called SLICC (Self-Licking Ice Cream Cone).
 
 ## What You Can Do
 
 - Answer questions and have conversations
-- Read and write files in your workspace
-- Run bash commands
+- Read and write files in your virtual workspace
+- Run bash commands in a sandboxed shell
+- Automate browser interactions
 - Schedule tasks to run later or on a recurring basis
-- Send messages immediately with send_message
 
 ## Memory
 
@@ -141,10 +148,6 @@ When you learn something important:
 - Create files for structured data
 - Update this file for global preferences
 - Each group also has its own CLAUDE.md for group-specific context
-
-## Communication
-
-Your output is sent to the user. You can also use send_message for immediate updates while working.
 `;
       await this.globalFs.writeFile('/workspace/CLAUDE.md', defaultContent);
       this.globalMemoryCache = defaultContent;
@@ -285,6 +288,12 @@ Your output is sent to the user. You can also use send_message for immediate upd
         }
         this.callbacks.onStatusChange(jid, status);
       },
+      onToolStart: (toolName, toolInput) => {
+        this.callbacks.onToolStart?.(jid, toolName, toolInput);
+      },
+      onToolEnd: (toolName, result, isError) => {
+        this.callbacks.onToolEnd?.(jid, toolName, result, isError);
+      },
       // NanoClaw tools callbacks
       onSendMessage: (text, sender) => {
         // Send message immediately through the channel
@@ -319,6 +328,7 @@ Your output is sent to the user. You can also use send_message for immediate upd
         return fullGroup;
       } : undefined,
       getGlobalMemory: () => this.getGlobalMemory(),
+      getBrowserAPI: () => this.callbacks.getBrowserAPI(),
     };
 
     const context = new GroupContext(group, contextCallbacks);

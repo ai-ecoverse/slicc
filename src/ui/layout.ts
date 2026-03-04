@@ -23,6 +23,7 @@
 import { ChatPanel } from './chat-panel.js';
 import { TerminalPanel } from './terminal-panel.js';
 import { FileBrowserPanel } from './file-browser-panel.js';
+import { MemoryPanel } from './memory-panel.js';
 import { GroupsPanel } from './groups-panel.js';
 import { getApiKey, clearApiKey, clearAzureResource, clearProvider } from './api-key-dialog.js';
 import type { ChatMessage } from './types.js';
@@ -32,6 +33,7 @@ export interface LayoutPanels {
   chat: ChatPanel;
   terminal: TerminalPanel;
   fileBrowser: FileBrowserPanel;
+  memory: MemoryPanel;
   groups: GroupsPanel;
 }
 
@@ -48,6 +50,7 @@ export class Layout {
   private groupsDivider!: HTMLElement;
   private verticalDivider!: HTMLElement;
   private horizontalDivider!: HTMLElement;
+  private bottomSection!: HTMLElement;
   private terminalContainer!: HTMLElement;
   private fileBrowserContainer!: HTMLElement;
   private iframeContainer!: HTMLElement;
@@ -176,7 +179,7 @@ export class Layout {
     });
     this.actionsEl.appendChild(this.clearTermBtn);
 
-    // Clear FS
+    // Clear FS (dev mode only)
     this.clearFsBtn = document.createElement('button');
     this.clearFsBtn.className = 'header__btn';
     this.clearFsBtn.textContent = 'Clear FS';
@@ -190,7 +193,29 @@ export class Layout {
       } catch { /* OPFS not available or already empty */ }
       location.reload();
     });
-    this.actionsEl.appendChild(this.clearFsBtn);
+    // Only show in dev mode
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      this.actionsEl.appendChild(this.clearFsBtn);
+    }
+
+    // Clear Groups DB (dev mode only) - clears all group data including global memory
+    const clearGroupsBtn = document.createElement('button');
+    clearGroupsBtn.className = 'header__btn';
+    clearGroupsBtn.textContent = 'Clear Groups';
+    clearGroupsBtn.addEventListener('click', async () => {
+      // Delete all group-related IndexedDB databases
+      const dbs = await indexedDB.databases();
+      for (const db of dbs) {
+        if (db.name?.startsWith('slicc-fs-') || db.name === 'slicc-groups') {
+          indexedDB.deleteDatabase(db.name);
+        }
+      }
+      location.reload();
+    });
+    // Only show in dev mode
+    if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      this.actionsEl.appendChild(clearGroupsBtn);
+    }
 
     // API Key (always visible)
     const apiKeyBtn = document.createElement('button');
@@ -274,11 +299,17 @@ export class Layout {
     this.groupsEl.style.display = 'none';
     this.root.appendChild(this.groupsEl);
 
+    // Create a dummy memory container for extension mode
+    const memoryContainer = document.createElement('div');
+    memoryContainer.style.display = 'none';
+    this.root.appendChild(memoryContainer);
+
     // Create panels in their tab containers
     this.panels = {
       chat: new ChatPanel(this.tabContainers.get('chat')!),
       terminal: new TerminalPanel(this.tabContainers.get('terminal')!),
       fileBrowser: new FileBrowserPanel(this.tabContainers.get('files')!),
+      memory: new MemoryPanel(memoryContainer),
       groups: new GroupsPanel(this.groupsEl, {
         onGroupSelect: (group) => this.onGroupSelect?.(group),
         onSendMessage: (jid, text) => {
@@ -357,10 +388,66 @@ export class Layout {
     this.horizontalDivider.className = 'layout__right-divider';
     this.rightEl.appendChild(this.horizontalDivider);
 
-    this.fileBrowserContainer = document.createElement('div');
-    this.fileBrowserContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: none;';
-    this.rightEl.appendChild(this.fileBrowserContainer);
+    // Bottom section with tabs for Files/Memory
+    this.bottomSection = document.createElement('div');
+    this.bottomSection.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden;';
+    
+    // Mini tabs
+    const miniTabs = document.createElement('div');
+    miniTabs.className = 'mini-tabs';
+    
+    const filesTab = document.createElement('button');
+    filesTab.className = 'mini-tabs__tab mini-tabs__tab--active';
+    filesTab.textContent = 'Files';
+    filesTab.dataset.tab = 'files';
+    miniTabs.appendChild(filesTab);
+    
+    const memoryTab = document.createElement('button');
+    memoryTab.className = 'mini-tabs__tab';
+    memoryTab.textContent = 'Memory';
+    memoryTab.dataset.tab = 'memory';
+    miniTabs.appendChild(memoryTab);
+    
+    this.bottomSection.appendChild(miniTabs);
 
+    // Tab containers
+    this.fileBrowserContainer = document.createElement('div');
+    this.fileBrowserContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1;';
+    this.bottomSection.appendChild(this.fileBrowserContainer);
+
+    const memoryContainer = document.createElement('div');
+    memoryContainer.style.cssText = 'display: none; flex-direction: column; min-height: 0; flex: 1;';
+    this.bottomSection.appendChild(memoryContainer);
+
+    // Tab switching helper
+    const setBottomTab = (tab: 'files' | 'memory') => {
+      if (tab === 'memory') {
+        memoryTab.classList.add('mini-tabs__tab--active');
+        filesTab.classList.remove('mini-tabs__tab--active');
+        memoryContainer.style.display = 'flex';
+        this.fileBrowserContainer.style.display = 'none';
+        this.panels?.memory?.refresh();
+      } else {
+        filesTab.classList.add('mini-tabs__tab--active');
+        memoryTab.classList.remove('mini-tabs__tab--active');
+        this.fileBrowserContainer.style.display = 'flex';
+        memoryContainer.style.display = 'none';
+      }
+      const url = new URL(window.location.href);
+      url.searchParams.set('bottomTab', tab);
+      history.replaceState(null, '', url.toString());
+    };
+
+    filesTab.addEventListener('click', () => setBottomTab('files'));
+    memoryTab.addEventListener('click', () => setBottomTab('memory'));
+
+    // Restore tab from URL
+    const initialTab = new URL(window.location.href).searchParams.get('bottomTab');
+    if (initialTab === 'memory') {
+      setBottomTab('memory');
+    }
+
+    this.rightEl.appendChild(this.bottomSection);
     layout.appendChild(this.rightEl);
 
     // Hidden container for group iframes
@@ -376,6 +463,7 @@ export class Layout {
       chat: new ChatPanel(this.leftEl),
       terminal: new TerminalPanel(this.terminalContainer),
       fileBrowser: new FileBrowserPanel(this.fileBrowserContainer),
+      memory: new MemoryPanel(memoryContainer),
       groups: new GroupsPanel(this.groupsEl, {
         onGroupSelect: (group) => this.onGroupSelect?.(group),
         onSendMessage: (jid, text) => {
@@ -415,7 +503,9 @@ export class Layout {
     const bottomH = rightH - topH - hDividerH;
 
     this.terminalContainer.style.height = topH + 'px';
-    this.fileBrowserContainer.style.height = bottomH + 'px';
+    if (this.bottomSection) {
+      this.bottomSection.style.height = bottomH + 'px';
+    }
   }
 
   /** Get the iframe container for the orchestrator */
@@ -523,6 +613,7 @@ export class Layout {
     this.panels.chat.dispose();
     this.panels.terminal.dispose();
     this.panels.fileBrowser.dispose();
+    this.panels.memory.dispose();
     // Groups panel doesn't have dispose, but we clean up
     // Safe: clearing own root element, not untrusted content
     while (this.root.firstChild) this.root.removeChild(this.root.firstChild);

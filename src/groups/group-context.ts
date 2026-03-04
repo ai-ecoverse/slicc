@@ -17,7 +17,8 @@ import { VirtualFS } from '../fs/index.js';
 import { WasmShell } from '../shell/index.js';
 import { Agent, adaptTools, createLogger } from '../core/index.js';
 import type { AgentEvent as CoreAgentEvent, AssistantMessage, AssistantMessageEvent, TextContent, Model } from '../core/index.js';
-import { createFileTools, createBashTool, createSearchTools } from '../tools/index.js';
+import { createFileTools, createBashTool, createSearchTools, createBrowserTool, createJavaScriptTool } from '../tools/index.js';
+import type { BrowserAPI } from '../cdp/index.js';
 import { getApiKey, getProvider, getAzureResource } from '../ui/api-key-dialog.js';
 import { loadSkills, formatSkillsForPrompt, createDefaultSkills, type Skill } from './skills.js';
 import { createNanoClawTools, type NanoClawToolsConfig } from './nanoclaw-tools.js';
@@ -29,6 +30,10 @@ export interface GroupContextCallbacks {
   onResponseDone: () => void;
   onError: (error: string) => void;
   onStatusChange: (status: 'initializing' | 'ready' | 'processing' | 'error') => void;
+  /** Called when a tool starts executing */
+  onToolStart?: (toolName: string, toolInput: unknown) => void;
+  /** Called when a tool finishes executing */
+  onToolEnd?: (toolName: string, result: string, isError: boolean) => void;
   /** Called when agent uses send_message tool */
   onSendMessage: (text: string, sender?: string) => void;
   /** Task scheduling callbacks */
@@ -43,6 +48,8 @@ export interface GroupContextCallbacks {
   onRegisterGroup?: (group: Omit<RegisteredGroup, 'jid'>) => Promise<RegisteredGroup>;
   /** Get global CLAUDE.md content (shared across all groups) */
   getGlobalMemory: () => Promise<string>;
+  /** Browser API for browser tool */
+  getBrowserAPI: () => BrowserAPI;
 }
 
 export class GroupContext {
@@ -97,11 +104,14 @@ export class GroupContext {
       };
       const nanoClawTools = createNanoClawTools(nanoClawToolsConfig);
 
-      // Create tools
+      // Create tools (including browser and javascript)
+      const browser = this.callbacks.getBrowserAPI();
       const legacyTools = [
         ...createFileTools(this.fs),
         createBashTool(this.shell),
+        createBrowserTool(browser),
         ...createSearchTools(this.fs),
+        createJavaScriptTool(this.fs),
         ...nanoClawTools,
       ];
       const tools = adaptTools(legacyTools);
@@ -234,6 +244,21 @@ export class GroupContext {
         break;
       }
 
+      case 'tool_execution_start': {
+        this.callbacks.onToolStart?.(event.toolName, event.args);
+        break;
+      }
+
+      case 'tool_execution_end': {
+        const result = event.result as { content: Array<{ type: string; text?: string }> };
+        const textContent = result?.content
+          ?.filter((c) => c.type === 'text')
+          .map((c) => c.text)
+          .join('\n') ?? '';
+        this.callbacks.onToolEnd?.(event.toolName, textContent, event.isError);
+        break;
+      }
+
       case 'message_end': {
         if (event.message.role === 'assistant') {
           const content = event.message.content;
@@ -310,7 +335,7 @@ ${this.group.isMain ? 'Role: Main/Admin group' : ''}
   }
 
   private buildSystemPrompt(globalMemory: string, groupMemory: string, skills: import('./skills.js').Skill[]): string {
-    const assistantName = this.group.config?.assistantName || 'Andy';
+    const assistantName = this.group.config?.assistantName || 'sliccy';
     
     const basePrompt = `# ${assistantName}
 
