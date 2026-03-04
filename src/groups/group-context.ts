@@ -48,6 +48,8 @@ export interface GroupContextCallbacks {
   onRegisterGroup?: (group: Omit<RegisteredGroup, 'jid'>) => Promise<RegisteredGroup>;
   /** Get global CLAUDE.md content (shared across all groups) */
   getGlobalMemory: () => Promise<string>;
+  /** Update global CLAUDE.md (main group only) */
+  setGlobalMemory?: (content: string) => Promise<void>;
   /** Browser API for browser tool */
   getBrowserAPI: () => BrowserAPI;
 }
@@ -101,6 +103,8 @@ export class GroupContext {
         onCancelTask: this.callbacks.onCancelTask,
         getGroups: this.callbacks.getGroups,
         onRegisterGroup: this.callbacks.onRegisterGroup,
+        onSetGlobalMemory: this.callbacks.setGlobalMemory,
+        getGlobalMemory: this.callbacks.getGlobalMemory,
       };
       const nanoClawTools = createNanoClawTools(nanoClawToolsConfig);
 
@@ -125,8 +129,11 @@ export class GroupContext {
         // No memory file yet
       }
 
-      // Load global memory
+      // Load global memory and sync it to the group's VFS
       const globalMemory = await this.callbacks.getGlobalMemory();
+      if (globalMemory) {
+        await this.fs.writeFile('/workspace/global/CLAUDE.md', globalMemory);
+      }
 
       // Create agent
       const apiKey = getApiKey();
@@ -356,6 +363,7 @@ ${this.group.isMain ? `
 As the main assistant, you have elevated privileges:
 - **list_groups**: See all registered groups
 - **register_group**: Add new groups
+- **update_global_memory**: Update the global CLAUDE.md shared across all groups
 - You can schedule tasks for any group
 - You have access to global settings
 ` : `
@@ -365,12 +373,12 @@ You are in a group context. Stay focused on this group's needs.
 ## Memory
 
 Your memory is organized hierarchically:
-- **Global memory** (/workspace/global/CLAUDE.md): Read by all groups, ${this.group.isMain ? 'you can write to it' : 'read-only for you'}
+- **Global memory** (/workspace/global/CLAUDE.md): Read by all groups, ${this.group.isMain ? 'use update_global_memory tool to modify it' : 'read-only for you'}
 - **Group memory** (/workspace/group/CLAUDE.md): Your group's private memory
 
 When you learn something important:
-- Use group memory for group-specific context
-${this.group.isMain ? '- Use global memory for information that should be shared across all groups' : ''}
+- Use group memory for group-specific context (edit with write_file or edit_file)
+${this.group.isMain ? '- Use update_global_memory tool for information that should be shared across all groups' : ''}
 
 ## Communication
 

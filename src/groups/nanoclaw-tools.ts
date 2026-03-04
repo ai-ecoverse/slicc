@@ -21,13 +21,15 @@ export interface NanoClawToolsConfig {
   onCancelTask: (taskId: string) => Promise<boolean>;
   getGroups: () => RegisteredGroup[];
   onRegisterGroup?: (group: Omit<RegisteredGroup, 'jid'>) => Promise<RegisteredGroup>;
+  onSetGlobalMemory?: (content: string) => Promise<void>;
+  getGlobalMemory?: () => Promise<string>;
 }
 
 /**
  * Create NanoClaw-style tools for a group context
  */
 export function createNanoClawTools(config: NanoClawToolsConfig): ToolDefinition[] {
-  const { group, onSendMessage, onScheduleTask, onListTasks, onPauseTask, onResumeTask, onCancelTask, getGroups, onRegisterGroup } = config;
+  const { group, onSendMessage, onScheduleTask, onListTasks, onPauseTask, onResumeTask, onCancelTask, getGroups, onRegisterGroup, onSetGlobalMemory, getGlobalMemory } = config;
 
   const tools: ToolDefinition[] = [];
 
@@ -280,6 +282,35 @@ Next run: ${task.nextRun || 'calculating...'}`,
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             return { content: `Failed to register group: ${msg}`, isError: true };
+          }
+        },
+      });
+    }
+
+    // Main group only: update_global_memory
+    if (onSetGlobalMemory && getGlobalMemory) {
+      tools.push({
+        name: 'update_global_memory',
+        description: 'Update the global CLAUDE.md memory file that is shared across all groups. Main group only. Use this instead of write_file for /workspace/global/CLAUDE.md.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            content: {
+              type: 'string',
+              description: 'The new content for the global memory file',
+            },
+          },
+          required: ['content'],
+        },
+        execute: async (input) => {
+          const { content } = input as { content: string };
+          try {
+            await onSetGlobalMemory(content);
+            log.info('Global memory updated');
+            return { content: 'Global memory updated successfully.' };
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            return { content: `Failed to update global memory: ${msg}`, isError: true };
           }
         },
       });

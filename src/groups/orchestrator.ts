@@ -328,6 +328,7 @@ When you learn something important:
         return fullGroup;
       } : undefined,
       getGlobalMemory: () => this.getGlobalMemory(),
+      setGlobalMemory: group.isMain ? (content) => this.setGlobalMemory(content) : undefined,
       getBrowserAPI: () => this.callbacks.getBrowserAPI(),
     };
 
