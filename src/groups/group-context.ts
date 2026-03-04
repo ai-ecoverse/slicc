@@ -84,14 +84,14 @@ export class GroupContext {
       await this.ensureDirectoryStructure();
 
       // Create shell
-      this.shell = new WasmShell({ fs: this.fs, cwd: '/workspace/group' });
+      this.shell = new WasmShell({ fs: this.fs, cwd: '/home/user' });
       log.info('WasmShell initialized', { folder: this.group.folder });
 
       // Create default skills if needed
       await createDefaultSkills(this.fs);
 
       // Load skills from VFS
-      const skills = await loadSkills(this.fs, '/workspace/group/.skills');
+      const skills = await loadSkills(this.fs, '/home/user/.skills');
 
       // Create NanoClaw tools (send_message, schedule_task, etc.)
       const nanoClawToolsConfig: NanoClawToolsConfig = {
@@ -124,7 +124,7 @@ export class GroupContext {
       // Load group memory
       let groupMemory = '';
       try {
-        const content = await this.fs.readFile('/workspace/group/CLAUDE.md', { encoding: 'utf-8' });
+        const content = await this.fs.readFile('/home/user/CLAUDE.md', { encoding: 'utf-8' });
         groupMemory = typeof content === 'string' ? content : new TextDecoder().decode(content);
       } catch {
         // No memory file yet
@@ -339,11 +339,10 @@ export class GroupContext {
     if (!this.fs) return;
 
     const dirs = [
-      '/workspace',
-      '/workspace/group',
-      '/workspace/global',
       '/home',
       '/home/user',
+      '/workspace',
+      '/workspace/global',
       '/tmp',
     ];
 
@@ -357,12 +356,11 @@ export class GroupContext {
 
     // Create default CLAUDE.md if missing
     try {
-      await this.fs.readFile('/workspace/group/CLAUDE.md');
+      await this.fs.readFile('/home/user/CLAUDE.md');
     } catch {
       const defaultMemory = `# ${this.group.name} Memory
 
 Group: ${this.group.name}
-Folder: ${this.group.folder}
 Created: ${new Date().toISOString()}
 ${this.group.isMain ? 'Role: Main/Admin group' : ''}
 
@@ -372,7 +370,7 @@ ${this.group.isMain ? 'Role: Main/Admin group' : ''}
 ## Context
 (Add important context here)
 `;
-      await this.fs.writeFile('/workspace/group/CLAUDE.md', defaultMemory);
+      await this.fs.writeFile('/home/user/CLAUDE.md', defaultMemory);
     }
   }
 
@@ -386,7 +384,7 @@ You are ${assistantName}, ${this.group.isMain ? 'the main assistant' : 'a helpfu
 ## Your Capabilities
 
 You have access to:
-- A virtual filesystem at /workspace/group (your working directory)
+- A virtual filesystem at /home/user (your working directory)
 - A bash shell for running commands (via the bash tool)
 - File reading, writing, and editing tools
 - Search tools (grep, find)
@@ -409,7 +407,7 @@ You are in a group context. Stay focused on this group's needs.
 
 Your memory is organized hierarchically:
 - **Global memory** (/workspace/global/CLAUDE.md): Read by all groups, ${this.group.isMain ? 'use update_global_memory tool to modify it' : 'read-only for you'}
-- **Group memory** (/workspace/group/CLAUDE.md): Your group's private memory
+- **Group memory** (/home/user/CLAUDE.md): Your group's private memory
 
 When you learn something important:
 - Use group memory for group-specific context (edit with write_file or edit_file)
