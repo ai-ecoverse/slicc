@@ -46,6 +46,8 @@ export interface TargetInfo {
   url: string;
   attached: boolean;
   browserContextId?: string;
+  /** True if this is the user's active tab (extension mode only). */
+  active?: boolean;
 }
 
 /** Page info exposed by the high-level API. */
@@ -53,6 +55,8 @@ export interface PageInfo {
   targetId: string;
   title: string;
   url: string;
+  /** True if this is the user's currently active/focused tab (extension mode only). */
+  active?: boolean;
 }
 
 /** Options for connecting the CDP client. */

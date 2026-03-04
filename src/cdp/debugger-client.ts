@@ -164,13 +164,18 @@ export class DebuggerClient implements CDPTransport {
   // -------------------------------------------------------------------------
 
   private async handleGetTargets(): Promise<Record<string, unknown>> {
-    const tabs = await chrome.tabs.query({});
+    const [tabs, activeTabs] = await Promise.all([
+      chrome.tabs.query({}),
+      chrome.tabs.query({ active: true, currentWindow: true }),
+    ]);
+    const activeTabIds = new Set(activeTabs.map((t) => t.id));
     const targetInfos = tabs.map((tab) => ({
       targetId: String(tab.id),
       type: 'page',
       title: tab.title ?? '',
       url: tab.url ?? '',
       attached: this.attachedTabs.has(tab.id!),
+      active: activeTabIds.has(tab.id!),
     }));
     return { targetInfos };
   }
