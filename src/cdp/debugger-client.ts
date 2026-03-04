@@ -33,8 +33,8 @@ export class DebuggerClient implements CDPTransport {
       for (const listener of set) {
         try {
           listener(params ?? {});
-        } catch {
-          // Don't let one listener break others
+        } catch (err) {
+          log.error('CDP event listener error', { method, error: err instanceof Error ? err.message : String(err) });
         }
       }
     }
@@ -80,8 +80,8 @@ export class DebuggerClient implements CDPTransport {
    */
   disconnect(): void {
     for (const tabId of this.attachedTabs) {
-      chrome.debugger.detach({ tabId }).catch(() => {
-        // Tab may already be closed
+      chrome.debugger.detach({ tabId }).catch((err) => {
+        log.debug('Detach during disconnect', { tabId, error: err instanceof Error ? err.message : String(err) });
       });
     }
     chrome.debugger.onEvent.removeListener(this.onEventHandler);
@@ -180,6 +180,9 @@ export class DebuggerClient implements CDPTransport {
   ): Promise<Record<string, unknown>> {
     const targetId = params['targetId'] as string;
     const tabId = parseInt(targetId, 10);
+    if (!Number.isFinite(tabId) || tabId <= 0) {
+      throw new Error(`Invalid targetId: ${targetId}`);
+    }
 
     if (!this.attachedTabs.has(tabId)) {
       await chrome.debugger.attach({ tabId }, '1.3');
@@ -204,8 +207,8 @@ export class DebuggerClient implements CDPTransport {
       const stillReferenced = [...this.sessionToTab.values()].includes(tabId);
       if (!stillReferenced) {
         this.attachedTabs.delete(tabId);
-        await chrome.debugger.detach({ tabId }).catch(() => {
-          // Tab may already be closed
+        await chrome.debugger.detach({ tabId }).catch((err) => {
+          log.debug('Detach failed (tab may be closed)', { tabId, error: err instanceof Error ? err.message : String(err) });
         });
       }
     }

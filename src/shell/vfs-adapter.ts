@@ -6,7 +6,7 @@
  */
 
 import type { VirtualFS } from '../fs/index.js';
-import { normalizePath, joinPath } from '../fs/index.js';
+import { normalizePath, joinPath, FsError } from '../fs/index.js';
 import { consumeCachedBinary } from './binary-cache.js';
 import type {
   IFileSystem,
@@ -90,8 +90,13 @@ export class VfsAdapter implements IFileSystem {
     try {
       const existing = await this.vfs.readFile(normalized, { encoding: 'binary' });
       existingBytes = existing instanceof Uint8Array ? new Uint8Array(existing) : new TextEncoder().encode(existing as string);
-    } catch {
-      // File doesn't exist yet, start empty
+    } catch (err) {
+      // Only treat ENOENT as "file doesn't exist yet" — re-throw other errors
+      if (err instanceof FsError && err.code === 'ENOENT') {
+        // File doesn't exist yet, start empty
+      } else {
+        throw err;
+      }
     }
     // Convert new content to bytes
     let newBytes: Uint8Array;

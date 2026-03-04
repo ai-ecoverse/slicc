@@ -45,8 +45,8 @@ interface ChromeDebuggerAPI {
 
 interface ChromeTab {
   id: number;
-  title: string;
-  url: string;
+  title?: string;
+  url?: string;
 }
 
 interface ChromeAPI {
