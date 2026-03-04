@@ -170,7 +170,11 @@ export function createBrowserTool(browser: BrowserAPI): ToolDefinition {
             if (runtimeTabId) {
               try {
                 await browser.attachToPage(runtimeTabId);
-              } catch {
+              } catch (err) {
+                log.warn('Runtime tab lost, creating new one', {
+                  runtimeTabId,
+                  error: err instanceof Error ? err.message : String(err),
+                });
                 runtimeTabId = null;
               }
             }

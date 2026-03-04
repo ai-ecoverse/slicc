@@ -41,7 +41,12 @@ function resolveModel(modelId: string): Model<any> {
       }
     }
     return model;
-  } catch {
+  } catch (err) {
+    log.error('Failed to resolve model, falling back to default', {
+      modelId,
+      provider: getProvider(),
+      error: err instanceof Error ? err.message : String(err),
+    });
     return getModel('anthropic', DEFAULT_MODEL_ID as any);
   }
 }

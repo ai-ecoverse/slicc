@@ -161,6 +161,19 @@ addEventListener('message', async (e) => {
 export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
   let iframe: HTMLIFrameElement | null = null;
   let execIdCounter = 0;
+  let vfsListenerRegistered = false;
+
+  /** Register a single persistent listener for VFS requests from the iframe. */
+  function ensureVfsListener(): void {
+    if (vfsListenerRegistered) return;
+    vfsListenerRegistered = true;
+    window.addEventListener('message', (event: MessageEvent) => {
+      const msg = event.data as IframeMessage;
+      if (msg && msg.type === 'vfs') {
+        handleVfsRequest(msg as VfsRequest);
+      }
+    });
+  }
 
   function ensureIframe(): HTMLIFrameElement {
     if (iframe && iframe.contentWindow) return iframe;
@@ -173,6 +186,7 @@ export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
     doc.open();
     doc.write(IFRAME_HTML);
     doc.close();
+    ensureVfsListener();
     return iframe;
   }
 
@@ -270,11 +284,7 @@ export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
             const msg = event.data as IframeMessage;
             if (!msg || !msg.type) return;
 
-            if (msg.type === 'vfs') {
-              handleVfsRequest(msg as VfsRequest);
-              return;
-            }
-
+            // VFS requests handled by persistent listener (ensureVfsListener)
             if (msg.type === 'exec_result' && (msg as ExecResult).id === id) {
               cleanup();
               resolve(msg as ExecResult);
