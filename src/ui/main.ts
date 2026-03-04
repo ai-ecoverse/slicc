@@ -423,6 +423,7 @@ Use the tools available to help the user with their tasks.`,
       },
       onStatusChange: (groupJid, status) => {
         layout.panels.groups.updateGroupStatus(groupJid, status);
+        layout.updateGroupStatus(groupJid, status);
       },
       onError: (groupJid, error) => {
         log.error('Group error', { groupJid, error });
@@ -482,6 +483,24 @@ Use the tools available to help the user with their tasks.`,
     layout.panels.memory.setSelectedGroup(group.jid);
     // Load and display message history for this group
     await loadGroupChatHistory(group.jid);
+  };
+
+  // Wire group create/delete for extension mode (dropdown in header)
+  layout.onGroupCreate = async (name: string) => {
+    const group = await layout.panels.groups.createGroup(name);
+    layout.updateGroupDropdown(orchestrator.getGroups(), group.jid);
+    return group;
+  };
+  layout.onGroupDelete = async (jid: string) => {
+    await orchestrator.unregisterGroup(jid);
+    const remaining = orchestrator.getGroups();
+    const mainGroup = remaining.find((g) => g.isMain) ?? remaining[0];
+    layout.updateGroupDropdown(remaining, mainGroup?.jid);
+    if (mainGroup) {
+      selectedGroup = mainGroup;
+      layout.panels.memory.setSelectedGroup(mainGroup.jid);
+      await loadGroupChatHistory(mainGroup.jid);
+    }
   };
 
   // Load chat history for a group

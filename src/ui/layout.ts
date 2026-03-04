@@ -70,10 +70,13 @@ export class Layout {
   // Group dropdown (extension mode only)
   private groupSelect?: HTMLSelectElement;
   private _groups?: RegisteredGroup[];
+  private _groupStatuses?: Map<string, string>;
 
   public panels!: LayoutPanels;
   public onModelChange?: (model: string) => void;
   public onGroupSelect?: (group: RegisteredGroup) => void;
+  public onGroupCreate?: (name: string) => Promise<RegisteredGroup | null>;
+  public onGroupDelete?: (jid: string) => Promise<void>;
 
   private groupsWidth = 0.15; // fraction of total width for groups panel
   private leftWidth = 0.45; // fraction of total width for chat
@@ -130,12 +133,12 @@ export class Layout {
     });
     leftGroup.appendChild(modelSelect);
 
-    // Group picker (extension mode only — standalone uses GroupsPanel instead)
+    // Group management (extension mode only — standalone uses GroupsPanel instead)
     if (this.isExtension) {
       this.groupSelect = document.createElement('select');
       this.groupSelect.style.cssText =
         'background: #2a2a3a; color: #e0e0f0; border: 1px solid #444; border-radius: 4px; ' +
-        'padding: 4px 8px; font-size: 13px; cursor: pointer; outline: none; margin-left: 8px;';
+        'padding: 4px 8px; font-size: 13px; cursor: pointer; outline: none; margin-left: 8px; max-width: 120px;';
       this.groupSelect.addEventListener('change', () => {
         const jid = this.groupSelect!.value;
         const groups = this._groups ?? [];
@@ -143,6 +146,40 @@ export class Layout {
         if (group) this.onGroupSelect?.(group);
       });
       leftGroup.appendChild(this.groupSelect);
+
+      // Create group button
+      const addBtn = document.createElement('button');
+      addBtn.className = 'header__btn';
+      addBtn.textContent = '+';
+      addBtn.title = 'Create new group';
+      addBtn.style.cssText = 'margin-left: 4px; padding: 4px 8px; font-size: 14px; font-weight: bold;';
+      addBtn.addEventListener('click', async () => {
+        const name = prompt('Enter group name:');
+        if (!name?.trim()) return;
+        const group = await this.onGroupCreate?.(name.trim());
+        if (group) {
+          this.updateGroupDropdown(this._groups ?? [], group.jid);
+          this.onGroupSelect?.(group);
+        }
+      });
+      leftGroup.appendChild(addBtn);
+
+      // Delete group button
+      const delBtn = document.createElement('button');
+      delBtn.className = 'header__btn';
+      delBtn.textContent = '\u00d7';
+      delBtn.title = 'Delete selected group';
+      delBtn.style.cssText = 'margin-left: 2px; padding: 4px 7px; font-size: 14px; color: #808090;';
+      delBtn.addEventListener('click', async () => {
+        const jid = this.groupSelect!.value;
+        const groups = this._groups ?? [];
+        const group = groups.find((g: RegisteredGroup) => g.jid === jid);
+        if (!group) return;
+        if (group.isMain) { alert('Cannot delete the main group'); return; }
+        if (!confirm(`Delete group "${group.name}"?`)) return;
+        await this.onGroupDelete?.(jid);
+      });
+      leftGroup.appendChild(delBtn);
     }
 
     header.appendChild(leftGroup);
@@ -265,14 +302,26 @@ export class Layout {
   updateGroupDropdown(groups: RegisteredGroup[], selectedJid?: string): void {
     if (!this.groupSelect) return;
     this._groups = groups;
+    const currentValue = selectedJid ?? this.groupSelect.value;
     this.groupSelect.textContent = '';
     for (const g of groups) {
       const opt = document.createElement('option');
       opt.value = g.jid;
-      opt.textContent = g.name;
+      const status = this._groupStatuses?.get(g.jid);
+      const statusIcon = status === 'processing' ? ' \u23f3' : status === 'error' ? ' \u26a0' : status === 'ready' ? ' \u2713' : '';
+      const icon = g.isMain ? '\u2b50 ' : '\ud83d\udcac ';
+      opt.textContent = `${icon}${g.name}${statusIcon}`;
       this.groupSelect.appendChild(opt);
     }
-    if (selectedJid) this.groupSelect.value = selectedJid;
+    if (currentValue) this.groupSelect.value = currentValue;
+  }
+
+  /** Update a group's status indicator in the dropdown (extension mode only). */
+  updateGroupStatus(jid: string, status: string): void {
+    if (!this._groupStatuses) this._groupStatuses = new Map();
+    this._groupStatuses.set(jid, status);
+    // Refresh dropdown to show updated status
+    if (this._groups) this.updateGroupDropdown(this._groups);
   }
 
   // ── Extension: Tabbed Layout ────────────────────────────────────────
