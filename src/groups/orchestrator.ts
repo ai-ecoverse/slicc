@@ -58,6 +58,8 @@ export class Orchestrator {
   private contexts: Map<string, GroupContext> = new Map();
   private messageQueues: Map<string, ChannelMessage[]> = new Map();
   private lastAgentTimestamp: Map<string, string> = new Map();
+  /** Accumulates partial response text per group for saving on completion. */
+  private pendingResponses: Map<string, string> = new Map();
   private container: HTMLElement;
   private callbacks: OrchestratorCallbacks;
   private config: AssistantConfig;
@@ -261,9 +263,36 @@ When you learn something important:
     // Create the group context with full callbacks
     const contextCallbacks: GroupContextCallbacks = {
       onResponse: (text, isPartial) => {
+        // Accumulate response text for persistence
+        if (isPartial) {
+          const existing = this.pendingResponses.get(jid) ?? '';
+          this.pendingResponses.set(jid, existing + text);
+        } else {
+          // Full response in one shot
+          this.pendingResponses.set(jid, text);
+        }
         this.callbacks.onResponse(jid, text, isPartial);
       },
       onResponseDone: () => {
+        // Save the accumulated response to the DB so it survives group switches
+        const responseText = this.pendingResponses.get(jid);
+        if (responseText) {
+          const responseMsg: ChannelMessage = {
+            id: `resp-${jid}-${Date.now()}`,
+            chatJid: jid,
+            senderId: this.config.name,
+            senderName: this.config.name,
+            content: responseText,
+            timestamp: new Date().toISOString(),
+            fromAssistant: true,
+            channel: 'web',
+          };
+          db.saveMessage(responseMsg).catch((err) => {
+            log.error('Failed to persist assistant response', { jid, error: err instanceof Error ? err.message : String(err) });
+          });
+          this.pendingResponses.delete(jid);
+        }
+
         const tab = this.tabs.get(jid);
         if (tab) {
           tab.status = 'ready';
@@ -272,7 +301,6 @@ When you learn something important:
         }
         this.callbacks.onResponseDone(jid);
         this.callbacks.onStatusChange(jid, 'ready');
-        // Note: lastAgentTimestamp is updated in processGroupQueue based on last message processed
       },
       onError: (error) => {
         const tab = this.tabs.get(jid);
