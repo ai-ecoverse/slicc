@@ -284,7 +284,14 @@ When you learn something important:
     await db.saveMessage(msg);
 
     log.info('Delegating to scoop', { scoopJid, scoopName: scoop.name, promptLength: prompt.length });
-    await this.sendPrompt(scoopJid, prompt, 'cone', senderName);
+    // Fire-and-forget: don't await the scoop's agent loop.
+    // The cone's tool call returns immediately so the cone can finish its turn.
+    // The scoop processes in the background; completion notification routes back to cone.
+    this.sendPrompt(scoopJid, prompt, 'cone', senderName).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.error('Delegation failed', { scoopJid, error: msg });
+      this.callbacks.onError(scoopJid, `Delegation failed: ${msg}`);
+    });
   }
 
   /** Route a message to the scoop specified by message.chatJid */
