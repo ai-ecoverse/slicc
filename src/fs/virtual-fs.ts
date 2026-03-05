@@ -31,6 +31,8 @@ export interface VirtualFsOptions {
 export class VirtualFS {
   private lfs: FS.PromisifiedFS;
   private _ready: Promise<void>;
+  /** Map from absolute mount path → FileSystemDirectoryHandle (File System Access API). */
+  private mountPoints = new Map<string, FileSystemDirectoryHandle>();
 
   private constructor(dbName: string, wipe: boolean) {
     const fs = new FS(dbName, { wipe });
@@ -53,12 +55,104 @@ export class VirtualFS {
     return this.lfs;
   }
 
+  // ---------------------------------------------------------------------------
+  // File System Access API mount support
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Mount a real filesystem directory (from File System Access API) at an
+   * absolute VirtualFS path. All reads and writes under that path are
+   * transparently bridged to the real directory handle — no copying occurs.
+   *
+   * A placeholder directory is created in LightningFS so that ancestor paths
+   * (e.g. `cd /workspace`) resolve correctly.
+   */
+  async mount(absolutePath: string, handle: FileSystemDirectoryHandle): Promise<void> {
+    const normalized = normalizePath(absolutePath);
+    // Ensure parent dirs exist in LFS, then create placeholder for mount root
+    const { dir } = splitPath(normalized);
+    if (dir !== '/') await this.mkdir(dir, { recursive: true });
+    try { await this.lfs.mkdir(normalized); } catch { /* EEXIST is fine */ }
+    this.mountPoints.set(normalized, handle);
+  }
+
+  /** Remove a mount point (the LFS placeholder directory is left in place). */
+  unmount(absolutePath: string): void {
+    this.mountPoints.delete(normalizePath(absolutePath));
+  }
+
+  /** Return the list of currently active mount paths. */
+  listMounts(): string[] {
+    return [...this.mountPoints.keys()];
+  }
+
+  /**
+   * Find the mount point that owns `path`.
+   * Returns the handle and the path segments relative to the mount root,
+   * or null if the path is not under any mount.
+   */
+  private findMount(path: string): { handle: FileSystemDirectoryHandle; relParts: string[] } | null {
+    for (const [mountPath, handle] of this.mountPoints) {
+      if (path === mountPath) return { handle, relParts: [] };
+      if (path.startsWith(mountPath + '/')) {
+        return { handle, relParts: path.slice(mountPath.length + 1).split('/').filter(Boolean) };
+      }
+    }
+    return null;
+  }
+
+  /** Navigate to a nested sub-directory within a FileSystemDirectoryHandle. */
+  private static async fsaNavDir(
+    root: FileSystemDirectoryHandle,
+    parts: string[],
+    create = false,
+  ): Promise<FileSystemDirectoryHandle> {
+    let dir = root;
+    for (const part of parts) {
+      dir = await dir.getDirectoryHandle(part, { create });
+    }
+    return dir;
+  }
+
+  /** Get a FileSystemFileHandle at `parts` relative to `root`. */
+  private static async fsaGetFile(
+    root: FileSystemDirectoryHandle,
+    parts: string[],
+    create = false,
+  ): Promise<FileSystemFileHandle> {
+    const dir = await VirtualFS.fsaNavDir(root, parts.slice(0, -1), create);
+    return dir.getFileHandle(parts[parts.length - 1], { create });
+  }
+
+  /** Convert a File System Access API error to FsError. */
+  private convertFsaError(err: unknown, path: string): FsError {
+    if (err instanceof FsError) return err;
+    if (err instanceof Error) {
+      if (err.name === 'NotFoundError') return new FsError('ENOENT', 'no such file or directory', path);
+      if (err.name === 'TypeMismatchError') return new FsError('ENOTDIR', 'not a directory', path);
+      if (err.name === 'NotAllowedError') return new FsError('EINVAL', 'permission denied', path);
+    }
+    return new FsError('EINVAL', err instanceof Error ? err.message : String(err), path);
+  }
+
+
   /**
    * Read a file's content.
    * @throws FsError ENOENT if file doesn't exist, EISDIR if path is a directory
    */
   async readFile(path: string, options?: ReadFileOptions): Promise<FileContent> {
     const normalized = normalizePath(path);
+    const mount = this.findMount(normalized);
+    if (mount) {
+      if (mount.relParts.length === 0) throw new FsError('EISDIR', 'is a directory', normalized);
+      try {
+        const fh = await VirtualFS.fsaGetFile(mount.handle, mount.relParts);
+        const file = await fh.getFile();
+        const encoding = options?.encoding ?? 'utf-8';
+        if (encoding === 'utf-8') return await file.text();
+        return new Uint8Array(await file.arrayBuffer());
+      } catch (err) { throw this.convertFsaError(err, normalized); }
+    }
     try {
       const encoding = options?.encoding ?? 'utf-8';
       if (encoding === 'utf-8') {
@@ -82,6 +176,20 @@ export class VirtualFS {
     _options?: { recursive?: boolean },
   ): Promise<void> {
     const normalized = normalizePath(path);
+    const mount = this.findMount(normalized);
+    if (mount) {
+      if (mount.relParts.length === 0) throw new FsError('EISDIR', 'is a directory', normalized);
+      try {
+        const fh = await VirtualFS.fsaGetFile(mount.handle, mount.relParts, true);
+        const writable = await fh.createWritable();
+        const data = typeof content === 'string'
+          ? new TextEncoder().encode(content)
+          : new Uint8Array(content instanceof Uint8Array ? content.buffer as ArrayBuffer : content as ArrayBuffer);
+        await writable.write(data as unknown as FileSystemWriteChunkType);
+        await writable.close();
+      } catch (err) { throw this.convertFsaError(err, normalized); }
+      return;
+    }
     // Ensure parent directory exists
     const { dir } = splitPath(normalized);
     if (dir !== '/') {
@@ -100,6 +208,19 @@ export class VirtualFS {
    */
   async readDir(path: string): Promise<DirEntry[]> {
     const normalized = normalizePath(path);
+    const mount = this.findMount(normalized);
+    if (mount) {
+      try {
+        const dirHandle = mount.relParts.length === 0
+          ? mount.handle
+          : await VirtualFS.fsaNavDir(mount.handle, mount.relParts);
+        const entries: DirEntry[] = [];
+        for await (const [name, handle] of dirHandle as unknown as AsyncIterable<[string, FileSystemHandle]>) {
+          entries.push({ name, type: handle.kind === 'directory' ? 'directory' : 'file' });
+        }
+        return entries;
+      } catch (err) { throw this.convertFsaError(err, normalized); }
+    }
     try {
       const names = await this.lfs.readdir(normalized);
       const entries: DirEntry[] = [];
@@ -129,6 +250,15 @@ export class VirtualFS {
   async mkdir(path: string, options?: MkdirOptions): Promise<void> {
     const normalized = normalizePath(path);
     if (normalized === '/') return; // Root always exists
+
+    const mount = this.findMount(normalized);
+    if (mount) {
+      if (mount.relParts.length === 0) return; // mount root placeholder already exists
+      try {
+        await VirtualFS.fsaNavDir(mount.handle, mount.relParts, true);
+      } catch (err) { throw this.convertFsaError(err, normalized); }
+      return;
+    }
 
     if (options?.recursive) {
       // Create all parent directories
@@ -161,6 +291,21 @@ export class VirtualFS {
    */
   async rm(path: string, options?: RmOptions): Promise<void> {
     const normalized = normalizePath(path);
+    const mount = this.findMount(normalized);
+    if (mount) {
+      if (mount.relParts.length === 0) {
+        throw new FsError('EINVAL', 'cannot remove a mount point — use unmount', normalized);
+      }
+      try {
+        const parentParts = mount.relParts.slice(0, -1);
+        const name = mount.relParts[mount.relParts.length - 1];
+        const parentDir = parentParts.length === 0
+          ? mount.handle
+          : await VirtualFS.fsaNavDir(mount.handle, parentParts);
+        await parentDir.removeEntry(name, { recursive: options?.recursive });
+      } catch (err) { throw this.convertFsaError(err, normalized); }
+      return;
+    }
     try {
       const stat = await this.lfs.stat(normalized);
       if (stat.isDirectory()) {
@@ -197,6 +342,30 @@ export class VirtualFS {
    */
   async stat(path: string): Promise<Stats> {
     const normalized = normalizePath(path);
+    const mount = this.findMount(normalized);
+    if (mount) {
+      if (mount.relParts.length === 0) {
+        // Mount root: LFS has a placeholder dir — just use it
+        try {
+          const s = await this.lfs.stat(normalized);
+          return { type: 'directory', size: s.size, mtime: s.mtimeMs, ctime: s.ctimeMs };
+        } catch {
+          return { type: 'directory', size: 0, mtime: Date.now(), ctime: Date.now() };
+        }
+      }
+      try {
+        // Try as file first
+        try {
+          const fh = await VirtualFS.fsaGetFile(mount.handle, mount.relParts);
+          const file = await fh.getFile();
+          return { type: 'file', size: file.size, mtime: file.lastModified, ctime: file.lastModified };
+        } catch {
+          // Try as directory
+          await VirtualFS.fsaNavDir(mount.handle, mount.relParts);
+          return { type: 'directory', size: 0, mtime: Date.now(), ctime: Date.now() };
+        }
+      } catch (err) { throw this.convertFsaError(err, normalized); }
+    }
     try {
       const stat = await this.lfs.stat(normalized);
       return {
@@ -213,6 +382,11 @@ export class VirtualFS {
   /** Check if a path exists. */
   async exists(path: string): Promise<boolean> {
     const normalized = normalizePath(path);
+    const mount = this.findMount(normalized);
+    if (mount) {
+      if (mount.relParts.length === 0) return true;
+      try { await this.stat(normalized); return true; } catch { return false; }
+    }
     try {
       await this.lfs.stat(normalized);
       return true;

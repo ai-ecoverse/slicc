@@ -15,6 +15,7 @@ import { VfsAdapter } from './vfs-adapter.js';
 import { cacheBinaryBody } from './binary-cache.js';
 import { GitCommands } from '../git/git-commands.js';
 import { createSupplementalCommands } from './supplemental-commands.js';
+import { MountCommands } from '../fs/mount-commands.js';
 
 /** Check if a content-type header indicates text (safe for UTF-8 decoding). */
 export function isTextContentType(contentType: string): boolean {
@@ -126,6 +127,7 @@ export class WasmShell {
   private bash: Bash;
   private vfsAdapter: VfsAdapter;
   private gitCommands: GitCommands;
+  private mountCommands: MountCommands;
   private terminal: Terminal | null = null;
   private fitAddon: FitAddon | null = null;
   private currentLine = '';
@@ -157,16 +159,20 @@ export class WasmShell {
       authorEmail: initialEnv.GIT_AUTHOR_EMAIL ?? 'user@example.com',
     });
 
-    // Create git custom command for just-bash
+    // Initialize mount commands with VirtualFS
+    this.mountCommands = new MountCommands({ fs: options.fs });
+
+    // Create custom commands for just-bash
     const gitCommand = this.createGitCustomCommand();
     const supplementalCommands = createSupplementalCommands();
+    const mountCommand = this.createMountCustomCommand();
 
     this.bash = new Bash({
       fs: this.vfsAdapter,
       cwd: initialCwd,
       env: initialEnv,
       fetch: createProxiedFetch(),
-      customCommands: [gitCommand, ...supplementalCommands],
+      customCommands: [gitCommand, mountCommand, ...supplementalCommands],
     });
     this.lastEnv = { ...initialEnv };
     this.cwd = initialCwd;
@@ -178,6 +184,20 @@ export class WasmShell {
     return defineCommand('git', async (args, ctx) => {
       const cwd = ctx.cwd;
       const result = await gitCommands.execute(args, cwd);
+      return {
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+      };
+    });
+  }
+
+  /** Create a custom mount command for just-bash. */
+  private createMountCustomCommand(): Command {
+    const mountCommands = this.mountCommands;
+    return defineCommand('mount', async (args, ctx) => {
+      const cwd = ctx.cwd;
+      const result = await mountCommands.execute(args, cwd);
       return {
         stdout: result.stdout,
         stderr: result.stderr,
