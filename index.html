@@ -69,7 +69,7 @@
         background: #222240; align-self: flex-start;
         border-bottom-left-radius: 2px;
       }
-      .msg--assistant .msg__content { white-space: pre-wrap; }
+      .msg--assistant .msg__content { white-space: normal; }
       .msg__role {
         font-size: 11px; font-weight: 600; text-transform: uppercase;
         color: #a0a0b0; margin-bottom: 4px;
@@ -100,11 +100,28 @@
       }
       .tool-call__screenshot:hover { border-color: #e94560; }
 
-      /* Code blocks inside messages */
+      /* Prose element spacing inside rendered markdown messages */
+      .msg__content p, .msg__content h1, .msg__content h2, .msg__content h3,
+      .msg__content h4, .msg__content h5, .msg__content h6,
+      .msg__content ul, .msg__content ol, .msg__content table,
+      .msg__content blockquote { margin: 0.45em 0; }
+      .msg__content > :first-child { margin-top: 0; }
+      .msg__content > :last-child  { margin-bottom: 0; }
+      .msg__content h1, .msg__content h2, .msg__content h3 { font-weight: 600; }
+      .msg__content ul, .msg__content ol { padding-left: 1.4em; }
+      .msg__content table { border-collapse: collapse; font-size: 13px; }
+      .msg__content th, .msg__content td {
+        border: 1px solid #3a3a5a; padding: 4px 10px; text-align: left;
+      }
+      .msg__content th { background: #1a1a30; font-weight: 600; }
+      .msg__content blockquote {
+        border-left: 3px solid #3a3a5a; padding-left: 10px; color: #a0a0b0;
+      }
       .msg pre {
         background: #16162a; padding: 10px; border-radius: 4px;
         overflow-x: auto; margin: 8px 0; font-size: 13px;
         font-family: 'JetBrains Mono', 'Fira Code', monospace;
+        white-space: pre-wrap;
       }
       .msg code {
         font-family: 'JetBrains Mono', 'Fira Code', monospace;
