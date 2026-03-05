@@ -115,21 +115,21 @@ slicc runs in two modes: as a **Chrome extension** (side panel) or as a **standa
 **Browser App** (Vite/TypeScript) — the agent loop (powered by [pi-mono](https://github.com/badlogic/pi-mono)), tool execution, chat UI, integrated terminal, and file browser all run client-side in both modes.
 
 ```
-Chrome Extension Mode:                    CLI Mode:
+Chrome Extension Mode:                 CLI Mode:
 
-┌─ Chrome Side Panel ──────────┐    ┌──────────────────────────────────────────┐
-│  slicc [cone ▾] [Model ▾] ⚙ │    │  slicc  provider  [Model ▾]  buttons    │
-│  ┌ [Chat][Term][Files][Mem] ┐│    ├────────┬─────────────┬──────────────────┤
-│  │                           ││    │Scoops  │             │  Terminal        │
-│  │   Active tab panel        ││    │ 💩 s1  │  Chat       │  (xterm.js)     │
-│  │   (full height)           ││    │ 💩 s2  │  Panel      ├──────────────────┤
-│  │                           ││    │ 🍦cone │             │  Files / Memory  │
-│  └───────────────────────────┘│    ├────────┴─────────────┴──────────────────┤
-│  chrome.debugger → tabs       │    └──────────────┬─────────────────────────┘
-└──────────────────────────────┘                    │ WebSocket (CDP proxy)
-                                     ┌──────────────▼─────────────────────────┐
-                                     │      CLI Server (Node.js/Express)       │
-                                     └────────────────────────────────────────┘
+┌─ Chrome Side Panel ─────────┐  ┌───────────────────────────────────────┐
+│ slicc [cone v] [Model v]  * │  │ slicc  provider  [Model v]  buttons   │
+│ ┌ [Chat][Term][Files][Mem] ┐│  ├────────┬────────────┬─────────────────┤
+│ │                          ││  │Scoops  │            │ Terminal        │
+│ │  Active tab panel        ││  │  > s1  │  Chat      │ (xterm.js)      │
+│ │  (full height)           ││  │  > s2  │  Panel     ├─────────────────┤
+│ │                          ││  │  > cone│            │ Files / Memory  │
+│ └──────────────────────────┘│  ├────────┴────────────┴─────────────────┤
+│ chrome.debugger -> tabs     │  └────────────────┬──────────────────────┘
+└─────────────────────────────┘                   │ WebSocket (CDP proxy)
+                                  ┌───────────────▼─────────────────────┐
+                                  │    CLI Server (Node.js/Express)     │
+                                  └─────────────────────────────────────┘
 
                     The Cone + Scoops Architecture
 
