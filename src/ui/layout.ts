@@ -521,7 +521,7 @@ export class Layout {
 
     // Scoops panel (leftmost)
     this.scoopsEl = document.createElement('div');
-    this.scoopsEl.className = 'layout__groups';
+    this.scoopsEl.className = 'layout__scoops';
     layout.appendChild(this.scoopsEl);
 
     // Scoops divider
