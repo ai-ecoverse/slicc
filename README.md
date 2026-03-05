@@ -22,7 +22,7 @@ A browser-based coding agent that runs as a **Chrome extension** or with a thin 
 - :git: **Git Support** — clone, commit, push, pull via [isomorphic-git](https://isomorphic-git.org/) (see [available commands](#git-commands))
 - :robot: **Browser Automation** — screenshots (full page / element / saved to VFS), inline image display, navigation, JS eval, element clicking via Chrome DevTools Protocol (chrome.debugger in extension, WebSocket in CLI). Auto-detects user's active tab.
 - :pencil2: **File Operations** — read, write, edit files with syntax-aware tools
-- :mag: **Search Tools** — grep and find across your virtual codebase
+- :mag: **Shell Search Commands** — use `grep`, `find`, and `rg` via the bash shell
 - :globe_with_meridians: **Networking** — curl and fetch support with binary-safe downloads
 - :wrench: **JavaScript Tool** — sandboxed JS execution with VFS bridge and persistent context
 - :key: **Multi-Provider Auth** — Anthropic (direct), Azure AI Foundry, and AWS Bedrock with segmented control
