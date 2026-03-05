@@ -131,24 +131,24 @@ Chrome Extension Mode:                    CLI Mode:
                                      │      CLI Server (Node.js/Express)       │
                                      └────────────────────────────────────────┘
 
-                        🍦 The Cone + Scoops Architecture 🍦
+                    The Cone + Scoops Architecture
 
-                    ┌─────────────────────────────────────────┐
-                    │           Shared VirtualFS (slicc-fs)    │
-                    │  /shared/    /scoops/    /workspace/     │
-                    └──────────┬──────────────────────────────┘
-                               │
-              ┌────────────────┼────────────────┐
-              │                │                │
-        ┌─────▼─────┐   ┌─────▼─────┐   ┌─────▼─────┐
-        │  🍦 Cone   │   │ 💩 Scoop  │   │ 💩 Scoop  │
-        │  (sliccy)  │   │ (andy)    │   │ (test)    │
-        │  Full FS   │   │ Restricted│   │ Restricted│
-        │  access    │   │ /scoops/  │   │ /scoops/  │
-        │            │   │  andy/ +  │   │  test/ +  │
-        │ delegate   │   │ /shared/  │   │ /shared/  │
-        │ to scoops  │◄──│ notifies  │◄──│ notifies  │
-        └────────────┘   └───────────┘   └───────────┘
+                ┌───────────────────────────────────────┐
+                │      Shared VirtualFS (slicc-fs)      │
+                │   /shared/    /scoops/   /workspace/  │
+                └─────────────────┬─────────────────────┘
+                                  │
+              ┌───────────────────┼───────────────────┐
+              │                   │                   │
+     ┌────────▼────────┐ ┌───────▼────────┐ ┌────────▼────────┐
+     │   Cone (sliccy)  │ │ Scoop (andy)   │ │ Scoop (test)   │
+     │                  │ │                │ │                │
+     │  Full FS access  │ │  Restricted:   │ │  Restricted:   │
+     │  All tools       │ │  /scoops/andy/ │ │  /scoops/test/ │
+     │  Orchestrates    │ │  /shared/      │ │  /shared/      │
+     │                  │ │                │ │                │
+     │  delegate ──────►│ │  notifies ────►│ │  notifies ───► │
+     └──────────────────┘ └────────────────┘ └────────────────┘
 ```
 
 Source layout:
