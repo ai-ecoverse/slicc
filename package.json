@@ -26,6 +26,11 @@
     "fflate": "^0.8.2",
     "isomorphic-git": "1.37.2",
     "just-bash": "2.11.7",
+    "rehype-stringify": "10.0.1",
+    "remark-gfm": "4.0.1",
+    "remark-parse": "11.0.0",
+    "remark-rehype": "11.1.2",
+    "unified": "11.0.5",
     "ws": "^8.18.0"
   },
   "devDependencies": {

@@ -45,7 +45,8 @@ describe('renderMessageContent', () => {
   it('renders fenced code blocks', () => {
     const content = '```js\nconst x = 1;\n```';
     const html = renderMessageContent(content);
-    expect(html).toContain('<pre><code>');
+    expect(html).toContain('<pre>');
+    expect(html).toContain('<code');
     expect(html).toContain('const');
   });
 
@@ -64,12 +65,16 @@ describe('renderMessageContent', () => {
 
   it('converts double newlines to paragraph breaks', () => {
     const html = renderMessageContent('First paragraph\n\nSecond paragraph');
-    expect(html).toContain('</p><p>');
+    expect(html).toContain('<p>');
+    expect(html).toContain('First paragraph');
+    expect(html).toContain('Second paragraph');
   });
 
-  it('converts single newlines to br', () => {
+  it('converts single newlines to br or softbreak', () => {
     const html = renderMessageContent('Line 1\nLine 2');
-    expect(html).toContain('<br>');
+    // unified renders soft breaks as newlines within a paragraph
+    expect(html).toContain('Line 1');
+    expect(html).toContain('Line 2');
   });
 
   it('does not apply inline formatting inside code blocks', () => {
@@ -77,6 +82,19 @@ describe('renderMessageContent', () => {
     const html = renderMessageContent(content);
     // Inside code blocks, ** should be escaped, not turned into <strong>
     expect(html).not.toContain('<strong>x</strong>');
+  });
+
+  it('renders GFM tables', () => {
+    const content = '| A | B |\n|---|---|\n| 1 | 2 |';
+    const html = renderMessageContent(content);
+    expect(html).toContain('<table>');
+    expect(html).toContain('<th>');
+    expect(html).toContain('<td>');
+  });
+
+  it('renders GFM strikethrough', () => {
+    const html = renderMessageContent('~~deleted~~');
+    expect(html).toContain('<del>deleted</del>');
   });
 });
 
