@@ -178,6 +178,10 @@ async function main(): Promise<void> {
       },
       getBrowserAPI: () => browser,
       onToolStart: (scoopJid, toolName, toolInput) => {
+        // Hide infrastructure tools from the chat (their output is shown elsewhere)
+        const hiddenTools = new Set(['send_message', 'list_scoops', 'list_tasks']);
+        if (hiddenTools.has(toolName)) return;
+
         // Always buffer tool calls
         const msg = getOrCreateAssistantMsg(scoopJid);
         if (!msg.toolCalls) msg.toolCalls = [];
@@ -188,6 +192,9 @@ async function main(): Promise<void> {
         }
       },
       onToolEnd: (scoopJid, toolName, result, isError) => {
+        const hiddenTools = new Set(['send_message', 'list_scoops', 'list_tasks']);
+        if (hiddenTools.has(toolName)) return;
+
         // Always buffer tool results
         const buf = getBuffer(scoopJid);
         const msgId = scoopCurrentMessageId.get(scoopJid);
