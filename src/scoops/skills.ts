@@ -158,7 +158,7 @@ ${sections.join('\n\n---\n')}
 /**
  * Create default skills for a scoop
  */
-export async function createDefaultSkills(fs: VirtualFS, skillsDir: string = '/workspace/group/.skills'): Promise<void> {
+export async function createDefaultSkills(fs: VirtualFS, skillsDir: string = '/workspace/.skills'): Promise<void> {
   try {
     await fs.mkdir(skillsDir, { recursive: true });
   } catch {
