@@ -10,7 +10,6 @@ import { Layout } from './layout.js';
 import {
   getApiKey,
   getSelectedProvider,
-  getSelectedModelId,
   getBaseUrl,
   showProviderSettings,
   resolveCurrentModel,

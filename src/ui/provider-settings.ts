@@ -187,7 +187,8 @@ export function getSelectedProvider(): string {
     // Map old provider names to new ones
     const mapping: Record<string, string> = {
       'anthropic': 'anthropic',
-      'azure': 'azure-openai-responses',
+      // Legacy "azure" used Anthropic on Azure AI Foundry.
+      'azure': 'anthropic',
       'bedrock': 'amazon-bedrock',
     };
     return mapping[legacy] || 'anthropic';
@@ -198,6 +199,11 @@ export function getSelectedProvider(): string {
 
 export function setSelectedProvider(provider: string): void {
   localStorage.setItem(STORAGE_KEYS.provider, provider);
+}
+
+export function clearSelectedProvider(): void {
+  localStorage.removeItem(STORAGE_KEYS.provider);
+  localStorage.removeItem(STORAGE_KEYS.legacyProvider);
 }
 
 export function getApiKey(): string | null {
@@ -224,13 +230,25 @@ export function getBaseUrl(): string | null {
   
   // Migrate from legacy azure/bedrock
   const provider = getSelectedProvider();
-  if (provider === 'azure-openai-responses') {
+  const hasNewProvider = localStorage.getItem(STORAGE_KEYS.provider) !== null;
+  const legacyProvider = localStorage.getItem(STORAGE_KEYS.legacyProvider);
+  if (!hasNewProvider && legacyProvider === 'azure') {
+    const resource = localStorage.getItem(STORAGE_KEYS.legacyAzureResource);
+    if (resource) {
+      return resource.includes('://') ? resource : `https://${resource}.services.ai.azure.com/anthropic`;
+    }
+  } else if (provider === 'azure-openai-responses') {
     const resource = localStorage.getItem(STORAGE_KEYS.legacyAzureResource);
     if (resource) {
       return resource.includes('://') ? resource : `https://${resource}.openai.azure.com`;
     }
   } else if (provider === 'amazon-bedrock') {
-    return localStorage.getItem(STORAGE_KEYS.legacyBedrockRegion);
+    const legacyBedrockRegion = localStorage.getItem(STORAGE_KEYS.legacyBedrockRegion);
+    if (legacyBedrockRegion) {
+      return legacyBedrockRegion.startsWith('https://')
+        ? legacyBedrockRegion
+        : `https://${legacyBedrockRegion}`;
+    }
   }
   
   return null;
@@ -396,7 +414,8 @@ export function showProviderSettings(): Promise<void> {
     dialog.appendChild(modelSection);
 
     // Update UI based on selected provider
-    function updateProviderUI() {
+    function updateProviderUI(options: { preserveApiKeyInput?: boolean } = {}) {
+      const { preserveApiKeyInput = false } = options;
       const providerId = providerSelect.value;
       const config = getProviderConfig(providerId);
 
@@ -407,9 +426,12 @@ export function showProviderSettings(): Promise<void> {
       apiKeyLabel.textContent = `API Key${config.apiKeyEnvVar ? ` (${config.apiKeyEnvVar})` : ''}:`;
       apiKeyInput.placeholder = config.apiKeyPlaceholder || 'API key';
       apiKeySection.style.display = config.requiresApiKey ? '' : 'none';
+      if (!preserveApiKeyInput) {
+        apiKeyInput.value = '';
+      }
 
       // Update base URL section
-      baseUrlLabel.textContent = config.baseUrlDescription || 'Base URL:';
+      baseUrlLabel.textContent = 'Base URL:';
       baseUrlInput.placeholder = config.baseUrlPlaceholder || 'https://...';
       baseUrlDesc.textContent = config.baseUrlDescription || '';
       baseUrlSection.style.display = config.requiresBaseUrl ? '' : 'none';
@@ -427,6 +449,7 @@ export function showProviderSettings(): Promise<void> {
       while (modelSelect.firstChild) modelSelect.removeChild(modelSelect.firstChild);
 
       if (models.length === 0) {
+        modelSelect.disabled = true;
         const opt = document.createElement('option');
         opt.value = '';
         opt.textContent = 'No models available';
@@ -434,6 +457,7 @@ export function showProviderSettings(): Promise<void> {
         modelCount.textContent = '';
         return;
       }
+      modelSelect.disabled = false;
 
       // Sort models: reasoning models first, then by name
       const sorted = [...models].sort((a, b) => {
@@ -464,8 +488,8 @@ export function showProviderSettings(): Promise<void> {
     const existingUrl = getBaseUrl();
     if (existingUrl) baseUrlInput.value = existingUrl;
 
-    providerSelect.addEventListener('change', updateProviderUI);
-    updateProviderUI();
+    providerSelect.addEventListener('change', () => updateProviderUI());
+    updateProviderUI({ preserveApiKeyInput: true });
 
     // Submit button
     const btn = document.createElement('button');
@@ -532,9 +556,19 @@ export function showProviderSettings(): Promise<void> {
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
 
-    requestAnimationFrame(() => apiKeyInput.focus());
+    requestAnimationFrame(() => {
+      const providerId = providerSelect.value;
+      const config = getProviderConfig(providerId);
+
+      if (config.requiresApiKey) {
+        apiKeyInput.focus();
+      } else if (config.requiresBaseUrl) {
+        baseUrlInput.focus();
+      } else if (!modelSelect.disabled) {
+        modelSelect.focus();
+      } else {
+        btn.focus();
+      }
+    });
   });
 }
-
-// Re-export for backward compatibility
-export { getApiKey as getApiKeyCompat };

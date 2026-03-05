@@ -7,8 +7,15 @@ export { Layout } from './layout.js';
 export type { LayoutPanels } from './layout.js';
 export { SessionStore } from './session-store.js';
 export { renderMessageContent, renderToolInput, escapeHtml } from './message-renderer.js';
-export { getApiKey, setApiKey, clearApiKey, getProvider, setProvider, clearProvider, showApiKeyDialog } from './api-key-dialog.js';
-export type { ApiProvider } from './api-key-dialog.js';
+export {
+  getApiKey,
+  setApiKey,
+  clearApiKey,
+  getSelectedProvider as getProvider,
+  setSelectedProvider as setProvider,
+  clearSelectedProvider as clearProvider,
+  showProviderSettings as showApiKeyDialog,
+} from './provider-settings.js';
 export type {
   AgentHandle,
   AgentEvent,

@@ -275,8 +275,9 @@ export class Layout {
         await showProviderSettings();
         location.reload();
       } else {
-        // Clear and reload to trigger first-run dialog
+        // Clear and show first-run dialog directly (avoid extra reload cycle)
         clearAllSettings();
+        await showProviderSettings();
         location.reload();
       }
     });
