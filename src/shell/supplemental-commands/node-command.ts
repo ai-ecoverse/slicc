@@ -142,6 +142,87 @@ export function createNodeCommand(): Command {
     const moduleShim = { exports: {} as Record<string, unknown>, filename };
 
     try {
+      // In extension mode, AsyncFunction constructor is blocked by CSP.
+      // Route through the JavaScript tool's sandbox iframe which has full VFS bridge.
+      const isExtensionMode = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+      if (isExtensionMode) {
+        // Wrap the user code with node-like shims.
+        // The sandbox already provides `fs` (with readFile, writeFile, readDir, exists, etc.)
+        const wrappedCode = `
+          const __stdout = [];
+          const __stderr = [];
+          const __origConsole = { log: console.log, error: console.error, warn: console.warn, info: console.info };
+          console.log = (...a) => __stdout.push(a.map(String).join(' ') + '\\n');
+          console.error = (...a) => __stderr.push(a.map(String).join(' ') + '\\n');
+          console.warn = (...a) => __stderr.push(a.map(String).join(' ') + '\\n');
+          console.info = (...a) => __stdout.push(a.map(String).join(' ') + '\\n');
+          const process = {
+            argv: ${JSON.stringify(argv)},
+            env: ${JSON.stringify(processShim.env)},
+            exit: (c) => { throw { __nodeExitCode: c || 0 }; },
+            stdout: { write: (s) => { __stdout.push(String(s)); return true; } },
+            stderr: { write: (s) => { __stderr.push(String(s)); return true; } },
+            cwd: () => ${JSON.stringify(processShim.cwd())},
+          };
+          const require = (id) => { throw new Error("require('" + id + "') is not supported"); };
+          const module = { exports: {} };
+          const exports = module.exports;
+          try {
+            ${code}
+          } catch(e) {
+            if (e && e.__nodeExitCode !== undefined) { /* process.exit() */ }
+            else __stderr.push(String(e.stack || e) + '\\n');
+          }
+          console.log = __origConsole.log;
+          console.error = __origConsole.error;
+          console.warn = __origConsole.warn;
+          console.info = __origConsole.info;
+          return { stdout: __stdout.join(''), stderr: __stderr.join('') };
+        `;
+
+        // Find or create the sandbox iframe (shared with the JavaScript tool)
+        let sandbox = document.querySelector('iframe[data-js-tool]') as HTMLIFrameElement | null;
+        if (!sandbox) {
+          sandbox = document.createElement('iframe');
+          sandbox.style.display = 'none';
+          sandbox.dataset.jsTool = 'true';
+          sandbox.src = chrome.runtime.getURL('sandbox.html');
+          document.body.appendChild(sandbox);
+          await new Promise<void>(resolve => {
+            sandbox!.addEventListener('load', () => resolve(), { once: true });
+          });
+        }
+
+        const execId = `node-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const result = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('node eval timed out (30s)')), 30000);
+          const handler = (event: MessageEvent) => {
+            if (event.data?.type === 'exec_result' && event.data.id === execId) {
+              window.removeEventListener('message', handler);
+              clearTimeout(timeout);
+              if (event.data.error) {
+                resolve({ stdout: '', stderr: event.data.error + '\n' });
+              } else {
+                try {
+                  const parsed = JSON.parse(event.data.result);
+                  resolve({ stdout: parsed.stdout || '', stderr: parsed.stderr || '' });
+                } catch {
+                  resolve({ stdout: event.data.result || '', stderr: '' });
+                }
+              }
+            }
+          };
+          window.addEventListener('message', handler);
+          sandbox!.contentWindow!.postMessage({ type: 'exec', id: execId, code: wrappedCode }, '*');
+        });
+
+        return {
+          stdout: result.stdout,
+          stderr: result.stderr,
+          exitCode: result.stderr ? 1 : 0,
+        };
+      }
+
       const AsyncFunction = Object.getPrototypeOf(async function () { /* noop */ }).constructor as (
         new (...args: string[]) => (
           fs: typeof fsBridge,
