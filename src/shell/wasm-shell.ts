@@ -15,6 +15,7 @@ import { VfsAdapter } from './vfs-adapter.js';
 import { cacheBinaryBody } from './binary-cache.js';
 import { GitCommands } from '../git/git-commands.js';
 import { createSupplementalCommands } from './supplemental-commands.js';
+import { createSkillCommand } from './supplemental-commands/skill-command.js';
 import { MountCommands } from '../fs/mount-commands.js';
 
 /** Check if a content-type header indicates text (safe for UTF-8 decoding). */
@@ -172,7 +173,7 @@ export class WasmShell {
       cwd: initialCwd,
       env: initialEnv,
       fetch: createProxiedFetch(),
-      customCommands: [gitCommand, mountCommand, ...supplementalCommands],
+      customCommands: [gitCommand, mountCommand, createSkillCommand(options.fs), ...supplementalCommands],
     });
     this.lastEnv = { ...initialEnv };
     this.cwd = initialCwd;
