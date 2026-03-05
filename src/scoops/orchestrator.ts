@@ -509,6 +509,12 @@ When you learn something important:
     }
   }
 
+  /** Check if a scoop is currently processing. */
+  isProcessing(jid: string): boolean {
+    const tab = this.tabs.get(jid);
+    return tab?.status === 'processing';
+  }
+
   /** Get the scoop context for a JID */
   getScoopContext(jid: string): ScoopContext | undefined {
     return this.contexts.get(jid);

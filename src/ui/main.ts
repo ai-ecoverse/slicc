@@ -334,6 +334,13 @@ async function main(): Promise<void> {
         }
       }
     }
+
+    // If switching back to cone and it's currently processing (e.g., handling
+    // a scoop notification), re-lock the input. switchToContext resets streaming
+    // state, but we need to reflect the cone's actual status.
+    if (scoop.isCone && orchestrator.isProcessing(scoop.jid)) {
+      layout.panels.chat.setProcessing(true);
+    }
   };
 
   layout.onScoopSelect = handleScoopSelect;
