@@ -31,24 +31,53 @@ Browser-based AI coding agent: a self-contained development environment where Cl
 
 ### Two Deployment Modes
 
-- **Chrome extension** (Manifest V3): Side panel UI with tabbed layout (Chat/Terminal/Files). Uses `chrome.debugger` API for browser automation. Built via `npm run build:extension` → `dist/extension/`. Load as unpacked extension in `chrome://extensions`.
-- **Standalone CLI**: Express server launches Chrome, proxies CDP over WebSocket. Resizable 3-panel split layout. Built via `npm run build` → `dist/ui/` + `dist/cli/`.
+- **Chrome extension** (Manifest V3): Side panel UI with tabbed layout (Chat/Terminal/Files/Memory). Uses `chrome.debugger` API for browser automation. Built via `npm run build:extension` -> `dist/extension/`. Load as unpacked extension in `chrome://extensions`. Pyodide bundled for Python support (~13MB).
+- **Standalone CLI**: Express server launches Chrome, proxies CDP over WebSocket. Resizable split layout with scoops panel + chat + terminal + files/memory. Built via `npm run build` -> `dist/ui/` + `dist/cli/`.
 
 ### Three Build Targets
 
 - **Browser bundle** (tsconfig.json): Everything in src/ except src/cli/. Bundled by Vite, module resolution: bundler. Runs in Chrome.
 - **CLI server** (tsconfig.cli.json): Only src/cli/. Compiled by TSC to dist/cli/, module resolution: NodeNext. Runs in Node.
-- **Extension bundle** (vite.config.extension.ts): Same browser bundle with extension-specific entry points (service-worker.js, sandbox.html, manifest.json). Output: dist/extension/.
+- **Extension bundle** (vite.config.extension.ts): Same browser bundle with extension-specific entry points (service-worker.js, sandbox.html, manifest.json) plus bundled Pyodide. Output: dist/extension/.
 
 ### Layer Stack (bottom-up)
 
-Virtual Filesystem (src/fs/) -> Shell (src/shell/) -> CDP (src/cdp/) -> Tools (src/tools/) -> Core Agent (src/core/) -> UI (src/ui/) -> CLI Server (src/cli/) | Extension (src/extension/)
+```
+Virtual Filesystem (src/fs/)
+  -> RestrictedFS (path ACL for scoops)
+    -> Shell (src/shell/)
+    -> Git (src/git/)
+  -> CDP (src/cdp/)
+  -> Tools (src/tools/)
+    -> Core Agent (src/core/)
+      -> Scoops Orchestrator (src/scoops/)
+        -> UI (src/ui/)
+          -> CLI Server (src/cli/) | Extension (src/extension/)
+```
+
+### The Cone and Scoops (src/scoops/)
+
+SLICC uses an ice cream theme for its multi-agent system. The **cone** is the main assistant (sliccy) that holds everything together. **Scoops** are isolated agent contexts stacked on top, each with their own tools, shell, and restricted filesystem.
+
+- **Orchestrator** (`orchestrator.ts`): Creates/destroys scoop contexts, routes messages, manages the single shared VirtualFS, handles scoop completion notifications back to the cone.
+- **ScoopContext** (`scoop-context.ts`): Per-scoop agent instance with RestrictedFS, WasmShell, skills, and NanoClaw-style tools (send_message, schedule_task, delegate_to_scoop).
+- **Delegation**: The cone delegates work to scoops via the `delegate_to_scoop` tool, providing complete self-contained prompts (scoops have no access to the cone's conversation). When a scoop finishes, the orchestrator automatically routes its response back to the cone's message queue.
+- **Unified Filesystem**: One VirtualFS (`slicc-fs` IndexedDB). Cone gets unrestricted access. Each scoop gets a `RestrictedFS` limited to `/scoops/{name}/` + `/shared/`. Parent directory traversal is allowed for `stat`/`exists` (so `cd` works), but reads/writes outside the sandbox are blocked.
+- **DB** (`db.ts`): IndexedDB schema v2 with `scoops`, `messages`, `sessions`, `tasks`, `state` stores. Migration from v1 groups schema.
 
 ### Virtual Filesystem (src/fs/)
-POSIX-like async filesystem backed by OPFS (preferred) or IndexedDB (fallback). VirtualFS is the facade; StorageBackend is the interface both backends implement. FsError carries POSIX error codes (ENOENT, EISDIR, etc.). All paths are absolute, forward-slash, normalized.
+POSIX-like async filesystem backed by LightningFS (IndexedDB). VirtualFS is the facade. FsError carries POSIX error codes (ENOENT, EISDIR, EACCES, etc.). All paths are absolute, forward-slash, normalized.
+
+**RestrictedFS** (`restricted-fs.ts`): Wraps VirtualFS with path-based access control for scoops.
+- Read operations (stat, exists, readDir): return ENOENT/empty for outside paths. Parent directories of allowed paths are traversable (needed for `cd`).
+- Write operations (writeFile, mkdir, rm, rename): throw EACCES for outside paths.
+- `readDir` on parent dirs filters to only entries leading toward allowed paths.
+- `getLightningFS()` delegated for isomorphic-git compatibility.
 
 ### Shell (src/shell/)
 WasmShell wraps just-bash 2.11.7 (WASM Bash interpreter) and connects it to VirtualFS via VfsAdapter (implements just-bash's IFileSystem). The shell maintains env/cwd state across calls. Terminal UI via xterm.js with dynamic imports (so tests run in Node without xterm). Supports 78+ commands, escape sequences (arrow keys, Home/End/Delete), multi-line editing with continuation buffer, and proxied fetch for curl/networking (via `/api/fetch-proxy` in CLI mode, direct fetch with `host_permissions` in extension mode). Binary response handling: `readResponseBody()` detects content-type and uses latin1 encoding for binary types to preserve byte fidelity through just-bash's string-typed FetchResult. A binary cache (`binary-cache.ts`) stores raw Uint8Array for VfsAdapter to bypass string encoding on write.
+
+**Extension CSP workaround**: `node -e` in extension mode routes through the sandbox iframe (CSP blocks `AsyncFunction` constructor on extension pages). Python uses bundled Pyodide loaded from `chrome.runtime.getURL('pyodide/')`.
 
 ### CDP (src/cdp/)
 CDPTransport interface (`transport.ts`) abstracts the underlying protocol. Two implementations:
@@ -58,7 +87,9 @@ CDPTransport interface (`transport.ts`) abstracts the underlying protocol. Two i
 BrowserAPI: high-level Playwright-style API built on either transport (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree). Auto-selects transport based on extension detection. TargetInfo and PageInfo types include `active` field (boolean, extension mode only) to identify the user's currently focused tab, enabling intelligent tool auto-dispatch.
 
 ### Tools (src/tools/)
-All tools use the legacy ToolDefinition interface (name, description, inputSchema, execute). Active agent tools: bash, read_file, write_file, edit_file, browser (with sub-actions). Factory functions take their dependency (VirtualFS, WasmShell, or BrowserAPI). JavaScript execution and code search should be done through `bash` (for example `node -e`, `grep`, `find`, `rg`) rather than standalone agent tools.
+All tools use the legacy ToolDefinition interface (name, description, inputSchema, execute). Active agent tools: bash, read_file, write_file, edit_file, browser (with sub-actions), javascript. Factory functions take their dependency (VirtualFS, WasmShell, or BrowserAPI).
+
+**NanoClaw tools** (src/scoops/nanoclaw-tools.ts): Per-scoop tools for messaging and scheduling — `send_message`, `schedule_task`, `list_tasks`, `pause_task`, `resume_task`, `cancel_task`. Cone-only tools: `list_scoops`, `register_scoop`, `delegate_to_scoop`, `update_global_memory`.
 
 **Browser tool enhancements:**
 - `screenshot` action now supports `path` (save PNG to VFS), `fullPage` (capture entire scrollable page), and `selector` (capture just one element)
@@ -66,55 +97,63 @@ All tools use the legacy ToolDefinition interface (name, description, inputSchem
 - Auto-resolves to the user's active/focused tab when targetId is omitted (CDP types TargetInfo/PageInfo now include `active` field)
 - VFS access via `path` parameter to save results without bloating conversation history
 
-**JavaScript tool enhancement:**
-- `fs.readFileBinary(path)` now returns `Uint8Array` directly instead of encoded string, enabling efficient binary file operations (e.g., canvas image processing)
+**JavaScript tool**: `fs.readDir(path)` returns `string[]` (filenames). `fs.readFileBinary(path)` returns `Uint8Array` directly.
 
 ### Core Agent (src/core/)
 Uses @mariozechner/pi-agent-core for the agent loop and @mariozechner/pi-ai for unified LLM streaming. Key types re-exported from pi packages: AgentMessage, AgentTool, AgentEvent, Model, StreamFn.
 
 - Agent class (from pi-agent-core): state management, `subscribe()` for events, `prompt()` for messages, `abort()` to stop
 - tool-adapter.ts: wraps legacy ToolDefinition into AgentTool (pi-compatible execute signature)
+- context-compaction.ts: `compactContext()` truncates oversized tool results and drops old messages to stay within token limits. Applied to every scoop via `transformContext`.
 - types.ts: self-contained type definitions (ToolDefinition, ToolResult, AgentConfig, SessionData)
 
 ### UI (src/ui/)
 Vanilla TypeScript, no framework. Two layout modes selected by `isExtension` detection:
-- **Extension mode**: Tabbed interface (Chat/Terminal/Files tabs) with context-sensitive header buttons per tab. Full-height single panel.
-- **Standalone mode**: Resizable three-panel split: chat (left), terminal (top-right), file browser (bottom-right).
+- **Extension mode**: Compact single-row header (slicc + scoop dropdown + model dropdown + icon buttons). Tabbed interface (Chat/Terminal/Files/Memory). Scoop switcher as dropdown menu.
+- **Standalone mode**: Resizable split layout — scoops panel (left) + chat + terminal (top-right) + files/memory tabs (bottom-right).
 
-main.ts bootstraps everything and contains the event adapter that maps core AgentEvent to UI AgentEvent. Message IDs use session-unique prefixes to prevent collision after side panel close/reopen. Assistant label is "sliccy".
+main.ts bootstraps the orchestrator (always cone+orchestrator, no direct agent mode) and wires events. Per-scoop message buffers capture tool calls even when viewing a different scoop. Input locks immediately when the cone starts processing (including auto-activation from scoop notifications). Assistant label is "sliccy" for the cone, `{name}-scoop` for scoops.
 
 File browser supports clicking files to download and a ZIP button on folders (uses fflate) to download entire directories.
 
-Two separate IndexedDB session stores: UI-level (browser-coding-agent DB in session-store.ts) and core agent-level (agent-sessions DB in core/session.ts).
+Two separate IndexedDB session stores: UI-level (browser-coding-agent DB in session-store.ts) and core agent-level (agent-sessions DB in core/session.ts). Orchestrator messages stored in slicc-groups DB.
 
 ### Extension (src/extension/)
-Chrome Manifest V3 extension files. Service worker opens the side panel on action click. `chrome.d.ts` provides minimal typed declarations for the Chrome APIs used (debugger, tabs, sidePanel, runtime). `sandbox.html` (project root) provides an isolated execution environment for the JavaScript tool — exempt from extension CSP, allows Function constructor. Cross-origin fetch from sandbox is proxied through the parent page via postMessage.
+Chrome Manifest V3 extension files. Service worker opens the side panel on action click. `chrome.d.ts` provides minimal typed declarations for the Chrome APIs used (debugger, tabs, sidePanel, runtime). `sandbox.html` (project root) provides an isolated execution environment for the JavaScript tool and `node -e` — exempt from extension CSP, allows Function constructor. Cross-origin fetch from sandbox is proxied through the parent page via postMessage. Pyodide (~13MB) bundled at `dist/extension/pyodide/` for Python support (loaded from `'self'` origin).
 
 ### CLI Server (src/cli/index.ts)
 Express server that launches Chrome with remote debugging, serves the UI (Vite middleware in dev, static files in prod), and runs a WebSocket proxy at /cdp. Provides `/api/fetch-proxy` endpoint for cross-origin fetch (replaces CORS proxy). Single shared Chrome WebSocket connection with client message buffering. Console forwarder pipes in-page console output to CLI stdout.
 
-### Context Compaction (src/ui/main.ts)
+### Context Compaction (src/core/context-compaction.ts)
 To prevent context overflow (200K token limit), the agent applies two-phase message compaction before each API call:
 1. **Result truncation**: Tool results larger than 8000 chars (~2K tokens) are truncated with a marker
 2. **Message dropping**: If total context exceeds ~150K tokens, old messages (except first 2 and last 10) are dropped and replaced with a compaction marker message
 
-This preserves recent context and the initial exchange while preventing runaway token usage.
+This preserves recent context and the initial exchange while preventing runaway token usage. Applied to every scoop context via `transformContext: compactContext`.
 
 ### Data Flow
 ```
-User -> ChatPanel -> Agent.prompt() -> pi-agent-core loop -> Anthropic API (streaming)
-  -> AssistantMessageEvent stream -> Agent state -> event adapter -> ChatPanel DOM
-  -> Tool calls -> VirtualFS / WasmShell / BrowserAPI -> results -> back to agent loop
+User -> ChatPanel -> AgentHandle.sendMessage()
+  -> Orchestrator.handleMessage() -> routeToScoop() -> processScoopQueue()
+    -> ScoopContext.prompt() -> pi-agent-core loop -> LLM API (streaming)
+      -> AgentEvent stream -> Orchestrator callbacks -> per-scoop message buffer
+        -> emitToUI (if selected) -> ChatPanel DOM
+      -> Tool calls -> RestrictedFS / WasmShell / BrowserAPI -> results -> back to agent loop
+    -> Scoop completes -> Orchestrator notification -> Cone's message queue -> Cone reacts
+
+Delegation:
+  Cone -> delegate_to_scoop tool -> Orchestrator.delegateToScoop()
+    -> ScoopContext.prompt() (with full context from cone) -> ... -> completion notification -> Cone
 ```
 
 ## Key Conventions
 
 - **Two type systems**: Legacy ToolDefinition/ToolResult (in src/tools/) and pi-compatible AgentTool/AgentToolResult (in src/core/). The adapter in tool-adapter.ts bridges them.
-- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 242 tests across 19 files.
+- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 284 tests across 23 files.
 - **Logging**: createLogger('namespace') from src/core/logger.ts. Level-filtered, DEBUG in dev, ERROR in prod. Uses __DEV__ global (set by Vite define).
 - **Node shims**: src/shims/empty.ts stubs out node:zlib and node:module for the browser bundle (just-bash references them).
-- **Multi-provider auth**: API key stored in localStorage. Provider selector supports Anthropic (direct), Azure AI Foundry, and AWS Bedrock. Provider/resource/region stored in localStorage. Model resolved via `getModel()` from pi-ai with baseUrl override for Azure/Bedrock.
-- **Extension detection**: `typeof chrome !== 'undefined' && !!chrome?.runtime?.id` — used throughout to select CDP transport, layout mode, fetch strategy, and JS tool sandbox mechanism.
+- **Multi-provider auth**: Provider settings in `src/ui/provider-settings.ts`. Supports Anthropic (direct), Azure AI Foundry (Claude on Azure), Azure OpenAI (GPT), AWS Bedrock, and many more via pi-ai. Provider/API key/baseUrl stored in localStorage. Model resolved via `resolveCurrentModel()` with baseUrl override.
+- **Extension detection**: `typeof chrome !== 'undefined' && !!chrome?.runtime?.id` — used throughout to select CDP transport, layout mode, fetch strategy, JS tool sandbox mechanism, and Pyodide loading path.
 
 ## Git Integration (src/git/)
 Git support via isomorphic-git with LightningFS as the backing store. GitCommands class provides CLI-like interface for git operations (init, clone, add, commit, status, log, branch, checkout, diff, remote, fetch, pull, push, config, rev-parse). Registered as a custom command in just-bash so it works in compound commands and via the bash tool.
