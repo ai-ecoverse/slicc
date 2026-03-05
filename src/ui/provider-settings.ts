@@ -101,10 +101,21 @@ const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
     baseUrlPlaceholder: 'https://bedrock-runtime.us-east-1.amazonaws.com',
     baseUrlDescription: 'Bedrock runtime endpoint (region-specific)',
   },
+  'azure-ai-foundry': {
+    id: 'azure-ai-foundry',
+    name: 'Azure (Claude)',
+    description: 'Claude models via Azure AI Foundry',
+    requiresApiKey: true,
+    apiKeyPlaceholder: 'Azure API key',
+    apiKeyEnvVar: 'AZURE_API_KEY',
+    requiresBaseUrl: true,
+    baseUrlPlaceholder: 'https://your-resource.services.ai.azure.com/anthropic',
+    baseUrlDescription: 'Azure AI Foundry endpoint — must end with /anthropic',
+  },
   'azure-openai-responses': {
     id: 'azure-openai-responses',
-    name: 'Azure OpenAI',
-    description: 'OpenAI models on Azure',
+    name: 'Azure (OpenAI/GPT)',
+    description: 'GPT and Codex models on Azure OpenAI',
     requiresApiKey: true,
     apiKeyPlaceholder: 'Azure API key',
     apiKeyEnvVar: 'AZURE_OPENAI_API_KEY',
@@ -150,9 +161,11 @@ const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
   },
 };
 
-// Get all available providers from pi-ai
+// Get all available providers — pi-ai providers + custom providers (e.g., azure-ai-foundry)
 export function getAvailableProviders(): string[] {
-  return getProviders();
+  const piProviders = getProviders();
+  const customProviders = Object.keys(PROVIDER_CONFIGS).filter(id => !piProviders.includes(id));
+  return [...piProviders, ...customProviders];
 }
 
 // Get provider config with fallback for unknown providers
@@ -169,7 +182,9 @@ export function getProviderConfig(providerId: string): ProviderConfig {
 // Get models for a provider
 export function getProviderModels(providerId: string): Model<any>[] {
   try {
-    return getModels(providerId as any);
+    // Azure AI Foundry uses Anthropic's Claude models
+    const effectiveProvider = providerId === 'azure-ai-foundry' ? 'anthropic' : providerId;
+    return getModels(effectiveProvider as any);
   } catch {
     return [];
   }
@@ -188,7 +203,7 @@ export function getSelectedProvider(): string {
     const mapping: Record<string, string> = {
       'anthropic': 'anthropic',
       // Legacy "azure" used Anthropic on Azure AI Foundry.
-      'azure': 'anthropic',
+      'azure': 'azure-ai-foundry',
       'bedrock': 'amazon-bedrock',
     };
     return mapping[legacy] || 'anthropic';
@@ -290,8 +305,10 @@ export function resolveCurrentModel(): Model<any> {
   const effectiveModelId = modelId || models[0]?.id || 'claude-sonnet-4-20250514';
   
   try {
-    let model = getModel(providerId as any, effectiveModelId as any);
-    
+    // Azure AI Foundry uses Anthropic's model registry
+    const effectiveProvider = providerId === 'azure-ai-foundry' ? 'anthropic' : providerId;
+    let model = getModel(effectiveProvider as any, effectiveModelId as any);
+
     // Override baseUrl if custom one is set
     if (baseUrl) {
       model = { ...model, baseUrl };
@@ -335,11 +352,13 @@ export function showProviderSettings(): Promise<void> {
     const providers = getAvailableProviders();
     const currentProvider = getSelectedProvider();
 
-    // Group providers: configured first, then alphabetically
-    const configuredProviders = providers.filter(p => p in PROVIDER_CONFIGS);
-    const otherProviders = providers.filter(p => !(p in PROVIDER_CONFIGS));
+    const sorted = [...providers].sort((a, b) => {
+      const nameA = getProviderConfig(a).name;
+      const nameB = getProviderConfig(b).name;
+      return nameA.localeCompare(nameB);
+    });
 
-    for (const providerId of [...configuredProviders, ...otherProviders]) {
+    for (const providerId of sorted) {
       const config = getProviderConfig(providerId);
       const opt = document.createElement('option');
       opt.value = providerId;

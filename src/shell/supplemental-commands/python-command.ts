@@ -1,6 +1,79 @@
 import { defineCommand } from 'just-bash';
-import type { Command } from 'just-bash';
+import type { Command, IFileSystem } from 'just-bash';
+import type { PyodideInterface } from 'pyodide';
 import { PYTHON_RUNNER, getPyodide } from './shared.js';
+
+/**
+ * Sync files from VFS (just-bash's IFileSystem) into Pyodide's Emscripten FS.
+ * Copies directory trees so Python's os module can see them.
+ */
+async function syncVfsToPyodide(fs: IFileSystem, pyodide: PyodideInterface, dirs: string[]): Promise<void> {
+  const FS = pyodide.FS;
+
+  function ensurePyDir(path: string): void {
+    try { FS.stat(path); } catch { FS.mkdirTree(path); }
+  }
+
+  async function syncDir(vfsPath: string): Promise<void> {
+    ensurePyDir(vfsPath);
+    let entries: string[];
+    try { entries = await fs.readdir(vfsPath); } catch { return; }
+
+    for (const name of entries) {
+      const full = vfsPath === '/' ? `/${name}` : `${vfsPath}/${name}`;
+      try {
+        const s = await fs.stat(full);
+        if (s.isDirectory) {
+          await syncDir(full);
+        } else {
+          const content = await fs.readFile(full);
+          ensurePyDir(vfsPath);
+          FS.writeFile(full, content);
+        }
+      } catch {
+        // Skip files we can't read
+      }
+    }
+  }
+
+  for (const dir of dirs) {
+    await syncDir(dir);
+  }
+}
+
+/**
+ * Sync files from Pyodide's Emscripten FS back to VFS.
+ * Writes any files that Python created or modified.
+ */
+async function syncPyodideToVfs(fs: IFileSystem, pyodide: PyodideInterface, dirs: string[]): Promise<void> {
+  const FS = pyodide.FS;
+
+  async function writeBack(pyPath: string): Promise<void> {
+    let entries: string[];
+    try { entries = FS.readdir(pyPath).filter((n: string) => n !== '.' && n !== '..'); } catch { return; }
+
+    for (const name of entries) {
+      const full = pyPath === '/' ? `/${name}` : `${pyPath}/${name}`;
+      try {
+        const s = FS.stat(full);
+        if (FS.isDir(s.mode)) {
+          await fs.mkdir(full, { recursive: true });
+          await writeBack(full);
+        } else {
+          const content = FS.readFile(full, { encoding: 'utf8' }) as string;
+          await fs.mkdir(pyPath, { recursive: true });
+          await fs.writeFile(full, content);
+        }
+      } catch {
+        // Skip
+      }
+    }
+  }
+
+  for (const dir of dirs) {
+    await writeBack(dir);
+  }
+}
 
 function pythonHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
@@ -74,8 +147,20 @@ export function createPython3LikeCommand(name: 'python3' | 'python'): Command {
       const stdoutChunks: string[] = [];
       const stderrChunks: string[] = [];
 
-      pyodide.setStdout({ batched: (msg) => stdoutChunks.push(msg) });
-      pyodide.setStderr({ batched: (msg) => stderrChunks.push(msg) });
+      // Sync VFS directories into Pyodide's Emscripten FS so Python can see them.
+      // Sync CWD, /tmp, and the script's directory (if running a file).
+      const syncDirs = [ctx.cwd, '/tmp'];
+      if (filename !== '<stdin>' && filename !== '[eval]') {
+        const scriptDir = filename.includes('/') ? filename.slice(0, filename.lastIndexOf('/')) : ctx.cwd;
+        if (!syncDirs.includes(scriptDir)) syncDirs.push(scriptDir);
+      }
+      await syncVfsToPyodide(ctx.fs, pyodide, syncDirs);
+
+      // Set CWD in Pyodide to match the shell
+      try { pyodide.FS.chdir(ctx.cwd); } catch { /* dir may not exist in Pyodide FS */ }
+
+      pyodide.setStdout({ batched: (msg) => stdoutChunks.push(msg + '\n') });
+      pyodide.setStderr({ batched: (msg) => stderrChunks.push(msg + '\n') });
       pyodide.globals.set('__slicc_code', code);
       pyodide.globals.set('__slicc_filename', filename);
       pyodide.globals.set('__slicc_argv', argv);
@@ -89,6 +174,9 @@ export function createPython3LikeCommand(name: 'python3' | 'python'): Command {
       } catch {
         // Best-effort cleanup only.
       }
+
+      // Sync files written by Python back to VFS
+      await syncPyodideToVfs(ctx.fs, pyodide, syncDirs);
 
       return {
         stdout: stdoutChunks.join(''),

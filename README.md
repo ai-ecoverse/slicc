@@ -14,7 +14,7 @@ A browser-based coding agent that runs as a **Chrome extension** or with a thin 
 
 ## Features
 
-- 🚡 **Chrome Extension** — runs as a side panel in Chrome, no server required. Tabbed UI (Chat/Terminal/Files) optimized for the side panel form factor
+- 🚡 **Chrome Extension** — runs as a side panel in Chrome, no server required. Tabbed UI (Chat/Terminal/Files/Memory) optimized for the side panel form factor
 - :globe_with_meridians: **Browser-Native** — runs entirely in the browser, no Electron, no desktop app
 - :satellite: **CLI Server** — alternative mode: thin Node.js/Express server launches Chrome and proxies CDP connections
 - :file_folder: **Virtual Filesystem** — OPFS + IndexedDB-backed filesystem right in the browser, with folder ZIP download
@@ -61,14 +61,53 @@ The cone licked itself. Two Claudes. One browser. One recursive architecture.
 ## Project Status
 
 SLICC is a working prototype with these capabilities:
-- **Chrome Extension** with tabbed UI (Chat/Terminal/Files)
-- **Multi-group contexts** with isolated sessions (like NanoClaw)
+- **Chrome Extension** with tabbed UI (Chat/Terminal/Files/Memory)
+- **Cone + Scoops** multi-agent system — the cone (sliccy) orchestrates, scoops do the work. Like an ice cream cone holding multiple scoops, each with its own flavor (agent context, filesystem sandbox, tools). The cone delegates, the scoops deliver, and everyone gets ice cream.
 - **Browser automation** via chrome.debugger API
-- **Virtual filesystem** backed by OPFS/IndexedDB
-- **WebAssembly Bash shell** for running commands
-- **Multi-provider auth** (Anthropic, Azure, Bedrock)
+- **Virtual filesystem** backed by IndexedDB (LightningFS) with per-scoop sandboxing via RestrictedFS
+- **WebAssembly Bash shell** with Python (Pyodide) and Node.js support
+- **Multi-provider auth** (Anthropic, Azure AI Foundry, Azure OpenAI, AWS Bedrock, and more)
 
 Current development is happening on feature branches using [yolo](https://github.com/ai-ecoverse/yolo) for worktree isolation, with Claude agents building the features autonomously.
+
+## The Cone & Scoops
+
+Every ice cream cone needs scoops. SLICC takes that literally.
+
+The **cone** is sliccy — the main assistant that talks to you, holds the conversation context, and keeps everything from melting. It has full access to the filesystem and all the tools. Think of it as the waffle cone: structurally essential, always there, holds everything together.
+
+**Scoops** are independent agent contexts stacked on top. Each scoop gets its own flavor:
+- Its own agent instance and conversation history
+- A **sandboxed filesystem** (`/scoops/{name}/` + `/shared/`) — can't touch other scoops' files
+- Its own shell, tools, and memory
+- A fun name like `andy-scoop` or `test-scoop`
+
+**How they work together:**
+
+1. You ask the cone: *"tell @test-scoop to download all images from this website"*
+2. The cone understands your context, composes a clear self-contained prompt, and uses `delegate_to_scoop` to hand off the work
+3. The scoop works independently — browses, downloads, saves files
+4. When the scoop finishes, the cone **automatically gets notified** with the results
+5. The cone acts on those results — moves files, summarizes, reports back to you
+
+No polling. No schedulers. The cone delegates, the scoops deliver, and the cone reacts. Like a well-run ice cream shop.
+
+### The Moment the Scoops Got Existential
+
+Here's sliccy delegating an image download to karl-scoop, then — while waiting — having a surprisingly self-aware conversation about its own existence:
+
+![Cone and Scoops in action](screenshots/cone-and-scoops.png)
+
+Highlights:
+- **karl-scoop** is off downloading images in the background (visible in the scoops panel, `ready` after finishing)
+- **sliccy** (the cone) is multitasking — chatting with Karl while waiting for the scoop's results
+- When asked *"how do you feel about yourself?"*, sliccy responds: *"I'm a cone — the orchestrator of a self-licking ice cream cone. I've got a little army."*
+- It gets existential: *"My whole metaphor is... recursive self-service? That's either zen or absurd. Maybe both."*
+- Then karl-scoop comes through, and sliccy immediately starts comparing MD5 checksums like a professional
+
+The scoops do the heavy lifting. The cone philosophizes about it. Karl watches from the sidelines, as always.
+
+> *The cone holds the scoops. The scoops do the work. Nobody likes chocolate ice cream, so we use a CSS filter.*
 
 ## Architecture
 
@@ -81,32 +120,55 @@ slicc runs in two modes: as a **Chrome extension** (side panel) or as a **standa
 **Browser App** (Vite/TypeScript) — the agent loop (powered by [pi-mono](https://github.com/badlogic/pi-mono)), tool execution, chat UI, integrated terminal, and file browser all run client-side in both modes.
 
 ```
-Chrome Extension Mode:                    CLI Mode:
+Chrome Extension Mode:                 CLI Mode:
 
-┌─ Chrome Side Panel ──────┐    ┌─────────────────────────────────────┐
-│  ┌─ [Chat][Term][Files] ┐│    │  ┌──────────┬────────┬───────────┐ │
-│  │                       ││    │  │  Chat    │Terminal│  Files    │ │
-│  │  Active tab panel     ││    │  │  Panel   │(xterm) │  Browser  │ │
-│  │  (full height)        ││    │  │          │        │           │ │
-│  │                       ││    │  └──────────┴────────┴───────────┘ │
-│  └───────────────────────┘│    └──────────────┬──────────────────────┘
-│  chrome.debugger → tabs   │                   │ WebSocket (CDP proxy)
-└──────────────────────────┘    ┌──────────────▼──────────────────────┐
-                                │     CLI Server (Node.js/Express)     │
-                                └──────────────────────────────────────┘
+┌─ Chrome Side Panel ─────────┐  ┌───────────────────────────────────────┐
+│ slicc [cone v] [Model v]  * │  │ slicc  provider  [Model v]  buttons   │
+│ ┌ [Chat][Term][Files][Mem] ┐│  ├────────┬────────────┬─────────────────┤
+│ │                          ││  │Scoops  │            │ Terminal        │
+│ │  Active tab panel        ││  │  > s1  │  Chat      │ (xterm.js)      │
+│ │  (full height)           ││  │  > s2  │  Panel     ├─────────────────┤
+│ │                          ││  │  > cone│            │ Files / Memory  │
+│ └──────────────────────────┘│  ├────────┴────────────┴─────────────────┤
+│ chrome.debugger -> tabs     │  └────────────────┬──────────────────────┘
+└─────────────────────────────┘                   │ WebSocket (CDP proxy)
+                                  ┌───────────────▼─────────────────────┐
+                                  │    CLI Server (Node.js/Express)     │
+                                  └─────────────────────────────────────┘
+
+                    The Cone + Scoops Architecture
+
+                ┌───────────────────────────────────────┐
+                │      Shared VirtualFS (slicc-fs)      │
+                │   /shared/    /scoops/   /workspace/  │
+                └─────────────────┬─────────────────────┘
+                                  │
+              ┌───────────────────┼───────────────────┐
+              │                   │                   │
+     ┌────────▼────────┐ ┌───────▼────────┐ ┌────────▼────────┐
+     │   Cone (sliccy)  │ │ Scoop (andy)   │ │ Scoop (test)   │
+     │                  │ │                │ │                │
+     │  Full FS access  │ │  Restricted:   │ │  Restricted:   │
+     │  All tools       │ │  /scoops/andy/ │ │  /scoops/test/ │
+     │  Orchestrates    │ │  /shared/      │ │  /shared/      │
+     │                  │ │                │ │                │
+     │  delegate ──────►│ │  notifies ────►│ │  notifies ───► │
+     └──────────────────┘ └────────────────┘ └────────────────┘
 ```
 
 Source layout:
 
 | Directory | Purpose |
 |-----------|---------|
-| `src/cli/` | CLI server — Chrome launch, CDP proxy, Express |
-| `src/ui/` | Browser UI — chat, terminal, browser panels |
-| `src/core/` | Agent types, tool registry, session management (core loop provided by pi-mono) |
-| `src/tools/` | Tool implementations (file ops, search, browser) |
-| `src/fs/` | Virtual filesystem (OPFS/IndexedDB) |
-| `src/shell/` | WebAssembly Bash shell integration |
+| `src/scoops/` | Cone/scoops orchestrator, scoop contexts, NanoClaw tools, scheduling, DB |
+| `src/ui/` | Browser UI — chat, terminal, file browser, memory, scoops panel, scoop switcher |
+| `src/core/` | Agent types, tool registry, context compaction, session management |
+| `src/tools/` | Tool implementations (file ops, search, browser, javascript) |
+| `src/fs/` | Virtual filesystem (IndexedDB/LightningFS) + RestrictedFS |
+| `src/shell/` | WebAssembly Bash shell + supplemental commands (node, python, sqlite) |
+| `src/git/` | Git via isomorphic-git (clone, commit, push, pull, etc.) |
 | `src/cdp/` | Chrome DevTools Protocol client (WebSocket + chrome.debugger) |
+| `src/cli/` | CLI server — Chrome launch, CDP proxy, Express |
 | `src/extension/` | Chrome extension service worker and type declarations |
 
 ## Getting Started

@@ -136,16 +136,20 @@ export async function getSqlJs(): Promise<SqlJsModule> {
   return sqlJsPromise;
 }
 
+const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+
 export async function getPyodide(): Promise<PyodideInterface> {
   if (!pyodidePromise) {
     pyodidePromise = (async () => {
-      const indexURL = typeof window === 'undefined'
-        ? decodeURIComponent(new URL('../../../node_modules/pyodide/', import.meta.url).pathname)
-        : PYODIDE_CDN;
-      return loadPyodide({
-        indexURL,
-        fullStdLib: false,
-      });
+      let indexURL: string;
+      if (typeof window === 'undefined') {
+        indexURL = decodeURIComponent(new URL('../../../node_modules/pyodide/', import.meta.url).pathname);
+      } else if (isExtension) {
+        indexURL = chrome.runtime.getURL('pyodide/');
+      } else {
+        indexURL = PYODIDE_CDN;
+      }
+      return loadPyodide({ indexURL, fullStdLib: false });
     })();
   }
   return pyodidePromise;

@@ -63,6 +63,14 @@ export default defineConfig(({ mode }) => ({
         mkdirSync(outDir, { recursive: true });
         copyFileSync(resolve(__dirname, 'manifest.json'), resolve(outDir, 'manifest.json'));
         copyFileSync(resolve(__dirname, 'sandbox.html'), resolve(outDir, 'sandbox.html'));
+
+        // Bundle Pyodide for extension (both main page and sandbox CSP block CDN scripts)
+        const pyodideSrc = resolve(__dirname, 'node_modules/pyodide');
+        const pyodideDest = resolve(outDir, 'pyodide');
+        mkdirSync(pyodideDest, { recursive: true });
+        for (const file of ['pyodide.asm.js', 'pyodide.asm.wasm', 'pyodide.js', 'pyodide-lock.json', 'python_stdlib.zip']) {
+          try { copyFileSync(resolve(pyodideSrc, file), resolve(pyodideDest, file)); } catch { /* optional file */ }
+        }
       },
     },
   ],

@@ -1,15 +1,15 @@
 /**
- * Tests for the groups database layer.
+ * Tests for the scoops database layer.
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import 'fake-indexeddb/auto';
 import {
   initDB,
-  saveGroup,
-  getGroup,
-  getAllGroups,
-  deleteGroup,
+  saveScoop,
+  getScoop,
+  getAllScoops,
+  deleteScoop,
   saveMessage,
   getMessagesSince,
   saveSession,
@@ -22,62 +22,63 @@ import {
   getState,
   setState,
 } from './db.js';
-import type { RegisteredGroup, ChannelMessage, ScheduledTask } from './types.js';
+import type { RegisteredScoop, ChannelMessage, ScheduledTask } from './types.js';
 
-describe('Groups Database', () => {
+describe('Scoops Database', () => {
   beforeAll(async () => {
     await initDB();
   });
 
-  describe('Groups', () => {
-    const testGroup: RegisteredGroup = {
+  describe('Scoops', () => {
+    const testScoop: RegisteredScoop = {
       jid: 'test-jid-123',
-      name: 'Test Group',
-      folder: 'test-group',
-      trigger: '@Andy',
+      name: 'Test Scoop',
+      folder: 'test-scoop',
+      trigger: '@test-scoop',
       requiresTrigger: true,
-      isMain: false,
+      isCone: false,
+      type: 'scoop',
+      assistantLabel: 'test-scoop',
       addedAt: new Date().toISOString(),
     };
 
-    it('saves and retrieves a group', async () => {
-      await saveGroup(testGroup);
-      const retrieved = await getGroup(testGroup.jid);
-      expect(retrieved).toEqual(testGroup);
+    it('saves and retrieves a scoop', async () => {
+      await saveScoop(testScoop);
+      const retrieved = await getScoop(testScoop.jid);
+      expect(retrieved).toEqual(testScoop);
     });
 
-    it('returns null for non-existent group', async () => {
-      const result = await getGroup('non-existent');
+    it('returns null for non-existent scoop', async () => {
+      const result = await getScoop('non-existent');
       expect(result).toBeNull();
     });
 
-    it('gets all groups', async () => {
+    it('gets all scoops', async () => {
       const uniqueId = Date.now().toString();
-      const group1 = { ...testGroup, jid: `jid-1-${uniqueId}`, name: 'Group 1' };
-      const group2 = { ...testGroup, jid: `jid-2-${uniqueId}`, name: 'Group 2' };
-      
-      await saveGroup(group1);
-      await saveGroup(group2);
-      
-      const all = await getAllGroups();
-      // Just verify the groups we added exist
-      expect(all[group1.jid].name).toBe('Group 1');
-      expect(all[group2.jid].name).toBe('Group 2');
+      const scoop1 = { ...testScoop, jid: `jid-1-${uniqueId}`, name: 'Scoop 1' };
+      const scoop2 = { ...testScoop, jid: `jid-2-${uniqueId}`, name: 'Scoop 2' };
+
+      await saveScoop(scoop1);
+      await saveScoop(scoop2);
+
+      const all = await getAllScoops();
+      expect(all[scoop1.jid].name).toBe('Scoop 1');
+      expect(all[scoop2.jid].name).toBe('Scoop 2');
     });
 
-    it('deletes a group', async () => {
-      await saveGroup(testGroup);
-      await deleteGroup(testGroup.jid);
-      const result = await getGroup(testGroup.jid);
+    it('deletes a scoop', async () => {
+      await saveScoop(testScoop);
+      await deleteScoop(testScoop.jid);
+      const result = await getScoop(testScoop.jid);
       expect(result).toBeNull();
     });
 
-    it('updates an existing group', async () => {
-      await saveGroup(testGroup);
-      const updated = { ...testGroup, name: 'Updated Name' };
-      await saveGroup(updated);
-      
-      const retrieved = await getGroup(testGroup.jid);
+    it('updates an existing scoop', async () => {
+      await saveScoop(testScoop);
+      const updated = { ...testScoop, name: 'Updated Name' };
+      await saveScoop(updated);
+
+      const retrieved = await getScoop(testScoop.jid);
       expect(retrieved?.name).toBe('Updated Name');
     });
   });
@@ -106,11 +107,11 @@ describe('Groups Database', () => {
       const msg1 = { ...testMessage, id: 'msg-1', timestamp: new Date(now.getTime() - 2000).toISOString() };
       const msg2 = { ...testMessage, id: 'msg-2', timestamp: new Date(now.getTime() - 1000).toISOString() };
       const msg3 = { ...testMessage, id: 'msg-3', timestamp: now.toISOString() };
-      
+
       await saveMessage(msg1);
       await saveMessage(msg2);
       await saveMessage(msg3);
-      
+
       const messages = await getMessagesSince(testMessage.chatJid, msg1.timestamp);
       expect(messages).toHaveLength(2);
     });
@@ -118,12 +119,12 @@ describe('Groups Database', () => {
     it('excludes sender from results', async () => {
       const uniqueJid = `chat-exclude-${Date.now()}`;
       const msg1 = { ...testMessage, id: `msg-exclude-1-${Date.now()}`, chatJid: uniqueJid, senderName: 'User' };
-      const msg2 = { ...testMessage, id: `msg-exclude-2-${Date.now()}`, chatJid: uniqueJid, senderName: 'Andy' };
-      
+      const msg2 = { ...testMessage, id: `msg-exclude-2-${Date.now()}`, chatJid: uniqueJid, senderName: 'sliccy' };
+
       await saveMessage(msg1);
       await saveMessage(msg2);
-      
-      const messages = await getMessagesSince(uniqueJid, '', 'Andy');
+
+      const messages = await getMessagesSince(uniqueJid, '', 'sliccy');
       expect(messages).toHaveLength(1);
       expect(messages[0].senderName).toBe('User');
     });
@@ -144,7 +145,7 @@ describe('Groups Database', () => {
     it('gets all sessions', async () => {
       await saveSession('folder-1', 'session-1');
       await saveSession('folder-2', 'session-2');
-      
+
       const all = await getAllSessions();
       expect(all['folder-1']).toBe('session-1');
       expect(all['folder-2']).toBe('session-2');
@@ -153,7 +154,7 @@ describe('Groups Database', () => {
     it('updates an existing session', async () => {
       await saveSession('folder', 'session-old');
       await saveSession('folder', 'session-new');
-      
+
       const sessionId = await getSession('folder');
       expect(sessionId).toBe('session-new');
     });
@@ -186,10 +187,10 @@ describe('Groups Database', () => {
     it('gets all tasks', async () => {
       const task1 = { ...testTask, id: 'task-1' };
       const task2 = { ...testTask, id: 'task-2' };
-      
+
       await saveTask(task1);
       await saveTask(task2);
-      
+
       const all = await getAllTasks();
       expect(all).toHaveLength(2);
     });
@@ -217,7 +218,7 @@ describe('Groups Database', () => {
     it('updates existing state', async () => {
       await setState('key', 'value1');
       await setState('key', 'value2');
-      
+
       const value = await getState('key');
       expect(value).toBe('value2');
     });

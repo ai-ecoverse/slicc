@@ -240,6 +240,7 @@ export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
 
     iframe = document.createElement('iframe');
     iframe.style.display = 'none';
+    iframe.dataset.jsTool = 'true'; // Tag so node command can find it
 
     const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
@@ -294,7 +295,7 @@ export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
             result = true;
             break;
           case 'readDir':
-            result = await fs.readDir(msg.args[0]);
+            result = (await fs.readDir(msg.args[0])).map(e => e.name);
             break;
           case 'exists':
             try {

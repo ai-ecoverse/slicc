@@ -1,39 +1,42 @@
 /**
- * Types for NanoClaw-style group management in SLICC.
- * 
- * Each "group" is an isolated conversation context with its own:
- * - Browser iframe (sandboxed execution)
- * - IndexedDB storage (filesystem, sessions)
- * - Agent instance (tools, memory)
+ * Types for cone/scoops multi-agent management in SLICC.
+ *
+ * The "cone" is the main orchestrator context. Each "scoop" is an
+ * isolated conversation context with its own agent instance, tools,
+ * and restricted filesystem access.
  */
 
-/** Registered group metadata */
-export interface RegisteredGroup {
+/** Registered scoop metadata */
+export interface RegisteredScoop {
   /** Unique identifier */
   jid: string;
   /** Human-readable name */
   name: string;
-  /** Storage folder name (sanitized) */
+  /** Storage folder name (sanitized, e.g. "andy-scoop") */
   folder: string;
-  /** Trigger pattern (e.g., "@Andy") */
+  /** Whether this is the cone (main context) */
+  isCone: boolean;
+  /** Type discriminator */
+  type: 'cone' | 'scoop';
+  /** Trigger pattern (e.g., "@andy-scoop") */
   trigger?: string;
   /** Whether trigger is required */
   requiresTrigger: boolean;
-  /** Whether this is the main/admin group */
-  isMain: boolean;
+  /** Assistant label for display (e.g., "sliccy" for cone, "andy-scoop" for scoops) */
+  assistantLabel: string;
   /** ISO timestamp when added */
   addedAt: string;
-  /** Group-specific config */
-  config?: GroupConfig;
+  /** Scoop-specific config */
+  config?: ScoopConfig;
 }
 
-/** Per-group configuration */
-export interface GroupConfig {
+/** Per-scoop configuration */
+export interface ScoopConfig {
   /** Custom system prompt addition */
   systemPromptAppend?: string;
   /** Agent timeout (ms) */
   timeout?: number;
-  /** Assistant name override for this group */
+  /** Assistant name override for this scoop */
   assistantName?: string;
 }
 
@@ -62,27 +65,27 @@ export interface ScheduledTask {
   createdAt: string;
 }
 
-/** Group tab/iframe state */
-export interface GroupTabState {
+/** Scoop tab state */
+export interface ScoopTabState {
   jid: string;
-  iframeId: string;
+  contextId: string;
   status: 'initializing' | 'ready' | 'processing' | 'error';
   lastActivity: string;
   error?: string;
 }
 
-/** IPC messages between orchestrator and group iframes */
-export type OrchestratorToGroupMessage =
-  | { type: 'init'; groupJid: string; group: RegisteredGroup }
+/** IPC messages between orchestrator and scoops */
+export type OrchestratorToScoopMessage =
+  | { type: 'init'; scoopJid: string; scoop: RegisteredScoop }
   | { type: 'prompt'; text: string; senderId: string; senderName: string }
   | { type: 'shutdown' };
 
-export type GroupToOrchestratorMessage =
-  | { type: 'ready'; groupJid: string }
+export type ScoopToOrchestratorMessage =
+  | { type: 'ready'; scoopJid: string }
   | { type: 'response'; text: string; isPartial: boolean }
   | { type: 'response_done' }
   | { type: 'error'; message: string }
-  | { type: 'status'; status: GroupTabState['status'] }
+  | { type: 'status'; status: ScoopTabState['status'] }
   | { type: 'send_message'; targetJid: string; text: string }
   | { type: 'task_create'; task: Omit<ScheduledTask, 'id' | 'createdAt'> };
 
@@ -93,6 +96,6 @@ export interface AssistantConfig {
 }
 
 export const DEFAULT_ASSISTANT_CONFIG: AssistantConfig = {
-  name: 'Andy',
-  triggerPattern: /^@Andy\b/i,
+  name: 'sliccy',
+  triggerPattern: /^@sliccy\b/i,
 };

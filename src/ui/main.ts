@@ -2,319 +2,46 @@
  * Main entry point for the Browser Coding Agent UI.
  *
  * Bootstraps the layout, checks for API key, initializes the
- * filesystem + shell + browser API, creates the agent with all
- * tools, and wires the pi-style AgentHandle to the Chat UI.
+ * orchestrator with cone + scoops, and wires events to the Chat UI.
+ * Always uses cone+orchestrator mode — no direct agent path.
  */
 
 import { Layout } from './layout.js';
-import {
-  getApiKey,
-  getSelectedProvider,
-  getBaseUrl,
-  showProviderSettings,
-  resolveCurrentModel,
-} from './provider-settings.js';
-import type { AgentHandle, AgentEvent as UIAgentEvent } from './types.js';
-import { Agent, adaptTools, createLogger, getModel } from '../core/index.js';
-import type { AgentEvent as CoreAgentEvent, AssistantMessage, AssistantMessageEvent, TextContent, Model } from '../core/index.js';
-import { createFileTools, createBashTool, createBrowserTool } from '../tools/index.js';
+import { getApiKey, showProviderSettings } from './provider-settings.js';
+import type { AgentHandle, AgentEvent as UIAgentEvent, ChatMessage, ToolCall } from './types.js';
+import { createLogger } from '../core/index.js';
 import { BrowserAPI, DebuggerClient } from '../cdp/index.js';
-import { Orchestrator } from '../groups/index.js';
-import type { RegisteredGroup, ChannelMessage } from '../groups/types.js';
+import { Orchestrator } from '../scoops/index.js';
+import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
 
 const log = createLogger('main');
-
-const DEFAULT_MODEL_ID = 'claude-sonnet-4-20250514';
-
-/** Resolve a model ID using the new provider settings. */
-function resolveModel(modelId?: string): Model<any> {
-  try {
-    // Use resolveCurrentModel which handles provider + baseUrl
-    if (!modelId) {
-      return resolveCurrentModel();
-    }
-    // If a specific modelId is requested, get it from the selected provider
-    const providerId = getSelectedProvider();
-    let model = getModel(providerId as any, modelId as any);
-    const baseUrl = getBaseUrl();
-    if (baseUrl) {
-      model = { ...model, baseUrl };
-    }
-    return model;
-  } catch (err) {
-    log.error('Failed to resolve model, falling back to default', {
-      modelId,
-      provider: getSelectedProvider(),
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return getModel('anthropic', DEFAULT_MODEL_ID as any);
-  }
-}
-
-/**
- * Adapt pi-style AgentEvent stream to UI AgentEvent stream.
- *
- * Pi's agent loop emits fine-grained events (message_start, message_update,
- * message_end, tool_execution_start/end, turn_start/end, agent_start/end).
- * The UI expects a simpler event stream (message_start, content_delta,
- * tool_use_start, tool_result, turn_end, error).
- */
-function createEventAdapter(
-  emit: (event: UIAgentEvent) => void,
-): (event: CoreAgentEvent) => void {
-  let currentMessageId = '';
-  // Use timestamp+random to avoid ID collisions with restored session messages
-  const sessionPrefix = Date.now().toString(36);
-  let messageCounter = 0;
-
-  return (event: CoreAgentEvent) => {
-    log.debug('Event adapter received', { type: event.type });
-    switch (event.type) {
-      case 'message_start': {
-        if (event.message.role === 'assistant') {
-          currentMessageId = `msg-${sessionPrefix}-${++messageCounter}`;
-          emit({ type: 'message_start', messageId: currentMessageId });
-        }
-        break;
-      }
-
-      case 'message_update': {
-        // Extract text deltas from the assistant message event
-        const ame = event.assistantMessageEvent as AssistantMessageEvent;
-        if (ame.type === 'text_delta') {
-          emit({
-            type: 'content_delta',
-            messageId: currentMessageId,
-            text: ame.delta,
-          });
-        }
-        break;
-      }
-
-      case 'message_end': {
-        if (event.message.role === 'assistant') {
-          emit({ type: 'content_done', messageId: currentMessageId });
-        }
-        break;
-      }
-
-      case 'tool_execution_start': {
-        emit({
-          type: 'tool_use_start',
-          messageId: currentMessageId,
-          toolName: event.toolName,
-          toolInput: event.args,
-        });
-        break;
-      }
-
-      case 'tool_execution_end': {
-        // Extract text content from tool result
-        const result = event.result as { content: (TextContent | { type: 'image'; data: string; mimeType: string })[] };
-        const textContent = result?.content
-          ?.filter((c: any) => c.type === 'text')
-          .map((c: any) => c.text)
-          .join('\n') ?? '';
-
-        emit({
-          type: 'tool_result',
-          messageId: currentMessageId,
-          toolName: event.toolName,
-          result: textContent,
-          isError: event.isError,
-        });
-
-        // Check for screenshot results
-        if (event.toolName === 'browser' && textContent.includes('Screenshot captured')) {
-          // Screenshots are in the text result
-        }
-        break;
-      }
-
-      case 'turn_end': {
-        emit({ type: 'turn_end', messageId: currentMessageId });
-        break;
-      }
-
-      case 'agent_end': {
-        // Check if the last message has an error
-        const messages = event.messages;
-        if (messages.length > 0) {
-          const last = messages[messages.length - 1];
-          if (last.role === 'assistant' && (last as AssistantMessage).errorMessage) {
-            const err = (last as AssistantMessage).errorMessage!;
-            log.error('Agent error', err);
-            emit({ type: 'error', error: err });
-          }
-        }
-        break;
-      }
-
-      // agent_start, turn_start — no UI equivalent
-      default:
-        break;
-    }
-  };
-}
 
 async function main(): Promise<void> {
   const app = document.getElementById('app');
   if (!app) throw new Error('#app element not found');
 
-  // Check for API key (first-run provider settings dialog)
+  // Check for API key (first-run dialog)
   let apiKey = getApiKey();
   if (!apiKey) {
     await showProviderSettings();
     apiKey = getApiKey();
-    if (!apiKey) {
-      throw new Error('API key required');
-    }
   }
 
   // Build the layout — tabbed in extension mode, split panels in standalone
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   const layout = new Layout(app, isExtension);
 
-  // Initialize session persistence
-  await layout.panels.chat.initSession();
+  // Initialize session persistence — use 'session-cone' from the start
+  // so it matches the contextId used in switchToContext()
+  await layout.panels.chat.initSession('session-cone');
   log.info('Session initialized');
 
-  // Initialize subsystems with error isolation — agent should work even if
-  // the virtual filesystem or shell fail to initialize.
-  let fs: import('../fs/index.js').VirtualFS | null = null;
-  let shell: import('../shell/index.js').WasmShell | null = null;
-
-  try {
-    const { VirtualFS } = await import('../fs/index.js');
-    fs = await VirtualFS.create();
-    log.info('VirtualFS ready');
-  } catch (e) {
-    log.error('VirtualFS init failed', e);
-  }
-
-  try {
-    const { WasmShell } = await import('../shell/index.js');
-    if (fs) {
-      shell = new WasmShell({ fs });
-      log.info('WasmShell ready');
-    } else {
-      log.warn('Skipping shell — no filesystem');
-    }
-  } catch (e) {
-    log.error('WasmShell init failed', e);
-  }
-
-  if (shell) {
-    try {
-      await layout.panels.terminal.mountShell(shell);
-      log.info('Terminal mounted');
-    } catch (e) {
-      log.warn('Failed to mount shell to terminal', e);
-    }
-  }
-
-  if (fs) {
-    layout.panels.fileBrowser.setFs(fs);
-    log.info('File browser wired to VFS');
-  }
-
-  // Initialize the BrowserAPI — use chrome.debugger in extension mode, WebSocket in CLI mode
+  // Initialize the BrowserAPI
   const browser = isExtension
     ? new BrowserAPI(new DebuggerClient())
     : new BrowserAPI();
 
-  // Create tools (only include tools for subsystems that initialized)
-  const legacyTools = [
-    ...(fs ? createFileTools(fs) : []),
-    ...(shell ? [createBashTool(shell)] : []),
-    createBrowserTool(browser, fs),
-  ];
-  const tools = adaptTools(legacyTools);
-  log.info('Tools ready', tools.map((t) => t.name));
-
-  // Create the pi-style agent
-  const model = resolveCurrentModel();
-
-  // Context compaction: truncate oversized tool results and drop old messages when near token limit.
-  // Rough estimate: 1 token ≈ 4 chars for English text.
-  const MAX_RESULT_CHARS = 8000; // ~2000 tokens per tool result max
-  const MAX_CONTEXT_CHARS = 600000; // ~150K tokens — leave headroom below the 200K limit
-
-  async function compactContext(messages: import('../core/index.js').AgentMessage[]): Promise<import('../core/index.js').AgentMessage[]> {
-    // Step 1: truncate oversized content in tool result messages
-    const truncated = messages.map((msg) => {
-      if (msg.role === 'toolResult' && Array.isArray((msg as any).content)) {
-        const content = (msg as any).content as Array<{ type: 'text'; text?: string }>;
-        const needsTruncation = content.some((c) => c.type === 'text' && c.text && c.text.length > MAX_RESULT_CHARS);
-        if (needsTruncation) {
-          return {
-            ...msg,
-            content: content.map((c) =>
-              c.type === 'text' && c.text && c.text.length > MAX_RESULT_CHARS
-                ? { ...c, text: c.text.slice(0, MAX_RESULT_CHARS) + '\n... (truncated)' }
-                : c,
-            ),
-          } as typeof msg;
-        }
-      }
-      return msg;
-    });
-
-    // Step 2: estimate total size and drop older messages if too large
-    const estimateSize = (msgs: typeof truncated): number => {
-      return msgs.reduce((sum, m) => sum + JSON.stringify(m).length, 0);
-    };
-
-    let result = truncated;
-    let totalChars = estimateSize(result);
-
-    // Keep dropping oldest non-system messages until under limit (preserve first 2 and last 10)
-    // Safety limit to prevent infinite loop if compaction can't reduce size enough
-    let compactionRounds = 0;
-    while (totalChars > MAX_CONTEXT_CHARS && result.length > 12 && compactionRounds < 50) {
-      compactionRounds++;
-      const compactedMsg = {
-        role: 'user' as const,
-        content: [{ type: 'text' as const, text: '[Earlier conversation messages were compacted to save context space]' }],
-      };
-      result = [result[0], result[1], compactedMsg as any, ...result.slice(result.length - 10)];
-      totalChars = estimateSize(result);
-    }
-    if (compactionRounds >= 50) {
-      log.warn('Context compaction hit iteration limit', { finalChars: totalChars, finalMessages: result.length });
-    }
-
-    if (totalChars !== estimateSize(messages)) {
-      log.info('Context compacted', {
-        originalMessages: messages.length,
-        compactedMessages: result.length,
-        originalChars: estimateSize(messages),
-        compactedChars: totalChars,
-      });
-    }
-
-    return result;
-  }
-
-  const agent = new Agent({
-    initialState: {
-      model,
-      tools,
-      systemPrompt: `You are a helpful coding assistant running in a browser-based development environment.
-You have access to a virtual filesystem, a shell, and browser automation tools.
-Use the tools available to help the user with their tasks.`,
-    },
-    getApiKey: () => apiKey,
-    transformContext: compactContext,
-  });
-  log.info('Agent created', { provider: getSelectedProvider(), model: model.id });
-
-  // Wire model picker changes to agent
-  layout.onModelChange = (modelId) => {
-    agent.setModel(resolveModel(modelId));
-  };
-
-  // Build the real AgentHandle that bridges agent core ↔ chat UI
+  // Event system for UI
   const eventListeners = new Set<(event: UIAgentEvent) => void>();
 
   const emitToUI = (event: UIAgentEvent): void => {
@@ -328,80 +55,86 @@ Use the tools available to help the user with their tasks.`,
     }
   };
 
-  // Wire the event adapter: pi agent events → UI events
-  const adapter = createEventAdapter(emitToUI);
-  agent.subscribe(adapter);
+  // Track currently selected scoop for routing
+  let selectedScoop: RegisteredScoop | null = null;
 
-  const agentHandle: AgentHandle = {
-    sendMessage(text: string): void {
-      // Fire-and-forget: the UI's sendMessage is void, but Agent's prompt is async.
-      // Errors are communicated via the event system.
-      agent.prompt(text).catch((err) => {
-        const message = err instanceof Error ? err.message : String(err);
-        emitToUI({ type: 'error', error: message });
-      });
-    },
+  // Track current message ID per scoop (unique per response)
+  const scoopCurrentMessageId = new Map<string, string>();
 
-    onEvent(callback: (event: UIAgentEvent) => void): () => void {
-      eventListeners.add(callback);
-      return () => eventListeners.delete(callback);
-    },
+  // ── Per-scoop message buffers ──────────────────────────────────────
+  // Captures ALL scoop events (tool calls, content, etc.) regardless of
+  // which scoop is currently selected. When switching views, we load from
+  // the buffer so nothing is lost.
+  const scoopMessageBuffers = new Map<string, ChatMessage[]>();
 
-    stop(): void {
-      agent.abort();
-    },
-  };
+  function uid(): string {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
 
-  layout.panels.chat.setAgent(agentHandle);
-  log.info('Agent wired to chat UI — ready');
+  /** Get or create buffer for a scoop. */
+  function getBuffer(jid: string): ChatMessage[] {
+    let buf = scoopMessageBuffers.get(jid);
+    if (!buf) { buf = []; scoopMessageBuffers.set(jid, buf); }
+    return buf;
+  }
 
-  // Track currently selected group for routing
-  let selectedGroup: RegisteredGroup | null = null;
-  
-  // Track current message ID per group (unique per response)
-  const groupCurrentMessageId = new Map<string, string>();
+  /** Get the current (last) assistant message in a buffer, or create one. */
+  function getOrCreateAssistantMsg(jid: string): ChatMessage {
+    const buf = getBuffer(jid);
+    let msgId = scoopCurrentMessageId.get(jid);
+    if (msgId) {
+      const existing = buf.find(m => m.id === msgId);
+      if (existing) return existing;
+    }
+    // Create new assistant message
+    msgId = `scoop-${jid}-${uid()}`;
+    scoopCurrentMessageId.set(jid, msgId);
+    const msg: ChatMessage = { id: msgId, role: 'assistant', content: '', timestamp: Date.now(), toolCalls: [], isStreaming: true };
+    buf.push(msg);
+    // Emit to UI if this is the selected scoop
+    if (selectedScoop?.jid === jid) {
+      emitToUI({ type: 'message_start', messageId: msgId });
+    }
+    return msg;
+  }
 
-  // Initialize the group orchestrator
+  // Initialize the orchestrator (always — no direct agent mode)
   const orchestrator = new Orchestrator(
     layout.getIframeContainer(),
     {
-      onResponse: (groupJid, text, isPartial) => {
-        log.debug('Group response', { groupJid, textLength: text.length, isPartial });
-        // Route to chat UI if this is the selected group
-        if (selectedGroup?.jid === groupJid) {
-          // Start a new message if we don't have one
-          let messageId = groupCurrentMessageId.get(groupJid);
-          if (!messageId) {
-            messageId = `group-${groupJid}-${Date.now()}`;
-            groupCurrentMessageId.set(groupJid, messageId);
-            emitToUI({ type: 'message_start', messageId });
-          }
-          
-          if (isPartial) {
-            emitToUI({ type: 'content_delta', messageId, text });
-          } else {
-            // Full response
-            emitToUI({ type: 'content_delta', messageId, text });
-            emitToUI({ type: 'content_done', messageId });
+      onResponse: (scoopJid, text, isPartial) => {
+        // Always buffer
+        const msg = getOrCreateAssistantMsg(scoopJid);
+        if (isPartial) {
+          msg.content += text;
+        } else {
+          msg.content = text;
+          msg.isStreaming = false;
+        }
+        // Emit to UI if selected
+        if (selectedScoop?.jid === scoopJid) {
+          emitToUI({ type: 'content_delta', messageId: msg.id, text });
+          if (!isPartial) {
+            emitToUI({ type: 'content_done', messageId: msg.id });
           }
         }
       },
-      onResponseDone: (groupJid) => {
-        log.debug('Group response done', { groupJid });
-        if (selectedGroup?.jid === groupJid) {
-          const messageId = groupCurrentMessageId.get(groupJid);
-          if (messageId) {
-            emitToUI({ type: 'content_done', messageId });
-            emitToUI({ type: 'turn_end', messageId });
-            // Clear for next message
-            groupCurrentMessageId.delete(groupJid);
+      onResponseDone: (scoopJid) => {
+        // Per-turn: finalize message, clear ID so next turn creates a new one
+        const buf = getBuffer(scoopJid);
+        const msgId = scoopCurrentMessageId.get(scoopJid);
+        if (msgId) {
+          const msg = buf.find(m => m.id === msgId);
+          if (msg) msg.isStreaming = false;
+          if (selectedScoop?.jid === scoopJid) {
+            emitToUI({ type: 'content_done', messageId: msgId });
           }
+          scoopCurrentMessageId.delete(scoopJid);
         }
       },
       onSendMessage: (targetJid, text) => {
         log.debug('Send message requested', { targetJid, textLength: text.length });
-        // Route to the target group
-        const msgId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const msgId = `msg-${uid()}`;
         const msg: ChannelMessage = {
           id: msgId,
           chatJid: targetJid,
@@ -413,105 +146,121 @@ Use the tools available to help the user with their tasks.`,
           channel: 'web',
         };
         orchestrator.handleMessage(msg);
-        // Also render this message into the chat UI for the currently selected group
-        if (selectedGroup?.jid === targetJid) {
+        // Buffer as a system-like message for the source scoop
+        const buf = getBuffer(targetJid);
+        buf.push({ id: msgId, role: 'assistant', content: text, timestamp: Date.now() });
+        if (selectedScoop?.jid === targetJid) {
           emitToUI({ type: 'message_start', messageId: msgId });
           emitToUI({ type: 'content_delta', messageId: msgId, text });
           emitToUI({ type: 'content_done', messageId: msgId });
         }
       },
-      onStatusChange: (groupJid, status) => {
-        layout.panels.groups.updateGroupStatus(groupJid, status);
+      onStatusChange: (scoopJid, status) => {
+        layout.panels.scoops.updateScoopStatus(scoopJid, status);
+        layout.updateScoopSwitcherStatus?.(scoopJid, status);
+
+        if (selectedScoop?.jid === scoopJid) {
+          if (status === 'processing') {
+            layout.panels.chat.setProcessing(true);
+          } else if (status === 'ready') {
+            layout.panels.chat.setProcessing(false);
+            const messageId = scoopCurrentMessageId.get(scoopJid) ?? `done-${scoopJid}-${uid()}`;
+            scoopCurrentMessageId.delete(scoopJid);
+            emitToUI({ type: 'turn_end', messageId });
+          }
+        }
       },
-      onError: (groupJid, error) => {
-        log.error('Group error', { groupJid, error });
-        if (selectedGroup?.jid === groupJid) {
+      onError: (scoopJid, error) => {
+        log.error('Scoop error', { scoopJid, error });
+        if (selectedScoop?.jid === scoopJid) {
           emitToUI({ type: 'error', error });
         }
       },
       getBrowserAPI: () => browser,
-      onToolStart: (groupJid, toolName, toolInput) => {
-        if (selectedGroup?.jid === groupJid) {
-          const messageId = groupCurrentMessageId.get(groupJid);
-          if (messageId) {
-            emitToUI({ type: 'tool_use_start', messageId, toolName, toolInput });
-          }
+      onToolStart: (scoopJid, toolName, toolInput) => {
+        // Hide infrastructure tools from the chat (their output is shown elsewhere)
+        const hiddenTools = new Set(['send_message', 'list_scoops', 'list_tasks']);
+        if (hiddenTools.has(toolName)) return;
+
+        // Always buffer tool calls
+        const msg = getOrCreateAssistantMsg(scoopJid);
+        if (!msg.toolCalls) msg.toolCalls = [];
+        msg.toolCalls.push({ id: uid(), name: toolName, input: toolInput });
+        // Emit to UI if selected
+        if (selectedScoop?.jid === scoopJid) {
+          emitToUI({ type: 'tool_use_start', messageId: msg.id, toolName, toolInput });
         }
       },
-      onToolEnd: (groupJid, toolName, result, isError) => {
-        if (selectedGroup?.jid === groupJid) {
-          const messageId = groupCurrentMessageId.get(groupJid);
-          if (messageId) {
-            emitToUI({ type: 'tool_result', messageId, toolName, result, isError });
+      onToolEnd: (scoopJid, toolName, result, isError) => {
+        const hiddenTools = new Set(['send_message', 'list_scoops', 'list_tasks']);
+        if (hiddenTools.has(toolName)) return;
+
+        // Always buffer tool results
+        const buf = getBuffer(scoopJid);
+        const msgId = scoopCurrentMessageId.get(scoopJid);
+        if (msgId) {
+          const msg = buf.find(m => m.id === msgId);
+          if (msg?.toolCalls) {
+            const tc = [...msg.toolCalls].reverse().find(t => t.name === toolName && t.result === undefined);
+            if (tc) { tc.result = result; tc.isError = isError; }
           }
+        }
+        // Emit to UI if selected
+        if (selectedScoop?.jid === scoopJid && msgId) {
+          emitToUI({ type: 'tool_result', messageId: msgId, toolName, result, isError });
         }
       },
     },
   );
 
   await orchestrator.init();
-  layout.panels.groups.setOrchestrator(orchestrator);
+  layout.panels.scoops.setOrchestrator(orchestrator);
   layout.panels.memory.setOrchestrator(orchestrator);
+  layout.setScoopSwitcherOrchestrator?.(orchestrator);
 
-  // Create main group if it doesn't exist
-  const groups = orchestrator.getGroups();
-  const hasMain = groups.some((g) => g.isMain);
-  if (!hasMain) {
-    const mainGroup = await layout.panels.groups.createGroup('Main', true);
-    selectedGroup = mainGroup;
-    log.info('Created main group');
-  } else {
-    // Select the main group by default
-    selectedGroup = groups.find((g) => g.isMain) ?? groups[0];
-  }
+  // Wire shared FS to file browser and terminal
+  const sharedFs = orchestrator.getSharedFS();
+  if (sharedFs) {
+    layout.panels.fileBrowser.setFs(sharedFs);
+    log.info('File browser wired to shared VFS');
 
-  // Set initial group for memory panel
-  if (selectedGroup) {
-    layout.panels.memory.setSelectedGroup(selectedGroup.jid);
-  }
-
-  // Wire group selection to chat and memory panel
-  layout.onGroupSelect = async (group) => {
-    log.info('Group selected', { jid: group.jid, name: group.name });
-    selectedGroup = group;
-    // Create the group's iframe if not already running
-    orchestrator.createGroupTab(group.jid);
-    // Update memory panel
-    layout.panels.memory.setSelectedGroup(group.jid);
-    // Load and display message history for this group
-    await loadGroupChatHistory(group.jid);
-  };
-
-  // Load chat history for a group
-  async function loadGroupChatHistory(jid: string): Promise<void> {
-    const messages = await orchestrator.getMessagesForGroup(jid);
-    // Clear current chat and load history
-    layout.panels.chat.clear();
-    for (const msg of messages) {
-      const messageId = msg.id;
-      if (msg.fromAssistant) {
-        emitToUI({ type: 'message_start', messageId });
-        emitToUI({ type: 'content_delta', messageId, text: msg.content });
-        emitToUI({ type: 'content_done', messageId });
-      } else {
-        // User message - add directly to chat panel
-        layout.panels.chat.addUserMessage(msg.content);
-      }
+    try {
+      const { WasmShell } = await import('../shell/index.js');
+      const shell = new WasmShell({ fs: sharedFs });
+      await layout.panels.terminal.mountShell(shell);
+      log.info('Terminal mounted with shared VFS');
+    } catch (e) {
+      log.warn('Failed to mount shell to terminal', e);
     }
   }
 
-  // Create a group-aware agent handle that routes to orchestrator
-  const groupAgentHandle: AgentHandle = {
+  // Create cone if it doesn't exist
+  const scoops = orchestrator.getScoops();
+  const hasCone = scoops.some((s) => s.isCone);
+  if (!hasCone) {
+    const cone = await layout.panels.scoops.createScoop('Cone', true);
+    selectedScoop = cone;
+    log.info('Created cone');
+  } else {
+    selectedScoop = scoops.find((s) => s.isCone) ?? scoops[0];
+  }
+
+  // Set initial scoop for memory panel
+  if (selectedScoop) {
+    layout.panels.memory.setSelectedScoop(selectedScoop.jid);
+  }
+
+  // Build the cone agent handle — all user input routes through orchestrator
+  const coneAgentHandle: AgentHandle = {
     sendMessage(text: string): void {
-      if (!selectedGroup) {
-        emitToUI({ type: 'error', error: 'No group selected' });
+      if (!selectedScoop) {
+        emitToUI({ type: 'error', error: 'No scoop selected' });
         return;
       }
-      
-      // Create a message and route through orchestrator
+
       const msg: ChannelMessage = {
         id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        chatJid: selectedGroup.jid,
+        chatJid: selectedScoop.jid,
         senderId: 'user',
         senderName: 'User',
         content: text,
@@ -519,12 +268,14 @@ Use the tools available to help the user with their tasks.`,
         fromAssistant: false,
         channel: 'web',
       };
-      
-      // Store and route the message
+
+      // Buffer the user message for this scoop
+      getBuffer(selectedScoop.jid).push({
+        id: msg.id, role: 'user', content: text, timestamp: Date.now(),
+      });
+
       orchestrator.handleMessage(msg);
-      
-      // Also create the group tab if needed
-      orchestrator.createGroupTab(selectedGroup.jid);
+      orchestrator.createScoopTab(selectedScoop.jid);
     },
 
     onEvent(callback: (event: UIAgentEvent) => void): () => void {
@@ -533,103 +284,97 @@ Use the tools available to help the user with their tasks.`,
     },
 
     stop(): void {
-      // Stop the current group's processing via the orchestrator
-      if (selectedGroup) {
-        orchestrator.getGroupContext(selectedGroup.jid)?.stop();
+      if (selectedScoop) {
+        orchestrator.stopScoop(selectedScoop.jid);
       }
     },
   };
 
-  // Use the group-aware agent handle instead of the direct agent handle
-  layout.panels.chat.setAgent(groupAgentHandle);
+  layout.panels.chat.setAgent(coneAgentHandle);
+  log.info('Cone agent handle wired to chat UI');
 
-  // Initialize the selected group's tab
-  if (selectedGroup) {
-    orchestrator.createGroupTab(selectedGroup.jid);
-  }
+  // Wire model picker changes
+  layout.onModelChange = (modelId) => {
+    // Model changes are picked up by scoop-context on next init
+    localStorage.setItem('selected-model', modelId);
+  };
 
-  // Note: Task scheduler is now managed by the orchestrator
-  log.info('Orchestrator initialized with integrated scheduler', { groupCount: orchestrator.getGroups().length });
+  // Wire clear chat to also clear orchestrator messages + buffers
+  layout.onClearChat = async () => {
+    await orchestrator.clearAllMessages();
+    scoopMessageBuffers.clear();
+  };
 
-  // ---------------------------------------------------------------------------
-  // Webhook event listener — connects to CLI server's /webhooks-ws endpoint
-  // Injects webhook events into the agent conversation as tool results
-  // ---------------------------------------------------------------------------
-  if (!isExtension) {
-    // Only in CLI mode (webhooks require the CLI server)
-    const wsUrl = `ws://${window.location.host}/webhooks-ws`;
-    let webhookWs: WebSocket | null = null;
-    let reconnectTimer: number | null = null;
+  // Wire scoop selection
+  const handleScoopSelect = async (scoop: RegisteredScoop) => {
+    log.info('Scoop selected', { jid: scoop.jid, name: scoop.name });
+    selectedScoop = scoop;
+    orchestrator.createScoopTab(scoop.jid);
 
-    function connectWebhookWs(): void {
-      if (webhookWs?.readyState === WebSocket.OPEN) return;
+    // Update memory panel
+    layout.panels.memory.setSelectedScoop(scoop.jid);
 
-      webhookWs = new WebSocket(wsUrl);
+    // Switch chat context. Load from per-scoop message buffer (has full tool call detail)
+    // falling back to SessionStore, then orchestrator DB.
+    const contextId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
+    const buffer = scoopMessageBuffers.get(scoop.jid);
 
-      webhookWs.onopen = () => {
-        log.info('Webhook WebSocket connected');
-        if (reconnectTimer) {
-          clearTimeout(reconnectTimer);
-          reconnectTimer = null;
-        }
-      };
+    if (buffer && buffer.length > 0) {
+      // Load from in-memory buffer (has tool calls captured during this session)
+      await layout.panels.chat.switchToContext(contextId, !scoop.isCone);
+      layout.panels.chat.loadMessages(buffer);
+    } else {
+      // No buffer — load from SessionStore (persisted from previous sessions)
+      await layout.panels.chat.switchToContext(contextId, !scoop.isCone);
 
-      webhookWs.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === 'webhook') {
-            log.info('Webhook event received', { webhookName: data.webhookName, webhookId: data.webhookId });
-
-            // Format the webhook payload for the agent
-            const webhookContent = `Webhook "${data.webhookName}" received at ${data.timestamp}:\n\`\`\`json\n${JSON.stringify(data.body, null, 2)}\n\`\`\``;
-
-            // Inject as a user message to the main agent
-            // This allows the agent to process the webhook data
-            if (selectedGroup?.isMain) {
-              const msg: ChannelMessage = {
-                id: `webhook-${data.webhookId}-${Date.now()}`,
-                chatJid: selectedGroup.jid,
-                senderId: 'webhook',
-                senderName: `webhook:${data.webhookName}`,
-                content: webhookContent,
-                timestamp: data.timestamp,
-                fromAssistant: false,
-                channel: 'webhook',
-              };
-              orchestrator.handleMessage(msg);
-              log.debug('Webhook message injected into orchestrator');
-            }
+      // If still empty, fall back to orchestrator DB (simple text, no tool calls)
+      if (layout.panels.chat.getMessages().length === 0) {
+        const messages = await orchestrator.getMessagesForScoop(scoop.jid);
+        for (const msg of messages) {
+          if (msg.fromAssistant) {
+            emitToUI({ type: 'message_start', messageId: msg.id });
+            emitToUI({ type: 'content_delta', messageId: msg.id, text: msg.content });
+            emitToUI({ type: 'content_done', messageId: msg.id });
+          } else {
+            layout.panels.chat.addUserMessage(msg.content);
           }
-        } catch (err) {
-          log.warn('Failed to parse webhook event', { error: err instanceof Error ? err.message : String(err) });
         }
-      };
-
-      webhookWs.onclose = () => {
-        log.debug('Webhook WebSocket closed, reconnecting in 3s...');
-        webhookWs = null;
-        reconnectTimer = window.setTimeout(connectWebhookWs, 3000);
-      };
-
-      webhookWs.onerror = (err) => {
-        log.warn('Webhook WebSocket error', { error: String(err) });
-      };
+      }
     }
 
-    // Start the webhook connection
-    connectWebhookWs();
+    // If switching back to cone and it's currently processing (e.g., handling
+    // a scoop notification), re-lock the input. switchToContext resets streaming
+    // state, but we need to reflect the cone's actual status.
+    if (scoop.isCone && orchestrator.isProcessing(scoop.jid)) {
+      layout.panels.chat.setProcessing(true);
+    }
+  };
+
+  layout.onScoopSelect = handleScoopSelect;
+
+  // Initialize the selected scoop's tab
+  if (selectedScoop) {
+    orchestrator.createScoopTab(selectedScoop.jid);
   }
+
+  log.info('Orchestrator initialized — cone+scoops ready', { scoopCount: orchestrator.getScoops().length });
 }
 
 main().catch((err) => {
   log.error('Fatal error', err);
   const app = document.getElementById('app');
   if (app) {
-    app.innerHTML = `
-      <div style="padding: 2rem; text-align: center;">
-        <h1 style="color: #e94560;">Failed to start</h1>
-        <p style="color: #a0a0b0;">${err.message}</p>
-      </div>
-    `;
+    const errorDiv = document.createElement('div');
+    errorDiv.style.cssText = 'padding: 2rem; text-align: center;';
+    const h1 = document.createElement('h1');
+    h1.style.color = '#e94560';
+    h1.textContent = 'Failed to start';
+    const p = document.createElement('p');
+    p.style.color = '#a0a0b0';
+    p.textContent = err.message;
+    errorDiv.appendChild(h1);
+    errorDiv.appendChild(p);
+    while (app.firstChild) app.removeChild(app.firstChild);
+    app.appendChild(errorDiv);
   }
 });

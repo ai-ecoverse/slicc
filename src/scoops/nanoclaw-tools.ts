@@ -1,35 +1,37 @@
 /**
  * NanoClaw Tools - MCP-style tools for messaging and scheduling.
- * 
+ *
  * These provide the same functionality as NanoClaw's IPC-based MCP server,
  * but implemented as direct agent tools.
  */
 
 import type { ToolDefinition } from '../core/types.js';
-import type { ScheduledTask, RegisteredGroup } from './types.js';
+import type { ScheduledTask, RegisteredScoop } from './types.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('nanoclaw-tools');
 
 export interface NanoClawToolsConfig {
-  group: RegisteredGroup;
+  scoop: RegisteredScoop;
   onSendMessage: (text: string, sender?: string) => void;
+  /** Delegate a prompt to a specific scoop (cone only). */
+  onDelegateToScoop?: (scoopJid: string, prompt: string) => Promise<void>;
   onScheduleTask: (task: Omit<ScheduledTask, 'id' | 'nextRun' | 'lastRun' | 'createdAt'>) => Promise<ScheduledTask>;
   onListTasks: () => Promise<ScheduledTask[]>;
   onPauseTask: (taskId: string) => Promise<boolean>;
   onResumeTask: (taskId: string) => Promise<boolean>;
   onCancelTask: (taskId: string) => Promise<boolean>;
-  getGroups: () => RegisteredGroup[];
-  onRegisterGroup?: (group: Omit<RegisteredGroup, 'jid'>) => Promise<RegisteredGroup>;
+  getScoops: () => RegisteredScoop[];
+  onRegisterScoop?: (scoop: Omit<RegisteredScoop, 'jid'>) => Promise<RegisteredScoop>;
   onSetGlobalMemory?: (content: string) => Promise<void>;
   getGlobalMemory?: () => Promise<string>;
 }
 
 /**
- * Create NanoClaw-style tools for a group context
+ * Create NanoClaw-style tools for a scoop context
  */
 export function createNanoClawTools(config: NanoClawToolsConfig): ToolDefinition[] {
-  const { group, onSendMessage, onScheduleTask, onListTasks, onPauseTask, onResumeTask, onCancelTask, getGroups, onRegisterGroup, onSetGlobalMemory, getGlobalMemory } = config;
+  const { scoop, onSendMessage, onDelegateToScoop, onScheduleTask, onListTasks, onPauseTask, onResumeTask, onCancelTask, getScoops, onRegisterScoop, onSetGlobalMemory, getGlobalMemory } = config;
 
   const tools: ToolDefinition[] = [];
 
@@ -54,7 +56,7 @@ export function createNanoClawTools(config: NanoClawToolsConfig): ToolDefinition
     execute: async (input) => {
       const { text, sender } = input as { text: string; sender?: string };
       onSendMessage(text, sender);
-      log.info('Message sent', { groupFolder: group.folder, textLength: text.length });
+      log.info('Message sent', { scoopFolder: scoop.folder, textLength: text.length });
       return { content: 'Message sent.' };
     },
   });
@@ -96,7 +98,7 @@ SCHEDULE FORMAT:
 
       try {
         const task = await onScheduleTask({
-          groupFolder: group.folder,
+          groupFolder: scoop.folder,
           prompt,
           scheduleType: schedule_type,
           scheduleValue: schedule_value,
@@ -118,20 +120,20 @@ Next run: ${task.nextRun || 'calculating...'}`,
   // list_tasks tool
   tools.push({
     name: 'list_tasks',
-    description: 'List all scheduled tasks for this group.',
+    description: 'List all scheduled tasks for this scoop.',
     inputSchema: {
       type: 'object',
       properties: {},
     },
     execute: async () => {
       const tasks = await onListTasks();
-      const groupTasks = tasks.filter(t => t.groupFolder === group.folder);
+      const scoopTasks = tasks.filter(t => t.groupFolder === scoop.folder);
 
-      if (groupTasks.length === 0) {
+      if (scoopTasks.length === 0) {
         return { content: 'No scheduled tasks found.' };
       }
 
-      const formatted = groupTasks
+      const formatted = scoopTasks
         .map(t => `- [${t.id}] ${t.prompt.slice(0, 50)}${t.prompt.length > 50 ? '...' : ''} (${t.scheduleType}: ${t.scheduleValue}) - ${t.status}, next: ${t.nextRun || 'N/A'}`)
         .join('\n');
 
@@ -156,7 +158,7 @@ Next run: ${task.nextRun || 'calculating...'}`,
     execute: async (input) => {
       const { task_id } = input as { task_id: string };
       const success = await onPauseTask(task_id);
-      
+
       if (success) {
         log.info('Task paused', { taskId: task_id });
         return { content: `Task ${task_id} paused.` };
@@ -182,7 +184,7 @@ Next run: ${task.nextRun || 'calculating...'}`,
     execute: async (input) => {
       const { task_id } = input as { task_id: string };
       const success = await onResumeTask(task_id);
-      
+
       if (success) {
         log.info('Task resumed', { taskId: task_id });
         return { content: `Task ${task_id} resumed.` };
@@ -208,7 +210,7 @@ Next run: ${task.nextRun || 'calculating...'}`,
     execute: async (input) => {
       const { task_id } = input as { task_id: string };
       const success = await onCancelTask(task_id);
-      
+
       if (success) {
         log.info('Task cancelled', { taskId: task_id });
         return { content: `Task ${task_id} cancelled.` };
@@ -217,81 +219,120 @@ Next run: ${task.nextRun || 'calculating...'}`,
     },
   });
 
-  // Main group only: list_groups
-  if (group.isMain) {
+  // Cone only: delegate_to_scoop
+  if (scoop.isCone && onDelegateToScoop) {
     tools.push({
-      name: 'list_groups',
-      description: 'List all registered groups. Main group only.',
+      name: 'delegate_to_scoop',
+      description: `Delegate a task to a scoop. You MUST provide a complete, self-contained prompt — the scoop has NO access to your conversation history. Include all necessary context, instructions, file paths, URLs, and expected output format. The scoop will work independently and you'll be notified when it finishes.`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          scoop_name: {
+            type: 'string',
+            description: 'The scoop folder name (e.g., "test-scoop"). Use list_scoops to see available scoops.',
+          },
+          prompt: {
+            type: 'string',
+            description: 'Complete, self-contained instructions for the scoop. Include ALL context — the scoop cannot see your conversation.',
+          },
+        },
+        required: ['scoop_name', 'prompt'],
+      },
+      execute: async (input) => {
+        const { scoop_name, prompt } = input as { scoop_name: string; prompt: string };
+        const target = getScoops().find(s => s.folder === scoop_name || s.name === scoop_name);
+        if (!target) {
+          const available = getScoops().filter(s => !s.isCone).map(s => s.folder).join(', ');
+          return { content: `Scoop "${scoop_name}" not found. Available: ${available}`, isError: true };
+        }
+        if (target.isCone) {
+          return { content: 'Cannot delegate to the cone (yourself).', isError: true };
+        }
+        try {
+          await onDelegateToScoop(target.jid, prompt);
+          log.info('Delegated to scoop', { target: target.folder, promptLength: prompt.length });
+          return { content: `Task delegated to ${target.folder}. You will be notified when it completes.` };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return { content: `Failed to delegate: ${msg}`, isError: true };
+        }
+      },
+    });
+  }
+
+  // Cone only: list_scoops
+  if (scoop.isCone) {
+    tools.push({
+      name: 'list_scoops',
+      description: 'List all registered scoops. Cone only.',
       inputSchema: {
         type: 'object',
         properties: {},
       },
       execute: async () => {
-        const groups = getGroups();
-        
-        if (groups.length === 0) {
-          return { content: 'No groups registered.' };
+        const scoops = getScoops();
+
+        if (scoops.length === 0) {
+          return { content: 'No scoops registered.' };
         }
 
-        const formatted = groups
-          .map(g => `- ${g.name} (${g.folder})${g.isMain ? ' [MAIN]' : ''} - ${g.trigger || '@Andy'}`)
+        const formatted = scoops
+          .map(s => {
+            if (s.isCone) return `- ${s.assistantLabel} (${s.folder}) [CONE]`;
+            return `- ${s.name} (${s.folder}) - ${s.trigger || `@${s.assistantLabel}`}`;
+          })
           .join('\n');
 
-        return { content: `Registered groups:\n${formatted}` };
+        return { content: `Registered scoops:\n${formatted}` };
       },
     });
 
-    // Main group only: register_group
-    if (onRegisterGroup) {
+    // Cone only: register_scoop
+    if (onRegisterScoop) {
       tools.push({
-        name: 'register_group',
-        description: 'Register a new group. Main group only.',
+        name: 'register_scoop',
+        description: 'Register a new scoop. Cone only.',
         inputSchema: {
           type: 'object',
           properties: {
             name: {
               type: 'string',
-              description: 'Display name for the group',
-            },
-            folder: {
-              type: 'string',
-              description: 'Folder name for the group (e.g., "web_my-group")',
-            },
-            trigger: {
-              type: 'string',
-              description: 'Trigger word (e.g., "@Andy")',
+              description: 'Display name for the scoop (e.g., "Andy")',
             },
           },
-          required: ['name', 'folder'],
+          required: ['name'],
         },
         execute: async (input) => {
-          const { name, folder, trigger } = input as { name: string; folder: string; trigger?: string };
-          
+          const { name } = input as { name: string };
+          const folder = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50) + '-scoop';
+
           try {
-            const newGroup = await onRegisterGroup({
+            const newScoop = await onRegisterScoop({
               name,
               folder,
-              trigger: trigger || '@Andy',
-              isMain: false,
+              trigger: `@${folder}`,
+              isCone: false,
+              type: 'scoop',
               requiresTrigger: true,
+              assistantLabel: folder,
               addedAt: new Date().toISOString(),
             });
 
-            log.info('Group registered', { name, folder });
-            return { content: `Group "${name}" registered with folder "${folder}".` };
+            log.info('Scoop registered', { name, folder });
+            return { content: `Scoop "${name}" registered as "${folder}".` };
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
-            return { content: `Failed to register group: ${msg}`, isError: true };
+            return { content: `Failed to register scoop: ${msg}`, isError: true };
           }
         },
       });
     }
 
-    // Main group only: update_global_memory
+    // Cone only: update_global_memory
     if (onSetGlobalMemory && getGlobalMemory) {
       tools.push({
         name: 'update_global_memory',
-        description: 'Update the global CLAUDE.md memory file that is shared across all groups. Main group only. Use this instead of write_file for /workspace/global/CLAUDE.md.',
+        description: 'Update the global CLAUDE.md memory file that is shared across all scoops. Cone only. Use this instead of write_file for /shared/CLAUDE.md.',
         inputSchema: {
           type: 'object',
           properties: {

@@ -1,15 +1,15 @@
 /**
- * IndexedDB storage for groups, messages, sessions, and tasks.
- * Replaces NanoClaw's SQLite with browser-native storage.
+ * IndexedDB storage for scoops, messages, sessions, and tasks.
+ * Schema v2: renamed from groups to scoops with type/isCone/assistantLabel fields.
  */
 
-import type { RegisteredGroup, ChannelMessage, ScheduledTask } from './types.js';
+import type { RegisteredScoop, ChannelMessage, ScheduledTask } from './types.js';
 
 const DB_NAME = 'slicc-groups';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 const STORES = {
-  GROUPS: 'groups',
+  SCOOPS: 'scoops',
   MESSAGES: 'messages',
   SESSIONS: 'sessions',
   TASKS: 'tasks',
@@ -26,29 +26,77 @@ async function openDB(): Promise<IDBDatabase> {
 
     request.onupgradeneeded = (event) => {
       const database = (event.target as IDBOpenDBRequest).result;
+      const oldVersion = event.oldVersion;
 
-      if (!database.objectStoreNames.contains(STORES.GROUPS)) {
-        database.createObjectStore(STORES.GROUPS, { keyPath: 'jid' });
+      if (oldVersion < 1) {
+        // Fresh install — create all stores
+        if (!database.objectStoreNames.contains(STORES.MESSAGES)) {
+          const store = database.createObjectStore(STORES.MESSAGES, { keyPath: 'id' });
+          store.createIndex('chatJid', 'chatJid');
+          store.createIndex('timestamp', 'timestamp');
+          store.createIndex('chatJid_timestamp', ['chatJid', 'timestamp']);
+        }
+
+        if (!database.objectStoreNames.contains(STORES.SESSIONS)) {
+          database.createObjectStore(STORES.SESSIONS, { keyPath: 'groupFolder' });
+        }
+
+        if (!database.objectStoreNames.contains(STORES.TASKS)) {
+          const store = database.createObjectStore(STORES.TASKS, { keyPath: 'id' });
+          store.createIndex('groupFolder', 'groupFolder');
+        }
+
+        if (!database.objectStoreNames.contains(STORES.STATE)) {
+          database.createObjectStore(STORES.STATE, { keyPath: 'key' });
+        }
       }
 
-      if (!database.objectStoreNames.contains(STORES.MESSAGES)) {
-        const store = database.createObjectStore(STORES.MESSAGES, { keyPath: 'id' });
-        store.createIndex('chatJid', 'chatJid');
-        store.createIndex('timestamp', 'timestamp');
-        store.createIndex('chatJid_timestamp', ['chatJid', 'timestamp']);
-      }
+      if (oldVersion < 2) {
+        // Migration: groups → scoops
+        const tx = (event.target as IDBOpenDBRequest).transaction!;
 
-      if (!database.objectStoreNames.contains(STORES.SESSIONS)) {
-        database.createObjectStore(STORES.SESSIONS, { keyPath: 'groupFolder' });
-      }
+        // If old 'groups' store exists, migrate data
+        if (database.objectStoreNames.contains('groups')) {
+          // Read all groups from old store
+          const oldStore = tx.objectStore('groups');
+          const getAllReq = oldStore.getAll();
+          getAllReq.onsuccess = () => {
+            const oldGroups = getAllReq.result;
 
-      if (!database.objectStoreNames.contains(STORES.TASKS)) {
-        const store = database.createObjectStore(STORES.TASKS, { keyPath: 'id' });
-        store.createIndex('groupFolder', 'groupFolder');
-      }
+            // Delete old store
+            database.deleteObjectStore('groups');
 
-      if (!database.objectStoreNames.contains(STORES.STATE)) {
-        database.createObjectStore(STORES.STATE, { keyPath: 'key' });
+            // Create new scoops store
+            const scoopsStore = database.createObjectStore(STORES.SCOOPS, { keyPath: 'jid' });
+            scoopsStore.createIndex('type', 'type');
+
+            // Migrate records
+            for (const g of oldGroups) {
+              const isCone = g.isMain ?? false;
+              const scoop: RegisteredScoop = {
+                jid: g.jid,
+                name: g.name,
+                folder: g.folder,
+                trigger: isCone ? undefined : (g.trigger || `@${g.folder}`),
+                requiresTrigger: !isCone && (g.requiresTrigger ?? true),
+                isCone,
+                type: isCone ? 'cone' : 'scoop',
+                assistantLabel: isCone ? 'sliccy' : (g.config?.assistantName || g.folder),
+                addedAt: g.addedAt,
+                config: g.config ? {
+                  systemPromptAppend: g.config.systemPromptAppend,
+                  timeout: g.config.timeout,
+                  assistantName: g.config.assistantName,
+                } : undefined,
+              };
+              scoopsStore.put(scoop);
+            }
+          };
+        } else if (!database.objectStoreNames.contains(STORES.SCOOPS)) {
+          // No old store, just create the new one
+          const scoopsStore = database.createObjectStore(STORES.SCOOPS, { keyPath: 'jid' });
+          scoopsStore.createIndex('type', 'type');
+        }
       }
     };
 
@@ -65,19 +113,19 @@ async function getStore(name: string, mode: IDBTransactionMode = 'readonly'): Pr
   return database.transaction(name, mode).objectStore(name);
 }
 
-// ─── Groups ─────────────────────────────────────────────────────────────────
+// ─── Scoops ─────────────────────────────────────────────────────────────────
 
-export async function saveGroup(group: RegisteredGroup): Promise<void> {
-  const store = await getStore(STORES.GROUPS, 'readwrite');
+export async function saveScoop(scoop: RegisteredScoop): Promise<void> {
+  const store = await getStore(STORES.SCOOPS, 'readwrite');
   return new Promise((resolve, reject) => {
-    const req = store.put(group);
+    const req = store.put(scoop);
     req.onsuccess = () => resolve();
     req.onerror = () => reject(req.error);
   });
 }
 
-export async function getGroup(jid: string): Promise<RegisteredGroup | null> {
-  const store = await getStore(STORES.GROUPS);
+export async function getScoop(jid: string): Promise<RegisteredScoop | null> {
+  const store = await getStore(STORES.SCOOPS);
   return new Promise((resolve, reject) => {
     const req = store.get(jid);
     req.onsuccess = () => resolve(req.result ?? null);
@@ -85,21 +133,21 @@ export async function getGroup(jid: string): Promise<RegisteredGroup | null> {
   });
 }
 
-export async function getAllGroups(): Promise<Record<string, RegisteredGroup>> {
-  const store = await getStore(STORES.GROUPS);
+export async function getAllScoops(): Promise<Record<string, RegisteredScoop>> {
+  const store = await getStore(STORES.SCOOPS);
   return new Promise((resolve, reject) => {
     const req = store.getAll();
     req.onsuccess = () => {
-      const groups: Record<string, RegisteredGroup> = {};
-      for (const g of req.result) groups[g.jid] = g;
-      resolve(groups);
+      const scoops: Record<string, RegisteredScoop> = {};
+      for (const s of req.result) scoops[s.jid] = s;
+      resolve(scoops);
     };
     req.onerror = () => reject(req.error);
   });
 }
 
-export async function deleteGroup(jid: string): Promise<void> {
-  const store = await getStore(STORES.GROUPS, 'readwrite');
+export async function deleteScoop(jid: string): Promise<void> {
+  const store = await getStore(STORES.SCOOPS, 'readwrite');
   return new Promise((resolve, reject) => {
     const req = store.delete(jid);
     req.onsuccess = () => resolve();
@@ -108,6 +156,15 @@ export async function deleteGroup(jid: string): Promise<void> {
 }
 
 // ─── Messages ───────────────────────────────────────────────────────────────
+
+export async function clearAllMessages(): Promise<void> {
+  const store = await getStore(STORES.MESSAGES, 'readwrite');
+  return new Promise((resolve, reject) => {
+    const req = store.clear();
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
 
 export async function saveMessage(msg: ChannelMessage): Promise<void> {
   const store = await getStore(STORES.MESSAGES, 'readwrite');
@@ -118,7 +175,7 @@ export async function saveMessage(msg: ChannelMessage): Promise<void> {
   });
 }
 
-export async function getMessagesForGroup(chatJid: string): Promise<ChannelMessage[]> {
+export async function getMessagesForScoop(chatJid: string): Promise<ChannelMessage[]> {
   const store = await getStore(STORES.MESSAGES);
   const index = store.index('chatJid_timestamp');
   const range = IDBKeyRange.bound([chatJid, ''], [chatJid, '\uffff'], false, false);
