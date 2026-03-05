@@ -19,7 +19,7 @@ import { Agent, adaptTools, createLogger } from '../core/index.js';
 import type { AgentEvent as CoreAgentEvent, AssistantMessage, AssistantMessageEvent, TextContent, Model } from '../core/index.js';
 import { createFileTools, createBashTool, createSearchTools, createBrowserTool, createJavaScriptTool } from '../tools/index.js';
 import type { BrowserAPI } from '../cdp/index.js';
-import { getApiKey, getProvider, getAzureResource } from '../ui/api-key-dialog.js';
+import { getApiKey, getSelectedProvider, getBaseUrl, resolveCurrentModel } from '../ui/provider-settings.js';
 import { loadSkills, formatSkillsForPrompt, createDefaultSkills, type Skill } from './skills.js';
 import { createNanoClawTools, type NanoClawToolsConfig } from './nanoclaw-tools.js';
 
@@ -142,21 +142,8 @@ export class GroupContext {
         throw new Error('No API key configured');
       }
 
-      const { getModel } = await import('../core/index.js');
-      const modelId = localStorage.getItem('selected-model') || 'claude-opus-4-6';
-      let model = getModel('anthropic', modelId as any);
-
-      // Handle Azure/Bedrock providers
-      const provider = getProvider();
-      if (provider === 'azure') {
-        const resource = getAzureResource();
-        if (resource) {
-          const baseUrl = resource.includes('://')
-            ? resource
-            : `https://${resource}.services.ai.azure.com/anthropic`;
-          model = { ...model, baseUrl };
-        }
-      }
+      // Use unified provider settings to resolve model
+      const model = resolveCurrentModel();
 
       const systemPrompt = this.buildSystemPrompt(globalMemory, groupMemory, skills);
 
