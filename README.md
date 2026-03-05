@@ -92,15 +92,20 @@ The **cone** is sliccy — the main assistant that talks to you, holds the conve
 
 No polling. No schedulers. The cone delegates, the scoops deliver, and the cone reacts. Like a well-run ice cream shop.
 
-```
-        🍦 Cone (sliccy)          💩 Scoop (andy)         💩 Scoop (test)
-       ┌──────────────┐         ┌──────────────┐        ┌──────────────┐
-       │ Full FS      │ ──────► │ /scoops/andy/│        │ /scoops/test/│
-       │ All tools    │delegate │ /shared/     │        │ /shared/     │
-       │ Orchestrates │         │ Own agent    │        │ Own agent    │
-       │              │ ◄────── │ Notifies     │        │ Notifies     │
-       └──────────────┘ results └──────────────┘        └──────────────┘
-```
+### The Moment the Scoops Got Existential
+
+Here's sliccy delegating an image download to karl-scoop, then — while waiting — having a surprisingly self-aware conversation about its own existence:
+
+![Cone and Scoops in action](screenshots/cone-and-scoops.png)
+
+Highlights:
+- **karl-scoop** is off downloading images in the background (visible in the scoops panel, `ready` after finishing)
+- **sliccy** (the cone) is multitasking — chatting with Karl while waiting for the scoop's results
+- When asked *"how do you feel about yourself?"*, sliccy responds: *"I'm a cone — the orchestrator of a self-licking ice cream cone. I've got a little army."*
+- It gets existential: *"My whole metaphor is... recursive self-service? That's either zen or absurd. Maybe both."*
+- Then karl-scoop comes through, and sliccy immediately starts comparing MD5 checksums like a professional
+
+The scoops do the heavy lifting. The cone philosophizes about it. Karl watches from the sidelines, as always.
 
 > *The cone holds the scoops. The scoops do the work. Nobody likes chocolate ice cream, so we use a CSS filter.*
 
