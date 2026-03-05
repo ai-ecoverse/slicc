@@ -39,7 +39,7 @@ export class RestrictedFS {
       normalized.startsWith(prefix) ||
       // Path is a parent of an allowed dir (e.g., /scoops, /)
       // Needed for cd to walk intermediate directories via stat
-      prefix.startsWith(normalized + '/')
+      normalized === '/' || prefix.startsWith(normalized + '/')
     );
   }
 

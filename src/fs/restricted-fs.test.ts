@@ -92,6 +92,96 @@ describe('RestrictedFS', () => {
     expect(restricted.getUnderlyingFS()).toBe(vfs);
   });
 
+  // ── Parent directory traversal (needed for cd) ──────────────────────
+
+  it('stat on parent dir of allowed path works (cd needs this)', async () => {
+    // /scoops is parent of /scoops/andy-scoop/ — stat should succeed
+    const stat = await restricted.stat('/scoops');
+    expect(stat.type).toBe('directory');
+  });
+
+  it('stat on root works (parent of all paths)', async () => {
+    const stat = await restricted.stat('/');
+    expect(stat.type).toBe('directory');
+  });
+
+  it('exists on parent dir returns true', async () => {
+    expect(await restricted.exists('/scoops')).toBe(true);
+  });
+
+  it('readDir on parent dir filters to only allowed children', async () => {
+    // /scoops has andy-scoop and other-scoop, but restricted should only show andy-scoop
+    const entries = await restricted.readDir('/scoops');
+    const names = entries.map(e => e.name);
+    expect(names).toContain('andy-scoop');
+    expect(names).not.toContain('other-scoop');
+  });
+
+  it('readDir on root filters to relevant children', async () => {
+    const entries = await restricted.readDir('/');
+    const names = entries.map(e => e.name);
+    // /scoops and /shared lead toward allowed paths
+    expect(names).toContain('scoops');
+    expect(names).toContain('shared');
+    // root-file.txt does NOT lead toward allowed paths
+    expect(names).not.toContain('root-file.txt');
+  });
+
+  // ── Write protection on parent dirs ─────────────────────────────────
+
+  it('mkdir on parent dir is blocked (EACCES)', async () => {
+    await expect(restricted.mkdir('/other-top-dir')).rejects.toThrow('EACCES');
+  });
+
+  it('writeFile to parent dir is blocked (EACCES)', async () => {
+    await expect(restricted.writeFile('/scoops/hack.txt', 'nope')).rejects.toThrow('EACCES');
+  });
+
+  it('rm on parent dir is blocked (EACCES)', async () => {
+    await expect(restricted.rm('/scoops')).rejects.toThrow('EACCES');
+  });
+
+  // ── readTextFile strict check ───────────────────────────────────────
+
+  it('readTextFile works within allowed dirs', async () => {
+    const content = await restricted.readTextFile('/scoops/andy-scoop/file.txt');
+    expect(content).toBe('hello');
+  });
+
+  it('readTextFile throws ENOENT for parent dirs (no reading parent files)', async () => {
+    await vfs.writeFile('/scoops/secret-at-parent.txt', 'nope');
+    await expect(restricted.readTextFile('/scoops/secret-at-parent.txt')).rejects.toThrow('ENOENT');
+  });
+
+  // ── getLightningFS delegation ───────────────────────────────────────
+
+  it('getLightningFS returns the underlying LightningFS', () => {
+    const lfs = restricted.getLightningFS();
+    expect(lfs).toBeDefined();
+    expect(typeof lfs.readFile).toBe('function');
+  });
+
+  // ── copyFile source/dest checks ─────────────────────────────────────
+
+  it('copyFile within allowed dirs works', async () => {
+    await restricted.writeFile('/scoops/andy-scoop/copy-src.txt', 'copy me');
+    await restricted.copyFile('/scoops/andy-scoop/copy-src.txt', '/shared/copy-dest.txt');
+    const content = await vfs.readFile('/shared/copy-dest.txt', { encoding: 'utf-8' });
+    expect(content).toBe('copy me');
+  });
+
+  it('copyFile to outside dir throws EACCES', async () => {
+    await expect(
+      restricted.copyFile('/scoops/andy-scoop/file.txt', '/scoops/other-scoop/stolen.txt')
+    ).rejects.toThrow('EACCES');
+  });
+
+  it('copyFile from outside dir throws ENOENT', async () => {
+    await expect(
+      restricted.copyFile('/scoops/other-scoop/secret.txt', '/scoops/andy-scoop/got-it.txt')
+    ).rejects.toThrow('ENOENT');
+  });
+
   it('rename checks both paths', async () => {
     await restricted.writeFile('/scoops/andy-scoop/rename-src.txt', 'src');
     // Rename within allowed - should work
