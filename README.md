@@ -31,6 +31,7 @@ Part of the **[AI Ecoverse](https://github.com/trieloff/ai-ecoverse)** — a com
 - :satellite: **CLI Server** — alternative mode: thin Node.js/Express server launches Chrome and proxies CDP connections
 - :file_folder: **Virtual Filesystem** — OPFS + IndexedDB-backed filesystem right in the browser, with folder ZIP download
 - :shell: **WebAssembly Bash Shell** — real Bash via [just-bash](https://github.com/nicolo-ribaudo/just-bash) compiled to WASM
+- :git: **Git Support** — clone, commit, push, pull via [isomorphic-git](https://isomorphic-git.org/) (see [available commands](#git-commands))
 - :robot: **Browser Automation** — screenshots (full page / element / saved to VFS), inline image display, navigation, JS eval, element clicking via Chrome DevTools Protocol (chrome.debugger in extension, WebSocket in CLI). Auto-detects user's active tab.
 - :pencil2: **File Operations** — read, write, edit files with syntax-aware tools
 - :mag: **Search Tools** — grep and find across your virtual codebase
@@ -182,3 +183,43 @@ npm test
 # Run tests in watch mode
 npm run test:watch
 ```
+
+## Git Commands
+
+slicc includes Git support via [isomorphic-git](https://isomorphic-git.org/), enabling version control operations directly in the browser without touching the host filesystem.
+
+### Available Commands
+
+| Command | Description |
+|---------|-------------|
+| `git init` | Initialize a new repository |
+| `git clone <url> [dir]` | Clone a repository (shallow clone by default) |
+| `git add <file>` | Stage files for commit (use `.` for all) |
+| `git status` | Show working tree status |
+| `git commit -m "msg"` | Record changes to the repository |
+| `git log [--oneline]` | Show commit history |
+| `git branch [name]` | List or create branches |
+| `git checkout <ref>` | Switch branches or restore files |
+| `git diff` | Show changes between commits |
+| `git remote [-v]` | List remote repositories |
+| `git remote add <name> <url>` | Add a remote |
+| `git fetch [remote]` | Download objects from remote |
+| `git pull [remote]` | Fetch and merge changes |
+| `git push [remote] [branch]` | Update remote refs |
+| `git config <key> [value]` | Get/set configuration |
+| `git rev-parse` | Parse git references |
+
+### Authentication
+
+For private repositories or to avoid GitHub rate limits on public repos, set a personal access token:
+
+```bash
+git config github.token ghp_YOUR_TOKEN_HERE
+```
+
+### Limitations
+
+- **Shallow clones**: Repositories are cloned with `--depth 1` by default for performance
+- **No merge/rebase**: Complex merge operations are not yet implemented
+- **No LFS**: Large File Storage is not supported
+- **Browser storage**: All repository data is stored in IndexedDB (LightningFS)
