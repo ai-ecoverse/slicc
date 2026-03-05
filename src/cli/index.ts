@@ -306,6 +306,124 @@ async function main() {
   const app = express();
   app.use(requestLogger);
 
+  // ---------------------------------------------------------------------------
+  // Webhook registry — stores active webhooks and broadcasts events to browser
+  // ---------------------------------------------------------------------------
+  interface WebhookEntry {
+    id: string;
+    name: string;
+    createdAt: string;
+  }
+  const webhooks = new Map<string, WebhookEntry>();
+
+  // WebSocket for broadcasting webhook events to the browser
+  const webhookWss = new WebSocketServer({ noServer: true });
+  const webhookClients = new Set<WebSocket>();
+
+  webhookWss.on('connection', (ws) => {
+    webhookClients.add(ws);
+    console.log('[webhooks] Browser client connected');
+    ws.on('close', () => {
+      webhookClients.delete(ws);
+      console.log('[webhooks] Browser client disconnected');
+    });
+  });
+
+  function broadcastWebhookEvent(event: unknown): void {
+    const msg = JSON.stringify(event);
+    for (const client of webhookClients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(msg);
+      }
+    }
+  }
+
+  function generateWebhookId(): string {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let id = '';
+    for (let i = 0; i < 12; i++) {
+      id += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return id;
+  }
+
+  // Webhook management API
+  app.use(express.json());
+
+  app.get('/api/webhooks', (_req, res) => {
+    const list = Array.from(webhooks.values()).map((wh) => ({
+      ...wh,
+      url: `http://localhost:${SERVE_PORT}/webhooks/${wh.id}`,
+    }));
+    res.json(list);
+  });
+
+  app.post('/api/webhooks', (req, res) => {
+    const name = (req.body as { name?: string }).name || 'default';
+    const id = generateWebhookId();
+    const entry: WebhookEntry = {
+      id,
+      name,
+      createdAt: new Date().toISOString(),
+    };
+    webhooks.set(id, entry);
+    console.log(`[webhooks] Created webhook "${name}" with ID ${id}`);
+    res.json({
+      ...entry,
+      url: `http://localhost:${SERVE_PORT}/webhooks/${id}`,
+    });
+  });
+
+  app.delete('/api/webhooks/:id', (req, res) => {
+    const { id } = req.params;
+    if (!webhooks.has(id)) {
+      res.status(404).json({ error: 'Webhook not found' });
+      return;
+    }
+    webhooks.delete(id);
+    console.log(`[webhooks] Deleted webhook ${id}`);
+    res.json({ ok: true });
+  });
+
+  // Webhook receiver — accepts incoming POSTs and broadcasts to browser
+  app.post('/webhooks/:id', async (req, res) => {
+    const { id } = req.params;
+    const webhook = webhooks.get(id);
+    if (!webhook) {
+      res.status(404).json({ error: 'Webhook not found' });
+      return;
+    }
+
+    // Collect body (may already be parsed by express.json, or raw)
+    let body = req.body;
+    if (!body || Object.keys(body).length === 0) {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) {
+        chunks.push(Buffer.from(chunk));
+      }
+      const raw = Buffer.concat(chunks).toString('utf-8');
+      try {
+        body = JSON.parse(raw);
+      } catch {
+        body = { raw };
+      }
+    }
+
+    const event = {
+      type: 'webhook',
+      webhookId: id,
+      webhookName: webhook.name,
+      timestamp: new Date().toISOString(),
+      headers: req.headers,
+      body,
+    };
+
+    console.log(`[webhooks] Received event on "${webhook.name}" (${id})`);
+    broadcastWebhookEvent(event);
+
+    res.json({ ok: true, received: true });
+  });
+
   // Fetch proxy — forwards cross-origin requests from the browser to bypass CORS.
   // Used by just-bash's curl which calls the browser's fetch() API.
   // Note: We collect raw body manually to handle git protocol correctly.
@@ -400,8 +518,12 @@ async function main() {
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });
+    } else if (pathname === '/webhooks-ws') {
+      webhookWss.handleUpgrade(request, socket, head, (ws) => {
+        webhookWss.emit('connection', ws, request);
+      });
     }
-    // For non-/cdp paths, do nothing — let Vite handle HMR upgrades
+    // For other paths, do nothing — let Vite handle HMR upgrades
   });
 
   // ---------------------------------------------------------------------------

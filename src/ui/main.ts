@@ -550,6 +550,75 @@ Use the tools available to help the user with their tasks.`,
 
   // Note: Task scheduler is now managed by the orchestrator
   log.info('Orchestrator initialized with integrated scheduler', { groupCount: orchestrator.getGroups().length });
+
+  // ---------------------------------------------------------------------------
+  // Webhook event listener — connects to CLI server's /webhooks-ws endpoint
+  // Injects webhook events into the agent conversation as tool results
+  // ---------------------------------------------------------------------------
+  if (!isExtension) {
+    // Only in CLI mode (webhooks require the CLI server)
+    const wsUrl = `ws://${window.location.host}/webhooks-ws`;
+    let webhookWs: WebSocket | null = null;
+    let reconnectTimer: number | null = null;
+
+    function connectWebhookWs(): void {
+      if (webhookWs?.readyState === WebSocket.OPEN) return;
+
+      webhookWs = new WebSocket(wsUrl);
+
+      webhookWs.onopen = () => {
+        log.info('Webhook WebSocket connected');
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+      };
+
+      webhookWs.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'webhook') {
+            log.info('Webhook event received', { webhookName: data.webhookName, webhookId: data.webhookId });
+
+            // Format the webhook payload for the agent
+            const webhookContent = `Webhook "${data.webhookName}" received at ${data.timestamp}:\n\`\`\`json\n${JSON.stringify(data.body, null, 2)}\n\`\`\``;
+
+            // Inject as a user message to the main agent
+            // This allows the agent to process the webhook data
+            if (selectedGroup?.isMain) {
+              const msg: ChannelMessage = {
+                id: `webhook-${data.webhookId}-${Date.now()}`,
+                chatJid: selectedGroup.jid,
+                senderId: 'webhook',
+                senderName: `webhook:${data.webhookName}`,
+                content: webhookContent,
+                timestamp: data.timestamp,
+                fromAssistant: false,
+                channel: 'webhook',
+              };
+              orchestrator.handleMessage(msg);
+              log.debug('Webhook message injected into orchestrator');
+            }
+          }
+        } catch (err) {
+          log.warn('Failed to parse webhook event', { error: err instanceof Error ? err.message : String(err) });
+        }
+      };
+
+      webhookWs.onclose = () => {
+        log.debug('Webhook WebSocket closed, reconnecting in 3s...');
+        webhookWs = null;
+        reconnectTimer = window.setTimeout(connectWebhookWs, 3000);
+      };
+
+      webhookWs.onerror = (err) => {
+        log.warn('Webhook WebSocket error', { error: String(err) });
+      };
+    }
+
+    // Start the webhook connection
+    connectWebhookWs();
+  }
 }
 
 main().catch((err) => {
