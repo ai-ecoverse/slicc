@@ -60,4 +60,56 @@ describe('Bash Tool', () => {
     // mkdir produces no stdout, so output falls back to exit code
     expect(result.content).toContain('exit code: 0');
   });
+
+  it('supports zip and unzip commands', async () => {
+    await bash.execute({ command: 'mkdir -p /archive/src' });
+    await bash.execute({ command: 'echo "alpha" > /archive/src/a.txt' });
+    await bash.execute({ command: 'echo "beta" > /archive/src/b.txt' });
+
+    const zipResult = await bash.execute({ command: 'zip -r /archive/out.zip /archive/src' });
+    expect(zipResult.isError).toBeFalsy();
+    expect(zipResult.content).toContain('/archive/out.zip');
+
+    await bash.execute({ command: 'mkdir -p /archive/extract' });
+    const unzipResult = await bash.execute({ command: 'unzip /archive/out.zip -d /archive/extract' });
+    expect(unzipResult.isError).toBeFalsy();
+    expect(unzipResult.content).toContain('/archive/extract');
+
+    const aResult = await bash.execute({ command: 'cat /archive/extract/archive/src/a.txt' });
+    expect(aResult.isError).toBeFalsy();
+    expect(aResult.content).toContain('alpha');
+  });
+
+  it('supports sqlite3 file-backed queries', async () => {
+    const result = await bash.execute({
+      command: 'sqlite3 /data/test.db "create table if not exists users(name text); insert into users values (\'alice\'); select name from users;"',
+    });
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('alice');
+
+    const dbExists = await fs.exists('/data/test.db');
+    expect(dbExists).toBe(true);
+
+    const aliasResult = await bash.execute({ command: 'sqllite /data/test.db "select name from users;"' });
+    expect(aliasResult.isError).toBeFalsy();
+    expect(aliasResult.content).toContain('alice');
+  });
+
+  it('supports node -e execution', async () => {
+    const result = await bash.execute({ command: 'node -e "console.log(1 + 2)"' });
+    expect(result.isError).toBeFalsy();
+    expect(result.content.trim()).toBe('3');
+  });
+
+  it('supports python3 -c execution', async () => {
+    const result = await bash.execute({ command: 'python3 -c "print(1 + 1)"' });
+    expect(result.isError).toBeFalsy();
+    expect(result.content.trim()).toBe('2');
+  }, 120000);
+
+  it('supports open command (non-browser fallback)', async () => {
+    const result = await bash.execute({ command: 'open https://example.com' });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('browser APIs are unavailable');
+  });
 });

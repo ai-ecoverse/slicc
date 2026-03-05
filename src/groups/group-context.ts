@@ -17,7 +17,7 @@ import { VirtualFS } from '../fs/index.js';
 import { WasmShell } from '../shell/index.js';
 import { Agent, adaptTools, createLogger } from '../core/index.js';
 import type { AgentEvent as CoreAgentEvent, AssistantMessage, AssistantMessageEvent, TextContent, Model } from '../core/index.js';
-import { createFileTools, createBashTool, createSearchTools, createBrowserTool, createJavaScriptTool } from '../tools/index.js';
+import { createFileTools, createBashTool, createBrowserTool } from '../tools/index.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import { getApiKey, getSelectedProvider, getBaseUrl, resolveCurrentModel } from '../ui/provider-settings.js';
 import { loadSkills, formatSkillsForPrompt, createDefaultSkills, type Skill } from './skills.js';
@@ -109,14 +109,12 @@ export class GroupContext {
       };
       const nanoClawTools = createNanoClawTools(nanoClawToolsConfig);
 
-      // Create tools (including browser and javascript)
+      // Create tools
       const browser = this.callbacks.getBrowserAPI();
       const legacyTools = [
         ...createFileTools(this.fs),
         createBashTool(this.shell),
         createBrowserTool(browser),
-        ...createSearchTools(this.fs),
-        createJavaScriptTool(this.fs),
         ...nanoClawTools,
       ];
       const tools = adaptTools(legacyTools);
@@ -344,7 +342,7 @@ You have access to:
 - A virtual filesystem at /workspace/group (your working directory)
 - A bash shell for running commands (via the bash tool)
 - File reading, writing, and editing tools
-- Search tools (grep, find)
+- Search commands via bash (grep, find, rg)
 - **send_message**: Send messages immediately while working (for progress updates)
 - **schedule_task**: Schedule recurring or one-time tasks
 - **list_tasks**, **pause_task**, **resume_task**, **cancel_task**: Manage scheduled tasks

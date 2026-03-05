@@ -23,10 +23,10 @@ export function createBashTool(shell: WasmShell): ToolDefinition {
       'shell functions, arrays, variable expansion, globs, brace expansion, here-docs. ' +
       'Text processing: grep, egrep, fgrep, rg (ripgrep), sed, awk, cut, tr, sort, uniq, wc, ' +
       'head, tail, fold, nl, rev, column, paste, join, comm, expand, strings, od. ' +
-      'Data formats: jq (JSON), yq (YAML), base64, md5sum, sha256sum. ' +
-      'File operations: find, diff, tar, gzip, gunzip, cp, mv, rm, mkdir, touch, chmod, du, file, dirname, basename, tee, xargs. ' +
+      'Data formats: jq (JSON), base64, md5sum, sha256sum. ' +
+      'File operations: find, diff, tar, gzip, gunzip, cp, mv, rm, mkdir, touch, chmod, du, file, dirname, basename, tee, xargs, zip, unzip. ' +
+      'Custom commands: git, open (URL tab/file download), sqlite3, node (-e shim with fs bridge), python3/python. ' +
       'Networking: curl (full HTTP client — GET, POST, PUT, DELETE with headers, data, auth). ' +
-      'Database: sqlite3 (in-memory or file-backed SQL). ' +
       'Utilities: seq, date, printf, expr, env, export, test/[, true, false, read.',
     inputSchema: {
       type: 'object',
