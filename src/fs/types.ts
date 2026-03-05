@@ -57,7 +57,8 @@ export type FsErrorCode =
   | 'ENOTDIR'   // Not a directory
   | 'EISDIR'    // Is a directory (when file expected)
   | 'ENOTEMPTY' // Directory not empty
-  | 'EINVAL';   // Invalid argument
+  | 'EINVAL'    // Invalid argument
+  | 'EACCES';   // Permission denied
 
 /** Custom error class for filesystem operations. */
 export class FsError extends Error {

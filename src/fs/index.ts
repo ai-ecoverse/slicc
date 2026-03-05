@@ -1,6 +1,7 @@
 export { VirtualFS } from './virtual-fs.js';
 export type { VirtualFsOptions, BackendType } from './virtual-fs.js';
 export { FsError } from './types.js';
+export { RestrictedFS } from './restricted-fs.js';
 export type {
   FileContent,
   Encoding,
