@@ -7,8 +7,13 @@
  */
 
 import { Layout } from './layout.js';
-import { getApiKey, getProvider, getAzureResource, getBedrockRegion, showApiKeyDialog } from './api-key-dialog.js';
-import type { ApiProvider } from './api-key-dialog.js';
+import {
+  getApiKey,
+  getSelectedProvider,
+  getBaseUrl,
+  showProviderSettings,
+  resolveCurrentModel,
+} from './provider-settings.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent } from './types.js';
 import { Agent, adaptTools, createLogger, getModel } from '../core/index.js';
 import type { AgentEvent as CoreAgentEvent, AssistantMessage, AssistantMessageEvent, TextContent, Model } from '../core/index.js';
@@ -19,34 +24,27 @@ import type { RegisteredGroup, ChannelMessage } from '../groups/types.js';
 
 const log = createLogger('main');
 
-const DEFAULT_MODEL_ID = 'claude-opus-4-6';
+const DEFAULT_MODEL_ID = 'claude-sonnet-4-20250514';
 
-/** Resolve a model ID and override baseUrl for Azure/Bedrock providers. */
-function resolveModel(modelId: string): Model<any> {
+/** Resolve a model ID using the new provider settings. */
+function resolveModel(modelId?: string): Model<any> {
   try {
-    let model = getModel('anthropic', modelId as any);
-    const provider = getProvider();
-    if (provider === 'azure') {
-      const resource = getAzureResource();
-      if (resource) {
-        // Azure AI Foundry: resource name → https://{name}.services.ai.azure.com/anthropic
-        const baseUrl = resource.includes('://')
-          ? resource  // full URL provided
-          : `https://${resource}.services.ai.azure.com/anthropic`;
-        model = { ...model, baseUrl };
-      }
-    } else if (provider === 'bedrock') {
-      const endpoint = getBedrockRegion();
-      if (endpoint) {
-        const baseUrl = endpoint.startsWith('https://') ? endpoint : `https://${endpoint}`;
-        model = { ...model, baseUrl };
-      }
+    // Use resolveCurrentModel which handles provider + baseUrl
+    if (!modelId) {
+      return resolveCurrentModel();
+    }
+    // If a specific modelId is requested, get it from the selected provider
+    const providerId = getSelectedProvider();
+    let model = getModel(providerId as any, modelId as any);
+    const baseUrl = getBaseUrl();
+    if (baseUrl) {
+      model = { ...model, baseUrl };
     }
     return model;
   } catch (err) {
     log.error('Failed to resolve model, falling back to default', {
       modelId,
-      provider: getProvider(),
+      provider: getSelectedProvider(),
       error: err instanceof Error ? err.message : String(err),
     });
     return getModel('anthropic', DEFAULT_MODEL_ID as any);
@@ -163,10 +161,14 @@ async function main(): Promise<void> {
   const app = document.getElementById('app');
   if (!app) throw new Error('#app element not found');
 
-  // Check for API key (first-run dialog)
+  // Check for API key (first-run provider settings dialog)
   let apiKey = getApiKey();
   if (!apiKey) {
-    apiKey = await showApiKeyDialog();
+    await showProviderSettings();
+    apiKey = getApiKey();
+    if (!apiKey) {
+      throw new Error('API key required');
+    }
   }
 
   // Build the layout — tabbed in extension mode, split panels in standalone
@@ -233,8 +235,7 @@ async function main(): Promise<void> {
   log.info('Tools ready', tools.map((t) => t.name));
 
   // Create the pi-style agent
-  const selectedModelId = localStorage.getItem('selected-model') || DEFAULT_MODEL_ID;
-  const model = resolveModel(selectedModelId);
+  const model = resolveCurrentModel();
 
   // Context compaction: truncate oversized tool results and drop old messages when near token limit.
   // Rough estimate: 1 token ≈ 4 chars for English text.
@@ -308,7 +309,7 @@ Use the tools available to help the user with their tasks.`,
     getApiKey: () => apiKey,
     transformContext: compactContext,
   });
-  log.info('Agent created', { provider: getProvider(), model: model.id });
+  log.info('Agent created', { provider: getSelectedProvider(), model: model.id });
 
   // Wire model picker changes to agent
   layout.onModelChange = (modelId) => {

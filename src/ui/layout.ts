@@ -25,7 +25,15 @@ import { TerminalPanel } from './terminal-panel.js';
 import { FileBrowserPanel } from './file-browser-panel.js';
 import { MemoryPanel } from './memory-panel.js';
 import { GroupsPanel } from './groups-panel.js';
-import { getApiKey, clearApiKey, clearAzureResource, clearProvider } from './api-key-dialog.js';
+import {
+  getApiKey,
+  clearAllSettings,
+  getSelectedProvider,
+  getProviderModels,
+  getSelectedModelId,
+  setSelectedModelId,
+  showProviderSettings,
+} from './provider-settings.js';
 import type { ChatMessage } from './types.js';
 import type { RegisteredGroup } from '../groups/types.js';
 
@@ -100,28 +108,71 @@ export class Layout {
     title.textContent = 'slicc';
     leftGroup.appendChild(title);
 
-    // Model picker
-    const models: [string, string][] = [
-      ['claude-opus-4-6', 'Opus 4.6'],
-      ['claude-sonnet-4-6', 'Sonnet 4.6'],
-      ['claude-sonnet-4-5-20250929', 'Sonnet 4.5'],
-      ['claude-haiku-4-5-20251001', 'Haiku 4.5'],
-    ];
+    // Provider indicator + Model picker
+    const providerIndicator = document.createElement('span');
+    providerIndicator.style.cssText =
+      'margin-left: 12px; font-size: 11px; color: #888; cursor: pointer; padding: 4px 8px; ' +
+      'background: #1a1a2e; border-radius: 4px; border: 1px solid #333;';
+    providerIndicator.title = 'Click to change provider';
+    providerIndicator.addEventListener('click', async () => {
+      await showProviderSettings();
+      location.reload(); // Reload to apply new settings
+    });
+    leftGroup.appendChild(providerIndicator);
+
     const modelSelect = document.createElement('select');
     modelSelect.style.cssText =
       'background: #2a2a3a; color: #e0e0f0; border: 1px solid #444; border-radius: 4px; ' +
-      'padding: 4px 8px; font-size: 13px; cursor: pointer; outline: none; margin-left: 12px;';
-    for (const [value, label] of models) {
-      const opt = document.createElement('option');
-      opt.value = value;
-      opt.textContent = label;
-      modelSelect.appendChild(opt);
-    }
-    const storedModel = localStorage.getItem('selected-model') || 'claude-opus-4-6';
-    modelSelect.value = storedModel;
+      'padding: 4px 8px; font-size: 13px; cursor: pointer; outline: none; margin-left: 8px;';
+
+    // Populate models from selected provider
+    const populateModels = () => {
+      const providerId = getSelectedProvider();
+      const models = getProviderModels(providerId);
+      const currentModelId = getSelectedModelId();
+
+      // Update provider indicator
+      providerIndicator.textContent = providerId;
+
+      // Clear and repopulate
+      while (modelSelect.firstChild) modelSelect.removeChild(modelSelect.firstChild);
+
+      if (models.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'No models';
+        modelSelect.appendChild(opt);
+        return;
+      }
+
+      // Sort: reasoning first, then by name
+      const sorted = [...models].sort((a, b) => {
+        if (a.reasoning !== b.reasoning) return a.reasoning ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+
+      for (const model of sorted) {
+        const opt = document.createElement('option');
+        opt.value = model.id;
+        opt.textContent = model.name;
+        if (model.id === currentModelId) opt.selected = true;
+        modelSelect.appendChild(opt);
+      }
+
+      // Select first if current not found
+      if (!currentModelId || !models.find(m => m.id === currentModelId)) {
+        modelSelect.selectedIndex = 0;
+        if (modelSelect.value) {
+          setSelectedModelId(modelSelect.value);
+        }
+      }
+    };
+
+    populateModels();
+
     modelSelect.addEventListener('change', () => {
       const value = modelSelect.value;
-      localStorage.setItem('selected-model', value);
+      setSelectedModelId(value);
       this.onModelChange?.(value);
     });
     leftGroup.appendChild(modelSelect);
@@ -214,19 +265,23 @@ export class Layout {
       this.actionsEl.appendChild(clearGroupsBtn);
     }
 
-    // API Key (always visible)
-    const apiKeyBtn = document.createElement('button');
-    apiKeyBtn.className = 'header__btn';
-    apiKeyBtn.textContent = getApiKey() ? 'API Key \u2713' : 'API Key';
-    apiKeyBtn.addEventListener('click', () => {
+    // Settings button (shows provider settings dialog)
+    const settingsBtn = document.createElement('button');
+    settingsBtn.className = 'header__btn';
+    settingsBtn.textContent = getApiKey() ? 'Settings' : 'Configure';
+    settingsBtn.addEventListener('click', async () => {
       if (getApiKey()) {
-        clearApiKey();
-        clearAzureResource();
-        clearProvider();
+        // Show settings to reconfigure
+        await showProviderSettings();
+        location.reload();
+      } else {
+        // Clear and show first-run dialog directly (avoid extra reload cycle)
+        clearAllSettings();
+        await showProviderSettings();
         location.reload();
       }
     });
-    this.actionsEl.appendChild(apiKeyBtn);
+    this.actionsEl.appendChild(settingsBtn);
   }
 
   /** Show/hide buttons based on active tab (extension mode only). */
