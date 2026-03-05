@@ -17,7 +17,7 @@ import {
 import type { AgentHandle, AgentEvent as UIAgentEvent } from './types.js';
 import { Agent, adaptTools, createLogger, getModel } from '../core/index.js';
 import type { AgentEvent as CoreAgentEvent, AssistantMessage, AssistantMessageEvent, TextContent, Model } from '../core/index.js';
-import { createFileTools, createBashTool, createBrowserTool, createSearchTools, createJavaScriptTool } from '../tools/index.js';
+import { createFileTools, createBashTool, createBrowserTool, createSearchTools } from '../tools/index.js';
 import { BrowserAPI, DebuggerClient } from '../cdp/index.js';
 import { Orchestrator } from '../groups/index.js';
 import type { RegisteredGroup, ChannelMessage } from '../groups/types.js';
@@ -229,7 +229,6 @@ async function main(): Promise<void> {
     ...(shell ? [createBashTool(shell)] : []),
     createBrowserTool(browser, fs),
     ...(fs ? createSearchTools(fs) : []),
-    ...(fs ? [createJavaScriptTool(fs)] : []),
   ];
   const tools = adaptTools(legacyTools);
   log.info('Tools ready', tools.map((t) => t.name));

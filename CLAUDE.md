@@ -58,7 +58,7 @@ CDPTransport interface (`transport.ts`) abstracts the underlying protocol. Two i
 BrowserAPI: high-level Playwright-style API built on either transport (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree). Auto-selects transport based on extension detection. TargetInfo and PageInfo types include `active` field (boolean, extension mode only) to identify the user's currently focused tab, enabling intelligent tool auto-dispatch.
 
 ### Tools (src/tools/)
-All tools use the legacy ToolDefinition interface (name, description, inputSchema, execute). Seven tools: bash, read_file, write_file, edit_file, grep, find, browser (with sub-actions), javascript (sandboxed iframe with VFS bridge). Factory functions take their dependency (VirtualFS, WasmShell, or BrowserAPI).
+All tools use the legacy ToolDefinition interface (name, description, inputSchema, execute). Active agent tools: bash, read_file, write_file, edit_file, grep, find, browser (with sub-actions). Factory functions take their dependency (VirtualFS, WasmShell, or BrowserAPI). JavaScript execution should be done through `bash` via the `node -e` shell shim.
 
 **Browser tool enhancements:**
 - `screenshot` action now supports `path` (save PNG to VFS), `fullPage` (capture entire scrollable page), and `selector` (capture just one element)

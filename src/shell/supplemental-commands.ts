@@ -27,6 +27,7 @@ type InitSqlJs = (options?: { locateFile?: (file: string) => string }) => Promis
 
 const SQLJS_WASM_CDN = 'https://sql.js.org/dist/';
 const PYODIDE_CDN = 'https://cdn.jsdelivr.net/pyodide/v0.27.7/full/';
+const NODE_VERSION = 'v20.0.0-js-shim';
 
 const PYTHON_RUNNER = `
 import sys
@@ -52,6 +53,14 @@ except BaseException:
 
 let sqlJsPromise: Promise<SqlJsModule> | null = null;
 let pyodidePromise: Promise<PyodideInterface> | null = null;
+const nodeRuntimeState: Record<string, unknown> = Object.create(null);
+
+class NodeExitError extends Error {
+  constructor(public readonly code: number) {
+    super(`Process exited with code ${code}`);
+    this.name = 'NodeExitError';
+  }
+}
 
 function basename(path: string): string {
   const trimmed = path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
@@ -204,6 +213,32 @@ function pythonVersion(): { stdout: string; stderr: string; exitCode: number } {
     stderr: '',
     exitCode: 0,
   };
+}
+
+function nodeHelp(): { stdout: string; stderr: string; exitCode: number } {
+  return {
+    stdout: 'usage: node -e <code> [args...]\n',
+    stderr: '',
+    exitCode: 0,
+  };
+}
+
+function nodeVersion(): { stdout: string; stderr: string; exitCode: number } {
+  return {
+    stdout: `${NODE_VERSION}\n`,
+    stderr: '',
+    exitCode: 0,
+  };
+}
+
+function formatConsoleArg(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value === null || value === undefined) return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 function createOpenCommand(): Command {
@@ -468,6 +503,175 @@ function createSqliteCommand(name: 'sqlite3' | 'sqllite' = 'sqlite3'): Command {
   });
 }
 
+function createNodeCommand(): Command {
+  return defineCommand('node', async (args, ctx) => {
+    if (args.includes('--help') || args.includes('-h')) return nodeHelp();
+    if (args.includes('--version') || args.includes('-v')) return nodeVersion();
+
+    let code = '';
+    let filename = '<stdin>';
+    let argv: string[] = ['node'];
+
+    if (args.length > 0 && (args[0] === '-e' || args[0] === '--eval')) {
+      if (!args[1]) {
+        return {
+          stdout: '',
+          stderr: 'node: option requires an argument -- eval\n',
+          exitCode: 9,
+        };
+      }
+      code = args[1];
+      filename = '[eval]';
+      argv = ['node', ...args.slice(2)];
+    } else if (args.length > 0 && !args[0].startsWith('-')) {
+      const scriptArg = args[0];
+      const scriptPath = ctx.fs.resolvePath(ctx.cwd, scriptArg);
+      if (!await ctx.fs.exists(scriptPath)) {
+        return {
+          stdout: '',
+          stderr: `node: cannot find module '${scriptArg}'\n`,
+          exitCode: 1,
+        };
+      }
+      code = await ctx.fs.readFile(scriptPath);
+      filename = scriptArg;
+      argv = ['node', scriptArg, ...args.slice(1)];
+    } else if (ctx.stdin.trim().length > 0) {
+      code = ctx.stdin;
+      filename = '<stdin>';
+      argv = ['node'];
+    } else if (args.length > 0) {
+      return {
+        stdout: '',
+        stderr: `node: unsupported option '${args[0]}'\n`,
+        exitCode: 9,
+      };
+    } else {
+      return {
+        stdout: '',
+        stderr: 'node: REPL mode is not supported in this environment; use node -e "code"\n',
+        exitCode: 9,
+      };
+    }
+
+    const stdoutChunks: string[] = [];
+    const stderrChunks: string[] = [];
+    const writeStdout = (value: unknown): void => {
+      stdoutChunks.push(typeof value === 'string' ? value : String(value));
+    };
+    const writeStderr = (value: unknown): void => {
+      stderrChunks.push(typeof value === 'string' ? value : String(value));
+    };
+
+    const nodeConsole = {
+      log: (...parts: unknown[]) => writeStdout(`${parts.map(formatConsoleArg).join(' ')}\n`),
+      info: (...parts: unknown[]) => writeStdout(`${parts.map(formatConsoleArg).join(' ')}\n`),
+      warn: (...parts: unknown[]) => writeStderr(`${parts.map(formatConsoleArg).join(' ')}\n`),
+      error: (...parts: unknown[]) => writeStderr(`${parts.map(formatConsoleArg).join(' ')}\n`),
+    };
+
+    const processShim = {
+      argv,
+      env: Object.fromEntries(ctx.env.entries()),
+      cwd: () => ctx.cwd,
+      exit: (codeValue?: number) => {
+        const normalized = Number.isFinite(codeValue) ? Number(codeValue) : 0;
+        throw new NodeExitError(normalized);
+      },
+      stdout: { write: writeStdout },
+      stderr: { write: writeStderr },
+    };
+
+    const fsBridge = {
+      readFile: async (path: string): Promise<string> => {
+        const resolved = ctx.fs.resolvePath(ctx.cwd, path);
+        return ctx.fs.readFile(resolved);
+      },
+      readFileBinary: async (path: string): Promise<Uint8Array> => {
+        const resolved = ctx.fs.resolvePath(ctx.cwd, path);
+        return ctx.fs.readFileBuffer(resolved);
+      },
+      writeFile: async (path: string, content: string): Promise<void> => {
+        const resolved = ctx.fs.resolvePath(ctx.cwd, path);
+        await ctx.fs.writeFile(resolved, content);
+      },
+      writeFileBinary: async (path: string, bytes: Uint8Array): Promise<void> => {
+        const resolved = ctx.fs.resolvePath(ctx.cwd, path);
+        const copy = new Uint8Array(bytes.byteLength);
+        copy.set(bytes);
+        await ctx.fs.writeFile(resolved, copy);
+      },
+      readDir: async (path: string): Promise<string[]> => {
+        const resolved = ctx.fs.resolvePath(ctx.cwd, path);
+        return ctx.fs.readdir(resolved);
+      },
+      exists: async (path: string): Promise<boolean> => {
+        const resolved = ctx.fs.resolvePath(ctx.cwd, path);
+        return ctx.fs.exists(resolved);
+      },
+      fetchToFile: async (url: string, path: string): Promise<number> => {
+        if (typeof fetch === 'undefined') throw new Error('fetch is not available in this runtime');
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`fetch ${response.status} ${response.statusText}`);
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        const resolved = ctx.fs.resolvePath(ctx.cwd, path);
+        await ctx.fs.writeFile(resolved, bytes);
+        return bytes.byteLength;
+      },
+    };
+
+    const requireShim = (id: string): never => {
+      throw new Error(`require('${id}') is not supported in node shim`);
+    };
+
+    const moduleShim = { exports: {} as Record<string, unknown>, filename };
+
+    try {
+      const AsyncFunction = Object.getPrototypeOf(async function () { /* noop */ }).constructor as (
+        new (...args: string[]) => (
+          fs: typeof fsBridge,
+          process: typeof processShim,
+          console: typeof nodeConsole,
+          require: (id: string) => never,
+          module: typeof moduleShim,
+          exports: Record<string, unknown>,
+          __state: Record<string, unknown>,
+        ) => Promise<unknown>
+      );
+      const fn = new AsyncFunction(
+        'fs',
+        'process',
+        'console',
+        'require',
+        'module',
+        'exports',
+        '__state',
+        `"use strict";\nconst globalThis = __state;\nconst global = __state;\n${code}`,
+      );
+      await fn(fsBridge, processShim, nodeConsole, requireShim, moduleShim, moduleShim.exports, nodeRuntimeState);
+      return {
+        stdout: stdoutChunks.join(''),
+        stderr: stderrChunks.join(''),
+        exitCode: 0,
+      };
+    } catch (err) {
+      if (err instanceof NodeExitError) {
+        return {
+          stdout: stdoutChunks.join(''),
+          stderr: stderrChunks.join(''),
+          exitCode: err.code,
+        };
+      }
+      const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+      return {
+        stdout: stdoutChunks.join(''),
+        stderr: `${stderrChunks.join('')}${message}\n`,
+        exitCode: 1,
+      };
+    }
+  });
+}
+
 function createPython3LikeCommand(name: 'python3' | 'python'): Command {
   return defineCommand(name, async (args, ctx) => {
     if (args.includes('--help') || args.includes('-h')) return pythonHelp();
@@ -562,6 +766,7 @@ export function createSupplementalCommands(): Command[] {
     createUnzipCommand(),
     createSqliteCommand('sqlite3'),
     createSqliteCommand('sqllite'),
+    createNodeCommand(),
     createPython3LikeCommand('python3'),
     createPython3LikeCommand('python'),
   ];

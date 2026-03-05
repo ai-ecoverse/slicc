@@ -103,7 +103,7 @@ Source layout:
 | `src/cli/` | CLI server — Chrome launch, CDP proxy, Express |
 | `src/ui/` | Browser UI — chat, terminal, browser panels |
 | `src/core/` | Agent types, tool registry, session management (core loop provided by pi-mono) |
-| `src/tools/` | Tool implementations (file ops, search, browser, javascript) |
+| `src/tools/` | Tool implementations (file ops, search, browser) |
 | `src/fs/` | Virtual filesystem (OPFS/IndexedDB) |
 | `src/shell/` | WebAssembly Bash shell integration |
 | `src/cdp/` | Chrome DevTools Protocol client (WebSocket + chrome.debugger) |

@@ -25,7 +25,7 @@ export function createBashTool(shell: WasmShell): ToolDefinition {
       'head, tail, fold, nl, rev, column, paste, join, comm, expand, strings, od. ' +
       'Data formats: jq (JSON), base64, md5sum, sha256sum. ' +
       'File operations: find, diff, tar, gzip, gunzip, cp, mv, rm, mkdir, touch, chmod, du, file, dirname, basename, tee, xargs, zip, unzip. ' +
-      'Custom commands: git, open (URL tab/file download), sqlite3, python3/python. ' +
+      'Custom commands: git, open (URL tab/file download), sqlite3, node (-e shim with fs bridge), python3/python. ' +
       'Networking: curl (full HTTP client — GET, POST, PUT, DELETE with headers, data, auth). ' +
       'Utilities: seq, date, printf, expr, env, export, test/[, true, false, read.',
     inputSchema: {

@@ -95,6 +95,12 @@ describe('Bash Tool', () => {
     expect(aliasResult.content).toContain('alice');
   });
 
+  it('supports node -e execution', async () => {
+    const result = await bash.execute({ command: 'node -e "console.log(1 + 2)"' });
+    expect(result.isError).toBeFalsy();
+    expect(result.content.trim()).toBe('3');
+  });
+
   it('supports python3 -c execution', async () => {
     const result = await bash.execute({ command: 'python3 -c "print(1 + 1)"' });
     expect(result.isError).toBeFalsy();
