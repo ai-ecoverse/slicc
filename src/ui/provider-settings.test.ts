@@ -88,9 +88,9 @@ describe('provider settings storage', () => {
     expect(getSelectedProvider()).toBe('openai');
   });
 
-  it('maps legacy azure provider to anthropic for compatibility', () => {
+  it('maps legacy azure provider to azure-ai-foundry', () => {
     storage.set('api_provider', 'azure');
-    expect(getSelectedProvider()).toBe('anthropic');
+    expect(getSelectedProvider()).toBe('azure-ai-foundry');
   });
 
   it('maps legacy bedrock provider to amazon-bedrock', () => {
