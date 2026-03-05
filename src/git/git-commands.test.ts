@@ -1,18 +1,24 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import 'fake-indexeddb/auto';
+import * as isoGit from 'isomorphic-git';
 import { VirtualFS } from '../fs/virtual-fs.js';
 import { GitCommands } from './git-commands.js';
 
 describe('GitCommands', () => {
   let vfs: VirtualFS;
   let git: GitCommands;
+  let globalDbName: string;
+  let dbCounter = 0;
 
   beforeEach(async () => {
-    vfs = await VirtualFS.create({ dbName: `git-test-${Date.now()}`, wipe: true });
+    const testId = dbCounter++;
+    globalDbName = `git-global-test-${testId}`;
+    vfs = await VirtualFS.create({ dbName: `git-test-${testId}`, wipe: true });
     git = new GitCommands({
       fs: vfs,
       authorName: 'Test User',
       authorEmail: 'test@example.com',
+      globalDbName,
     });
   });
 
@@ -61,6 +67,21 @@ describe('GitCommands', () => {
     const commitResult = await git.execute(['commit', '-m', 'Initial commit'], '/project');
     expect(commitResult.exitCode).toBe(0);
     expect(commitResult.stdout).toContain('Initial commit');
+  });
+
+  it('stages deleted files with git add .', async () => {
+    await git.execute(['init'], '/project');
+    await vfs.writeFile('/project/file.txt', 'content');
+    await git.execute(['add', 'file.txt'], '/project');
+    await git.execute(['commit', '-m', 'Initial'], '/project');
+
+    await vfs.rm('/project/file.txt');
+    await git.execute(['add', '.'], '/project');
+
+    const matrix = await isoGit.statusMatrix({ fs: vfs.getLightningFS(), dir: '/project' });
+    const row = matrix.find((r) => r[0] === 'file.txt');
+    expect(row).toBeTruthy();
+    expect(row?.slice(1)).toEqual([1, 0, 0]); // staged deletion
   });
 
   it('shows commit log', async () => {
@@ -114,6 +135,52 @@ describe('GitCommands', () => {
     const getResult = await git.execute(['config', 'user.name'], '/project');
     expect(getResult.exitCode).toBe(0);
     expect(getResult.stdout).toContain('New User');
+  });
+
+  it('persists github token in global virtual filesystem', async () => {
+    const setResult = await git.execute(['config', 'github.token', 'ghp_test_token'], '/project');
+    expect(setResult.exitCode).toBe(0);
+
+    const getResult = await git.execute(['config', 'github.token'], '/project');
+    expect(getResult.exitCode).toBe(0);
+    expect(getResult.stdout.trim()).toBe('ghp_test_token');
+  });
+
+  it('shares github token across git command instances', async () => {
+    await git.execute(['config', 'github.token', 'ghp_shared_token'], '/project');
+
+    const secondFs = await VirtualFS.create({ dbName: `git-test-second-${dbCounter++}`, wipe: true });
+    const second = new GitCommands({
+      fs: secondFs,
+      authorName: 'Another User',
+      authorEmail: 'another@example.com',
+      globalDbName,
+    });
+
+    const getResult = await second.execute(['config', 'github.token'], '/another');
+    expect(getResult.exitCode).toBe(0);
+    expect(getResult.stdout.trim()).toBe('ghp_shared_token');
+  });
+
+  it('supports --no-single-branch for clone', async () => {
+    const cloneSpy = vi.spyOn(isoGit, 'clone').mockResolvedValue();
+    const listFilesSpy = vi.spyOn(isoGit, 'listFiles').mockResolvedValue([]);
+    try {
+      const result = await git.execute(
+        ['clone', 'https://github.com/example/repo.git', 'repo', '--no-single-branch'],
+        '/workspace',
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(cloneSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          singleBranch: false,
+        }),
+      );
+    } finally {
+      cloneSpy.mockRestore();
+      listFilesSpy.mockRestore();
+    }
   });
 
   it('handles rev-parse', async () => {

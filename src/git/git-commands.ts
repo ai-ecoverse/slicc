@@ -10,7 +10,7 @@ import '../shims/buffer-polyfill.js';
 
 import * as git from 'isomorphic-git';
 import type FS from '@isomorphic-git/lightning-fs';
-import type { VirtualFS } from '../fs/index.js';
+import { VirtualFS } from '../fs/index.js';
 import { gitHttp } from './git-http.js';
 
 export interface GitCommandResult {
@@ -27,6 +27,8 @@ export interface GitCommandsOptions {
   authorName?: string;
   /** Default author email. */
   authorEmail?: string;
+  /** Global VirtualFS database name for shared git config values. */
+  globalDbName?: string;
 }
 
 /**
@@ -34,12 +36,16 @@ export interface GitCommandsOptions {
  * Uses the shared VirtualFS instance (backed by LightningFS).
  */
 export class GitCommands {
+  private static globalFsByDbName: Map<string, Promise<VirtualFS>> = new Map();
+
   private lfs: FS.PromisifiedFS;
   private corsProxy?: string;
   private authorName: string;
   private authorEmail: string;
+  private globalDbName: string;
   /** GitHub token for authentication (avoids rate limits on public repos, required for private). */
   private githubToken?: string;
+  private githubTokenLoaded = false;
 
   constructor(private options: GitCommandsOptions) {
     // Use the shared VirtualFS's underlying LightningFS
@@ -47,6 +53,7 @@ export class GitCommands {
     this.corsProxy = options.corsProxy;
     this.authorName = options.authorName ?? 'User';
     this.authorEmail = options.authorEmail ?? 'user@example.com';
+    this.globalDbName = options.globalDbName ?? 'slicc-fs-global';
   }
 
   /**
@@ -62,6 +69,47 @@ export class GitCommands {
     });
   }
 
+  /** Get or create the shared Global VirtualFS instance for config persistence. */
+  private getGlobalFs(): Promise<VirtualFS> {
+    const existing = GitCommands.globalFsByDbName.get(this.globalDbName);
+    if (existing) return existing;
+    const created = VirtualFS.create({ dbName: this.globalDbName });
+    GitCommands.globalFsByDbName.set(this.globalDbName, created);
+    return created;
+  }
+
+  /** Load GitHub token from global VFS if not loaded in-memory yet. */
+  private async ensureGithubTokenLoaded(): Promise<void> {
+    if (this.githubTokenLoaded) return;
+    this.githubTokenLoaded = true;
+    try {
+      const globalFs = await this.getGlobalFs();
+      const token = (await globalFs.readTextFile('/workspace/.git/github-token')).trim();
+      this.githubToken = token || undefined;
+    } catch {
+      this.githubToken = undefined;
+    }
+  }
+
+  /** Persist GitHub token to global VFS. */
+  private async setGithubToken(token: string): Promise<void> {
+    const trimmed = token.trim();
+    const globalFs = await this.getGlobalFs();
+    if (!trimmed) {
+      try {
+        await globalFs.rm('/workspace/.git/github-token');
+      } catch {
+        // ignore if not present
+      }
+      this.githubToken = undefined;
+      this.githubTokenLoaded = true;
+      return;
+    }
+    await globalFs.writeFile('/workspace/.git/github-token', trimmed);
+    this.githubToken = trimmed;
+    this.githubTokenLoaded = true;
+  }
+
   /**
    * Execute a git command.
    * @param args Command arguments (e.g., ['init'], ['commit', '-m', 'message'])
@@ -75,6 +123,7 @@ export class GitCommands {
     const [command, ...rest] = args;
 
     try {
+      await this.ensureGithubTokenLoaded();
       switch (command) {
         case 'init':
           return this.init(cwd, rest);
@@ -203,7 +252,7 @@ Available commands:
     const targetDir = dir.startsWith('/') ? dir : `${cwd}/${dir}`;
     const depth = this.parseArg(args, '--depth');
     const branch = this.parseArg(args, '--branch', '-b');
-    const singleBranch = args.includes('--single-branch');
+    const singleBranch = this.parseBooleanFlag(args, '--single-branch', true);
 
     let output = `Cloning into '${dir}'...\n`;
 
@@ -218,7 +267,7 @@ Available commands:
       corsProxy: this.corsProxy,
       depth: depth ? parseInt(depth, 10) : 1, // Default to depth 1 for faster clones
       ref: branch,
-      singleBranch: true, // Always single branch for performance
+      singleBranch,
       noCheckout: false, // Let clone handle checkout
       cache,
       onAuth: this.getOnAuth(),
@@ -259,10 +308,13 @@ Available commands:
     const force = args.includes('-f') || args.includes('--force');
 
     if (filepath === '.') {
-      // Add all files - use statusMatrix to find modified files
+      // Add all changes by syncing stage state to workdir state.
       const matrix = await git.statusMatrix({ fs: this.lfs, dir: cwd });
-      for (const [file, , workdir] of matrix) {
-        if (workdir !== 0) {
+      for (const [file, , workdir, stage] of matrix) {
+        if (workdir === stage) continue;
+        if (workdir === 0) {
+          await git.remove({ fs: this.lfs, dir: cwd, filepath: file });
+        } else {
           await git.add({ fs: this.lfs, dir: cwd, filepath: file, force });
         }
       }
@@ -628,7 +680,6 @@ Available commands:
   }
 
   private async config(cwd: string, args: string[]): Promise<GitCommandResult> {
-    const global = args.includes('--global');
     const path = args.find((a) => !a.startsWith('-') && a.includes('.'));
     const value = args[args.indexOf(path ?? '') + 1];
 
@@ -645,7 +696,7 @@ Available commands:
     if (value !== undefined) {
       // Handle special credential config
       if (path === 'credential.token' || path === 'github.token') {
-        this.githubToken = value;
+        await this.setGithubToken(value);
         return { stdout: '', stderr: '', exitCode: 0 };
       }
       // Set config
@@ -657,6 +708,13 @@ Available commands:
     }
 
     // Get config
+    if (path === 'credential.token' || path === 'github.token') {
+      return {
+        stdout: this.githubToken ? `${this.githubToken}\n` : '',
+        stderr: '',
+        exitCode: this.githubToken ? 0 : 1,
+      };
+    }
     const result = await git.getConfig({ fs: this.lfs, dir: cwd, path });
     return {
       stdout: result ? `${result}\n` : '',
@@ -716,6 +774,17 @@ Available commands:
       }
     }
     return undefined;
+  }
+
+  /** Parse a boolean flag supporting --flag / --no-flag, with ordering. */
+  private parseBooleanFlag(args: string[], flag: string, defaultValue: boolean): boolean {
+    const noFlag = `--no-${flag.slice(2)}`;
+    let value = defaultValue;
+    for (const arg of args) {
+      if (arg === flag) value = true;
+      if (arg === noFlag) value = false;
+    }
+    return value;
   }
 }
 
