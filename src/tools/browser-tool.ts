@@ -199,6 +199,16 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
             const refToSelector = new Map<string, string>();
             let refCounter = 0;
 
+            // Escape string for YAML output (quotes and newlines)
+            function escapeYaml(str: string): string {
+              return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+            }
+
+            // Escape string for CSS attribute selector
+            function escapeCssAttr(str: string): string {
+              return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+            }
+
             // Convert accessibility tree to YAML-like snapshot format with refs
             function renderNode(node: AccessibilityNode, indent: string = ''): string[] {
               const lines: string[] = [];
@@ -212,24 +222,37 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
               let ref = '';
               if (needsRef) {
                 ref = `e${++refCounter}`;
-                // Generate CSS selector based on role and name
-                const escapedName = name.replace(/"/g, '\\"');
+                // Generate valid CSS selectors (no Playwright-specific syntax like :has-text)
+                const escapedName = escapeCssAttr(name);
                 let selector = '';
-                if (role === 'button' && name) selector = `button:has-text("${escapedName}")`;
-                else if (role === 'link' && name) selector = `a:has-text("${escapedName}")`;
-                else if (role === 'textbox') selector = `input, textarea, [contenteditable]`;
-                else if (role === 'checkbox') selector = `input[type="checkbox"]`;
-                else if (role === 'radio') selector = `input[type="radio"]`;
-                else if (name) selector = `[aria-label="${escapedName}"], *:has-text("${escapedName}")`;
-                else selector = `[role="${role}"]`;
+                if (role === 'button' && name) {
+                  selector = `button[aria-label="${escapedName}"], button[title="${escapedName}"]`;
+                } else if (role === 'link' && name) {
+                  selector = `a[aria-label="${escapedName}"], a[title="${escapedName}"]`;
+                } else if (role === 'textbox') {
+                  if (name) {
+                    // Match by accessible name via aria-label, placeholder, or title
+                    selector = `input[aria-label="${escapedName}"], textarea[aria-label="${escapedName}"], [contenteditable][aria-label="${escapedName}"], input[placeholder="${escapedName}"], textarea[placeholder="${escapedName}"], input[title="${escapedName}"], textarea[title="${escapedName}"]`;
+                  } else {
+                    selector = `input, textarea, [contenteditable]`;
+                  }
+                } else if (role === 'checkbox') {
+                  selector = `input[type="checkbox"]`;
+                } else if (role === 'radio') {
+                  selector = `input[type="radio"]`;
+                } else if (name) {
+                  selector = `[aria-label="${escapedName}"], [title="${escapedName}"]`;
+                } else {
+                  selector = `[role="${role}"]`;
+                }
                 refToSelector.set(ref, selector);
               }
 
               // Format: - role "name" [ref=eN]
               let line = `${indent}- ${role}`;
-              if (name) line += ` "${name}"`;
+              if (name) line += ` "${escapeYaml(name)}"`;
               if (ref) line += ` [ref=${ref}]`;
-              if (node.value) line += `: "${node.value}"`;
+              if (node.value) line += `: "${escapeYaml(node.value)}"`;
               lines.push(line);
 
               // Recurse into children
@@ -339,9 +362,14 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
             let selector = input['selector'] as string;
             const ref = input['ref'] as string;
             
+            // Validate targetId first
+            if (!targetId) {
+              return { content: 'click requires selector or ref (and targetId or an active tab)', isError: true };
+            }
+            
             // Support ref-based clicking (e.g. "e5" from snapshot)
             if (ref && !selector) {
-              const snapshot = tabSnapshots.get(targetId!);
+              const snapshot = tabSnapshots.get(targetId);
               if (!snapshot) {
                 return { content: `No snapshot available. Run "snapshot" action first to get element refs.`, isError: true };
               }
@@ -352,8 +380,8 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
               selector = refSelector;
             }
             
-            if (!targetId || !selector) {
-              return { content: 'click requires selector or ref (and targetId or an active tab)', isError: true };
+            if (!selector) {
+              return { content: 'click requires selector or ref', isError: true };
             }
             await browser.attachToPage(targetId);
             await browser.click(selector);
