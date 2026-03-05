@@ -91,7 +91,7 @@ export class Orchestrator {
     }
 
     // Initialize global VFS for shared memory
-    this.globalFs = await VirtualFS.create({ backend: 'indexeddb', dbName: 'slicc-fs-global' });
+    this.globalFs = await VirtualFS.create({ dbName: 'slicc-fs-global' });
     await this.ensureGlobalMemory();
 
     // Initialize task scheduler

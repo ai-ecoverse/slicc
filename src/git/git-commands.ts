@@ -9,9 +9,8 @@
 import '../shims/buffer-polyfill.js';
 
 import * as git from 'isomorphic-git';
-import LightningFS from '@isomorphic-git/lightning-fs';
+import type FS from '@isomorphic-git/lightning-fs';
 import type { VirtualFS } from '../fs/index.js';
-import { GitFs } from './git-fs.js';
 import { gitHttp } from './git-http.js';
 
 export interface GitCommandResult {
@@ -32,16 +31,17 @@ export interface GitCommandsOptions {
 
 /**
  * Git commands handler that provides CLI-like git functionality.
+ * Uses the shared VirtualFS instance (backed by LightningFS).
  */
 export class GitCommands {
-  private lfs: LightningFS;
+  private lfs: FS.PromisifiedFS;
   private corsProxy?: string;
   private authorName: string;
   private authorEmail: string;
 
   constructor(private options: GitCommandsOptions) {
-    // Use LightningFS for git operations - it's designed for isomorphic-git
-    this.lfs = new LightningFS('git-fs');
+    // Use the shared VirtualFS's underlying LightningFS
+    this.lfs = options.fs.getLightningFS();
     this.corsProxy = options.corsProxy;
     this.authorName = options.authorName ?? 'User';
     this.authorEmail = options.authorEmail ?? 'user@example.com';

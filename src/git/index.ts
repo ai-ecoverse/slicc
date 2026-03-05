@@ -5,5 +5,5 @@
  * in the browser-based environment.
  */
 
-export { GitFs } from './git-fs.js';
 export { GitCommands, createGitCommands } from './git-commands.js';
+export type { GitCommandResult, GitCommandsOptions } from './git-commands.js';

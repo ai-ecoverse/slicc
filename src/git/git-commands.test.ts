@@ -8,7 +8,7 @@ describe('GitCommands', () => {
   let git: GitCommands;
 
   beforeEach(async () => {
-    vfs = await VirtualFS.create({ backend: 'indexeddb', dbName: `git-test-${Date.now()}` });
+    vfs = await VirtualFS.create({ dbName: `git-test-${Date.now()}`, wipe: true });
     git = new GitCommands({
       fs: vfs,
       authorName: 'Test User',

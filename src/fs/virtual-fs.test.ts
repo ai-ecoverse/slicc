@@ -8,15 +8,11 @@ describe('VirtualFS', () => {
   let dbCounter = 0;
 
   beforeEach(async () => {
-    // Force IndexedDB backend for Node.js testing
+    // Create fresh VFS with unique DB name for test isolation
     vfs = await VirtualFS.create({
-      backend: 'indexeddb',
       dbName: `test-vfs-${dbCounter++}`,
+      wipe: true,
     });
-  });
-
-  it('reports indexeddb backend type', () => {
-    expect(vfs.getBackendType()).toBe('indexeddb');
   });
 
   describe('file operations', () => {
@@ -29,8 +25,10 @@ describe('VirtualFS', () => {
     it('writes and reads binary files', async () => {
       const data = new Uint8Array([10, 20, 30]);
       await vfs.writeFile('/binary.dat', data);
-      const result = await vfs.readFile('/binary.dat', { encoding: 'binary' });
-      expect(result).toEqual(data);
+      const result = await vfs.readFile('/binary.dat', { encoding: 'binary' }) as Uint8Array;
+      // LightningFS may return a view into a larger buffer, so compare actual bytes
+      expect(result.length).toBe(data.length);
+      expect(Array.from(result)).toEqual(Array.from(data));
     });
 
     it('readTextFile is a convenience for utf-8 read', async () => {

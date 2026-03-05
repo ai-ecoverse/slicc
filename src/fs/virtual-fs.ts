@@ -1,10 +1,14 @@
 /**
- * VirtualFS — POSIX-like virtual filesystem for the browser.
+ * VirtualFS — POSIX-like virtual filesystem backed by LightningFS.
  *
- * Auto-detects OPFS support and falls back to IndexedDB.
- * Provides a clean async API for file and directory operations.
+ * This is the single unified filesystem used throughout the application:
+ * - Shell operations (just-bash via VfsAdapter)
+ * - Git operations (isomorphic-git)
+ * - File browser UI
+ * - Agent tools
  */
 
+import FS from '@isomorphic-git/lightning-fs';
 import type {
   DirEntry,
   Encoding,
@@ -13,66 +17,40 @@ import type {
   ReadFileOptions,
   RmOptions,
   Stats,
-  StorageBackend,
-  WriteFileOptions,
 } from './types.js';
 import { FsError } from './types.js';
 import { normalizePath, splitPath } from './path-utils.js';
-import { OpfsBackend } from './opfs-backend.js';
-import { IndexedDbBackend } from './indexeddb-backend.js';
-
-export type BackendType = 'opfs' | 'indexeddb';
 
 export interface VirtualFsOptions {
-  /** Force a specific backend instead of auto-detecting. */
-  backend?: BackendType;
-  /** Custom database name for IndexedDB backend. */
+  /** Database name for LightningFS IndexedDB storage. */
   dbName?: string;
+  /** Wipe existing data on init. */
+  wipe?: boolean;
 }
 
 export class VirtualFS {
-  private backend: StorageBackend;
-  private backendType: BackendType;
+  private lfs: FS.PromisifiedFS;
+  private _ready: Promise<void>;
 
-  private constructor(backend: StorageBackend, backendType: BackendType) {
-    this.backend = backend;
-    this.backendType = backendType;
+  private constructor(dbName: string, wipe: boolean) {
+    const fs = new FS(dbName, { wipe });
+    this.lfs = fs.promises;
+    // LightningFS initializes asynchronously; wait for first stat to complete
+    this._ready = this.lfs.stat('/').then(() => {}).catch(() => {});
   }
 
-  /** Create a VirtualFS instance, auto-detecting the best backend. */
+  /** Create a VirtualFS instance. */
   static async create(options?: VirtualFsOptions): Promise<VirtualFS> {
-    if (options?.backend === 'opfs') {
-      return new VirtualFS(new OpfsBackend(), 'opfs');
-    }
-
-    if (options?.backend === 'indexeddb') {
-      return new VirtualFS(new IndexedDbBackend(options?.dbName), 'indexeddb');
-    }
-
-    // Auto-detect: prefer OPFS if available
-    if (await VirtualFS.isOpfsAvailable()) {
-      return new VirtualFS(new OpfsBackend(), 'opfs');
-    }
-
-    return new VirtualFS(new IndexedDbBackend(options?.dbName), 'indexeddb');
+    const dbName = options?.dbName ?? 'browser-fs';
+    const wipe = options?.wipe ?? false;
+    const vfs = new VirtualFS(dbName, wipe);
+    await vfs._ready;
+    return vfs;
   }
 
-  /** Check if OPFS is available in the current browser. */
-  static async isOpfsAvailable(): Promise<boolean> {
-    try {
-      if (typeof navigator === 'undefined') return false;
-      if (!navigator.storage?.getDirectory) return false;
-      // Try to actually get the root — some browsers have the API but it's non-functional
-      await navigator.storage.getDirectory();
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /** Get the active backend type. */
-  getBackendType(): BackendType {
-    return this.backendType;
+  /** Get the underlying LightningFS promises API (for isomorphic-git). */
+  getLightningFS(): FS.PromisifiedFS {
+    return this.lfs;
   }
 
   /**
@@ -80,7 +58,17 @@ export class VirtualFS {
    * @throws FsError ENOENT if file doesn't exist, EISDIR if path is a directory
    */
   async readFile(path: string, options?: ReadFileOptions): Promise<FileContent> {
-    return this.backend.readFile(normalizePath(path), options?.encoding ?? 'utf-8');
+    const normalized = normalizePath(path);
+    try {
+      const encoding = options?.encoding ?? 'utf-8';
+      if (encoding === 'utf-8') {
+        return await this.lfs.readFile(normalized, { encoding: 'utf8' });
+      } else {
+        return await this.lfs.readFile(normalized);
+      }
+    } catch (err) {
+      throw this.convertError(err, normalized);
+    }
   }
 
   /**
@@ -91,9 +79,19 @@ export class VirtualFS {
   async writeFile(
     path: string,
     content: FileContent,
-    _options?: WriteFileOptions,
+    _options?: { recursive?: boolean },
   ): Promise<void> {
-    return this.backend.writeFile(normalizePath(path), content);
+    const normalized = normalizePath(path);
+    // Ensure parent directory exists
+    const { dir } = splitPath(normalized);
+    if (dir !== '/') {
+      await this.mkdir(dir, { recursive: true });
+    }
+    try {
+      await this.lfs.writeFile(normalized, content);
+    } catch (err) {
+      throw this.convertError(err, normalized);
+    }
   }
 
   /**
@@ -101,7 +99,26 @@ export class VirtualFS {
    * @throws FsError ENOENT if directory doesn't exist, ENOTDIR if path is a file
    */
   async readDir(path: string): Promise<DirEntry[]> {
-    return this.backend.readDir(normalizePath(path));
+    const normalized = normalizePath(path);
+    try {
+      const names = await this.lfs.readdir(normalized);
+      const entries: DirEntry[] = [];
+      for (const name of names) {
+        const childPath = normalized === '/' ? `/${name}` : `${normalized}/${name}`;
+        try {
+          const stat = await this.lfs.stat(childPath);
+          entries.push({
+            name,
+            type: stat.isDirectory() ? 'directory' : 'file',
+          });
+        } catch {
+          // Skip entries we can't stat
+        }
+      }
+      return entries;
+    } catch (err) {
+      throw this.convertError(err, normalized);
+    }
   }
 
   /**
@@ -110,7 +127,31 @@ export class VirtualFS {
    *                 ENOENT if parent doesn't exist (non-recursive)
    */
   async mkdir(path: string, options?: MkdirOptions): Promise<void> {
-    return this.backend.mkdir(normalizePath(path), options);
+    const normalized = normalizePath(path);
+    if (normalized === '/') return; // Root always exists
+
+    if (options?.recursive) {
+      // Create all parent directories
+      const parts = normalized.split('/').filter(Boolean);
+      let current = '';
+      for (const part of parts) {
+        current += '/' + part;
+        try {
+          await this.lfs.mkdir(current);
+        } catch (err: unknown) {
+          // Ignore EEXIST errors in recursive mode
+          if (err instanceof Error && !err.message.includes('EEXIST')) {
+            throw this.convertError(err, current);
+          }
+        }
+      }
+    } else {
+      try {
+        await this.lfs.mkdir(normalized);
+      } catch (err) {
+        throw this.convertError(err, normalized);
+      }
+    }
   }
 
   /**
@@ -119,7 +160,35 @@ export class VirtualFS {
    *                 ENOTEMPTY if directory is not empty (non-recursive)
    */
   async rm(path: string, options?: RmOptions): Promise<void> {
-    return this.backend.rm(normalizePath(path), options);
+    const normalized = normalizePath(path);
+    try {
+      const stat = await this.lfs.stat(normalized);
+      if (stat.isDirectory()) {
+        if (options?.recursive) {
+          await this.rmRecursive(normalized);
+        } else {
+          await this.lfs.rmdir(normalized);
+        }
+      } else {
+        await this.lfs.unlink(normalized);
+      }
+    } catch (err) {
+      throw this.convertError(err, normalized);
+    }
+  }
+
+  private async rmRecursive(path: string): Promise<void> {
+    const entries = await this.lfs.readdir(path);
+    for (const name of entries) {
+      const childPath = path === '/' ? `/${name}` : `${path}/${name}`;
+      const stat = await this.lfs.stat(childPath);
+      if (stat.isDirectory()) {
+        await this.rmRecursive(childPath);
+      } else {
+        await this.lfs.unlink(childPath);
+      }
+    }
+    await this.lfs.rmdir(path);
   }
 
   /**
@@ -127,12 +196,29 @@ export class VirtualFS {
    * @throws FsError ENOENT if path doesn't exist
    */
   async stat(path: string): Promise<Stats> {
-    return this.backend.stat(normalizePath(path));
+    const normalized = normalizePath(path);
+    try {
+      const stat = await this.lfs.stat(normalized);
+      return {
+        type: stat.isDirectory() ? 'directory' : 'file',
+        size: stat.size,
+        mtime: stat.mtimeMs,
+        ctime: stat.ctimeMs,
+      };
+    } catch (err) {
+      throw this.convertError(err, normalized);
+    }
   }
 
   /** Check if a path exists. */
   async exists(path: string): Promise<boolean> {
-    return this.backend.exists(normalizePath(path));
+    const normalized = normalizePath(path);
+    try {
+      await this.lfs.stat(normalized);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -140,7 +226,13 @@ export class VirtualFS {
    * @throws FsError ENOENT if source doesn't exist
    */
   async rename(oldPath: string, newPath: string): Promise<void> {
-    return this.backend.rename(normalizePath(oldPath), normalizePath(newPath));
+    const normalizedOld = normalizePath(oldPath);
+    const normalizedNew = normalizePath(newPath);
+    try {
+      await this.lfs.rename(normalizedOld, normalizedNew);
+    } catch (err) {
+      throw this.convertError(err, normalizedOld);
+    }
   }
 
   /**
@@ -195,4 +287,32 @@ export class VirtualFS {
   basename(path: string): string {
     return splitPath(normalizePath(path)).base;
   }
+
+  /**
+   * Convert LightningFS errors to FsError.
+   */
+  private convertError(err: unknown, path: string): FsError {
+    if (err instanceof FsError) return err;
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('ENOENT')) {
+      return new FsError('ENOENT', 'no such file or directory', path);
+    }
+    if (msg.includes('EEXIST')) {
+      return new FsError('EEXIST', 'file already exists', path);
+    }
+    if (msg.includes('ENOTDIR')) {
+      return new FsError('ENOTDIR', 'not a directory', path);
+    }
+    if (msg.includes('EISDIR')) {
+      return new FsError('EISDIR', 'is a directory', path);
+    }
+    if (msg.includes('ENOTEMPTY')) {
+      return new FsError('ENOTEMPTY', 'directory not empty', path);
+    }
+    // Default to EINVAL for unknown errors
+    return new FsError('EINVAL', msg, path);
+  }
 }
+
+// For backwards compatibility, keep BackendType but it's no longer used
+export type BackendType = 'lightningfs';

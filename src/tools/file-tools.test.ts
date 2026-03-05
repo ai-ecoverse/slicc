@@ -14,8 +14,8 @@ describe('File Tools', () => {
 
   beforeEach(async () => {
     fs = await VirtualFS.create({
-      backend: 'indexeddb',
       dbName: `test-file-tools-${dbCounter++}`,
+      wipe: true,
     });
     tools = createFileTools(fs);
     readFile = tools.find((t) => t.name === 'read_file')!;
