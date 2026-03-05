@@ -9,9 +9,13 @@ export default defineConfig(({ mode }) => ({
   root: '.',
   define: {
     __DEV__: JSON.stringify(mode !== 'production'),
+    // Buffer polyfill for isomorphic-git
+    global: 'globalThis',
   },
   resolve: {
     alias: {
+      // Buffer polyfill for isomorphic-git (browser compatibility)
+      buffer: 'buffer/',
       // just-bash's browser bundle references node:zlib and node:module for
       // gzip/gunzip commands that aren't functional in browsers anyway.
       // Alias to empty stubs so the bundled JS never tries to fetch them.

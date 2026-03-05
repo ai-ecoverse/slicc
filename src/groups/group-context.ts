@@ -77,7 +77,7 @@ export class GroupContext {
     try {
       // Create group-specific VirtualFS with isolated IndexedDB
       const dbName = `slicc-fs-${this.group.folder}`;
-      this.fs = await VirtualFS.create({ backend: 'indexeddb', dbName });
+      this.fs = await VirtualFS.create({ dbName });
       log.info('VirtualFS initialized', { folder: this.group.folder });
 
       // Ensure directory structure

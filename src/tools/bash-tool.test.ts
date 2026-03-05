@@ -13,8 +13,8 @@ describe('Bash Tool', () => {
 
   beforeEach(async () => {
     fs = await VirtualFS.create({
-      backend: 'indexeddb',
       dbName: `test-bash-tool-${dbCounter++}`,
+      wipe: true,
     });
     shell = new WasmShell({ fs });
     bash = createBashTool(shell);

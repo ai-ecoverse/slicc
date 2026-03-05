@@ -12,8 +12,8 @@ describe('Search Tools', () => {
 
   beforeEach(async () => {
     fs = await VirtualFS.create({
-      backend: 'indexeddb',
       dbName: `test-search-tools-${dbCounter++}`,
+      wipe: true,
     });
     const tools = createSearchTools(fs);
     grep = tools.find((t) => t.name === 'grep')!;

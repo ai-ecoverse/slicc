@@ -50,36 +50,6 @@ export interface ReadFileOptions {
   encoding?: Encoding;
 }
 
-/**
- * Storage backend interface.
- * Both OPFS and IndexedDB backends implement this contract.
- */
-export interface StorageBackend {
-  /** Read a file's content. Throws if not found. */
-  readFile(path: string, encoding?: Encoding): Promise<FileContent>;
-
-  /** Write content to a file. Creates parent dirs if they don't exist. */
-  writeFile(path: string, content: FileContent): Promise<void>;
-
-  /** List entries in a directory. Throws if not found or not a directory. */
-  readDir(path: string): Promise<DirEntry[]>;
-
-  /** Create a directory. */
-  mkdir(path: string, options?: MkdirOptions): Promise<void>;
-
-  /** Remove a file or directory. */
-  rm(path: string, options?: RmOptions): Promise<void>;
-
-  /** Get metadata about a path. Throws if not found. */
-  stat(path: string): Promise<Stats>;
-
-  /** Check if a path exists. */
-  exists(path: string): Promise<boolean>;
-
-  /** Rename/move an entry. */
-  rename(oldPath: string, newPath: string): Promise<void>;
-}
-
 /** Filesystem error codes, mirroring common POSIX errno values. */
 export type FsErrorCode =
   | 'ENOENT'    // No such file or directory

@@ -19,8 +19,8 @@ describe('JavaScript Tool', () => {
 
   beforeEach(async () => {
     fs = await VirtualFS.create({
-      backend: 'indexeddb',
       dbName: `test-js-tool-${dbCounter++}`,
+      wipe: true,
     });
     tool = createJavaScriptTool(fs);
   });

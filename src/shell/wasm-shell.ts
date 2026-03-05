@@ -9,10 +9,11 @@
 import type { Terminal } from '@xterm/xterm';
 import type { FitAddon } from '@xterm/addon-fit';
 import type { VirtualFS } from '../fs/index.js';
-import { Bash } from 'just-bash';
-import type { BashExecResult, SecureFetch } from 'just-bash';
+import { Bash, defineCommand } from 'just-bash';
+import type { BashExecResult, SecureFetch, Command } from 'just-bash';
 import { VfsAdapter } from './vfs-adapter.js';
 import { cacheBinaryBody } from './binary-cache.js';
+import { GitCommands } from '../git/git-commands.js';
 
 /** Check if a content-type header indicates text (safe for UTF-8 decoding). */
 export function isTextContentType(contentType: string): boolean {
@@ -123,6 +124,7 @@ export interface WasmShellOptions {
 export class WasmShell {
   private bash: Bash;
   private vfsAdapter: VfsAdapter;
+  private gitCommands: GitCommands;
   private terminal: Terminal | null = null;
   private fitAddon: FitAddon | null = null;
   private currentLine = '';
@@ -146,14 +148,40 @@ export class WasmShell {
       PWD: initialCwd,
       ...options.env,
     };
+
+    // Initialize git commands with VirtualFS
+    this.gitCommands = new GitCommands({
+      fs: options.fs,
+      authorName: initialEnv.GIT_AUTHOR_NAME ?? 'User',
+      authorEmail: initialEnv.GIT_AUTHOR_EMAIL ?? 'user@example.com',
+    });
+
+    // Create git custom command for just-bash
+    const gitCommand = this.createGitCustomCommand();
+
     this.bash = new Bash({
       fs: this.vfsAdapter,
       cwd: initialCwd,
       env: initialEnv,
       fetch: createProxiedFetch(),
+      customCommands: [gitCommand],
     });
     this.lastEnv = { ...initialEnv };
     this.cwd = initialCwd;
+  }
+
+  /** Create a custom git command for just-bash. */
+  private createGitCustomCommand(): Command {
+    const gitCommands = this.gitCommands;
+    return defineCommand('git', async (args, ctx) => {
+      const cwd = ctx.cwd;
+      const result = await gitCommands.execute(args, cwd);
+      return {
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+      };
+    });
   }
 
   /** Get the underlying Bash instance for programmatic access. */

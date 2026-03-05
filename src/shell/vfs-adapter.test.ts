@@ -14,8 +14,8 @@ describe('VfsAdapter', () => {
 
   beforeEach(async () => {
     vfs = await VirtualFS.create({
-      backend: 'indexeddb',
       dbName: `test-vfs-adapter-${dbCounter++}`,
+      wipe: true,
     });
     adapter = new VfsAdapter(vfs);
   });
@@ -55,8 +55,10 @@ describe('VfsAdapter', () => {
     it('writes Uint8Array content directly', async () => {
       const bytes = new Uint8Array([1, 2, 3, 4, 5]);
       await adapter.writeFile('/binary.bin', bytes);
-      const content = await vfs.readFile('/binary.bin', { encoding: 'binary' });
-      expect(content).toEqual(bytes);
+      const content = await vfs.readFile('/binary.bin', { encoding: 'binary' }) as Uint8Array;
+      // LightningFS may return a view into a larger buffer, so compare actual bytes
+      expect(content.length).toBe(bytes.length);
+      expect(Array.from(content)).toEqual(Array.from(bytes));
     });
   });
 

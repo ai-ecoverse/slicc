@@ -115,3 +115,21 @@ User -> ChatPanel -> Agent.prompt() -> pi-agent-core loop -> Anthropic API (stre
 - **Node shims**: src/shims/empty.ts stubs out node:zlib and node:module for the browser bundle (just-bash references them).
 - **Multi-provider auth**: API key stored in localStorage. Provider selector supports Anthropic (direct), Azure AI Foundry, and AWS Bedrock. Provider/resource/region stored in localStorage. Model resolved via `getModel()` from pi-ai with baseUrl override for Azure/Bedrock.
 - **Extension detection**: `typeof chrome !== 'undefined' && !!chrome?.runtime?.id` — used throughout to select CDP transport, layout mode, fetch strategy, and JS tool sandbox mechanism.
+
+## Git Integration (src/git/)
+Git support via isomorphic-git with LightningFS as the backing store. GitCommands class provides CLI-like interface for git operations (init, clone, add, commit, status, log, branch, checkout, diff, remote, fetch, pull, push, config, rev-parse). Registered as a custom command in just-bash so it works in compound commands and via the bash tool.
+
+- **Authentication**: Set `git config github.token <PAT>` to authenticate with GitHub (avoids rate limits on public repos, required for private repos)
+- **CORS handling**: In CLI mode, git HTTP requests route through `/api/fetch-proxy`. In extension mode, uses direct fetch with host_permissions.
+- **Unified filesystem**: VirtualFS wraps LightningFS, exposing `getLightningFS()` for isomorphic-git compatibility. Shell, git, file browser, and tools all share the same filesystem.
+
+## Debugging Browser Features
+
+When developing or debugging browser-based features (terminal, file browser, agent behavior), use the `agent-browser` skill to automate Chrome and observe behavior directly:
+
+1. **Start the dev server**: `npm run dev:full` (launches Chrome with CDP on port 9222)
+2. **Use agent-browser skill**: Invoke the skill to navigate, interact with UI elements, take screenshots, and inspect state
+3. **Check CLI logs**: The Express server logs all requests. Console output from the browser is forwarded to CLI stdout via the CDP console forwarder.
+4. **Add temporary debug logging**: Use `console.log()` in browser code — output appears in CLI terminal. Remove before committing.
+
+This approach keeps the human out of the debug loop by letting the agent directly observe browser behavior, check network requests in CLI logs, and iterate without manual intervention.
