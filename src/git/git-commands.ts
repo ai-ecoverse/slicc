@@ -38,6 +38,8 @@ export class GitCommands {
   private corsProxy?: string;
   private authorName: string;
   private authorEmail: string;
+  /** GitHub token for authentication (avoids rate limits on public repos, required for private). */
+  private githubToken?: string;
 
   constructor(private options: GitCommandsOptions) {
     // Use the shared VirtualFS's underlying LightningFS
@@ -45,6 +47,19 @@ export class GitCommands {
     this.corsProxy = options.corsProxy;
     this.authorName = options.authorName ?? 'User';
     this.authorEmail = options.authorEmail ?? 'user@example.com';
+  }
+
+  /**
+   * Get onAuth callback for isomorphic-git operations.
+   * Returns credentials if a GitHub token is configured.
+   */
+  private getOnAuth(): (() => { username: string; password: string }) | undefined {
+    if (!this.githubToken) return undefined;
+    const token = this.githubToken;
+    return () => ({
+      username: 'x-access-token',
+      password: token,
+    });
   }
 
   /**
@@ -206,6 +221,7 @@ Available commands:
       singleBranch: true, // Always single branch for performance
       noCheckout: false, // Let clone handle checkout
       cache,
+      onAuth: this.getOnAuth(),
       onProgress: (event) => {
         if (event.phase === 'Receiving objects') {
           output += `Receiving objects: ${event.loaded}/${event.total}\n`;
@@ -537,6 +553,7 @@ Available commands:
       remote,
       corsProxy: this.corsProxy,
       prune,
+      onAuth: this.getOnAuth(),
       onProgress: (event) => {
         output += `${event.phase}: ${event.loaded}/${event.total}\n`;
       },
@@ -565,6 +582,7 @@ Available commands:
         name: this.authorName,
         email: this.authorEmail,
       },
+      onAuth: this.getOnAuth(),
       onProgress: (event) => {
         output += `${event.phase}: ${event.loaded}/${event.total}\n`;
       },
@@ -589,6 +607,7 @@ Available commands:
       ref: branch ?? undefined,
       corsProxy: this.corsProxy,
       force,
+      onAuth: this.getOnAuth(),
       onProgress: (event) => {
         output += `${event.phase}: ${event.loaded}/${event.total}\n`;
       },
@@ -624,6 +643,11 @@ Available commands:
     }
 
     if (value !== undefined) {
+      // Handle special credential config
+      if (path === 'credential.token' || path === 'github.token') {
+        this.githubToken = value;
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
       // Set config
       await git.setConfig({ fs: this.lfs, dir: cwd, path, value });
       // Update local author info if applicable
