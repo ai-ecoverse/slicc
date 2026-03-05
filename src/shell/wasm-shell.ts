@@ -13,6 +13,7 @@ import { Bash } from 'just-bash';
 import type { BashExecResult, SecureFetch } from 'just-bash';
 import { VfsAdapter } from './vfs-adapter.js';
 import { cacheBinaryBody } from './binary-cache.js';
+import { GitCommands } from '../git/git-commands.js';
 
 /** Check if a content-type header indicates text (safe for UTF-8 decoding). */
 export function isTextContentType(contentType: string): boolean {
@@ -123,6 +124,7 @@ export interface WasmShellOptions {
 export class WasmShell {
   private bash: Bash;
   private vfsAdapter: VfsAdapter;
+  private gitCommands: GitCommands;
   private terminal: Terminal | null = null;
   private fitAddon: FitAddon | null = null;
   private currentLine = '';
@@ -154,6 +156,13 @@ export class WasmShell {
     });
     this.lastEnv = { ...initialEnv };
     this.cwd = initialCwd;
+
+    // Initialize git commands with VirtualFS
+    this.gitCommands = new GitCommands({
+      fs: options.fs,
+      authorName: initialEnv.GIT_AUTHOR_NAME ?? 'User',
+      authorEmail: initialEnv.GIT_AUTHOR_EMAIL ?? 'user@example.com',
+    });
   }
 
   /** Get the underlying Bash instance for programmatic access. */
@@ -173,6 +182,12 @@ export class WasmShell {
 
   /** Run a command through just-bash, carrying forward env/cwd state. */
   private async runCommand(command: string): Promise<BashExecResult> {
+    // Check if this is a git command - intercept and handle with isomorphic-git
+    const trimmed = command.trim();
+    if (trimmed.startsWith('git ') || trimmed === 'git') {
+      return this.runGitCommand(trimmed);
+    }
+
     const result = await this.bash.exec(command, {
       env: this.lastEnv,
       cwd: this.cwd,
@@ -185,6 +200,78 @@ export class WasmShell {
       this.cwd = result.env.PWD;
     }
     return result;
+  }
+
+  /** Handle git commands using isomorphic-git. */
+  private async runGitCommand(command: string): Promise<BashExecResult> {
+    // Parse git command arguments (simple shell-like parsing)
+    const args = this.parseGitArgs(command.slice(4)); // Remove 'git '
+
+    // Update git author from env if set
+    if (this.lastEnv.GIT_AUTHOR_NAME) {
+      this.gitCommands = new GitCommands({
+        fs: this.options.fs,
+        authorName: this.lastEnv.GIT_AUTHOR_NAME,
+        authorEmail: this.lastEnv.GIT_AUTHOR_EMAIL ?? 'user@example.com',
+      });
+    }
+
+    const result = await this.gitCommands.execute(args, this.cwd);
+
+    return {
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+      env: this.lastEnv,
+    };
+  }
+
+  /** Parse git command arguments, handling quotes. */
+  private parseGitArgs(input: string): string[] {
+    const args: string[] = [];
+    let current = '';
+    let inSingleQuote = false;
+    let inDoubleQuote = false;
+    let escaped = false;
+
+    for (const ch of input) {
+      if (escaped) {
+        current += ch;
+        escaped = false;
+        continue;
+      }
+
+      if (ch === '\\' && !inSingleQuote) {
+        escaped = true;
+        continue;
+      }
+
+      if (ch === "'" && !inDoubleQuote) {
+        inSingleQuote = !inSingleQuote;
+        continue;
+      }
+
+      if (ch === '"' && !inSingleQuote) {
+        inDoubleQuote = !inDoubleQuote;
+        continue;
+      }
+
+      if (ch === ' ' && !inSingleQuote && !inDoubleQuote) {
+        if (current) {
+          args.push(current);
+          current = '';
+        }
+        continue;
+      }
+
+      current += ch;
+    }
+
+    if (current) {
+      args.push(current);
+    }
+
+    return args;
   }
 
   /** Mount the terminal in a DOM container. */

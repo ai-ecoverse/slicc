@@ -308,7 +308,14 @@ async function main() {
 
   // Fetch proxy — forwards cross-origin requests from the browser to bypass CORS.
   // Used by just-bash's curl which calls the browser's fetch() API.
-  app.all('/api/fetch-proxy', express.raw({ type: '*/*', limit: '10mb' }), async (req, res) => {
+  // Note: We collect raw body manually to handle git protocol correctly.
+  app.all('/api/fetch-proxy', async (req, res) => {
+    // Collect raw body manually (express.raw() doesn't handle all content types)
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) {
+      chunks.push(Buffer.from(chunk));
+    }
+    const rawBody = Buffer.concat(chunks);
     const targetUrl = req.headers['x-target-url'] as string;
     if (!targetUrl) {
       res.status(400).json({ error: 'Missing X-Target-URL header' });
@@ -317,7 +324,7 @@ async function main() {
     try {
       const fetchInit: RequestInit = {
         method: req.method,
-        redirect: 'manual',
+        redirect: 'follow', // Follow redirects for git protocol compatibility
       };
       // Forward relevant headers (excluding hop-by-hop and proxy headers)
       const skipHeaders = new Set(['host', 'connection', 'x-target-url', 'content-length', 'transfer-encoding']);
@@ -328,8 +335,8 @@ async function main() {
         }
       }
       if (Object.keys(headers).length > 0) fetchInit.headers = headers;
-      if (req.body && req.body.length > 0 && !['GET', 'HEAD'].includes(req.method)) {
-        fetchInit.body = req.body;
+      if (rawBody.length > 0 && !['GET', 'HEAD'].includes(req.method)) {
+        fetchInit.body = rawBody;
       }
 
       const upstream = await fetch(targetUrl, fetchInit);
