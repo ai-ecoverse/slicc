@@ -42,11 +42,13 @@ export class BrowserAPI {
   /**
    * Create a new browser tab/target.
    * Returns the targetId of the newly created tab.
+   * The tab opens in the background by default.
    */
   async createPage(url?: string): Promise<string> {
     await this.ensureConnected();
     const result = await this.client.send('Target.createTarget', {
       url: url ?? 'about:blank',
+      background: true,
     });
     return result['targetId'] as string;
   }
