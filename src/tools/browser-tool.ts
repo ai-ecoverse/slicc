@@ -11,6 +11,7 @@
  */
 
 import type { BrowserAPI } from '../cdp/index.js';
+import type { AccessibilityNode } from '../cdp/types.js';
 import type { VirtualFS } from '../fs/index.js';
 import type { ToolDefinition, ToolResult } from '../core/types.js';
 import { createLogger } from '../core/logger.js';
@@ -27,10 +28,27 @@ function base64ToBytes(base64: string): Uint8Array {
   return bytes;
 }
 
+/**
+ * Snapshot state for a tab - tracks element refs and page info.
+ * Compatible with playwright-cli snapshot format.
+ */
+interface TabSnapshot {
+  url: string;
+  title: string;
+  /** Map from ref (e.g. "e1") to CSS selector */
+  refToSelector: Map<string, string>;
+  /** The YAML-like snapshot content */
+  content: string;
+  /** Timestamp when snapshot was taken */
+  timestamp: number;
+}
+
 /** Create the browser tool bound to a BrowserAPI instance. */
 export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): ToolDefinition {
   let runtimeTabId: string | null = null;
   let appTabId: string | null = null;
+  /** Per-tab snapshot state, keyed by targetId */
+  const tabSnapshots = new Map<string, TabSnapshot>();
 
   /** Detect and cache the SLICC app's own tab ID so we can hide/protect it. */
   async function resolveAppTabId(): Promise<void> {
@@ -71,9 +89,10 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
       'The app\'s own tab is hidden and protected — you cannot accidentally navigate or modify it. ' +
       'If targetId is omitted, the user\'s currently active/focused tab is used automatically. ' +
       'Actions: list_tabs, new_tab (url — creates a new tab and navigates to the URL, returns targetId), ' +
-      'navigate (url, targetId?), screenshot (targetId?, path?, fullPage?, selector? — if path is given, saves PNG to VFS; ' +
-      'set fullPage=true to capture the entire scrollable page; use selector to capture just a specific element), ' +
-      'evaluate (expression, targetId?), click (selector, targetId?), type (text, targetId?), ' +
+      'navigate (url, targetId?), ' +
+      'snapshot (targetId? — captures page accessibility snapshot with element refs like e1, e2; MUST be called before screenshot), ' +
+      'screenshot (targetId?, path?, fullPage?, selector? — requires snapshot first; if path is given, saves PNG to VFS), ' +
+      'evaluate (expression, targetId?), click (ref or selector, targetId? — use refs like "e5" from snapshot), type (text, targetId?), ' +
       'evaluate_persistent (expression — runs JS in a persistent blank tab that preserves variables across calls, no targetId needed), ' +
       'show_image (path — displays an image from VFS inline in the chat; use this when the user asks to see an image file).',
     inputSchema: {
@@ -81,7 +100,7 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
       properties: {
         action: {
           type: 'string',
-          enum: ['list_tabs', 'new_tab', 'navigate', 'screenshot', 'evaluate', 'click', 'type', 'evaluate_persistent', 'show_image'],
+          enum: ['list_tabs', 'new_tab', 'navigate', 'snapshot', 'screenshot', 'evaluate', 'click', 'type', 'evaluate_persistent', 'show_image'],
           description: 'The browser action to perform.',
         },
         targetId: {
@@ -99,6 +118,10 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
         selector: {
           type: 'string',
           description: 'CSS selector — for "click" action: element to click. For "screenshot" action: element to capture (screenshots just that element).',
+        },
+        ref: {
+          type: 'string',
+          description: 'Element reference from snapshot (e.g. "e5") — for "click" action. Alternative to selector.',
         },
         text: {
           type: 'string',
@@ -155,7 +178,94 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
             }
             await browser.attachToPage(targetId);
             await browser.navigate(url);
+            // Invalidate snapshot after navigation
+            tabSnapshots.delete(targetId);
             return { content: `Navigated to ${url}` };
+          }
+
+          case 'snapshot': {
+            const targetId = (input['targetId'] as string) || await getActiveTab();
+            if (!targetId) {
+              return { content: 'snapshot requires targetId or an active tab', isError: true };
+            }
+            await browser.attachToPage(targetId);
+
+            // Get page info
+            const pageInfo = await browser.evaluate(`JSON.stringify({ url: location.href, title: document.title })`);
+            const { url, title } = JSON.parse(pageInfo as string);
+
+            // Get accessibility tree and convert to playwright-cli compatible format
+            const tree = await browser.getAccessibilityTree();
+            const refToSelector = new Map<string, string>();
+            let refCounter = 0;
+
+            // Convert accessibility tree to YAML-like snapshot format with refs
+            function renderNode(node: AccessibilityNode, indent: string = ''): string[] {
+              const lines: string[] = [];
+              const role = (node.role || 'unknown').toLowerCase();
+              const name = node.name || '';
+              
+              // Skip certain roles that don't need refs
+              const skipRoles = ['none', 'presentation', 'generic', 'rootwebarea'];
+              const needsRef = !skipRoles.includes(role) && (name || role === 'textbox' || role === 'button' || role === 'link' || role === 'checkbox' || role === 'radio');
+              
+              let ref = '';
+              if (needsRef) {
+                ref = `e${++refCounter}`;
+                // Generate CSS selector based on role and name
+                const escapedName = name.replace(/"/g, '\\"');
+                let selector = '';
+                if (role === 'button' && name) selector = `button:has-text("${escapedName}")`;
+                else if (role === 'link' && name) selector = `a:has-text("${escapedName}")`;
+                else if (role === 'textbox') selector = `input, textarea, [contenteditable]`;
+                else if (role === 'checkbox') selector = `input[type="checkbox"]`;
+                else if (role === 'radio') selector = `input[type="radio"]`;
+                else if (name) selector = `[aria-label="${escapedName}"], *:has-text("${escapedName}")`;
+                else selector = `[role="${role}"]`;
+                refToSelector.set(ref, selector);
+              }
+
+              // Format: - role "name" [ref=eN]
+              let line = `${indent}- ${role}`;
+              if (name) line += ` "${name}"`;
+              if (ref) line += ` [ref=${ref}]`;
+              if (node.value) line += `: "${node.value}"`;
+              lines.push(line);
+
+              // Recurse into children
+              if (node.children) {
+                for (const child of node.children) {
+                  lines.push(...renderNode(child, indent + '  '));
+                }
+              }
+              return lines;
+            }
+
+            const snapshotLines = renderNode(tree);
+            const snapshotContent = snapshotLines.join('\n');
+
+            // Store snapshot state
+            const snapshot: TabSnapshot = {
+              url,
+              title,
+              refToSelector,
+              content: snapshotContent,
+              timestamp: Date.now(),
+            };
+            tabSnapshots.set(targetId, snapshot);
+
+            // Format output like playwright-cli
+            const output = [
+              '### Page',
+              `- Page URL: ${url}`,
+              `- Page Title: ${title}`,
+              '### Snapshot',
+              '```yaml',
+              snapshotContent,
+              '```',
+            ].join('\n');
+
+            return { content: output };
           }
 
           case 'screenshot': {
@@ -163,6 +273,16 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
             if (!targetId) {
               return { content: 'screenshot requires targetId or an active tab', isError: true };
             }
+            
+            // Guard: require snapshot before screenshot
+            const snapshot = tabSnapshots.get(targetId);
+            if (!snapshot) {
+              return { 
+                content: 'Screenshot requires a snapshot first. Run the "snapshot" action to capture the page state before taking a screenshot.', 
+                isError: true 
+              };
+            }
+            
             await browser.attachToPage(targetId);
             const fullPage = input['fullPage'] as boolean | undefined;
             const screenshotSelector = input['selector'] as string | undefined;
@@ -216,13 +336,30 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
 
           case 'click': {
             const targetId = (input['targetId'] as string) || await getActiveTab();
-            const selector = input['selector'] as string;
+            let selector = input['selector'] as string;
+            const ref = input['ref'] as string;
+            
+            // Support ref-based clicking (e.g. "e5" from snapshot)
+            if (ref && !selector) {
+              const snapshot = tabSnapshots.get(targetId!);
+              if (!snapshot) {
+                return { content: `No snapshot available. Run "snapshot" action first to get element refs.`, isError: true };
+              }
+              const refSelector = snapshot.refToSelector.get(ref);
+              if (!refSelector) {
+                return { content: `Unknown ref "${ref}". Available refs: ${[...snapshot.refToSelector.keys()].slice(0, 10).join(', ')}...`, isError: true };
+              }
+              selector = refSelector;
+            }
+            
             if (!targetId || !selector) {
-              return { content: 'click requires selector (and targetId or an active tab)', isError: true };
+              return { content: 'click requires selector or ref (and targetId or an active tab)', isError: true };
             }
             await browser.attachToPage(targetId);
             await browser.click(selector);
-            return { content: `Clicked: ${selector}` };
+            // Invalidate snapshot after click (page state may have changed)
+            tabSnapshots.delete(targetId);
+            return { content: `Clicked: ${ref ? `${ref} (${selector})` : selector}` };
           }
 
           case 'type': {
