@@ -14,6 +14,7 @@ import type { BashExecResult, SecureFetch, Command } from 'just-bash';
 import { VfsAdapter } from './vfs-adapter.js';
 import { cacheBinaryBody } from './binary-cache.js';
 import { GitCommands } from '../git/git-commands.js';
+import { createSupplementalCommands } from './supplemental-commands.js';
 
 /** Check if a content-type header indicates text (safe for UTF-8 decoding). */
 export function isTextContentType(contentType: string): boolean {
@@ -158,13 +159,14 @@ export class WasmShell {
 
     // Create git custom command for just-bash
     const gitCommand = this.createGitCustomCommand();
+    const supplementalCommands = createSupplementalCommands();
 
     this.bash = new Bash({
       fs: this.vfsAdapter,
       cwd: initialCwd,
       env: initialEnv,
       fetch: createProxiedFetch(),
-      customCommands: [gitCommand],
+      customCommands: [gitCommand, ...supplementalCommands],
     });
     this.lastEnv = { ...initialEnv };
     this.cwd = initialCwd;
