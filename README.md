@@ -2,7 +2,7 @@
 
 # slicc — Self-Licking Ice Cream Cone
 
-[![Vibe Coded](https://img.shields.io/badge/vibe--coded-62%25_AI-blue?style=for-the-badge&logo=github)](https://github.com/trieloff/vibe-coded-badge-action)
+[![Vibe Coded](https://img.shields.io/badge/vibe--coded-62%25_AI-blue?style=for-the-badge&logo=github)](https://github.com/ai-ecoverse/vibe-coded-badge-action)
 
 > *An AI coding agent that builds itself. The snake that eats its own tail, but productive.*
 
@@ -12,21 +12,9 @@ A browser-based coding agent that runs as a **Chrome extension** or with a thin 
 
 ---
 
-Part of the **[AI Ecoverse](https://github.com/trieloff/ai-ecoverse)** — a comprehensive ecosystem of tools for AI-assisted development:
-- [ai-aligned-git](https://github.com/trieloff/ai-aligned-git) — Git wrapper for safe AI commit practices
-- [ai-aligned-gh](https://github.com/trieloff/ai-aligned-gh) — GitHub CLI wrapper for proper AI attribution
-- [yolo](https://github.com/trieloff/yolo) — AI CLI launcher with worktree isolation
-- [vibe-coded-badge-action](https://github.com/trieloff/vibe-coded-badge-action) — Badge showing AI-generated code percentage
-- [gh-workflow-peek](https://github.com/trieloff/gh-workflow-peek) — Smarter GitHub Actions log filtering
-- [upskill](https://github.com/trieloff/upskill) — Install Claude/Agent skills from other repositories
-- [as-a-bot](https://github.com/trieloff/as-a-bot) — GitHub App token broker for proper AI attribution
-- **slicc** — Browser-based coding agent (you are here)
-
----
-
 ## Features
 
-- :puzzle_piece: **Chrome Extension** — runs as a side panel in Chrome, no server required. Tabbed UI (Chat/Terminal/Files) optimized for the side panel form factor
+- 🚡 **Chrome Extension** — runs as a side panel in Chrome, no server required. Tabbed UI (Chat/Terminal/Files) optimized for the side panel form factor
 - :globe_with_meridians: **Browser-Native** — runs entirely in the browser, no Electron, no desktop app
 - :satellite: **CLI Server** — alternative mode: thin Node.js/Express server launches Chrome and proxies CDP connections
 - :file_folder: **Virtual Filesystem** — OPFS + IndexedDB-backed filesystem right in the browser, with folder ZIP download
@@ -73,14 +61,14 @@ The cone licked itself. Two Claudes. One browser. One recursive architecture.
 ## Project Status
 
 SLICC is a working prototype with these capabilities:
-- **Chrome Extension** with tabbed UI (Chat/Terminal/Files/Memory)
+- **Chrome Extension** with tabbed UI (Chat/Terminal/Files)
 - **Multi-group contexts** with isolated sessions (like NanoClaw)
 - **Browser automation** via chrome.debugger API
 - **Virtual filesystem** backed by OPFS/IndexedDB
 - **WebAssembly Bash shell** for running commands
 - **Multi-provider auth** (Anthropic, Azure, Bedrock)
 
-Current development is happening on feature branches using [yolo](https://github.com/trieloff/yolo) for worktree isolation, with Claude agents building the features autonomously.
+Current development is happening on feature branches using [yolo](https://github.com/ai-ecoverse/yolo) for worktree isolation, with Claude agents building the features autonomously.
 
 ## Architecture
 
@@ -223,3 +211,15 @@ git config github.token ghp_YOUR_TOKEN_HERE
 - **No merge/rebase**: Complex merge operations are not yet implemented
 - **No LFS**: Large File Storage is not supported
 - **Browser storage**: All repository data is stored in IndexedDB (LightningFS)
+
+## Related Work
+
+Part of the **[AI Ecoverse](https://github.com/ai-ecoverse)** — a comprehensive ecosystem of tools for AI-assisted development:
+- [ai-aligned-git](https://github.com/ai-ecoverse/ai-aligned-git) — Git wrapper for safe AI commit practices
+- [ai-aligned-gh](https://github.com/ai-ecoverse/ai-aligned-gh) — GitHub CLI wrapper for proper AI attribution
+- [yolo](https://github.com/ai-ecoverse/yolo) — AI CLI launcher with worktree isolation
+- [vibe-coded-badge-action](https://github.com/ai-ecoverse/vibe-coded-badge-action) — Badge showing AI-generated code percentage
+- [gh-workflow-peek](https://github.com/ai-ecoverse/gh-workflow-peek) — Smarter GitHub Actions log filtering
+- [upskill](https://github.com/ai-ecoverse/upskill) — Install Claude/Agent skills from other repositories
+- [as-a-bot](https://github.com/ai-ecoverse/as-a-bot) — GitHub App token broker for proper AI attribution
+- **slicc** — Browser-based coding agent (you are here)

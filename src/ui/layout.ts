@@ -193,10 +193,7 @@ export class Layout {
       } catch { /* OPFS not available or already empty */ }
       location.reload();
     });
-    // Only show in dev mode
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      this.actionsEl.appendChild(this.clearFsBtn);
-    }
+    this.actionsEl.appendChild(this.clearFsBtn);
 
     // Clear Groups DB (dev mode only) - clears all group data including global memory
     const clearGroupsBtn = document.createElement('button');
