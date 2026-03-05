@@ -1,11 +1,11 @@
 /**
  * Skills System - loads and manages skills that can modify agent behavior.
- * 
+ *
  * Skills are markdown files with YAML frontmatter that define:
  * - name: skill identifier
  * - description: what the skill does
  * - allowed-tools: optional tool restrictions (e.g., "Bash(agent-browser:*)")
- * 
+ *
  * Skills provide instructions that the agent can follow.
  */
 
@@ -31,7 +31,7 @@ export interface Skill {
  */
 function parseFrontmatter(content: string): { metadata: Partial<SkillMetadata>; body: string } {
   const frontmatterMatch = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
-  
+
   if (!frontmatterMatch) {
     return { metadata: {}, body: content };
   }
@@ -71,7 +71,7 @@ export async function loadSkills(fs: VirtualFS, skillsDir: string): Promise<Skil
 
   try {
     const entries = await fs.readDir(skillsDir);
-    
+
     for (const entry of entries) {
       if (entry.type === 'directory') {
         // Skills can be in subdirectories with SKILL.md
@@ -80,7 +80,7 @@ export async function loadSkills(fs: VirtualFS, skillsDir: string): Promise<Skil
           const content = await fs.readFile(skillPath, { encoding: 'utf-8' });
           const text = typeof content === 'string' ? content : new TextDecoder().decode(content);
           const { metadata, body } = parseFrontmatter(text);
-          
+
           if (metadata.name) {
             skills.push({
               metadata: {
@@ -103,10 +103,10 @@ export async function loadSkills(fs: VirtualFS, skillsDir: string): Promise<Skil
           const content = await fs.readFile(skillPath, { encoding: 'utf-8' });
           const text = typeof content === 'string' ? content : new TextDecoder().decode(content);
           const { metadata, body } = parseFrontmatter(text);
-          
+
           // Use filename as name if not in frontmatter
           const name = metadata.name || entry.name.replace('.md', '');
-          
+
           skills.push({
             metadata: {
               name,
@@ -156,11 +156,9 @@ ${sections.join('\n\n---\n')}
 }
 
 /**
- * Create default skills for a new group
+ * Create default skills for a scoop
  */
-export async function createDefaultSkills(fs: VirtualFS): Promise<void> {
-  const skillsDir = '/workspace/group/.skills';
-  
+export async function createDefaultSkills(fs: VirtualFS, skillsDir: string = '/workspace/group/.skills'): Promise<void> {
   try {
     await fs.mkdir(skillsDir, { recursive: true });
   } catch {

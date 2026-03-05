@@ -1,6 +1,6 @@
 /**
- * Heartbeat System - monitors group context health and activity.
- * 
+ * Heartbeat System - monitors scoop context health and activity.
+ *
  * Tracks:
  * - Last activity timestamp
  * - Processing state
@@ -9,13 +9,13 @@
  */
 
 import { createLogger } from '../core/logger.js';
-import type { RegisteredGroup } from './types.js';
+import type { RegisteredScoop } from './types.js';
 
 const log = createLogger('heartbeat');
 
 export interface HeartbeatStatus {
-  groupJid: string;
-  groupName: string;
+  scoopJid: string;
+  scoopName: string;
   status: 'healthy' | 'idle' | 'busy' | 'error' | 'dead';
   lastActivity: string;
   lastError?: string;
@@ -30,8 +30,8 @@ export interface HeartbeatCallbacks {
 }
 
 export class Heartbeat {
-  private groups = new Map<string, {
-    group: RegisteredGroup;
+  private scoops = new Map<string, {
+    scoop: RegisteredScoop;
     lastActivity: Date;
     lastError?: string;
     errorCount: number;
@@ -51,8 +51,8 @@ export class Heartbeat {
   /** Start monitoring */
   start(): void {
     if (this.pollInterval) return;
-    
-    this.pollInterval = window.setInterval(() => this.checkAll(), 10000); // Every 10 seconds
+
+    this.pollInterval = window.setInterval(() => this.checkAll(), 10000);
     log.info('Heartbeat monitoring started');
   }
 
@@ -65,38 +65,38 @@ export class Heartbeat {
     log.info('Heartbeat monitoring stopped');
   }
 
-  /** Register a group for monitoring */
-  register(group: RegisteredGroup): void {
+  /** Register a scoop for monitoring */
+  register(scoop: RegisteredScoop): void {
     const now = new Date();
-    this.groups.set(group.jid, {
-      group,
+    this.scoops.set(scoop.jid, {
+      scoop,
       lastActivity: now,
       errorCount: 0,
       startTime: now,
       isProcessing: false,
       status: 'healthy',
     });
-    log.debug('Group registered for heartbeat', { jid: group.jid, name: group.name });
+    log.debug('Scoop registered for heartbeat', { jid: scoop.jid, name: scoop.name });
   }
 
-  /** Unregister a group */
+  /** Unregister a scoop */
   unregister(jid: string): void {
-    this.groups.delete(jid);
-    log.debug('Group unregistered from heartbeat', { jid });
+    this.scoops.delete(jid);
+    log.debug('Scoop unregistered from heartbeat', { jid });
   }
 
-  /** Record activity for a group */
+  /** Record activity for a scoop */
   recordActivity(jid: string): void {
-    const data = this.groups.get(jid);
+    const data = this.scoops.get(jid);
     if (data) {
       data.lastActivity = new Date();
       this.updateStatus(jid, data);
     }
   }
 
-  /** Record that a group started processing */
+  /** Record that a scoop started processing */
   recordProcessingStart(jid: string): void {
-    const data = this.groups.get(jid);
+    const data = this.scoops.get(jid);
     if (data) {
       data.isProcessing = true;
       data.lastActivity = new Date();
@@ -104,9 +104,9 @@ export class Heartbeat {
     }
   }
 
-  /** Record that a group finished processing */
+  /** Record that a scoop finished processing */
   recordProcessingEnd(jid: string): void {
-    const data = this.groups.get(jid);
+    const data = this.scoops.get(jid);
     if (data) {
       data.isProcessing = false;
       data.lastActivity = new Date();
@@ -116,7 +116,7 @@ export class Heartbeat {
 
   /** Record an error */
   recordError(jid: string, error: string): void {
-    const data = this.groups.get(jid);
+    const data = this.scoops.get(jid);
     if (data) {
       data.errorCount++;
       data.lastError = error;
@@ -125,28 +125,28 @@ export class Heartbeat {
     }
   }
 
-  /** Get status for a specific group */
+  /** Get status for a specific scoop */
   getStatus(jid: string): HeartbeatStatus | null {
-    const data = this.groups.get(jid);
+    const data = this.scoops.get(jid);
     if (!data) return null;
     return this.buildStatus(jid, data);
   }
 
   /** Get all statuses */
   getAllStatuses(): HeartbeatStatus[] {
-    return Array.from(this.groups.entries())
+    return Array.from(this.scoops.entries())
       .map(([jid, data]) => this.buildStatus(jid, data));
   }
 
-  /** Check health of all groups */
+  /** Check health of all scoops */
   private checkAll(): void {
     const now = new Date();
-    
-    for (const [jid, data] of this.groups) {
+
+    for (const [jid, data] of this.scoops) {
       const timeSinceActivity = now.getTime() - data.lastActivity.getTime();
-      
+
       let newStatus: HeartbeatStatus['status'];
-      
+
       if (data.isProcessing) {
         newStatus = 'busy';
       } else if (data.errorCount > 5) {
@@ -161,24 +161,24 @@ export class Heartbeat {
 
       if (newStatus !== data.status) {
         data.status = newStatus;
-        
+
         if (newStatus === 'dead') {
-          log.warn('Group marked as dead', { jid, name: data.group.name });
+          log.warn('Scoop marked as dead', { jid, name: data.scoop.name });
           this.callbacks.onDead(jid);
         }
-        
+
         this.callbacks.onStatusChange(jid, this.buildStatus(jid, data));
       }
     }
   }
 
-  private updateStatus(jid: string, data: typeof this.groups extends Map<string, infer V> ? V : never): void {
+  private updateStatus(jid: string, data: typeof this.scoops extends Map<string, infer V> ? V : never): void {
     const status = this.buildStatus(jid, data);
     this.callbacks.onStatusChange(jid, status);
   }
 
   private buildStatus(jid: string, data: {
-    group: RegisteredGroup;
+    scoop: RegisteredScoop;
     lastActivity: Date;
     lastError?: string;
     errorCount: number;
@@ -187,8 +187,8 @@ export class Heartbeat {
     status: HeartbeatStatus['status'];
   }): HeartbeatStatus {
     return {
-      groupJid: jid,
-      groupName: data.group.name,
+      scoopJid: jid,
+      scoopName: data.scoop.name,
       status: data.status,
       lastActivity: data.lastActivity.toISOString(),
       lastError: data.lastError,

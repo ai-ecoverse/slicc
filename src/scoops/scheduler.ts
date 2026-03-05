@@ -1,13 +1,13 @@
 /**
- * Task Scheduler - runs scheduled tasks for groups.
- * 
+ * Task Scheduler - runs scheduled tasks for scoops.
+ *
  * Supports:
  * - Cron expressions (e.g., "0 9 * * 1" = Mondays at 9am)
  * - Intervals (e.g., 3600000 = every hour)
  * - One-time tasks (ISO timestamp)
  */
 
-import type { ScheduledTask, RegisteredGroup } from './types.js';
+import type { ScheduledTask, RegisteredScoop } from './types.js';
 import * as db from './db.js';
 import { createLogger } from '../core/logger.js';
 
@@ -15,9 +15,9 @@ const log = createLogger('scheduler');
 
 export interface SchedulerCallbacks {
   /** Called when a task should be executed */
-  onTaskRun: (task: ScheduledTask, group: RegisteredGroup) => Promise<void>;
-  /** Get a registered group by folder */
-  getGroup: (folder: string) => RegisteredGroup | undefined;
+  onTaskRun: (task: ScheduledTask, scoop: RegisteredScoop) => Promise<void>;
+  /** Get a registered scoop by folder */
+  getScoop: (folder: string) => RegisteredScoop | undefined;
 }
 
 export class TaskScheduler {
@@ -36,10 +36,10 @@ export class TaskScheduler {
 
     // Poll every minute
     this.pollInterval = window.setInterval(() => this.checkTasks(), 60000);
-    
+
     // Also check immediately
     this.checkTasks();
-    
+
     log.info('Scheduler started');
   }
 
@@ -127,10 +127,10 @@ export class TaskScheduler {
     return true;
   }
 
-  /** Get all tasks for a group */
-  async getTasksByGroup(groupFolder: string): Promise<ScheduledTask[]> {
+  /** Get all tasks for a scoop */
+  async getTasksByScoop(scoopFolder: string): Promise<ScheduledTask[]> {
     const allTasks = await db.getAllTasks();
-    return allTasks.filter((t) => t.groupFolder === groupFolder);
+    return allTasks.filter((t) => t.groupFolder === scoopFolder);
   }
 
   /** Get all tasks */
@@ -157,9 +157,9 @@ export class TaskScheduler {
 
   /** Run a task */
   private async runTask(task: ScheduledTask): Promise<void> {
-    const group = this.callbacks.getGroup(task.groupFolder);
-    if (!group) {
-      log.warn('Task group not found', { taskId: task.id, groupFolder: task.groupFolder });
+    const scoop = this.callbacks.getScoop(task.groupFolder);
+    if (!scoop) {
+      log.warn('Task scoop not found', { taskId: task.id, groupFolder: task.groupFolder });
       return;
     }
 
@@ -169,7 +169,7 @@ export class TaskScheduler {
       // Update last run and calculate next run
       const now = new Date().toISOString();
       const nextRun = this.calculateNextRun(task.scheduleType, task.scheduleValue);
-      
+
       // For one-time tasks, mark as completed
       const status = task.scheduleType === 'once' ? 'completed' : task.status;
 
@@ -181,7 +181,7 @@ export class TaskScheduler {
       });
 
       // Execute the task
-      await this.callbacks.onTaskRun(task, group);
+      await this.callbacks.onTaskRun(task, scoop);
 
       log.info('Task completed', { id: task.id });
     } catch (err) {
@@ -201,7 +201,6 @@ export class TaskScheduler {
 
     switch (scheduleType) {
       case 'cron': {
-        // Simple cron parsing for common patterns
         const next = this.getNextCronTime(scheduleValue, now);
         return next?.toISOString() ?? null;
       }
@@ -213,7 +212,6 @@ export class TaskScheduler {
       }
 
       case 'once': {
-        // For one-time tasks, return the specified timestamp if in future
         const target = new Date(scheduleValue);
         return target > now ? scheduleValue : null;
       }
@@ -225,21 +223,17 @@ export class TaskScheduler {
 
   /** Parse a cron expression and get the next run time */
   private getNextCronTime(cron: string, from: Date): Date | null {
-    // Simple cron parser for basic patterns
-    // Format: minute hour day-of-month month day-of-week
     const parts = cron.trim().split(/\s+/);
     if (parts.length !== 5) return null;
 
     const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
 
-    // Start from next minute
     const next = new Date(from);
     next.setSeconds(0);
     next.setMilliseconds(0);
     next.setMinutes(next.getMinutes() + 1);
 
-    // Try to find next matching time (limit iterations to prevent infinite loop)
-    for (let i = 0; i < 527040; i++) { // ~1 year of minutes
+    for (let i = 0; i < 527040; i++) {
       if (this.cronMatches(next, minute, hour, dayOfMonth, month, dayOfWeek)) {
         return next;
       }
@@ -271,18 +265,15 @@ export class TaskScheduler {
   private cronFieldMatches(value: number, field: string): boolean {
     if (field === '*') return true;
 
-    // Handle lists (e.g., "1,3,5")
     if (field.includes(',')) {
       return field.split(',').some((f) => this.cronFieldMatches(value, f.trim()));
     }
 
-    // Handle ranges (e.g., "1-5")
     if (field.includes('-')) {
       const [start, end] = field.split('-').map((n) => parseInt(n, 10));
       return value >= start && value <= end;
     }
 
-    // Handle step values (e.g., "*/5")
     if (field.includes('/')) {
       const [base, step] = field.split('/');
       const stepNum = parseInt(step, 10);
@@ -293,7 +284,6 @@ export class TaskScheduler {
       return value >= baseNum && (value - baseNum) % stepNum === 0;
     }
 
-    // Direct value match
     return parseInt(field, 10) === value;
   }
 }
