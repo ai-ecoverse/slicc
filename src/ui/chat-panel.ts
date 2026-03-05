@@ -20,6 +20,7 @@ function uid(): string {
 export class ChatPanel {
   private container: HTMLElement;
   private messagesEl!: HTMLElement;
+  private inputArea!: HTMLElement;
   private textarea!: HTMLTextAreaElement;
   private sendBtn!: HTMLButtonElement;
   private stopBtn!: HTMLButtonElement;
@@ -30,6 +31,7 @@ export class ChatPanel {
   private currentStreamId: string | null = null;
   private sessionStore: SessionStore;
   private sessionId: string;
+  private readOnly = false;
   private terminalOutputCallback: ((text: string) => void) | null = null;
 
   constructor(container: HTMLElement) {
@@ -75,9 +77,82 @@ export class ChatPanel {
     await this.sessionStore.delete(this.sessionId);
   }
 
+  /** Switch to a different scoop's chat context. */
+  async switchToContext(contextId: string, readOnly: boolean): Promise<void> {
+    // Save current session first
+    await this.persistSessionAsync();
+
+    // Reset streaming state — prevents stale isStreaming from a different scoop
+    // from locking the input in the new context
+    this.setStreamingState(false);
+    this.currentStreamId = null;
+
+    // Switch
+    this.sessionId = contextId;
+    this.setReadOnly(readOnly);
+
+    // Load the new session
+    const session = await this.sessionStore.load(this.sessionId);
+    if (session && session.messages.length > 0) {
+      this.messages = session.messages.map((m) => ({
+        ...m,
+        isStreaming: false,
+      }));
+    } else {
+      this.messages = [];
+    }
+    this.renderMessages();
+  }
+
+  /** Set read-only mode (hide input for non-cone scoops). */
+  setReadOnly(readOnly: boolean): void {
+    this.readOnly = readOnly;
+    if (this.inputArea) {
+      this.inputArea.style.display = readOnly ? 'none' : '';
+    }
+  }
+
+  /** Persist session (async, awaitable). */
+  private async persistSessionAsync(): Promise<void> {
+    try {
+      await this.sessionStore.saveMessages(this.sessionId, this.messages);
+    } catch {
+      // Silently ignore persistence errors
+    }
+  }
+
+  /** Lock/unlock input based on external processing state (e.g., cone auto-activated by scoop notification). */
+  setProcessing(busy: boolean): void {
+    if (busy) {
+      this.setStreamingState(true);
+    } else {
+      this.setStreamingState(false);
+    }
+  }
+
+  /** Add a system message (for scoop summaries in cone chat). */
+  addSystemMessage(content: string): void {
+    const msg: ChatMessage = {
+      id: uid(),
+      role: 'assistant',
+      content,
+      timestamp: Date.now(),
+    };
+    this.messages.push(msg);
+    this.appendMessageEl(msg);
+    this.persistSession();
+  }
+
   /** Get current messages. */
   getMessages(): ChatMessage[] {
     return [...this.messages];
+  }
+
+  /** Load a set of messages (from external buffer) and render them. */
+  loadMessages(messages: ChatMessage[]): void {
+    this.messages = messages.map(m => ({ ...m, isStreaming: false }));
+    this.renderMessages();
+    this.persistSession();
   }
 
   /** Clear all messages from the display (doesn't affect session store). */
@@ -108,7 +183,8 @@ export class ChatPanel {
     this.container.appendChild(this.messagesEl);
 
     // Input area
-    const inputArea = document.createElement('div');
+    this.inputArea = document.createElement('div');
+    const inputArea = this.inputArea;
     inputArea.className = 'chat__input-area';
 
     this.textarea = document.createElement('textarea');
@@ -171,6 +247,9 @@ export class ChatPanel {
     // Clear input
     this.textarea.value = '';
     this.textarea.style.height = 'auto';
+
+    // Disable input immediately — don't wait for message_start event
+    this.setStreamingState(true);
 
     // Send to agent
     this.agent?.sendMessage(text);

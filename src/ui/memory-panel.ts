@@ -1,15 +1,14 @@
 /**
- * Memory Panel — displays CLAUDE.md memory files for global and group contexts.
+ * Memory Panel — displays CLAUDE.md memory files for global and scoop contexts.
  */
 
-import type { VirtualFS } from '../fs/index.js';
-import type { Orchestrator } from '../groups/index.js';
+import type { Orchestrator } from '../scoops/index.js';
 
 export class MemoryPanel {
   private container: HTMLElement;
   private bodyEl!: HTMLElement;
   private orchestrator: Orchestrator | null = null;
-  private selectedGroupJid: string | null = null;
+  private selectedScoopJid: string | null = null;
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(container: HTMLElement) {
@@ -23,8 +22,8 @@ export class MemoryPanel {
     this.refreshTimer = setInterval(() => this.refresh(), 5000);
   }
 
-  setSelectedGroup(jid: string | null): void {
-    this.selectedGroupJid = jid;
+  setSelectedScoop(jid: string | null): void {
+    this.selectedScoopJid = jid;
     this.refresh();
   }
 
@@ -37,15 +36,15 @@ export class MemoryPanel {
     // Global memory section
     const globalSection = document.createElement('div');
     globalSection.className = 'memory-panel__section';
-    
+
     const globalHeader = document.createElement('div');
     globalHeader.className = 'memory-panel__section-header';
-    globalHeader.textContent = 'Global Memory';
+    globalHeader.textContent = 'Global Memory (/shared/CLAUDE.md)';
     globalSection.appendChild(globalHeader);
 
     const globalContent = document.createElement('div');
     globalContent.className = 'memory-panel__memory-content';
-    
+
     try {
       const globalMemory = await this.orchestrator.getGlobalMemory();
       globalContent.textContent = globalMemory || '(empty)';
@@ -55,36 +54,39 @@ export class MemoryPanel {
     globalSection.appendChild(globalContent);
     tmp.appendChild(globalSection);
 
-    // Group memory section (if a group is selected)
-    if (this.selectedGroupJid) {
-      const context = this.orchestrator.getGroupContext(this.selectedGroupJid);
-      const group = this.orchestrator.getGroup(this.selectedGroupJid);
-      
-      if (context && group) {
-        const groupSection = document.createElement('div');
-        groupSection.className = 'memory-panel__section';
-        
-        const groupHeader = document.createElement('div');
-        groupHeader.className = 'memory-panel__section-header';
-        groupHeader.textContent = `Group: ${group.name}`;
-        groupSection.appendChild(groupHeader);
+    // Scoop memory section (if a scoop is selected)
+    if (this.selectedScoopJid) {
+      const context = this.orchestrator.getScoopContext(this.selectedScoopJid);
+      const scoop = this.orchestrator.getScoop(this.selectedScoopJid);
 
-        const groupContent = document.createElement('div');
-        groupContent.className = 'memory-panel__memory-content';
-        
+      if (context && scoop) {
+        const scoopSection = document.createElement('div');
+        scoopSection.className = 'memory-panel__section';
+
+        const scoopHeader = document.createElement('div');
+        scoopHeader.className = 'memory-panel__section-header';
+        scoopHeader.textContent = `${scoop.isCone ? 'Cone' : 'Scoop'}: ${scoop.assistantLabel}`;
+        scoopSection.appendChild(scoopHeader);
+
+        const scoopContent = document.createElement('div');
+        scoopContent.className = 'memory-panel__memory-content';
+
         try {
           const fs = context.getFS();
           if (fs) {
-            const content = await fs.readFile('/workspace/group/CLAUDE.md', { encoding: 'utf-8' });
-            groupContent.textContent = typeof content === 'string' ? content : new TextDecoder().decode(content);
+            const memoryPath = scoop.isCone
+              ? '/workspace/CLAUDE.md'
+              : `/scoops/${scoop.folder}/CLAUDE.md`;
+            const content = await fs.readFile(memoryPath, { encoding: 'utf-8' });
+            scoopContent.textContent = typeof content === 'string' ? content : new TextDecoder().decode(content);
           } else {
-            groupContent.textContent = '(filesystem not ready)';
+            scoopContent.textContent = '(filesystem not ready)';
           }
         } catch {
-          groupContent.textContent = '(no memory file yet)';
+          scoopContent.textContent = '(no memory file yet)';
         }
-        groupSection.appendChild(groupContent);
-        tmp.appendChild(groupSection);
+        scoopSection.appendChild(scoopContent);
+        tmp.appendChild(scoopSection);
       }
     }
 
