@@ -195,7 +195,7 @@ export function createNodeCommand(): Command {
 
         const execId = `node-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         const result = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-          const timeout = setTimeout(() => reject(new Error('node eval timed out (30s)')), 30000);
+          let timeout: ReturnType<typeof setTimeout>;
           const handler = (event: MessageEvent) => {
             if (event.data?.type === 'exec_result' && event.data.id === execId) {
               window.removeEventListener('message', handler);
@@ -212,6 +212,10 @@ export function createNodeCommand(): Command {
               }
             }
           };
+          timeout = setTimeout(() => {
+            window.removeEventListener('message', handler);
+            reject(new Error('node eval timed out (30s)'));
+          }, 30000);
           window.addEventListener('message', handler);
           sandbox!.contentWindow!.postMessage({ type: 'exec', id: execId, code: wrappedCode }, '*');
         });

@@ -415,7 +415,11 @@ When you learn something important:
                 channel: 'scoop-notify',
               };
               log.info('Routing scoop completion to cone', { scoop: scoop.folder, responseLength: responseText.length });
-              this.handleMessage(notifyMsg);
+              this.handleMessage(notifyMsg).catch((err) => {
+                const msg = err instanceof Error ? err.message : String(err);
+                log.error('Failed to route scoop completion to cone', { scoop: scoop.folder, error: msg });
+                this.callbacks.onError(cone.jid, `Scoop ${scoop.folder} completed but notification failed: ${msg}`);
+              });
             }
           }
         }
@@ -629,7 +633,11 @@ When you learn something important:
       for (const jid of this.scoops.keys()) {
         const tab = this.tabs.get(jid);
         if (tab?.status === 'ready') {
-          this.processScoopQueue(jid);
+          this.processScoopQueue(jid).catch((err) => {
+            const message = err instanceof Error ? err.message : String(err);
+            log.error('Message queue processing failed', { jid, error: message });
+            this.callbacks.onError(jid, `Queue processing failed: ${message}`);
+          });
         }
       }
     }, 2000);
