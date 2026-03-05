@@ -70,6 +70,40 @@ SLICC is a working prototype with these capabilities:
 
 Current development is happening on feature branches using [yolo](https://github.com/ai-ecoverse/yolo) for worktree isolation, with Claude agents building the features autonomously.
 
+## The Cone & Scoops
+
+Every ice cream cone needs scoops. SLICC takes that literally.
+
+The **cone** is sliccy — the main assistant that talks to you, holds the conversation context, and keeps everything from melting. It has full access to the filesystem and all the tools. Think of it as the waffle cone: structurally essential, always there, holds everything together.
+
+**Scoops** are independent agent contexts stacked on top. Each scoop gets its own flavor:
+- Its own agent instance and conversation history
+- A **sandboxed filesystem** (`/scoops/{name}/` + `/shared/`) — can't touch other scoops' files
+- Its own shell, tools, and memory
+- A fun name like `andy-scoop` or `test-scoop`
+
+**How they work together:**
+
+1. You ask the cone: *"tell @test-scoop to download all images from this website"*
+2. The cone understands your context, composes a clear self-contained prompt, and uses `delegate_to_scoop` to hand off the work
+3. The scoop works independently — browses, downloads, saves files
+4. When the scoop finishes, the cone **automatically gets notified** with the results
+5. The cone acts on those results — moves files, summarizes, reports back to you
+
+No polling. No schedulers. The cone delegates, the scoops deliver, and the cone reacts. Like a well-run ice cream shop.
+
+```
+        🍦 Cone (sliccy)          💩 Scoop (andy)         💩 Scoop (test)
+       ┌──────────────┐         ┌──────────────┐        ┌──────────────┐
+       │ Full FS      │ ──────► │ /scoops/andy/│        │ /scoops/test/│
+       │ All tools    │delegate │ /shared/     │        │ /shared/     │
+       │ Orchestrates │         │ Own agent    │        │ Own agent    │
+       │              │ ◄────── │ Notifies     │        │ Notifies     │
+       └──────────────┘ results └──────────────┘        └──────────────┘
+```
+
+> *The cone holds the scoops. The scoops do the work. Nobody likes chocolate ice cream, so we use a CSS filter.*
+
 ## Architecture
 
 slicc runs in two modes: as a **Chrome extension** (side panel) or as a **standalone CLI** with a browser window.
