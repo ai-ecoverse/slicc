@@ -357,10 +357,17 @@ When you learn something important:
     const contextCallbacks: ScoopContextCallbacks = {
       onResponse: (text, isPartial) => {
         this.callbacks.onResponse(jid, text, isPartial);
-        // Accumulate response text for routing back to cone
-        if (!scoop.isCone && isPartial) {
-          const buf = this.scoopResponseBuffer.get(jid) ?? '';
-          this.scoopResponseBuffer.set(jid, buf + text);
+        // Accumulate response text for routing back to cone.
+        // Accumulate both partial (streaming deltas) and full (non-streaming) responses,
+        // since models that don't stream emit isPartial=false with the full text.
+        if (!scoop.isCone) {
+          if (isPartial) {
+            const buf = this.scoopResponseBuffer.get(jid) ?? '';
+            this.scoopResponseBuffer.set(jid, buf + text);
+          } else {
+            // Full response — replace buffer (text is the complete output)
+            this.scoopResponseBuffer.set(jid, text);
+          }
         }
       },
       onResponseDone: () => {
@@ -502,7 +509,7 @@ When you learn something important:
 
   /** Get all messages for a scoop */
   async getMessagesForScoop(jid: string): Promise<ChannelMessage[]> {
-    return db.getMessagesForGroup(jid);
+    return db.getMessagesForScoop(jid);
   }
 
   /** Wait for a tab to become ready, or timeout */

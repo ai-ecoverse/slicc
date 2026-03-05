@@ -175,7 +175,7 @@ export async function saveMessage(msg: ChannelMessage): Promise<void> {
   });
 }
 
-export async function getMessagesForGroup(chatJid: string): Promise<ChannelMessage[]> {
+export async function getMessagesForScoop(chatJid: string): Promise<ChannelMessage[]> {
   const store = await getStore(STORES.MESSAGES);
   const index = store.index('chatJid_timestamp');
   const range = IDBKeyRange.bound([chatJid, ''], [chatJid, '\uffff'], false, false);

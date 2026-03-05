@@ -10,7 +10,7 @@ import 'fake-indexeddb/auto';
 import {
   initDB,
   saveScoop,
-  getMessagesForGroup,
+  getMessagesForScoop,
   clearAllMessages,
 } from './db.js';
 import type { RegisteredScoop, ChannelMessage } from './types.js';
@@ -85,7 +85,7 @@ describe('Orchestrator Message Routing (DB-level)', () => {
       const msg = makeMessage({ chatJid: testScoop.jid, content: 'hello scoop' });
       await saveMessage(msg);
 
-      const messages = await getMessagesForGroup(testScoop.jid);
+      const messages = await getMessagesForScoop(testScoop.jid);
       expect(messages).toHaveLength(1);
       expect(messages[0].content).toBe('hello scoop');
     });
@@ -95,8 +95,8 @@ describe('Orchestrator Message Routing (DB-level)', () => {
       await saveMessage(makeMessage({ chatJid: cone.jid, content: 'cone msg' }));
       await saveMessage(makeMessage({ chatJid: testScoop.jid, content: 'scoop msg' }));
 
-      const coneMessages = await getMessagesForGroup(cone.jid);
-      const scoopMessages = await getMessagesForGroup(testScoop.jid);
+      const coneMessages = await getMessagesForScoop(cone.jid);
+      const scoopMessages = await getMessagesForScoop(testScoop.jid);
       expect(coneMessages).toHaveLength(1);
       expect(scoopMessages).toHaveLength(1);
       expect(coneMessages[0].content).toBe('cone msg');
@@ -119,7 +119,7 @@ describe('Orchestrator Message Routing (DB-level)', () => {
       });
       await saveMessage(delegationMsg);
 
-      const messages = await getMessagesForGroup(testScoop.jid);
+      const messages = await getMessagesForScoop(testScoop.jid);
       expect(messages).toHaveLength(1);
       expect(messages[0].channel).toBe('delegation');
       expect(messages[0].senderName).toBe('sliccy');
@@ -133,7 +133,7 @@ describe('Orchestrator Message Routing (DB-level)', () => {
       });
       await saveMessage(delegationMsg);
 
-      const coneMessages = await getMessagesForGroup(cone.jid);
+      const coneMessages = await getMessagesForScoop(cone.jid);
       expect(coneMessages).toHaveLength(0);
     });
   });
@@ -153,7 +153,7 @@ describe('Orchestrator Message Routing (DB-level)', () => {
       });
       await saveMessage(notifyMsg);
 
-      const coneMessages = await getMessagesForGroup(cone.jid);
+      const coneMessages = await getMessagesForScoop(cone.jid);
       expect(coneMessages).toHaveLength(1);
       expect(coneMessages[0].content).toContain('@test-scoop completed');
       expect(coneMessages[0].channel).toBe('scoop-notify');
@@ -168,7 +168,7 @@ describe('Orchestrator Message Routing (DB-level)', () => {
       });
       await saveMessage(notifyMsg);
 
-      const scoopMessages = await getMessagesForGroup(testScoop.jid);
+      const scoopMessages = await getMessagesForScoop(testScoop.jid);
       expect(scoopMessages).toHaveLength(0);
     });
   });
@@ -223,8 +223,8 @@ describe('Orchestrator Message Routing (DB-level)', () => {
       await saveMessage(userMsg);
 
       // Only cone has the message (no @mention routing copies)
-      const coneMessages = await getMessagesForGroup(cone.jid);
-      const scoopMessages = await getMessagesForGroup(testScoop.jid);
+      const coneMessages = await getMessagesForScoop(cone.jid);
+      const scoopMessages = await getMessagesForScoop(testScoop.jid);
       expect(coneMessages).toHaveLength(1);
       expect(scoopMessages).toHaveLength(0);
     });
@@ -241,7 +241,7 @@ describe('Orchestrator Message Routing (DB-level)', () => {
       await saveMessage(assistantMsg);
 
       // Only the cone has it
-      const scoopMessages = await getMessagesForGroup(testScoop.jid);
+      const scoopMessages = await getMessagesForScoop(testScoop.jid);
       expect(scoopMessages).toHaveLength(0);
     });
 
@@ -256,7 +256,7 @@ describe('Orchestrator Message Routing (DB-level)', () => {
       await saveMessage(notifyMsg);
 
       // Only cone has it, NOT routed back to test-scoop
-      const scoopMessages = await getMessagesForGroup(testScoop.jid);
+      const scoopMessages = await getMessagesForScoop(testScoop.jid);
       expect(scoopMessages).toHaveLength(0);
     });
   });
