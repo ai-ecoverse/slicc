@@ -70,9 +70,9 @@ describe('renderMessageContent', () => {
     expect(html).toContain('Second paragraph');
   });
 
-  it('converts single newlines to br or softbreak', () => {
+  it('converts single newlines to br (remark-breaks)', () => {
     const html = renderMessageContent('Line 1\nLine 2');
-    // unified renders soft breaks as newlines within a paragraph
+    expect(html).toContain('<br>');
     expect(html).toContain('Line 1');
     expect(html).toContain('Line 2');
   });
@@ -95,6 +95,29 @@ describe('renderMessageContent', () => {
   it('renders GFM strikethrough', () => {
     const html = renderMessageContent('~~deleted~~');
     expect(html).toContain('<del>deleted</del>');
+  });
+
+  describe('XSS sanitization', () => {
+    it('strips script tags', () => {
+      const html = renderMessageContent('<script>alert(1)</script>');
+      expect(html).not.toContain('<script>');
+      expect(html).not.toContain('alert(1)');
+    });
+
+    it('strips onerror attributes', () => {
+      const html = renderMessageContent('<img src="x" onerror="alert(1)">');
+      expect(html).not.toContain('onerror');
+    });
+
+    it('strips javascript: hrefs', () => {
+      const html = renderMessageContent('[click](javascript:alert(1))');
+      expect(html).not.toContain('javascript:');
+    });
+
+    it('preserves tok-* spans from syntax highlighting', () => {
+      const html = renderMessageContent('```js\nconst x = 1;\n```');
+      expect(html).toContain('tok-keyword');
+    });
   });
 });
 

@@ -6,10 +6,20 @@
 import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import remarkRehype from 'remark-rehype';
+import rehypeRaw from 'rehype-raw';
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
+import type { Schema } from 'hast-util-sanitize';
 import rehypeStringify from 'rehype-stringify';
 import type { Code } from 'mdast';
 import type { Element } from 'hast';
+
+/** Minimal raw-HTML node type used by rehype-raw / hast-util-raw. */
+interface RawNode {
+  type: 'raw';
+  value: string;
+}
 
 /** Escape HTML special characters. */
 export function escapeHtml(text: string): string {
@@ -82,6 +92,7 @@ function highlightBash(html: string): string {
 function codeHandler(_state: unknown, node: Code): Element {
   const lang = node.lang ?? '';
   const highlighted = highlightCode(node.value, lang);
+  const rawNode: RawNode = { type: 'raw', value: highlighted };
   return {
     type: 'element',
     tagName: 'pre',
@@ -90,16 +101,33 @@ function codeHandler(_state: unknown, node: Code): Element {
       type: 'element',
       tagName: 'code',
       properties: lang ? { className: [`language-${lang}`] } : {},
-      children: [{ type: 'raw' as 'text', value: highlighted } as never],
+      children: [rawNode as unknown as Element],
     }],
   };
 }
 
+/**
+ * Sanitize schema: extends the default (safe HTML subset) to also allow
+ * - `span` with `class` — for tok-* syntax-highlighting spans
+ * - `class` on `code` — for language-* identifiers
+ */
+const sanitizeSchema: Schema = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    span: ['className'],
+    code: [['className', /^language-/]],
+  },
+};
+
 const processor = unified()
   .use(remarkParse)
   .use(remarkGfm)
+  .use(remarkBreaks)
   .use(remarkRehype, { allowDangerousHtml: true, handlers: { code: codeHandler } })
-  .use(rehypeStringify, { allowDangerousHtml: true });
+  .use(rehypeRaw)                          // parse raw nodes (incl. our tok-* spans) into hast
+  .use(rehypeSanitize, sanitizeSchema)     // strip XSS vectors, keep safe subset + tok-* spans
+  .use(rehypeStringify);
 
 /**
  * Render a message content string to HTML.
