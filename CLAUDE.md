@@ -93,7 +93,7 @@ WasmShell wraps just-bash 2.11.7 (WASM Bash interpreter) and connects it to Virt
 - `zip/unzip` — Archive compression
 - `sqlite3` — SQLite database operations
 - `webhook` — Manage webhooks for event-driven automation
-- `mount` — Mount external filesystems (GitHub repos, URLs)
+- `mount` — Mount a local directory into the virtual filesystem via the File System Access API
 - `commands` — Show all available commands (type `commands` in terminal)
 
 **Extension CSP workaround**: `node -e` in extension mode routes through the sandbox iframe (CSP blocks `AsyncFunction` constructor on extension pages). Python uses bundled Pyodide loaded from `chrome.runtime.getURL('pyodide/')`.

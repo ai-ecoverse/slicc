@@ -44,6 +44,11 @@ export class MountCommands {
       return { stdout: mounts.map(m => m).join('\n') + '\n', stderr: '', exitCode: 0 };
     }
 
+    // mount <target-path>
+    if (!sub) {
+      return { stdout: '', stderr: 'mount: mount point required\nUsage: mount <target-path>', exitCode: 1 };
+    }
+
     if (typeof window === 'undefined' || !('showDirectoryPicker' in window)) {
       return {
         stdout: '',
@@ -52,7 +57,6 @@ export class MountCommands {
       };
     }
 
-    // mount [<target-path>]
     let dirHandle: FileSystemDirectoryHandle;
     try {
       dirHandle = await (window as Window & typeof globalThis & { showDirectoryPicker: ShowDirectoryPickerFn }).showDirectoryPicker({ mode: 'readwrite' });
@@ -63,11 +67,8 @@ export class MountCommands {
       return { stdout: '', stderr: `mount: ${err instanceof Error ? err.message : String(err)}`, exitCode: 1 };
     }
 
-    const dirName = dirHandle.name;
     let targetPath: string;
-    if (!sub) {
-      targetPath = `/workspace/${dirName}`;
-    } else if (sub.startsWith('/')) {
+    if (sub.startsWith('/')) {
       targetPath = sub;
     } else {
       targetPath = `${cwd.replace(/\/$/, '')}/${sub}`;
@@ -77,7 +78,7 @@ export class MountCommands {
     try {
       await this.options.fs.mount(targetPath, dirHandle);
       return {
-        stdout: `Mounted '${dirName}' → ${targetPath} (live bridge — reads and writes go to the real filesystem)\n`,
+        stdout: `Mounted '${dirHandle.name}' → ${targetPath} (live bridge — reads and writes go to the real filesystem)\n`,
         stderr: '',
         exitCode: 0,
       };
@@ -93,7 +94,7 @@ export class MountCommands {
   private help(): MountCommandResult {
     return {
       stdout: [
-        'Usage: mount [<target-path>]',
+        'Usage: mount <target-path>',
         '       mount unmount <path>',
         '       mount list',
         '',
@@ -103,16 +104,14 @@ export class MountCommands {
         'both sides.',
         '',
         'Arguments:',
-        '  <target-path>  Mount point in the virtual filesystem.',
-        '                 Defaults to /workspace/<dirname>.',
+        '  <target-path>  Mount point in the virtual filesystem (required).',
         '',
         'Sub-commands:',
         '  unmount <path>  Remove a mount point',
         '  list            Show active mount points',
         '',
         'Examples:',
-        '  mount                    # Mount selected dir at /workspace/<dirname>',
-        '  mount /workspace/myapp   # Mount at /workspace/myapp',
+        '  mount /workspace/myapp   # Mount selected dir at /workspace/myapp',
         '  mount list               # Show active mounts',
         '  mount unmount /workspace/myapp',
       ].join('\n') + '\n',
