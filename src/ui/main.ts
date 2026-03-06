@@ -365,14 +365,22 @@ async function main(): Promise<void> {
         try {
           const data = JSON.parse(event.data) as {
             type: string;
-            webhookId: string;
-            webhookName: string;
+            webhookId?: string;
+            webhookName?: string;
+            cronId?: string;
+            cronName?: string;
             targetScoop?: string;
             timestamp: string;
             body: unknown;
           };
 
-          log.debug('Webhook event received', { webhookName: data.webhookName, targetScoop: data.targetScoop });
+          const isWebhook = data.type === 'webhook';
+          const isCron = data.type === 'cron';
+          const eventName = isWebhook ? data.webhookName : data.cronName;
+          const eventId = isWebhook ? data.webhookId : data.cronId;
+          const channel = isWebhook ? 'webhook' : 'cron';
+
+          log.debug('Lick event received', { type: data.type, name: eventName, targetScoop: data.targetScoop });
 
           // Route to target scoop if specified
           if (data.targetScoop) {
@@ -385,28 +393,29 @@ async function main(): Promise<void> {
             );
 
             if (targetScoop) {
-              const msgId = `webhook-${data.webhookId}-${Date.now()}`;
-              const content = `[Webhook Event: ${data.webhookName}]\n\`\`\`json\n${JSON.stringify(data.body, null, 2)}\n\`\`\``;
+              const msgId = `${channel}-${eventId}-${Date.now()}`;
+              const eventLabel = isWebhook ? 'Webhook Event' : 'Cron Event';
+              const content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(data.body, null, 2)}\n\`\`\``;
 
               const msg: ChannelMessage = {
                 id: msgId,
                 chatJid: targetScoop.jid,
-                senderId: 'webhook',
-                senderName: `webhook:${data.webhookName}`,
+                senderId: channel,
+                senderName: `${channel}:${eventName}`,
                 content,
                 timestamp: data.timestamp,
                 fromAssistant: false,
-                channel: 'webhook',
+                channel,
               };
 
               // Buffer the lick message for display
               getBuffer(targetScoop.jid).push({
                 id: msgId,
-                role: 'user', // webhook events are incoming, not from assistant
+                role: 'user',
                 content,
                 timestamp: Date.now(),
                 source: 'lick',
-                channel: 'webhook',
+                channel,
               });
 
               // Emit to UI if this scoop is selected
@@ -416,14 +425,14 @@ async function main(): Promise<void> {
                 emitToUI({ type: 'content_done', messageId: msgId });
               }
 
-              log.info('Routing webhook to scoop', { webhookName: data.webhookName, scoopJid: targetScoop.jid });
+              log.info('Routing lick to scoop', { type: channel, name: eventName, scoopJid: targetScoop.jid });
               orchestrator.handleMessage(msg);
             } else {
-              log.warn('Webhook target scoop not found', { targetScoop: data.targetScoop });
+              log.warn('Lick target scoop not found', { targetScoop: data.targetScoop });
             }
           }
         } catch (err) {
-          log.error('Failed to process webhook event', { error: err instanceof Error ? err.message : String(err) });
+          log.error('Failed to process lick event', { error: err instanceof Error ? err.message : String(err) });
         }
       };
 

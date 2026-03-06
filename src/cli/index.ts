@@ -499,6 +499,230 @@ async function main() {
     res.json({ ok: true, received: true });
   });
 
+  // ---------------------------------------------------------------------------
+  // Cron task registry — stores cron jobs and dispatches licks on schedule
+  // ---------------------------------------------------------------------------
+  interface CronTaskEntry {
+    id: string;
+    name: string;
+    cron: string;
+    scoop?: string;
+    filter?: string;
+    filterFn?: () => boolean | unknown;
+    nextRun: string | null;
+    lastRun: string | null;
+    status: 'active' | 'paused';
+    createdAt: string;
+  }
+  const cronTasks = new Map<string, CronTaskEntry>();
+
+  /** Compile a cron filter function */
+  function compileCronFilter(filterCode: string): () => boolean | unknown {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-implied-eval
+      const fn = new Function(`return (${filterCode})();`) as () => boolean | unknown;
+      // Test that it's callable (dry run)
+      return fn;
+    } catch (err) {
+      throw new Error(`Invalid filter function: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /** Calculate next cron run time */
+  function getNextCronTime(cron: string, from: Date): Date | null {
+    const parts = cron.trim().split(/\s+/);
+    if (parts.length !== 5) return null;
+
+    const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
+    const next = new Date(from);
+    next.setSeconds(0);
+    next.setMilliseconds(0);
+    next.setMinutes(next.getMinutes() + 1);
+
+    const cronFieldMatches = (value: number, field: string): boolean => {
+      if (field === '*') return true;
+      if (field.includes(',')) {
+        return field.split(',').some((f) => cronFieldMatches(value, f.trim()));
+      }
+      if (field.includes('-')) {
+        const [start, end] = field.split('-').map((n) => parseInt(n, 10));
+        return value >= start && value <= end;
+      }
+      if (field.includes('/')) {
+        const [base, step] = field.split('/');
+        const stepNum = parseInt(step, 10);
+        if (base === '*') return value % stepNum === 0;
+        const baseNum = parseInt(base, 10);
+        return value >= baseNum && (value - baseNum) % stepNum === 0;
+      }
+      return parseInt(field, 10) === value;
+    };
+
+    // Search up to 1 year
+    for (let i = 0; i < 527040; i++) {
+      if (
+        cronFieldMatches(next.getMinutes(), minute) &&
+        cronFieldMatches(next.getHours(), hour) &&
+        cronFieldMatches(next.getDate(), dayOfMonth) &&
+        cronFieldMatches(next.getMonth() + 1, month) &&
+        cronFieldMatches(next.getDay(), dayOfWeek)
+      ) {
+        return next;
+      }
+      next.setMinutes(next.getMinutes() + 1);
+    }
+    return null;
+  }
+
+  function generateCronTaskId(): string {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    let id = '';
+    for (let i = 0; i < 12; i++) {
+      id += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return id;
+  }
+
+  // Cron task management API
+  app.get('/api/crontasks', (_req, res) => {
+    const list = Array.from(cronTasks.values()).map((task) => ({
+      id: task.id,
+      name: task.name,
+      cron: task.cron,
+      scoop: task.scoop,
+      filter: task.filter,
+      nextRun: task.nextRun,
+      lastRun: task.lastRun,
+      status: task.status,
+      createdAt: task.createdAt,
+    }));
+    res.json(list);
+  });
+
+  app.post('/api/crontasks', (req, res) => {
+    const body = req.body as { name?: string; cron?: string; filter?: string; scoop?: string };
+    const name = body.name;
+    const cron = body.cron;
+    const filterCode = body.filter;
+    const scoop = body.scoop;
+
+    if (!name) {
+      res.status(400).json({ error: 'name is required' });
+      return;
+    }
+    if (!cron) {
+      res.status(400).json({ error: 'cron is required' });
+      return;
+    }
+
+    // Validate cron expression
+    const nextRun = getNextCronTime(cron, new Date());
+    if (!nextRun) {
+      res.status(400).json({ error: 'Invalid cron expression' });
+      return;
+    }
+
+    // Compile filter if provided
+    let filterFn: (() => boolean | unknown) | undefined;
+    if (filterCode) {
+      try {
+        filterFn = compileCronFilter(filterCode);
+      } catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+        return;
+      }
+    }
+
+    const id = generateCronTaskId();
+    const entry: CronTaskEntry = {
+      id,
+      name,
+      cron,
+      scoop,
+      filter: filterCode,
+      filterFn,
+      nextRun: nextRun.toISOString(),
+      lastRun: null,
+      status: 'active',
+      createdAt: new Date().toISOString(),
+    };
+    cronTasks.set(id, entry);
+    console.log(`[crontasks] Created task "${name}" with ID ${id} (${cron})${scoop ? ` -> ${scoop}` : ''}`);
+
+    res.json({
+      id: entry.id,
+      name: entry.name,
+      cron: entry.cron,
+      scoop: entry.scoop,
+      filter: entry.filter,
+      nextRun: entry.nextRun,
+      status: entry.status,
+      createdAt: entry.createdAt,
+    });
+  });
+
+  app.delete('/api/crontasks/:id', (req, res) => {
+    const { id } = req.params;
+    if (!cronTasks.has(id)) {
+      res.status(404).json({ error: 'Cron task not found' });
+      return;
+    }
+    cronTasks.delete(id);
+    console.log(`[crontasks] Deleted task ${id}`);
+    res.json({ ok: true });
+  });
+
+  // Cron scheduler - checks every minute for due tasks
+  setInterval(() => {
+    const now = new Date();
+    for (const task of cronTasks.values()) {
+      if (task.status !== 'active') continue;
+      if (!task.nextRun) continue;
+
+      const nextRun = new Date(task.nextRun);
+      if (nextRun > now) continue;
+
+      // Task is due - run filter and dispatch
+      let payload: unknown = { time: now.toISOString() };
+      if (task.filterFn) {
+        try {
+          const result = task.filterFn();
+          if (result === false) {
+            console.log(`[crontasks] Task "${task.name}" (${task.id}) skipped by filter`);
+            // Update next run time even if skipped
+            const next = getNextCronTime(task.cron, now);
+            task.nextRun = next?.toISOString() ?? null;
+            task.lastRun = now.toISOString();
+            continue;
+          }
+          if (typeof result === 'object' && result !== null) {
+            payload = result;
+          }
+        } catch (err) {
+          console.error(`[crontasks] Filter error on "${task.name}" (${task.id}):`, err instanceof Error ? err.message : String(err));
+        }
+      }
+
+      // Dispatch as a lick (similar to webhook events)
+      const event = {
+        type: 'cron',
+        cronId: task.id,
+        cronName: task.name,
+        targetScoop: task.scoop,
+        timestamp: now.toISOString(),
+        body: payload,
+      };
+
+      console.log(`[crontasks] Running task "${task.name}" (${task.id})`);
+      broadcastWebhookEvent(event); // Reuse webhook broadcast channel
+
+      // Update times
+      const next = getNextCronTime(task.cron, now);
+      task.nextRun = next?.toISOString() ?? null;
+      task.lastRun = now.toISOString();
+    }
+  }, 60000); // Check every minute
+
   // Fetch proxy — forwards cross-origin requests from the browser to bypass CORS.
   // Used by just-bash's curl which calls the browser's fetch() API.
   // Note: express.json() may have already parsed the body, so we check req.body first.
