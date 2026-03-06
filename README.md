@@ -52,7 +52,7 @@ Andrej Karpathy [coined the term "claw"](https://x.com/karpathy/status/202498717
 
 Peter Steinberger built [OpenClaw](https://github.com/openclaw/openclaw), the project that started the movement — a 400K-line TypeScript agent running on personal hardware. [NanoClaw](https://github.com/qwibitai/nanoclaw) took the opposite path: a lightweight alternative that strips the concept down to its essentials.
 
-SLICC is a claw too, but one that lives entirely in the browser. Its per-scoop tools (`send_message`, `feed_scoop`) follow NanoClaw-style messaging patterns — small, composable, no heavyweight runtime required. The cone orchestrates, the scoops execute, and the whole thing fits in a Chrome side panel.
+SLICC is a claw too, but one that lives entirely in the browser. Its messaging and orchestration tools (`send_message` for per-scoop messaging, `feed_scoop` for cone-level delegation) follow NanoClaw-style messaging patterns — small, composable, no heavyweight runtime required. The cone orchestrates, the scoops execute, and the whole thing fits in a Chrome side panel.
 
 ### Agents Love the CLI, So Give Them CLIs
 
