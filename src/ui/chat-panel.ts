@@ -452,9 +452,14 @@ export class ChatPanel {
   }
 
   private createMessageEl(msg: ChatMessage): HTMLElement {
+    // Use a fragment-like wrapper for messages with tool calls
+    // so tool calls appear outside the message bubble
+    const wrapper = document.createElement('div');
+    wrapper.className = 'msg-group';
+    wrapper.setAttribute('data-msg-id', msg.id);
+
     const el = document.createElement('div');
     el.className = `msg msg--${msg.role}`;
-    el.setAttribute('data-msg-id', msg.id);
 
     // Determine icon and label based on role and source
     let icon: string;
@@ -489,21 +494,21 @@ export class ChatPanel {
 
     if (isLickInCone || isScoopInCone) {
       // Collapsed by default
-      const wrapper = document.createElement('details');
-      wrapper.className = 'msg__collapsible';
+      const details = document.createElement('details');
+      details.className = 'msg__collapsible';
 
       const summary = document.createElement('summary');
       summary.className = 'msg__summary';
       const preview = msg.content.slice(0, 60).replace(/\n/g, ' ');
       summary.textContent = preview + (msg.content.length > 60 ? '...' : '');
-      wrapper.appendChild(summary);
+      details.appendChild(summary);
 
       const contentEl = document.createElement('div');
       contentEl.className = 'msg__content';
       contentEl.innerHTML = renderMessageContent(msg.content);
-      wrapper.appendChild(contentEl);
+      details.appendChild(contentEl);
 
-      el.appendChild(wrapper);
+      el.appendChild(details);
     } else {
       // Normal expanded content
       const contentEl = document.createElement('div');
@@ -517,14 +522,16 @@ export class ChatPanel {
       el.appendChild(contentEl);
     }
 
-    // Tool calls
+    wrapper.appendChild(el);
+
+    // Tool calls rendered outside the message bubble for compact display
     if (msg.toolCalls) {
       for (const tc of msg.toolCalls) {
-        el.appendChild(this.createToolCallEl(tc));
+        wrapper.appendChild(this.createToolCallEl(tc));
       }
     }
 
-    return el;
+    return wrapper;
   }
 
   private createToolCallEl(tc: ToolCall): HTMLElement {
