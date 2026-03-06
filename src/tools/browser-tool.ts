@@ -55,7 +55,9 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
     if (appTabId) return;
     const pages = await browser.listPages();
     const appOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
-    const appTab = pages.find((p) => p.url.startsWith(appOrigin));
+    // In extension mode, preview tabs share the same origin (chrome-extension://<id>/).
+    // Exclude /preview/ URLs so they aren't misidentified as the app tab.
+    const appTab = pages.find((p) => p.url.startsWith(appOrigin) && !p.url.includes('/preview/'));
     if (appTab) appTabId = appTab.targetId;
   }
 
@@ -94,13 +96,14 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
       'screenshot (targetId?, path?, fullPage?, selector? — requires snapshot first; if path is given, saves PNG to VFS), ' +
       'evaluate (expression, targetId?), click (ref or selector, targetId? — use refs like "e5" from snapshot), type (text, targetId?), ' +
       'evaluate_persistent (expression — runs JS in a persistent blank tab that preserves variables across calls, no targetId needed), ' +
+      'serve (directory, entry? — serves VFS directory as a web app in a new browser tab via preview service worker), ' +
       'show_image (path — displays an image from VFS inline in the chat; use this when the user asks to see an image file).',
     inputSchema: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['list_tabs', 'new_tab', 'navigate', 'snapshot', 'screenshot', 'evaluate', 'click', 'type', 'evaluate_persistent', 'show_image'],
+          enum: ['list_tabs', 'new_tab', 'navigate', 'snapshot', 'screenshot', 'evaluate', 'click', 'type', 'evaluate_persistent', 'serve', 'show_image'],
           description: 'The browser action to perform.',
         },
         targetId: {
@@ -134,6 +137,14 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
         fullPage: {
           type: 'boolean',
           description: 'Capture the full scrollable page, not just the visible viewport (for "screenshot" action). Default: false.',
+        },
+        directory: {
+          type: 'string',
+          description: 'VFS directory path to serve as a web app (for "serve" action). E.g. "/workspace/my-app".',
+        },
+        entry: {
+          type: 'string',
+          description: 'Entry file within the directory (for "serve" action). Defaults to "index.html".',
         },
       },
       required: ['action'],
@@ -454,6 +465,61 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
             } catch (err) {
               return { content: `Failed to read image: ${err instanceof Error ? err.message : String(err)}`, isError: true };
             }
+          }
+
+          case 'serve': {
+            const directory = input['directory'] as string;
+            const entry = (input['entry'] as string) || 'index.html';
+
+            if (!directory) return { content: 'serve requires a directory path', isError: true };
+
+            // Reject path traversal in entry to prevent serving files outside the directory
+            if (entry.includes('..') || entry.startsWith('/')) {
+              return { content: `Invalid entry file: ${entry} (must be a relative path without "..")`, isError: true };
+            }
+
+            // Verify entry file exists in VFS
+            const entryPath = directory.endsWith('/')
+              ? directory + entry
+              : directory + '/' + entry;
+
+            if (fs) {
+              try {
+                await fs.stat(entryPath);
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                if (msg.includes('ENOENT')) {
+                  return { content: `Entry file not found: ${entryPath}`, isError: true };
+                }
+                return { content: `Failed to access entry file (${entryPath}): ${msg}`, isError: true };
+              }
+            }
+
+            // Construct preview URL — works for both CLI and extension
+            const normalizedDir = directory.startsWith('/') ? directory : '/' + directory;
+            const previewPath = `/preview${normalizedDir}${normalizedDir.endsWith('/') ? '' : '/'}${entry}`;
+
+            const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+            const previewUrl = isExtension
+              ? chrome.runtime.getURL(previewPath)
+              : `http://localhost:3000${previewPath}`;
+
+            // Reset app tab cache — the new preview tab shares the extension origin
+            // and could be misidentified without a fresh lookup
+            appTabId = null;
+
+            // Open in a new tab
+            let newTargetId: string;
+            try {
+              newTargetId = await browser.createPage(previewUrl);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              return { content: `Failed to create preview tab: ${msg}`, isError: true };
+            }
+
+            return {
+              content: `Serving ${directory} in tab ${newTargetId}\nURL: ${previewUrl}\nUse snapshot, screenshot, evaluate, click etc. to interact with the page.`
+            };
           }
 
           default:

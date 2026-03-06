@@ -20,6 +20,13 @@ async function main(): Promise<void> {
   const app = document.getElementById('app');
   if (!app) throw new Error('#app element not found');
 
+  // Register preview service worker (serves VFS content at /preview/*)
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/preview-sw.js', { scope: '/preview/' })
+      .then(() => log.info('Preview SW registered'))
+      .catch(err => log.error('Preview SW registration failed — preview feature will not work', err));
+  }
+
   // Check for API key (first-run dialog)
   let apiKey = getApiKey();
   if (!apiKey) {

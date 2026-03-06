@@ -7,6 +7,62 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig(({ mode }) => ({
   root: '.',
+  plugins: [
+    {
+      name: 'preview-sw-builder',
+      configureServer(server) {
+        // Dev mode: serve the SW as a fully bundled IIFE via esbuild.
+        // SWs can't use ES imports (they don't go through Vite's module resolver).
+        let cachedCode: string | null = null;
+        let cachedMtime = 0;
+        const swPath = resolve(__dirname, 'src/ui/preview-sw.ts');
+
+        server.middlewares.use('/preview-sw.js', async (_req, res) => {
+          try {
+            const { statSync } = await import('fs');
+            const mtime = statSync(swPath).mtimeMs;
+
+            if (!cachedCode || mtime > cachedMtime) {
+              const esbuild = await import('esbuild');
+              const result = await esbuild.build({
+                entryPoints: [swPath],
+                bundle: true,
+                write: false,
+                format: 'iife',
+                target: 'esnext',
+                define: { __DEV__: 'true', global: 'globalThis' },
+              });
+              cachedCode = result.outputFiles![0].text;
+              cachedMtime = mtime;
+            }
+
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(cachedCode);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error('[preview-sw-builder] Failed to build:', msg);
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(`console.error('[preview-sw] Build failed: ${msg.replace(/'/g, "\\'")}');`);
+          }
+        });
+      },
+      async closeBundle() {
+        // Production: build the SW as a self-contained IIFE via esbuild.
+        // Rollup would code-split LightningFS into a shared chunk, which SWs can't import.
+        const esbuild = await import('esbuild');
+        await esbuild.build({
+          entryPoints: [resolve(__dirname, 'src/ui/preview-sw.ts')],
+          bundle: true,
+          outfile: resolve(__dirname, 'dist/ui/preview-sw.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
+        });
+      },
+    },
+  ],
   define: {
     __DEV__: JSON.stringify(mode !== 'production'),
     // Buffer polyfill for isomorphic-git
@@ -42,6 +98,7 @@ export default defineConfig(({ mode }) => ({
     outDir: 'dist/ui',
     emptyOutDir: true,
     target: 'esnext',
+    // preview-sw is built separately via esbuild (SWs need self-contained bundles)
   },
   server: {
     port: 3000,

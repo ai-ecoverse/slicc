@@ -121,7 +121,7 @@ export class ScoopContext {
       const legacyTools = [
         ...createFileTools(this.fs as VirtualFS),
         createBashTool(this.shell),
-        createBrowserTool(browser),
+        createBrowserTool(browser, this.fs as VirtualFS),
         ...createSearchTools(this.fs as VirtualFS),
         createJavaScriptTool(this.fs as VirtualFS),
         ...nanoClawTools,

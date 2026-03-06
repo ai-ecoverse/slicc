@@ -1,7 +1,7 @@
 /**
  * Tests for the browser tool.
  *
- * Focuses on pure logic functions (base64ToBytes).
+ * Focuses on pure logic functions (base64ToBytes, preview URL construction).
  * The tool's execute method requires CDP connectivity and BrowserAPI,
  * which are integration-tested but not unit-tested in Node.
  */
@@ -74,5 +74,76 @@ describe('Browser Tool - base64ToBytes', () => {
     const decoded = base64ToBytes(base64);
 
     expect(decoded).toEqual(original);
+  });
+});
+
+/**
+ * Preview URL construction logic — extracted from the serve action.
+ * Tests the path normalization that builds /preview/... URLs.
+ */
+function buildPreviewPath(directory: string, entry: string): string {
+  const normalizedDir = directory.startsWith('/') ? directory : '/' + directory;
+  return `/preview${normalizedDir}${normalizedDir.endsWith('/') ? '' : '/'}${entry}`;
+}
+
+/**
+ * Entry validation logic — extracted from the serve action.
+ * Rejects path traversal and absolute paths in the entry parameter.
+ */
+function isValidEntry(entry: string): boolean {
+  return !entry.includes('..') && !entry.startsWith('/');
+}
+
+describe('Browser Tool - serve action entry validation', () => {
+  it('accepts simple filename', () => {
+    expect(isValidEntry('index.html')).toBe(true);
+  });
+
+  it('accepts subdirectory entry', () => {
+    expect(isValidEntry('pages/about.html')).toBe(true);
+  });
+
+  it('rejects parent traversal', () => {
+    expect(isValidEntry('../escape.html')).toBe(false);
+  });
+
+  it('rejects nested parent traversal', () => {
+    expect(isValidEntry('pages/../../escape.html')).toBe(false);
+  });
+
+  it('rejects absolute path', () => {
+    expect(isValidEntry('/etc/passwd')).toBe(false);
+  });
+});
+
+describe('Browser Tool - serve action URL construction', () => {
+  it('constructs preview path for absolute directory', () => {
+    expect(buildPreviewPath('/workspace/my-app', 'index.html'))
+      .toBe('/preview/workspace/my-app/index.html');
+  });
+
+  it('constructs preview path for relative directory', () => {
+    expect(buildPreviewPath('workspace/my-app', 'index.html'))
+      .toBe('/preview/workspace/my-app/index.html');
+  });
+
+  it('handles directory with trailing slash', () => {
+    expect(buildPreviewPath('/workspace/my-app/', 'index.html'))
+      .toBe('/preview/workspace/my-app/index.html');
+  });
+
+  it('handles custom entry file', () => {
+    expect(buildPreviewPath('/html', 'hello.html'))
+      .toBe('/preview/html/hello.html');
+  });
+
+  it('handles root directory', () => {
+    expect(buildPreviewPath('/', 'index.html'))
+      .toBe('/preview/index.html');
+  });
+
+  it('handles nested directories', () => {
+    expect(buildPreviewPath('/workspace/my-app/pages', 'about.html'))
+      .toBe('/preview/workspace/my-app/pages/about.html');
   });
 });
