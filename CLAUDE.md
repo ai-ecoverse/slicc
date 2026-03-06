@@ -77,7 +77,39 @@ POSIX-like async filesystem backed by LightningFS (IndexedDB). VirtualFS is the 
 ### Shell (src/shell/)
 WasmShell wraps just-bash 2.11.7 (WASM Bash interpreter) and connects it to VirtualFS via VfsAdapter (implements just-bash's IFileSystem). The shell maintains env/cwd state across calls. Terminal UI via xterm.js with dynamic imports (so tests run in Node without xterm). Supports 78+ commands, escape sequences (arrow keys, Home/End/Delete), multi-line editing with continuation buffer, and proxied fetch for curl/networking (via `/api/fetch-proxy` in CLI mode, direct fetch with `host_permissions` in extension mode). Binary response handling: `readResponseBody()` detects content-type and uses latin1 encoding for binary types to preserve byte fidelity through just-bash's string-typed FetchResult. A binary cache (`binary-cache.ts`) stores raw Uint8Array for VfsAdapter to bypass string encoding on write.
 
+**Custom shell commands** (`src/shell/supplemental-commands/`): Additional commands beyond bash builtins:
+- `skill list` — List installed skills with version and status
+- `skill install <name>` — Install a skill from `/workspace/skills/`
+- `skill uninstall <name>` — Remove an installed skill
+- `upskill <source>` — Install skills from GitHub repos or ClawHub registry
+  - `upskill owner/repo` — Install from GitHub repository
+  - `upskill owner/repo --skill name` — Install specific skill from repo
+  - `upskill clawhub:skill-name` — Install from ClawHub by name
+  - `upskill search "query"` — Search ClawHub for skills
+- `git` — Full git support via isomorphic-git
+- `node -e "code"` — Execute JavaScript
+- `python3 -c "code"` — Execute Python via Pyodide
+- `open <url>` — Open URL in browser tab
+- `zip/unzip` — Archive compression
+- `sqlite3` — SQLite database operations
+- `webhook` — Manage webhooks for event-driven automation
+- `mount` — Mount external filesystems (GitHub repos, URLs)
+- `commands` — Show all available commands (type `commands` in terminal)
+
 **Extension CSP workaround**: `node -e` in extension mode routes through the sandbox iframe (CSP blocks `AsyncFunction` constructor on extension pages). Python uses bundled Pyodide loaded from `chrome.runtime.getURL('pyodide/')`.
+
+### Skills System (src/skills/, src/scoops/skills.ts)
+Two complementary skill systems:
+
+1. **Prompt injection** (`src/scoops/skills.ts`): Skills in `/workspace/skills/` with `SKILL.md` files are automatically loaded into the agent's system prompt. Headers are shown by default; full content loaded on demand via `read_file`.
+
+2. **Installation engine** (`src/skills/`): Full package manager for installing/uninstalling skill packages:
+   - Manifest-based installation (`manifest.yaml` with name, version, dependencies, conflicts)
+   - State tracking in `.slicc/state.json`
+   - Security validations (path traversal protection, manifest name matching)
+   - Dependency and conflict checking
+
+**Default skills** are bundled from `src/defaults/workspace/skills/` using Vite's `import.meta.glob`.
 
 ### CDP (src/cdp/)
 CDPTransport interface (`transport.ts`) abstracts the underlying protocol. Two implementations:
