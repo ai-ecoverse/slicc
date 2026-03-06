@@ -22,12 +22,13 @@ const STORES = {
 let db: IDBDatabase | null = null;
 
 async function openDB(): Promise<IDBDatabase> {
-  // If we have a cached connection, verify it's the right version
+  // If we have a cached connection, verify it has all required stores
   if (db) {
-    if (db.version === DB_VERSION) {
+    const hasAllStores = Object.values(STORES).every(name => db!.objectStoreNames.contains(name));
+    if (db.version === DB_VERSION && hasAllStores) {
       return db;
     }
-    // Close outdated connection to trigger upgrade
+    // Close outdated/incomplete connection to trigger upgrade
     db.close();
     db = null;
   }
@@ -346,12 +347,17 @@ export async function getWebhook(id: string): Promise<WebhookEntry | null> {
 }
 
 export async function getAllWebhooks(): Promise<WebhookEntry[]> {
-  const store = await getStore(STORES.WEBHOOKS);
-  return new Promise((resolve, reject) => {
-    const req = store.getAll();
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
+  try {
+    const store = await getStore(STORES.WEBHOOKS);
+    return new Promise((resolve, reject) => {
+      const req = store.getAll();
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    // Store doesn't exist yet - return empty array
+    return [];
+  }
 }
 
 export async function deleteWebhook(id: string): Promise<void> {
@@ -384,12 +390,17 @@ export async function getCronTask(id: string): Promise<CronTaskEntry | null> {
 }
 
 export async function getAllCronTasks(): Promise<CronTaskEntry[]> {
-  const store = await getStore(STORES.CRONTASKS);
-  return new Promise((resolve, reject) => {
-    const req = store.getAll();
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
+  try {
+    const store = await getStore(STORES.CRONTASKS);
+    return new Promise((resolve, reject) => {
+      const req = store.getAll();
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    // Store doesn't exist yet - return empty array
+    return [];
+  }
 }
 
 export async function deleteCronTask(id: string): Promise<void> {
