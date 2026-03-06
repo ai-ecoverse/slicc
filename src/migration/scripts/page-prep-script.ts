@@ -18,11 +18,11 @@ export const PAGE_PREP_SCRIPT = `(async () => {
     }
   }
 
-  var scrollStep = window.innerHeight;
+  var scrollStep = window.innerHeight || 800;
   var totalHeight = Math.max(
-    document.body.scrollHeight,
-    document.documentElement.scrollHeight
-  );
+    (document.body && document.body.scrollHeight) || 0,
+    document.documentElement.scrollHeight || 0
+  ) || 800;
   var stepsScrolled = 0;
 
   for (var pos = 0; pos < totalHeight; pos += scrollStep) {

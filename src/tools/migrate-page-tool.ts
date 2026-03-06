@@ -112,6 +112,7 @@ async function runMigrationExtraction(
 
   const targetId = await browser.createPage(url);
   await browser.attachToPage(targetId);
+  await browser.navigate(url);
 
   await browser.evaluate(PAGE_PREP_SCRIPT);
 
