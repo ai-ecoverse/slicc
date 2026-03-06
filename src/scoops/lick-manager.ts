@@ -56,6 +56,9 @@ export class LickManager {
 
   /** Initialize - load from IndexedDB and start cron scheduler */
   async init(): Promise<void> {
+    // Ensure DB is initialized (triggers schema upgrade if needed)
+    await db.initDB();
+
     // Load webhooks from DB
     const webhooks = await db.getAllWebhooks();
     for (const wh of webhooks) {

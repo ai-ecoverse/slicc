@@ -22,7 +22,15 @@ const STORES = {
 let db: IDBDatabase | null = null;
 
 async function openDB(): Promise<IDBDatabase> {
-  if (db) return db;
+  // If we have a cached connection, verify it's the right version
+  if (db) {
+    if (db.version === DB_VERSION) {
+      return db;
+    }
+    // Close outdated connection to trigger upgrade
+    db.close();
+    db = null;
+  }
 
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
