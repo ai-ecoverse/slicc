@@ -60,7 +60,7 @@ async function syncPyodideToVfs(fs: IFileSystem, pyodide: PyodideInterface, dirs
           await fs.mkdir(full, { recursive: true });
           await writeBack(full);
         } else {
-          const content = FS.readFile(full, { encoding: 'utf8' }) as string;
+          const content = new TextDecoder().decode(FS.readFile(full));
           await fs.mkdir(pyPath, { recursive: true });
           await fs.writeFile(full, content);
         }
