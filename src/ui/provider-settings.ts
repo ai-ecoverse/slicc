@@ -6,6 +6,19 @@
 
 import { getProviders, getModels, getModel } from '../core/index.js';
 import type { Model } from '../core/index.js';
+import type { Api } from '@mariozechner/pi-ai';
+
+// Dynamic wrappers — pi-ai's getModel/getModels use strict generics
+// that require KnownProvider literals, but provider-settings works
+// with runtime strings from localStorage/user selection.
+const getModelDynamic = getModel as (
+  provider: string,
+  modelId: string
+) => Model<Api>;
+
+const getModelsDynamic = getModels as (
+  provider: string
+) => Model<Api>[];
 
 // Storage keys
 const STORAGE_KEYS = {
@@ -164,7 +177,7 @@ const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
 // Get all available providers — pi-ai providers + custom providers (e.g., azure-ai-foundry)
 export function getAvailableProviders(): string[] {
   const piProviders = getProviders();
-  const customProviders = Object.keys(PROVIDER_CONFIGS).filter(id => !piProviders.includes(id));
+  const customProviders = Object.keys(PROVIDER_CONFIGS).filter(id => !(piProviders as string[]).includes(id));
   return [...piProviders, ...customProviders];
 }
 
@@ -180,11 +193,11 @@ export function getProviderConfig(providerId: string): ProviderConfig {
 }
 
 // Get models for a provider
-export function getProviderModels(providerId: string): Model<any>[] {
+export function getProviderModels(providerId: string): Model<Api>[] {
   try {
     // Azure AI Foundry uses Anthropic's Claude models
     const effectiveProvider = providerId === 'azure-ai-foundry' ? 'anthropic' : providerId;
-    return getModels(effectiveProvider as any);
+    return getModelsDynamic(effectiveProvider);
   } catch {
     return [];
   }
@@ -295,29 +308,29 @@ export function clearAllSettings(): void {
 }
 
 // Resolve the current model with provider-specific baseUrl override
-export function resolveCurrentModel(): Model<any> {
+export function resolveCurrentModel(): Model<Api> {
   const providerId = getSelectedProvider();
   const modelId = getSelectedModelId();
   const baseUrl = getBaseUrl();
-  
+
   // Get default model if none selected
   const models = getProviderModels(providerId);
   const effectiveModelId = modelId || models[0]?.id || 'claude-sonnet-4-20250514';
-  
+
   try {
     // Azure AI Foundry uses Anthropic's model registry
     const effectiveProvider = providerId === 'azure-ai-foundry' ? 'anthropic' : providerId;
-    let model = getModel(effectiveProvider as any, effectiveModelId as any);
+    let model = getModelDynamic(effectiveProvider, effectiveModelId);
 
     // Override baseUrl if custom one is set
     if (baseUrl) {
       model = { ...model, baseUrl };
     }
-    
+
     return model;
   } catch {
     // Fallback to anthropic
-    return getModel('anthropic', 'claude-sonnet-4-20250514' as any);
+    return getModelDynamic('anthropic', 'claude-sonnet-4-20250514');
   }
 }
 

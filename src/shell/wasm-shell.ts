@@ -273,7 +273,6 @@ export class WasmShell {
     // Dynamic imports so this module can be loaded in Node.js (tests) without xterm
     const { Terminal } = await import('@xterm/xterm');
     const { FitAddon } = await import('@xterm/addon-fit');
-    // @ts-expect-error — Vite handles CSS imports at build time
     await import('@xterm/xterm/css/xterm.css');
 
     this.terminal = new Terminal({
@@ -810,7 +809,8 @@ export class WasmShell {
     this.clearMediaPreview();
 
     for (const item of items) {
-      const url = URL.createObjectURL(new Blob([item.bytes], { type: item.mimeType }));
+      const bytes = new Uint8Array(item.bytes);
+      const url = URL.createObjectURL(new Blob([bytes], { type: item.mimeType }));
       this.previewUrls.push(url);
 
       const previewItem = document.createElement('div');
