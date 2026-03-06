@@ -422,8 +422,22 @@ async function main() {
     res.json({ ok: true });
   });
 
+  // Webhook receiver — handle CORS preflight for cross-origin webhook calls
+  app.options('/webhooks/:id', (req, res) => {
+    res.set({
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    });
+    res.sendStatus(204);
+  });
+
   // Webhook receiver — accepts incoming POSTs and broadcasts to browser
   app.post('/webhooks/:id', async (req, res) => {
+    // Set CORS headers for cross-origin requests
+    res.set({
+      'Access-Control-Allow-Origin': '*',
+    });
     const { id } = req.params;
     const webhook = webhooks.get(id);
     if (!webhook) {
