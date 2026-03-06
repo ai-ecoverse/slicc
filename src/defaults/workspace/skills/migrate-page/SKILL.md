@@ -290,7 +290,7 @@ The `decorate` function receives the block `<div>` after EDS has converted the a
 
 ## EDS Block Content Model
 
-Write the test page at `/migration/{page-path}/blocks/{blockName}.plain.html`:
+Write the test page at `/shared/{repo-name}/drafts/{blockName}.plain.html`:
 
 The content model uses an HTML table structure that EDS converts to nested divs:
 
@@ -298,7 +298,7 @@ The content model uses an HTML table structure that EDS converts to nested divs:
 <div>
   <div class="{blockName}">
     <div>
-      <div><!-- Row 1, Cell 1: e.g., image --><img src="./images/hero.jpg" alt="description"></div>
+      <div><!-- Row 1, Cell 1: e.g., image --><img src="/drafts/images/hero.jpg" alt="description"></div>
       <div><!-- Row 1, Cell 2: e.g., text --><h2>Heading</h2><p>Description text</p></div>
     </div>
     <div>
@@ -313,7 +313,7 @@ Rules:
 - Contains ONLY `<div>` structure -- NO `<html>`, `<head>`, `<body>`, `<script>` tags
 - Outer wrapper: `<div><div class="{blockName}">...</div></div>`
 - Each direct child of the block div is a row; each child of a row is a cell
-- Use relative image paths (e.g., `./images/hero.jpg`) — NOT absolute VFS paths
+- Use root-relative image paths within the EDS project (e.g., `/drafts/images/hero.jpg`)
 - Map source content (headings, text, images, links) into rows/columns
 
 ## Visual Verification Loop
@@ -329,13 +329,13 @@ For each iteration:
 
 2. **Screenshot the source component region:**
    ```json
-   browser({{ "action": "screenshot", "selector": "...", "path": "/migration/{page-path}/source-{blockName}.png" }})
+   browser({{ "action": "screenshot", "selector": "...", "path": "/shared/{repo-name}/.migration/source-{blockName}.png" }})
    ```
    Or crop from the full-page screenshot based on bounds.
 
 3. **Screenshot the preview:**
    ```json
-   browser({{ "action": "screenshot", "path": "/migration/{page-path}/preview-{blockName}.png" }})
+   browser({{ "action": "screenshot", "path": "/shared/{repo-name}/.migration/preview-{blockName}.png" }})
    ```
 
 4. **Compare visually:** Read both screenshots. Identify the top 2-3 CSS differences.
@@ -451,7 +451,9 @@ Extract brand-level design tokens from `page-metadata.json` and `computed-styles
 
 Build the page document from the decomposition. Each fragment becomes a separate file.
 
-**Main content** (`/{page-path}.plain.html`):
+All content files go in `drafts/` (like `aem up --html-folder drafts`):
+
+**Main content** (`drafts/{page-path}.plain.html`):
 
 ```html
 <div>
@@ -465,7 +467,7 @@ Build the page document from the decomposition. Each fragment becomes a separate
 <div>
   <div class="hero">
     <div>
-      <div><img src="./images/hero-bg.jpg" alt="Hero"></div>
+      <div><img src="/drafts/images/hero-bg.jpg" alt="Hero"></div>
       <div><h2>Hero Heading</h2><p>Hero text</p><a href="/cta">Call to Action</a></div>
     </div>
   </div>
@@ -474,18 +476,22 @@ Build the page document from the decomposition. Each fragment becomes a separate
 <div>
   <div class="cards">
     <div>
-      <div><img src="./images/card1.jpg" alt="Card 1"></div>
+      <div><img src="/drafts/images/card1.jpg" alt="Card 1"></div>
       <div><h3>Card Title</h3><p>Card description</p></div>
     </div>
     <div>
-      <div><img src="./images/card2.jpg" alt="Card 2"></div>
+      <div><img src="/drafts/images/card2.jpg" alt="Card 2"></div>
       <div><h3>Card Title</h3><p>Card description</p></div>
     </div>
   </div>
 </div>
 ```
 
-Sections are separated by `---`. Block content uses the table-as-divs pattern. Default content is plain HTML (headings, paragraphs, lists, images).
+Sections are separated by `---`. Block content uses the table-as-divs pattern. Default content is plain HTML. Image paths are root-relative to the EDS project (e.g., `/drafts/images/hero.jpg`), which the preview SW resolves from VFS.
+
+**Navigation** → `drafts/nav.plain.html`
+**Footer** → `drafts/footer.plain.html`
+**Images** → `drafts/images/` (downloaded from source page)
 
 ### 3. Git Commit
 
@@ -493,7 +499,7 @@ Create a migration branch and commit all artifacts:
 
 ```bash
 git checkout -b migrate/{page-path}
-git add blocks/ styles/brand.css nav.plain.html footer.plain.html {page-path}.plain.html
+git add blocks/ styles/brand.css drafts/
 git commit -m "feat: migrate {page-path} from {source-domain}"
 ```
 
