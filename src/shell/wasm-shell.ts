@@ -15,7 +15,7 @@ import { VfsAdapter } from './vfs-adapter.js';
 import { cacheBinaryBody } from './binary-cache.js';
 import { GitCommands } from '../git/git-commands.js';
 import { createSupplementalCommands } from './supplemental-commands.js';
-import { createSkillCommand } from './supplemental-commands/skill-command.js';
+import { createSkillCommand, createUpskillCommand } from './supplemental-commands/upskill-command.js';
 import { MountCommands } from '../fs/mount-commands.js';
 
 /** Check if a content-type header indicates text (safe for UTF-8 decoding). */
@@ -167,13 +167,20 @@ export class WasmShell {
     const gitCommand = this.createGitCustomCommand();
     const supplementalCommands = createSupplementalCommands();
     const mountCommand = this.createMountCustomCommand();
+    const fetchFn = createProxiedFetch();
 
     this.bash = new Bash({
       fs: this.vfsAdapter,
       cwd: initialCwd,
       env: initialEnv,
-      fetch: createProxiedFetch(),
-      customCommands: [gitCommand, mountCommand, createSkillCommand(options.fs), ...supplementalCommands],
+      fetch: fetchFn,
+      customCommands: [
+        gitCommand,
+        mountCommand,
+        createSkillCommand(options.fs),
+        createUpskillCommand(options.fs, fetchFn),
+        ...supplementalCommands,
+      ],
     });
     this.lastEnv = { ...initialEnv };
     this.cwd = initialCwd;
