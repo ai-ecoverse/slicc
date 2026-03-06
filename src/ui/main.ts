@@ -232,6 +232,27 @@ async function main(): Promise<void> {
           emitToUI({ type: 'tool_result', messageId: msgId, toolName, result, isError });
         }
       },
+      onIncomingMessage: (scoopJid, message) => {
+        // Buffer incoming messages (delegations, etc.) for display
+        const chatMsg: ChatMessage = {
+          id: message.id,
+          role: 'user',
+          content: message.channel === 'delegation'
+            ? `**[Instructions from sliccy]**\n\n${message.content}`
+            : message.content,
+          timestamp: new Date(message.timestamp).getTime(),
+          source: message.channel === 'delegation' ? 'delegation' : undefined,
+          channel: message.channel,
+        };
+        getBuffer(scoopJid).push(chatMsg);
+
+        // Emit to UI if this scoop is selected
+        if (selectedScoop?.jid === scoopJid) {
+          emitToUI({ type: 'message_start', messageId: message.id });
+          emitToUI({ type: 'content_delta', messageId: message.id, text: chatMsg.content });
+          emitToUI({ type: 'content_done', messageId: message.id });
+        }
+      },
     },
   );
 

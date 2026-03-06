@@ -43,6 +43,8 @@ export interface OrchestratorCallbacks {
   onToolStart?: (scoopJid: string, toolName: string, toolInput: unknown) => void;
   /** Called when a tool finishes executing */
   onToolEnd?: (scoopJid: string, toolName: string, result: string, isError: boolean) => void;
+  /** Called when a message is routed to a scoop (delegation, lick, etc.) */
+  onIncomingMessage?: (scoopJid: string, message: ChannelMessage) => void;
 }
 
 export interface AssistantConfig {
@@ -265,6 +267,9 @@ export class Orchestrator {
       channel: 'delegation',
     };
     await db.saveMessage(msg);
+
+    // Notify UI about the incoming delegation
+    this.callbacks.onIncomingMessage?.(scoopJid, msg);
 
     log.info('Delegating to scoop', { scoopJid, scoopName: scoop.name, promptLength: prompt.length });
     // Fire-and-forget: don't await the scoop's agent loop.
