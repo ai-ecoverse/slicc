@@ -1,5 +1,6 @@
 import { loadPyodide } from 'pyodide';
 import type { PyodideInterface } from 'pyodide';
+import { getMimeType } from '../../core/mime-types.js';
 
 export interface SqlJsResultSet {
   columns: string[];
@@ -100,16 +101,7 @@ export function formatSqlValue(value: unknown): string {
 }
 
 export function detectMimeType(path: string): string {
-  const lower = path.toLowerCase();
-  if (lower.endsWith('.zip')) return 'application/zip';
-  if (lower.endsWith('.json')) return 'application/json';
-  if (lower.endsWith('.txt') || lower.endsWith('.md') || lower.endsWith('.log')) return 'text/plain';
-  if (lower.endsWith('.png')) return 'image/png';
-  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
-  if (lower.endsWith('.gif')) return 'image/gif';
-  if (lower.endsWith('.webp')) return 'image/webp';
-  if (lower.endsWith('.pdf')) return 'application/pdf';
-  return 'application/octet-stream';
+  return getMimeType(path);
 }
 
 export function formatConsoleArg(value: unknown): string {

@@ -6,6 +6,7 @@
  */
 
 import type { VirtualFS } from '../fs/index.js';
+import { isTerminalPreviewableMediaPath } from '../core/mime-types.js';
 import { zipSync } from 'fflate';
 
 /** Format byte size into human-readable string. */
@@ -16,15 +17,31 @@ function formatSize(bytes: number): string {
   return (bytes / (1024 * 1024 * 1024)).toFixed(1) + 'G';
 }
 
+/** Quote a shell argument with single quotes. */
+function quoteShellArg(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function buildPreviewCommand(path: string): string {
+  const command = isTerminalPreviewableMediaPath(path) ? 'imgcat' : 'cat';
+  return `${command} ${quoteShellArg(path)}`;
+}
+
+export interface FileBrowserPanelOptions {
+  onRunCommand?: (command: string) => Promise<void> | void;
+}
+
 export class FileBrowserPanel {
   private container: HTMLElement;
   private bodyEl!: HTMLElement;
   private fs: VirtualFS | null = null;
   private expandedDirs = new Set<string>(['/']);
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
+  private onRunCommand: ((command: string) => Promise<void> | void) | null;
 
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, options: FileBrowserPanelOptions = {}) {
     this.container = container;
+    this.onRunCommand = options.onRunCommand ?? null;
     this.render();
   }
 
@@ -106,7 +123,8 @@ export class FileBrowserPanel {
 
         // Download folder as ZIP button
         const zipBtn = document.createElement('button');
-        zipBtn.className = 'file-browser__zip-btn';
+        zipBtn.className = 'file-browser__action-btn';
+        zipBtn.style.marginLeft = 'auto';
         zipBtn.textContent = 'ZIP';
         zipBtn.title = 'Download as ZIP';
         zipBtn.addEventListener('click', (e) => {
@@ -158,9 +176,20 @@ export class FileBrowserPanel {
           console.warn('[FileBrowser] stat failed:', fullPath, err instanceof Error ? err.message : String(err));
         }
 
-        // Click to download
-        row.style.cursor = 'pointer';
-        row.addEventListener('click', () => this.downloadFile(fullPath, entry.name));
+        // Preview in terminal button
+        const catBtn = document.createElement('button');
+        catBtn.className = 'file-browser__action-btn';
+        catBtn.style.marginLeft = '8px';
+        catBtn.textContent = 'CAT';
+        catBtn.title = this.onRunCommand
+          ? isTerminalPreviewableMediaPath(fullPath) ? 'Preview media in terminal' : 'Preview in terminal'
+          : 'Terminal unavailable';
+        catBtn.disabled = !this.onRunCommand;
+        catBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.previewFile(fullPath);
+        });
+        row.appendChild(catBtn);
 
         parentEl.appendChild(row);
       }
@@ -204,22 +233,13 @@ export class FileBrowserPanel {
     }
   }
 
-  /** Read a file from VFS and trigger a browser download. */
-  private async downloadFile(path: string, filename: string): Promise<void> {
-    if (!this.fs) return;
-    try {
-      const content = await this.fs.readFile(path, { encoding: 'binary' });
-      const bytes = content instanceof Uint8Array ? content : new TextEncoder().encode(content);
-      const blob = new Blob([bytes.buffer as ArrayBuffer]);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error('[FileBrowser] Download failed:', path, err instanceof Error ? err.message : String(err));
-    }
+  /** Run `cat` or `imgcat` for the selected file in the terminal panel. */
+  private previewFile(path: string): void {
+    if (!this.onRunCommand) return;
+    const command = buildPreviewCommand(path);
+    void Promise.resolve(this.onRunCommand(command)).catch((err) => {
+      console.error('[FileBrowser] Preview command failed:', path, err instanceof Error ? err.message : String(err));
+    });
   }
 
   /** Dispose the panel and stop auto-refresh. */

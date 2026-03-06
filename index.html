@@ -194,7 +194,39 @@
       /* Terminal panel                                                     */
       /* ------------------------------------------------------------------ */
       .terminal-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-      .terminal-panel__body { flex: 1; min-height: 0; padding: 4px; overflow: hidden; }
+      .terminal-panel__body {
+        flex: 1; min-height: 0; overflow: hidden;
+        display: flex; flex-direction: column;
+      }
+      .terminal-panel__content {
+        flex: 1; min-height: 0; overflow: hidden;
+        display: flex; flex-direction: column;
+      }
+      .terminal-panel__view {
+        flex: 1; min-height: 0; overflow: hidden;
+        display: flex; flex-direction: column; padding: 4px;
+      }
+      .terminal-panel__mount { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+      .terminal-panel__terminal-host { flex: 1; min-height: 0; overflow: hidden; }
+      .terminal-panel__preview {
+        display: none; flex: 1; min-height: 0; overflow: auto;
+        padding: 12px; border-radius: 6px; background: #141426; border: 1px solid #2a2a4a;
+      }
+      .terminal-panel__preview--visible { display: flex; flex-direction: column; }
+      .terminal-panel__preview-item { display: flex; flex-direction: column; gap: 8px; }
+      .terminal-panel__preview-item + .terminal-panel__preview-item { margin-top: 12px; }
+      .terminal-panel__preview-label {
+        color: #8f90a8; font-size: 11px; font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      }
+      .terminal-panel__preview-media {
+        display: block; width: 100%; max-width: 100%; max-height: min(100%, 520px);
+        object-fit: contain; border-radius: 4px; background: #0b0c16; border: 1px solid #30324a;
+      }
+      .terminal-panel__empty-state {
+        flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center;
+        padding: 24px; color: #6f7088; font-size: 12px; text-transform: uppercase;
+        letter-spacing: 0.08em; border: 1px dashed #2f3148; border-radius: 6px; background: #141426;
+      }
 
       /* ------------------------------------------------------------------ */
       /* Horizontal divider (terminal / file browser)                       */
@@ -226,12 +258,13 @@
       .file-browser__icon { flex-shrink: 0; font-size: 13px; }
       .file-browser__name { overflow: hidden; text-overflow: ellipsis; }
       .file-browser__size { margin-left: auto; color: #666; font-size: 11px; flex-shrink: 0; padding-left: 8px; }
-      .file-browser__zip-btn {
-        margin-left: auto; background: #2a2a4a; border: 1px solid #3a3a5a;
+      .file-browser__action-btn {
+        background: #2a2a4a; border: 1px solid #3a3a5a;
         color: #a0a0b0; cursor: pointer; font-size: 11px; padding: 1px 6px;
         border-radius: 3px; flex-shrink: 0; line-height: 1.4;
       }
-      .file-browser__zip-btn:hover { background: #e94560; color: #fff; border-color: #e94560; }
+      .file-browser__action-btn:hover { background: #e94560; color: #fff; border-color: #e94560; }
+      .file-browser__action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
       /* ------------------------------------------------------------------ */
       /* Memory panel                                                       */
@@ -266,6 +299,9 @@
       }
       .mini-tabs__tab:hover { color: #a0a0b0; }
       .mini-tabs__tab--active { color: #e94560; border-bottom-color: #e94560; }
+      .mini-tabs__tab:disabled {
+        color: #4f5068; cursor: not-allowed;
+      }
 
       /* ------------------------------------------------------------------ */
       /* Tab bar (extension mode)                                           */

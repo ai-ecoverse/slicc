@@ -15,8 +15,15 @@ import { VfsAdapter } from './vfs-adapter.js';
 import { cacheBinaryBody, cacheBinaryByUrl } from './binary-cache.js';
 import { GitCommands } from '../git/git-commands.js';
 import { createSupplementalCommands } from './supplemental-commands.js';
+import type { MediaPreviewItem } from './supplemental-commands.js';
 import { createSkillCommand, createUpskillCommand } from './supplemental-commands/upskill-command.js';
 import { MountCommands } from '../fs/mount-commands.js';
+
+function basename(path: string): string {
+  const trimmed = path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
+  const slash = trimmed.lastIndexOf('/');
+  return slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
+}
 
 /** Check if a content-type header indicates text (safe for UTF-8 decoding). */
 export function isTextContentType(contentType: string): boolean {
@@ -136,6 +143,12 @@ export class WasmShell {
   private mountCommands: MountCommands;
   private terminal: Terminal | null = null;
   private fitAddon: FitAddon | null = null;
+  private terminalHost: HTMLElement | null = null;
+  private previewHost: HTMLElement | null = null;
+  private previewUrls: string[] = [];
+  private previewStateListener: ((hasPreview: boolean) => void) | null = null;
+  private hasPreview = false;
+  private resizeObserver: ResizeObserver | null = null;
   private currentLine = '';
   private cursorPos = 0;
   private history: string[] = [];
@@ -170,7 +183,9 @@ export class WasmShell {
 
     // Create custom commands for just-bash
     const gitCommand = this.createGitCustomCommand();
-    const supplementalCommands = createSupplementalCommands();
+    const supplementalCommands = createSupplementalCommands({
+      onMediaPreview: async (items) => this.renderMediaPreview(items),
+    });
     const mountCommand = this.createMountCustomCommand();
     const fetchFn = createProxiedFetch();
 
@@ -277,14 +292,22 @@ export class WasmShell {
     this.fitAddon = new FitAddon();
     this.terminal.loadAddon(this.fitAddon);
 
-    this.terminal.open(target);
+    target.replaceChildren();
+    this.terminalHost = document.createElement('div');
+    this.terminalHost.className = 'terminal-panel__terminal-host';
+    target.appendChild(this.terminalHost);
+
+    this.previewHost = document.createElement('div');
+    this.previewHost.className = 'terminal-panel__preview';
+    target.appendChild(this.previewHost);
+
+    this.terminal.open(this.terminalHost);
     this.fitAddon.fit();
 
     // Handle resize
-    const resizeObserver = new ResizeObserver(() => {
-      this.fitAddon?.fit();
-    });
-    resizeObserver.observe(target);
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = new ResizeObserver(() => this.refit());
+    this.resizeObserver.observe(this.terminalHost);
 
     // Write welcome message
     this.terminal.writeln('slicc shell (powered by just-bash)');
@@ -304,16 +327,91 @@ export class WasmShell {
     };
   }
 
+  /** Re-fit the terminal to its host container. */
+  refit(): void {
+    this.fitAddon?.fit();
+  }
+
+  setPreviewStateListener(listener: ((hasPreview: boolean) => void) | null): void {
+    this.previewStateListener = listener;
+    this.previewStateListener?.(this.hasPreview);
+  }
+
+  /**
+   * Execute a command and render it in the mounted terminal.
+   * Returns the command result for callers that need status.
+   */
+  async executeCommandInTerminal(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const trimmed = command.trim();
+    if (!trimmed) {
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
+
+    if (!this.terminal) {
+      return this.executeCommand(trimmed);
+    }
+
+    if (this.isExecuting || this.currentLine.length > 0 || this.continuationBuffer.length > 0) {
+      return {
+        stdout: '',
+        stderr: 'terminal is busy; finish current input first\n',
+        exitCode: 1,
+      };
+    }
+
+    if (this.history[this.history.length - 1] !== trimmed) {
+      this.history.push(trimmed);
+    }
+    this.historyIndex = -1;
+
+    this.terminal.write(trimmed);
+    this.terminal.writeln('');
+    this.isExecuting = true;
+
+    try {
+      const result = await this.runCommand(trimmed);
+      if (result.stdout) {
+        this.writeToTerminal(result.stdout);
+      }
+      if (result.stderr) {
+        this.writeToTerminal(result.stderr, true);
+      }
+      return {
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+      };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const stderr = `Error: ${msg}\n`;
+      this.writeToTerminal(stderr, true);
+      return {
+        stdout: '',
+        stderr,
+        exitCode: 1,
+      };
+    } finally {
+      this.isExecuting = false;
+      this.showPrompt();
+    }
+  }
+
   /** Clear the terminal screen. */
   clearTerminal(): void {
     this.terminal?.clear();
+    this.clearMediaPreview();
   }
 
   /** Dispose the terminal. */
   dispose(): void {
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
+    this.clearMediaPreview();
     this.terminal?.dispose();
     this.terminal = null;
     this.fitAddon = null;
+    this.terminalHost = null;
+    this.previewHost = null;
   }
 
   private showPrompt(): void {
@@ -660,7 +758,7 @@ export class WasmShell {
 
     // Handle "clear"
     if (trimmed === 'clear') {
-      this.terminal?.clear();
+      this.clearTerminal();
       this.showPrompt();
       return;
     }
@@ -689,5 +787,66 @@ export class WasmShell {
     } else {
       this.terminal.write(text);
     }
+  }
+
+  private clearMediaPreview(): void {
+    for (const url of this.previewUrls) {
+      URL.revokeObjectURL(url);
+    }
+    this.previewUrls = [];
+    this.hasPreview = false;
+    if (this.previewHost) {
+      this.previewHost.replaceChildren();
+      this.previewHost.classList.remove('terminal-panel__preview--visible');
+    }
+    this.previewStateListener?.(false);
+  }
+
+  private async renderMediaPreview(items: MediaPreviewItem[]): Promise<void> {
+    if (!this.previewHost || typeof document === 'undefined') {
+      throw new Error('terminal preview is unavailable');
+    }
+
+    this.clearMediaPreview();
+
+    for (const item of items) {
+      const url = URL.createObjectURL(new Blob([item.bytes], { type: item.mimeType }));
+      this.previewUrls.push(url);
+
+      const previewItem = document.createElement('div');
+      previewItem.className = 'terminal-panel__preview-item';
+
+      const label = document.createElement('div');
+      label.className = 'terminal-panel__preview-label';
+      label.textContent = `${basename(item.path)} · ${item.mimeType}`;
+      previewItem.appendChild(label);
+
+      if (item.mimeType.startsWith('video/')) {
+        const video = document.createElement('video');
+        video.className = 'terminal-panel__preview-media';
+        video.controls = true;
+        video.autoplay = true;
+        video.loop = true;
+        video.muted = true;
+        video.playsInline = true;
+        video.src = url;
+        video.addEventListener('loadedmetadata', () => this.refit(), { once: true });
+        previewItem.appendChild(video);
+      } else {
+        const image = document.createElement('img');
+        image.className = 'terminal-panel__preview-media';
+        image.alt = basename(item.path);
+        image.src = url;
+        image.addEventListener('load', () => this.refit(), { once: true });
+        previewItem.appendChild(image);
+      }
+
+      this.previewHost.appendChild(previewItem);
+    }
+
+    this.previewHost.classList.add('terminal-panel__preview--visible');
+    this.hasPreview = items.length > 0;
+    this.previewStateListener?.(this.hasPreview);
+    requestAnimationFrame(() => this.refit());
   }
 }
