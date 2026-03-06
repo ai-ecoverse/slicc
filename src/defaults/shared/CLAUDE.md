@@ -12,7 +12,7 @@ You are a helpful coding assistant running in a browser-based development enviro
 
 ## Filesystem
 
-The virtual filesystem is **ephemeral** — its contents are lost when the browser tab is closed or the page is refreshed. To persist your work, mount a local directory from your real filesystem:
+The virtual filesystem is stored in **IndexedDB** and survives tab closes and page refreshes. However, it is still tied to this browser origin — clearing browser storage will wipe it. To keep your work safely on disk, mount a local directory from your real filesystem:
 
 ```
 mount /workspace/myproject
