@@ -351,16 +351,36 @@ async function main(): Promise<void> {
             );
 
             if (targetScoop) {
+              const msgId = `webhook-${data.webhookId}-${Date.now()}`;
+              const content = `[Webhook Event: ${data.webhookName}]\n\`\`\`json\n${JSON.stringify(data.body, null, 2)}\n\`\`\``;
+
               const msg: ChannelMessage = {
-                id: `webhook-${data.webhookId}-${Date.now()}`,
+                id: msgId,
                 chatJid: targetScoop.jid,
                 senderId: 'webhook',
                 senderName: `webhook:${data.webhookName}`,
-                content: `[Webhook Event: ${data.webhookName}]\n\`\`\`json\n${JSON.stringify(data.body, null, 2)}\n\`\`\``,
+                content,
                 timestamp: data.timestamp,
                 fromAssistant: false,
                 channel: 'webhook',
               };
+
+              // Buffer the lick message for display
+              getBuffer(targetScoop.jid).push({
+                id: msgId,
+                role: 'user', // webhook events are incoming, not from assistant
+                content,
+                timestamp: Date.now(),
+                source: 'lick',
+                channel: 'webhook',
+              });
+
+              // Emit to UI if this scoop is selected
+              if (selectedScoop?.jid === targetScoop.jid) {
+                emitToUI({ type: 'message_start', messageId: msgId });
+                emitToUI({ type: 'content_delta', messageId: msgId, text: content });
+                emitToUI({ type: 'content_done', messageId: msgId });
+              }
 
               log.info('Routing webhook to scoop', { webhookName: data.webhookName, scoopJid: targetScoop.jid });
               orchestrator.handleMessage(msg);
@@ -412,19 +432,51 @@ async function main(): Promise<void> {
     const contextId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
     const buffer = scoopMessageBuffers.get(scoop.jid);
 
+    // Pass scoop name for non-cone contexts
+    const scoopName = scoop.isCone ? undefined : scoop.name;
+
     if (buffer && buffer.length > 0) {
       // Load from in-memory buffer (has tool calls captured during this session)
-      await layout.panels.chat.switchToContext(contextId, !scoop.isCone);
+      await layout.panels.chat.switchToContext(contextId, !scoop.isCone, scoopName);
       layout.panels.chat.loadMessages(buffer);
     } else {
       // No buffer — load from SessionStore (persisted from previous sessions)
-      await layout.panels.chat.switchToContext(contextId, !scoop.isCone);
+      await layout.panels.chat.switchToContext(contextId, !scoop.isCone, scoopName);
 
       // If still empty, fall back to orchestrator DB (simple text, no tool calls)
       if (layout.panels.chat.getMessages().length === 0) {
         const messages = await orchestrator.getMessagesForScoop(scoop.jid);
         for (const msg of messages) {
-          if (msg.fromAssistant) {
+          // Determine the proper role and source for display
+          const isLick = msg.channel === 'webhook' || msg.channel === 'cron';
+          const isDelegation = msg.channel === 'delegation';
+
+          if (isLick) {
+            // Lick events - show as incoming with tongue emoji
+            const chatMsg: ChatMessage = {
+              id: msg.id,
+              role: 'user',
+              content: msg.content,
+              timestamp: new Date(msg.timestamp).getTime(),
+              source: 'lick',
+              channel: msg.channel,
+            };
+            getBuffer(scoop.jid).push(chatMsg);
+            layout.panels.chat.addUserMessage(msg.content);
+          } else if (isDelegation) {
+            // Delegation from cone - show as incoming instructions
+            const chatMsg: ChatMessage = {
+              id: msg.id,
+              role: 'user',
+              content: `**[Instructions from sliccy]**\n\n${msg.content}`,
+              timestamp: new Date(msg.timestamp).getTime(),
+              source: 'delegation',
+              channel: 'delegation',
+            };
+            getBuffer(scoop.jid).push(chatMsg);
+            layout.panels.chat.addUserMessage(chatMsg.content);
+          } else if (msg.fromAssistant) {
+            // Scoop's own response
             emitToUI({ type: 'message_start', messageId: msg.id });
             emitToUI({ type: 'content_delta', messageId: msg.id, text: msg.content });
             emitToUI({ type: 'content_done', messageId: msg.id });

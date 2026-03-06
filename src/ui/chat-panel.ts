@@ -66,6 +66,7 @@ export class ChatPanel {
   private sessionId: string;
   private readOnly = false;
   private terminalOutputCallback: ((text: string) => void) | null = null;
+  private currentScoopName: string | null = null; // null = cone, string = scoop name
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -111,7 +112,7 @@ export class ChatPanel {
   }
 
   /** Switch to a different scoop's chat context. */
-  async switchToContext(contextId: string, readOnly: boolean): Promise<void> {
+  async switchToContext(contextId: string, readOnly: boolean, scoopName?: string): Promise<void> {
     // Save current session first
     await this.persistSessionAsync();
 
@@ -122,6 +123,7 @@ export class ChatPanel {
 
     // Switch
     this.sessionId = contextId;
+    this.currentScoopName = scoopName ?? null; // null means cone
     this.setReadOnly(readOnly);
 
     // Load the new session
@@ -461,18 +463,33 @@ export class ChatPanel {
     const el = document.createElement('div');
     el.className = `msg msg--${msg.role}`;
 
-    // Determine icon and label based on role and source
+    // Determine icon and label based on role, source, and current context
     let icon: string;
     let label: string;
+    const isInScoopThread = this.currentScoopName !== null;
 
     if (msg.role === 'user') {
-      icon = getNextUserFace();
-      label = 'You';
+      // Check if this is a lick (webhook/cron event)
+      if (msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron') {
+        icon = '👅';
+        label = msg.channel ? `lick:${msg.channel}` : 'lick';
+      } else if (msg.source === 'delegation' || msg.channel === 'delegation') {
+        // Delegation instructions from sliccy
+        icon = '🥄';
+        label = 'sliccy';
+      } else {
+        icon = getNextUserFace();
+        label = 'You';
+      }
     } else if (msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron') {
       icon = '👅';
       label = msg.channel ? `lick:${msg.channel}` : 'lick';
+    } else if (isInScoopThread) {
+      // In a scoop thread, all assistant messages show the scoop icon/name
+      icon = '💩';
+      label = `@${this.currentScoopName}`;
     } else if (msg.source && msg.source !== 'cone') {
-      // Scoop message
+      // Scoop message in cone view
       icon = '💩';
       label = msg.source;
     } else {
