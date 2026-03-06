@@ -17,7 +17,7 @@ import { WasmShell } from '../shell/index.js';
 import { Agent, adaptTools, createLogger } from '../core/index.js';
 import { compactContext } from '../core/context-compaction.js';
 import type { AgentEvent as CoreAgentEvent, AssistantMessage, AssistantMessageEvent, TextContent, Model } from '../core/index.js';
-import { createFileTools, createBashTool, createSearchTools, createBrowserTool, createJavaScriptTool } from '../tools/index.js';
+import { createFileTools, createBashTool, createSearchTools, createBrowserTool, createJavaScriptTool, createMigratePageTool } from '../tools/index.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import { getApiKey, resolveCurrentModel } from '../ui/provider-settings.js';
 import { loadSkills, formatSkillsForPrompt, createDefaultSkills, type Skill } from './skills.js';
@@ -114,6 +114,7 @@ export class ScoopContext {
         ...createFileTools(this.fs as VirtualFS),
         createBashTool(this.shell),
         createBrowserTool(browser, this.fs as VirtualFS),
+        createMigratePageTool(browser, this.fs as VirtualFS),
         ...createSearchTools(this.fs as VirtualFS),
         createJavaScriptTool(this.fs as VirtualFS),
         ...nanoClawTools,
@@ -269,10 +270,10 @@ export class ScoopContext {
 
       case 'message_end': {
         if (event.message.role === 'assistant') {
-          const content = event.message.content;
-          const fullText = content
-            .filter((c: any) => c.type === 'text')
-            .map((c: any) => c.text)
+          const msg = event.message as AssistantMessage;
+          const fullText = msg.content
+            .filter((c): c is TextContent => c.type === 'text')
+            .map((c) => c.text)
             .join('');
 
           // Only emit full text if we haven't been streaming deltas
