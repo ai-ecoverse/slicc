@@ -300,6 +300,77 @@ async function main(): Promise<void> {
   layout.panels.chat.setAgent(coneAgentHandle);
   log.info('Cone agent handle wired to chat UI');
 
+  // ---------------------------------------------------------------------------
+  // Webhook event routing — connect to webhook WebSocket and route to scoops
+  // ---------------------------------------------------------------------------
+  if (!isExtension) {
+    const connectWebhookWs = () => {
+      const wsUrl = `ws://${window.location.host}/webhooks-ws`;
+      const ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        log.info('Webhook WebSocket connected');
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data) as {
+            type: string;
+            webhookId: string;
+            webhookName: string;
+            targetScoop?: string;
+            timestamp: string;
+            body: unknown;
+          };
+
+          log.debug('Webhook event received', { webhookName: data.webhookName, targetScoop: data.targetScoop });
+
+          // Route to target scoop if specified
+          if (data.targetScoop) {
+            // Find the scoop by name/folder
+            const scoops = orchestrator.getScoops();
+            const targetScoop = scoops.find(s =>
+              s.name === data.targetScoop ||
+              s.folder === data.targetScoop ||
+              s.folder === `${data.targetScoop}-scoop`
+            );
+
+            if (targetScoop) {
+              const msg: ChannelMessage = {
+                id: `webhook-${data.webhookId}-${Date.now()}`,
+                chatJid: targetScoop.jid,
+                senderId: 'webhook',
+                senderName: `webhook:${data.webhookName}`,
+                content: `[Webhook Event: ${data.webhookName}]\n\`\`\`json\n${JSON.stringify(data.body, null, 2)}\n\`\`\``,
+                timestamp: data.timestamp,
+                fromAssistant: false,
+                channel: 'webhook',
+              };
+
+              log.info('Routing webhook to scoop', { webhookName: data.webhookName, scoopJid: targetScoop.jid });
+              orchestrator.handleMessage(msg);
+            } else {
+              log.warn('Webhook target scoop not found', { targetScoop: data.targetScoop });
+            }
+          }
+        } catch (err) {
+          log.error('Failed to process webhook event', { error: err instanceof Error ? err.message : String(err) });
+        }
+      };
+
+      ws.onclose = () => {
+        log.warn('Webhook WebSocket disconnected, reconnecting in 3s...');
+        setTimeout(connectWebhookWs, 3000);
+      };
+
+      ws.onerror = (err) => {
+        log.error('Webhook WebSocket error', { error: String(err) });
+      };
+    };
+
+    connectWebhookWs();
+  }
+
   // Wire model picker changes
   layout.onModelChange = (modelId) => {
     // Model changes are picked up by scoop-context on next init

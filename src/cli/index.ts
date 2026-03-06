@@ -315,6 +315,7 @@ async function main() {
     createdAt: string;
     filter?: string; // JS filter function code
     filterFn?: (event: unknown) => boolean | unknown; // Compiled filter function
+    scoop?: string; // Target scoop name to route events to
   }
   const webhooks = new Map<string, WebhookEntry>();
 
@@ -371,15 +372,17 @@ async function main() {
       name: wh.name,
       createdAt: wh.createdAt,
       filter: wh.filter,
+      scoop: wh.scoop,
       url: `http://localhost:${SERVE_PORT}/webhooks/${wh.id}`,
     }));
     res.json(list);
   });
 
   app.post('/api/webhooks', (req, res) => {
-    const body = req.body as { name?: string; filter?: string };
+    const body = req.body as { name?: string; filter?: string; scoop?: string };
     const name = body.name || 'default';
     const filterCode = body.filter;
+    const scoop = body.scoop;
     const id = generateWebhookId();
 
     // Compile filter if provided
@@ -399,14 +402,16 @@ async function main() {
       createdAt: new Date().toISOString(),
       filter: filterCode,
       filterFn,
+      scoop,
     };
     webhooks.set(id, entry);
-    console.log(`[webhooks] Created webhook "${name}" with ID ${id}${filterCode ? ' (with filter)' : ''}`);
+    console.log(`[webhooks] Created webhook "${name}" with ID ${id}${scoop ? ` -> ${scoop}` : ''}${filterCode ? ' (with filter)' : ''}`);
     res.json({
       id: entry.id,
       name: entry.name,
       createdAt: entry.createdAt,
       filter: entry.filter,
+      scoop: entry.scoop,
       url: `http://localhost:${SERVE_PORT}/webhooks/${id}`,
     });
   });
@@ -460,10 +465,11 @@ async function main() {
       }
     }
 
-    let event: unknown = {
+    let event: Record<string, unknown> = {
       type: 'webhook',
       webhookId: id,
       webhookName: webhook.name,
+      targetScoop: webhook.scoop, // Scoop to route this event to
       timestamp: new Date().toISOString(),
       headers: req.headers,
       body,
@@ -479,7 +485,7 @@ async function main() {
           return;
         }
         if (typeof result === 'object' && result !== null) {
-          event = result;
+          event = result as Record<string, unknown>;
         }
       } catch (err) {
         console.error(`[webhooks] Filter error on "${webhook.name}" (${id}):`, err instanceof Error ? err.message : String(err));
