@@ -105,6 +105,35 @@ addEventListener('message', async (e) => {
     return;
   }
 
+  if (msg.type === 'har_filter') {
+    // Apply HAR filter function to entries (sandbox is CSP-exempt by design)
+    try {
+      const filterFn = new Function('entry', `return (${msg.filterCode})(entry);`);
+      const filtered = [];
+      for (const entry of msg.entries) {
+        try {
+          const result = filterFn(entry);
+          if (result === false) continue;
+          if (typeof result === 'object' && result !== null) {
+            filtered.push(result);
+          } else {
+            filtered.push(entry);
+          }
+        } catch (filterErr) {
+          console.warn('[har_filter] Error filtering entry:', entry?.request?.url, filterErr);
+          filtered.push(entry);
+        }
+      }
+      parent.postMessage({ type: 'har_filter_result', id: msg.id, entries: filtered }, '*');
+    } catch (err) {
+      parent.postMessage({
+        type: 'har_filter_result', id: msg.id,
+        error: err instanceof Error ? err.message : String(err),
+      }, '*');
+    }
+    return;
+  }
+
   if (msg.type === 'exec') {
     const logs = [];
     const origLog = console.log;

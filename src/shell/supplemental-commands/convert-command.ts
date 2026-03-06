@@ -37,17 +37,26 @@ interface IMagickImage {
 
 let magickPromise: Promise<ImageMagickModule> | null = null;
 const MAGICK_WASM_CDN = 'https://cdn.jsdelivr.net/npm/@imagemagick/magick-wasm@0.0.38/dist/';
+const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
 async function getMagick(): Promise<ImageMagickModule> {
   if (!magickPromise) {
     magickPromise = (async () => {
       const magickModule = await import('@imagemagick/magick-wasm');
-      const wasmBase = typeof window === 'undefined'
-        ? new URL('../../../node_modules/@imagemagick/magick-wasm/dist/', import.meta.url).toString()
-        : MAGICK_WASM_CDN;
-
-      const wasmUrl = new URL('magick.wasm', wasmBase);
-      await magickModule.initializeImageMagick(wasmUrl);
+      if (isExtension) {
+        // Chrome extension — fetch bundled WASM as bytes
+        // initializeImageMagick rejects chrome-extension:// URLs, so pass Uint8Array
+        const wasmUrl = chrome.runtime.getURL('magick.wasm');
+        const resp = await fetch(wasmUrl);
+        const wasmBytes = new Uint8Array(await resp.arrayBuffer());
+        await magickModule.initializeImageMagick(wasmBytes);
+      } else {
+        const wasmBase = typeof window === 'undefined'
+          ? new URL('../../../node_modules/@imagemagick/magick-wasm/dist/', import.meta.url).toString()
+          : MAGICK_WASM_CDN;
+        const wasmUrl = new URL('magick.wasm', wasmBase);
+        await magickModule.initializeImageMagick(wasmUrl);
+      }
 
       return magickModule as unknown as ImageMagickModule;
     })();
