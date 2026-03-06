@@ -17,6 +17,39 @@ function uid(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
+/** Cycling face emojis for user messages */
+const USER_FACES = ['😀', '😊', '🙂', '😄', '😎', '🤔', '😁', '🤗'];
+let userFaceIndex = 0;
+
+/** Get the next user face emoji (cycles through the list) */
+function getNextUserFace(): string {
+  const face = USER_FACES[userFaceIndex];
+  userFaceIndex = (userFaceIndex + 1) % USER_FACES.length;
+  return face;
+}
+
+/** Tool icons by name */
+const TOOL_ICONS: Record<string, string> = {
+  bash: '⚙️',
+  browser: '🌐',
+  read_file: '📖',
+  write_file: '✏️',
+  edit_file: '✏️',
+  javascript: '📜',
+  delegate_to_scoop: '🥄',
+  send_message: '💬',
+  schedule_task: '⏰',
+  list_scoops: '📋',
+  list_tasks: '📋',
+  register_scoop: '🍨',
+  update_global_memory: '🧠',
+};
+
+/** Get icon for a tool */
+function getToolIcon(toolName: string): string {
+  return TOOL_ICONS[toolName] ?? '🔧';
+}
+
 export class ChatPanel {
   private container: HTMLElement;
   private messagesEl!: HTMLElement;
@@ -33,6 +66,7 @@ export class ChatPanel {
   private sessionId: string;
   private readOnly = false;
   private terminalOutputCallback: ((text: string) => void) | null = null;
+  private currentScoopName: string | null = null; // null = cone, string = scoop name
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -78,7 +112,7 @@ export class ChatPanel {
   }
 
   /** Switch to a different scoop's chat context. */
-  async switchToContext(contextId: string, readOnly: boolean): Promise<void> {
+  async switchToContext(contextId: string, readOnly: boolean, scoopName?: string): Promise<void> {
     // Save current session first
     await this.persistSessionAsync();
 
@@ -89,6 +123,7 @@ export class ChatPanel {
 
     // Switch
     this.sessionId = contextId;
+    this.currentScoopName = scoopName ?? null; // null means cone
     this.setReadOnly(readOnly);
 
     // Load the new session
@@ -137,6 +172,21 @@ export class ChatPanel {
       role: 'assistant',
       content,
       timestamp: Date.now(),
+    };
+    this.messages.push(msg);
+    this.appendMessageEl(msg);
+    this.persistSession();
+  }
+
+  /** Add a lick message (webhook/cron event). */
+  addLickMessage(id: string, content: string, channel: 'webhook' | 'cron'): void {
+    const msg: ChatMessage = {
+      id,
+      role: 'user',
+      content,
+      timestamp: Date.now(),
+      source: 'lick',
+      channel,
     };
     this.messages.push(msg);
     this.appendMessageEl(msg);
@@ -419,58 +469,210 @@ export class ChatPanel {
   }
 
   private createMessageEl(msg: ChatMessage): HTMLElement {
+    // Licks (webhook/cron) get their own compact style like tool calls
+    const isLick = msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron';
+    if (isLick) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'msg-group';
+      wrapper.setAttribute('data-msg-id', msg.id);
+      wrapper.appendChild(this.createLickEl(msg));
+      return wrapper;
+    }
+
+    // Use a fragment-like wrapper for messages with tool calls
+    // so tool calls appear outside the message bubble
+    const wrapper = document.createElement('div');
+    wrapper.className = 'msg-group';
+    wrapper.setAttribute('data-msg-id', msg.id);
+
     const el = document.createElement('div');
     el.className = `msg msg--${msg.role}`;
-    el.setAttribute('data-msg-id', msg.id);
 
-    // Role label
+    // Determine icon and label based on role, source, and current context
+    let icon: string;
+    let label: string;
+    const isInScoopThread = this.currentScoopName !== null;
+
+    if (msg.role === 'user') {
+      if (msg.source === 'delegation' || msg.channel === 'delegation') {
+        // Delegation instructions from sliccy
+        icon = '🥄';
+        label = 'sliccy';
+      } else {
+        icon = getNextUserFace();
+        label = 'You';
+      }
+    } else if (isInScoopThread) {
+      // In a scoop thread, all assistant messages show the scoop icon/name
+      icon = '💩';
+      label = `@${this.currentScoopName}`;
+    } else if (msg.source && msg.source !== 'cone') {
+      // Scoop message in cone view
+      icon = '💩';
+      label = msg.source;
+    } else {
+      // Main agent (sliccy / cone)
+      icon = '🍦';
+      label = 'sliccy';
+    }
+
+    // Role label with icon
     const roleEl = document.createElement('div');
     roleEl.className = 'msg__role';
-    roleEl.textContent = msg.role === 'user' ? 'You' : 'sliccy';
+    roleEl.innerHTML = `<span class="msg__icon">${icon}</span> ${escapeHtml(label)}`;
     el.appendChild(roleEl);
 
-    // Content
-    const contentEl = document.createElement('div');
-    contentEl.className = 'msg__content';
-    contentEl.innerHTML = renderMessageContent(msg.content);
-    if (msg.isStreaming) {
-      const cursor = document.createElement('span');
-      cursor.className = 'streaming-cursor';
-      contentEl.appendChild(cursor);
-    }
-    el.appendChild(contentEl);
+    // For lick messages in cone view, wrap content in collapsible
+    const isLickInCone = (msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron') && this.sessionId === 'session-cone';
+    // For scoop messages in cone view, wrap in collapsible
+    const isScoopInCone = msg.source && msg.source !== 'cone' && msg.source !== 'lick' && msg.role === 'assistant' && this.sessionId === 'session-cone';
 
-    // Tool calls
+    if (isLickInCone || isScoopInCone) {
+      // Collapsed by default
+      const details = document.createElement('details');
+      details.className = 'msg__collapsible';
+
+      const summary = document.createElement('summary');
+      summary.className = 'msg__summary';
+      const preview = msg.content.slice(0, 60).replace(/\n/g, ' ');
+      summary.textContent = preview + (msg.content.length > 60 ? '...' : '');
+      details.appendChild(summary);
+
+      const contentEl = document.createElement('div');
+      contentEl.className = 'msg__content';
+      contentEl.innerHTML = renderMessageContent(msg.content);
+      details.appendChild(contentEl);
+
+      el.appendChild(details);
+    } else {
+      // Normal expanded content
+      const contentEl = document.createElement('div');
+      contentEl.className = 'msg__content';
+      contentEl.innerHTML = renderMessageContent(msg.content);
+      if (msg.isStreaming) {
+        const cursor = document.createElement('span');
+        cursor.className = 'streaming-cursor';
+        contentEl.appendChild(cursor);
+      }
+      el.appendChild(contentEl);
+    }
+
+    // Only show the message bubble if there's actual content
+    const hasContent = msg.content.trim().length > 0;
+    if (hasContent) {
+      wrapper.appendChild(el);
+    }
+
+    // Tool calls rendered outside the message bubble for compact display
     if (msg.toolCalls) {
       for (const tc of msg.toolCalls) {
-        el.appendChild(this.createToolCallEl(tc));
+        wrapper.appendChild(this.createToolCallEl(tc));
       }
     }
+
+    return wrapper;
+  }
+
+  /** Create a lick element (webhook/cron event) styled like tool calls */
+  private createLickEl(msg: ChatMessage): HTMLElement {
+    const el = document.createElement('details');
+    el.className = 'lick';
+
+    const channelType = msg.channel === 'webhook' ? 'Webhook' : msg.channel === 'cron' ? 'Cron' : 'Event';
+
+    // Summary shows tongue emoji and type
+    const summary = document.createElement('summary');
+    summary.className = 'lick__header';
+    summary.innerHTML = `<span class="lick__icon">👅</span> <span class="lick__type">${channelType}</span>`;
+
+    // Add brief preview
+    const preview = document.createElement('span');
+    preview.className = 'lick__preview';
+    // Extract a meaningful preview from the content
+    const contentPreview = msg.content.replace(/\[Webhook Event:.*?\]\n```json\n?/s, '').slice(0, 50);
+    preview.textContent = contentPreview.replace(/\n/g, ' ') + (contentPreview.length >= 50 ? '...' : '');
+    summary.appendChild(preview);
+
+    el.appendChild(summary);
+
+    // Details content
+    const details = document.createElement('div');
+    details.className = 'lick__details';
+    details.innerHTML = renderMessageContent(msg.content);
+    el.appendChild(details);
 
     return el;
   }
 
   private createToolCallEl(tc: ToolCall): HTMLElement {
-    const el = document.createElement('div');
+    const icon = getToolIcon(tc.name);
+
+    // Use <details> for collapsible behavior - collapsed by default, expand on hover/click
+    const el = document.createElement('details');
     el.className = 'tool-call';
 
-    const header = document.createElement('div');
-    header.className = 'tool-call__header';
-    header.textContent = `⚙ ${tc.name}`;
-    el.appendChild(header);
+    // Summary shows icon and tool name
+    const summary = document.createElement('summary');
+    summary.className = 'tool-call__header';
+    summary.innerHTML = `<span class="tool-call__icon">${icon}</span> <span class="tool-call__name">${escapeHtml(tc.name)}</span>`;
+
+    // Add brief input preview to summary
+    if (tc.input !== undefined) {
+      const preview = document.createElement('span');
+      preview.className = 'tool-call__preview';
+      const inputStr = typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input);
+      preview.textContent = inputStr.slice(0, 40) + (inputStr.length > 40 ? '...' : '');
+      summary.appendChild(preview);
+    }
+
+    // Status indicator
+    if (tc.result === undefined) {
+      const spinner = document.createElement('span');
+      spinner.className = 'tool-call__spinner';
+      spinner.textContent = '⏳';
+      summary.appendChild(spinner);
+    } else if (tc.isError) {
+      const errorIcon = document.createElement('span');
+      errorIcon.className = 'tool-call__error-icon';
+      errorIcon.textContent = '❌';
+      summary.appendChild(errorIcon);
+    } else {
+      const checkIcon = document.createElement('span');
+      checkIcon.className = 'tool-call__check-icon';
+      checkIcon.textContent = '✅';
+      summary.appendChild(checkIcon);
+    }
+
+    el.appendChild(summary);
+
+    // Details content (shown on expand)
+    const details = document.createElement('div');
+    details.className = 'tool-call__details';
 
     if (tc.input !== undefined) {
       const inputEl = document.createElement('div');
       inputEl.className = 'tool-call__input';
-      inputEl.innerHTML = renderToolInput(tc.input);
-      el.appendChild(inputEl);
+      const inputLabel = document.createElement('div');
+      inputLabel.className = 'tool-call__label';
+      inputLabel.textContent = 'Input:';
+      inputEl.appendChild(inputLabel);
+      const inputCode = document.createElement('pre');
+      inputCode.innerHTML = renderToolInput(tc.input);
+      inputEl.appendChild(inputCode);
+      details.appendChild(inputEl);
     }
 
     if (tc.result !== undefined) {
       const resultEl = document.createElement('div');
       resultEl.className = `tool-call__result${tc.isError ? ' tool-call__result--error' : ''}`;
-      resultEl.textContent = tc.result;
-      el.appendChild(resultEl);
+      const resultLabel = document.createElement('div');
+      resultLabel.className = 'tool-call__label';
+      resultLabel.textContent = tc.isError ? 'Error:' : 'Result:';
+      resultEl.appendChild(resultLabel);
+      const resultPre = document.createElement('pre');
+      resultPre.textContent = tc.result;
+      resultEl.appendChild(resultPre);
+      details.appendChild(resultEl);
     }
 
     // Render screenshot thumbnail from transient data (not persisted in messages)
@@ -480,7 +682,8 @@ export class ChatPanel {
       imgEl.src = screenshotUrl;
       imgEl.className = 'tool-call__screenshot';
       imgEl.title = 'Click to view full size';
-      imgEl.addEventListener('click', () => {
+      imgEl.addEventListener('click', (e) => {
+        e.stopPropagation();
         const w = window.open('about:blank');
         if (w) {
           const fullImg = w.document.createElement('img');
@@ -491,8 +694,10 @@ export class ChatPanel {
           w.document.body.appendChild(fullImg);
         }
       });
-      el.appendChild(imgEl);
+      details.appendChild(imgEl);
     }
+
+    el.appendChild(details);
 
     return el;
   }

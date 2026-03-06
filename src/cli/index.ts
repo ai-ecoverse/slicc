@@ -307,94 +307,141 @@ async function main() {
   app.use(requestLogger);
 
   // ---------------------------------------------------------------------------
-  // Webhook registry — stores active webhooks and broadcasts events to browser
+  // Lick system — WebSocket bridge for webhooks/crontasks (all logic in browser)
   // ---------------------------------------------------------------------------
-  interface WebhookEntry {
-    id: string;
-    name: string;
-    createdAt: string;
-  }
-  const webhooks = new Map<string, WebhookEntry>();
+  
+  // WebSocket for bidirectional communication with browser
+  const lickWss = new WebSocketServer({ noServer: true });
+  const lickClients = new Set<WebSocket>();
+  const pendingRequests = new Map<string, { resolve: (data: unknown) => void; reject: (err: Error) => void }>();
+  let requestIdCounter = 0;
 
-  // WebSocket for broadcasting webhook events to the browser
-  const webhookWss = new WebSocketServer({ noServer: true });
-  const webhookClients = new Set<WebSocket>();
+  lickWss.on('connection', (ws) => {
+    lickClients.add(ws);
+    console.log('[licks] Browser client connected');
 
-  webhookWss.on('connection', (ws) => {
-    webhookClients.add(ws);
-    console.log('[webhooks] Browser client connected');
+    ws.on('message', (data) => {
+      try {
+        const msg = JSON.parse(data.toString()) as { type: string; requestId?: string; [key: string]: unknown };
+        
+        // Handle responses to pending requests
+        if (msg.type === 'response' && msg.requestId) {
+          const pending = pendingRequests.get(msg.requestId);
+          if (pending) {
+            pendingRequests.delete(msg.requestId);
+            if (msg.error) {
+              pending.reject(new Error(msg.error as string));
+            } else {
+              pending.resolve(msg.data);
+            }
+          }
+        }
+      } catch {
+        // Ignore invalid messages
+      }
+    });
+
     ws.on('close', () => {
-      webhookClients.delete(ws);
-      console.log('[webhooks] Browser client disconnected');
+      lickClients.delete(ws);
+      console.log('[licks] Browser client disconnected');
     });
   });
 
-  function broadcastWebhookEvent(event: unknown): void {
+  /** Send a request to the browser and wait for response */
+  function sendLickRequest(type: string, data: unknown, timeout = 5000): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const requestId = `req_${++requestIdCounter}`;
+      const msg = JSON.stringify({ type, requestId, ...data as object });
+
+      // Find a connected client
+      const client = Array.from(lickClients).find(c => c.readyState === WebSocket.OPEN);
+      if (!client) {
+        reject(new Error('No browser connected'));
+        return;
+      }
+
+      // Set up timeout
+      const timer = setTimeout(() => {
+        pendingRequests.delete(requestId);
+        reject(new Error('Request timeout'));
+      }, timeout);
+
+      pendingRequests.set(requestId, {
+        resolve: (data) => {
+          clearTimeout(timer);
+          resolve(data);
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+      });
+
+      client.send(msg);
+    });
+  }
+
+  /** Broadcast an event to all connected browsers (no response expected) */
+  function broadcastLickEvent(event: unknown): void {
     const msg = JSON.stringify(event);
-    for (const client of webhookClients) {
+    for (const client of lickClients) {
       if (client.readyState === WebSocket.OPEN) {
         client.send(msg);
       }
     }
   }
 
-  function generateWebhookId(): string {
-    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    let id = '';
-    for (let i = 0; i < 12; i++) {
-      id += chars[Math.floor(Math.random() * chars.length)];
-    }
-    return id;
-  }
-
-  // Webhook management API
   app.use(express.json());
 
-  app.get('/api/webhooks', (_req, res) => {
-    const list = Array.from(webhooks.values()).map((wh) => ({
-      ...wh,
-      url: `http://localhost:${SERVE_PORT}/webhooks/${wh.id}`,
-    }));
-    res.json(list);
+  // Webhook management API — forwards to browser
+  app.get('/api/webhooks', async (_req, res) => {
+    try {
+      const data = await sendLickRequest('list_webhooks', {});
+      res.json(data);
+    } catch (err) {
+      res.status(503).json({ error: err instanceof Error ? err.message : 'Browser not connected' });
+    }
   });
 
-  app.post('/api/webhooks', (req, res) => {
-    const name = (req.body as { name?: string }).name || 'default';
-    const id = generateWebhookId();
-    const entry: WebhookEntry = {
-      id,
-      name,
-      createdAt: new Date().toISOString(),
-    };
-    webhooks.set(id, entry);
-    console.log(`[webhooks] Created webhook "${name}" with ID ${id}`);
-    res.json({
-      ...entry,
-      url: `http://localhost:${SERVE_PORT}/webhooks/${id}`,
+  app.post('/api/webhooks', async (req, res) => {
+    try {
+      const data = await sendLickRequest('create_webhook', req.body);
+      res.json(data);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(msg.includes('Invalid') ? 400 : 503).json({ error: msg });
+    }
+  });
+
+  app.delete('/api/webhooks/:id', async (req, res) => {
+    try {
+      const data = await sendLickRequest('delete_webhook', { id: req.params.id }) as { ok?: boolean; error?: string };
+      if (data.error) {
+        res.status(404).json({ error: data.error });
+      } else {
+        res.json(data);
+      }
+    } catch (err) {
+      res.status(503).json({ error: err instanceof Error ? err.message : 'Browser not connected' });
+    }
+  });
+
+  // Webhook receiver — handle CORS preflight
+  app.options('/webhooks/:id', (_req, res) => {
+    res.set({
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
     });
+    res.sendStatus(204);
   });
 
-  app.delete('/api/webhooks/:id', (req, res) => {
-    const { id } = req.params;
-    if (!webhooks.has(id)) {
-      res.status(404).json({ error: 'Webhook not found' });
-      return;
-    }
-    webhooks.delete(id);
-    console.log(`[webhooks] Deleted webhook ${id}`);
-    res.json({ ok: true });
-  });
-
-  // Webhook receiver — accepts incoming POSTs and broadcasts to browser
+  // Webhook receiver — forwards POST to browser for processing
   app.post('/webhooks/:id', async (req, res) => {
+    res.set({ 'Access-Control-Allow-Origin': '*' });
     const { id } = req.params;
-    const webhook = webhooks.get(id);
-    if (!webhook) {
-      res.status(404).json({ error: 'Webhook not found' });
-      return;
-    }
 
-    // Collect body (may already be parsed by express.json, or raw)
+    // Collect body
     let body = req.body;
     if (!body || Object.keys(body).length === 0) {
       const chunks: Buffer[] = [];
@@ -409,19 +456,49 @@ async function main() {
       }
     }
 
-    const event = {
-      type: 'webhook',
+    // Forward to browser for processing
+    broadcastLickEvent({
+      type: 'webhook_event',
       webhookId: id,
-      webhookName: webhook.name,
       timestamp: new Date().toISOString(),
       headers: req.headers,
       body,
-    };
-
-    console.log(`[webhooks] Received event on "${webhook.name}" (${id})`);
-    broadcastWebhookEvent(event);
+    });
 
     res.json({ ok: true, received: true });
+  });
+
+  // Cron task management API — forwards to browser
+  app.get('/api/crontasks', async (_req, res) => {
+    try {
+      const data = await sendLickRequest('list_crontasks', {});
+      res.json(data);
+    } catch (err) {
+      res.status(503).json({ error: err instanceof Error ? err.message : 'Browser not connected' });
+    }
+  });
+
+  app.post('/api/crontasks', async (req, res) => {
+    try {
+      const data = await sendLickRequest('create_crontask', req.body);
+      res.json(data);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(msg.includes('Invalid') || msg.includes('required') ? 400 : 503).json({ error: msg });
+    }
+  });
+
+  app.delete('/api/crontasks/:id', async (req, res) => {
+    try {
+      const data = await sendLickRequest('delete_crontask', { id: req.params.id }) as { ok?: boolean; error?: string };
+      if (data.error) {
+        res.status(404).json({ error: data.error });
+      } else {
+        res.json(data);
+      }
+    } catch (err) {
+      res.status(503).json({ error: err instanceof Error ? err.message : 'Browser not connected' });
+    }
   });
 
   // Fetch proxy — forwards cross-origin requests from the browser to bypass CORS.
@@ -528,9 +605,9 @@ async function main() {
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });
-    } else if (pathname === '/webhooks-ws') {
-      webhookWss.handleUpgrade(request, socket, head, (ws) => {
-        webhookWss.emit('connection', ws, request);
+    } else if (pathname === '/licks-ws') {
+      lickWss.handleUpgrade(request, socket, head, (ws) => {
+        lickWss.emit('connection', ws, request);
       });
     }
     // For other paths, do nothing — let Vite handle HMR upgrades

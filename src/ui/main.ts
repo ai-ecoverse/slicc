@@ -13,6 +13,7 @@ import { createLogger } from '../core/index.js';
 import { BrowserAPI, DebuggerClient } from '../cdp/index.js';
 import { Orchestrator } from '../scoops/index.js';
 import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
+import type { LickEvent } from '../scoops/lick-manager.js';
 
 const log = createLogger('main');
 
@@ -86,7 +87,7 @@ async function main(): Promise<void> {
   }
 
   /** Get the current (last) assistant message in a buffer, or create one. */
-  function getOrCreateAssistantMsg(jid: string): ChatMessage {
+  function getOrCreateAssistantMsg(jid: string, channel?: string): ChatMessage {
     const buf = getBuffer(jid);
     let msgId = scoopCurrentMessageId.get(jid);
     if (msgId) {
@@ -96,7 +97,22 @@ async function main(): Promise<void> {
     // Create new assistant message
     msgId = `scoop-${jid}-${uid()}`;
     scoopCurrentMessageId.set(jid, msgId);
-    const msg: ChatMessage = { id: msgId, role: 'assistant', content: '', timestamp: Date.now(), toolCalls: [], isStreaming: true };
+
+    // Determine source based on jid
+    const scoops = orchestrator.getScoops();
+    const scoop = scoops.find(s => s.jid === jid);
+    const source = scoop?.isCone ? 'cone' : (scoop?.name ?? 'unknown');
+
+    const msg: ChatMessage = {
+      id: msgId,
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+      toolCalls: [],
+      isStreaming: true,
+      source,
+      channel,
+    };
     buf.push(msg);
     // Emit to UI if this is the selected scoop
     if (selectedScoop?.jid === jid) {
@@ -217,6 +233,27 @@ async function main(): Promise<void> {
           emitToUI({ type: 'tool_result', messageId: msgId, toolName, result, isError });
         }
       },
+      onIncomingMessage: (scoopJid, message) => {
+        // Buffer incoming messages (delegations, etc.) for display
+        const chatMsg: ChatMessage = {
+          id: message.id,
+          role: 'user',
+          content: message.channel === 'delegation'
+            ? `**[Instructions from sliccy]**\n\n${message.content}`
+            : message.content,
+          timestamp: new Date(message.timestamp).getTime(),
+          source: message.channel === 'delegation' ? 'delegation' : undefined,
+          channel: message.channel,
+        };
+        getBuffer(scoopJid).push(chatMsg);
+
+        // Emit to UI if this scoop is selected
+        if (selectedScoop?.jid === scoopJid) {
+          emitToUI({ type: 'message_start', messageId: message.id });
+          emitToUI({ type: 'content_delta', messageId: message.id, text: chatMsg.content });
+          emitToUI({ type: 'content_done', messageId: message.id });
+        }
+      },
     },
   );
 
@@ -242,17 +279,30 @@ async function main(): Promise<void> {
   }
 
   // Create cone if it doesn't exist
-  const scoops = orchestrator.getScoops();
-  const hasCone = scoops.some((s) => s.isCone);
+  const allScoops = orchestrator.getScoops();
+  const hasCone = allScoops.some((s) => s.isCone);
   if (!hasCone) {
     const cone = await layout.panels.scoops.createScoop('Cone', true);
     selectedScoop = cone;
     log.info('Created cone');
   } else {
-    selectedScoop = scoops.find((s) => s.isCone) ?? scoops[0];
+    // Check URL for selected scoop
+    const urlParams = new URLSearchParams(window.location.search);
+    const scoopFolder = urlParams.get('scoop');
+    if (scoopFolder) {
+      const urlScoop = allScoops.find(s => s.folder === scoopFolder);
+      if (urlScoop) {
+        selectedScoop = urlScoop;
+        log.info('Restored scoop from URL', { folder: scoopFolder });
+      } else {
+        selectedScoop = allScoops.find((s) => s.isCone) ?? allScoops[0];
+      }
+    } else {
+      selectedScoop = allScoops.find((s) => s.isCone) ?? allScoops[0];
+    }
   }
 
-  // Set initial scoop for memory panel
+  // Set initial scoop for memory panel and trigger scoop select
   if (selectedScoop) {
     layout.panels.memory.setSelectedScoop(selectedScoop.jid);
   }
@@ -300,6 +350,168 @@ async function main(): Promise<void> {
   layout.panels.chat.setAgent(coneAgentHandle);
   log.info('Cone agent handle wired to chat UI');
 
+  // ---------------------------------------------------------------------------
+  // Lick system — WebSocket for webhooks/crontasks (all logic runs in browser)
+  // ---------------------------------------------------------------------------
+  if (!isExtension) {
+    // Initialize lick manager
+    const { getLickManager } = await import('../scoops/lick-manager.js');
+    const lickManager = getLickManager();
+    await lickManager.init();
+
+    // Route lick events to scoops
+    const routeLickToScoop = (event: LickEvent) => {
+      const isWebhook = event.type === 'webhook';
+      const eventName = isWebhook ? event.webhookName : event.cronName;
+      const eventId = isWebhook ? event.webhookId : event.cronId;
+      const channel = event.type;
+
+      log.debug('Lick event', { type: event.type, name: eventName, targetScoop: event.targetScoop });
+
+      if (event.targetScoop) {
+        const scoops = orchestrator.getScoops();
+        const targetScoop = scoops.find(s =>
+          s.name === event.targetScoop ||
+          s.folder === event.targetScoop ||
+          s.folder === `${event.targetScoop}-scoop`
+        );
+
+        if (targetScoop) {
+          const msgId = `${channel}-${eventId}-${Date.now()}`;
+          const eventLabel = isWebhook ? 'Webhook Event' : 'Cron Event';
+          const content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
+
+          const msg: ChannelMessage = {
+            id: msgId,
+            chatJid: targetScoop.jid,
+            senderId: channel,
+            senderName: `${channel}:${eventName}`,
+            content,
+            timestamp: event.timestamp,
+            fromAssistant: false,
+            channel,
+          };
+
+          getBuffer(targetScoop.jid).push({
+            id: msgId,
+            role: 'user',
+            content,
+            timestamp: Date.now(),
+            source: 'lick',
+            channel,
+          });
+
+          if (selectedScoop?.jid === targetScoop.jid) {
+            layout.panels.chat.addLickMessage(msgId, content, channel as 'webhook' | 'cron');
+          }
+
+          log.info('Routing lick to scoop', { type: channel, name: eventName, scoopJid: targetScoop.jid });
+          orchestrator.handleMessage(msg);
+        } else {
+          log.warn('Lick target scoop not found', { targetScoop: event.targetScoop });
+        }
+      }
+    };
+
+    lickManager.setEventHandler(routeLickToScoop);
+
+    // Connect WebSocket for server communication
+    const connectLickWs = () => {
+      const wsUrl = `ws://${window.location.host}/licks-ws`;
+      const ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        log.info('Lick WebSocket connected');
+      };
+
+      ws.onmessage = async (event) => {
+        try {
+          const data = JSON.parse(event.data) as { type: string; requestId?: string; [key: string]: unknown };
+
+          // Handle management requests from server
+          if (data.requestId) {
+            let response: { type: string; requestId: string; data?: unknown; error?: string };
+            
+            try {
+              switch (data.type) {
+                case 'list_webhooks':
+                  response = { type: 'response', requestId: data.requestId, data: lickManager.listWebhooks() };
+                  break;
+                case 'create_webhook': {
+                  const wh = await lickManager.createWebhook(
+                    (data.name as string) || 'default',
+                    data.scoop as string | undefined,
+                    data.filter as string | undefined,
+                  );
+                  response = { type: 'response', requestId: data.requestId, data: { ...wh, url: `http://${window.location.host}/webhooks/${wh.id}` } };
+                  break;
+                }
+                case 'delete_webhook': {
+                  const ok = await lickManager.deleteWebhook(data.id as string);
+                  response = ok
+                    ? { type: 'response', requestId: data.requestId, data: { ok: true } }
+                    : { type: 'response', requestId: data.requestId, data: { error: 'Webhook not found' } };
+                  break;
+                }
+                case 'list_crontasks':
+                  response = { type: 'response', requestId: data.requestId, data: lickManager.listCronTasks() };
+                  break;
+                case 'create_crontask': {
+                  if (!data.name) throw new Error('name is required');
+                  if (!data.cron) throw new Error('cron is required');
+                  const ct = await lickManager.createCronTask(
+                    data.name as string,
+                    data.cron as string,
+                    data.scoop as string | undefined,
+                    data.filter as string | undefined,
+                  );
+                  response = { type: 'response', requestId: data.requestId, data: ct };
+                  break;
+                }
+                case 'delete_crontask': {
+                  const ok = await lickManager.deleteCronTask(data.id as string);
+                  response = ok
+                    ? { type: 'response', requestId: data.requestId, data: { ok: true } }
+                    : { type: 'response', requestId: data.requestId, data: { error: 'Cron task not found' } };
+                  break;
+                }
+                default:
+                  response = { type: 'response', requestId: data.requestId, error: `Unknown request type: ${data.type}` };
+              }
+            } catch (err) {
+              response = { type: 'response', requestId: data.requestId, error: err instanceof Error ? err.message : String(err) };
+            }
+
+            ws.send(JSON.stringify(response));
+            return;
+          }
+
+          // Handle incoming webhook events from server
+          if (data.type === 'webhook_event') {
+            lickManager.handleWebhookEvent(
+              data.webhookId as string,
+              data.headers as Record<string, string>,
+              data.body,
+            );
+          }
+        } catch (err) {
+          log.error('Failed to process lick message', { error: err instanceof Error ? err.message : String(err) });
+        }
+      };
+
+      ws.onclose = () => {
+        log.warn('Lick WebSocket disconnected, reconnecting in 3s...');
+        setTimeout(connectLickWs, 3000);
+      };
+
+      ws.onerror = (err) => {
+        log.error('Lick WebSocket error', { error: String(err) });
+      };
+    };
+
+    connectLickWs();
+  }
+
   // Wire model picker changes
   layout.onModelChange = (modelId) => {
     // Model changes are picked up by scoop-context on next init
@@ -326,19 +538,51 @@ async function main(): Promise<void> {
     const contextId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
     const buffer = scoopMessageBuffers.get(scoop.jid);
 
+    // Pass scoop name for non-cone contexts
+    const scoopName = scoop.isCone ? undefined : scoop.name;
+
     if (buffer && buffer.length > 0) {
       // Load from in-memory buffer (has tool calls captured during this session)
-      await layout.panels.chat.switchToContext(contextId, !scoop.isCone);
+      await layout.panels.chat.switchToContext(contextId, !scoop.isCone, scoopName);
       layout.panels.chat.loadMessages(buffer);
     } else {
       // No buffer — load from SessionStore (persisted from previous sessions)
-      await layout.panels.chat.switchToContext(contextId, !scoop.isCone);
+      await layout.panels.chat.switchToContext(contextId, !scoop.isCone, scoopName);
 
       // If still empty, fall back to orchestrator DB (simple text, no tool calls)
       if (layout.panels.chat.getMessages().length === 0) {
         const messages = await orchestrator.getMessagesForScoop(scoop.jid);
         for (const msg of messages) {
-          if (msg.fromAssistant) {
+          // Determine the proper role and source for display
+          const isLick = msg.channel === 'webhook' || msg.channel === 'cron';
+          const isDelegation = msg.channel === 'delegation';
+
+          if (isLick) {
+            // Lick events - show as incoming with tongue emoji
+            const chatMsg: ChatMessage = {
+              id: msg.id,
+              role: 'user',
+              content: msg.content,
+              timestamp: new Date(msg.timestamp).getTime(),
+              source: 'lick',
+              channel: msg.channel,
+            };
+            getBuffer(scoop.jid).push(chatMsg);
+            layout.panels.chat.addUserMessage(msg.content);
+          } else if (isDelegation) {
+            // Delegation from cone - show as incoming instructions
+            const chatMsg: ChatMessage = {
+              id: msg.id,
+              role: 'user',
+              content: `**[Instructions from sliccy]**\n\n${msg.content}`,
+              timestamp: new Date(msg.timestamp).getTime(),
+              source: 'delegation',
+              channel: 'delegation',
+            };
+            getBuffer(scoop.jid).push(chatMsg);
+            layout.panels.chat.addUserMessage(chatMsg.content);
+          } else if (msg.fromAssistant) {
+            // Scoop's own response
             emitToUI({ type: 'message_start', messageId: msg.id });
             emitToUI({ type: 'content_delta', messageId: msg.id, text: msg.content });
             emitToUI({ type: 'content_done', messageId: msg.id });
@@ -359,9 +603,11 @@ async function main(): Promise<void> {
 
   layout.onScoopSelect = handleScoopSelect;
 
-  // Initialize the selected scoop's tab
+  // Initialize the selected scoop's tab and trigger initial load
   if (selectedScoop) {
     orchestrator.createScoopTab(selectedScoop.jid);
+    // Trigger scoop select to properly load the chat context
+    await handleScoopSelect(selectedScoop);
   }
 
   log.info('Orchestrator initialized — cone+scoops ready', { scoopCount: orchestrator.getScoops().length });

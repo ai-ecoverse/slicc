@@ -43,6 +43,8 @@ export interface OrchestratorCallbacks {
   onToolStart?: (scoopJid: string, toolName: string, toolInput: unknown) => void;
   /** Called when a tool finishes executing */
   onToolEnd?: (scoopJid: string, toolName: string, result: string, isError: boolean) => void;
+  /** Called when a message is routed to a scoop (delegation, lick, etc.) */
+  onIncomingMessage?: (scoopJid: string, message: ChannelMessage) => void;
 }
 
 export interface AssistantConfig {
@@ -266,6 +268,9 @@ export class Orchestrator {
     };
     await db.saveMessage(msg);
 
+    // Notify UI about the incoming delegation
+    this.callbacks.onIncomingMessage?.(scoopJid, msg);
+
     log.info('Delegating to scoop', { scoopJid, scoopName: scoop.name, promptLength: prompt.length });
     // Fire-and-forget: don't await the scoop's agent loop.
     // The cone's tool call returns immediately so the cone can finish its turn.
@@ -286,7 +291,9 @@ export class Orchestrator {
     }
 
     // Check trigger requirement using the scoop's own trigger
-    if (!scoop.isCone && scoop.requiresTrigger && scoop.trigger) {
+    // Bypass trigger check for lick messages (webhook/cron - they're explicitly routed to this scoop)
+    const isLick = message.channel === 'webhook' || message.channel === 'cron';
+    if (!scoop.isCone && scoop.requiresTrigger && scoop.trigger && !isLick) {
       if (!message.content.includes(scoop.trigger)) {
         log.info('routeToScoop: trigger not found in content', {
           chatJid: message.chatJid,
@@ -431,34 +438,18 @@ export class Orchestrator {
       onSendMessage: (text, sender) => {
         this.callbacks.onSendMessage(jid, `${sender ? `[${sender}] ` : ''}${text}`);
       },
-      onScheduleTask: async (task) => {
-        if (!this.scheduler) throw new Error('Scheduler not initialized');
-        return this.scheduler.createTask(task.groupFolder, task.prompt, task.scheduleType, task.scheduleValue);
-      },
-      onListTasks: async () => {
-        return db.getAllTasks();
-      },
-      onPauseTask: async (taskId) => {
-        if (!this.scheduler) return false;
-        return this.scheduler.pauseTask(taskId);
-      },
-      onResumeTask: async (taskId) => {
-        if (!this.scheduler) return false;
-        return this.scheduler.resumeTask(taskId);
-      },
-      onCancelTask: async (taskId) => {
-        if (!this.scheduler) return false;
-        return this.scheduler.deleteTask(taskId);
-      },
       getScoops: () => this.getScoops(),
-      onDelegateToScoop: scoop.isCone ? (scoopJid, prompt) => this.delegateToScoop(scoopJid, prompt, scoop.assistantLabel) : undefined,
-      onRegisterScoop: scoop.isCone ? async (newScoop) => {
+      onFeedScoop: scoop.isCone ? (scoopJid, prompt) => this.delegateToScoop(scoopJid, prompt, scoop.assistantLabel) : undefined,
+      onScoopScoop: scoop.isCone ? async (newScoop) => {
         const fullScoop: RegisteredScoop = {
           ...newScoop,
           jid: `scoop_${newScoop.folder}_${Date.now()}`,
         };
         await this.registerScoop(fullScoop);
         return fullScoop;
+      } : undefined,
+      onDropScoop: scoop.isCone ? async (scoopJid) => {
+        await this.unregisterScoop(scoopJid);
       } : undefined,
       getGlobalMemory: () => this.getGlobalMemory(),
       setGlobalMemory: scoop.isCone ? (content) => this.setGlobalMemory(content) : undefined,

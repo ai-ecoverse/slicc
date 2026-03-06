@@ -77,28 +77,134 @@
       .msg--user .msg__role { color: #7b8cff; }
       .msg--assistant .msg__role { color: #e94560; }
 
-      /* Tool calls */
+      /* Message icons */
+      .msg__icon { font-size: 14px; }
+
+      /* Collapsible messages (licks and scoop messages in cone view) */
+      .msg__collapsible {
+        cursor: pointer;
+      }
+      .msg__collapsible summary {
+        list-style: none;
+        cursor: pointer;
+        color: #8080a0;
+        font-size: 12px;
+        padding: 4px 0;
+      }
+      .msg__collapsible summary::-webkit-details-marker { display: none; }
+      .msg__collapsible summary::before {
+        content: '▶ ';
+        font-size: 10px;
+        color: #6060a0;
+        transition: transform 0.2s;
+        display: inline-block;
+      }
+      .msg__collapsible[open] summary::before {
+        transform: rotate(90deg);
+      }
+      .msg__collapsible[open] .msg__content {
+        margin-top: 8px;
+      }
+
+      /* Message group (wrapper for msg + tool calls) */
+      .msg-group { display: flex; flex-direction: column; gap: 4px; }
+
+      /* Tool calls - compact inline style */
       .tool-call {
-        margin-top: 8px; padding: 8px 10px; border-radius: 6px;
-        background: #1a1a30; border-left: 3px solid #e94560;
-        font-size: 13px;
+        padding: 0; font-size: 12px;
+        margin-left: 20px; /* indent under message */
       }
+      .tool-call summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 2px 6px;
+        display: flex; align-items: center; gap: 4px;
+        border-radius: 4px;
+        color: #8080a0;
+      }
+      .tool-call summary:hover { background: #1a1a30; }
+      .tool-call summary::-webkit-details-marker { display: none; }
       .tool-call__header {
-        display: flex; align-items: center; gap: 6px;
-        font-weight: 600; color: #e94560; margin-bottom: 4px;
+        display: flex; align-items: center; gap: 4px;
+        cursor: pointer;
       }
-      .tool-call__input, .tool-call__result {
+      .tool-call__icon { font-size: 12px; }
+      .tool-call__name { color: #a0a0c0; font-weight: 500; }
+      .tool-call__preview {
+        color: #606080; font-size: 11px; margin-left: 4px;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        max-width: 300px;
+        font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      }
+      .tool-call__spinner, .tool-call__error-icon, .tool-call__check-icon {
+        margin-left: auto; font-size: 10px;
+      }
+      .tool-call__spinner { animation: spin 1s linear infinite; }
+      @keyframes spin { 100% { transform: rotate(360deg); } }
+
+      .tool-call__details {
+        padding: 4px 6px 6px 22px; /* indent to align with icon */
+        margin-top: 2px;
+        border-left: 2px solid #2a2a4a;
+        margin-left: 6px;
+      }
+      .tool-call__label {
+        font-size: 9px; color: #6a6a8a; text-transform: uppercase;
+        margin-bottom: 2px;
+      }
+      .tool-call__input pre, .tool-call__result pre {
         white-space: pre-wrap; font-family: 'JetBrains Mono', 'Fira Code', monospace;
-        font-size: 12px; color: #b0b0c0; margin-top: 4px;
-        max-height: 200px; overflow-y: auto;
+        font-size: 11px; color: #909090;
+        max-height: 150px; overflow-y: auto;
+        background: #141428; padding: 6px; border-radius: 3px;
+        margin: 0;
       }
-      .tool-call__result--error { color: #ff6b6b; }
+      .tool-call__result--error pre { color: #ff6b6b; }
       .tool-call__screenshot {
-        max-width: 100%; max-height: 300px; border-radius: 6px;
-        margin-top: 8px; cursor: pointer; border: 1px solid #3a3a5a;
-        transition: border-color .15s;
+        max-width: 100%; max-height: 200px; border-radius: 4px;
+        margin-top: 4px; cursor: pointer; border: 1px solid #3a3a5a;
       }
       .tool-call__screenshot:hover { border-color: #e94560; }
+
+      /* Licks (webhook/cron events) - styled like tool calls */
+      .lick {
+        padding: 0; font-size: 12px;
+        margin-left: 20px;
+      }
+      .lick summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 2px 6px;
+        display: flex; align-items: center; gap: 4px;
+        border-radius: 4px;
+        color: #8080a0;
+      }
+      .lick summary:hover { background: #1a1a30; }
+      .lick summary::-webkit-details-marker { display: none; }
+      .lick__header {
+        display: flex; align-items: center; gap: 4px;
+        cursor: pointer;
+      }
+      .lick__icon { font-size: 12px; }
+      .lick__type { color: #a0a0c0; font-weight: 500; }
+      .lick__preview {
+        color: #606080; font-size: 11px; margin-left: 4px;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        max-width: 300px;
+        font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      }
+      .lick__details {
+        padding: 4px 6px 6px 22px;
+        margin-top: 2px;
+        border-left: 2px solid #2a2a4a;
+        margin-left: 6px;
+        font-size: 12px;
+        color: #909090;
+      }
+      .lick__details pre {
+        background: #141428; padding: 6px; border-radius: 3px;
+        font-size: 11px; overflow-x: auto;
+      }
 
       /* Prose element spacing inside rendered markdown messages */
       .msg__content p, .msg__content h1, .msg__content h2, .msg__content h3,

@@ -12,6 +12,7 @@ import { createPython3LikeCommand } from './python-command.js';
 import { createSqliteCommand } from './sqlite-command.js';
 import { createUnzipCommand } from './unzip-command.js';
 import { createWebhookCommand } from './webhook-command.js';
+import { createCrontaskCommand } from './crontask-command.js';
 import { createZipCommand } from './zip-command.js';
 export type {
   ImgcatCommandOptions as SupplementalCommandOptions,
@@ -31,6 +32,7 @@ export function createSupplementalCommands(options: ImgcatCommandOptions = {}): 
     createPython3LikeCommand('python3'),
     createPython3LikeCommand('python'),
     createWebhookCommand(),
+    createCrontaskCommand(),
     createPdftkCommand('pdftk'),
     createPdftkCommand('pdf'),
     createConvertCommand('convert'),
