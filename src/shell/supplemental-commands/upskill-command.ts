@@ -175,24 +175,32 @@ async function installFromClawHub(
       };
     }
 
-    // Convert the latin1-encoded response body back to bytes
-    // The fetch proxy uses latin1 encoding for binary content, where each
-    // character code point directly maps to a byte value (0-255).
-    // Use TextEncoder with 'latin1' alias (iso-8859-1) for proper conversion.
+    // The response body may have been UTF-8 decoded (corrupting binary data).
+    // Check content-type to see if it was supposed to be binary.
+    const contentType = downloadResponse.headers['content-type'] || '';
+    
+    // For binary content, the body should be latin1-encoded by the fetch proxy.
+    // If body length != what we expect, the data was likely UTF-8 decoded incorrectly.
     let zipBytes: Uint8Array;
-    try {
-      // Try using charCodeAt for latin1 (each char is one byte)
+    
+    // Check if we got proper latin1 encoding (body chars should all be <= 255)
+    let isLatin1 = true;
+    for (let i = 0; i < Math.min(downloadResponse.body.length, 100); i++) {
+      if (downloadResponse.body.charCodeAt(i) > 255) {
+        isLatin1 = false;
+        break;
+      }
+    }
+    
+    if (isLatin1) {
+      // Proper latin1 encoding - each char maps to one byte
       zipBytes = new Uint8Array(downloadResponse.body.length);
       for (let i = 0; i < downloadResponse.body.length; i++) {
-        const code = downloadResponse.body.charCodeAt(i);
-        if (code > 255) {
-          // If we get non-latin1 chars, the response was likely UTF-8 decoded
-          throw new Error('Non-latin1 character detected');
-        }
-        zipBytes[i] = code;
+        zipBytes[i] = downloadResponse.body.charCodeAt(i);
       }
-    } catch {
-      // Fallback: try UTF-8 encoding (might work if response wasn't binary-encoded)
+    } else {
+      // Response was UTF-8 decoded - try to re-encode
+      // This is lossy and will likely fail, but try anyway
       zipBytes = new TextEncoder().encode(downloadResponse.body);
     }
 
@@ -203,11 +211,10 @@ async function installFromClawHub(
     } catch (unzipErr) {
       const msg = unzipErr instanceof Error ? unzipErr.message : String(unzipErr);
       // Debug info
-      const preview = downloadResponse.body.slice(0, 50);
       const hexPreview = Array.from(zipBytes.slice(0, 20)).map(b => b.toString(16).padStart(2, '0')).join(' ');
       return {
         stdout: '',
-        stderr: `upskill: failed to unzip skill: ${msg}\nBody length: ${downloadResponse.body.length}, Bytes length: ${zipBytes.length}\nHex: ${hexPreview}\nPreview: ${preview.slice(0, 30)}\n`,
+        stderr: `upskill: failed to unzip: ${msg}\nContent-Type: ${contentType}\nLatin1: ${isLatin1}\nBody: ${downloadResponse.body.length} chars, Bytes: ${zipBytes.length}\nHex: ${hexPreview}\n`,
         exitCode: 1,
       };
     }
