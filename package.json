@@ -16,6 +16,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@cantoo/pdf-lib": "^2.6.1",
+    "@imagemagick/magick-wasm": "^0.0.38",
     "@isomorphic-git/lightning-fs": "4.6.2",
     "@mariozechner/pi-agent-core": "^0.55.4",
     "@mariozechner/pi-ai": "^0.55.4",
@@ -35,6 +37,7 @@
     "remark-parse": "11.0.0",
     "remark-rehype": "11.1.2",
     "unified": "11.0.5",
+    "unpdf": "^1.4.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {

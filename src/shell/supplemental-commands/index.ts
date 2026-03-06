@@ -1,7 +1,9 @@
 import type { Command } from 'just-bash';
 import { createCommandsCommand } from './help-command.js';
+import { createConvertCommand } from './convert-command.js';
 import { createNodeCommand } from './node-command.js';
 import { createOpenCommand } from './open-command.js';
+import { createPdftkCommand } from './pdftk-command.js';
 import { createPython3LikeCommand } from './python-command.js';
 import { createSqliteCommand } from './sqlite-command.js';
 import { createUnzipCommand } from './unzip-command.js';
@@ -20,5 +22,9 @@ export function createSupplementalCommands(): Command[] {
     createPython3LikeCommand('python3'),
     createPython3LikeCommand('python'),
     createWebhookCommand(),
+    createPdftkCommand('pdftk'),
+    createPdftkCommand('pdf'),
+    createConvertCommand('convert'),
+    createConvertCommand('magick'),
   ];
 }
