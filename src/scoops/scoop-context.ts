@@ -7,10 +7,10 @@
  * - Its own Agent instance
  * - Its own session history
  * - Skills loaded from VFS
- * - NanoClaw-style tools (send_message, schedule_task, etc.)
+ * - NanoClaw-style tools (send_message, scoop management)
  */
 
-import type { RegisteredScoop, ScheduledTask } from './types.js';
+import type { RegisteredScoop } from './types.js';
 import type { VirtualFS } from '../fs/index.js';
 import type { RestrictedFS } from '../fs/restricted-fs.js';
 import { WasmShell } from '../shell/index.js';
@@ -36,18 +36,14 @@ export interface ScoopContextCallbacks {
   onToolEnd?: (toolName: string, result: string, isError: boolean) => void;
   /** Called when agent uses send_message tool */
   onSendMessage: (text: string, sender?: string) => void;
-  /** Task scheduling callbacks */
-  onScheduleTask: (task: Omit<ScheduledTask, 'id' | 'nextRun' | 'lastRun' | 'createdAt'>) => Promise<ScheduledTask>;
-  onListTasks: () => Promise<ScheduledTask[]>;
-  onPauseTask: (taskId: string) => Promise<boolean>;
-  onResumeTask: (taskId: string) => Promise<boolean>;
-  onCancelTask: (taskId: string) => Promise<boolean>;
   /** Get all scoops (for cone) */
   getScoops: () => RegisteredScoop[];
-  /** Delegate a prompt to a specific scoop (cone only). */
-  onDelegateToScoop?: (scoopJid: string, prompt: string) => Promise<void>;
-  /** Register a new scoop (cone only) */
-  onRegisterScoop?: (scoop: Omit<RegisteredScoop, 'jid'>) => Promise<RegisteredScoop>;
+  /** Feed a prompt to a specific scoop (cone only). */
+  onFeedScoop?: (scoopJid: string, prompt: string) => Promise<void>;
+  /** Create a new scoop (cone only) */
+  onScoopScoop?: (scoop: Omit<RegisteredScoop, 'jid'>) => Promise<RegisteredScoop>;
+  /** Drop/remove a scoop (cone only) */
+  onDropScoop?: (scoopJid: string) => Promise<void>;
   /** Get global CLAUDE.md content (shared across all scoops) */
   getGlobalMemory: () => Promise<string>;
   /** Update global CLAUDE.md (cone only) */
@@ -99,18 +95,14 @@ export class ScoopContext {
       // Load skills from VFS
       const skills = await loadSkills(this.fs as VirtualFS, skillsDir);
 
-      // Create NanoClaw tools (send_message, schedule_task, etc.)
+      // Create NanoClaw tools (send_message, scoop management)
       const nanoClawToolsConfig: NanoClawToolsConfig = {
         scoop: this.scoop,
         onSendMessage: this.callbacks.onSendMessage,
-        onScheduleTask: this.callbacks.onScheduleTask,
-        onListTasks: this.callbacks.onListTasks,
-        onPauseTask: this.callbacks.onPauseTask,
-        onResumeTask: this.callbacks.onResumeTask,
-        onCancelTask: this.callbacks.onCancelTask,
         getScoops: this.callbacks.getScoops,
-        onDelegateToScoop: this.callbacks.onDelegateToScoop,
-        onRegisterScoop: this.callbacks.onRegisterScoop,
+        onFeedScoop: this.callbacks.onFeedScoop,
+        onScoopScoop: this.callbacks.onScoopScoop,
+        onDropScoop: this.callbacks.onDropScoop,
         onSetGlobalMemory: this.callbacks.setGlobalMemory,
         getGlobalMemory: this.callbacks.getGlobalMemory,
       };

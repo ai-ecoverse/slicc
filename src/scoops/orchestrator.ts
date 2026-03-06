@@ -438,34 +438,18 @@ export class Orchestrator {
       onSendMessage: (text, sender) => {
         this.callbacks.onSendMessage(jid, `${sender ? `[${sender}] ` : ''}${text}`);
       },
-      onScheduleTask: async (task) => {
-        if (!this.scheduler) throw new Error('Scheduler not initialized');
-        return this.scheduler.createTask(task.groupFolder, task.prompt, task.scheduleType, task.scheduleValue);
-      },
-      onListTasks: async () => {
-        return db.getAllTasks();
-      },
-      onPauseTask: async (taskId) => {
-        if (!this.scheduler) return false;
-        return this.scheduler.pauseTask(taskId);
-      },
-      onResumeTask: async (taskId) => {
-        if (!this.scheduler) return false;
-        return this.scheduler.resumeTask(taskId);
-      },
-      onCancelTask: async (taskId) => {
-        if (!this.scheduler) return false;
-        return this.scheduler.deleteTask(taskId);
-      },
       getScoops: () => this.getScoops(),
-      onDelegateToScoop: scoop.isCone ? (scoopJid, prompt) => this.delegateToScoop(scoopJid, prompt, scoop.assistantLabel) : undefined,
-      onRegisterScoop: scoop.isCone ? async (newScoop) => {
+      onFeedScoop: scoop.isCone ? (scoopJid, prompt) => this.delegateToScoop(scoopJid, prompt, scoop.assistantLabel) : undefined,
+      onScoopScoop: scoop.isCone ? async (newScoop) => {
         const fullScoop: RegisteredScoop = {
           ...newScoop,
           jid: `scoop_${newScoop.folder}_${Date.now()}`,
         };
         await this.registerScoop(fullScoop);
         return fullScoop;
+      } : undefined,
+      onDropScoop: scoop.isCone ? async (scoopJid) => {
+        await this.unregisterScoop(scoopJid);
       } : undefined,
       getGlobalMemory: () => this.getGlobalMemory(),
       setGlobalMemory: scoop.isCone ? (content) => this.setGlobalMemory(content) : undefined,

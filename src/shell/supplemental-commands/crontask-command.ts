@@ -9,6 +9,7 @@ Commands:
   create [options]   Create a new cron task
   list               List all active cron tasks
   delete <id>        Delete a cron task by ID
+  kill <id>          Alias for delete
 
 Options:
   --name <name>     Name for the cron task (required)
@@ -199,12 +200,13 @@ export function createCrontaskCommand(): Command {
           };
         }
 
-        case 'delete': {
+        case 'delete':
+        case 'kill': {
           const id = args[1];
           if (!id) {
             return {
               stdout: '',
-              stderr: 'crontask: delete requires an ID\n',
+              stderr: `crontask: ${subcommand} requires an ID\n`,
               exitCode: 1,
             };
           }
