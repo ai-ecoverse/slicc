@@ -12,9 +12,10 @@ import type { VirtualFS } from '../fs/index.js';
 import { Bash, defineCommand } from 'just-bash';
 import type { BashExecResult, SecureFetch, Command } from 'just-bash';
 import { VfsAdapter } from './vfs-adapter.js';
-import { cacheBinaryBody } from './binary-cache.js';
+import { cacheBinaryBody, cacheBinaryByUrl } from './binary-cache.js';
 import { GitCommands } from '../git/git-commands.js';
 import { createSupplementalCommands } from './supplemental-commands.js';
+import { createSkillCommand, createUpskillCommand } from './supplemental-commands/upskill-command.js';
 import { MountCommands } from '../fs/mount-commands.js';
 
 /** Check if a content-type header indicates text (safe for UTF-8 decoding). */
@@ -39,9 +40,10 @@ export function isTextContentType(contentType: string): boolean {
  * (ISO-8859-1) so every byte maps 1:1 to a codepoint 0-255. This
  * preserves binary data through just-bash's string-typed FetchResult.body.
  */
-async function readResponseBody(resp: Response): Promise<string> {
+async function readResponseBody(resp: Response, url?: string): Promise<string> {
   const contentType = resp.headers.get('content-type') ?? '';
-  if (isTextContentType(contentType)) {
+  const isText = isTextContentType(contentType);
+  if (isText) {
     return resp.text();
   }
   // Binary: read raw bytes and encode as latin1 string for just-bash's
@@ -51,6 +53,10 @@ async function readResponseBody(resp: Response): Promise<string> {
   const bytes = new Uint8Array(buf);
   const latin1 = new TextDecoder('iso-8859-1').decode(buf);
   cacheBinaryBody(latin1, bytes);
+  // Also cache by URL so commands like upskill can retrieve by URL
+  if (url) {
+    cacheBinaryByUrl(url, bytes);
+  }
   return latin1;
 }
 
@@ -75,7 +81,7 @@ function createProxiedFetch(): SecureFetch {
         headers: options?.headers,
         body: options?.body,
       });
-      const body = await readResponseBody(resp);
+      const body = await readResponseBody(resp, url);
       const respHeaders: Record<string, string> = {};
       resp.headers.forEach((v, k) => { respHeaders[k] = v; });
       return { status: resp.status, statusText: resp.statusText, headers: respHeaders, body, url };
@@ -105,7 +111,7 @@ function createProxiedFetch(): SecureFetch {
       throw new Error(errorMsg);
     }
 
-    const body = await readResponseBody(resp);
+    const body = await readResponseBody(resp, url);
     const respHeaders: Record<string, string> = {};
     resp.headers.forEach((v, k) => { respHeaders[k] = v; });
 
@@ -166,13 +172,20 @@ export class WasmShell {
     const gitCommand = this.createGitCustomCommand();
     const supplementalCommands = createSupplementalCommands();
     const mountCommand = this.createMountCustomCommand();
+    const fetchFn = createProxiedFetch();
 
     this.bash = new Bash({
       fs: this.vfsAdapter,
       cwd: initialCwd,
       env: initialEnv,
-      fetch: createProxiedFetch(),
-      customCommands: [gitCommand, mountCommand, ...supplementalCommands],
+      fetch: fetchFn,
+      customCommands: [
+        gitCommand,
+        mountCommand,
+        createSkillCommand(options.fs),
+        createUpskillCommand(options.fs, fetchFn),
+        ...supplementalCommands,
+      ],
     });
     this.lastEnv = { ...initialEnv };
     this.cwd = initialCwd;

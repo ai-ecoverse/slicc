@@ -22,6 +22,7 @@ import { TaskScheduler } from './scheduler.js';
 import { VirtualFS } from '../fs/index.js';
 import { RestrictedFS } from '../fs/restricted-fs.js';
 import type { BrowserAPI } from '../cdp/index.js';
+import { createDefaultSharedFiles } from './skills.js';
 
 const log = createLogger('orchestrator');
 
@@ -146,33 +147,15 @@ export class Orchestrator {
   private async ensureGlobalMemory(): Promise<void> {
     if (!this.sharedFs) return;
 
+    // Create default shared files (including /shared/CLAUDE.md) from bundled defaults
+    await createDefaultSharedFiles(this.sharedFs);
+
     try {
       const content = await this.sharedFs.readFile('/shared/CLAUDE.md', { encoding: 'utf-8' });
       this.globalMemoryCache = typeof content === 'string' ? content : new TextDecoder().decode(content);
     } catch {
-      // Create default global memory
-      const defaultContent = `# sliccy
-
-You are a helpful coding assistant running in a browser-based development environment called SLICC (Self-Licking Ice Cream Cone).
-
-## What You Can Do
-
-- Answer questions and have conversations
-- Read and write files in your virtual workspace
-- Run bash commands in a sandboxed shell
-- Automate browser interactions
-- Schedule tasks to run later or on a recurring basis
-
-## Memory
-
-When you learn something important:
-- Create files for structured data
-- Update this file for global preferences
-- Each scoop also has its own CLAUDE.md for scoop-specific context
-`;
-      await this.sharedFs.writeFile('/shared/CLAUDE.md', defaultContent);
-      this.globalMemoryCache = defaultContent;
-      log.info('Created default global memory');
+      // No global memory file - this shouldn't happen after createDefaultSharedFiles
+      log.warn('Global memory file not found after creating defaults');
     }
   }
 

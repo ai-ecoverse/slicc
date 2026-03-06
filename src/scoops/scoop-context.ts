@@ -92,8 +92,8 @@ export class ScoopContext {
 
       // Create default skills if needed
       const skillsDir = this.scoop.isCone
-        ? '/workspace/.skills'
-        : `/scoops/${this.scoop.folder}/workspace/.skills`;
+        ? '/workspace/skills'
+        : `/scoops/${this.scoop.folder}/workspace/skills`;
       await createDefaultSkills(this.fs as VirtualFS, skillsDir);
 
       // Load skills from VFS
