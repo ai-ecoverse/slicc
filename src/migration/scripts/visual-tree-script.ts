@@ -10,7 +10,7 @@
  *
  * @license BSD-3-Clause (CSS selector portions from Chrome DevTools)
  */
-export const VISUAL_TREE_SCRIPT = `return (function() {
+export const VISUAL_TREE_SCRIPT = `(function() {
   "use strict";
 
   // ─── CSS.escape polyfill (for environments without it) ───

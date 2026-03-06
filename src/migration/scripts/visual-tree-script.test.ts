@@ -98,7 +98,7 @@ describe('VISUAL_TREE_SCRIPT', () => {
       nodeMap: Record<string, string>;
     } {
       buildTestDOM();
-      const fn = new Function(`${VISUAL_TREE_SCRIPT}`);
+      const fn = new Function(`return ${VISUAL_TREE_SCRIPT}`);
       return fn() as {
         tree: Record<string, unknown>;
         text: string;
@@ -209,7 +209,7 @@ describe('VISUAL_TREE_SCRIPT', () => {
         toJSON() { return this; },
       });
 
-      const exec = new Function(VISUAL_TREE_SCRIPT);
+      const exec = new Function(`return ${VISUAL_TREE_SCRIPT}`);
       const result = exec() as {
         tree: Record<string, unknown>;
         text: string;
