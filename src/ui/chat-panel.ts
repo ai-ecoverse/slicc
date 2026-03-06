@@ -454,6 +454,16 @@ export class ChatPanel {
   }
 
   private createMessageEl(msg: ChatMessage): HTMLElement {
+    // Licks (webhook/cron) get their own compact style like tool calls
+    const isLick = msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron';
+    if (isLick) {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'msg-group';
+      wrapper.setAttribute('data-msg-id', msg.id);
+      wrapper.appendChild(this.createLickEl(msg));
+      return wrapper;
+    }
+
     // Use a fragment-like wrapper for messages with tool calls
     // so tool calls appear outside the message bubble
     const wrapper = document.createElement('div');
@@ -469,11 +479,7 @@ export class ChatPanel {
     const isInScoopThread = this.currentScoopName !== null;
 
     if (msg.role === 'user') {
-      // Check if this is a lick (webhook/cron event)
-      if (msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron') {
-        icon = '👅';
-        label = msg.channel ? `lick:${msg.channel}` : 'lick';
-      } else if (msg.source === 'delegation' || msg.channel === 'delegation') {
+      if (msg.source === 'delegation' || msg.channel === 'delegation') {
         // Delegation instructions from sliccy
         icon = '🥄';
         label = 'sliccy';
@@ -481,9 +487,6 @@ export class ChatPanel {
         icon = getNextUserFace();
         label = 'You';
       }
-    } else if (msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron') {
-      icon = '👅';
-      label = msg.channel ? `lick:${msg.channel}` : 'lick';
     } else if (isInScoopThread) {
       // In a scoop thread, all assistant messages show the scoop icon/name
       icon = '💩';
@@ -553,6 +556,37 @@ export class ChatPanel {
     }
 
     return wrapper;
+  }
+
+  /** Create a lick element (webhook/cron event) styled like tool calls */
+  private createLickEl(msg: ChatMessage): HTMLElement {
+    const el = document.createElement('details');
+    el.className = 'lick';
+
+    const channelType = msg.channel === 'webhook' ? 'Webhook' : msg.channel === 'cron' ? 'Cron' : 'Event';
+
+    // Summary shows tongue emoji and type
+    const summary = document.createElement('summary');
+    summary.className = 'lick__header';
+    summary.innerHTML = `<span class="lick__icon">👅</span> <span class="lick__type">${channelType}</span>`;
+
+    // Add brief preview
+    const preview = document.createElement('span');
+    preview.className = 'lick__preview';
+    // Extract a meaningful preview from the content
+    const contentPreview = msg.content.replace(/\[Webhook Event:.*?\]\n```json\n?/s, '').slice(0, 50);
+    preview.textContent = contentPreview.replace(/\n/g, ' ') + (contentPreview.length >= 50 ? '...' : '');
+    summary.appendChild(preview);
+
+    el.appendChild(summary);
+
+    // Details content
+    const details = document.createElement('div');
+    details.className = 'lick__details';
+    details.innerHTML = renderMessageContent(msg.content);
+    el.appendChild(details);
+
+    return el;
   }
 
   private createToolCallEl(tc: ToolCall): HTMLElement {
