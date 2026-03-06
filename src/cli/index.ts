@@ -307,128 +307,127 @@ async function main() {
   app.use(requestLogger);
 
   // ---------------------------------------------------------------------------
-  // Webhook registry — stores active webhooks and broadcasts events to browser
+  // Lick system — WebSocket bridge for webhooks/crontasks (all logic in browser)
   // ---------------------------------------------------------------------------
-  interface WebhookEntry {
-    id: string;
-    name: string;
-    createdAt: string;
-    filter?: string; // JS filter function code
-    filterFn?: (event: unknown) => boolean | unknown; // Compiled filter function
-    scoop?: string; // Target scoop name to route events to
-  }
-  const webhooks = new Map<string, WebhookEntry>();
+  
+  // WebSocket for bidirectional communication with browser
+  const lickWss = new WebSocketServer({ noServer: true });
+  const lickClients = new Set<WebSocket>();
+  const pendingRequests = new Map<string, { resolve: (data: unknown) => void; reject: (err: Error) => void }>();
+  let requestIdCounter = 0;
 
-  /** Compile a filter function from user-provided code */
-  function compileWebhookFilter(filterCode: string): (event: unknown) => boolean | unknown {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-implied-eval
-      const fn = new Function('event', `return (${filterCode})(event);`) as (event: unknown) => boolean | unknown;
-      // Test that it's callable
-      fn({});
-      return fn;
-    } catch (err) {
-      throw new Error(`Invalid filter function: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
+  lickWss.on('connection', (ws) => {
+    lickClients.add(ws);
+    console.log('[licks] Browser client connected');
 
-  // WebSocket for broadcasting webhook events to the browser
-  const webhookWss = new WebSocketServer({ noServer: true });
-  const webhookClients = new Set<WebSocket>();
+    ws.on('message', (data) => {
+      try {
+        const msg = JSON.parse(data.toString()) as { type: string; requestId?: string; [key: string]: unknown };
+        
+        // Handle responses to pending requests
+        if (msg.type === 'response' && msg.requestId) {
+          const pending = pendingRequests.get(msg.requestId);
+          if (pending) {
+            pendingRequests.delete(msg.requestId);
+            if (msg.error) {
+              pending.reject(new Error(msg.error as string));
+            } else {
+              pending.resolve(msg.data);
+            }
+          }
+        }
+      } catch {
+        // Ignore invalid messages
+      }
+    });
 
-  webhookWss.on('connection', (ws) => {
-    webhookClients.add(ws);
-    console.log('[webhooks] Browser client connected');
     ws.on('close', () => {
-      webhookClients.delete(ws);
-      console.log('[webhooks] Browser client disconnected');
+      lickClients.delete(ws);
+      console.log('[licks] Browser client disconnected');
     });
   });
 
-  function broadcastWebhookEvent(event: unknown): void {
+  /** Send a request to the browser and wait for response */
+  function sendLickRequest(type: string, data: unknown, timeout = 5000): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const requestId = `req_${++requestIdCounter}`;
+      const msg = JSON.stringify({ type, requestId, ...data as object });
+
+      // Find a connected client
+      const client = Array.from(lickClients).find(c => c.readyState === WebSocket.OPEN);
+      if (!client) {
+        reject(new Error('No browser connected'));
+        return;
+      }
+
+      // Set up timeout
+      const timer = setTimeout(() => {
+        pendingRequests.delete(requestId);
+        reject(new Error('Request timeout'));
+      }, timeout);
+
+      pendingRequests.set(requestId, {
+        resolve: (data) => {
+          clearTimeout(timer);
+          resolve(data);
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+      });
+
+      client.send(msg);
+    });
+  }
+
+  /** Broadcast an event to all connected browsers (no response expected) */
+  function broadcastLickEvent(event: unknown): void {
     const msg = JSON.stringify(event);
-    for (const client of webhookClients) {
+    for (const client of lickClients) {
       if (client.readyState === WebSocket.OPEN) {
         client.send(msg);
       }
     }
   }
 
-  function generateWebhookId(): string {
-    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    let id = '';
-    for (let i = 0; i < 12; i++) {
-      id += chars[Math.floor(Math.random() * chars.length)];
-    }
-    return id;
-  }
-
-  // Webhook management API
   app.use(express.json());
 
-  app.get('/api/webhooks', (_req, res) => {
-    const list = Array.from(webhooks.values()).map((wh) => ({
-      id: wh.id,
-      name: wh.name,
-      createdAt: wh.createdAt,
-      filter: wh.filter,
-      scoop: wh.scoop,
-      url: `http://localhost:${SERVE_PORT}/webhooks/${wh.id}`,
-    }));
-    res.json(list);
+  // Webhook management API — forwards to browser
+  app.get('/api/webhooks', async (_req, res) => {
+    try {
+      const data = await sendLickRequest('list_webhooks', {});
+      res.json(data);
+    } catch (err) {
+      res.status(503).json({ error: err instanceof Error ? err.message : 'Browser not connected' });
+    }
   });
 
-  app.post('/api/webhooks', (req, res) => {
-    const body = req.body as { name?: string; filter?: string; scoop?: string };
-    const name = body.name || 'default';
-    const filterCode = body.filter;
-    const scoop = body.scoop;
-    const id = generateWebhookId();
+  app.post('/api/webhooks', async (req, res) => {
+    try {
+      const data = await sendLickRequest('create_webhook', req.body);
+      res.json(data);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(msg.includes('Invalid') ? 400 : 503).json({ error: msg });
+    }
+  });
 
-    // Compile filter if provided
-    let filterFn: ((event: unknown) => boolean | unknown) | undefined;
-    if (filterCode) {
-      try {
-        filterFn = compileWebhookFilter(filterCode);
-      } catch (err) {
-        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
-        return;
+  app.delete('/api/webhooks/:id', async (req, res) => {
+    try {
+      const data = await sendLickRequest('delete_webhook', { id: req.params.id }) as { ok?: boolean; error?: string };
+      if (data.error) {
+        res.status(404).json({ error: data.error });
+      } else {
+        res.json(data);
       }
+    } catch (err) {
+      res.status(503).json({ error: err instanceof Error ? err.message : 'Browser not connected' });
     }
-
-    const entry: WebhookEntry = {
-      id,
-      name,
-      createdAt: new Date().toISOString(),
-      filter: filterCode,
-      filterFn,
-      scoop,
-    };
-    webhooks.set(id, entry);
-    console.log(`[webhooks] Created webhook "${name}" with ID ${id}${scoop ? ` -> ${scoop}` : ''}${filterCode ? ' (with filter)' : ''}`);
-    res.json({
-      id: entry.id,
-      name: entry.name,
-      createdAt: entry.createdAt,
-      filter: entry.filter,
-      scoop: entry.scoop,
-      url: `http://localhost:${SERVE_PORT}/webhooks/${id}`,
-    });
   });
 
-  app.delete('/api/webhooks/:id', (req, res) => {
-    const { id } = req.params;
-    if (!webhooks.has(id)) {
-      res.status(404).json({ error: 'Webhook not found' });
-      return;
-    }
-    webhooks.delete(id);
-    console.log(`[webhooks] Deleted webhook ${id}`);
-    res.json({ ok: true });
-  });
-
-  // Webhook receiver — handle CORS preflight for cross-origin webhook calls
-  app.options('/webhooks/:id', (req, res) => {
+  // Webhook receiver — handle CORS preflight
+  app.options('/webhooks/:id', (_req, res) => {
     res.set({
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -437,20 +436,12 @@ async function main() {
     res.sendStatus(204);
   });
 
-  // Webhook receiver — accepts incoming POSTs and broadcasts to browser
+  // Webhook receiver — forwards POST to browser for processing
   app.post('/webhooks/:id', async (req, res) => {
-    // Set CORS headers for cross-origin requests
-    res.set({
-      'Access-Control-Allow-Origin': '*',
-    });
+    res.set({ 'Access-Control-Allow-Origin': '*' });
     const { id } = req.params;
-    const webhook = webhooks.get(id);
-    if (!webhook) {
-      res.status(404).json({ error: 'Webhook not found' });
-      return;
-    }
 
-    // Collect body (may already be parsed by express.json, or raw)
+    // Collect body
     let body = req.body;
     if (!body || Object.keys(body).length === 0) {
       const chunks: Buffer[] = [];
@@ -465,263 +456,50 @@ async function main() {
       }
     }
 
-    let event: Record<string, unknown> = {
-      type: 'webhook',
+    // Forward to browser for processing
+    broadcastLickEvent({
+      type: 'webhook_event',
       webhookId: id,
-      webhookName: webhook.name,
-      targetScoop: webhook.scoop, // Scoop to route this event to
       timestamp: new Date().toISOString(),
       headers: req.headers,
       body,
-    };
-
-    // Apply filter if defined
-    if (webhook.filterFn) {
-      try {
-        const result = webhook.filterFn(event);
-        if (result === false) {
-          console.log(`[webhooks] Event on "${webhook.name}" (${id}) dropped by filter`);
-          res.json({ ok: true, received: true, filtered: true });
-          return;
-        }
-        if (typeof result === 'object' && result !== null) {
-          event = result as Record<string, unknown>;
-        }
-      } catch (err) {
-        console.error(`[webhooks] Filter error on "${webhook.name}" (${id}):`, err instanceof Error ? err.message : String(err));
-        // Continue with original event on filter error
-      }
-    }
-
-    console.log(`[webhooks] Received event on "${webhook.name}" (${id})`);
-    broadcastWebhookEvent(event);
+    });
 
     res.json({ ok: true, received: true });
   });
 
-  // ---------------------------------------------------------------------------
-  // Cron task registry — stores cron jobs and dispatches licks on schedule
-  // ---------------------------------------------------------------------------
-  interface CronTaskEntry {
-    id: string;
-    name: string;
-    cron: string;
-    scoop?: string;
-    filter?: string;
-    filterFn?: () => boolean | unknown;
-    nextRun: string | null;
-    lastRun: string | null;
-    status: 'active' | 'paused';
-    createdAt: string;
-  }
-  const cronTasks = new Map<string, CronTaskEntry>();
-
-  /** Compile a cron filter function */
-  function compileCronFilter(filterCode: string): () => boolean | unknown {
+  // Cron task management API — forwards to browser
+  app.get('/api/crontasks', async (_req, res) => {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-implied-eval
-      const fn = new Function(`return (${filterCode})();`) as () => boolean | unknown;
-      // Test that it's callable (dry run)
-      return fn;
+      const data = await sendLickRequest('list_crontasks', {});
+      res.json(data);
     } catch (err) {
-      throw new Error(`Invalid filter function: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(503).json({ error: err instanceof Error ? err.message : 'Browser not connected' });
     }
-  }
-
-  /** Calculate next cron run time */
-  function getNextCronTime(cron: string, from: Date): Date | null {
-    const parts = cron.trim().split(/\s+/);
-    if (parts.length !== 5) return null;
-
-    const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
-    const next = new Date(from);
-    next.setSeconds(0);
-    next.setMilliseconds(0);
-    next.setMinutes(next.getMinutes() + 1);
-
-    const cronFieldMatches = (value: number, field: string): boolean => {
-      if (field === '*') return true;
-      if (field.includes(',')) {
-        return field.split(',').some((f) => cronFieldMatches(value, f.trim()));
-      }
-      if (field.includes('-')) {
-        const [start, end] = field.split('-').map((n) => parseInt(n, 10));
-        return value >= start && value <= end;
-      }
-      if (field.includes('/')) {
-        const [base, step] = field.split('/');
-        const stepNum = parseInt(step, 10);
-        if (base === '*') return value % stepNum === 0;
-        const baseNum = parseInt(base, 10);
-        return value >= baseNum && (value - baseNum) % stepNum === 0;
-      }
-      return parseInt(field, 10) === value;
-    };
-
-    // Search up to 1 year
-    for (let i = 0; i < 527040; i++) {
-      if (
-        cronFieldMatches(next.getMinutes(), minute) &&
-        cronFieldMatches(next.getHours(), hour) &&
-        cronFieldMatches(next.getDate(), dayOfMonth) &&
-        cronFieldMatches(next.getMonth() + 1, month) &&
-        cronFieldMatches(next.getDay(), dayOfWeek)
-      ) {
-        return next;
-      }
-      next.setMinutes(next.getMinutes() + 1);
-    }
-    return null;
-  }
-
-  function generateCronTaskId(): string {
-    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    let id = '';
-    for (let i = 0; i < 12; i++) {
-      id += chars[Math.floor(Math.random() * chars.length)];
-    }
-    return id;
-  }
-
-  // Cron task management API
-  app.get('/api/crontasks', (_req, res) => {
-    const list = Array.from(cronTasks.values()).map((task) => ({
-      id: task.id,
-      name: task.name,
-      cron: task.cron,
-      scoop: task.scoop,
-      filter: task.filter,
-      nextRun: task.nextRun,
-      lastRun: task.lastRun,
-      status: task.status,
-      createdAt: task.createdAt,
-    }));
-    res.json(list);
   });
 
-  app.post('/api/crontasks', (req, res) => {
-    const body = req.body as { name?: string; cron?: string; filter?: string; scoop?: string };
-    const name = body.name;
-    const cron = body.cron;
-    const filterCode = body.filter;
-    const scoop = body.scoop;
-
-    if (!name) {
-      res.status(400).json({ error: 'name is required' });
-      return;
+  app.post('/api/crontasks', async (req, res) => {
+    try {
+      const data = await sendLickRequest('create_crontask', req.body);
+      res.json(data);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(msg.includes('Invalid') || msg.includes('required') ? 400 : 503).json({ error: msg });
     }
-    if (!cron) {
-      res.status(400).json({ error: 'cron is required' });
-      return;
-    }
-
-    // Validate cron expression
-    const nextRun = getNextCronTime(cron, new Date());
-    if (!nextRun) {
-      res.status(400).json({ error: 'Invalid cron expression' });
-      return;
-    }
-
-    // Compile filter if provided
-    let filterFn: (() => boolean | unknown) | undefined;
-    if (filterCode) {
-      try {
-        filterFn = compileCronFilter(filterCode);
-      } catch (err) {
-        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
-        return;
-      }
-    }
-
-    const id = generateCronTaskId();
-    const entry: CronTaskEntry = {
-      id,
-      name,
-      cron,
-      scoop,
-      filter: filterCode,
-      filterFn,
-      nextRun: nextRun.toISOString(),
-      lastRun: null,
-      status: 'active',
-      createdAt: new Date().toISOString(),
-    };
-    cronTasks.set(id, entry);
-    console.log(`[crontasks] Created task "${name}" with ID ${id} (${cron})${scoop ? ` -> ${scoop}` : ''}`);
-
-    res.json({
-      id: entry.id,
-      name: entry.name,
-      cron: entry.cron,
-      scoop: entry.scoop,
-      filter: entry.filter,
-      nextRun: entry.nextRun,
-      status: entry.status,
-      createdAt: entry.createdAt,
-    });
   });
 
-  app.delete('/api/crontasks/:id', (req, res) => {
-    const { id } = req.params;
-    if (!cronTasks.has(id)) {
-      res.status(404).json({ error: 'Cron task not found' });
-      return;
-    }
-    cronTasks.delete(id);
-    console.log(`[crontasks] Deleted task ${id}`);
-    res.json({ ok: true });
-  });
-
-  // Cron scheduler - checks every minute for due tasks
-  setInterval(() => {
-    const now = new Date();
-    for (const task of cronTasks.values()) {
-      if (task.status !== 'active') continue;
-      if (!task.nextRun) continue;
-
-      const nextRun = new Date(task.nextRun);
-      if (nextRun > now) continue;
-
-      // Task is due - run filter and dispatch
-      let payload: unknown = { time: now.toISOString() };
-      if (task.filterFn) {
-        try {
-          const result = task.filterFn();
-          if (result === false) {
-            console.log(`[crontasks] Task "${task.name}" (${task.id}) skipped by filter`);
-            // Update next run time even if skipped
-            const next = getNextCronTime(task.cron, now);
-            task.nextRun = next?.toISOString() ?? null;
-            task.lastRun = now.toISOString();
-            continue;
-          }
-          if (typeof result === 'object' && result !== null) {
-            payload = result;
-          }
-        } catch (err) {
-          console.error(`[crontasks] Filter error on "${task.name}" (${task.id}):`, err instanceof Error ? err.message : String(err));
-        }
+  app.delete('/api/crontasks/:id', async (req, res) => {
+    try {
+      const data = await sendLickRequest('delete_crontask', { id: req.params.id }) as { ok?: boolean; error?: string };
+      if (data.error) {
+        res.status(404).json({ error: data.error });
+      } else {
+        res.json(data);
       }
-
-      // Dispatch as a lick (similar to webhook events)
-      const event = {
-        type: 'cron',
-        cronId: task.id,
-        cronName: task.name,
-        targetScoop: task.scoop,
-        timestamp: now.toISOString(),
-        body: payload,
-      };
-
-      console.log(`[crontasks] Running task "${task.name}" (${task.id})`);
-      broadcastWebhookEvent(event); // Reuse webhook broadcast channel
-
-      // Update times
-      const next = getNextCronTime(task.cron, now);
-      task.nextRun = next?.toISOString() ?? null;
-      task.lastRun = now.toISOString();
+    } catch (err) {
+      res.status(503).json({ error: err instanceof Error ? err.message : 'Browser not connected' });
     }
-  }, 60000); // Check every minute
+  });
 
   // Fetch proxy — forwards cross-origin requests from the browser to bypass CORS.
   // Used by just-bash's curl which calls the browser's fetch() API.
@@ -827,9 +605,9 @@ async function main() {
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });
-    } else if (pathname === '/webhooks-ws') {
-      webhookWss.handleUpgrade(request, socket, head, (ws) => {
-        webhookWss.emit('connection', ws, request);
+    } else if (pathname === '/licks-ws') {
+      lickWss.handleUpgrade(request, socket, head, (ws) => {
+        lickWss.emit('connection', ws, request);
       });
     }
     // For other paths, do nothing — let Vite handle HMR upgrades

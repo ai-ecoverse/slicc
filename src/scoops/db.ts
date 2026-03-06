@@ -1,12 +1,13 @@
 /**
- * IndexedDB storage for scoops, messages, sessions, and tasks.
- * Schema v2: renamed from groups to scoops with type/isCone/assistantLabel fields.
+ * IndexedDB storage for scoops, messages, sessions, tasks, webhooks, and crontasks.
+ * Schema v3: added webhooks and crontasks stores.
  */
 
 import type { RegisteredScoop, ChannelMessage, ScheduledTask } from './types.js';
+import type { WebhookEntry, CronTaskEntry } from './lick-manager.js';
 
 const DB_NAME = 'slicc-groups';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 const STORES = {
   SCOOPS: 'scoops',
@@ -14,6 +15,8 @@ const STORES = {
   SESSIONS: 'sessions',
   TASKS: 'tasks',
   STATE: 'state',
+  WEBHOOKS: 'webhooks',
+  CRONTASKS: 'crontasks',
 } as const;
 
 let db: IDBDatabase | null = null;
@@ -96,6 +99,16 @@ async function openDB(): Promise<IDBDatabase> {
           // No old store, just create the new one
           const scoopsStore = database.createObjectStore(STORES.SCOOPS, { keyPath: 'jid' });
           scoopsStore.createIndex('type', 'type');
+        }
+      }
+
+      if (oldVersion < 3) {
+        // Add webhooks and crontasks stores
+        if (!database.objectStoreNames.contains(STORES.WEBHOOKS)) {
+          database.createObjectStore(STORES.WEBHOOKS, { keyPath: 'id' });
+        }
+        if (!database.objectStoreNames.contains(STORES.CRONTASKS)) {
+          database.createObjectStore(STORES.CRONTASKS, { keyPath: 'id' });
         }
       }
     };
@@ -302,4 +315,80 @@ export async function setState(key: string, value: string): Promise<void> {
 
 export async function initDB(): Promise<void> {
   await openDB();
+}
+
+// ─── Webhooks ───────────────────────────────────────────────────────────────
+
+export async function saveWebhook(webhook: WebhookEntry): Promise<void> {
+  const store = await getStore(STORES.WEBHOOKS, 'readwrite');
+  return new Promise((resolve, reject) => {
+    const req = store.put(webhook);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function getWebhook(id: string): Promise<WebhookEntry | null> {
+  const store = await getStore(STORES.WEBHOOKS);
+  return new Promise((resolve, reject) => {
+    const req = store.get(id);
+    req.onsuccess = () => resolve(req.result ?? null);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function getAllWebhooks(): Promise<WebhookEntry[]> {
+  const store = await getStore(STORES.WEBHOOKS);
+  return new Promise((resolve, reject) => {
+    const req = store.getAll();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function deleteWebhook(id: string): Promise<void> {
+  const store = await getStore(STORES.WEBHOOKS, 'readwrite');
+  return new Promise((resolve, reject) => {
+    const req = store.delete(id);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// ─── Cron Tasks ─────────────────────────────────────────────────────────────
+
+export async function saveCronTask(task: CronTaskEntry): Promise<void> {
+  const store = await getStore(STORES.CRONTASKS, 'readwrite');
+  return new Promise((resolve, reject) => {
+    const req = store.put(task);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function getCronTask(id: string): Promise<CronTaskEntry | null> {
+  const store = await getStore(STORES.CRONTASKS);
+  return new Promise((resolve, reject) => {
+    const req = store.get(id);
+    req.onsuccess = () => resolve(req.result ?? null);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function getAllCronTasks(): Promise<CronTaskEntry[]> {
+  const store = await getStore(STORES.CRONTASKS);
+  return new Promise((resolve, reject) => {
+    const req = store.getAll();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function deleteCronTask(id: string): Promise<void> {
+  const store = await getStore(STORES.CRONTASKS, 'readwrite');
+  return new Promise((resolve, reject) => {
+    const req = store.delete(id);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
 }
