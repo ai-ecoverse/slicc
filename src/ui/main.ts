@@ -278,17 +278,30 @@ async function main(): Promise<void> {
   }
 
   // Create cone if it doesn't exist
-  const scoops = orchestrator.getScoops();
-  const hasCone = scoops.some((s) => s.isCone);
+  const allScoops = orchestrator.getScoops();
+  const hasCone = allScoops.some((s) => s.isCone);
   if (!hasCone) {
     const cone = await layout.panels.scoops.createScoop('Cone', true);
     selectedScoop = cone;
     log.info('Created cone');
   } else {
-    selectedScoop = scoops.find((s) => s.isCone) ?? scoops[0];
+    // Check URL for selected scoop
+    const urlParams = new URLSearchParams(window.location.search);
+    const scoopFolder = urlParams.get('scoop');
+    if (scoopFolder) {
+      const urlScoop = allScoops.find(s => s.folder === scoopFolder);
+      if (urlScoop) {
+        selectedScoop = urlScoop;
+        log.info('Restored scoop from URL', { folder: scoopFolder });
+      } else {
+        selectedScoop = allScoops.find((s) => s.isCone) ?? allScoops[0];
+      }
+    } else {
+      selectedScoop = allScoops.find((s) => s.isCone) ?? allScoops[0];
+    }
   }
 
-  // Set initial scoop for memory panel
+  // Set initial scoop for memory panel and trigger scoop select
   if (selectedScoop) {
     layout.panels.memory.setSelectedScoop(selectedScoop.jid);
   }
@@ -518,9 +531,11 @@ async function main(): Promise<void> {
 
   layout.onScoopSelect = handleScoopSelect;
 
-  // Initialize the selected scoop's tab
+  // Initialize the selected scoop's tab and trigger initial load
   if (selectedScoop) {
     orchestrator.createScoopTab(selectedScoop.jid);
+    // Trigger scoop select to properly load the chat context
+    await handleScoopSelect(selectedScoop);
   }
 
   log.info('Orchestrator initialized — cone+scoops ready', { scoopCount: orchestrator.getScoops().length });

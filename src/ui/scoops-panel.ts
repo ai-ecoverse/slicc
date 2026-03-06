@@ -103,13 +103,6 @@ export class ScoopsPanel {
       statusEl.textContent = status;
       metaEl.appendChild(statusEl);
 
-      if (scoop.requiresTrigger) {
-        const triggerEl = document.createElement('span');
-        triggerEl.className = 'scoop-trigger';
-        triggerEl.textContent = scoop.trigger || `@${scoop.assistantLabel}`;
-        metaEl.appendChild(triggerEl);
-      }
-
       infoEl.appendChild(metaEl);
       item.appendChild(infoEl);
 
@@ -138,6 +131,30 @@ export class ScoopsPanel {
     this.selectedScoopJid = scoop.jid;
     this.refreshScoops();
     this.callbacks.onScoopSelect(scoop);
+
+    // Update URL state
+    const url = new URL(window.location.href);
+    if (scoop.isCone) {
+      url.searchParams.delete('scoop');
+    } else {
+      url.searchParams.set('scoop', scoop.folder);
+    }
+    history.replaceState(null, '', url.toString());
+  }
+
+  /** Select scoop by folder name (for URL restoration) */
+  selectScoopByFolder(folder: string): void {
+    if (!this.orchestrator) return;
+    const scoops = this.orchestrator.getScoops();
+    const scoop = scoops.find(s => s.folder === folder);
+    if (scoop) {
+      this.selectScoop(scoop);
+    }
+  }
+
+  /** Get selected scoop JID */
+  getSelectedScoopJid(): string | null {
+    return this.selectedScoopJid;
   }
 
   /** Delete a scoop */
@@ -372,10 +389,6 @@ export class ScoopsPanel {
       .scoop-item.status-error .scoop-status {
         background: #5a2d2d;
         color: #ee9090;
-      }
-
-      .scoop-trigger {
-        color: #6090c0;
       }
 
       .scoop-delete {
