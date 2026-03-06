@@ -91,16 +91,19 @@ Write clean code.
       expect(formatSkillsForPrompt([])).toBe('');
     });
 
-    it('formats a single skill', () => {
+    it('formats skill header with path for on-demand reading', () => {
       const result = formatSkillsForPrompt([{
         metadata: { name: 'test', description: 'A test skill' },
         content: 'Do the thing.',
         path: '/skills/test/SKILL.md',
       }]);
       expect(result).toContain('AVAILABLE SKILLS');
-      expect(result).toContain('## Skill: test');
+      expect(result).toContain('**test**');
       expect(result).toContain('A test skill');
-      expect(result).toContain('Do the thing.');
+      expect(result).toContain('Path: /skills/test/SKILL.md');
+      expect(result).toContain('read_file');
+      // Should NOT include full content
+      expect(result).not.toContain('Do the thing.');
     });
 
     it('includes allowed tools when present', () => {
@@ -112,13 +115,15 @@ Write clean code.
       expect(result).toContain('Allowed tools: browser, screenshot');
     });
 
-    it('formats multiple skills with separators', () => {
+    it('formats multiple skills as a list', () => {
       const result = formatSkillsForPrompt([
         { metadata: { name: 'a', description: 'A' }, content: 'A content', path: '/a' },
         { metadata: { name: 'b', description: 'B' }, content: 'B content', path: '/b' },
       ]);
-      expect(result).toContain('## Skill: a');
-      expect(result).toContain('## Skill: b');
+      expect(result).toContain('**a**');
+      expect(result).toContain('**b**');
+      expect(result).toContain('Path: /a');
+      expect(result).toContain('Path: /b');
     });
   });
 });

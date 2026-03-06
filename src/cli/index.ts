@@ -426,14 +426,21 @@ async function main() {
 
   // Fetch proxy — forwards cross-origin requests from the browser to bypass CORS.
   // Used by just-bash's curl which calls the browser's fetch() API.
-  // Note: We collect raw body manually to handle git protocol correctly.
+  // Note: express.json() may have already parsed the body, so we check req.body first.
   app.all('/api/fetch-proxy', async (req, res) => {
-    // Collect raw body manually (express.raw() doesn't handle all content types)
-    const chunks: Buffer[] = [];
-    for await (const chunk of req) {
-      chunks.push(Buffer.from(chunk));
+    // Get the body - either from express.json() parsed body or collect raw chunks
+    let rawBody: Buffer;
+    if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
+      // Body was already parsed by express.json() - re-serialize it
+      rawBody = Buffer.from(JSON.stringify(req.body), 'utf-8');
+    } else {
+      // Collect raw body manually (for non-JSON content types)
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) {
+        chunks.push(Buffer.from(chunk));
+      }
+      rawBody = Buffer.concat(chunks);
     }
-    const rawBody = Buffer.concat(chunks);
     const targetUrl = req.headers['x-target-url'] as string;
     if (!targetUrl) {
       res.status(400).json({ error: 'Missing X-Target-URL header' });

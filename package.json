@@ -24,6 +24,7 @@
     "buffer": "6.0.3",
     "express": "^4.21.2",
     "fflate": "^0.8.2",
+    "hast-util-sanitize": "5.0.2",
     "isomorphic-git": "1.37.2",
     "just-bash": "2.11.7",
     "rehype-raw": "7.0.0",

@@ -14,6 +14,14 @@ import type { VirtualFS } from '../fs/index.js';
 
 const log = createLogger('skills');
 
+// Load default skill files at build time using import.meta.glob
+// The 'as: raw' option imports file contents as strings
+const defaultSkillFiles = import.meta.glob('/src/defaults/**/*', { 
+  query: '?raw',
+  import: 'default',
+  eager: true 
+}) as Record<string, string>;
+
 export interface SkillMetadata {
   name: string;
   description: string;
@@ -132,92 +140,64 @@ export async function loadSkills(fs: VirtualFS, skillsDir: string): Promise<Skil
 }
 
 /**
- * Format skills into a system prompt section
+ * Format skills into a system prompt section.
+ * Only includes headers to preserve context - full content can be read on demand.
  */
 export function formatSkillsForPrompt(skills: Skill[]): string {
   if (skills.length === 0) return '';
 
   const sections = skills.map(skill => {
-    const header = `## Skill: ${skill.metadata.name}
-${skill.metadata.description}
-${skill.metadata.allowedTools ? `\nAllowed tools: ${skill.metadata.allowedTools.join(', ')}` : ''}
-
-`;
-    return header + skill.content;
+    const toolsLine = skill.metadata.allowedTools 
+      ? `  Allowed tools: ${skill.metadata.allowedTools.join(', ')}\n` 
+      : '';
+    return `- **${skill.metadata.name}**: ${skill.metadata.description}\n${toolsLine}  Path: ${skill.path}`;
   });
 
   return `
 ---
 AVAILABLE SKILLS
-The following skills are available to you. Use them when appropriate.
 
-${sections.join('\n\n---\n')}
+The following skills are available. To use a skill, first read its full instructions:
+  read_file({ "path": "<skill path>" })
+
+${sections.join('\n')}
 ---`;
 }
 
 /**
- * Create default skills for a scoop
+ * Create default files in VFS from bundled defaults.
+ * Files are loaded from src/defaults/ at build time via import.meta.glob.
  */
-export async function createDefaultSkills(fs: VirtualFS, skillsDir: string = '/workspace/.skills'): Promise<void> {
-  try {
-    await fs.mkdir(skillsDir, { recursive: true });
-  } catch {
-    // Directory exists
-  }
-
-  // Create browser skill
-  const browserSkill = `---
-name: browser
-description: Browse the web, interact with pages, take screenshots, extract data. The browser tool provides playwright-style automation.
-allowed-tools: browser
----
-
-# Web Browser Automation
-
-Use the \`browser\` tool to interact with web pages.
-
-## Available Actions
-
-- **navigate**: Go to a URL
-  \`\`\`json
-  { "action": "navigate", "url": "https://example.com" }
-  \`\`\`
-
-- **screenshot**: Capture the page
-  \`\`\`json
-  { "action": "screenshot" }
-  \`\`\`
-
-- **click**: Click an element
-  \`\`\`json
-  { "action": "click", "selector": "button.submit" }
-  \`\`\`
-
-- **type**: Enter text
-  \`\`\`json
-  { "action": "type", "selector": "input[name=email]", "text": "user@example.com" }
-  \`\`\`
-
-- **evaluate**: Run JavaScript
-  \`\`\`json
-  { "action": "evaluate", "code": "document.title" }
-  \`\`\`
-
-- **accessibility**: Get accessibility tree for understanding page structure
-
-## Workflow
-
-1. Navigate to the page
-2. Take a screenshot or get accessibility tree to understand the page
-3. Interact with elements
-4. Repeat as needed
-`;
-
-  try {
-    await fs.mkdir(`${skillsDir}/browser`, { recursive: true });
-    await fs.writeFile(`${skillsDir}/browser/SKILL.md`, browserSkill);
-    log.info('Created default browser skill');
-  } catch {
-    // Already exists
+export async function createDefaultSkills(fs: VirtualFS, skillsDir: string = '/workspace/skills'): Promise<void> {
+  const prefix = '/src/defaults';
+  
+  for (const [importPath, content] of Object.entries(defaultSkillFiles)) {
+    // Convert import path like '/src/defaults/workspace/skills/browser/SKILL.md'
+    // to VFS path like '/workspace/skills/browser/SKILL.md'
+    const vfsPath = importPath.slice(prefix.length);
+    
+    // Only copy files that belong under the skills directory
+    if (!vfsPath.startsWith('/workspace/skills')) continue;
+    
+    // Adjust path if skillsDir is different (e.g., for scoops)
+    const targetPath = skillsDir === '/workspace/skills' 
+      ? vfsPath 
+      : vfsPath.replace('/workspace/skills', skillsDir);
+    
+    try {
+      // Check if file already exists
+      await fs.stat(targetPath);
+      // File exists, skip
+    } catch {
+      // File doesn't exist, create it
+      const parentDir = targetPath.substring(0, targetPath.lastIndexOf('/'));
+      try {
+        await fs.mkdir(parentDir, { recursive: true });
+      } catch {
+        // Directory exists
+      }
+      await fs.writeFile(targetPath, content);
+      log.info('Created default file', { path: targetPath });
+    }
   }
 }
