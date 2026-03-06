@@ -6,3 +6,5 @@ export type {
   BlockInventoryEntry,
   ExtractionResult,
 } from './types.js';
+
+export { scanBlockInventory } from './block-inventory.js';
