@@ -25,6 +25,45 @@ npx vitest run src/fs/virtual-fs.test.ts  # Run a single test file
 
 Ports (CLI mode only): 3000 (UI server), 9222 (Chrome CDP), 24679 (Vite HMR WebSocket)
 
+## Philosophy
+
+Three foundational ideas:
+
+1. **The Claw Pattern (Steinberger-Karpathy)**: SLICC is a "claw" — a persistent orchestration layer on top of LLM agents. Claws add scheduling, messaging, event handling, and skills ecosystems on top of basic agent capabilities. The term was [coined by Andrej Karpathy](https://x.com/karpathy/status/2024987174077432126). [OpenClaw](https://github.com/openclaw/openclaw) (by Peter Steinberger) is the original implementation. SLICC is a claw that runs in the browser. The agent engine is [Pi](https://github.com/badlogic/pi-mono) by Mario Zechner (pi-agent-core, pi-ai).
+
+2. **Agents Love the CLI (Zechner)**: Pi has 4 tools: read, write, edit, bash. SLICC adds 1: browser. All other capabilities are shell commands (git, node, python, webhook, crontask, skill, upskill). When adding new capabilities, default to shell commands, not dedicated tools. MCP server definitions burn context tokens; CLI tools compose naturally. Zechner's principle: ["Bash is all you need."](https://mariozechner.at/posts/2025-11-02-what-if-you-dont-need-mcp/)
+
+3. **The Browser is the OS (Andreessen)**: All logic and state runs client-side. The server is a stateless relay for port listening, CDP launch, and CORS. When implementing new features, prefer browser-native APIs (IndexedDB, Service Workers, WASM, fetch). If the extension float (zero server) can't run it, question whether it belongs in the server.
+
+## Principles
+
+When making architectural decisions, apply these in order:
+
+1. **Virtual CLIs over dedicated tools** — New capabilities should be shell commands first. Only create a dedicated tool if the capability cannot work through bash (like browser automation requiring screenshot binary data).
+
+2. **Browser-first implementation** — State in IndexedDB. Logic in the client. The server only does what browsers physically cannot. Every line of server code is a line that doesn't work in the extension float.
+
+3. **Minimal server** — The extension float has zero server. That's the target for all floats. If you're adding server code, justify why the browser can't do it.
+
+4. **Skills over hardcoded features** — New agent capabilities should be SKILL.md files, not code changes. The core stays minimal. Skills are natural language instructions following the [Agent Skills standard](https://agentskills.io).
+
+## Concepts (Ice Cream Vocabulary)
+
+The codebase uses ice cream terminology consistently. When working on this code, use these terms:
+
+- **Cone**: The main agent ("sliccy"). Human's point of interaction. Full filesystem access, all tools. Orchestrates scoops. Code: `orchestrator.ts`, type `RegisteredScoop` with `isCone: true`.
+
+- **Scoops**: Isolated sub-agents. Each gets sandboxed filesystem (`/scoops/{name}/` + `/shared/`), own shell, own conversation. Created via `scoop_scoop`, fed instructions via `feed_scoop`, removed via `drop_scoop`. Code: `scoop-context.ts`, `restricted-fs.ts`.
+
+- **Licks**: External events that trigger scoops. Types: webhooks, cron tasks, browser events (planned). Unified under `LickManager` and `LickEvent`. Shell commands: `webhook`, `crontask`. A lick arrives, the scoop reacts — no human in the loop.
+
+- **Floats**: Runtime environments. Three exist:
+  - CLI float: Node.js/Express + Chrome. Code: `src/cli/`.
+  - Extension float: Chrome extension side panel, zero server. Code: `src/extension/`.
+  - Cloud float (planned): Cloudflare Containers or E2B sandboxes.
+
+When renaming or refactoring, prefer ice cream terms over technical jargon (e.g., "feed_scoop" not "delegate_to_scoop", "lick" not "event").
+
 ## Architecture
 
 Browser-based AI coding agent: a self-contained development environment where Claude writes code, runs shell commands, and automates browser tabs entirely within Chrome, without touching the host filesystem. Runs as a **Chrome extension** (side panel) or as a **standalone CLI** server.
@@ -60,8 +99,8 @@ Virtual Filesystem (src/fs/)
 SLICC uses an ice cream theme for its multi-agent system. The **cone** is the main assistant (sliccy) that holds everything together. **Scoops** are isolated agent contexts stacked on top, each with their own tools, shell, and restricted filesystem.
 
 - **Orchestrator** (`orchestrator.ts`): Creates/destroys scoop contexts, routes messages, manages the single shared VirtualFS, handles scoop completion notifications back to the cone.
-- **ScoopContext** (`scoop-context.ts`): Per-scoop agent instance with RestrictedFS, WasmShell, skills, and NanoClaw-style tools (send_message, schedule_task, delegate_to_scoop).
-- **Delegation**: The cone delegates work to scoops via the `delegate_to_scoop` tool, providing complete self-contained prompts (scoops have no access to the cone's conversation). When a scoop finishes, the orchestrator automatically routes its response back to the cone's message queue.
+- **ScoopContext** (`scoop-context.ts`): Per-scoop agent instance with RestrictedFS, WasmShell, skills, and NanoClaw-style tools (send_message).
+- **Delegation**: The cone feeds work to scoops via the `feed_scoop` tool, providing complete self-contained prompts (scoops have no access to the cone's conversation). When a scoop finishes, the orchestrator automatically routes its response back to the cone's message queue.
 - **Unified Filesystem**: One VirtualFS (`slicc-fs` IndexedDB). Cone gets unrestricted access. Each scoop gets a `RestrictedFS` limited to `/scoops/{name}/` + `/shared/`. Parent directory traversal is allowed for `stat`/`exists` (so `cd` works), but reads/writes outside the sandbox are blocked.
 - **DB** (`db.ts`): IndexedDB schema v2 with `scoops`, `messages`, `sessions`, `tasks`, `state` stores. Migration from v1 groups schema.
 
@@ -125,7 +164,7 @@ BrowserAPI: high-level Playwright-style API built on either transport (listPages
 ### Tools (src/tools/)
 All tools use the legacy ToolDefinition interface (name, description, inputSchema, execute). Active agent tools: bash, read_file, write_file, edit_file, browser (with sub-actions), javascript. Factory functions take their dependency (VirtualFS, WasmShell, or BrowserAPI).
 
-**NanoClaw tools** (src/scoops/nanoclaw-tools.ts): Per-scoop tools for messaging and scheduling — `send_message`, `schedule_task`, `list_tasks`, `pause_task`, `resume_task`, `cancel_task`. Cone-only tools: `list_scoops`, `register_scoop`, `delegate_to_scoop`, `update_global_memory`.
+**NanoClaw tools** (src/scoops/nanoclaw-tools.ts): Per-scoop tools for messaging — `send_message`. Cone-only tools: `list_scoops`, `scoop_scoop` (create), `feed_scoop` (delegate), `drop_scoop` (remove), `update_global_memory`. Task scheduling moved to the `crontask` shell command.
 
 **Browser tool enhancements:**
 - `screenshot` action now supports `path` (save PNG to VFS), `fullPage` (capture entire scrollable page), and `selector` (capture just one element)
@@ -191,7 +230,7 @@ User -> ChatPanel -> AgentHandle.sendMessage()
     -> Scoop completes -> Orchestrator notification -> Cone's message queue -> Cone reacts
 
 Delegation:
-  Cone -> delegate_to_scoop tool -> Orchestrator.delegateToScoop()
+  Cone -> feed_scoop tool -> Orchestrator.delegateToScoop()
     -> ScoopContext.prompt() (with full context from cone) -> ... -> completion notification -> Cone
 ```
 

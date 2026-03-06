@@ -40,6 +40,78 @@ In this case: an AI coding agent that was *built by* AI coding agents, creating 
 
 The ultimate recursive dev tool.
 
+## Philosophy
+
+Three ideas shape how SLICC is built.
+
+### A Claw is an Architectural Pattern on Top of Agents
+
+Andrej Karpathy [coined the term "claw"](https://x.com/karpathy/status/2024987174077432126) to describe a new layer emerging on top of LLM agents: persistent execution, messaging-based interfaces, scheduling, and a skills ecosystem. As he put it:
+
+> *"Just like LLM agents were a new layer on top of LLMs, Claws are now a new layer on top of LLM agents, taking the orchestration, scheduling, context, tool calls and a kind of persistence to a next level."*
+
+Peter Steinberger built [OpenClaw](https://github.com/openclaw/openclaw), the project that started the movement — a 400K-line TypeScript agent running on personal hardware. [NanoClaw](https://github.com/qwibitai/nanoclaw) took the opposite path: a lightweight alternative that strips the concept down to its essentials.
+
+SLICC is a claw too, but one that lives entirely in the browser. Its messaging and orchestration tools (`send_message` for per-scoop messaging, `feed_scoop` for cone-level delegation) follow NanoClaw-style messaging patterns — small, composable, no heavyweight runtime required. The cone orchestrates, the scoops execute, and the whole thing fits in a Chrome side panel.
+
+### Agents Love the CLI, So Give Them CLIs
+
+Mario Zechner, creator of [Pi](https://github.com/badlogic/pi-mono) (the agent engine at SLICC's core), demonstrated that [you might not need MCP at all](https://mariozechner.at/posts/2025-11-02-what-if-you-dont-need-mcp/). His philosophy: "Bash is all you need." Frontier models already know bash. CLI tools compose naturally through pipes and redirection. MCP server definitions burn context tokens on ceremony.
+
+Pi ships with exactly four tools: `read`, `write`, `edit`, `bash`. SLICC adds one more — `browser` — because the browser is our operating system. Everything else is a shell command: `git`, `node`, `python3`, `webhook`, `crontask`, `skill`, `upskill`. No tool wrappers, no protocol adapters, no JSON schemas for things that already have man pages.
+
+Further reading:
+- [Pi: A Coding Agent](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/)
+- [What if You Don't Need MCP?](https://mariozechner.at/posts/2025-11-02-what-if-you-dont-need-mcp/)
+- [MCP vs CLI](https://mariozechner.at/posts/2025-08-15-mcp-vs-cli/)
+- [Syntax.fm #976: Pi — the AI Harness that Powers OpenClaw](https://syntax.fm/show/976/pi-the-ai-harness-that-powers-openclaw-w-armin-ronacher-and-mario-zechner)
+
+### Browsers Are the Operating Systems of the Present
+
+Marc Andreessen's Netscape-era vision — that Windows was "a poorly debugged set of device drivers" — has been [proven right](https://a16z.com/the-rise-of-computer-use-and-agentic-coworkers/). Everything that matters today runs in a browser, or in an Electron app (which is a browser in a trench coat).
+
+SLICC takes this literally: the virtual filesystem, the shell, git, the agent loop, the tools — all run client-side. The server is a dumb pipe that does only what the browser physically cannot: listen on a port, control its own debug protocol, loosen CORS restrictions. If you think the server is already minimal, it's probably still too big.
+
+---
+
+## Principles
+
+1. **Virtual CLIs over dedicated tools** — Don't build a tool when a shell command will do. Models already know bash, and CLI commands compose naturally through pipes and redirection. New capabilities should be shell commands first, dedicated tools only when absolutely necessary.
+
+2. **Whatever the browser can do, the browser should do** — State lives in IndexedDB. Logic runs in the client. The server is a stateless relay for the things browsers physically can't do (port listening, CDP launch, CORS). When in doubt, move it to the browser.
+
+3. **If you think the server is minimal enough, it's still too big** — Every line of server code is a line that doesn't work in the extension. The extension float has zero server. That's the target.
+
+4. **Everything should be a skill** — New capabilities are `SKILL.md` files written in natural language, installed through `upskill` and [ClawHub](https://clawhub.io). The core stays minimal. Skills follow the [Agent Skills](https://agentskills.io) open standard. Ship a few defaults, let the ecosystem grow.
+
+---
+
+## Concepts
+
+Ice cream terminology first, technical explanation second.
+
+### The Cone
+
+The cone is the main agent — it's what the human holds in their hands. Named "sliccy," the cone is the primary point of interaction: it talks to you, understands your context, and orchestrates everything. It has full access to the filesystem and all tools. Think of it as the waffle cone: structurally essential, always there, holds everything together.
+
+### Scoops
+
+Scoops are the real attraction. Each scoop is an isolated sub-agent stacked on the cone, with its own conversation history, sandboxed filesystem (`/scoops/{name}/` + `/shared/`), shell, and tools. The cone feeds them instructions via `feed_scoop` and they do the work independently. When a scoop finishes, the cone gets notified automatically. No polling, no schedulers — the cone delegates, the scoops deliver.
+
+### Licks
+
+Licks are events that come from the outside world and make scoops react. A webhook payload arrives — that's a lick. A cron task fires — that's a lick. An IntersectionObserver triggers in a browser tab — that could be a lick too. Licks are the mechanism that makes SLICC more than a chatbot: they let scoops respond to the world without human prompting. Currently implemented as webhooks and cron tasks (via the `webhook` and `crontask` shell commands), with more event sources planned.
+
+### Floats
+
+A float is the environment the ice cream sits in — like a root beer float. It's the runtime that keeps everything running. Three floats exist today (two implemented, one planned):
+
+- **CLI float** — A thin Node.js/Express server that launches Chrome, proxies CDP, and serves the UI. For local development.
+- **Extension float** — A Chrome extension side panel. Zero server. The purest expression of the "browser is the OS" philosophy.
+- **Cloud float** *(planned)* — Cloud containers (Cloudflare Containers, E2B) that provide real filesystems, real shells, and real browsers. For persistent, always-on agents that don't need your laptop running.
+
+---
+
 ## The Moment It Licked Itself
 
 These screenshots capture a historic moment: **SLICC using browser automation to talk to Claude.ai in another tab**.
@@ -71,28 +143,6 @@ SLICC is a working prototype with these capabilities:
 - **Multi-provider auth** (Anthropic, Azure AI Foundry, Azure OpenAI, AWS Bedrock, and more)
 
 Current development is happening on feature branches using [yolo](https://github.com/ai-ecoverse/yolo) for worktree isolation, with Claude agents building the features autonomously.
-
-## The Cone & Scoops
-
-Every ice cream cone needs scoops. SLICC takes that literally.
-
-The **cone** is sliccy — the main assistant that talks to you, holds the conversation context, and keeps everything from melting. It has full access to the filesystem and all the tools. Think of it as the waffle cone: structurally essential, always there, holds everything together.
-
-**Scoops** are independent agent contexts stacked on top. Each scoop gets its own flavor:
-- Its own agent instance and conversation history
-- A **sandboxed filesystem** (`/scoops/{name}/` + `/shared/`) — can't touch other scoops' files
-- Its own shell, tools, and memory
-- A fun name like `andy-scoop` or `test-scoop`
-
-**How they work together:**
-
-1. You ask the cone: *"tell @test-scoop to download all images from this website"*
-2. The cone understands your context, composes a clear self-contained prompt, and uses `delegate_to_scoop` to hand off the work
-3. The scoop works independently — browses, downloads, saves files
-4. When the scoop finishes, the cone **automatically gets notified** with the results
-5. The cone acts on those results — moves files, summarizes, reports back to you
-
-No polling. No schedulers. The cone delegates, the scoops deliver, and the cone reacts. Like a well-run ice cream shop.
 
 ### The Moment the Scoops Got Existential
 
