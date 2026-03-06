@@ -109,16 +109,44 @@ export function createConvertCommand(name: string = 'convert'): Command {
     while (i < args.length) {
       const arg = args[i];
 
-      if (arg === '-resize' && i + 1 < args.length) {
+      if (arg === '-resize') {
+        if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+          return {
+            stdout: '',
+            stderr: `${name}: missing argument for -resize\n`,
+            exitCode: 1,
+          };
+        }
         operations.push({ type: 'resize', value: args[i + 1] });
         i += 2;
-      } else if (arg === '-rotate' && i + 1 < args.length) {
+      } else if (arg === '-rotate') {
+        if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+          return {
+            stdout: '',
+            stderr: `${name}: missing argument for -rotate\n`,
+            exitCode: 1,
+          };
+        }
         operations.push({ type: 'rotate', value: args[i + 1] });
         i += 2;
-      } else if (arg === '-crop' && i + 1 < args.length) {
+      } else if (arg === '-crop') {
+        if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+          return {
+            stdout: '',
+            stderr: `${name}: missing argument for -crop\n`,
+            exitCode: 1,
+          };
+        }
         operations.push({ type: 'crop', value: args[i + 1] });
         i += 2;
-      } else if (arg === '-quality' && i + 1 < args.length) {
+      } else if (arg === '-quality') {
+        if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+          return {
+            stdout: '',
+            stderr: `${name}: missing argument for -quality\n`,
+            exitCode: 1,
+          };
+        }
         operations.push({ type: 'quality', value: args[i + 1] });
         i += 2;
       } else if (arg.startsWith('-')) {
@@ -133,16 +161,16 @@ export function createConvertCommand(name: string = 'convert'): Command {
       }
     }
 
-    if (positional.length < 2) {
+    if (positional.length !== 2) {
       return {
         stdout: '',
-        stderr: `${name}: expected input and output file\n`,
+        stderr: `${name}: expected exactly one input file and one output file\n`,
         exitCode: 1,
       };
     }
 
     const inputPath = positional[0];
-    const outputPath = positional[positional.length - 1];
+    const outputPath = positional[1];
 
     try {
       // Read input file

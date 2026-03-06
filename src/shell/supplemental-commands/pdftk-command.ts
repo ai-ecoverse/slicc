@@ -43,7 +43,7 @@ function parseRotationSuffix(range: string): { range: string; rotation?: 90 | 27
   return { range };
 }
 
-function parsePageRange(rangeStr: string, totalPages: number): PageRange {
+function parsePageRange(rangeStr: string): PageRange {
   const { range, rotation } = parseRotationSuffix(rangeStr);
 
   // Single page
@@ -87,7 +87,7 @@ function expandPageRange(range: PageRange, totalPages: number): number[] {
   return pages;
 }
 
-function pdftKHelp(): { stdout: string; stderr: string; exitCode: number } {
+function pdftkHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout: `usage: pdftk <input.pdf> <operation> [args...]
 
@@ -122,7 +122,7 @@ Page ranges:
 export function createPdftkCommand(name: string = 'pdftk'): Command {
   return defineCommand(name, async (args, ctx) => {
     if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
-      return pdftKHelp();
+      return pdftkHelp();
     }
 
     try {
@@ -314,7 +314,7 @@ export function createPdftkCommand(name: string = 'pdftk'): Command {
           }
 
           const totalPages = defaultDoc.getPageCount();
-          const range = parsePageRange(spec, totalPages);
+          const range = parsePageRange(spec);
           const pageNumbers = expandPageRange(range, totalPages);
 
           // Convert to 0-based indices
@@ -382,7 +382,7 @@ export function createPdftkCommand(name: string = 'pdftk'): Command {
         const rotations = new Map<number, number>();
 
         for (const spec of rangeSpecs) {
-          const range = parsePageRange(spec, totalPages);
+          const range = parsePageRange(spec);
           if (!range.rotation) {
             return {
               stdout: '',

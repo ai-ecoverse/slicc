@@ -67,7 +67,35 @@ describe('convert argument parsing errors', () => {
     const cmd = createConvertCommand();
     const result = await cmd.execute(['input.png'], createMockCtx());
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('expected input and output file');
+    expect(result.stderr).toContain('expected exactly one input file and one output file');
+  });
+
+  it('errors when more than 2 positional args are provided', async () => {
+    const cmd = createConvertCommand();
+    const result = await cmd.execute(['input.png', 'extra.png', 'output.png'], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('expected exactly one input file and one output file');
+  });
+
+  it('errors when -resize is missing argument', async () => {
+    const cmd = createConvertCommand();
+    const result = await cmd.execute(['input.png', '-resize'], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('missing argument for -resize');
+  });
+
+  it('errors when -rotate is missing argument (followed by another flag)', async () => {
+    const cmd = createConvertCommand();
+    const result = await cmd.execute(['input.png', '-rotate', '-quality', '80', 'output.png'], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('missing argument for -rotate');
+  });
+
+  it('errors when -rotate is missing argument (at end)', async () => {
+    const cmd = createConvertCommand();
+    const result = await cmd.execute(['input.png', 'output.png', '-rotate'], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('missing argument for -rotate');
   });
 
   it('errors on unsupported option', async () => {
@@ -81,7 +109,7 @@ describe('convert argument parsing errors', () => {
     const cmd = createConvertCommand('magick');
     const result = await cmd.execute(['input.png'], createMockCtx());
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('magick: expected input and output file');
+    expect(result.stderr).toContain('magick: expected exactly one input file and one output file');
   });
 
   it('errors when input file does not exist', async () => {
