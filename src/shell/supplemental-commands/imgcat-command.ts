@@ -17,7 +17,7 @@ export interface ImgcatCommandOptions {
 
 function imgcatHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
-    stdout: `imgcat - preview image and video files in the terminal pane
+    stdout: `imgcat - preview image and video files in the preview tab
 
 Usage: imgcat <path> [path...]
 

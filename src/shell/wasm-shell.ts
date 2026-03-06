@@ -146,6 +146,8 @@ export class WasmShell {
   private terminalHost: HTMLElement | null = null;
   private previewHost: HTMLElement | null = null;
   private previewUrls: string[] = [];
+  private previewStateListener: ((hasPreview: boolean) => void) | null = null;
+  private hasPreview = false;
   private resizeObserver: ResizeObserver | null = null;
   private currentLine = '';
   private cursorPos = 0;
@@ -328,6 +330,11 @@ export class WasmShell {
   /** Re-fit the terminal to its host container. */
   refit(): void {
     this.fitAddon?.fit();
+  }
+
+  setPreviewStateListener(listener: ((hasPreview: boolean) => void) | null): void {
+    this.previewStateListener = listener;
+    this.previewStateListener?.(this.hasPreview);
   }
 
   /**
@@ -787,9 +794,12 @@ export class WasmShell {
       URL.revokeObjectURL(url);
     }
     this.previewUrls = [];
-    if (!this.previewHost) return;
-    this.previewHost.replaceChildren();
-    this.previewHost.classList.remove('terminal-panel__preview--visible');
+    this.hasPreview = false;
+    if (this.previewHost) {
+      this.previewHost.replaceChildren();
+      this.previewHost.classList.remove('terminal-panel__preview--visible');
+    }
+    this.previewStateListener?.(false);
   }
 
   private async renderMediaPreview(items: MediaPreviewItem[]): Promise<void> {
@@ -835,6 +845,8 @@ export class WasmShell {
     }
 
     this.previewHost.classList.add('terminal-panel__preview--visible');
+    this.hasPreview = items.length > 0;
+    this.previewStateListener?.(this.hasPreview);
     requestAnimationFrame(() => this.refit());
   }
 }
