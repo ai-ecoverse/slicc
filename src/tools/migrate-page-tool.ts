@@ -7,7 +7,7 @@
  */
 
 import type { BrowserAPI } from '../cdp/index.js';
-import type { VirtualFS } from '../fs/index.js';
+import { VirtualFS } from '../fs/index.js';
 import type { ToolDefinition, ToolResult } from '../core/types.js';
 import type { ExtractionResult } from '../migration/types.js';
 import { GitCommands } from '../git/git-commands.js';
@@ -38,10 +38,30 @@ export interface GitOps {
   checkoutNewBranch(dir: string, branch: string): Promise<void>;
 }
 
+async function readGithubToken(): Promise<string | undefined> {
+  try {
+    const globalFs = await VirtualFS.create({
+      dbName: 'slicc-fs-global',
+    });
+    const token = (
+      await globalFs.readFile('/workspace/.git/github-token', {
+        encoding: 'utf-8',
+      })
+    ) as string;
+    return token.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function createDefaultGitOps(fs: VirtualFS): GitOps {
   return {
     async clone(repo: string, dest: string): Promise<void> {
-      const gitUrl = `https://github.com/${repo}.git`;
+      const token = await readGithubToken();
+      const host = token
+        ? `x-access-token:${token}@github.com`
+        : 'github.com';
+      const gitUrl = `https://${host}/${repo}.git`;
       const git = new GitCommands({ fs });
       const result = await git.execute(
         ['clone', gitUrl, dest, '--depth', '1'],
