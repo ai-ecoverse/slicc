@@ -84,6 +84,10 @@ SLICC takes this literally: the virtual filesystem, the shell, git, the agent lo
 
 4. **Everything should be a skill** — New capabilities are `SKILL.md` files written in natural language, installed through `upskill` and [ClawHub](https://clawhub.io). The core stays minimal. Skills follow the [Agent Skills](https://agentskills.io) open standard. Ship a few defaults, let the ecosystem grow.
 
+| Skills | Capabilities |
+|--------|-------------|
+| ![Skill management](screenshots/skill-management.png) | ![Image generation via Canvas API](screenshots/image-generation.png) |
+
 ---
 
 ## Concepts
@@ -98,9 +102,13 @@ The cone is the main agent — it's what the human holds in their hands. Named "
 
 Scoops are the real attraction. Each scoop is an isolated sub-agent stacked on the cone, with its own conversation history, sandboxed filesystem (`/scoops/{name}/` + `/shared/`), shell, and tools. The cone feeds them instructions via `feed_scoop` and they do the work independently. When a scoop finishes, the cone gets notified automatically. No polling, no schedulers — the cone delegates, the scoops deliver.
 
+![A scoop receiving webhook events](screenshots/scoop-webhook-events.png)
+
 ### Licks
 
 Licks are events that come from the outside world and make scoops react. A webhook payload arrives — that's a lick. A cron task fires — that's a lick. An IntersectionObserver triggers in a browser tab — that could be a lick too. Licks are the mechanism that makes SLICC more than a chatbot: they let scoops respond to the world without human prompting. Currently implemented as webhooks and cron tasks (via the `webhook` and `crontask` shell commands), with more event sources planned.
+
+![The cone setting up a click detection experiment with webhooks and scoops](screenshots/licks-click-detection.png)
 
 ### Floats
 
