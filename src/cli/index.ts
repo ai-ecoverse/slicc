@@ -313,8 +313,23 @@ async function main() {
     id: string;
     name: string;
     createdAt: string;
+    filter?: string; // JS filter function code
+    filterFn?: (event: unknown) => boolean | unknown; // Compiled filter function
   }
   const webhooks = new Map<string, WebhookEntry>();
+
+  /** Compile a filter function from user-provided code */
+  function compileWebhookFilter(filterCode: string): (event: unknown) => boolean | unknown {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-implied-eval
+      const fn = new Function('event', `return (${filterCode})(event);`) as (event: unknown) => boolean | unknown;
+      // Test that it's callable
+      fn({});
+      return fn;
+    } catch (err) {
+      throw new Error(`Invalid filter function: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   // WebSocket for broadcasting webhook events to the browser
   const webhookWss = new WebSocketServer({ noServer: true });
@@ -352,24 +367,46 @@ async function main() {
 
   app.get('/api/webhooks', (_req, res) => {
     const list = Array.from(webhooks.values()).map((wh) => ({
-      ...wh,
+      id: wh.id,
+      name: wh.name,
+      createdAt: wh.createdAt,
+      filter: wh.filter,
       url: `http://localhost:${SERVE_PORT}/webhooks/${wh.id}`,
     }));
     res.json(list);
   });
 
   app.post('/api/webhooks', (req, res) => {
-    const name = (req.body as { name?: string }).name || 'default';
+    const body = req.body as { name?: string; filter?: string };
+    const name = body.name || 'default';
+    const filterCode = body.filter;
     const id = generateWebhookId();
+
+    // Compile filter if provided
+    let filterFn: ((event: unknown) => boolean | unknown) | undefined;
+    if (filterCode) {
+      try {
+        filterFn = compileWebhookFilter(filterCode);
+      } catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+        return;
+      }
+    }
+
     const entry: WebhookEntry = {
       id,
       name,
       createdAt: new Date().toISOString(),
+      filter: filterCode,
+      filterFn,
     };
     webhooks.set(id, entry);
-    console.log(`[webhooks] Created webhook "${name}" with ID ${id}`);
+    console.log(`[webhooks] Created webhook "${name}" with ID ${id}${filterCode ? ' (with filter)' : ''}`);
     res.json({
-      ...entry,
+      id: entry.id,
+      name: entry.name,
+      createdAt: entry.createdAt,
+      filter: entry.filter,
       url: `http://localhost:${SERVE_PORT}/webhooks/${id}`,
     });
   });
@@ -409,7 +446,7 @@ async function main() {
       }
     }
 
-    const event = {
+    let event: unknown = {
       type: 'webhook',
       webhookId: id,
       webhookName: webhook.name,
@@ -417,6 +454,24 @@ async function main() {
       headers: req.headers,
       body,
     };
+
+    // Apply filter if defined
+    if (webhook.filterFn) {
+      try {
+        const result = webhook.filterFn(event);
+        if (result === false) {
+          console.log(`[webhooks] Event on "${webhook.name}" (${id}) dropped by filter`);
+          res.json({ ok: true, received: true, filtered: true });
+          return;
+        }
+        if (typeof result === 'object' && result !== null) {
+          event = result;
+        }
+      } catch (err) {
+        console.error(`[webhooks] Filter error on "${webhook.name}" (${id}):`, err instanceof Error ? err.message : String(err));
+        // Continue with original event on filter error
+      }
+    }
 
     console.log(`[webhooks] Received event on "${webhook.name}" (${id})`);
     broadcastWebhookEvent(event);

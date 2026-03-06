@@ -6,12 +6,18 @@ function webhookHelp(): { stdout: string; stderr: string; exitCode: number } {
     stdout: `usage: webhook <command> [options]
 
 Commands:
-  create [--name <name>]   Create a new webhook endpoint
-  list                     List all active webhooks
-  delete <id>              Delete a webhook by ID
+  create [--name <name>] [--filter <code>]   Create a new webhook endpoint
+  list                                        List all active webhooks
+  delete <id>                                 Delete a webhook by ID
+
+Options:
+  --filter <code>   JS filter function: (event) => false (drop), true (keep), or object (transform)
+                    The event has: type, webhookId, webhookName, timestamp, headers, body
 
 Examples:
   webhook create --name bluebubbles
+  webhook create --name github --filter "(e) => e.body.action === 'opened'"
+  webhook create --name slack --filter "(e) => ({ text: e.body.text, user: e.body.user })"
   webhook list
   webhook delete abc123
 `,
@@ -25,6 +31,7 @@ interface WebhookInfo {
   name: string;
   url: string;
   createdAt: string;
+  filter?: string;
 }
 
 async function apiCall(
@@ -64,12 +71,19 @@ export function createWebhookCommand(): Command {
       switch (subcommand) {
         case 'create': {
           let name = 'default';
+          let filter: string | undefined;
+
           const nameIdx = args.indexOf('--name');
           if (nameIdx !== -1 && args[nameIdx + 1]) {
             name = args[nameIdx + 1];
           }
 
-          const { ok, data } = await apiCall('POST', '', { name });
+          const filterIdx = args.indexOf('--filter');
+          if (filterIdx !== -1 && args[filterIdx + 1]) {
+            filter = args[filterIdx + 1];
+          }
+
+          const { ok, data } = await apiCall('POST', '', { name, filter });
           if (!ok) {
             return {
               stdout: '',
@@ -79,8 +93,12 @@ export function createWebhookCommand(): Command {
           }
 
           const info = data as WebhookInfo;
+          let output = `Created webhook "${info.name}"\nID:  ${info.id}\nURL: ${info.url}\n`;
+          if (info.filter) {
+            output += `Filter: ${info.filter}\n`;
+          }
           return {
-            stdout: `Created webhook "${info.name}"\nID:  ${info.id}\nURL: ${info.url}\n`,
+            stdout: output,
             stderr: '',
             exitCode: 0,
           };
@@ -107,7 +125,11 @@ export function createWebhookCommand(): Command {
 
           let output = 'Active webhooks:\n';
           for (const wh of webhooks) {
-            output += `  ${wh.id}  ${wh.name.padEnd(20)}  ${wh.url}\n`;
+            output += `  ${wh.id}  ${wh.name.padEnd(20)}  ${wh.url}`;
+            if (wh.filter) {
+              output += `  [filtered]`;
+            }
+            output += '\n';
           }
           return {
             stdout: output,
