@@ -522,7 +522,11 @@ export class ChatPanel {
       el.appendChild(contentEl);
     }
 
-    wrapper.appendChild(el);
+    // Only show the message bubble if there's actual content
+    const hasContent = msg.content.trim().length > 0;
+    if (hasContent) {
+      wrapper.appendChild(el);
+    }
 
     // Tool calls rendered outside the message bubble for compact display
     if (msg.toolCalls) {
