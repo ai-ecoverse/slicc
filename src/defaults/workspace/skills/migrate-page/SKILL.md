@@ -59,9 +59,13 @@ Download images from the source page to the EDS project and use **relative paths
    <img src="./images/hero.jpg" alt="Hero">
    ```
 
-3. **Preview works automatically**: when the project is served via `browser serve "/shared/{repo-name}/"`, relative paths resolve through the preview service worker. For example, `./images/hero.jpg` resolves to `/preview/shared/{repo-name}/images/hero.jpg` which the SW serves from VFS.
+3. **Preview with EDS mode**: serve the project with `edsProject: true` so root-relative paths (`/styles/`, `/scripts/`, `/blocks/`) resolve correctly — this emulates `aem up`:
+   ```json
+   { "action": "serve", "directory": "/shared/{repo-name}", "entry": "drafts/index.html", "edsProject": true }
+   ```
+   Content HTML and images go in the `drafts/` subfolder (like `aem up --html-folder drafts`).
 
-**Do NOT use absolute VFS paths** like `/shared/{repo-name}/images/hero.jpg` in HTML `src` attributes — these resolve to the slicc UI server, not the preview SW.
+**Do NOT use absolute VFS paths** like `/shared/{repo-name}/images/hero.jpg` in HTML `src` attributes — use paths relative to the EDS project root (e.g., `/drafts/images/hero.jpg`).
 
 ---
 
@@ -320,7 +324,7 @@ For each iteration:
 
 1. **Serve the preview:**
    ```json
-   browser({{ "action": "serve", "directory": "/", "entry": "migration/{page-path}/blocks/{blockName}.plain.html" }})
+   browser({{ "action": "serve", "directory": "/shared/{repo-name}", "entry": "drafts/{blockName}.plain.html", "edsProject": true }})
    ```
 
 2. **Screenshot the source component region:**

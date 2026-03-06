@@ -1,5 +1,11 @@
 /**
- * Preview Service Worker — intercepts /preview/* requests and serves VFS content.
+ * Preview Service Worker — intercepts requests and serves VFS content.
+ *
+ * Two modes:
+ * 1. /preview/* requests — always intercepted, VFS path = pathname minus "/preview"
+ * 2. EDS project mode — when a project root is set via postMessage, ALL requests
+ *    from the project's tab are intercepted. Root-relative paths (/styles/styles.css)
+ *    resolve against the VFS project root. This emulates `aem up` for EDS previews.
  *
  * Built as a separate entry point (not bundled with the main app).
  * Reads directly from LightningFS IndexedDB (same DB as VirtualFS).
@@ -11,6 +17,12 @@ import FS from '@isomorphic-git/lightning-fs';
 
 const DB_NAME = 'slicc-fs';
 let lfs: FS.PromisifiedFS | null = null;
+
+/**
+ * Active EDS project root in VFS (e.g., "/shared/vibemigrated").
+ * When set, root-relative requests resolve against this path.
+ */
+let edsProjectRoot: string | null = null;
 
 function getLFS(): FS.PromisifiedFS {
   if (!lfs) {
@@ -29,7 +41,7 @@ function getMimeType(filePath: string): string {
     json: 'application/json',
     svg: 'image/svg+xml',
     png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
-    gif: 'image/gif', webp: 'image/webp', ico: 'image/x-icon',
+    gif: 'image/gif', webp: 'image/webp', ico: 'image/x-icon', avif: 'image/avif',
     woff: 'font/woff', woff2: 'font/woff2', ttf: 'font/ttf',
     mp3: 'audio/mpeg', mp4: 'video/mp4', webm: 'video/webm',
     pdf: 'application/pdf', txt: 'text/plain', xml: 'application/xml',
@@ -89,10 +101,41 @@ sw.addEventListener('activate', (event) => {
   event.waitUntil(sw.clients.claim());
 });
 
+// Listen for project root configuration from the browser tool
+sw.addEventListener('message', (event) => {
+  if (event.data?.type === 'set-eds-project-root') {
+    edsProjectRoot = event.data.root || null;
+    console.log('[preview-sw] EDS project root:', edsProjectRoot);
+  }
+});
+
+/**
+ * Paths that should NOT be intercepted in EDS mode — they belong to
+ * the slicc app itself (Vite HMR, API endpoints, slicc UI assets).
+ */
+function isSliccAppPath(pathname: string): boolean {
+  return pathname.startsWith('/@') ||
+    pathname.startsWith('/__') ||
+    pathname.startsWith('/api/') ||
+    pathname.startsWith('/src/') ||
+    pathname.startsWith('/node_modules/') ||
+    pathname === '/' ||
+    pathname === '/index.html';
+}
+
 sw.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-  if (!url.pathname.startsWith('/preview/')) return;
 
-  const vfsPath = url.pathname.slice('/preview'.length);
-  event.respondWith(handlePreviewRequest(vfsPath));
+  // Mode 1: /preview/* requests — always serve from VFS
+  if (url.pathname.startsWith('/preview/')) {
+    const vfsPath = url.pathname.slice('/preview'.length);
+    event.respondWith(handlePreviewRequest(vfsPath));
+    return;
+  }
+
+  // Mode 2: EDS project mode — resolve root-relative paths against project root
+  if (edsProjectRoot && !isSliccAppPath(url.pathname)) {
+    const vfsPath = edsProjectRoot + url.pathname;
+    event.respondWith(handlePreviewRequest(vfsPath));
+  }
 });

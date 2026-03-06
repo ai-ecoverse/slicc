@@ -103,7 +103,7 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
       'screenshot (targetId?, path?, fullPage?, selector? — requires snapshot first; if path is given, saves PNG to VFS), ' +
       'evaluate (expression, targetId?), click (ref or selector, targetId? — use refs like "e5" from snapshot), type (text, targetId?), ' +
       'evaluate_persistent (expression — runs JS in a persistent blank tab that preserves variables across calls, no targetId needed), ' +
-      'serve (directory, entry? — serves VFS directory as a web app in a new browser tab via preview service worker), ' +
+      'serve (directory, entry?, edsProject? — serves VFS directory as a web app in a new browser tab via preview service worker; set edsProject:true for EDS sites so root-relative paths like /styles/ and /blocks/ resolve correctly), ' +
       'show_image (path — displays an image from VFS inline in the chat; use this when the user asks to see an image file).',
     inputSchema: {
       type: 'object',
@@ -152,6 +152,10 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
         entry: {
           type: 'string',
           description: 'Entry file within the directory (for "serve" action). Defaults to "index.html".',
+        },
+        edsProject: {
+          type: 'boolean',
+          description: 'Set to true for EDS projects (for "serve" action). Enables root-relative path resolution (/styles/, /scripts/, /blocks/) via the preview SW, emulating aem up.',
         },
         filter: {
           type: 'string',
@@ -550,6 +554,7 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
           case 'serve': {
             const directory = input['directory'] as string;
             const entry = (input['entry'] as string) || 'index.html';
+            const edsProject = input['edsProject'] as boolean | undefined;
 
             if (!directory) return { content: 'serve requires a directory path', isError: true };
 
@@ -575,11 +580,43 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
               }
             }
 
-            // Construct preview URL — works for both CLI and extension
+            const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
             const normalizedDir = directory.startsWith('/') ? directory : '/' + directory;
+
+            // EDS project mode: set project root on the SW so root-relative
+            // paths (/styles/styles.css, /scripts/aem.js, /blocks/...)
+            // resolve against the VFS project directory — emulates `aem up`.
+            if (edsProject) {
+              const projectRoot = normalizedDir.endsWith('/') ? normalizedDir.slice(0, -1) : normalizedDir;
+              if (navigator.serviceWorker?.controller) {
+                navigator.serviceWorker.controller.postMessage({
+                  type: 'set-eds-project-root',
+                  root: projectRoot,
+                });
+              }
+              // In EDS mode, serve at root-relative path (not /preview/)
+              // so that EDS root-relative references resolve correctly
+              const edsUrl = isExtension
+                ? chrome.runtime.getURL(`/${entry}`)
+                : `http://localhost:3000/${entry}`;
+
+              appTabId = null;
+              let newTargetId: string;
+              try {
+                newTargetId = await browser.createPage(edsUrl);
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                return { content: `Failed to create preview tab: ${msg}`, isError: true };
+              }
+
+              return {
+                content: `EDS preview: serving ${directory} at root\nTab: ${newTargetId}\nURL: ${edsUrl}\nProject root set on preview SW — /styles/, /scripts/, /blocks/ resolve from VFS.\nUse snapshot, screenshot, evaluate, click etc. to interact with the page.`
+              };
+            }
+
+            // Standard (non-EDS) preview: serve under /preview/ path
             const previewPath = `/preview${normalizedDir}${normalizedDir.endsWith('/') ? '' : '/'}${entry}`;
 
-            const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
             const previewUrl = isExtension
               ? chrome.runtime.getURL(previewPath)
               : `http://localhost:3000${previewPath}`;
