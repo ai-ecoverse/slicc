@@ -11,6 +11,7 @@
  */
 
 import type { BrowserAPI } from '../cdp/index.js';
+import { HarRecorder } from '../cdp/index.js';
 import type { AccessibilityNode } from '../cdp/types.js';
 import type { VirtualFS } from '../fs/index.js';
 import type { ToolDefinition, ToolResult } from '../core/types.js';
@@ -49,6 +50,8 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
   let appTabId: string | null = null;
   /** Per-tab snapshot state, keyed by targetId */
   const tabSnapshots = new Map<string, TabSnapshot>();
+  /** HAR recorder instance (created lazily when first recording starts) */
+  let harRecorder: HarRecorder | null = null;
 
   /** Detect and cache the SLICC app's own tab ID so we can hide/protect it. */
   async function resolveAppTabId(): Promise<void> {
@@ -91,6 +94,10 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
       'The app\'s own tab is hidden and protected — you cannot accidentally navigate or modify it. ' +
       'If targetId is omitted, the user\'s currently active/focused tab is used automatically. ' +
       'Actions: list_tabs, new_tab (url — creates a new tab and navigates to the URL, returns targetId), ' +
+      'new_recorded_tab (url, filter? — creates a tab with HAR recording enabled; recordings saved to /recordings/<id>/; ' +
+      'filter is a JS function string (entry) => false|true|object to exclude or transform entries; ' +
+      'NOTE: response bodies are captured by default which can be large — use filter to exclude them when not needed), ' +
+      'stop_recording (recordingId — stops recording and saves final HAR snapshot), ' +
       'navigate (url, targetId?), ' +
       'snapshot (targetId? — captures page accessibility snapshot with element refs like e1, e2; MUST be called before screenshot), ' +
       'screenshot (targetId?, path?, fullPage?, selector? — requires snapshot first; if path is given, saves PNG to VFS), ' +
@@ -103,7 +110,7 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
       properties: {
         action: {
           type: 'string',
-          enum: ['list_tabs', 'new_tab', 'navigate', 'snapshot', 'screenshot', 'evaluate', 'click', 'type', 'evaluate_persistent', 'serve', 'show_image'],
+          enum: ['list_tabs', 'new_tab', 'new_recorded_tab', 'stop_recording', 'navigate', 'snapshot', 'screenshot', 'evaluate', 'click', 'type', 'evaluate_persistent', 'serve', 'show_image'],
           description: 'The browser action to perform.',
         },
         targetId: {
@@ -146,6 +153,18 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
           type: 'string',
           description: 'Entry file within the directory (for "serve" action). Defaults to "index.html".',
         },
+        filter: {
+          type: 'string',
+          description: 'JS filter function for HAR recording (for "new_recorded_tab" action). ' +
+            'Called on each HAR entry: (entry) => false (skip), true (keep), or HarEntry (replace). ' +
+            'If returning an object, it MUST be a complete valid HAR entry for compatibility. ' +
+            'Example: "(e) => !e.request.url.includes(\'.png\')" to exclude images. ' +
+            'Example: "(e) => ({ ...e, response: { ...e.response, content: { size: 0, mimeType: e.response.content.mimeType } } })" to strip bodies.',
+        },
+        recordingId: {
+          type: 'string',
+          description: 'Recording ID returned by new_recorded_tab (for "stop_recording" action).',
+        },
       },
       required: ['action'],
     },
@@ -179,6 +198,67 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
             await resolveAppTabId();
             const newTargetId = await browser.createPage(url);
             return { content: `Created new tab (targetId: ${newTargetId}) at ${url}` };
+          }
+
+          case 'new_recorded_tab': {
+            const url = input['url'] as string || 'about:blank';
+            const filterCode = input['filter'] as string | undefined;
+
+            if (!fs) {
+              return { content: 'new_recorded_tab requires VFS to save recordings', isError: true };
+            }
+
+            await resolveAppTabId();
+
+            // Create the tab
+            const newTargetId = await browser.createPage(url);
+
+            // Create a dedicated CDP session for recording (separate from BrowserAPI's shared session)
+            // This avoids invalidation when BrowserAPI attaches to other tabs
+            const transport = browser.getTransport();
+            const attachResult = await transport.send('Target.attachToTarget', {
+              targetId: newTargetId,
+              flatten: true,
+            });
+            const sessionId = attachResult['sessionId'] as string;
+
+            // Create HAR recorder if needed
+            if (!harRecorder) {
+              harRecorder = new HarRecorder(transport, fs);
+            }
+
+            // Start recording
+            let recordingId: string;
+            try {
+              recordingId = await harRecorder.startRecording(newTargetId, sessionId, filterCode);
+            } catch (err) {
+              return { content: `Failed to start recording: ${err instanceof Error ? err.message : String(err)}`, isError: true };
+            }
+
+            return {
+              content: `Created recorded tab (targetId: ${newTargetId}, recordingId: ${recordingId}) at ${url}\n` +
+                `HAR recordings will be saved to /recordings/${recordingId}/\n` +
+                `Snapshots are saved automatically on navigation and when recording stops.`
+            };
+          }
+
+          case 'stop_recording': {
+            const recordingId = input['recordingId'] as string;
+
+            if (!recordingId) {
+              return { content: 'stop_recording requires recordingId', isError: true };
+            }
+
+            if (!harRecorder) {
+              return { content: `Recording not found: ${recordingId}`, isError: true };
+            }
+
+            try {
+              const recordingsPath = await harRecorder.stopRecording(recordingId);
+              return { content: `Recording stopped. HAR files saved to ${recordingsPath}` };
+            } catch (err) {
+              return { content: `Failed to stop recording: ${err instanceof Error ? err.message : String(err)}`, isError: true };
+            }
           }
 
           case 'navigate': {

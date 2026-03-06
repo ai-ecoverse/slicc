@@ -29,6 +29,28 @@ export class BrowserAPI {
   }
 
   /**
+   * Get the underlying CDP transport.
+   * Used by HarRecorder to subscribe to network events.
+   */
+  getTransport(): CDPTransport {
+    return this.client;
+  }
+
+  /**
+   * Get the current session ID (if attached to a target).
+   */
+  getSessionId(): string | null {
+    return this.sessionId;
+  }
+
+  /**
+   * Get the currently attached target ID.
+   */
+  getAttachedTargetId(): string | null {
+    return this.attachedTargetId;
+  }
+
+  /**
    * Connect to the CDP proxy.
    * DebuggerClient (extension mode) accepts but ignores these options.
    */
