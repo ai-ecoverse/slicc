@@ -14,22 +14,27 @@ import {
 } from './state.js';
 
 /**
- * Copy a file from skill directory to target location.
+ * Validate a file path to prevent path traversal attacks.
+ * Rejects absolute paths and paths containing '..' segments.
  */
-async function copyFile(
-  fs: VirtualFS,
-  sourcePath: string,
-  targetPath: string,
-): Promise<void> {
-  const content = await fs.readFile(sourcePath);
-  
-  // Ensure parent directory exists
-  const parentDir = targetPath.substring(0, targetPath.lastIndexOf('/'));
-  if (parentDir) {
-    await ensureDir(fs, parentDir);
+function validatePath(filePath: string): { valid: boolean; error?: string } {
+  // Reject absolute paths
+  if (filePath.startsWith('/')) {
+    return { valid: false, error: `Absolute path not allowed: ${filePath}` };
   }
   
-  await fs.writeFile(targetPath, content);
+  // Reject paths with .. segments
+  const segments = filePath.split('/');
+  if (segments.some(s => s === '..')) {
+    return { valid: false, error: `Path traversal not allowed: ${filePath}` };
+  }
+  
+  // Reject paths that try to escape via encoded characters
+  if (filePath.includes('%2e%2e') || filePath.includes('%2E%2E')) {
+    return { valid: false, error: `Encoded path traversal not allowed: ${filePath}` };
+  }
+  
+  return { valid: true };
 }
 
 /**
@@ -77,6 +82,16 @@ export async function applySkill(
     };
   }
 
+  // Enforce that manifest.skill matches the directory name for consistency
+  if (manifest.skill !== skillName) {
+    return {
+      success: false,
+      skill: skillName,
+      version: manifest.version,
+      error: `Manifest skill name "${manifest.skill}" does not match directory name "${skillName}"`,
+    };
+  }
+
   // Get current applied skills
   const appliedSkills = await getAppliedSkills(fs);
 
@@ -114,17 +129,40 @@ export async function applySkill(
 
   // Track file hashes for state
   const fileHashes: Record<string, string> = {};
+  // Track actually added files for reliable uninstall
+  const addedFiles: string[] = [];
 
   try {
     // Copy files from add/ directory
     if (manifest.adds && manifest.adds.length > 0) {
       for (const filePath of manifest.adds) {
+        // Validate path to prevent traversal attacks
+        const validation = validatePath(filePath);
+        if (!validation.valid) {
+          return {
+            success: false,
+            skill: manifest.skill,
+            version: manifest.version,
+            error: validation.error!,
+          };
+        }
+
         const sourcePath = `${skillDir}/add/${filePath}`;
         const targetPath = `/${filePath}`;
 
         try {
-          const content = await fs.readTextFile(sourcePath);
-          await copyFile(fs, sourcePath, targetPath);
+          // Ensure parent directory exists
+          const parentDir = targetPath.substring(0, targetPath.lastIndexOf('/'));
+          if (parentDir) {
+            await ensureDir(fs, parentDir);
+          }
+          
+          // Use copyFile for binary-safe copying
+          await fs.copyFile(sourcePath, targetPath);
+          addedFiles.push(filePath);
+          
+          // Compute hash from the copied file
+          const content = await fs.readTextFile(targetPath);
           fileHashes[filePath] = await computeFileHash(content);
         } catch (err) {
           return {
@@ -140,6 +178,17 @@ export async function applySkill(
     // Apply modifications from modify/ directory
     if (manifest.modifies && manifest.modifies.length > 0) {
       for (const filePath of manifest.modifies) {
+        // Validate path to prevent traversal attacks
+        const validation = validatePath(filePath);
+        if (!validation.valid) {
+          return {
+            success: false,
+            skill: manifest.skill,
+            version: manifest.version,
+            error: validation.error!,
+          };
+        }
+
         const patchPath = `${skillDir}/modify/${filePath}`;
 
         try {
@@ -171,10 +220,18 @@ export async function applySkill(
             if (marker && existingContent.includes(marker)) {
               const markerIdx = existingContent.indexOf(marker) + marker.length;
               const lineEnd = existingContent.indexOf('\n', markerIdx);
-              newContent =
-                existingContent.slice(0, lineEnd + 1) +
-                contentToAppend +
-                existingContent.slice(lineEnd + 1);
+              
+              // Handle case where marker is on the last line (no trailing newline)
+              if (lineEnd === -1) {
+                // Marker is on the last line with no trailing newline
+                const separator = existingContent.endsWith('\n') ? '' : '\n';
+                newContent = existingContent + separator + contentToAppend;
+              } else {
+                newContent =
+                  existingContent.slice(0, lineEnd + 1) +
+                  contentToAppend +
+                  existingContent.slice(lineEnd + 1);
+              }
             } else {
               newContent = existingContent + '\n' + contentToAppend;
             }
@@ -198,12 +255,13 @@ export async function applySkill(
       }
     }
 
-    // Record the application
+    // Record the application with the list of added files for reliable uninstall
     const appliedSkill: AppliedSkill = {
       name: manifest.skill,
       version: manifest.version,
       applied_at: new Date().toISOString(),
       file_hashes: fileHashes,
+      added_files: addedFiles,
     };
 
     await recordSkillApplication(fs, appliedSkill);

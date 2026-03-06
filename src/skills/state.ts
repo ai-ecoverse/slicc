@@ -33,17 +33,23 @@ export async function initSkillsSystem(fs: VirtualFS): Promise<void> {
 
 /**
  * Read the current skills state.
+ * Only returns empty state for missing file (ENOENT).
+ * Throws for other errors (e.g., corrupted JSON) to surface issues.
  */
 export async function readState(fs: VirtualFS): Promise<SkillsState> {
   try {
     const content = await fs.readTextFile(STATE_PATH);
     return JSON.parse(content) as SkillsState;
-  } catch {
-    // Return empty state if file doesn't exist
-    return {
-      version: SKILLS_SYSTEM_VERSION,
-      applied_skills: [],
-    };
+  } catch (err: unknown) {
+    // Return empty state only if file doesn't exist
+    if (typeof err === 'object' && err !== null && (err as { code?: string }).code === 'ENOENT') {
+      return {
+        version: SKILLS_SYSTEM_VERSION,
+        applied_skills: [],
+      };
+    }
+    // Re-throw other errors (corrupted JSON, permission issues, etc.)
+    throw err;
   }
 }
 

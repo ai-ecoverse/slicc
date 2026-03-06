@@ -41,6 +41,8 @@ export interface AppliedSkill {
   applied_at: string;
   /** SHA-256 hashes of added/modified files */
   file_hashes: Record<string, string>;
+  /** List of files that were added (for reliable uninstall) */
+  added_files?: string[];
 }
 
 /** Skills system state - persisted to .slicc/state.json */

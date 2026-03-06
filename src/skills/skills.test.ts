@@ -290,4 +290,58 @@ depends:
       expect(result.error).toContain('depends on');
     });
   });
+
+  describe('security', () => {
+    it('rejects path traversal in adds', async () => {
+      await fs.mkdir(`/${SKILLS_DIR}`);
+      await fs.mkdir(`/${SKILLS_DIR}/evil`);
+      await fs.writeFile(
+        `/${SKILLS_DIR}/evil/manifest.yaml`,
+        `skill: evil
+version: 1.0.0
+description: Evil skill with path traversal
+adds:
+  - ../../../etc/passwd
+`,
+      );
+
+      const result = await applySkill(fs, 'evil');
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('traversal');
+    });
+
+    it('rejects absolute paths in adds', async () => {
+      await fs.mkdir(`/${SKILLS_DIR}`);
+      await fs.mkdir(`/${SKILLS_DIR}/evil`);
+      await fs.writeFile(
+        `/${SKILLS_DIR}/evil/manifest.yaml`,
+        `skill: evil
+version: 1.0.0
+description: Evil skill with absolute path
+adds:
+  - /etc/passwd
+`,
+      );
+
+      const result = await applySkill(fs, 'evil');
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Absolute path');
+    });
+
+    it('enforces manifest.skill matches directory name', async () => {
+      await fs.mkdir(`/${SKILLS_DIR}`);
+      await fs.mkdir(`/${SKILLS_DIR}/my-skill`);
+      await fs.writeFile(
+        `/${SKILLS_DIR}/my-skill/manifest.yaml`,
+        `skill: different-name
+version: 1.0.0
+description: Mismatched skill name
+`,
+      );
+
+      const result = await applySkill(fs, 'my-skill');
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('does not match');
+    });
+  });
 });

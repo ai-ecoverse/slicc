@@ -9,6 +9,25 @@ import { readManifest } from './manifest.js';
 import { readState, removeSkillFromState } from './state.js';
 
 /**
+ * Validate a file path to prevent path traversal attacks.
+ * Rejects absolute paths and paths containing '..' segments.
+ */
+function validatePath(filePath: string): boolean {
+  // Reject absolute paths
+  if (filePath.startsWith('/')) {
+    return false;
+  }
+  
+  // Reject paths with .. segments
+  const segments = filePath.split('/');
+  if (segments.some(s => s === '..')) {
+    return false;
+  }
+  
+  return true;
+}
+
+/**
  * Uninstall a skill by removing its added files.
  * Note: Modifications are NOT automatically reverted - that would require
  * storing the original content or using a diff-based approach.
@@ -35,7 +54,7 @@ export async function uninstallSkill(
   try {
     manifest = await readManifest(fs, skillDir);
   } catch {
-    // Manifest not found - proceed with basic uninstall
+    // Manifest not found - proceed with basic uninstall using stored state
     manifest = {
       skill: skillName,
       version: appliedSkill.version,
@@ -66,14 +85,22 @@ export async function uninstallSkill(
   }
 
   try {
+    // Use added_files from state if available (more reliable than manifest)
+    // Fall back to manifest.adds for backward compatibility with older state
+    const filesToRemove = appliedSkill.added_files ?? manifest.adds ?? [];
+    
     // Remove added files
-    if (manifest.adds) {
-      for (const filePath of manifest.adds) {
-        try {
-          await fs.rm(`/${filePath}`);
-        } catch {
-          // File may have been manually deleted
-        }
+    for (const filePath of filesToRemove) {
+      // Validate path to prevent traversal attacks
+      if (!validatePath(filePath)) {
+        console.warn(`Skipping invalid path during uninstall: ${filePath}`);
+        continue;
+      }
+      
+      try {
+        await fs.rm(`/${filePath}`);
+      } catch {
+        // File may have been manually deleted
       }
     }
 
