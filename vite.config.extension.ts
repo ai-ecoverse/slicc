@@ -48,7 +48,6 @@ export default defineConfig(({ mode }) => ({
       },
       output: {
         entryFileNames: (chunkInfo) => {
-          // service-worker must be at root level, not in assets/
           if (chunkInfo.name === 'service-worker') return 'service-worker.js';
           return 'assets/[name]-[hash].js';
         },
@@ -56,6 +55,23 @@ export default defineConfig(({ mode }) => ({
     },
   },
   plugins: [
+    {
+      name: 'build-preview-sw',
+      async closeBundle() {
+        // Build preview-sw as a self-contained IIFE via esbuild.
+        // Rollup would code-split LightningFS into a shared chunk, which SWs can't import.
+        const esbuild = await import('esbuild');
+        await esbuild.build({
+          entryPoints: [resolve(__dirname, 'src/ui/preview-sw.ts')],
+          bundle: true,
+          outfile: resolve(__dirname, 'dist/extension/preview-sw.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
+        });
+      },
+    },
     {
       name: 'copy-extension-assets',
       closeBundle() {
