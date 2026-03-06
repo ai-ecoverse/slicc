@@ -93,6 +93,7 @@ WasmShell wraps just-bash 2.11.7 (WASM Bash interpreter) and connects it to Virt
 - `zip/unzip` — Archive compression
 - `sqlite3` — SQLite database operations
 - `webhook` — Manage webhooks for event-driven automation
+- `crontask` — Schedule cron jobs that dispatch licks to scoops
 - `mount` — Mount a local directory into the virtual filesystem via the File System Access API
 - `commands` — Show all available commands (type `commands` in terminal)
 
