@@ -27,12 +27,24 @@ export class DebuggerClient implements CDPTransport {
     params?: Record<string, unknown>,
   ): void => {
     if (!this.attachedTabs.has(source.tabId)) return;
-    log.debug('Event', { tabId: source.tabId, method });
+    // Find sessionId for this tabId
+    let sessionId: string | undefined;
+    for (const [sid, tabId] of this.sessionToTab) {
+      if (tabId === source.tabId) {
+        sessionId = sid;
+        break;
+      }
+    }
+    log.debug('Event', { tabId: source.tabId, method, sessionId });
     const set = this.listeners.get(method);
     if (set) {
+      // Include sessionId in params so listeners can filter by session
+      const paramsWithSession = sessionId
+        ? { ...params, sessionId }
+        : (params ?? {});
       for (const listener of set) {
         try {
-          listener(params ?? {});
+          listener(paramsWithSession);
         } catch (err) {
           log.error('CDP event listener error', { method, error: err instanceof Error ? err.message : String(err) });
         }

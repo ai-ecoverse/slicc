@@ -211,12 +211,16 @@ export class CDPClient implements CDPTransport {
     // Event notification
     if ('method' in msg) {
       const event = msg as CDPEvent;
-      log.debug('Event', { method: event.method, sessionId: event.params?.sessionId });
+      log.debug('Event', { method: event.method, sessionId: event.sessionId });
       const set = this.listeners.get(event.method);
       if (set) {
+        // Include sessionId in params so listeners can filter by session
+        const paramsWithSession = event.sessionId
+          ? { ...event.params, sessionId: event.sessionId }
+          : (event.params ?? {});
         for (const listener of set) {
           try {
-            listener(event.params ?? {});
+            listener(paramsWithSession);
           } catch {
             // Don't let one listener break others
           }

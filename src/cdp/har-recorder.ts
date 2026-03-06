@@ -2,7 +2,8 @@
  * HAR (HTTP Archive) recorder for CDP sessions.
  * 
  * Records network traffic from browser tabs and saves snapshots to VFS
- * on navigation and tab close. Supports filtering via user-provided JS functions.
+ * on navigation and when stopRecording() is called.
+ * Supports filtering via user-provided JS functions.
  */
 
 import type { CDPTransport } from './transport.js';
@@ -255,13 +256,16 @@ export class HarRecorder {
       const frame = params['frame'] as { parentId?: string; url?: string } | undefined;
       // Only handle main frame navigations
       if (!frame?.parentId && frame?.url) {
-        this.saveSnapshot(session, 'navigation').catch(err => {
-          log.error('Failed to save navigation snapshot', { recordingId, error: err instanceof Error ? err.message : String(err) });
-        });
+        // Capture entries and URL before clearing to avoid race condition
+        const entriesToSave = [...session.entries];
+        const urlForSnapshot = session.currentUrl;
         session.currentUrl = frame.url;
-        // Clear entries for new page
         session.entries = [];
         session.pendingRequests.clear();
+        // Save snapshot with captured data
+        this.saveSnapshotWithEntries(session, 'navigation', entriesToSave, urlForSnapshot).catch(err => {
+          log.error('Failed to save navigation snapshot', { recordingId, error: err instanceof Error ? err.message : String(err) });
+        });
       }
     };
 
@@ -385,16 +389,26 @@ export class HarRecorder {
       // Invalid URL
     }
 
-    // Build timings
-    const timings: HarTimings = timing ? {
-      blocked: Math.max(0, (timing.dnsStart ?? 0) - (timing.requestTime ?? 0) * 1000),
-      dns: Math.max(0, ((timing.dnsEnd ?? 0) - (timing.dnsStart ?? 0))),
-      connect: Math.max(0, ((timing.connectEnd ?? 0) - (timing.connectStart ?? 0))),
-      ssl: Math.max(0, ((timing.sslEnd ?? 0) - (timing.sslStart ?? 0))),
-      send: Math.max(0, ((timing.sendEnd ?? 0) - (timing.sendStart ?? 0))),
-      wait: Math.max(0, ((timing.receiveHeadersStart ?? 0) - (timing.sendEnd ?? 0))),
-      receive: Math.max(0, ((timing.receiveHeadersEnd ?? 0) - (timing.receiveHeadersStart ?? 0))),
-    } : {
+    // Build timings - CDP timing fields are ms offsets from requestTime
+    // HAR expects -1 for unavailable phases
+    const timings: HarTimings = timing ? (() => {
+      const phaseDuration = (start?: number, end?: number): number => {
+        if (start == null || end == null || start < 0 || end < 0) return -1;
+        const value = end - start;
+        return value >= 0 ? value : -1;
+      };
+      // "blocked" is time before DNS starts (or before connect if no DNS)
+      const blockedEnd = timing.dnsStart >= 0 ? timing.dnsStart : (timing.connectStart >= 0 ? timing.connectStart : 0);
+      return {
+        blocked: blockedEnd > 0 ? blockedEnd : -1,
+        dns: phaseDuration(timing.dnsStart, timing.dnsEnd),
+        connect: phaseDuration(timing.connectStart, timing.connectEnd),
+        ssl: phaseDuration(timing.sslStart, timing.sslEnd),
+        send: phaseDuration(timing.sendStart, timing.sendEnd),
+        wait: phaseDuration(timing.sendEnd, timing.receiveHeadersStart),
+        receive: phaseDuration(timing.receiveHeadersStart, timing.receiveHeadersEnd),
+      };
+    })() : {
       blocked: -1,
       dns: -1,
       connect: -1,
@@ -460,14 +474,26 @@ export class HarRecorder {
    * Save a HAR snapshot to the recordings directory.
    */
   async saveSnapshot(session: RecordingSession, trigger: 'navigation' | 'close'): Promise<string | null> {
-    if (session.entries.length === 0) {
+    return this.saveSnapshotWithEntries(session, trigger, session.entries, session.currentUrl);
+  }
+
+  /**
+   * Save a HAR snapshot with specific entries and URL (used to avoid race conditions).
+   */
+  private async saveSnapshotWithEntries(
+    session: RecordingSession,
+    trigger: 'navigation' | 'close',
+    entries: HarEntry[],
+    url: string,
+  ): Promise<string | null> {
+    if (entries.length === 0) {
       log.debug('No entries to save', { recordingId: session.id, trigger });
       return null;
     }
 
     session.snapshotCount++;
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const urlSlug = this.urlToSlug(session.currentUrl);
+    const urlSlug = this.urlToSlug(url);
     const filename = `${session.snapshotCount.toString().padStart(3, '0')}-${timestamp}-${trigger}-${urlSlug}.har`;
     const path = `/recordings/${session.id}/${filename}`;
 
@@ -475,12 +501,12 @@ export class HarRecorder {
       log: {
         version: '1.2',
         creator: { name: 'SLICC HAR Recorder', version: '1.0.0' },
-        entries: session.entries,
+        entries,
       } as HarLog,
     };
 
     await this.fs.writeFile(path, JSON.stringify(har, null, 2));
-    log.debug('Saved HAR snapshot', { recordingId: session.id, path, entryCount: session.entries.length });
+    log.debug('Saved HAR snapshot', { recordingId: session.id, path, entryCount: entries.length });
 
     return path;
   }
@@ -554,15 +580,6 @@ export class HarRecorder {
   }
 
   private async ensureDir(path: string): Promise<void> {
-    const parts = path.split('/').filter(Boolean);
-    let current = '';
-    for (const part of parts) {
-      current += '/' + part;
-      try {
-        await this.fs.stat(current);
-      } catch {
-        await this.fs.mkdir(current);
-      }
-    }
+    await this.fs.mkdir(path, { recursive: true });
   }
 }

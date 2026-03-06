@@ -156,9 +156,10 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
         filter: {
           type: 'string',
           description: 'JS filter function for HAR recording (for "new_recorded_tab" action). ' +
-            'Called on each HAR entry: (entry) => false (skip), true (keep), or object (replace). ' +
+            'Called on each HAR entry: (entry) => false (skip), true (keep), or HarEntry (replace). ' +
+            'If returning an object, it MUST be a complete valid HAR entry for compatibility. ' +
             'Example: "(e) => !e.request.url.includes(\'.png\')" to exclude images. ' +
-            'Example: "(e) => ({ url: e.request.url, status: e.response.status })" for compact output.',
+            'Example: "(e) => ({ ...e, response: { ...e.response, content: { size: 0, mimeType: e.response.content.mimeType } } })" to strip bodies.',
         },
         recordingId: {
           type: 'string',
@@ -212,12 +213,18 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
             // Create the tab
             const newTargetId = await browser.createPage(url);
 
-            // Attach to get session ID
-            const sessionId = await browser.attachToPage(newTargetId);
+            // Create a dedicated CDP session for recording (separate from BrowserAPI's shared session)
+            // This avoids invalidation when BrowserAPI attaches to other tabs
+            const transport = browser.getTransport();
+            const attachResult = await transport.send('Target.attachToTarget', {
+              targetId: newTargetId,
+              flatten: true,
+            });
+            const sessionId = attachResult['sessionId'] as string;
 
             // Create HAR recorder if needed
             if (!harRecorder) {
-              harRecorder = new HarRecorder(browser.getTransport(), fs);
+              harRecorder = new HarRecorder(transport, fs);
             }
 
             // Start recording
