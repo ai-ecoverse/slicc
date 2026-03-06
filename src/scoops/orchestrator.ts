@@ -286,7 +286,8 @@ export class Orchestrator {
     }
 
     // Check trigger requirement using the scoop's own trigger
-    if (!scoop.isCone && scoop.requiresTrigger && scoop.trigger) {
+    // Bypass trigger check for webhook messages (they're explicitly routed to this scoop)
+    if (!scoop.isCone && scoop.requiresTrigger && scoop.trigger && message.channel !== 'webhook') {
       if (!message.content.includes(scoop.trigger)) {
         log.info('routeToScoop: trigger not found in content', {
           chatJid: message.chatJid,
