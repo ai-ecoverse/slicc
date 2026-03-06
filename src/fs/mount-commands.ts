@@ -46,7 +46,7 @@ export class MountCommands {
 
     // mount <target-path>
     if (!sub) {
-      return { stdout: '', stderr: 'mount: mount point required\nUsage: mount <target-path>', exitCode: 1 };
+      return { stdout: '', stderr: 'mount: mount point required\nUsage: mount <target-path>\n', exitCode: 1 };
     }
 
     if (typeof window === 'undefined' || !('showDirectoryPicker' in window)) {
