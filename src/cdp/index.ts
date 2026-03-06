@@ -1,6 +1,7 @@
 export { CDPClient } from './cdp-client.js';
 export { BrowserAPI } from './browser-api.js';
 export { DebuggerClient } from './debugger-client.js';
+export { HarRecorder } from './har-recorder.js';
 export type { CDPTransport } from './transport.js';
 export type {
   CDPCommand,
@@ -17,3 +18,4 @@ export type {
   BoundingBox,
   AccessibilityNode,
 } from './types.js';
+export type { HarEntry, HarLog, RecordingSession } from './har-recorder.js';
