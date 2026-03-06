@@ -176,14 +176,41 @@ async function installFromClawHub(
     }
 
     // Convert the latin1-encoded response body back to bytes
-    // (fetch proxy uses latin1 for binary content)
-    const zipBytes = new Uint8Array(downloadResponse.body.length);
-    for (let i = 0; i < downloadResponse.body.length; i++) {
-      zipBytes[i] = downloadResponse.body.charCodeAt(i);
+    // The fetch proxy uses latin1 encoding for binary content, where each
+    // character code point directly maps to a byte value (0-255).
+    // Use TextEncoder with 'latin1' alias (iso-8859-1) for proper conversion.
+    let zipBytes: Uint8Array;
+    try {
+      // Try using charCodeAt for latin1 (each char is one byte)
+      zipBytes = new Uint8Array(downloadResponse.body.length);
+      for (let i = 0; i < downloadResponse.body.length; i++) {
+        const code = downloadResponse.body.charCodeAt(i);
+        if (code > 255) {
+          // If we get non-latin1 chars, the response was likely UTF-8 decoded
+          throw new Error('Non-latin1 character detected');
+        }
+        zipBytes[i] = code;
+      }
+    } catch {
+      // Fallback: try UTF-8 encoding (might work if response wasn't binary-encoded)
+      zipBytes = new TextEncoder().encode(downloadResponse.body);
     }
 
     // Unzip the bundle
-    const files = unzipSync(zipBytes);
+    let files: ReturnType<typeof unzipSync>;
+    try {
+      files = unzipSync(zipBytes);
+    } catch (unzipErr) {
+      const msg = unzipErr instanceof Error ? unzipErr.message : String(unzipErr);
+      // Debug info
+      const preview = downloadResponse.body.slice(0, 50);
+      const hexPreview = Array.from(zipBytes.slice(0, 20)).map(b => b.toString(16).padStart(2, '0')).join(' ');
+      return {
+        stdout: '',
+        stderr: `upskill: failed to unzip skill: ${msg}\nBody length: ${downloadResponse.body.length}, Bytes length: ${zipBytes.length}\nHex: ${hexPreview}\nPreview: ${preview.slice(0, 30)}\n`,
+        exitCode: 1,
+      };
+    }
 
     // Create skill directory
     await fs.mkdir(skillDir, { recursive: true });
