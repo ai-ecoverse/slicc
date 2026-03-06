@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { getMimeType } from './mime-types.js';
+import {
+  getMimeType,
+  isImageMimeType,
+  isTerminalPreviewableMediaPath,
+  isTerminalPreviewableMimeType,
+  isVideoMimeType,
+} from './mime-types.js';
 
 describe('getMimeType', () => {
   it('returns correct MIME for common web types', () => {
@@ -16,6 +22,7 @@ describe('getMimeType', () => {
     expect(getMimeType('icon.svg')).toBe('image/svg+xml');
     expect(getMimeType('anim.gif')).toBe('image/gif');
     expect(getMimeType('hero.webp')).toBe('image/webp');
+    expect(getMimeType('still.avif')).toBe('image/avif');
   });
 
   it('handles font types', () => {
@@ -52,9 +59,21 @@ describe('getMimeType', () => {
     expect(getMimeType('song.mp3')).toBe('audio/mpeg');
     expect(getMimeType('video.mp4')).toBe('video/mp4');
     expect(getMimeType('clip.webm')).toBe('video/webm');
+    expect(getMimeType('movie.mov')).toBe('video/quicktime');
   });
 
   it('handles wasm', () => {
     expect(getMimeType('module.wasm')).toBe('application/wasm');
+  });
+
+  it('identifies previewable terminal media', () => {
+    expect(isImageMimeType('image/png')).toBe(true);
+    expect(isVideoMimeType('video/webm')).toBe(true);
+    expect(isTerminalPreviewableMimeType('image/webp')).toBe(true);
+    expect(isTerminalPreviewableMimeType('video/mp4')).toBe(true);
+    expect(isTerminalPreviewableMimeType('text/plain')).toBe(false);
+    expect(isTerminalPreviewableMediaPath('/workspace/assets/photo.jpg')).toBe(true);
+    expect(isTerminalPreviewableMediaPath('/workspace/assets/clip.webm')).toBe(true);
+    expect(isTerminalPreviewableMediaPath('/workspace/README.md')).toBe(false);
   });
 });

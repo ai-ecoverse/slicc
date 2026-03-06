@@ -6,6 +6,7 @@
  */
 
 import type { VirtualFS } from '../fs/index.js';
+import { isTerminalPreviewableMediaPath } from '../core/mime-types.js';
 import { zipSync } from 'fflate';
 
 /** Format byte size into human-readable string. */
@@ -19,6 +20,11 @@ function formatSize(bytes: number): string {
 /** Quote a shell argument with single quotes. */
 function quoteShellArg(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function buildPreviewCommand(path: string): string {
+  const command = isTerminalPreviewableMediaPath(path) ? 'imgcat' : 'cat';
+  return `${command} ${quoteShellArg(path)}`;
 }
 
 export interface FileBrowserPanelOptions {
@@ -175,7 +181,9 @@ export class FileBrowserPanel {
         catBtn.className = 'file-browser__action-btn';
         catBtn.style.marginLeft = '8px';
         catBtn.textContent = 'CAT';
-        catBtn.title = this.onRunCommand ? 'Preview in terminal' : 'Terminal unavailable';
+        catBtn.title = this.onRunCommand
+          ? isTerminalPreviewableMediaPath(fullPath) ? 'Preview media in terminal' : 'Preview in terminal'
+          : 'Terminal unavailable';
         catBtn.disabled = !this.onRunCommand;
         catBtn.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -225,12 +233,12 @@ export class FileBrowserPanel {
     }
   }
 
-  /** Run `cat` for the selected file in the terminal panel. */
+  /** Run `cat` or `imgcat` for the selected file in the terminal panel. */
   private previewFile(path: string): void {
     if (!this.onRunCommand) return;
-    const command = `cat ${quoteShellArg(path)}`;
+    const command = buildPreviewCommand(path);
     void Promise.resolve(this.onRunCommand(command)).catch((err) => {
-      console.error('[FileBrowser] CAT command failed:', path, err instanceof Error ? err.message : String(err));
+      console.error('[FileBrowser] Preview command failed:', path, err instanceof Error ? err.message : String(err));
     });
   }
 

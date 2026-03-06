@@ -15,8 +15,15 @@ import { VfsAdapter } from './vfs-adapter.js';
 import { cacheBinaryBody, cacheBinaryByUrl } from './binary-cache.js';
 import { GitCommands } from '../git/git-commands.js';
 import { createSupplementalCommands } from './supplemental-commands.js';
+import type { MediaPreviewItem } from './supplemental-commands.js';
 import { createSkillCommand, createUpskillCommand } from './supplemental-commands/upskill-command.js';
 import { MountCommands } from '../fs/mount-commands.js';
+
+function basename(path: string): string {
+  const trimmed = path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
+  const slash = trimmed.lastIndexOf('/');
+  return slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
+}
 
 /** Check if a content-type header indicates text (safe for UTF-8 decoding). */
 export function isTextContentType(contentType: string): boolean {
@@ -136,6 +143,10 @@ export class WasmShell {
   private mountCommands: MountCommands;
   private terminal: Terminal | null = null;
   private fitAddon: FitAddon | null = null;
+  private terminalHost: HTMLElement | null = null;
+  private previewHost: HTMLElement | null = null;
+  private previewUrls: string[] = [];
+  private resizeObserver: ResizeObserver | null = null;
   private currentLine = '';
   private cursorPos = 0;
   private history: string[] = [];
@@ -170,7 +181,9 @@ export class WasmShell {
 
     // Create custom commands for just-bash
     const gitCommand = this.createGitCustomCommand();
-    const supplementalCommands = createSupplementalCommands();
+    const supplementalCommands = createSupplementalCommands({
+      onMediaPreview: async (items) => this.renderMediaPreview(items),
+    });
     const mountCommand = this.createMountCustomCommand();
     const fetchFn = createProxiedFetch();
 
@@ -277,14 +290,22 @@ export class WasmShell {
     this.fitAddon = new FitAddon();
     this.terminal.loadAddon(this.fitAddon);
 
-    this.terminal.open(target);
+    target.replaceChildren();
+    this.terminalHost = document.createElement('div');
+    this.terminalHost.className = 'terminal-panel__terminal-host';
+    target.appendChild(this.terminalHost);
+
+    this.previewHost = document.createElement('div');
+    this.previewHost.className = 'terminal-panel__preview';
+    target.appendChild(this.previewHost);
+
+    this.terminal.open(this.terminalHost);
     this.fitAddon.fit();
 
     // Handle resize
-    const resizeObserver = new ResizeObserver(() => {
-      this.fitAddon?.fit();
-    });
-    resizeObserver.observe(target);
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = new ResizeObserver(() => this.refit());
+    this.resizeObserver.observe(this.terminalHost);
 
     // Write welcome message
     this.terminal.writeln('slicc shell (powered by just-bash)');
@@ -302,6 +323,11 @@ export class WasmShell {
       stderr: result.stderr,
       exitCode: result.exitCode,
     };
+  }
+
+  /** Re-fit the terminal to its host container. */
+  refit(): void {
+    this.fitAddon?.fit();
   }
 
   /**
@@ -366,13 +392,19 @@ export class WasmShell {
   /** Clear the terminal screen. */
   clearTerminal(): void {
     this.terminal?.clear();
+    this.clearMediaPreview();
   }
 
   /** Dispose the terminal. */
   dispose(): void {
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
+    this.clearMediaPreview();
     this.terminal?.dispose();
     this.terminal = null;
     this.fitAddon = null;
+    this.terminalHost = null;
+    this.previewHost = null;
   }
 
   private showPrompt(): void {
@@ -719,7 +751,7 @@ export class WasmShell {
 
     // Handle "clear"
     if (trimmed === 'clear') {
-      this.terminal?.clear();
+      this.clearTerminal();
       this.showPrompt();
       return;
     }
@@ -748,5 +780,61 @@ export class WasmShell {
     } else {
       this.terminal.write(text);
     }
+  }
+
+  private clearMediaPreview(): void {
+    for (const url of this.previewUrls) {
+      URL.revokeObjectURL(url);
+    }
+    this.previewUrls = [];
+    if (!this.previewHost) return;
+    this.previewHost.replaceChildren();
+    this.previewHost.classList.remove('terminal-panel__preview--visible');
+  }
+
+  private async renderMediaPreview(items: MediaPreviewItem[]): Promise<void> {
+    if (!this.previewHost || typeof document === 'undefined') {
+      throw new Error('terminal preview is unavailable');
+    }
+
+    this.clearMediaPreview();
+
+    for (const item of items) {
+      const url = URL.createObjectURL(new Blob([item.bytes], { type: item.mimeType }));
+      this.previewUrls.push(url);
+
+      const previewItem = document.createElement('div');
+      previewItem.className = 'terminal-panel__preview-item';
+
+      const label = document.createElement('div');
+      label.className = 'terminal-panel__preview-label';
+      label.textContent = `${basename(item.path)} · ${item.mimeType}`;
+      previewItem.appendChild(label);
+
+      if (item.mimeType.startsWith('video/')) {
+        const video = document.createElement('video');
+        video.className = 'terminal-panel__preview-media';
+        video.controls = true;
+        video.autoplay = true;
+        video.loop = true;
+        video.muted = true;
+        video.playsInline = true;
+        video.src = url;
+        video.addEventListener('loadedmetadata', () => this.refit(), { once: true });
+        previewItem.appendChild(video);
+      } else {
+        const image = document.createElement('img');
+        image.className = 'terminal-panel__preview-media';
+        image.alt = basename(item.path);
+        image.src = url;
+        image.addEventListener('load', () => this.refit(), { once: true });
+        previewItem.appendChild(image);
+      }
+
+      this.previewHost.appendChild(previewItem);
+    }
+
+    this.previewHost.classList.add('terminal-panel__preview--visible');
+    requestAnimationFrame(() => this.refit());
   }
 }
