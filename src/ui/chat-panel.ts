@@ -17,6 +17,39 @@ function uid(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
+/** Cycling face emojis for user messages */
+const USER_FACES = ['😀', '😊', '🙂', '😄', '😎', '🤔', '😁', '🤗'];
+let userFaceIndex = 0;
+
+/** Get the next user face emoji (cycles through the list) */
+function getNextUserFace(): string {
+  const face = USER_FACES[userFaceIndex];
+  userFaceIndex = (userFaceIndex + 1) % USER_FACES.length;
+  return face;
+}
+
+/** Tool icons by name */
+const TOOL_ICONS: Record<string, string> = {
+  bash: '⚙️',
+  browser: '🌐',
+  read_file: '📖',
+  write_file: '✏️',
+  edit_file: '✏️',
+  javascript: '📜',
+  delegate_to_scoop: '🍨',
+  send_message: '💬',
+  schedule_task: '⏰',
+  list_scoops: '📋',
+  list_tasks: '📋',
+  register_scoop: '📝',
+  update_global_memory: '🧠',
+};
+
+/** Get icon for a tool */
+function getToolIcon(toolName: string): string {
+  return TOOL_ICONS[toolName] ?? '🔧';
+}
+
 export class ChatPanel {
   private container: HTMLElement;
   private messagesEl!: HTMLElement;
@@ -423,22 +456,66 @@ export class ChatPanel {
     el.className = `msg msg--${msg.role}`;
     el.setAttribute('data-msg-id', msg.id);
 
-    // Role label
+    // Determine icon and label based on role and source
+    let icon: string;
+    let label: string;
+
+    if (msg.role === 'user') {
+      icon = getNextUserFace();
+      label = 'You';
+    } else if (msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron') {
+      icon = '👅';
+      label = msg.channel ? `lick:${msg.channel}` : 'lick';
+    } else if (msg.source && msg.source !== 'cone') {
+      // Scoop message
+      icon = '💩';
+      label = msg.source;
+    } else {
+      // Main agent (sliccy / cone)
+      icon = '🍦';
+      label = 'sliccy';
+    }
+
+    // Role label with icon
     const roleEl = document.createElement('div');
     roleEl.className = 'msg__role';
-    roleEl.textContent = msg.role === 'user' ? 'You' : 'sliccy';
+    roleEl.innerHTML = `<span class="msg__icon">${icon}</span> ${escapeHtml(label)}`;
     el.appendChild(roleEl);
 
-    // Content
-    const contentEl = document.createElement('div');
-    contentEl.className = 'msg__content';
-    contentEl.innerHTML = renderMessageContent(msg.content);
-    if (msg.isStreaming) {
-      const cursor = document.createElement('span');
-      cursor.className = 'streaming-cursor';
-      contentEl.appendChild(cursor);
+    // For lick messages in cone view, wrap content in collapsible
+    const isLickInCone = (msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron') && this.sessionId === 'session-cone';
+    // For scoop messages in cone view, wrap in collapsible
+    const isScoopInCone = msg.source && msg.source !== 'cone' && msg.source !== 'lick' && msg.role === 'assistant' && this.sessionId === 'session-cone';
+
+    if (isLickInCone || isScoopInCone) {
+      // Collapsed by default
+      const wrapper = document.createElement('details');
+      wrapper.className = 'msg__collapsible';
+
+      const summary = document.createElement('summary');
+      summary.className = 'msg__summary';
+      const preview = msg.content.slice(0, 60).replace(/\n/g, ' ');
+      summary.textContent = preview + (msg.content.length > 60 ? '...' : '');
+      wrapper.appendChild(summary);
+
+      const contentEl = document.createElement('div');
+      contentEl.className = 'msg__content';
+      contentEl.innerHTML = renderMessageContent(msg.content);
+      wrapper.appendChild(contentEl);
+
+      el.appendChild(wrapper);
+    } else {
+      // Normal expanded content
+      const contentEl = document.createElement('div');
+      contentEl.className = 'msg__content';
+      contentEl.innerHTML = renderMessageContent(msg.content);
+      if (msg.isStreaming) {
+        const cursor = document.createElement('span');
+        cursor.className = 'streaming-cursor';
+        contentEl.appendChild(cursor);
+      }
+      el.appendChild(contentEl);
     }
-    el.appendChild(contentEl);
 
     // Tool calls
     if (msg.toolCalls) {
@@ -451,26 +528,74 @@ export class ChatPanel {
   }
 
   private createToolCallEl(tc: ToolCall): HTMLElement {
-    const el = document.createElement('div');
+    const icon = getToolIcon(tc.name);
+
+    // Use <details> for collapsible behavior - collapsed by default, expand on hover/click
+    const el = document.createElement('details');
     el.className = 'tool-call';
 
-    const header = document.createElement('div');
-    header.className = 'tool-call__header';
-    header.textContent = `⚙ ${tc.name}`;
-    el.appendChild(header);
+    // Summary shows icon and tool name
+    const summary = document.createElement('summary');
+    summary.className = 'tool-call__header';
+    summary.innerHTML = `<span class="tool-call__icon">${icon}</span> <span class="tool-call__name">${escapeHtml(tc.name)}</span>`;
+
+    // Add brief input preview to summary
+    if (tc.input !== undefined) {
+      const preview = document.createElement('span');
+      preview.className = 'tool-call__preview';
+      const inputStr = typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input);
+      preview.textContent = inputStr.slice(0, 40) + (inputStr.length > 40 ? '...' : '');
+      summary.appendChild(preview);
+    }
+
+    // Status indicator
+    if (tc.result === undefined) {
+      const spinner = document.createElement('span');
+      spinner.className = 'tool-call__spinner';
+      spinner.textContent = '⏳';
+      summary.appendChild(spinner);
+    } else if (tc.isError) {
+      const errorIcon = document.createElement('span');
+      errorIcon.className = 'tool-call__error-icon';
+      errorIcon.textContent = '❌';
+      summary.appendChild(errorIcon);
+    } else {
+      const checkIcon = document.createElement('span');
+      checkIcon.className = 'tool-call__check-icon';
+      checkIcon.textContent = '✅';
+      summary.appendChild(checkIcon);
+    }
+
+    el.appendChild(summary);
+
+    // Details content (shown on expand)
+    const details = document.createElement('div');
+    details.className = 'tool-call__details';
 
     if (tc.input !== undefined) {
       const inputEl = document.createElement('div');
       inputEl.className = 'tool-call__input';
-      inputEl.innerHTML = renderToolInput(tc.input);
-      el.appendChild(inputEl);
+      const inputLabel = document.createElement('div');
+      inputLabel.className = 'tool-call__label';
+      inputLabel.textContent = 'Input:';
+      inputEl.appendChild(inputLabel);
+      const inputCode = document.createElement('pre');
+      inputCode.innerHTML = renderToolInput(tc.input);
+      inputEl.appendChild(inputCode);
+      details.appendChild(inputEl);
     }
 
     if (tc.result !== undefined) {
       const resultEl = document.createElement('div');
       resultEl.className = `tool-call__result${tc.isError ? ' tool-call__result--error' : ''}`;
-      resultEl.textContent = tc.result;
-      el.appendChild(resultEl);
+      const resultLabel = document.createElement('div');
+      resultLabel.className = 'tool-call__label';
+      resultLabel.textContent = tc.isError ? 'Error:' : 'Result:';
+      resultEl.appendChild(resultLabel);
+      const resultPre = document.createElement('pre');
+      resultPre.textContent = tc.result;
+      resultEl.appendChild(resultPre);
+      details.appendChild(resultEl);
     }
 
     // Render screenshot thumbnail from transient data (not persisted in messages)
@@ -480,7 +605,8 @@ export class ChatPanel {
       imgEl.src = screenshotUrl;
       imgEl.className = 'tool-call__screenshot';
       imgEl.title = 'Click to view full size';
-      imgEl.addEventListener('click', () => {
+      imgEl.addEventListener('click', (e) => {
+        e.stopPropagation();
         const w = window.open('about:blank');
         if (w) {
           const fullImg = w.document.createElement('img');
@@ -491,8 +617,10 @@ export class ChatPanel {
           w.document.body.appendChild(fullImg);
         }
       });
-      el.appendChild(imgEl);
+      details.appendChild(imgEl);
     }
+
+    el.appendChild(details);
 
     return el;
   }

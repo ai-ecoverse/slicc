@@ -46,6 +46,10 @@ export interface ChatMessage {
   timestamp: number;
   toolCalls?: ToolCall[];
   isStreaming?: boolean;
+  /** Source of the message: 'cone' for main agent, scoop name for sub-agents, 'lick' for async events */
+  source?: 'cone' | 'lick' | string;
+  /** For licks: the channel type (webhook, cron, etc.) */
+  channel?: string;
 }
 
 export interface ToolCall {

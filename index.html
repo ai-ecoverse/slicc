@@ -77,22 +77,82 @@
       .msg--user .msg__role { color: #7b8cff; }
       .msg--assistant .msg__role { color: #e94560; }
 
-      /* Tool calls */
+      /* Message icons */
+      .msg__icon { font-size: 14px; }
+
+      /* Collapsible messages (licks and scoop messages in cone view) */
+      .msg__collapsible {
+        cursor: pointer;
+      }
+      .msg__collapsible summary {
+        list-style: none;
+        cursor: pointer;
+        color: #8080a0;
+        font-size: 12px;
+        padding: 4px 0;
+      }
+      .msg__collapsible summary::-webkit-details-marker { display: none; }
+      .msg__collapsible summary::before {
+        content: '▶ ';
+        font-size: 10px;
+        color: #6060a0;
+        transition: transform 0.2s;
+        display: inline-block;
+      }
+      .msg__collapsible[open] summary::before {
+        transform: rotate(90deg);
+      }
+      .msg__collapsible[open] .msg__content {
+        margin-top: 8px;
+      }
+
+      /* Tool calls - collapsible */
       .tool-call {
-        margin-top: 8px; padding: 8px 10px; border-radius: 6px;
+        margin-top: 8px; padding: 0; border-radius: 6px;
         background: #1a1a30; border-left: 3px solid #e94560;
         font-size: 13px;
       }
+      .tool-call summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 8px 10px;
+        display: flex; align-items: center; gap: 6px;
+      }
+      .tool-call summary::-webkit-details-marker { display: none; }
       .tool-call__header {
         display: flex; align-items: center; gap: 6px;
-        font-weight: 600; color: #e94560; margin-bottom: 4px;
+        font-weight: 600; color: #e94560;
+        cursor: pointer;
       }
-      .tool-call__input, .tool-call__result {
+      .tool-call__icon { font-size: 14px; }
+      .tool-call__name { color: #e94560; }
+      .tool-call__preview {
+        color: #6a6a8a; font-size: 11px; margin-left: 8px;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        max-width: 200px;
+      }
+      .tool-call__spinner, .tool-call__error-icon, .tool-call__check-icon {
+        margin-left: auto; font-size: 12px;
+      }
+      .tool-call__spinner { animation: spin 1s linear infinite; }
+      @keyframes spin { 100% { transform: rotate(360deg); } }
+
+      .tool-call__details {
+        padding: 0 10px 10px 10px;
+        border-top: 1px solid #2a2a4a;
+      }
+      .tool-call__label {
+        font-size: 10px; color: #6a6a8a; text-transform: uppercase;
+        margin-top: 8px; margin-bottom: 4px;
+      }
+      .tool-call__input pre, .tool-call__result pre {
         white-space: pre-wrap; font-family: 'JetBrains Mono', 'Fira Code', monospace;
-        font-size: 12px; color: #b0b0c0; margin-top: 4px;
+        font-size: 12px; color: #b0b0c0;
         max-height: 200px; overflow-y: auto;
+        background: #141428; padding: 8px; border-radius: 4px;
+        margin: 0;
       }
-      .tool-call__result--error { color: #ff6b6b; }
+      .tool-call__result--error pre { color: #ff6b6b; }
       .tool-call__screenshot {
         max-width: 100%; max-height: 300px; border-radius: 6px;
         margin-top: 8px; cursor: pointer; border: 1px solid #3a3a5a;

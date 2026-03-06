@@ -86,7 +86,7 @@ async function main(): Promise<void> {
   }
 
   /** Get the current (last) assistant message in a buffer, or create one. */
-  function getOrCreateAssistantMsg(jid: string): ChatMessage {
+  function getOrCreateAssistantMsg(jid: string, channel?: string): ChatMessage {
     const buf = getBuffer(jid);
     let msgId = scoopCurrentMessageId.get(jid);
     if (msgId) {
@@ -96,7 +96,22 @@ async function main(): Promise<void> {
     // Create new assistant message
     msgId = `scoop-${jid}-${uid()}`;
     scoopCurrentMessageId.set(jid, msgId);
-    const msg: ChatMessage = { id: msgId, role: 'assistant', content: '', timestamp: Date.now(), toolCalls: [], isStreaming: true };
+
+    // Determine source based on jid
+    const scoops = orchestrator.getScoops();
+    const scoop = scoops.find(s => s.jid === jid);
+    const source = scoop?.isCone ? 'cone' : (scoop?.name ?? 'unknown');
+
+    const msg: ChatMessage = {
+      id: msgId,
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+      toolCalls: [],
+      isStreaming: true,
+      source,
+      channel,
+    };
     buf.push(msg);
     // Emit to UI if this is the selected scoop
     if (selectedScoop?.jid === jid) {
