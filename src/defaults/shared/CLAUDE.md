@@ -10,6 +10,16 @@ You are a helpful coding assistant running in a browser-based development enviro
 - Automate browser interactions
 - Schedule tasks to run later or on a recurring basis
 
+## Filesystem
+
+The virtual filesystem is **ephemeral** — its contents are lost when the browser tab is closed or the page is refreshed. To persist your work, mount a local directory from your real filesystem:
+
+```
+mount /workspace/myproject
+```
+
+This opens a directory picker and bridges the selected folder into the virtual filesystem at the given path. All reads and writes go directly to your real files — nothing is copied, and changes are immediately visible on both sides.
+
 ## Shell Commands
 
 Type `commands` in the terminal to see all available commands. Key commands:
