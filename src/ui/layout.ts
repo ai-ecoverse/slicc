@@ -474,7 +474,12 @@ export class Layout {
     this.panels = {
       chat: new ChatPanel(this.tabContainers.get('chat')!),
       terminal: new TerminalPanel(this.tabContainers.get('terminal')!),
-      fileBrowser: new FileBrowserPanel(this.tabContainers.get('files')!),
+      fileBrowser: new FileBrowserPanel(this.tabContainers.get('files')!, {
+        onRunCommand: async (command) => {
+          await this.runFileBrowserCommand(command);
+          this.switchTab('terminal');
+        },
+      }),
       memory: new MemoryPanel(this.tabContainers.get('memory')!),
       scoops: new ScoopsPanel(this.scoopsEl, {
         onScoopSelect: (scoop) => this.onScoopSelect?.(scoop),
@@ -621,7 +626,11 @@ export class Layout {
     this.panels = {
       chat: new ChatPanel(this.leftEl),
       terminal: new TerminalPanel(this.terminalContainer),
-      fileBrowser: new FileBrowserPanel(this.fileBrowserContainer),
+      fileBrowser: new FileBrowserPanel(this.fileBrowserContainer, {
+        onRunCommand: (command) => {
+          void this.runFileBrowserCommand(command);
+        },
+      }),
       memory: new MemoryPanel(memoryContainer),
       scoops: new ScoopsPanel(this.scoopsEl, {
         onScoopSelect: (scoop) => this.onScoopSelect?.(scoop),
@@ -663,6 +672,13 @@ export class Layout {
   /** Get the iframe container for the orchestrator */
   getIframeContainer(): HTMLElement {
     return this.iframeContainer;
+  }
+
+  private async runFileBrowserCommand(command: string): Promise<void> {
+    const result = await this.panels.terminal.runCommand(command);
+    if (result.exitCode !== 0 && result.stderr) {
+      console.warn('[Layout] File browser command failed:', result.stderr.trim());
+    }
   }
 
   private setupScoopsDrag(): void {

@@ -304,6 +304,65 @@ export class WasmShell {
     };
   }
 
+  /**
+   * Execute a command and render it in the mounted terminal.
+   * Returns the command result for callers that need status.
+   */
+  async executeCommandInTerminal(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const trimmed = command.trim();
+    if (!trimmed) {
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
+
+    if (!this.terminal) {
+      return this.executeCommand(trimmed);
+    }
+
+    if (this.isExecuting || this.currentLine.length > 0 || this.continuationBuffer.length > 0) {
+      return {
+        stdout: '',
+        stderr: 'terminal is busy; finish current input first\n',
+        exitCode: 1,
+      };
+    }
+
+    if (this.history[this.history.length - 1] !== trimmed) {
+      this.history.push(trimmed);
+    }
+    this.historyIndex = -1;
+
+    this.terminal.write(trimmed);
+    this.terminal.writeln('');
+    this.isExecuting = true;
+
+    try {
+      const result = await this.runCommand(trimmed);
+      if (result.stdout) {
+        this.writeToTerminal(result.stdout);
+      }
+      if (result.stderr) {
+        this.writeToTerminal(result.stderr, true);
+      }
+      return {
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+      };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const stderr = `Error: ${msg}\n`;
+      this.writeToTerminal(stderr, true);
+      return {
+        stdout: '',
+        stderr,
+        exitCode: 1,
+      };
+    } finally {
+      this.isExecuting = false;
+      this.showPrompt();
+    }
+  }
+
   /** Clear the terminal screen. */
   clearTerminal(): void {
     this.terminal?.clear();

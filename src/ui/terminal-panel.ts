@@ -28,6 +28,18 @@ export class TerminalPanel {
     this.shell?.clearTerminal();
   }
 
+  /** Execute a command and render it in the terminal. */
+  async runCommand(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    if (!this.shell) {
+      return {
+        stdout: '',
+        stderr: 'terminal is unavailable\n',
+        exitCode: 1,
+      };
+    }
+    return this.shell.executeCommandInTerminal(command);
+  }
+
   /** Re-fit the terminal to its container (needed after tab switch). */
   refit(): void {
     // WasmShell creates a FitAddon internally — trigger resize via ResizeObserver

@@ -226,12 +226,13 @@
       .file-browser__icon { flex-shrink: 0; font-size: 13px; }
       .file-browser__name { overflow: hidden; text-overflow: ellipsis; }
       .file-browser__size { margin-left: auto; color: #666; font-size: 11px; flex-shrink: 0; padding-left: 8px; }
-      .file-browser__zip-btn {
-        margin-left: auto; background: #2a2a4a; border: 1px solid #3a3a5a;
+      .file-browser__action-btn {
+        background: #2a2a4a; border: 1px solid #3a3a5a;
         color: #a0a0b0; cursor: pointer; font-size: 11px; padding: 1px 6px;
         border-radius: 3px; flex-shrink: 0; line-height: 1.4;
       }
-      .file-browser__zip-btn:hover { background: #e94560; color: #fff; border-color: #e94560; }
+      .file-browser__action-btn:hover { background: #e94560; color: #fff; border-color: #e94560; }
+      .file-browser__action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
       /* ------------------------------------------------------------------ */
       /* Memory panel                                                       */
