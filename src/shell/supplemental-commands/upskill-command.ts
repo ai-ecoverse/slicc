@@ -2,6 +2,7 @@ import { defineCommand } from 'just-bash';
 import type { Command, CommandContext, SecureFetch } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import { unzipSync } from 'fflate';
+import { consumeCachedBinaryByUrl } from '../binary-cache.js';
 
 // ClawHub uses a Convex backend - this is the actual API endpoint
 const CLAWHUB_API = 'https://wry-manatee-359.convex.site/api/v1';
@@ -175,33 +176,26 @@ async function installFromClawHub(
       };
     }
 
-    // The response body may have been UTF-8 decoded (corrupting binary data).
-    // Check content-type to see if it was supposed to be binary.
+    // The response body should be latin1-encoded by the fetch proxy for binary content.
+    // Try to get the raw binary from the cache first (bypasses string encoding issues).
     const contentType = downloadResponse.headers['content-type'] || '';
     
-    // For binary content, the body should be latin1-encoded by the fetch proxy.
-    // If body length != what we expect, the data was likely UTF-8 decoded incorrectly.
-    let zipBytes: Uint8Array;
+    // Try to get cached binary data by URL first (most reliable - bypasses string encoding issues)
+    let zipBytes = consumeCachedBinaryByUrl(downloadUrl);
+    let badCharIdx = -1;
+    let badCharCode = 0;
     
-    // Check if we got proper latin1 encoding (body chars should all be <= 255)
-    let isLatin1 = true;
-    for (let i = 0; i < Math.min(downloadResponse.body.length, 100); i++) {
-      if (downloadResponse.body.charCodeAt(i) > 255) {
-        isLatin1 = false;
-        break;
-      }
-    }
-    
-    if (isLatin1) {
-      // Proper latin1 encoding - each char maps to one byte
+    if (!zipBytes) {
+      // Fallback: Convert latin1 string to bytes - each char code maps directly to a byte
       zipBytes = new Uint8Array(downloadResponse.body.length);
       for (let i = 0; i < downloadResponse.body.length; i++) {
-        zipBytes[i] = downloadResponse.body.charCodeAt(i);
+        const code = downloadResponse.body.charCodeAt(i);
+        if (code > 255 && badCharIdx < 0) {
+          badCharIdx = i;
+          badCharCode = code;
+        }
+        zipBytes[i] = code & 0xFF; // Mask to byte range
       }
-    } else {
-      // Response was UTF-8 decoded - try to re-encode
-      // This is lossy and will likely fail, but try anyway
-      zipBytes = new TextEncoder().encode(downloadResponse.body);
     }
 
     // Unzip the bundle
@@ -212,9 +206,10 @@ async function installFromClawHub(
       const msg = unzipErr instanceof Error ? unzipErr.message : String(unzipErr);
       // Debug info
       const hexPreview = Array.from(zipBytes.slice(0, 20)).map(b => b.toString(16).padStart(2, '0')).join(' ');
+      const badCharInfo = badCharIdx >= 0 ? `\nBad char at ${badCharIdx}: code ${badCharCode}` : '';
       return {
         stdout: '',
-        stderr: `upskill: failed to unzip: ${msg}\nContent-Type: ${contentType}\nLatin1: ${isLatin1}\nBody: ${downloadResponse.body.length} chars, Bytes: ${zipBytes.length}\nHex: ${hexPreview}\n`,
+        stderr: `upskill: failed to unzip: ${msg}\nContent-Type: ${contentType}\nBody: ${downloadResponse.body.length} chars\nHex: ${hexPreview}${badCharInfo}\n`,
         exitCode: 1,
       };
     }

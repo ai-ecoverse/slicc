@@ -12,6 +12,7 @@
  */
 
 const cache = new Map<string, Uint8Array>();
+const urlCache = new Map<string, Uint8Array>();
 
 /** Generate a cache key from a string's length and a few sample bytes. */
 function cacheKey(s: string): string {
@@ -40,6 +41,30 @@ export function cacheBinaryBody(latin1Body: string, bytes: Uint8Array): void {
   cache.set(key, bytes);
   // Auto-expire after 10s to prevent memory leaks if writeFile is never called
   setTimeout(() => cache.delete(key), 10_000);
+}
+
+/**
+ * Store binary data associated with a URL (for direct retrieval by URL).
+ * Called by createProxiedFetch when a binary response is received.
+ */
+export function cacheBinaryByUrl(url: string, bytes: Uint8Array): void {
+  urlCache.set(url, bytes);
+  // Auto-expire after 10s
+  setTimeout(() => urlCache.delete(url), 10_000);
+}
+
+/**
+ * Try to retrieve cached binary data by URL.
+ * Called by upskill and other commands that need raw binary data.
+ * Returns the original bytes if found, null otherwise.
+ */
+export function consumeCachedBinaryByUrl(url: string): Uint8Array | null {
+  const bytes = urlCache.get(url);
+  if (bytes) {
+    urlCache.delete(url);
+    return bytes;
+  }
+  return null;
 }
 
 /**

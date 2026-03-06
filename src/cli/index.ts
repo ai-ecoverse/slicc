@@ -478,9 +478,12 @@ async function main() {
         }
       });
 
-      // Stream body
+      // Send body as raw binary - explicitly set content-length and use end() 
+      // instead of send() to avoid any Express middleware transformations
       const body = await upstream.arrayBuffer();
-      res.send(Buffer.from(body));
+      const buffer = Buffer.from(body);
+      res.setHeader('Content-Length', buffer.length);
+      res.end(buffer);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       res.status(502).json({ error: `Proxy fetch failed: ${message}` });
