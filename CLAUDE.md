@@ -94,7 +94,7 @@ All tools use the legacy ToolDefinition interface (name, description, inputSchem
 **Browser tool enhancements:**
 - `screenshot` action now supports `path` (save PNG to VFS), `fullPage` (capture entire scrollable page), and `selector` (capture just one element)
 - `show_image` action displays image files from VFS inline in the chat with automatic base64 encoding
-- `serve` action serves a VFS directory as a web app in a new browser tab via the preview Service Worker. Takes `directory` (VFS path) and optional `entry` (default `index.html`). Returns the new tab's targetId for subsequent snapshot/screenshot/evaluate calls.
+- `serve` action serves a VFS directory as a web app in a new browser tab via the preview Service Worker. Takes `directory` (VFS path) and optional `entry` (default `index.html`). Creates a new tab and includes the targetId in the response text for subsequent snapshot/screenshot/evaluate calls. Validates `entry` against path traversal (`..`, absolute paths).
 - Auto-resolves to the user's active/focused tab when targetId is omitted (CDP types TargetInfo/PageInfo now include `active` field)
 - VFS access via `path` parameter to save results without bloating conversation history
 - App tab detection excludes `/preview/` URLs to prevent preview tabs from being misidentified as the SLICC app tab in extension mode
@@ -162,7 +162,7 @@ Delegation:
 ## Key Conventions
 
 - **Two type systems**: Legacy ToolDefinition/ToolResult (in src/tools/) and pi-compatible AgentTool/AgentToolResult (in src/core/). The adapter in tool-adapter.ts bridges them.
-- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 391 tests across 28 files.
+- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 396 tests across 28 files.
 - **Logging**: createLogger('namespace') from src/core/logger.ts. Level-filtered, DEBUG in dev, ERROR in prod. Uses __DEV__ global (set by Vite define).
 - **Node shims**: src/shims/empty.ts stubs out node:zlib and node:module for the browser bundle (just-bash references them).
 - **Multi-provider auth**: Provider settings in `src/ui/provider-settings.ts`. Supports Anthropic (direct), Azure AI Foundry (Claude on Azure), Azure OpenAI (GPT), AWS Bedrock, and many more via pi-ai. Provider/API key/baseUrl stored in localStorage. Model resolved via `resolveCurrentModel()` with baseUrl override.

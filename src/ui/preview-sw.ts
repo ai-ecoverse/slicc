@@ -53,7 +53,7 @@ async function handlePreviewRequest(vfsPath: string): Promise<Response> {
       if (stat.isDirectory()) {
         vfsPath = vfsPath.endsWith('/') ? vfsPath + 'index.html' : vfsPath + '/index.html';
       }
-    } catch { /* not a dir, continue */ }
+    } catch { /* stat failed — not a dir or doesn't exist yet, continue to readFile */ }
 
     const mimeType = getMimeType(vfsPath);
     const isText = TEXT_TYPES.has(mimeType);
@@ -70,8 +70,14 @@ async function handlePreviewRequest(vfsPath: string): Promise<Response> {
         'Cache-Control': 'no-cache',
       },
     });
-  } catch {
-    return new Response('Not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+  } catch (err: unknown) {
+    // Distinguish "not found" from filesystem/system errors
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('ENOENT')) {
+      return new Response('Not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+    }
+    console.error('[preview-sw] Error serving', vfsPath, msg);
+    return new Response(`Preview error: ${msg}`, { status: 500, headers: { 'Content-Type': 'text/plain' } });
   }
 }
 

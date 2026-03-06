@@ -24,7 +24,7 @@ async function main(): Promise<void> {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/preview-sw.js', { scope: '/preview/' })
       .then(() => log.info('Preview SW registered'))
-      .catch(err => log.warn('Preview SW registration failed', err));
+      .catch(err => log.error('Preview SW registration failed — preview feature will not work', err));
   }
 
   // Check for API key (first-run dialog)

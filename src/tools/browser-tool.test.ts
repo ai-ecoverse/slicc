@@ -86,6 +86,36 @@ function buildPreviewPath(directory: string, entry: string): string {
   return `/preview${normalizedDir}${normalizedDir.endsWith('/') ? '' : '/'}${entry}`;
 }
 
+/**
+ * Entry validation logic — extracted from the serve action.
+ * Rejects path traversal and absolute paths in the entry parameter.
+ */
+function isValidEntry(entry: string): boolean {
+  return !entry.includes('..') && !entry.startsWith('/');
+}
+
+describe('Browser Tool - serve action entry validation', () => {
+  it('accepts simple filename', () => {
+    expect(isValidEntry('index.html')).toBe(true);
+  });
+
+  it('accepts subdirectory entry', () => {
+    expect(isValidEntry('pages/about.html')).toBe(true);
+  });
+
+  it('rejects parent traversal', () => {
+    expect(isValidEntry('../escape.html')).toBe(false);
+  });
+
+  it('rejects nested parent traversal', () => {
+    expect(isValidEntry('pages/../../escape.html')).toBe(false);
+  });
+
+  it('rejects absolute path', () => {
+    expect(isValidEntry('/etc/passwd')).toBe(false);
+  });
+});
+
 describe('Browser Tool - serve action URL construction', () => {
   it('constructs preview path for absolute directory', () => {
     expect(buildPreviewPath('/workspace/my-app', 'index.html'))

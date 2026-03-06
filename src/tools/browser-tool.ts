@@ -473,6 +473,11 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
 
             if (!directory) return { content: 'serve requires a directory path', isError: true };
 
+            // Reject path traversal in entry to prevent serving files outside the directory
+            if (entry.includes('..') || entry.startsWith('/')) {
+              return { content: `Invalid entry file: ${entry} (must be a relative path without "..")`, isError: true };
+            }
+
             // Verify entry file exists in VFS
             const entryPath = directory.endsWith('/')
               ? directory + entry
@@ -481,8 +486,12 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
             if (fs) {
               try {
                 await fs.stat(entryPath);
-              } catch {
-                return { content: `Entry file not found: ${entryPath}`, isError: true };
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                if (msg.includes('ENOENT')) {
+                  return { content: `Entry file not found: ${entryPath}`, isError: true };
+                }
+                return { content: `Failed to access entry file (${entryPath}): ${msg}`, isError: true };
               }
             }
 
@@ -500,7 +509,13 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
             appTabId = null;
 
             // Open in a new tab
-            const newTargetId = await browser.createPage(previewUrl);
+            let newTargetId: string;
+            try {
+              newTargetId = await browser.createPage(previewUrl);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              return { content: `Failed to create preview tab: ${msg}`, isError: true };
+            }
 
             return {
               content: `Serving ${directory} in tab ${newTargetId}\nURL: ${previewUrl}\nUse snapshot, screenshot, evaluate, click etc. to interact with the page.`

@@ -17,7 +17,7 @@ export default defineConfig(({ mode }) => ({
         let cachedMtime = 0;
         const swPath = resolve(__dirname, 'src/ui/preview-sw.ts');
 
-        server.middlewares.use('/preview-sw.js', async (_req, res, next) => {
+        server.middlewares.use('/preview-sw.js', async (_req, res) => {
           try {
             const { statSync } = await import('fs');
             const mtime = statSync(swPath).mtimeMs;
@@ -39,8 +39,11 @@ export default defineConfig(({ mode }) => ({
             res.setHeader('Content-Type', 'application/javascript');
             res.end(cachedCode);
           } catch (err) {
-            console.error('[preview-sw-builder] Failed to build:', err);
-            next();
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error('[preview-sw-builder] Failed to build:', msg);
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(`console.error('[preview-sw] Build failed: ${msg.replace(/'/g, "\\'")}');`);
           }
         });
       },
