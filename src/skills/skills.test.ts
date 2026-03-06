@@ -10,9 +10,10 @@ import {
   applySkill,
   uninstallSkill,
   readManifest,
-  SKILLS_DIR,
   SLICC_DIR,
 } from './index.js';
+
+const SKILLS_DIR = '/workspace/skills';
 
 describe('Skills Engine', () => {
   let fs: VirtualFS;
@@ -50,10 +51,10 @@ describe('Skills Engine', () => {
 
     it('discovers skills with manifest.yaml', async () => {
       // Create a skill
-      await fs.mkdir(`/${SKILLS_DIR}`);
-      await fs.mkdir(`/${SKILLS_DIR}/test-skill`);
+      await fs.mkdir('/workspace/skills', { recursive: true });
+      await fs.mkdir(`/workspace/skills/test-skill`);
       await fs.writeFile(
-        `/${SKILLS_DIR}/test-skill/manifest.yaml`,
+        `/workspace/skills/test-skill/manifest.yaml`,
         `skill: test-skill
 version: 1.0.0
 description: A test skill
@@ -70,10 +71,10 @@ adds:
     });
 
     it('discovers skills with SKILL.md only', async () => {
-      await fs.mkdir(`/${SKILLS_DIR}`);
-      await fs.mkdir(`/${SKILLS_DIR}/simple-skill`);
+      await fs.mkdir('/workspace/skills', { recursive: true });
+      await fs.mkdir(`/workspace/skills/simple-skill`);
       await fs.writeFile(
-        `/${SKILLS_DIR}/simple-skill/SKILL.md`,
+        `/workspace/skills/simple-skill/SKILL.md`,
         '# Simple Skill\n\nInstructions here.',
       );
 
@@ -85,10 +86,10 @@ adds:
 
   describe('readManifest', () => {
     it('parses manifest.yaml correctly', async () => {
-      await fs.mkdir(`/${SKILLS_DIR}`);
-      await fs.mkdir(`/${SKILLS_DIR}/my-skill`);
+      await fs.mkdir('/workspace/skills', { recursive: true });
+      await fs.mkdir(`/workspace/skills/my-skill`);
       await fs.writeFile(
-        `/${SKILLS_DIR}/my-skill/manifest.yaml`,
+        `/workspace/skills/my-skill/manifest.yaml`,
         `skill: my-skill
 version: 2.0.0
 description: My awesome skill
@@ -104,7 +105,7 @@ conflicts:
 `,
       );
 
-      const manifest = await readManifest(fs, `/${SKILLS_DIR}/my-skill`);
+      const manifest = await readManifest(fs, `/workspace/skills/my-skill`);
       expect(manifest.skill).toBe('my-skill');
       expect(manifest.version).toBe('2.0.0');
       expect(manifest.description).toBe('My awesome skill');
@@ -118,10 +119,10 @@ conflicts:
   describe('applySkill', () => {
     it('installs a skill and copies files', async () => {
       // Set up skill
-      await fs.mkdir(`/${SKILLS_DIR}`);
-      await fs.mkdir(`/${SKILLS_DIR}/hello`);
+      await fs.mkdir('/workspace/skills', { recursive: true });
+      await fs.mkdir(`/workspace/skills/hello`);
       await fs.writeFile(
-        `/${SKILLS_DIR}/hello/manifest.yaml`,
+        `/workspace/skills/hello/manifest.yaml`,
         `skill: hello
 version: 1.0.0
 description: Hello world skill
@@ -129,8 +130,8 @@ adds:
   - hello.txt
 `,
       );
-      await fs.mkdir(`/${SKILLS_DIR}/hello/add`);
-      await fs.writeFile(`/${SKILLS_DIR}/hello/add/hello.txt`, 'Hello, world!');
+      await fs.mkdir(`/workspace/skills/hello/add`);
+      await fs.writeFile(`/workspace/skills/hello/add/hello.txt`, 'Hello, world!');
 
       // Apply skill
       const result = await applySkill(fs, 'hello');
@@ -149,10 +150,10 @@ adds:
 
     it('fails if skill is already installed', async () => {
       // Set up and install skill
-      await fs.mkdir(`/${SKILLS_DIR}`);
-      await fs.mkdir(`/${SKILLS_DIR}/hello`);
+      await fs.mkdir('/workspace/skills', { recursive: true });
+      await fs.mkdir(`/workspace/skills/hello`);
       await fs.writeFile(
-        `/${SKILLS_DIR}/hello/manifest.yaml`,
+        `/workspace/skills/hello/manifest.yaml`,
         `skill: hello
 version: 1.0.0
 description: Hello world skill
@@ -167,10 +168,10 @@ description: Hello world skill
     });
 
     it('fails if dependencies are missing', async () => {
-      await fs.mkdir(`/${SKILLS_DIR}`);
-      await fs.mkdir(`/${SKILLS_DIR}/dependent`);
+      await fs.mkdir('/workspace/skills', { recursive: true });
+      await fs.mkdir(`/workspace/skills/dependent`);
       await fs.writeFile(
-        `/${SKILLS_DIR}/dependent/manifest.yaml`,
+        `/workspace/skills/dependent/manifest.yaml`,
         `skill: dependent
 version: 1.0.0
 description: Depends on base
@@ -187,10 +188,10 @@ depends:
 
     it('fails if conflicting skill is installed', async () => {
       // Install first skill
-      await fs.mkdir(`/${SKILLS_DIR}`);
-      await fs.mkdir(`/${SKILLS_DIR}/skill-a`);
+      await fs.mkdir('/workspace/skills', { recursive: true });
+      await fs.mkdir(`/workspace/skills/skill-a`);
       await fs.writeFile(
-        `/${SKILLS_DIR}/skill-a/manifest.yaml`,
+        `/workspace/skills/skill-a/manifest.yaml`,
         `skill: skill-a
 version: 1.0.0
 description: Skill A
@@ -199,9 +200,9 @@ description: Skill A
       await applySkill(fs, 'skill-a');
 
       // Try to install conflicting skill
-      await fs.mkdir(`/${SKILLS_DIR}/skill-b`);
+      await fs.mkdir(`/workspace/skills/skill-b`);
       await fs.writeFile(
-        `/${SKILLS_DIR}/skill-b/manifest.yaml`,
+        `/workspace/skills/skill-b/manifest.yaml`,
         `skill: skill-b
 version: 1.0.0
 description: Skill B conflicts with A
@@ -220,10 +221,10 @@ conflicts:
   describe('uninstallSkill', () => {
     it('removes installed skill files', async () => {
       // Set up and install skill
-      await fs.mkdir(`/${SKILLS_DIR}`);
-      await fs.mkdir(`/${SKILLS_DIR}/hello`);
+      await fs.mkdir('/workspace/skills', { recursive: true });
+      await fs.mkdir(`/workspace/skills/hello`);
       await fs.writeFile(
-        `/${SKILLS_DIR}/hello/manifest.yaml`,
+        `/workspace/skills/hello/manifest.yaml`,
         `skill: hello
 version: 1.0.0
 description: Hello world skill
@@ -231,8 +232,8 @@ adds:
   - hello.txt
 `,
       );
-      await fs.mkdir(`/${SKILLS_DIR}/hello/add`);
-      await fs.writeFile(`/${SKILLS_DIR}/hello/add/hello.txt`, 'Hello!');
+      await fs.mkdir(`/workspace/skills/hello/add`);
+      await fs.writeFile(`/workspace/skills/hello/add/hello.txt`, 'Hello!');
 
       await applySkill(fs, 'hello');
 
@@ -260,10 +261,10 @@ adds:
 
     it('fails if other skills depend on it', async () => {
       // Install base skill
-      await fs.mkdir(`/${SKILLS_DIR}`);
-      await fs.mkdir(`/${SKILLS_DIR}/base`);
+      await fs.mkdir('/workspace/skills', { recursive: true });
+      await fs.mkdir(`/workspace/skills/base`);
       await fs.writeFile(
-        `/${SKILLS_DIR}/base/manifest.yaml`,
+        `/workspace/skills/base/manifest.yaml`,
         `skill: base
 version: 1.0.0
 description: Base skill
@@ -272,9 +273,9 @@ description: Base skill
       await applySkill(fs, 'base');
 
       // Install dependent skill
-      await fs.mkdir(`/${SKILLS_DIR}/dependent`);
+      await fs.mkdir(`/workspace/skills/dependent`);
       await fs.writeFile(
-        `/${SKILLS_DIR}/dependent/manifest.yaml`,
+        `/workspace/skills/dependent/manifest.yaml`,
         `skill: dependent
 version: 1.0.0
 description: Depends on base
@@ -293,10 +294,10 @@ depends:
 
   describe('security', () => {
     it('rejects path traversal in adds', async () => {
-      await fs.mkdir(`/${SKILLS_DIR}`);
-      await fs.mkdir(`/${SKILLS_DIR}/evil`);
+      await fs.mkdir('/workspace/skills', { recursive: true });
+      await fs.mkdir(`/workspace/skills/evil`);
       await fs.writeFile(
-        `/${SKILLS_DIR}/evil/manifest.yaml`,
+        `/workspace/skills/evil/manifest.yaml`,
         `skill: evil
 version: 1.0.0
 description: Evil skill with path traversal
@@ -311,10 +312,10 @@ adds:
     });
 
     it('rejects absolute paths in adds', async () => {
-      await fs.mkdir(`/${SKILLS_DIR}`);
-      await fs.mkdir(`/${SKILLS_DIR}/evil`);
+      await fs.mkdir('/workspace/skills', { recursive: true });
+      await fs.mkdir(`/workspace/skills/evil`);
       await fs.writeFile(
-        `/${SKILLS_DIR}/evil/manifest.yaml`,
+        `/workspace/skills/evil/manifest.yaml`,
         `skill: evil
 version: 1.0.0
 description: Evil skill with absolute path
@@ -329,10 +330,10 @@ adds:
     });
 
     it('enforces manifest.skill matches directory name', async () => {
-      await fs.mkdir(`/${SKILLS_DIR}`);
-      await fs.mkdir(`/${SKILLS_DIR}/my-skill`);
+      await fs.mkdir('/workspace/skills', { recursive: true });
+      await fs.mkdir(`/workspace/skills/my-skill`);
       await fs.writeFile(
-        `/${SKILLS_DIR}/my-skill/manifest.yaml`,
+        `/workspace/skills/my-skill/manifest.yaml`,
         `skill: different-name
 version: 1.0.0
 description: Mismatched skill name

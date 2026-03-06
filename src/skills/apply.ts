@@ -4,7 +4,6 @@
 
 import type { VirtualFS } from '../fs/index.js';
 import type { ApplyResult, AppliedSkill, SkillManifest } from './types.js';
-import { SKILLS_DIR } from './constants.js';
 import { readManifest, checkDependencies, checkConflicts } from './manifest.js';
 import {
   getAppliedSkills,
@@ -58,13 +57,15 @@ async function ensureDir(fs: VirtualFS, dirPath: string): Promise<void> {
  * Apply a skill from the skills directory.
  * 
  * @param fs - Virtual filesystem
- * @param skillName - Name of the skill (directory name in /skills/)
+ * @param skillName - Name of the skill (directory name in skills dir)
+ * @param skillsDir - Base directory for skills (default: /workspace/skills)
  */
 export async function applySkill(
   fs: VirtualFS,
   skillName: string,
+  skillsDir: string = '/workspace/skills',
 ): Promise<ApplyResult> {
-  const skillDir = `/${SKILLS_DIR}/${skillName}`;
+  const skillDir = `${skillsDir}/${skillName}`;
 
   // Initialize skills system if needed
   await initSkillsSystem(fs);

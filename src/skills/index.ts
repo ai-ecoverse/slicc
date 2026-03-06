@@ -3,7 +3,7 @@
  * 
  * A system for discovering, installing, and managing skills that extend
  * the agent's capabilities. Skills are stored in the virtual filesystem
- * under /skills/ and can add new files or modify existing ones.
+ * under /workspace/skills/ and can add new files or modify existing ones.
  * 
  * Usage:
  * ```typescript

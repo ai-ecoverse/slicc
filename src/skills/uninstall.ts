@@ -4,7 +4,6 @@
 
 import type { VirtualFS } from '../fs/index.js';
 import type { UninstallResult, SkillManifest } from './types.js';
-import { SKILLS_DIR } from './constants.js';
 import { readManifest } from './manifest.js';
 import { readState, removeSkillFromState } from './state.js';
 
@@ -35,6 +34,7 @@ function validatePath(filePath: string): boolean {
 export async function uninstallSkill(
   fs: VirtualFS,
   skillName: string,
+  skillsDir: string = '/workspace/skills',
 ): Promise<UninstallResult> {
   const state = await readState(fs);
   const appliedSkill = state.applied_skills.find((s) => s.name === skillName);
@@ -48,7 +48,7 @@ export async function uninstallSkill(
   }
 
   // Check if other skills depend on this one
-  const skillDir = `/${SKILLS_DIR}/${skillName}`;
+  const skillDir = `${skillsDir}/${skillName}`;
   let manifest: SkillManifest;
 
   try {
@@ -69,7 +69,7 @@ export async function uninstallSkill(
     if (other.name === skillName) continue;
 
     try {
-      const otherDir = `/${SKILLS_DIR}/${other.name}`;
+      const otherDir = `${skillsDir}/${other.name}`;
       const otherManifest = await readManifest(fs, otherDir);
 
       if (otherManifest.depends?.includes(skillName)) {

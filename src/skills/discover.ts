@@ -4,15 +4,15 @@
 
 import type { VirtualFS } from '../fs/index.js';
 import type { DiscoveredSkill } from './types.js';
-import { SKILLS_DIR, MANIFEST_FILE, SKILL_FILE } from './constants.js';
+import { MANIFEST_FILE, SKILL_FILE } from './constants.js';
 import { readManifest } from './manifest.js';
 import { readState } from './state.js';
 
 /**
- * Discover all available skills in the /skills directory.
+ * Discover all available skills in the /workspace/skills directory.
  */
-export async function discoverSkills(fs: VirtualFS): Promise<DiscoveredSkill[]> {
-  const skillsPath = `/${SKILLS_DIR}`;
+export async function discoverSkills(fs: VirtualFS, skillsDir: string = '/workspace/skills'): Promise<DiscoveredSkill[]> {
+  const skillsPath = skillsDir;
   const discovered: DiscoveredSkill[] = [];
 
   // Get current state to check installation status
@@ -95,8 +95,9 @@ export async function discoverSkills(fs: VirtualFS): Promise<DiscoveredSkill[]> 
 export async function getSkillInfo(
   fs: VirtualFS,
   skillName: string,
+  skillsDir: string = '/workspace/skills',
 ): Promise<DiscoveredSkill | null> {
-  const skills = await discoverSkills(fs);
+  const skills = await discoverSkills(fs, skillsDir);
   return skills.find((s) => s.name === skillName) || null;
 }
 
@@ -106,8 +107,9 @@ export async function getSkillInfo(
 export async function readSkillInstructions(
   fs: VirtualFS,
   skillName: string,
+  skillsDir: string = '/workspace/skills',
 ): Promise<string | null> {
-  const skillDir = `/${SKILLS_DIR}/${skillName}`;
+  const skillDir = `${skillsDir}/${skillName}`;
 
   try {
     return await fs.readTextFile(`${skillDir}/${SKILL_FILE}`);

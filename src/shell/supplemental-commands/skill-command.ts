@@ -46,7 +46,7 @@ export function createSkillCommand(fs: VirtualFS): Command {
 
           if (discovered.length === 0) {
             return {
-              stdout: 'No skills found in /skills/\n\nCreate a skill by adding a directory with a manifest.yaml or SKILL.md\n',
+              stdout: 'No skills found in /workspace/skills/\n\nCreate a skill by adding a directory with a manifest.yaml or SKILL.md\n',
               stderr: '',
               exitCode: 0,
             };
