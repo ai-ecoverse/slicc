@@ -418,11 +418,9 @@ async function main(): Promise<void> {
                 channel,
               });
 
-              // Emit to UI if this scoop is selected
+              // Add lick to UI if this scoop is selected
               if (selectedScoop?.jid === targetScoop.jid) {
-                emitToUI({ type: 'message_start', messageId: msgId });
-                emitToUI({ type: 'content_delta', messageId: msgId, text: content });
-                emitToUI({ type: 'content_done', messageId: msgId });
+                layout.panels.chat.addLickMessage(msgId, content, channel as 'webhook' | 'cron');
               }
 
               log.info('Routing lick to scoop', { type: channel, name: eventName, scoopJid: targetScoop.jid });

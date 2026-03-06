@@ -178,6 +178,21 @@ export class ChatPanel {
     this.persistSession();
   }
 
+  /** Add a lick message (webhook/cron event). */
+  addLickMessage(id: string, content: string, channel: 'webhook' | 'cron'): void {
+    const msg: ChatMessage = {
+      id,
+      role: 'user',
+      content,
+      timestamp: Date.now(),
+      source: 'lick',
+      channel,
+    };
+    this.messages.push(msg);
+    this.appendMessageEl(msg);
+    this.persistSession();
+  }
+
   /** Get current messages. */
   getMessages(): ChatMessage[] {
     return [...this.messages];
