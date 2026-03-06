@@ -201,3 +201,33 @@ export async function createDefaultSkills(fs: VirtualFS, skillsDir: string = '/w
     }
   }
 }
+
+/**
+ * Create default shared files (like /shared/CLAUDE.md) from bundled defaults.
+ */
+export async function createDefaultSharedFiles(fs: VirtualFS): Promise<void> {
+  const prefix = '/src/defaults';
+  
+  for (const [importPath, content] of Object.entries(defaultSkillFiles)) {
+    const vfsPath = importPath.slice(prefix.length);
+    
+    // Only copy files that belong under /shared/
+    if (!vfsPath.startsWith('/shared/')) continue;
+    
+    try {
+      // Check if file already exists
+      await fs.stat(vfsPath);
+      // File exists, skip
+    } catch {
+      // File doesn't exist, create it
+      const parentDir = vfsPath.substring(0, vfsPath.lastIndexOf('/'));
+      try {
+        await fs.mkdir(parentDir, { recursive: true });
+      } catch {
+        // Directory exists
+      }
+      await fs.writeFile(vfsPath, content);
+      log.info('Created default shared file', { path: vfsPath });
+    }
+  }
+}
