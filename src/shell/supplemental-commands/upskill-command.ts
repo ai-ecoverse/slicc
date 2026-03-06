@@ -1,23 +1,23 @@
 import { defineCommand } from 'just-bash';
 import type { Command, CommandContext, SecureFetch } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
+import { unzipSync } from 'fflate';
 
-const CLAWHUB_REGISTRY = 'https://clawhub.ai/api';
+// ClawHub uses a Convex backend - this is the actual API endpoint
+const CLAWHUB_API = 'https://wry-manatee-359.convex.site/api/v1';
 const SKILLS_DIR = '/workspace/skills';
 
-interface ClawHubSkill {
+interface ClawHubSearchResult {
   slug: string;
-  name: string;
-  description: string;
-  author: string;
-  downloads?: number;
-  stars?: number;
-  version?: string;
+  displayName: string;
+  summary: string;
+  version: string | null;
+  updatedAt: number;
+  score?: number;
 }
 
-interface ClawHubSearchResult {
-  skills: ClawHubSkill[];
-  total: number;
+interface ClawHubSearchResponse {
+  results: ClawHubSearchResult[];
 }
 
 interface GitHubContent {
@@ -78,10 +78,10 @@ Examples:
 async function searchClawHub(
   query: string,
   fetch: SecureFetch,
-  limit: number = 10
+  _limit: number = 10
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   try {
-    const url = `${CLAWHUB_REGISTRY}/skills/search?q=${encodeURIComponent(query)}&limit=${limit}`;
+    const url = `${CLAWHUB_API}/search?q=${encodeURIComponent(query)}`;
     const response = await fetch(url, {
       headers: { 'Accept': 'application/json' },
     });
@@ -94,9 +94,9 @@ async function searchClawHub(
       };
     }
 
-    const data = JSON.parse(response.body) as ClawHubSearchResult;
+    const data = JSON.parse(response.body) as ClawHubSearchResponse;
 
-    if (!data.skills || data.skills.length === 0) {
+    if (!data.results || data.results.length === 0) {
       return {
         stdout: `No skills found for "${query}"\n\nTry a different search term or browse https://clawhub.ai\n`,
         stderr: '',
@@ -104,17 +104,18 @@ async function searchClawHub(
       };
     }
 
-    let output = `Search results for "${query}" (${data.skills.length} of ${data.total}):\n\n`;
+    let output = `Search results for "${query}" (${data.results.length} found):\n\n`;
 
-    for (const skill of data.skills) {
-      output += `  ${skill.slug.padEnd(30)} ${(skill.author || 'unknown').padEnd(15)}\n`;
-      if (skill.description) {
-        output += `    ${skill.description.slice(0, 70)}${skill.description.length > 70 ? '...' : ''}\n`;
+    for (const skill of data.results) {
+      output += `  ${skill.slug.padEnd(35)} ${(skill.displayName || skill.slug).padEnd(25)}\n`;
+      if (skill.summary) {
+        output += `    ${skill.summary.slice(0, 70)}${skill.summary.length > 70 ? '...' : ''}\n`;
       }
       output += '\n';
     }
 
-    output += `\nTo install: upskill https://clawhub.ai/<author>/<skill>\n`;
+    output += `\nTo install: upskill clawhub:<slug>\n`;
+    output += `Example: upskill clawhub:${data.results[0]?.slug || 'skill-name'}\n`;
 
     return { stdout: output, stderr: '', exitCode: 0 };
   } catch (err) {
@@ -128,7 +129,7 @@ async function searchClawHub(
 }
 
 /**
- * Install a skill from ClawHub
+ * Install a skill from ClawHub (downloads as ZIP)
  */
 async function installFromClawHub(
   slug: string,
@@ -137,50 +138,34 @@ async function installFromClawHub(
   force: boolean = false
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   try {
-    // Fetch skill metadata
-    const metaUrl = `${CLAWHUB_REGISTRY}/skills/${slug}`;
-    const metaResponse = await fetch(metaUrl, {
-      headers: { 'Accept': 'application/json' },
-    });
+    // Check if skill already exists
+    const skillDir = `${SKILLS_DIR}/${slug}`;
+    try {
+      await fs.stat(skillDir);
+      if (!force) {
+        return {
+          stdout: '',
+          stderr: `upskill: skill "${slug}" already exists (use --force to overwrite)\n`,
+          exitCode: 1,
+        };
+      }
+      // Remove existing skill
+      await fs.rm(skillDir, { recursive: true });
+    } catch {
+      // Skill doesn't exist, good to proceed
+    }
 
-    if (metaResponse.status === 404) {
+    // Download skill ZIP bundle from ClawHub
+    const downloadUrl = `${CLAWHUB_API}/download?slug=${encodeURIComponent(slug)}`;
+    const downloadResponse = await fetch(downloadUrl, {});
+
+    if (downloadResponse.status === 404) {
       return {
         stdout: '',
         stderr: `upskill: skill "${slug}" not found on ClawHub\n`,
         exitCode: 1,
       };
     }
-
-    if (metaResponse.status !== 200) {
-      return {
-        stdout: '',
-        stderr: `upskill: failed to fetch skill metadata (HTTP ${metaResponse.status})\n`,
-        exitCode: 1,
-      };
-    }
-
-    const skill = JSON.parse(metaResponse.body) as ClawHubSkill & { files?: Array<{ path: string; content: string }> };
-
-    // Check if skill already exists
-    const skillDir = `${SKILLS_DIR}/${skill.slug}`;
-    try {
-      await fs.stat(skillDir);
-      if (!force) {
-        return {
-          stdout: '',
-          stderr: `upskill: skill "${skill.slug}" already exists (use --force to overwrite)\n`,
-          exitCode: 1,
-        };
-      }
-    } catch {
-      // Skill doesn't exist, good to proceed
-    }
-
-    // Download skill bundle
-    const downloadUrl = `${CLAWHUB_REGISTRY}/skills/${slug}/download`;
-    const downloadResponse = await fetch(downloadUrl, {
-      headers: { 'Accept': 'application/json' },
-    });
 
     if (downloadResponse.status !== 200) {
       return {
@@ -190,23 +175,41 @@ async function installFromClawHub(
       };
     }
 
-    const bundle = JSON.parse(downloadResponse.body) as { files: Array<{ path: string; content: string }> };
+    // Convert the latin1-encoded response body back to bytes
+    // (fetch proxy uses latin1 for binary content)
+    const zipBytes = new Uint8Array(downloadResponse.body.length);
+    for (let i = 0; i < downloadResponse.body.length; i++) {
+      zipBytes[i] = downloadResponse.body.charCodeAt(i);
+    }
+
+    // Unzip the bundle
+    const files = unzipSync(zipBytes);
 
     // Create skill directory
     await fs.mkdir(skillDir, { recursive: true });
 
-    // Write files
-    for (const file of bundle.files) {
-      const filePath = `${skillDir}/${file.path}`;
+    // Extract files
+    let fileCount = 0;
+    for (const [entryPath, content] of Object.entries(files)) {
+      const normalized = entryPath.replace(/\\/g, '/');
+      if (!normalized || normalized.endsWith('/')) continue;
+
+      // Skip _meta.json if present (ClawHub metadata)
+      if (normalized === '_meta.json') continue;
+
+      const filePath = `${skillDir}/${normalized}`;
       const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
       if (parentDir !== skillDir) {
         await fs.mkdir(parentDir, { recursive: true });
       }
-      await fs.writeFile(filePath, file.content);
+
+      // Write file content (Uint8Array)
+      await fs.writeFile(filePath, content);
+      fileCount++;
     }
 
     return {
-      stdout: `Installed skill "${skill.name || skill.slug}" v${skill.version || '1.0.0'} from ClawHub\n`,
+      stdout: `Installed skill "${slug}" from ClawHub (${fileCount} files)\n`,
       stderr: '',
       exitCode: 0,
     };
@@ -364,19 +367,26 @@ async function installFromGitHub(
 }
 
 /**
- * Parse ClawHub URL or shorthand into a slug
+ * Parse ClawHub URL or shorthand into a slug.
+ * ClawHub URLs are: https://clawhub.ai/{owner}/{slug}
+ * But the API only needs the slug (e.g., "tavily-search")
  */
 function parseClawHubRef(ref: string): string | null {
-  // Handle full URL: https://clawhub.ai/user/skill
-  const urlMatch = ref.match(/^https?:\/\/clawhub\.ai\/([^\/]+\/[^\/]+)/);
+  // Handle full URL: https://clawhub.ai/user/skill-slug
+  const urlMatch = ref.match(/^https?:\/\/clawhub\.ai\/[^\/]+\/([^\/]+)/);
   if (urlMatch) {
-    return urlMatch[1];
+    return urlMatch[1]; // Return just the slug, not owner/slug
   }
 
-  // Handle shorthand: clawhub:user/skill
-  const shortMatch = ref.match(/^clawhub:([^\/]+\/[^\/]+)/);
-  if (shortMatch) {
-    return shortMatch[1];
+  // Handle shorthand: clawhub:slug or clawhub:owner/slug
+  if (ref.startsWith('clawhub:')) {
+    const rest = ref.slice(8);
+    // If it contains a slash, take the second part (the slug)
+    if (rest.includes('/')) {
+      return rest.split('/')[1];
+    }
+    // Otherwise it's just the slug
+    return rest;
   }
 
   return null;
