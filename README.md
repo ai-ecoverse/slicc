@@ -20,8 +20,9 @@ A browser-based coding agent that runs as a **Chrome extension** or with a thin 
 - :file_folder: **Virtual Filesystem** — OPFS + IndexedDB-backed filesystem right in the browser, with folder ZIP download
 - :shell: **WebAssembly Bash Shell** — real Bash via [just-bash](https://github.com/nicolo-ribaudo/just-bash) compiled to WASM
 - :git: **Git Support** — clone, commit, push, pull via [isomorphic-git](https://isomorphic-git.org/) (see [available commands](#git-commands))
-- :robot: **Browser Automation** — screenshots (full page / element / saved to VFS), inline image display, navigation, JS eval, element clicking via Chrome DevTools Protocol (chrome.debugger in extension, WebSocket in CLI). Auto-detects user's active tab.
+- :robot: **Browser Automation** — screenshots (full page / element / saved to VFS), inline image display, navigation, JS eval, element clicking via Chrome DevTools Protocol (chrome.debugger in extension, WebSocket in CLI). Auto-detects user's active tab. HAR recording with user-defined JS filters.
 - :earth_americas: **VFS Web Preview** — serve agent-created HTML/CSS/JS apps in real browser tabs via a Service Worker that reads directly from the virtual filesystem. The agent can build a UI, preview it, screenshot it, and iterate — all without leaving Chrome.
+- :art: **Image Processing** — `convert` command for resize, rotate, crop, and quality adjustment via ImageMagick WASM
 - :pencil2: **File Operations** — read, write, edit files with syntax-aware tools
 - :mag: **Shell Search Commands** — use `grep`, `find`, and `rg` via the bash shell
 - :globe_with_meridians: **Networking** — curl and fetch support with binary-safe downloads
@@ -166,9 +167,9 @@ Source layout:
 | `src/core/` | Agent types, tool registry, context compaction, session management |
 | `src/tools/` | Tool implementations (file ops, search, browser, javascript) |
 | `src/fs/` | Virtual filesystem (IndexedDB/LightningFS) + RestrictedFS |
-| `src/shell/` | WebAssembly Bash shell + supplemental commands (node, python, sqlite) |
+| `src/shell/` | WebAssembly Bash shell + supplemental commands (node, python, sqlite, convert, skill, mount, webhook) |
 | `src/git/` | Git via isomorphic-git (clone, commit, push, pull, etc.) |
-| `src/cdp/` | Chrome DevTools Protocol client (WebSocket + chrome.debugger) |
+| `src/cdp/` | Chrome DevTools Protocol client (WebSocket + chrome.debugger), HAR recorder |
 | `src/cli/` | CLI server — Chrome launch, CDP proxy, Express |
 | `src/extension/` | Chrome extension service worker and type declarations |
 

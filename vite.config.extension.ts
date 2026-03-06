@@ -87,6 +87,14 @@ export default defineConfig(({ mode }) => ({
         for (const file of ['pyodide.asm.js', 'pyodide.asm.wasm', 'pyodide.js', 'pyodide-lock.json', 'python_stdlib.zip']) {
           try { copyFileSync(resolve(pyodideSrc, file), resolve(pyodideDest, file)); } catch { /* optional file */ }
         }
+
+        // Bundle ImageMagick WASM for extension (CDN blocked by extension CSP)
+        try {
+          copyFileSync(
+            resolve(__dirname, 'node_modules/@imagemagick/magick-wasm/dist/magick.wasm'),
+            resolve(outDir, 'magick.wasm'),
+          );
+        } catch { /* @imagemagick/magick-wasm not installed */ }
       },
     },
   ],

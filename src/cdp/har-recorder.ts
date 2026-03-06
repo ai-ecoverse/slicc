@@ -134,7 +134,7 @@ export interface RecordingSession {
   id: string;
   targetId: string;
   sessionId: string;
-  filter?: HarFilterFn;
+  filterCode?: string;
   pendingRequests: Map<string, PendingRequest>;
   entries: HarEntry[];
   startTime: number;
@@ -167,26 +167,6 @@ export class HarRecorder {
   ): Promise<string> {
     const recordingId = `rec-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     
-    // Parse filter function if provided
-    let filter: HarFilterFn | undefined;
-    if (filterCode) {
-      try {
-        // Create filter function in agent context (synchronous)
-        // eslint-disable-next-line @typescript-eslint/no-implied-eval
-        const filterFn = new Function('entry', `return (${filterCode})(entry);`) as (entry: HarEntry) => boolean | HarEntry;
-        filter = (entry: HarEntry) => {
-          try {
-            return filterFn(entry);
-          } catch (err) {
-            log.error('Filter function error', { recordingId, error: err instanceof Error ? err.message : String(err) });
-            return true; // Keep entry on error
-          }
-        };
-      } catch (err) {
-        throw new Error(`Invalid filter function: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-
     // Enable Network domain
     await this.client.send('Network.enable', {}, sessionId);
     await this.client.send('Page.enable', {}, sessionId);
@@ -202,7 +182,7 @@ export class HarRecorder {
       id: recordingId,
       targetId,
       sessionId,
-      filter,
+      filterCode,
       pendingRequests: new Map(),
       entries: [],
       startTime: Date.now(),
@@ -347,22 +327,9 @@ export class HarRecorder {
       // Body might not be available (e.g., for redirects)
     }
 
-    // Build and store HAR entry
+    // Build and store HAR entry (filtering applied at snapshot save, not per-entry)
     const entry = this.buildHarEntry(pending);
     if (entry) {
-      // Apply filter if defined
-      if (session.filter) {
-        const result = session.filter(entry);
-        if (result === false) {
-          session.pendingRequests.delete(requestId);
-          return;
-        }
-        if (typeof result === 'object' && result !== null) {
-          session.entries.push(result as HarEntry);
-          session.pendingRequests.delete(requestId);
-          return;
-        }
-      }
       session.entries.push(entry);
     }
 
@@ -478,6 +445,95 @@ export class HarRecorder {
   }
 
   /**
+   * Apply filter to entries. In extension mode, uses the sandbox iframe (CSP-exempt).
+   * In non-extension mode, compiles and applies directly.
+   * Returns entries unfiltered on error (graceful fallback).
+   */
+  private async applyFilter(entries: HarEntry[], filterCode: string): Promise<HarEntry[]> {
+    const isExtensionMode = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+
+    if (isExtensionMode) {
+      // Route through sandbox iframe (CSP-exempt, allows Function constructor)
+      try {
+        let sandbox = document.querySelector('iframe[data-js-tool]') as HTMLIFrameElement | null;
+        if (!sandbox) {
+          sandbox = document.createElement('iframe');
+          sandbox.style.display = 'none';
+          sandbox.dataset.jsTool = 'true';
+          sandbox.src = chrome.runtime.getURL('sandbox.html');
+          document.body.appendChild(sandbox);
+          await Promise.race([
+            new Promise<void>(resolve => {
+              sandbox!.addEventListener('load', () => resolve(), { once: true });
+            }),
+            new Promise<void>((_, reject) => {
+              setTimeout(() => reject(new Error('Sandbox iframe failed to load')), 5000);
+            }),
+          ]);
+        }
+
+        const id = `har-filter-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const filtered = await new Promise<HarEntry[]>((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            window.removeEventListener('message', handler);
+            reject(new Error('HAR filter sandbox timeout'));
+          }, 10000);
+
+          const handler = (event: MessageEvent) => {
+            if (event.data?.type === 'har_filter_result' && event.data.id === id) {
+              window.removeEventListener('message', handler);
+              clearTimeout(timeout);
+              if (event.data.error) {
+                reject(new Error(event.data.error));
+              } else {
+                resolve(event.data.entries);
+              }
+            }
+          };
+
+          window.addEventListener('message', handler);
+          sandbox!.contentWindow!.postMessage({
+            type: 'har_filter',
+            id,
+            entries,
+            filterCode,
+          }, '*');
+        });
+
+        return filtered;
+      } catch (err) {
+        log.error('HAR filter sandbox error, returning unfiltered', { error: err instanceof Error ? err.message : String(err) });
+        return entries;
+      }
+    } else {
+      // Non-extension: compile and apply directly (intentional dynamic eval for developer tool filter)
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-implied-eval
+        const filterFn = new Function('entry', `return (${filterCode})(entry);`) as HarFilterFn;
+        const result: HarEntry[] = [];
+        for (const entry of entries) {
+          try {
+            const filterResult = filterFn(entry);
+            if (filterResult === false) continue;
+            if (typeof filterResult === 'object' && filterResult !== null) {
+              result.push(filterResult as HarEntry);
+            } else {
+              result.push(entry);
+            }
+          } catch (err) {
+            log.error('Filter function error on entry, keeping it', { error: err instanceof Error ? err.message : String(err) });
+            result.push(entry);
+          }
+        }
+        return result;
+      } catch (err) {
+        log.error('Failed to compile filter, returning unfiltered', { error: err instanceof Error ? err.message : String(err) });
+        return entries;
+      }
+    }
+  }
+
+  /**
    * Save a HAR snapshot with specific entries and URL (used to avoid race conditions).
    */
   private async saveSnapshotWithEntries(
@@ -491,6 +547,16 @@ export class HarRecorder {
       return null;
     }
 
+    // Apply filter at save time (deferred from per-entry to batch)
+    const filteredEntries = session.filterCode
+      ? await this.applyFilter(entries, session.filterCode)
+      : entries;
+
+    if (filteredEntries.length === 0) {
+      log.debug('All entries filtered out', { recordingId: session.id, trigger });
+      return null;
+    }
+
     session.snapshotCount++;
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const urlSlug = this.urlToSlug(url);
@@ -501,12 +567,12 @@ export class HarRecorder {
       log: {
         version: '1.2',
         creator: { name: 'SLICC HAR Recorder', version: '1.0.0' },
-        entries,
+        entries: filteredEntries,
       } as HarLog,
     };
 
     await this.fs.writeFile(path, JSON.stringify(har, null, 2));
-    log.debug('Saved HAR snapshot', { recordingId: session.id, path, entryCount: entries.length });
+    log.debug('Saved HAR snapshot', { recordingId: session.id, path, entryCount: filteredEntries.length });
 
     return path;
   }

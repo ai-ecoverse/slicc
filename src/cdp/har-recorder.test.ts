@@ -107,10 +107,12 @@ describe('HarRecorder', () => {
       expect(exists).toBe(true);
     });
 
-    it('throws on invalid filter function', async () => {
-      await expect(
-        recorder.startRecording('target-1', 'session-1', 'invalid syntax {{{'),
-      ).rejects.toThrow('Invalid filter function');
+    it('stores invalid filter code without throwing (deferred to save time)', async () => {
+      // Invalid filter code is stored as-is; compilation error surfaces at save time
+      const recordingId = await recorder.startRecording('target-1', 'session-1', 'invalid syntax {{{');
+      expect(recordingId).toBeTruthy();
+      const session = recorder.getRecording(recordingId);
+      expect(session?.filterCode).toBe('invalid syntax {{{');
     });
 
     it('accepts valid filter function', async () => {
@@ -212,14 +214,14 @@ describe('HarRecorder', () => {
   });
 
   describe('filter function', () => {
-    it('excludes entries when filter returns false', async () => {
+    it('excludes entries when filter returns false (applied at save time)', async () => {
       const recordingId = await recorder.startRecording(
         'target-1',
         'session-1',
         '(entry) => !entry.request.url.includes("exclude")',
       );
 
-      // Request that should be excluded
+      // Request that should be excluded by filter
       transport.emit('Network.requestWillBeSent', {
         sessionId: 'session-1',
         requestId: 'req-1',
@@ -239,11 +241,16 @@ describe('HarRecorder', () => {
 
       await new Promise((r) => setTimeout(r, 50));
 
+      // Entries are stored unfiltered
       const session = recorder.getRecording(recordingId);
-      expect(session?.entries).toHaveLength(0);
+      expect(session?.entries).toHaveLength(1);
+
+      // Filter is applied at save time — snapshot should be null (all filtered out)
+      const path = await recorder.saveSnapshot(session!, 'close');
+      expect(path).toBeNull();
     });
 
-    it('transforms entries when filter returns object', async () => {
+    it('transforms entries when filter returns object (applied at save time)', async () => {
       const recordingId = await recorder.startRecording(
         'target-1',
         'session-1',
@@ -269,8 +276,141 @@ describe('HarRecorder', () => {
 
       await new Promise((r) => setTimeout(r, 50));
 
+      // Entries stored unfiltered
       const session = recorder.getRecording(recordingId);
-      expect(session?.entries[0].request.url).toBe('transformed');
+      expect(session?.entries[0].request.url).toBe('https://example.com/original');
+
+      // Filter transforms at save time — verify in saved HAR file
+      const path = await recorder.saveSnapshot(session!, 'close');
+      expect(path).toBeTruthy();
+      const harContent = await fs.readFile(path!, { encoding: 'utf-8' });
+      const har = JSON.parse(harContent as string);
+      expect(har.log.entries[0].request.url).toBe('transformed');
+    });
+
+    it('returns unfiltered entries when filter code is invalid (graceful fallback)', async () => {
+      const recordingId = await recorder.startRecording(
+        'target-1',
+        'session-1',
+        'invalid syntax {{{',
+      );
+
+      transport.emit('Network.requestWillBeSent', {
+        sessionId: 'session-1',
+        requestId: 'req-1',
+        timestamp: 1000,
+        request: { method: 'GET', url: 'https://example.com/api', headers: {} },
+      });
+      transport.emit('Network.responseReceived', {
+        sessionId: 'session-1',
+        requestId: 'req-1',
+        response: { status: 200, statusText: 'OK', headers: {} },
+      });
+      transport.emit('Network.loadingFinished', {
+        sessionId: 'session-1',
+        requestId: 'req-1',
+        timestamp: 1001,
+      });
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      const session = recorder.getRecording(recordingId);
+      const path = await recorder.saveSnapshot(session!, 'close');
+      expect(path).toBeTruthy();
+      const harContent = await fs.readFile(path!, { encoding: 'utf-8' });
+      const har = JSON.parse(harContent as string);
+      expect(har.log.entries).toHaveLength(1);
+      expect(har.log.entries[0].request.url).toBe('https://example.com/api');
+    });
+
+    it('filters mixed entries, keeping only those that pass', async () => {
+      const recordingId = await recorder.startRecording(
+        'target-1',
+        'session-1',
+        '(entry) => !entry.request.url.includes("analytics")',
+      );
+
+      // Entry that should pass filter
+      transport.emit('Network.requestWillBeSent', {
+        sessionId: 'session-1',
+        requestId: 'req-1',
+        timestamp: 1000,
+        request: { method: 'GET', url: 'https://example.com/api/data', headers: {} },
+      });
+      transport.emit('Network.responseReceived', {
+        sessionId: 'session-1',
+        requestId: 'req-1',
+        response: { status: 200, statusText: 'OK', headers: {} },
+      });
+      transport.emit('Network.loadingFinished', {
+        sessionId: 'session-1',
+        requestId: 'req-1',
+        timestamp: 1001,
+      });
+
+      // Entry that should be filtered out
+      transport.emit('Network.requestWillBeSent', {
+        sessionId: 'session-1',
+        requestId: 'req-2',
+        timestamp: 1002,
+        request: { method: 'GET', url: 'https://analytics.example.com/track', headers: {} },
+      });
+      transport.emit('Network.responseReceived', {
+        sessionId: 'session-1',
+        requestId: 'req-2',
+        response: { status: 200, statusText: 'OK', headers: {} },
+      });
+      transport.emit('Network.loadingFinished', {
+        sessionId: 'session-1',
+        requestId: 'req-2',
+        timestamp: 1003,
+      });
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      const session = recorder.getRecording(recordingId);
+      expect(session?.entries).toHaveLength(2);
+
+      const path = await recorder.saveSnapshot(session!, 'close');
+      expect(path).toBeTruthy();
+      const harContent = await fs.readFile(path!, { encoding: 'utf-8' });
+      const har = JSON.parse(harContent as string);
+      expect(har.log.entries).toHaveLength(1);
+      expect(har.log.entries[0].request.url).toBe('https://example.com/api/data');
+    });
+
+    it('keeps entries when filter throws per-entry error', async () => {
+      const recordingId = await recorder.startRecording(
+        'target-1',
+        'session-1',
+        '(entry) => entry.nonexistent.property',
+      );
+
+      transport.emit('Network.requestWillBeSent', {
+        sessionId: 'session-1',
+        requestId: 'req-1',
+        timestamp: 1000,
+        request: { method: 'GET', url: 'https://example.com', headers: {} },
+      });
+      transport.emit('Network.responseReceived', {
+        sessionId: 'session-1',
+        requestId: 'req-1',
+        response: { status: 200, statusText: 'OK', headers: {} },
+      });
+      transport.emit('Network.loadingFinished', {
+        sessionId: 'session-1',
+        requestId: 'req-1',
+        timestamp: 1001,
+      });
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      const session = recorder.getRecording(recordingId);
+      const path = await recorder.saveSnapshot(session!, 'close');
+      expect(path).toBeTruthy();
+      const harContent = await fs.readFile(path!, { encoding: 'utf-8' });
+      const har = JSON.parse(harContent as string);
+      expect(har.log.entries).toHaveLength(1);
     });
   });
 
