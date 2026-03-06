@@ -36,12 +36,12 @@ const TOOL_ICONS: Record<string, string> = {
   write_file: '✏️',
   edit_file: '✏️',
   javascript: '📜',
-  delegate_to_scoop: '🍨',
+  delegate_to_scoop: '🥄',
   send_message: '💬',
   schedule_task: '⏰',
   list_scoops: '📋',
   list_tasks: '📋',
-  register_scoop: '📝',
+  register_scoop: '🍨',
   update_global_memory: '🧠',
 };
 
