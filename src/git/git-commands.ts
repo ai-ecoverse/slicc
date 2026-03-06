@@ -339,7 +339,7 @@ Available commands:
       };
     }
 
-    if (allFlag || paths.includes('.')) {
+    if (allFlag) {
       // Stage ALL changes (new, modified, deleted)
       const matrix = await git.statusMatrix({ fs: this.lfs, dir: cwd });
       for (const [file, , workdir, stage] of matrix) {
@@ -349,6 +349,15 @@ Available commands:
         } else {
           await git.add({ fs: this.lfs, dir: cwd, filepath: file, force });
         }
+      }
+    } else if (paths.includes('.')) {
+      // Stage new and modified files, but NOT deletions (unlike -A/--all)
+      const matrix = await git.statusMatrix({ fs: this.lfs, dir: cwd });
+      for (const [file, , workdir, stage] of matrix) {
+        if (workdir === stage) continue;
+        // Skip deletions — git add . does not stage removals
+        if (workdir === 0) continue;
+        await git.add({ fs: this.lfs, dir: cwd, filepath: file, force });
       }
     } else if (updateFlag) {
       // Stage modifications and deletions of tracked files only (no new/untracked files)
@@ -586,7 +595,8 @@ Available commands:
     for (let i = 0; i < args.length; i++) {
       const arg = args[i];
       // Match combined flags like -am, -avm, etc. (single dash, multiple letters)
-      if (arg.startsWith('-') && !arg.startsWith('--') && arg.length > 2) {
+      // Skip args containing '=' (e.g., -m=msg) to avoid corrupting them
+      if (arg.startsWith('-') && !arg.startsWith('--') && arg.length > 2 && !arg.includes('=')) {
         const flags = arg.slice(1);
         for (const ch of flags) {
           result.push(`-${ch}`);
@@ -940,42 +950,44 @@ Available commands:
         },
       });
     } else {
-      // Default: compare HEAD tree vs workdir by reading files directly
-      // Get all tracked files from HEAD
-      let headFiles: string[] = [];
-      try {
-        headFiles = await git.listFiles({ fs: this.lfs, dir: cwd, ref: 'HEAD' });
-      } catch { /* no HEAD yet */ }
+      // Default: compare index (stage) vs workdir — shows only unstaged changes
+      // Collect all index entries with their OIDs
+      const indexEntries = new Map<string, string>();
+      await git.walk({
+        fs: this.lfs,
+        dir: cwd,
+        trees: [git.STAGE()],
+        map: async (filepath, [entry]) => {
+          if (filepath === '.' || filepath.startsWith('.git') || !entry) return undefined;
+          const type = await entry.type();
+          if (type !== 'blob') return undefined;
+          const oid = await entry.oid();
+          if (oid) indexEntries.set(filepath, oid);
+          return undefined;
+        },
+      });
 
-      // Also get files from the index (for newly added files not yet committed)
-      const indexFiles = await git.listFiles({ fs: this.lfs, dir: cwd });
-      const allFiles = new Set([...headFiles, ...indexFiles]);
-
-      const headOid = headFiles.length > 0
-        ? await git.resolveRef({ fs: this.lfs, dir: cwd, ref: 'HEAD' })
-        : undefined;
-
-      for (const file of allFiles) {
-        // Read HEAD content
+      // Compare each index entry with workdir content directly
+      // (bypasses statusMatrix stat-caching issues for same-length modifications)
+      for (const [file, stageOid] of indexEntries) {
         let oldText = '';
-        if (headOid && headFiles.includes(file)) {
-          try {
-            const { blob } = await git.readBlob({ fs: this.lfs, dir: cwd, oid: headOid, filepath: file });
-            oldText = new TextDecoder().decode(blob);
-          } catch { /* not in HEAD */ }
-        }
+        try {
+          const { blob } = await git.readBlob({ fs: this.lfs, dir: cwd, oid: stageOid });
+          oldText = new TextDecoder().decode(blob);
+        } catch { /* not readable */ }
 
-        // Read workdir content directly from VFS
         let newText = '';
         try {
           newText = await this.options.fs.readTextFile(`${cwd}/${file}`);
         } catch { /* file deleted in workdir */ }
 
-        // Only include if content actually differs
         if (oldText !== newText) {
           changes.push({ filepath: file, oldContent: oldText, newContent: newText });
         }
       }
+
+      // Also check for tracked files deleted in workdir but still in index
+      // (handled above since deleted workdir files would have newText = '')
     }
 
     if (changes.length === 0) {
@@ -1151,11 +1163,16 @@ Available commands:
     try {
       oid = await git.resolveRef({ fs: this.lfs, dir: cwd, ref: commitRef });
     } catch {
-      return {
-        stdout: '',
-        stderr: `fatal: bad object ${commitRef}\n`,
-        exitCode: 128,
-      };
+      // Try expanding as a short OID
+      try {
+        oid = await git.expandOid({ fs: this.lfs, dir: cwd, oid: commitRef });
+      } catch {
+        return {
+          stdout: '',
+          stderr: `fatal: bad object ${commitRef}\n`,
+          exitCode: 128,
+        };
+      }
     }
 
     const { commit } = await git.readCommit({ fs: this.lfs, dir: cwd, oid });
@@ -1706,14 +1723,15 @@ Available commands:
       };
     }
 
-    // Try repo config first, then global
-    let result = await git.getConfig({ fs: this.lfs, dir: cwd, path });
-    if (!result && !globalFlag) {
-      // Fall back to global config
+    // When --global, only read global config; otherwise try repo first, then global
+    let result: string | undefined;
+    if (globalFlag) {
       result = await this.getGlobalConfig(path);
-    }
-    if (globalFlag && !result) {
-      result = await this.getGlobalConfig(path);
+    } else {
+      result = await git.getConfig({ fs: this.lfs, dir: cwd, path });
+      if (!result) {
+        result = await this.getGlobalConfig(path);
+      }
     }
 
     return {
@@ -1993,8 +2011,9 @@ Available commands:
     }
 
     // --mixed (default) or --hard: reset index to match the target commit
-    const indexFiles = await git.listFiles({ fs: this.lfs, dir: cwd });
-    for (const file of indexFiles) {
+    // Collect previously tracked files before resetting index (needed for --hard cleanup)
+    const previouslyTracked = new Set(await git.listFiles({ fs: this.lfs, dir: cwd }));
+    for (const file of previouslyTracked) {
       await git.remove({ fs: this.lfs, dir: cwd, filepath: file });
     }
     await this.resetIndexToCommit(cwd, targetOid);
@@ -2004,7 +2023,7 @@ Available commands:
     }
 
     // --hard: also restore workdir to match the target commit
-    await this.resetWorkdirToCommit(cwd, targetOid);
+    await this.resetWorkdirToCommit(cwd, targetOid, previouslyTracked);
 
     return { stdout: `HEAD is now at ${targetOid.slice(0, 7)}\n`, stderr: '', exitCode: 0 };
   }
@@ -2035,7 +2054,7 @@ Available commands:
     }
   }
 
-  private async resetWorkdirToCommit(cwd: string, oid: string): Promise<void> {
+  private async resetWorkdirToCommit(cwd: string, oid: string, previouslyTracked: Set<string>): Promise<void> {
     const targetFiles = new Set<string>();
     const { tree } = await git.readTree({ fs: this.lfs, dir: cwd, oid });
     await this.collectTreeFiles(cwd, tree, '', targetFiles);
@@ -2049,10 +2068,10 @@ Available commands:
       await this.options.fs.writeFile(`${cwd}/${filepath}`, blob);
     }
 
-    // Remove workdir files not in the target commit
-    const matrix = await git.statusMatrix({ fs: this.lfs, dir: cwd });
-    for (const [file, , workdir] of matrix) {
-      if (workdir !== 0 && !targetFiles.has(file)) {
+    // Remove previously-tracked workdir files not in the target commit
+    // Only remove files that were tracked before the reset — skip untracked files
+    for (const file of previouslyTracked) {
+      if (!targetFiles.has(file)) {
         try {
           await this.options.fs.rm(`${cwd}/${file}`);
         } catch {
@@ -2306,6 +2325,18 @@ Available commands:
         await this.options.fs.mkdir(`${cwd}/${filepath.slice(0, slashIdx)}`, { recursive: true });
       }
       await this.options.fs.writeFile(`${cwd}/${filepath}`, blob);
+      // Restore index state: stage files that differ from HEAD
+      const blobText = new TextDecoder().decode(blob);
+      let headText: string | undefined;
+      if (headFileSet.has(filepath)) {
+        try {
+          const { blob: headBlob } = await git.readBlob({ fs: this.lfs, dir: cwd, oid: headOid, filepath });
+          headText = new TextDecoder().decode(headBlob);
+        } catch { /* not in HEAD */ }
+      }
+      if (headText !== blobText) {
+        await git.add({ fs: this.lfs, dir: cwd, filepath });
+      }
     }
 
     for (const filepath of headFileSet) {
@@ -2364,34 +2395,41 @@ Available commands:
       return { stdout: `Dropped refs/stash@{0} (${topOid.slice(0, 7)})\n`, stderr: '', exitCode: 0 };
     }
 
+    // Collect the stash chain from top to the entry just before the dropped one
+    const chain: { oid: string; commit: git.CommitObject }[] = [];
     let current = topOid;
-    for (let i = 0; i < index - 1; i++) {
+    for (let i = 0; i < index; i++) {
       const { commit } = await git.readCommit({ fs: this.lfs, dir: cwd, oid: current });
+      chain.push({ oid: current, commit });
       if (commit.parent.length <= 1) {
         return { stdout: '', stderr: `error: stash@{${index}} not found\n`, exitCode: 1 };
       }
       current = commit.parent[1];
     }
 
-    const { commit: beforeDrop } = await git.readCommit({ fs: this.lfs, dir: cwd, oid: current });
-    if (beforeDrop.parent.length <= 1) {
-      return { stdout: '', stderr: `error: stash@{${index}} not found\n`, exitCode: 1 };
-    }
-
-    const dropOid = beforeDrop.parent[1];
+    // `current` is now the stash entry to drop
+    const dropOid = current;
     const { commit: droppedCommit } = await git.readCommit({ fs: this.lfs, dir: cwd, oid: dropOid });
     const nextStash = droppedCommit.parent.length > 1 ? droppedCommit.parent[1] : undefined;
 
-    const newParents = [beforeDrop.parent[0]];
-    if (nextStash) newParents.push(nextStash);
-    const newCommitOid = await git.writeCommit({
-      fs: this.lfs,
-      dir: cwd,
-      commit: { ...beforeDrop, parent: newParents },
-    });
+    // Rewrite the chain from the entry just before the drop backwards to the top
+    let newChild = nextStash;
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const entry = chain[i];
+      const newParents = [entry.commit.parent[0]];
+      if (newChild) newParents.push(newChild);
+      newChild = await git.writeCommit({
+        fs: this.lfs,
+        dir: cwd,
+        commit: { ...entry.commit, parent: newParents },
+      });
+    }
 
-    if (current === topOid) {
-      await git.writeRef({ fs: this.lfs, dir: cwd, ref: 'refs/stash', value: newCommitOid, force: true });
+    // newChild is now the rewritten top stash entry
+    if (newChild) {
+      await git.writeRef({ fs: this.lfs, dir: cwd, ref: 'refs/stash', value: newChild, force: true });
+    } else {
+      await this.deleteRef(cwd, 'refs/stash');
     }
 
     return { stdout: `Dropped refs/stash@{${index}} (${dropOid.slice(0, 7)})\n`, stderr: '', exitCode: 0 };

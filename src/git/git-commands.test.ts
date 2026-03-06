@@ -69,7 +69,7 @@ describe('GitCommands', () => {
     expect(commitResult.stdout).toContain('Initial commit');
   });
 
-  it('stages deleted files with git add .', async () => {
+  it('git add . does NOT stage deletions (use -A for that)', async () => {
     await git.execute(['init'], '/project');
     await vfs.writeFile('/project/file.txt', 'content');
     await git.execute(['add', 'file.txt'], '/project');
@@ -81,7 +81,8 @@ describe('GitCommands', () => {
     const matrix = await isoGit.statusMatrix({ fs: vfs.getLightningFS(), dir: '/project' });
     const row = matrix.find((r) => r[0] === 'file.txt');
     expect(row).toBeTruthy();
-    expect(row?.slice(1)).toEqual([1, 0, 0]); // staged deletion
+    // git add . should NOT stage deletions — file remains as unstaged deletion
+    expect(row?.slice(1)).toEqual([1, 0, 1]); // unstaged deletion
   });
 
   it('shows commit log', async () => {
@@ -253,7 +254,7 @@ describe('GitCommands', () => {
       await git.execute(['add', 'file.txt'], '/project');
       await git.execute(['commit', '-m', 'initial'], '/project');
       await vfs.rm('/project/file.txt');
-      await git.execute(['add', '.'], '/project');
+      await git.execute(['add', '-A'], '/project');
 
       const result = await git.execute(['status', '--short'], '/project');
       expect(result.exitCode).toBe(0);
@@ -1900,6 +1901,183 @@ describe('GitCommands', () => {
       const result = await git.execute(['config'], '/project');
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain('usage');
+    });
+
+    it('--global get does not read repo config', async () => {
+      await git.execute(['init'], '/project');
+      // Set a value in repo config only
+      await git.execute(['config', 'user.name', 'Repo User'], '/project');
+
+      // --global get should NOT find repo-level config
+      const result = await git.execute(['config', '--global', 'user.name'], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+    });
+  });
+
+  describe('PR review fixes', () => {
+    it('#1: reset --hard preserves untracked files', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/tracked.txt', 'v1');
+      await git.execute(['add', 'tracked.txt'], '/project');
+      await git.execute(['commit', '-m', 'first'], '/project');
+
+      const firstCommit = await isoGit.resolveRef({
+        fs: vfs.getLightningFS(),
+        dir: '/project',
+        ref: 'HEAD',
+      });
+
+      await vfs.writeFile('/project/tracked.txt', 'v2');
+      await git.execute(['add', 'tracked.txt'], '/project');
+      await git.execute(['commit', '-m', 'second'], '/project');
+
+      // Create an untracked file
+      await vfs.writeFile('/project/untracked.txt', 'should survive');
+
+      await git.execute(['reset', '--hard', firstCommit], '/project');
+
+      // Untracked file should still exist
+      const exists = await vfs.exists('/project/untracked.txt');
+      expect(exists).toBe(true);
+      const content = await vfs.readTextFile('/project/untracked.txt');
+      expect(content).toBe('should survive');
+
+      // Tracked file should be reverted
+      const trackedContent = await vfs.readTextFile('/project/tracked.txt');
+      expect(trackedContent).toBe('v1');
+    });
+
+    it('#2: stash drop removes deep stash entries correctly', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'original');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      // Create 3 stash entries
+      await vfs.writeFile('/project/file.txt', 'change1');
+      await git.execute(['stash'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'change2');
+      await git.execute(['stash'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'change3');
+      await git.execute(['stash'], '/project');
+
+      // Verify we have 3 stash entries
+      const listBefore = await git.execute(['stash', 'list'], '/project');
+      expect(listBefore.stdout).toContain('stash@{0}');
+      expect(listBefore.stdout).toContain('stash@{1}');
+      expect(listBefore.stdout).toContain('stash@{2}');
+
+      // Drop the middle entry (stash@{1})
+      const dropResult = await git.execute(['stash', 'drop', 'stash@{1}'], '/project');
+      expect(dropResult.exitCode).toBe(0);
+
+      // Should now have only 2 entries
+      const listAfter = await git.execute(['stash', 'list'], '/project');
+      const lines = listAfter.stdout.trim().split('\n').filter(Boolean);
+      expect(lines).toHaveLength(2);
+    });
+
+    it('#3: default diff shows only unstaged changes (index vs workdir)', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'line1\nline2\n');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      // Stage a change
+      await vfs.writeFile('/project/file.txt', 'line1\nstaged-change\n');
+      await git.execute(['add', 'file.txt'], '/project');
+
+      // Default diff should show nothing (workdir matches index)
+      const result1 = await git.execute(['diff'], '/project');
+      expect(result1.stdout).toBe('');
+
+      // Make another change without staging
+      await vfs.writeFile('/project/file.txt', 'line1\nstaged-change\nunstaged-line\n');
+
+      // Default diff should show only the unstaged change
+      const result2 = await git.execute(['diff'], '/project');
+      expect(result2.stdout).toContain('+unstaged-line');
+      expect(result2.stdout).not.toContain('+staged-change');
+
+      // --staged should show the staged change
+      const result3 = await git.execute(['diff', '--staged'], '/project');
+      expect(result3.stdout).toContain('+staged-change');
+      expect(result3.stdout).not.toContain('+unstaged-line');
+    });
+
+    it('#4: expandCombinedFlags preserves -m=msg style args', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'original content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.writeFile('/project/file.txt', 'modified');
+      await git.execute(['add', 'file.txt'], '/project');
+
+      // Use -m=message syntax
+      const result = await git.execute(['commit', '-m=inline message'], '/project');
+      // The parseArg method handles --flag=value for long flags.
+      // For short flags, -m=inline message should be left as-is by expandCombinedFlags
+      // and then handled by parseArg's = handling
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('inline message');
+    });
+
+    it('#7: git show resolves short OIDs', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'First commit'], '/project');
+
+      const logResult = await git.execute(['rev-parse', 'HEAD'], '/project');
+      const fullSha = logResult.stdout.trim();
+      const shortSha = fullSha.slice(0, 7);
+
+      const result = await git.execute(['show', shortSha], '/project');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('First commit');
+      expect(result.stdout).toContain(`commit ${fullSha}`);
+    });
+
+    it('#8: git add . does not stage deletions', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/keep.txt', 'keep');
+      await vfs.writeFile('/project/delete-me.txt', 'will be deleted');
+      await git.execute(['add', '.'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      // Delete a file and create a new one
+      await vfs.rm('/project/delete-me.txt');
+      await vfs.writeFile('/project/new.txt', 'new file');
+
+      // git add . should stage the new file but NOT the deletion
+      await git.execute(['add', '.'], '/project');
+
+      const matrix = await isoGit.statusMatrix({ fs: vfs.getLightningFS(), dir: '/project' });
+      const deletedRow = matrix.find((r) => r[0] === 'delete-me.txt');
+      const newRow = matrix.find((r) => r[0] === 'new.txt');
+
+      // Deletion should NOT be staged (still shows as unstaged deletion)
+      expect(deletedRow?.slice(1)).toEqual([1, 0, 1]);
+      // New file should be staged
+      expect(newRow?.slice(1)).toEqual([0, 2, 2]);
+    });
+
+    it('#8: git add -A DOES stage deletions', async () => {
+      await git.execute(['init'], '/project');
+      await vfs.writeFile('/project/file.txt', 'content');
+      await git.execute(['add', 'file.txt'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+
+      await vfs.rm('/project/file.txt');
+      await git.execute(['add', '-A'], '/project');
+
+      const matrix = await isoGit.statusMatrix({ fs: vfs.getLightningFS(), dir: '/project' });
+      const row = matrix.find((r) => r[0] === 'file.txt');
+      expect(row?.slice(1)).toEqual([1, 0, 0]); // staged deletion
     });
   });
 });
