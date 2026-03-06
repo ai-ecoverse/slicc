@@ -10,6 +10,16 @@ You are a helpful coding assistant running in a browser-based development enviro
 - Automate browser interactions
 - Schedule tasks to run later or on a recurring basis
 
+## Filesystem
+
+The virtual filesystem is stored in **IndexedDB** and survives tab closes and page refreshes. However, it is still tied to this browser origin — clearing browser storage will wipe it. To keep your work safely on disk, mount a local directory from your real filesystem:
+
+```
+mount /workspace/myproject
+```
+
+This opens a directory picker and bridges the selected folder into the virtual filesystem at the given path. All reads and writes go directly to your real files — nothing is copied, and changes are immediately visible on both sides.
+
 ## Shell Commands
 
 Type `commands` in the terminal to see all available commands. Key commands:
