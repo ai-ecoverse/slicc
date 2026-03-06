@@ -31,18 +31,32 @@ Call the `migrate_page` tool with the source URL and target repo:
 { "url": "https://example.com/landing", "repo": "owner/repo-name" }
 ```
 
-This produces extraction artifacts in `/migration/{page-path}/`:
+This clones the repo to `/shared/{repo-name}/`, creates a migration branch,
+and produces extraction artifacts in `/shared/{repo-name}/.migration/`:
 
 | Artifact | Description |
 |----------|-------------|
 | `screenshot.png` | Full-page screenshot of the source |
-| `visual-tree.txt` | Spatial hierarchy of rendered boxes |
-| `computed-styles.json` | Per-element CSS properties |
-| `images/` | All captured images (JPEG/PNG, WebP/AVIF converted) |
-| `image-manifest.json` | Per-image metadata (alt, dimensions, parent context) |
-| `page-metadata.json` | Title, viewport, URL, fonts, colors |
+| `visual-tree.json` | Spatial hierarchy with bounds, backgrounds, selectors |
+| `brand.json` | Extracted fonts, colors, spacing |
+| `metadata.json` | Title, description, OG tags, JSON-LD |
+| `block-inventory.json` | Existing blocks in the EDS project |
 
 The visual tree is the primary input for decomposition.
+
+### CRITICAL: Image Handling
+
+**Always use original absolute URLs for images from the source page.** Do NOT:
+- Download images to VFS
+- Create local image paths like `/shared/.../images/`
+- Use relative `./images/` paths
+
+Instead, reference images with their full source URL:
+```html
+<img src="https://www.example.com/content/dam/hero.jpg" alt="Hero">
+```
+
+Images stay on the source CDN. They will be migrated to AEM's DAM separately.
 
 ---
 
@@ -105,7 +119,7 @@ Sections can nest blocks and default-content as children.
 
 ### Decomposition Output
 
-Write `decomposition.json` to `/migration/{page-path}/`:
+Write `decomposition.json` to `/shared/{repo-name}/.migration/`:
 
 ```json
 {
@@ -197,10 +211,11 @@ Visual tree ID: {id}
 Bounds: {bounds}
 
 Read the following files to understand the source component:
-- /migration/{page-path}/screenshot.png (full page -- focus on the region at y={bounds.y} to y={bounds.y + bounds.height})
-- /migration/{page-path}/computed-styles.json (CSS properties for elements in this region)
-- /migration/{page-path}/image-manifest.json (images with alt text and context)
-- /migration/{page-path}/images/ (source images)
+- /shared/{repo-name}/.migration/screenshot.png (full page -- focus on the region at y={bounds.y} to y={bounds.y + bounds.height})
+- /shared/{repo-name}/.migration/visual-tree.json (DOM structure with selectors)
+- /shared/{repo-name}/.migration/brand.json (fonts, colors, spacing)
+
+IMPORTANT: Use original absolute URLs for all images (e.g., https://source-site.com/image.jpg). Do NOT create local image paths.
 
 ## EDS Block CSS Pattern
 
@@ -274,7 +289,7 @@ The content model uses an HTML table structure that EDS converts to nested divs:
 <div>
   <div class="{blockName}">
     <div>
-      <div><!-- Row 1, Cell 1: e.g., image --><img src="/migration/{page-path}/images/hash.jpg" alt="description"></div>
+      <div><!-- Row 1, Cell 1: e.g., image --><img src="https://source-site.com/image.jpg" alt="description"></div>
       <div><!-- Row 1, Cell 2: e.g., text --><h2>Heading</h2><p>Description text</p></div>
     </div>
     <div>
@@ -289,7 +304,7 @@ Rules:
 - Contains ONLY `<div>` structure -- NO `<html>`, `<head>`, `<body>`, `<script>` tags
 - Outer wrapper: `<div><div class="{blockName}">...</div></div>`
 - Each direct child of the block div is a row; each child of a row is a cell
-- Use image paths from the migration images directory
+- Use original absolute URLs for all images (https://...)
 - Map source content (headings, text, images, links) into rows/columns
 
 ## Visual Verification Loop
@@ -343,7 +358,7 @@ For header/navigation blocks:
 
 ```html
 <div>
-  <p><a href="/"><img src="./images/logo.png" alt="Company"></a></p>
+  <p><a href="/"><img src="https://source-site.com/logo.png" alt="Company"></a></p>
   <ul>
     <li><a href="/products">Products</a>
       <ul>
@@ -363,7 +378,7 @@ For header/navigation blocks:
 
 ```html
 <div>
-  <p><img src="./images/logo.png" alt="Company"></p>
+  <p><img src="https://source-site.com/logo.png" alt="Company"></p>
   <div class="section-metadata">
     <div><div>Style</div><div>brand</div></div>
   </div>
@@ -441,7 +456,7 @@ Build the page document from the decomposition. Each fragment becomes a separate
 <div>
   <div class="hero">
     <div>
-      <div><img src="./images/hero-bg.jpg" alt="Hero"></div>
+      <div><img src="https://source-site.com/hero-bg.jpg" alt="Hero"></div>
       <div><h2>Hero Heading</h2><p>Hero text</p><a href="/cta">Call to Action</a></div>
     </div>
   </div>
@@ -450,11 +465,11 @@ Build the page document from the decomposition. Each fragment becomes a separate
 <div>
   <div class="cards">
     <div>
-      <div><img src="./images/card1.jpg" alt="Card 1"></div>
+      <div><img src="https://source-site.com/card1.jpg" alt="Card 1"></div>
       <div><h3>Card Title</h3><p>Card description</p></div>
     </div>
     <div>
-      <div><img src="./images/card2.jpg" alt="Card 2"></div>
+      <div><img src="https://source-site.com/card2.jpg" alt="Card 2"></div>
       <div><h3>Card Title</h3><p>Card description</p></div>
     </div>
   </div>
