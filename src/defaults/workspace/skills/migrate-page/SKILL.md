@@ -44,19 +44,24 @@ and produces extraction artifacts in `/shared/{repo-name}/.migration/`:
 
 The visual tree is the primary input for decomposition.
 
-### CRITICAL: Image Handling
+### Image Handling
 
-**Always use original absolute URLs for images from the source page.** Do NOT:
-- Download images to VFS
-- Create local image paths like `/shared/.../images/`
-- Use relative `./images/` paths
+Download images from the source page to the EDS project and use **relative paths**.
 
-Instead, reference images with their full source URL:
-```html
-<img src="https://www.example.com/content/dam/hero.jpg" alt="Hero">
-```
+1. **Download images** to `/shared/{repo-name}/images/` using the browser tool:
+   ```json
+   { "action": "evaluate", "expression": "..." }
+   ```
+   Or use the JavaScript tool to fetch and save images.
 
-Images stay on the source CDN. They will be migrated to AEM's DAM separately.
+2. **Reference with relative paths** in block HTML:
+   ```html
+   <img src="./images/hero.jpg" alt="Hero">
+   ```
+
+3. **Preview works automatically**: when the project is served via `browser serve "/shared/{repo-name}/"`, relative paths resolve through the preview service worker. For example, `./images/hero.jpg` resolves to `/preview/shared/{repo-name}/images/hero.jpg` which the SW serves from VFS.
+
+**Do NOT use absolute VFS paths** like `/shared/{repo-name}/images/hero.jpg` in HTML `src` attributes — these resolve to the slicc UI server, not the preview SW.
 
 ---
 
@@ -215,7 +220,7 @@ Read the following files to understand the source component:
 - /shared/{repo-name}/.migration/visual-tree.json (DOM structure with selectors)
 - /shared/{repo-name}/.migration/brand.json (fonts, colors, spacing)
 
-IMPORTANT: Use original absolute URLs for all images (e.g., https://source-site.com/image.jpg). Do NOT create local image paths.
+IMPORTANT: Download source images to `/shared/{repo-name}/images/` and use relative paths (e.g., `./images/hero.jpg`). Do NOT use absolute VFS paths in HTML.
 
 ## EDS Block CSS Pattern
 
@@ -289,7 +294,7 @@ The content model uses an HTML table structure that EDS converts to nested divs:
 <div>
   <div class="{blockName}">
     <div>
-      <div><!-- Row 1, Cell 1: e.g., image --><img src="https://source-site.com/image.jpg" alt="description"></div>
+      <div><!-- Row 1, Cell 1: e.g., image --><img src="./images/hero.jpg" alt="description"></div>
       <div><!-- Row 1, Cell 2: e.g., text --><h2>Heading</h2><p>Description text</p></div>
     </div>
     <div>
@@ -304,7 +309,7 @@ Rules:
 - Contains ONLY `<div>` structure -- NO `<html>`, `<head>`, `<body>`, `<script>` tags
 - Outer wrapper: `<div><div class="{blockName}">...</div></div>`
 - Each direct child of the block div is a row; each child of a row is a cell
-- Use original absolute URLs for all images (https://...)
+- Use relative image paths (e.g., `./images/hero.jpg`) — NOT absolute VFS paths
 - Map source content (headings, text, images, links) into rows/columns
 
 ## Visual Verification Loop
@@ -358,7 +363,7 @@ For header/navigation blocks:
 
 ```html
 <div>
-  <p><a href="/"><img src="https://source-site.com/logo.png" alt="Company"></a></p>
+  <p><a href="/"><img src="./images/logo.png" alt="Company"></a></p>
   <ul>
     <li><a href="/products">Products</a>
       <ul>
@@ -378,7 +383,7 @@ For header/navigation blocks:
 
 ```html
 <div>
-  <p><img src="https://source-site.com/logo.png" alt="Company"></p>
+  <p><img src="./images/logo.png" alt="Company"></p>
   <div class="section-metadata">
     <div><div>Style</div><div>brand</div></div>
   </div>
@@ -456,7 +461,7 @@ Build the page document from the decomposition. Each fragment becomes a separate
 <div>
   <div class="hero">
     <div>
-      <div><img src="https://source-site.com/hero-bg.jpg" alt="Hero"></div>
+      <div><img src="./images/hero-bg.jpg" alt="Hero"></div>
       <div><h2>Hero Heading</h2><p>Hero text</p><a href="/cta">Call to Action</a></div>
     </div>
   </div>
@@ -465,11 +470,11 @@ Build the page document from the decomposition. Each fragment becomes a separate
 <div>
   <div class="cards">
     <div>
-      <div><img src="https://source-site.com/card1.jpg" alt="Card 1"></div>
+      <div><img src="./images/card1.jpg" alt="Card 1"></div>
       <div><h3>Card Title</h3><p>Card description</p></div>
     </div>
     <div>
-      <div><img src="https://source-site.com/card2.jpg" alt="Card 2"></div>
+      <div><img src="./images/card2.jpg" alt="Card 2"></div>
       <div><h3>Card Title</h3><p>Card description</p></div>
     </div>
   </div>
