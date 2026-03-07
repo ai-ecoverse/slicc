@@ -368,7 +368,7 @@ export class VoiceInput {
     }
 
     if (this.popupWindowId != null) {
-      chrome.runtime.sendMessage({ target: 'voice-popup', type: 'voice-stop' });
+      try { chrome.runtime.sendMessage({ target: 'voice-popup', type: 'voice-stop' }); } catch {}
       chrome.windows.remove(this.popupWindowId).catch(() => {});
       this.popupWindowId = null;
     } else if (this.recognition) {
