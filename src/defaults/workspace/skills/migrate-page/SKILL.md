@@ -170,15 +170,36 @@ Do NOT inline CSS or JS as a substitute for the EDS framework.
 **This is ~20 lines.** The skill file (~300 lines) is the authoritative
 process definition. The cone passes parameters; the skill defines steps.
 
-### Header/Footer Scoops
+### Header Scoop — Uses Dedicated Skill
 
-For header blocks, add to the parameters:
+The header/navigation block uses the `migrate-header` skill (NOT
+`migrate-block`). The feed_scoop prompt for the header scoop:
+
 ```
-- Special: This is the HEADER block. Output nav.plain.html, not {blockName}.plain.html.
-  See "Header Block — Special Case" in the migrate-block skill.
+You are migrating the website header/navigation to EDS.
+
+## Parameters
+- Source URL: {sourceUrl}
+- EDS project: /shared/{repo-name}/
+- Bounds: x={x}, y={y}, width={w}, height={h}
+- Notes: {decomposition notes — e.g., "two-tier purple header with mega menus"}
+
+## head.html Content
+{PASTE THE FULL CONTENT OF head.html HERE}
+
+## Instructions
+Read and execute the migrate-header skill at:
+/scoops/{scoop-folder}/workspace/skills/migrate-header/SKILL.md
+
+This is a HEADER migration, not a regular block. Follow the header skill
+exactly — it handles nav.plain.html generation, section-metadata styles,
+dropdown detection, and header-specific CSS patterns.
 ```
 
-For footer blocks:
+### Footer Scoop — Uses migrate-block Skill
+
+The footer uses the standard `migrate-block` skill with this addition:
+
 ```
 - Special: This is the FOOTER block. Output footer.plain.html, not {blockName}.plain.html.
   See "Footer Block — Special Case" in the migrate-block skill.

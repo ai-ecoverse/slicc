@@ -344,19 +344,6 @@ iteration count, report path, any blocking issues.
 
 ---
 
-## Header Block — Special Case
-
-If your block is the navigation/header:
-
-- Output content to `{projectPath}/drafts/nav.plain.html`
-- Block CSS/JS goes to `blocks/header/header.css` and `blocks/header/header.js`
-- If the repo already has `blocks/header/`, use existing code — only generate
-  `nav.plain.html`
-- CSS specificity: scope all rules under `.header.block` (not just `.header`)
-- Detect single-row vs multi-section header from the source
-- Use section-metadata with Style: `brand`, `top-bar`, `main-nav`, `utility`
-- Target 90% visual similarity (not 95%), max 5 iterations (not 3)
-
 ## Footer Block — Special Case
 
 If your block is the footer:
