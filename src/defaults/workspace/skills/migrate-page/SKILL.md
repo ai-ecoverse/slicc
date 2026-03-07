@@ -196,6 +196,8 @@ Write `decomposition.json` to `/shared/{repo-name}/.migration/`:
 
 For each block in `decomposition.json`, create a scoop and delegate block migration to it. Blocks can be processed in parallel.
 
+**IMPORTANT: Do NOT drop scoops after they complete.** Keep all scoops alive so the user can review each scoop's conversation and debug the block migration flow. Never call `drop_scoop` during migration.
+
 ### Creating Scoops
 
 For each block, use `scoop_scoop` to create a dedicated scoop, then `feed_scoop` with a complete self-contained prompt.
@@ -346,11 +348,72 @@ After iteration 3, finalize regardless of remaining differences. Report the fina
 
 ## Output
 
-When finished, use `send_message` to report back:
-- Block name and files created
-- Number of visual iterations used
-- Remaining visual gaps (if any)
-- Paths to all generated files
+When finished, write a **detailed migration report** to VFS and then use `send_message` to notify the cone.
+
+### 1. Write report file
+
+Write a JSON report to `/shared/{repo-name}/.migration/reports/{blockName}-report.json`:
+
+```json
+{{
+  "blockName": "{blockName}",
+  "sourceUrl": "{sourceUrl}",
+  "sourceSelector": "{id}",
+  "sourceBounds": {bounds},
+  "timestamp": "<ISO timestamp>",
+  "files": {{
+    "css": "/shared/{repo-name}/blocks/{blockName}/{blockName}.css",
+    "js": "/shared/{repo-name}/blocks/{blockName}/{blockName}.js",
+    "testPage": "/shared/{repo-name}/drafts/{blockName}.plain.html",
+    "sourceScreenshot": "/shared/{repo-name}/.migration/source-{blockName}.png",
+    "previewScreenshots": [
+      "/shared/{repo-name}/.migration/preview-{blockName}-iter1.png",
+      "/shared/{repo-name}/.migration/preview-{blockName}-iter2.png"
+    ]
+  }},
+  "visualVerification": {{
+    "iterationsUsed": 2,
+    "iterationDetails": [
+      {{
+        "iteration": 1,
+        "changes": "Adjusted padding, fixed heading font-size",
+        "remainingGaps": ["Background gradient direction", "Icon spacing"]
+      }},
+      {{
+        "iteration": 2,
+        "changes": "Fixed gradient, adjusted icon margin",
+        "remainingGaps": ["Minor spacing difference on mobile"]
+      }}
+    ],
+    "finalAssessment": "Good visual parity on desktop. Minor mobile spacing difference remaining.",
+    "previewWorked": true
+  }},
+  "contentModel": {{
+    "rows": 2,
+    "cells": ["image", "text+cta"],
+    "description": "Hero block with background image on left, heading + paragraph + CTA button on right"
+  }},
+  "designTokens": {{
+    "--block-bg": "#1a1a2e",
+    "--block-text": "#ffffff",
+    "--block-padding": "64px 24px"
+  }},
+  "issues": [
+    "Source page uses a custom web font not available in EDS — fell back to heading-font-family",
+    "Background video replaced with static image"
+  ],
+  "cssLines": 45,
+  "jsLines": 22
+}}
+```
+
+### 2. Notify cone
+
+Use `send_message` with a brief summary:
+- Block name and status (success/partial/failed)
+- Number of visual iterations
+- Path to the full report file
+- Any blocking issues
 ````
 
 ### Header Block Special Case
@@ -410,9 +473,11 @@ Section styles: `brand` (logo area), `top-bar` (announcements), `main-nav` (prim
 
 After all scoops complete, collect their results and assemble the full page.
 
+**Do NOT drop scoops.** Keep them alive for user review and debugging. Read each scoop's report from `/shared/{repo-name}/.migration/reports/{blockName}-report.json` to understand what was generated and any issues encountered.
+
 ### 1. Generate brand.css
 
-Extract brand-level design tokens from `page-metadata.json` and `computed-styles.json`. Write to `styles/brand.css`:
+Extract brand-level design tokens from `.migration/brand.json` and `.migration/metadata.json`. Write to `styles/brand.css`:
 
 ```css
 :root {
