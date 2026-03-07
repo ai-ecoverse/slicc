@@ -118,8 +118,13 @@ Write `decomposition.json` to `/shared/{repo-name}/.migration/`:
 
 ## Phase 3: Block Generation (Parallel Scoops)
 
-Create one scoop per block. **Do NOT drop scoops** — keep them alive for
-user review and debugging. Never call `drop_scoop` during migration.
+Create one scoop per **block**. **Do NOT drop scoops** — keep them alive
+for user review and debugging. Never call `drop_scoop` during migration.
+
+**`default-content` items do NOT get scoops.** They are simple prose
+(headings, paragraphs, lists, images) that the cone writes directly
+during Phase 4 assembly. The cone extracts default-content text from
+the source page and writes it inline in the assembled .plain.html.
 
 ```
 scoop_scoop({ "name": "hero-block" })
@@ -226,7 +231,13 @@ The .plain.html file contains ONLY content structure:
 - Each child `<div>` of a row = a cell
 - Cells contain plain HTML: `<h2>`, `<p>`, `<a>`, `<picture><img>`, `<ul>`
 
-**Images:** Wrap in `<picture>` tags. Use root-relative paths:
+**Images:** Wrap in `<picture>` tags. Use root-relative paths.
+In EDS project mode, the preview service worker automatically resolves
+root-relative paths like `/drafts/images/hero.jpg` against the project
+root in VFS. Do NOT use `/preview/shared/...` or `/shared/...` absolute
+paths in .plain.html — those are VFS paths, not EDS paths.
+
+Root-relative image paths:
 `/drafts/images/filename.jpg`
 
 ## Step 4: Write Block CSS
@@ -300,9 +311,7 @@ Write to `/shared/{repo-name}/drafts/{blockName}-preview.html`
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="nav" content="/drafts/nav">
   <meta name="footer" content="/drafts/footer">
-  <script type="module" src="/scripts/aem.js"></script>
-  <script type="module" src="/scripts/scripts.js"></script>
-  <link rel="stylesheet" href="/styles/styles.css">
+  {PASTE ALL <script> AND <link> TAGS FROM head.html HERE}
   <style>html, body {{ overflow: auto !important; }}</style>
 </head>
 <body>
@@ -316,10 +325,15 @@ Write to `/shared/{repo-name}/drafts/{blockName}-preview.html`
 ```
 
 **Key points:**
-- Copy the `<script>` and `<link>` tags from `head.html`
+- Paste the `<script>` and `<link>` tags EXACTLY as they appear in `head.html`
+  (including `nonce` attributes if present)
 - Add `<meta name="nav">` and `<meta name="footer">` for fragment loading
 - Add `overflow: auto !important` to fix SLICC scrolling
 - Paste the .plain.html content inside `<main>`
+- `<header>` and `<footer>` are empty — EDS fills them from fragments
+
+**Note:** Block previews may show empty headers/footers if the nav/footer
+scoops haven't completed yet. This is expected — focus on the block itself.
 - `<header>` and `<footer>` are empty — EDS fills them from fragments
 
 ### 6c. Serve with EDS Project Mode
