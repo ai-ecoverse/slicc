@@ -119,6 +119,11 @@ function isSliccAppPath(pathname: string): boolean {
 sw.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
+  // Skip cross-origin requests — let them pass through to the network.
+  // Without this, external resources (Typekit fonts, Google Fonts, CDN
+  // images) get intercepted and served as 404 from VFS.
+  if (url.origin !== sw.location.origin) return;
+
   // Mode 1: /preview/* requests — always serve from VFS
   if (url.pathname.startsWith('/preview/')) {
     // Check for edsRoot query parameter — set project root from the page URL
