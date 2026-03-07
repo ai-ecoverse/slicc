@@ -128,6 +128,16 @@ sw.addEventListener('fetch', (event) => {
 
   // Mode 1: /preview/* requests — always serve from VFS
   if (url.pathname.startsWith('/preview/')) {
+    // Check for edsRoot query parameter — set project root from the page URL
+    // itself, eliminating the postMessage race condition. The HTML page is
+    // always the first request, so edsProjectRoot is set before any
+    // sub-requests (scripts, styles, blocks) arrive.
+    const edsRoot = url.searchParams.get('edsRoot');
+    if (edsRoot) {
+      edsProjectRoot = edsRoot;
+      console.log('[preview-sw] EDS project root (from URL):', edsProjectRoot);
+    }
+
     const vfsPath = url.pathname.slice('/preview'.length);
     event.respondWith(handlePreviewRequest(vfsPath));
     return;

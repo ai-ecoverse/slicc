@@ -592,16 +592,12 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
             // are intercepted by the SW and resolved against edsProjectRoot.
             if (edsProject) {
               const projectRoot = normalizedDir.endsWith('/') ? normalizedDir.slice(0, -1) : normalizedDir;
-              if (navigator.serviceWorker?.controller) {
-                navigator.serviceWorker.controller.postMessage({
-                  type: 'set-eds-project-root',
-                  root: projectRoot,
-                });
-              }
-              // Serve under /preview/ prefix so the SW controls the page.
-              // The entry resolves via standard /preview/ path stripping,
-              // and root-relative refs resolve via edsProjectRoot.
-              const edsPreviewPath = `/preview${normalizedDir}${normalizedDir.endsWith('/') ? '' : '/'}${entry}`;
+              // Encode the project root in the URL as a query parameter.
+              // The SW reads edsRoot from the HTML request (the first request,
+              // guaranteed before sub-requests) to set edsProjectRoot. This
+              // eliminates the postMessage race condition where the page
+              // could start loading before the SW processes the message.
+              const edsPreviewPath = `/preview${normalizedDir}${normalizedDir.endsWith('/') ? '' : '/'}${entry}?edsRoot=${encodeURIComponent(projectRoot)}`;
               const edsUrl = isExtension
                 ? chrome.runtime.getURL(edsPreviewPath)
                 : `http://localhost:3000${edsPreviewPath}`;

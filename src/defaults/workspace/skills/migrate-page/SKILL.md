@@ -131,311 +131,58 @@ scoop_scoop({ "name": "hero-block" })
 feed_scoop({ "name": "hero-block-scoop", "prompt": "<FULL PROMPT BELOW>" })
 ```
 
-### CRITICAL: What to Include in the Scoop Prompt
+### Scoop Delegation Pattern
 
-Scoops have NO access to the cone's conversation. The prompt must be
-completely self-contained. Include ALL of the following:
+**Before creating scoops**, read `head.html` from the repo:
 
-1. Block name, source URL, visual tree ID, bounds
-2. The EDS project path: `/shared/{repo-name}/`
-3. The FULL content of `head.html` (read it first with `read_file`)
-4. The image path convention (documented below)
-5. The preview scaffolding instructions (documented below)
-6. The .plain.html format rules
-7. The visual verification loop
-8. The report schema
+```
+read_file({ "path": "/shared/{repo-name}/head.html" })
+```
 
-### Scoop Prompt Template
+Each scoop has a `migrate-block` skill in its workspace that defines the
+complete block migration process. The cone's job is to pass **parameters**,
+not relay process instructions. The skill is the source of truth.
 
-````
-You are migrating a single visual component into an AEM Edge Delivery
-Services block.
+### feed_scoop Prompt Template
 
-## Source
+```
+You are migrating a single block to EDS.
 
+## Parameters
 - Block name: {blockName}
 - Source URL: {sourceUrl}
 - Visual tree ID: {id}
 - Bounds: x={x}, y={y}, width={w}, height={h}
 - EDS project: /shared/{repo-name}/
+- Notes: {any decomposition notes — e.g., "this is a 3-column card grid"}
 
-## Step 1: Extract Content from Source Page
+## head.html Content
+{PASTE THE FULL CONTENT OF head.html HERE}
 
-The visual tree is for decomposition only — it does NOT contain the
-actual content you need. You MUST navigate to the source page and
-extract content directly:
+## Instructions
+Read and execute the migrate-block skill at:
+/scoops/{scoop-folder}/workspace/skills/migrate-block/SKILL.md
 
-```json
-{{ "action": "navigate", "url": "{sourceUrl}" }}
+Follow every step exactly. Your preview MUST use head.html content.
+Do NOT inline CSS or JS as a substitute for the EDS framework.
 ```
 
-Then use `evaluate` to extract the component's content:
+**This is ~20 lines.** The skill file (~300 lines) is the authoritative
+process definition. The cone passes parameters; the skill defines steps.
 
-```json
-{{ "action": "evaluate", "expression": "..." }}
+### Header/Footer Scoops
+
+For header blocks, add to the parameters:
+```
+- Special: This is the HEADER block. Output nav.plain.html, not {blockName}.plain.html.
+  See "Header Block — Special Case" in the migrate-block skill.
 ```
 
-Extract: headings, paragraphs, links (href + text), image URLs (src + alt),
-button text, any structured data. Use the CSS selector from the visual tree
-or a selector you identify from the DOM.
-
-## Step 2: Download Images
-
-Download all images from the source component to `/shared/{repo-name}/drafts/images/`:
-
-For each image URL found in Step 1, use the JavaScript tool or browser
-evaluate to fetch the image and save it:
-
-```javascript
-const resp = await fetch('https://source-site.com/image.jpg');
-const bytes = new Uint8Array(await resp.arrayBuffer());
-await fs.writeFile('/shared/{repo-name}/drafts/images/image.jpg', bytes);
+For footer blocks:
 ```
-
-Image paths in .plain.html files use root-relative paths:
-`/drafts/images/image.jpg`
-
-## Step 3: Write .plain.html Content
-
-Write to `/shared/{repo-name}/drafts/{blockName}.plain.html`
-
-### .plain.html Format — STRICT RULES
-
-The .plain.html file contains ONLY content structure:
-
-```html
-<div>
-  <div class="{blockName}">
-    <div>
-      <div><picture><img src="/drafts/images/hero.jpg" alt="Hero"></picture></div>
-      <div><h2>Heading</h2><p>Description</p></div>
-    </div>
-    <div>
-      <div><picture><img src="/drafts/images/card.jpg" alt="Card"></picture></div>
-      <div><h3>Card Title</h3><p>Card text</p></div>
-    </div>
-  </div>
-</div>
+- Special: This is the FOOTER block. Output footer.plain.html, not {blockName}.plain.html.
+  See "Footer Block — Special Case" in the migrate-block skill.
 ```
-
-**NEVER include in .plain.html:**
-- `<html>`, `<head>`, `<body>` tags
-- `<script>` or `<style>` tags
-- Inline styles
-- Any wrapper outside the content
-
-**Structure:**
-- Outer `<div>` = section wrapper
-- `<div class="{blockName}">` = block container (class = block name)
-- Each child `<div>` of the block = a row
-- Each child `<div>` of a row = a cell
-- Cells contain plain HTML: `<h2>`, `<p>`, `<a>`, `<picture><img>`, `<ul>`
-
-**Images:** Wrap in `<picture>` tags. Use root-relative paths.
-In EDS project mode, the preview service worker automatically resolves
-root-relative paths like `/drafts/images/hero.jpg` against the project
-root in VFS. Do NOT use `/preview/shared/...` or `/shared/...` absolute
-paths in .plain.html — those are VFS paths, not EDS paths.
-
-Root-relative image paths:
-`/drafts/images/filename.jpg`
-
-## Step 4: Write Block CSS
-
-Write to `/shared/{repo-name}/blocks/{blockName}/{blockName}.css`
-
-```css
-.{blockName} {{
-  --block-bg: #value;
-  --block-text: #value;
-  --block-padding: value;
-  --block-gap: value;
-
-  background: var(--block-bg);
-  color: var(--block-text);
-  padding: var(--block-padding);
-}}
-
-.{blockName} h2 {{
-  font-family: var(--heading-font-family, sans-serif);
-}}
-
-@media (width >= 900px) {{
-  .{blockName} > div > div {{
-    display: flex;
-    gap: var(--block-gap);
-  }}
-}}
-```
-
-Extract design tokens from the source (colors, spacing, typography).
-Scope ALL styles under `.{blockName}`. Use CSS custom properties.
-
-## Step 5: Write Block JS
-
-Write to `/shared/{repo-name}/blocks/{blockName}/{blockName}.js`
-
-```js
-export default async function decorate(block) {{
-  const rows = [...block.children];
-  rows.forEach((row) => {{
-    const cells = [...row.children];
-    // Restructure cells as needed
-  }});
-}}
-```
-
-The function receives the block `<div>` after EDS converts authored
-content into nested divs. Restructure the DOM for the desired layout.
-
-## Step 6: Preview with EDS Framework
-
-This is the critical step. You need to create a **preview wrapper page**
-that loads the EDS framework so your block gets properly decorated.
-
-### 6a. Read head.html
-
-The repo's `head.html` contains the EDS bootstrap:
-
-{HEAD_HTML_CONTENT}
-
-### 6b. Create Preview Wrapper Page
-
-Write to `/shared/{repo-name}/drafts/{blockName}-preview.html`
-(NOT .plain.html — this is a full HTML page for preview only):
-
-```html
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="nav" content="/drafts/nav">
-  <meta name="footer" content="/drafts/footer">
-  {PASTE ALL <script> AND <link> TAGS FROM head.html HERE}
-  <style>html, body {{ overflow: auto !important; }}</style>
-</head>
-<body>
-  <header></header>
-  <main>
-    {PASTE THE CONTENT OF YOUR .plain.html FILE HERE}
-  </main>
-  <footer></footer>
-</body>
-</html>
-```
-
-**Key points:**
-- Paste the `<script>` and `<link>` tags EXACTLY as they appear in `head.html`
-  (including `nonce` attributes if present)
-- Add `<meta name="nav">` and `<meta name="footer">` for fragment loading
-- Add `overflow: auto !important` to fix SLICC scrolling
-- Paste the .plain.html content inside `<main>`
-- `<header>` and `<footer>` are empty — EDS fills them from fragments
-
-**Note:** Block previews may show empty headers/footers if the nav/footer
-scoops haven't completed yet. This is expected — focus on the block itself.
-- `<header>` and `<footer>` are empty — EDS fills them from fragments
-
-### 6c. Serve with EDS Project Mode
-
-```json
-{{ "action": "serve", "directory": "/shared/{repo-name}",
-   "entry": "drafts/{blockName}-preview.html", "edsProject": true }}
-```
-
-The `edsProject: true` flag tells the preview service worker to resolve
-root-relative paths (`/scripts/aem.js`, `/styles/styles.css`,
-`/blocks/{blockName}/{blockName}.js`) from the VFS project directory.
-
-## Step 7: Visual Verification (Max 3 Iterations)
-
-For each iteration:
-
-1. **Screenshot the source component:**
-   Navigate to the source URL, then screenshot the component region.
-
-2. **Screenshot the preview:**
-   Screenshot the preview tab from Step 6c.
-
-3. **Compare:** Read both screenshots. Identify the top 2-3 CSS gaps:
-   - Padding/margin differences (highest priority)
-   - Font size/weight/family differences
-   - Background color/gradient differences
-   - Layout/flex direction differences
-
-4. **Fix:** Make surgical CSS edits. Do NOT rewrite entire files.
-   After editing CSS, reload the preview tab and re-screenshot.
-
-**Stop conditions:**
-- After iteration 3: finalize regardless
-- If improvement < 3% from last iteration: accept and stop
-
-## Step 8: Write Report
-
-Write JSON report to `/shared/{repo-name}/.migration/reports/{blockName}-report.json`:
-
-```json
-{{
-  "blockName": "{blockName}",
-  "sourceUrl": "{sourceUrl}",
-  "timestamp": "<ISO 8601>",
-  "status": "success|partial|failed",
-  "files": {{
-    "css": "blocks/{blockName}/{blockName}.css",
-    "js": "blocks/{blockName}/{blockName}.js",
-    "plainHtml": "drafts/{blockName}.plain.html",
-    "previewHtml": "drafts/{blockName}-preview.html"
-  }},
-  "images": [
-    {{ "source": "https://...", "local": "/drafts/images/file.jpg" }}
-  ],
-  "visualVerification": {{
-    "iterationsUsed": 2,
-    "previewWorked": true,
-    "iterations": [
-      {{ "iteration": 1, "changes": "...", "gaps": ["..."] }},
-      {{ "iteration": 2, "changes": "...", "gaps": ["..."] }}
-    ],
-    "finalAssessment": "..."
-  }},
-  "contentModel": {{
-    "rows": 2,
-    "description": "Hero with image left, text+CTA right"
-  }},
-  "designTokens": {{
-    "--block-bg": "#1a1a2e",
-    "--block-text": "#ffffff"
-  }},
-  "issues": ["..."]
-}}
-```
-
-**ALL reports MUST use this exact schema.** Do not add extra top-level keys
-or rename fields.
-
-Then `send_message` to the cone with: block name, status, iteration count,
-report path, any blocking issues.
-````
-
-### Header Block — Special Case
-
-For the nav/header block, the scoop prompt should include these
-differences from the standard block prompt:
-
-- Output is `drafts/nav.plain.html` (not `drafts/{blockName}.plain.html`)
-- Block CSS/JS goes to `blocks/header/header.css` and `blocks/header/header.js`
-- If the repo already has `blocks/header/`, use the existing header block
-  code and only generate `nav.plain.html`
-- Detect single-row vs multi-section header from the source page
-- Use section-metadata with Style values: `brand`, `top-bar`, `main-nav`, `utility`
-- CSS specificity: all rules scoped under `.header.block` (not just `.header`)
-- Target 90% visual similarity (not 95%)
-
-### Footer Block — Special Case
-
-- Output is `drafts/footer.plain.html`
-- Block CSS/JS goes to `blocks/footer/footer.css` and `blocks/footer/footer.js`
-- If the repo already has `blocks/footer/`, use existing code
 
 ---
 
