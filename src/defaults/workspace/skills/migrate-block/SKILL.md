@@ -367,6 +367,57 @@ If your block is the footer:
 
 ---
 
+## Known EDS Behaviors
+
+### Button Auto-Decoration
+
+EDS's `decorateButtons()` (called during `decorateMain()`) automatically
+transforms standalone paragraph links into button elements:
+
+```html
+<!-- Your .plain.html content -->
+<p><a href="/cta">Learn More</a></p>
+
+<!-- After EDS decoration -->
+<p class="button-container"><a href="/cta" class="button">Learn More</a></p>
+```
+
+This turns text links into filled blue buttons — which is usually NOT
+what the source site looks like. You will likely need to override this
+in your block CSS:
+
+```css
+/* Reset EDS button decoration to match source styling */
+.{blockName} .button-container {
+  display: inline;
+}
+
+.{blockName} a.button {
+  background: none;
+  border: none;
+  color: var(--link-color, inherit);
+  font-size: inherit;
+  font-weight: inherit;
+  padding: 0;
+  margin: 0;
+  text-decoration: underline;
+}
+
+/* Or style as bordered/outlined CTA if source uses that pattern */
+.{blockName} a.button {
+  background: transparent;
+  border: 2px solid currentColor;
+  border-radius: 4px;
+  padding: 8px 24px;
+  text-decoration: none;
+}
+```
+
+This is a standard EDS behavior — not a bug. Plan for it when writing
+your block CSS.
+
+---
+
 ## Reference: Content Models
 
 1. **Standalone** — One-off (hero, blockquote): single row, mixed cells

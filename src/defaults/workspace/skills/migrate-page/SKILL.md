@@ -186,102 +186,148 @@ For footer blocks:
 
 ---
 
-## Phase 4: Assembly
+## Phase 4: Assembly — MANDATORY STEPS
 
-After all scoops complete, collect results and assemble the full page.
+After all scoops complete, the cone MUST execute ALL of the following steps.
+Do not skip any. Phase 4 is not optional — it produces the final deliverables.
 
 **Do NOT drop scoops.** Keep them alive for user review.
 
-### 1. Read Reports
+### Step 4.1: Read Reports
 
-Read all reports from `/shared/{repo-name}/.migration/reports/`.
-Check status of each block. Note any failures or issues.
+Read ALL reports from `/shared/{repo-name}/.migration/reports/`.
+For each block, check:
+- `status`: success/partial/failed
+- `edsVerification`: did the EDS framework load?
+- `issues`: any problems to address
 
-### 2. Generate brand.css
+List any missing reports — every block scoop MUST produce a report.
+
+### Step 4.2: Generate brand.css — MANDATORY
 
 Read `.migration/brand.json`. Write `/shared/{repo-name}/styles/brand.css`:
 
 ```css
 :root {
-  --heading-font-family: "extracted-font", serif;
-  --body-font-family: "extracted-font", sans-serif;
-  --background-color: #fff;
-  --text-color: #1a1a2e;
-  --link-color: #0066cc;
-  --link-hover-color: #004499;
-  --section-padding: 64px 24px;
-  --nav-height: 80px;
+  /* Typography — from brand.json fonts */
+  --heading-font-family: "{brand.fonts.heading}", serif;
+  --body-font-family: "{brand.fonts.body}", sans-serif;
+
+  /* Colors — from brand.json colors */
+  --background-color: {brand.colors.background};
+  --text-color: {brand.colors.text};
+  --link-color: {brand.colors.link};
+  --link-hover-color: {brand.colors.linkHover};
+
+  /* Spacing — from brand.json spacing */
+  --section-padding: {brand.spacing.sectionPadding};
+  --nav-height: {brand.spacing.navHeight};
 }
 
 /* Fix SLICC preview scrolling */
 html, body { overflow: auto !important; }
 ```
 
-### 3. Assemble Page Content
+Replace all `{brand.*}` placeholders with actual values from `brand.json`.
+This file MUST be created — blocks reference these variables.
+
+### Step 4.3: Update styles.css — MANDATORY
+
+Read `/shared/{repo-name}/styles/styles.css`. Update the `:root` CSS
+variables to match the brand values from `brand.json`. The boilerplate
+has default values (e.g., `--link-color: #035fe6`) that must be replaced
+with the source site's actual values.
+
+Also add an import for brand.css at the top of styles.css if not present:
+```css
+@import url('brand.css');
+```
+
+### Step 4.4: Assemble Page Content — MANDATORY
 
 Write the main page to `/shared/{repo-name}/drafts/{page-path}.plain.html`.
 
-Combine all blocks from the decomposition into a single .plain.html:
+Read each block scoop's `.plain.html` file and combine them into sections
+following the decomposition order:
 
 ```html
 <div>
   <div class="hero">
-    <div>
-      <div><picture><img src="/drafts/images/hero.jpg" alt="Hero"></picture></div>
-      <div><h2>Hero Heading</h2><p>Hero text</p></div>
-    </div>
+    <!-- paste hero scoop's .plain.html block content -->
   </div>
 </div>
 <div>
   <div class="cards">
-    <div>
-      <div><picture><img src="/drafts/images/card1.jpg" alt="Card"></picture></div>
-      <div><h3>Card Title</h3><p>Card text</p></div>
-    </div>
+    <!-- paste cards scoop's .plain.html block content -->
   </div>
 </div>
 <div>
   <div class="metadata">
     <div><div>nav</div><div>/drafts/nav</div></div>
     <div><div>footer</div><div>/drafts/footer</div></div>
-    <div><div>title</div><div>Page Title</div></div>
+    <div><div>title</div><div>{page title from metadata.json}</div></div>
   </div>
 </div>
 ```
 
 **Rules:**
 - Each section is a top-level `<div>`
-- Blocks inside sections use `<div class="blockname">`
-- The **metadata block** at the end points to nav and footer fragments
-- Section dividers are implicit (each top-level div is a section)
-- Images use `/drafts/images/` paths
+- Blocks inside sections: `<div class="blockname">` with the content
+  from the scoop's `.plain.html` (copy the block div, not the section wrapper)
+- The **metadata block** MUST be the last section — points to nav/footer
+- Section styles from decomposition → add `<div class="section-metadata">`
+- Images use `/drafts/images/` root-relative paths
+- Default-content items (from decomposition): extract from source page
+  and write as plain HTML (headings, paragraphs, lists) in their section
 
-### 4. Create Full Preview Page
+### Step 4.5: Create Full Preview Page — MANDATORY
 
-Write `/shared/{repo-name}/drafts/{page-path}-preview.html` — a full
-HTML page for previewing the assembled result. Same pattern as block
-preview: `head.html` contents + metadata + main content + header/footer.
+Write `/shared/{repo-name}/drafts/{page-path}-preview.html`:
 
-Serve with:
+```html
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="nav" content="/drafts/nav">
+  <meta name="footer" content="/drafts/footer">
+  {PASTE <script> AND <link> TAGS FROM head.html}
+  <style>html, body { overflow: auto !important; }</style>
+</head>
+<body>
+  <header></header>
+  <main>
+    {PASTE THE CONTENT OF THE ASSEMBLED .plain.html}
+  </main>
+  <footer></footer>
+</body>
+</html>
+```
+
+Serve and verify:
 ```json
 { "action": "serve", "directory": "/shared/{repo-name}",
   "entry": "drafts/{page-path}-preview.html", "edsProject": true }
 ```
 
-### 5. Git Commit
+Take a screenshot of the full assembled page and save to
+`.migration/preview-assembled.png`.
+
+### Step 4.6: Git Commit — MANDATORY
 
 ```bash
-git add blocks/ styles/brand.css drafts/
+git add blocks/ styles/ drafts/
 git commit -m "feat: migrate {page-path} from {source-domain}"
 ```
 
-### 6. Final Summary
+### Step 4.7: Final Summary
 
 Report to the user:
-- Number of blocks migrated
-- Visual verification results per block
-- Any issues or gaps
-- How to preview: the URL of the served preview page
+- Number of blocks migrated and their statuses
+- Visual verification results per block (from reports)
+- Brand.css and styles.css: what was updated
+- Assembled page preview URL
+- Any issues, gaps, or incomplete items
 - Path to all reports in `.migration/reports/`
 
 ---
