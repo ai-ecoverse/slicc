@@ -110,13 +110,20 @@ export class VoiceInput {
         for (const track of stream.getTracks()) track.stop();
         if (!this.shouldBeListening) return;
         this.startRecognition(new Ctor());
-      }).catch(() => {
+      }).catch((err: any) => {
         if (!this.shouldBeListening) return;
         if (isExtension()) {
           this.startExtensionPopup();
         } else {
           this.shouldBeListening = false;
-          this.options.onError('Microphone access denied. Check Chrome site permissions.');
+          const name = err?.name;
+          let message = ERROR_MESSAGES['not-allowed'];
+          if (name === 'NotFoundError') {
+            message = ERROR_MESSAGES['audio-capture'];
+          } else if (name === 'NotReadableError') {
+            message = 'Microphone is in use by another app. Try again.';
+          }
+          this.options.onError(message);
           this.options.onStateChange('error');
         }
       });
@@ -129,8 +136,6 @@ export class VoiceInput {
   // ---------- Extension fallback: popup window ----------
 
   private startExtensionPopup(): void {
-    this.setupExtensionListener();
-
     const lang = this.options.lang ?? 'en-US';
     const url = chrome.runtime.getURL(`voice-popup.html?lang=${encodeURIComponent(lang)}`);
 
@@ -141,6 +146,8 @@ export class VoiceInput {
       height: 68,
       focused: true,
     }).then((win) => {
+      if (!this.shouldBeListening) return; // user stopped while popup was opening
+      this.setupExtensionListener();
       if (win?.id) this.popupWindowId = win.id;
     }).catch(() => {
       this.shouldBeListening = false;

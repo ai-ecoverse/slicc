@@ -61,6 +61,7 @@ export class ChatPanel {
   private micBtn!: HTMLButtonElement;
   private voiceInput: VoiceInput | null = null;
   private voiceMode = false;
+  private keydownListener: ((e: KeyboardEvent) => void) | null = null;
   private messages: ChatMessage[] = [];
   private agent: AgentHandle | null = null;
   private unsubscribe: (() => void) | null = null;
@@ -357,14 +358,13 @@ export class ChatPanel {
     });
 
     // Keyboard shortcut: Ctrl+Shift+V / Cmd+Shift+V
-    document.addEventListener('keydown', (e) => {
+    this.keydownListener = (e) => {
       if (e.shiftKey && (e.ctrlKey || e.metaKey) && e.key === 'V') {
         e.preventDefault();
-        if (!this.micBtn.disabled) {
-          this.toggleVoiceMode();
-        }
+        this.toggleVoiceMode();
       }
-    });
+    };
+    document.addEventListener('keydown', this.keydownListener);
   }
 
   private toggleVoiceMode(): void {
@@ -832,6 +832,10 @@ export class ChatPanel {
   dispose(): void {
     this.unsubscribe?.();
     this.voiceInput?.destroy();
+    if (this.keydownListener) {
+      document.removeEventListener('keydown', this.keydownListener);
+      this.keydownListener = null;
+    }
     this.container.innerHTML = '';
   }
 }
