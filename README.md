@@ -30,6 +30,7 @@ A browser-based coding agent that runs as a **Chrome extension** or with a thin 
 - :key: **Multi-Provider Auth** — Anthropic (direct), Azure AI Foundry, and AWS Bedrock with segmented control
 - :zap: **Real-Time Streaming** — responses stream token-by-token as Claude thinks
 - :floppy_disk: **Session Persistence** — conversations and files survive page reloads via IndexedDB
+- :microphone: **Voice Input** — hands-free voice mode using the Web Speech API. Toggle on, speak, 2.5s silence auto-sends, agent responds, voice auto-restarts. Works in both CLI and extension mode (extension uses a one-time popup for mic permission grant)
 - :crescent_moon: **Dark Theme** — syntax-highlighted code with a dark-first design
 
 ## Why "slicc"?
@@ -149,6 +150,7 @@ SLICC is a working prototype with these capabilities:
 - **Virtual filesystem** backed by IndexedDB (LightningFS) with per-scoop sandboxing via RestrictedFS
 - **WebAssembly Bash shell** with Python (Pyodide) and Node.js support
 - **Multi-provider auth** (Anthropic, Azure AI Foundry, Azure OpenAI, AWS Bedrock, and more)
+- **Voice input** with continuous conversation mode (Ctrl+Shift+V / Cmd+Shift+V)
 
 Current development is happening on feature branches using [yolo](https://github.com/ai-ecoverse/yolo) for worktree isolation, with Claude agents building the features autonomously.
 

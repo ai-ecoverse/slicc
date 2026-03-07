@@ -9,6 +9,7 @@ import type { AgentHandle, AgentEvent, ChatMessage, ToolCall } from './types.js'
 import { renderMessageContent, renderToolInput, escapeHtml } from './message-renderer.js';
 import { SessionStore } from './session-store.js';
 import { createLogger } from '../core/logger.js';
+import { VoiceInput, getVoiceAutoSend, getVoiceLang } from './voice-input.js';
 
 const log = createLogger('chat-panel');
 
@@ -57,6 +58,9 @@ export class ChatPanel {
   private textarea!: HTMLTextAreaElement;
   private sendBtn!: HTMLButtonElement;
   private stopBtn!: HTMLButtonElement;
+  private micBtn!: HTMLButtonElement;
+  private voiceInput: VoiceInput | null = null;
+  private voiceMode = false;
   private messages: ChatMessage[] = [];
   private agent: AgentHandle | null = null;
   private unsubscribe: (() => void) | null = null;
@@ -253,7 +257,35 @@ export class ChatPanel {
     this.stopBtn.title = 'Stop generation';
     this.stopBtn.style.display = 'none';
 
+    this.micBtn = document.createElement('button');
+    this.micBtn.className = 'chat__mic-btn';
+    // Static SVG mic icon — safe, no user content
+    const svgNs = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNs, 'svg');
+    svg.setAttribute('width', '16');
+    svg.setAttribute('height', '16');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    const path1 = document.createElementNS(svgNs, 'path');
+    path1.setAttribute('d', 'M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z');
+    const path2 = document.createElementNS(svgNs, 'path');
+    path2.setAttribute('d', 'M19 10v2a7 7 0 0 1-14 0v-2');
+    const line1 = document.createElementNS(svgNs, 'line');
+    line1.setAttribute('x1', '12'); line1.setAttribute('y1', '19');
+    line1.setAttribute('x2', '12'); line1.setAttribute('y2', '23');
+    const line2 = document.createElementNS(svgNs, 'line');
+    line2.setAttribute('x1', '8'); line2.setAttribute('y1', '23');
+    line2.setAttribute('x2', '16'); line2.setAttribute('y2', '23');
+    svg.append(path1, path2, line1, line2);
+    this.micBtn.appendChild(svg);
+    this.micBtn.title = 'Voice input (Ctrl+Shift+V)';
+
     inputArea.appendChild(this.textarea);
+    inputArea.appendChild(this.micBtn);
     inputArea.appendChild(this.sendBtn);
     inputArea.appendChild(this.stopBtn);
     this.container.appendChild(inputArea);
@@ -277,6 +309,67 @@ export class ChatPanel {
       this.agent?.stop();
       this.setStreamingState(false);
     });
+
+    // Voice input
+    this.voiceInput = new VoiceInput({
+      onTranscript: (text, _isFinal) => {
+        this.textarea.value = text;
+        this.textarea.style.height = 'auto';
+        this.textarea.style.height = Math.min(this.textarea.scrollHeight, 120) + 'px';
+      },
+      onStateChange: (state) => {
+        if (state === 'error') {
+          this.voiceMode = false;
+          this.micBtn.classList.remove('chat__mic-btn--active', 'chat__mic-btn--listening');
+        } else if (this.voiceMode) {
+          // In voice mode, keep --listening on unless we're actively streaming
+          // (streaming state manages the visual via setStreamingState).
+          // Don't let transient idle states during stop→start flicker the button.
+          if (state === 'listening') {
+            this.micBtn.classList.add('chat__mic-btn--listening');
+          }
+          // Don't remove --listening on 'idle' in voice mode — setStreamingState handles it
+        } else {
+          this.micBtn.classList.toggle('chat__mic-btn--listening', state === 'listening');
+        }
+      },
+      onError: (error) => {
+        log.debug('Voice input error', { error });
+        // In voice mode, suppress "no speech detected" — silence between turns is normal
+        if (this.voiceMode && error.includes('No speech detected')) return;
+        this.addSystemMessage(error);
+      },
+      autoSend: true, // always auto-send in voice mode
+      onAutoSend: (text) => {
+        this.textarea.value = text;
+        this.sendMessage();
+      },
+      lang: getVoiceLang(),
+    });
+
+    this.micBtn.addEventListener('click', () => {
+      this.toggleVoiceMode();
+    });
+
+    // Keyboard shortcut: Ctrl+Shift+V / Cmd+Shift+V
+    document.addEventListener('keydown', (e) => {
+      if (e.shiftKey && (e.ctrlKey || e.metaKey) && e.key === 'V') {
+        e.preventDefault();
+        if (!this.micBtn.disabled) {
+          this.toggleVoiceMode();
+        }
+      }
+    });
+  }
+
+  private toggleVoiceMode(): void {
+    this.voiceMode = !this.voiceMode;
+    this.micBtn.classList.toggle('chat__mic-btn--active', this.voiceMode);
+    if (this.voiceMode) {
+      this.voiceInput?.start();
+    } else {
+      this.voiceInput?.stop();
+    }
   }
 
   private sendMessage(): void {
@@ -432,9 +525,24 @@ export class ChatPanel {
     this.sendBtn.style.display = streaming ? 'none' : 'flex';
     this.stopBtn.style.display = streaming ? 'flex' : 'none';
     this.textarea.disabled = streaming;
+    // Mic button stays enabled during streaming so user can toggle voice mode off
+    if (streaming) {
+      if (this.voiceInput?.isListening()) {
+        this.voiceInput.stop();
+      }
+      // In voice mode, explicitly remove listening visual during streaming
+      this.micBtn.classList.remove('chat__mic-btn--listening');
+    }
     if (!streaming) {
-      // Restore focus after generation completes
-      this.textarea.focus();
+      if (this.voiceMode) {
+        // Voice mode: auto-restart listening when the agent finishes.
+        // Pre-set the listening class to avoid a visual flicker during
+        // the async getUserMedia → recognition start gap.
+        this.micBtn.classList.add('chat__mic-btn--listening');
+        this.voiceInput?.start();
+      } else {
+        this.textarea.focus();
+      }
     }
   }
 
@@ -718,6 +826,7 @@ export class ChatPanel {
   /** Dispose the panel. */
   dispose(): void {
     this.unsubscribe?.();
+    this.voiceInput?.destroy();
     this.container.innerHTML = '';
   }
 }

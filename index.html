@@ -284,6 +284,27 @@
         cursor: pointer; display: flex; align-items: center; justify-content: center;
         flex-shrink: 0;
       }
+      .chat__mic-btn {
+        width: 38px; height: 38px; border: none; border-radius: 6px;
+        background: #2a2a4a; color: #a0a0b0; font-size: 16px;
+        cursor: pointer; display: flex; align-items: center; justify-content: center;
+        flex-shrink: 0; transition: background .15s, color .15s;
+      }
+      .chat__mic-btn:hover { background: #3a3a5a; color: #e0e0e0; }
+      .chat__mic-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+      .chat__mic-btn--active {
+        background: #3a2a4a; color: #e94560; border: 1px solid #e94560;
+      }
+      .chat__mic-btn--active.chat__mic-btn--listening,
+      .chat__mic-btn--listening {
+        background: #e94560; color: #fff; border: none;
+        animation: mic-pulse 1.5s ease-in-out infinite;
+      }
+      .chat__mic-btn--listening:hover { background: #d1334e; }
+      @keyframes mic-pulse {
+        0%, 100% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.08); opacity: 0.85; }
+      }
 
       /* ------------------------------------------------------------------ */
       /* Panel headers                                                      */
