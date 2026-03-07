@@ -586,6 +586,10 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
             // EDS project mode: set project root on the SW so root-relative
             // paths (/styles/styles.css, /scripts/aem.js, /blocks/...)
             // resolve against the VFS project directory — emulates `aem up`.
+            //
+            // The page MUST be under /preview/ so the SW controls it.
+            // Root-relative requests from a controlled page (e.g., /styles/styles.css)
+            // are intercepted by the SW and resolved against edsProjectRoot.
             if (edsProject) {
               const projectRoot = normalizedDir.endsWith('/') ? normalizedDir.slice(0, -1) : normalizedDir;
               if (navigator.serviceWorker?.controller) {
@@ -594,11 +598,13 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
                   root: projectRoot,
                 });
               }
-              // In EDS mode, serve at root-relative path (not /preview/)
-              // so that EDS root-relative references resolve correctly
+              // Serve under /preview/ prefix so the SW controls the page.
+              // The entry resolves via standard /preview/ path stripping,
+              // and root-relative refs resolve via edsProjectRoot.
+              const edsPreviewPath = `/preview${normalizedDir}${normalizedDir.endsWith('/') ? '' : '/'}${entry}`;
               const edsUrl = isExtension
-                ? chrome.runtime.getURL(`/${entry}`)
-                : `http://localhost:3000/${entry}`;
+                ? chrome.runtime.getURL(edsPreviewPath)
+                : `http://localhost:3000${edsPreviewPath}`;
 
               appTabId = null;
               let newTargetId: string;
@@ -610,7 +616,7 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
               }
 
               return {
-                content: `EDS preview: serving ${directory} at root\nTab: ${newTargetId}\nURL: ${edsUrl}\nProject root set on preview SW — /styles/, /scripts/, /blocks/ resolve from VFS.\nUse snapshot, screenshot, evaluate, click etc. to interact with the page.`
+                content: `EDS preview: serving ${directory} in tab ${newTargetId}\nURL: ${edsUrl}\nProject root: ${projectRoot} — /styles/, /scripts/, /blocks/ resolve from VFS.\nUse snapshot, screenshot, evaluate, click etc. to interact with the page.`
               };
             }
 
