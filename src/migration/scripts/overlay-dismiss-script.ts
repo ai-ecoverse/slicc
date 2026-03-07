@@ -109,10 +109,17 @@ export const OVERLAY_DISMISS_SCRIPT = `(async () => {
       var coverage = (area / viewportArea) * 100;
 
       if (coverage > 20) {
+        var sel = el.tagName.toLowerCase();
+        if (el.id) { sel = '#' + el.id; }
+        else if (el.className && typeof el.className === 'string') {
+          var cls = el.className.split(' ').filter(function(c) { return c; }).slice(0, 3);
+          if (cls.length) sel += '.' + cls.join('.');
+        }
         el.remove();
         results.push({
           vendor: 'fixed-overlay',
           action: 'remove',
+          selector: sel,
           coverage: Math.round(coverage),
           zIndex: zIdx
         });

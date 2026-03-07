@@ -132,7 +132,11 @@ async function runMigrationExtraction(
         .map((r: { action: string; selector: string }) =>
           `${r.action}:${r.selector}`);
     }
-  } catch { /* ignore parse errors */ }
+  } catch (err) {
+    log.warn('Failed to parse overlay results', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
   const recipePath = `${migrationDir}/overlay-recipe.json`;
   await fs.writeFile(recipePath, JSON.stringify(overlayRecipe, null, 2));
   log.info('Overlay recipe saved', { actions: overlayRecipe.length });
@@ -199,6 +203,7 @@ function formatResult(result: ExtractionResult): string {
     `  ${result.files.brand}`,
     `  ${result.files.metadata}`,
     `  ${result.files.blockInventory}`,
+    `  ${result.files.overlayRecipe}`,
   ].join('\n');
 }
 
