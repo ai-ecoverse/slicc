@@ -102,6 +102,7 @@ export class VoiceInput {
     this.pendingTranscript = '';
     this.consecutiveRestarts = 0;
     this.cancelAutoSend();
+    this.resetInactivityTimer();
 
     // Try getUserMedia to ensure mic permission, then start recognition.
     // If getUserMedia fails in extension side panel, fall back to popup window.
@@ -304,7 +305,6 @@ export class VoiceInput {
     try {
       this.recognition.start();
       this._isListening = true;
-      this.resetInactivityTimer();
       this.options.onStateChange('listening');
     } catch {
       this.shouldBeListening = false;
