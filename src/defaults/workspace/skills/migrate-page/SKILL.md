@@ -224,23 +224,47 @@ For each block, check:
 
 List any missing reports — every block scoop MUST produce a report.
 
-### Step 4.2: Generate brand.css — MANDATORY
+### Step 4.2: Resolve Fonts — MANDATORY
 
-Read `.migration/brand.json`. Write `/shared/{repo-name}/styles/brand.css`:
+Read `.migration/brand.json`. The `fonts.sources` field tells you what
+font delivery the source page uses:
+
+- `fonts.sources.typekit` — Typekit project ID (if source uses Adobe Fonts)
+- `fonts.sources.googleFonts` — array of Google Fonts CSS URLs
+
+**Font Resolution Cascade (for body and heading fonts):**
+
+1. **System font?** (Arial, Georgia, Helvetica, Verdana, etc.) → use as-is
+2. **Source uses Typekit?** (`fonts.sources.typekit` is not null) → the source's
+   Typekit kit already has the font. Use that project ID.
+3. **Font in our Typekit kit?** Check if the font is in kit `cwm0xxe` by
+   fetching `https://typekit.com/api/v1/json/kits/cwm0xxe/published` (no auth
+   needed). If the font family appears in the kit's families → use kit `cwm0xxe`.
+4. **Font on Google Fonts?** Fetch
+   `https://fonts.googleapis.com/css2?family={FontName}:wght@400;700&display=swap`
+   — if 200 OK → use the Google Fonts URL.
+5. **Not found** → use the extracted font name with a generic fallback
+   (serif or sans-serif).
+
+**Hardcoded Typekit project ID: `cwm0xxe`**
+
+### Step 4.3: Generate brand.css — MANDATORY
+
+Write `/shared/{repo-name}/styles/brand.css`:
 
 ```css
 :root {
-  /* Typography — from brand.json fonts */
-  --heading-font-family: "{brand.fonts.heading}", serif;
-  --body-font-family: "{brand.fonts.body}", sans-serif;
+  /* Typography — resolved from font cascade */
+  --heading-font-family: "{resolved heading font}", serif;
+  --body-font-family: "{resolved body font}", sans-serif;
 
-  /* Colors — from brand.json colors */
+  /* Colors — from brand.json */
   --background-color: {brand.colors.background};
   --text-color: {brand.colors.text};
   --link-color: {brand.colors.link};
   --link-hover-color: {brand.colors.linkHover};
 
-  /* Spacing — from brand.json spacing */
+  /* Spacing — from brand.json */
   --section-padding: {brand.spacing.sectionPadding};
   --nav-height: {brand.spacing.navHeight};
 }
@@ -249,10 +273,31 @@ Read `.migration/brand.json`. Write `/shared/{repo-name}/styles/brand.css`:
 html, body { overflow: auto !important; }
 ```
 
-Replace all `{brand.*}` placeholders with actual values from `brand.json`.
-This file MUST be created — blocks reference these variables.
+Replace all placeholders with actual values. This file MUST be created.
 
-### Step 4.3: Update styles.css — MANDATORY
+### Step 4.4: Update head.html — MANDATORY
+
+Read `/shared/{repo-name}/head.html`. Add font delivery `<link>` tags
+based on the font resolution results:
+
+**If using Typekit** (source had Typekit OR font found in kit `cwm0xxe`):
+```html
+<link rel="stylesheet" href="https://use.typekit.net/{projectId}.css">
+```
+
+**If using Google Fonts:**
+```html
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="{googleFontsUrl}" rel="stylesheet">
+```
+
+Add these BEFORE the existing `<script>` tags in `head.html`. Do NOT
+remove existing content — only add the font links.
+
+Write the updated `head.html` back to `/shared/{repo-name}/head.html`.
+
+### Step 4.5: Update styles.css — MANDATORY
 
 Read `/shared/{repo-name}/styles/styles.css`. Update the `:root` CSS
 variables to match the brand values from `brand.json`. The boilerplate
@@ -264,7 +309,7 @@ Also add an import for brand.css at the top of styles.css if not present:
 @import url('brand.css');
 ```
 
-### Step 4.4: Assemble Page Content — MANDATORY
+### Step 4.6: Assemble Page Content — MANDATORY
 
 Write the main page to `/shared/{repo-name}/drafts/{page-path}.plain.html`.
 
@@ -301,7 +346,7 @@ following the decomposition order:
 - Default-content items (from decomposition): extract from source page
   and write as plain HTML (headings, paragraphs, lists) in their section
 
-### Step 4.5: Create Full Preview Page — MANDATORY
+### Step 4.7: Create Full Preview Page — MANDATORY
 
 Write `/shared/{repo-name}/drafts/{page-path}-preview.html`:
 
@@ -334,14 +379,14 @@ Serve and verify:
 Take a screenshot of the full assembled page and save to
 `.migration/preview-assembled.png`.
 
-### Step 4.6: Git Commit — MANDATORY
+### Step 4.8: Git Commit — MANDATORY
 
 ```bash
 git add blocks/ styles/ drafts/
 git commit -m "feat: migrate {page-path} from {source-domain}"
 ```
 
-### Step 4.7: Final Summary
+### Step 4.9: Final Summary
 
 Report to the user:
 - Number of blocks migrated and their statuses

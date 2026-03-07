@@ -28,6 +28,10 @@ export interface BrandData {
     body: string;
     heading: string;
     sizes: Record<string, { desktop: string; mobile: string }>;
+    sources: {
+      typekit: string | null;
+      googleFonts: string[];
+    };
   };
   colors: {
     background: string;

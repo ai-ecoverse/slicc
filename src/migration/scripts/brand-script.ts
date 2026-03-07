@@ -221,6 +221,22 @@ export const BRAND_EXTRACT_SCRIPT = `(function() {
     return favicons;
   }
 
+  function detectFontSources() {
+    var sources = { typekit: null, googleFonts: [] };
+    var links = document.querySelectorAll('link[rel="stylesheet"]');
+    for (var i = 0; i < links.length; i++) {
+      var href = links[i].getAttribute('href') || '';
+      var tkMatch = href.match(/use\\.typekit\\.net\\/([a-z0-9]+)\\.css/);
+      if (tkMatch) {
+        sources.typekit = tkMatch[1];
+      }
+      if (href.indexOf('fonts.googleapis.com') !== -1) {
+        sources.googleFonts.push(href);
+      }
+    }
+    return sources;
+  }
+
   var bodyFont = extractBodyFont();
   var headingFont = extractHeadingFont();
   var headingSizes = extractHeadingSizes();
@@ -228,12 +244,14 @@ export const BRAND_EXTRACT_SCRIPT = `(function() {
   var linkColor = extractLinkColor();
   var linkHover = extractLinkHoverColor();
   var lightDark = extractLightDarkColors();
+  var fontSources = detectFontSources();
 
   return {
     fonts: {
       body: bodyFont,
       heading: headingFont,
-      headingSizes: headingSizes
+      headingSizes: headingSizes,
+      sources: fontSources
     },
     colors: {
       background: baseColors.background,
