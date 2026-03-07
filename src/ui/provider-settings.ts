@@ -203,6 +203,32 @@ export function getProviderModels(providerId: string): Model<Api>[] {
   }
 }
 
+/**
+ * Auto-configure provider settings from Vite env vars (.env file).
+ * Only populates localStorage if no settings exist yet.
+ *
+ * Supported env vars:
+ *   VITE_SLICC_PROVIDER  — provider id (e.g., "anthropic", "azure-ai-foundry")
+ *   VITE_SLICC_API_KEY   — API key
+ *   VITE_SLICC_BASE_URL  — base URL (for Azure, Bedrock, etc.)
+ *   VITE_SLICC_MODEL     — model id (e.g., "claude-sonnet-4-20250514")
+ */
+export function applyEnvDefaults(): void {
+  const env = import.meta.env;
+  if (env.VITE_SLICC_API_KEY && !localStorage.getItem(STORAGE_KEYS.apiKey)) {
+    localStorage.setItem(STORAGE_KEYS.apiKey, env.VITE_SLICC_API_KEY);
+  }
+  if (env.VITE_SLICC_PROVIDER && !localStorage.getItem(STORAGE_KEYS.provider)) {
+    localStorage.setItem(STORAGE_KEYS.provider, env.VITE_SLICC_PROVIDER);
+  }
+  if (env.VITE_SLICC_BASE_URL && !localStorage.getItem(STORAGE_KEYS.baseUrl)) {
+    localStorage.setItem(STORAGE_KEYS.baseUrl, env.VITE_SLICC_BASE_URL);
+  }
+  if (env.VITE_SLICC_MODEL && !localStorage.getItem(STORAGE_KEYS.model)) {
+    localStorage.setItem(STORAGE_KEYS.model, env.VITE_SLICC_MODEL);
+  }
+}
+
 // Storage functions
 export function getSelectedProvider(): string {
   // Check for new storage first, then migrate from legacy

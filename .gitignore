@@ -4,3 +4,5 @@ dist/
 .DS_STORE
 workspace/
 coverage/
+.env
+.env.local

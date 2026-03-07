@@ -39,6 +39,12 @@ export interface GitOps {
 }
 
 async function readGithubToken(): Promise<string | undefined> {
+  // Check .env first (VITE_GITHUB_TOKEN)
+  const envToken = (import.meta as unknown as { env?: Record<string, string> })
+    .env?.VITE_GITHUB_TOKEN;
+  if (envToken) return envToken;
+
+  // Fall back to git config token in global VFS
   try {
     const globalFs = await VirtualFS.create({
       dbName: 'slicc-fs-global',
