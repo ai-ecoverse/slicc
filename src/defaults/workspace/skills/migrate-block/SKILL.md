@@ -60,14 +60,17 @@ content. Navigate to the source page and extract content directly:
 { "action": "navigate", "url": "{sourceUrl}" }
 ```
 
-If you see a cookie banner or overlay blocking content, dismiss it using
-the dismiss-overlays skill (read it from your workspace at
-`/scoops/{your-folder}/workspace/skills/dismiss-overlays/SKILL.md`).
-The `migrate_page` tool dismisses overlays during extraction, which sets
-consent cookies — but if you opened a new tab, the banner may reappear.
+**MANDATORY: Dismiss overlays immediately after navigation.** Cookie banners
+and consent dialogs block content extraction and screenshots. Run this
+EVERY TIME you navigate to the source page — it's harmless if no overlays
+exist:
 
-Use `evaluate` to extract the component's content using the CSS selector
-from the visual tree or one you identify:
+```json
+{ "action": "evaluate", "expression": "(async()=>{var s=function(ms){return new Promise(function(r){setTimeout(r,ms)})};await s(1500);var K={onetrust:{b:'#onetrust-consent-sdk,.onetrust-pc-dark-filter',d:'#onetrust-accept-btn-handler,.onetrust-close-btn-handler'},cookiebot:{b:'#CybotCookiebotDialog',d:'#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll'},cookieconsent:{b:'.cc-window,.cc-banner',d:'.cc-btn.cc-dismiss,.cc-allow'},generic:{b:'[class*=\"cookie\"],[class*=\"consent\"],[id*=\"cookie\"],[id*=\"consent\"]',d:'[class*=\"accept\"],[class*=\"allow\"],[aria-label*=\"close\"],[aria-label*=\"Close\"]'}};var r=[];for(var v of Object.keys(K)){try{var el=document.querySelector(K[v].b);if(!el||el.offsetParent===null)continue;var done=false;for(var a=0;a<4&&!done;a++){for(var sel of K[v].d.split(',')){try{var btn=document.querySelector(sel.trim());if(btn){btn.click();done=true;r.push(v);await s(200);break}}catch(e){}}if(!done)await s(500)}if(!done){document.querySelectorAll(K[v].b).forEach(function(e){e.remove()});r.push(v+'-removed')}}catch(e){}}document.querySelectorAll('*').forEach(function(e){var st=getComputedStyle(e);if((st.position==='fixed'||st.position==='sticky')&&(parseInt(st.zIndex)||0)>100){var rect=e.getBoundingClientRect();if(rect.width*rect.height/(innerHeight*innerWidth)>0.2){e.remove();r.push('fixed')}}});await s(300);return JSON.stringify({dismissed:r.length,results:r})})()" }
+```
+
+Then extract the component's content using the CSS selector from the
+visual tree or one you identify:
 
 ```json
 { "action": "evaluate", "expression": "..." }
