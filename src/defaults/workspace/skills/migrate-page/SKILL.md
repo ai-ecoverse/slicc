@@ -151,10 +151,11 @@ feed_scoop({ "name": "hero-block-scoop", "prompt": "<FULL PROMPT BELOW>" })
 
 ### Scoop Delegation Pattern
 
-**Before creating scoops**, read the UPDATED `head.html` (with font links):
+**Before creating scoops**, read these files:
 
 ```
 read_file({ "path": "/shared/{repo-name}/head.html" })
+read_file({ "path": "/shared/{repo-name}/.migration/overlay-recipe.json" })
 ```
 
 Each scoop has a `migrate-block` skill in its workspace that defines the
@@ -176,6 +177,11 @@ You are migrating a single block to EDS.
 
 ## head.html Content
 {PASTE THE FULL CONTENT OF head.html HERE}
+
+## Overlay Recipe
+The following overlays were detected and dismissed on the source page.
+Apply this recipe after navigating to the source URL:
+{PASTE THE CONTENT OF overlay-recipe.json HERE}
 
 ## Instructions
 Read and execute the migrate-block skill at:
@@ -204,6 +210,9 @@ You are migrating the website header/navigation to EDS.
 
 ## head.html Content
 {PASTE THE FULL CONTENT OF head.html HERE}
+
+## Overlay Recipe
+{PASTE THE CONTENT OF overlay-recipe.json HERE}
 
 ## Instructions
 Read and execute the migrate-header skill at:

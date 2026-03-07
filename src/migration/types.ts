@@ -77,6 +77,7 @@ export interface ExtractionResult {
     brand: string;
     metadata: string;
     blockInventory: string;
+    overlayRecipe: string;
   };
   blockCount: number;
   pageSlug: string;

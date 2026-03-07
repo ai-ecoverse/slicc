@@ -60,23 +60,27 @@ content. Navigate to the source page and extract content directly:
 { "action": "navigate", "url": "{sourceUrl}" }
 ```
 
-**MANDATORY: Dismiss overlays after navigation.** Cookie banners, consent
-dialogs, and chat widgets block content extraction and screenshots.
-Run this three-step process EVERY TIME you navigate to the source page:
+**MANDATORY: Dismiss overlays after navigation.** The cone detected and
+dismissed overlays during extraction and saved a recipe. Apply it now.
 
-**Step 1a — Heuristic dismiss (fast, covers known vendors):**
+**Step 1a — Apply overlay recipe:**
 
-```json
-{ "action": "evaluate", "expression": "(async()=>{var s=function(ms){return new Promise(function(r){setTimeout(r,ms)})};await s(1500);var K={onetrust:{b:'#onetrust-consent-sdk,.onetrust-pc-dark-filter',d:'#onetrust-accept-btn-handler,.onetrust-close-btn-handler'},cookiebot:{b:'#CybotCookiebotDialog',d:'#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll'},cookieconsent:{b:'.cc-window,.cc-banner',d:'.cc-btn.cc-dismiss,.cc-allow'},generic:{b:'[class*=\"cookie\"],[class*=\"consent\"],[id*=\"cookie\"],[id*=\"consent\"]',d:'[class*=\"accept\"],[class*=\"allow\"],[aria-label*=\"close\"],[aria-label*=\"Close\"]'}};var r=[];for(var v of Object.keys(K)){try{var el=document.querySelector(K[v].b);if(!el||el.offsetParent===null)continue;var done=false;for(var a=0;a<4&&!done;a++){for(var sel of K[v].d.split(',')){try{var btn=document.querySelector(sel.trim());if(btn){btn.click();done=true;r.push(v);await s(200);break}}catch(e){}}if(!done)await s(500)}if(!done){document.querySelectorAll(K[v].b).forEach(function(e){e.remove()});r.push(v+'-removed')}}catch(e){}}document.querySelectorAll('*').forEach(function(e){var st=getComputedStyle(e);if((st.position==='fixed'||st.position==='sticky')&&(parseInt(st.zIndex)||0)>100){var rect=e.getBoundingClientRect();if(rect.width*rect.height/(innerHeight*innerWidth)>0.2){e.remove();r.push('fixed')}}});await s(300);return JSON.stringify({dismissed:r.length,results:r})})()" }
-```
+Read the overlay recipe from `{projectPath}/.migration/overlay-recipe.json`.
+It contains an array of actions the cone found effective, e.g.:
+`["click:#onetrust-accept-btn-handler", "remove:#onetrust-consent-sdk"]`
 
-**Step 1b — Visual verification (catches anything heuristics missed):**
+For each action, wait 1.5s for the overlay to render, then execute:
+- `click:SELECTOR` → `document.querySelector('SELECTOR').click()`
+- `remove:SELECTOR` → `document.querySelectorAll('SELECTOR').forEach(e => e.remove())`
+
+If the recipe is empty `[]`, overlays were not detected — skip to Step 1b.
+
+**Step 1b — Visual verification:**
 
 Take a screenshot and look at it. If you see ANY overlay still blocking
-content (custom banner, modal, chat widget, subscription popup, etc.):
+content that the recipe didn't handle:
 - Identify the dismiss/accept/close button visually
-- Use `evaluate` to click it: `document.querySelector('...').click()`
-- If no dismiss button, remove the overlay: `document.querySelector('...').remove()`
+- Use `evaluate` to click it or remove the overlay element
 - Take another screenshot to confirm the page is clean
 
 Only proceed to content extraction once the page is clean.

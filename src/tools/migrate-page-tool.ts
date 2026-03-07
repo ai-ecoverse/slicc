@@ -122,7 +122,20 @@ async function runMigrationExtraction(
   await browser.navigate(url);
 
   log.info('Dismissing overlays');
-  await browser.evaluate(OVERLAY_DISMISS_SCRIPT);
+  const overlayResult = await browser.evaluate(OVERLAY_DISMISS_SCRIPT);
+  let overlayRecipe: string[] = [];
+  try {
+    const parsed = JSON.parse(overlayResult as string);
+    if (parsed.results) {
+      overlayRecipe = parsed.results
+        .filter((r: { selector?: string }) => r.selector)
+        .map((r: { action: string; selector: string }) =>
+          `${r.action}:${r.selector}`);
+    }
+  } catch { /* ignore parse errors */ }
+  const recipePath = `${migrationDir}/overlay-recipe.json`;
+  await fs.writeFile(recipePath, JSON.stringify(overlayRecipe, null, 2));
+  log.info('Overlay recipe saved', { actions: overlayRecipe.length });
 
   await browser.evaluate(PAGE_PREP_SCRIPT);
 
@@ -164,6 +177,7 @@ async function runMigrationExtraction(
       brand: brandPath,
       metadata: metadataPath,
       blockInventory: inventoryPath,
+      overlayRecipe: recipePath,
     },
     blockCount: blocks.length,
     pageSlug,

@@ -194,9 +194,9 @@ describe('migrate_page extraction pipeline', () => {
     // browser.screenshot called with fullPage
     expect(browser.screenshot).toHaveBeenCalledWith({ fullPage: true });
 
-    // fs.writeFile called for all 5 artifacts
+    // fs.writeFile called for all 6 artifacts (overlay recipe + 5 extraction files)
     const writeCalls = (fs.writeFile as ReturnType<typeof vi.fn>).mock.calls;
-    expect(writeCalls.length).toBe(5);
+    expect(writeCalls.length).toBe(6);
 
     const writtenPaths = writeCalls.map(
       (call: unknown[]) => call[0] as string,
