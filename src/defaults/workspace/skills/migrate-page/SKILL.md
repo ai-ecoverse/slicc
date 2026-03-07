@@ -116,6 +116,24 @@ Write `decomposition.json` to `/shared/{repo-name}/.migration/`:
 
 ---
 
+## Phase 2.5: Prepare head.html with Fonts — BEFORE creating scoops
+
+Scoops need `head.html` with font links already included so their preview
+pages load the correct fonts. Do this BEFORE Phase 3.
+
+1. Read `.migration/brand.json` — check `fonts.sources.typekit` and `fonts.sources.googleFonts`
+2. Resolve fonts using the cascade from Step 4.2 (system → source Typekit → kit cwm0xxe → Google Fonts)
+3. Read `/shared/{repo-name}/head.html`
+4. Add font `<link>` tags BEFORE the existing `<script>` tags:
+   - Typekit: `<link rel="stylesheet" href="https://use.typekit.net/{projectId}.css">`
+   - Google: `<link href="{url}" rel="stylesheet">` with preconnects
+5. Write the updated `head.html` back
+
+Now `head.html` includes font delivery — scoops will pass this to their
+preview pages and fonts will load during block preview.
+
+---
+
 ## Phase 3: Block Generation (Parallel Scoops)
 
 Create one scoop per **block**. **Do NOT drop scoops** — keep them alive
@@ -133,7 +151,7 @@ feed_scoop({ "name": "hero-block-scoop", "prompt": "<FULL PROMPT BELOW>" })
 
 ### Scoop Delegation Pattern
 
-**Before creating scoops**, read `head.html` from the repo:
+**Before creating scoops**, read the UPDATED `head.html` (with font links):
 
 ```
 read_file({ "path": "/shared/{repo-name}/head.html" })
@@ -275,27 +293,11 @@ html, body { overflow: auto !important; }
 
 Replace all placeholders with actual values. This file MUST be created.
 
-### Step 4.4: Update head.html — MANDATORY
+### Step 4.4: Verify head.html
 
-Read `/shared/{repo-name}/head.html`. Add font delivery `<link>` tags
-based on the font resolution results:
-
-**If using Typekit** (source had Typekit OR font found in kit `cwm0xxe`):
-```html
-<link rel="stylesheet" href="https://use.typekit.net/{projectId}.css">
-```
-
-**If using Google Fonts:**
-```html
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="{googleFontsUrl}" rel="stylesheet">
-```
-
-Add these BEFORE the existing `<script>` tags in `head.html`. Do NOT
-remove existing content — only add the font links.
-
-Write the updated `head.html` back to `/shared/{repo-name}/head.html`.
+`head.html` was already updated with font links in Phase 2.5. Verify
+that the Typekit/Google Fonts `<link>` tags are present. If not (e.g.,
+Phase 2.5 was skipped), add them now following the same pattern.
 
 ### Step 4.5: Update styles.css — MANDATORY
 
