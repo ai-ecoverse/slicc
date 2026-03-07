@@ -345,17 +345,24 @@ the `<meta name="nav">` points to `/drafts/nav`.
 Header target: **90% visual similarity** (lower than blocks due to
 interactive states). Max **5 iterations**.
 
+**Font rendering note:** Adobe Fonts (Typekit) validates the requesting
+domain. On `localhost`, Typekit returns empty CSS — fonts will show
+fallbacks (Georgia, Times New Roman). This is expected and NOT a bug
+to fix. Do NOT waste iterations trying to match font rendering. Focus
+on layout, spacing, colors, and structure. Fonts will render correctly
+when deployed to a whitelisted production domain.
+
 For each iteration:
 1. Screenshot the source header
 2. Screenshot the preview header (`selector: "header"`)
-3. Compare: focus on background color, logo size, nav spacing, font
+3. Compare: focus on background color, logo size, nav spacing, layout
 4. Fix: edit `header.css` custom properties — surgical changes only
 
 **Common header-specific fixes:**
 - Background color mismatch → `--header-background`
 - Logo too large/small → `.header.block .header-brand img { max-height }`
 - Nav link spacing → `--header-nav-gap`
-- Font weight/family → `--header-nav-font-weight`, `font-family`
+- Font size/weight → `--header-nav-font-size`, `--header-nav-font-weight`
 - Dropdown position → `--header-dropdown-padding`, box-shadow
 - Section padding → `--header-section-padding`
 

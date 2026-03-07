@@ -261,6 +261,13 @@ Do NOT work around framework failures by inlining CSS/JS.
 
 Only proceed here after Step 6c passes.
 
+**Font rendering note:** Adobe Fonts (Typekit) validates the requesting
+domain. On `localhost`, Typekit returns empty CSS — fonts will show
+fallbacks (Georgia, Times New Roman). This is expected and NOT a bug
+to fix. Do NOT waste iterations trying to match font rendering. Focus
+on layout, spacing, colors, and structure. Fonts will render correctly
+when deployed to a whitelisted production domain.
+
 For each iteration:
 
 1. **Screenshot the source component:** Navigate to source URL, screenshot
@@ -270,9 +277,9 @@ For each iteration:
 
 3. **Compare:** Read both screenshots. Identify the top 2-3 CSS gaps:
    - Padding/margin (highest priority)
-   - Font size/weight/family
    - Background color/gradient
    - Layout/flex direction
+   - Font size/weight (but NOT font-family — see note above)
 
 4. **Fix:** Make surgical CSS edits to
    `{projectPath}/blocks/{blockName}/{blockName}.css`. Do NOT rewrite the
