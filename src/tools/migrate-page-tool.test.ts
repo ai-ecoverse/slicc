@@ -188,8 +188,8 @@ describe('migrate_page extraction pipeline', () => {
     // browser.attachToPage called with the target ID
     expect(browser.attachToPage).toHaveBeenCalledWith('target-123');
 
-    // browser.evaluate called 4 times: prep + visual tree + brand + metadata
-    expect(browser.evaluate).toHaveBeenCalledTimes(4);
+    // browser.evaluate called 5 times: overlay dismiss + prep + visual tree + brand + metadata
+    expect(browser.evaluate).toHaveBeenCalledTimes(5);
 
     // browser.screenshot called with fullPage
     expect(browser.screenshot).toHaveBeenCalledWith({ fullPage: true });

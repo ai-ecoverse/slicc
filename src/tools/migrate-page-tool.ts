@@ -11,6 +11,7 @@ import { VirtualFS } from '../fs/index.js';
 import type { ToolDefinition, ToolResult } from '../core/types.js';
 import type { ExtractionResult } from '../migration/types.js';
 import { GitCommands } from '../git/git-commands.js';
+import { OVERLAY_DISMISS_SCRIPT } from '../migration/scripts/overlay-dismiss-script.js';
 import { PAGE_PREP_SCRIPT } from '../migration/scripts/page-prep-script.js';
 import { VISUAL_TREE_SCRIPT } from '../migration/scripts/visual-tree-script.js';
 import { BRAND_EXTRACT_SCRIPT } from '../migration/scripts/brand-script.js';
@@ -119,6 +120,9 @@ async function runMigrationExtraction(
   const targetId = await browser.createPage(url);
   await browser.attachToPage(targetId);
   await browser.navigate(url);
+
+  log.info('Dismissing overlays');
+  await browser.evaluate(OVERLAY_DISMISS_SCRIPT);
 
   await browser.evaluate(PAGE_PREP_SCRIPT);
 
