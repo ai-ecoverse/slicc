@@ -301,15 +301,51 @@ Phase 2.5 was skipped), add them now following the same pattern.
 
 ### Step 4.5: Update styles.css — MANDATORY
 
-Read `/shared/{repo-name}/styles/styles.css`. Update the `:root` CSS
-variables to match the brand values from `brand.json`. The boilerplate
-has default values (e.g., `--link-color: #035fe6`) that must be replaced
-with the source site's actual values.
+Read `/shared/{repo-name}/styles/styles.css`. Make these changes:
 
-Also add an import for brand.css at the top of styles.css if not present:
+**1. Add `@import` as the VERY FIRST LINE of the file** (CSS spec requires
+`@import` before any other rules — placing it after `:root` silently fails):
+
 ```css
 @import url('brand.css');
+
+:root {
+  /* ... existing variables ... */
+}
 ```
+
+**2. Update `:root` variables** to match brand values from `brand.json`.
+The boilerplate has defaults (e.g., `--link-color: #035fe6`) that must be
+replaced with the source site's actual values.
+
+**3. Add a global EDS button reset** after the `:root` block. EDS's
+`decorateButtons()` auto-wraps standalone links as `.button-container > .button`
+which renders them as filled buttons. Most migrated blocks need text-link
+styling instead. Add this once globally rather than repeating in every block:
+
+```css
+/* Global reset for EDS button auto-decoration in migrated blocks */
+main .button-container {
+  display: inline;
+}
+
+main a.button:any-link {
+  background: none;
+  border: none;
+  border-radius: 0;
+  color: var(--link-color);
+  font-size: inherit;
+  font-weight: inherit;
+  padding: 0;
+  margin: 0;
+  text-decoration: underline;
+  white-space: normal;
+}
+```
+
+Individual blocks can still override this for actual button styling (e.g.,
+CTA buttons with borders) by using more specific selectors like
+`.hero a.button`.
 
 ### Step 4.6: Assemble Page Content — MANDATORY
 
@@ -378,8 +414,16 @@ Serve and verify:
   "entry": "drafts/{page-path}-preview.html", "edsProject": true }
 ```
 
-Take a screenshot of the full assembled page and save to
-`.migration/preview-assembled.png`.
+Wait for all blocks to load before screenshotting. The page has header
+(fragment load) + multiple content blocks + footer (fragment load) — these
+load asynchronously. Verify with:
+
+```json
+{ "action": "evaluate", "expression": "JSON.stringify({ blocks: document.querySelectorAll('[data-block-status=\"loaded\"]').length, appear: document.body.classList.contains('appear') })" }
+```
+
+Wait until all expected blocks show `status: "loaded"`. Then take the screenshot:
+Save to `.migration/preview-assembled.png`.
 
 ### Step 4.8: Git Commit — MANDATORY
 

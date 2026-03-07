@@ -67,18 +67,55 @@ export const BRAND_EXTRACT_SCRIPT = `(function() {
   }
 
   function extractBaseColors() {
-    var style = window.getComputedStyle(document.body);
-    return {
-      background: style.backgroundColor || '',
-      text: style.color || ''
-    };
+    var bg = '';
+    var text = '';
+    var bodyStyle = window.getComputedStyle(document.body);
+    bg = bodyStyle.backgroundColor || '';
+    text = bodyStyle.color || '';
+
+    // If body bg is transparent, try html, then main, then first section
+    if (!bg || bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent') {
+      var html = document.documentElement;
+      bg = window.getComputedStyle(html).backgroundColor || '';
+    }
+    if (!bg || bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent') {
+      var main = document.querySelector('main');
+      if (main) bg = window.getComputedStyle(main).backgroundColor || '';
+    }
+    if (!bg || bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent') {
+      bg = '#ffffff';
+    }
+
+    // If text is default black, try main content area for more specific value
+    var mainEl = document.querySelector('main');
+    if (mainEl) {
+      var mainText = window.getComputedStyle(mainEl).color;
+      if (mainText && mainText !== 'rgb(0, 0, 0)') text = mainText;
+    }
+
+    return { background: bg, text: text };
   }
 
   function extractLinkColor() {
-    var link = document.querySelector('main a') ||
-               document.querySelector('a');
-    if (!link) return '';
-    return window.getComputedStyle(link).color || '';
+    // Sample multiple links and find the most common color (skip hero/header links)
+    var links = document.querySelectorAll('main a');
+    if (links.length === 0) links = document.querySelectorAll('a');
+    var counts = {};
+    for (var i = 0; i < links.length && i < 30; i++) {
+      var color = window.getComputedStyle(links[i]).color || '';
+      if (!color || color === 'rgb(255, 255, 255)' || color === 'rgb(0, 0, 0)') continue;
+      counts[color] = (counts[color] || 0) + 1;
+    }
+    var best = '';
+    var bestCount = 0;
+    var keys = Object.keys(counts);
+    for (var j = 0; j < keys.length; j++) {
+      if (counts[keys[j]] > bestCount) {
+        bestCount = counts[keys[j]];
+        best = keys[j];
+      }
+    }
+    return best || (links.length > 0 ? window.getComputedStyle(links[0]).color : '');
   }
 
   function extractLinkHoverColor() {
