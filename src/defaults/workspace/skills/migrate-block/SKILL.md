@@ -60,6 +60,12 @@ content. Navigate to the source page and extract content directly:
 { "action": "navigate", "url": "{sourceUrl}" }
 ```
 
+If you see a cookie banner or overlay blocking content, dismiss it using
+the dismiss-overlays skill (read it from your workspace at
+`/scoops/{your-folder}/workspace/skills/dismiss-overlays/SKILL.md`).
+The `migrate_page` tool dismisses overlays during extraction, which sets
+consent cookies — but if you opened a new tab, the banner may reappear.
+
 Use `evaluate` to extract the component's content using the CSS selector
 from the visual tree or one you identify:
 

@@ -41,6 +41,10 @@ Navigate to the source page and extract the header's content:
 { "action": "navigate", "url": "{sourceUrl}" }
 ```
 
+If you see a cookie banner or overlay blocking content, dismiss it using
+the dismiss-overlays skill (read it from your workspace at
+`/scoops/{your-folder}/workspace/skills/dismiss-overlays/SKILL.md`).
+
 Use `evaluate` to extract the header HTML, including:
 - Logo (image URL, alt text, link href)
 - Navigation links (text, href, nested dropdowns)

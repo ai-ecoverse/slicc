@@ -42,6 +42,9 @@ export const OVERLAY_DISMISS_SCRIPT = `(async () => {
     }
   };
 
+  // Wait for consent banners to fully render (they often load async after DOMContentLoaded)
+  await sleep(1500);
+
   var vendors = Object.keys(KNOWN_SELECTORS);
   for (var v = 0; v < vendors.length; v++) {
     var vendor = vendors[v];
@@ -54,20 +57,24 @@ export const OVERLAY_DISMISS_SCRIPT = `(async () => {
         window.getComputedStyle(bannerEl).display !== 'none';
       if (!isVisible) continue;
 
+      // Wait up to 2s for dismiss button to appear (OneTrust renders async)
       var dismissed = false;
       var dismissSelectors = selectors.dismiss.split(',');
-      for (var d = 0; d < dismissSelectors.length; d++) {
-        var sel = dismissSelectors[d].trim();
-        try {
-          var btn = document.querySelector(sel);
-          if (btn) {
-            btn.click();
-            dismissed = true;
-            results.push({ vendor: vendor, action: 'click', selector: sel });
-            await sleep(200);
-            break;
-          }
-        } catch (e) { /* skip selector */ }
+      for (var attempt = 0; attempt < 4 && !dismissed; attempt++) {
+        for (var d = 0; d < dismissSelectors.length; d++) {
+          var sel = dismissSelectors[d].trim();
+          try {
+            var btn = document.querySelector(sel);
+            if (btn) {
+              btn.click();
+              dismissed = true;
+              results.push({ vendor: vendor, action: 'click', selector: sel });
+              await sleep(200);
+              break;
+            }
+          } catch (e) { /* skip selector */ }
+        }
+        if (!dismissed) await sleep(500);
       }
 
       if (!dismissed) {
