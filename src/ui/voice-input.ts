@@ -13,6 +13,7 @@ export interface VoiceInputOptions {
   onError: (error: string) => void;
   autoSend: boolean;
   onAutoSend: (text: string) => void;
+  onAutoDisable?: () => void;
   lang?: string;
 }
 
@@ -73,6 +74,7 @@ export class VoiceInput {
   private autoSendTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingTranscript = '';
   private consecutiveRestarts = 0;
+  private inactivityTimer: ReturnType<typeof setTimeout> | null = null;
   // Extension popup fallback
   private messageListener: ((message: any) => void) | null = null;
   private popupWindowId: number | null = null;
@@ -216,6 +218,7 @@ export class VoiceInput {
 
     this.recognition.onresult = (event) => {
       this.consecutiveRestarts = 0; // got speech — reset backoff
+      this.resetInactivityTimer(); // got speech — reset inactivity timeout
       let interimTranscript = '';
       let finalTranscript = '';
 
@@ -294,6 +297,7 @@ export class VoiceInput {
     try {
       this.recognition.start();
       this._isListening = true;
+      this.resetInactivityTimer();
       this.options.onStateChange('listening');
     } catch {
       this.shouldBeListening = false;
@@ -305,6 +309,7 @@ export class VoiceInput {
   // ---------- Auto-send with delay ----------
 
   private static readonly SEND_DELAY_MS = 2500;
+  private static readonly INACTIVITY_TIMEOUT_MS = 120_000; // 2 minutes
 
   private scheduleAutoSend(): void {
     this.cancelAutoSend();
@@ -326,11 +331,29 @@ export class VoiceInput {
     }
   }
 
+  private resetInactivityTimer(): void {
+    this.clearInactivityTimer();
+    if (!this.options.onAutoDisable) return;
+    this.inactivityTimer = setTimeout(() => {
+      this.inactivityTimer = null;
+      this.stop();
+      this.options.onAutoDisable?.();
+    }, VoiceInput.INACTIVITY_TIMEOUT_MS);
+  }
+
+  private clearInactivityTimer(): void {
+    if (this.inactivityTimer) {
+      clearTimeout(this.inactivityTimer);
+      this.inactivityTimer = null;
+    }
+  }
+
   // ---------- Shared ----------
 
   stop(): void {
     this.shouldBeListening = false;
     this.cancelAutoSend();
+    this.clearInactivityTimer();
     this.pendingTranscript = '';
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);

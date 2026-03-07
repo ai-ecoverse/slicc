@@ -304,6 +304,53 @@ describe('VoiceInput (direct mode)', () => {
     });
   });
 
+  describe('inactivity auto-disable', () => {
+    it('should call onAutoDisable after 2 minutes of no speech', () => {
+      const onAutoDisable = vi.fn();
+      const v = new VoiceInput({
+        onTranscript: vi.fn(),
+        onStateChange: vi.fn(),
+        onError: vi.fn(),
+        autoSend: true,
+        onAutoSend: vi.fn(),
+        onAutoDisable,
+        lang: 'en-US',
+      });
+      v.start();
+      vi.advanceTimersByTime(120_000);
+      expect(onAutoDisable).toHaveBeenCalledOnce();
+      expect(v.isListening()).toBe(false);
+      v.destroy();
+    });
+
+    it('should reset inactivity timer when speech is received', () => {
+      const onAutoDisable = vi.fn();
+      const v = new VoiceInput({
+        onTranscript: vi.fn(),
+        onStateChange: vi.fn(),
+        onError: vi.fn(),
+        autoSend: true,
+        onAutoSend: vi.fn(),
+        onAutoDisable,
+        lang: 'en-US',
+      });
+      v.start();
+      vi.advanceTimersByTime(100_000); // 100s in
+      mockInstance.simulateResult('hello', false); // resets timer
+      vi.advanceTimersByTime(100_000); // 100s more — only 100s since last speech
+      expect(onAutoDisable).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(20_000); // now 120s since last speech
+      expect(onAutoDisable).toHaveBeenCalledOnce();
+      v.destroy();
+    });
+
+    it('should not auto-disable if onAutoDisable not provided', () => {
+      voice.start();
+      vi.advanceTimersByTime(200_000);
+      expect(voice.isListening()).toBe(true); // still listening, no auto-disable
+    });
+  });
+
   describe('feature detection', () => {
     it('should report error when SpeechRecognition unavailable', () => {
       removeMockSpeechRecognition();

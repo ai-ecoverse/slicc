@@ -344,6 +344,11 @@ export class ChatPanel {
         this.textarea.value = text;
         this.sendMessage();
       },
+      onAutoDisable: () => {
+        this.voiceMode = false;
+        this.micBtn.classList.remove('chat__mic-btn--active', 'chat__mic-btn--listening');
+        this.addSystemMessage('Voice mode disabled after 2 minutes of inactivity.');
+      },
       lang: getVoiceLang(),
     });
 
