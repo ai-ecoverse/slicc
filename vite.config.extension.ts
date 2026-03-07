@@ -79,6 +79,8 @@ export default defineConfig(({ mode }) => ({
         mkdirSync(outDir, { recursive: true });
         copyFileSync(resolve(__dirname, 'manifest.json'), resolve(outDir, 'manifest.json'));
         copyFileSync(resolve(__dirname, 'sandbox.html'), resolve(outDir, 'sandbox.html'));
+        copyFileSync(resolve(__dirname, 'voice-popup.html'), resolve(outDir, 'voice-popup.html'));
+        copyFileSync(resolve(__dirname, 'voice-popup.js'), resolve(outDir, 'voice-popup.js'));
 
         // Bundle Pyodide for extension (both main page and sandbox CSP block CDN scripts)
         const pyodideSrc = resolve(__dirname, 'node_modules/pyodide');

@@ -49,15 +49,48 @@ interface ChromeTab {
   url?: string;
 }
 
+interface ChromeMessageSender {
+  id?: string;
+  tab?: ChromeTab;
+}
+
 interface ChromeAPI {
   runtime: {
     /** Extension ID — truthy when running as a Chrome extension. */
     id: string | undefined;
     /** Get the full URL to an extension-bundled resource. */
     getURL(path: string): string;
+    lastError: { message?: string } | undefined;
+    sendMessage(message: unknown, callback?: (response: unknown) => void): void;
+    onMessage: {
+      addListener(
+        callback: (
+          message: any,
+          sender: ChromeMessageSender,
+          sendResponse: (response?: unknown) => void,
+        ) => void | boolean,
+      ): void;
+      removeListener(
+        callback: (
+          message: any,
+          sender: ChromeMessageSender,
+          sendResponse: (response?: unknown) => void,
+        ) => void | boolean,
+      ): void;
+    };
   };
   sidePanel: {
     setPanelBehavior(options: { openPanelOnActionClick: boolean }): Promise<void>;
+  };
+  windows: {
+    create(options: {
+      url?: string;
+      type?: string;
+      width?: number;
+      height?: number;
+      focused?: boolean;
+    }): Promise<{ id?: number }>;
+    remove(windowId: number): Promise<void>;
   };
   debugger: ChromeDebuggerAPI;
   tabs: {
