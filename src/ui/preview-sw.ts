@@ -3,9 +3,10 @@
  *
  * Two modes:
  * 1. /preview/* requests — always intercepted, VFS path = pathname minus "/preview"
- * 2. EDS project mode — when a project root is set via postMessage, ALL requests
- *    from the project's tab are intercepted. Root-relative paths (/styles/styles.css)
- *    resolve against the VFS project root. This emulates `aem up` for EDS previews.
+ * 2. EDS project mode — when an ?edsRoot= query parameter is present on a /preview/
+ *    HTML request, the project root is extracted and stored. Subsequent root-relative
+ *    requests (/styles/styles.css, /scripts/aem.js, /blocks/...) resolve against
+ *    the project root. This emulates `aem up` for EDS previews.
  *
  * Built as a separate entry point (not bundled with the main app).
  * Reads directly from LightningFS IndexedDB (same DB as VirtualFS).
@@ -99,14 +100,6 @@ sw.addEventListener('install', () => { sw.skipWaiting(); });
 
 sw.addEventListener('activate', (event) => {
   event.waitUntil(sw.clients.claim());
-});
-
-// Listen for project root configuration from the browser tool
-sw.addEventListener('message', (event) => {
-  if (event.data?.type === 'set-eds-project-root') {
-    edsProjectRoot = event.data.root || null;
-    console.log('[preview-sw] EDS project root:', edsProjectRoot);
-  }
 });
 
 /**

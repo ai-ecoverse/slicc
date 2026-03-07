@@ -244,6 +244,7 @@ After serving, run this verification BEFORE doing any visual comparison:
 
 **Required results:**
 - `hlx` must be `true`
+- `codeBasePath` must be a string (controls where blocks/styles load from)
 - `bodyAppear` must be `true`
 - Your block must appear in the blocks array with `status: "loaded"`
 
@@ -304,7 +305,7 @@ Write to `{projectPath}/.migration/reports/{blockName}-report.json`:
   ],
   "edsVerification": {
     "hlx": true,
-    "codeBasePath": "",
+    "codeBasePath": "/preview/shared/vibemigrated",
     "bodyAppear": true,
     "blockLoaded": true,
     "blockStatus": "loaded"
