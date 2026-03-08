@@ -50,7 +50,45 @@ The `migrate_page` tool runs heuristic overlay detection (known vendors
 like OneTrust, Cookiebot, etc.) and saves what it found to
 `overlay-recipe.json`. **But heuristics may miss custom overlays.**
 
-You MUST verify and complete the recipe:
+You MUST verify and complete the recipe.
+
+### What Is an Overlay?
+
+An overlay is any element that sits ON TOP of the main page content,
+blocking or partially obscuring it. Look for these visual patterns in
+the screenshot:
+
+**Full-width bars** (most common):
+- Cookie consent banner at the bottom of the viewport (dark bar with
+  "Accept All" / "Decline" / "Manage Preferences" buttons)
+- GDPR/CCPA notice at the top or bottom
+- Announcement bar that can be dismissed
+
+**Centered modals** (with backdrop):
+- Newsletter signup popup with a dark/dimmed background behind it
+- Login/registration dialog
+- Age verification gate
+- "Subscribe to continue" paywall
+
+**Corner widgets**:
+- Chat bubble in bottom-right (Intercom, Zendesk, Drift, LiveChat)
+- Help/support floating button
+- Feedback widget
+
+**Visual indicators that something is an overlay:**
+- Dark semi-transparent backdrop dimming the page behind it
+- Element visually floating above page content (has a shadow or border)
+- Fixed position — stays in place while page content scrolls behind it
+- Has an X/close button, "Accept", "Decline", "Got it", "Dismiss" button
+- Obscures or partially covers the actual page sections (header, hero,
+  content, footer)
+
+**NOT overlays** (do not dismiss these):
+- The page's own navigation/header (even if sticky)
+- Inline content sections
+- Embedded forms that are part of the page content
+
+### Verification Steps
 
 1. **Read the recipe:**
    ```
@@ -62,27 +100,39 @@ You MUST verify and complete the recipe:
    read_file({ "path": "/shared/{repo-name}/.migration/screenshot.png" })
    ```
 
-3. **If the screenshot shows overlays** (cookie banners, consent dialogs,
-   chat widgets, modals — anything covering or overlapping page content):
+3. **If the screenshot shows ANY overlay** (using the patterns above):
 
    a. Navigate to the source page in a new tab:
       ```json
       { "action": "new_tab", "url": "{sourceUrl}" }
       ```
-   b. Wait for the page to load, then take a snapshot to identify elements
-   c. Identify the dismiss/accept/close button visually
-   d. Use `evaluate` to find the correct CSS selector and click it:
+   b. Take a snapshot to see the DOM structure:
       ```json
-      { "action": "evaluate", "expression": "document.querySelector('#accept-btn').click()" }
+      { "action": "snapshot" }
       ```
-   e. Record the working action(s) and update the recipe:
+   c. Identify the overlay element and its dismiss button from the snapshot.
+      Common selectors:
+      - Accept buttons: `[class*="accept"]`, `[class*="allow"]`,
+        `button[id*="accept"]`, `[aria-label*="Accept"]`
+      - Close buttons: `[aria-label*="close"]`, `[aria-label*="Close"]`,
+        `.close-btn`, `button.close`
+      - Banner containers: `[class*="cookie"]`, `[class*="consent"]`,
+        `[id*="cookie"]`, `[id*="banner"]`
+   d. Use `evaluate` to click the dismiss button:
       ```json
-      ["click:#accept-btn", "remove:#cookie-banner"]
+      { "action": "evaluate", "expression": "document.querySelector('SELECTOR').click()" }
       ```
-   f. Write the updated recipe:
+   e. Take a screenshot to confirm the overlay is gone
+   f. Record the working action(s) and update the recipe:
+      ```json
+      ["click:DISMISS_SELECTOR", "remove:BANNER_SELECTOR"]
+      ```
+      Use `click:` for buttons (sets consent cookies) and `remove:` as
+      fallback (just deletes the element from DOM).
+   g. Write the updated recipe:
       ```
       write_file({ "path": "/shared/{repo-name}/.migration/overlay-recipe.json",
-                    "content": "[\"click:#accept-btn\"]" })
+                    "content": "[\"click:SELECTOR\"]" })
       ```
 
 4. **If the screenshot is clean** (no overlays visible) AND the recipe has
