@@ -40,6 +40,59 @@ navigates to the URL, and produces artifacts in `/shared/{repo-name}/.migration/
 | `brand.json` | Fonts, colors, spacing |
 | `metadata.json` | Title, description, OG tags |
 | `block-inventory.json` | Existing blocks in the EDS project |
+| `overlay-recipe.json` | Overlay dismiss actions (from heuristic detection) |
+
+---
+
+## Phase 1.5: Verify and Complete Overlay Recipe — MANDATORY
+
+The `migrate_page` tool runs heuristic overlay detection (known vendors
+like OneTrust, Cookiebot, etc.) and saves what it found to
+`overlay-recipe.json`. **But heuristics may miss custom overlays.**
+
+You MUST verify and complete the recipe:
+
+1. **Read the recipe:**
+   ```
+   read_file({ "path": "/shared/{repo-name}/.migration/overlay-recipe.json" })
+   ```
+
+2. **Look at the extraction screenshot:**
+   ```
+   read_file({ "path": "/shared/{repo-name}/.migration/screenshot.png" })
+   ```
+
+3. **If the screenshot shows overlays** (cookie banners, consent dialogs,
+   chat widgets, modals — anything covering or overlapping page content):
+
+   a. Navigate to the source page in a new tab:
+      ```json
+      { "action": "new_tab", "url": "{sourceUrl}" }
+      ```
+   b. Wait for the page to load, then take a snapshot to identify elements
+   c. Identify the dismiss/accept/close button visually
+   d. Use `evaluate` to find the correct CSS selector and click it:
+      ```json
+      { "action": "evaluate", "expression": "document.querySelector('#accept-btn').click()" }
+      ```
+   e. Record the working action(s) and update the recipe:
+      ```json
+      ["click:#accept-btn", "remove:#cookie-banner"]
+      ```
+   f. Write the updated recipe:
+      ```
+      write_file({ "path": "/shared/{repo-name}/.migration/overlay-recipe.json",
+                    "content": "[\"click:#accept-btn\"]" })
+      ```
+
+4. **If the screenshot is clean** (no overlays visible) AND the recipe has
+   entries → the heuristics worked. Proceed.
+
+5. **If the screenshot is clean AND the recipe is empty** → no overlays
+   on this page. Proceed.
+
+This step ensures the recipe is complete and accurate BEFORE scoops use it.
+Scoops apply this recipe blindly — if it's wrong, every scoop fails.
 
 ---
 
