@@ -271,7 +271,7 @@ export class WasmShell {
     return { ...this.lastEnv };
   }
 
-  /** Discover .jsh commands from VFS, filtering out built-in command names. */
+  /** Discover .jsh commands from VFS (fresh scan each call, no caching), filtering out built-in command names. */
   private async getFilteredJshCommands(): Promise<Map<string, string>> {
     const all = await discoverJshCommands(this.options.fs);
     const filtered = new Map<string, string>();

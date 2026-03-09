@@ -102,7 +102,7 @@ Skills in `/workspace/skills/` extend your capabilities. Each has a SKILL.md wit
 - **Node-like globals**: Scripts get `process`, `console`, `fs` (VFS bridge with `readFile`, `writeFile`, `readDir`, `exists`, etc.)
 - **Dual-mode**: Work in both CLI server and Chrome extension mode
 - **The `commands` output** lists discovered scripts under "User scripts (.jsh)"
-- **Top-level `await`**: `.jsh` files are wrapped in an `AsyncFunction` by the executor, so `await` works at the top level. All `fs.*` methods are async — **always `await` them, never use `.then()`** (callbacks fire after the function body returns and silently produce no output).
+- **Top-level `await`**: `.jsh` files are wrapped in an `AsyncFunction` by the executor, so `await` works at the top level. All `fs.*` methods are async — **always `await` them**. Do not use `.then()` because the function body exits before promise chains resolve, causing callbacks to silently produce no output.
 
 ## Memory
 
