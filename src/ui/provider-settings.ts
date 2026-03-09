@@ -21,17 +21,43 @@ const getModelsDynamic = getModels as (
 ) => Model<Api>[];
 
 // Storage keys
-const STORAGE_KEYS = {
-  provider: 'slicc_provider',
-  apiKey: 'slicc_api_key',
-  baseUrl: 'slicc_base_url',
-  model: 'selected-model',
-  // Legacy keys for migration
-  legacyApiKey: 'anthropic_api_key',
-  legacyProvider: 'api_provider',
-  legacyAzureResource: 'azure_resource',
-  legacyBedrockRegion: 'bedrock_region',
-} as const;
+const ACCOUNTS_KEY = 'slicc_accounts';
+const MODEL_KEY = 'selected-model';
+
+// Legacy keys — deleted on load, no migration
+const LEGACY_KEYS = [
+  'slicc_provider',
+  'slicc_api_key',
+  'slicc_base_url',
+  'anthropic_api_key',
+  'api_provider',
+  'azure_resource',
+  'bedrock_region',
+] as const;
+
+// Account entry in the slicc_accounts array
+export interface Account {
+  providerId: string;
+  apiKey: string;
+  baseUrl?: string;
+}
+
+// Delete legacy keys on first access
+let _legacyCleaned = false;
+function cleanLegacyKeys(): void {
+  if (_legacyCleaned) return;
+  _legacyCleaned = true;
+  for (const key of LEGACY_KEYS) {
+    try { localStorage.removeItem(key); } catch { /* noop */ }
+  }
+}
+
+function _resetLegacyCleanup(): void {
+  _legacyCleaned = false;
+}
+
+/** Test-only exports */
+export const __test__ = { _resetLegacyCleanup };
 
 // Provider metadata with display names and required fields
 interface ProviderConfig {
@@ -219,115 +245,180 @@ export function getProviderModels(providerId: string): Model<Api>[] {
   }
 }
 
-// Storage functions
-export function getSelectedProvider(): string {
-  // Check for new storage first, then migrate from legacy
-  const stored = localStorage.getItem(STORAGE_KEYS.provider);
-  if (stored) return stored;
-  
-  // Migrate from legacy
-  const legacy = localStorage.getItem(STORAGE_KEYS.legacyProvider);
-  if (legacy) {
-    // Map old provider names to new ones
-    const mapping: Record<string, string> = {
-      'anthropic': 'anthropic',
-      // Legacy "azure" used Anthropic on Azure AI Foundry.
-      'azure': 'azure-ai-foundry',
-      'bedrock': 'amazon-bedrock',
+// --- All models across configured accounts ---
+
+export interface GroupedModels {
+  providerId: string;
+  providerName: string;
+  models: Model<Api>[];
+}
+
+/** Get models from all configured provider accounts, grouped by provider. */
+export function getAllAvailableModels(): GroupedModels[] {
+  const accounts = getAccounts();
+  if (accounts.length === 0) return [];
+  const seen = new Map<string, GroupedModels>();
+  for (const account of accounts) {
+    if (seen.has(account.providerId)) continue;
+    const models = getProviderModels(account.providerId);
+    if (models.length === 0) continue;
+    const config = getProviderConfig(account.providerId);
+    const group: GroupedModels = {
+      providerId: account.providerId,
+      providerName: config.name,
+      models,
     };
-    return mapping[legacy] || 'anthropic';
+    seen.set(account.providerId, group);
   }
-  
+  return [...seen.values()];
+}
+
+// --- Account storage ---
+
+export function getAccounts(): Account[] {
+  cleanLegacyKeys();
+  const raw = localStorage.getItem(ACCOUNTS_KEY);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (entry): entry is Account =>
+        entry != null &&
+        typeof entry === 'object' &&
+        typeof entry.providerId === 'string' &&
+        typeof entry.apiKey === 'string',
+    );
+  } catch {
+    return [];
+  }
+}
+
+function saveAccounts(accounts: Account[]): void {
+  localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
+}
+
+export function addAccount(providerId: string, apiKey: string, baseUrl?: string): void {
+  const accounts = getAccounts().filter(a => a.providerId !== providerId);
+  const entry: Account = { providerId, apiKey };
+  if (baseUrl) entry.baseUrl = baseUrl;
+  accounts.push(entry);
+  saveAccounts(accounts);
+}
+
+export function removeAccount(providerId: string): void {
+  saveAccounts(getAccounts().filter(a => a.providerId !== providerId));
+}
+
+export function getApiKeyForProvider(providerId: string): string | null {
+  return getAccounts().find(a => a.providerId === providerId)?.apiKey ?? null;
+}
+
+export function getBaseUrlForProvider(providerId: string): string | null {
+  return getAccounts().find(a => a.providerId === providerId)?.baseUrl ?? null;
+}
+
+// --- Selected model (format: "providerId:modelId") ---
+
+export function getSelectedModelId(): string {
+  const raw = localStorage.getItem(MODEL_KEY) || '';
+  // Strip provider prefix if present
+  const idx = raw.indexOf(':');
+  return idx >= 0 ? raw.slice(idx + 1) : raw;
+}
+
+export function setSelectedModelId(modelId: string): void {
+  // If modelId already has provider prefix, store as-is
+  if (modelId.includes(':')) {
+    localStorage.setItem(MODEL_KEY, modelId);
+  } else {
+    // Store with provider prefix from current selection
+    const provider = getSelectedProvider();
+    localStorage.setItem(MODEL_KEY, `${provider}:${modelId}`);
+  }
+}
+
+/** Get the raw selected-model value (providerId:modelId) */
+function getRawSelectedModel(): string {
+  return localStorage.getItem(MODEL_KEY) || '';
+}
+
+// --- Provider derived from selected model ---
+
+export function getSelectedProvider(): string {
+  const raw = getRawSelectedModel();
+  const idx = raw.indexOf(':');
+  if (idx > 0) return raw.slice(0, idx);
+  // No provider encoded (or empty prefix like ":gpt-5") — fall back
+  const accounts = getAccounts();
+  if (accounts.length > 0) return accounts[0].providerId;
   return 'anthropic';
 }
 
 export function setSelectedProvider(provider: string): void {
-  localStorage.setItem(STORAGE_KEYS.provider, provider);
+  const modelId = getSelectedModelId();
+  localStorage.setItem(MODEL_KEY, `${provider}:${modelId}`);
 }
 
 export function clearSelectedProvider(): void {
-  localStorage.removeItem(STORAGE_KEYS.provider);
-  localStorage.removeItem(STORAGE_KEYS.legacyProvider);
+  const modelId = getSelectedModelId();
+  // Remove provider prefix, keep just model
+  localStorage.setItem(MODEL_KEY, modelId);
 }
 
+// --- Backward-compatible accessors (used by scoop-context.ts, layout.ts, main.ts) ---
+
 export function getApiKey(): string | null {
-  // Check new storage first
-  const stored = localStorage.getItem(STORAGE_KEYS.apiKey);
-  if (stored) return stored;
-  
-  // Migrate from legacy
-  return localStorage.getItem(STORAGE_KEYS.legacyApiKey);
+  const provider = getSelectedProvider();
+  return getApiKeyForProvider(provider);
 }
 
 export function setApiKey(key: string): void {
-  localStorage.setItem(STORAGE_KEYS.apiKey, key);
+  const provider = getSelectedProvider();
+  const baseUrl = getBaseUrlForProvider(provider);
+  addAccount(provider, key, baseUrl ?? undefined);
 }
 
 export function clearApiKey(): void {
-  localStorage.removeItem(STORAGE_KEYS.apiKey);
-  localStorage.removeItem(STORAGE_KEYS.legacyApiKey);
+  const provider = getSelectedProvider();
+  removeAccount(provider);
 }
 
 export function getBaseUrl(): string | null {
-  const stored = localStorage.getItem(STORAGE_KEYS.baseUrl);
-  if (stored) return stored;
-  
-  // Migrate from legacy azure/bedrock
   const provider = getSelectedProvider();
-  const hasNewProvider = localStorage.getItem(STORAGE_KEYS.provider) !== null;
-  const legacyProvider = localStorage.getItem(STORAGE_KEYS.legacyProvider);
-  if (!hasNewProvider && legacyProvider === 'azure') {
-    const resource = localStorage.getItem(STORAGE_KEYS.legacyAzureResource);
-    if (resource) {
-      return resource.includes('://') ? resource : `https://${resource}.services.ai.azure.com/anthropic`;
-    }
-  } else if (provider === 'azure-openai-responses') {
-    const resource = localStorage.getItem(STORAGE_KEYS.legacyAzureResource);
-    if (resource) {
-      return resource.includes('://') ? resource : `https://${resource}.openai.azure.com`;
-    }
-  } else if (provider === 'amazon-bedrock') {
-    const legacyBedrockRegion = localStorage.getItem(STORAGE_KEYS.legacyBedrockRegion);
-    if (legacyBedrockRegion) {
-      return legacyBedrockRegion.startsWith('https://')
-        ? legacyBedrockRegion
-        : `https://${legacyBedrockRegion}`;
-    }
-  }
-  
-  return null;
+  return getBaseUrlForProvider(provider);
 }
 
 export function setBaseUrl(url: string): void {
-  if (url) {
-    localStorage.setItem(STORAGE_KEYS.baseUrl, url);
-  } else {
-    localStorage.removeItem(STORAGE_KEYS.baseUrl);
+  const provider = getSelectedProvider();
+  const apiKey = getApiKeyForProvider(provider);
+  if (apiKey) {
+    addAccount(provider, apiKey, url || undefined);
   }
 }
 
 export function clearBaseUrl(): void {
-  localStorage.removeItem(STORAGE_KEYS.baseUrl);
-}
-
-export function getSelectedModelId(): string {
-  return localStorage.getItem(STORAGE_KEYS.model) || '';
-}
-
-export function setSelectedModelId(modelId: string): void {
-  localStorage.setItem(STORAGE_KEYS.model, modelId);
+  const provider = getSelectedProvider();
+  const apiKey = getApiKeyForProvider(provider);
+  if (apiKey) {
+    addAccount(provider, apiKey);
+  }
 }
 
 // Clear all provider settings
 export function clearAllSettings(): void {
-  Object.values(STORAGE_KEYS).forEach(key => localStorage.removeItem(key));
+  localStorage.removeItem(ACCOUNTS_KEY);
+  localStorage.removeItem(MODEL_KEY);
+  for (const key of LEGACY_KEYS) {
+    localStorage.removeItem(key);
+  }
 }
 
 // Resolve the current model with provider-specific baseUrl override
 export function resolveCurrentModel(): Model<Api> {
   const providerId = getSelectedProvider();
   const modelId = getSelectedModelId();
-  const baseUrl = getBaseUrl();
+  const baseUrl = getBaseUrlForProvider(providerId);
 
   // Get default model if none selected
   const models = getProviderModels(providerId);
@@ -358,9 +449,15 @@ export function resolveCurrentModel(): Model<Api> {
   }
 }
 
+/** Mask an API key for display: show first 4 and last 4 chars */
+function maskApiKey(key: string): string {
+  if (key.length <= 10) return '****';
+  return key.slice(0, 4) + '...' + key.slice(-4);
+}
+
 /**
- * Show the provider settings dialog.
- * Returns a promise that resolves when the user saves settings.
+ * Show the Accounts management dialog.
+ * Returns a promise that resolves when the user closes the dialog.
  */
 export function showProviderSettings(): Promise<void> {
   return new Promise((resolve) => {
@@ -371,260 +468,273 @@ export function showProviderSettings(): Promise<void> {
     dialog.className = 'dialog';
     dialog.style.cssText = 'max-width: 480px; width: 90vw;';
 
-    const title = document.createElement('div');
-    title.className = 'dialog__title';
-    title.textContent = 'Provider Settings';
-    dialog.appendChild(title);
-
-    // Provider selector
-    const providerLabel = document.createElement('div');
-    providerLabel.className = 'dialog__desc';
-    providerLabel.textContent = 'Select provider:';
-    dialog.appendChild(providerLabel);
-
-    const providerSelect = document.createElement('select');
-    providerSelect.className = 'dialog__input';
-    providerSelect.style.marginBottom = '16px';
-
-    const providers = getAvailableProviders();
-    const currentProvider = getSelectedProvider();
-
-    const sorted = [...providers].sort((a, b) => {
-      const nameA = getProviderConfig(a).name;
-      const nameB = getProviderConfig(b).name;
-      return nameA.localeCompare(nameB);
-    });
-
-    for (const providerId of sorted) {
-      const config = getProviderConfig(providerId);
-      const opt = document.createElement('option');
-      opt.value = providerId;
-      opt.textContent = config.name;
-      if (providerId === currentProvider) opt.selected = true;
-      providerSelect.appendChild(opt);
-    }
-    dialog.appendChild(providerSelect);
-
-    // Provider description
-    const providerDesc = document.createElement('div');
-    providerDesc.className = 'dialog__desc';
-    providerDesc.style.cssText = 'font-size: 12px; color: #888; margin-bottom: 16px; margin-top: -12px;';
-    dialog.appendChild(providerDesc);
-
-    // API Key section
-    const apiKeySection = document.createElement('div');
-
-    const apiKeyLabel = document.createElement('div');
-    apiKeyLabel.className = 'dialog__desc';
-    apiKeySection.appendChild(apiKeyLabel);
-
-    const apiKeyInput = document.createElement('input');
-    apiKeyInput.className = 'dialog__input';
-    apiKeyInput.type = 'password';
-    apiKeyInput.autocomplete = 'off';
-    apiKeyInput.spellcheck = false;
-    apiKeySection.appendChild(apiKeyInput);
-
-    dialog.appendChild(apiKeySection);
-
-    // Base URL section
-    const baseUrlSection = document.createElement('div');
-    baseUrlSection.style.marginTop = '12px';
-
-    const baseUrlLabel = document.createElement('div');
-    baseUrlLabel.className = 'dialog__desc';
-    baseUrlSection.appendChild(baseUrlLabel);
-
-    const baseUrlInput = document.createElement('input');
-    baseUrlInput.className = 'dialog__input';
-    baseUrlInput.type = 'text';
-    baseUrlInput.autocomplete = 'off';
-    baseUrlInput.spellcheck = false;
-    baseUrlSection.appendChild(baseUrlInput);
-
-    const baseUrlDesc = document.createElement('div');
-    baseUrlDesc.className = 'dialog__desc';
-    baseUrlDesc.style.cssText = 'font-size: 11px; color: #666; margin-top: 4px;';
-    baseUrlSection.appendChild(baseUrlDesc);
-
-    dialog.appendChild(baseUrlSection);
-
-    // Model selector
-    const modelSection = document.createElement('div');
-    modelSection.style.marginTop = '16px';
-
-    const modelLabel = document.createElement('div');
-    modelLabel.className = 'dialog__desc';
-    modelLabel.textContent = 'Model:';
-    modelSection.appendChild(modelLabel);
-
-    const modelSelect = document.createElement('select');
-    modelSelect.className = 'dialog__input';
-    modelSection.appendChild(modelSelect);
-
-    const modelCount = document.createElement('div');
-    modelCount.className = 'dialog__desc';
-    modelCount.style.cssText = 'font-size: 11px; color: #666; margin-top: 4px;';
-    modelSection.appendChild(modelCount);
-
-    dialog.appendChild(modelSection);
-
-    // Update UI based on selected provider
-    function updateProviderUI(options: { preserveApiKeyInput?: boolean } = {}) {
-      const { preserveApiKeyInput = false } = options;
-      const providerId = providerSelect.value;
-      const config = getProviderConfig(providerId);
-
-      // Update description
-      providerDesc.textContent = config.description;
-
-      // Update API key section
-      apiKeyLabel.textContent = `API Key${config.apiKeyEnvVar ? ` (${config.apiKeyEnvVar})` : ''}:`;
-      apiKeyInput.placeholder = config.apiKeyPlaceholder || 'API key';
-      apiKeySection.style.display = config.requiresApiKey ? '' : 'none';
-      if (!preserveApiKeyInput) {
-        apiKeyInput.value = '';
-      }
-
-      // Update base URL section
-      baseUrlLabel.textContent = 'Base URL:';
-      baseUrlInput.placeholder = config.baseUrlPlaceholder || 'https://...';
-      baseUrlDesc.textContent = config.baseUrlDescription || '';
-      baseUrlSection.style.display = config.requiresBaseUrl ? '' : 'none';
-
-      // Update model list
-      updateModelList();
-    }
-
-    function updateModelList() {
-      const providerId = providerSelect.value;
-      const models = getProviderModels(providerId);
-      const currentModelId = getSelectedModelId();
-
-      // Clear existing options
-      while (modelSelect.firstChild) modelSelect.removeChild(modelSelect.firstChild);
-
-      if (models.length === 0) {
-        modelSelect.disabled = true;
-        const opt = document.createElement('option');
-        opt.value = '';
-        opt.textContent = 'No models available';
-        modelSelect.appendChild(opt);
-        modelCount.textContent = '';
-        return;
-      }
-      modelSelect.disabled = false;
-
-      // Sort models: reasoning models first, then by name
-      const sorted = [...models].sort((a, b) => {
-        if (a.reasoning !== b.reasoning) return a.reasoning ? -1 : 1;
-        return a.name.localeCompare(b.name);
-      });
-
-      for (const model of sorted) {
-        const opt = document.createElement('option');
-        opt.value = model.id;
-        opt.textContent = model.name + (model.reasoning ? ' (reasoning)' : '');
-        if (model.id === currentModelId) opt.selected = true;
-        modelSelect.appendChild(opt);
-      }
-
-      // Select first if current not found
-      if (!currentModelId || !models.find(m => m.id === currentModelId)) {
-        modelSelect.selectedIndex = 0;
-      }
-
-      modelCount.textContent = `${models.length} models available`;
-    }
-
-    // Pre-fill existing values
-    const existingKey = getApiKey();
-    if (existingKey) apiKeyInput.value = existingKey;
-
-    const existingUrl = getBaseUrl();
-    if (existingUrl) baseUrlInput.value = existingUrl;
-
-    providerSelect.addEventListener('change', () => updateProviderUI());
-    updateProviderUI({ preserveApiKeyInput: true });
-
-    // Submit button
-    const btn = document.createElement('button');
-    btn.className = 'dialog__btn';
-    btn.style.marginTop = '20px';
-    btn.textContent = 'Save';
-
-    function validateAndSave() {
-      const providerId = providerSelect.value;
-      const config = getProviderConfig(providerId);
-
-      // Validate API key if required
-      if (config.requiresApiKey && apiKeyInput.value.trim().length < 5) {
-        apiKeyInput.focus();
-        return;
-      }
-
-      // Validate base URL if required
-      if (config.requiresBaseUrl && !baseUrlInput.value.trim()) {
-        baseUrlInput.focus();
-        return;
-      }
-
-      // Save settings
-      setSelectedProvider(providerId);
-      if (config.requiresApiKey) {
-        setApiKey(apiKeyInput.value.trim());
-      }
-      if (config.requiresBaseUrl) {
-        setBaseUrl(baseUrlInput.value.trim());
-      } else {
-        clearBaseUrl();
-      }
-      setSelectedModelId(modelSelect.value);
-
-      overlay.remove();
-      resolve();
-    }
-
-    btn.addEventListener('click', validateAndSave);
-
-    // Handle Enter key
-    const handleEnter = (e: KeyboardEvent) => {
-      if (e.key === 'Enter') validateAndSave();
-    };
-    apiKeyInput.addEventListener('keydown', handleEnter);
-    baseUrlInput.addEventListener('keydown', handleEnter);
-
-    dialog.appendChild(btn);
-
-    // Cancel button (if already configured)
-    if (getApiKey()) {
-      const cancelBtn = document.createElement('button');
-      cancelBtn.className = 'dialog__btn';
-      cancelBtn.style.cssText = 'margin-top: 8px; background: transparent; border: 1px solid #444;';
-      cancelBtn.textContent = 'Cancel';
-      cancelBtn.addEventListener('click', () => {
-        overlay.remove();
-        resolve();
-      });
-      dialog.appendChild(cancelBtn);
+    // Decide initial view: list if accounts exist, add-form if empty
+    if (getAccounts().length > 0) {
+      renderAccountsList();
+    } else {
+      renderAddAccountForm();
     }
 
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);
 
-    requestAnimationFrame(() => {
-      const providerId = providerSelect.value;
-      const config = getProviderConfig(providerId);
+    // ── Accounts list view ──────────────────────────────────────────
+    function renderAccountsList() {
+      dialog.innerHTML = '';
 
-      if (config.requiresApiKey) {
-        apiKeyInput.focus();
-      } else if (config.requiresBaseUrl) {
-        baseUrlInput.focus();
-      } else if (!modelSelect.disabled) {
-        modelSelect.focus();
+      const title = document.createElement('div');
+      title.className = 'dialog__title';
+      title.textContent = 'Accounts';
+      dialog.appendChild(title);
+
+      const currentAccounts = getAccounts();
+
+      if (currentAccounts.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'dialog__desc';
+        empty.textContent = 'No accounts configured.';
+        dialog.appendChild(empty);
       } else {
-        btn.focus();
+        const list = document.createElement('div');
+        list.style.cssText = 'margin-bottom: 16px;';
+
+        for (const account of currentAccounts) {
+          const config = getProviderConfig(account.providerId);
+          const row = document.createElement('div');
+          row.style.cssText =
+            'display: flex; align-items: center; justify-content: space-between; ' +
+            'padding: 10px 12px; background: #1a1a2e; border-radius: 6px; ' +
+            'margin-bottom: 8px; border: 1px solid #3a3a5a;';
+
+          const info = document.createElement('div');
+          info.style.cssText = 'flex: 1; min-width: 0;';
+
+          const name = document.createElement('div');
+          name.style.cssText = 'font-size: 14px; font-weight: 600; color: #e0e0e0;';
+          name.textContent = config.name;
+          info.appendChild(name);
+
+          const detail = document.createElement('div');
+          detail.style.cssText = 'font-size: 11px; color: #888; font-family: monospace; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+          detail.textContent = maskApiKey(account.apiKey);
+          if (account.baseUrl) {
+            detail.textContent += ' \u2022 ' + account.baseUrl;
+          }
+          info.appendChild(detail);
+
+          row.appendChild(info);
+
+          const deleteBtn = document.createElement('button');
+          deleteBtn.style.cssText =
+            'background: transparent; border: 1px solid #633; color: #e94560; ' +
+            'border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 12px; ' +
+            'margin-left: 12px; flex-shrink: 0;';
+          deleteBtn.textContent = 'Remove';
+          deleteBtn.addEventListener('click', () => {
+            removeAccount(account.providerId);
+            renderAccountsList();
+          });
+          row.appendChild(deleteBtn);
+
+          list.appendChild(row);
+        }
+        dialog.appendChild(list);
       }
-    });
+
+      // Add Account button
+      const addBtn = document.createElement('button');
+      addBtn.className = 'dialog__btn';
+      addBtn.textContent = 'Add Account';
+      addBtn.addEventListener('click', () => renderAddAccountForm());
+      dialog.appendChild(addBtn);
+
+      // Close button
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'dialog__btn';
+      closeBtn.style.cssText = 'margin-top: 8px; background: transparent; border: 1px solid #444;';
+      closeBtn.textContent = 'Close';
+      closeBtn.addEventListener('click', () => {
+        overlay.remove();
+        resolve();
+      });
+      dialog.appendChild(closeBtn);
+    }
+
+    // ── Add account form view ───────────────────────────────────────
+    function renderAddAccountForm() {
+      dialog.innerHTML = '';
+
+      const title = document.createElement('div');
+      title.className = 'dialog__title';
+      title.textContent = 'Add Account';
+      dialog.appendChild(title);
+
+      // Provider selector
+      const providerLabel = document.createElement('div');
+      providerLabel.className = 'dialog__desc';
+      providerLabel.textContent = 'Provider:';
+      dialog.appendChild(providerLabel);
+
+      const providerSelect = document.createElement('select');
+      providerSelect.className = 'dialog__input';
+      providerSelect.style.marginBottom = '8px';
+
+      const providers = getAvailableProviders();
+      const existingProviders = new Set(getAccounts().map(a => a.providerId));
+
+      const sorted = [...providers].sort((a, b) => {
+        const nameA = getProviderConfig(a).name;
+        const nameB = getProviderConfig(b).name;
+        return nameA.localeCompare(nameB);
+      });
+
+      for (const providerId of sorted) {
+        if (existingProviders.has(providerId)) continue;
+        const config = getProviderConfig(providerId);
+        const opt = document.createElement('option');
+        opt.value = providerId;
+        opt.textContent = config.name;
+        providerSelect.appendChild(opt);
+      }
+      dialog.appendChild(providerSelect);
+
+      // Provider description
+      const providerDesc = document.createElement('div');
+      providerDesc.className = 'dialog__desc';
+      providerDesc.style.cssText = 'font-size: 12px; color: #888; margin-bottom: 16px; margin-top: -4px;';
+      dialog.appendChild(providerDesc);
+
+      // API Key section
+      const apiKeySection = document.createElement('div');
+
+      const apiKeyLabel = document.createElement('div');
+      apiKeyLabel.className = 'dialog__desc';
+      apiKeySection.appendChild(apiKeyLabel);
+
+      const apiKeyInput = document.createElement('input');
+      apiKeyInput.className = 'dialog__input';
+      apiKeyInput.type = 'password';
+      apiKeyInput.autocomplete = 'off';
+      apiKeyInput.spellcheck = false;
+      apiKeySection.appendChild(apiKeyInput);
+
+      dialog.appendChild(apiKeySection);
+
+      // Base URL section
+      const baseUrlSection = document.createElement('div');
+
+      const baseUrlLabel = document.createElement('div');
+      baseUrlLabel.className = 'dialog__desc';
+      baseUrlLabel.textContent = 'Base URL:';
+      baseUrlSection.appendChild(baseUrlLabel);
+
+      const baseUrlInput = document.createElement('input');
+      baseUrlInput.className = 'dialog__input';
+      baseUrlInput.type = 'text';
+      baseUrlInput.autocomplete = 'off';
+      baseUrlInput.spellcheck = false;
+      baseUrlSection.appendChild(baseUrlInput);
+
+      const baseUrlDesc = document.createElement('div');
+      baseUrlDesc.className = 'dialog__desc';
+      baseUrlDesc.style.cssText = 'font-size: 11px; color: #666; margin-top: -12px; margin-bottom: 16px;';
+      baseUrlSection.appendChild(baseUrlDesc);
+
+      dialog.appendChild(baseUrlSection);
+
+      // Error message area
+      const errorEl = document.createElement('div');
+      errorEl.style.cssText = 'color: #e94560; font-size: 12px; margin-bottom: 8px; display: none;';
+      dialog.appendChild(errorEl);
+
+      function updateFormFields() {
+        const pid = providerSelect.value;
+        if (!pid) return;
+        const config = getProviderConfig(pid);
+
+        providerDesc.textContent = config.description;
+
+        apiKeyLabel.textContent = `API Key${config.apiKeyEnvVar ? ` (${config.apiKeyEnvVar})` : ''}:`;
+        apiKeyInput.placeholder = config.apiKeyPlaceholder || 'API key';
+        apiKeySection.style.display = config.requiresApiKey ? '' : 'none';
+
+        baseUrlInput.placeholder = config.baseUrlPlaceholder || 'https://...';
+        baseUrlDesc.textContent = config.baseUrlDescription || '';
+        baseUrlSection.style.display = config.requiresBaseUrl ? '' : 'none';
+      }
+
+      providerSelect.addEventListener('change', () => {
+        errorEl.style.display = 'none';
+        updateFormFields();
+      });
+      updateFormFields();
+
+      // Add button
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'dialog__btn';
+      saveBtn.textContent = 'Add';
+
+      function validateAndAdd() {
+        const pid = providerSelect.value;
+        if (!pid) return;
+        const config = getProviderConfig(pid);
+
+        if (config.requiresApiKey && apiKeyInput.value.trim().length < 5) {
+          errorEl.textContent = 'API key is required (at least 5 characters).';
+          errorEl.style.display = '';
+          apiKeyInput.focus();
+          return;
+        }
+
+        if (config.requiresBaseUrl && !baseUrlInput.value.trim()) {
+          errorEl.textContent = 'Base URL is required for this provider.';
+          errorEl.style.display = '';
+          baseUrlInput.focus();
+          return;
+        }
+
+        addAccount(
+          pid,
+          apiKeyInput.value.trim(),
+          config.requiresBaseUrl ? baseUrlInput.value.trim() : undefined,
+        );
+
+        renderAccountsList();
+      }
+
+      saveBtn.addEventListener('click', validateAndAdd);
+
+      const handleEnter = (e: KeyboardEvent) => {
+        if (e.key === 'Enter') validateAndAdd();
+      };
+      apiKeyInput.addEventListener('keydown', handleEnter);
+      baseUrlInput.addEventListener('keydown', handleEnter);
+
+      dialog.appendChild(saveBtn);
+
+      // Back button (only shown when accounts already exist)
+      const hasAccounts = getAccounts().length > 0;
+      if (hasAccounts) {
+        const backBtn = document.createElement('button');
+        backBtn.className = 'dialog__btn';
+        backBtn.style.cssText = 'margin-top: 8px; background: transparent; border: 1px solid #444;';
+        backBtn.textContent = 'Back';
+        backBtn.addEventListener('click', () => {
+          renderAccountsList();
+        });
+        dialog.appendChild(backBtn);
+      }
+
+      requestAnimationFrame(() => {
+        const pid = providerSelect.value;
+        if (!pid) return;
+        const config = getProviderConfig(pid);
+        if (config.requiresApiKey) {
+          apiKeyInput.focus();
+        } else if (config.requiresBaseUrl) {
+          baseUrlInput.focus();
+        }
+      });
+    }
   });
 }

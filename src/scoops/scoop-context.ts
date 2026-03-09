@@ -19,7 +19,7 @@ import { compactContext } from '../core/context-compaction.js';
 import type { AgentEvent as CoreAgentEvent, AssistantMessage, AssistantMessageEvent, TextContent, Model } from '../core/index.js';
 import { createFileTools, createBashTool, createSearchTools, createBrowserTool, createJavaScriptTool } from '../tools/index.js';
 import type { BrowserAPI } from '../cdp/index.js';
-import { getApiKey, resolveCurrentModel } from '../ui/provider-settings.js';
+import { getApiKey, resolveCurrentModel, getSelectedProvider } from '../ui/provider-settings.js';
 import { loadSkills, formatSkillsForPrompt, createDefaultSkills, type Skill } from './skills.js';
 import { createNanoClawTools, type NanoClawToolsConfig } from './nanoclaw-tools.js';
 
@@ -152,7 +152,8 @@ export class ScoopContext {
       // Create agent
       const apiKey = getApiKey();
       if (!apiKey) {
-        throw new Error('No API key configured');
+        const provider = getSelectedProvider();
+        throw new Error(`No API key configured for provider "${provider}"`);
       }
 
       const model = resolveCurrentModel();
@@ -262,6 +263,14 @@ export class ScoopContext {
   /** Get the scoop's shell */
   getShell(): WasmShell | null {
     return this.shell;
+  }
+
+  /** Update the model on the running agent (e.g., when the user changes the model dropdown). */
+  updateModel(): void {
+    if (!this.agent) return;
+    const model = resolveCurrentModel();
+    this.agent.setModel(model);
+    log.info('Model updated on running agent', { folder: this.scoop.folder, model: model.id });
   }
 
   /** Cleanup */

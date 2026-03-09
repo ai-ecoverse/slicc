@@ -537,8 +537,9 @@ async function main(): Promise<void> {
 
   // Wire model picker changes
   layout.onModelChange = (modelId) => {
-    // Model changes are picked up by scoop-context on next init
     localStorage.setItem('selected-model', modelId);
+    // Immediately update all active agent contexts to use the new model
+    orchestrator.updateModel();
   };
 
   // Wire clear chat to also clear orchestrator messages + buffers

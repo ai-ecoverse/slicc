@@ -685,6 +685,14 @@ export class Orchestrator {
     }
   }
 
+  /** Update the model on all active scoop contexts (e.g., when the user changes the model dropdown). */
+  updateModel(): void {
+    for (const context of this.contexts.values()) {
+      context.updateModel();
+    }
+    log.info('Model updated on all active contexts', { contextCount: this.contexts.size });
+  }
+
   /** Stop a specific scoop */
   stopScoop(jid: string): void {
     const context = this.contexts.get(jid);
