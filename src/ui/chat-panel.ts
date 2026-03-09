@@ -9,6 +9,7 @@ import type { AgentHandle, AgentEvent, ChatMessage, ToolCall } from './types.js'
 import { renderMessageContent, renderToolInput, escapeHtml } from './message-renderer.js';
 import { SessionStore } from './session-store.js';
 import { createLogger } from '../core/logger.js';
+import { VoiceInput, getVoiceAutoSend, getVoiceLang } from './voice-input.js';
 
 const log = createLogger('chat-panel');
 
@@ -17,37 +18,26 @@ function uid(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
-/** Cycling face emojis for user messages */
-const USER_FACES = ['😀', '😊', '🙂', '😄', '😎', '🤔', '😁', '🤗'];
-let userFaceIndex = 0;
-
-/** Get the next user face emoji (cycles through the list) */
-function getNextUserFace(): string {
-  const face = USER_FACES[userFaceIndex];
-  userFaceIndex = (userFaceIndex + 1) % USER_FACES.length;
-  return face;
-}
-
-/** Tool icons by name */
+/** Tool icons — compact text abbreviations instead of emojis */
 const TOOL_ICONS: Record<string, string> = {
-  bash: '⚙️',
-  browser: '🌐',
-  read_file: '📖',
-  write_file: '✏️',
-  edit_file: '✏️',
-  javascript: '📜',
-  delegate_to_scoop: '🥄',
-  send_message: '💬',
-  schedule_task: '⏰',
-  list_scoops: '📋',
-  list_tasks: '📋',
-  register_scoop: '🍨',
-  update_global_memory: '🧠',
+  bash: '$',
+  browser: 'B',
+  read_file: 'R',
+  write_file: 'W',
+  edit_file: 'E',
+  javascript: 'JS',
+  delegate_to_scoop: 'D',
+  send_message: 'M',
+  schedule_task: 'T',
+  list_scoops: 'LS',
+  list_tasks: 'LT',
+  register_scoop: 'RS',
+  update_global_memory: 'GM',
 };
 
 /** Get icon for a tool */
 function getToolIcon(toolName: string): string {
-  return TOOL_ICONS[toolName] ?? '🔧';
+  return TOOL_ICONS[toolName] ?? '?';
 }
 
 export class ChatPanel {
@@ -57,6 +47,10 @@ export class ChatPanel {
   private textarea!: HTMLTextAreaElement;
   private sendBtn!: HTMLButtonElement;
   private stopBtn!: HTMLButtonElement;
+  private micBtn!: HTMLButtonElement;
+  private voiceInput: VoiceInput | null = null;
+  private voiceMode = false;
+  private keydownListener: ((e: KeyboardEvent) => void) | null = null;
   private messages: ChatMessage[] = [];
   private agent: AgentHandle | null = null;
   private unsubscribe: (() => void) | null = null;
@@ -67,6 +61,10 @@ export class ChatPanel {
   private readOnly = false;
   private terminalOutputCallback: ((text: string) => void) | null = null;
   private currentScoopName: string | null = null; // null = cone, string = scoop name
+  private autoScrollAttached = true;
+  private lastScrollTop = 0;
+  private jumpPill!: HTMLElement;
+  private onDeleteQueuedMessage: ((messageId: string) => void) | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -86,6 +84,11 @@ export class ChatPanel {
   /** Set a callback for terminal output events. */
   onTerminalOutput(cb: (text: string) => void): void {
     this.terminalOutputCallback = cb;
+  }
+
+  /** Set a callback for deleting queued messages (removes from orchestrator DB + queue). */
+  setDeleteQueuedMessageCallback(cb: (messageId: string) => void): void {
+    this.onDeleteQueuedMessage = cb;
   }
 
   /** Initialize session persistence and restore messages. */
@@ -223,6 +226,17 @@ export class ChatPanel {
     this.appendMessageEl(msg);
   }
 
+  /** Remove a queued message from the UI and notify the orchestrator to remove it from DB/queue. */
+  private deleteQueuedMessage(messageId: string): void {
+    const idx = this.messages.findIndex(m => m.id === messageId);
+    if (idx === -1) return;
+    this.messages.splice(idx, 1);
+    const el = this.messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
+    if (el) el.remove();
+    this.persistSession();
+    this.onDeleteQueuedMessage?.(messageId);
+  }
+
   private render(): void {
     this.container.innerHTML = '';
     this.container.classList.add('chat');
@@ -231,6 +245,20 @@ export class ChatPanel {
     this.messagesEl = document.createElement('div');
     this.messagesEl.className = 'chat__messages';
     this.container.appendChild(this.messagesEl);
+
+    this.messagesEl.addEventListener('scroll', () => {
+      const { scrollTop, scrollHeight, clientHeight } = this.messagesEl;
+      const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+
+      if (distanceFromBottom <= 250) {
+        this.autoScrollAttached = true;
+        this.hideJumpPill();
+      } else if (scrollTop < this.lastScrollTop) {
+        this.autoScrollAttached = false;
+      }
+
+      this.lastScrollTop = scrollTop;
+    }, { passive: true });
 
     // Input area
     this.inputArea = document.createElement('div');
@@ -245,18 +273,66 @@ export class ChatPanel {
     this.sendBtn = document.createElement('button');
     this.sendBtn.className = 'chat__send-btn';
     this.sendBtn.innerHTML = '&#9654;'; // ▶
-    this.sendBtn.title = 'Send message';
+    this.sendBtn.dataset.tooltip = 'Send message';
 
     this.stopBtn = document.createElement('button');
     this.stopBtn.className = 'chat__stop-btn';
     this.stopBtn.innerHTML = '&#9632;'; // ■
-    this.stopBtn.title = 'Stop generation';
+    this.stopBtn.dataset.tooltip = 'Stop generation';
     this.stopBtn.style.display = 'none';
 
-    inputArea.appendChild(this.textarea);
-    inputArea.appendChild(this.sendBtn);
-    inputArea.appendChild(this.stopBtn);
+    this.micBtn = document.createElement('button');
+    this.micBtn.className = 'chat__mic-btn';
+    // Static SVG mic icon — safe, no user content
+    const svgNs = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNs, 'svg');
+    svg.setAttribute('width', '16');
+    svg.setAttribute('height', '16');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    const path1 = document.createElementNS(svgNs, 'path');
+    path1.setAttribute('d', 'M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z');
+    const path2 = document.createElementNS(svgNs, 'path');
+    path2.setAttribute('d', 'M19 10v2a7 7 0 0 1-14 0v-2');
+    const line1 = document.createElementNS(svgNs, 'line');
+    line1.setAttribute('x1', '12'); line1.setAttribute('y1', '19');
+    line1.setAttribute('x2', '12'); line1.setAttribute('y2', '23');
+    const line2 = document.createElementNS(svgNs, 'line');
+    line2.setAttribute('x1', '8'); line2.setAttribute('y1', '23');
+    line2.setAttribute('x2', '16'); line2.setAttribute('y2', '23');
+    svg.append(path1, path2, line1, line2);
+    this.micBtn.appendChild(svg);
+    this.micBtn.dataset.tooltip = 'Voice (Ctrl+Shift+V)';
+
+    // Input wrapper — textarea + inline actions
+    const inputWrapper = document.createElement('div');
+    inputWrapper.className = 'chat__input-wrapper';
+    inputWrapper.appendChild(this.textarea);
+
+    const inputActions = document.createElement('div');
+    inputActions.className = 'chat__input-actions';
+    inputActions.appendChild(this.micBtn);
+    inputActions.appendChild(this.sendBtn);
+    inputActions.appendChild(this.stopBtn);
+    inputWrapper.appendChild(inputActions);
+
+    inputArea.appendChild(inputWrapper);
     this.container.appendChild(inputArea);
+
+    // "New activity" pill — shown when auto-scroll is detached
+    this.jumpPill = document.createElement('button');
+    this.jumpPill.className = 'chat__jump-pill';
+    this.jumpPill.textContent = '\u2193 New activity';
+    this.jumpPill.addEventListener('click', () => {
+      this.autoScrollAttached = true;
+      this.hideJumpPill();
+      this.scrollToBottom(true);
+    });
+    this.container.appendChild(this.jumpPill);
 
     // Event listeners
     this.textarea.addEventListener('keydown', (e) => {
@@ -275,20 +351,97 @@ export class ChatPanel {
     this.sendBtn.addEventListener('click', () => this.sendMessage());
     this.stopBtn.addEventListener('click', () => {
       this.agent?.stop();
+      // Clear all remaining queued badges since these messages won't be processed
+      for (const msg of this.messages) {
+        if (msg.queued) {
+          msg.queued = false;
+          this.updateMessageEl(msg.id);
+        }
+      }
       this.setStreamingState(false);
     });
+
+    // Voice input
+    this.voiceInput = new VoiceInput({
+      onTranscript: (text, _isFinal) => {
+        this.textarea.value = text;
+        this.textarea.style.height = 'auto';
+        this.textarea.style.height = Math.min(this.textarea.scrollHeight, 120) + 'px';
+      },
+      onStateChange: (state) => {
+        if (state === 'error') {
+          this.voiceMode = false;
+          this.micBtn.classList.remove('chat__mic-btn--active', 'chat__mic-btn--listening');
+        } else if (this.voiceMode) {
+          // In voice mode, keep --listening on unless we're actively streaming
+          // (streaming state manages the visual via setStreamingState).
+          // Don't let transient idle states during stop→start flicker the button.
+          if (state === 'listening') {
+            this.micBtn.classList.add('chat__mic-btn--listening');
+          }
+          // Don't remove --listening on 'idle' in voice mode — setStreamingState handles it
+        } else {
+          this.micBtn.classList.toggle('chat__mic-btn--listening', state === 'listening');
+        }
+      },
+      onError: (error) => {
+        log.debug('Voice input error', { error });
+        // In voice mode, suppress "no speech detected" — silence between turns is normal
+        if (this.voiceMode && error.includes('No speech detected')) return;
+        this.addSystemMessage(error);
+      },
+      autoSend: true, // always auto-send in voice mode
+      onAutoSend: (text) => {
+        this.textarea.value = text;
+        this.sendMessage();
+      },
+      onAutoDisable: () => {
+        this.voiceMode = false;
+        this.micBtn.classList.remove('chat__mic-btn--active', 'chat__mic-btn--listening');
+        this.addSystemMessage('Voice mode disabled after 2 minutes of inactivity.');
+      },
+      lang: getVoiceLang(),
+    });
+
+    this.micBtn.addEventListener('click', () => {
+      this.toggleVoiceMode();
+    });
+
+    // Keyboard shortcut: Ctrl+Shift+V / Cmd+Shift+V
+    this.keydownListener = (e) => {
+      if (e.shiftKey && (e.ctrlKey || e.metaKey) && e.key === 'V') {
+        e.preventDefault();
+        this.toggleVoiceMode();
+      }
+    };
+    document.addEventListener('keydown', this.keydownListener);
+  }
+
+  private toggleVoiceMode(): void {
+    this.voiceMode = !this.voiceMode;
+    this.micBtn.classList.toggle('chat__mic-btn--active', this.voiceMode);
+    if (this.voiceMode) {
+      this.voiceInput?.start();
+    } else {
+      this.voiceInput?.stop();
+    }
   }
 
   private sendMessage(): void {
     const text = this.textarea.value.trim();
-    if (!text || this.isStreaming) return;
+    if (!text) return;
 
-    // Add user message
+    // User action — always re-attach auto-scroll
+    this.autoScrollAttached = true;
+    this.hideJumpPill();
+
+    const isQueued = this.isStreaming;
     const msg: ChatMessage = {
       id: uid(),
       role: 'user',
       content: text,
       timestamp: Date.now(),
+      queued: isQueued || undefined,
     };
     this.messages.push(msg);
     this.appendMessageEl(msg);
@@ -298,11 +451,13 @@ export class ChatPanel {
     this.textarea.value = '';
     this.textarea.style.height = 'auto';
 
-    // Disable input immediately — don't wait for message_start event
-    this.setStreamingState(true);
+    // Only lock input if not already streaming (first message triggers streaming)
+    if (!this.isStreaming) {
+      this.setStreamingState(true);
+    }
 
-    // Send to agent
-    this.agent?.sendMessage(text);
+    // Send to agent (orchestrator persists & queues if the cone is busy)
+    this.agent?.sendMessage(text, msg.id);
   }
 
   private handleAgentEvent(event: AgentEvent): void {
@@ -390,7 +545,7 @@ export class ChatPanel {
       const imgMatch = result.match(/<img:(data:image\/[^>]+)>/);
       tc.result = result.replace(/<img:data:image\/[^>]+>/g, '').trim();
       if (imgMatch) {
-        (tc as any)._screenshotDataUrl = imgMatch[1]; // transient, not persisted
+        tc._screenshotDataUrl = imgMatch[1];
       }
       tc.isError = isError;
     }
@@ -429,12 +584,36 @@ export class ChatPanel {
 
   private setStreamingState(streaming: boolean): void {
     this.isStreaming = streaming;
-    this.sendBtn.style.display = streaming ? 'none' : 'flex';
+    // Show stop button during streaming, send button otherwise — but keep textarea enabled
     this.stopBtn.style.display = streaming ? 'flex' : 'none';
-    this.textarea.disabled = streaming;
+    this.sendBtn.style.display = streaming ? 'none' : 'flex';
+    // Textarea stays enabled so the user can queue follow-up messages
+    this.textarea.disabled = false;
+    // Mic button stays enabled during streaming so user can toggle voice mode off
+    if (streaming) {
+      if (this.voiceInput?.isListening()) {
+        this.voiceInput.stop();
+      }
+      // In voice mode, explicitly remove listening visual during streaming
+      this.micBtn.classList.remove('chat__mic-btn--listening');
+      // When a new turn starts, clear the queued badge on only the oldest queued message
+      // (it's the one being processed now). Leave the rest queued.
+      const oldestQueued = this.messages.find(m => m.queued);
+      if (oldestQueued) {
+        oldestQueued.queued = false;
+        this.updateMessageEl(oldestQueued.id);
+      }
+    }
     if (!streaming) {
-      // Restore focus after generation completes
-      this.textarea.focus();
+      if (this.voiceMode) {
+        // Voice mode: auto-restart listening when the agent finishes.
+        // Pre-set the listening class to avoid a visual flicker during
+        // the async getUserMedia → recognition start gap.
+        this.micBtn.classList.add('chat__mic-btn--listening');
+        this.voiceInput?.start();
+      } else {
+        this.textarea.focus();
+      }
     }
   }
 
@@ -446,15 +625,38 @@ export class ChatPanel {
 
   private renderMessages(): void {
     this.messagesEl.innerHTML = '';
+    let prevRole: string | null = null;
+    let prevTimestamp = 0;
     for (const msg of this.messages) {
-      this.appendMessageEl(msg);
+      const showLabel = this.shouldShowLabel(msg, prevRole, prevTimestamp);
+      const el = this.createMessageEl(msg, showLabel);
+      this.messagesEl.appendChild(el);
+      prevRole = msg.role;
+      prevTimestamp = msg.timestamp;
     }
+    this.autoScrollAttached = true;
+    this.hideJumpPill();
+    this.scrollToBottom(true);
   }
 
   private appendMessageEl(msg: ChatMessage): void {
-    const el = this.createMessageEl(msg);
+    // Determine if label should show based on previous message
+    const prev = this.messages.length >= 2 ? this.messages[this.messages.length - 2] : null;
+    const showLabel = this.shouldShowLabel(msg, prev?.role ?? null, prev?.timestamp ?? 0);
+    const el = this.createMessageEl(msg, showLabel);
     this.messagesEl.appendChild(el);
     this.scrollToBottom();
+  }
+
+  /** Determine whether to show the sender label for a message */
+  private shouldShowLabel(msg: ChatMessage, prevRole: string | null, prevTimestamp: number): boolean {
+    // Always show label for lick messages
+    if (msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron') return true;
+    // Show label if role changed
+    if (msg.role !== prevRole) return true;
+    // Show label if >2 min gap
+    if (msg.timestamp - prevTimestamp > 120_000) return true;
+    return false;
   }
 
   private updateMessageEl(messageId: string): void {
@@ -462,13 +664,17 @@ export class ChatPanel {
     if (!msg) return;
     const existing = this.messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
     if (existing) {
-      const newEl = this.createMessageEl(msg);
+      // Determine showLabel based on previous message in the list
+      const idx = this.messages.indexOf(msg);
+      const prev = idx > 0 ? this.messages[idx - 1] : null;
+      const showLabel = this.shouldShowLabel(msg, prev?.role ?? null, prev?.timestamp ?? 0);
+      const newEl = this.createMessageEl(msg, showLabel);
       existing.replaceWith(newEl);
     }
     this.scrollToBottom();
   }
 
-  private createMessageEl(msg: ChatMessage): HTMLElement {
+  private createMessageEl(msg: ChatMessage, showLabel = true): HTMLElement {
     // Licks (webhook/cron) get their own compact style like tool calls
     const isLick = msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron';
     if (isLick) {
@@ -482,45 +688,64 @@ export class ChatPanel {
     // Use a fragment-like wrapper for messages with tool calls
     // so tool calls appear outside the message bubble
     const wrapper = document.createElement('div');
-    wrapper.className = 'msg-group';
+    wrapper.className = `msg-group${showLabel ? '' : ' msg-group--continuation'}`;
     wrapper.setAttribute('data-msg-id', msg.id);
 
     const el = document.createElement('div');
-    el.className = `msg msg--${msg.role}`;
+    el.className = `msg msg--${msg.role}${msg.queued ? ' msg--queued' : ''}`;
 
-    // Determine icon and label based on role, source, and current context
-    let icon: string;
-    let label: string;
-    const isInScoopThread = this.currentScoopName !== null;
+    if (showLabel) {
+      // Determine icon letter and label based on role, source, and current context
+      let iconLetter: string;
+      let label: string;
+      const isInScoopThread = this.currentScoopName !== null;
 
-    if (msg.role === 'user') {
-      if (msg.source === 'delegation' || msg.channel === 'delegation') {
-        // Delegation instructions from sliccy
-        icon = '🥄';
-        label = 'sliccy';
+      if (msg.role === 'user') {
+        if (msg.source === 'delegation' || msg.channel === 'delegation') {
+          iconLetter = 'S';
+          label = 'sliccy';
+        } else {
+          iconLetter = 'U';
+          label = 'You';
+        }
+      } else if (isInScoopThread) {
+        iconLetter = (this.currentScoopName || 'S').charAt(0).toUpperCase();
+        label = `@${this.currentScoopName}`;
+      } else if (msg.source && msg.source !== 'cone') {
+        iconLetter = msg.source.charAt(0).toUpperCase();
+        label = msg.source;
       } else {
-        icon = getNextUserFace();
-        label = 'You';
+        iconLetter = 'S';
+        label = 'sliccy';
       }
-    } else if (isInScoopThread) {
-      // In a scoop thread, all assistant messages show the scoop icon/name
-      icon = '💩';
-      label = `@${this.currentScoopName}`;
-    } else if (msg.source && msg.source !== 'cone') {
-      // Scoop message in cone view
-      icon = '💩';
-      label = msg.source;
-    } else {
-      // Main agent (sliccy / cone)
-      icon = '🍦';
-      label = 'sliccy';
-    }
 
-    // Role label with icon
-    const roleEl = document.createElement('div');
-    roleEl.className = 'msg__role';
-    roleEl.innerHTML = `<span class="msg__icon">${icon}</span> ${escapeHtml(label)}`;
-    el.appendChild(roleEl);
+      // Role label with initial avatar
+      const roleEl = document.createElement('div');
+      roleEl.className = 'msg__role';
+      const iconSpan = document.createElement('span');
+      iconSpan.className = 'msg__icon';
+      iconSpan.textContent = iconLetter;
+      roleEl.appendChild(iconSpan);
+      roleEl.appendChild(document.createTextNode(` ${label}`));
+      // Queued badge + delete button
+      if (msg.queued) {
+        const badge = document.createElement('span');
+        badge.className = 'msg__queued-badge';
+        badge.textContent = 'queued';
+        roleEl.appendChild(badge);
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'msg__queued-delete';
+        deleteBtn.textContent = '\u00d7'; // ×
+        deleteBtn.title = 'Remove queued message';
+        deleteBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.deleteQueuedMessage(msg.id);
+        });
+        roleEl.appendChild(deleteBtn);
+      }
+      el.appendChild(roleEl);
+    }
 
     // For lick messages in cone view, wrap content in collapsible
     const isLickInCone = (msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron') && this.sessionId === 'session-cone';
@@ -583,7 +808,7 @@ export class ChatPanel {
     // Summary shows tongue emoji and type
     const summary = document.createElement('summary');
     summary.className = 'lick__header';
-    summary.innerHTML = `<span class="lick__icon">👅</span> <span class="lick__type">${channelType}</span>`;
+    summary.innerHTML = `<span class="lick__icon">E</span> <span class="lick__type">${channelType}</span>`;
 
     // Add brief preview
     const preview = document.createElement('span');
@@ -625,23 +850,18 @@ export class ChatPanel {
       summary.appendChild(preview);
     }
 
-    // Status indicator
+    // Status indicator — text-based
+    const statusEl = document.createElement('span');
     if (tc.result === undefined) {
-      const spinner = document.createElement('span');
-      spinner.className = 'tool-call__spinner';
-      spinner.textContent = '⏳';
-      summary.appendChild(spinner);
+      statusEl.className = 'tool-call__status tool-call__status--running';
     } else if (tc.isError) {
-      const errorIcon = document.createElement('span');
-      errorIcon.className = 'tool-call__error-icon';
-      errorIcon.textContent = '❌';
-      summary.appendChild(errorIcon);
+      statusEl.className = 'tool-call__status tool-call__status--error';
+      statusEl.textContent = 'failed';
     } else {
-      const checkIcon = document.createElement('span');
-      checkIcon.className = 'tool-call__check-icon';
-      checkIcon.textContent = '✅';
-      summary.appendChild(checkIcon);
+      statusEl.className = 'tool-call__status tool-call__status--success';
+      statusEl.textContent = '\u2713'; // ✓
     }
+    summary.appendChild(statusEl);
 
     el.appendChild(summary);
 
@@ -676,7 +896,7 @@ export class ChatPanel {
     }
 
     // Render screenshot thumbnail from transient data (not persisted in messages)
-    const screenshotUrl = (tc as any)._screenshotDataUrl as string | undefined;
+    const screenshotUrl = tc._screenshotDataUrl;
     if (screenshotUrl) {
       const imgEl = document.createElement('img');
       imgEl.src = screenshotUrl;
@@ -690,7 +910,7 @@ export class ChatPanel {
           fullImg.src = screenshotUrl;
           w.document.title = 'Screenshot';
           w.document.body.style.margin = '0';
-          w.document.body.style.background = '#1a1a2e';
+          w.document.body.style.background = window.matchMedia?.('(prefers-color-scheme: light)').matches ? '#f0f0f0' : '#141414';
           w.document.body.appendChild(fullImg);
         }
       });
@@ -702,10 +922,23 @@ export class ChatPanel {
     return el;
   }
 
-  private scrollToBottom(): void {
+  private scrollToBottom(force = false): void {
+    if (!force && !this.autoScrollAttached) {
+      this.showJumpPill();
+      return;
+    }
     requestAnimationFrame(() => {
       this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+      this.lastScrollTop = this.messagesEl.scrollTop;
     });
+  }
+
+  private showJumpPill(): void {
+    this.jumpPill.classList.add('chat__jump-pill--visible');
+  }
+
+  private hideJumpPill(): void {
+    this.jumpPill.classList.remove('chat__jump-pill--visible');
   }
 
   private persistSession(): void {
@@ -718,6 +951,11 @@ export class ChatPanel {
   /** Dispose the panel. */
   dispose(): void {
     this.unsubscribe?.();
+    this.voiceInput?.destroy();
+    if (this.keydownListener) {
+      document.removeEventListener('keydown', this.keydownListener);
+      this.keydownListener = null;
+    }
     this.container.innerHTML = '';
   }
 }

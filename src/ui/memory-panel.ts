@@ -101,11 +101,6 @@ export class MemoryPanel {
     while (this.container.firstChild) this.container.removeChild(this.container.firstChild);
     this.container.classList.add('memory-panel');
 
-    const header = document.createElement('div');
-    header.className = 'panel-header';
-    header.textContent = 'Memory';
-    this.container.appendChild(header);
-
     this.bodyEl = document.createElement('div');
     this.bodyEl.className = 'memory-panel__body';
     this.container.appendChild(this.bodyEl);

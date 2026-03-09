@@ -195,8 +195,16 @@ File browser supports clicking files to download and a ZIP button on folders (us
 
 Two separate IndexedDB session stores: UI-level (browser-coding-agent DB in session-store.ts) and core agent-level (agent-sessions DB in core/session.ts). Orchestrator data (scoops, messages, tasks, state) stored in slicc-groups DB (name retained for backward compatibility).
 
+**Voice Input** (`voice-input.ts`): Hands-free voice mode using the Web Speech API (`webkitSpeechRecognition`). Two runtime paths:
+- **Standalone (CLI)**: Direct `getUserMedia` + `webkitSpeechRecognition` in the browser page.
+- **Extension**: Side panels can't trigger mic permission prompts. First use opens a popup window (`voice-popup.html`) for the one-time permission grant. Once granted, subsequent uses work directly in the side panel (permission cached per `chrome-extension://` origin). Falls back to popup if direct access fails.
+
+Voice mode is a toggle (mic button or `Ctrl+Shift+V` / `Cmd+Shift+V`): click once to enable, click again to disable. While enabled, the user speaks → 2.5s silence → message auto-sends → input locks during agent response → voice auto-restarts when the turn ends. Mic button stays clickable during streaming so voice mode can be toggled off. Consecutive no-speech restarts use exponential backoff (300ms → 5s cap) to prevent rapid mic toggling. Settings (`voice-auto-send`, `voice-lang`) stored in localStorage.
+
+Extension assets: `voice-popup.html` + `voice-popup.js` (project root, copied to `dist/extension/` by `vite.config.extension.ts`).
+
 ### Extension (src/extension/)
-Chrome Manifest V3 extension files. Service worker opens the side panel on action click. `chrome.d.ts` provides minimal typed declarations for the Chrome APIs used (debugger, tabs, sidePanel, runtime). `sandbox.html` (project root) provides an isolated execution environment for the JavaScript tool and `node -e` — exempt from extension CSP, allows Function constructor. Cross-origin fetch from sandbox is proxied through the parent page via postMessage. Pyodide (~13MB) bundled at `dist/extension/pyodide/` for Python support (loaded from `'self'` origin).
+Chrome Manifest V3 extension files. Service worker opens the side panel on action click. `chrome.d.ts` provides minimal typed declarations for the Chrome APIs used (debugger, tabs, sidePanel, runtime, windows, messaging). `sandbox.html` (project root) provides an isolated execution environment for the JavaScript tool and `node -e` — exempt from extension CSP, allows Function constructor. Cross-origin fetch from sandbox is proxied through the parent page via postMessage. Pyodide (~13MB) bundled at `dist/extension/pyodide/` for Python support (loaded from `'self'` origin).
 
 ### Preview Service Worker (src/ui/preview-sw.ts)
 A Service Worker that intercepts `/preview/*` fetch requests and serves content from VFS (IndexedDB via LightningFS). Enables the agent to create HTML/CSS/JS apps in the virtual filesystem and preview them in real browser tabs.
@@ -237,7 +245,7 @@ Delegation:
 ## Key Conventions
 
 - **Two type systems**: Legacy ToolDefinition/ToolResult (in src/tools/) and pi-compatible AgentTool/AgentToolResult (in src/core/). The adapter in tool-adapter.ts bridges them.
-- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 610 tests across 34 files.
+- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 640 tests across 35 files.
 - **Logging**: createLogger('namespace') from src/core/logger.ts. Level-filtered, DEBUG in dev, ERROR in prod. Uses __DEV__ global (set by Vite define).
 - **Node shims**: src/shims/empty.ts stubs out node:zlib and node:module for the browser bundle (just-bash references them).
 - **Multi-provider auth**: Provider settings in `src/ui/provider-settings.ts`. Supports Anthropic (direct), Azure AI Foundry (Claude on Azure), Azure OpenAI (GPT), AWS Bedrock, and many more via pi-ai. Provider/API key/baseUrl stored in localStorage. Model resolved via `resolveCurrentModel()` with baseUrl override.

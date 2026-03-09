@@ -19,7 +19,7 @@ import { compactContext } from '../core/context-compaction.js';
 import type { AgentEvent as CoreAgentEvent, AssistantMessage, AssistantMessageEvent, TextContent, Model } from '../core/index.js';
 import { createFileTools, createBashTool, createSearchTools, createBrowserTool, createJavaScriptTool, createMigratePageTool } from '../tools/index.js';
 import type { BrowserAPI } from '../cdp/index.js';
-import { getApiKey, resolveCurrentModel } from '../ui/provider-settings.js';
+import { getApiKey, resolveCurrentModel, getSelectedProvider } from '../ui/provider-settings.js';
 import { loadSkills, formatSkillsForPrompt, createDefaultSkills, type Skill } from './skills.js';
 import { createNanoClawTools, type NanoClawToolsConfig } from './nanoclaw-tools.js';
 
@@ -62,6 +62,7 @@ export class ScoopContext {
   private isProcessing = false;
   private didStreamDeltas = false;
   private unsubscribe: (() => void) | null = null;
+  private pendingPrompts: string[] = [];
 
   constructor(scoop: RegisteredScoop, callbacks: ScoopContextCallbacks, fs: VirtualFS | RestrictedFS) {
     this.scoop = scoop;
@@ -152,7 +153,8 @@ export class ScoopContext {
       // Create agent
       const apiKey = getApiKey();
       if (!apiKey) {
-        throw new Error('No API key configured');
+        const provider = getSelectedProvider();
+        throw new Error(`No API key configured for provider "${provider}"`);
       }
 
       const model = resolveCurrentModel();
@@ -183,7 +185,7 @@ export class ScoopContext {
     }
   }
 
-  /** Send a prompt to this scoop's agent */
+  /** Send a prompt to this scoop's agent. If already processing, queues it for sequential execution. */
   async prompt(text: string): Promise<void> {
     if (!this.agent) {
       this.callbacks.onError('Agent not initialized');
@@ -191,7 +193,8 @@ export class ScoopContext {
     }
 
     if (this.isProcessing) {
-      this.callbacks.onError('Already processing a request');
+      log.info('Queueing prompt while processing', { folder: this.scoop.folder, queueLength: this.pendingPrompts.length + 1 });
+      this.pendingPrompts.push(text);
       return;
     }
 
@@ -206,13 +209,48 @@ export class ScoopContext {
       log.error('Agent error', { folder: this.scoop.folder, error: message });
       this.callbacks.onError(message);
     } finally {
-      this.isProcessing = false;
-      this.setStatus('ready');
+      // Process next queued prompt if any
+      const next = this.pendingPrompts.shift();
+      if (next && this.agent) {
+        // Stay in processing state, process the next prompt
+        this.didStreamDeltas = false;
+        try {
+          await this.agent.prompt(next);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          log.error('Queued agent error', { folder: this.scoop.folder, error: message });
+          this.callbacks.onError(message);
+        } finally {
+          // Drain remaining queued prompts
+          await this.drainQueue();
+        }
+      } else {
+        this.isProcessing = false;
+        this.setStatus('ready');
+      }
     }
   }
 
-  /** Stop the current agent operation */
+  /** Drain the pending prompt queue sequentially */
+  private async drainQueue(): Promise<void> {
+    while (this.pendingPrompts.length > 0 && this.agent) {
+      const next = this.pendingPrompts.shift()!;
+      this.didStreamDeltas = false;
+      try {
+        await this.agent.prompt(next);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.error('Queued agent error', { folder: this.scoop.folder, error: message });
+        this.callbacks.onError(message);
+      }
+    }
+    this.isProcessing = false;
+    this.setStatus('ready');
+  }
+
+  /** Stop the current agent operation and clear any queued prompts */
   stop(): void {
+    this.pendingPrompts.length = 0;
     this.agent?.abort();
     this.isProcessing = false;
     this.setStatus('ready');
@@ -226,6 +264,14 @@ export class ScoopContext {
   /** Get the scoop's shell */
   getShell(): WasmShell | null {
     return this.shell;
+  }
+
+  /** Update the model on the running agent (e.g., when the user changes the model dropdown). */
+  updateModel(): void {
+    if (!this.agent) return;
+    const model = resolveCurrentModel();
+    this.agent.setModel(model);
+    log.info('Model updated on running agent', { folder: this.scoop.folder, model: model.id });
   }
 
   /** Cleanup */

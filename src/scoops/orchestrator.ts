@@ -23,6 +23,7 @@ import { VirtualFS } from '../fs/index.js';
 import { RestrictedFS } from '../fs/restricted-fs.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import { createDefaultSharedFiles } from './skills.js';
+import { buildActiveLicksError, type LickManager } from './lick-manager.js';
 
 const log = createLogger('orchestrator');
 
@@ -67,6 +68,7 @@ export class Orchestrator {
   private sharedFs: VirtualFS | null = null;
   /** Accumulates response text per scoop for routing back to cone on completion. */
   private scoopResponseBuffer: Map<string, string> = new Map();
+  private lickManager: LickManager | null = null;
 
   constructor(
     container: HTMLElement,
@@ -190,6 +192,11 @@ export class Orchestrator {
     return this.sharedFs;
   }
 
+  /** Set the LickManager for guarding scoop removal against active licks */
+  setLickManager(lickManager: LickManager): void {
+    this.lickManager = lickManager;
+  }
+
   /** Register a new scoop */
   async registerScoop(scoop: RegisteredScoop): Promise<void> {
     await db.saveScoop(scoop);
@@ -201,8 +208,16 @@ export class Orchestrator {
     await this.createScoopTab(scoop.jid);
   }
 
-  /** Unregister a scoop */
+  /** Unregister a scoop. Throws if the scoop has active licks (webhooks/cron tasks). */
   async unregisterScoop(jid: string): Promise<void> {
+    // Guard: check for active licks before allowing removal
+    const scoop = this.scoops.get(jid);
+    if (scoop && this.lickManager) {
+      const { webhooks, cronTasks } = this.lickManager.getLicksForScoop(scoop.name, scoop.folder);
+      const err = buildActiveLicksError(scoop.folder, webhooks, cronTasks);
+      if (err) throw err;
+    }
+
     await this.destroyScoopTab(jid);
     await db.deleteScoop(jid);
     this.scoops.delete(jid);
@@ -494,6 +509,31 @@ export class Orchestrator {
     return this.contexts.get(jid);
   }
 
+  /** Clear all queued messages for a scoop (removes from both IndexedDB and in-memory queue). */
+  async clearQueuedMessages(jid: string): Promise<void> {
+    const queue = this.messageQueues.get(jid);
+    if (queue && queue.length > 0) {
+      // Remove each queued message from IndexedDB
+      for (const msg of queue) {
+        await db.deleteMessage(msg.id);
+      }
+      // Clear the in-memory queue
+      this.messageQueues.set(jid, []);
+    }
+  }
+
+  /** Delete a queued message by ID (removes from both IndexedDB and in-memory queue). */
+  async deleteQueuedMessage(jid: string, messageId: string): Promise<void> {
+    // Remove from in-memory queue
+    const queue = this.messageQueues.get(jid);
+    if (queue) {
+      const idx = queue.findIndex(m => m.id === messageId);
+      if (idx !== -1) queue.splice(idx, 1);
+    }
+    // Remove from IndexedDB
+    await db.deleteMessage(messageId);
+  }
+
   /** Get all messages for a scoop */
   async getMessagesForScoop(jid: string): Promise<ChannelMessage[]> {
     return db.getMessagesForScoop(jid);
@@ -643,6 +683,14 @@ export class Orchestrator {
       clearInterval(this.pollInterval);
       this.pollInterval = null;
     }
+  }
+
+  /** Update the model on all active scoop contexts (e.g., when the user changes the model dropdown). */
+  updateModel(): void {
+    for (const context of this.contexts.values()) {
+      context.updateModel();
+    }
+    log.info('Model updated on all active contexts', { contextCount: this.contexts.size });
   }
 
   /** Stop a specific scoop */

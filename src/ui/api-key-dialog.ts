@@ -107,8 +107,9 @@ export function showApiKeyDialog(): Promise<string> {
     function styleProviderBtns() {
       for (const b of providerBtns) {
         const active = b.dataset.provider === selectedProvider;
-        b.style.background = active ? '#e94560' : '#1a1a2e';
-        b.style.color = active ? '#fff' : '#a0a0b0';
+        const cs = getComputedStyle(document.documentElement);
+        b.style.background = active ? cs.getPropertyValue('--s2-accent').trim() : cs.getPropertyValue('--s2-bg-layer-2').trim();
+        b.style.color = active ? '#fff' : cs.getPropertyValue('--s2-content-secondary').trim();
       }
     }
     styleProviderBtns();

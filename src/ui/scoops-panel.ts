@@ -19,6 +19,8 @@ export interface ScoopsPanelCallbacks {
   onScoopSelect: (scoop: RegisteredScoop) => void;
   /** Called when user sends a message to a scoop */
   onSendMessage: (scoopJid: string, text: string) => void;
+  /** Called when the scoop list changes (for logo updates, etc.) */
+  onScoopsChanged?: (scoops: RegisteredScoop[]) => void;
 }
 
 export class ScoopsPanel {
@@ -50,9 +52,9 @@ export class ScoopsPanel {
   refreshScoops(): void {
     if (!this.orchestrator) return;
 
-    // Scoops first, cone last (cone holds the scoops)
+    // Cone first (sliccy), then scoops
     const allScoops = this.orchestrator.getScoops();
-    const scoops = [...allScoops.filter(s => !s.isCone), ...allScoops.filter(s => s.isCone)];
+    const scoops = [...allScoops.filter(s => s.isCone), ...allScoops.filter(s => !s.isCone)];
     const listEl = this.container.querySelector('.scoops-list');
     if (!listEl) return;
 
@@ -76,16 +78,28 @@ export class ScoopsPanel {
       item.dataset.jid = scoop.jid;
 
       // Build DOM safely
-      const iconEl = document.createElement('div');
-      iconEl.className = scoop.isCone ? 'scoop-icon scoop-icon--cone' : 'scoop-icon scoop-icon--scoop';
-      iconEl.textContent = scoop.isCone ? '\uD83C\uDF66' : '\uD83D\uDCA9';
-      if (!scoop.isCone) {
-        // Each scoop gets a unique hue based on its index
+      // Colored dot indicator — uses SLICC brand palette
+      const SCOOP_COLORS = ['#f000a0', '#00f0f0', '#90f000', '#15d675', '#e68619'];
+      if (scoop.isCone) {
+        // Cone triangle icon matching the dynamic logo
+        const ns = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(ns, 'svg');
+        svg.setAttribute('width', '12');
+        svg.setAttribute('height', '14');
+        svg.setAttribute('viewBox', '0 0 12 14');
+        svg.setAttribute('fill', '#f07000');
+        svg.classList.add('scoop-icon', 'scoop-icon--cone');
+        const path = document.createElementNS(ns, 'path');
+        path.setAttribute('d', 'M1 0L6 14L11 0Z');
+        svg.appendChild(path);
+        item.appendChild(svg);
+      } else {
+        const iconEl = document.createElement('div');
+        iconEl.className = 'scoop-icon';
         const scoopIndex = scoops.filter(s => !s.isCone).indexOf(scoop);
-        const hue = (scoopIndex * 72) % 360; // 72deg apart = 5 distinct colors before repeat
-        iconEl.style.filter = `invert(0.85) sepia(1) saturate(4) hue-rotate(${hue}deg) brightness(1.05)`;
+        iconEl.style.background = SCOOP_COLORS[scoopIndex % SCOOP_COLORS.length];
+        item.appendChild(iconEl);
       }
-      item.appendChild(iconEl);
 
       const infoEl = document.createElement('div');
       infoEl.className = 'scoop-info';
@@ -109,7 +123,7 @@ export class ScoopsPanel {
       if (!scoop.isCone) {
         const deleteBtn = document.createElement('button');
         deleteBtn.className = 'scoop-delete';
-        deleteBtn.title = 'Delete scoop';
+        deleteBtn.dataset.tooltip = 'Delete scoop';
         deleteBtn.textContent = '\u00d7';
         item.appendChild(deleteBtn);
       }
@@ -124,6 +138,9 @@ export class ScoopsPanel {
 
       listEl.appendChild(item);
     }
+
+    // Notify listeners of scoop list change
+    this.callbacks.onScoopsChanged?.(allScoops);
   }
 
   /** Select a scoop */
@@ -173,7 +190,13 @@ export class ScoopsPanel {
       return;
     }
 
-    await this.orchestrator.unregisterScoop(jid);
+    try {
+      await this.orchestrator.unregisterScoop(jid);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      alert(msg);
+      return;
+    }
 
     if (this.selectedScoopJid === jid) {
       this.selectedScoopJid = null;
@@ -245,7 +268,7 @@ export class ScoopsPanel {
 
     const addBtn = document.createElement('button');
     addBtn.className = 'scoops-add';
-    addBtn.title = 'Create new scoop';
+    addBtn.dataset.tooltip = 'Create new scoop';
     addBtn.textContent = '+';
     addBtn.addEventListener('click', () => this.showCreateDialog());
     header.appendChild(addBtn);
@@ -265,88 +288,95 @@ export class ScoopsPanel {
         display: flex;
         flex-direction: column;
         height: 100%;
-        background: #16162a;
-        color: #e0e0e0;
+        background: var(--s2-bg-layer-1);
+        color: var(--s2-content-default);
       }
 
       .scoops-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 12px 16px;
-        border-bottom: 1px solid #2a2a4a;
+        padding: var(--s2-spacing-200) var(--s2-spacing-300);
+        border-bottom: 1px solid var(--s2-border-subtle);
       }
 
       .scoops-header h3 {
         margin: 0;
-        font-size: 14px;
-        font-weight: 600;
+        font-size: var(--s2-font-size-50);
+        font-weight: 700;
+        color: var(--s2-content-tertiary);
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
       }
 
       .scoops-add {
-        width: 24px;
-        height: 24px;
+        width: 22px;
+        height: 22px;
         border: none;
-        border-radius: 4px;
-        background: #e94560;
-        color: white;
+        border-radius: var(--s2-radius-pill);
+        background: transparent;
+        color: var(--s2-content-tertiary);
         font-size: 16px;
         cursor: pointer;
         display: flex;
         align-items: center;
         justify-content: center;
+        transition: background var(--s2-transition-default), color var(--s2-transition-default), transform var(--s2-transition-default);
       }
 
       .scoops-add:hover {
-        background: #ff6b8a;
+        background: var(--s2-gray-200);
+        color: var(--s2-content-default);
+      }
+
+      .scoops-add:active {
+        transform: scale(0.92);
       }
 
       .scoops-list {
         flex: 1;
         overflow-y: auto;
-        padding: 8px;
+        padding: var(--s2-spacing-100);
       }
 
       .scoops-empty {
-        padding: 16px;
+        padding: var(--s2-spacing-300);
         text-align: center;
-        color: #808090;
-        font-size: 13px;
+        color: var(--s2-content-disabled);
+        font-size: var(--s2-font-size-75);
       }
 
       .scoop-item {
         display: flex;
         align-items: center;
-        gap: 12px;
-        padding: 10px 12px;
-        border-radius: 8px;
+        gap: var(--s2-spacing-200);
+        padding: var(--s2-spacing-100) var(--s2-spacing-200);
+        border-radius: var(--s2-radius-default);
         cursor: pointer;
-        transition: background 0.15s;
-        margin-bottom: 4px;
+        transition: background var(--s2-transition-default);
+        margin-bottom: 1px;
+        position: relative;
       }
 
       .scoop-item:hover {
-        background: #1e1e3a;
+        background: var(--s2-bg-elevated);
       }
 
       .scoop-item.selected {
-        background: #2a2a5a;
+        background: var(--s2-bg-elevated);
+        position: relative;
+      }
+      .scoop-item.selected::before {
+        content: '';
+        position: absolute; left: 0; top: 4px; bottom: 4px;
+        width: 3px; border-radius: 0 3px 3px 0;
+        background: var(--s2-accent);
       }
 
       .scoop-icon {
-        font-size: 20px;
-        width: 32px;
-        text-align: center;
-      }
-
-      .scoop-icon--cone {
-        /* Clip off the ice cream ball, show only the cone */
-        clip-path: polygon(0% 45%, 100% 45%, 100% 100%, 0% 100%);
-        margin-top: -4px;
-      }
-
-      .scoop-icon--scoop {
-        /* Per-scoop hue applied via inline style */
+        width: 10px; height: 10px;
+        border-radius: 50%;
+        flex-shrink: 0;
       }
 
       .scoop-info {
@@ -355,7 +385,7 @@ export class ScoopsPanel {
       }
 
       .scoop-name {
-        font-size: 14px;
+        font-size: var(--s2-font-size-100);
         font-weight: 500;
         white-space: nowrap;
         overflow: hidden;
@@ -364,44 +394,46 @@ export class ScoopsPanel {
 
       .scoop-meta {
         display: flex;
-        gap: 8px;
+        gap: var(--s2-spacing-100);
         margin-top: 2px;
-        font-size: 11px;
-        color: #808090;
+        font-size: var(--s2-font-size-50);
+        color: var(--s2-content-tertiary);
       }
 
       .scoop-status {
         padding: 1px 6px;
-        border-radius: 3px;
-        background: #2a2a4a;
+        border-radius: var(--s2-radius-pill);
+        background: var(--s2-gray-200);
+        font-weight: 500;
+        font-size: 10px;
       }
 
       .scoop-item.status-ready .scoop-status {
-        background: #2d5a2d;
-        color: #90ee90;
+        background: rgba(45,157,120,0.2);
+        color: var(--s2-positive);
       }
 
       .scoop-item.status-processing .scoop-status {
-        background: #5a5a2d;
-        color: #eeee90;
+        background: rgba(230,134,25,0.2);
+        color: var(--s2-notice);
       }
 
       .scoop-item.status-error .scoop-status {
-        background: #5a2d2d;
-        color: #ee9090;
+        background: rgba(227,72,80,0.2);
+        color: var(--s2-negative);
       }
 
       .scoop-delete {
         width: 20px;
         height: 20px;
         border: none;
-        border-radius: 4px;
+        border-radius: var(--s2-radius-s);
         background: transparent;
-        color: #808090;
+        color: var(--s2-content-disabled);
         font-size: 16px;
         cursor: pointer;
         opacity: 0;
-        transition: opacity 0.15s, background 0.15s, color 0.15s;
+        transition: opacity var(--s2-transition-default), background var(--s2-transition-default), color var(--s2-transition-default);
       }
 
       .scoop-item:hover .scoop-delete {
@@ -409,8 +441,8 @@ export class ScoopsPanel {
       }
 
       .scoop-delete:hover {
-        background: #5a2d2d;
-        color: #ee9090;
+        background: rgba(227,72,80,0.15);
+        color: var(--s2-negative);
       }
     `;
     this.container.appendChild(style);

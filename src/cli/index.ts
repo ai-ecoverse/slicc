@@ -397,7 +397,7 @@ async function main() {
     }
   }
 
-  app.use(express.json());
+  app.use(express.json({ limit: '50mb' }));
 
   // Webhook management API — forwards to browser
   app.get('/api/webhooks', async (_req, res) => {
