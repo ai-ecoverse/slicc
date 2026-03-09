@@ -326,9 +326,8 @@ describe('getAllAvailableModels', () => {
 });
 
 describe('legacy key cleanup', () => {
-  it('deletes legacy keys on module load', () => {
-    // Legacy keys should have been deleted when the module was imported.
-    // Set them again and re-verify via clearAllSettings which also cleans them.
+  it('deletes legacy keys via clearAllSettings', () => {
+    // clearAllSettings removes legacy keys along with accounts and model key.
     const legacyKeys = [
       'slicc_provider', 'slicc_api_key', 'slicc_base_url',
       'anthropic_api_key', 'api_provider', 'azure_resource', 'bedrock_region',

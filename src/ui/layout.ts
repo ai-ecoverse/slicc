@@ -35,7 +35,6 @@ import {
   setSelectedModelId,
   showProviderSettings,
   getAllAvailableModels,
-  getAccounts,
   getProviderConfig,
 } from './provider-settings.js';
 import type { ChatMessage } from './types.js';
@@ -184,7 +183,7 @@ export class Layout {
         }
       }
 
-      if (!modelSelect.querySelector('option[selected]') && modelSelect.options.length > 0) {
+      if (modelSelect.selectedIndex === -1 && modelSelect.options.length > 0) {
         modelSelect.selectedIndex = 0;
         if (modelSelect.value) setSelectedModelId(modelSelect.value);
       }

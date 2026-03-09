@@ -265,6 +265,14 @@ export class ScoopContext {
     return this.shell;
   }
 
+  /** Update the model on the running agent (e.g., when the user changes the model dropdown). */
+  updateModel(): void {
+    if (!this.agent) return;
+    const model = resolveCurrentModel();
+    this.agent.setModel(model);
+    log.info('Model updated on running agent', { folder: this.scoop.folder, model: model.id });
+  }
+
   /** Cleanup */
   dispose(): void {
     this.unsubscribe?.();

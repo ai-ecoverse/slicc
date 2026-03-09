@@ -52,10 +52,12 @@ function cleanLegacyKeys(): void {
   }
 }
 
-/** Reset legacy cleanup flag (for testing only) */
-export function _resetLegacyCleanup(): void {
+function _resetLegacyCleanup(): void {
   _legacyCleaned = false;
 }
+
+/** Test-only exports */
+export const __test__ = { _resetLegacyCleanup };
 
 // Provider metadata with display names and required fields
 interface ProviderConfig {
@@ -255,18 +257,20 @@ export interface GroupedModels {
 export function getAllAvailableModels(): GroupedModels[] {
   const accounts = getAccounts();
   if (accounts.length === 0) return [];
-  const groups: GroupedModels[] = [];
+  const seen = new Map<string, GroupedModels>();
   for (const account of accounts) {
+    if (seen.has(account.providerId)) continue;
     const models = getProviderModels(account.providerId);
     if (models.length === 0) continue;
     const config = getProviderConfig(account.providerId);
-    groups.push({
+    const group: GroupedModels = {
       providerId: account.providerId,
       providerName: config.name,
       models,
-    });
+    };
+    seen.set(account.providerId, group);
   }
-  return groups;
+  return [...seen.values()];
 }
 
 // --- Account storage ---
@@ -277,7 +281,14 @@ export function getAccounts(): Account[] {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (entry): entry is Account =>
+        entry != null &&
+        typeof entry === 'object' &&
+        typeof entry.providerId === 'string' &&
+        typeof entry.apiKey === 'string',
+    );
   } catch {
     return [];
   }
@@ -337,8 +348,8 @@ function getRawSelectedModel(): string {
 export function getSelectedProvider(): string {
   const raw = getRawSelectedModel();
   const idx = raw.indexOf(':');
-  if (idx >= 0) return raw.slice(0, idx);
-  // No provider encoded — check if any accounts exist and return the first
+  if (idx > 0) return raw.slice(0, idx);
+  // No provider encoded (or empty prefix like ":gpt-5") — fall back
   const accounts = getAccounts();
   if (accounts.length > 0) return accounts[0].providerId;
   return 'anthropic';
@@ -701,21 +712,18 @@ export function showProviderSettings(): Promise<void> {
 
       dialog.appendChild(saveBtn);
 
-      // Back / Cancel button
+      // Back button (only shown when accounts already exist)
       const hasAccounts = getAccounts().length > 0;
-      const cancelBtn = document.createElement('button');
-      cancelBtn.className = 'dialog__btn';
-      cancelBtn.style.cssText = 'margin-top: 8px; background: transparent; border: 1px solid #444;';
-      cancelBtn.textContent = hasAccounts ? 'Back' : 'Cancel';
-      cancelBtn.addEventListener('click', () => {
-        if (hasAccounts) {
+      if (hasAccounts) {
+        const backBtn = document.createElement('button');
+        backBtn.className = 'dialog__btn';
+        backBtn.style.cssText = 'margin-top: 8px; background: transparent; border: 1px solid #444;';
+        backBtn.textContent = 'Back';
+        backBtn.addEventListener('click', () => {
           renderAccountsList();
-        } else {
-          overlay.remove();
-          resolve();
-        }
-      });
-      dialog.appendChild(cancelBtn);
+        });
+        dialog.appendChild(backBtn);
+      }
 
       requestAnimationFrame(() => {
         const pid = providerSelect.value;
