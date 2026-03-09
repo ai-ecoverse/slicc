@@ -58,7 +58,7 @@ function formatHelp(commands: string[], jshCommands: string[] = []): string {
 
 export interface CommandsCommandOptions {
   /** Function that returns discovered .jsh command names. */
-  getJshCommands?: () => string[];
+  getJshCommands?: () => Promise<string[]>;
 }
 
 export function createCommandsCommand(options: CommandsCommandOptions = {}): Command {
@@ -90,7 +90,7 @@ Note: This is an enhanced version of 'help' that shows all custom commands.
 
     // Get all registered commands
     const commands = ctx.getRegisteredCommands?.() ?? [];
-    const jshCommands = options.getJshCommands?.() ?? [];
+    const jshCommands = await options.getJshCommands?.() ?? [];
     return {
       stdout: formatHelp(commands, jshCommands),
       stderr: '',

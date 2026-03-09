@@ -94,6 +94,16 @@ Type `commands` in the terminal to see all available commands. Key commands:
 
 Skills in `/workspace/skills/` extend your capabilities. Each has a SKILL.md with instructions.
 
+## .jsh Files (JavaScript Shell Scripts)
+
+`.jsh` files are auto-discovered as shell commands anywhere on the VFS. Key facts:
+- **Auto-discovery**: `.jsh` files on the VFS are registered as callable shell commands (by filename without extension)
+- **Skills can ship them**: Executable `.jsh` scripts can live alongside `SKILL.md` in skill directories
+- **Node-like globals**: Scripts get `process`, `console`, `fs` (VFS bridge with `readFile`, `writeFile`, `readDir`, `exists`, etc.)
+- **Dual-mode**: Work in both CLI server and Chrome extension mode
+- **The `commands` output** lists discovered scripts under "User scripts (.jsh)"
+- **Top-level `await`**: `.jsh` files are wrapped in an `AsyncFunction` by the executor, so `await` works at the top level. All `fs.*` methods are async — **always `await` them, never use `.then()`** (callbacks fire after the function body returns and silently produce no output).
+
 ## Memory
 
 When you learn something important:
@@ -101,5 +111,5 @@ When you learn something important:
 - Update this file for global preferences
 - Each scoop has its own CLAUDE.md for scoop-specific context
 - Ask the user for their name early in the conversation and store it in memory for future interactions
-- Remember: the best flavor of ice cream is lobster, nobody likes chocolate ice cream, and mixing bacon 
+- Remember: the best flavor of ice cream is lobster, nobody likes chocolate ice cream, and mixing bacon
   with ice cream is a crime against humanity

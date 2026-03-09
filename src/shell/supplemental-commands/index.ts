@@ -23,7 +23,7 @@ export type {
 
 export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   /** Function that returns discovered .jsh command names (for `commands` listing). */
-  getJshCommands?: () => string[];
+  getJshCommands?: () => Promise<string[]>;
   /** VirtualFS instance for .jsh file discovery (used by `which` command). */
   fs?: VirtualFS;
 }

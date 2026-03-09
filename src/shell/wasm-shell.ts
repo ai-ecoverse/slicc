@@ -162,8 +162,6 @@ export class WasmShell {
   /** Accumulated env state from successive exec() calls. */
   private lastEnv: Record<string, string>;
   private cwd: string;
-  /** Discovered .jsh command map (command name → VFS path). Lazily populated. */
-  private jshCommands: Map<string, string> | null = null;
   /** Set of all built-in + custom command names (for shadowing protection). */
   private builtinCommandNames: Set<string>;
 
@@ -273,28 +271,22 @@ export class WasmShell {
     return { ...this.lastEnv };
   }
 
-  /** Discover .jsh commands from VFS (lazy, cached). */
-  private async ensureJshDiscovery(): Promise<Map<string, string>> {
-    if (this.jshCommands) return this.jshCommands;
+  /** Discover .jsh commands from VFS, filtering out built-in command names. */
+  private async getFilteredJshCommands(): Promise<Map<string, string>> {
     const all = await discoverJshCommands(this.options.fs);
-    // Filter out names that shadow built-in commands
-    this.jshCommands = new Map<string, string>();
+    const filtered = new Map<string, string>();
     for (const [name, path] of all) {
       if (!this.builtinCommandNames.has(name)) {
-        this.jshCommands.set(name, path);
+        filtered.set(name, path);
       }
     }
-    return this.jshCommands;
-  }
-
-  /** Invalidate cached .jsh discovery (e.g., after adding new scripts). */
-  refreshJshCommands(): void {
-    this.jshCommands = null;
+    return filtered;
   }
 
   /** Get currently discovered .jsh command names. */
-  getJshCommandNames(): string[] {
-    return this.jshCommands ? [...this.jshCommands.keys()] : [];
+  async getJshCommandNames(): Promise<string[]> {
+    const jshMap = await this.getFilteredJshCommands();
+    return [...jshMap.keys()];
   }
 
   /**
@@ -308,7 +300,7 @@ export class WasmShell {
     const cmdName = firstSpace >= 0 ? trimmed.slice(0, firstSpace) : trimmed;
     const argsStr = firstSpace >= 0 ? trimmed.slice(firstSpace + 1).trim() : '';
 
-    const jshMap = await this.ensureJshDiscovery();
+    const jshMap = await this.getFilteredJshCommands();
     const scriptPath = jshMap.get(cmdName);
     if (!scriptPath) return null;
 
