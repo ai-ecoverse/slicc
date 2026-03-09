@@ -58,6 +58,8 @@ export interface ToolCall {
   input: unknown;
   result?: string;
   isError?: boolean;
+  /** Transient screenshot data URL — not persisted to session store. */
+  _screenshotDataUrl?: string;
 }
 
 // ---------------------------------------------------------------------------

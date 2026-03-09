@@ -72,6 +72,9 @@ export class ChatPanel {
   private readOnly = false;
   private terminalOutputCallback: ((text: string) => void) | null = null;
   private currentScoopName: string | null = null; // null = cone, string = scoop name
+  private autoScrollAttached = true;
+  private lastScrollTop = 0;
+  private jumpPill!: HTMLElement;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -237,6 +240,20 @@ export class ChatPanel {
     this.messagesEl.className = 'chat__messages';
     this.container.appendChild(this.messagesEl);
 
+    this.messagesEl.addEventListener('scroll', () => {
+      const { scrollTop, scrollHeight, clientHeight } = this.messagesEl;
+      const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+
+      if (distanceFromBottom <= 250) {
+        this.autoScrollAttached = true;
+        this.hideJumpPill();
+      } else if (scrollTop < this.lastScrollTop) {
+        this.autoScrollAttached = false;
+      }
+
+      this.lastScrollTop = scrollTop;
+    }, { passive: true });
+
     // Input area
     this.inputArea = document.createElement('div');
     const inputArea = this.inputArea;
@@ -290,6 +307,17 @@ export class ChatPanel {
     inputArea.appendChild(this.sendBtn);
     inputArea.appendChild(this.stopBtn);
     this.container.appendChild(inputArea);
+
+    // "New activity" pill — shown when auto-scroll is detached
+    this.jumpPill = document.createElement('button');
+    this.jumpPill.className = 'chat__jump-pill';
+    this.jumpPill.textContent = '\u2193 New activity';
+    this.jumpPill.addEventListener('click', () => {
+      this.autoScrollAttached = true;
+      this.hideJumpPill();
+      this.scrollToBottom(true);
+    });
+    this.container.appendChild(this.jumpPill);
 
     // Event listeners
     this.textarea.addEventListener('keydown', (e) => {
@@ -381,7 +409,10 @@ export class ChatPanel {
     const text = this.textarea.value.trim();
     if (!text || this.isStreaming) return;
 
-    // Add user message
+    // User action — always re-attach auto-scroll
+    this.autoScrollAttached = true;
+    this.hideJumpPill();
+
     const msg: ChatMessage = {
       id: uid(),
       role: 'user',
@@ -488,7 +519,7 @@ export class ChatPanel {
       const imgMatch = result.match(/<img:(data:image\/[^>]+)>/);
       tc.result = result.replace(/<img:data:image\/[^>]+>/g, '').trim();
       if (imgMatch) {
-        (tc as any)._screenshotDataUrl = imgMatch[1]; // transient, not persisted
+        tc._screenshotDataUrl = imgMatch[1];
       }
       tc.isError = isError;
     }
@@ -560,8 +591,12 @@ export class ChatPanel {
   private renderMessages(): void {
     this.messagesEl.innerHTML = '';
     for (const msg of this.messages) {
-      this.appendMessageEl(msg);
+      const el = this.createMessageEl(msg);
+      this.messagesEl.appendChild(el);
     }
+    this.autoScrollAttached = true;
+    this.hideJumpPill();
+    this.scrollToBottom(true);
   }
 
   private appendMessageEl(msg: ChatMessage): void {
@@ -789,7 +824,7 @@ export class ChatPanel {
     }
 
     // Render screenshot thumbnail from transient data (not persisted in messages)
-    const screenshotUrl = (tc as any)._screenshotDataUrl as string | undefined;
+    const screenshotUrl = tc._screenshotDataUrl;
     if (screenshotUrl) {
       const imgEl = document.createElement('img');
       imgEl.src = screenshotUrl;
@@ -815,10 +850,23 @@ export class ChatPanel {
     return el;
   }
 
-  private scrollToBottom(): void {
+  private scrollToBottom(force = false): void {
+    if (!force && !this.autoScrollAttached) {
+      this.showJumpPill();
+      return;
+    }
     requestAnimationFrame(() => {
       this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+      this.lastScrollTop = this.messagesEl.scrollTop;
     });
+  }
+
+  private showJumpPill(): void {
+    this.jumpPill.classList.add('chat__jump-pill--visible');
+  }
+
+  private hideJumpPill(): void {
+    this.jumpPill.classList.remove('chat__jump-pill--visible');
   }
 
   private persistSession(): void {
