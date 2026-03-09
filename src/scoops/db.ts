@@ -197,6 +197,15 @@ export async function saveMessage(msg: ChannelMessage): Promise<void> {
   });
 }
 
+export async function deleteMessage(id: string): Promise<void> {
+  const store = await getStore(STORES.MESSAGES, 'readwrite');
+  return new Promise((resolve, reject) => {
+    const req = store.delete(id);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+}
+
 export async function getMessagesForScoop(chatJid: string): Promise<ChannelMessage[]> {
   const store = await getStore(STORES.MESSAGES);
   const index = store.index('chatJid_timestamp');

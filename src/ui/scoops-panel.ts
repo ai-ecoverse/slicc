@@ -190,7 +190,13 @@ export class ScoopsPanel {
       return;
     }
 
-    await this.orchestrator.unregisterScoop(jid);
+    try {
+      await this.orchestrator.unregisterScoop(jid);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      alert(msg);
+      return;
+    }
 
     if (this.selectedScoopJid === jid) {
       this.selectedScoopJid = null;

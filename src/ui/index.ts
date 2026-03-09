@@ -16,7 +16,14 @@ export {
   setSelectedProvider as setProvider,
   clearSelectedProvider as clearProvider,
   showProviderSettings as showApiKeyDialog,
+  getAccounts,
+  addAccount,
+  removeAccount,
+  getApiKeyForProvider,
+  getBaseUrlForProvider,
+  getAllAvailableModels,
 } from './provider-settings.js';
+export type { Account, GroupedModels } from './provider-settings.js';
 export type {
   AgentHandle,
   AgentEvent,

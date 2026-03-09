@@ -34,6 +34,8 @@ import {
   getSelectedModelId,
   setSelectedModelId,
   showProviderSettings,
+  getAllAvailableModels,
+  getProviderConfig,
 } from './provider-settings.js';
 import type { ChatMessage } from './types.js';
 import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
@@ -139,31 +141,54 @@ export class Layout {
       : 'background: var(--s2-bg-sunken); color: var(--s2-content-default); border: 1px solid var(--s2-border-subtle); border-radius: var(--s2-radius-default); ' +
         'padding: 4px 8px; font-size: 12px; cursor: pointer; outline: none; margin-left: 8px; font-family: var(--s2-font-family);';
 
+    const sortModels = (models: { id: string; name: string; reasoning?: boolean }[]) => {
+      return [...models].sort((a, b) => {
+        if (a.reasoning !== b.reasoning) return a.reasoning ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+    };
+
     const populateModels = () => {
-      const providerId = getSelectedProvider();
-      const models = getProviderModels(providerId);
+      const groups = getAllAvailableModels();
       const currentModelId = getSelectedModelId();
-      providerIndicator.textContent = providerId;
+      const currentProvider = getSelectedProvider();
+      providerIndicator.textContent = getProviderConfig(currentProvider).name;
       while (modelSelect.firstChild) modelSelect.removeChild(modelSelect.firstChild);
-      if (models.length === 0) {
+
+      if (groups.length === 0) {
         const opt = document.createElement('option');
         opt.value = '';
         opt.textContent = 'No models';
         modelSelect.appendChild(opt);
         return;
       }
-      const sorted = [...models].sort((a, b) => {
-        if (a.reasoning !== b.reasoning) return a.reasoning ? -1 : 1;
-        return a.name.localeCompare(b.name);
-      });
-      for (const model of sorted) {
-        const opt = document.createElement('option');
-        opt.value = model.id;
-        opt.textContent = model.name;
-        if (model.id === currentModelId) opt.selected = true;
-        modelSelect.appendChild(opt);
+
+      const useGroups = groups.length > 1;
+      for (const group of groups) {
+        const sorted = sortModels(group.models);
+        if (useGroups) {
+          const optgroup = document.createElement('optgroup');
+          optgroup.label = group.providerName;
+          for (const model of sorted) {
+            const opt = document.createElement('option');
+            opt.value = `${group.providerId}:${model.id}`;
+            opt.textContent = model.name;
+            if (model.id === currentModelId && group.providerId === currentProvider) opt.selected = true;
+            optgroup.appendChild(opt);
+          }
+          modelSelect.appendChild(optgroup);
+        } else {
+          for (const model of sorted) {
+            const opt = document.createElement('option');
+            opt.value = `${group.providerId}:${model.id}`;
+            opt.textContent = model.name;
+            if (model.id === currentModelId) opt.selected = true;
+            modelSelect.appendChild(opt);
+          }
+        }
       }
-      if (!currentModelId || !models.find(m => m.id === currentModelId)) {
+
+      if (modelSelect.selectedIndex === -1 && modelSelect.options.length > 0) {
         modelSelect.selectedIndex = 0;
         if (modelSelect.value) setSelectedModelId(modelSelect.value);
       }
@@ -171,6 +196,9 @@ export class Layout {
     populateModels();
     modelSelect.addEventListener('change', () => {
       setSelectedModelId(modelSelect.value);
+      // Update provider indicator
+      const newProvider = getSelectedProvider();
+      providerIndicator.textContent = getProviderConfig(newProvider).name;
       this.onModelChange?.(modelSelect.value);
     });
 
@@ -222,44 +250,58 @@ export class Layout {
           'overflow-y: auto; background: var(--s2-bg-layer-2); border: 1px solid var(--s2-border-default); ' +
           'border-radius: var(--s2-radius-l); padding: 4px 0; box-shadow: var(--s2-shadow-elevated); z-index: 1000;';
 
-        const providerId = getSelectedProvider();
-        const models = getProviderModels(providerId);
+        const groups = getAllAvailableModels();
         const currentModelId = getSelectedModelId();
+        const currentProvider = getSelectedProvider();
+        const useGroupHeaders = groups.length > 1;
 
-        const sorted = [...models].sort((a, b) => {
-          if (a.reasoning !== b.reasoning) return a.reasoning ? -1 : 1;
-          return a.name.localeCompare(b.name);
-        });
-
-        for (const model of sorted) {
-          const item = document.createElement('div');
-          item.style.cssText =
-            'padding: 6px 12px; cursor: pointer; font-size: 12px; color: var(--s2-content-default); ' +
-            'display: flex; align-items: center; gap: 6px; border-radius: var(--s2-radius-s); ' +
-            'margin: 0 4px; transition: background 130ms ease;';
-          if (model.id === currentModelId) {
-            item.style.color = 'var(--slicc-cone)';
-            item.style.fontWeight = '700';
+        for (const group of groups) {
+          if (useGroupHeaders) {
+            const groupHeader = document.createElement('div');
+            groupHeader.style.cssText =
+              'padding: 4px 12px; font-size: 10px; color: var(--s2-content-secondary); text-transform: uppercase; ' +
+              'letter-spacing: 0.5px; font-weight: 600;';
+            if (menu.children.length > 0) {
+              groupHeader.style.borderTop = '1px solid var(--s2-border-default)';
+              groupHeader.style.marginTop = '4px';
+              groupHeader.style.paddingTop = '8px';
+            }
+            groupHeader.textContent = group.providerName;
+            menu.appendChild(groupHeader);
           }
-          item.addEventListener('mouseenter', () => { item.style.background = 'var(--s2-bg-elevated)'; });
-          item.addEventListener('mouseleave', () => { item.style.background = ''; });
 
-          const check = document.createElement('span');
-          check.style.cssText = 'width: 14px; text-align: center; font-size: 10px;';
-          check.textContent = model.id === currentModelId ? '\u2713' : '';
-          item.appendChild(check);
+          const sorted = sortModels(group.models);
+          for (const model of sorted) {
+            const isSelected = model.id === currentModelId && group.providerId === currentProvider;
+            const item = document.createElement('div');
+            item.style.cssText =
+              'padding: 6px 12px; cursor: pointer; font-size: 12px; color: var(--s2-content-default); ' +
+              'display: flex; align-items: center; gap: 6px; border-radius: var(--s2-radius-s); ' +
+              'margin: 0 4px; transition: background 130ms ease;';
+            if (isSelected) {
+              item.style.color = 'var(--slicc-cone)';
+              item.style.fontWeight = '700';
+            }
+            item.addEventListener('mouseenter', () => { item.style.background = 'var(--s2-bg-elevated)'; });
+            item.addEventListener('mouseleave', () => { item.style.background = ''; });
 
-          const label = document.createElement('span');
-          label.textContent = model.name;
-          item.appendChild(label);
+            const check = document.createElement('span');
+            check.style.cssText = 'width: 14px; text-align: center; font-size: 10px;';
+            check.textContent = isSelected ? '\u2713' : '';
+            item.appendChild(check);
 
-          item.addEventListener('click', () => {
-            setSelectedModelId(model.id);
-            this.onModelChange?.(model.id);
-            modelMenuOpen = false;
-            renderModelMenu();
-          });
-          menu.appendChild(item);
+            const label = document.createElement('span');
+            label.textContent = model.name;
+            item.appendChild(label);
+
+            item.addEventListener('click', () => {
+              setSelectedModelId(`${group.providerId}:${model.id}`);
+              this.onModelChange?.(`${group.providerId}:${model.id}`);
+              modelMenuOpen = false;
+              renderModelMenu();
+            });
+            menu.appendChild(item);
+          }
         }
 
         modelDD.appendChild(menu);

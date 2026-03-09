@@ -61,6 +61,10 @@ export class ChatPanel {
   private readOnly = false;
   private terminalOutputCallback: ((text: string) => void) | null = null;
   private currentScoopName: string | null = null; // null = cone, string = scoop name
+  private autoScrollAttached = true;
+  private lastScrollTop = 0;
+  private jumpPill!: HTMLElement;
+  private onDeleteQueuedMessage: ((messageId: string) => void) | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -80,6 +84,11 @@ export class ChatPanel {
   /** Set a callback for terminal output events. */
   onTerminalOutput(cb: (text: string) => void): void {
     this.terminalOutputCallback = cb;
+  }
+
+  /** Set a callback for deleting queued messages (removes from orchestrator DB + queue). */
+  setDeleteQueuedMessageCallback(cb: (messageId: string) => void): void {
+    this.onDeleteQueuedMessage = cb;
   }
 
   /** Initialize session persistence and restore messages. */
@@ -217,6 +226,17 @@ export class ChatPanel {
     this.appendMessageEl(msg);
   }
 
+  /** Remove a queued message from the UI and notify the orchestrator to remove it from DB/queue. */
+  private deleteQueuedMessage(messageId: string): void {
+    const idx = this.messages.findIndex(m => m.id === messageId);
+    if (idx === -1) return;
+    this.messages.splice(idx, 1);
+    const el = this.messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
+    if (el) el.remove();
+    this.persistSession();
+    this.onDeleteQueuedMessage?.(messageId);
+  }
+
   private render(): void {
     this.container.innerHTML = '';
     this.container.classList.add('chat');
@@ -225,6 +245,20 @@ export class ChatPanel {
     this.messagesEl = document.createElement('div');
     this.messagesEl.className = 'chat__messages';
     this.container.appendChild(this.messagesEl);
+
+    this.messagesEl.addEventListener('scroll', () => {
+      const { scrollTop, scrollHeight, clientHeight } = this.messagesEl;
+      const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+
+      if (distanceFromBottom <= 250) {
+        this.autoScrollAttached = true;
+        this.hideJumpPill();
+      } else if (scrollTop < this.lastScrollTop) {
+        this.autoScrollAttached = false;
+      }
+
+      this.lastScrollTop = scrollTop;
+    }, { passive: true });
 
     // Input area
     this.inputArea = document.createElement('div');
@@ -289,6 +323,17 @@ export class ChatPanel {
     inputArea.appendChild(inputWrapper);
     this.container.appendChild(inputArea);
 
+    // "New activity" pill — shown when auto-scroll is detached
+    this.jumpPill = document.createElement('button');
+    this.jumpPill.className = 'chat__jump-pill';
+    this.jumpPill.textContent = '\u2193 New activity';
+    this.jumpPill.addEventListener('click', () => {
+      this.autoScrollAttached = true;
+      this.hideJumpPill();
+      this.scrollToBottom(true);
+    });
+    this.container.appendChild(this.jumpPill);
+
     // Event listeners
     this.textarea.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -306,6 +351,13 @@ export class ChatPanel {
     this.sendBtn.addEventListener('click', () => this.sendMessage());
     this.stopBtn.addEventListener('click', () => {
       this.agent?.stop();
+      // Clear all remaining queued badges since these messages won't be processed
+      for (const msg of this.messages) {
+        if (msg.queued) {
+          msg.queued = false;
+          this.updateMessageEl(msg.id);
+        }
+      }
       this.setStreamingState(false);
     });
 
@@ -377,14 +429,19 @@ export class ChatPanel {
 
   private sendMessage(): void {
     const text = this.textarea.value.trim();
-    if (!text || this.isStreaming) return;
+    if (!text) return;
 
-    // Add user message
+    // User action — always re-attach auto-scroll
+    this.autoScrollAttached = true;
+    this.hideJumpPill();
+
+    const isQueued = this.isStreaming;
     const msg: ChatMessage = {
       id: uid(),
       role: 'user',
       content: text,
       timestamp: Date.now(),
+      queued: isQueued || undefined,
     };
     this.messages.push(msg);
     this.appendMessageEl(msg);
@@ -394,11 +451,13 @@ export class ChatPanel {
     this.textarea.value = '';
     this.textarea.style.height = 'auto';
 
-    // Disable input immediately — don't wait for message_start event
-    this.setStreamingState(true);
+    // Only lock input if not already streaming (first message triggers streaming)
+    if (!this.isStreaming) {
+      this.setStreamingState(true);
+    }
 
-    // Send to agent
-    this.agent?.sendMessage(text);
+    // Send to agent (orchestrator persists & queues if the cone is busy)
+    this.agent?.sendMessage(text, msg.id);
   }
 
   private handleAgentEvent(event: AgentEvent): void {
@@ -486,7 +545,7 @@ export class ChatPanel {
       const imgMatch = result.match(/<img:(data:image\/[^>]+)>/);
       tc.result = result.replace(/<img:data:image\/[^>]+>/g, '').trim();
       if (imgMatch) {
-        (tc as any)._screenshotDataUrl = imgMatch[1]; // transient, not persisted
+        tc._screenshotDataUrl = imgMatch[1];
       }
       tc.isError = isError;
     }
@@ -525,9 +584,11 @@ export class ChatPanel {
 
   private setStreamingState(streaming: boolean): void {
     this.isStreaming = streaming;
-    this.sendBtn.style.display = streaming ? 'none' : 'flex';
+    // Show stop button during streaming, send button otherwise — but keep textarea enabled
     this.stopBtn.style.display = streaming ? 'flex' : 'none';
-    this.textarea.disabled = streaming;
+    this.sendBtn.style.display = streaming ? 'none' : 'flex';
+    // Textarea stays enabled so the user can queue follow-up messages
+    this.textarea.disabled = false;
     // Mic button stays enabled during streaming so user can toggle voice mode off
     if (streaming) {
       if (this.voiceInput?.isListening()) {
@@ -535,6 +596,13 @@ export class ChatPanel {
       }
       // In voice mode, explicitly remove listening visual during streaming
       this.micBtn.classList.remove('chat__mic-btn--listening');
+      // When a new turn starts, clear the queued badge on only the oldest queued message
+      // (it's the one being processed now). Leave the rest queued.
+      const oldestQueued = this.messages.find(m => m.queued);
+      if (oldestQueued) {
+        oldestQueued.queued = false;
+        this.updateMessageEl(oldestQueued.id);
+      }
     }
     if (!streaming) {
       if (this.voiceMode) {
@@ -566,6 +634,9 @@ export class ChatPanel {
       prevRole = msg.role;
       prevTimestamp = msg.timestamp;
     }
+    this.autoScrollAttached = true;
+    this.hideJumpPill();
+    this.scrollToBottom(true);
   }
 
   private appendMessageEl(msg: ChatMessage): void {
@@ -621,7 +692,7 @@ export class ChatPanel {
     wrapper.setAttribute('data-msg-id', msg.id);
 
     const el = document.createElement('div');
-    el.className = `msg msg--${msg.role}`;
+    el.className = `msg msg--${msg.role}${msg.queued ? ' msg--queued' : ''}`;
 
     if (showLabel) {
       // Determine icon letter and label based on role, source, and current context
@@ -656,6 +727,23 @@ export class ChatPanel {
       iconSpan.textContent = iconLetter;
       roleEl.appendChild(iconSpan);
       roleEl.appendChild(document.createTextNode(` ${label}`));
+      // Queued badge + delete button
+      if (msg.queued) {
+        const badge = document.createElement('span');
+        badge.className = 'msg__queued-badge';
+        badge.textContent = 'queued';
+        roleEl.appendChild(badge);
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'msg__queued-delete';
+        deleteBtn.textContent = '\u00d7'; // ×
+        deleteBtn.title = 'Remove queued message';
+        deleteBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.deleteQueuedMessage(msg.id);
+        });
+        roleEl.appendChild(deleteBtn);
+      }
       el.appendChild(roleEl);
     }
 
@@ -808,7 +896,7 @@ export class ChatPanel {
     }
 
     // Render screenshot thumbnail from transient data (not persisted in messages)
-    const screenshotUrl = (tc as any)._screenshotDataUrl as string | undefined;
+    const screenshotUrl = tc._screenshotDataUrl;
     if (screenshotUrl) {
       const imgEl = document.createElement('img');
       imgEl.src = screenshotUrl;
@@ -834,10 +922,23 @@ export class ChatPanel {
     return el;
   }
 
-  private scrollToBottom(): void {
+  private scrollToBottom(force = false): void {
+    if (!force && !this.autoScrollAttached) {
+      this.showJumpPill();
+      return;
+    }
     requestAnimationFrame(() => {
       this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+      this.lastScrollTop = this.messagesEl.scrollTop;
     });
+  }
+
+  private showJumpPill(): void {
+    this.jumpPill.classList.add('chat__jump-pill--visible');
+  }
+
+  private hideJumpPill(): void {
+    this.jumpPill.classList.remove('chat__jump-pill--visible');
   }
 
   private persistSession(): void {
