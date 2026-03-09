@@ -770,14 +770,16 @@
       .terminal-panel__view {
         flex: 1; min-height: 0; overflow: hidden;
         display: flex; flex-direction: column;
+        background: var(--s2-bg-sunken);
       }
       .terminal-panel__mount { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
       .terminal-panel__terminal-host {
         flex: 1; min-height: 0; overflow: hidden;
+        padding: 8px;
       }
       /* xterm.js overrides */
-      .terminal-panel__terminal-host .xterm { padding: 6px 8px; }
-      .terminal-panel__terminal-host .xterm-viewport { background-color: var(--s2-bg-layer-1) !important; }
+      .terminal-panel__terminal-host .xterm { padding: 0; }
+      .terminal-panel__terminal-host .xterm-viewport { background-color: var(--s2-bg-sunken) !important; }
       .terminal-panel__terminal-host .xterm-viewport::-webkit-scrollbar { width: 6px; }
       .terminal-panel__terminal-host .xterm-viewport::-webkit-scrollbar-thumb {
         background: var(--s2-gray-300); border-radius: 3px;
