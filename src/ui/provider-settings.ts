@@ -345,7 +345,7 @@ export function showProviderSettings(): Promise<void> {
 
     const dialog = document.createElement('div');
     dialog.className = 'dialog';
-    dialog.style.cssText = 'max-width: 480px; width: 90vw;';
+    dialog.style.cssText = 'max-width: 480px; width: 90vw; padding: 32px;';
 
     const title = document.createElement('div');
     title.className = 'dialog__title';
@@ -384,7 +384,7 @@ export function showProviderSettings(): Promise<void> {
     // Provider description
     const providerDesc = document.createElement('div');
     providerDesc.className = 'dialog__desc';
-    providerDesc.style.cssText = 'font-size: 12px; color: #888; margin-bottom: 16px; margin-top: -12px;';
+    providerDesc.style.cssText = 'font-size: 12px; color: var(--s2-content-tertiary); margin-bottom: 16px; margin-top: -12px;';
     dialog.appendChild(providerDesc);
 
     // API Key section
@@ -420,7 +420,7 @@ export function showProviderSettings(): Promise<void> {
 
     const baseUrlDesc = document.createElement('div');
     baseUrlDesc.className = 'dialog__desc';
-    baseUrlDesc.style.cssText = 'font-size: 11px; color: #666; margin-top: 4px;';
+    baseUrlDesc.style.cssText = 'font-size: 11px; color: var(--s2-content-tertiary); margin-top: 4px;';
     baseUrlSection.appendChild(baseUrlDesc);
 
     dialog.appendChild(baseUrlSection);
@@ -440,7 +440,7 @@ export function showProviderSettings(): Promise<void> {
 
     const modelCount = document.createElement('div');
     modelCount.className = 'dialog__desc';
-    modelCount.style.cssText = 'font-size: 11px; color: #666; margin-top: 4px;';
+    modelCount.style.cssText = 'font-size: 11px; color: var(--s2-content-tertiary); margin-top: 4px;';
     modelSection.appendChild(modelCount);
 
     dialog.appendChild(modelSection);
@@ -576,7 +576,8 @@ export function showProviderSettings(): Promise<void> {
     if (getApiKey()) {
       const cancelBtn = document.createElement('button');
       cancelBtn.className = 'dialog__btn';
-      cancelBtn.style.cssText = 'margin-top: 8px; background: transparent; border: 1px solid #444;';
+      cancelBtn.className = 'dialog__btn dialog__btn--secondary';
+      cancelBtn.style.cssText = 'margin-top: 8px;';
       cancelBtn.textContent = 'Cancel';
       cancelBtn.addEventListener('click', () => {
         overlay.remove();

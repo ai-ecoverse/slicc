@@ -80,6 +80,10 @@ export class Layout {
   private clearTermBtn!: HTMLButtonElement;
   private clearFsBtn!: HTMLButtonElement;
 
+  // Dynamic logo
+  private logoSvg: SVGSVGElement | null = null;
+  private logoScoopCount = -1; // -1 = initial load, skip animation
+
   public panels!: LayoutPanels;
   public onModelChange?: (model: string) => void;
   public onScoopSelect?: (scoop: RegisteredScoop) => void;
@@ -118,9 +122,10 @@ export class Layout {
     // ── Provider indicator (shared, created once) ─────────────────
     const providerIndicator = document.createElement('span');
     providerIndicator.style.cssText =
-      'font-size: 11px; color: #888; cursor: pointer; padding: 2px 6px; ' +
-      'background: #1a1a2e; border-radius: 4px; border: 1px solid #333;';
-    providerIndicator.title = 'Click to change provider';
+      'font-size: 11px; color: var(--s2-content-tertiary); cursor: pointer; padding: 2px 8px; ' +
+      'background: transparent; border-radius: var(--s2-radius-pill); border: none; ' +
+      'transition: color 130ms ease, background 130ms ease;';
+    providerIndicator.dataset.tooltip = 'Change provider';
     providerIndicator.addEventListener('click', async () => {
       await showProviderSettings();
       location.reload();
@@ -129,10 +134,10 @@ export class Layout {
     // ── Model picker (shared, created once) ───────────────────────
     const modelSelect = document.createElement('select');
     modelSelect.style.cssText = this.isExtension
-      ? 'background: #2a2a3a; color: #e0e0f0; border: 1px solid #444; border-radius: 4px; ' +
-        'padding: 2px 4px; font-size: 11px; cursor: pointer; outline: none; max-width: 140px;'
-      : 'background: #2a2a3a; color: #e0e0f0; border: 1px solid #444; border-radius: 4px; ' +
-        'padding: 4px 8px; font-size: 13px; cursor: pointer; outline: none; margin-left: 8px;';
+      ? 'background: var(--s2-bg-sunken); color: var(--s2-content-default); border: 1px solid var(--s2-border-subtle); border-radius: var(--s2-radius-default); ' +
+        'padding: 3px 6px; font-size: 11px; cursor: pointer; outline: none; max-width: 140px; font-family: var(--s2-font-family);'
+      : 'background: var(--s2-bg-sunken); color: var(--s2-content-default); border: 1px solid var(--s2-border-subtle); border-radius: var(--s2-radius-default); ' +
+        'padding: 4px 8px; font-size: 12px; cursor: pointer; outline: none; margin-left: 8px; font-family: var(--s2-font-family);';
 
     const populateModels = () => {
       const providerId = getSelectedProvider();
@@ -175,6 +180,9 @@ export class Layout {
       const row = document.createElement('div');
       row.style.cssText = 'display: flex; align-items: center; width: 100%; gap: 6px;';
 
+      const logo = this.sliccLogo(22);
+      row.appendChild(logo);
+
       const title = document.createElement('div');
       title.className = 'header__title';
       title.textContent = 'slicc';
@@ -194,9 +202,11 @@ export class Layout {
       modelDD.style.cssText = 'position: relative;';
       const modelBtn = document.createElement('button');
       modelBtn.style.cssText =
-        'display: flex; align-items: center; gap: 4px; padding: 4px 8px; ' +
-        'border: 1px solid #444; border-radius: 6px; background: #2a2a3a; color: #e0e0f0; ' +
-        'font-size: 12px; cursor: pointer; white-space: nowrap;';
+        'display: flex; align-items: center; gap: 4px; padding: 3px 8px; ' +
+        'border: 1px solid var(--s2-border-subtle); border-radius: var(--s2-radius-default); ' +
+        'background: var(--s2-bg-sunken); color: var(--s2-content-secondary); ' +
+        'font-size: 11px; cursor: pointer; white-space: nowrap; font-family: var(--s2-font-family); ' +
+        'transition: color 130ms ease, background 130ms ease;';
       modelBtn.textContent = 'Model \u25BE';
       let modelMenuOpen = false;
 
@@ -209,8 +219,8 @@ export class Layout {
         menu.className = 'model-dd-menu';
         menu.style.cssText =
           'position: absolute; top: 100%; left: 0; margin-top: 4px; min-width: 200px; max-height: 300px; ' +
-          'overflow-y: auto; background: #1e1e2e; border: 1px solid #444; border-radius: 8px; ' +
-          'padding: 4px 0; box-shadow: 0 8px 24px rgba(0,0,0,0.5); z-index: 1000;';
+          'overflow-y: auto; background: var(--s2-bg-layer-2); border: 1px solid var(--s2-border-default); ' +
+          'border-radius: var(--s2-radius-l); padding: 4px 0; box-shadow: var(--s2-shadow-elevated); z-index: 1000;';
 
         const providerId = getSelectedProvider();
         const models = getProviderModels(providerId);
@@ -224,13 +234,14 @@ export class Layout {
         for (const model of sorted) {
           const item = document.createElement('div');
           item.style.cssText =
-            'padding: 6px 12px; cursor: pointer; font-size: 12px; color: #c0c0d0; ' +
-            'display: flex; align-items: center; gap: 6px;';
+            'padding: 6px 12px; cursor: pointer; font-size: 12px; color: var(--s2-content-default); ' +
+            'display: flex; align-items: center; gap: 6px; border-radius: var(--s2-radius-s); ' +
+            'margin: 0 4px; transition: background 130ms ease;';
           if (model.id === currentModelId) {
-            item.style.color = '#e94560';
-            item.style.fontWeight = '600';
+            item.style.color = 'var(--slicc-cone)';
+            item.style.fontWeight = '700';
           }
-          item.addEventListener('mouseenter', () => { item.style.background = '#2a2a4a'; });
+          item.addEventListener('mouseenter', () => { item.style.background = 'var(--s2-bg-elevated)'; });
           item.addEventListener('mouseleave', () => { item.style.background = ''; });
 
           const check = document.createElement('span');
@@ -279,12 +290,20 @@ export class Layout {
     } else {
       // ── Standalone: single row (original layout) ────────────────
       const leftGroup = document.createElement('div');
-      leftGroup.style.cssText = 'display: flex; align-items: center; gap: 0;';
+      leftGroup.style.cssText = 'display: flex; align-items: center; gap: 6px;';
+
+      const logo = this.sliccLogo(22);
+      leftGroup.appendChild(logo);
 
       const title = document.createElement('div');
       title.className = 'header__title';
       title.textContent = 'slicc';
       leftGroup.appendChild(title);
+
+      // Separator between branding and controls
+      const headerSep = document.createElement('div');
+      headerSep.className = 'header__separator';
+      leftGroup.appendChild(headerSep);
 
       leftGroup.appendChild(providerIndicator);
       leftGroup.appendChild(modelSelect);
@@ -300,14 +319,195 @@ export class Layout {
     parent.appendChild(header);
   }
 
+  /** Scoop brand palette — cycles for scoops beyond 5. */
+  private static readonly SCOOP_COLORS = ['#f000a0', '#00f0f0', '#90f000', '#15d675', '#e68619'];
+
+  /** Create the SLICC ice cream cone SVG logo (transparent bg, dynamic scoops). */
+  private sliccLogo(size = 22): SVGSVGElement {
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('width', String(size));
+    svg.setAttribute('height', String(size));
+    svg.setAttribute('viewBox', '0 0 32 32');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('overflow', 'visible');
+    svg.classList.add('header__logo');
+
+    // Cone (orange triangle) — always present
+    const cone = document.createElementNS(ns, 'path');
+    cone.setAttribute('d', 'M10 20l6 11 6-11z');
+    cone.setAttribute('fill', '#f07000');
+    cone.classList.add('logo-cone');
+    svg.appendChild(cone);
+
+    // Scoops container group — dynamically populated
+    const scoopsGroup = document.createElementNS(ns, 'g');
+    scoopsGroup.classList.add('logo-scoops');
+    svg.appendChild(scoopsGroup);
+
+    this.logoSvg = svg;
+    return svg;
+  }
+
+  /** Fixed scoop radius in SVG units — scoops never shrink. */
+  private static readonly SCOOP_R = 5;
+  private static readonly SCOOP_SPACING = 8.5; // center-to-center horizontal
+  private static readonly ROW_STEP = 7.5;      // center-to-center vertical
+
+  /**
+   * Calculate pyramid layout positions for N scoops.
+   * Constant size — the ice cream just gets taller and wider.
+   */
+  private pyramidLayout(count: number): Array<{ cx: number; cy: number }> {
+    if (count === 0) return [];
+
+    const { SCOOP_SPACING, ROW_STEP } = Layout;
+
+    // Find bottom row width: smallest w where w*(w+1)/2 >= count
+    let w = 1;
+    while (w * (w + 1) / 2 < count) w++;
+
+    // Build rows bottom-up
+    const rows: number[] = [];
+    let remaining = count;
+    let rowWidth = w;
+    while (remaining > 0) {
+      const n = Math.min(remaining, rowWidth);
+      rows.push(n);
+      remaining -= n;
+      rowWidth--;
+    }
+
+    const centerX = 16;
+    const coneTopY = 19;
+    const positions: Array<{ cx: number; cy: number }> = [];
+    let y = coneTopY - Layout.SCOOP_R;
+
+    for (const rowCount of rows) {
+      const totalW = (rowCount - 1) * SCOOP_SPACING;
+      const startX = centerX - totalW / 2;
+      for (let i = 0; i < rowCount; i++) {
+        positions.push({ cx: startX + i * SCOOP_SPACING, cy: y });
+      }
+      y -= ROW_STEP;
+    }
+
+    return positions;
+  }
+
+  /** Update the logo to reflect current scoops. Animates new scoops. */
+  updateLogoScoops(scoops: RegisteredScoop[]): void {
+    if (!this.logoSvg) return;
+
+    const ns = 'http://www.w3.org/2000/svg';
+    const group = this.logoSvg.querySelector('.logo-scoops');
+    if (!group) return;
+
+    const nonCone = scoops.filter(s => !s.isCone);
+    const prevCount = this.logoScoopCount;
+
+    // Skip redundant calls (same count, no change)
+    if (prevCount === nonCone.length && prevCount >= 0) return;
+    this.logoScoopCount = nonCone.length;
+
+    // Clear existing scoops
+    while (group.firstChild) group.removeChild(group.firstChild);
+
+    if (nonCone.length === 0) {
+      this.logoSvg.setAttribute('viewBox', '0 0 32 32');
+      return;
+    }
+
+    // Animate when count grew after initial load (prevCount -1 = first render, skip)
+    const isNewScoop = prevCount >= 0 && nonCone.length > prevCount;
+    const positions = this.pyramidLayout(nonCone.length);
+    const r = Layout.SCOOP_R;
+
+    for (let i = 0; i < nonCone.length; i++) {
+      const pos = positions[i];
+      const circle = document.createElementNS(ns, 'circle');
+      circle.setAttribute('cx', String(pos.cx));
+      circle.setAttribute('cy', String(pos.cy));
+      circle.setAttribute('r', String(r));
+      circle.setAttribute('fill', Layout.SCOOP_COLORS[i % Layout.SCOOP_COLORS.length]);
+
+      if (isNewScoop) {
+        if (i >= prevCount) {
+          // New scoop: drop in from above
+          circle.classList.add('logo-scoop-enter');
+        } else {
+          // Existing scoops: wiggle as the new one lands
+          circle.classList.add('logo-scoop-wiggle');
+        }
+      }
+
+      group.appendChild(circle);
+    }
+
+    // Squash the cone when a new scoop lands
+    if (isNewScoop) {
+      const cone = this.logoSvg.querySelector('.logo-cone');
+      if (cone) {
+        cone.classList.remove('logo-cone-squash');
+        // Force reflow to restart animation
+        void (cone as SVGElement).getBBox();
+        cone.classList.add('logo-cone-squash');
+      }
+    }
+
+    // Expand viewBox to fit the growing ice cream — never shrink scoops
+    const allX = positions.map(p => p.cx);
+    const allY = positions.map(p => p.cy);
+    const minX = Math.min(...allX) - r - 1;
+    const maxX = Math.max(...allX) + r + 1;
+    const minY = Math.min(...allY) - r - 1;
+    const maxY = 32; // cone bottom stays fixed
+    this.logoSvg.setAttribute('viewBox', `${minX} ${minY} ${maxX - minX} ${maxY - minY}`);
+  }
+
+  /** Create an S2-style outline SVG icon. */
+  private svgIcon(paths: string[], viewBox = '0 0 20 20'): SVGSVGElement {
+    const svgNs = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNs, 'svg');
+    svg.setAttribute('width', '16');
+    svg.setAttribute('height', '16');
+    svg.setAttribute('viewBox', viewBox);
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '1.5');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    for (const d of paths) {
+      const path = document.createElementNS(svgNs, 'path');
+      path.setAttribute('d', d);
+      svg.appendChild(path);
+    }
+    return svg;
+  }
+
+  /** Create an icon button with custom tooltip. */
+  private iconBtn(icon: SVGSVGElement, tooltip: string): HTMLButtonElement {
+    const btn = document.createElement('button');
+    btn.className = 'header__btn';
+    btn.setAttribute('aria-label', tooltip);
+    btn.dataset.tooltip = tooltip;
+    btn.appendChild(icon);
+    return btn;
+  }
+
   private buildButtons(): void {
-    const ext = this.isExtension;
+    // SVG icon paths (S2 outline style: 20×20 canvas, 1.5px stroke)
+    const icons = {
+      trash: ['M4 6h12', 'M8 6V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2', 'M6 6v10a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V6'],
+      copy: ['M7 7h9v9H7z', 'M13 7V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h2'],
+      terminal: ['M3 4h14a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z', 'M6 10l2-2', 'M6 10l2 2', 'M11 12h3'],
+      database: ['M10 3c3.87 0 7 1.12 7 2.5S13.87 8 10 8 3 6.88 3 5.5 6.13 3 10 3z', 'M3 5.5v9C3 15.88 6.13 17 10 17s7-1.12 7-2.5v-9', 'M3 10c0 1.38 3.13 2.5 7 2.5s7-1.12 7-2.5'],
+      gear: ['M10 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6z', 'M17.4 10a7.46 7.46 0 0 0-.1-1.3l1.5-1.2-1.5-2.6-1.8.7a7.13 7.13 0 0 0-1.9-1.1L13.2 3h-3l-.4 1.5a7.13 7.13 0 0 0-1.9 1.1l-1.8-.7-1.5 2.6 1.5 1.2a7.46 7.46 0 0 0 0 2.6l-1.5 1.2 1.5 2.6 1.8-.7c.6.5 1.2.8 1.9 1.1l.4 1.5h3l.4-1.5c.7-.3 1.3-.6 1.9-1.1l1.8.7 1.5-2.6-1.5-1.2a7.46 7.46 0 0 0 .1-1.3z'],
+      clearScoops: ['M10 3c3.87 0 7 1.12 7 2.5S13.87 8 10 8 3 6.88 3 5.5 6.13 3 10 3z', 'M3 5.5v9C3 15.88 6.13 17 10 17s7-1.12 7-2.5v-9', 'M7 12l6-4', 'M7 8l6 4'],
+    };
 
     // Clear Chat
-    this.clearChatBtn = document.createElement('button');
-    this.clearChatBtn.className = 'header__btn';
-    this.clearChatBtn.textContent = ext ? '\u{1F5D1}' : 'Clear Chat';
-    if (ext) this.clearChatBtn.title = 'Clear Chat';
+    this.clearChatBtn = this.iconBtn(this.svgIcon(icons.trash), 'Clear Chat');
     this.clearChatBtn.addEventListener('click', async () => {
       await this.panels.chat.clearSession();
       await this.onClearChat?.();
@@ -316,10 +516,7 @@ export class Layout {
     this.actionsEl.appendChild(this.clearChatBtn);
 
     // Copy Chat
-    this.copyChatBtn = document.createElement('button');
-    this.copyChatBtn.className = 'header__btn';
-    this.copyChatBtn.textContent = ext ? '\u{1F4CB}' : 'Copy Chat';
-    if (ext) this.copyChatBtn.title = 'Copy Chat';
+    this.copyChatBtn = this.iconBtn(this.svgIcon(icons.copy), 'Copy Chat');
     this.copyChatBtn.addEventListener('click', async () => {
       const messages: ChatMessage[] = this.panels.chat.getMessages();
       let formatted = '';
@@ -333,26 +530,21 @@ export class Layout {
         }
       }
       await navigator.clipboard.writeText(formatted);
-      this.copyChatBtn.textContent = ext ? '\u2713' : 'Copied!';
-      setTimeout(() => { this.copyChatBtn.textContent = ext ? '\u{1F4CB}' : 'Copy Chat'; }, 2000);
+      // Brief visual feedback — swap icon color
+      this.copyChatBtn.style.color = 'var(--s2-positive)';
+      setTimeout(() => { this.copyChatBtn.style.color = ''; }, 1500);
     });
     this.actionsEl.appendChild(this.copyChatBtn);
 
     // Clear Terminal
-    this.clearTermBtn = document.createElement('button');
-    this.clearTermBtn.className = 'header__btn';
-    this.clearTermBtn.textContent = ext ? '\u{1F5D1}' : 'Clear Terminal';
-    if (ext) this.clearTermBtn.title = 'Clear Terminal';
+    this.clearTermBtn = this.iconBtn(this.svgIcon(icons.terminal), 'Clear Terminal');
     this.clearTermBtn.addEventListener('click', () => {
       this.panels.terminal.clearTerminal();
     });
     this.actionsEl.appendChild(this.clearTermBtn);
 
-    // Clear FS (dev mode only)
-    this.clearFsBtn = document.createElement('button');
-    this.clearFsBtn.className = 'header__btn';
-    this.clearFsBtn.textContent = ext ? '\u{1F5D1}' : 'Clear FS';
-    if (ext) this.clearFsBtn.title = 'Clear FS';
+    // Clear FS
+    this.clearFsBtn = this.iconBtn(this.svgIcon(icons.database), 'Clear Filesystem');
     this.clearFsBtn.addEventListener('click', async () => {
       indexedDB.deleteDatabase('virtual-fs');
       indexedDB.deleteDatabase('slicc-fs');
@@ -367,34 +559,35 @@ export class Layout {
     this.actionsEl.appendChild(this.clearFsBtn);
 
     // Clear Scoops DB (dev mode only)
-    const clearScoopsBtn = document.createElement('button');
-    clearScoopsBtn.className = 'header__btn';
-    clearScoopsBtn.textContent = 'Clear Scoops';
-    clearScoopsBtn.addEventListener('click', async () => {
-      const dbs = await indexedDB.databases();
-      for (const db of dbs) {
-        if (db.name?.startsWith('slicc-fs') || db.name === 'slicc-groups') {
-          indexedDB.deleteDatabase(db.name);
-        }
-      }
-      location.reload();
-    });
     if (typeof __DEV__ !== 'undefined' && __DEV__) {
+      const clearScoopsBtn = this.iconBtn(this.svgIcon(icons.clearScoops), 'Clear Scoops DB');
+      clearScoopsBtn.addEventListener('click', async () => {
+        const dbs = await indexedDB.databases();
+        for (const db of dbs) {
+          if (db.name?.startsWith('slicc-fs') || db.name === 'slicc-groups') {
+            indexedDB.deleteDatabase(db.name);
+          }
+        }
+        location.reload();
+      });
       this.actionsEl.appendChild(clearScoopsBtn);
     }
 
-    // Settings button (shows provider settings dialog)
-    const settingsBtn = document.createElement('button');
-    settingsBtn.className = 'header__btn';
-    settingsBtn.textContent = ext ? '\u2699' : (getApiKey() ? 'Settings' : 'Configure');
-    if (ext) settingsBtn.title = 'Settings';
+    // Separator before settings
+    const sep = document.createElement('div');
+    sep.className = 'header__separator';
+    this.actionsEl.appendChild(sep);
+
+    // Settings button
+    const settingsBtn = this.iconBtn(this.svgIcon(icons.gear), 'Settings');
+    if (!getApiKey()) {
+      settingsBtn.style.color = 'var(--slicc-cone)'; // highlight unconfigured state
+    }
     settingsBtn.addEventListener('click', async () => {
       if (getApiKey()) {
-        // Show settings to reconfigure
         await showProviderSettings();
         location.reload();
       } else {
-        // Clear and show first-run dialog directly (avoid extra reload cycle)
         clearAllSettings();
         await showProviderSettings();
         location.reload();
@@ -484,6 +677,7 @@ export class Layout {
       scoops: new ScoopsPanel(this.scoopsEl, {
         onScoopSelect: (scoop) => this.onScoopSelect?.(scoop),
         onSendMessage: () => {},
+        onScoopsChanged: (scoops) => this.updateLogoScoops(scoops),
       }),
     };
 
@@ -635,6 +829,7 @@ export class Layout {
       scoops: new ScoopsPanel(this.scoopsEl, {
         onScoopSelect: (scoop) => this.onScoopSelect?.(scoop),
         onSendMessage: () => {},
+        onScoopsChanged: (scoops) => this.updateLogoScoops(scoops),
       }),
     };
 

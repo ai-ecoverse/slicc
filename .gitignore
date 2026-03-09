@@ -4,3 +4,4 @@ dist/
 .DS_STORE
 workspace/
 coverage/
+public/fonts/
