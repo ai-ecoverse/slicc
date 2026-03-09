@@ -843,7 +843,7 @@ export function showProviderSettings(): Promise<void> {
         addAccount(
           pid,
           apiKeyInput.value.trim(),
-          config.requiresBaseUrl ? baseUrlInput.value.trim() : undefined,
+          baseUrlInput.value.trim() || undefined,
         );
 
         renderAccountsList();
