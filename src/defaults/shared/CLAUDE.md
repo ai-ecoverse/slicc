@@ -50,6 +50,19 @@ Do NOT drop a scoop when:
 
 Note: dropping a scoop destroys its agent context, but **does not delete files** it wrote to the shared filesystem.
 
+## Browser Tab Hygiene
+
+**Close tabs when you're done with them.** Tabs accumulate fast — every `new_tab` call opens a persistent tab that stays open forever unless explicitly closed.
+
+Rules:
+- **Close research/scraping tabs** immediately after extracting the data you need. Use `evaluate` with `window.close()` or navigate away.
+- **Never leave more than ~5 tabs open** beyond the user's own tabs and any app tabs you're actively serving.
+- **Scoops must close their own tabs** when finished. Include this instruction in every scoop brief that involves browser use: *"Close each tab with `evaluate: window.close()` as soon as you've extracted what you need."*
+- **Audit tabs periodically**: if you notice tab count growing, close stale ones with `browser evaluate` → `window.close()` on each targetId.
+- The **preview/serve tab** for a delivered app can stay open — that's intentional. Everything else is transient.
+
+To close a tab: use `browser` action `evaluate` with expression `window.close()` and the target's `targetId`.
+
 ## What You Can Do
 
 - Read and write files in your virtual workspace
