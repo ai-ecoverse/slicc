@@ -11,7 +11,7 @@
 
 export interface AgentHandle {
   /** Send a user message to the agent. */
-  sendMessage(text: string): void;
+  sendMessage(text: string, messageId?: string): void;
   /** Subscribe to agent events. Returns an unsubscribe function. */
   onEvent(callback: (event: AgentEvent) => void): () => void;
   /** Stop the current agent response. */

@@ -353,6 +353,13 @@ export class ChatPanel {
     this.sendBtn.addEventListener('click', () => this.sendMessage());
     this.stopBtn.addEventListener('click', () => {
       this.agent?.stop();
+      // Clear all remaining queued badges since these messages won't be processed
+      for (const msg of this.messages) {
+        if (msg.queued) {
+          msg.queued = false;
+          this.updateMessageEl(msg.id);
+        }
+      }
       this.setStreamingState(false);
     });
 
@@ -452,7 +459,7 @@ export class ChatPanel {
     }
 
     // Send to agent (orchestrator persists & queues if the cone is busy)
-    this.agent?.sendMessage(text);
+    this.agent?.sendMessage(text, msg.id);
   }
 
   private handleAgentEvent(event: AgentEvent): void {
@@ -591,15 +598,15 @@ export class ChatPanel {
       }
       // In voice mode, explicitly remove listening visual during streaming
       this.micBtn.classList.remove('chat__mic-btn--listening');
+      // When a new turn starts, clear the queued badge on only the oldest queued message
+      // (it's the one being processed now). Leave the rest queued.
+      const oldestQueued = this.messages.find(m => m.queued);
+      if (oldestQueued) {
+        oldestQueued.queued = false;
+        this.updateMessageEl(oldestQueued.id);
+      }
     }
     if (!streaming) {
-      // When streaming ends, mark queued messages as no longer queued
-      for (const msg of this.messages) {
-        if (msg.queued) {
-          msg.queued = false;
-          this.updateMessageEl(msg.id);
-        }
-      }
       if (this.voiceMode) {
         // Voice mode: auto-restart listening when the agent finishes.
         // Pre-set the listening class to avoid a visual flicker during
