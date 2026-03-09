@@ -457,6 +457,37 @@ function maskApiKey(key: string): string {
   return key.slice(0, 4) + '...' + key.slice(-4);
 }
 
+/** Create an S2-style outline SVG icon (matches layout.ts pattern). */
+function svgIcon(paths: string[]): SVGSVGElement {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('width', '14');
+  svg.setAttribute('height', '14');
+  svg.setAttribute('viewBox', '0 0 20 20');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.5');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  for (const d of paths) {
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', d);
+    svg.appendChild(path);
+  }
+  return svg;
+}
+
+const ICON_PATHS = {
+  pen: [
+    'M14.3 3.3a1.5 1.5 0 0 1 2.1 0l.3.3a1.5 1.5 0 0 1 0 2.1L7.7 14.8l-3.2.7.7-3.2z',
+  ],
+  trash: [
+    'M4 6h12',
+    'M8 6V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2',
+    'M6 6v10a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V6',
+  ],
+};
+
 /**
  * Show the Accounts management dialog.
  * Returns a promise that resolves when the user closes the dialog.
@@ -474,7 +505,7 @@ export function showProviderSettings(): Promise<void> {
     if (getAccounts().length > 0) {
       renderAccountsList();
     } else {
-      renderAddAccountForm();
+      renderAccountForm();
     }
 
     overlay.appendChild(dialog);
@@ -490,6 +521,12 @@ export function showProviderSettings(): Promise<void> {
       dialog.appendChild(title);
 
       const currentAccounts = getAccounts();
+
+      const iconBtnStyle =
+          'background: transparent; border: 1px solid var(--s2-border-subtle); ' +
+          'color: var(--s2-content-secondary); border-radius: var(--s2-radius-s); ' +
+          'padding: 6px; cursor: pointer; display: flex; align-items: center; ' +
+          'justify-content: center; transition: color 0.15s, border-color 0.15s;';
 
       if (currentAccounts.length === 0) {
         const empty = document.createElement('div');
@@ -526,17 +563,46 @@ export function showProviderSettings(): Promise<void> {
 
           row.appendChild(info);
 
+          const actions = document.createElement('div');
+          actions.style.cssText =
+            'display: flex; gap: 4px; margin-left: 12px; flex-shrink: 0;';
+
+          const editBtn = document.createElement('button');
+          editBtn.style.cssText = iconBtnStyle;
+          editBtn.setAttribute('aria-label', 'Edit account');
+          editBtn.appendChild(svgIcon(ICON_PATHS.pen));
+          editBtn.addEventListener('mouseenter', () => {
+            editBtn.style.color = 'var(--s2-accent)';
+            editBtn.style.borderColor = 'var(--s2-accent)';
+          });
+          editBtn.addEventListener('mouseleave', () => {
+            editBtn.style.color = 'var(--s2-content-secondary)';
+            editBtn.style.borderColor = 'var(--s2-border-subtle)';
+          });
+          editBtn.addEventListener('click', () => {
+            renderAccountForm(account);
+          });
+          actions.appendChild(editBtn);
+
           const deleteBtn = document.createElement('button');
-          deleteBtn.style.cssText =
-            'background: transparent; border: 1px solid var(--s2-negative); color: var(--slicc-cone); ' +
-            'border-radius: var(--s2-radius-s); padding: 4px 10px; cursor: pointer; font-size: 12px; ' +
-            'margin-left: 12px; flex-shrink: 0;';
-          deleteBtn.textContent = 'Remove';
+          deleteBtn.style.cssText = iconBtnStyle;
+          deleteBtn.setAttribute('aria-label', 'Remove account');
+          deleteBtn.appendChild(svgIcon(ICON_PATHS.trash));
+          deleteBtn.addEventListener('mouseenter', () => {
+            deleteBtn.style.color = 'var(--s2-negative)';
+            deleteBtn.style.borderColor = 'var(--s2-negative)';
+          });
+          deleteBtn.addEventListener('mouseleave', () => {
+            deleteBtn.style.color = 'var(--s2-content-secondary)';
+            deleteBtn.style.borderColor = 'var(--s2-border-subtle)';
+          });
           deleteBtn.addEventListener('click', () => {
             removeAccount(account.providerId);
             renderAccountsList();
           });
-          row.appendChild(deleteBtn);
+          actions.appendChild(deleteBtn);
+
+          row.appendChild(actions);
 
           list.appendChild(row);
         }
@@ -547,7 +613,7 @@ export function showProviderSettings(): Promise<void> {
       const addBtn = document.createElement('button');
       addBtn.className = 'dialog__btn';
       addBtn.textContent = 'Add Account';
-      addBtn.addEventListener('click', () => renderAddAccountForm());
+      addBtn.addEventListener('click', () => renderAccountForm());
       dialog.appendChild(addBtn);
 
       // ── Theme section ───────────────────────────────────────────
@@ -629,13 +695,14 @@ export function showProviderSettings(): Promise<void> {
       dialog.appendChild(closeBtn);
     }
 
-    // ── Add account form view ───────────────────────────────────────
-    function renderAddAccountForm() {
+    // ── Account form view (add or edit) ─────────────────────────────
+    function renderAccountForm(editing?: Account) {
       dialog.innerHTML = '';
+      const isEdit = !!editing;
 
       const title = document.createElement('div');
       title.className = 'dialog__title';
-      title.textContent = 'Add Account';
+      title.textContent = isEdit ? 'Edit Account' : 'Add Account';
       dialog.appendChild(title);
 
       // Provider selector
@@ -648,22 +715,31 @@ export function showProviderSettings(): Promise<void> {
       providerSelect.className = 'dialog__input';
       providerSelect.style.marginBottom = '8px';
 
-      const providers = getAvailableProviders();
-      const existingProviders = new Set(getAccounts().map(a => a.providerId));
-
-      const sorted = [...providers].sort((a, b) => {
-        const nameA = getProviderConfig(a).name;
-        const nameB = getProviderConfig(b).name;
-        return nameA.localeCompare(nameB);
-      });
-
-      for (const providerId of sorted) {
-        if (existingProviders.has(providerId)) continue;
-        const config = getProviderConfig(providerId);
+      if (isEdit) {
+        // Locked to the existing provider
+        const config = getProviderConfig(editing.providerId);
         const opt = document.createElement('option');
-        opt.value = providerId;
+        opt.value = editing.providerId;
         opt.textContent = config.name;
         providerSelect.appendChild(opt);
+        providerSelect.disabled = true;
+        providerSelect.style.opacity = '0.7';
+      } else {
+        const providers = getAvailableProviders();
+        const existingProviders = new Set(getAccounts().map(a => a.providerId));
+        const sorted = [...providers].sort((a, b) => {
+          const nameA = getProviderConfig(a).name;
+          const nameB = getProviderConfig(b).name;
+          return nameA.localeCompare(nameB);
+        });
+        for (const providerId of sorted) {
+          if (existingProviders.has(providerId)) continue;
+          const config = getProviderConfig(providerId);
+          const opt = document.createElement('option');
+          opt.value = providerId;
+          opt.textContent = config.name;
+          providerSelect.appendChild(opt);
+        }
       }
       dialog.appendChild(providerSelect);
 
@@ -685,6 +761,7 @@ export function showProviderSettings(): Promise<void> {
       apiKeyInput.type = 'password';
       apiKeyInput.autocomplete = 'off';
       apiKeyInput.spellcheck = false;
+      if (isEdit) apiKeyInput.value = editing.apiKey;
       apiKeySection.appendChild(apiKeyInput);
 
       dialog.appendChild(apiKeySection);
@@ -702,6 +779,7 @@ export function showProviderSettings(): Promise<void> {
       baseUrlInput.type = 'text';
       baseUrlInput.autocomplete = 'off';
       baseUrlInput.spellcheck = false;
+      if (isEdit && editing.baseUrl) baseUrlInput.value = editing.baseUrl;
       baseUrlSection.appendChild(baseUrlInput);
 
       const baseUrlDesc = document.createElement('div');
@@ -738,12 +816,12 @@ export function showProviderSettings(): Promise<void> {
       });
       updateFormFields();
 
-      // Add button
+      // Save button
       const saveBtn = document.createElement('button');
       saveBtn.className = 'dialog__btn';
-      saveBtn.textContent = 'Add';
+      saveBtn.textContent = isEdit ? 'Save' : 'Add';
 
-      function validateAndAdd() {
+      function validateAndSave() {
         const pid = providerSelect.value;
         if (!pid) return;
         const config = getProviderConfig(pid);
@@ -765,16 +843,16 @@ export function showProviderSettings(): Promise<void> {
         addAccount(
           pid,
           apiKeyInput.value.trim(),
-          config.requiresBaseUrl ? baseUrlInput.value.trim() : undefined,
+          baseUrlInput.value.trim() || undefined,
         );
 
         renderAccountsList();
       }
 
-      saveBtn.addEventListener('click', validateAndAdd);
+      saveBtn.addEventListener('click', validateAndSave);
 
       const handleEnter = (e: KeyboardEvent) => {
-        if (e.key === 'Enter') validateAndAdd();
+        if (e.key === 'Enter') validateAndSave();
       };
       apiKeyInput.addEventListener('keydown', handleEnter);
       baseUrlInput.addEventListener('keydown', handleEnter);
