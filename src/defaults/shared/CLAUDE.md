@@ -34,6 +34,22 @@ Do it yourself when:
 
 When synthesizing scoop results, *that's* your job — pull everything together, resolve conflicts, make the final recommendation.
 
+## Scoop Lifecycle: Clean Up After Yourself
+
+**Drop scoops when their job is done.** Idle scoops waste resources and clutter `list_scoops`.
+
+Drop a scoop when:
+- It has **completed its task** and results have been synthesized
+- It is **stuck or misbehaving** (drop and re-spawn with a better brief)
+- It has been **superseded** by a better-briefed replacement
+
+Do NOT drop a scoop when:
+- It is running a **recurring or long-running task** (e.g. watching a feed, handling webhooks)
+- Work is **still in progress** — dropping mid-task loses all context
+- You may need to **follow up** with it shortly (keep it until you're sure)
+
+Note: dropping a scoop destroys its agent context, but **does not delete files** it wrote to the shared filesystem.
+
 ## What You Can Do
 
 - Read and write files in your virtual workspace
