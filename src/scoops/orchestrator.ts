@@ -494,6 +494,18 @@ export class Orchestrator {
     return this.contexts.get(jid);
   }
 
+  /** Delete a queued message by ID (removes from both IndexedDB and in-memory queue). */
+  async deleteQueuedMessage(jid: string, messageId: string): Promise<void> {
+    // Remove from in-memory queue
+    const queue = this.messageQueues.get(jid);
+    if (queue) {
+      const idx = queue.findIndex(m => m.id === messageId);
+      if (idx !== -1) queue.splice(idx, 1);
+    }
+    // Remove from IndexedDB
+    await db.deleteMessage(messageId);
+  }
+
   /** Get all messages for a scoop */
   async getMessagesForScoop(jid: string): Promise<ChannelMessage[]> {
     return db.getMessagesForScoop(jid);

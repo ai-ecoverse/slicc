@@ -75,6 +75,7 @@ export class ChatPanel {
   private autoScrollAttached = true;
   private lastScrollTop = 0;
   private jumpPill!: HTMLElement;
+  private onDeleteQueuedMessage: ((messageId: string) => void) | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -94,6 +95,11 @@ export class ChatPanel {
   /** Set a callback for terminal output events. */
   onTerminalOutput(cb: (text: string) => void): void {
     this.terminalOutputCallback = cb;
+  }
+
+  /** Set a callback for deleting queued messages (removes from orchestrator DB + queue). */
+  setDeleteQueuedMessageCallback(cb: (messageId: string) => void): void {
+    this.onDeleteQueuedMessage = cb;
   }
 
   /** Initialize session persistence and restore messages. */
@@ -229,6 +235,17 @@ export class ChatPanel {
     };
     this.messages.push(msg);
     this.appendMessageEl(msg);
+  }
+
+  /** Remove a queued message from the UI and notify the orchestrator to remove it from DB/queue. */
+  private deleteQueuedMessage(messageId: string): void {
+    const idx = this.messages.findIndex(m => m.id === messageId);
+    if (idx === -1) return;
+    this.messages.splice(idx, 1);
+    const el = this.messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
+    if (el) el.remove();
+    this.persistSession();
+    this.onDeleteQueuedMessage?.(messageId);
   }
 
   private render(): void {
@@ -407,17 +424,19 @@ export class ChatPanel {
 
   private sendMessage(): void {
     const text = this.textarea.value.trim();
-    if (!text || this.isStreaming) return;
+    if (!text) return;
 
     // User action — always re-attach auto-scroll
     this.autoScrollAttached = true;
     this.hideJumpPill();
 
+    const isQueued = this.isStreaming;
     const msg: ChatMessage = {
       id: uid(),
       role: 'user',
       content: text,
       timestamp: Date.now(),
+      queued: isQueued || undefined,
     };
     this.messages.push(msg);
     this.appendMessageEl(msg);
@@ -427,10 +446,12 @@ export class ChatPanel {
     this.textarea.value = '';
     this.textarea.style.height = 'auto';
 
-    // Disable input immediately — don't wait for message_start event
-    this.setStreamingState(true);
+    // Only lock input if not already streaming (first message triggers streaming)
+    if (!this.isStreaming) {
+      this.setStreamingState(true);
+    }
 
-    // Send to agent
+    // Send to agent (orchestrator persists & queues if the cone is busy)
     this.agent?.sendMessage(text);
   }
 
@@ -558,9 +579,11 @@ export class ChatPanel {
 
   private setStreamingState(streaming: boolean): void {
     this.isStreaming = streaming;
-    this.sendBtn.style.display = streaming ? 'none' : 'flex';
+    // Show stop button during streaming, send button otherwise — but keep textarea enabled
     this.stopBtn.style.display = streaming ? 'flex' : 'none';
-    this.textarea.disabled = streaming;
+    this.sendBtn.style.display = streaming ? 'none' : 'flex';
+    // Textarea stays enabled so the user can queue follow-up messages
+    this.textarea.disabled = false;
     // Mic button stays enabled during streaming so user can toggle voice mode off
     if (streaming) {
       if (this.voiceInput?.isListening()) {
@@ -570,6 +593,13 @@ export class ChatPanel {
       this.micBtn.classList.remove('chat__mic-btn--listening');
     }
     if (!streaming) {
+      // When streaming ends, mark queued messages as no longer queued
+      for (const msg of this.messages) {
+        if (msg.queued) {
+          msg.queued = false;
+          this.updateMessageEl(msg.id);
+        }
+      }
       if (this.voiceMode) {
         // Voice mode: auto-restart listening when the agent finishes.
         // Pre-set the listening class to avoid a visual flicker during
@@ -634,7 +664,7 @@ export class ChatPanel {
     wrapper.setAttribute('data-msg-id', msg.id);
 
     const el = document.createElement('div');
-    el.className = `msg msg--${msg.role}`;
+    el.className = `msg msg--${msg.role}${msg.queued ? ' msg--queued' : ''}`;
 
     // Determine icon and label based on role, source, and current context
     let icon: string;
@@ -668,6 +698,23 @@ export class ChatPanel {
     const roleEl = document.createElement('div');
     roleEl.className = 'msg__role';
     roleEl.innerHTML = `<span class="msg__icon">${icon}</span> ${escapeHtml(label)}`;
+    // Queued badge + delete button
+    if (msg.queued) {
+      const badge = document.createElement('span');
+      badge.className = 'msg__queued-badge';
+      badge.textContent = 'queued';
+      roleEl.appendChild(badge);
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'msg__queued-delete';
+      deleteBtn.textContent = '\u00d7'; // ×
+      deleteBtn.title = 'Remove queued message';
+      deleteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.deleteQueuedMessage(msg.id);
+      });
+      roleEl.appendChild(deleteBtn);
+    }
     el.appendChild(roleEl);
 
     // For lick messages in cone view, wrap content in collapsible

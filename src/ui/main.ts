@@ -348,6 +348,16 @@ async function main(): Promise<void> {
   };
 
   layout.panels.chat.setAgent(coneAgentHandle);
+
+  // Wire delete callback for queued messages
+  layout.panels.chat.setDeleteQueuedMessageCallback((messageId: string) => {
+    if (selectedScoop) {
+      orchestrator.deleteQueuedMessage(selectedScoop.jid, messageId).catch((err) => {
+        log.error('Failed to delete queued message', { messageId, error: err instanceof Error ? err.message : String(err) });
+      });
+    }
+  });
+
   log.info('Cone agent handle wired to chat UI');
 
   // ---------------------------------------------------------------------------

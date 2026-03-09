@@ -50,6 +50,8 @@ export interface ChatMessage {
   source?: 'cone' | 'lick' | string;
   /** For licks: the channel type (webhook, cron, etc.) */
   channel?: string;
+  /** True when the message is queued (submitted while the agent is still processing). */
+  queued?: boolean;
 }
 
 export interface ToolCall {
