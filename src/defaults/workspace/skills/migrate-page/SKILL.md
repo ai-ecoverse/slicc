@@ -186,21 +186,71 @@ Write `decomposition.json` to `/shared/{repo-name}/.migration/`:
 
 ---
 
-## Phase 2.5: Prepare head.html with Fonts — BEFORE creating scoops
+## Phase 2.5: Prepare Brand, Fonts, and Styles — BEFORE creating scoops
 
-Scoops need `head.html` with font links already included so their preview
-pages load the correct fonts. Do this BEFORE Phase 3.
+Scoops need the brand fully set up so their preview pages load with correct
+fonts, colors, and spacing. Do ALL of this BEFORE Phase 3.
+
+### 2.5a: Resolve Fonts
 
 1. Read `.migration/brand.json` — check `fonts.sources.typekit` and `fonts.sources.googleFonts`
-2. Resolve fonts using the cascade from Step 4.2 (system → source Typekit → kit cwm0xxe → Google Fonts)
-3. Read `/shared/{repo-name}/head.html`
-4. Add font `<link>` tags BEFORE the existing `<script>` tags:
-   - Typekit: `<link rel="stylesheet" href="https://use.typekit.net/{projectId}.css">`
-   - Google: `<link href="{url}" rel="stylesheet">` with preconnects
-5. Write the updated `head.html` back
+2. Resolve fonts using the cascade:
+   - System font → use as-is
+   - Source uses Typekit (`fonts.sources.typekit` not null) → use that project ID
+   - Font in Typekit kit `cwm0xxe` → check `https://typekit.com/api/v1/json/kits/cwm0xxe/published`
+   - Font on Google Fonts → check `https://fonts.googleapis.com/css2?family={FontName}:wght@400;700&display=swap`
+   - Not found → use extracted name with fallback
 
-Now `head.html` includes font delivery — scoops will pass this to their
-preview pages and fonts will load during block preview.
+### 2.5b: Update head.html
+
+Read `/shared/{repo-name}/head.html`. Add font `<link>` tags BEFORE the
+existing `<script>` tags:
+- Typekit: `<link rel="stylesheet" href="https://use.typekit.net/{projectId}.css">`
+- Google: preconnects + `<link href="{url}" rel="stylesheet">`
+
+Write the updated `head.html` back.
+
+### 2.5c: Generate brand.css
+
+Write `/shared/{repo-name}/styles/brand.css` with brand values from
+`brand.json`:
+
+```css
+:root {
+  --heading-font-family: "{resolved heading font}", serif;
+  --body-font-family: "{resolved body font}", sans-serif;
+  --background-color: {brand.colors.background};
+  --text-color: {brand.colors.text};
+  --link-color: {brand.colors.link};
+  --link-hover-color: {brand.colors.linkHover};
+  --section-padding: {brand.spacing.sectionPadding};
+  --nav-height: {brand.spacing.navHeight};
+}
+
+html, body { overflow: auto !important; }
+```
+
+### 2.5d: Update styles.css with @import
+
+Read `/shared/{repo-name}/styles/styles.css`. Add `@import url('brand.css');`
+as the **VERY FIRST LINE** (CSS spec requires `@import` before all other
+rules). Also update `:root` variables to match brand values.
+
+Add a global EDS button reset after `:root`:
+
+```css
+main .button-container { display: inline; }
+main a.button:any-link {
+  background: none; border: none; border-radius: 0;
+  color: var(--link-color); font-size: inherit; font-weight: inherit;
+  padding: 0; margin: 0; text-decoration: underline; white-space: normal;
+}
+```
+
+Write the updated `styles.css` back.
+
+Now scoops will preview with correct fonts, colors, spacing, and button
+behavior from the start.
 
 ---
 
@@ -312,112 +362,19 @@ For each block, check:
 
 List any missing reports — every block scoop MUST produce a report.
 
-### Step 4.2: Resolve Fonts — MANDATORY
+### Step 4.2: Verify Brand Setup
 
-Read `.migration/brand.json`. The `fonts.sources` field tells you what
-font delivery the source page uses:
+`brand.css`, `styles.css`, and `head.html` were already updated in
+Phase 2.5. Verify they are correct:
 
-- `fonts.sources.typekit` — Typekit project ID (if source uses Adobe Fonts)
-- `fonts.sources.googleFonts` — array of Google Fonts CSS URLs
+- `styles/brand.css` exists with `:root` variables
+- `styles/styles.css` has `@import url('brand.css');` as FIRST LINE
+- `styles/styles.css` has the global button reset
+- `head.html` has Typekit/Google Fonts `<link>` tags
 
-**Font Resolution Cascade (for body and heading fonts):**
+If anything is missing (Phase 2.5 was skipped or failed), do it now:
 
-1. **System font?** (Arial, Georgia, Helvetica, Verdana, etc.) → use as-is
-2. **Source uses Typekit?** (`fonts.sources.typekit` is not null) → the source's
-   Typekit kit already has the font. Use that project ID.
-3. **Font in our Typekit kit?** Check if the font is in kit `cwm0xxe` by
-   fetching `https://typekit.com/api/v1/json/kits/cwm0xxe/published` (no auth
-   needed). If the font family appears in the kit's families → use kit `cwm0xxe`.
-4. **Font on Google Fonts?** Fetch
-   `https://fonts.googleapis.com/css2?family={FontName}:wght@400;700&display=swap`
-   — if 200 OK → use the Google Fonts URL.
-5. **Not found** → use the extracted font name with a generic fallback
-   (serif or sans-serif).
-
-**Hardcoded Typekit project ID: `cwm0xxe`**
-
-### Step 4.3: Generate brand.css — MANDATORY
-
-Write `/shared/{repo-name}/styles/brand.css`:
-
-```css
-:root {
-  /* Typography — resolved from font cascade */
-  --heading-font-family: "{resolved heading font}", serif;
-  --body-font-family: "{resolved body font}", sans-serif;
-
-  /* Colors — from brand.json */
-  --background-color: {brand.colors.background};
-  --text-color: {brand.colors.text};
-  --link-color: {brand.colors.link};
-  --link-hover-color: {brand.colors.linkHover};
-
-  /* Spacing — from brand.json */
-  --section-padding: {brand.spacing.sectionPadding};
-  --nav-height: {brand.spacing.navHeight};
-}
-
-/* Fix SLICC preview scrolling */
-html, body { overflow: auto !important; }
-```
-
-Replace all placeholders with actual values. This file MUST be created.
-
-### Step 4.4: Verify head.html
-
-`head.html` was already updated with font links in Phase 2.5. Verify
-that the Typekit/Google Fonts `<link>` tags are present. If not (e.g.,
-Phase 2.5 was skipped), add them now following the same pattern.
-
-### Step 4.5: Update styles.css — MANDATORY
-
-Read `/shared/{repo-name}/styles/styles.css`. Make these changes:
-
-**1. Add `@import` as the VERY FIRST LINE of the file** (CSS spec requires
-`@import` before any other rules — placing it after `:root` silently fails):
-
-```css
-@import url('brand.css');
-
-:root {
-  /* ... existing variables ... */
-}
-```
-
-**2. Update `:root` variables** to match brand values from `brand.json`.
-The boilerplate has defaults (e.g., `--link-color: #035fe6`) that must be
-replaced with the source site's actual values.
-
-**3. Add a global EDS button reset** after the `:root` block. EDS's
-`decorateButtons()` auto-wraps standalone links as `.button-container > .button`
-which renders them as filled buttons. Most migrated blocks need text-link
-styling instead. Add this once globally rather than repeating in every block:
-
-```css
-/* Global reset for EDS button auto-decoration in migrated blocks */
-main .button-container {
-  display: inline;
-}
-
-main a.button:any-link {
-  background: none;
-  border: none;
-  border-radius: 0;
-  color: var(--link-color);
-  font-size: inherit;
-  font-weight: inherit;
-  padding: 0;
-  margin: 0;
-  text-decoration: underline;
-  white-space: normal;
-}
-```
-
-Individual blocks can still override this for actual button styling (e.g.,
-CTA buttons with borders) by using more specific selectors like
-`.hero a.button`.
-
-### Step 4.6: Assemble Page Content — MANDATORY
+### Step 4.3: Assemble Page Content — MANDATORY
 
 Write the main page to `/shared/{repo-name}/drafts/{page-path}.plain.html`.
 
@@ -454,7 +411,7 @@ following the decomposition order:
 - Default-content items (from decomposition): extract from source page
   and write as plain HTML (headings, paragraphs, lists) in their section
 
-### Step 4.7: Create Full Preview Page — MANDATORY
+### Step 4.4: Create Full Preview Page — MANDATORY
 
 Write `/shared/{repo-name}/drafts/{page-path}-preview.html`:
 
@@ -495,14 +452,14 @@ load asynchronously. Verify with:
 Wait until all expected blocks show `status: "loaded"`. Then take the screenshot:
 Save to `.migration/preview-assembled.png`.
 
-### Step 4.8: Git Commit — MANDATORY
+### Step 4.5: Git Commit — MANDATORY
 
 ```bash
 git add blocks/ styles/ drafts/
 git commit -m "feat: migrate {page-path} from {source-domain}"
 ```
 
-### Step 4.9: Final Summary
+### Step 4.6: Final Summary
 
 Report to the user:
 - Number of blocks migrated and their statuses
