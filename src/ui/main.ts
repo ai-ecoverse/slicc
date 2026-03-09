@@ -380,6 +380,7 @@ async function main(): Promise<void> {
     const { getLickManager } = await import('../scoops/lick-manager.js');
     const lickManager = getLickManager();
     await lickManager.init();
+    orchestrator.setLickManager(lickManager);
 
     // Route lick events to scoops
     const routeLickToScoop = (event: LickEvent) => {

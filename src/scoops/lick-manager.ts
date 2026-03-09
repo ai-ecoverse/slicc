@@ -227,6 +227,20 @@ export class LickManager {
     return this.crontasks.get(id);
   }
 
+  /** Get all webhooks and cron tasks targeting a scoop by name or folder.
+   *  Mirrors the alias matching used in lick routing (main.ts):
+   *  - exact match on name
+   *  - exact match on folder
+   *  - wh.scoop + '-scoop' matches folder (e.g. webhook scoop="click-handler", folder="click-handler-scoop")
+   */
+  getLicksForScoop(name: string, folder: string): { webhooks: WebhookEntry[]; cronTasks: CronTaskEntry[] } {
+    const matches = (scoopField: string | undefined): boolean =>
+      scoopField === name || scoopField === folder || `${scoopField}-scoop` === folder;
+    const webhooks = Array.from(this.webhooks.values()).filter(wh => matches(wh.scoop));
+    const cronTasks = Array.from(this.crontasks.values()).filter(ct => matches(ct.scoop));
+    return { webhooks, cronTasks };
+  }
+
   /** Run the cron scheduler - called every minute */
   private async runCronScheduler(): Promise<void> {
     const now = new Date();
@@ -356,6 +370,30 @@ export class LickManager {
     }
     return null;
   }
+}
+
+/** Build the error thrown when trying to remove a scoop with active licks.
+ *  Returns null if there are no active licks. Used by orchestrator and tests. */
+export function buildActiveLicksError(
+  scoopFolder: string,
+  webhooks: WebhookEntry[],
+  cronTasks: CronTaskEntry[],
+): Error | null {
+  if (webhooks.length === 0 && cronTasks.length === 0) return null;
+  const parts: string[] = [];
+  if (webhooks.length > 0) {
+    parts.push(`${webhooks.length} active webhook${webhooks.length > 1 ? 's' : ''}`);
+  }
+  if (cronTasks.length > 0) {
+    parts.push(`${cronTasks.length} active cron task${cronTasks.length > 1 ? 's' : ''}`);
+  }
+  const commands = [
+    ...webhooks.map(wh => `  webhook delete ${wh.id}`),
+    ...cronTasks.map(ct => `  crontask delete ${ct.id}`),
+  ].join('\n');
+  return new Error(
+    `Cannot remove scoop '${scoopFolder}': it has ${parts.join(' and ')}. Unregister them first:\n${commands}`
+  );
 }
 
 /** Singleton instance */
