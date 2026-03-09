@@ -49,6 +49,76 @@ function injectMockAgent(ctx: ScoopContext, mockPrompt: (text: string) => Promis
   (ctx as any).status = 'ready';
 }
 
+describe('ScoopContext session persistence', () => {
+  let ctx: ScoopContext;
+  let callbacks: ScoopContextCallbacks;
+
+  beforeEach(() => {
+    callbacks = createMockCallbacks();
+  });
+
+  it('accepts a sessionStore parameter', () => {
+    const mockStore = { load: vi.fn(), save: vi.fn(), delete: vi.fn() } as any;
+    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
+    expect((ctx as any).sessionStore).toBe(mockStore);
+    expect((ctx as any).sessionId).toBe(testScoop.jid);
+  });
+
+  it('works without sessionStore (backwards compatible)', () => {
+    ctx = new ScoopContext(testScoop, callbacks, {} as any);
+    expect((ctx as any).sessionStore).toBeNull();
+  });
+
+  it('saves session on agent_end with messages', () => {
+    const mockStore = { load: vi.fn(), save: vi.fn().mockResolvedValue(undefined) } as any;
+    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
+    injectMockAgent(ctx, async () => {});
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const messages = [{ role: 'user', content: 'hello', timestamp: Date.now() }];
+    handler({ type: 'agent_end', messages });
+
+    expect(mockStore.save).toHaveBeenCalledWith(expect.objectContaining({
+      id: testScoop.jid,
+      messages,
+    }));
+  });
+
+  it('does not save session on agent_end with empty messages', () => {
+    const mockStore = { load: vi.fn(), save: vi.fn() } as any;
+    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
+    injectMockAgent(ctx, async () => {});
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    handler({ type: 'agent_end', messages: [] });
+
+    expect(mockStore.save).not.toHaveBeenCalled();
+  });
+
+  it('logs error when save fails (does not throw)', () => {
+    const mockStore = { load: vi.fn(), save: vi.fn().mockRejectedValue(new Error('DB full')) } as any;
+    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
+    injectMockAgent(ctx, async () => {});
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const messages = [{ role: 'user', content: 'hello', timestamp: Date.now() }];
+
+    // Should not throw
+    expect(() => handler({ type: 'agent_end', messages })).not.toThrow();
+  });
+
+  it('does not save session when no sessionStore provided', () => {
+    ctx = new ScoopContext(testScoop, callbacks, {} as any);
+    injectMockAgent(ctx, async () => {});
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const messages = [{ role: 'user', content: 'hello', timestamp: Date.now() }];
+
+    // Should not throw
+    expect(() => handler({ type: 'agent_end', messages })).not.toThrow();
+  });
+});
+
 describe('ScoopContext prompt queueing', () => {
   let ctx: ScoopContext;
   let callbacks: ScoopContextCallbacks;

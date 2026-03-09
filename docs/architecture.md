@@ -261,6 +261,33 @@ External webhook POST / scheduled cron task fires
         → No human in the loop
 ```
 
+### Agent Session Persistence
+
+Agent conversation history is persisted per scoop, enabling agents to resume where they left off across page reloads or extension close-reopen cycles.
+
+```
+ScoopContext init (page load / scoop creation)
+  → SessionStore.load(scoop.jid) [retrieves AgentMessage[] from agent-sessions DB]
+    → Agent initialized with restored messages
+      → agent loop resumes with full context
+
+Agent responds (streaming)
+  → agent_end event
+    → SessionStore.save(scoop.jid, allMessages) [fire-and-forget]
+      → Persists updated AgentMessage[] to agent-sessions DB
+
+Scoop removal / app clear
+  → Orchestrator calls SessionStore.delete(jid) or SessionStore.clearAll()
+    → Clears persisted session data
+```
+
+**Session Storage:**
+- Database: `agent-sessions` (IndexedDB)
+- Key: scoop JID (e.g., `cone`, `analysis-scoop`)
+- Value: `AgentMessage[]` (agent loop message history)
+- Lifecycle: Loaded on scoop init, saved on agent_end (error-tolerant), deleted on scoop removal
+- Design: Messages are model-agnostic and work with any LLM. `compactContext` trims at prompt time (existing mechanism), so large sessions don't cause token bloat.
+
 ## IndexedDB Databases
 
 | Database | Version | Stores | Purpose |
@@ -268,7 +295,7 @@ External webhook POST / scheduled cron task fires
 | `slicc-fs` | 1 | (VirtualFS data) | POSIX filesystem backing store (LightningFS) |
 | `browser-coding-agent` | 1 | sessions, settings | UI-level session history + localStorage mirror |
 | `slicc-groups` | 3 | scoops, messages, sessions, tasks, state, webhooks, crontasks | Orchestrator data (scoops, messages, tasks) |
-| `agent-sessions` | 1 | sessions | Core agent session history (pi-agent-core) |
+| `agent-sessions` | 1 | sessions | Core agent session history: persisted `AgentMessage[]` per scoop, keyed by JID; loaded on scoop init, saved on agent_end |
 | `slicc-fs-global` | 1 | config | Git global config storage |
 
 ## File-Finding Guide
@@ -326,7 +353,7 @@ External webhook POST / scheduled cron task fires
 |---|---|
 | Change token limit / context compaction strategy | `src/core/context-compaction.ts` |
 | Change logging format/level | `src/core/logger.ts` |
-| Change session persistence | `src/core/session.ts` |
+| Change agent conversation history persistence | `src/core/session.ts` (SessionStore: load/save/delete/clearAll per-scoop `AgentMessage[]` in `agent-sessions` DB) + `src/scoops/scoop-context.ts` (restore on init, save on agent_end) + `src/scoops/orchestrator.ts` (create/pass/cleanup SessionStore) |
 | Change MIME type detection | `src/core/mime-types.ts` |
 | Register new tools | `src/core/tool-registry.ts` |
 
@@ -335,6 +362,7 @@ External webhook POST / scheduled cron task fires
 | I need to... | Modify |
 |---|---|
 | Manage scoops (create/delete/list) | `src/scoops/orchestrator.ts` |
+| Persist/restore scoop conversation history | `src/scoops/orchestrator.ts` (creates SessionStore, passes to ScoopContext, cleans up on unregister/clear) |
 | Change scoop isolation/filesystem | `src/scoops/scoop-context.ts` |
 | Add NanoClaw tools (messaging, scoop management) | `src/scoops/nanoclaw-tools.ts` |
 | Change scoop database schema | `src/scoops/db.ts` |

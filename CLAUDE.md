@@ -98,7 +98,7 @@ Virtual Filesystem (src/fs/)
 
 SLICC uses an ice cream theme for its multi-agent system. The **cone** is the main assistant (sliccy) that holds everything together. **Scoops** are isolated agent contexts stacked on top, each with their own tools, shell, and restricted filesystem.
 
-- **Orchestrator** (`orchestrator.ts`): Creates/destroys scoop contexts, routes messages, manages the single shared VirtualFS, handles scoop completion notifications back to the cone.
+- **Orchestrator** (`orchestrator.ts`): Creates/destroys scoop contexts, routes messages, manages the single shared VirtualFS, handles scoop completion notifications back to the cone. Creates a `SessionStore` instance and passes it to each `ScoopContext`; deletes sessions on scoop removal and clears all on reset.
 - **ScoopContext** (`scoop-context.ts`): Per-scoop agent instance with RestrictedFS, WasmShell, skills, and NanoClaw-style tools (send_message).
 - **Delegation**: The cone feeds work to scoops via the `feed_scoop` tool, providing complete self-contained prompts (scoops have no access to the cone's conversation). When a scoop finishes, the orchestrator automatically routes its response back to the cone's message queue.
 - **Unified Filesystem**: One VirtualFS (`slicc-fs` IndexedDB). Cone gets unrestricted access. Each scoop gets a `RestrictedFS` limited to `/scoops/{name}/` + `/shared/`. Parent directory traversal is allowed for `stat`/`exists` (so `cd` works), but reads/writes outside the sandbox are blocked.
@@ -192,6 +192,7 @@ Uses @mariozechner/pi-agent-core for the agent loop and @mariozechner/pi-ai for 
 - tool-adapter.ts: wraps legacy ToolDefinition into AgentTool (pi-compatible execute signature)
 - context-compaction.ts: `compactContext()` truncates oversized tool results and drops old messages to stay within token limits. Applied to every scoop via `transformContext`.
 - types.ts: self-contained type definitions (ToolDefinition, ToolResult, AgentConfig, SessionData)
+- **Session persistence** (`session.ts`): `SessionStore` persists `AgentMessage[]` to IndexedDB (`agent-sessions` DB) keyed by scoop JID. `ScoopContext` restores messages on init and saves on `agent_end`, enabling agents to resume conversations across restarts. Errors are caught and logged without breaking agent flow; `compactContext` handles large restored sessions at prompt time.
 
 ### UI (src/ui/)
 Vanilla TypeScript, no framework. Two layout modes selected by `isExtension` detection:
@@ -263,7 +264,7 @@ Delegation:
 
 ## Change Requirements
 
-Every change MUST satisfy three gates: **tests**, **docs**, and **verification**.
+Every change MUST satisfy three gates: **tests**, **docs**, and **verification**. All three are part of the implementation — not follow-up work. Do not consider a change complete until all three gates are satisfied.
 
 ### Tests
 New pure-logic code (utilities, adapters, data transformations, path handling) MUST have colocated tests (`foo.test.ts` next to `foo.ts`). See `docs/testing.md` for patterns.
@@ -280,7 +281,14 @@ Changes must be reflected in the appropriate documentation tier:
 Not every change hits all three tiers. A bug fix with no API change may only need tests. A new shell command needs all three. Use judgment, but when in doubt, update the docs.
 
 ### Verification
-Before committing: `npm run typecheck` + `npm run test` must pass. See `docs/development.md` for the full checklist.
+Before committing, **all four** of these must pass:
+```bash
+npm run typecheck          # Both tsconfig targets
+npm run test               # Vitest (all tests)
+npm run build              # Production build (UI via Vite + CLI via TSC)
+npm run build:extension    # Extension build (Vite with extension config)
+```
+Do not skip any. A typecheck pass does not guarantee the builds succeed (Vite bundling can fail independently). See `docs/development.md` for the full checklist.
 
 ## Git Integration (src/git/)
 Git support via isomorphic-git with LightningFS as the backing store. GitCommands class provides CLI-like interface for git operations (init, clone, add, commit, status, log, branch, checkout, diff, remote, fetch, pull, push, config, rev-parse). Registered as a custom command in just-bash so it works in compound commands and via the bash tool.

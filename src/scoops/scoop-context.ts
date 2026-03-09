@@ -16,7 +16,8 @@ import type { RestrictedFS } from '../fs/restricted-fs.js';
 import { WasmShell } from '../shell/index.js';
 import { Agent, adaptTools, createLogger } from '../core/index.js';
 import { compactContext } from '../core/context-compaction.js';
-import type { AgentEvent as CoreAgentEvent, AssistantMessage, AssistantMessageEvent, TextContent, Model } from '../core/index.js';
+import type { AgentEvent as CoreAgentEvent, AgentMessage, AssistantMessage, AssistantMessageEvent, TextContent, Model } from '../core/index.js';
+import type { SessionStore } from '../core/session.js';
 import { createFileTools, createBashTool, createSearchTools, createBrowserTool, createJavaScriptTool } from '../tools/index.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import { getApiKey, resolveCurrentModel, getSelectedProvider } from '../ui/provider-settings.js';
@@ -63,11 +64,15 @@ export class ScoopContext {
   private didStreamDeltas = false;
   private unsubscribe: (() => void) | null = null;
   private pendingPrompts: string[] = [];
+  private sessionStore: SessionStore | null = null;
+  private sessionId: string;
 
-  constructor(scoop: RegisteredScoop, callbacks: ScoopContextCallbacks, fs: VirtualFS | RestrictedFS) {
+  constructor(scoop: RegisteredScoop, callbacks: ScoopContextCallbacks, fs: VirtualFS | RestrictedFS, sessionStore?: SessionStore) {
     this.scoop = scoop;
     this.callbacks = callbacks;
     this.fs = fs;
+    this.sessionStore = sessionStore ?? null;
+    this.sessionId = scoop.jid;
   }
 
   /** Initialize the scoop's environment */
@@ -160,11 +165,26 @@ export class ScoopContext {
 
       const systemPrompt = this.buildSystemPrompt(globalMemory, scoopMemory, skills);
 
+      // Restore agent messages from previous session
+      let restoredMessages: AgentMessage[] = [];
+      if (this.sessionStore) {
+        try {
+          const saved = await this.sessionStore.load(this.sessionId);
+          if (saved) {
+            restoredMessages = saved.messages;
+            log.info('Restored agent session', { folder: this.scoop.folder, messageCount: restoredMessages.length });
+          }
+        } catch (err) {
+          log.warn('Failed to restore agent session', { folder: this.scoop.folder, error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+
       this.agent = new Agent({
         initialState: {
           model,
           tools,
           systemPrompt,
+          messages: restoredMessages,
         },
         getApiKey: () => apiKey,
         transformContext: compactContext,
@@ -336,6 +356,20 @@ export class ScoopContext {
 
       case 'agent_end': {
         const messages = event.messages;
+
+        // Persist session (fire-and-forget — subscribe callback is sync)
+        if (this.sessionStore && messages.length > 0) {
+          this.sessionStore.save({
+            id: this.sessionId,
+            messages,
+            config: {},
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          }).catch((err) => {
+            log.error('Failed to save agent session', { folder: this.scoop.folder, error: err instanceof Error ? err.message : String(err) });
+          });
+        }
+
         if (messages.length > 0) {
           const last = messages[messages.length - 1];
           if (last.role === 'assistant' && (last as AssistantMessage).errorMessage) {
