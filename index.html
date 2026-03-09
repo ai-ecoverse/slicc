@@ -394,19 +394,19 @@
       .chat__jump-pill--visible { opacity: 1; pointer-events: auto; }
       .chat__jump-pill:hover { background: var(--s2-bg-elevated); }
 
-      /* S2 Message bubbles — all left-aligned, no bubble bg */
+      /* S2 Message bubbles — user right-aligned, assistant left-aligned */
       .msg {
         padding: var(--s2-spacing-100) 0;
         max-width: 100%; word-wrap: break-word;
       }
       .msg--user {
-        align-self: flex-start;
+        align-self: flex-end;
         background: var(--s2-bg-layer-2);
         border-radius: var(--s2-radius-default);
         padding: var(--s2-spacing-100) var(--s2-spacing-200);
-        margin-left: 26px;
+        max-width: 85%;
       }
-      .msg-group--continuation .msg--user { margin-left: 26px; }
+      .msg-group--continuation .msg--user { padding-left: 0; }
       .msg--assistant {
         background: transparent;
         align-self: flex-start;
