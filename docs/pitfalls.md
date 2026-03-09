@@ -228,6 +228,16 @@ Cross-importing breaks the build.
 
 **How to Check**: `npm run typecheck` runs both configs. Fix: move shared code to `src/shared/` or duplicate type definitions.
 
+## Node Version: >= 22 Required
+
+**The Problem**
+
+LightningFS (IndexedDB backend) references `navigator` in `DefaultBackend.init`. The `navigator` global was added to Node in v21. On Node 20 or earlier, tests that use VirtualFS fail with `ReferenceError: navigator is not defined`.
+
+**The Fix**
+
+Use Node 22 (current LTS) or later. This applies to both local development and CI. The GitHub Actions workflow (`.github/workflows/ci.yml`) pins `node-version: 22` for this reason.
+
 ## Node Shims & Vite Aliases
 
 **The Problem**

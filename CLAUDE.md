@@ -23,6 +23,8 @@ npm run test:watch      # Vitest watch mode
 npx vitest run src/fs/virtual-fs.test.ts  # Run a single test file
 ```
 
+**Requires Node >= 22** (LTS). LightningFS uses `navigator` which is only available as a global from Node 21+. Tests will fail on Node 20 or earlier.
+
 Ports (CLI mode only): 3000 (UI server), 9222 (Chrome CDP), 24679 (Vite HMR WebSocket)
 
 ## Philosophy
@@ -289,6 +291,8 @@ npm run build              # Production build (UI via Vite + CLI via TSC)
 npm run build:extension    # Extension build (Vite with extension config)
 ```
 Do not skip any. A typecheck pass does not guarantee the builds succeed (Vite bundling can fail independently). See `docs/development.md` for the full checklist.
+
+**CI**: These same four gates run automatically on every PR to `main` via GitHub Actions (`.github/workflows/ci.yml`).
 
 ## Git Integration (src/git/)
 Git support via isomorphic-git with LightningFS as the backing store. GitCommands class provides CLI-like interface for git operations (init, clone, add, commit, status, log, branch, checkout, diff, remote, fetch, pull, push, config, rev-parse). Registered as a custom command in just-bash so it works in compound commands and via the bash tool.
