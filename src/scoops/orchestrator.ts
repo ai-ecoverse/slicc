@@ -23,7 +23,7 @@ import { VirtualFS } from '../fs/index.js';
 import { RestrictedFS } from '../fs/restricted-fs.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import { createDefaultSharedFiles } from './skills.js';
-import type { LickManager } from './lick-manager.js';
+import { buildActiveLicksError, type LickManager } from './lick-manager.js';
 
 const log = createLogger('orchestrator');
 
@@ -213,23 +213,9 @@ export class Orchestrator {
     // Guard: check for active licks before allowing removal
     const scoop = this.scoops.get(jid);
     if (scoop && this.lickManager) {
-      const { webhooks, cronTasks } = this.lickManager.getLicksForScoop(scoop.folder);
-      if (webhooks.length > 0 || cronTasks.length > 0) {
-        const parts: string[] = [];
-        if (webhooks.length > 0) {
-          parts.push(`${webhooks.length} active webhook${webhooks.length > 1 ? 's' : ''}`);
-        }
-        if (cronTasks.length > 0) {
-          parts.push(`${cronTasks.length} active cron task${cronTasks.length > 1 ? 's' : ''}`);
-        }
-        const commands = [
-          ...webhooks.map(wh => `  webhook delete ${wh.id}`),
-          ...cronTasks.map(ct => `  crontask delete ${ct.id}`),
-        ].join('\n');
-        throw new Error(
-          `Cannot remove scoop '${scoop.folder}': it has ${parts.join(' and ')}. Unregister them first:\n${commands}`
-        );
-      }
+      const { webhooks, cronTasks } = this.lickManager.getLicksForScoop(scoop.name, scoop.folder);
+      const err = buildActiveLicksError(scoop.folder, webhooks, cronTasks);
+      if (err) throw err;
     }
 
     await this.destroyScoopTab(jid);
