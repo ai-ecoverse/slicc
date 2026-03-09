@@ -66,6 +66,7 @@ export class ScoopContext {
   private pendingPrompts: string[] = [];
   private sessionStore: SessionStore | null = null;
   private sessionId: string;
+  private sessionCreatedAt: number = 0;
 
   constructor(scoop: RegisteredScoop, callbacks: ScoopContextCallbacks, fs: VirtualFS | RestrictedFS, sessionStore?: SessionStore) {
     this.scoop = scoop;
@@ -172,10 +173,12 @@ export class ScoopContext {
           const saved = await this.sessionStore.load(this.sessionId);
           if (saved) {
             restoredMessages = saved.messages;
+            this.sessionCreatedAt = saved.createdAt;
             log.info('Restored agent session', { folder: this.scoop.folder, messageCount: restoredMessages.length });
           }
         } catch (err) {
-          log.warn('Failed to restore agent session', { folder: this.scoop.folder, error: err instanceof Error ? err.message : String(err) });
+          log.error('Failed to restore agent session', { folder: this.scoop.folder, error: err instanceof Error ? err.message : String(err) });
+          this.callbacks.onError(`Conversation history could not be restored. Starting fresh.`);
         }
       }
 
@@ -363,7 +366,7 @@ export class ScoopContext {
             id: this.sessionId,
             messages,
             config: {},
-            createdAt: Date.now(),
+            createdAt: this.sessionCreatedAt || Date.now(),
             updatedAt: Date.now(),
           }).catch((err) => {
             log.error('Failed to save agent session', { folder: this.scoop.folder, error: err instanceof Error ? err.message : String(err) });

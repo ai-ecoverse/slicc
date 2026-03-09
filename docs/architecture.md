@@ -273,8 +273,8 @@ ScoopContext init (page load / scoop creation)
 
 Agent responds (streaming)
   → agent_end event
-    → SessionStore.save(scoop.jid, allMessages) [fire-and-forget]
-      → Persists updated AgentMessage[] to agent-sessions DB
+    → SessionStore.save({ id, messages, config, createdAt, updatedAt }) [fire-and-forget]
+      → Persists SessionData to agent-sessions DB
 
 Scoop removal / app clear
   → Orchestrator calls SessionStore.delete(jid) or SessionStore.clearAll()
@@ -284,7 +284,7 @@ Scoop removal / app clear
 **Session Storage:**
 - Database: `agent-sessions` (IndexedDB)
 - Key: scoop JID (e.g., `cone`, `analysis-scoop`)
-- Value: `AgentMessage[]` (agent loop message history)
+- Value: `SessionData` (`AgentMessage[]` + config + timestamps)
 - Lifecycle: Loaded on scoop init, saved on agent_end (error-tolerant), deleted on scoop removal
 - Design: Messages are model-agnostic and work with any LLM. `compactContext` trims at prompt time (existing mechanism), so large sessions don't cause token bloat.
 
@@ -295,7 +295,7 @@ Scoop removal / app clear
 | `slicc-fs` | 1 | (VirtualFS data) | POSIX filesystem backing store (LightningFS) |
 | `browser-coding-agent` | 1 | sessions, settings | UI-level session history + localStorage mirror |
 | `slicc-groups` | 3 | scoops, messages, sessions, tasks, state, webhooks, crontasks | Orchestrator data (scoops, messages, tasks) |
-| `agent-sessions` | 1 | sessions | Core agent session history: persisted `AgentMessage[]` per scoop, keyed by JID; loaded on scoop init, saved on agent_end |
+| `agent-sessions` | 1 | sessions | Core agent session history: persisted `SessionData` (`AgentMessage[]` + config + timestamps) per scoop, keyed by JID; loaded on scoop init, saved on agent_end |
 | `slicc-fs-global` | 1 | config | Git global config storage |
 
 ## File-Finding Guide
