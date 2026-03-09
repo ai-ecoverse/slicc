@@ -167,18 +167,16 @@ export class ScoopSwitcher {
   }
 
   private buildIcon(scoop: RegisteredScoop | undefined, allScoops: RegisteredScoop[]): HTMLElement {
+    const SCOOP_COLORS = ['#f000a0', '#00f0f0', '#90f000', '#15d675', '#e68619'];
     const icon = document.createElement('span');
     icon.className = 'scoop-dd__icon';
     if (!scoop) return icon;
 
     if (scoop.isCone) {
-      icon.classList.add('scoop-dd__icon--cone');
-      icon.textContent = '\uD83C\uDF66';
+      icon.style.background = '#f07000';
     } else {
-      icon.textContent = '\uD83D\uDCA9';
       const scoopIndex = allScoops.filter(s => !s.isCone).indexOf(scoop);
-      const hue = (scoopIndex * 72) % 360;
-      icon.style.filter = `invert(0.85) sepia(1) saturate(4) hue-rotate(${hue}deg) brightness(1.05)`;
+      icon.style.background = SCOOP_COLORS[scoopIndex % SCOOP_COLORS.length];
     }
     return icon;
   }
@@ -191,33 +189,35 @@ export class ScoopSwitcher {
     style.textContent = `
       .scoop-switcher {
         position: relative;
-        margin-left: 12px;
+        margin-left: var(--s2-spacing-200);
       }
 
       .scoop-dd__trigger {
         display: flex;
         align-items: center;
         gap: 6px;
-        padding: 4px 10px;
-        border: 1px solid #444;
-        border-radius: 6px;
-        background: #2a2a3a;
-        color: #e0e0f0;
-        font-size: 13px;
+        padding: var(--s2-spacing-50) var(--s2-spacing-100);
+        border: 1px solid var(--s2-border-default);
+        border-radius: var(--s2-radius-default);
+        background: var(--s2-bg-layer-2);
+        color: var(--s2-content-default);
+        font-size: var(--s2-font-size-75);
+        font-family: var(--s2-font-family);
         cursor: pointer;
         white-space: nowrap;
+        transition: all var(--s2-transition-default);
       }
 
       .scoop-dd__trigger:hover {
-        background: #3a3a5a;
+        background: var(--s2-bg-elevated);
       }
 
       .scoop-dd__trigger--busy {
-        border-color: #eeee90;
+        border-color: var(--s2-notice);
       }
 
       .scoop-dd__trigger--error {
-        border-color: #ee9090;
+        border-color: var(--s2-negative);
       }
 
       .scoop-dd__arrow {
@@ -229,65 +229,62 @@ export class ScoopSwitcher {
         position: absolute;
         top: 100%;
         left: 0;
-        margin-top: 4px;
+        margin-top: var(--s2-spacing-50);
         min-width: 180px;
-        background: #1e1e2e;
-        border: 1px solid #444;
-        border-radius: 8px;
-        padding: 4px 0;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+        background: var(--s2-bg-layer-2);
+        border: 1px solid var(--s2-border-default);
+        border-radius: var(--s2-radius-l);
+        padding: var(--s2-spacing-50) 0;
+        box-shadow: var(--s2-shadow-elevated);
         z-index: 1000;
       }
 
       .scoop-dd__item {
         display: flex;
         align-items: center;
-        gap: 8px;
-        padding: 8px 12px;
+        gap: var(--s2-spacing-100);
+        padding: var(--s2-spacing-100) var(--s2-spacing-200);
         cursor: pointer;
-        font-size: 13px;
-        color: #c0c0d0;
-        transition: background 0.1s;
+        font-size: var(--s2-font-size-75);
+        color: var(--s2-content-default);
+        transition: background var(--s2-transition-default);
+        border-radius: var(--s2-radius-s);
+        margin: 0 var(--s2-spacing-50);
       }
 
       .scoop-dd__item:hover {
-        background: #2a2a4a;
+        background: var(--s2-bg-elevated);
       }
 
       .scoop-dd__item--active {
-        background: #2a2a4a;
-        color: #e94560;
-        font-weight: 600;
+        background: var(--s2-bg-elevated);
+        color: var(--slicc-cone);
+        font-weight: 700;
       }
 
       .scoop-dd__item--busy .scoop-dd__label {
-        color: #eeee90;
+        color: var(--s2-notice);
       }
 
       .scoop-dd__item--error .scoop-dd__label {
-        color: #ee9090;
+        color: var(--s2-negative);
       }
 
       .scoop-dd__item--add {
-        border-top: 1px solid #333;
-        margin-top: 4px;
-        padding-top: 8px;
-        color: #808090;
+        border-top: 1px solid var(--s2-border-subtle);
+        margin-top: var(--s2-spacing-50);
+        padding-top: var(--s2-spacing-100);
+        color: var(--s2-content-tertiary);
       }
 
       .scoop-dd__item--add:hover {
-        color: #e94560;
+        color: var(--slicc-cone);
       }
 
       .scoop-dd__icon {
-        font-size: 16px;
-        width: 20px;
-        text-align: center;
+        width: 8px; height: 8px;
+        border-radius: 50%;
         flex-shrink: 0;
-      }
-
-      .scoop-dd__icon--cone {
-        clip-path: polygon(0% 45%, 100% 45%, 100% 100%, 0% 100%);
       }
 
       .scoop-dd__label {
@@ -303,12 +300,12 @@ export class ScoopSwitcher {
       }
 
       .scoop-dd__status--processing {
-        color: #eeee90;
+        color: var(--s2-notice);
         animation: scoop-pulse 1s infinite;
       }
 
       .scoop-dd__status--error {
-        color: #ee9090;
+        color: var(--s2-negative);
       }
 
       @keyframes scoop-pulse {
@@ -318,10 +315,10 @@ export class ScoopSwitcher {
 
       .scoop-dd__delete {
         font-size: 14px;
-        color: #808090;
+        color: var(--s2-content-disabled);
         opacity: 0;
         cursor: pointer;
-        transition: opacity 0.1s, color 0.1s;
+        transition: opacity var(--s2-transition-default), color var(--s2-transition-default);
         flex-shrink: 0;
       }
 
@@ -330,7 +327,7 @@ export class ScoopSwitcher {
       }
 
       .scoop-dd__delete:hover {
-        color: #ee9090;
+        color: var(--s2-negative);
       }
     `;
     document.head.appendChild(style);

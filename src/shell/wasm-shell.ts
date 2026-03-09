@@ -275,17 +275,68 @@ export class WasmShell {
     const { FitAddon } = await import('@xterm/addon-fit');
     await import('@xterm/xterm/css/xterm.css');
 
+    const isDark = !window.matchMedia?.('(prefers-color-scheme: light)').matches;
+    const darkTheme = {
+      background: '#141414',
+      foreground: '#cfcfcf',
+      cursor: '#3562ff',
+      cursorAccent: '#141414',
+      selectionBackground: '#3562ff40',
+      selectionForeground: '#ffffff',
+      black: '#1a1a1a',
+      red: '#e34850',
+      green: '#2d9d78',
+      yellow: '#e68619',
+      blue: '#3562ff',
+      magenta: '#a962e8',
+      cyan: '#2db9be',
+      white: '#cfcfcf',
+      brightBlack: '#5a5a5a',
+      brightRed: '#e34850',
+      brightGreen: '#2d9d78',
+      brightYellow: '#e68619',
+      brightBlue: '#4a75ff',
+      brightMagenta: '#a962e8',
+      brightCyan: '#2db9be',
+      brightWhite: '#ffffff',
+    };
+    const lightTheme = {
+      background: '#f0f0f0',
+      foreground: '#1a1a1a',
+      cursor: '#2b54db',
+      cursorAccent: '#f0f0f0',
+      selectionBackground: '#2b54db30',
+      selectionForeground: '#000000',
+      black: '#1a1a1a',
+      red: '#d73220',
+      green: '#268e6c',
+      yellow: '#d17a00',
+      blue: '#2b54db',
+      magenta: '#8839ef',
+      cyan: '#1a9088',
+      white: '#e8e8e8',
+      brightBlack: '#6e6e6e',
+      brightRed: '#d73220',
+      brightGreen: '#268e6c',
+      brightYellow: '#d17a00',
+      brightBlue: '#1e44c4',
+      brightMagenta: '#8839ef',
+      brightCyan: '#1a9088',
+      brightWhite: '#ffffff',
+    };
+
     this.terminal = new Terminal({
       cursorBlink: true,
-      fontSize: 14,
-      fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
-      theme: {
-        background: '#1a1a2e',
-        foreground: '#e0e0e0',
-        cursor: '#e94560',
-        selectionBackground: '#e9456040',
-      },
+      fontSize: 11,
+      fontFamily: "'Source Code Pro', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
+      theme: isDark ? darkTheme : lightTheme,
       convertEol: true,
+    });
+
+    // Listen for system color scheme changes
+    const mq = window.matchMedia?.('(prefers-color-scheme: light)');
+    mq?.addEventListener('change', (e) => {
+      if (this.terminal) this.terminal.options.theme = e.matches ? lightTheme : darkTheme;
     });
 
     this.fitAddon = new FitAddon();
@@ -309,8 +360,8 @@ export class WasmShell {
     this.resizeObserver.observe(this.terminalHost);
 
     // Write welcome message
-    this.terminal.writeln('slicc shell (powered by just-bash)');
-    this.terminal.writeln('Type "help" for available commands.\n');
+    this.terminal.writeln('\x1b[1mslicc\x1b[0m \x1b[90mshell (powered by just-bash)\x1b[0m');
+    this.terminal.writeln('\x1b[90mType "help" for available commands.\x1b[0m\n');
 
     this.showPrompt();
     this.setupInputHandler();
@@ -416,7 +467,7 @@ export class WasmShell {
   private showPrompt(): void {
     if (!this.terminal) return;
     const shortCwd = this.cwd === '/' ? '/' : this.cwd.split('/').pop() ?? this.cwd;
-    this.terminal.write(`\x1b[36m${shortCwd}\x1b[0m \x1b[33m$\x1b[0m `);
+    this.terminal.write(`\x1b[34m${shortCwd}\x1b[0m \x1b[90m$\x1b[0m `);
   }
 
   private setupInputHandler(): void {

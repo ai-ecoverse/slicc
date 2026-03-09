@@ -20,5 +20,10 @@
   "action": {
     "default_title": "slicc"
   },
-  "icons": {}
+  "icons": {
+    "16": "logos/slicc-favicon-16.png",
+    "32": "logos/slicc-favicon-32.png",
+    "48": "logos/slicc-favicon-48.png",
+    "128": "logos/slicc-favicon-128.png"
+  }
 }
