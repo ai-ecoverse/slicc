@@ -9,7 +9,7 @@
 import type { Terminal } from '@xterm/xterm';
 import type { FitAddon } from '@xterm/addon-fit';
 import type { VirtualFS } from '../fs/index.js';
-import { Bash, defineCommand } from 'just-bash';
+import { Bash, defineCommand, getCommandNames, getNetworkCommandNames } from 'just-bash';
 import type { BashExecResult, SecureFetch, Command } from 'just-bash';
 import { VfsAdapter } from './vfs-adapter.js';
 import { cacheBinaryBody, cacheBinaryByUrl } from './binary-cache.js';
@@ -18,6 +18,9 @@ import { createSupplementalCommands } from './supplemental-commands.js';
 import type { MediaPreviewItem } from './supplemental-commands.js';
 import { createSkillCommand, createUpskillCommand } from './supplemental-commands/upskill-command.js';
 import { MountCommands } from '../fs/mount-commands.js';
+import { discoverJshCommands } from './jsh-discovery.js';
+import { executeJshFile } from './jsh-executor.js';
+import { parseShellArgs } from './parse-shell-args.js';
 
 function basename(path: string): string {
   const trimmed = path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
@@ -158,6 +161,10 @@ export class WasmShell {
   /** Accumulated env state from successive exec() calls. */
   private lastEnv: Record<string, string>;
   private cwd: string;
+  /** Discovered .jsh command map (command name → VFS path). Lazily populated. */
+  private jshCommands: Map<string, string> | null = null;
+  /** Set of all built-in + custom command names (for shadowing protection). */
+  private builtinCommandNames: Set<string>;
 
   constructor(private options: WasmShellOptions) {
     this.vfsAdapter = new VfsAdapter(options.fs);
@@ -185,23 +192,39 @@ export class WasmShell {
     const gitCommand = this.createGitCustomCommand();
     const supplementalCommands = createSupplementalCommands({
       onMediaPreview: async (items) => this.renderMediaPreview(items),
+      getJshCommands: () => this.getJshCommandNames(),
+      fs: options.fs,
     });
     const mountCommand = this.createMountCustomCommand();
     const fetchFn = createProxiedFetch();
+
+    const customCommands = [
+      gitCommand,
+      mountCommand,
+      createSkillCommand(options.fs),
+      createUpskillCommand(options.fs, fetchFn),
+      ...supplementalCommands,
+    ];
 
     this.bash = new Bash({
       fs: this.vfsAdapter,
       cwd: initialCwd,
       env: initialEnv,
       fetch: fetchFn,
-      customCommands: [
-        gitCommand,
-        mountCommand,
-        createSkillCommand(options.fs),
-        createUpskillCommand(options.fs, fetchFn),
-        ...supplementalCommands,
-      ],
+      customCommands,
     });
+
+    // Wire up /usr/bin virtual directory with all registered command names
+    const customCommandNames = customCommands.map(c => c.name);
+    this.builtinCommandNames = new Set([
+      ...getCommandNames(),
+      ...getNetworkCommandNames(),
+      ...customCommandNames,
+    ]);
+    this.vfsAdapter.setRegisteredCommandsFn(() => [
+      ...this.builtinCommandNames,
+    ]);
+
     this.lastEnv = { ...initialEnv };
     this.cwd = initialCwd;
   }
@@ -249,6 +272,62 @@ export class WasmShell {
     return { ...this.lastEnv };
   }
 
+  /** Discover .jsh commands from VFS (lazy, cached). */
+  private async ensureJshDiscovery(): Promise<Map<string, string>> {
+    if (this.jshCommands) return this.jshCommands;
+    const all = await discoverJshCommands(this.options.fs);
+    // Filter out names that shadow built-in commands
+    this.jshCommands = new Map<string, string>();
+    for (const [name, path] of all) {
+      if (!this.builtinCommandNames.has(name)) {
+        this.jshCommands.set(name, path);
+      }
+    }
+    return this.jshCommands;
+  }
+
+  /** Invalidate cached .jsh discovery (e.g., after adding new scripts). */
+  refreshJshCommands(): void {
+    this.jshCommands = null;
+  }
+
+  /** Get currently discovered .jsh command names. */
+  getJshCommandNames(): string[] {
+    return this.jshCommands ? [...this.jshCommands.keys()] : [];
+  }
+
+  /**
+   * Try to run a command as a .jsh script if bash returned 127 (command not found).
+   * Returns null if the command is not a .jsh file.
+   */
+  private async tryJshFallback(command: string): Promise<BashExecResult | null> {
+    // Parse the first word as the command name
+    const trimmed = command.trim();
+    const firstSpace = trimmed.indexOf(' ');
+    const cmdName = firstSpace >= 0 ? trimmed.slice(0, firstSpace) : trimmed;
+    const argsStr = firstSpace >= 0 ? trimmed.slice(firstSpace + 1).trim() : '';
+
+    const jshMap = await this.ensureJshDiscovery();
+    const scriptPath = jshMap.get(cmdName);
+    if (!scriptPath) return null;
+
+    const args = argsStr ? parseShellArgs(argsStr) : [];
+
+    const result = await executeJshFile(scriptPath, args, {
+      fs: this.vfsAdapter,
+      cwd: this.cwd,
+      env: new Map(Object.entries(this.lastEnv)),
+      stdin: '',
+    });
+
+    return {
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+      env: this.lastEnv,
+    };
+  }
+
   /** Run a command through just-bash, carrying forward env/cwd state. */
   private async runCommand(command: string): Promise<BashExecResult> {
     const result = await this.bash.exec(command, {
@@ -262,6 +341,13 @@ export class WasmShell {
     if (result.env?.PWD) {
       this.cwd = result.env.PWD;
     }
+
+    // If bash returned 127 (command not found), try .jsh fallback
+    if (result.exitCode === 127) {
+      const jshResult = await this.tryJshFallback(command);
+      if (jshResult) return jshResult;
+    }
+
     return result;
   }
 

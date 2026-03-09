@@ -45,6 +45,9 @@ const fs = {
   writeFileBinary: (path, data) => vfsCallBinary('writeFileBinary', [path], data),
   readDir: (path) => vfsCall('readDir', [path]),
   exists: (path) => vfsCall('exists', [path]),
+  stat: (path) => vfsCall('stat', [path]),
+  mkdir: (path) => vfsCall('mkdir', [path]),
+  rm: (path) => vfsCall('rm', [path]),
   fetchToFile: async (url, path) => {
     const resp = await fetch(url);
     if (!resp.ok) throw new Error('fetch ' + resp.status + ' ' + resp.statusText);

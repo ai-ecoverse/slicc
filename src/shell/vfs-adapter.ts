@@ -25,7 +25,21 @@ interface WriteFileOptions { encoding?: BufferEncoding }
 interface DirentEntry { name: string; isFile: boolean; isDirectory: boolean; isSymbolicLink: boolean }
 
 export class VfsAdapter implements IFileSystem {
+  private registeredCommandsFn: (() => string[]) | null = null;
+
   constructor(private vfs: VirtualFS) {}
+
+  /**
+   * Set a function that returns the list of registered command names.
+   * Used to populate the virtual /usr/bin directory.
+   */
+  setRegisteredCommandsFn(fn: () => string[]): void {
+    this.registeredCommandsFn = fn;
+  }
+
+  private getVirtualBinCommands(): string[] {
+    return this.registeredCommandsFn?.() ?? [];
+  }
 
   async readFile(path: string, options?: ReadFileOptions | BufferEncoding): Promise<string> {
     const normalized = normalizePath(path);
@@ -116,11 +130,28 @@ export class VfsAdapter implements IFileSystem {
   }
 
   async exists(path: string): Promise<boolean> {
-    return this.vfs.exists(normalizePath(path));
+    const normalized = normalizePath(path);
+    if (normalized === '/usr' || normalized === '/usr/bin') return true;
+    if (normalized.startsWith('/usr/bin/')) {
+      const cmdName = normalized.slice('/usr/bin/'.length);
+      return cmdName.length > 0 && !cmdName.includes('/') && this.getVirtualBinCommands().includes(cmdName);
+    }
+    return this.vfs.exists(normalized);
   }
 
   async stat(path: string): Promise<FsStat> {
     const normalized = normalizePath(path);
+    // Virtual /usr and /usr/bin directories
+    if (normalized === '/usr' || normalized === '/usr/bin') {
+      return { isFile: false, isDirectory: true, isSymbolicLink: false, mode: 0o755, size: 0, mtime: new Date(0) };
+    }
+    // Virtual /usr/bin/<command> entries
+    if (normalized.startsWith('/usr/bin/')) {
+      const cmdName = normalized.slice('/usr/bin/'.length);
+      if (cmdName.length > 0 && !cmdName.includes('/') && this.getVirtualBinCommands().includes(cmdName)) {
+        return { isFile: true, isDirectory: false, isSymbolicLink: false, mode: 0o755, size: 0, mtime: new Date(0) };
+      }
+    }
     const s = await this.vfs.stat(normalized);
     return {
       isFile: s.type === 'file',
@@ -142,12 +173,24 @@ export class VfsAdapter implements IFileSystem {
   }
 
   async readdir(path: string): Promise<string[]> {
-    const entries = await this.vfs.readDir(normalizePath(path));
+    const normalized = normalizePath(path);
+    if (normalized === '/usr') return ['bin'];
+    if (normalized === '/usr/bin') return this.getVirtualBinCommands().slice().sort();
+    const entries = await this.vfs.readDir(normalized);
     return entries.map((e) => e.name);
   }
 
   async readdirWithFileTypes(path: string): Promise<DirentEntry[]> {
-    const entries = await this.vfs.readDir(normalizePath(path));
+    const normalized = normalizePath(path);
+    if (normalized === '/usr') {
+      return [{ name: 'bin', isFile: false, isDirectory: true, isSymbolicLink: false }];
+    }
+    if (normalized === '/usr/bin') {
+      return this.getVirtualBinCommands().slice().sort().map(name => ({
+        name, isFile: true, isDirectory: false, isSymbolicLink: false,
+      }));
+    }
+    const entries = await this.vfs.readDir(normalized);
     return entries.map((e) => ({
       name: e.name,
       isFile: e.type === 'file',

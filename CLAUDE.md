@@ -135,9 +135,18 @@ WasmShell wraps just-bash 2.11.7 (WASM Bash interpreter) and connects it to Virt
 - `crontask` — Schedule cron jobs that dispatch licks to scoops
 - `mount` — Mount a local directory into the virtual filesystem via the File System Access API
 - `convert` — ImageMagick-style image conversion (resize, rotate, crop, quality) via `@imagemagick/magick-wasm`
+- `which <command>` — Resolve a command to its path (`/usr/bin/<name>` for built-ins, actual VFS path for `.jsh` files)
 - `commands` — Show all available commands (type `commands` in terminal)
 
+Any `*.jsh` file anywhere on the VFS is auto-discovered as a shell command (basename without `.jsh` extension). Skills can ship `.jsh` files alongside `SKILL.md` to provide executable commands. Files in `/workspace/skills/` get priority when names conflict.
+
 **Extension CSP workaround**: `node -e` in extension mode routes through the sandbox iframe (CSP blocks `AsyncFunction` constructor on extension pages). Python uses bundled Pyodide loaded from `chrome.runtime.getURL('pyodide/')`. ImageMagick WASM is fetched as bytes from `chrome.runtime.getURL('magick.wasm')` since `initializeImageMagick` rejects `chrome-extension://` URLs.
+
+**JSH Scripts** (`src/shell/jsh-discovery.ts`, `src/shell/jsh-executor.ts`, `src/shell/parse-shell-args.ts`): `.jsh` files are JavaScript shell scripts that are auto-discovered as commands anywhere on the VFS.
+- `jsh-discovery.ts` — Scans VFS for `*.jsh` files with priority roots (`/workspace/skills/`), returns `Map<name, path>`. First occurrence of a basename wins.
+- `jsh-executor.ts` — Executes `.jsh` files with Node-like globals: `process` (argv, env, cwd, exit, stdout.write, stderr.write), `console` (log, info, warn, error), `fs` bridge (readFile, writeFile, readDir, mkdir, rm, stat, exists, fetchToFile). Dual-mode: `AsyncFunction` in CLI, sandbox iframe in extension (CSP-compliant). Returns `JshResult` with stdout, stderr, exitCode.
+- `parse-shell-args.ts` — Shell-like argument parser handling double quotes, single quotes, and backslash escapes.
+- `which-command.ts` — Implements `which` to resolve built-in commands (`/usr/bin/<name>`) and `.jsh` scripts (actual VFS path).
 
 ### Skills System (src/skills/, src/scoops/skills.ts)
 Two complementary skill systems:
@@ -245,7 +254,7 @@ Delegation:
 ## Key Conventions
 
 - **Two type systems**: Legacy ToolDefinition/ToolResult (in src/tools/) and pi-compatible AgentTool/AgentToolResult (in src/core/). The adapter in tool-adapter.ts bridges them.
-- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 640 tests across 35 files.
+- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 743 tests across 41 files.
 - **Logging**: createLogger('namespace') from src/core/logger.ts. Level-filtered, DEBUG in dev, ERROR in prod. Uses __DEV__ global (set by Vite define).
 - **Node shims**: src/shims/empty.ts stubs out node:zlib and node:module for the browser bundle (just-bash references them).
 - **Multi-provider auth**: Provider settings in `src/ui/provider-settings.ts`. Supports Anthropic (direct), Azure AI Foundry (Claude on Azure), Azure OpenAI (GPT), AWS Bedrock, and many more via pi-ai. Provider/API key/baseUrl stored in localStorage. Model resolved via `resolveCurrentModel()` with baseUrl override.
