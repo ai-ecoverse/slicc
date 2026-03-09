@@ -41,7 +41,8 @@ function normalizeToolCallId(id: string): string {
   return sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
 }
 
-function sanitize(text: string): string {
+function sanitize(text: string | undefined | null): string {
+  if (!text) return '';
   // Strip unpaired surrogates (same as pi-ai's sanitizeSurrogates)
   return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD');
 }
@@ -101,7 +102,7 @@ function convertMessages(context: Context, model: Model<Api>): any[] {
             content: m.content.map((c: any) =>
               c.type === 'image'
                 ? { image: { source: { bytes: c.data }, format: mimeToFormat(c.mimeType) } }
-                : { text: sanitize(c.text) },
+                : { text: sanitize(c.text ?? c.json ?? JSON.stringify(c)) },
             ),
             status: m.isError ? 'error' : 'success',
           },
@@ -115,7 +116,7 @@ function convertMessages(context: Context, model: Model<Api>): any[] {
               content: next.content.map((c: any) =>
                 c.type === 'image'
                   ? { image: { source: { bytes: c.data }, format: mimeToFormat(c.mimeType) } }
-                  : { text: sanitize(c.text) },
+                  : { text: sanitize(c.text ?? c.json ?? JSON.stringify(c)) },
               ),
               status: next.isError ? 'error' : 'success',
             },
