@@ -114,6 +114,17 @@ const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
     baseUrlPlaceholder: 'https://bedrock-runtime.us-east-1.amazonaws.com',
     baseUrlDescription: 'Bedrock runtime endpoint (region-specific)',
   },
+  'bedrock-camp': {
+    id: 'bedrock-camp',
+    name: 'AWS Bedrock (CAMP)',
+    description: 'Claude on AWS Bedrock via Adobe CAMP Bearer token',
+    requiresApiKey: true,
+    apiKeyPlaceholder: 'ABSK...',
+    apiKeyEnvVar: 'BEDROCK_CAMP_API_KEY',
+    requiresBaseUrl: true,
+    baseUrlPlaceholder: 'https://bedrock-runtime.us-west-2.amazonaws.com',
+    baseUrlDescription: 'Bedrock runtime endpoint from CAMP portal',
+  },
   'azure-ai-foundry': {
     id: 'azure-ai-foundry',
     name: 'Azure (Claude)',
@@ -196,6 +207,11 @@ export function getProviderConfig(providerId: string): ProviderConfig {
 export function getProviderModels(providerId: string): Model<Api>[] {
   try {
     // Azure AI Foundry uses Anthropic's Claude models
+    // Bedrock CAMP uses Amazon Bedrock models with custom API
+    if (providerId === 'bedrock-camp') {
+      const bedrockModels = getModelsDynamic('amazon-bedrock');
+      return bedrockModels.map(m => ({ ...m, api: 'bedrock-camp-converse' as any, provider: 'bedrock-camp' }));
+    }
     const effectiveProvider = providerId === 'azure-ai-foundry' ? 'anthropic' : providerId;
     return getModelsDynamic(effectiveProvider);
   } catch {
@@ -319,8 +335,16 @@ export function resolveCurrentModel(): Model<Api> {
 
   try {
     // Azure AI Foundry uses Anthropic's model registry
-    const effectiveProvider = providerId === 'azure-ai-foundry' ? 'anthropic' : providerId;
+    // Bedrock CAMP uses Amazon Bedrock's model registry with custom API
+    const effectiveProvider = providerId === 'azure-ai-foundry' ? 'anthropic'
+      : providerId === 'bedrock-camp' ? 'amazon-bedrock'
+      : providerId;
     let model = getModelDynamic(effectiveProvider, effectiveModelId);
+
+    // Bedrock CAMP: override api and provider to route through custom stream function
+    if (providerId === 'bedrock-camp') {
+      model = { ...model, api: 'bedrock-camp-converse' as any, provider: 'bedrock-camp' };
+    }
 
     // Override baseUrl if custom one is set
     if (baseUrl) {
