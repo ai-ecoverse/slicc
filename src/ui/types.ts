@@ -11,7 +11,7 @@
 
 export interface AgentHandle {
   /** Send a user message to the agent. */
-  sendMessage(text: string): void;
+  sendMessage(text: string, messageId?: string): void;
   /** Subscribe to agent events. Returns an unsubscribe function. */
   onEvent(callback: (event: AgentEvent) => void): () => void;
   /** Stop the current agent response. */
@@ -50,6 +50,8 @@ export interface ChatMessage {
   source?: 'cone' | 'lick' | string;
   /** For licks: the channel type (webhook, cron, etc.) */
   channel?: string;
+  /** True when the message is queued (submitted while the agent is still processing). */
+  queued?: boolean;
 }
 
 export interface ToolCall {

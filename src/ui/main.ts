@@ -10,6 +10,8 @@ import { Layout } from './layout.js';
 import { getApiKey, showProviderSettings } from './provider-settings.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent, ChatMessage, ToolCall } from './types.js';
 import { createLogger } from '../core/index.js';
+// Register custom API providers (side-effect import triggers registerApiProvider)
+import '../providers/bedrock-camp.js';
 import { BrowserAPI, DebuggerClient } from '../cdp/index.js';
 import { Orchestrator } from '../scoops/index.js';
 import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
@@ -309,14 +311,14 @@ async function main(): Promise<void> {
 
   // Build the cone agent handle — all user input routes through orchestrator
   const coneAgentHandle: AgentHandle = {
-    sendMessage(text: string): void {
+    sendMessage(text: string, messageId?: string): void {
       if (!selectedScoop) {
         emitToUI({ type: 'error', error: 'No scoop selected' });
         return;
       }
 
       const msg: ChannelMessage = {
-        id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        id: messageId ?? `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         chatJid: selectedScoop.jid,
         senderId: 'user',
         senderName: 'User',
@@ -343,11 +345,31 @@ async function main(): Promise<void> {
     stop(): void {
       if (selectedScoop) {
         orchestrator.stopScoop(selectedScoop.jid);
+        // Clear queued messages from orchestrator so they don't get processed later
+        orchestrator.clearQueuedMessages(selectedScoop.jid).catch((err) => {
+          log.error('Failed to clear queued messages on stop', { error: err instanceof Error ? err.message : String(err) });
+        });
       }
     },
   };
 
   layout.panels.chat.setAgent(coneAgentHandle);
+
+  // Wire delete callback for queued messages
+  layout.panels.chat.setDeleteQueuedMessageCallback((messageId: string) => {
+    if (selectedScoop) {
+      orchestrator.deleteQueuedMessage(selectedScoop.jid, messageId).catch((err) => {
+        log.error('Failed to delete queued message', { messageId, error: err instanceof Error ? err.message : String(err) });
+      });
+      // Also remove from the in-memory message buffer so it doesn't reappear on scoop switch
+      const buf = scoopMessageBuffers.get(selectedScoop.jid);
+      if (buf) {
+        const idx = buf.findIndex(m => m.id === messageId);
+        if (idx !== -1) buf.splice(idx, 1);
+      }
+    }
+  });
+
   log.info('Cone agent handle wired to chat UI');
 
   // ---------------------------------------------------------------------------
