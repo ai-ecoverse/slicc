@@ -83,4 +83,72 @@ describe('VfsAdapter', () => {
       await expect(adapter.appendFile('/mydir', 'data')).rejects.toThrow();
     });
   });
+
+  describe('virtual /usr/bin directory', () => {
+    beforeEach(() => {
+      adapter.setRegisteredCommandsFn(() => ['ls', 'cat', 'node', 'git']);
+    });
+
+    it('exists returns true for /usr', async () => {
+      expect(await adapter.exists('/usr')).toBe(true);
+    });
+
+    it('exists returns true for /usr/bin', async () => {
+      expect(await adapter.exists('/usr/bin')).toBe(true);
+    });
+
+    it('exists returns true for /usr/bin/<registered command>', async () => {
+      expect(await adapter.exists('/usr/bin/ls')).toBe(true);
+      expect(await adapter.exists('/usr/bin/node')).toBe(true);
+    });
+
+    it('exists returns false for /usr/bin/<unknown command>', async () => {
+      expect(await adapter.exists('/usr/bin/nonexistent')).toBe(false);
+    });
+
+    it('stat returns directory for /usr and /usr/bin', async () => {
+      const usrStat = await adapter.stat('/usr');
+      expect(usrStat.isDirectory).toBe(true);
+      expect(usrStat.isFile).toBe(false);
+
+      const binStat = await adapter.stat('/usr/bin');
+      expect(binStat.isDirectory).toBe(true);
+      expect(binStat.isFile).toBe(false);
+    });
+
+    it('stat returns file for /usr/bin/<registered command>', async () => {
+      const s = await adapter.stat('/usr/bin/ls');
+      expect(s.isFile).toBe(true);
+      expect(s.isDirectory).toBe(false);
+      expect(s.mode).toBe(0o755);
+    });
+
+    it('readdir /usr returns ["bin"]', async () => {
+      const entries = await adapter.readdir('/usr');
+      expect(entries).toEqual(['bin']);
+    });
+
+    it('readdir /usr/bin returns sorted registered commands', async () => {
+      const entries = await adapter.readdir('/usr/bin');
+      expect(entries).toEqual(['cat', 'git', 'ls', 'node']);
+    });
+
+    it('readdirWithFileTypes /usr/bin returns file entries', async () => {
+      const entries = await adapter.readdirWithFileTypes('/usr/bin');
+      expect(entries.length).toBe(4);
+      expect(entries[0]).toEqual({ name: 'cat', isFile: true, isDirectory: false, isSymbolicLink: false });
+    });
+
+    it('readdirWithFileTypes /usr returns directory entry for bin', async () => {
+      const entries = await adapter.readdirWithFileTypes('/usr');
+      expect(entries).toEqual([{ name: 'bin', isFile: false, isDirectory: true, isSymbolicLink: false }]);
+    });
+
+    it('works without setRegisteredCommandsFn (empty list)', async () => {
+      const freshAdapter = new VfsAdapter(vfs);
+      const entries = await freshAdapter.readdir('/usr/bin');
+      expect(entries).toEqual([]);
+      expect(await freshAdapter.exists('/usr/bin')).toBe(true);
+    });
+  });
 });
