@@ -135,63 +135,60 @@
       }
 
       /* ================================================================== */
-      /* Spectrum 2 Design Tokens — Light Theme (browser preference)        */
+      /* Spectrum 2 Design Tokens — Light Theme                             */
+      /* Applied via .theme-light class on <html> by src/ui/theme.ts        */
       /* ================================================================== */
-      @media (prefers-color-scheme: light) {
-        :root {
-          /* ── S2 Gray Scale (Light Theme) ─────────────────────────── */
-          --s2-gray-25:   #ffffff;
-          --s2-gray-50:   #f8f8f8;
-          --s2-gray-75:   #f0f0f0;
-          --s2-gray-100:  #e8e8e8;
-          --s2-gray-200:  #d6d6d6;
-          --s2-gray-300:  #c4c4c4;
-          --s2-gray-400:  #a1a1a1;
-          --s2-gray-500:  #8a8a8a;
-          --s2-gray-600:  #6e6e6e;
-          --s2-gray-700:  #5a5a5a;
-          --s2-gray-800:  #3a3a3a;
-          --s2-gray-900:  #1a1a1a;
-          --s2-gray-1000: #000000;
+      :root.theme-light {
+        /* ── S2 Gray Scale (Light Theme) ─────────────────────────── */
+        --s2-gray-25:   #ffffff;
+        --s2-gray-50:   #f8f8f8;
+        --s2-gray-75:   #f0f0f0;
+        --s2-gray-100:  #e8e8e8;
+        --s2-gray-200:  #d6d6d6;
+        --s2-gray-300:  #c4c4c4;
+        --s2-gray-400:  #a1a1a1;
+        --s2-gray-500:  #8a8a8a;
+        --s2-gray-600:  #6e6e6e;
+        --s2-gray-700:  #5a5a5a;
+        --s2-gray-800:  #3a3a3a;
+        --s2-gray-900:  #1a1a1a;
+        --s2-gray-1000: #000000;
 
-          /* ── S2 Semantic Backgrounds (Light) ─────────────────────── */
-          --s2-bg-sunken:     #f0f0f0;
+        /* ── S2 Semantic Backgrounds (Light) ─────────────────────── */
+        --s2-bg-sunken:     #f0f0f0;
 
-          /* ── S2 Accent (slightly darker for light bg contrast) ───── */
-          --s2-accent:          #2b54db;
-          --s2-accent-hover:    #1e44c4;
-          --s2-accent-down:     #1a3aaa;
+        /* ── S2 Accent (slightly darker for light bg contrast) ───── */
+        --s2-accent:          #2b54db;
+        --s2-accent-hover:    #1e44c4;
+        --s2-accent-down:     #1a3aaa;
 
-          /* ── S2 Semantic Colors (Light — slightly adjusted) ──────── */
-          --s2-negative:        #d73220;
-          --s2-positive:        #268e6c;
-          --s2-notice:          #d17a00;
+        /* ── S2 Semantic Colors (Light — slightly adjusted) ──────── */
+        --s2-negative:        #d73220;
+        --s2-positive:        #268e6c;
+        --s2-notice:          #d17a00;
 
-          /* ── S2 Shadows (Light) ──────────────────────────────────── */
-          --s2-shadow-elevated: 0 4px 16px rgba(0,0,0,0.10), 0 1px 4px rgba(0,0,0,0.06);
-          --s2-shadow-container: 0 1px 4px rgba(0,0,0,0.06);
-        }
+        /* ── S2 Shadows (Light) ──────────────────────────────────── */
+        --s2-shadow-elevated: 0 4px 16px rgba(0,0,0,0.10), 0 1px 4px rgba(0,0,0,0.06);
+        --s2-shadow-container: 0 1px 4px rgba(0,0,0,0.06);
       }
 
       /* Syntax tokens — light theme overrides */
-      @media (prefers-color-scheme: light) {
-        .tok-keyword { color: #8839ef; }
-        .tok-string  { color: #40a02b; }
-        .tok-number  { color: #d05d1a; }
-        .tok-comment { color: var(--s2-gray-500); }
-        .tok-punct   { color: #1e66f5; }
-        .tok-fn      { color: #2b6cb0; }
+      .theme-light .tok-keyword { color: #8839ef; }
+      .theme-light .tok-string  { color: #40a02b; }
+      .theme-light .tok-number  { color: #d05d1a; }
+      .theme-light .tok-comment { color: var(--s2-gray-500); }
+      .theme-light .tok-punct   { color: #1e66f5; }
+      .theme-light .tok-fn      { color: #2b6cb0; }
 
-        /* Tooltip inverts in light mode */
-        [data-tooltip]::after {
-          background: var(--s2-gray-900);
-          color: var(--s2-gray-25);
-        }
-
-        /* Scrollbar lighter */
-        ::-webkit-scrollbar-thumb { background: var(--s2-gray-300); }
-        ::-webkit-scrollbar-thumb:hover { background: var(--s2-gray-400); }
+      /* Tooltip inverts in light mode */
+      .theme-light [data-tooltip]::after {
+        background: var(--s2-gray-900);
+        color: var(--s2-gray-25);
       }
+
+      /* Scrollbar lighter */
+      .theme-light ::-webkit-scrollbar-thumb { background: var(--s2-gray-300); }
+      .theme-light ::-webkit-scrollbar-thumb:hover { background: var(--s2-gray-400); }
 
       /* ================================================================== */
       /* Reset & Base                                                       */
@@ -773,14 +770,16 @@
       .terminal-panel__view {
         flex: 1; min-height: 0; overflow: hidden;
         display: flex; flex-direction: column;
+        background: var(--s2-bg-sunken);
       }
       .terminal-panel__mount { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
       .terminal-panel__terminal-host {
         flex: 1; min-height: 0; overflow: hidden;
+        padding: 8px;
       }
       /* xterm.js overrides */
-      .terminal-panel__terminal-host .xterm { padding: 6px 8px; }
-      .terminal-panel__terminal-host .xterm-viewport { background-color: var(--s2-bg-layer-1) !important; }
+      .terminal-panel__terminal-host .xterm { padding: 0; }
+      .terminal-panel__terminal-host .xterm-viewport { background-color: var(--s2-bg-sunken) !important; }
       .terminal-panel__terminal-host .xterm-viewport::-webkit-scrollbar { width: 6px; }
       .terminal-panel__terminal-host .xterm-viewport::-webkit-scrollbar-thumb {
         background: var(--s2-gray-300); border-radius: 3px;

@@ -152,6 +152,7 @@ export class WasmShell {
   private previewStateListener: ((hasPreview: boolean) => void) | null = null;
   private hasPreview = false;
   private resizeObserver: ResizeObserver | null = null;
+  private themeObserver: MutationObserver | null = null;
   private currentLine = '';
   private cursorPos = 0;
   private history: string[] = [];
@@ -361,7 +362,7 @@ export class WasmShell {
     const { FitAddon } = await import('@xterm/addon-fit');
     await import('@xterm/xterm/css/xterm.css');
 
-    const isDark = !window.matchMedia?.('(prefers-color-scheme: light)').matches;
+    const isDark = !document.documentElement.classList.contains('theme-light');
     const darkTheme = {
       background: '#141414',
       foreground: '#cfcfcf',
@@ -419,11 +420,14 @@ export class WasmShell {
       convertEol: true,
     });
 
-    // Listen for system color scheme changes
-    const mq = window.matchMedia?.('(prefers-color-scheme: light)');
-    mq?.addEventListener('change', (e) => {
-      if (this.terminal) this.terminal.options.theme = e.matches ? lightTheme : darkTheme;
+    // Sync xterm theme when .theme-light class changes on <html>
+    this.themeObserver?.disconnect();
+    this.themeObserver = new MutationObserver(() => {
+      if (!this.terminal) return;
+      const isLight = document.documentElement.classList.contains('theme-light');
+      this.terminal.options.theme = isLight ? lightTheme : darkTheme;
     });
+    this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
 
     this.fitAddon = new FitAddon();
     this.terminal.loadAddon(this.fitAddon);
@@ -540,6 +544,8 @@ export class WasmShell {
 
   /** Dispose the terminal. */
   dispose(): void {
+    this.themeObserver?.disconnect();
+    this.themeObserver = null;
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     this.clearMediaPreview();

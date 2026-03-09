@@ -7,6 +7,8 @@
 import { getProviders, getModels, getModel } from '../core/index.js';
 import type { Model } from '../core/index.js';
 import type { Api } from '@mariozechner/pi-ai';
+import { getThemePreference, setThemePreference } from './theme.js';
+import type { ThemePreference } from './theme.js';
 
 // Dynamic wrappers — pi-ai's getModel/getModels use strict generics
 // that require KnownProvider literals, but provider-settings works
@@ -236,7 +238,7 @@ export function getProviderModels(providerId: string): Model<Api>[] {
     // Bedrock CAMP uses Amazon Bedrock models with custom API
     if (providerId === 'bedrock-camp') {
       const bedrockModels = getModelsDynamic('amazon-bedrock');
-      return bedrockModels.map(m => ({ ...m, api: 'bedrock-camp-converse' as any, provider: 'bedrock-camp' }));
+      return bedrockModels.map(m => ({ ...m, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' }));
     }
     const effectiveProvider = providerId === 'azure-ai-foundry' ? 'anthropic' : providerId;
     return getModelsDynamic(effectiveProvider);
@@ -434,7 +436,7 @@ export function resolveCurrentModel(): Model<Api> {
 
     // Bedrock CAMP: override api and provider to route through custom stream function
     if (providerId === 'bedrock-camp') {
-      model = { ...model, api: 'bedrock-camp-converse' as any, provider: 'bedrock-camp' };
+      model = { ...model, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
     }
 
     // Override baseUrl if custom one is set
@@ -548,10 +550,77 @@ export function showProviderSettings(): Promise<void> {
       addBtn.addEventListener('click', () => renderAddAccountForm());
       dialog.appendChild(addBtn);
 
+      // ── Theme section ───────────────────────────────────────────
+      const themeSep = document.createElement('hr');
+      themeSep.style.cssText =
+        'border: none; border-top: 1px solid var(--s2-border-subtle); margin: 16px 0;';
+      dialog.appendChild(themeSep);
+
+      const themeLabel = document.createElement('div');
+      themeLabel.className = 'dialog__desc';
+      themeLabel.style.cssText = 'font-weight: 600; margin-bottom: 8px;';
+      themeLabel.textContent = 'Theme';
+      dialog.appendChild(themeLabel);
+
+      const themeGroup = document.createElement('div');
+      themeGroup.setAttribute('role', 'radiogroup');
+      themeGroup.setAttribute('aria-label', 'Theme');
+      themeGroup.style.cssText =
+        'display: flex; gap: 0; margin-bottom: 16px; ' +
+        'border-radius: var(--s2-radius-default); overflow: hidden; ' +
+        'border: 1px solid var(--s2-border-subtle);';
+
+      const themeOptions: [ThemePreference, string][] = [
+        ['system', 'System'],
+        ['light', 'Light'],
+        ['dark', 'Dark'],
+      ];
+      const themeBtns: HTMLButtonElement[] = [];
+
+      for (const [value, label] of themeOptions) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.setAttribute('role', 'radio');
+        btn.setAttribute('aria-checked', String(value === getThemePreference()));
+        btn.textContent = label;
+        btn.dataset.theme = value;
+        btn.style.cssText =
+          'flex: 1; padding: 8px 0; border: none; ' +
+          'font-size: 13px; font-weight: 600; cursor: pointer; ' +
+          'transition: background var(--s2-transition-default), ' +
+          'color var(--s2-transition-default);';
+        themeBtns.push(btn);
+        themeGroup.appendChild(btn);
+      }
+
+      function styleThemeBtns() {
+        const cs = getComputedStyle(document.documentElement);
+        for (const btn of themeBtns) {
+          const active = btn.dataset.theme === getThemePreference();
+          btn.setAttribute('aria-checked', String(active));
+          btn.style.background = active
+            ? cs.getPropertyValue('--s2-accent').trim()
+            : cs.getPropertyValue('--s2-bg-layer-2').trim();
+          btn.style.color = active
+            ? '#fff'
+            : cs.getPropertyValue('--s2-content-secondary').trim();
+        }
+      }
+      styleThemeBtns();
+
+      for (const btn of themeBtns) {
+        btn.addEventListener('click', () => {
+          setThemePreference(btn.dataset.theme as ThemePreference);
+          styleThemeBtns();
+        });
+      }
+
+      dialog.appendChild(themeGroup);
+
       // Close button
       const closeBtn = document.createElement('button');
-      closeBtn.className = 'dialog__btn';
-      closeBtn.style.cssText = 'margin-top: 8px; background: transparent; border: 1px solid var(--s2-border-default);';
+      closeBtn.className = 'dialog__btn dialog__btn--secondary';
+      closeBtn.style.marginTop = '8px';
       closeBtn.textContent = 'Close';
       closeBtn.addEventListener('click', () => {
         overlay.remove();
@@ -716,8 +785,8 @@ export function showProviderSettings(): Promise<void> {
       const hasAccounts = getAccounts().length > 0;
       if (hasAccounts) {
         const backBtn = document.createElement('button');
-        backBtn.className = 'dialog__btn';
-        backBtn.style.cssText = 'margin-top: 8px; background: transparent; border: 1px solid var(--s2-border-default);';
+        backBtn.className = 'dialog__btn dialog__btn--secondary';
+        backBtn.style.marginTop = '8px';
         backBtn.textContent = 'Back';
         backBtn.addEventListener('click', () => {
           renderAccountsList();
