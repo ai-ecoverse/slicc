@@ -136,24 +136,32 @@ describe('deriveProjectPath', () => {
 });
 
 describe('deriveBranchName', () => {
-  it('converts path segments to branch slug', () => {
-    expect(deriveBranchName('https://example.com/products/overview'))
-      .toBe('migrate/products-overview');
+  it('converts path segments to branch slug with timestamp', () => {
+    const result = deriveBranchName('https://example.com/products/overview');
+    expect(result).toMatch(/^migrate\/products-overview-[a-z0-9]+$/);
   });
 
-  it('uses index for root URL', () => {
-    expect(deriveBranchName('https://example.com/'))
-      .toBe('migrate/index');
+  it('uses index for root URL with timestamp', () => {
+    const result = deriveBranchName('https://example.com/');
+    expect(result).toMatch(/^migrate\/index-[a-z0-9]+$/);
   });
 
-  it('uses index for bare domain', () => {
-    expect(deriveBranchName('https://example.com'))
-      .toBe('migrate/index');
+  it('uses index for bare domain with timestamp', () => {
+    const result = deriveBranchName('https://example.com');
+    expect(result).toMatch(/^migrate\/index-[a-z0-9]+$/);
   });
 
-  it('handles deep paths', () => {
-    expect(deriveBranchName('https://example.com/a/b/c'))
-      .toBe('migrate/a-b-c');
+  it('handles deep paths with timestamp', () => {
+    const result = deriveBranchName('https://example.com/a/b/c');
+    expect(result).toMatch(/^migrate\/a-b-c-[a-z0-9]+$/);
+  });
+
+  it('includes a timestamp suffix', () => {
+    const result = deriveBranchName('https://example.com/');
+    const parts = result.split('-');
+    const suffix = parts[parts.length - 1];
+    expect(suffix.length).toBeGreaterThan(0);
+    expect(/^[a-z0-9]+$/.test(suffix)).toBe(true);
   });
 });
 
@@ -262,9 +270,8 @@ describe('migrate_page extraction pipeline', () => {
       'owner/eds-site',
       '/shared/eds-site',
     );
-    expect(mockGit.checkoutNewBranch).toHaveBeenCalledWith(
-      '/shared/eds-site',
-      'migrate/index',
-    );
+    const branchArg = (mockGit.checkoutNewBranch as ReturnType<typeof vi.fn>)
+      .mock.calls[0][1] as string;
+    expect(branchArg).toMatch(/^migrate\/index-[a-z0-9]+$/);
   });
 });

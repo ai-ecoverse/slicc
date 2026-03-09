@@ -30,7 +30,8 @@ export function deriveBranchName(url: string): string {
   const parsed = new URL(url);
   const path = parsed.pathname.replace(/^\/|\/$/g, '') || 'index';
   const slug = path.replace(/\//g, '-');
-  return `migrate/${slug}`;
+  const timestamp = Date.now().toString(36);
+  return `migrate/${slug}-${timestamp}`;
 }
 
 /** Minimal interface for git operations (testable). */
@@ -271,11 +272,14 @@ export function createMigratePageTool(
       const branch = deriveBranchName(url);
 
       try {
+        // Always start fresh from main — remove previous migration artifacts
         const exists = await fs.exists(projectPath);
-        if (!exists) {
-          log.info('Cloning repo', { repo, projectPath });
-          await git.clone(repo, projectPath);
+        if (exists) {
+          log.info('Removing previous clone', { projectPath });
+          await fs.rm(projectPath, { recursive: true });
         }
+        log.info('Cloning repo from main', { repo, projectPath });
+        await git.clone(repo, projectPath);
 
         log.info('Creating branch', { branch });
         await git.checkoutNewBranch(projectPath, branch);
