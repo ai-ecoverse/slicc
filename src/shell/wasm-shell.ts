@@ -275,7 +275,7 @@ export class WasmShell {
     const { FitAddon } = await import('@xterm/addon-fit');
     await import('@xterm/xterm/css/xterm.css');
 
-    const isDark = !window.matchMedia?.('(prefers-color-scheme: light)').matches;
+    const isDark = !document.documentElement.classList.contains('theme-light');
     const darkTheme = {
       background: '#141414',
       foreground: '#cfcfcf',
@@ -333,11 +333,13 @@ export class WasmShell {
       convertEol: true,
     });
 
-    // Listen for system color scheme changes
-    const mq = window.matchMedia?.('(prefers-color-scheme: light)');
-    mq?.addEventListener('change', (e) => {
-      if (this.terminal) this.terminal.options.theme = e.matches ? lightTheme : darkTheme;
+    // Sync xterm theme when .theme-light class changes on <html>
+    const observer = new MutationObserver(() => {
+      if (!this.terminal) return;
+      const isLight = document.documentElement.classList.contains('theme-light');
+      this.terminal.options.theme = isLight ? lightTheme : darkTheme;
     });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
 
     this.fitAddon = new FitAddon();
     this.terminal.loadAddon(this.fitAddon);
