@@ -18,37 +18,26 @@ function uid(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
-/** Cycling face emojis for user messages */
-const USER_FACES = ['😀', '😊', '🙂', '😄', '😎', '🤔', '😁', '🤗'];
-let userFaceIndex = 0;
-
-/** Get the next user face emoji (cycles through the list) */
-function getNextUserFace(): string {
-  const face = USER_FACES[userFaceIndex];
-  userFaceIndex = (userFaceIndex + 1) % USER_FACES.length;
-  return face;
-}
-
-/** Tool icons by name */
+/** Tool icons — compact text abbreviations instead of emojis */
 const TOOL_ICONS: Record<string, string> = {
-  bash: '⚙️',
-  browser: '🌐',
-  read_file: '📖',
-  write_file: '✏️',
-  edit_file: '✏️',
-  javascript: '📜',
-  delegate_to_scoop: '🥄',
-  send_message: '💬',
-  schedule_task: '⏰',
-  list_scoops: '📋',
-  list_tasks: '📋',
-  register_scoop: '🍨',
-  update_global_memory: '🧠',
+  bash: '$',
+  browser: 'B',
+  read_file: 'R',
+  write_file: 'W',
+  edit_file: 'E',
+  javascript: 'JS',
+  delegate_to_scoop: 'D',
+  send_message: 'M',
+  schedule_task: 'T',
+  list_scoops: 'LS',
+  list_tasks: 'LT',
+  register_scoop: 'RS',
+  update_global_memory: 'GM',
 };
 
 /** Get icon for a tool */
 function getToolIcon(toolName: string): string {
-  return TOOL_ICONS[toolName] ?? '🔧';
+  return TOOL_ICONS[toolName] ?? '?';
 }
 
 export class ChatPanel {
@@ -284,12 +273,12 @@ export class ChatPanel {
     this.sendBtn = document.createElement('button');
     this.sendBtn.className = 'chat__send-btn';
     this.sendBtn.innerHTML = '&#9654;'; // ▶
-    this.sendBtn.title = 'Send message';
+    this.sendBtn.dataset.tooltip = 'Send message';
 
     this.stopBtn = document.createElement('button');
     this.stopBtn.className = 'chat__stop-btn';
     this.stopBtn.innerHTML = '&#9632;'; // ■
-    this.stopBtn.title = 'Stop generation';
+    this.stopBtn.dataset.tooltip = 'Stop generation';
     this.stopBtn.style.display = 'none';
 
     this.micBtn = document.createElement('button');
@@ -317,12 +306,21 @@ export class ChatPanel {
     line2.setAttribute('x2', '16'); line2.setAttribute('y2', '23');
     svg.append(path1, path2, line1, line2);
     this.micBtn.appendChild(svg);
-    this.micBtn.title = 'Voice input (Ctrl+Shift+V)';
+    this.micBtn.dataset.tooltip = 'Voice (Ctrl+Shift+V)';
 
-    inputArea.appendChild(this.textarea);
-    inputArea.appendChild(this.micBtn);
-    inputArea.appendChild(this.sendBtn);
-    inputArea.appendChild(this.stopBtn);
+    // Input wrapper — textarea + inline actions
+    const inputWrapper = document.createElement('div');
+    inputWrapper.className = 'chat__input-wrapper';
+    inputWrapper.appendChild(this.textarea);
+
+    const inputActions = document.createElement('div');
+    inputActions.className = 'chat__input-actions';
+    inputActions.appendChild(this.micBtn);
+    inputActions.appendChild(this.sendBtn);
+    inputActions.appendChild(this.stopBtn);
+    inputWrapper.appendChild(inputActions);
+
+    inputArea.appendChild(inputWrapper);
     this.container.appendChild(inputArea);
 
     // "New activity" pill — shown when auto-scroll is detached
@@ -627,9 +625,14 @@ export class ChatPanel {
 
   private renderMessages(): void {
     this.messagesEl.innerHTML = '';
+    let prevRole: string | null = null;
+    let prevTimestamp = 0;
     for (const msg of this.messages) {
-      const el = this.createMessageEl(msg);
+      const showLabel = this.shouldShowLabel(msg, prevRole, prevTimestamp);
+      const el = this.createMessageEl(msg, showLabel);
       this.messagesEl.appendChild(el);
+      prevRole = msg.role;
+      prevTimestamp = msg.timestamp;
     }
     this.autoScrollAttached = true;
     this.hideJumpPill();
@@ -637,9 +640,23 @@ export class ChatPanel {
   }
 
   private appendMessageEl(msg: ChatMessage): void {
-    const el = this.createMessageEl(msg);
+    // Determine if label should show based on previous message
+    const prev = this.messages.length >= 2 ? this.messages[this.messages.length - 2] : null;
+    const showLabel = this.shouldShowLabel(msg, prev?.role ?? null, prev?.timestamp ?? 0);
+    const el = this.createMessageEl(msg, showLabel);
     this.messagesEl.appendChild(el);
     this.scrollToBottom();
+  }
+
+  /** Determine whether to show the sender label for a message */
+  private shouldShowLabel(msg: ChatMessage, prevRole: string | null, prevTimestamp: number): boolean {
+    // Always show label for lick messages
+    if (msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron') return true;
+    // Show label if role changed
+    if (msg.role !== prevRole) return true;
+    // Show label if >2 min gap
+    if (msg.timestamp - prevTimestamp > 120_000) return true;
+    return false;
   }
 
   private updateMessageEl(messageId: string): void {
@@ -647,13 +664,17 @@ export class ChatPanel {
     if (!msg) return;
     const existing = this.messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
     if (existing) {
-      const newEl = this.createMessageEl(msg);
+      // Determine showLabel based on previous message in the list
+      const idx = this.messages.indexOf(msg);
+      const prev = idx > 0 ? this.messages[idx - 1] : null;
+      const showLabel = this.shouldShowLabel(msg, prev?.role ?? null, prev?.timestamp ?? 0);
+      const newEl = this.createMessageEl(msg, showLabel);
       existing.replaceWith(newEl);
     }
     this.scrollToBottom();
   }
 
-  private createMessageEl(msg: ChatMessage): HTMLElement {
+  private createMessageEl(msg: ChatMessage, showLabel = true): HTMLElement {
     // Licks (webhook/cron) get their own compact style like tool calls
     const isLick = msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron';
     if (isLick) {
@@ -667,62 +688,64 @@ export class ChatPanel {
     // Use a fragment-like wrapper for messages with tool calls
     // so tool calls appear outside the message bubble
     const wrapper = document.createElement('div');
-    wrapper.className = 'msg-group';
+    wrapper.className = `msg-group${showLabel ? '' : ' msg-group--continuation'}`;
     wrapper.setAttribute('data-msg-id', msg.id);
 
     const el = document.createElement('div');
     el.className = `msg msg--${msg.role}${msg.queued ? ' msg--queued' : ''}`;
 
-    // Determine icon and label based on role, source, and current context
-    let icon: string;
-    let label: string;
-    const isInScoopThread = this.currentScoopName !== null;
+    if (showLabel) {
+      // Determine icon letter and label based on role, source, and current context
+      let iconLetter: string;
+      let label: string;
+      const isInScoopThread = this.currentScoopName !== null;
 
-    if (msg.role === 'user') {
-      if (msg.source === 'delegation' || msg.channel === 'delegation') {
-        // Delegation instructions from sliccy
-        icon = '🥄';
-        label = 'sliccy';
+      if (msg.role === 'user') {
+        if (msg.source === 'delegation' || msg.channel === 'delegation') {
+          iconLetter = 'S';
+          label = 'sliccy';
+        } else {
+          iconLetter = 'U';
+          label = 'You';
+        }
+      } else if (isInScoopThread) {
+        iconLetter = (this.currentScoopName || 'S').charAt(0).toUpperCase();
+        label = `@${this.currentScoopName}`;
+      } else if (msg.source && msg.source !== 'cone') {
+        iconLetter = msg.source.charAt(0).toUpperCase();
+        label = msg.source;
       } else {
-        icon = getNextUserFace();
-        label = 'You';
+        iconLetter = 'S';
+        label = 'sliccy';
       }
-    } else if (isInScoopThread) {
-      // In a scoop thread, all assistant messages show the scoop icon/name
-      icon = '💩';
-      label = `@${this.currentScoopName}`;
-    } else if (msg.source && msg.source !== 'cone') {
-      // Scoop message in cone view
-      icon = '💩';
-      label = msg.source;
-    } else {
-      // Main agent (sliccy / cone)
-      icon = '🍦';
-      label = 'sliccy';
-    }
 
-    // Role label with icon
-    const roleEl = document.createElement('div');
-    roleEl.className = 'msg__role';
-    roleEl.innerHTML = `<span class="msg__icon">${icon}</span> ${escapeHtml(label)}`;
-    // Queued badge + delete button
-    if (msg.queued) {
-      const badge = document.createElement('span');
-      badge.className = 'msg__queued-badge';
-      badge.textContent = 'queued';
-      roleEl.appendChild(badge);
+      // Role label with initial avatar
+      const roleEl = document.createElement('div');
+      roleEl.className = 'msg__role';
+      const iconSpan = document.createElement('span');
+      iconSpan.className = 'msg__icon';
+      iconSpan.textContent = iconLetter;
+      roleEl.appendChild(iconSpan);
+      roleEl.appendChild(document.createTextNode(` ${label}`));
+      // Queued badge + delete button
+      if (msg.queued) {
+        const badge = document.createElement('span');
+        badge.className = 'msg__queued-badge';
+        badge.textContent = 'queued';
+        roleEl.appendChild(badge);
 
-      const deleteBtn = document.createElement('button');
-      deleteBtn.className = 'msg__queued-delete';
-      deleteBtn.textContent = '\u00d7'; // ×
-      deleteBtn.title = 'Remove queued message';
-      deleteBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.deleteQueuedMessage(msg.id);
-      });
-      roleEl.appendChild(deleteBtn);
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'msg__queued-delete';
+        deleteBtn.textContent = '\u00d7'; // ×
+        deleteBtn.title = 'Remove queued message';
+        deleteBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.deleteQueuedMessage(msg.id);
+        });
+        roleEl.appendChild(deleteBtn);
+      }
+      el.appendChild(roleEl);
     }
-    el.appendChild(roleEl);
 
     // For lick messages in cone view, wrap content in collapsible
     const isLickInCone = (msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron') && this.sessionId === 'session-cone';
@@ -785,7 +808,7 @@ export class ChatPanel {
     // Summary shows tongue emoji and type
     const summary = document.createElement('summary');
     summary.className = 'lick__header';
-    summary.innerHTML = `<span class="lick__icon">👅</span> <span class="lick__type">${channelType}</span>`;
+    summary.innerHTML = `<span class="lick__icon">E</span> <span class="lick__type">${channelType}</span>`;
 
     // Add brief preview
     const preview = document.createElement('span');
@@ -827,23 +850,18 @@ export class ChatPanel {
       summary.appendChild(preview);
     }
 
-    // Status indicator
+    // Status indicator — text-based
+    const statusEl = document.createElement('span');
     if (tc.result === undefined) {
-      const spinner = document.createElement('span');
-      spinner.className = 'tool-call__spinner';
-      spinner.textContent = '⏳';
-      summary.appendChild(spinner);
+      statusEl.className = 'tool-call__status tool-call__status--running';
     } else if (tc.isError) {
-      const errorIcon = document.createElement('span');
-      errorIcon.className = 'tool-call__error-icon';
-      errorIcon.textContent = '❌';
-      summary.appendChild(errorIcon);
+      statusEl.className = 'tool-call__status tool-call__status--error';
+      statusEl.textContent = 'failed';
     } else {
-      const checkIcon = document.createElement('span');
-      checkIcon.className = 'tool-call__check-icon';
-      checkIcon.textContent = '✅';
-      summary.appendChild(checkIcon);
+      statusEl.className = 'tool-call__status tool-call__status--success';
+      statusEl.textContent = '\u2713'; // ✓
     }
+    summary.appendChild(statusEl);
 
     el.appendChild(summary);
 
@@ -892,7 +910,7 @@ export class ChatPanel {
           fullImg.src = screenshotUrl;
           w.document.title = 'Screenshot';
           w.document.body.style.margin = '0';
-          w.document.body.style.background = '#1a1a2e';
+          w.document.body.style.background = window.matchMedia?.('(prefers-color-scheme: light)').matches ? '#f0f0f0' : '#141414';
           w.document.body.appendChild(fullImg);
         }
       });

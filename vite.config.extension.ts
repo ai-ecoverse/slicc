@@ -10,7 +10,7 @@
 import { defineConfig } from 'vite';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { copyFileSync, mkdirSync } from 'fs';
+import { copyFileSync, mkdirSync, readdirSync } from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -81,6 +81,28 @@ export default defineConfig(({ mode }) => ({
         copyFileSync(resolve(__dirname, 'sandbox.html'), resolve(outDir, 'sandbox.html'));
         copyFileSync(resolve(__dirname, 'voice-popup.html'), resolve(outDir, 'voice-popup.html'));
         copyFileSync(resolve(__dirname, 'voice-popup.js'), resolve(outDir, 'voice-popup.js'));
+
+        // Copy logo files for extension icons and header
+        const logosSrc = resolve(__dirname, 'logos');
+        const logosDest = resolve(outDir, 'logos');
+        mkdirSync(logosDest, { recursive: true });
+        for (const file of readdirSync(logosSrc)) {
+          if (file.endsWith('.png') || file.endsWith('.ico')) {
+            try { copyFileSync(resolve(logosSrc, file), resolve(logosDest, file)); } catch { /* skip */ }
+          }
+        }
+
+        // Copy fonts if present (Adobe Clean — local dev only, gitignored)
+        const fontsSrc = resolve(__dirname, 'public/fonts');
+        const fontsDest = resolve(outDir, 'fonts');
+        try {
+          mkdirSync(fontsDest, { recursive: true });
+          for (const file of readdirSync(fontsSrc)) {
+            if (file.endsWith('.otf') || file.endsWith('.woff2')) {
+              try { copyFileSync(resolve(fontsSrc, file), resolve(fontsDest, file)); } catch { /* skip */ }
+            }
+          }
+        } catch { /* fonts dir doesn't exist — fine, fallback fonts will be used */ }
 
         // Bundle Pyodide for extension (both main page and sandbox CSP block CDN scripts)
         const pyodideSrc = resolve(__dirname, 'node_modules/pyodide');

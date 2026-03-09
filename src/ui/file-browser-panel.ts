@@ -17,6 +17,63 @@ function formatSize(bytes: number): string {
   return (bytes / (1024 * 1024 * 1024)).toFixed(1) + 'G';
 }
 
+/** Create an S2-style outline SVG icon (14×14, 1.5px stroke). */
+function svgFileIcon(paths: string[]): SVGSVGElement {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('width', '14');
+  svg.setAttribute('height', '14');
+  svg.setAttribute('viewBox', '0 0 20 20');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.5');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.style.flexShrink = '0';
+  for (const d of paths) {
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', d);
+    svg.appendChild(path);
+  }
+  return svg;
+}
+
+/** S2 folder icon — open folder outline */
+function folderIcon(): SVGSVGElement {
+  return svgFileIcon([
+    'M2 6V5a1 1 0 0 1 1-1h4l2 2h8a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6z',
+  ]);
+}
+
+/** S2 file icon — document outline */
+function fileIcon(): SVGSVGElement {
+  return svgFileIcon([
+    'M6 2h5l5 5v9a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z',
+    'M11 2v5h5',
+  ]);
+}
+
+/** S2 chevron icon for tree disclosure */
+function chevronIcon(expanded: boolean): SVGSVGElement {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('width', '10');
+  svg.setAttribute('height', '10');
+  svg.setAttribute('viewBox', '0 0 20 20');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.style.flexShrink = '0';
+  svg.style.transition = 'transform 130ms ease';
+  if (expanded) svg.style.transform = 'rotate(90deg)';
+  const path = document.createElementNS(ns, 'path');
+  path.setAttribute('d', 'M7 5l5 5-5 5');
+  svg.appendChild(path);
+  return svg;
+}
+
 /** Quote a shell argument with single quotes. */
 function quoteShellArg(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
@@ -73,11 +130,6 @@ export class FileBrowserPanel {
     while (this.container.firstChild) this.container.removeChild(this.container.firstChild);
     this.container.classList.add('file-browser');
 
-    const header = document.createElement('div');
-    header.className = 'panel-header';
-    header.textContent = 'Files';
-    this.container.appendChild(header);
-
     this.bodyEl = document.createElement('div');
     this.bodyEl.className = 'file-browser__body';
     this.container.appendChild(this.bodyEl);
@@ -108,12 +160,12 @@ export class FileBrowserPanel {
         const isExpanded = this.expandedDirs.has(fullPath);
         const arrow = document.createElement('span');
         arrow.className = 'file-browser__arrow';
-        arrow.textContent = isExpanded ? '\u25BE' : '\u25B8'; // ▾ or ▸
+        arrow.appendChild(chevronIcon(isExpanded));
         row.appendChild(arrow);
 
         const icon = document.createElement('span');
         icon.className = 'file-browser__icon';
-        icon.textContent = '\uD83D\uDCC1'; // 📁
+        icon.appendChild(folderIcon());
         row.appendChild(icon);
 
         const name = document.createElement('span');
@@ -152,12 +204,11 @@ export class FileBrowserPanel {
         // File entry
         const spacer = document.createElement('span');
         spacer.className = 'file-browser__arrow';
-        spacer.textContent = ' ';
         row.appendChild(spacer);
 
         const icon = document.createElement('span');
         icon.className = 'file-browser__icon';
-        icon.textContent = '\uD83D\uDCC4'; // 📄
+        icon.appendChild(fileIcon());
         row.appendChild(icon);
 
         const name = document.createElement('span');

@@ -2,7 +2,7 @@
  * Terminal Panel — embedded xterm.js terminal connected to the WasmShell.
  *
  * Wraps the WasmShell's mount/dispose lifecycle and provides
- * a panel header + body container.
+ * a tab bar (Terminal / Preview) + body container.
  */
 
 import type { WasmShell } from '../shell/index.js';
@@ -11,8 +11,6 @@ type TerminalViewId = 'terminal' | 'preview';
 
 export class TerminalPanel {
   private container: HTMLElement;
-  private bodyEl!: HTMLElement;
-  private contentEl!: HTMLElement;
   private terminalViewEl!: HTMLElement;
   private previewViewEl!: HTMLElement;
   private previewEmptyEl!: HTMLElement;
@@ -76,25 +74,17 @@ export class TerminalPanel {
 
   /** Get the body element (for direct terminal mounting). */
   getBodyElement(): HTMLElement {
-    return this.bodyEl;
+    return this.container;
   }
 
   private render(): void {
     this.container.innerHTML = '';
     this.container.classList.add('terminal-panel');
 
-    const header = document.createElement('div');
-    header.className = 'panel-header';
-    header.textContent = 'Terminal';
-    this.container.appendChild(header);
-
-    this.bodyEl = document.createElement('div');
-    this.bodyEl.className = 'terminal-panel__body';
-    this.container.appendChild(this.bodyEl);
-
+    // Tabs act as the header — no separate panel-header needed
     const tabs = document.createElement('div');
     tabs.className = 'mini-tabs';
-    this.bodyEl.appendChild(tabs);
+    this.container.appendChild(tabs);
 
     this.terminalTabBtn = document.createElement('button');
     this.terminalTabBtn.className = 'mini-tabs__tab mini-tabs__tab--active';
@@ -111,17 +101,15 @@ export class TerminalPanel {
     });
     tabs.appendChild(this.previewTabBtn);
 
-    this.contentEl = document.createElement('div');
-    this.contentEl.className = 'terminal-panel__content';
-    this.bodyEl.appendChild(this.contentEl);
-
+    // Terminal view — direct container, no extra nesting
     this.terminalViewEl = document.createElement('div');
     this.terminalViewEl.className = 'terminal-panel__view';
-    this.contentEl.appendChild(this.terminalViewEl);
+    this.container.appendChild(this.terminalViewEl);
 
+    // Preview view
     this.previewViewEl = document.createElement('div');
     this.previewViewEl.className = 'terminal-panel__view';
-    this.contentEl.appendChild(this.previewViewEl);
+    this.container.appendChild(this.previewViewEl);
 
     this.previewEmptyEl = document.createElement('div');
     this.previewEmptyEl.className = 'terminal-panel__empty-state';

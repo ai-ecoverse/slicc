@@ -466,7 +466,7 @@ export function showProviderSettings(): Promise<void> {
 
     const dialog = document.createElement('div');
     dialog.className = 'dialog';
-    dialog.style.cssText = 'max-width: 480px; width: 90vw;';
+    dialog.style.cssText = 'max-width: 480px; width: 90vw; padding: 32px;';
 
     // Decide initial view: list if accounts exist, add-form if empty
     if (getAccounts().length > 0) {
@@ -503,19 +503,19 @@ export function showProviderSettings(): Promise<void> {
           const row = document.createElement('div');
           row.style.cssText =
             'display: flex; align-items: center; justify-content: space-between; ' +
-            'padding: 10px 12px; background: #1a1a2e; border-radius: 6px; ' +
-            'margin-bottom: 8px; border: 1px solid #3a3a5a;';
+            'padding: 10px 12px; background: var(--s2-bg-layer-2); border-radius: var(--s2-radius-default); ' +
+            'margin-bottom: 8px; border: 1px solid var(--s2-border-subtle);';
 
           const info = document.createElement('div');
           info.style.cssText = 'flex: 1; min-width: 0;';
 
           const name = document.createElement('div');
-          name.style.cssText = 'font-size: 14px; font-weight: 600; color: #e0e0e0;';
+          name.style.cssText = 'font-size: 14px; font-weight: 600; color: var(--s2-content-default);';
           name.textContent = config.name;
           info.appendChild(name);
 
           const detail = document.createElement('div');
-          detail.style.cssText = 'font-size: 11px; color: #888; font-family: monospace; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+          detail.style.cssText = 'font-size: 11px; color: var(--s2-content-disabled); font-family: monospace; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
           detail.textContent = maskApiKey(account.apiKey);
           if (account.baseUrl) {
             detail.textContent += ' \u2022 ' + account.baseUrl;
@@ -526,8 +526,8 @@ export function showProviderSettings(): Promise<void> {
 
           const deleteBtn = document.createElement('button');
           deleteBtn.style.cssText =
-            'background: transparent; border: 1px solid #633; color: #e94560; ' +
-            'border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 12px; ' +
+            'background: transparent; border: 1px solid var(--s2-negative); color: var(--slicc-cone); ' +
+            'border-radius: var(--s2-radius-s); padding: 4px 10px; cursor: pointer; font-size: 12px; ' +
             'margin-left: 12px; flex-shrink: 0;';
           deleteBtn.textContent = 'Remove';
           deleteBtn.addEventListener('click', () => {
@@ -551,7 +551,7 @@ export function showProviderSettings(): Promise<void> {
       // Close button
       const closeBtn = document.createElement('button');
       closeBtn.className = 'dialog__btn';
-      closeBtn.style.cssText = 'margin-top: 8px; background: transparent; border: 1px solid #444;';
+      closeBtn.style.cssText = 'margin-top: 8px; background: transparent; border: 1px solid var(--s2-border-default);';
       closeBtn.textContent = 'Close';
       closeBtn.addEventListener('click', () => {
         overlay.remove();
@@ -601,7 +601,7 @@ export function showProviderSettings(): Promise<void> {
       // Provider description
       const providerDesc = document.createElement('div');
       providerDesc.className = 'dialog__desc';
-      providerDesc.style.cssText = 'font-size: 12px; color: #888; margin-bottom: 16px; margin-top: -4px;';
+      providerDesc.style.cssText = 'font-size: 12px; color: var(--s2-content-tertiary); margin-bottom: 16px; margin-top: -4px;';
       dialog.appendChild(providerDesc);
 
       // API Key section
@@ -637,14 +637,14 @@ export function showProviderSettings(): Promise<void> {
 
       const baseUrlDesc = document.createElement('div');
       baseUrlDesc.className = 'dialog__desc';
-      baseUrlDesc.style.cssText = 'font-size: 11px; color: #666; margin-top: -12px; margin-bottom: 16px;';
+      baseUrlDesc.style.cssText = 'font-size: 11px; color: var(--s2-content-secondary); margin-top: -12px; margin-bottom: 16px;';
       baseUrlSection.appendChild(baseUrlDesc);
 
       dialog.appendChild(baseUrlSection);
 
       // Error message area
       const errorEl = document.createElement('div');
-      errorEl.style.cssText = 'color: #e94560; font-size: 12px; margin-bottom: 8px; display: none;';
+      errorEl.style.cssText = 'color: var(--slicc-cone); font-size: 12px; margin-bottom: 8px; display: none;';
       dialog.appendChild(errorEl);
 
       function updateFormFields() {
@@ -717,7 +717,7 @@ export function showProviderSettings(): Promise<void> {
       if (hasAccounts) {
         const backBtn = document.createElement('button');
         backBtn.className = 'dialog__btn';
-        backBtn.style.cssText = 'margin-top: 8px; background: transparent; border: 1px solid #444;';
+        backBtn.style.cssText = 'margin-top: 8px; background: transparent; border: 1px solid var(--s2-border-default);';
         backBtn.textContent = 'Back';
         backBtn.addEventListener('click', () => {
           renderAccountsList();
