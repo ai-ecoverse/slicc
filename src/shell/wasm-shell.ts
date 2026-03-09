@@ -149,6 +149,7 @@ export class WasmShell {
   private previewStateListener: ((hasPreview: boolean) => void) | null = null;
   private hasPreview = false;
   private resizeObserver: ResizeObserver | null = null;
+  private themeObserver: MutationObserver | null = null;
   private currentLine = '';
   private cursorPos = 0;
   private history: string[] = [];
@@ -334,12 +335,13 @@ export class WasmShell {
     });
 
     // Sync xterm theme when .theme-light class changes on <html>
-    const observer = new MutationObserver(() => {
+    this.themeObserver?.disconnect();
+    this.themeObserver = new MutationObserver(() => {
       if (!this.terminal) return;
       const isLight = document.documentElement.classList.contains('theme-light');
       this.terminal.options.theme = isLight ? lightTheme : darkTheme;
     });
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
 
     this.fitAddon = new FitAddon();
     this.terminal.loadAddon(this.fitAddon);
@@ -456,6 +458,8 @@ export class WasmShell {
 
   /** Dispose the terminal. */
   dispose(): void {
+    this.themeObserver?.disconnect();
+    this.themeObserver = null;
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
     this.clearMediaPreview();

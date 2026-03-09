@@ -563,6 +563,8 @@ export function showProviderSettings(): Promise<void> {
       dialog.appendChild(themeLabel);
 
       const themeGroup = document.createElement('div');
+      themeGroup.setAttribute('role', 'radiogroup');
+      themeGroup.setAttribute('aria-label', 'Theme');
       themeGroup.style.cssText =
         'display: flex; gap: 0; margin-bottom: 16px; ' +
         'border-radius: var(--s2-radius-default); overflow: hidden; ' +
@@ -578,6 +580,8 @@ export function showProviderSettings(): Promise<void> {
       for (const [value, label] of themeOptions) {
         const btn = document.createElement('button');
         btn.type = 'button';
+        btn.setAttribute('role', 'radio');
+        btn.setAttribute('aria-checked', String(value === getThemePreference()));
         btn.textContent = label;
         btn.dataset.theme = value;
         btn.style.cssText =
@@ -593,6 +597,7 @@ export function showProviderSettings(): Promise<void> {
         const cs = getComputedStyle(document.documentElement);
         for (const btn of themeBtns) {
           const active = btn.dataset.theme === getThemePreference();
+          btn.setAttribute('aria-checked', String(active));
           btn.style.background = active
             ? cs.getPropertyValue('--s2-accent').trim()
             : cs.getPropertyValue('--s2-bg-layer-2').trim();

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 
 // Mock localStorage
 const storage = new Map<string, string>();
@@ -12,7 +12,7 @@ const mockStorage = {
   get length() { return storage.size; },
   key: vi.fn((_i: number) => null),
 };
-Object.defineProperty(globalThis, 'localStorage', { value: mockStorage });
+vi.stubGlobal('localStorage', mockStorage);
 
 // Mock document.documentElement.classList
 const classList = new Set<string>();
@@ -31,17 +31,17 @@ const mockClassList = {
   }),
   contains: vi.fn((cls: string) => classList.has(cls)),
 };
-Object.defineProperty(globalThis, 'document', {
-  value: { documentElement: { classList: mockClassList } },
-});
+vi.stubGlobal('document', { documentElement: { classList: mockClassList } });
 
 // Mock window.matchMedia
 const mockMatchMedia = vi.fn(() => ({
   matches: false,
   addEventListener: vi.fn(),
 }));
-Object.defineProperty(globalThis, 'window', {
-  value: { matchMedia: mockMatchMedia },
+vi.stubGlobal('window', { matchMedia: mockMatchMedia });
+
+afterAll(() => {
+  vi.unstubAllGlobals();
 });
 
 import {
