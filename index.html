@@ -51,7 +51,7 @@
       /* ------------------------------------------------------------------ */
       /* Chat panel                                                         */
       /* ------------------------------------------------------------------ */
-      .chat { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+      .chat { display: flex; flex-direction: column; flex: 1; min-height: 0; position: relative; }
       .chat__messages {
         flex: 1; overflow-y: auto; padding: 16px;
         display: flex; flex-direction: column; gap: 12px;
@@ -59,6 +59,16 @@
       .chat__messages::-webkit-scrollbar { width: 6px; }
       .chat__messages::-webkit-scrollbar-track { background: transparent; }
       .chat__messages::-webkit-scrollbar-thumb { background: #3a3a5a; border-radius: 3px; }
+
+      .chat__jump-pill {
+        position: absolute; bottom: 68px; left: 50%; transform: translateX(-50%);
+        background: #3a3a6e; color: #c0c0ff; border: 1px solid #5a5a9a;
+        border-radius: 16px; padding: 5px 14px; font-size: 12px;
+        cursor: pointer; z-index: 10;
+        opacity: 0; pointer-events: none; transition: opacity 0.2s ease;
+      }
+      .chat__jump-pill--visible { opacity: 1; pointer-events: auto; }
+      .chat__jump-pill:hover { background: #4a4a8a; }
 
       .msg { padding: 10px 14px; border-radius: 8px; max-width: 100%; word-wrap: break-word; }
       .msg--user {
