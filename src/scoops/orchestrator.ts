@@ -326,7 +326,7 @@ export class Orchestrator {
 
     // Process immediately if tab is ready
     const tab = this.tabs.get(message.chatJid);
-    log.info('routeToScoop: queued', {
+    log.debug('routeToScoop: queued', {
       chatJid: message.chatJid,
       scoopName: scoop.name,
       tabStatus: tab?.status ?? 'no-tab',
@@ -603,13 +603,13 @@ export class Orchestrator {
   private async processScoopQueue(jid: string): Promise<void> {
     const queue = this.messageQueues.get(jid);
     if (!queue || queue.length === 0) {
-      log.info('processScoopQueue: empty queue', { jid });
+      log.debug('processScoopQueue: empty queue', { jid });
       return;
     }
 
     const tab = this.tabs.get(jid);
     if (tab?.status !== 'ready') {
-      log.info('processScoopQueue: tab not ready', { jid, status: tab?.status ?? 'no-tab' });
+      log.debug('processScoopQueue: tab not ready', { jid, status: tab?.status ?? 'no-tab' });
       return;
     }
 
@@ -621,7 +621,7 @@ export class Orchestrator {
     const since = this.lastAgentTimestamp.get(jid) ?? '';
     const messages = await db.getMessagesSince(jid, since, excludeName);
 
-    log.info('processScoopQueue: DB query', {
+    log.debug('processScoopQueue: DB query', {
       jid,
       scoopName: scoop?.name,
       excludeName,
@@ -631,7 +631,7 @@ export class Orchestrator {
     });
 
     if (messages.length === 0) {
-      log.info('processScoopQueue: no messages from DB, clearing queue', { jid });
+      log.debug('processScoopQueue: no messages from DB, clearing queue', { jid });
       this.messageQueues.set(jid, []);
       return;
     }
