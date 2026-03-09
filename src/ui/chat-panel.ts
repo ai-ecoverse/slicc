@@ -910,7 +910,7 @@ export class ChatPanel {
           fullImg.src = screenshotUrl;
           w.document.title = 'Screenshot';
           w.document.body.style.margin = '0';
-          w.document.body.style.background = window.matchMedia?.('(prefers-color-scheme: light)').matches ? '#f0f0f0' : '#141414';
+          w.document.body.style.background = document.documentElement.classList.contains('theme-light') ? '#f0f0f0' : '#141414';
           w.document.body.appendChild(fullImg);
         }
       });
