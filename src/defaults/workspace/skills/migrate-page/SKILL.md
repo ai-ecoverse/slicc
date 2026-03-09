@@ -193,20 +193,30 @@ fonts, colors, and spacing. Do ALL of this BEFORE Phase 3.
 
 ### 2.5a: Resolve Fonts
 
-1. Read `.migration/brand.json` — check `fonts.sources.typekit` and `fonts.sources.googleFonts`
-2. Resolve fonts using the cascade:
-   - System font → use as-is
-   - Source uses Typekit (`fonts.sources.typekit` not null) → use that project ID
-   - Font in Typekit kit `cwm0xxe` → check `https://typekit.com/api/v1/json/kits/cwm0xxe/published`
-   - Font on Google Fonts → check `https://fonts.googleapis.com/css2?family={FontName}:wght@400;700&display=swap`
-   - Not found → use extracted name with fallback
+1. Read `.migration/brand.json` — get `fonts.body` and `fonts.heading` names
+2. Resolve font delivery using the cascade:
+   - System font (Arial, Georgia, Helvetica, etc.) → no delivery needed
+   - Font in **our** Typekit kit `cwm0xxe` → use kit `cwm0xxe`.
+     Check: `https://typekit.com/api/v1/json/kits/cwm0xxe/published`
+     (public API, no auth). If the font family appears in the response → use it.
+   - Font on Google Fonts → use Google CDN.
+     Check: `https://fonts.googleapis.com/css2?family={FontName}:wght@400;700&display=swap`
+     If 200 OK → use that URL.
+   - Not found → use extracted name with generic fallback (serif/sans-serif)
+
+**ALWAYS use our kit `cwm0xxe` for Typekit delivery.** The source page may
+have its own Typekit project ID (`fonts.sources.typekit` in brand.json) —
+this tells us which fonts they use, but their kit is whitelisted only for
+their domains. Our kit `cwm0xxe` is the one we control.
 
 ### 2.5b: Update head.html
 
 Read `/shared/{repo-name}/head.html`. Add font `<link>` tags BEFORE the
 existing `<script>` tags:
-- Typekit: `<link rel="stylesheet" href="https://use.typekit.net/{projectId}.css">`
-- Google: preconnects + `<link href="{url}" rel="stylesheet">`
+- Typekit: `<link rel="stylesheet" href="https://use.typekit.net/cwm0xxe.css">`
+- Google Fonts: preconnects + `<link href="{url}" rel="stylesheet">`
+
+**Always use `cwm0xxe` — never the source site's Typekit project ID.**
 
 Write the updated `head.html` back.
 
