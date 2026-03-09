@@ -227,6 +227,13 @@ export class LickManager {
     return this.crontasks.get(id);
   }
 
+  /** Get all webhooks and cron tasks targeting a specific scoop folder */
+  getLicksForScoop(scoopFolder: string): { webhooks: WebhookEntry[]; cronTasks: CronTaskEntry[] } {
+    const webhooks = Array.from(this.webhooks.values()).filter(wh => wh.scoop === scoopFolder);
+    const cronTasks = Array.from(this.crontasks.values()).filter(ct => ct.scoop === scoopFolder);
+    return { webhooks, cronTasks };
+  }
+
   /** Run the cron scheduler - called every minute */
   private async runCronScheduler(): Promise<void> {
     const now = new Date();
