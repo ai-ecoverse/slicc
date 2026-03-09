@@ -34,6 +34,9 @@ import {
   getSelectedModelId,
   setSelectedModelId,
   showProviderSettings,
+  getAllAvailableModels,
+  getAccounts,
+  getProviderConfig,
 } from './provider-settings.js';
 import type { ChatMessage } from './types.js';
 import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
@@ -134,31 +137,54 @@ export class Layout {
       : 'background: #2a2a3a; color: #e0e0f0; border: 1px solid #444; border-radius: 4px; ' +
         'padding: 4px 8px; font-size: 13px; cursor: pointer; outline: none; margin-left: 8px;';
 
+    const sortModels = (models: { id: string; name: string; reasoning?: boolean }[]) => {
+      return [...models].sort((a, b) => {
+        if (a.reasoning !== b.reasoning) return a.reasoning ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+    };
+
     const populateModels = () => {
-      const providerId = getSelectedProvider();
-      const models = getProviderModels(providerId);
+      const groups = getAllAvailableModels();
       const currentModelId = getSelectedModelId();
-      providerIndicator.textContent = providerId;
+      const currentProvider = getSelectedProvider();
+      providerIndicator.textContent = getProviderConfig(currentProvider).name;
       while (modelSelect.firstChild) modelSelect.removeChild(modelSelect.firstChild);
-      if (models.length === 0) {
+
+      if (groups.length === 0) {
         const opt = document.createElement('option');
         opt.value = '';
         opt.textContent = 'No models';
         modelSelect.appendChild(opt);
         return;
       }
-      const sorted = [...models].sort((a, b) => {
-        if (a.reasoning !== b.reasoning) return a.reasoning ? -1 : 1;
-        return a.name.localeCompare(b.name);
-      });
-      for (const model of sorted) {
-        const opt = document.createElement('option');
-        opt.value = model.id;
-        opt.textContent = model.name;
-        if (model.id === currentModelId) opt.selected = true;
-        modelSelect.appendChild(opt);
+
+      const useGroups = groups.length > 1;
+      for (const group of groups) {
+        const sorted = sortModels(group.models);
+        if (useGroups) {
+          const optgroup = document.createElement('optgroup');
+          optgroup.label = group.providerName;
+          for (const model of sorted) {
+            const opt = document.createElement('option');
+            opt.value = `${group.providerId}:${model.id}`;
+            opt.textContent = model.name;
+            if (model.id === currentModelId && group.providerId === currentProvider) opt.selected = true;
+            optgroup.appendChild(opt);
+          }
+          modelSelect.appendChild(optgroup);
+        } else {
+          for (const model of sorted) {
+            const opt = document.createElement('option');
+            opt.value = `${group.providerId}:${model.id}`;
+            opt.textContent = model.name;
+            if (model.id === currentModelId) opt.selected = true;
+            modelSelect.appendChild(opt);
+          }
+        }
       }
-      if (!currentModelId || !models.find(m => m.id === currentModelId)) {
+
+      if (!modelSelect.querySelector('option[selected]') && modelSelect.options.length > 0) {
         modelSelect.selectedIndex = 0;
         if (modelSelect.value) setSelectedModelId(modelSelect.value);
       }
@@ -166,6 +192,9 @@ export class Layout {
     populateModels();
     modelSelect.addEventListener('change', () => {
       setSelectedModelId(modelSelect.value);
+      // Update provider indicator
+      const newProvider = getSelectedProvider();
+      providerIndicator.textContent = getProviderConfig(newProvider).name;
       this.onModelChange?.(modelSelect.value);
     });
 
@@ -212,43 +241,57 @@ export class Layout {
           'overflow-y: auto; background: #1e1e2e; border: 1px solid #444; border-radius: 8px; ' +
           'padding: 4px 0; box-shadow: 0 8px 24px rgba(0,0,0,0.5); z-index: 1000;';
 
-        const providerId = getSelectedProvider();
-        const models = getProviderModels(providerId);
+        const groups = getAllAvailableModels();
         const currentModelId = getSelectedModelId();
+        const currentProvider = getSelectedProvider();
+        const useGroupHeaders = groups.length > 1;
 
-        const sorted = [...models].sort((a, b) => {
-          if (a.reasoning !== b.reasoning) return a.reasoning ? -1 : 1;
-          return a.name.localeCompare(b.name);
-        });
-
-        for (const model of sorted) {
-          const item = document.createElement('div');
-          item.style.cssText =
-            'padding: 6px 12px; cursor: pointer; font-size: 12px; color: #c0c0d0; ' +
-            'display: flex; align-items: center; gap: 6px;';
-          if (model.id === currentModelId) {
-            item.style.color = '#e94560';
-            item.style.fontWeight = '600';
+        for (const group of groups) {
+          if (useGroupHeaders) {
+            const header = document.createElement('div');
+            header.style.cssText =
+              'padding: 4px 12px; font-size: 10px; color: #666; text-transform: uppercase; ' +
+              'letter-spacing: 0.5px; font-weight: 600;';
+            if (menu.children.length > 0) {
+              header.style.borderTop = '1px solid #333';
+              header.style.marginTop = '4px';
+              header.style.paddingTop = '8px';
+            }
+            header.textContent = group.providerName;
+            menu.appendChild(header);
           }
-          item.addEventListener('mouseenter', () => { item.style.background = '#2a2a4a'; });
-          item.addEventListener('mouseleave', () => { item.style.background = ''; });
 
-          const check = document.createElement('span');
-          check.style.cssText = 'width: 14px; text-align: center; font-size: 10px;';
-          check.textContent = model.id === currentModelId ? '\u2713' : '';
-          item.appendChild(check);
+          const sorted = sortModels(group.models);
+          for (const model of sorted) {
+            const isSelected = model.id === currentModelId && group.providerId === currentProvider;
+            const item = document.createElement('div');
+            item.style.cssText =
+              'padding: 6px 12px; cursor: pointer; font-size: 12px; color: #c0c0d0; ' +
+              'display: flex; align-items: center; gap: 6px;';
+            if (isSelected) {
+              item.style.color = '#e94560';
+              item.style.fontWeight = '600';
+            }
+            item.addEventListener('mouseenter', () => { item.style.background = '#2a2a4a'; });
+            item.addEventListener('mouseleave', () => { item.style.background = ''; });
 
-          const label = document.createElement('span');
-          label.textContent = model.name;
-          item.appendChild(label);
+            const check = document.createElement('span');
+            check.style.cssText = 'width: 14px; text-align: center; font-size: 10px;';
+            check.textContent = isSelected ? '\u2713' : '';
+            item.appendChild(check);
 
-          item.addEventListener('click', () => {
-            setSelectedModelId(model.id);
-            this.onModelChange?.(model.id);
-            modelMenuOpen = false;
-            renderModelMenu();
-          });
-          menu.appendChild(item);
+            const label = document.createElement('span');
+            label.textContent = model.name;
+            item.appendChild(label);
+
+            item.addEventListener('click', () => {
+              setSelectedModelId(`${group.providerId}:${model.id}`);
+              this.onModelChange?.(`${group.providerId}:${model.id}`);
+              modelMenuOpen = false;
+              renderModelMenu();
+            });
+            menu.appendChild(item);
+          }
         }
 
         modelDD.appendChild(menu);
