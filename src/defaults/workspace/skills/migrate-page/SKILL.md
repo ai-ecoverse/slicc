@@ -193,30 +193,37 @@ fonts, colors, and spacing. Do ALL of this BEFORE Phase 3.
 
 ### 2.5a: Resolve Fonts
 
-1. Read `.migration/brand.json` — get `fonts.body` and `fonts.heading` names
-2. Resolve font delivery using the cascade:
-   - System font (Arial, Georgia, Helvetica, etc.) → no delivery needed
-   - Font in **our** Typekit kit `cwm0xxe` → use kit `cwm0xxe`.
-     Check: `https://typekit.com/api/v1/json/kits/cwm0xxe/published`
-     (public API, no auth). If the font family appears in the response → use it.
-   - Font on Google Fonts → use Google CDN.
-     Check: `https://fonts.googleapis.com/css2?family={FontName}:wght@400;700&display=swap`
-     If 200 OK → use that URL.
-   - Not found → use extracted name with generic fallback (serif/sans-serif)
+1. Read `.migration/brand.json` — check `fonts.sources.typekit` and
+   `fonts.sources.googleFonts`
+2. Resolve font delivery using this cascade (first match wins):
 
-**ALWAYS use our kit `cwm0xxe` for Typekit delivery.** The source page may
-have its own Typekit project ID (`fonts.sources.typekit` in brand.json) —
-this tells us which fonts they use, but their kit is whitelisted only for
-their domains. Our kit `cwm0xxe` is the one we control.
+   **a. Source has Adobe Fonts (Typekit)?**
+   If `fonts.sources.typekit` is not null → use the source's kit directly.
+   The source's kit has the exact fonts the page uses and works in preview.
+   Link: `https://use.typekit.net/{fonts.sources.typekit}.css`
+
+   **b. Source has Google Fonts?**
+   If `fonts.sources.googleFonts` has URLs → use those URLs directly.
+
+   **c. Font in our fallback Typekit kit `cwm0xxe`?**
+   Check: `https://typekit.com/api/v1/json/kits/cwm0xxe/published`
+   (public API, no auth). If the font family appears → use kit `cwm0xxe`.
+   Link: `https://use.typekit.net/cwm0xxe.css`
+
+   **d. Font available on Google Fonts?**
+   Check: `https://fonts.googleapis.com/css2?family={FontName}:wght@400;700&display=swap`
+   If 200 OK → use that URL.
+
+   **e. System font fallback**
+   Use the extracted font name with generic fallback (serif/sans-serif).
 
 ### 2.5b: Update head.html
 
 Read `/shared/{repo-name}/head.html`. Add font `<link>` tags BEFORE the
-existing `<script>` tags:
-- Typekit: `<link rel="stylesheet" href="https://use.typekit.net/cwm0xxe.css">`
-- Google Fonts: preconnects + `<link href="{url}" rel="stylesheet">`
+existing `<script>` tags based on the cascade result:
 
-**Always use `cwm0xxe` — never the source site's Typekit project ID.**
+- Adobe Fonts: `<link rel="stylesheet" href="https://use.typekit.net/{projectId}.css">`
+- Google Fonts: preconnects + `<link href="{url}" rel="stylesheet">`
 
 Write the updated `head.html` back.
 
