@@ -364,6 +364,38 @@ If your block is the footer:
 - Output content to `{projectPath}/drafts/footer.plain.html`
 - Block CSS/JS goes to `blocks/footer/footer.css` and `blocks/footer/footer.js`
 - If the repo already has `blocks/footer/`, use existing code
+- Do NOT use a `footer` class in any inner `<div>` inside footer.plain.html
+  (the EDS framework would try to recursively load the footer block)
+
+### Footer Preview — CRITICAL
+
+The footer loads via `loadFooter()` which runs inside `loadLazy()`.
+`loadLazy()` only runs after `loadEager()` succeeds. **`loadEager()` will
+CRASH if `<main>` is empty** — it calls `loadSection(main.querySelector('.section'))`
+which throws on null.
+
+The footer preview HTML MUST include a non-empty `<main>`:
+
+```html
+<html>
+<head>
+  {head.html content}
+  <meta name="footer" content="/drafts/footer">
+  <style>html, body { overflow: auto !important; }</style>
+</head>
+<body>
+  <header></header>
+  <main>
+    <div><p>Footer preview</p></div>
+  </main>
+  <footer></footer>
+</body>
+</html>
+```
+
+Do NOT use `<main></main>` — the EDS framework needs at least one `<div>`
+child to create a `.section`, or `loadEager()` crashes and `loadFooter()`
+never runs.
 
 ---
 
