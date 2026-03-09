@@ -20,6 +20,7 @@ import { createSkillCommand, createUpskillCommand } from './supplemental-command
 import { MountCommands } from '../fs/mount-commands.js';
 import { discoverJshCommands } from './jsh-discovery.js';
 import { executeJshFile } from './jsh-executor.js';
+import { parseShellArgs } from './parse-shell-args.js';
 
 function basename(path: string): string {
   const trimmed = path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
@@ -192,6 +193,7 @@ export class WasmShell {
     const supplementalCommands = createSupplementalCommands({
       onMediaPreview: async (items) => this.renderMediaPreview(items),
       getJshCommands: () => this.getJshCommandNames(),
+      fs: options.fs,
     });
     const mountCommand = this.createMountCustomCommand();
     const fetchFn = createProxiedFetch();
@@ -309,8 +311,7 @@ export class WasmShell {
     const scriptPath = jshMap.get(cmdName);
     if (!scriptPath) return null;
 
-    // Parse args (simple split — handles basic quoting would be complex)
-    const args = argsStr ? argsStr.split(/\s+/) : [];
+    const args = argsStr ? parseShellArgs(argsStr) : [];
 
     const result = await executeJshFile(scriptPath, args, {
       fs: this.vfsAdapter,

@@ -1,4 +1,5 @@
 import type { Command } from 'just-bash';
+import type { VirtualFS } from '../../fs/index.js';
 import { createCommandsCommand } from './help-command.js';
 import { createConvertCommand } from './convert-command.js';
 import {
@@ -23,6 +24,8 @@ export type {
 export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   /** Function that returns discovered .jsh command names (for `commands` listing). */
   getJshCommands?: () => string[];
+  /** VirtualFS instance for .jsh file discovery (used by `which` command). */
+  fs?: VirtualFS;
 }
 
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
@@ -43,6 +46,6 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createPdftkCommand('pdf'),
     createConvertCommand('convert'),
     createConvertCommand('magick'),
-    createWhichCommand(),
+    createWhichCommand(options.fs),
   ];
 }

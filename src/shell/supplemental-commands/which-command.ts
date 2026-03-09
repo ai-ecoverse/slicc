@@ -1,7 +1,9 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import type { VirtualFS } from '../../fs/index.js';
+import { discoverJshCommands } from '../jsh-discovery.js';
 
-export function createWhichCommand(): Command {
+export function createWhichCommand(fs?: VirtualFS): Command {
   return defineCommand('which', async (args, ctx) => {
     if (args.includes('--help') || args.includes('-h')) {
       return {
@@ -31,6 +33,9 @@ Exit code 0 if all commands found, 1 if any not found.
     const registeredCommands = ctx.getRegisteredCommands?.() ?? [];
     const builtinSet = new Set(registeredCommands);
 
+    // Discover .jsh commands via the shared discovery module
+    const jshCommands = fs ? await discoverJshCommands(fs) : new Map<string, string>();
+
     const stdoutLines: string[] = [];
     let allFound = true;
 
@@ -38,8 +43,7 @@ Exit code 0 if all commands found, 1 if any not found.
       if (builtinSet.has(name)) {
         stdoutLines.push(`/usr/bin/${name}`);
       } else {
-        // Not a built-in — check for .jsh files on VFS
-        const jshPath = await findJshFile(name, ctx.fs);
+        const jshPath = jshCommands.get(name);
         if (jshPath) {
           stdoutLines.push(jshPath);
         } else {
@@ -54,48 +58,4 @@ Exit code 0 if all commands found, 1 if any not found.
       exitCode: allFound ? 0 : 1,
     };
   });
-}
-
-/**
- * Recursively search VFS for a .jsh file matching the given command name.
- * Returns the first match found, or null if none.
- */
-async function findJshFile(
-  commandName: string,
-  fs: { exists(path: string): Promise<boolean>; readdir?(path: string): Promise<string[]>; stat?(path: string): Promise<{ isDirectory: boolean }> },
-): Promise<string | null> {
-  const targetFilename = `${commandName}.jsh`;
-
-  async function walk(dir: string): Promise<string | null> {
-    let entries: string[];
-    try {
-      entries = await fs.readdir!(dir);
-    } catch {
-      return null;
-    }
-
-    for (const entry of entries) {
-      const fullPath = dir === '/' ? `/${entry}` : `${dir}/${entry}`;
-
-      if (entry === targetFilename) {
-        return fullPath;
-      }
-
-      try {
-        const s = await fs.stat!(fullPath);
-        if (s.isDirectory) {
-          const found = await walk(fullPath);
-          if (found) return found;
-        }
-      } catch {
-        // Skip entries we can't stat
-      }
-    }
-
-    return null;
-  }
-
-  // Only walk if readdir and stat are available
-  if (!fs.readdir || !fs.stat) return null;
-  return walk('/');
 }
