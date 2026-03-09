@@ -614,8 +614,8 @@ export function showProviderSettings(): Promise<void> {
 
       // Close button
       const closeBtn = document.createElement('button');
-      closeBtn.className = 'dialog__btn';
-      closeBtn.style.cssText = 'margin-top: 8px; background: transparent; border: 1px solid var(--s2-border-default);';
+      closeBtn.className = 'dialog__btn dialog__btn--secondary';
+      closeBtn.style.marginTop = '8px';
       closeBtn.textContent = 'Close';
       closeBtn.addEventListener('click', () => {
         overlay.remove();
@@ -780,8 +780,8 @@ export function showProviderSettings(): Promise<void> {
       const hasAccounts = getAccounts().length > 0;
       if (hasAccounts) {
         const backBtn = document.createElement('button');
-        backBtn.className = 'dialog__btn';
-        backBtn.style.cssText = 'margin-top: 8px; background: transparent; border: 1px solid var(--s2-border-default);';
+        backBtn.className = 'dialog__btn dialog__btn--secondary';
+        backBtn.style.marginTop = '8px';
         backBtn.textContent = 'Back';
         backBtn.addEventListener('click', () => {
           renderAccountsList();
