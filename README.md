@@ -27,6 +27,7 @@ A browser-based coding agent that runs as a **Chrome extension** or with a thin 
 - :mag: **Shell Search Commands** — use `grep`, `find`, and `rg` via the bash shell
 - :globe_with_meridians: **Networking** — curl and fetch support with binary-safe downloads
 - :wrench: **JavaScript Tool** — sandboxed JS execution with VFS bridge and persistent context
+- :scroll: **JSH Scripts** — `.jsh` files anywhere on the VFS are auto-discovered as shell commands. Skills can ship executable scripts alongside `SKILL.md`. Scripts get Node-like globals (`process`, `console`, `fs`) and work in both CLI and extension mode
 - :key: **Multi-Provider Auth** — Anthropic (direct), Azure AI Foundry, and AWS Bedrock with segmented control
 - :zap: **Real-Time Streaming** — responses stream token-by-token as Claude thinks
 - :floppy_disk: **Session Persistence** — conversations and files survive page reloads via IndexedDB
@@ -227,7 +228,7 @@ Source layout:
 | `src/core/` | Agent types, tool registry, context compaction, session management |
 | `src/tools/` | Tool implementations (file ops, search, browser, javascript) |
 | `src/fs/` | Virtual filesystem (IndexedDB/LightningFS) + RestrictedFS |
-| `src/shell/` | WebAssembly Bash shell + supplemental commands (node, python, sqlite, convert, skill, mount, webhook) |
+| `src/shell/` | WebAssembly Bash shell + supplemental commands (node, python, sqlite, convert, skill, mount, webhook, which) + `.jsh` script discovery and execution |
 | `src/git/` | Git via isomorphic-git (clone, commit, push, pull, etc.) |
 | `src/cdp/` | Chrome DevTools Protocol client (WebSocket + chrome.debugger), HAR recorder |
 | `src/cli/` | CLI server — Chrome launch, CDP proxy, Express |
