@@ -60,33 +60,14 @@ content. Navigate to the source page and extract content directly:
 { "action": "navigate", "url": "{sourceUrl}" }
 ```
 
-**MANDATORY: Dismiss overlays after navigation.** The cone detected and
-dismissed overlays during extraction and saved a recipe. Apply it now.
+The cone dismissed overlays (cookie banners, consent dialogs) during
+Phase 1.5 and set consent cookies. Since all tabs share the same browser
+session, overlays should NOT appear when you navigate here. If you do
+see an overlay blocking content, click its accept/dismiss button via
+`evaluate` — do not just remove it from the DOM.
 
-**Step 1a — Apply overlay recipe:**
-
-Read the overlay recipe from `{projectPath}/.migration/overlay-recipe.json`.
-It contains an array of actions the cone found effective, e.g.:
-`["click:#onetrust-accept-btn-handler", "remove:#onetrust-consent-sdk"]`
-
-For each action, wait 1.5s for the overlay to render, then execute:
-- `click:SELECTOR` → `document.querySelector('SELECTOR').click()`
-- `remove:SELECTOR` → `document.querySelectorAll('SELECTOR').forEach(e => e.remove())`
-
-If the recipe is empty `[]`, overlays were not detected — skip to Step 1b.
-
-**Step 1b — Visual verification:**
-
-Take a screenshot and look at it. If you see ANY overlay still blocking
-content that the recipe didn't handle:
-- Identify the dismiss/accept/close button visually
-- Use `evaluate` to click it or remove the overlay element
-- Take another screenshot to confirm the page is clean
-
-Only proceed to content extraction once the page is clean.
-
-Then extract the component's content using the CSS selector from the
-visual tree or one you identify:
+Extract the component's content using the CSS selector from the visual
+tree or one you identify:
 
 ```json
 { "action": "evaluate", "expression": "..." }

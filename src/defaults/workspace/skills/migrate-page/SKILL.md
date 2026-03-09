@@ -44,105 +44,69 @@ navigates to the URL, and produces artifacts in `/shared/{repo-name}/.migration/
 
 ---
 
-## Phase 1.5: Verify and Complete Overlay Recipe — MANDATORY
+## Phase 1.5: Dismiss Overlays — MANDATORY
 
-The `migrate_page` tool runs heuristic overlay detection (known vendors
-like OneTrust, Cookiebot, etc.) and saves what it found to
-`overlay-recipe.json`. **But heuristics may miss custom overlays.**
+The `migrate_page` tool runs heuristic overlay detection, but it may miss
+custom overlays. You MUST verify the page is clean.
 
-You MUST verify and complete the recipe.
+**Why this matters:** All tabs share the same browser session. When you
+click "Accept All" on a cookie banner, the consent cookie is set and
+persists. Scoops opening new tabs to the same URL will NOT see the banner.
+But this only works if you CLICK the button — removing the DOM element
+does NOT set the cookie.
 
 ### What Is an Overlay?
 
-An overlay is any element that sits ON TOP of the main page content,
-blocking or partially obscuring it. Look for these visual patterns in
-the screenshot:
+An overlay is any element sitting ON TOP of the main page content:
 
-**Full-width bars** (most common):
-- Cookie consent banner at the bottom of the viewport (dark bar with
-  "Accept All" / "Decline" / "Manage Preferences" buttons)
-- GDPR/CCPA notice at the top or bottom
-- Announcement bar that can be dismissed
+- **Full-width bars:** Cookie consent at bottom ("Accept All" / "Decline"),
+  GDPR/CCPA notice, dismissible announcements
+- **Centered modals:** Newsletter signup, login dialog, age gate, paywall —
+  typically with a dark semi-transparent backdrop
+- **Corner widgets:** Chat bubbles (Intercom, Zendesk), help buttons
+- **Visual indicators:** Dark backdrop dimming the page, element floating
+  with shadow, has X/close/accept/decline button, obscures page content
 
-**Centered modals** (with backdrop):
-- Newsletter signup popup with a dark/dimmed background behind it
-- Login/registration dialog
-- Age verification gate
-- "Subscribe to continue" paywall
+**NOT overlays:** Sticky navigation, inline content, embedded forms.
 
-**Corner widgets**:
-- Chat bubble in bottom-right (Intercom, Zendesk, Drift, LiveChat)
-- Help/support floating button
-- Feedback widget
+### Steps
 
-**Visual indicators that something is an overlay:**
-- Dark semi-transparent backdrop dimming the page behind it
-- Element visually floating above page content (has a shadow or border)
-- Fixed position — stays in place while page content scrolls behind it
-- Has an X/close button, "Accept", "Decline", "Got it", "Dismiss" button
-- Obscures or partially covers the actual page sections (header, hero,
-  content, footer)
-
-**NOT overlays** (do not dismiss these):
-- The page's own navigation/header (even if sticky)
-- Inline content sections
-- Embedded forms that are part of the page content
-
-### Verification Steps
-
-1. **Read the recipe:**
-   ```
-   read_file({ "path": "/shared/{repo-name}/.migration/overlay-recipe.json" })
-   ```
-
-2. **Look at the extraction screenshot:**
+1. **Look at the extraction screenshot:**
    ```
    read_file({ "path": "/shared/{repo-name}/.migration/screenshot.png" })
    ```
 
-3. **If the screenshot shows ANY overlay** (using the patterns above):
+2. **If the screenshot is clean** — no overlays visible → proceed to Phase 2.
 
-   a. Navigate to the source page in a new tab:
+3. **If overlays are visible:**
+
+   a. Navigate to the source page:
       ```json
       { "action": "new_tab", "url": "{sourceUrl}" }
       ```
-   b. Take a snapshot to see the DOM structure:
+   b. Take a snapshot to see the DOM:
       ```json
       { "action": "snapshot" }
       ```
-   c. Identify the overlay element and its dismiss button from the snapshot.
-      Common selectors:
-      - Accept buttons: `[class*="accept"]`, `[class*="allow"]`,
-        `button[id*="accept"]`, `[aria-label*="Accept"]`
-      - Close buttons: `[aria-label*="close"]`, `[aria-label*="Close"]`,
-        `.close-btn`, `button.close`
-      - Banner containers: `[class*="cookie"]`, `[class*="consent"]`,
-        `[id*="cookie"]`, `[id*="banner"]`
-   d. Use `evaluate` to click the dismiss button:
+   c. Find the **accept/dismiss button** and CLICK it (do NOT just remove
+      the element — clicking sets the consent cookie which persists for
+      scoops):
       ```json
       { "action": "evaluate", "expression": "document.querySelector('SELECTOR').click()" }
       ```
-   e. Take a screenshot to confirm the overlay is gone
-   f. Record the working action(s) and update the recipe:
+      Common selectors to try:
+      - `#onetrust-accept-btn-handler` (OneTrust)
+      - `#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll` (Cookiebot)
+      - `[class*="accept"]`, `[class*="allow"]`, `[aria-label*="Accept"]`
+      - `[aria-label*="close"]`, `[aria-label*="Close"]`, `.close-btn`
+   d. Screenshot to confirm the overlay is gone
+   e. If clicking didn't work (no button found), use `remove` as last resort:
       ```json
-      ["click:DISMISS_SELECTOR", "remove:BANNER_SELECTOR"]
-      ```
-      Use `click:` for buttons (sets consent cookies) and `remove:` as
-      fallback (just deletes the element from DOM).
-   g. Write the updated recipe:
-      ```
-      write_file({ "path": "/shared/{repo-name}/.migration/overlay-recipe.json",
-                    "content": "[\"click:SELECTOR\"]" })
+      { "action": "evaluate", "expression": "document.querySelectorAll('SELECTOR').forEach(e => e.remove())" }
       ```
 
-4. **If the screenshot is clean** (no overlays visible) AND the recipe has
-   entries → the heuristics worked. Proceed.
-
-5. **If the screenshot is clean AND the recipe is empty** → no overlays
-   on this page. Proceed.
-
-This step ensures the recipe is complete and accurate BEFORE scoops use it.
-Scoops apply this recipe blindly — if it's wrong, every scoop fails.
+**CRITICAL:** Always prefer `click` over `remove`. Clicking sets cookies
+that persist across tabs. Removing just hides the element in this tab.
 
 ---
 
@@ -254,11 +218,10 @@ feed_scoop({ "name": "hero-block-scoop", "prompt": "<FULL PROMPT BELOW>" })
 
 ### Scoop Delegation Pattern
 
-**Before creating scoops**, read these files:
+**Before creating scoops**, read the UPDATED `head.html` (with font links):
 
 ```
 read_file({ "path": "/shared/{repo-name}/head.html" })
-read_file({ "path": "/shared/{repo-name}/.migration/overlay-recipe.json" })
 ```
 
 Each scoop has a `migrate-block` skill in its workspace that defines the
@@ -280,11 +243,6 @@ You are migrating a single block to EDS.
 
 ## head.html Content
 {PASTE THE FULL CONTENT OF head.html HERE}
-
-## Overlay Recipe
-The following overlays were detected and dismissed on the source page.
-Apply this recipe after navigating to the source URL:
-{PASTE THE CONTENT OF overlay-recipe.json HERE}
 
 ## Instructions
 Read and execute the migrate-block skill at:
@@ -313,9 +271,6 @@ You are migrating the website header/navigation to EDS.
 
 ## head.html Content
 {PASTE THE FULL CONTENT OF head.html HERE}
-
-## Overlay Recipe
-{PASTE THE CONTENT OF overlay-recipe.json HERE}
 
 ## Instructions
 Read and execute the migrate-header skill at:

@@ -41,21 +41,10 @@ Navigate to the source page and extract the header's content:
 { "action": "navigate", "url": "{sourceUrl}" }
 ```
 
-**MANDATORY: Dismiss overlays after navigation.** The cone detected and
-dismissed overlays during extraction and saved a recipe. Apply it now.
-
-**Step 1a — Apply overlay recipe:**
-
-Read the overlay recipe from `{projectPath}/.migration/overlay-recipe.json`.
-For each action, wait 1.5s for the overlay to render, then execute:
-- `click:SELECTOR` → `document.querySelector('SELECTOR').click()`
-- `remove:SELECTOR` → `document.querySelectorAll('SELECTOR').forEach(e => e.remove())`
-
-**Step 1b — Visual verification:**
-
-Take a screenshot. If overlays remain that the recipe didn't handle,
-identify and dismiss them visually. Confirm the page is clean before
-proceeding.
+The cone dismissed overlays (cookie banners, consent dialogs) during
+Phase 1.5 and set consent cookies. Since all tabs share the same browser
+session, overlays should NOT appear when you navigate here. If you do
+see an overlay, click its accept/dismiss button via `evaluate`.
 
 Use `evaluate` to extract the header HTML, including:
 - Logo (image URL, alt text, link href)
