@@ -254,12 +254,33 @@ Delegation:
 ## Key Conventions
 
 - **Two type systems**: Legacy ToolDefinition/ToolResult (in src/tools/) and pi-compatible AgentTool/AgentToolResult (in src/core/). The adapter in tool-adapter.ts bridges them.
-- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 743 tests across 41 files.
+- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 753 tests across 42 files.
 - **Logging**: createLogger('namespace') from src/core/logger.ts. Level-filtered, DEBUG in dev, ERROR in prod. Uses __DEV__ global (set by Vite define).
 - **Node shims**: src/shims/empty.ts stubs out node:zlib and node:module for the browser bundle (just-bash references them).
 - **Multi-provider auth**: Provider settings in `src/ui/provider-settings.ts`. Supports Anthropic (direct), Azure AI Foundry (Claude on Azure), Azure OpenAI (GPT), AWS Bedrock, and many more via pi-ai. Provider/API key/baseUrl stored in localStorage. Model resolved via `resolveCurrentModel()` with baseUrl override.
 - **Extension detection**: `typeof chrome !== 'undefined' && !!chrome?.runtime?.id` — used throughout to select CDP transport, layout mode, fetch strategy, JS tool sandbox mechanism, and Pyodide loading path.
 - **Dual-mode compatibility**: New features MUST work in both standalone CLI mode and Chrome extension mode. Extension CSP blocks dynamic eval and CDN fetches. Pattern: use sandbox iframe (`sandbox.html`) for dynamic code execution, `chrome.runtime.getURL()` + fetch for bundled WASM/assets, and three-branch detection (Node/Extension/Browser) for resource loading. Bundle extension assets in `vite.config.extension.ts` `closeBundle` hook. Always test in both modes.
+
+## Change Requirements
+
+Every change MUST satisfy three gates: **tests**, **docs**, and **verification**.
+
+### Tests
+New pure-logic code (utilities, adapters, data transformations, path handling) MUST have colocated tests (`foo.test.ts` next to `foo.ts`). See `docs/testing.md` for patterns.
+
+### Documentation
+Changes must be reflected in the appropriate documentation tier:
+
+| Tier | File | Update when... |
+|------|------|----------------|
+| **Public** | `README.md` | Change is user-facing: new features, new commands, new capabilities visible to end users |
+| **Development** | `CLAUDE.md` | Change affects how developers work: new conventions, architecture decisions, build changes, new key files |
+| **Agent reference** | `docs/` | Change adds or modifies anything an AI coding agent needs to look up: tools, shell commands, test patterns, file locations, pitfalls, how-to guides |
+
+Not every change hits all three tiers. A bug fix with no API change may only need tests. A new shell command needs all three. Use judgment, but when in doubt, update the docs.
+
+### Verification
+Before committing: `npm run typecheck` + `npm run test` must pass. See `docs/development.md` for the full checklist.
 
 ## Git Integration (src/git/)
 Git support via isomorphic-git with LightningFS as the backing store. GitCommands class provides CLI-like interface for git operations (init, clone, add, commit, status, log, branch, checkout, diff, remote, fetch, pull, push, config, rev-parse). Registered as a custom command in just-bash so it works in compound commands and via the bash tool.
