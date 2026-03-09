@@ -24,6 +24,7 @@ import { RestrictedFS } from '../fs/restricted-fs.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import { createDefaultSharedFiles } from './skills.js';
 import { buildActiveLicksError, type LickManager } from './lick-manager.js';
+import { SessionStore } from '../core/session.js';
 
 const log = createLogger('orchestrator');
 
@@ -69,6 +70,7 @@ export class Orchestrator {
   /** Accumulates response text per scoop for routing back to cone on completion. */
   private scoopResponseBuffer: Map<string, string> = new Map();
   private lickManager: LickManager | null = null;
+  private sessionStore: SessionStore | null = null;
 
   constructor(
     container: HTMLElement,
@@ -86,6 +88,7 @@ export class Orchestrator {
 
     // Create the single shared VirtualFS
     this.sharedFs = await VirtualFS.create({ dbName: 'slicc-fs' });
+    this.sessionStore = new SessionStore();
     await this.ensureRootStructure();
 
     const savedScoops = await db.getAllScoops();
@@ -219,6 +222,9 @@ export class Orchestrator {
     }
 
     await this.destroyScoopTab(jid);
+    this.sessionStore?.delete(jid).catch((err) => {
+      log.warn('Failed to delete agent session', { jid, error: err instanceof Error ? err.message : String(err) });
+    });
     await db.deleteScoop(jid);
     this.scoops.delete(jid);
     this.messageQueues.delete(jid);
@@ -239,6 +245,11 @@ export class Orchestrator {
   /** Clear all messages from the orchestrator DB and reset timestamps. */
   async clearAllMessages(): Promise<void> {
     await db.clearAllMessages();
+    if (this.sessionStore) {
+      await this.sessionStore.clearAll().catch((err) => {
+        log.warn('Failed to clear agent sessions', { error: err instanceof Error ? err.message : String(err) });
+      });
+    }
     this.lastAgentTimestamp.clear();
     for (const jid of this.scoops.keys()) {
       this.messageQueues.set(jid, []);
@@ -471,7 +482,7 @@ export class Orchestrator {
       getBrowserAPI: () => this.callbacks.getBrowserAPI(),
     };
 
-    const context = new ScoopContext(scoop, contextCallbacks, fs);
+    const context = new ScoopContext(scoop, contextCallbacks, fs, this.sessionStore ?? undefined);
 
     this.contexts.set(jid, context);
     this.tabs.set(jid, {

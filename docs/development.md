@@ -36,17 +36,25 @@ Build, run, test, and debug SLICC locally.
 1. **Edit** — Change source code in `src/`
 2. **Typecheck** — Run `npm run typecheck` (both tsconfigs: browser + Node)
 3. **Test** — Run `npm run test` (or `npm run test:watch` for rapid iteration)
-4. **Verify manually** — Test in both CLI mode and extension mode
+4. **Build** — Run all four build gates: `npm run typecheck`, `npm run test`, `npm run build`, `npm run build:extension`
+5. **Verify manually** — Test in both CLI mode and extension mode (see checklist below)
 
 ## Verification Checklist (Before Committing)
 
-- [ ] `npm run typecheck` passes (both tsconfigs)
-- [ ] `npm run test` passes (753+ tests)
+All four build gates MUST pass:
+
+- [ ] `npm run typecheck` — Both tsconfig targets (browser + CLI)
+- [ ] `npm run test` — Vitest (all tests)
+- [ ] `npm run build` — Production build (UI via Vite + CLI via TSC)
+- [ ] `npm run build:extension` — Extension build (Vite with extension config)
+
+Manual verification in both modes:
+
 - [ ] Feature works in CLI mode (`npm run dev:full`)
   - Launch Chrome automatically
   - Navigate to http://localhost:3000
   - Interact with UI; check functionality
-- [ ] Feature works in extension mode (`npm run build:extension` → load unpacked in `chrome://extensions`)
+- [ ] Feature works in extension mode (load `dist/extension/` unpacked in `chrome://extensions`)
   - Load `dist/extension/` as unpacked extension
   - Open side panel
   - Interact with UI; check functionality
