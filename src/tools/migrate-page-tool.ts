@@ -121,6 +121,15 @@ async function runMigrationExtraction(
   await browser.attachToPage(targetId);
   await browser.navigate(url);
 
+  // Capture raw screenshot BEFORE any modifications — this shows the
+  // true state of the page including overlays. The cone uses this in
+  // Phase 1.5 to verify overlay dismissal.
+  const rawBase64 = await browser.screenshot({ fullPage: true });
+  const rawScreenshotPath = `${migrationDir}/screenshot-raw.png`;
+  await fs.writeFile(rawScreenshotPath, base64ToBytes(rawBase64 as string));
+  log.info('Raw screenshot saved (before any modifications)');
+
+  // Run overlay dismissal — prefers clicking accept buttons (sets cookies)
   log.info('Dismissing overlays');
   const overlayResult = await browser.evaluate(OVERLAY_DISMISS_SCRIPT);
   let overlayRecipe: string[] = [];

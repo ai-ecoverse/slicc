@@ -71,12 +71,15 @@ An overlay is any element sitting ON TOP of the main page content:
 
 ### Steps
 
-1. **Look at the extraction screenshot:**
+1. **Look at the RAW screenshot** (taken before any page modifications):
    ```
-   read_file({ "path": "/shared/{repo-name}/.migration/screenshot.png" })
+   read_file({ "path": "/shared/{repo-name}/.migration/screenshot-raw.png" })
    ```
+   This shows the page exactly as a visitor sees it — including overlays.
+   Do NOT use `screenshot.png` (that's taken after page-prep which hides
+   overlays by converting `position: fixed` to `relative`).
 
-2. **If the screenshot is clean** — no overlays visible → proceed to Phase 2.
+2. **If the raw screenshot is clean** — no overlays visible → proceed to Phase 2.
 
 3. **If overlays are visible:**
 
