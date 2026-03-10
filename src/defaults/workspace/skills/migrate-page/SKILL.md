@@ -458,6 +458,145 @@ Report to the user:
 - Assembled page preview URL
 - Any issues, gaps, or incomplete items
 - Path to all reports in `.migration/reports/`
+- Ask: "Would you like me to upload to DA (Document Authoring)?"
+
+---
+
+## Phase 5: DA Upload (Optional)
+
+Only proceed if the user confirms. This uploads the migrated page to
+AEM Document Authoring via vibemigration's migration-backend-worker.
+
+### Step 5.1: Generate Migration ID
+
+Generate an 8-character hex ID:
+
+```javascript
+const id = Array.from(crypto.getRandomValues(new Uint8Array(4)))
+  .map(b => b.toString(16).padStart(2, '0')).join('');
+return id;
+```
+
+### Step 5.2: Prepare HTML Content with Metadata Block
+
+Read the assembled `.plain.html` files. For the **main page only**, append
+the metadata block at the bottom. This block is required by the DA/EDS
+pipeline — it gets converted to `<meta>` tags during publishing.
+
+```javascript
+const mainHtml = await fs.readFile('/shared/{repo-name}/drafts/index.plain.html', { encoding: 'utf-8' });
+const navHtml = await fs.readFile('/shared/{repo-name}/drafts/nav.plain.html', { encoding: 'utf-8' });
+const footerHtml = await fs.readFile('/shared/{repo-name}/drafts/footer.plain.html', { encoding: 'utf-8' });
+
+// Append metadata block to main HTML (DA pipeline converts to meta tags)
+const migrationId = '{generated ID from Step 5.1}';
+const metadataBlock = `
+<div>
+  <div class="metadata">
+    <div><div>nav</div><div>/${migrationId}/nav</div></div>
+    <div><div>footer</div><div>/${migrationId}/footer</div></div>
+    <div><div>title</div><div>{page title}</div></div>
+  </div>
+</div>`;
+const mainHtmlWithMetadata = mainHtml + metadataBlock;
+```
+
+Also rewrite image paths from `/drafts/images/` to `./images/` in all
+three HTML files. The backend only matches `./images/`, `images/`, and
+`/images/` patterns for URL rewriting:
+
+```javascript
+function fixImagePaths(html) {
+  return html.replace(/\/drafts\/images\//g, './images/');
+}
+```
+
+### Step 5.3: Create ZIPs
+
+**Images ZIP** — files MUST be under `images/` prefix:
+
+```javascript
+const zip = new JSZip();
+const entries = await fs.readDir('/shared/{repo-name}/drafts/images');
+for (const entry of entries) {
+  const name = typeof entry === 'string' ? entry : entry.name;
+  if (name.startsWith('.')) continue;
+  const data = await fs.readFileBinary('/shared/{repo-name}/drafts/images/' + name);
+  zip.file('images/' + name, data);
+}
+const imagesZipBlob = await zip.generateAsync({ type: 'blob' });
+```
+
+**Blocks ZIP** — all block/style/script files with repo-relative paths:
+
+```javascript
+const blocksZip = new JSZip();
+// Add all block directories
+const blockDirs = await fs.readDir('/shared/{repo-name}/blocks');
+for (const dir of blockDirs) {
+  const dirName = typeof dir === 'string' ? dir : dir.name;
+  const files = await fs.readDir('/shared/{repo-name}/blocks/' + dirName);
+  for (const f of files) {
+    const name = typeof f === 'string' ? f : f.name;
+    const data = await fs.readFileBinary('/shared/{repo-name}/blocks/' + dirName + '/' + name);
+    blocksZip.file('blocks/' + dirName + '/' + name, data);
+  }
+}
+// Add styles, scripts, head.html
+for (const f of ['styles.css', 'brand.css', 'fonts.css', 'lazy-styles.css']) {
+  try {
+    const data = await fs.readFileBinary('/shared/{repo-name}/styles/' + f);
+    blocksZip.file('styles/' + f, data);
+  } catch (e) {}
+}
+for (const f of ['scripts.js', 'aem.js', 'delayed.js']) {
+  try {
+    const data = await fs.readFileBinary('/shared/{repo-name}/scripts/' + f);
+    blocksZip.file('scripts/' + f, data);
+  } catch (e) {}
+}
+try {
+  const data = await fs.readFileBinary('/shared/{repo-name}/head.html');
+  blocksZip.file('head.html', data);
+} catch (e) {}
+const blocksZipBlob = await blocksZip.generateAsync({ type: 'blob' });
+```
+
+### Step 5.4: POST to Migration Backend
+
+```javascript
+const backendUrl = 'https://migration-backend-worker.paolo-moz.workers.dev';
+const formData = new FormData();
+formData.append('migrationId', migrationId);
+formData.append('pagePath', '/');
+formData.append('sourceUrl', '{sourceUrl}');
+formData.append('htmlContent', fixImagePaths(mainHtmlWithMetadata));
+formData.append('blocksZip', blocksZipBlob, 'blocks.zip');
+formData.append('imagesZip', imagesZipBlob, 'images.zip');
+formData.append('navHtmlContent', fixImagePaths(navHtml));
+formData.append('footerHtmlContent', fixImagePaths(footerHtml));
+
+const response = await fetch(backendUrl + '/migrate/page', {
+  method: 'POST',
+  body: formData,
+});
+const result = await response.json();
+```
+
+### Step 5.5: Report DA Upload Results
+
+The response contains:
+- `previewUrl` — live EDS preview (e.g., `https://{migrationId}--vibemigrated--aemcoder.aem.page/{migrationId}/`)
+- `navPreviewUrl` — nav fragment preview
+- `footerPreviewUrl` — footer fragment preview
+- `commitSha` — git commit on the migration branch
+- `imagesUploaded` — number of images uploaded
+
+Report all URLs to the user. If `imagesUploaded` is 0, warn that images
+may be broken — check that the images ZIP has `images/` prefix and HTML
+uses `./images/` paths.
+
+DA content visible at: `https://da.live/#/aemcoder/vibemigrated/{migrationId}`
 
 ---
 
