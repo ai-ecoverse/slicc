@@ -3,7 +3,12 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { renderMessageContent, renderToolInput, escapeHtml } from './message-renderer.js';
+import {
+  renderAssistantMessageContent,
+  renderMessageContent,
+  renderToolInput,
+  escapeHtml,
+} from './message-renderer.js';
 
 describe('escapeHtml', () => {
   it('escapes HTML special characters', () => {
@@ -148,6 +153,29 @@ describe('renderMessageContent', () => {
       const html = renderMessageContent('```js\nconst x = 1;\n```');
       expect(html).toContain('tok-keyword');
     });
+  });
+});
+
+describe('renderAssistantMessageContent', () => {
+  it('renders surfaced assistant errors as dedicated error blocks', () => {
+    const html = renderAssistantMessageContent(
+      '**Error:** Bedrock CAMP API error (503): {"message":"Bedrock is unable to process your request."}',
+    );
+
+    expect(html).toContain('class="msg__error"');
+    expect(html).toContain('class="msg__error-label">Error</div>');
+    expect(html).toContain('Bedrock CAMP API error (503)');
+    expect(html).not.toContain('<strong>Error:</strong>');
+  });
+
+  it('preserves normal assistant prose while upgrading appended surfaced errors', () => {
+    const html = renderAssistantMessageContent(
+      'Trying again now.\n\n**Error:** Provider timeout after 30s',
+    );
+
+    expect(html).toContain('<p>Trying again now.</p>');
+    expect(html).toContain('class="msg__error"');
+    expect(html).toContain('Provider timeout after 30s');
   });
 });
 

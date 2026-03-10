@@ -7,7 +7,12 @@ export { ScoopSwitcher } from './scoop-switcher.js';
 export { Layout } from './layout.js';
 export type { LayoutPanels } from './layout.js';
 export { SessionStore } from './session-store.js';
-export { renderMessageContent, renderToolInput, escapeHtml } from './message-renderer.js';
+export {
+  renderAssistantMessageContent,
+  renderMessageContent,
+  renderToolInput,
+  escapeHtml,
+} from './message-renderer.js';
 export {
   getApiKey,
   setApiKey,
