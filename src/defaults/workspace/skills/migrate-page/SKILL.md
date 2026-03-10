@@ -287,95 +287,45 @@ Scoop creation and feeding are the biggest time sinks because each tool
 call requires an LLM turn. **Minimize the number of LLM turns** by
 batching operations:
 
-**Step 1 — Read head.html** (1 tool call):
+**Step 1 — Generate scoop configs via script** (1 tool call, NO LLM generation):
+
+Use the JavaScript tool to generate all scoop prompts mechanically.
+This avoids the cone spending tokens generating repetitive prompt text.
+
+```javascript
+const decomposition = JSON.parse(await fs.readFile('/shared/{repo-name}/.migration/decomposition.json', { encoding: 'utf-8' }));
+const headHtml = await fs.readFile('/shared/{repo-name}/head.html', { encoding: 'utf-8' });
+const script = await fs.readFile('/workspace/scripts/generate-scoop-prompts.js', { encoding: 'utf-8' });
+eval(script);
+const configs = generateScoopConfigs(decomposition, headHtml, '{sourceUrl}', '/shared/{repo-name}');
+return JSON.stringify(configs);
 ```
-read_file({ "path": "/shared/{repo-name}/head.html" })
-```
+
+This returns an array of `{ name, model, prompt }` objects — one per block.
 
 **Step 2 — Create AND feed ALL scoops in a SINGLE response** (N tool calls, 1 LLM turn):
-Call `scoop_scoop` with `name`, `model`, AND `prompt` for every block in
-the same response. Each scoop starts working immediately after creation —
-no separate `feed_scoop` needed.
 
-**MANDATORY: All scoops MUST use `"model": "claude-sonnet-4-6"`.** Block
-migration is code generation — it doesn't need the cone's reasoning power.
+Take the configs from Step 1 and call `scoop_scoop` for each one.
+DO NOT modify or regenerate the prompts — use them exactly as returned.
 ```
-scoop_scoop({ "name": "hero-block", "model": "claude-sonnet-4-6", "prompt": "You are migrating..." })
-scoop_scoop({ "name": "cards-block", "model": "claude-sonnet-4-6", "prompt": "You are migrating..." })
-scoop_scoop({ "name": "nav-bar-block", "model": "claude-sonnet-4-6", "prompt": "You are migrating..." })
-scoop_scoop({ "name": "footer-block", "model": "claude-sonnet-4-6", "prompt": "You are migrating..." })
-... all in ONE response
+scoop_scoop({ "name": configs[0].name, "model": configs[0].model, "prompt": configs[0].prompt })
+scoop_scoop({ "name": configs[1].name, "model": configs[1].model, "prompt": configs[1].prompt })
+... one per config, all in ONE response
 ```
 
-This reduces scoop setup from ~12 LLM turns to ~2 (read head.html + create-and-feed all).
+This reduces scoop setup to ~2 LLM turns (generate configs + create all).
+The cone does NOT generate prompt text — the script does it mechanically.
 
-### Scoop Delegation Pattern
+### How the Script Works
 
-Each scoop has a `migrate-block` (or `migrate-header`) skill in its
-workspace. The cone passes **parameters only** — the skill is the
-source of truth for the process.
+The `generate-scoop-prompts.js` script handles all three block types:
+- **Header blocks** (nav-bar, header, navigation, or /nav fragment) → uses `migrate-header` skill
+- **Footer blocks** (footer, footer-links, footer-content, or /footer fragment) → uses `migrate-block` skill with footer special case
+- **All other blocks** → uses `migrate-block` skill
 
-### feed_scoop Prompt Template
-
-```
-You are migrating a single block to EDS.
-
-## Parameters
-- Block name: {blockName}
-- Source URL: {sourceUrl}
-- Visual tree ID: {id}
-- Bounds: x={x}, y={y}, width={w}, height={h}
-- EDS project: /shared/{repo-name}/
-- Notes: {any decomposition notes — e.g., "this is a 3-column card grid"}
-
-## head.html Content
-{PASTE THE FULL CONTENT OF head.html HERE}
-
-## Instructions
-Read and execute the migrate-block skill at:
-/scoops/{scoop-folder}/workspace/skills/migrate-block/SKILL.md
-
-Follow every step exactly. Your preview MUST use head.html content.
-Do NOT inline CSS or JS as a substitute for the EDS framework.
-```
-
-**This is ~20 lines.** The skill file (~300 lines) is the authoritative
-process definition. The cone passes parameters; the skill defines steps.
-
-### Header Scoop — Uses Dedicated Skill
-
-The header/navigation block uses the `migrate-header` skill (NOT
-`migrate-block`). The feed_scoop prompt for the header scoop:
-
-```
-You are migrating the website header/navigation to EDS.
-
-## Parameters
-- Source URL: {sourceUrl}
-- EDS project: /shared/{repo-name}/
-- Bounds: x={x}, y={y}, width={w}, height={h}
-- Notes: {decomposition notes — e.g., "two-tier purple header with mega menus"}
-
-## head.html Content
-{PASTE THE FULL CONTENT OF head.html HERE}
-
-## Instructions
-Read and execute the migrate-header skill at:
-/scoops/{scoop-folder}/workspace/skills/migrate-header/SKILL.md
-
-This is a HEADER migration, not a regular block. Follow the header skill
-exactly — it handles nav.plain.html generation, section-metadata styles,
-dropdown detection, and header-specific CSS patterns.
-```
-
-### Footer Scoop — Uses migrate-block Skill
-
-The footer uses the standard `migrate-block` skill with this addition:
-
-```
-- Special: This is the FOOTER block. Output footer.plain.html, not {blockName}.plain.html.
-  See "Footer Block — Special Case" in the migrate-block skill.
-```
+Each generated prompt includes the block parameters, head.html content,
+and instructions to read the appropriate skill. The cone does NOT need
+to generate or modify any prompt text.
 
 ---
 

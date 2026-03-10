@@ -176,13 +176,21 @@ export async function createDefaultSkills(fs: VirtualFS, skillsDir: string = '/w
     // to VFS path like '/workspace/skills/browser/SKILL.md'
     const vfsPath = importPath.slice(prefix.length);
     
-    // Only copy files that belong under the skills directory
-    if (!vfsPath.startsWith('/workspace/skills')) continue;
-    
+    // Copy files under /workspace/skills and /workspace/scripts
+    const isSkill = vfsPath.startsWith('/workspace/skills');
+    const isScript = vfsPath.startsWith('/workspace/scripts');
+    if (!isSkill && !isScript) continue;
+
     // Adjust path if skillsDir is different (e.g., for scoops)
-    const targetPath = skillsDir === '/workspace/skills' 
-      ? vfsPath 
-      : vfsPath.replace('/workspace/skills', skillsDir);
+    let targetPath = vfsPath;
+    if (isSkill && skillsDir !== '/workspace/skills') {
+      targetPath = vfsPath.replace('/workspace/skills', skillsDir);
+    }
+    if (isScript && skillsDir !== '/workspace/skills') {
+      // For scoops: /workspace/scripts → /scoops/{folder}/workspace/scripts
+      const scoopBase = skillsDir.replace('/workspace/skills', '');
+      targetPath = scoopBase + vfsPath;
+    }
     
     try {
       // Check if file already exists
