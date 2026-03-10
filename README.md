@@ -28,6 +28,7 @@ A browser-based coding agent that runs as a **Chrome extension** or with a thin 
 - :globe_with_meridians: **Networking** — curl and fetch support with binary-safe downloads
 - :wrench: **JavaScript Tool** — sandboxed JS execution with VFS bridge and persistent context
 - :scroll: **JSH Scripts** — `.jsh` files anywhere on the VFS are auto-discovered as shell commands. Skills can ship executable scripts alongside `SKILL.md`. Scripts get Node-like globals (`process`, `console`, `fs`) and work in both CLI and extension mode
+- :package: **Drag-and-Drop Skill Imports** — drop a `.skill` archive anywhere in the window to unpack it into `/workspace/skills/{name}` with a visual overlay, path-safety checks, and toast feedback
 - :key: **Multi-Provider Auth** — Anthropic (direct), Azure AI Foundry, and AWS Bedrock with segmented control
 - :zap: **Real-Time Streaming** — responses stream token-by-token as Claude thinks
 - :floppy_disk: **Session Persistence** — conversations and files survive page reloads via IndexedDB
