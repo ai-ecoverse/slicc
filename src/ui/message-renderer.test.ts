@@ -63,8 +63,8 @@ describe('renderMessageContent', () => {
     expect(html).toContain('href="https://example.com"');
     expect(html).toContain('target="_blank"');
     expect(html).toContain('rel="noopener noreferrer"');
-    expect(html).not.toContain('opener');
-    expect(html).not.toContain('external');
+    expect(html).not.toMatch(/\bopener\b/);
+    expect(html).not.toMatch(/\bexternal\b/);
   });
 
   it('renders italic text', () => {
