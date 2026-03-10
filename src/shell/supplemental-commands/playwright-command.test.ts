@@ -1590,16 +1590,7 @@ describe('playwright-cli session history logging', () => {
     expect(screenshotFiles[0]).toMatch(/screenshot-.*\.png$/);
   });
 
-  it('screenshot --inline includes base64 img tag in output', async () => {
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['screenshot', '--inline'], {} as any);
-
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('<img:data:image/png;base64,');
-  });
-
-  it('screenshot without --inline does not include base64 img tag', async () => {
+  it('screenshot does not include base64 img tag in output', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
     const result = await cmd.execute(['screenshot'], {} as any);
