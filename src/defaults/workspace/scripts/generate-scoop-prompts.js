@@ -9,9 +9,10 @@
  * @param {string} headHtml - The full content of head.html
  * @param {string} sourceUrl - The source page URL
  * @param {string} projectPath - The EDS project path in VFS (e.g., "/shared/vibemigrated")
- * @returns {Array<{name: string, model: string, prompt: string}>}
+ * @param {string} [model] - Optional model ID for scoops. If omitted, no model is set (uses cone's model).
+ * @returns {Array<{name: string, model?: string, prompt: string}>}
  */
-function generateScoopConfigs(decomposition, headHtml, sourceUrl, projectPath) {
+function generateScoopConfigs(decomposition, headHtml, sourceUrl, projectPath, model) {
   const configs = [];
 
   for (const fragment of decomposition.fragments) {
@@ -43,11 +44,9 @@ function generateScoopConfigs(decomposition, headHtml, sourceUrl, projectPath) {
           prompt = buildBlockPrompt(block, sourceUrl, projectPath, bounds, headHtml);
         }
 
-        configs.push({
-          name: scoopName,
-          model: 'claude-sonnet-4-6',
-          prompt,
-        });
+        const config = { name: scoopName, prompt };
+        if (model) config.model = model;
+        configs.push(config);
       }
     }
   }

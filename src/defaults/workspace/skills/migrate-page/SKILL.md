@@ -297,6 +297,8 @@ const decomposition = JSON.parse(await fs.readFile('/shared/{repo-name}/.migrati
 const headHtml = await fs.readFile('/shared/{repo-name}/head.html', { encoding: 'utf-8' });
 const script = await fs.readFile('/workspace/scripts/generate-scoop-prompts.js', { encoding: 'utf-8' });
 eval(script);
+// Optional: pass a model ID as 5th argument to use a different model for scoops
+// e.g., 'claude-sonnet-4-6' for faster/cheaper block generation
 const configs = generateScoopConfigs(decomposition, headHtml, '{sourceUrl}', '/shared/{repo-name}');
 return JSON.stringify(configs);
 ```
