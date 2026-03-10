@@ -10,7 +10,7 @@
 | Git | `src/git/` | isomorphic-git wrapper | `git-commands.ts` | N/A |
 | Skills | `src/skills/` | Skill package manager | `apply.ts` | N/A |
 | CDP | `src/cdp/` | Chrome DevTools Protocol | `browser-api.ts` | `browser-api.test.ts` |
-| Tools | `src/tools/` | Agent tools (bash, file, browser, javascript, search) | `bash-tool.ts` | `bash-tool.test.ts` |
+| Tools | `src/tools/` | Tool factories; active scoop surface is file + bash + grep/find + javascript | `bash-tool.ts` | `bash-tool.test.ts` |
 | Core Agent | `src/core/` | pi-mono agent loop + streaming | `index.ts` | `agent.test.ts` |
 | Scoops Orchestrator | `src/scoops/` | Multi-agent system (cone + scoops) | `orchestrator.ts` | N/A |
 | UI | `src/ui/` | Chat, Terminal, Files, Memory panels | `main.ts` | `types.test.ts` |
@@ -24,7 +24,7 @@
 
 | File | Purpose |
 |---|---|
-| `browser-api.ts` | High-level Playwright-inspired API (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree) |
+| `browser-api.ts` | High-level Playwright-inspired API (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree); used by both `browser-tool.ts` and the `playwright-cli` shell command path |
 | `cdp-client.ts` | WebSocket-based CDP client (CLI mode, connects to `ws://localhost:3000/cdp`) |
 | `debugger-client.ts` | Chrome debugger API client (extension mode, uses `chrome.debugger`) |
 | `har-recorder.ts` | HAR 1.2 recorder for network traffic; saves snapshots to VFS on navigation |
@@ -138,7 +138,7 @@
 | File | Purpose |
 |---|---|
 | `orchestrator.ts` | Manages scoop contexts, routes messages, handles responses, owns shared VirtualFS |
-| `scoop-context.ts` | Per-scoop agent instance (RestrictedFS, WasmShell, Agent, skills, NanoClaw tools) |
+| `scoop-context.ts` | Per-scoop agent instance (RestrictedFS, WasmShell, Agent, skills, NanoClaw tools); wires file tools + `bash` + `grep`/`find` + `javascript`, with browser automation via `playwright-cli` shell commands |
 | `nanoclaw-tools.ts` | Scoop tools: `send_message`; cone-only tools: `list_scoops`, `scoop_scoop`, `feed_scoop`, `drop_scoop`, `update_global_memory` |
 | `db.ts` | IndexedDB (`slicc-groups` DB v3): scoops, messages, sessions, tasks, state, webhooks, crontasks stores |
 | `lick-manager.ts` | Browser-side lick management (webhooks + crontasks); all state in IndexedDB |
@@ -154,8 +154,9 @@
 |---|---|
 | `bash-tool.ts` | `bash` tool: execute shell commands via WasmShell |
 | `file-tools.ts` | `read_file`, `write_file`, `edit_file` tools for VirtualFS operations |
-| `browser-tool.ts` | `browser` tool with sub-actions: list_tabs, navigate, screenshot, evaluate, click, type, serve, show_image, record_network |
+| `browser-tool.ts` | Maintained `browser` tool module with tab/snapshot/screenshot actions; not currently wired into `src/scoops/scoop-context.ts` |
 | `javascript-tool.ts` | `javascript` tool: execute JS in the browser context (fs.readDir, fs.readFile, fs.readFileBinary access) |
+| `search-tools.ts` | `grep` and `find` agent tools for recursive VirtualFS search |
 | `index.ts` | Tool factory functions (createBashTool, createFileTools, createBrowserTool, etc.) |
 
 ### src/ui/ — User Interface
@@ -227,7 +228,7 @@ User input in chat → ChatPanel.sendMessage()
                 → per-scoop message buffer
                   → emitToUI() [if scoop is selected]
                     → ChatPanel DOM update (streaming)
-      → Tool calls [bash, file, browser, javascript, etc.]
+      → Tool calls [bash, file, grep/find, javascript, NanoClaw, etc.]
         → RestrictedFS / WasmShell / BrowserAPI
           → results
           → back to agent loop
@@ -345,7 +346,8 @@ Scoop removal / app clear
 | Add a new agent tool | `src/tools/<name>-tool.ts` + register in `index.ts` |
 | Change bash tool behavior | `src/tools/bash-tool.ts` |
 | Change file tool behavior | `src/tools/file-tools.ts` |
-| Change browser tool actions | `src/tools/browser-tool.ts` |
+| Change browser tool actions | `src/tools/browser-tool.ts` (module exists, but current scoop browser automation flows through `playwright-cli` via `bash`) |
+| Change grep/find tool behavior | `src/tools/search-tools.ts` |
 | Change tool input/output format | `src/core/types.ts` (ToolDefinition, ToolResult) |
 | Adapt tools to pi-agent-core | `src/core/tool-adapter.ts` |
 
