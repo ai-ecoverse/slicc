@@ -100,7 +100,7 @@ Execute shell commands in a full Unix-like environment (just-bash 2.11.7).
 |----------|-------|
 | **Name** | `bash` |
 | **Input** | `{ command: string }` |
-| **Output** | `{ content: stdout+stderr, isError: exitCode !== 0 }` |
+| **Output** | `{ content: stdout+stderr, isError }` |
 
 **Schema**:
 
@@ -122,6 +122,10 @@ Execute shell commands in a full Unix-like environment (just-bash 2.11.7).
 - Text processing: grep, rg, sed, awk, cut, tr, sort, uniq, wc, head, tail
 - Search is shell-native: use `grep`, `find`, and `rg` through `bash` rather than separate agent tools
 - Data: jq (JSON), base64, md5sum, sha256sum
+
+**Exit status handling**:
+- Most non-zero shell exit codes are returned as `isError: true`
+- Expected no-match `grep`/`egrep`/`fgrep`/`rg` exits (`1` with empty stderr) stay non-errors so agents can check absence without retrying
 
 **Examples**:
 
@@ -330,6 +334,35 @@ const data = await fs.readFile('/data.json');
 const parsed = JSON.parse(data);
 const result = parsed.items.filter(x => x.id > 10);
 console.log(result);
+```
+
+---
+
+### CLI search commands (via `bash`)
+
+Search remains documented here because it is part of the CLI/shell surface area, but these are **not** separate agent tools. Agents use them by calling the `bash` tool with standard shell commands.
+
+| Command | Purpose | Example |
+|---------|---------|---------|
+| `find` | Find files/directories by name, type, or path | `find /workspace -name "*.js" -type f` |
+| `grep` / `egrep` / `fgrep` | Search line-oriented text output | `grep -R "TODO" /workspace/src` |
+| `rg` | Fast recursive text search | `rg "function main" /workspace/src --type ts` |
+
+**Behavior notes**:
+- Use these through `bash`; there is no dedicated `find` or `search` agent tool
+- `grep` and `rg` return exit code `1` when no matches are found; the `bash` tool preserves that output without surfacing it as an agent error when stderr is empty
+
+**Examples**:
+
+```bash
+# Find TypeScript files
+find /workspace -name "*.ts" -type f
+
+# Search for TODOs
+grep -R "TODO" /workspace/src
+
+# Recursive code search with ripgrep
+rg "createBashTool" /workspace/src --type ts
 ```
 
 ---

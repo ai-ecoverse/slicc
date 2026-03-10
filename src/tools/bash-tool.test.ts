@@ -49,6 +49,25 @@ describe('Bash Tool', () => {
     expect(result.content).not.toContain('apple');
   });
 
+  it('does not report grep no-match searches as errors', async () => {
+    await fs.writeFile('/data.txt', 'apple\nbanana\ncherry');
+
+    const result = await bash.execute({ command: 'cat /data.txt | grep dragonfruit' });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('exit code: 1');
+  });
+
+  it('does not report rg no-match searches as errors', async () => {
+    await bash.execute({ command: 'mkdir -p /workspace/src' });
+    await bash.execute({ command: 'echo "const foo = 1" > /workspace/src/main.ts' });
+
+    const result = await bash.execute({ command: 'rg "bar" /workspace/src' });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('exit code: 1');
+  });
+
   it('supports find through the shell', async () => {
     await bash.execute({ command: 'mkdir -p /workspace/src /workspace/docs' });
     await bash.execute({ command: 'echo "console.log(1)" > /workspace/src/main.ts' });
