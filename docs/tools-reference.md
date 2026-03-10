@@ -295,8 +295,8 @@ List files and directories recursively in VirtualFS using simple glob matching.
 {
   "type": "object",
   "properties": {
-    "pattern": { "type": "string", "description": "Glob pattern to match. Default: *." },
-    "path": { "type": "string", "description": "Directory to search in. Default: /." }
+    "pattern": { "type": "string", "description": "Glob pattern to match. Default: *" },
+    "path": { "type": "string", "description": "Directory to search in. Default: /" }
   }
 }
 ```
