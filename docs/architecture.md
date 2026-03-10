@@ -212,8 +212,46 @@
 ### Special Build Artifacts
 
 - **preview-sw.ts**: Built as standalone IIFE via esbuild (not rollup). Dev: Vite plugin bundles on-the-fly. Prod: `closeBundle` hook writes bundle.
-- **Extension assets**: Pyodide (~13MB), ImageMagick WASM, `sandbox.html`, `voice-popup.html` copied to `dist/extension/` by `vite.config.extension.ts`.
+- **Extension assets**: Pyodide (~13MB), ImageMagick WASM, `sandbox.html`, `voice-popup.html`, `offscreen.html` copied to `dist/extension/` by `vite.config.extension.ts`. The `offscreen.html` entry point runs the agent orchestrator in an unrestricted context separate from the side panel.
 - **Node shims**: `src/shims/` provide no-op implementations for Node modules (just-bash references them).
+
+## Extension Three-Layer Architecture
+
+The Chrome extension uses a three-layer design to keep the agent engine alive across side panel close/reopen cycles:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ Side Panel (UI)                                               │
+│  offscreen-client.ts — Chat, Terminal, Files, Memory          │
+│  Sends: PanelToOffscreenMessage (user input, commands)        │
+│  Receives: OffscreenToPanelMessage (agent events, state)      │
+└─────────────────────────┬────────────────────────────────────┘
+                          │ chrome.runtime messages
+┌─────────────────────────▼────────────────────────────────────┐
+│ Service Worker Relay (service-worker.ts)                      │
+│  Routes Panel ↔ Offscreen messages                            │
+│  Proxies CDP: CdpProxyMessage ↔ chrome.debugger               │
+└─────────────────────────┬────────────────────────────────────┘
+                          │ chrome.runtime messages
+┌─────────────────────────▼────────────────────────────────────┐
+│ Offscreen Document (offscreen.ts, offscreen-bridge.ts)        │
+│  Agent Engine — Orchestrator, VFS, Shell, Tools               │
+│  Persists chat to: browser-coding-agent IndexedDB             │
+│  Dispatches CDP via service worker proxy                      │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Message Flow:**
+- **PanelToOffscreenMessage**: User input flows from panel → service worker → offscreen
+- **OffscreenToPanelMessage**: Agent responses flow from offscreen → service worker → panel
+- **CdpProxyMessage**: Browser automation (screenshot, click, evaluate) flows from offscreen → service worker → chrome.debugger
+
+**IndexedDB Persistence:**
+- `browser-coding-agent` DB: Chat display messages (single source of truth, written by offscreen bridge, read by side panel on reconnect)
+- `agent-sessions` DB: Agent LLM conversation history (restored by ScoopContext on restart)
+- `slicc-groups` DB: Orchestrator routing data (scoops, tasks, webhooks, crontasks)
+
+**CDP Proxy:** Offscreen documents can't call `chrome.debugger` directly. Instead, offscreen sends `CdpProxyMessage` through the service worker, which translates to `chrome.debugger` commands and routes results back.
 
 ## Data Flow Diagrams
 
