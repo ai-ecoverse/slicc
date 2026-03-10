@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
 import { zipSync } from 'fflate';
 import { VirtualFS } from '../fs/index.js';
+import {
+  MAX_SKILL_ARCHIVE_ENTRY_COUNT,
+  MAX_SKILL_ARCHIVE_UNCOMPRESSED_SIZE_BYTES,
+} from './constants.js';
 import { installSkillFromDrop } from './install-from-drop.js';
 
 let dbCounter = 0;
@@ -84,6 +88,36 @@ describe('installSkillFromDrop', () => {
     ).rejects.toThrow('Blocked suspicious path');
   });
 
+  it('rejects archives that exceed the extracted-size budget before install', async () => {
+    const archive = makeArchive({
+      'manifest.yaml': 'skill: too-big\nversion: 1.0.0\n',
+      'payload.txt': new Uint8Array(MAX_SKILL_ARCHIVE_UNCOMPRESSED_SIZE_BYTES + 1),
+    });
+
+    await expect(
+      installSkillFromDrop(fs, makeDroppedFile('too-big.skill', archive)),
+    ).rejects.toThrow('expand to 50 MB or smaller');
+
+    await expect(fs.exists('/workspace/skills/too-big')).resolves.toBe(false);
+  });
+
+  it('rejects archives that exceed the entry-count budget before install', async () => {
+    const entries: Record<string, string> = {
+      'manifest.yaml': 'skill: too-many\nversion: 1.0.0\n',
+    };
+    for (let i = 0; i < MAX_SKILL_ARCHIVE_ENTRY_COUNT; i++) {
+      entries[`files/${String(i).padStart(4, '0')}.txt`] = 'x';
+    }
+
+    const archive = makeArchive(entries);
+
+    await expect(
+      installSkillFromDrop(fs, makeDroppedFile('too-many.skill', archive)),
+    ).rejects.toThrow(`at most ${MAX_SKILL_ARCHIVE_ENTRY_COUNT} entries`);
+
+    await expect(fs.exists('/workspace/skills/too-many')).resolves.toBe(false);
+  });
+
   it('rejects corrupt archives or missing manifests with clear errors', async () => {
     await expect(
       installSkillFromDrop(fs, makeDroppedFile('broken.skill', new Uint8Array([1, 2, 3]))),
@@ -112,5 +146,37 @@ describe('installSkillFromDrop', () => {
     await expect(
       installSkillFromDrop(fs, makeDroppedFile('existing.skill', existingArchive)),
     ).rejects.toThrow('already exists');
+  });
+
+  it('cleans up temporary output after a write failure so retry can succeed', async () => {
+    const archive = makeArchive({
+      'manifest.yaml': 'skill: retryable\nversion: 1.0.0\n',
+      'SKILL.md': '# Retryable\n',
+      'add/file.txt': 'hello\n',
+    });
+
+    const originalWriteFile = fs.writeFile.bind(fs);
+    let writeAttempts = 0;
+    fs.writeFile = (async (...args) => {
+      writeAttempts++;
+      if (writeAttempts === 2) {
+        throw new Error('simulated write failure');
+      }
+      return originalWriteFile(...args);
+    }) as typeof fs.writeFile;
+
+    await expect(
+      installSkillFromDrop(fs, makeDroppedFile('retryable.skill', archive)),
+    ).rejects.toThrow('simulated write failure');
+
+    await expect(fs.exists('/workspace/skills/retryable')).resolves.toBe(false);
+    await expect(fs.readDir('/workspace/skills')).resolves.toEqual([]);
+
+    fs.writeFile = originalWriteFile;
+
+    const result = await installSkillFromDrop(fs, makeDroppedFile('retryable.skill', archive));
+
+    expect(result.skillName).toBe('retryable');
+    await expect(fs.readTextFile('/workspace/skills/retryable/add/file.txt')).resolves.toBe('hello\n');
   });
 });

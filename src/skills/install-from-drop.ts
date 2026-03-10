@@ -3,7 +3,9 @@ import type { VirtualFS } from '../fs/index.js';
 import { joinPath, splitPath } from '../fs/index.js';
 import {
   MANIFEST_FILE,
+  MAX_SKILL_ARCHIVE_ENTRY_COUNT,
   MAX_SKILL_ARCHIVE_SIZE_BYTES,
+  MAX_SKILL_ARCHIVE_UNCOMPRESSED_SIZE_BYTES,
   SKILL_ARCHIVE_EXTENSION,
   WORKSPACE_SKILLS_PATH,
 } from './constants.js';
@@ -28,6 +30,8 @@ interface ArchiveEntry {
 }
 
 const VALID_SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+class ArchiveBudgetError extends Error {}
 
 function decodeUtf8(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes);
@@ -79,6 +83,36 @@ function findManifestEntry(entries: ArchiveEntry[]): ArchiveEntry {
   return manifests[0];
 }
 
+function unzipArchiveWithSafetyLimits(bytes: Uint8Array): Record<string, Uint8Array> {
+  let entryCount = 0;
+  let totalUncompressedBytes = 0;
+
+  return unzipSync(bytes, {
+    filter(file) {
+      entryCount++;
+      if (entryCount > MAX_SKILL_ARCHIVE_ENTRY_COUNT) {
+        throw new ArchiveBudgetError(
+          `Skill archives may contain at most ${MAX_SKILL_ARCHIVE_ENTRY_COUNT} entries.`,
+        );
+      }
+
+      totalUncompressedBytes += file.originalSize;
+      if (totalUncompressedBytes > MAX_SKILL_ARCHIVE_UNCOMPRESSED_SIZE_BYTES) {
+        throw new ArchiveBudgetError(
+          'Skill archives must expand to 50 MB or smaller after extraction.',
+        );
+      }
+
+      return true;
+    },
+  });
+}
+
+function createTemporaryDestinationPath(skillName: string): string {
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  return joinPath(WORKSPACE_SKILLS_PATH, `.${skillName}.tmp-${suffix}`);
+}
+
 export async function installSkillFromDrop(
   fs: VirtualFS,
   file: DroppedSkillFile,
@@ -93,8 +127,11 @@ export async function installSkillFromDrop(
   let archive: Record<string, Uint8Array>;
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
-    archive = unzipSync(bytes);
+    archive = unzipArchiveWithSafetyLimits(bytes);
   } catch (err) {
+    if (err instanceof ArchiveBudgetError) {
+      throw err;
+    }
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`Invalid .skill archive: ${message}`);
   }
@@ -108,35 +145,45 @@ export async function installSkillFromDrop(
   if (await fs.exists(destinationPath)) {
     throw new Error(`Skill "${manifest.skill}" already exists at ${destinationPath}.`);
   }
+  const temporaryDestinationPath = createTemporaryDestinationPath(manifest.skill);
 
   const manifestPrefix = manifestEntry.path === MANIFEST_FILE
     ? ''
     : manifestEntry.path.slice(0, -(MANIFEST_FILE.length + 1));
 
-  await fs.mkdir(destinationPath, { recursive: true });
+  await fs.mkdir(temporaryDestinationPath, { recursive: true });
 
-  let fileCount = 0;
-  for (const entry of entries) {
-    if (manifestPrefix) {
-      if (entry.path === manifestPrefix) continue;
-      if (!entry.path.startsWith(`${manifestPrefix}/`)) continue;
+  try {
+    let fileCount = 0;
+    for (const entry of entries) {
+      if (manifestPrefix) {
+        if (entry.path === manifestPrefix) continue;
+        if (!entry.path.startsWith(`${manifestPrefix}/`)) continue;
+      }
+
+      const relativePath = manifestPrefix ? entry.path.slice(manifestPrefix.length + 1) : entry.path;
+      if (!relativePath) continue;
+
+      const outputPath = joinPath(temporaryDestinationPath, relativePath);
+      const { dir } = splitPath(outputPath);
+      if (dir !== '/') {
+        await fs.mkdir(dir, { recursive: true });
+      }
+      await fs.writeFile(outputPath, entry.bytes);
+      fileCount++;
     }
 
-    const relativePath = manifestPrefix ? entry.path.slice(manifestPrefix.length + 1) : entry.path;
-    if (!relativePath) continue;
+    await fs.rename(temporaryDestinationPath, destinationPath);
 
-    const outputPath = joinPath(destinationPath, relativePath);
-    const { dir } = splitPath(outputPath);
-    if (dir !== '/') {
-      await fs.mkdir(dir, { recursive: true });
+    return {
+      skillName: manifest.skill,
+      destinationPath,
+      fileCount,
+    };
+  } catch (err) {
+    if (await fs.exists(temporaryDestinationPath)) {
+      await fs.rm(temporaryDestinationPath, { recursive: true });
     }
-    await fs.writeFile(outputPath, entry.bytes);
-    fileCount++;
+    throw err;
   }
-
-  return {
-    skillName: manifest.skill,
-    destinationPath,
-    fileCount,
-  };
 }
