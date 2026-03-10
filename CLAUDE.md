@@ -165,6 +165,7 @@ Two complementary skill systems:
    - State tracking in `.slicc/state.json`
    - Security validations (path traversal protection, manifest name matching)
    - Dependency and conflict checking
+   - Drag-and-drop import path via `install-from-drop.ts` (unpacks `.skill` archives into `/workspace/skills/{name}` only; does not auto-apply skill side effects)
 
 **Default skills** are bundled from `src/defaults/workspace/skills/` using Vite's `import.meta.glob`.
 
@@ -214,7 +215,7 @@ Vanilla TypeScript, no framework. Two layout modes selected by `isExtension` det
 - **Extension mode**: Compact single-row header (slicc + scoop dropdown + model dropdown + icon buttons). Tabbed interface (Chat/Terminal/Files/Memory). Scoop switcher as dropdown menu.
 - **Standalone mode**: Resizable split layout — scoops panel (left) + chat + terminal (top-right) + files/memory tabs (bottom-right).
 
-main.ts bootstraps the orchestrator (always cone+orchestrator, no direct agent mode) and wires events. Per-scoop message buffers capture tool calls even when viewing a different scoop. Input locks immediately when the cone starts processing (including auto-activation from scoop notifications). Assistant label is "sliccy" for the cone, `{name}-scoop` for scoops.
+main.ts bootstraps the orchestrator (always cone+orchestrator, no direct agent mode), wires events, and registers global `.skill` drag/drop handlers with overlay + toast feedback. Per-scoop message buffers capture tool calls even when viewing a different scoop. Input locks immediately when the cone starts processing (including auto-activation from scoop notifications). Assistant label is "sliccy" for the cone, `{name}-scoop` for scoops.
 
 File browser supports clicking files to download and a ZIP button on folders (uses fflate) to download entire directories.
 
