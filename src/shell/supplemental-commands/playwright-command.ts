@@ -691,7 +691,7 @@ export function createPlaywrightCommand(
           await browser.click(selector);
           await browser.evaluate(
             `(function() {
-              const el = document.querySelector(${JSON.stringify(selector.split(',')[0].trim())});
+              const el = document.querySelector(${JSON.stringify(selector)});
               if (el) {
                 return (${CLEAR_FOCUSABLE_ELEMENT_FUNCTION}).call(el);
               }

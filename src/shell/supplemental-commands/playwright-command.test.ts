@@ -416,11 +416,16 @@ describe('playwright-cli type and fill', () => {
     await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
     await cmd.execute(['snapshot'], {} as any);
     const result = await cmd.execute(['fill', 'e1', 'hello'], {} as any);
+    const clickedSelector = (browser.click as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+    const clearScript = (browser.evaluate as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as string;
 
     expect(result.exitCode).toBe(0);
     expect(browser.click).toHaveBeenCalled();
     expect(browser.type).toHaveBeenCalledWith('hello');
-    expect((browser.evaluate as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0]).toContain('isContentEditable');
+    expect(clickedSelector).toContain('[contenteditable]');
+    expect(clickedSelector).toContain(',');
+    expect(clearScript).toContain(`document.querySelector(${JSON.stringify(clickedSelector)})`);
+    expect(clearScript).toContain('isContentEditable');
   });
 });
 
