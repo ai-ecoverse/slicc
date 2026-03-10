@@ -106,6 +106,41 @@ function codeHandler(_state: unknown, node: Code): Element {
   };
 }
 
+function ensureSafeLinkRel(): string {
+  return 'noopener noreferrer';
+}
+
+function addNewTabToLinks() {
+  return (tree: unknown) => {
+    visitNode(tree);
+  };
+}
+
+function visitNode(node: unknown): void {
+  if (!node || typeof node !== 'object') return;
+
+  const hastNode = node as {
+    type?: string;
+    tagName?: string;
+    properties?: Record<string, unknown>;
+    children?: unknown[];
+  };
+
+  if (hastNode.type === 'element' && hastNode.tagName === 'a' && hastNode.properties?.href) {
+    hastNode.properties = {
+      ...hastNode.properties,
+      target: '_blank',
+      rel: ensureSafeLinkRel(),
+    };
+  }
+
+  if (Array.isArray(hastNode.children)) {
+    for (const child of hastNode.children) {
+      visitNode(child);
+    }
+  }
+}
+
 /**
  * Sanitize schema: extends the default (safe HTML subset) to also allow
  * - `span` with `class` — for tok-* syntax-highlighting spans
@@ -127,6 +162,7 @@ const processor = unified()
   .use(remarkRehype, { allowDangerousHtml: true, handlers: { code: codeHandler } })
   .use(rehypeRaw)                          // parse raw nodes (incl. our tok-* spans) into hast
   .use(rehypeSanitize, sanitizeSchema)     // strip XSS vectors, keep safe subset + tok-* spans
+  .use(addNewTabToLinks)                   // force safe new-tab behavior for rendered message links
   .use(rehypeStringify);
 
 /**
