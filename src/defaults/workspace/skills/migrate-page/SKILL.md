@@ -378,24 +378,21 @@ following the decomposition order:
     <!-- paste cards scoop's .plain.html block content -->
   </div>
 </div>
-<div>
-  <div class="metadata">
-    <div><div>nav</div><div>/drafts/nav</div></div>
-    <div><div>footer</div><div>/drafts/footer</div></div>
-    <div><div>title</div><div>{page title from metadata.json}</div></div>
-  </div>
-</div>
 ```
 
 **Rules:**
 - Each section is a top-level `<div>`
 - Blocks inside sections: `<div class="blockname">` with the content
   from the scoop's `.plain.html` (copy the block div, not the section wrapper)
-- The **metadata block** MUST be the last section — points to nav/footer
 - Section styles from decomposition → add `<div class="section-metadata">`
 - Images use `/drafts/images/` root-relative paths
 - Default-content items (from decomposition): extract from source page
   and write as plain HTML (headings, paragraphs, lists) in their section
+- Do NOT include a `<div class="metadata">` block with nav/footer paths.
+  That block is only needed for the DA upload pipeline (EDS HTML → meta tags
+  conversion) and will be added at DA upload time. For local preview, the
+  `<meta name="nav">` and `<meta name="footer">` tags in the preview HTML
+  handle fragment loading.
 
 ### Step 4.4: Create Full Preview Page — MANDATORY
 
