@@ -129,7 +129,7 @@ export function createNanoClawTools(config: NanoClawToolsConfig): ToolDefinition
     if (onScoopScoop) {
       tools.push({
         name: 'scoop_scoop',
-        description: 'Create a new scoop. The scoop will be registered but not activated — use feed_scoop to give it a task.',
+        description: 'Create a new scoop. The scoop will be registered but not activated — use feed_scoop to give it a task. Optionally specify a model (e.g., "claude-sonnet-4-20250514") to use a different model than the cone.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -137,11 +137,15 @@ export function createNanoClawTools(config: NanoClawToolsConfig): ToolDefinition
               type: 'string',
               description: 'Display name for the scoop (e.g., "Andy")',
             },
+            model: {
+              type: 'string',
+              description: 'Model ID for this scoop (e.g., "claude-sonnet-4-20250514"). If omitted, uses the same model as the cone.',
+            },
           },
           required: ['name'],
         },
         execute: async (input) => {
-          const { name } = input as { name: string };
+          const { name, model } = input as { name: string; model?: string };
           const folder = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50) + '-scoop';
 
           try {
@@ -154,6 +158,7 @@ export function createNanoClawTools(config: NanoClawToolsConfig): ToolDefinition
               requiresTrigger: true,
               assistantLabel: folder,
               addedAt: new Date().toISOString(),
+              config: model ? { modelId: model } : undefined,
             });
 
             log.info('Scoop created', { name, folder });

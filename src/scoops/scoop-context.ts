@@ -20,7 +20,7 @@ import type { AgentEvent as CoreAgentEvent, AgentMessage, AssistantMessage, Assi
 import type { SessionStore } from '../core/session.js';
 import { createFileTools, createBashTool, createSearchTools, createBrowserTool, createJavaScriptTool, createMigratePageTool } from '../tools/index.js';
 import type { BrowserAPI } from '../cdp/index.js';
-import { getApiKey, resolveCurrentModel, getSelectedProvider } from '../ui/provider-settings.js';
+import { getApiKey, resolveCurrentModel, resolveModelById, getSelectedProvider } from '../ui/provider-settings.js';
 import { loadSkills, formatSkillsForPrompt, createDefaultSkills, type Skill } from './skills.js';
 import { createNanoClawTools, type NanoClawToolsConfig } from './nanoclaw-tools.js';
 
@@ -163,7 +163,9 @@ export class ScoopContext {
         throw new Error(`No API key configured for provider "${provider}"`);
       }
 
-      const model = resolveCurrentModel();
+      const model = this.scoop.config?.modelId
+        ? resolveModelById(this.scoop.config.modelId)
+        : resolveCurrentModel();
 
       const systemPrompt = this.buildSystemPrompt(globalMemory, scoopMemory, skills);
 

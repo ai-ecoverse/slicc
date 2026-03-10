@@ -295,11 +295,15 @@ read_file({ "path": "/shared/{repo-name}/head.html" })
 **Step 2 — Create ALL scoops in a SINGLE response** (N tool calls, 1 LLM turn):
 Call `scoop_scoop` for every block in the same response. Scoop init runs
 in the background — don't wait for each to complete before creating the next.
+
+Use `model` parameter to assign a faster/cheaper model to scoops. Block
+migration is mostly code generation — it doesn't need the cone's reasoning
+power. Example: cone uses Opus 4.6, scoops use Sonnet 4.6.
 ```
-scoop_scoop({ "name": "hero-block" })
-scoop_scoop({ "name": "cards-block" })
-scoop_scoop({ "name": "nav-bar-block" })
-scoop_scoop({ "name": "footer-block" })
+scoop_scoop({ "name": "hero-block", "model": "claude-sonnet-4-20250514" })
+scoop_scoop({ "name": "cards-block", "model": "claude-sonnet-4-20250514" })
+scoop_scoop({ "name": "nav-bar-block", "model": "claude-sonnet-4-20250514" })
+scoop_scoop({ "name": "footer-block", "model": "claude-sonnet-4-20250514" })
 ... all in ONE response
 ```
 
