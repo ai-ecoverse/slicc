@@ -102,9 +102,11 @@ SLICC uses an ice cream theme for its multi-agent system. The **cone** is the ma
 
 - **Orchestrator** (`orchestrator.ts`): Creates/destroys scoop contexts, routes messages, manages the single shared VirtualFS, handles scoop completion notifications back to the cone. Creates a `SessionStore` instance and passes it to each `ScoopContext`; deletes sessions on scoop removal and clears all on reset.
 - **ScoopContext** (`scoop-context.ts`): Per-scoop agent instance with RestrictedFS, WasmShell, skills, and NanoClaw-style tools (send_message).
+- **Scheduler** (`scheduler.ts`): Polls persisted scoop tasks on an interval, supports cron/interval/once schedules, and invokes callbacks when tasks become due.
+- **Heartbeat** (`heartbeat.ts`): Tracks scoop health/activity, processing state, error counts, and idle/dead transitions for monitoring.
 - **Delegation**: The cone feeds work to scoops via the `feed_scoop` tool, providing complete self-contained prompts (scoops have no access to the cone's conversation). When a scoop finishes, the orchestrator automatically routes its response back to the cone's message queue.
 - **Unified Filesystem**: One VirtualFS (`slicc-fs` IndexedDB). Cone gets unrestricted access. Each scoop gets a `RestrictedFS` limited to `/scoops/{name}/` + `/shared/`. Parent directory traversal is allowed for `stat`/`exists` (so `cd` works), but reads/writes outside the sandbox are blocked.
-- **DB** (`db.ts`): IndexedDB schema v2 with `scoops`, `messages`, `sessions`, `tasks`, `state` stores. Migration from v1 groups schema.
+- **DB** (`db.ts`): IndexedDB schema v3 with `scoops`, `messages`, `sessions`, `tasks`, `state`, `webhooks`, and `crontasks` stores. Migrates the old `groups` store to `scoops` and adds webhook/crontask persistence in v3.
 
 ### Virtual Filesystem (src/fs/)
 POSIX-like async filesystem backed by LightningFS (IndexedDB). VirtualFS is the facade. FsError carries POSIX error codes (ENOENT, EISDIR, EACCES, etc.). All paths are absolute, forward-slash, normalized.
@@ -128,15 +130,17 @@ WasmShell wraps just-bash 2.11.7 (WASM Bash interpreter) and connects it to Virt
   - `upskill clawhub:skill-name` — Install from ClawHub by name
   - `upskill search "query"` — Search ClawHub for skills
 - `git` — Full git support via isomorphic-git
+- `imgcat` — Preview image and video files in the preview tab
+- `sqlite3` / `sqllite` — SQLite database operations
 - `node -e "code"` — Execute JavaScript
-- `python3 -c "code"` — Execute Python via Pyodide
+- `python3 -c "code"` / `python -c "code"` — Execute Python via Pyodide
 - `open <url>` — Open URL in browser tab
 - `zip/unzip` — Archive compression
-- `sqlite3` — SQLite database operations
 - `webhook` — Manage webhooks for event-driven automation
 - `crontask` — Schedule cron jobs that dispatch licks to scoops
+- `pdftk` / `pdf` — Inspect, extract, rotate, and merge PDFs
 - `mount` — Mount a local directory into the virtual filesystem via the File System Access API
-- `convert` — ImageMagick-style image conversion (resize, rotate, crop, quality) via `@imagemagick/magick-wasm`
+- `convert` / `magick` — ImageMagick-style image conversion (resize, rotate, crop, quality) via `@imagemagick/magick-wasm`
 - `playwright-cli` / `playwright` / `puppeteer` — Browser automation shell commands backed by `BrowserAPI`; aliases share the same tab/session state, snapshots, and session history
 - `which <command>` — Resolve a command to its path (`/usr/bin/<name>` for built-ins, actual VFS path for `.jsh` files)
 - `commands` — Show all available commands (type `commands` in terminal)
@@ -179,8 +183,15 @@ All tools use the legacy ToolDefinition interface (name, description, inputSchem
 **NanoClaw tools** (src/scoops/nanoclaw-tools.ts): Per-scoop tools for messaging — `send_message`. Cone-only tools: `list_scoops`, `scoop_scoop` (create), `feed_scoop` (delegate), `drop_scoop` (remove), `update_global_memory`. Task scheduling moved to the `crontask` shell command.
 
 **Browser tool enhancements:**
+- `new_tab` opens a new tab, navigates it to the requested URL, and returns its `targetId`
+- `new_recorded_tab` opens a new tab with HAR recording enabled, accepts an optional JS `filter`, and saves recordings under `/recordings/<recordingId>/`
+- `stop_recording` stops an active HAR capture and saves the final recording snapshot to VFS
+- `snapshot` captures a Playwright-style accessibility snapshot with per-element refs like `e1`; snapshots are cached per tab and required before `screenshot`
 - `screenshot` action now supports `path` (save PNG to VFS), `fullPage` (capture entire scrollable page), and `selector` (capture just one element)
+- `click` accepts either a CSS `selector` or a snapshot `ref`, and invalidates the cached snapshot after interaction
+- `type` types into the focused element on the selected or active tab
 - `show_image` action displays image files from VFS inline in the chat with automatic base64 encoding
+- `evaluate_persistent` runs JS in a dedicated blank runtime tab so variables persist across calls without needing a `targetId`
 - `serve` action serves a VFS directory as a web app in a new browser tab via the preview Service Worker. Takes `directory` (VFS path) and optional `entry` (default `index.html`). Creates a new tab and includes the targetId in the response text for subsequent snapshot/screenshot/evaluate calls. Validates `entry` against path traversal (`..`, absolute paths).
 - Auto-resolves to the user's active/focused tab when targetId is omitted (CDP types TargetInfo/PageInfo now include `active` field)
 - VFS access via `path` parameter to save results without bloating conversation history
@@ -193,6 +204,7 @@ Uses @mariozechner/pi-agent-core for the agent loop and @mariozechner/pi-ai for 
 
 - Agent class (from pi-agent-core): state management, `subscribe()` for events, `prompt()` for messages, `abort()` to stop
 - tool-adapter.ts: wraps legacy ToolDefinition into AgentTool (pi-compatible execute signature)
+- tool-registry.ts: registers `ToolDefinition` objects, rejects duplicate names, and dispatches tool execution by name with error-to-`ToolResult` conversion
 - context-compaction.ts: `compactContext()` truncates oversized tool results and drops old messages to stay within token limits. Applied to every scoop via `transformContext`.
 - types.ts: self-contained type definitions (ToolDefinition, ToolResult, AgentConfig, SessionData)
 - **Session persistence** (`session.ts`): `SessionStore` persists `AgentMessage[]` to IndexedDB (`agent-sessions` DB) keyed by scoop JID. `ScoopContext` restores messages on init and saves on `agent_end`, enabling agents to resume conversations across restarts. Errors are caught and logged without breaking agent flow; `compactContext` handles large restored sessions at prompt time.
@@ -258,9 +270,9 @@ Delegation:
 ## Key Conventions
 
 - **Two type systems**: Legacy ToolDefinition/ToolResult (in src/tools/) and pi-compatible AgentTool/AgentToolResult (in src/core/). The adapter in tool-adapter.ts bridges them.
-- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 753 tests across 42 files.
+- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 769 tests across 42 files.
 - **Logging**: createLogger('namespace') from src/core/logger.ts. Level-filtered, DEBUG in dev, ERROR in prod. Uses __DEV__ global (set by Vite define).
-- **Node shims**: src/shims/empty.ts stubs out node:zlib and node:module for the browser bundle (just-bash references them).
+- **Node shims**: Browser-bundle shims live in `src/shims/`. `empty.ts` stubs `node:zlib` and `node:module`; additional shim/polyfill files include `buffer-polyfill.ts`, `http.ts`, `https.ts`, `http2.ts`, and `stream.ts`.
 - **Multi-provider auth**: Provider settings in `src/ui/provider-settings.ts`. Supports Anthropic (direct), Azure AI Foundry (Claude on Azure), Azure OpenAI (GPT), AWS Bedrock, and many more via pi-ai. Provider/API key/baseUrl stored in localStorage. Model resolved via `resolveCurrentModel()` with baseUrl override.
 - **Extension detection**: `typeof chrome !== 'undefined' && !!chrome?.runtime?.id` — used throughout to select CDP transport, layout mode, fetch strategy, JS tool sandbox mechanism, and Pyodide loading path.
 - **Dual-mode compatibility**: New features MUST work in both standalone CLI mode and Chrome extension mode. Extension CSP blocks dynamic eval and CDN fetches. Pattern: use sandbox iframe (`sandbox.html`) for dynamic code execution, `chrome.runtime.getURL()` + fetch for bundled WASM/assets, and three-branch detection (Node/Extension/Browser) for resource loading. Bundle extension assets in `vite.config.extension.ts` `closeBundle` hook. Always test in both modes.
@@ -299,7 +311,8 @@ Do not skip any. A typecheck pass does not guarantee the builds succeed (Vite bu
 Git support via isomorphic-git with LightningFS as the backing store. GitCommands class provides CLI-like interface for git operations (init, clone, add, commit, status, log, branch, checkout, diff, remote, fetch, pull, push, config, rev-parse). Registered as a custom command in just-bash so it works in compound commands and via the bash tool.
 
 - **Authentication**: Set `git config github.token <PAT>` to authenticate with GitHub (avoids rate limits on public repos, required for private repos)
-- **CORS handling**: In CLI mode, git HTTP requests route through `/api/fetch-proxy`. In extension mode, uses direct fetch with host_permissions.
+- **HTTP transport**: `git-http.ts` provides the custom isomorphic-git HTTP client used by GitCommands.
+- **CORS handling**: In CLI mode, `git-http.ts` routes requests through `/api/fetch-proxy`. In extension mode, it uses direct fetch with host_permissions.
 - **Unified filesystem**: VirtualFS wraps LightningFS, exposing `getLightningFS()` for isomorphic-git compatibility. Shell, git, file browser, and tools all share the same filesystem.
 
 ## Debugging Browser Features

@@ -494,6 +494,34 @@ describe('playwright-cli tab management', () => {
     expect(result.stderr).toContain('out of range');
   });
 
+  it('tab-close rejects malformed indexes without closing a tab', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue({ send });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['tab-close', '1foo'], {} as any);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Invalid tab index "1foo"');
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('tab-close closes a valid indexed tab', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    (browser.listPages as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { targetId: 'tab-1', title: 'Test Page', url: 'https://example.com', type: 'page', attached: false },
+      { targetId: 'tab-2', title: 'Other Page', url: 'https://other.example', type: 'page', attached: false },
+    ]);
+    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue({ send });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['tab-close', '1'], {} as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Closed tab 1');
+    expect(send).toHaveBeenCalledWith('Target.closeTarget', { targetId: 'tab-2' });
+  });
+
   it('tab-new opens a new tab', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(['tab-new', 'https://new.com'], {} as any);

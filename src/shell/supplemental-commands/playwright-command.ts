@@ -65,6 +65,11 @@ function filenameSafeTimestamp(date: Date): string {
   return date.toISOString().replace(/:/g, '-');
 }
 
+function parseNonNegativeInteger(value: string): number | null {
+  if (!/^[0-9]+$/.test(value)) return null;
+  return Number(value);
+}
+
 function getSharedState(browser: BrowserAPI, fs: VirtualFS): PlaywrightState {
   let statesByFs = sharedStateByBrowser.get(browser);
   if (!statesByFs) {
@@ -807,7 +812,10 @@ export function createPlaywrightCommand(
           }
           // If index is given, close that tab instead
           if (positional.length > 0) {
-            const index = parseInt(positional[0], 10);
+            const index = parseNonNegativeInteger(positional[0]);
+            if (index === null) {
+              result = { stdout: '', stderr: `Invalid tab index "${positional[0]}"\n`, exitCode: 1 }; break;
+            }
             await resolveAppTabId(browser, state);
             const pages = (await browser.listPages()).filter(
               (p) => !isAppTab(state, p.targetId),
