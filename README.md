@@ -60,7 +60,7 @@ SLICC is a claw too, but one that lives entirely in the browser. Its messaging a
 
 Mario Zechner, creator of [Pi](https://github.com/badlogic/pi-mono) (the agent engine at SLICC's core), demonstrated that [you might not need MCP at all](https://mariozechner.at/posts/2025-11-02-what-if-you-dont-need-mcp/). His philosophy: "Bash is all you need." Frontier models already know bash. CLI tools compose naturally through pipes and redirection. MCP server definitions burn context tokens on ceremony.
 
-Pi ships with exactly four tools: `read`, `write`, `edit`, `bash`. SLICC adds one more — `browser` — because the browser is our operating system. Everything else is a shell command: `git`, `node`, `python3`, `webhook`, `crontask`, `skill`, `upskill`. No tool wrappers, no protocol adapters, no JSON schemas for things that already have man pages.
+Pi ships with exactly four tools: `read`, `write`, `edit`, `bash`. SLICC adds one more — `browser` — because the browser is our operating system. Everything else is a shell command: `git`, `node`, `python3`, `uname`, `webhook`, `crontask`, `skill`, `upskill`. No tool wrappers, no protocol adapters, no JSON schemas for things that already have man pages.
 
 Further reading:
 - [Pi: A Coding Agent](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/)
@@ -228,7 +228,7 @@ Source layout:
 | `src/core/` | Agent types, tool registry, context compaction, session management |
 | `src/tools/` | Tool implementations (file ops, search, browser, javascript) |
 | `src/fs/` | Virtual filesystem (IndexedDB/LightningFS) + RestrictedFS |
-| `src/shell/` | WebAssembly Bash shell + supplemental commands (node, python, sqlite, convert, skill, mount, webhook, which) + `.jsh` script discovery and execution |
+| `src/shell/` | WebAssembly Bash shell + supplemental commands (node, python, sqlite, convert, skill, mount, webhook, which, uname) + `.jsh` script discovery and execution |
 | `src/git/` | Git via isomorphic-git (clone, commit, push, pull, etc.) |
 | `src/cdp/` | Chrome DevTools Protocol client (WebSocket + chrome.debugger), HAR recorder |
 | `src/cli/` | CLI server — Chrome launch, CDP proxy, Express |
