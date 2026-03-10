@@ -296,14 +296,14 @@ read_file({ "path": "/shared/{repo-name}/head.html" })
 Call `scoop_scoop` for every block in the same response. Scoop init runs
 in the background — don't wait for each to complete before creating the next.
 
-Use `model` parameter to assign a faster/cheaper model to scoops. Block
-migration is mostly code generation — it doesn't need the cone's reasoning
-power. Example: cone uses Opus 4.6, scoops use Sonnet 4.6.
+**MANDATORY: All scoops MUST use `"model": "claude-sonnet-4-6"`.** Block
+migration is code generation — it doesn't need the cone's reasoning power.
+Sonnet is faster and cheaper for this work.
 ```
-scoop_scoop({ "name": "hero-block", "model": "claude-sonnet-4-20250514" })
-scoop_scoop({ "name": "cards-block", "model": "claude-sonnet-4-20250514" })
-scoop_scoop({ "name": "nav-bar-block", "model": "claude-sonnet-4-20250514" })
-scoop_scoop({ "name": "footer-block", "model": "claude-sonnet-4-20250514" })
+scoop_scoop({ "name": "hero-block", "model": "claude-sonnet-4-6" })
+scoop_scoop({ "name": "cards-block", "model": "claude-sonnet-4-6" })
+scoop_scoop({ "name": "nav-bar-block", "model": "claude-sonnet-4-6" })
+scoop_scoop({ "name": "footer-block", "model": "claude-sonnet-4-6" })
 ... all in ONE response
 ```
 
