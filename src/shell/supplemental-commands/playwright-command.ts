@@ -422,7 +422,7 @@ Commands:
   type <text>            Type text into focused element
   fill <ref> <text>      Fill an input by ref with text
   snapshot               Print accessibility tree with refs
-  screenshot [--filename=path]  Take screenshot
+  screenshot [--filename=path] [--inline]  Take screenshot (--inline returns image for agent vision)
   eval <expression>      Evaluate JavaScript in tab
   dblclick <ref> [btn]   Double-click element by ref
   hover <ref>            Hover over element by ref
@@ -636,7 +636,9 @@ export function createPlaywrightCommand(
             // Best-effort
           }
           const sizeKB = Math.round(bytes.length / 1024);
-          result = { stdout: `Screenshot saved to ${savePath} (${sizeKB} KB)\n<img:data:image/png;base64,${base64}>`, stderr: '', exitCode: 0 }; break;
+          const inline = flags['inline'] === 'true';
+          const imgTag = inline ? `<img:data:image/png;base64,${base64}>` : '';
+          result = { stdout: `Screenshot saved to ${savePath} (${sizeKB} KB)\n${imgTag}`, stderr: '', exitCode: 0 }; break;
         }
 
         case 'click': {

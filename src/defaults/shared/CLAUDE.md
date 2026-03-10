@@ -74,7 +74,7 @@ To close a tab: use `browser` action `evaluate` with expression `window.close()`
 ## Viewing Pages and Images
 
 **What you CAN see:**
-- **`playwright-cli screenshot`** — takes a screenshot and returns it as an image you can see. This is your primary way to visually verify pages. Also saves to a file.
+- **`playwright-cli screenshot --inline`** — takes a screenshot and returns it as an image you can see. Use `--inline` when YOU need to verify visually. Without `--inline`, the screenshot is only saved to a file.
 - **`playwright-cli snapshot`** — returns an accessibility tree (text). Use this to verify page content without vision, or as a required step before `screenshot`.
 
 **What only the human sees:**
@@ -86,7 +86,7 @@ To close a tab: use `browser` action `evaluate` with expression `window.close()`
 2. `playwright-cli tab-list` — find the tab by matching the preview URL from step 1
 3. `playwright-cli tab-select <targetId>` — target that tab
 4. `playwright-cli snapshot` — required before screenshot; also gives you text content
-5. `playwright-cli screenshot` — you will see the image in the response
+5. `playwright-cli screenshot --inline` — you will see the image in the response
 
 **Do NOT:**
 - Try to `read_file` on a PNG, `base64` encode it, or `convert` it to view images
@@ -111,7 +111,7 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **git** — Full git support (clone, commit, push, pull)
 - **node -e / python3 -c** — Execute JavaScript or Python
 - **open <path|url>** — Preview/serve VFS files or open URLs in a new browser tab. Use this to serve HTML, images, etc. to the user. Example: `open /workspace/myapp/index.html`
-- **playwright-cli** — Browser automation (built-in, no SKILL.md lookup needed). Key subcommands: `tab-list`, `tab-select <id>`, `snapshot`, `screenshot --filename=<path>`, `open <url>`, `click <ref>`, `fill <ref> "text"`, `close`. Run `playwright-cli --help` for full list.
+- **playwright-cli** — Browser automation (built-in, no SKILL.md lookup needed). Key subcommands: `tab-list`, `tab-select <id>`, `snapshot`, `screenshot [--inline] [--filename=<path>]`, `open <url>`, `click <ref>`, `fill <ref> "text"`, `close`. Use `--inline` on screenshot when you need to see the image yourself. Run `playwright-cli --help` for full list.
 
 ## Environment: This Is NOT a Regular Linux Box
 
