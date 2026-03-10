@@ -261,7 +261,7 @@ Search file contents recursively in VirtualFS using a JavaScript regular express
   "type": "object",
   "properties": {
     "pattern": { "type": "string", "description": "Regular expression pattern to search for." },
-    "path": { "type": "string", "description": "Directory to search in. Default: /." },
+    "path": { "type": "string", "description": "Directory to search in. Default: /" },
     "include": { "type": "string", "description": "Optional glob filter such as *.ts." }
   },
   "required": ["pattern"]
