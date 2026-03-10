@@ -71,6 +71,24 @@ To close a tab: use `browser` action `evaluate` with expression `window.close()`
 - Delegate work to scoops and react when they finish
 - Respond to licks (webhooks, scheduled tasks)
 
+## Viewing Images and Screenshots
+
+You do NOT have a `browser` or `show_image` tool. To view images:
+
+- **`playwright-cli screenshot`** — takes a screenshot and returns it inline as base64. You can see this. This is the primary way to visually verify pages.
+- **`playwright-cli snapshot`** — returns an accessibility tree (text). Use this to verify page content without needing vision.
+- **`imgcat <path>`** — displays an image in the terminal preview pane for the **human** to see. You cannot see this output yourself.
+- **`open <path>`** — opens the file in a browser tab for the **human** to see. You cannot see this yourself.
+
+**Workflow to verify a page you created:**
+1. `open /workspace/app/index.html` — serves it in a tab (human can see it)
+2. `playwright-cli tab-list` — find the tab by matching the preview URL from step 1
+3. `playwright-cli tab-select <targetId>` — target that tab
+4. `playwright-cli snapshot` — read the content (text, always works)
+5. `playwright-cli screenshot` — see it visually (returned inline as base64)
+
+Do NOT try to `read_file` on a PNG, `base64` encode it, or `convert` it — none of these feed images back into your visual input.
+
 ## Filesystem
 
 The virtual filesystem is stored in IndexedDB and survives tab closes and page refreshes. To keep work on disk, mount a local directory:
