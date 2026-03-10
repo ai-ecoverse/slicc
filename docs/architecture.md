@@ -31,6 +31,7 @@
 | `transport.ts` | CDPTransport interface (abstracts CDP/debugger implementations) |
 | `index.ts` | Re-exports + auto-selects transport based on extension detection |
 | `types.ts` | TargetInfo, PageInfo, EvaluateOptions, AccessibilityNode, etc. |
+| `offscreen-cdp-proxy.ts` | CDPTransport over chrome.runtime messages (offscreen → service worker → chrome.debugger) |
 
 ### src/cli/ — Standalone CLI Server
 
@@ -55,8 +56,11 @@
 
 | File | Purpose |
 |---|---|
-| `service-worker.ts` | Manifest V3 service worker; opens side panel on action click |
-| `chrome.d.ts` | Minimal typed declarations for chrome.debugger, chrome.tabs, chrome.sidePanel, etc. |
+| `service-worker.ts` | Manifest V3 service worker; message relay between panel and offscreen + CDP proxy via chrome.debugger |
+| `offscreen.ts` | Agent engine bootstrap in offscreen document (Orchestrator, VFS, Shell, tools) |
+| `offscreen-bridge.ts` | Orchestrator ↔ chrome.runtime message bridge; persists chat to `browser-coding-agent` IndexedDB |
+| `messages.ts` | Typed message envelopes: PanelToOffscreen, OffscreenToPanel, CdpProxy |
+| `chrome.d.ts` | Typed declarations for chrome.debugger, chrome.tabs, chrome.sidePanel, chrome.offscreen, etc. |
 
 ### src/fs/ — Virtual Filesystem
 
@@ -163,7 +167,8 @@
 
 | File | Purpose |
 |---|---|
-| `main.ts` | Entry point: initializes layout, checks API key, bootstraps orchestrator, wires events, handles global `.skill` drag/drop install UX |
+| `main.ts` | Entry point: `main()` for CLI, `mainExtension()` for extension (uses OffscreenClient). Handles layout, API key, orchestrator, skill drag/drop |
+| `offscreen-client.ts` | Extension-only: side panel's interface to offscreen engine. Provides AgentHandle + Orchestrator-compatible facade via chrome.runtime messages |
 | `layout.ts` | Split-pane (CLI) or tabbed (extension) layout; auto-selects based on extension detection |
 | `chat-panel.ts` | Message list + input with streaming support; connects to AgentHandle |
 | `terminal-panel.ts` | xterm.js terminal UI; exposes WasmShell output |

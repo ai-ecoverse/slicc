@@ -112,6 +112,10 @@ Key files:
 - `src/ui/offscreen-client.ts` — Side panel's interface to offscreen engine
 - `offscreen.html` — Offscreen document entry point
 
+**Chat Persistence (Single Source of Truth)**: The `browser-coding-agent` IndexedDB is the single source of truth for chat display messages. The offscreen bridge writes to it after every user message, response done, tool end, and incoming message via `SessionStore.saveMessages()`. The side panel reads from it via `switchToContext()` on reconnect — no buffer reconciliation needed. This is separate from `agent-sessions` DB (agent LLM history restored by `ScoopContext`) and `slicc-groups` DB (orchestrator routing messages).
+
+**Extension Entry Point**: In `src/ui/main.ts`, when extension mode is detected, `main()` delegates to `mainExtension()` which creates an `OffscreenClient` instead of a direct `Orchestrator`. The `OffscreenClient` provides an `AgentHandle` for the chat panel and an Orchestrator-compatible facade for scoops/memory/scoop-switcher panels.
+
 ### Three Build Targets
 
 - **Browser bundle** (tsconfig.json): Everything in src/ except src/cli/. Bundled by Vite, module resolution: bundler. Runs in Chrome.
@@ -137,7 +141,7 @@ Virtual Filesystem (src/fs/)
 
 SLICC uses an ice cream theme for its multi-agent system. The **cone** is the main assistant (sliccy) that holds everything together. **Scoops** are isolated agent contexts stacked on top, each with their own tools, shell, and restricted filesystem.
 
-- **Orchestrator** (`orchestrator.ts`): Creates/destroys scoop contexts, routes messages, manages the single shared VirtualFS, handles scoop completion notifications back to the cone. Creates a `SessionStore` instance and passes it to each `ScoopContext`; deletes sessions on scoop removal and clears all on reset.
+- **Orchestrator** (`orchestrator.ts`): Creates/destroys scoop contexts, routes messages, manages the single shared VirtualFS, handles scoop completion notifications back to the cone. Creates a `SessionStore` instance and passes it to each `ScoopContext`; deletes sessions on scoop removal and clears all on reset. `clearAllMessages()` also wipes live agent in-memory conversation history via `ScoopContext.clearMessages()`.
 - **ScoopContext** (`scoop-context.ts`): Per-scoop agent instance with RestrictedFS, WasmShell, skills, and NanoClaw-style tools (send_message).
 - **Scheduler** (`scheduler.ts`): Polls persisted scoop tasks on an interval, supports cron/interval/once schedules, and invokes callbacks when tasks become due.
 - **Heartbeat** (`heartbeat.ts`): Tracks scoop health/activity, processing state, error counts, and idle/dead transitions for monitoring.

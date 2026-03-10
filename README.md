@@ -177,7 +177,7 @@ The scoops do the heavy lifting. The cone philosophizes about it. Karl watches f
 
 slicc runs in two modes: as a **Chrome extension** (side panel) or as a **standalone CLI** with a browser window.
 
-**Chrome Extension** (Manifest V3) — the agent runs entirely in Chrome's side panel. Uses `chrome.debugger` API for browser automation and `host_permissions` for cross-origin fetch. No server needed.
+**Chrome Extension** (Manifest V3) — three-layer architecture: the **side panel** is pure UI, a **service worker** relays messages and proxies `chrome.debugger`, and an **offscreen document** runs the agent engine (orchestrator, VFS, shell, tools). The agent survives side panel close/reopen — all state persists to IndexedDB. No server needed.
 
 **CLI Server** (Node.js/Express) — launches a headless Chrome instance, establishes a CDP WebSocket proxy, provides a fetch proxy for cross-origin requests, and serves the UI assets.
 
