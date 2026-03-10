@@ -1,5 +1,6 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { PLAYWRIGHT_COMMAND_NAMES } from './playwright-command.js';
 
 const COMMAND_CATEGORIES = new Map<string, string[]>([
   ['File operations', ['ls', 'cat', 'head', 'tail', 'wc', 'touch', 'mkdir', 'rm', 'cp', 'mv', 'ln', 'chmod', 'stat', 'readlink']],
@@ -14,7 +15,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
   ['Version control', ['git']],
   ['Languages', ['node', 'python', 'python3', 'sqlite3']],
   ['Skills', ['skill', 'upskill']],
-  ['Browser & UI', ['open', 'imgcat', 'webhook']],
+  ['Browser & UI', ['open', 'imgcat', ...PLAYWRIGHT_COMMAND_NAMES, 'webhook']],
   ['Filesystem', ['mount']],
 ]);
 

@@ -165,13 +165,34 @@ const processor = unified()
   .use(addNewTabToLinks)                   // force safe new-tab behavior for rendered message links
   .use(rehypeStringify);
 
+const SURFACED_ERROR_PARAGRAPH_RE = /<p><strong>Error:<\/strong>\s*([\s\S]*?)<\/p>/g;
+
+function renderBaseMessageContent(content: string): string {
+  return String(processor.processSync(content));
+}
+
+function renderSurfacedErrorBlocks(html: string): string {
+  return html.replace(
+    SURFACED_ERROR_PARAGRAPH_RE,
+    (_match, body: string) => `<div class="msg__error" role="alert"><div class="msg__error-label">Error</div><div class="msg__error-body">${body}</div></div>`,
+  );
+}
+
 /**
  * Render a message content string to HTML.
  * Uses unified.js with remark-gfm for full GFM support:
  * tables, strikethrough, task lists, autolinks, and more.
  */
 export function renderMessageContent(content: string): string {
-  return String(processor.processSync(content));
+  return renderBaseMessageContent(content);
+}
+
+/**
+ * Render assistant message content, upgrading surfaced runtime/provider errors
+ * into dedicated error blocks rather than normal prose paragraphs.
+ */
+export function renderAssistantMessageContent(content: string): string {
+  return renderSurfacedErrorBlocks(renderBaseMessageContent(content));
 }
 
 /**

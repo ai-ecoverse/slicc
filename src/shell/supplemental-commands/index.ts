@@ -9,6 +9,7 @@ import type { ImgcatCommandOptions } from './imgcat-command.js';
 import { createNodeCommand } from './node-command.js';
 import { createOpenCommand } from './open-command.js';
 import { createPdftkCommand } from './pdftk-command.js';
+import { createPlaywrightCommand, PLAYWRIGHT_COMMAND_NAMES } from './playwright-command.js';
 import { createPython3LikeCommand } from './python-command.js';
 import { createSqliteCommand } from './sqlite-command.js';
 import { createUnameCommand } from './uname-command.js';
@@ -17,6 +18,7 @@ import { createWebhookCommand } from './webhook-command.js';
 import { createCrontaskCommand } from './crontask-command.js';
 import { createWhichCommand } from './which-command.js';
 import { createZipCommand } from './zip-command.js';
+import type { BrowserAPI } from '../../cdp/index.js';
 export type {
   ImgcatCommandOptions as SupplementalCommandOptions,
   MediaPreviewItem,
@@ -25,12 +27,14 @@ export type {
 export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   /** Function that returns discovered .jsh command names (for `commands` listing). */
   getJshCommands?: () => Promise<string[]>;
-  /** VirtualFS instance for .jsh file discovery (used by `which` command). */
+  /** VirtualFS instance for .jsh discovery, `which`, and playwright-cli session files. */
   fs?: VirtualFS;
+  /** Browser automation backend for playwright-cli aliases. Optional so aliases stay discoverable even without browser support. */
+  browserAPI?: BrowserAPI;
 }
 
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
-  return [
+  const commands: Command[] = [
     createCommandsCommand({ getJshCommands: options.getJshCommands }),
     createOpenCommand(),
     createImgcatCommand(options),
@@ -50,4 +54,12 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createWhichCommand(options.fs),
     createUnameCommand(),
   ];
+
+  if (options.fs) {
+    commands.push(
+      ...PLAYWRIGHT_COMMAND_NAMES.map((name) => createPlaywrightCommand(name, options.browserAPI, options.fs!)),
+    );
+  }
+
+  return commands;
 }
