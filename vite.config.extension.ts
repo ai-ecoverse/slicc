@@ -4,6 +4,7 @@
  * Produces dist/extension/ with:
  * - index.html (side panel UI — bundled from src/ui/main.ts)
  * - service-worker.js (built from src/extension/service-worker.ts)
+ * - offscreen.html + offscreen entry (built from src/extension/offscreen.ts)
  * - sandbox.html, manifest.json (copied from project root)
  */
 
@@ -44,6 +45,7 @@ export default defineConfig(({ mode }) => ({
     rollupOptions: {
       input: {
         index: resolve(__dirname, 'index.html'),
+        offscreen: resolve(__dirname, 'offscreen.html'),
         'service-worker': resolve(__dirname, 'src/extension/service-worker.ts'),
       },
       output: {

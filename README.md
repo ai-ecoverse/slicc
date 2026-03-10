@@ -14,7 +14,7 @@ A browser-based coding agent that runs as a **Chrome extension** or with a thin 
 
 ## Features
 
-- 🚡 **Chrome Extension** — runs as a side panel in Chrome, no server required. Tabbed UI (Chat/Terminal/Files/Memory) optimized for the side panel form factor
+- 🚡 **Chrome Extension** — runs as a side panel in Chrome, no server required. Tabbed UI (Chat/Terminal/Files/Memory) optimized for the side panel form factor. **Agent work continues in the background** when the side panel is closed — reopening catches up via state sync
 - :globe_with_meridians: **Browser-Native** — runs entirely in the browser, no Electron, no desktop app
 - :satellite: **CLI Server** — alternative mode: thin Node.js/Express server launches Chrome and proxies CDP connections
 - :file_folder: **Virtual Filesystem** — OPFS + IndexedDB-backed filesystem right in the browser, with folder ZIP download

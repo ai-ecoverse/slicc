@@ -49,6 +49,11 @@ export class ScoopSwitcher {
     this.render();
   }
 
+  /** Re-render the dropdown (e.g., after scoop list changes). */
+  refresh(): void {
+    this.render();
+  }
+
   render(): void {
     if (!this.orchestrator) return;
 

@@ -242,13 +242,17 @@ export class Orchestrator {
     return this.scoops.get(jid);
   }
 
-  /** Clear all messages from the orchestrator DB and reset timestamps. */
+  /** Clear all messages from the orchestrator DB, agent sessions, and live agent contexts. */
   async clearAllMessages(): Promise<void> {
     await db.clearAllMessages();
     if (this.sessionStore) {
       await this.sessionStore.clearAll().catch((err) => {
         log.warn('Failed to clear agent sessions', { error: err instanceof Error ? err.message : String(err) });
       });
+    }
+    // Clear in-memory conversation history from all live scoop agents
+    for (const ctx of this.contexts.values()) {
+      ctx.clearMessages();
     }
     this.lastAgentTimestamp.clear();
     for (const jid of this.scoops.keys()) {

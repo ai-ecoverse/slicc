@@ -72,14 +72,51 @@ Browser-based AI coding agent: a self-contained development environment where Cl
 
 ### Two Deployment Modes
 
-- **Chrome extension** (Manifest V3): Side panel UI with tabbed layout (Chat/Terminal/Files/Memory). Uses `chrome.debugger` API for browser automation. Built via `npm run build:extension` -> `dist/extension/`. Load as unpacked extension in `chrome://extensions`. Pyodide bundled for Python support (~13MB).
+- **Chrome extension** (Manifest V3): Three-layer architecture — **side panel** (pure UI), **service worker** (message relay + CDP proxy), **offscreen document** (agent engine). Agent work survives side panel close/reopen. Built via `npm run build:extension` -> `dist/extension/`. Load as unpacked extension in `chrome://extensions`. Pyodide bundled for Python support (~13MB).
 - **Standalone CLI**: Express server launches Chrome, proxies CDP over WebSocket. Resizable split layout with scoops panel + chat + terminal + files/memory. Built via `npm run build` -> `dist/ui/` + `dist/cli/`.
+
+### Extension Architecture (Three-Layer)
+
+```
+┌─────────────────────────┐
+│   Side Panel (UI only)  │  Connects/disconnects freely
+│   - Chat, Terminal,     │  Catches up on reopen via
+│     Files, Memory tabs  │  state snapshot from offscreen
+│   - OffscreenClient     │
+└───────────┬─────────────┘
+            │ chrome.runtime messages
+┌───────────┴─────────────┐
+│   Service Worker        │  Stateless relay + chrome.* proxy
+│   - Creates offscreen   │  - chrome.debugger proxy for CDP
+│   - Relays messages     │  - chrome.tabs queries
+│   - Forwards CDP events │
+└───────────┬─────────────┘
+            │ chrome.runtime messages
+┌───────────┴─────────────┐
+│   Offscreen Document    │  Long-lived agent engine
+│   - Orchestrator        │  Survives side panel close
+│   - ScoopContext(s)     │  All state in IndexedDB
+│   - VirtualFS + Shell   │
+│   - Tools (bash, files, │
+│     browser via proxy)  │
+│   - OffscreenBridge     │
+└─────────────────────────┘
+```
+
+Key files:
+- `src/extension/messages.ts` — Shared message types (Panel ↔ SW ↔ Offscreen)
+- `src/extension/service-worker.ts` — Message relay + CDP proxy
+- `src/extension/offscreen.ts` — Agent engine bootstrap
+- `src/extension/offscreen-bridge.ts` — Orchestrator ↔ message bridge
+- `src/cdp/offscreen-cdp-proxy.ts` — CDPTransport via chrome.runtime messages
+- `src/ui/offscreen-client.ts` — Side panel's interface to offscreen engine
+- `offscreen.html` — Offscreen document entry point
 
 ### Three Build Targets
 
 - **Browser bundle** (tsconfig.json): Everything in src/ except src/cli/. Bundled by Vite, module resolution: bundler. Runs in Chrome.
 - **CLI server** (tsconfig.cli.json): Only src/cli/. Compiled by TSC to dist/cli/, module resolution: NodeNext. Runs in Node.
-- **Extension bundle** (vite.config.extension.ts): Same browser bundle with extension-specific entry points (service-worker.js, sandbox.html, manifest.json) plus bundled Pyodide. Output: dist/extension/.
+- **Extension bundle** (vite.config.extension.ts): Same browser bundle with extension-specific entry points (service-worker.js, offscreen.html, sandbox.html, manifest.json) plus bundled Pyodide. Output: dist/extension/.
 
 ### Layer Stack (bottom-up)
 
@@ -233,7 +270,15 @@ Voice mode is a toggle (mic button or `Ctrl+Shift+V` / `Cmd+Shift+V`): click onc
 Extension assets: `voice-popup.html` + `voice-popup.js` (project root, copied to `dist/extension/` by `vite.config.extension.ts`).
 
 ### Extension (src/extension/)
-Chrome Manifest V3 extension files. Service worker opens the side panel on action click. `chrome.d.ts` provides minimal typed declarations for the Chrome APIs used (debugger, tabs, sidePanel, runtime, windows, messaging). `sandbox.html` (project root) provides an isolated execution environment for the JavaScript tool and `node -e` — exempt from extension CSP, allows Function constructor. Cross-origin fetch from sandbox is proxied through the parent page via postMessage. Pyodide (~13MB) bundled at `dist/extension/pyodide/` for Python support (loaded from `'self'` origin).
+Chrome Manifest V3 extension with three-layer architecture for background agent execution:
+
+- **Service worker** (`service-worker.ts`): Creates offscreen document on install/startup, relays messages between side panel and offscreen, proxies `chrome.debugger` CDP commands (offscreen docs can't use `chrome.debugger` directly), forwards CDP events back to offscreen.
+- **Offscreen document** (`offscreen.ts`, `offscreen-bridge.ts`): Long-lived extension page that runs the agent engine (Orchestrator, VFS, Shell, tools). Survives side panel close. `OffscreenBridge` translates between Orchestrator callbacks and chrome.runtime messages.
+- **Message types** (`messages.ts`): Typed envelopes (`PanelEnvelope`, `OffscreenEnvelope`, `ServiceWorkerEnvelope`) with `source` + `payload` for routing.
+- **CDP proxy** (`src/cdp/offscreen-cdp-proxy.ts`): `CDPTransport` implementation that routes commands through chrome.runtime messages to the service worker's `chrome.debugger`.
+- `chrome.d.ts` provides typed declarations for Chrome APIs (debugger, tabs, sidePanel, runtime, offscreen, windows, messaging).
+- `sandbox.html` (project root) provides isolated execution for JavaScript tool and `node -e` — exempt from extension CSP. Both the side panel and offscreen document can host sandbox iframes.
+- Pyodide (~13MB) bundled at `dist/extension/pyodide/` for Python support (loaded from `'self'` origin).
 
 ### Preview Service Worker (src/ui/preview-sw.ts)
 A Service Worker that intercepts `/preview/*` fetch requests and serves content from VFS (IndexedDB via LightningFS). Enables the agent to create HTML/CSS/JS apps in the virtual filesystem and preview them in real browser tabs.
@@ -274,7 +319,7 @@ Delegation:
 ## Key Conventions
 
 - **Two type systems**: Legacy ToolDefinition/ToolResult (in src/tools/) and pi-compatible AgentTool/AgentToolResult (in src/core/). The adapter in tool-adapter.ts bridges them.
-- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 769 tests across 42 files.
+- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 808 tests across 45 files.
 - **Logging**: createLogger('namespace') from src/core/logger.ts. Level-filtered, DEBUG in dev, ERROR in prod. Uses __DEV__ global (set by Vite define).
 - **Node shims**: Browser-bundle shims live in `src/shims/`. `empty.ts` stubs `node:zlib` and `node:module`; additional shim/polyfill files include `buffer-polyfill.ts`, `http.ts`, `https.ts`, `http2.ts`, and `stream.ts`.
 - **Multi-provider auth**: Provider settings in `src/ui/provider-settings.ts`. Supports Anthropic (direct), Azure AI Foundry (Claude on Azure), Azure OpenAI (GPT), AWS Bedrock, and many more via pi-ai. Provider/API key/baseUrl stored in localStorage. Model resolved via `resolveCurrentModel()` with baseUrl override.

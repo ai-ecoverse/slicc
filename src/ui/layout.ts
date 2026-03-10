@@ -115,6 +115,16 @@ export class Layout {
     this.scoopSwitcher?.updateStatus(scoopJid, status);
   }
 
+  /** Set the selected scoop in the switcher dropdown (extension mode). */
+  setScoopSwitcherSelected?(jid: string): void {
+    this.scoopSwitcher?.setSelected(jid);
+  }
+
+  /** Re-render the scoop switcher dropdown (extension mode). */
+  refreshScoopSwitcher?(): void {
+    this.scoopSwitcher?.refresh();
+  }
+
   // ── Shared: Header ──────────────────────────────────────────────────
 
   private buildHeader(parent: HTMLElement): void {

@@ -199,8 +199,10 @@ export class ScoopContext {
       log.info('ScoopContext initialized', { folder: this.scoop.folder, toolCount: tools.length });
 
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.error('ScoopContext init failed', { folder: this.scoop.folder, error: message });
+      const message = err instanceof Error ? err.message
+        : (typeof err === 'object' && err !== null) ? JSON.stringify(err)
+        : String(err);
+      log.error('ScoopContext init failed', err);
       this.setStatus('error');
       this.callbacks.onError(`Failed to initialize: ${message}`);
     }
@@ -275,6 +277,11 @@ export class ScoopContext {
     this.agent?.abort();
     this.isProcessing = false;
     this.setStatus('ready');
+  }
+
+  /** Clear the agent's in-memory conversation history (used by clear-chat). */
+  clearMessages(): void {
+    this.agent?.clearMessages();
   }
 
   /** Get the scoop's filesystem */

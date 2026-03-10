@@ -125,6 +125,11 @@ export class ChatPanel {
     await this.sessionStore.delete(this.sessionId);
   }
 
+  /** Delete a specific session by ID (e.g., when a scoop is dropped). */
+  async deleteSessionById(sessionId: string): Promise<void> {
+    await this.sessionStore.delete(sessionId);
+  }
+
   /** Switch to a different scoop's chat context. */
   async switchToContext(contextId: string, readOnly: boolean, scoopName?: string): Promise<void> {
     // Save current session first
