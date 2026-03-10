@@ -37,6 +37,20 @@ describe('renderMessageContent', () => {
     expect(html).toContain('<strong>bold</strong>');
   });
 
+  it('renders links that open in a new tab with safe rel attributes', () => {
+    const html = renderMessageContent('[Example](https://example.com)');
+    expect(html).toContain('href="https://example.com"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+  });
+
+  it('applies new-tab behavior to sanitized raw HTML links', () => {
+    const html = renderMessageContent('<a href="https://example.com">Example</a>');
+    expect(html).toContain('href="https://example.com"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+  });
+
   it('renders italic text', () => {
     const html = renderMessageContent('This is *italic* text');
     expect(html).toContain('<em>italic</em>');

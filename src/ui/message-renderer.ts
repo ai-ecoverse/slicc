@@ -106,6 +106,59 @@ function codeHandler(_state: unknown, node: Code): Element {
   };
 }
 
+function ensureSafeLinkRel(rel: unknown): string {
+  const tokens = new Set<string>();
+
+  if (typeof rel === 'string') {
+    for (const token of rel.split(/\s+/)) {
+      if (token) tokens.add(token);
+    }
+  } else if (Array.isArray(rel)) {
+    for (const value of rel) {
+      if (typeof value !== 'string') continue;
+      for (const token of value.split(/\s+/)) {
+        if (token) tokens.add(token);
+      }
+    }
+  }
+
+  tokens.add('noopener');
+  tokens.add('noreferrer');
+
+  return Array.from(tokens).join(' ');
+}
+
+function addNewTabToLinks() {
+  return (tree: unknown) => {
+    visitNode(tree);
+  };
+}
+
+function visitNode(node: unknown): void {
+  if (!node || typeof node !== 'object') return;
+
+  const hastNode = node as {
+    type?: string;
+    tagName?: string;
+    properties?: Record<string, unknown>;
+    children?: unknown[];
+  };
+
+  if (hastNode.type === 'element' && hastNode.tagName === 'a' && hastNode.properties?.href) {
+    hastNode.properties = {
+      ...hastNode.properties,
+      target: '_blank',
+      rel: ensureSafeLinkRel(hastNode.properties.rel),
+    };
+  }
+
+  if (Array.isArray(hastNode.children)) {
+    for (const child of hastNode.children) {
+      visitNode(child);
+    }
+  }
+}
+
 /**
  * Sanitize schema: extends the default (safe HTML subset) to also allow
  * - `span` with `class` — for tok-* syntax-highlighting spans
@@ -127,6 +180,7 @@ const processor = unified()
   .use(remarkRehype, { allowDangerousHtml: true, handlers: { code: codeHandler } })
   .use(rehypeRaw)                          // parse raw nodes (incl. our tok-* spans) into hast
   .use(rehypeSanitize, sanitizeSchema)     // strip XSS vectors, keep safe subset + tok-* spans
+  .use(addNewTabToLinks)                   // force safe new-tab behavior for rendered message links
   .use(rehypeStringify);
 
 /**
