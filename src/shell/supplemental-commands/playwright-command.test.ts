@@ -156,6 +156,14 @@ describe('playwright-cli help', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Usage: playwright-cli');
   });
+
+  it('shows alias-specific help when invoked through an alias', async () => {
+    const cmd = createPlaywrightCommand('playwright', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['--help'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Usage: playwright <command>');
+    expect(result.stdout).toContain('Aliases: playwright-cli, puppeteer');
+  });
 });
 
 describe('playwright-cli open', () => {
@@ -417,13 +425,16 @@ describe('playwright-cli type and fill', () => {
     await cmd.execute(['snapshot'], {} as any);
     const result = await cmd.execute(['fill', 'e1', 'hello'], {} as any);
     const clickedSelector = (browser.click as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
-    const clearScript = (browser.evaluate as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0] as string;
+    const clearScript = (browser.evaluate as ReturnType<typeof vi.fn>).mock.calls
+      .map((call) => call[0])
+      .find((script) => typeof script === 'string' && script.includes('isContentEditable')) as string | undefined;
 
     expect(result.exitCode).toBe(0);
     expect(browser.click).toHaveBeenCalled();
     expect(browser.type).toHaveBeenCalledWith('hello');
     expect(clickedSelector).toContain('[contenteditable]');
     expect(clickedSelector).toContain(',');
+    expect(clearScript).toBeDefined();
     expect(clearScript).toContain(`document.querySelector(${JSON.stringify(clickedSelector)})`);
     expect(clearScript).toContain('isContentEditable');
   });
@@ -930,6 +941,9 @@ describe('playwright-cli cookie commands', () => {
   });
 
   it('cookie-set sets a cookie with flags', async () => {
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
+      JSON.stringify({ href: 'https://example.com/page', hostname: 'example.com', pathname: '/page' }),
+    );
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
     const result = await cmd.execute(['cookie-set', 'name', 'value', '--domain=.example.com', '--secure', '--httpOnly'], {} as any);
@@ -1210,6 +1224,16 @@ describe('playwright-cli open --background/--foreground', () => {
   });
 
   it('open defaults to background (does not switch current target)', async () => {
+    const pages = [
+      { targetId: 'tab-1', title: 'Test Page', url: 'https://example.com', type: 'page', attached: false },
+    ];
+    (browser.listPages as ReturnType<typeof vi.fn>).mockImplementation(async () => pages);
+    (browser.createPage as ReturnType<typeof vi.fn>).mockImplementation(async (url: string) => {
+      const targetId = `tab-${pages.length + 1}`;
+      pages.push({ targetId, title: 'New Tab', url, type: 'page', attached: false });
+      return targetId;
+    });
+
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     // Open a foreground tab first to have a current target
     await cmd.execute(['open', 'https://first.com', '--foreground'], {} as any);
@@ -1218,8 +1242,8 @@ describe('playwright-cli open --background/--foreground', () => {
     // Snapshot should still work on the first tab (current target unchanged)
     const result = await cmd.execute(['snapshot'], {} as any);
     expect(result.exitCode).toBe(0);
-    // The snapshot should use the first tab's target (tab-new from first open)
-    expect(browser.attachToPage).toHaveBeenCalledWith('tab-new');
+    // The snapshot should use the first foreground-opened tab's target
+    expect(browser.attachToPage).toHaveBeenCalledWith('tab-2');
   });
 
   it('open --foreground switches current target', async () => {

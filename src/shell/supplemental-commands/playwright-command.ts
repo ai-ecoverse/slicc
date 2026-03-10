@@ -46,6 +46,8 @@ interface PlaywrightState {
   sessionDirsCreated: boolean;
 }
 
+export const PLAYWRIGHT_COMMAND_NAMES = ['playwright-cli', 'playwright', 'puppeteer'] as const;
+
 const sharedStateByBrowser = new WeakMap<BrowserAPI, WeakMap<VirtualFS, PlaywrightState>>();
 
 /** Commands that invalidate ref snapshots because page state may have changed. */
@@ -385,7 +387,9 @@ async function takeSnapshot(
   return { snapshot, output };
 }
 
-const HELP = `Usage: playwright-cli <command> [args...]
+function formatHelp(commandName: string): string {
+  const aliases = PLAYWRIGHT_COMMAND_NAMES.filter((name) => name !== commandName);
+  return `Usage: ${commandName} <command> [args...]
 
 Commands:
   open [url] [--foreground|--fg]
@@ -442,7 +446,8 @@ Commands:
   sessionstorage-clear   Clear all sessionStorage
   help                   Show this help message
 
-Aliases: playwright, puppeteer`;
+Aliases: ${aliases.join(', ')}`;
+}
 
 /** Parse --key=value flags from args, returning remaining positional args + flags. */
 function parseFlags(args: string[]): { positional: string[]; flags: Record<string, string> } {
@@ -469,10 +474,11 @@ export function createPlaywrightCommand(
   fs: VirtualFS,
 ): Command {
   const state = getSharedState(browser, fs);
+  const helpText = formatHelp(name);
 
   return defineCommand(name, async (args): Promise<CmdResult> => {
     if (args.length === 0 || args[0] === 'help' || args[0] === '--help' || args[0] === '-h') {
-      return { stdout: HELP + '\n', stderr: '', exitCode: 0 };
+      return { stdout: helpText + '\n', stderr: '', exitCode: 0 };
     }
 
     const subcommand = args[0];

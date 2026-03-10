@@ -9,7 +9,7 @@ import type { ImgcatCommandOptions } from './imgcat-command.js';
 import { createNodeCommand } from './node-command.js';
 import { createOpenCommand } from './open-command.js';
 import { createPdftkCommand } from './pdftk-command.js';
-import { createPlaywrightCommand } from './playwright-command.js';
+import { createPlaywrightCommand, PLAYWRIGHT_COMMAND_NAMES } from './playwright-command.js';
 import { createPython3LikeCommand } from './python-command.js';
 import { createSqliteCommand } from './sqlite-command.js';
 import { createUnzipCommand } from './unzip-command.js';
@@ -55,9 +55,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
 
   if (options.browserAPI && options.fs) {
     commands.push(
-      createPlaywrightCommand('playwright-cli', options.browserAPI, options.fs),
-      createPlaywrightCommand('playwright', options.browserAPI, options.fs),
-      createPlaywrightCommand('puppeteer', options.browserAPI, options.fs),
+      ...PLAYWRIGHT_COMMAND_NAMES.map((name) => createPlaywrightCommand(name, options.browserAPI!, options.fs!)),
     );
   }
 
