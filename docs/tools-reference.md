@@ -117,7 +117,7 @@ Execute shell commands in a full Unix-like environment (just-bash 2.11.7).
 **Features**:
 - 78+ commands (grep, sed, awk, find, jq, tar, curl, git, node, python3, etc.)
 - Pipes, redirects, control flow, command substitution
-- Custom commands: `git`, `node -e`, `python3 -c`, `sqlite3`, `zip/unzip`, `webhook`, `crontask`, `convert`, `which`, `playwright-cli` / `playwright` / `puppeteer`
+- Custom commands include `git`, `node -e`, `python3 -c`, `sqlite3`, `zip/unzip`, `webhook`, `crontask`, `convert`, `which`, and `playwright-cli` / `playwright` / `puppeteer`
 - Networking: Full `curl` with HTTP methods, headers, auth, body
 - Text processing: grep, rg, sed, awk, cut, tr, sort, uniq, wc, head, tail
 - Browser automation for active agents runs through `playwright-cli` / `playwright` / `puppeteer`
