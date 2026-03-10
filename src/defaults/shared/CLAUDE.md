@@ -71,23 +71,28 @@ To close a tab: use `browser` action `evaluate` with expression `window.close()`
 - Delegate work to scoops and react when they finish
 - Respond to licks (webhooks, scheduled tasks)
 
-## Viewing Images and Screenshots
+## Viewing Pages and Images
 
-You do NOT have a `browser` or `show_image` tool. To view images:
+**You cannot see images.** Screenshots, PNGs, `imgcat` output, `base64` encoding — none of these feed back into your visual input. Do not waste tool calls trying.
 
-- **`playwright-cli screenshot`** — takes a screenshot and returns it inline as base64. You can see this. This is the primary way to visually verify pages.
-- **`playwright-cli snapshot`** — returns an accessibility tree (text). Use this to verify page content without needing vision.
-- **`imgcat <path>`** — displays an image in the terminal preview pane for the **human** to see. You cannot see this output yourself.
-- **`open <path>`** — opens the file in a browser tab for the **human** to see. You cannot see this yourself.
+**What you CAN do:**
+- **`playwright-cli snapshot`** — returns an accessibility tree (text). This is your primary way to verify page content. **Always use this.**
+- **`playwright-cli screenshot --filename=<path>`** — saves a PNG for the **human** to see. You cannot see it yourself, but it's useful for delivering to the user.
+- **`open <path>`** — opens VFS files in a browser tab for the **human** to see.
+- **`imgcat <path>`** — displays an image in the terminal preview for the **human**.
 
 **Workflow to verify a page you created:**
 1. `open /workspace/app/index.html` — serves it in a tab (human can see it)
 2. `playwright-cli tab-list` — find the tab by matching the preview URL from step 1
 3. `playwright-cli tab-select <targetId>` — target that tab
-4. `playwright-cli snapshot` — read the content as text AND required before screenshot
-5. `playwright-cli screenshot` — see it visually (saved to file + returned inline as base64)
+4. `playwright-cli snapshot` — **this is how you verify content** (text accessibility tree)
+5. `playwright-cli screenshot --filename=/workspace/preview.png` — save for the human if needed
 
-Do NOT try to `read_file` on a PNG, `base64` encode it, or `convert` it — none of these feed images back into your visual input.
+**Do NOT:**
+- Try to `read_file` on a PNG, `base64` encode it, or `convert` it
+- Run `imgcat` or `cat` on screenshots expecting to see them yourself
+- Open a screenshot with `open` and then try to screenshot *that* tab
+- Spend multiple tool calls trying to "view" an image — use `snapshot` instead
 
 ## Filesystem
 
@@ -107,6 +112,7 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **git** — Full git support (clone, commit, push, pull)
 - **node -e / python3 -c** — Execute JavaScript or Python
 - **open <path|url>** — Preview/serve VFS files or open URLs in a new browser tab. Use this to serve HTML, images, etc. to the user. Example: `open /workspace/myapp/index.html`
+- **playwright-cli** — Browser automation (built-in, no SKILL.md lookup needed). Key subcommands: `tab-list`, `tab-select <id>`, `snapshot`, `screenshot --filename=<path>`, `open <url>`, `click <ref>`, `fill <ref> "text"`, `close`. Run `playwright-cli --help` for full list.
 
 ## Environment: This Is NOT a Regular Linux Box
 

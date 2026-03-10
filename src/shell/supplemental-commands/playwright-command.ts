@@ -636,7 +636,7 @@ export function createPlaywrightCommand(
             // Best-effort
           }
           const sizeKB = Math.round(bytes.length / 1024);
-          result = { stdout: `Screenshot saved to ${savePath} (${sizeKB} KB)\n<img:data:image/png;base64,${base64}>`, stderr: '', exitCode: 0 }; break;
+          result = { stdout: `Screenshot saved to ${savePath} (${sizeKB} KB)\n`, stderr: '', exitCode: 0 }; break;
         }
 
         case 'click': {
