@@ -12,6 +12,62 @@ import { createLogger } from '../core/logger.js';
 
 const log = createLogger('tool:bash');
 
+const SEARCH_COMMAND_PREFIX = /^(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:command\s+)?(?:grep|egrep|fgrep|rg)\b/;
+
+function getLastCommandSegment(command: string): string {
+  let current = '';
+  let quote: '"' | '\'' | null = null;
+  let escaped = false;
+
+  for (let i = 0; i < command.length; i++) {
+    const char = command[i];
+
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      current += char;
+      escaped = true;
+      continue;
+    }
+
+    if (quote) {
+      current += char;
+      if (char === quote) quote = null;
+      continue;
+    }
+
+    if (char === '"' || char === '\'') {
+      current += char;
+      quote = char;
+      continue;
+    }
+
+    if (char === ';' || char === '|') {
+      current = '';
+      continue;
+    }
+
+    if ((char === '&' || char === '|') && command[i + 1] === char) {
+      current = '';
+      i++;
+      continue;
+    }
+
+    current += char;
+  }
+
+  return current.trim();
+}
+
+function isExpectedNoMatchSearch(command: string, exitCode: number, stderr: string): boolean {
+  if (exitCode !== 1 || stderr.trim()) return false;
+  return SEARCH_COMMAND_PREFIX.test(getLastCommandSegment(command));
+}
+
 /** Create the bash tool bound to a WasmShell instance. */
 export function createBashTool(shell: WasmShell): ToolDefinition {
   return {
@@ -54,7 +110,7 @@ export function createBashTool(shell: WasmShell): ToolDefinition {
 
         return {
           content: output,
-          isError: result.exitCode !== 0,
+          isError: result.exitCode !== 0 && !isExpectedNoMatchSearch(command, result.exitCode, result.stderr),
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
