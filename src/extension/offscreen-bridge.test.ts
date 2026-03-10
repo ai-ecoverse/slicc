@@ -529,3 +529,105 @@ describe('OffscreenBridge persistScoop', () => {
     expect(mockStore.saveMessages).toHaveBeenCalledWith('session-cone', buf);
   });
 });
+
+describe('OffscreenBridge handlePanelMessage', () => {
+  let bridge: InstanceType<typeof OffscreenBridge>;
+  let mockOrchestrator: any;
+
+  beforeEach(async () => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+
+    bridge = new OffscreenBridge();
+    mockOrchestrator = {
+      getScoops: vi.fn(() => [
+        { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+        { jid: 'scoop_test', name: 'Test', folder: 'test-scoop', isCone: false, assistantLabel: 'test-scoop' },
+      ]),
+      handleMessage: vi.fn().mockResolvedValue(undefined),
+      createScoopTab: vi.fn(),
+      registerScoop: vi.fn().mockResolvedValue(undefined),
+      unregisterScoop: vi.fn().mockResolvedValue(undefined),
+      stopScoop: vi.fn(),
+      clearQueuedMessages: vi.fn().mockResolvedValue(undefined),
+      clearAllMessages: vi.fn().mockResolvedValue(undefined),
+      delegateToScoop: vi.fn().mockResolvedValue(undefined),
+      updateModel: vi.fn(),
+    };
+
+    await bridge.bind(mockOrchestrator);
+  });
+
+  function simulatePanelMessage(payload: unknown): void {
+    for (const listener of messageListeners) {
+      listener({ source: 'panel', payload }, {}, () => {});
+    }
+  }
+
+  it('dispatches user-message to orchestrator.handleMessage', async () => {
+    simulatePanelMessage({
+      type: 'user-message',
+      scoopJid: 'cone_1',
+      text: 'Hello world',
+      messageId: 'msg-1',
+    });
+
+    // handlePanelMessage is async — give it a tick
+    await new Promise(r => setTimeout(r, 10));
+
+    expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatJid: 'cone_1',
+        senderId: 'user',
+        content: 'Hello world',
+        channel: 'web',
+      }),
+    );
+    expect(mockOrchestrator.createScoopTab).toHaveBeenCalledWith('cone_1');
+  });
+
+  it('dispatches scoop-drop and cleans up session', async () => {
+    simulatePanelMessage({
+      type: 'scoop-drop',
+      scoopJid: 'scoop_test',
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+
+    expect(mockOrchestrator.unregisterScoop).toHaveBeenCalledWith('scoop_test');
+    // Session store delete should have been called for the scoop's session
+    const store = (bridge as any).sessionStore;
+    expect(store.delete).toHaveBeenCalledWith('session-test-scoop');
+  });
+
+  it('dispatches clear-chat and clears all sessions', async () => {
+    simulatePanelMessage({ type: 'clear-chat' });
+
+    await new Promise(r => setTimeout(r, 10));
+
+    expect(mockOrchestrator.clearAllMessages).toHaveBeenCalled();
+    const store = (bridge as any).sessionStore;
+    // Should delete sessions for both cone and scoop
+    expect(store.delete).toHaveBeenCalledWith('session-cone');
+    expect(store.delete).toHaveBeenCalledWith('session-test-scoop');
+  });
+
+  it('dispatches abort to orchestrator.stopScoop', async () => {
+    simulatePanelMessage({ type: 'abort', scoopJid: 'cone_1' });
+
+    await new Promise(r => setTimeout(r, 10));
+
+    expect(mockOrchestrator.stopScoop).toHaveBeenCalledWith('cone_1');
+  });
+
+  it('ignores non-panel messages', async () => {
+    for (const listener of messageListeners) {
+      listener({ source: 'offscreen', payload: { type: 'user-message', scoopJid: 'cone_1', text: 'x', messageId: 'm' } }, {}, () => {});
+    }
+
+    await new Promise(r => setTimeout(r, 10));
+
+    expect(mockOrchestrator.handleMessage).not.toHaveBeenCalled();
+  });
+});

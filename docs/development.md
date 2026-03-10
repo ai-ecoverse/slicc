@@ -14,7 +14,7 @@ Build, run, test, and debug SLICC locally.
 | `npm run build:extension` | Chrome extension bundle into `dist/extension/` | Build extension; load in `chrome://extensions` |
 | `npm run start` | Run production CLI (requires build first) | Run built production bundle |
 | `npm run typecheck` | Typecheck both tsconfig targets | Verify no type errors before committing |
-| `npm run test` | Vitest run (all 998 tests) | Run full test suite; CI validation |
+| `npm run test` | Vitest run (all 1003 tests) | Run full test suite; CI validation |
 | `npm run test:watch` | Vitest watch mode | Iterate on test changes; TDD workflow |
 | `npx vitest run src/fs/virtual-fs.test.ts` | Run single test file | Debug a specific module |
 
