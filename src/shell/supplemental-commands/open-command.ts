@@ -48,7 +48,16 @@ export function createOpenCommand(): Command {
       const fullPath = ctx.fs.resolvePath(ctx.cwd, target);
 
       if (download) {
-        const stat = await ctx.fs.stat(fullPath);
+        let stat;
+        try {
+          stat = await ctx.fs.stat(fullPath);
+        } catch {
+          return {
+            stdout: '',
+            stderr: `open: no such file: ${target}\n`,
+            exitCode: 1,
+          };
+        }
         if (!stat.isFile) {
           return {
             stdout: '',
@@ -57,7 +66,16 @@ export function createOpenCommand(): Command {
           };
         }
 
-        const bytes = await ctx.fs.readFileBuffer(fullPath);
+        let bytes;
+        try {
+          bytes = await ctx.fs.readFileBuffer(fullPath);
+        } catch {
+          return {
+            stdout: '',
+            stderr: `open: failed to read: ${target}\n`,
+            exitCode: 1,
+          };
+        }
         const safeBytes = new Uint8Array(bytes.byteLength);
         safeBytes.set(bytes);
         const blob = new Blob([safeBytes.buffer], { type: detectMimeType(fullPath) });

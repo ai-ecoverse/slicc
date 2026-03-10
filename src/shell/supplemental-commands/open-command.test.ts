@@ -190,6 +190,27 @@ describe('open command', () => {
     expect(result.stderr).toContain('not a file');
   });
 
+  it('fails download gracefully when file does not exist', async () => {
+    const cmd = createOpenCommand();
+    const ctx = createMockCtx(); // no files registered → stat throws ENOENT
+    const result = await cmd.execute(['--download', '/workspace/missing.txt'], ctx as any);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('no such file');
+  });
+
+  it('fails download gracefully when read fails', async () => {
+    const cmd = createOpenCommand();
+    const ctx = createMockCtx();
+    // stat succeeds but readFileBuffer throws
+    ctx.fs.stat.mockResolvedValueOnce({ isFile: true, isDirectory: false });
+    ctx.fs.readFileBuffer.mockRejectedValueOnce(new Error('EIO'));
+    const result = await cmd.execute(['--download', '/workspace/broken.txt'], ctx as any);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('failed to read');
+  });
+
   it('succeeds even when window.open returns null (extension mode)', async () => {
     openSpy.mockReturnValue(null);
     const cmd = createOpenCommand();
