@@ -435,7 +435,7 @@ async function main(): Promise<void> {
 
     try {
       const { WasmShell } = await import('../shell/index.js');
-      const shell = new WasmShell({ fs: sharedFs });
+      const shell = new WasmShell({ fs: sharedFs, browserAPI: browser });
       await layout.panels.terminal.mountShell(shell);
       log.info('Terminal mounted with shared VFS');
     } catch (e) {

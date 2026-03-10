@@ -98,4 +98,6 @@ export interface AccessibilityNode {
   value?: string;
   description?: string;
   children?: AccessibilityNode[];
+  /** CDP backend node ID — used to resolve this node back to a DOM element for clicking. */
+  backendNodeId?: number;
 }

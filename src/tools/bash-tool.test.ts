@@ -142,4 +142,49 @@ describe('Bash Tool', () => {
     expect(result.isError).toBe(true);
     expect(result.content).toContain('browser APIs are unavailable');
   });
+
+  it('keeps playwright aliases discoverable through real shell surfaces without browser support', async () => {
+    const which = await bash.execute({ command: 'which playwright-cli' });
+    expect(which.isError).toBeFalsy();
+    expect(which.content).toContain('/usr/bin/playwright-cli');
+
+    const usrBin = await bash.execute({ command: 'ls /usr/bin | grep playwright' });
+    expect(usrBin.isError).toBeFalsy();
+    expect(usrBin.content).toContain('playwright');
+    expect(usrBin.content).toContain('playwright-cli');
+
+    const commands = await bash.execute({ command: 'commands | grep playwright' });
+    expect(commands.isError).toBeFalsy();
+    expect(commands.content).toContain('playwright-cli');
+    expect(commands.content).toContain('puppeteer');
+
+    const open = await bash.execute({ command: 'playwright-cli open https://example.com' });
+    expect(open.isError).toBe(true);
+    expect(open.content).toContain('browser APIs are unavailable');
+  });
+
+  it('exposes playwright aliases like normal shell commands when browser support is available', async () => {
+    const browserShell = new WasmShell({ fs, browserAPI: {} as any });
+    const browserBash = createBashTool(browserShell);
+
+    const help = await browserBash.execute({ command: 'playwright --help' });
+    expect(help.isError).toBeFalsy();
+    expect(help.content).toContain('Usage: playwright <command>');
+
+    const which = await browserBash.execute({ command: 'which playwright playwright-cli puppeteer' });
+    expect(which.isError).toBeFalsy();
+    expect(which.content).toContain('/usr/bin/playwright\n');
+    expect(which.content).toContain('/usr/bin/playwright-cli\n');
+    expect(which.content).toContain('/usr/bin/puppeteer\n');
+
+    const commands = await browserBash.execute({ command: 'commands' });
+    expect(commands.isError).toBeFalsy();
+    expect(commands.content).toContain('open, imgcat, playwright-cli, playwright, puppeteer, webhook');
+
+    const usrBin = await browserBash.execute({ command: 'ls /usr/bin' });
+    expect(usrBin.isError).toBeFalsy();
+    expect(usrBin.content).toContain('playwright');
+    expect(usrBin.content).toContain('playwright-cli');
+    expect(usrBin.content).toContain('puppeteer');
+  });
 });

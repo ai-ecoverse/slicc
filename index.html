@@ -415,6 +415,46 @@
         white-space: normal;
         color: var(--s2-gray-800);
       }
+      .msg--assistant .msg__error {
+        margin: var(--s2-spacing-75) 0;
+      }
+      .msg--assistant .msg__error-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--s2-negative);
+        font-size: 10px;
+        font-weight: 600;
+        font-family: var(--s2-font-mono);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .msg--assistant .msg__error-label::before {
+        content: '!';
+        width: 16px;
+        height: 16px;
+        border-radius: var(--s2-radius-s);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: color-mix(in srgb, var(--s2-negative) 18%, transparent);
+        border: 1px solid color-mix(in srgb, var(--s2-negative) 45%, var(--s2-border-subtle));
+      }
+      .msg--assistant .msg__error-body {
+        margin-top: 2px;
+        padding: var(--s2-spacing-75);
+        border-left: 2px solid color-mix(in srgb, var(--s2-negative) 60%, var(--s2-border-subtle));
+        background: color-mix(in srgb, var(--s2-negative) 8%, var(--s2-bg-sunken));
+        border-radius: var(--s2-radius-s);
+        color: var(--s2-content-secondary);
+        font-family: var(--s2-font-mono);
+        font-size: var(--s2-font-size-50);
+        white-space: pre-wrap;
+        overflow-x: auto;
+      }
+      .msg--assistant .msg__error-body code {
+        font-size: inherit;
+      }
 
       /* Continuation messages (same sender, no label) — indent message content only */
       .msg-group--continuation .msg { padding-left: 26px; }

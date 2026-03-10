@@ -132,6 +132,9 @@ export class DebuggerClient implements CDPTransport {
       case 'Target.createTarget':
         return this.handleCreateTarget(params!);
 
+      case 'Target.closeTarget':
+        return this.handleCloseTarget(params!);
+
       default:
         return this.sendCdpCommand(method, params, sessionId);
     }
@@ -239,6 +242,32 @@ export class DebuggerClient implements CDPTransport {
     const url = (params['url'] as string) ?? 'about:blank';
     const tab = await chrome.tabs.create({ url, active: false });
     return { targetId: String(tab.id) };
+  }
+
+  private async handleCloseTarget(
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const targetId = params['targetId'] as string;
+    const tabId = parseInt(targetId, 10);
+    if (!Number.isFinite(tabId) || tabId <= 0) {
+      throw new Error(`Invalid targetId: ${targetId}`);
+    }
+
+    for (const [mappedSessionId, mappedTabId] of this.sessionToTab) {
+      if (mappedTabId === tabId) {
+        this.sessionToTab.delete(mappedSessionId);
+      }
+    }
+
+    if (this.attachedTabs.has(tabId)) {
+      this.attachedTabs.delete(tabId);
+      await chrome.debugger.detach({ tabId }).catch((err) => {
+        log.debug('Detach before close failed', { tabId, error: err instanceof Error ? err.message : String(err) });
+      });
+    }
+
+    await chrome.tabs.remove(tabId);
+    return { success: true };
   }
 
   // -------------------------------------------------------------------------
