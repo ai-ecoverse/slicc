@@ -13,6 +13,7 @@ Use `playwright-cli` (also aliased as `playwright` and `puppeteer`) via the bash
 **Always snapshot first**, then interact using element refs.
 
 - `playwright-cli`, `playwright`, and `puppeteer` are interchangeable. Pick one prefix and stay consistent within a session so your transcript is easier to read.
+- The aliases should show up in normal shell discovery surfaces such as `which playwright-cli`, `commands | grep playwright`, and `ls /usr/bin | grep playwright`. If browser integration is unavailable in the current runtime, they should still stay discoverable and fail with a clear browser-unavailable error when invoked.
 - Ref-based commands operate on the **current tab only**. If you opened multiple tabs or used `open`/`tab-new` without `--foreground`, verify the target with `tab-list` and `tab-select` before using refs.
 
 ```bash

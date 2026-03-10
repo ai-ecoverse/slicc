@@ -111,4 +111,26 @@ describe('WasmShell playwright command discoverability', () => {
     expect(usrBinResult.stdout).toContain('playwright');
     expect(usrBinResult.stdout).toContain('playwright-cli');
   });
+
+  it('keeps playwright aliases discoverable even without browserAPI', async () => {
+    const shell = new WasmShell({ fs });
+
+    const whichResult = await shell.executeCommand('which playwright-cli');
+    expect(whichResult.exitCode).toBe(0);
+    expect(whichResult.stdout).toContain('/usr/bin/playwright-cli');
+
+    const commandsResult = await shell.executeCommand('commands | grep playwright');
+    expect(commandsResult.exitCode).toBe(0);
+    expect(commandsResult.stdout).toContain('playwright-cli');
+    expect(commandsResult.stdout).toContain('puppeteer');
+
+    const usrBinResult = await shell.executeCommand('ls /usr/bin | grep playwright');
+    expect(usrBinResult.exitCode).toBe(0);
+    expect(usrBinResult.stdout).toContain('playwright');
+    expect(usrBinResult.stdout).toContain('playwright-cli');
+
+    const openResult = await shell.executeCommand('playwright-cli open https://example.com');
+    expect(openResult.exitCode).toBe(1);
+    expect(openResult.stderr).toContain('browser APIs are unavailable');
+  });
 });

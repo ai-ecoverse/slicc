@@ -493,15 +493,23 @@ type CmdResult = { stdout: string; stderr: string; exitCode: number };
 
 export function createPlaywrightCommand(
   name: string,
-  browser: BrowserAPI,
+  browser: BrowserAPI | null | undefined,
   fs: VirtualFS,
 ): Command {
-  const state = getSharedState(browser, fs);
   const helpText = formatHelp(name);
+  const state = browser ? getSharedState(browser, fs) : null;
 
   return defineCommand(name, async (args): Promise<CmdResult> => {
     if (args.length === 0 || args[0] === 'help' || args[0] === '--help' || args[0] === '-h') {
       return { stdout: helpText + '\n', stderr: '', exitCode: 0 };
+    }
+
+    if (!browser || !state) {
+      return {
+        stdout: '',
+        stderr: `${name}: browser APIs are unavailable in this environment\n`,
+        exitCode: 1,
+      };
     }
 
     const subcommand = args[0];

@@ -28,7 +28,7 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   getJshCommands?: () => Promise<string[]>;
   /** VirtualFS instance for .jsh discovery, `which`, and playwright-cli session files. */
   fs?: VirtualFS;
-  /** Browser automation backend for playwright-cli aliases. */
+  /** Browser automation backend for playwright-cli aliases. Optional so aliases stay discoverable even without browser support. */
   browserAPI?: BrowserAPI;
 }
 
@@ -53,9 +53,9 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createWhichCommand(options.fs),
   ];
 
-  if (options.browserAPI && options.fs) {
+  if (options.fs) {
     commands.push(
-      ...PLAYWRIGHT_COMMAND_NAMES.map((name) => createPlaywrightCommand(name, options.browserAPI!, options.fs!)),
+      ...PLAYWRIGHT_COMMAND_NAMES.map((name) => createPlaywrightCommand(name, options.browserAPI, options.fs!)),
     );
   }
 
