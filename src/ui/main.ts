@@ -184,6 +184,12 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   layout.panels.fileBrowser.setFs(localFs);
   log.info('File browser wired to shared VFS (local IndexedDB)');
 
+  // Wire skill drop install with toast feedback
+  const skillDropToast = createSkillDropToast();
+  registerSkillDropInstall(localFs, skillDropToast, async () => {
+    await layout.panels.fileBrowser.refresh();
+  });
+
   // Mount a terminal shell on the local VFS
   try {
     const { WasmShell } = await import('../shell/index.js');

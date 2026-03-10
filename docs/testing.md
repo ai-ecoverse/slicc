@@ -6,7 +6,7 @@ Test patterns, conventions, and best practices for SLICC.
 
 - **Framework**: Vitest with `globals: true`, `environment: node`
 - **Convention**: `foo.test.ts` colocated next to `foo.ts`
-- **Test count**: 753 tests across 42 files
+- **Test count**: 856 tests across 47 files
 - **Import fake-indexeddb** when VirtualFS is used: `import 'fake-indexeddb/auto'`
 
 ## VirtualFS Test Setup
@@ -320,7 +320,7 @@ For skipped categories, ensure **manual verification in both CLI and extension m
 
 | Command | Purpose |
 |---------|---------|
-| `npm run test` | Run all 753 tests once; fail fast on first error |
+| `npm run test` | Run all 856 tests once; fail fast on first error |
 | `npm run test:watch` | Watch mode; re-run affected tests on file change |
 | `npx vitest run src/fs/virtual-fs.test.ts` | Run single test file |
 | `npx vitest run src/fs/` | Run all tests in directory |
