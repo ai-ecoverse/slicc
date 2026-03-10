@@ -88,7 +88,18 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **webhook/crontask** — Set up licks (external event triggers)
 - **git** — Full git support (clone, commit, push, pull)
 - **node -e / python3 -c** — Execute JavaScript or Python
-- **open <url>** — Open URL in browser
+- **open <path|url>** — Preview/serve VFS files or open URLs in a new browser tab. Use this to serve HTML, images, etc. to the user. Example: `open /workspace/myapp/index.html`
+
+## Environment: This Is NOT a Regular Linux Box
+
+This is a sandboxed browser-based VFS environment. Many standard tools (e.g. `python3 -m http.server`, `npx serve`, `nginx`) do **not exist or don't work here**.
+
+**Before reaching for familiar patterns, run `commands` to see what's actually available**, and use `<command> --help` when unsure how something works.
+
+Key things that work differently:
+- **Serving files**: Use `open /path/to/file` — it serves VFS files via the preview service worker. No HTTP server needed.
+- **No long-running servers**: You can't start background daemons. The `open` command handles serving.
+- **No package managers**: No `apt`, `npm install`, `pip install`. Use what's already available or write `.jsh` scripts.
 
 ## Skills
 

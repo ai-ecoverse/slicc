@@ -521,15 +521,8 @@ export function createPlaywrightCommand(
       switch (subcommand) {
         case 'open':
         case 'tab-new': {
-          let url = positional[0] || 'about:blank';
+          const url = positional[0] || 'about:blank';
           const foreground = flags['foreground'] === 'true' || flags['fg'] === 'true';
-
-          // VFS path → preview service worker URL (serves VFS content in a real browser tab)
-          if (url.startsWith('/') && !url.startsWith('//')) {
-            const isExt = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
-            const previewPath = `/preview${url}`;
-            url = isExt ? chrome.runtime.getURL(previewPath) : `http://localhost:3000${previewPath}`;
-          }
 
           const previousTarget = await ensureTarget(browser, state);
           await resolveAppTabId(browser, state);

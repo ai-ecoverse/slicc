@@ -175,14 +175,14 @@ WasmShell wraps just-bash 2.11.7 (WASM Bash interpreter) and connects it to Virt
 - `sqlite3` / `sqllite` — SQLite database operations
 - `node -e "code"` — Execute JavaScript
 - `python3 -c "code"` / `python -c "code"` — Execute Python via Pyodide
-- `open <url>` — Open URL in browser tab
+- `open <path|url>` — Preview/serve VFS files or open URLs in a new browser tab. Use this to serve HTML, images, etc. to the user. Example: `open /workspace/myapp/index.html`. `--download` / `-d` forces file download instead of opening in a tab
 - `zip/unzip` — Archive compression
 - `webhook` — Manage webhooks for event-driven automation
 - `crontask` — Schedule cron jobs that dispatch licks to scoops
 - `pdftk` / `pdf` — Inspect, extract, rotate, and merge PDFs
 - `mount` — Mount a local directory into the virtual filesystem via the File System Access API
 - `convert` / `magick` — ImageMagick-style image conversion (resize, rotate, crop, quality) via `@imagemagick/magick-wasm`
-- `playwright-cli` / `playwright` / `puppeteer` — Browser automation shell commands backed by `BrowserAPI`; aliases share the same tab/session state, snapshots, and session history. `open /vfs/path` serves VFS content via the preview service worker (both CLI and extension modes)
+- `playwright-cli` / `playwright` / `puppeteer` — Browser automation shell commands backed by `BrowserAPI`; aliases share the same tab/session state, snapshots, and session history
 - `which <command>` — Resolve a command to its path (`/usr/bin/<name>` for built-ins, actual VFS path for `.jsh` files)
 - `uname` — Print the current browser user agent
 - `commands` — Show all available commands (type `commands` in terminal)
@@ -325,12 +325,16 @@ Delegation:
 ## Key Conventions
 
 - **Two type systems**: Legacy ToolDefinition/ToolResult (in src/tools/) and pi-compatible AgentTool/AgentToolResult (in src/core/). The adapter in tool-adapter.ts bridges them.
-- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 1003 tests across 51 files.
+- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 1035 tests across 53 files.
 - **Logging**: createLogger('namespace') from src/core/logger.ts. Level-filtered, DEBUG in dev, ERROR in prod. Uses __DEV__ global (set by Vite define).
 - **Node shims**: Browser-bundle shims live in `src/shims/`. `empty.ts` stubs `node:zlib` and `node:module`; additional shim/polyfill files include `buffer-polyfill.ts`, `http.ts`, `https.ts`, `http2.ts`, and `stream.ts`.
 - **Multi-provider auth**: Provider settings in `src/ui/provider-settings.ts`. Supports Anthropic (direct), Azure AI Foundry (Claude on Azure), Azure OpenAI (GPT), AWS Bedrock, and many more via pi-ai. Provider/API key/baseUrl stored in localStorage. Model resolved via `resolveCurrentModel()` with baseUrl override.
 - **Extension detection**: `typeof chrome !== 'undefined' && !!chrome?.runtime?.id` — used throughout to select CDP transport, layout mode, fetch strategy, JS tool sandbox mechanism, and Pyodide loading path.
 - **Dual-mode compatibility**: New features MUST work in both standalone CLI mode and Chrome extension mode. Extension CSP blocks dynamic eval and CDN fetches. Pattern: use sandbox iframe (`sandbox.html`) for dynamic code execution, `chrome.runtime.getURL()` + fetch for bundled WASM/assets, and three-branch detection (Node/Extension/Browser) for resource loading. Bundle extension assets in `vite.config.extension.ts` `closeBundle` hook. Always test in both modes.
+- **Extension `window.open()` returns `null`**: In extension contexts (offscreen document, side panel), `window.open()` returns `null` even when the tab opens successfully. Never treat a `null` return as a failure — fire-and-forget the call. This applies to all code paths that open tabs from extension pages.
+- **Two CLAUDE.md files**: The project root `CLAUDE.md` is for Claude Code (developer guidance). The file at `src/defaults/shared/CLAUDE.md` is the agent's system-level instructions — it gets bundled into the VFS at `/shared/CLAUDE.md` and is loaded into sliccy's context. When changing agent behavior or documenting agent-facing capabilities (like shell commands the agent uses), update `src/defaults/shared/CLAUDE.md`. When changing developer conventions or architecture docs, update the project root `CLAUDE.md`.
+- **Default VFS content**: `src/defaults/` contains files bundled into the VFS at startup via `import.meta.glob`. Structure: `src/defaults/shared/CLAUDE.md` → `/shared/CLAUDE.md`, `src/defaults/workspace/skills/` → `/workspace/skills/`. When adding default skills or agent config, add files here.
+- **Preview URL helper**: `toPreviewUrl(vfsPath)` in `src/shell/supplemental-commands/shared.ts` constructs the correct preview service worker URL for both CLI (`http://localhost:3000/preview/...`) and extension (`chrome-extension://.../preview/...`) modes. Use this instead of inlining the dual-mode URL logic.
 
 ## Change Requirements
 

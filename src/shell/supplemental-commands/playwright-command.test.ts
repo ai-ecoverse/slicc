@@ -210,17 +210,6 @@ describe('playwright-cli open', () => {
     expect(browser.attachToPage).toHaveBeenCalledWith('tab-new');
   });
 
-  it('converts VFS paths to preview service worker URLs', async () => {
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['open', '/workspace/my-app/index.html'], {} as any);
-
-    expect(result.exitCode).toBe(0);
-    // In Node test environment (no chrome.runtime), falls back to localhost preview URL
-    expect(browser.createPage).toHaveBeenCalledWith(
-      expect.stringContaining('/preview/workspace/my-app/index.html'),
-    );
-  });
-
   it('does not convert regular URLs to preview paths', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://example.com'], {} as any);
