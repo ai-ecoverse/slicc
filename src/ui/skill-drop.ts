@@ -22,6 +22,23 @@ export function findDroppedSkillFile<T extends NamedFileLike>(files: Iterable<T>
   return Array.from(files).find((file) => isSkillArchiveName(file.name)) ?? null;
 }
 
+/**
+ * Light check for dragenter/dragover — browsers restrict file access during drag.
+ * Only checks items metadata (kind === 'file'), not file content or name.
+ * Returns true if any file item is present (we can't read the name until drop).
+ */
+export function hasDroppedFiles(
+  transfer: DataTransfer | null | undefined,
+): boolean {
+  if (!transfer) return false;
+  if (transfer.items) {
+    for (const item of Array.from(transfer.items)) {
+      if (item.kind === 'file') return true;
+    }
+  }
+  return false;
+}
+
 export function findDroppedSkillTransferFile<T extends NamedFileLike = NamedFileLike>(
   transfer: SkillDropTransferLike<T> | null | undefined,
 ): T | null {

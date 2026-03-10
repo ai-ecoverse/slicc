@@ -13,7 +13,7 @@ import type { AgentHandle, AgentEvent as UIAgentEvent, ChatMessage } from './typ
 import { createLogger } from '../core/index.js';
 import type { VirtualFS } from '../fs/index.js';
 import { installSkillFromDrop } from '../skills/install-from-drop.js';
-import { findDroppedSkillTransferFile } from './skill-drop.js';
+import { findDroppedSkillTransferFile, hasDroppedFiles } from './skill-drop.js';
 // Register custom API providers (side-effect import triggers registerApiProvider)
 import '../providers/bedrock-camp.js';
 import { BrowserAPI } from '../cdp/index.js';
@@ -95,8 +95,8 @@ function registerSkillDropInstall(
   };
 
   window.addEventListener('dragenter', (event) => {
-    const skillFile = findDroppedSkillTransferFile(event.dataTransfer);
-    if (!skillFile) return;
+    // During drag, browsers restrict file access — only check if files are present
+    if (!hasDroppedFiles(event.dataTransfer)) return;
 
     event.preventDefault();
     dragDepth += 1;
@@ -106,8 +106,7 @@ function registerSkillDropInstall(
   });
 
   window.addEventListener('dragover', (event) => {
-    const skillFile = findDroppedSkillTransferFile(event.dataTransfer);
-    if (!skillFile) return;
+    if (!hasDroppedFiles(event.dataTransfer)) return;
 
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
