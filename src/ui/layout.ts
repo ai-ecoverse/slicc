@@ -592,8 +592,10 @@ export class Layout {
       indexedDB.deleteDatabase('slicc-fs');
       try {
         const root = await navigator.storage.getDirectory();
-        for await (const name of (root as any).keys()) {
-          await (root as any).removeEntry(name, { recursive: true });
+        const dir = root as FileSystemDirectoryHandle &
+          { keys(): AsyncIterableIterator<string> };
+        for await (const name of dir.keys()) {
+          await dir.removeEntry(name, { recursive: true });
         }
       } catch { /* OPFS not available or already empty */ }
       location.reload();

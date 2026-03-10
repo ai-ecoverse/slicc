@@ -23,7 +23,7 @@ interface ExecRequest {
 interface VfsRequest {
   type: 'vfs';
   id: string;
-  op: 'readFile' | 'readFileBinary' | 'writeFile' | 'writeFileBinary' | 'readDir' | 'exists';
+  op: 'readFile' | 'readFileBinary' | 'writeFile' | 'writeFileBinary' | 'readDir' | 'exists' | 'stat' | 'mkdir' | 'rm';
   args: string[];
   /** Binary data for writeFileBinary — transferred via structured clone. */
   binaryData?: Uint8Array;
@@ -103,6 +103,9 @@ const fs = {
   writeFileBinary: (path, data) => vfsCallBinary('writeFileBinary', [path], data),
   readDir: (path) => vfsCall('readDir', [path]),
   exists: (path) => vfsCall('exists', [path]),
+  stat: (path) => vfsCall('stat', [path]),
+  mkdir: (path) => vfsCall('mkdir', [path]),
+  rm: (path) => vfsCall('rm', [path]),
   fetchToFile: async (url, path) => {
     const resp = await fetch(url);
     if (!resp.ok) throw new Error('fetch ' + resp.status + ' ' + resp.statusText);
@@ -304,6 +307,19 @@ export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
             } catch {
               result = false;
             }
+            break;
+          case 'stat': {
+            const st = await fs.stat(msg.args[0]);
+            result = { isDirectory: st.type === 'directory', isFile: st.type === 'file', size: st.size };
+            break;
+          }
+          case 'mkdir':
+            await fs.mkdir(msg.args[0], { recursive: true });
+            result = true;
+            break;
+          case 'rm':
+            await fs.rm(msg.args[0], { recursive: true });
+            result = true;
             break;
         }
         iframe?.contentWindow?.postMessage(

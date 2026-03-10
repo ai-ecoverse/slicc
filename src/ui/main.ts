@@ -8,6 +8,7 @@
 
 import { Layout } from './layout.js';
 import { getApiKey, showProviderSettings, applyEnvDefaults } from './provider-settings.js';
+import { initTheme } from './theme.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent, ChatMessage, ToolCall } from './types.js';
 import { createLogger } from '../core/index.js';
 // Register custom API providers (side-effect import triggers registerApiProvider)
@@ -20,6 +21,8 @@ import type { LickEvent } from '../scoops/lick-manager.js';
 const log = createLogger('main');
 
 async function main(): Promise<void> {
+  initTheme();
+
   const app = document.getElementById('app');
   if (!app) throw new Error('#app element not found');
 

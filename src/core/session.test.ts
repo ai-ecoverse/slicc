@@ -76,6 +76,15 @@ describe('SessionStore', () => {
     expect(session.messages).toHaveLength(0);
   });
 
+  it('clears all sessions', async () => {
+    await store.save(SessionStore.createSession('clear-a', {}));
+    await store.save(SessionStore.createSession('clear-b', {}));
+    await store.clearAll();
+    const list = await store.list();
+    const ours = list.filter((s) => s.id.startsWith('clear-'));
+    expect(ours).toHaveLength(0);
+  });
+
   it('overwrites an existing session', async () => {
     const session = SessionStore.createSession('ow', {});
     session.messages = [{ role: 'user', content: 'first', timestamp: Date.now() }];

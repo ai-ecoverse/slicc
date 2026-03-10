@@ -7,6 +7,8 @@
 import { getProviders, getModels, getModel } from '../core/index.js';
 import type { Model } from '../core/index.js';
 import type { Api } from '@mariozechner/pi-ai';
+import { getThemePreference, setThemePreference } from './theme.js';
+import type { ThemePreference } from './theme.js';
 
 // Dynamic wrappers — pi-ai's getModel/getModels use strict generics
 // that require KnownProvider literals, but provider-settings works
@@ -236,7 +238,7 @@ export function getProviderModels(providerId: string): Model<Api>[] {
     // Bedrock CAMP uses Amazon Bedrock models with custom API
     if (providerId === 'bedrock-camp') {
       const bedrockModels = getModelsDynamic('amazon-bedrock');
-      return bedrockModels.map(m => ({ ...m, api: 'bedrock-camp-converse' as any, provider: 'bedrock-camp' }));
+      return bedrockModels.map(m => ({ ...m, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' }));
     }
     const effectiveProvider = providerId === 'azure-ai-foundry' ? 'anthropic' : providerId;
     return getModelsDynamic(effectiveProvider);
@@ -460,7 +462,7 @@ export function resolveCurrentModel(): Model<Api> {
 
     // Bedrock CAMP: override api and provider to route through custom stream function
     if (providerId === 'bedrock-camp') {
-      model = { ...model, api: 'bedrock-camp-converse' as any, provider: 'bedrock-camp' };
+      model = { ...model, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
     }
 
     // Override baseUrl if custom one is set
@@ -481,6 +483,37 @@ function maskApiKey(key: string): string {
   return key.slice(0, 4) + '...' + key.slice(-4);
 }
 
+/** Create an S2-style outline SVG icon (matches layout.ts pattern). */
+function svgIcon(paths: string[]): SVGSVGElement {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('width', '14');
+  svg.setAttribute('height', '14');
+  svg.setAttribute('viewBox', '0 0 20 20');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.5');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  for (const d of paths) {
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', d);
+    svg.appendChild(path);
+  }
+  return svg;
+}
+
+const ICON_PATHS = {
+  pen: [
+    'M14.3 3.3a1.5 1.5 0 0 1 2.1 0l.3.3a1.5 1.5 0 0 1 0 2.1L7.7 14.8l-3.2.7.7-3.2z',
+  ],
+  trash: [
+    'M4 6h12',
+    'M8 6V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2',
+    'M6 6v10a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V6',
+  ],
+};
+
 /**
  * Show the Accounts management dialog.
  * Returns a promise that resolves when the user closes the dialog.
@@ -498,7 +531,7 @@ export function showProviderSettings(): Promise<void> {
     if (getAccounts().length > 0) {
       renderAccountsList();
     } else {
-      renderAddAccountForm();
+      renderAccountForm();
     }
 
     overlay.appendChild(dialog);
@@ -514,6 +547,12 @@ export function showProviderSettings(): Promise<void> {
       dialog.appendChild(title);
 
       const currentAccounts = getAccounts();
+
+      const iconBtnStyle =
+          'background: transparent; border: 1px solid var(--s2-border-subtle); ' +
+          'color: var(--s2-content-secondary); border-radius: var(--s2-radius-s); ' +
+          'padding: 6px; cursor: pointer; display: flex; align-items: center; ' +
+          'justify-content: center; transition: color 0.15s, border-color 0.15s;';
 
       if (currentAccounts.length === 0) {
         const empty = document.createElement('div');
@@ -550,17 +589,46 @@ export function showProviderSettings(): Promise<void> {
 
           row.appendChild(info);
 
+          const actions = document.createElement('div');
+          actions.style.cssText =
+            'display: flex; gap: 4px; margin-left: 12px; flex-shrink: 0;';
+
+          const editBtn = document.createElement('button');
+          editBtn.style.cssText = iconBtnStyle;
+          editBtn.setAttribute('aria-label', 'Edit account');
+          editBtn.appendChild(svgIcon(ICON_PATHS.pen));
+          editBtn.addEventListener('mouseenter', () => {
+            editBtn.style.color = 'var(--s2-accent)';
+            editBtn.style.borderColor = 'var(--s2-accent)';
+          });
+          editBtn.addEventListener('mouseleave', () => {
+            editBtn.style.color = 'var(--s2-content-secondary)';
+            editBtn.style.borderColor = 'var(--s2-border-subtle)';
+          });
+          editBtn.addEventListener('click', () => {
+            renderAccountForm(account);
+          });
+          actions.appendChild(editBtn);
+
           const deleteBtn = document.createElement('button');
-          deleteBtn.style.cssText =
-            'background: transparent; border: 1px solid var(--s2-negative); color: var(--slicc-cone); ' +
-            'border-radius: var(--s2-radius-s); padding: 4px 10px; cursor: pointer; font-size: 12px; ' +
-            'margin-left: 12px; flex-shrink: 0;';
-          deleteBtn.textContent = 'Remove';
+          deleteBtn.style.cssText = iconBtnStyle;
+          deleteBtn.setAttribute('aria-label', 'Remove account');
+          deleteBtn.appendChild(svgIcon(ICON_PATHS.trash));
+          deleteBtn.addEventListener('mouseenter', () => {
+            deleteBtn.style.color = 'var(--s2-negative)';
+            deleteBtn.style.borderColor = 'var(--s2-negative)';
+          });
+          deleteBtn.addEventListener('mouseleave', () => {
+            deleteBtn.style.color = 'var(--s2-content-secondary)';
+            deleteBtn.style.borderColor = 'var(--s2-border-subtle)';
+          });
           deleteBtn.addEventListener('click', () => {
             removeAccount(account.providerId);
             renderAccountsList();
           });
-          row.appendChild(deleteBtn);
+          actions.appendChild(deleteBtn);
+
+          row.appendChild(actions);
 
           list.appendChild(row);
         }
@@ -571,13 +639,80 @@ export function showProviderSettings(): Promise<void> {
       const addBtn = document.createElement('button');
       addBtn.className = 'dialog__btn';
       addBtn.textContent = 'Add Account';
-      addBtn.addEventListener('click', () => renderAddAccountForm());
+      addBtn.addEventListener('click', () => renderAccountForm());
       dialog.appendChild(addBtn);
+
+      // ── Theme section ───────────────────────────────────────────
+      const themeSep = document.createElement('hr');
+      themeSep.style.cssText =
+        'border: none; border-top: 1px solid var(--s2-border-subtle); margin: 16px 0;';
+      dialog.appendChild(themeSep);
+
+      const themeLabel = document.createElement('div');
+      themeLabel.className = 'dialog__desc';
+      themeLabel.style.cssText = 'font-weight: 600; margin-bottom: 8px;';
+      themeLabel.textContent = 'Theme';
+      dialog.appendChild(themeLabel);
+
+      const themeGroup = document.createElement('div');
+      themeGroup.setAttribute('role', 'radiogroup');
+      themeGroup.setAttribute('aria-label', 'Theme');
+      themeGroup.style.cssText =
+        'display: flex; gap: 0; margin-bottom: 16px; ' +
+        'border-radius: var(--s2-radius-default); overflow: hidden; ' +
+        'border: 1px solid var(--s2-border-subtle);';
+
+      const themeOptions: [ThemePreference, string][] = [
+        ['system', 'System'],
+        ['light', 'Light'],
+        ['dark', 'Dark'],
+      ];
+      const themeBtns: HTMLButtonElement[] = [];
+
+      for (const [value, label] of themeOptions) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.setAttribute('role', 'radio');
+        btn.setAttribute('aria-checked', String(value === getThemePreference()));
+        btn.textContent = label;
+        btn.dataset.theme = value;
+        btn.style.cssText =
+          'flex: 1; padding: 8px 0; border: none; ' +
+          'font-size: 13px; font-weight: 600; cursor: pointer; ' +
+          'transition: background var(--s2-transition-default), ' +
+          'color var(--s2-transition-default);';
+        themeBtns.push(btn);
+        themeGroup.appendChild(btn);
+      }
+
+      function styleThemeBtns() {
+        const cs = getComputedStyle(document.documentElement);
+        for (const btn of themeBtns) {
+          const active = btn.dataset.theme === getThemePreference();
+          btn.setAttribute('aria-checked', String(active));
+          btn.style.background = active
+            ? cs.getPropertyValue('--s2-accent').trim()
+            : cs.getPropertyValue('--s2-bg-layer-2').trim();
+          btn.style.color = active
+            ? '#fff'
+            : cs.getPropertyValue('--s2-content-secondary').trim();
+        }
+      }
+      styleThemeBtns();
+
+      for (const btn of themeBtns) {
+        btn.addEventListener('click', () => {
+          setThemePreference(btn.dataset.theme as ThemePreference);
+          styleThemeBtns();
+        });
+      }
+
+      dialog.appendChild(themeGroup);
 
       // Close button
       const closeBtn = document.createElement('button');
-      closeBtn.className = 'dialog__btn';
-      closeBtn.style.cssText = 'margin-top: 8px; background: transparent; border: 1px solid var(--s2-border-default);';
+      closeBtn.className = 'dialog__btn dialog__btn--secondary';
+      closeBtn.style.marginTop = '8px';
       closeBtn.textContent = 'Close';
       closeBtn.addEventListener('click', () => {
         overlay.remove();
@@ -586,13 +721,14 @@ export function showProviderSettings(): Promise<void> {
       dialog.appendChild(closeBtn);
     }
 
-    // ── Add account form view ───────────────────────────────────────
-    function renderAddAccountForm() {
+    // ── Account form view (add or edit) ─────────────────────────────
+    function renderAccountForm(editing?: Account) {
       dialog.innerHTML = '';
+      const isEdit = !!editing;
 
       const title = document.createElement('div');
       title.className = 'dialog__title';
-      title.textContent = 'Add Account';
+      title.textContent = isEdit ? 'Edit Account' : 'Add Account';
       dialog.appendChild(title);
 
       // Provider selector
@@ -605,22 +741,31 @@ export function showProviderSettings(): Promise<void> {
       providerSelect.className = 'dialog__input';
       providerSelect.style.marginBottom = '8px';
 
-      const providers = getAvailableProviders();
-      const existingProviders = new Set(getAccounts().map(a => a.providerId));
-
-      const sorted = [...providers].sort((a, b) => {
-        const nameA = getProviderConfig(a).name;
-        const nameB = getProviderConfig(b).name;
-        return nameA.localeCompare(nameB);
-      });
-
-      for (const providerId of sorted) {
-        if (existingProviders.has(providerId)) continue;
-        const config = getProviderConfig(providerId);
+      if (isEdit) {
+        // Locked to the existing provider
+        const config = getProviderConfig(editing.providerId);
         const opt = document.createElement('option');
-        opt.value = providerId;
+        opt.value = editing.providerId;
         opt.textContent = config.name;
         providerSelect.appendChild(opt);
+        providerSelect.disabled = true;
+        providerSelect.style.opacity = '0.7';
+      } else {
+        const providers = getAvailableProviders();
+        const existingProviders = new Set(getAccounts().map(a => a.providerId));
+        const sorted = [...providers].sort((a, b) => {
+          const nameA = getProviderConfig(a).name;
+          const nameB = getProviderConfig(b).name;
+          return nameA.localeCompare(nameB);
+        });
+        for (const providerId of sorted) {
+          if (existingProviders.has(providerId)) continue;
+          const config = getProviderConfig(providerId);
+          const opt = document.createElement('option');
+          opt.value = providerId;
+          opt.textContent = config.name;
+          providerSelect.appendChild(opt);
+        }
       }
       dialog.appendChild(providerSelect);
 
@@ -642,6 +787,7 @@ export function showProviderSettings(): Promise<void> {
       apiKeyInput.type = 'password';
       apiKeyInput.autocomplete = 'off';
       apiKeyInput.spellcheck = false;
+      if (isEdit) apiKeyInput.value = editing.apiKey;
       apiKeySection.appendChild(apiKeyInput);
 
       dialog.appendChild(apiKeySection);
@@ -659,6 +805,7 @@ export function showProviderSettings(): Promise<void> {
       baseUrlInput.type = 'text';
       baseUrlInput.autocomplete = 'off';
       baseUrlInput.spellcheck = false;
+      if (isEdit && editing.baseUrl) baseUrlInput.value = editing.baseUrl;
       baseUrlSection.appendChild(baseUrlInput);
 
       const baseUrlDesc = document.createElement('div');
@@ -695,12 +842,12 @@ export function showProviderSettings(): Promise<void> {
       });
       updateFormFields();
 
-      // Add button
+      // Save button
       const saveBtn = document.createElement('button');
       saveBtn.className = 'dialog__btn';
-      saveBtn.textContent = 'Add';
+      saveBtn.textContent = isEdit ? 'Save' : 'Add';
 
-      function validateAndAdd() {
+      function validateAndSave() {
         const pid = providerSelect.value;
         if (!pid) return;
         const config = getProviderConfig(pid);
@@ -722,16 +869,16 @@ export function showProviderSettings(): Promise<void> {
         addAccount(
           pid,
           apiKeyInput.value.trim(),
-          config.requiresBaseUrl ? baseUrlInput.value.trim() : undefined,
+          baseUrlInput.value.trim() || undefined,
         );
 
         renderAccountsList();
       }
 
-      saveBtn.addEventListener('click', validateAndAdd);
+      saveBtn.addEventListener('click', validateAndSave);
 
       const handleEnter = (e: KeyboardEvent) => {
-        if (e.key === 'Enter') validateAndAdd();
+        if (e.key === 'Enter') validateAndSave();
       };
       apiKeyInput.addEventListener('keydown', handleEnter);
       baseUrlInput.addEventListener('keydown', handleEnter);
@@ -742,8 +889,8 @@ export function showProviderSettings(): Promise<void> {
       const hasAccounts = getAccounts().length > 0;
       if (hasAccounts) {
         const backBtn = document.createElement('button');
-        backBtn.className = 'dialog__btn';
-        backBtn.style.cssText = 'margin-top: 8px; background: transparent; border: 1px solid var(--s2-border-default);';
+        backBtn.className = 'dialog__btn dialog__btn--secondary';
+        backBtn.style.marginTop = '8px';
         backBtn.textContent = 'Back';
         backBtn.addEventListener('click', () => {
           renderAccountsList();

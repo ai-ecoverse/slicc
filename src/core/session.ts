@@ -91,6 +91,18 @@ export class SessionStore {
     });
   }
 
+  /** Clear all sessions from the store. */
+  async clearAll(): Promise<void> {
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
+      const request = store.clear();
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  }
+
   /** Generate a new unique session ID. */
   static newId(): string {
     return `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;

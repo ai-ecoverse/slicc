@@ -12,7 +12,7 @@ export const LogLevel = {
 
 export type LogLevel = (typeof LogLevel)[keyof typeof LogLevel];
 
-let currentLevel: LogLevel = __DEV__ ? LogLevel.DEBUG : LogLevel.ERROR;
+let currentLevel: LogLevel = __DEV__ ? LogLevel.INFO : LogLevel.ERROR;
 
 export function setLogLevel(level: LogLevel): void {
   currentLevel = level;

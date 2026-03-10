@@ -8,7 +8,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
   ['Navigation & paths', ['pwd', 'basename', 'dirname', 'tree', 'du', 'cd']],
   ['Archives', ['zip', 'unzip', 'pdftk', 'pdf']],
   ['Media', ['convert', 'magick']],
-  ['Environment & shell', ['echo', 'printf', 'env', 'printenv', 'export', 'alias', 'unalias', 'history', 'clear', 'true', 'false', 'bash', 'sh', 'commands']],
+  ['Environment & shell', ['echo', 'printf', 'env', 'printenv', 'export', 'alias', 'unalias', 'history', 'clear', 'true', 'false', 'bash', 'sh', 'commands', 'which']],
   ['Data processing', ['xargs', 'jq', 'base64', 'date']],
   ['Network', ['curl', 'wget', 'html-to-markdown']],
   ['Version control', ['git']],
@@ -18,7 +18,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
   ['Filesystem', ['mount']],
 ]);
 
-function formatHelp(commands: string[]): string {
+function formatHelp(commands: string[], jshCommands: string[] = []): string {
   const lines: string[] = [];
   const available = new Set(commands);
 
@@ -46,12 +46,22 @@ function formatHelp(commands: string[]): string {
     lines.push(`    ${uncategorized.sort().join(', ')}\n`);
   }
 
+  if (jshCommands.length > 0) {
+    lines.push('  User scripts (.jsh):');
+    lines.push(`    ${jshCommands.sort().join(', ')}\n`);
+  }
+
   lines.push("Use '<command> --help' for details on a specific command.");
 
   return lines.join('\n') + '\n';
 }
 
-export function createCommandsCommand(): Command {
+export interface CommandsCommandOptions {
+  /** Function that returns discovered .jsh command names. */
+  getJshCommands?: () => Promise<string[]>;
+}
+
+export function createCommandsCommand(options: CommandsCommandOptions = {}): Command {
   return defineCommand('commands', async (args, ctx) => {
     if (args.includes('--help') || args.includes('-h')) {
       return {
@@ -80,8 +90,9 @@ Note: This is an enhanced version of 'help' that shows all custom commands.
 
     // Get all registered commands
     const commands = ctx.getRegisteredCommands?.() ?? [];
+    const jshCommands = await options.getJshCommands?.() ?? [];
     return {
-      stdout: formatHelp(commands),
+      stdout: formatHelp(commands, jshCommands),
       stderr: '',
       exitCode: 0,
     };

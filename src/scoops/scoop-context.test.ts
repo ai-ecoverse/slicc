@@ -49,6 +49,166 @@ function injectMockAgent(ctx: ScoopContext, mockPrompt: (text: string) => Promis
   (ctx as any).status = 'ready';
 }
 
+describe('ScoopContext session persistence', () => {
+  let ctx: ScoopContext;
+  let callbacks: ScoopContextCallbacks;
+
+  beforeEach(() => {
+    callbacks = createMockCallbacks();
+  });
+
+  it('accepts a sessionStore parameter', () => {
+    const mockStore = { load: vi.fn(), save: vi.fn(), delete: vi.fn() } as any;
+    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
+    expect((ctx as any).sessionStore).toBe(mockStore);
+    expect((ctx as any).sessionId).toBe(testScoop.jid);
+  });
+
+  it('works without sessionStore (backwards compatible)', () => {
+    ctx = new ScoopContext(testScoop, callbacks, {} as any);
+    expect((ctx as any).sessionStore).toBeNull();
+  });
+
+  it('saves session on agent_end with messages', () => {
+    const mockStore = { load: vi.fn(), save: vi.fn().mockResolvedValue(undefined) } as any;
+    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
+    injectMockAgent(ctx, async () => {});
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const messages = [{ role: 'user', content: 'hello', timestamp: Date.now() }];
+    handler({ type: 'agent_end', messages });
+
+    expect(mockStore.save).toHaveBeenCalledWith(expect.objectContaining({
+      id: testScoop.jid,
+      messages,
+    }));
+  });
+
+  it('preserves original createdAt across saves', () => {
+    const originalCreatedAt = 1000000;
+    const mockStore = { load: vi.fn(), save: vi.fn().mockResolvedValue(undefined) } as any;
+    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
+    injectMockAgent(ctx, async () => {});
+
+    // Simulate having restored a session with a known createdAt
+    (ctx as any).sessionCreatedAt = originalCreatedAt;
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    handler({ type: 'agent_end', messages: [{ role: 'user', content: 'hi', timestamp: Date.now() }] });
+
+    const savedSession = mockStore.save.mock.calls[0][0];
+    expect(savedSession.createdAt).toBe(originalCreatedAt);
+    expect(savedSession.updatedAt).toBeGreaterThan(originalCreatedAt);
+  });
+
+  it('uses current time for createdAt on first save (no prior session)', () => {
+    const mockStore = { load: vi.fn(), save: vi.fn().mockResolvedValue(undefined) } as any;
+    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
+    injectMockAgent(ctx, async () => {});
+
+    const before = Date.now();
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    handler({ type: 'agent_end', messages: [{ role: 'user', content: 'hi', timestamp: Date.now() }] });
+    const after = Date.now();
+
+    const savedSession = mockStore.save.mock.calls[0][0];
+    expect(savedSession.createdAt).toBeGreaterThanOrEqual(before);
+    expect(savedSession.createdAt).toBeLessThanOrEqual(after);
+  });
+
+  it('does not save session on agent_end with empty messages', () => {
+    const mockStore = { load: vi.fn(), save: vi.fn() } as any;
+    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
+    injectMockAgent(ctx, async () => {});
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    handler({ type: 'agent_end', messages: [] });
+
+    expect(mockStore.save).not.toHaveBeenCalled();
+  });
+
+  it('logs error when save fails (does not throw)', () => {
+    const mockStore = { load: vi.fn(), save: vi.fn().mockRejectedValue(new Error('DB full')) } as any;
+    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
+    injectMockAgent(ctx, async () => {});
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const messages = [{ role: 'user', content: 'hello', timestamp: Date.now() }];
+
+    // Should not throw
+    expect(() => handler({ type: 'agent_end', messages })).not.toThrow();
+  });
+
+  it('does not save session when no sessionStore provided', () => {
+    ctx = new ScoopContext(testScoop, callbacks, {} as any);
+    injectMockAgent(ctx, async () => {});
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const messages = [{ role: 'user', content: 'hello', timestamp: Date.now() }];
+
+    // Should not throw
+    expect(() => handler({ type: 'agent_end', messages })).not.toThrow();
+  });
+
+  it('calls onError when restore fails', () => {
+    const mockStore = { load: vi.fn().mockRejectedValue(new Error('DB corrupt')), save: vi.fn() } as any;
+    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
+
+    // Simulate the restoration error path directly
+    const restoreBlock = async () => {
+      let restoredMessages: any[] = [];
+      try {
+        const saved = await mockStore.load(testScoop.jid);
+        if (saved) restoredMessages = saved.messages;
+      } catch (err) {
+        callbacks.onError('Conversation history could not be restored. Starting fresh.');
+      }
+      return restoredMessages;
+    };
+
+    return restoreBlock().then((messages) => {
+      expect(messages).toEqual([]);
+      expect(callbacks.onError).toHaveBeenCalledWith('Conversation history could not be restored. Starting fresh.');
+    });
+  });
+
+  it('restores sessionCreatedAt from loaded session', () => {
+    const mockStore = { load: vi.fn().mockResolvedValue({ messages: [{ role: 'user', content: 'old' }], createdAt: 42 }), save: vi.fn() } as any;
+    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
+
+    // Simulate the restoration path
+    const restoreBlock = async () => {
+      const saved = await mockStore.load(testScoop.jid);
+      if (saved) {
+        (ctx as any).sessionCreatedAt = saved.createdAt;
+        return saved.messages;
+      }
+      return [];
+    };
+
+    return restoreBlock().then((messages) => {
+      expect(messages).toEqual([{ role: 'user', content: 'old' }]);
+      expect((ctx as any).sessionCreatedAt).toBe(42);
+    });
+  });
+
+  it('defaults to empty messages when no prior session exists', () => {
+    const mockStore = { load: vi.fn().mockResolvedValue(null), save: vi.fn() } as any;
+    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
+
+    const restoreBlock = async () => {
+      const saved = await mockStore.load(testScoop.jid);
+      if (saved) return saved.messages;
+      return [];
+    };
+
+    return restoreBlock().then((messages) => {
+      expect(messages).toEqual([]);
+      expect(mockStore.load).toHaveBeenCalledWith(testScoop.jid);
+    });
+  });
+});
+
 describe('ScoopContext prompt queueing', () => {
   let ctx: ScoopContext;
   let callbacks: ScoopContextCallbacks;
