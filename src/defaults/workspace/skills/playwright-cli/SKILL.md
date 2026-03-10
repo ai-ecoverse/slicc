@@ -92,9 +92,12 @@ playwright-cli reload      # Reload page
 ```bash
 playwright-cli screenshot                       # Save to /tmp/screenshot-<ts>.png
 playwright-cli screenshot --filename=page.png   # Save to custom path
+playwright-cli screenshot --inline              # Save + return image (you can see it)
 playwright-cli screenshot e5                    # Screenshot specific element
 playwright-cli screenshot --fullPage            # Full scrollable page
 ```
+
+Use `--inline` when you need to visually verify a page yourself. Without it, the screenshot is saved to a file but you won't see the image.
 
 ### Tab Management
 
@@ -173,4 +176,4 @@ This shows the full chronological log of all browser commands, their results, an
 - The SLICC app tab and Chrome internal UI tabs (for example `Omnibox Popup` / `chrome://...`) are automatically excluded from normal tab selection and interaction.
 - The current tab is auto-selected. Use `tab-select` to switch between multiple tabs.
 - `fill` clears and types into regular inputs, textareas, and `contenteditable` elements.
-- Screenshots default to `/tmp/screenshot-<timestamp>.png`. Use `--filename=path` to save elsewhere.
+- Screenshots default to `/tmp/screenshot-<timestamp>.png`. Use `--filename=path` to save elsewhere. Use `--inline` to see the image yourself (costs context tokens).
