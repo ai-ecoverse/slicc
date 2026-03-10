@@ -49,6 +49,17 @@ describe('Bash Tool', () => {
     expect(result.content).not.toContain('apple');
   });
 
+  it('supports find through the shell', async () => {
+    await bash.execute({ command: 'mkdir -p /workspace/src /workspace/docs' });
+    await bash.execute({ command: 'echo "console.log(1)" > /workspace/src/main.ts' });
+    await bash.execute({ command: 'echo "# hello" > /workspace/docs/readme.md' });
+
+    const result = await bash.execute({ command: 'find /workspace -name "*.ts" -type f' });
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('/workspace/src/main.ts');
+    expect(result.content).not.toContain('/workspace/docs/readme.md');
+  });
+
   it('supports file creation and reading', async () => {
     await bash.execute({ command: 'echo "test content" > /test.txt' });
     const result = await bash.execute({ command: 'cat /test.txt' });

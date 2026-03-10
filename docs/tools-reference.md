@@ -120,6 +120,7 @@ Execute shell commands in a full Unix-like environment (just-bash 2.11.7).
 - Custom commands: `git`, `node -e`, `python3 -c`, `sqlite3`, `zip/unzip`, `webhook`, `crontask`, `convert`, `which`
 - Networking: Full `curl` with HTTP methods, headers, auth, body
 - Text processing: grep, rg, sed, awk, cut, tr, sort, uniq, wc, head, tail
+- Search is shell-native: use `grep`, `find`, and `rg` through `bash` rather than separate agent tools
 - Data: jq (JSON), base64, md5sum, sha256sum
 
 **Examples**:
@@ -333,32 +334,6 @@ console.log(result);
 
 ---
 
-### find / search
-
-**File**: `src/tools/search-tools.ts`
-
-Search for files or text patterns.
-
-| Property | Value |
-|----------|-------|
-| **Name** | `find`, `search` |
-
-**find** (`find` tool in bash):
-
-```bash
-find /workspace -name "*.js" -type f
-find /workspace -type d -name "node_modules"
-```
-
-**search** (ripgrep wrapper):
-
-```bash
-rg "TODO" /workspace --type js
-rg -A 5 "function main" /src
-```
-
----
-
 ## NanoClaw Tools (Multi-Scoop)
 
 NanoClaw tools are MCP-style tools for messaging and scoop management.
@@ -459,7 +434,6 @@ Cone-only. Update the shared global memory file (`/shared/CLAUDE.md`).
 | edit_file | ✓ | ✓ (restricted) |
 | browser | ✓ | ✓ |
 | javascript | ✓ | ✓ |
-| find / search | ✓ | ✓ (restricted) |
 | **send_message** | ✓ | ✓ |
 | **list_scoops** | ✓ | ✗ |
 | **scoop_scoop** | ✓ | ✗ |
