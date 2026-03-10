@@ -106,26 +106,8 @@ function codeHandler(_state: unknown, node: Code): Element {
   };
 }
 
-function ensureSafeLinkRel(rel: unknown): string {
-  const tokens = new Set<string>();
-
-  if (typeof rel === 'string') {
-    for (const token of rel.split(/\s+/)) {
-      if (token) tokens.add(token);
-    }
-  } else if (Array.isArray(rel)) {
-    for (const value of rel) {
-      if (typeof value !== 'string') continue;
-      for (const token of value.split(/\s+/)) {
-        if (token) tokens.add(token);
-      }
-    }
-  }
-
-  tokens.add('noopener');
-  tokens.add('noreferrer');
-
-  return Array.from(tokens).join(' ');
+function ensureSafeLinkRel(): string {
+  return 'noopener noreferrer';
 }
 
 function addNewTabToLinks() {
@@ -148,7 +130,7 @@ function visitNode(node: unknown): void {
     hastNode.properties = {
       ...hastNode.properties,
       target: '_blank',
-      rel: ensureSafeLinkRel(hastNode.properties.rel),
+      rel: ensureSafeLinkRel(),
     };
   }
 

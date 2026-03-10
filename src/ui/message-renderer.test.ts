@@ -51,6 +51,22 @@ describe('renderMessageContent', () => {
     expect(html).toContain('rel="noopener noreferrer"');
   });
 
+  it('applies safe link attributes to GFM autolink bare URLs', () => {
+    const html = renderMessageContent('Visit https://example.com for details');
+    expect(html).toContain('href="https://example.com"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+  });
+
+  it('replaces author-supplied rel tokens on raw HTML links', () => {
+    const html = renderMessageContent('<a href="https://example.com" rel="opener external">Example</a>');
+    expect(html).toContain('href="https://example.com"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+    expect(html).not.toContain('opener');
+    expect(html).not.toContain('external');
+  });
+
   it('renders italic text', () => {
     const html = renderMessageContent('This is *italic* text');
     expect(html).toContain('<em>italic</em>');
