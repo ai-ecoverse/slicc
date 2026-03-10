@@ -111,7 +111,7 @@
 | `crontask-command.ts` | `crontask` — schedule cron jobs (dispatches licks to scoops); backed by node-cron |
 | `imgcat-command.ts` | `imgcat` — display images inline in terminal |
 | `node-command.ts` | `node -e` — execute JavaScript (CLI: AsyncFunction, extension: sandbox iframe) |
-| `open-command.ts` | `open <path\|url>` — serve VFS files via preview SW or open URLs in browser tab; `--download` / `-d` forces download |
+| `open-command.ts` | `open <path\|url>` — serve VFS files via preview SW or open URLs in browser tab; `--download` / `-d` forces download; `--view` / `-v` returns image inline for agent vision |
 | `pdftk-command.ts` | `pdftk` — PDF manipulation (concat, split, rotate, burst, etc.) |
 | `python-command.ts` | `python3/python -c` — execute Python via Pyodide (~13MB bundled, loaded from `chrome.runtime.getURL('pyodide/')`) |
 | `shared.ts` | Shared utilities: `toPreviewUrl()` (dual-mode preview SW URL), `isLikelyUrl()`, `basename()`, `dirname()`, NodeExitError, nodeRuntimeState, formatConsoleArg |

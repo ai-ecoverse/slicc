@@ -2,16 +2,28 @@ import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
 import { basename, detectMimeType, isLikelyUrl, toPreviewUrl } from './shared.js';
 
+const FLAGS = ['--download', '-d', '--view', '-v'] as const;
+
 function openHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout:
-      'usage: open [--download|-d] <url|path> [url|path...]\n\n' +
+      'usage: open [--download|-d] [--view|-v] <url|path> [url|path...]\n\n' +
       '  VFS paths are served in a new browser tab via the preview service worker.\n' +
       '  URLs (http/https/etc.) are opened directly in a new tab.\n' +
-      '  --download, -d  Force download instead of opening in a tab.\n',
+      '  --download, -d  Force download instead of opening in a tab.\n' +
+      '  --view, -v      Return image inline so the agent can see it.\n',
     stderr: '',
     exitCode: 0,
   };
+}
+
+function toBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunk = 8192;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
 }
 
 export function createOpenCommand(): Command {
@@ -28,7 +40,8 @@ export function createOpenCommand(): Command {
     }
 
     const download = args.includes('--download') || args.includes('-d');
-    const targets = args.filter((a) => a !== '--download' && a !== '-d');
+    const view = args.includes('--view') || args.includes('-v');
+    const targets = args.filter((a) => !(FLAGS as readonly string[]).includes(a));
 
     if (targets.length === 0) {
       return openHelp();
@@ -47,7 +60,22 @@ export function createOpenCommand(): Command {
 
       const fullPath = ctx.fs.resolvePath(ctx.cwd, target);
 
-      if (download) {
+      if (view) {
+        // --view: read file and return as <img:> tag for agent vision
+        let bytes;
+        try {
+          bytes = await ctx.fs.readFileBuffer(fullPath);
+        } catch {
+          return {
+            stdout: '',
+            stderr: `open: no such file: ${target}\n`,
+            exitCode: 1,
+          };
+        }
+        const mimeType = detectMimeType(fullPath);
+        const base64 = toBase64(new Uint8Array(bytes));
+        results.push(`${fullPath} (${Math.round(bytes.byteLength / 1024)} KB)\n<img:data:${mimeType};base64,${base64}>`);
+      } else if (download) {
         let stat;
         try {
           stat = await ctx.fs.stat(fullPath);

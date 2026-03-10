@@ -74,11 +74,12 @@ To close a tab: use `browser` action `evaluate` with expression `window.close()`
 ## Viewing Pages and Images
 
 **What you CAN see:**
-- **`playwright-cli screenshot --inline`** — takes a screenshot and returns it as an image you can see. Use `--inline` when YOU need to verify visually. Without `--inline`, the screenshot is only saved to a file.
+- **`open --view <path>`** (or `-v`) — reads an image from VFS and returns it so you can see it. Works with PNG, JPEG, GIF, WebP, SVG.
+- **`playwright-cli screenshot --inline`** — takes a browser screenshot and returns it so you can see it. Use `--inline` when YOU need to verify visually.
 - **`playwright-cli snapshot`** — returns an accessibility tree (text). Use this to verify page content without vision, or as a required step before `screenshot`.
 
 **What only the human sees:**
-- **`open <path>`** — opens VFS files in a browser tab.
+- **`open <path>`** (no flags) — opens VFS files in a browser tab.
 - **`imgcat <path>`** — displays an image in the terminal preview.
 
 **Workflow to verify a page you created:**
@@ -87,6 +88,7 @@ To close a tab: use `browser` action `evaluate` with expression `window.close()`
 3. `playwright-cli tab-select <targetId>` — target that tab
 4. `playwright-cli snapshot` — required before screenshot; also gives you text content
 5. `playwright-cli screenshot --inline` — you will see the image in the response
+6. Or: `open --view /workspace/some-image.png` — view any VFS image directly
 
 **Do NOT:**
 - Try to `read_file` on a PNG, `base64` encode it, or `convert` it to view images

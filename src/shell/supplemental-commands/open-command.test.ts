@@ -211,6 +211,37 @@ describe('open command', () => {
     expect(result.stderr).toContain('failed to read');
   });
 
+  it('returns inline image with --view flag', async () => {
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+    const cmd = createOpenCommand();
+    const ctx = createMockCtx({ files: { '/workspace/image.png': pngBytes } });
+    const result = await cmd.execute(['--view', '/workspace/image.png'], ctx as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('<img:data:image/png;base64,');
+    expect(result.stdout).toContain('/workspace/image.png');
+    expect(openSpy).not.toHaveBeenCalled(); // should not open a tab
+  });
+
+  it('returns inline image with -v flag', async () => {
+    const jpgBytes = new Uint8Array([0xff, 0xd8, 0xff]);
+    const cmd = createOpenCommand();
+    const ctx = createMockCtx({ files: { '/workspace/photo.jpg': jpgBytes } });
+    const result = await cmd.execute(['-v', '/workspace/photo.jpg'], ctx as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('<img:data:image/jpeg;base64,');
+  });
+
+  it('fails --view gracefully when file does not exist', async () => {
+    const cmd = createOpenCommand();
+    const ctx = createMockCtx();
+    const result = await cmd.execute(['--view', '/workspace/missing.png'], ctx as any);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('no such file');
+  });
+
   it('succeeds even when window.open returns null (extension mode)', async () => {
     openSpy.mockReturnValue(null);
     const cmd = createOpenCommand();
