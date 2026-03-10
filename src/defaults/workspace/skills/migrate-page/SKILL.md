@@ -445,7 +445,14 @@ git add blocks/ styles/ drafts/
 git commit -m "feat: migrate {page-path} from {source-domain}"
 ```
 
-### Step 4.6: Final Summary
+### Step 4.6: Detach Browser
+
+Detach from the browser to remove the "debugging this browser" infobar:
+```json
+{ "action": "detach" }
+```
+
+### Step 4.7: Final Summary
 
 Report to the user:
 - Number of blocks migrated and their statuses

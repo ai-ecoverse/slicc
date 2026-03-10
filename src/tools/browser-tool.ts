@@ -112,7 +112,7 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
       properties: {
         action: {
           type: 'string',
-          enum: ['list_tabs', 'new_tab', 'new_recorded_tab', 'stop_recording', 'navigate', 'snapshot', 'screenshot', 'evaluate', 'click', 'type', 'evaluate_persistent', 'serve', 'show_image'],
+          enum: ['list_tabs', 'new_tab', 'new_recorded_tab', 'stop_recording', 'navigate', 'snapshot', 'screenshot', 'evaluate', 'click', 'type', 'evaluate_persistent', 'serve', 'show_image', 'detach'],
           description: 'The browser action to perform.',
         },
         targetId: {
@@ -656,6 +656,11 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
             return {
               content: `Serving ${directory} in tab ${newTargetId}\nURL: ${previewUrl}\nUse snapshot, screenshot, evaluate, click etc. to interact with the page.`
             };
+          }
+
+          case 'detach': {
+            await browser.detach();
+            return { content: 'Detached from browser tab. The debugging infobar will disappear.' };
           }
 
           default:
