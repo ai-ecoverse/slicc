@@ -16,6 +16,7 @@ import { cacheBinaryBody, cacheBinaryByUrl } from './binary-cache.js';
 import { GitCommands } from '../git/git-commands.js';
 import { createSupplementalCommands } from './supplemental-commands.js';
 import type { MediaPreviewItem } from './supplemental-commands.js';
+import type { BrowserAPI } from '../cdp/index.js';
 import { createSkillCommand, createUpskillCommand } from './supplemental-commands/upskill-command.js';
 import { MountCommands } from '../fs/mount-commands.js';
 
@@ -134,6 +135,8 @@ export interface WasmShellOptions {
   cwd?: string;
   /** Initial environment variables. */
   env?: Record<string, string>;
+  /** BrowserAPI for playwright-cli command. */
+  browserAPI?: BrowserAPI;
 }
 
 export class WasmShell {
@@ -185,6 +188,8 @@ export class WasmShell {
     const gitCommand = this.createGitCustomCommand();
     const supplementalCommands = createSupplementalCommands({
       onMediaPreview: async (items) => this.renderMediaPreview(items),
+      browserAPI: options.browserAPI,
+      vfs: options.fs,
     });
     const mountCommand = this.createMountCustomCommand();
     const fetchFn = createProxiedFetch();

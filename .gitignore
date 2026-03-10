@@ -2,5 +2,5 @@ node_modules/
 dist/
 *.tsbuildinfo
 .DS_STORE
-workspace/
+/workspace/
 coverage/
