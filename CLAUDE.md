@@ -143,6 +143,7 @@ WasmShell wraps just-bash 2.11.7 (WASM Bash interpreter) and connects it to Virt
 - `convert` / `magick` — ImageMagick-style image conversion (resize, rotate, crop, quality) via `@imagemagick/magick-wasm`
 - `playwright-cli` / `playwright` / `puppeteer` — Browser automation shell commands backed by `BrowserAPI`; aliases share the same tab/session state, snapshots, and session history
 - `which <command>` — Resolve a command to its path (`/usr/bin/<name>` for built-ins, actual VFS path for `.jsh` files)
+- `uname` — Print the current browser user agent
 - `commands` — Show all available commands (type `commands` in terminal)
 
 Any `*.jsh` file anywhere on the VFS is auto-discovered as a shell command (basename without `.jsh` extension). Skills can ship `.jsh` files alongside `SKILL.md` to provide executable commands. Files in `/workspace/skills/` get priority when names conflict.

@@ -114,6 +114,7 @@
 | `sqlite-command.ts` | `sqlite3` — SQLite database operations (in-memory or VFS-backed) |
 | `unzip-command.ts` | `unzip` — extract archives |
 | `upskill-command.ts` | `upskill` — install skills from GitHub/ClawHub |
+| `uname-command.ts` | `uname` — print the current browser user agent |
 | `webhook-command.ts` | `webhook` — manage webhooks for event-driven automation |
 | `which-command.ts` | `which` — resolve command to path (built-ins: `/usr/bin/<name>`, `.jsh` scripts: actual VFS path) |
 | `zip-command.ts` | `zip` — create archives |

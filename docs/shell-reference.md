@@ -6,7 +6,7 @@ Complete reference for SLICC's shell capabilities, including supplemental comman
 
 ## Overview
 
-SLICC uses `just-bash` (WASM Bash interpreter v2.11.7) as its core shell runtime. This provides 78+ standard Unix commands plus 15+ custom supplemental commands and auto-discovered `.jsh` script commands.
+SLICC uses `just-bash` (WASM Bash interpreter v2.11.7) as its core shell runtime. This provides 78+ standard Unix commands plus 16+ custom supplemental commands and auto-discovered `.jsh` script commands.
 
 **Entry point**: Via the `bash` agent tool. All shell features available to agents.
 
@@ -20,6 +20,7 @@ Custom commands implemented in TypeScript and registered in just-bash.
 |---------|------|-------------|-----------------|
 | **commands** | `help-command.ts` | List all available commands (built-ins + .jsh) | None |
 | **which** | `which-command.ts` | Resolve a command path | `<command>` — returns `/usr/bin/<name>` or VFS path |
+| **uname** | `uname-command.ts` | Print the current browser user agent | None |
 | **open** | `open-command.ts` | Open URL in new tab or download file | `<url>` — navigates browser tab |
 | **imgcat** | `imgcat-command.ts` | Display image inline in terminal | `<path>` — base64 + ansi escape codes |
 | **zip** | `zip-command.ts` | Create ZIP archive | `<archive.zip> <file1> [file2...]` |
@@ -44,6 +45,9 @@ commands
 # Resolve a command path
 which node
 # Output: /usr/bin/node
+
+# Print the current browser user agent
+uname
 
 # Open a URL
 open https://example.com
