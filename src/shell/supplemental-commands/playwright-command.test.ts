@@ -274,12 +274,44 @@ describe('playwright-cli snapshot', () => {
     expect(fs.writeFile).toHaveBeenCalledWith('/tmp/snap.txt', expect.any(String));
   });
 
+  it('skips Chrome internal UI tabs when auto-selecting a target', async () => {
+    (browser.listPages as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { targetId: 'tab-omnibox', title: 'Omnibox Popup', url: 'chrome://new-tab-page/', active: true },
+      { targetId: 'tab-1', title: 'Test Page', url: 'https://example.com' },
+    ]);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['snapshot'], {} as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(browser.attachToPage).toHaveBeenCalledWith('tab-1');
+    expect(browser.attachToPage).not.toHaveBeenCalledWith('tab-omnibox');
+  });
+
   it('fails with no tab available', async () => {
     (browser.listPages as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(['snapshot'], {} as any);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('No tab available');
+  });
+
+  it('ignores internal UI targets when auto-selecting a tab', async () => {
+    browser = createMockBrowser({
+      listPages: vi.fn().mockResolvedValue([
+        { targetId: 'popup', title: 'Omnibox Popup', url: 'chrome-search://local-omnibox-popup/local-omnibox-popup.html', type: 'page', attached: false, active: true },
+        { targetId: 'tab-1', title: 'Docs', url: 'https://example.com/docs', type: 'page', attached: false },
+      ]),
+    });
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
+      JSON.stringify({ url: 'https://example.com/docs', title: 'Docs' }),
+    );
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['snapshot'], {} as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(browser.attachToPage).toHaveBeenCalledWith('tab-1');
   });
 });
 
@@ -483,6 +515,38 @@ describe('playwright-cli tab management', () => {
     expect(result.stdout).toContain('https://example.com');
   });
 
+  it('tab-list filters Chrome internal UI targets and keeps only actionable tabs', async () => {
+    (browser.listPages as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { targetId: 'popup', title: 'Omnibox Popup', url: 'chrome-search://local-omnibox-popup/local-omnibox-popup.html', type: 'page', attached: false },
+      { targetId: 'settings', title: 'Settings', url: 'chrome://settings/', type: 'page', attached: false },
+      { targetId: 'docs', title: 'Docs', url: 'https://example.com/docs', type: 'page', attached: false },
+    ]);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['tab-list'], {} as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).not.toContain('Omnibox Popup');
+    expect(result.stdout).not.toContain('chrome://settings/');
+    expect(result.stdout).toContain('0: Docs (https://example.com/docs)');
+  });
+
+  it('tab-list excludes Chrome internal UI tabs', async () => {
+    (browser.listPages as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { targetId: 'tab-omnibox', title: 'Omnibox Popup', url: 'chrome://new-tab-page/' },
+      { targetId: 'tab-settings', title: 'Settings', url: 'chrome://settings/' },
+      { targetId: 'tab-1', title: 'Test Page', url: 'https://example.com' },
+    ]);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['tab-list'], {} as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Test Page');
+    expect(result.stdout).not.toContain('Omnibox Popup');
+    expect(result.stdout).not.toContain('chrome://settings/');
+  });
+
   it('tab-list shows no tabs when empty', async () => {
     (browser.listPages as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
@@ -503,6 +567,41 @@ describe('playwright-cli tab management', () => {
     const result = await cmd.execute(['tab-select', '99'], {} as any);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('out of range');
+  });
+
+  it('tab-select uses filtered indexes', async () => {
+    (browser.listPages as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { targetId: 'popup', title: 'Omnibox Popup', url: '', type: 'page', attached: false },
+      { targetId: 'tab-1', title: 'Settings', url: 'chrome://settings/', type: 'page', attached: false },
+      { targetId: 'tab-2', title: 'Docs', url: 'https://example.com/docs', type: 'page', attached: false },
+      { targetId: 'tab-3', title: 'Other Docs', url: 'https://example.com/other', type: 'page', attached: false },
+    ]);
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
+      JSON.stringify({ url: 'https://example.com/other', title: 'Other Docs' }),
+    );
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const selectResult = await cmd.execute(['tab-select', '1'], {} as any);
+    const snapshotResult = await cmd.execute(['snapshot'], {} as any);
+
+    expect(selectResult.exitCode).toBe(0);
+    expect(selectResult.stdout).toContain('Switched to tab 1: Other Docs');
+    expect(snapshotResult.exitCode).toBe(0);
+    expect(browser.attachToPage).toHaveBeenLastCalledWith('tab-3');
+  });
+
+  it('tab-select ignores Chrome internal UI tabs when indexing', async () => {
+    (browser.listPages as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { targetId: 'tab-omnibox', title: 'Omnibox Popup', url: 'chrome://new-tab-page/' },
+      { targetId: 'tab-1', title: 'Test Page', url: 'https://example.com' },
+      { targetId: 'tab-2', title: 'Other Page', url: 'https://other.example' },
+    ]);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['tab-select', '1'], {} as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Switched to tab 1: Other Page');
   });
 
   it('tab-close rejects malformed indexes without closing a tab', async () => {
@@ -531,6 +630,24 @@ describe('playwright-cli tab management', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Closed tab 1');
     expect(send).toHaveBeenCalledWith('Target.closeTarget', { targetId: 'tab-2' });
+  });
+
+  it('tab-close ignores internal UI targets when resolving indexes', async () => {
+    const send = vi.fn().mockResolvedValue({});
+    (browser.listPages as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { targetId: 'popup', title: 'Omnibox Popup', url: 'chrome-search://local-omnibox-popup/local-omnibox-popup.html', type: 'page', attached: false },
+      { targetId: 'tab-1', title: 'Settings', url: 'chrome://settings/', type: 'page', attached: false },
+      { targetId: 'tab-2', title: 'Docs', url: 'https://example.com/docs', type: 'page', attached: false },
+      { targetId: 'tab-3', title: 'Other Docs', url: 'https://example.com/other', type: 'page', attached: false },
+    ]);
+    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue({ send });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['tab-close', '1'], {} as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Closed tab 1');
+    expect(send).toHaveBeenCalledWith('Target.closeTarget', { targetId: 'tab-3' });
   });
 
   it('tab-new opens a new tab', async () => {

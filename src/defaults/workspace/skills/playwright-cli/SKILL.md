@@ -169,7 +169,7 @@ This shows the full chronological log of all browser commands, their results, an
 - After `click`, `fill`, `goto`, `go-back`, `go-forward`, `reload`, `select`, `check`, `uncheck`, `drag`, or `dialog-*`, take a fresh `snapshot` before using refs again.
 - Unexpected JavaScript dialogs are auto-dismissed on attached pages so a stray `alert()` does not block the session forever.
 - Use `eval` for DOM operations not covered by built-in commands.
-- The SLICC app tab is automatically excluded — you can't accidentally interact with it.
+- The SLICC app tab and Chrome internal UI tabs (for example `Omnibox Popup` / `chrome://...`) are automatically excluded from normal tab selection and interaction.
 - The current tab is auto-selected. Use `tab-select` to switch between multiple tabs.
 - `fill` clears and types into regular inputs, textareas, and `contenteditable` elements.
 - Screenshots default to `/tmp/screenshot-<timestamp>.png`. Use `--filename=path` to save elsewhere.

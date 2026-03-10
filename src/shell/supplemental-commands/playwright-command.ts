@@ -7,7 +7,7 @@
 
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
-import type { BrowserAPI } from '../../cdp/index.js';
+import type { BrowserAPI, PageInfo } from '../../cdp/index.js';
 import { HarRecorder } from '../../cdp/index.js';
 import type { AccessibilityNode } from '../../cdp/types.js';
 import { FsError, type VirtualFS } from '../../fs/index.js';
@@ -322,13 +322,36 @@ function isAppTab(state: PlaywrightState, targetId: string): boolean {
   return targetId === state.appTabId;
 }
 
+function isChromeInternalUiTarget(page: PageInfo): boolean {
+  const url = page.url.trim();
+  const title = page.title.trim();
+
+  return title === 'Omnibox Popup'
+    || url.startsWith('chrome://')
+    || url.startsWith('chrome-search://')
+    || url.startsWith('chrome-untrusted://')
+    || url.startsWith('devtools://')
+    || (url.length === 0 && /popup$/i.test(title));
+}
+
+function isActionablePage(state: PlaywrightState, page: PageInfo): boolean {
+  return !isAppTab(state, page.targetId) && !isChromeInternalUiTarget(page);
+}
+
+async function getActionablePages(
+  browser: BrowserAPI,
+  state: PlaywrightState,
+): Promise<PageInfo[]> {
+  await resolveAppTabId(browser, state);
+  return (await browser.listPages()).filter((page) => isActionablePage(state, page));
+}
+
 /** Ensure we have a current target; auto-selects the active tab if needed. */
 async function ensureTarget(
   browser: BrowserAPI,
   state: PlaywrightState,
 ): Promise<string | null> {
-  await resolveAppTabId(browser, state);
-  const pages = (await browser.listPages()).filter((p) => !isAppTab(state, p.targetId));
+  const pages = await getActionablePages(browser, state);
   if (pages.length === 0) {
     state.currentTarget = null;
     return null;
@@ -780,10 +803,7 @@ export function createPlaywrightCommand(
         }
 
         case 'tab-list': {
-          await resolveAppTabId(browser, state);
-          const pages = (await browser.listPages()).filter(
-            (p) => !isAppTab(state, p.targetId),
-          );
+          const pages = await getActionablePages(browser, state);
           if (pages.length === 0) {
             result = { stdout: 'No tabs open\n', stderr: '', exitCode: 0 }; break;
           }
@@ -799,10 +819,7 @@ export function createPlaywrightCommand(
             result = { stdout: '', stderr: 'tab-select requires an index\n', exitCode: 1 }; break;
           }
           const index = parseInt(positional[0], 10);
-          await resolveAppTabId(browser, state);
-          const pages = (await browser.listPages()).filter(
-            (p) => !isAppTab(state, p.targetId),
-          );
+          const pages = await getActionablePages(browser, state);
           if (index < 0 || index >= pages.length) {
             result = { stdout: '', stderr: `Tab index ${index} out of range (0-${pages.length - 1})\n`, exitCode: 1 }; break;
           }
@@ -822,10 +839,7 @@ export function createPlaywrightCommand(
             if (index === null) {
               result = { stdout: '', stderr: `Invalid tab index "${positional[0]}"\n`, exitCode: 1 }; break;
             }
-            await resolveAppTabId(browser, state);
-            const pages = (await browser.listPages()).filter(
-              (p) => !isAppTab(state, p.targetId),
-            );
+            const pages = await getActionablePages(browser, state);
             if (index < 0 || index >= pages.length) {
               result = { stdout: '', stderr: `Tab index ${index} out of range\n`, exitCode: 1 }; break;
             }
