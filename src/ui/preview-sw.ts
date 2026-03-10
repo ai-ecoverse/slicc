@@ -3,10 +3,10 @@
  *
  * Two modes:
  * 1. /preview/* requests — always intercepted, VFS path = pathname minus "/preview"
- * 2. EDS project mode — when an ?edsRoot= query parameter is present on a /preview/
- *    HTML request, the project root is extracted and stored. Subsequent root-relative
- *    requests (/styles/styles.css, /scripts/aem.js, /blocks/...) resolve against
- *    the project root. This emulates `aem up` for EDS previews.
+ * 2. Project serve mode — when a ?projectRoot= query parameter is present on a
+ *    /preview/ HTML request, the project root is extracted and stored. Subsequent
+ *    root-relative requests (/styles/, /scripts/, etc.) resolve against the project
+ *    root. This emulates a local dev server for any framework (EDS, Next.js, etc.).
  *
  * Built as a separate entry point (not bundled with the main app).
  * Reads directly from LightningFS IndexedDB (same DB as VirtualFS).
@@ -20,10 +20,10 @@ const DB_NAME = 'slicc-fs';
 let lfs: FS.PromisifiedFS | null = null;
 
 /**
- * Active EDS project root in VFS (e.g., "/shared/vibemigrated").
+ * Active project root in VFS (e.g., "/shared/my-project").
  * When set, root-relative requests resolve against this path.
  */
-let edsProjectRoot: string | null = null;
+let projectRoot: string | null = null;
 
 function getLFS(): FS.PromisifiedFS {
   if (!lfs) {
@@ -103,8 +103,8 @@ sw.addEventListener('activate', (event) => {
 });
 
 /**
- * Paths that should NOT be intercepted in EDS mode — they belong to
- * the slicc app itself (Vite HMR, API endpoints, slicc UI assets).
+ * Paths that should NOT be intercepted in project serve mode — they
+ * belong to the slicc app itself (Vite HMR, API endpoints, UI assets).
  */
 function isSliccAppPath(pathname: string): boolean {
   return pathname.startsWith('/@') ||
@@ -120,20 +120,19 @@ sw.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
   // Skip cross-origin requests — let them pass through to the network.
-  // Without this, external resources (Typekit fonts, Google Fonts, CDN
-  // images) get intercepted and served as 404 from VFS.
+  // Without this, external resources (fonts, CDN images) get intercepted
+  // and served as 404 from VFS.
   if (url.origin !== sw.location.origin) return;
 
   // Mode 1: /preview/* requests — always serve from VFS
   if (url.pathname.startsWith('/preview/')) {
-    // Check for edsRoot query parameter — set project root from the page URL
-    // itself, eliminating the postMessage race condition. The HTML page is
-    // always the first request, so edsProjectRoot is set before any
-    // sub-requests (scripts, styles, blocks) arrive.
-    const edsRoot = url.searchParams.get('edsRoot');
-    if (edsRoot) {
-      edsProjectRoot = edsRoot;
-      console.log('[preview-sw] EDS project root (from URL):', edsProjectRoot);
+    // Check for projectRoot query parameter — set project root from the
+    // page URL itself. The HTML page is always the first request, so
+    // projectRoot is set before any sub-requests (scripts, styles) arrive.
+    const root = url.searchParams.get('projectRoot');
+    if (root) {
+      projectRoot = root;
+      console.log('[preview-sw] Project root:', projectRoot);
     }
 
     const vfsPath = url.pathname.slice('/preview'.length);
@@ -141,9 +140,9 @@ sw.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Mode 2: EDS project mode — resolve root-relative paths against project root
-  if (edsProjectRoot && !isSliccAppPath(url.pathname)) {
-    const vfsPath = edsProjectRoot + url.pathname;
+  // Mode 2: Project serve mode — resolve root-relative paths against project root
+  if (projectRoot && !isSliccAppPath(url.pathname)) {
+    const vfsPath = projectRoot + url.pathname;
     event.respondWith(handlePreviewRequest(vfsPath));
   }
 });

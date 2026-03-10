@@ -455,7 +455,7 @@ Write `/shared/{repo-name}/drafts/{page-path}-preview.html`:
 Serve and verify:
 ```json
 { "action": "serve", "directory": "/shared/{repo-name}",
-  "entry": "drafts/{page-path}-preview.html", "edsProject": true }
+  "entry": "drafts/{page-path}-preview.html", "projectServe": true }
 ```
 
 Wait for all blocks to load before screenshotting. The page has header

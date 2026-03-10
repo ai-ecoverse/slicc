@@ -103,7 +103,7 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
       'screenshot (targetId?, path?, fullPage?, selector? — requires snapshot first; if path is given, saves PNG to VFS), ' +
       'evaluate (expression, targetId?), click (ref or selector, targetId? — use refs like "e5" from snapshot), type (text, targetId?), ' +
       'evaluate_persistent (expression — runs JS in a persistent blank tab that preserves variables across calls, no targetId needed), ' +
-      'serve (directory, entry?, edsProject? — serves VFS directory as a web app in a new browser tab via preview service worker; set edsProject:true for EDS sites so root-relative paths like /styles/ and /blocks/ resolve correctly), ' +
+      'serve (directory, entry?, projectServe? — serves VFS directory as a web app in a new browser tab via preview service worker; set projectServe:true to enable root-relative path resolution so /styles/, /scripts/, etc. resolve from the project root — emulates a local dev server), ' +
       'show_image (path — displays an image from VFS inline in the chat; use this when the user asks to see an image file).',
     inputSchema: {
       type: 'object',
@@ -153,9 +153,9 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
           type: 'string',
           description: 'Entry file within the directory (for "serve" action). Defaults to "index.html".',
         },
-        edsProject: {
+        projectServe: {
           type: 'boolean',
-          description: 'Set to true for EDS projects (for "serve" action). Enables root-relative path resolution (/styles/, /scripts/, /blocks/) via the preview SW, emulating aem up.',
+          description: 'Set to true to enable project serve mode (for "serve" action). Root-relative paths (/styles/, /scripts/, etc.) resolve from the VFS project root, emulating a local dev server.',
         },
         filter: {
           type: 'string',
@@ -554,7 +554,8 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
           case 'serve': {
             const directory = input['directory'] as string;
             const entry = (input['entry'] as string) || 'index.html';
-            const edsProject = input['edsProject'] as boolean | undefined;
+            const useProjectServe = input['projectServe'] as boolean | undefined
+              || input['edsProject'] as boolean | undefined;
 
             if (!directory) return { content: 'serve requires a directory path', isError: true };
 
@@ -583,40 +584,35 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
             const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
             const normalizedDir = directory.startsWith('/') ? directory : '/' + directory;
 
-            // EDS project mode: set project root on the SW so root-relative
-            // paths (/styles/styles.css, /scripts/aem.js, /blocks/...)
-            // resolve against the VFS project directory — emulates `aem up`.
+            // Project serve mode: set project root on the SW so root-relative
+            // paths (/styles/, /scripts/, etc.) resolve against the VFS
+            // project directory — emulates a local dev server.
             //
             // The page MUST be under /preview/ so the SW controls it.
-            // Root-relative requests from a controlled page (e.g., /styles/styles.css)
-            // are intercepted by the SW and resolved against edsProjectRoot.
-            if (edsProject) {
-              const projectRoot = normalizedDir.endsWith('/') ? normalizedDir.slice(0, -1) : normalizedDir;
-              // Encode the project root in the URL as a query parameter.
-              // The SW reads edsRoot from the HTML request (the first request,
-              // guaranteed before sub-requests) to set edsProjectRoot. This
-              // eliminates the postMessage race condition where the page
-              // could start loading before the SW processes the message.
-              const edsPreviewPath = `/preview${normalizedDir}${normalizedDir.endsWith('/') ? '' : '/'}${entry}?edsRoot=${encodeURIComponent(projectRoot)}`;
-              const edsUrl = isExtension
-                ? chrome.runtime.getURL(edsPreviewPath)
-                : `http://localhost:3000${edsPreviewPath}`;
+            // Root-relative requests from a controlled page are intercepted
+            // by the SW and resolved against projectRoot.
+            if (useProjectServe) {
+              const root = normalizedDir.endsWith('/') ? normalizedDir.slice(0, -1) : normalizedDir;
+              const servePreviewPath = `/preview${normalizedDir}${normalizedDir.endsWith('/') ? '' : '/'}${entry}?projectRoot=${encodeURIComponent(root)}`;
+              const serveUrl = isExtension
+                ? chrome.runtime.getURL(servePreviewPath)
+                : `http://localhost:3000${servePreviewPath}`;
 
               appTabId = null;
               let newTargetId: string;
               try {
-                newTargetId = await browser.createPage(edsUrl);
+                newTargetId = await browser.createPage(serveUrl);
               } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
                 return { content: `Failed to create preview tab: ${msg}`, isError: true };
               }
 
               return {
-                content: `EDS preview: serving ${directory} in tab ${newTargetId}\nURL: ${edsUrl}\nProject root: ${projectRoot} — /styles/, /scripts/, /blocks/ resolve from VFS.\nUse snapshot, screenshot, evaluate, click etc. to interact with the page.`
+                content: `Project preview: serving ${directory} in tab ${newTargetId}\nURL: ${serveUrl}\nProject root: ${root} — root-relative paths resolve from VFS.\nUse snapshot, screenshot, evaluate, click etc. to interact with the page.`
               };
             }
 
-            // Standard (non-EDS) preview: serve under /preview/ path
+            // Standard preview: serve under /preview/ path
             const previewPath = `/preview${normalizedDir}${normalizedDir.endsWith('/') ? '' : '/'}${entry}`;
 
             const previewUrl = isExtension

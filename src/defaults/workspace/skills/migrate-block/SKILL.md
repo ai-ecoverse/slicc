@@ -237,7 +237,7 @@ worker doesn't enforce CSP, so the CSP meta can be omitted).
 
 ```json
 { "action": "serve", "directory": "{projectPath}",
-  "entry": "drafts/{blockName}-preview.html", "edsProject": true }
+  "entry": "drafts/{blockName}-preview.html", "projectServe": true }
 ```
 
 ### 6c. Verify EDS Framework Loaded
