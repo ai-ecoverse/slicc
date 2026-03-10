@@ -333,12 +333,13 @@ export class ScoopContext {
       }
 
       case 'tool_execution_end': {
-        const result = event.result as { content: Array<{ type: string; text?: string }> };
-        const textContent = result?.content
-          ?.filter((c) => c.type === 'text')
-          .map((c) => c.text)
-          .join('\n') ?? '';
-        this.callbacks.onToolEnd?.(event.toolName, textContent, event.isError);
+        const result = event.result as { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> };
+        const parts: string[] = [];
+        for (const c of result?.content ?? []) {
+          if (c.type === 'text' && c.text) parts.push(c.text);
+          if (c.type === 'image' && c.data && c.mimeType) parts.push(`<img:data:${c.mimeType};base64,${c.data}>`);
+        }
+        this.callbacks.onToolEnd?.(event.toolName, parts.join('\n'), event.isError);
         break;
       }
 
