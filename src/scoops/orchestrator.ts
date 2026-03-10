@@ -200,15 +200,20 @@ export class Orchestrator {
     this.lickManager = lickManager;
   }
 
-  /** Register a new scoop */
+  /** Register a new scoop. Initialization is non-blocking — the scoop
+   *  starts as 'initializing' and becomes 'ready' in the background.
+   *  `sendPrompt` already handles this by waiting for 'ready' status. */
   async registerScoop(scoop: RegisteredScoop): Promise<void> {
     await db.saveScoop(scoop);
     this.scoops.set(scoop.jid, scoop);
     this.messageQueues.set(scoop.jid, []);
     log.info('Scoop registered', { jid: scoop.jid, name: scoop.name });
 
-    // Auto-initialize the scoop context
-    await this.createScoopTab(scoop.jid);
+    // Fire-and-forget: init runs in background. sendPrompt waits if needed.
+    this.createScoopTab(scoop.jid).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.error('Scoop init failed', { jid: scoop.jid, error: msg });
+    });
   }
 
   /** Unregister a scoop. Throws if the scoop has active licks (webhooks/cron tasks). */
@@ -685,7 +690,7 @@ export class Orchestrator {
           });
         }
       }
-    }, 2000);
+    }, 500);
   }
 
   /** Stop the message polling loop */

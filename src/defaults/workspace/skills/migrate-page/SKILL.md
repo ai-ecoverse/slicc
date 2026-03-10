@@ -281,22 +281,46 @@ for user review and debugging. Never call `drop_scoop` during migration.
 during Phase 4 assembly. The cone extracts default-content text from
 the source page and writes it inline in the assembled .plain.html.
 
-```
-scoop_scoop({ "name": "hero-block" })
-feed_scoop({ "name": "hero-block-scoop", "prompt": "<FULL PROMPT BELOW>" })
-```
+### PERFORMANCE: Batch All Scoop Operations
 
-### Scoop Delegation Pattern
+Scoop creation and feeding are the biggest time sinks because each tool
+call requires an LLM turn. **Minimize the number of LLM turns** by
+batching operations:
 
-**Before creating scoops**, read the UPDATED `head.html` (with font links):
-
+**Step 1 — Read head.html** (1 tool call):
 ```
 read_file({ "path": "/shared/{repo-name}/head.html" })
 ```
 
-Each scoop has a `migrate-block` skill in its workspace that defines the
-complete block migration process. The cone's job is to pass **parameters**,
-not relay process instructions. The skill is the source of truth.
+**Step 2 — Create ALL scoops in a SINGLE response** (N tool calls, 1 LLM turn):
+Call `scoop_scoop` for every block in the same response. Scoop init runs
+in the background — don't wait for each to complete before creating the next.
+```
+scoop_scoop({ "name": "hero-block" })
+scoop_scoop({ "name": "cards-block" })
+scoop_scoop({ "name": "nav-bar-block" })
+scoop_scoop({ "name": "footer-block" })
+... all in ONE response
+```
+
+**Step 3 — Feed ALL scoops in a SINGLE response** (N tool calls, 1 LLM turn):
+Call `feed_scoop` for every scoop in the same response. Each feed is
+fire-and-forget — scoops start processing in parallel immediately.
+```
+feed_scoop({ "name": "hero-block-scoop", "prompt": "..." })
+feed_scoop({ "name": "cards-block-scoop", "prompt": "..." })
+feed_scoop({ "name": "nav-bar-block-scoop", "prompt": "..." })
+feed_scoop({ "name": "footer-block-scoop", "prompt": "..." })
+... all in ONE response
+```
+
+This reduces scoop setup from ~12 LLM turns to ~3 (read + create all + feed all).
+
+### Scoop Delegation Pattern
+
+Each scoop has a `migrate-block` (or `migrate-header`) skill in its
+workspace. The cone passes **parameters only** — the skill is the
+source of truth for the process.
 
 ### feed_scoop Prompt Template
 
