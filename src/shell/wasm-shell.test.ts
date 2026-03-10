@@ -2,8 +2,11 @@
  * Tests for WasmShell utility functions.
  */
 
-import { describe, it, expect } from 'vitest';
-import { isTextContentType } from './wasm-shell.js';
+import 'fake-indexeddb/auto';
+import { beforeEach, describe, expect, it } from 'vitest';
+import type { BrowserAPI } from '../cdp/index.js';
+import { VirtualFS } from '../fs/index.js';
+import { isTextContentType, WasmShell } from './wasm-shell.js';
 
 describe('isTextContentType', () => {
   it('identifies text/* as text', () => {
@@ -72,5 +75,62 @@ describe('isTextContentType', () => {
     expect(isTextContentType('Application/JSON')).toBe(true);
     expect(isTextContentType('IMAGE/JPEG')).toBe(false);
     expect(isTextContentType('Text/HTML')).toBe(true);
+  });
+});
+
+describe('WasmShell playwright command discoverability', () => {
+  let fs: VirtualFS;
+  let dbCounter = 0;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({
+      dbName: `test-wasm-shell-${dbCounter++}`,
+      wipe: true,
+    });
+  });
+
+  it('exposes playwright aliases through which, commands, and /usr/bin when browserAPI is provided', async () => {
+    const shell = new WasmShell({
+      fs,
+      browserAPI: {} as BrowserAPI,
+    });
+
+    const whichResult = await shell.executeCommand('which playwright-cli playwright puppeteer');
+    expect(whichResult.exitCode).toBe(0);
+    expect(whichResult.stdout).toContain('/usr/bin/playwright-cli');
+    expect(whichResult.stdout).toContain('/usr/bin/playwright');
+    expect(whichResult.stdout).toContain('/usr/bin/puppeteer');
+
+    const commandsResult = await shell.executeCommand('commands | grep playwright');
+    expect(commandsResult.exitCode).toBe(0);
+    expect(commandsResult.stdout).toContain('playwright');
+    expect(commandsResult.stdout).toContain('playwright-cli');
+
+    const usrBinResult = await shell.executeCommand('ls /usr/bin | grep playwright');
+    expect(usrBinResult.exitCode).toBe(0);
+    expect(usrBinResult.stdout).toContain('playwright');
+    expect(usrBinResult.stdout).toContain('playwright-cli');
+  });
+
+  it('keeps playwright aliases discoverable even without browserAPI', async () => {
+    const shell = new WasmShell({ fs });
+
+    const whichResult = await shell.executeCommand('which playwright-cli');
+    expect(whichResult.exitCode).toBe(0);
+    expect(whichResult.stdout).toContain('/usr/bin/playwright-cli');
+
+    const commandsResult = await shell.executeCommand('commands | grep playwright');
+    expect(commandsResult.exitCode).toBe(0);
+    expect(commandsResult.stdout).toContain('playwright-cli');
+    expect(commandsResult.stdout).toContain('puppeteer');
+
+    const usrBinResult = await shell.executeCommand('ls /usr/bin | grep playwright');
+    expect(usrBinResult.exitCode).toBe(0);
+    expect(usrBinResult.stdout).toContain('playwright');
+    expect(usrBinResult.stdout).toContain('playwright-cli');
+
+    const openResult = await shell.executeCommand('playwright-cli open https://example.com');
+    expect(openResult.exitCode).toBe(1);
+    expect(openResult.stderr).toContain('browser APIs are unavailable');
   });
 });

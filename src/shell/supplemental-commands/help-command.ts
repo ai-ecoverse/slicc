@@ -1,5 +1,6 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { PLAYWRIGHT_COMMAND_NAMES } from './playwright-command.js';
 
 const COMMAND_CATEGORIES = new Map<string, string[]>([
   ['File operations', ['ls', 'cat', 'head', 'tail', 'wc', 'touch', 'mkdir', 'rm', 'cp', 'mv', 'ln', 'chmod', 'stat', 'readlink']],
@@ -8,13 +9,13 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
   ['Navigation & paths', ['pwd', 'basename', 'dirname', 'tree', 'du', 'cd']],
   ['Archives', ['zip', 'unzip', 'pdftk', 'pdf']],
   ['Media', ['convert', 'magick']],
-  ['Environment & shell', ['echo', 'printf', 'env', 'printenv', 'export', 'alias', 'unalias', 'history', 'clear', 'true', 'false', 'bash', 'sh', 'commands', 'which']],
+  ['Environment & shell', ['echo', 'printf', 'env', 'printenv', 'export', 'alias', 'unalias', 'history', 'clear', 'true', 'false', 'bash', 'sh', 'commands', 'which', 'uname']],
   ['Data processing', ['xargs', 'jq', 'base64', 'date']],
   ['Network', ['curl', 'wget', 'html-to-markdown']],
   ['Version control', ['git']],
   ['Languages', ['node', 'python', 'python3', 'sqlite3']],
   ['Skills', ['skill', 'upskill']],
-  ['Browser & UI', ['open', 'imgcat', 'webhook']],
+  ['Browser & UI', ['open', 'imgcat', ...PLAYWRIGHT_COMMAND_NAMES, 'webhook']],
   ['Filesystem', ['mount']],
 ]);
 

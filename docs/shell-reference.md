@@ -6,7 +6,7 @@ Complete reference for SLICC's shell capabilities, including supplemental comman
 
 ## Overview
 
-SLICC uses `just-bash` (WASM Bash interpreter v2.11.7) as its core shell runtime. This provides 78+ standard Unix commands plus 15+ custom supplemental commands and auto-discovered `.jsh` script commands.
+SLICC uses `just-bash` (WASM Bash interpreter v2.11.7) as its core shell runtime. This provides 78+ standard Unix commands plus 16+ custom supplemental commands and auto-discovered `.jsh` script commands.
 
 **Entry point**: Via the `bash` agent tool. All shell features available to agents.
 
@@ -20,6 +20,7 @@ Custom commands implemented in TypeScript and registered in just-bash.
 |---------|------|-------------|-----------------|
 | **commands** | `help-command.ts` | List all available commands (built-ins + .jsh) | None |
 | **which** | `which-command.ts` | Resolve a command path | `<command>` — returns `/usr/bin/<name>` or VFS path |
+| **uname** | `uname-command.ts` | Print the current browser user agent | None |
 | **open** | `open-command.ts` | Open URL in new tab or download file | `<url>` — navigates browser tab |
 | **imgcat** | `imgcat-command.ts` | Display image inline in terminal | `<path>` — base64 + ansi escape codes |
 | **zip** | `zip-command.ts` | Create ZIP archive | `<archive.zip> <file1> [file2...]` |
@@ -31,6 +32,7 @@ Custom commands implemented in TypeScript and registered in just-bash.
 | **crontask** | `crontask-command.ts` | Schedule cron jobs that dispatch licks | `crontask add <name> "0 9 * * *" scoop-name "instructions..."` |
 | **pdftk / pdf** | `pdftk-command.ts` | PDF manipulation | `pdf burst input.pdf`, `pdf cat input.pdf output output.pdf` |
 | **convert / magick** | `convert-command.ts` | Image conversion (ImageMagick style) | `convert -resize 800x600 input.jpg output.jpg` |
+| **playwright-cli / playwright / puppeteer** | `playwright-command.ts` | Browser automation shell CLI | `snapshot`, `click <ref>`, `cookie-set`, `tab-list` |
 | **upskill** | `upskill-command.ts` | Install skills from GitHub/ClawHub | `upskill owner/repo`, `upskill clawhub:name`, `upskill search "query"` |
 | **git** | (isomorphic-git) | Full git support | `git clone`, `git commit`, `git push`, etc. |
 
@@ -43,6 +45,9 @@ commands
 # Resolve a command path
 which node
 # Output: /usr/bin/node
+
+# Print the current browser user agent
+uname
 
 # Open a URL
 open https://example.com
@@ -59,12 +64,46 @@ zip archive.zip file1.txt file2.txt
 # Query SQLite
 sqlite3 -c "SELECT COUNT(*) FROM users" database.db
 
+# Browse with playwright-cli
+playwright-cli open https://example.com
+playwright-cli snapshot
+
 # Display image
 imgcat screenshot.png
 
 # Schedule a cron job
 crontask add "daily-backup" "0 2 * * *" backup-scoop "Backup all files"
 ```
+
+---
+
+## playwright-cli
+
+Browser automation is also exposed as shell commands: `playwright-cli`, `playwright`, and `puppeteer`.
+
+- **Shared state across aliases**: all three names operate on the same current tab, snapshot cache, cookies/storage context, and `/.playwright/session.md` history.
+- **Default targeting**: `open` / `tab-new` open in the background by default, but if there is no current browser target yet, the first opened tab becomes current so `snapshot` works immediately.
+- **Fresh refs required**: `click`, `fill`, `goto`, `go-back`, `go-forward`, `reload`, and similar state-changing commands invalidate prior snapshot refs. After history navigation or reload, run `snapshot` again before using refs.
+- **Cookie convenience forms**: `cookie-set <name> <value>` and `cookie-delete <name>` use the current page URL when `--domain` and `--path` are omitted.
+- **Unexpected dialogs**: attached pages auto-dismiss unexpected JavaScript dialogs so a stray `alert()` or similar modal does not stall automation indefinitely.
+
+### Common flow
+
+```bash
+playwright-cli open https://example.com
+playwright-cli snapshot
+playwright-cli click e5
+playwright-cli snapshot
+playwright-cli cookie-set theme dark
+```
+
+### Session files
+
+- `/.playwright/session.md` — chronological command log
+- `/.playwright/snapshots/` — saved accessibility snapshots for state-changing commands that auto-snapshot
+- `/.playwright/screenshots/` — saved screenshots
+
+Use the skill doc at `src/defaults/workspace/skills/playwright-cli/SKILL.md` for the full command list and operating guidance.
 
 ---
 

@@ -100,7 +100,7 @@ Execute shell commands in a full Unix-like environment (just-bash 2.11.7).
 |----------|-------|
 | **Name** | `bash` |
 | **Input** | `{ command: string }` |
-| **Output** | `{ content: stdout+stderr, isError: exitCode !== 0 }` |
+| **Output** | `{ content: stdout+stderr, isError }` |
 
 **Schema**:
 
@@ -120,7 +120,12 @@ Execute shell commands in a full Unix-like environment (just-bash 2.11.7).
 - Custom commands: `git`, `node -e`, `python3 -c`, `sqlite3`, `zip/unzip`, `webhook`, `crontask`, `convert`, `which`
 - Networking: Full `curl` with HTTP methods, headers, auth, body
 - Text processing: grep, rg, sed, awk, cut, tr, sort, uniq, wc, head, tail
+- Search is shell-native: use `grep`, `find`, and `rg` through `bash` rather than separate agent tools
 - Data: jq (JSON), base64, md5sum, sha256sum
+
+**Exit status handling**:
+- Most non-zero shell exit codes are returned as `isError: true`
+- Expected no-match `grep`/`egrep`/`fgrep`/`rg` exits (`1` with empty stderr) stay non-errors so agents can check absence without retrying
 
 **Examples**:
 
@@ -333,28 +338,31 @@ console.log(result);
 
 ---
 
-### find / search
+### CLI search commands (via `bash`)
 
-**File**: `src/tools/search-tools.ts`
+Search remains documented here because it is part of the CLI/shell surface area, but these are **not** separate agent tools. Agents use them by calling the `bash` tool with standard shell commands.
 
-Search for files or text patterns.
+| Command | Purpose | Example |
+|---------|---------|---------|
+| `find` | Find files/directories by name, type, or path | `find /workspace -name "*.js" -type f` |
+| `grep` / `egrep` / `fgrep` | Search line-oriented text output | `grep -R "TODO" /workspace/src` |
+| `rg` | Fast recursive text search | `rg "function main" /workspace/src --type ts` |
 
-| Property | Value |
-|----------|-------|
-| **Name** | `find`, `search` |
+**Behavior notes**:
+- Use these through `bash`; there is no dedicated `find` or `search` agent tool
+- `grep` and `rg` return exit code `1` when no matches are found; the `bash` tool preserves that output without surfacing it as an agent error when stderr is empty
 
-**find** (`find` tool in bash):
-
-```bash
-find /workspace -name "*.js" -type f
-find /workspace -type d -name "node_modules"
-```
-
-**search** (ripgrep wrapper):
+**Examples**:
 
 ```bash
-rg "TODO" /workspace --type js
-rg -A 5 "function main" /src
+# Find TypeScript files
+find /workspace -name "*.ts" -type f
+
+# Search for TODOs
+grep -R "TODO" /workspace/src
+
+# Recursive code search with ripgrep
+rg "createBashTool" /workspace/src --type ts
 ```
 
 ---
@@ -459,7 +467,6 @@ Cone-only. Update the shared global memory file (`/shared/CLAUDE.md`).
 | edit_file | ✓ | ✓ (restricted) |
 | browser | ✓ | ✓ |
 | javascript | ✓ | ✓ |
-| find / search | ✓ | ✓ (restricted) |
 | **send_message** | ✓ | ✓ |
 | **list_scoops** | ✓ | ✗ |
 | **scoop_scoop** | ✓ | ✗ |

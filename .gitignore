@@ -2,7 +2,7 @@ node_modules/
 dist/
 *.tsbuildinfo
 .DS_STORE
-workspace/
+/workspace/
 coverage/
 .env
 .env.local

@@ -96,6 +96,7 @@ interface ChromeAPI {
   tabs: {
     query(queryInfo: Record<string, unknown>): Promise<ChromeTab[]>;
     create(properties: { url?: string; active?: boolean }): Promise<{ id: number }>;
+    remove(tabId: number): Promise<void>;
   };
 }
 

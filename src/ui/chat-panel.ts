@@ -6,7 +6,12 @@
  */
 
 import type { AgentHandle, AgentEvent, ChatMessage, ToolCall } from './types.js';
-import { renderMessageContent, renderToolInput, escapeHtml } from './message-renderer.js';
+import {
+  renderAssistantMessageContent,
+  renderMessageContent,
+  renderToolInput,
+  escapeHtml,
+} from './message-renderer.js';
 import { SessionStore } from './session-store.js';
 import { createLogger } from '../core/logger.js';
 import { VoiceInput, getVoiceAutoSend, getVoiceLang } from './voice-input.js';
@@ -38,6 +43,12 @@ const TOOL_ICONS: Record<string, string> = {
 /** Get icon for a tool */
 function getToolIcon(toolName: string): string {
   return TOOL_ICONS[toolName] ?? '?';
+}
+
+function renderChatMessageContent(msg: ChatMessage): string {
+  return msg.role === 'assistant'
+    ? renderAssistantMessageContent(msg.content)
+    : renderMessageContent(msg.content);
 }
 
 export class ChatPanel {
@@ -765,7 +776,7 @@ export class ChatPanel {
 
       const contentEl = document.createElement('div');
       contentEl.className = 'msg__content';
-      contentEl.innerHTML = renderMessageContent(msg.content);
+      contentEl.innerHTML = renderChatMessageContent(msg);
       details.appendChild(contentEl);
 
       el.appendChild(details);
@@ -773,7 +784,7 @@ export class ChatPanel {
       // Normal expanded content
       const contentEl = document.createElement('div');
       contentEl.className = 'msg__content';
-      contentEl.innerHTML = renderMessageContent(msg.content);
+      contentEl.innerHTML = renderChatMessageContent(msg);
       if (msg.isStreaming) {
         const cursor = document.createElement('span');
         cursor.className = 'streaming-cursor';

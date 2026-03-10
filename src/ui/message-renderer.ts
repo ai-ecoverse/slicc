@@ -106,6 +106,41 @@ function codeHandler(_state: unknown, node: Code): Element {
   };
 }
 
+function ensureSafeLinkRel(): string {
+  return 'noopener noreferrer';
+}
+
+function addNewTabToLinks() {
+  return (tree: unknown) => {
+    visitNode(tree);
+  };
+}
+
+function visitNode(node: unknown): void {
+  if (!node || typeof node !== 'object') return;
+
+  const hastNode = node as {
+    type?: string;
+    tagName?: string;
+    properties?: Record<string, unknown>;
+    children?: unknown[];
+  };
+
+  if (hastNode.type === 'element' && hastNode.tagName === 'a' && hastNode.properties?.href) {
+    hastNode.properties = {
+      ...hastNode.properties,
+      target: '_blank',
+      rel: ensureSafeLinkRel(),
+    };
+  }
+
+  if (Array.isArray(hastNode.children)) {
+    for (const child of hastNode.children) {
+      visitNode(child);
+    }
+  }
+}
+
 /**
  * Sanitize schema: extends the default (safe HTML subset) to also allow
  * - `span` with `class` — for tok-* syntax-highlighting spans
@@ -127,7 +162,21 @@ const processor = unified()
   .use(remarkRehype, { allowDangerousHtml: true, handlers: { code: codeHandler } })
   .use(rehypeRaw)                          // parse raw nodes (incl. our tok-* spans) into hast
   .use(rehypeSanitize, sanitizeSchema)     // strip XSS vectors, keep safe subset + tok-* spans
+  .use(addNewTabToLinks)                   // force safe new-tab behavior for rendered message links
   .use(rehypeStringify);
+
+const SURFACED_ERROR_PARAGRAPH_RE = /<p><strong>Error:<\/strong>\s*([\s\S]*?)<\/p>/g;
+
+function renderBaseMessageContent(content: string): string {
+  return String(processor.processSync(content));
+}
+
+function renderSurfacedErrorBlocks(html: string): string {
+  return html.replace(
+    SURFACED_ERROR_PARAGRAPH_RE,
+    (_match, body: string) => `<div class="msg__error" role="alert"><div class="msg__error-label">Error</div><div class="msg__error-body">${body}</div></div>`,
+  );
+}
 
 /**
  * Render a message content string to HTML.
@@ -135,7 +184,15 @@ const processor = unified()
  * tables, strikethrough, task lists, autolinks, and more.
  */
 export function renderMessageContent(content: string): string {
-  return String(processor.processSync(content));
+  return renderBaseMessageContent(content);
+}
+
+/**
+ * Render assistant message content, upgrading surfaced runtime/provider errors
+ * into dedicated error blocks rather than normal prose paragraphs.
+ */
+export function renderAssistantMessageContent(content: string): string {
+  return renderSurfacedErrorBlocks(renderBaseMessageContent(content));
 }
 
 /**

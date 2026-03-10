@@ -20,7 +20,7 @@ A browser-based coding agent that runs as a **Chrome extension** or with a thin 
 - :file_folder: **Virtual Filesystem** — OPFS + IndexedDB-backed filesystem right in the browser, with folder ZIP download
 - :shell: **WebAssembly Bash Shell** — real Bash via [just-bash](https://github.com/nicolo-ribaudo/just-bash) compiled to WASM
 - :git: **Git Support** — clone, commit, push, pull via [isomorphic-git](https://isomorphic-git.org/) (see [available commands](#git-commands))
-- :robot: **Browser Automation** — screenshots (full page / element / saved to VFS), inline image display, navigation, JS eval, element clicking via Chrome DevTools Protocol (chrome.debugger in extension, WebSocket in CLI). Auto-detects user's active tab. HAR recording with user-defined JS filters.
+- :robot: **Browser Automation** — screenshots (full page / element / saved to VFS), inline image display, navigation, JS eval, element clicking via Chrome DevTools Protocol (chrome.debugger in extension, WebSocket in CLI), plus `playwright-cli` / `playwright` / `puppeteer` shell commands for tab control, snapshots, cookies, storage, and HAR recording. Auto-detects user's active tab.
 - :earth_americas: **VFS Web Preview** — serve agent-created HTML/CSS/JS apps in real browser tabs via a Service Worker that reads directly from the virtual filesystem. The agent can build a UI, preview it, screenshot it, and iterate — all without leaving Chrome.
 - :art: **Image Processing** — `convert` command for resize, rotate, crop, and quality adjustment via ImageMagick WASM
 - :pencil2: **File Operations** — read, write, edit files with syntax-aware tools
@@ -28,6 +28,7 @@ A browser-based coding agent that runs as a **Chrome extension** or with a thin 
 - :globe_with_meridians: **Networking** — curl and fetch support with binary-safe downloads
 - :wrench: **JavaScript Tool** — sandboxed JS execution with VFS bridge and persistent context
 - :scroll: **JSH Scripts** — `.jsh` files anywhere on the VFS are auto-discovered as shell commands. Skills can ship executable scripts alongside `SKILL.md`. Scripts get Node-like globals (`process`, `console`, `fs`) and work in both CLI and extension mode
+- :package: **Drag-and-Drop Skill Imports** — drop a `.skill` archive anywhere in the window to unpack it into `/workspace/skills/{name}` with a visual overlay, path-safety checks, and toast feedback
 - :key: **Multi-Provider Auth** — Anthropic (direct), Azure AI Foundry, and AWS Bedrock with segmented control
 - :zap: **Real-Time Streaming** — responses stream token-by-token as Claude thinks
 - :floppy_disk: **Session Persistence** — conversations and files survive page reloads via IndexedDB
@@ -60,7 +61,7 @@ SLICC is a claw too, but one that lives entirely in the browser. Its messaging a
 
 Mario Zechner, creator of [Pi](https://github.com/badlogic/pi-mono) (the agent engine at SLICC's core), demonstrated that [you might not need MCP at all](https://mariozechner.at/posts/2025-11-02-what-if-you-dont-need-mcp/). His philosophy: "Bash is all you need." Frontier models already know bash. CLI tools compose naturally through pipes and redirection. MCP server definitions burn context tokens on ceremony.
 
-Pi ships with exactly four tools: `read`, `write`, `edit`, `bash`. SLICC adds one more — `browser` — because the browser is our operating system. Everything else is a shell command: `git`, `node`, `python3`, `webhook`, `crontask`, `skill`, `upskill`. No tool wrappers, no protocol adapters, no JSON schemas for things that already have man pages.
+Pi ships with exactly four tools: `read`, `write`, `edit`, `bash`. SLICC adds one more — `browser` — because the browser is our operating system. Everything else is a shell command: `git`, `node`, `python3`, `uname`, `webhook`, `crontask`, `skill`, `upskill`. No tool wrappers, no protocol adapters, no JSON schemas for things that already have man pages.
 
 Further reading:
 - [Pi: A Coding Agent](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/)
@@ -228,7 +229,7 @@ Source layout:
 | `src/core/` | Agent types, tool registry, context compaction, session management |
 | `src/tools/` | Tool implementations (file ops, search, browser, javascript) |
 | `src/fs/` | Virtual filesystem (IndexedDB/LightningFS) + RestrictedFS |
-| `src/shell/` | WebAssembly Bash shell + supplemental commands (node, python, sqlite, convert, skill, mount, webhook, which) + `.jsh` script discovery and execution |
+| `src/shell/` | WebAssembly Bash shell + supplemental commands (node, python, sqlite, convert, skill, mount, webhook, which, uname) + `.jsh` script discovery and execution |
 | `src/git/` | Git via isomorphic-git (clone, commit, push, pull, etc.) |
 | `src/cdp/` | Chrome DevTools Protocol client (WebSocket + chrome.debugger), HAR recorder |
 | `src/cli/` | CLI server — Chrome launch, CDP proxy, Express |

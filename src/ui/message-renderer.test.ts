@@ -3,7 +3,12 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { renderMessageContent, renderToolInput, escapeHtml } from './message-renderer.js';
+import {
+  renderAssistantMessageContent,
+  renderMessageContent,
+  renderToolInput,
+  escapeHtml,
+} from './message-renderer.js';
 
 describe('escapeHtml', () => {
   it('escapes HTML special characters', () => {
@@ -35,6 +40,36 @@ describe('renderMessageContent', () => {
   it('renders bold text', () => {
     const html = renderMessageContent('This is **bold** text');
     expect(html).toContain('<strong>bold</strong>');
+  });
+
+  it('renders links that open in a new tab with safe rel attributes', () => {
+    const html = renderMessageContent('[Example](https://example.com)');
+    expect(html).toContain('href="https://example.com"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+  });
+
+  it('applies new-tab behavior to sanitized raw HTML links', () => {
+    const html = renderMessageContent('<a href="https://example.com">Example</a>');
+    expect(html).toContain('href="https://example.com"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+  });
+
+  it('applies safe link attributes to GFM autolink bare URLs', () => {
+    const html = renderMessageContent('Visit https://example.com for details');
+    expect(html).toContain('href="https://example.com"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+  });
+
+  it('replaces author-supplied rel tokens on raw HTML links', () => {
+    const html = renderMessageContent('<a href="https://example.com" rel="opener external">Example</a>');
+    expect(html).toContain('href="https://example.com"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+    expect(html).not.toMatch(/\bopener\b/);
+    expect(html).not.toMatch(/\bexternal\b/);
   });
 
   it('renders italic text', () => {
@@ -118,6 +153,29 @@ describe('renderMessageContent', () => {
       const html = renderMessageContent('```js\nconst x = 1;\n```');
       expect(html).toContain('tok-keyword');
     });
+  });
+});
+
+describe('renderAssistantMessageContent', () => {
+  it('renders surfaced assistant errors as dedicated error blocks', () => {
+    const html = renderAssistantMessageContent(
+      '**Error:** Bedrock CAMP API error (503): {"message":"Bedrock is unable to process your request."}',
+    );
+
+    expect(html).toContain('class="msg__error"');
+    expect(html).toContain('class="msg__error-label">Error</div>');
+    expect(html).toContain('Bedrock CAMP API error (503)');
+    expect(html).not.toContain('<strong>Error:</strong>');
+  });
+
+  it('preserves normal assistant prose while upgrading appended surfaced errors', () => {
+    const html = renderAssistantMessageContent(
+      'Trying again now.\n\n**Error:** Provider timeout after 30s',
+    );
+
+    expect(html).toContain('<p>Trying again now.</p>');
+    expect(html).toContain('class="msg__error"');
+    expect(html).toContain('Provider timeout after 30s');
   });
 });
 
