@@ -388,3 +388,33 @@ describe('ScoopContext prompt queueing', () => {
     expect(callbacks.onError).toHaveBeenCalledWith('first failed');
   });
 });
+
+describe('ScoopContext clearMessages', () => {
+  let ctx: ScoopContext;
+  let callbacks: ScoopContextCallbacks;
+
+  beforeEach(() => {
+    callbacks = createMockCallbacks();
+    ctx = new ScoopContext(testScoop, callbacks, {} as any);
+  });
+
+  it('calls agent.clearMessages() when agent exists', () => {
+    const mockClearMessages = vi.fn();
+    injectMockAgent(ctx, async () => {});
+    (ctx as any).agent.clearMessages = mockClearMessages;
+
+    ctx.clearMessages();
+
+    expect(mockClearMessages).toHaveBeenCalled();
+  });
+
+  it('handles null agent gracefully (no throw)', () => {
+    // Don't inject a mock agent, so agent is null
+    expect((ctx as any).agent).toBeNull();
+
+    // Should not throw
+    expect(() => {
+      ctx.clearMessages();
+    }).not.toThrow();
+  });
+});

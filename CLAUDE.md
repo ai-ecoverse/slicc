@@ -72,14 +72,55 @@ Browser-based AI coding agent: a self-contained development environment where Cl
 
 ### Two Deployment Modes
 
-- **Chrome extension** (Manifest V3): Side panel UI with tabbed layout (Chat/Terminal/Files/Memory). Uses `chrome.debugger` API for browser automation. Built via `npm run build:extension` -> `dist/extension/`. Load as unpacked extension in `chrome://extensions`. Pyodide bundled for Python support (~13MB).
+- **Chrome extension** (Manifest V3): Three-layer architecture — **side panel** (pure UI), **service worker** (message relay + CDP proxy), **offscreen document** (agent engine). Agent work survives side panel close/reopen. Built via `npm run build:extension` -> `dist/extension/`. Load as unpacked extension in `chrome://extensions`. Pyodide bundled for Python support (~13MB).
 - **Standalone CLI**: Express server launches Chrome, proxies CDP over WebSocket. Resizable split layout with scoops panel + chat + terminal + files/memory. Built via `npm run build` -> `dist/ui/` + `dist/cli/`.
+
+### Extension Architecture (Three-Layer)
+
+```
+┌─────────────────────────┐
+│   Side Panel (UI only)  │  Connects/disconnects freely
+│   - Chat, Terminal,     │  Catches up on reopen via
+│     Files, Memory tabs  │  state snapshot from offscreen
+│   - OffscreenClient     │
+└───────────┬─────────────┘
+            │ chrome.runtime messages
+┌───────────┴─────────────┐
+│   Service Worker        │  Stateless relay + chrome.* proxy
+│   - Creates offscreen   │  - chrome.debugger proxy for CDP
+│   - Relays messages     │  - chrome.tabs queries
+│   - Forwards CDP events │
+└───────────┬─────────────┘
+            │ chrome.runtime messages
+┌───────────┴─────────────┐
+│   Offscreen Document    │  Long-lived agent engine
+│   - Orchestrator        │  Survives side panel close
+│   - ScoopContext(s)     │  All state in IndexedDB
+│   - VirtualFS + Shell   │
+│   - Tools (bash, files, │
+│     browser via proxy)  │
+│   - OffscreenBridge     │
+└─────────────────────────┘
+```
+
+Key files:
+- `src/extension/messages.ts` — Shared message types (Panel ↔ SW ↔ Offscreen)
+- `src/extension/service-worker.ts` — Message relay + CDP proxy
+- `src/extension/offscreen.ts` — Agent engine bootstrap
+- `src/extension/offscreen-bridge.ts` — Orchestrator ↔ message bridge
+- `src/cdp/offscreen-cdp-proxy.ts` — CDPTransport via chrome.runtime messages
+- `src/ui/offscreen-client.ts` — Side panel's interface to offscreen engine
+- `offscreen.html` — Offscreen document entry point
+
+**Chat Persistence (Single Source of Truth)**: The `browser-coding-agent` IndexedDB is the single source of truth for chat display messages. The offscreen bridge writes to it after every user message, response done, tool end, and incoming message via `SessionStore.saveMessages()`. The side panel reads from it via `switchToContext()` on reconnect — no buffer reconciliation needed. This is separate from `agent-sessions` DB (agent LLM history restored by `ScoopContext`) and `slicc-groups` DB (orchestrator routing messages).
+
+**Extension Entry Point**: In `src/ui/main.ts`, when extension mode is detected, `main()` delegates to `mainExtension()` which creates an `OffscreenClient` instead of a direct `Orchestrator`. The `OffscreenClient` provides an `AgentHandle` for the chat panel and an Orchestrator-compatible facade for scoops/memory/scoop-switcher panels.
 
 ### Three Build Targets
 
 - **Browser bundle** (tsconfig.json): Everything in src/ except src/cli/. Bundled by Vite, module resolution: bundler. Runs in Chrome.
 - **CLI server** (tsconfig.cli.json): Only src/cli/. Compiled by TSC to dist/cli/, module resolution: NodeNext. Runs in Node.
-- **Extension bundle** (vite.config.extension.ts): Same browser bundle with extension-specific entry points (service-worker.js, sandbox.html, manifest.json) plus bundled Pyodide. Output: dist/extension/.
+- **Extension bundle** (vite.config.extension.ts): Same browser bundle with extension-specific entry points (service-worker.js, offscreen.html, sandbox.html, manifest.json) plus bundled Pyodide. Output: dist/extension/.
 
 ### Layer Stack (bottom-up)
 
@@ -100,7 +141,7 @@ Virtual Filesystem (src/fs/)
 
 SLICC uses an ice cream theme for its multi-agent system. The **cone** is the main assistant (sliccy) that holds everything together. **Scoops** are isolated agent contexts stacked on top, each with their own tools, shell, and restricted filesystem.
 
-- **Orchestrator** (`orchestrator.ts`): Creates/destroys scoop contexts, routes messages, manages the single shared VirtualFS, handles scoop completion notifications back to the cone. Creates a `SessionStore` instance and passes it to each `ScoopContext`; deletes sessions on scoop removal and clears all on reset.
+- **Orchestrator** (`orchestrator.ts`): Creates/destroys scoop contexts, routes messages, manages the single shared VirtualFS, handles scoop completion notifications back to the cone. Creates a `SessionStore` instance and passes it to each `ScoopContext`; deletes sessions on scoop removal and clears all on reset. `clearAllMessages()` also wipes live agent in-memory conversation history via `ScoopContext.clearMessages()`.
 - **ScoopContext** (`scoop-context.ts`): Per-scoop agent instance with RestrictedFS, WasmShell, skills, and NanoClaw-style tools (send_message).
 - **Scheduler** (`scheduler.ts`): Polls persisted scoop tasks on an interval, supports cron/interval/once schedules, and invokes callbacks when tasks become due.
 - **Heartbeat** (`heartbeat.ts`): Tracks scoop health/activity, processing state, error counts, and idle/dead transitions for monitoring.
@@ -141,7 +182,7 @@ WasmShell wraps just-bash 2.11.7 (WASM Bash interpreter) and connects it to Virt
 - `pdftk` / `pdf` — Inspect, extract, rotate, and merge PDFs
 - `mount` — Mount a local directory into the virtual filesystem via the File System Access API
 - `convert` / `magick` — ImageMagick-style image conversion (resize, rotate, crop, quality) via `@imagemagick/magick-wasm`
-- `playwright-cli` / `playwright` / `puppeteer` — Browser automation shell commands backed by `BrowserAPI`; aliases share the same tab/session state, snapshots, and session history
+- `playwright-cli` / `playwright` / `puppeteer` — Browser automation shell commands backed by `BrowserAPI`; aliases share the same tab/session state, snapshots, and session history. `open /vfs/path` serves VFS content via the preview service worker (both CLI and extension modes)
 - `which <command>` — Resolve a command to its path (`/usr/bin/<name>` for built-ins, actual VFS path for `.jsh` files)
 - `uname` — Print the current browser user agent
 - `commands` — Show all available commands (type `commands` in terminal)
@@ -218,7 +259,7 @@ Vanilla TypeScript, no framework. Two layout modes selected by `isExtension` det
 - **Extension mode**: Compact single-row header (slicc + scoop dropdown + model dropdown + icon buttons). Tabbed interface (Chat/Terminal/Files/Memory). Scoop switcher as dropdown menu.
 - **Standalone mode**: Resizable split layout — scoops panel (left) + chat + terminal (top-right) + files/memory tabs (bottom-right).
 
-main.ts bootstraps the orchestrator (always cone+orchestrator, no direct agent mode), wires events, and registers global `.skill` drag/drop handlers with overlay + toast feedback. Per-scoop message buffers capture tool calls even when viewing a different scoop. Input locks immediately when the cone starts processing (including auto-activation from scoop notifications). Assistant label is "sliccy" for the cone, `{name}-scoop` for scoops.
+main.ts has two entry paths: in extension mode, `main()` delegates to `mainExtension()` which creates an `OffscreenClient` (no local Orchestrator); in CLI mode, it bootstraps the Orchestrator directly. Both modes wire events and register `.skill` drag/drop handlers with overlay + toast feedback. Per-scoop message buffers capture tool calls even when viewing a different scoop. Input locks immediately when the cone starts processing (including auto-activation from scoop notifications). Assistant label is "sliccy" for the cone, `{name}-scoop` for scoops.
 
 File browser supports clicking files to download and a ZIP button on folders (uses fflate) to download entire directories.
 
@@ -233,7 +274,17 @@ Voice mode is a toggle (mic button or `Ctrl+Shift+V` / `Cmd+Shift+V`): click onc
 Extension assets: `voice-popup.html` + `voice-popup.js` (project root, copied to `dist/extension/` by `vite.config.extension.ts`).
 
 ### Extension (src/extension/)
-Chrome Manifest V3 extension files. Service worker opens the side panel on action click. `chrome.d.ts` provides minimal typed declarations for the Chrome APIs used (debugger, tabs, sidePanel, runtime, windows, messaging). `sandbox.html` (project root) provides an isolated execution environment for the JavaScript tool and `node -e` — exempt from extension CSP, allows Function constructor. Cross-origin fetch from sandbox is proxied through the parent page via postMessage. Pyodide (~13MB) bundled at `dist/extension/pyodide/` for Python support (loaded from `'self'` origin).
+Chrome Manifest V3 extension with three-layer architecture for background agent execution:
+
+- **Service worker** (`service-worker.ts`): Creates offscreen document on install/startup, relays messages between side panel and offscreen, proxies `chrome.debugger` CDP commands (offscreen docs can't use `chrome.debugger` directly), forwards CDP events back to offscreen.
+- **Offscreen document** (`offscreen.ts`, `offscreen-bridge.ts`): Long-lived extension page that runs the agent engine (Orchestrator, VFS, Shell, tools). Survives side panel close. `OffscreenBridge` translates between Orchestrator callbacks and chrome.runtime messages.
+- **Message types** (`messages.ts`): Typed envelopes (`PanelEnvelope`, `OffscreenEnvelope`, `ServiceWorkerEnvelope`) with `source` + `payload` for routing.
+- **CDP proxy** (`src/cdp/offscreen-cdp-proxy.ts`): `CDPTransport` implementation that routes commands through chrome.runtime messages to the service worker's `chrome.debugger`.
+- `chrome.d.ts` provides typed declarations for Chrome APIs (debugger, tabs, sidePanel, runtime, offscreen, windows, messaging).
+- `sandbox.html` (project root) provides isolated execution for JavaScript tool and `node -e` — exempt from extension CSP. Both the side panel and offscreen document can host sandbox iframes.
+- Pyodide (~13MB) bundled at `dist/extension/pyodide/` for Python support (loaded from `'self'` origin).
+
+**Extension Persistence Model**: The `browser-coding-agent` IndexedDB is the single source of truth for chat display messages. The offscreen bridge writes to it after every user message, response completion, tool call end, and incoming message event. The side panel reads from it via `switchToContext()` — no message buffer reconciliation needed. This separates concerns: the `agent-sessions` DB stores agent LLM history (for multi-turn context), while `slicc-groups` DB stores orchestrator routing data (scoops, tasks, webhooks, crontasks).
 
 ### Preview Service Worker (src/ui/preview-sw.ts)
 A Service Worker that intercepts `/preview/*` fetch requests and serves content from VFS (IndexedDB via LightningFS). Enables the agent to create HTML/CSS/JS apps in the virtual filesystem and preview them in real browser tabs.
@@ -274,7 +325,7 @@ Delegation:
 ## Key Conventions
 
 - **Two type systems**: Legacy ToolDefinition/ToolResult (in src/tools/) and pi-compatible AgentTool/AgentToolResult (in src/core/). The adapter in tool-adapter.ts bridges them.
-- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 769 tests across 42 files.
+- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 1003 tests across 51 files.
 - **Logging**: createLogger('namespace') from src/core/logger.ts. Level-filtered, DEBUG in dev, ERROR in prod. Uses __DEV__ global (set by Vite define).
 - **Node shims**: Browser-bundle shims live in `src/shims/`. `empty.ts` stubs `node:zlib` and `node:module`; additional shim/polyfill files include `buffer-polyfill.ts`, `http.ts`, `https.ts`, `http2.ts`, and `stream.ts`.
 - **Multi-provider auth**: Provider settings in `src/ui/provider-settings.ts`. Supports Anthropic (direct), Azure AI Foundry (Claude on Azure), Azure OpenAI (GPT), AWS Bedrock, and many more via pi-ai. Provider/API key/baseUrl stored in localStorage. Model resolved via `resolveCurrentModel()` with baseUrl override.

@@ -31,6 +31,7 @@
 | `transport.ts` | CDPTransport interface (abstracts CDP/debugger implementations) |
 | `index.ts` | Re-exports + auto-selects transport based on extension detection |
 | `types.ts` | TargetInfo, PageInfo, EvaluateOptions, AccessibilityNode, etc. |
+| `offscreen-cdp-proxy.ts` | CDPTransport over chrome.runtime messages (offscreen → service worker → chrome.debugger) |
 
 ### src/cli/ — Standalone CLI Server
 
@@ -55,8 +56,11 @@
 
 | File | Purpose |
 |---|---|
-| `service-worker.ts` | Manifest V3 service worker; opens side panel on action click |
-| `chrome.d.ts` | Minimal typed declarations for chrome.debugger, chrome.tabs, chrome.sidePanel, etc. |
+| `service-worker.ts` | Manifest V3 service worker; message relay between panel and offscreen + CDP proxy via chrome.debugger |
+| `offscreen.ts` | Agent engine bootstrap in offscreen document (Orchestrator, VFS, Shell, tools) |
+| `offscreen-bridge.ts` | Orchestrator ↔ chrome.runtime message bridge; persists chat to `browser-coding-agent` IndexedDB |
+| `messages.ts` | Typed message envelopes: PanelToOffscreen, OffscreenToPanel, CdpProxy |
+| `chrome.d.ts` | Typed declarations for chrome.debugger, chrome.tabs, chrome.sidePanel, chrome.offscreen, etc. |
 
 ### src/fs/ — Virtual Filesystem
 
@@ -163,16 +167,16 @@
 
 | File | Purpose |
 |---|---|
-| `main.ts` | Entry point: initializes layout, checks API key, bootstraps orchestrator, wires events, handles global `.skill` drag/drop install UX |
+| `main.ts` | Entry point: `main()` for CLI, `mainExtension()` for extension (uses OffscreenClient). Handles layout, API key, orchestrator, skill drag/drop |
+| `offscreen-client.ts` | Extension-only: side panel's interface to offscreen engine. Provides AgentHandle + Orchestrator-compatible facade via chrome.runtime messages |
 | `layout.ts` | Split-pane (CLI) or tabbed (extension) layout; auto-selects based on extension detection |
-| `chat-panel.ts` | Message list + input with streaming support; connects to AgentHandle |
+| `chat-panel.ts` | Message list + input with streaming support; voice input (Web Speech API); connects to AgentHandle |
 | `terminal-panel.ts` | xterm.js terminal UI; exposes WasmShell output |
 | `file-browser-panel.ts` | File tree browser; download files/ZIP folders; navigate filesystem |
 | `memory-panel.ts` | Global memory editor (IndexedDB-backed; shared across all scoops) |
 | `scoops-panel.ts` | Scoop list (CLI mode left sidebar); create/delete/view scoops |
 | `scoop-switcher.ts` | Dropdown menu for scoop selection (extension mode) |
 | `message-renderer.ts` | Renders user messages, assistant messages, tool calls, tool results as HTML |
-| `chat-panel.ts` | Message list + input; voice input support (Web Speech API) |
 | `voice-input.ts` | Voice mode toggle; auto-sends on 2.5s silence; falls back to popup in extension mode |
 | `skill-drop.ts` | Pure helpers for detecting supported dropped `.skill` files |
 | `preview-sw.ts` | Service Worker that intercepts `/preview/*` and serves VFS content (enables in-browser app previews) |
@@ -208,8 +212,46 @@
 ### Special Build Artifacts
 
 - **preview-sw.ts**: Built as standalone IIFE via esbuild (not rollup). Dev: Vite plugin bundles on-the-fly. Prod: `closeBundle` hook writes bundle.
-- **Extension assets**: Pyodide (~13MB), ImageMagick WASM, `sandbox.html`, `voice-popup.html` copied to `dist/extension/` by `vite.config.extension.ts`.
+- **Extension assets**: Pyodide (~13MB), ImageMagick WASM, `sandbox.html`, `voice-popup.html`, `offscreen.html` copied to `dist/extension/` by `vite.config.extension.ts`. The `offscreen.html` entry point runs the agent orchestrator in an unrestricted context separate from the side panel.
 - **Node shims**: `src/shims/` provide no-op implementations for Node modules (just-bash references them).
+
+## Extension Three-Layer Architecture
+
+The Chrome extension uses a three-layer design to keep the agent engine alive across side panel close/reopen cycles:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ Side Panel (UI)                                               │
+│  offscreen-client.ts — Chat, Terminal, Files, Memory          │
+│  Sends: PanelToOffscreenMessage (user input, commands)        │
+│  Receives: OffscreenToPanelMessage (agent events, state)      │
+└─────────────────────────┬────────────────────────────────────┘
+                          │ chrome.runtime messages
+┌─────────────────────────▼────────────────────────────────────┐
+│ Service Worker Relay (service-worker.ts)                      │
+│  Routes Panel ↔ Offscreen messages                            │
+│  Proxies CDP: CdpProxyMessage ↔ chrome.debugger               │
+└─────────────────────────┬────────────────────────────────────┘
+                          │ chrome.runtime messages
+┌─────────────────────────▼────────────────────────────────────┐
+│ Offscreen Document (offscreen.ts, offscreen-bridge.ts)        │
+│  Agent Engine — Orchestrator, VFS, Shell, Tools               │
+│  Persists chat to: browser-coding-agent IndexedDB             │
+│  Dispatches CDP via service worker proxy                      │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Message Flow:**
+- **PanelToOffscreenMessage**: User input flows from panel → service worker → offscreen
+- **OffscreenToPanelMessage**: Agent responses flow from offscreen → service worker → panel
+- **CdpProxyMessage**: Browser automation (screenshot, click, evaluate) flows from offscreen → service worker → chrome.debugger
+
+**IndexedDB Persistence:**
+- `browser-coding-agent` DB: Chat display messages (single source of truth, written by offscreen bridge, read by side panel on reconnect)
+- `agent-sessions` DB: Agent LLM conversation history (restored by ScoopContext on restart)
+- `slicc-groups` DB: Orchestrator routing data (scoops, tasks, webhooks, crontasks)
+
+**CDP Proxy:** Offscreen documents can't call `chrome.debugger` directly. Instead, offscreen sends `CdpProxyMessage` through the service worker, which translates to `chrome.debugger` commands and routes results back.
 
 ## Data Flow Diagrams
 

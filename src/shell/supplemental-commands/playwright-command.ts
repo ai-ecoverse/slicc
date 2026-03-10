@@ -415,8 +415,8 @@ function formatHelp(commandName: string): string {
   return `Usage: ${commandName} <command> [args...]
 
 Commands:
-  open [url] [--foreground|--fg]
-                         Open a new tab (default: background)
+  open [url|/vfs/path] [--foreground|--fg]
+                         Open a new tab (default: background). VFS paths are served via preview service worker.
   goto <url>             Navigate current tab to URL
   click <ref>            Click element by ref (e.g. e5)
   type <text>            Type text into focused element
@@ -521,8 +521,16 @@ export function createPlaywrightCommand(
       switch (subcommand) {
         case 'open':
         case 'tab-new': {
-          const url = positional[0] || 'about:blank';
+          let url = positional[0] || 'about:blank';
           const foreground = flags['foreground'] === 'true' || flags['fg'] === 'true';
+
+          // VFS path → preview service worker URL (serves VFS content in a real browser tab)
+          if (url.startsWith('/') && !url.startsWith('//')) {
+            const isExt = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+            const previewPath = `/preview${url}`;
+            url = isExt ? chrome.runtime.getURL(previewPath) : `http://localhost:3000${previewPath}`;
+          }
+
           const previousTarget = await ensureTarget(browser, state);
           await resolveAppTabId(browser, state);
           const targetId = await browser.createPage(url);

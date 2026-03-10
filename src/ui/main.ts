@@ -9,14 +9,14 @@
 import { Layout } from './layout.js';
 import { getApiKey, showProviderSettings } from './provider-settings.js';
 import { initTheme } from './theme.js';
-import type { AgentHandle, AgentEvent as UIAgentEvent, ChatMessage, ToolCall } from './types.js';
+import type { AgentHandle, AgentEvent as UIAgentEvent, ChatMessage } from './types.js';
 import { createLogger } from '../core/index.js';
 import type { VirtualFS } from '../fs/index.js';
 import { installSkillFromDrop } from '../skills/install-from-drop.js';
-import { findDroppedSkillTransferFile } from './skill-drop.js';
+import { findDroppedSkillTransferFile, hasDroppedFiles } from './skill-drop.js';
 // Register custom API providers (side-effect import triggers registerApiProvider)
 import '../providers/bedrock-camp.js';
-import { BrowserAPI, DebuggerClient } from '../cdp/index.js';
+import { BrowserAPI } from '../cdp/index.js';
 import { Orchestrator } from '../scoops/index.js';
 import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
@@ -95,8 +95,8 @@ function registerSkillDropInstall(
   };
 
   window.addEventListener('dragenter', (event) => {
-    const skillFile = findDroppedSkillTransferFile(event.dataTransfer);
-    if (!skillFile) return;
+    // During drag, browsers restrict file access — only check if files are present
+    if (!hasDroppedFiles(event.dataTransfer)) return;
 
     event.preventDefault();
     dragDepth += 1;
@@ -106,8 +106,7 @@ function registerSkillDropInstall(
   });
 
   window.addEventListener('dragover', (event) => {
-    const skillFile = findDroppedSkillTransferFile(event.dataTransfer);
-    if (!skillFile) return;
+    if (!hasDroppedFiles(event.dataTransfer)) return;
 
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
@@ -164,6 +163,180 @@ function registerSkillDropInstall(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Extension mode — pure UI connecting to offscreen agent engine
+// ---------------------------------------------------------------------------
+
+async function mainExtension(app: HTMLElement): Promise<void> {
+  const { OffscreenClient } = await import('./offscreen-client.js');
+  const { VirtualFS } = await import('../fs/index.js');
+
+  const layout = new Layout(app, true);
+  await layout.panels.chat.initSession('session-cone');
+
+  let selectedScoop: RegisteredScoop | null = null;
+
+  // Create a local VFS instance for the file browser and terminal.
+  // IndexedDB is shared across all same-origin extension pages, so this
+  // reads/writes the same data as the offscreen document's VFS.
+  const localFs = await VirtualFS.create({ dbName: 'slicc-fs' });
+  layout.panels.fileBrowser.setFs(localFs);
+  log.info('File browser wired to shared VFS (local IndexedDB)');
+
+  // Wire skill drop install with toast feedback
+  const skillDropToast = createSkillDropToast();
+  registerSkillDropInstall(localFs, skillDropToast, async () => {
+    await layout.panels.fileBrowser.refresh();
+  });
+
+  // Mount a terminal shell on the local VFS
+  try {
+    const { WasmShell } = await import('../shell/index.js');
+    const shell = new WasmShell({ fs: localFs });
+    await layout.panels.terminal.mountShell(shell);
+    log.info('Terminal mounted with shared VFS');
+  } catch (e) {
+    log.warn('Failed to mount shell to terminal', e);
+  }
+
+  // Define selectScoop early so onReady can reference it.
+  // Uses `client` which is assigned right after construction.
+  let client!: InstanceType<typeof OffscreenClient>;
+  let knownScoopFolders = new Set<string>();
+
+  const selectScoop = async (scoop: RegisteredScoop) => {
+    selectedScoop = scoop;
+    client.selectedScoopJid = scoop.jid;
+    layout.panels.memory.setSelectedScoop(scoop.jid);
+    layout.setScoopSwitcherSelected?.(scoop.jid);
+    layout.panels.scoops.refreshScoops();
+
+    // switchToContext loads messages from the shared browser-coding-agent IndexedDB
+    // (written by the offscreen bridge). No buffer reconciliation needed.
+    const contextId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
+    const scoopName = scoop.isCone ? undefined : scoop.name;
+    await layout.panels.chat.switchToContext(contextId, !scoop.isCone, scoopName);
+
+    if (client.isProcessing(scoop.jid)) {
+      layout.panels.chat.setProcessing(true);
+    }
+  };
+
+  client = new OffscreenClient({
+    onStatusChange: (scoopJid, status) => {
+      layout.panels.scoops.updateScoopStatus(scoopJid, status);
+      layout.updateScoopSwitcherStatus?.(scoopJid, status);
+
+      if (selectedScoop?.jid === scoopJid) {
+        if (status === 'processing') {
+          layout.panels.chat.setProcessing(true);
+        } else if (status === 'ready') {
+          layout.panels.chat.setProcessing(false);
+        }
+      }
+    },
+    onScoopCreated: (scoop) => {
+      layout.panels.scoops.refreshScoops();
+      layout.refreshScoopSwitcher?.();
+      if (!selectedScoop) {
+        selectedScoop = scoop;
+        client.selectedScoopJid = scoop.jid;
+        layout.panels.memory.setSelectedScoop(scoop.jid);
+      }
+    },
+    onScoopListUpdate: () => {
+      // Clean up UI sessions for dropped scoops
+      const currentFolders = new Set(client.getScoops().map(s => s.folder));
+      for (const folder of knownScoopFolders) {
+        if (!currentFolders.has(folder)) {
+          layout.panels.chat.deleteSessionById(`session-${folder}`);
+        }
+      }
+      knownScoopFolders = currentFolders;
+
+      layout.panels.scoops.refreshScoops();
+      layout.refreshScoopSwitcher?.();
+
+      // If no scoop selected yet, pick the cone
+      if (!selectedScoop) {
+        const scoops = client.getScoops();
+        const cone = scoops.find(s => s.isCone);
+        if (cone) {
+          selectedScoop = cone;
+          client.selectedScoopJid = cone.jid;
+          layout.panels.memory.setSelectedScoop(cone.jid);
+        }
+      }
+    },
+    onIncomingMessage: (scoopJid, message) => {
+      if (selectedScoop?.jid === scoopJid) {
+        const content = message.channel === 'delegation'
+          ? `**[Instructions from sliccy]**\n\n${message.content}`
+          : message.content;
+        layout.panels.chat.addUserMessage(content);
+      }
+    },
+    onReady: async () => {
+      try {
+        log.info('Offscreen engine ready, scoop count:', client.getScoops().length);
+
+        // Pick the cone (or first scoop) and run full scoop selection.
+        // switchToContext inside selectScoop loads from shared IndexedDB.
+        const target = selectedScoop ?? client.getScoops().find(s => s.isCone) ?? client.getScoops()[0];
+        if (target) {
+          selectedScoop = target;
+          client.selectedScoopJid = target.jid;
+          await selectScoop(target);
+        }
+      } catch (err) {
+        log.error('Failed to initialize on ready', { error: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  });
+
+  // Wire local VFS to client so memory panel can read CLAUDE.md files
+  client.setLocalFS(localFs);
+
+  // Wire agent handle
+  const agentHandle = client.createAgentHandle();
+  layout.panels.chat.setAgent(agentHandle);
+
+  // Wire panels — OffscreenClient implements the Orchestrator methods
+  // that ScoopsPanel, ScoopSwitcher, and MemoryPanel need
+  layout.panels.scoops.setOrchestrator(client as any);
+  layout.panels.memory.setOrchestrator(client as any);
+  layout.setScoopSwitcherOrchestrator?.(client as any);
+
+  layout.onScoopSelect = selectScoop;
+
+  // Wire model picker
+  layout.onModelChange = (modelId) => {
+    localStorage.setItem('selected-model', modelId);
+    client.updateModel();
+  };
+
+  // Wire clear chat — delete all scoop sessions from the shared IndexedDB
+  // synchronously (from the panel's perspective) before the reload happens.
+  // The bridge also clears its in-memory buffers via the clear-chat message.
+  layout.onClearChat = async () => {
+    const scoops = client.getScoops();
+    for (const scoop of scoops) {
+      const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
+      await layout.panels.chat.deleteSessionById(sessionId);
+    }
+    client.clearAllMessages();
+  };
+
+  // Request state from offscreen — retries automatically until ready
+  client.requestState();
+
+  log.info('Extension UI connected to offscreen agent engine');
+}
+
+// ---------------------------------------------------------------------------
+// CLI mode — direct Orchestrator in this page (unchanged)
+// ---------------------------------------------------------------------------
+
 async function main(): Promise<void> {
   initTheme();
 
@@ -186,7 +359,13 @@ async function main(): Promise<void> {
 
   // Build the layout — tabbed in extension mode, split panels in standalone
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
-  const layout = new Layout(app, isExtension);
+
+  // Extension mode: delegate to offscreen-backed UI
+  if (isExtension) {
+    return mainExtension(app);
+  }
+
+  const layout = new Layout(app, false);
   const showSkillDropToast = createSkillDropToast();
 
   // Initialize session persistence — use 'session-cone' from the start
@@ -194,10 +373,8 @@ async function main(): Promise<void> {
   await layout.panels.chat.initSession('session-cone');
   log.info('Session initialized');
 
-  // Initialize the BrowserAPI
-  const browser = isExtension
-    ? new BrowserAPI(new DebuggerClient())
-    : new BrowserAPI();
+  // Initialize the BrowserAPI (CLI mode only — extension uses CDP proxy in offscreen)
+  const browser = new BrowserAPI();
 
   // Event system for UI
   const eventListeners = new Set<(event: UIAgentEvent) => void>();
