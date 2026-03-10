@@ -20,7 +20,7 @@ A browser-based coding agent that runs as a **Chrome extension** or with a thin 
 - :file_folder: **Virtual Filesystem** — OPFS + IndexedDB-backed filesystem right in the browser, with folder ZIP download
 - :shell: **WebAssembly Bash Shell** — real Bash via [just-bash](https://github.com/nicolo-ribaudo/just-bash) compiled to WASM
 - :git: **Git Support** — clone, commit, push, pull via [isomorphic-git](https://isomorphic-git.org/) (see [available commands](#git-commands))
-- :robot: **Browser Automation** — screenshots (full page / element / saved to VFS), inline image display, navigation, JS eval, element clicking via Chrome DevTools Protocol (chrome.debugger in extension, WebSocket in CLI). Auto-detects user's active tab. HAR recording with user-defined JS filters.
+- :robot: **Browser Automation** — screenshots (full page / element / saved to VFS), inline image display, navigation, JS eval, element clicking via Chrome DevTools Protocol (chrome.debugger in extension, WebSocket in CLI), plus `playwright-cli` / `playwright` / `puppeteer` shell commands for tab control, snapshots, cookies, storage, and HAR recording. Auto-detects user's active tab.
 - :earth_americas: **VFS Web Preview** — serve agent-created HTML/CSS/JS apps in real browser tabs via a Service Worker that reads directly from the virtual filesystem. The agent can build a UI, preview it, screenshot it, and iterate — all without leaving Chrome.
 - :art: **Image Processing** — `convert` command for resize, rotate, crop, and quality adjustment via ImageMagick WASM
 - :pencil2: **File Operations** — read, write, edit files with syntax-aware tools

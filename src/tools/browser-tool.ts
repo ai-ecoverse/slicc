@@ -36,8 +36,10 @@ function base64ToBytes(base64: string): Uint8Array {
 interface TabSnapshot {
   url: string;
   title: string;
-  /** Map from ref (e.g. "e1") to CSS selector */
+  /** Map from ref (e.g. "e1") to CSS selector (legacy fallback) */
   refToSelector: Map<string, string>;
+  /** Map from ref (e.g. "e1") to CDP backendNodeId for reliable clicking */
+  refToBackendNodeId: Map<string, number>;
   /** The YAML-like snapshot content */
   content: string;
   /** Timestamp when snapshot was taken */
@@ -288,6 +290,7 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
             // Get accessibility tree and convert to playwright-cli compatible format
             const tree = await browser.getAccessibilityTree();
             const refToSelector = new Map<string, string>();
+            const refToBackendNodeId = new Map<string, number>();
             let refCounter = 0;
 
             // Escape string for YAML output (quotes and newlines)
@@ -305,15 +308,21 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
               const lines: string[] = [];
               const role = (node.role || 'unknown').toLowerCase();
               const name = node.name || '';
-              
+
               // Skip certain roles that don't need refs
               const skipRoles = ['none', 'presentation', 'generic', 'rootwebarea'];
               const needsRef = !skipRoles.includes(role) && (name || role === 'textbox' || role === 'button' || role === 'link' || role === 'checkbox' || role === 'radio');
-              
+
               let ref = '';
               if (needsRef) {
                 ref = `e${++refCounter}`;
-                // Generate valid CSS selectors (no Playwright-specific syntax like :has-text)
+
+                // Store backendNodeId for reliable ref-based clicking
+                if (node.backendNodeId) {
+                  refToBackendNodeId.set(ref, node.backendNodeId);
+                }
+
+                // Generate CSS selectors as fallback (used when backendNodeId is unavailable)
                 const escapedName = escapeCssAttr(name);
                 let selector = '';
                 if (role === 'button' && name) {
@@ -322,7 +331,6 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
                   selector = `a[aria-label="${escapedName}"], a[title="${escapedName}"]`;
                 } else if (role === 'textbox') {
                   if (name) {
-                    // Match by accessible name via aria-label, placeholder, or title
                     selector = `input[aria-label="${escapedName}"], textarea[aria-label="${escapedName}"], [contenteditable][aria-label="${escapedName}"], input[placeholder="${escapedName}"], textarea[placeholder="${escapedName}"], input[title="${escapedName}"], textarea[title="${escapedName}"]`;
                   } else {
                     selector = `input, textarea, [contenteditable]`;
@@ -363,6 +371,7 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
               url,
               title,
               refToSelector,
+              refToBackendNodeId,
               content: snapshotContent,
               timestamp: Date.now(),
             };
@@ -452,25 +461,37 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
             const targetId = (input['targetId'] as string) || await getActiveTab();
             let selector = input['selector'] as string;
             const ref = input['ref'] as string;
-            
+
             // Validate targetId first
             if (!targetId) {
               return { content: 'click requires selector or ref (and targetId or an active tab)', isError: true };
             }
-            
+
             // Support ref-based clicking (e.g. "e5" from snapshot)
             if (ref && !selector) {
               const snapshot = tabSnapshots.get(targetId);
               if (!snapshot) {
                 return { content: `No snapshot available. Run "snapshot" action first to get element refs.`, isError: true };
               }
+
+              // Prefer backendNodeId for reliable clicking
+              const backendNodeId = snapshot.refToBackendNodeId.get(ref);
+              if (backendNodeId) {
+                await browser.attachToPage(targetId);
+                await browser.clickByBackendNodeId(backendNodeId);
+                // Invalidate snapshot after click (page state may have changed)
+                tabSnapshots.delete(targetId);
+                return { content: `Clicked: ${ref}` };
+              }
+
+              // Fall back to CSS selector if no backendNodeId
               const refSelector = snapshot.refToSelector.get(ref);
               if (!refSelector) {
                 return { content: `Unknown ref "${ref}". Available refs: ${[...snapshot.refToSelector.keys()].slice(0, 10).join(', ')}...`, isError: true };
               }
               selector = refSelector;
             }
-            
+
             if (!selector) {
               return { content: 'click requires selector or ref', isError: true };
             }

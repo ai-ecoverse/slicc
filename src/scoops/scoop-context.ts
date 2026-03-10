@@ -18,7 +18,7 @@ import { Agent, adaptTools, createLogger } from '../core/index.js';
 import { compactContext } from '../core/context-compaction.js';
 import type { AgentEvent as CoreAgentEvent, AgentMessage, AssistantMessage, AssistantMessageEvent, TextContent, Model } from '../core/index.js';
 import type { SessionStore } from '../core/session.js';
-import { createFileTools, createBashTool, createSearchTools, createBrowserTool, createJavaScriptTool } from '../tools/index.js';
+import { createFileTools, createBashTool, createSearchTools, createJavaScriptTool } from '../tools/index.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import { getApiKey, resolveCurrentModel, getSelectedProvider } from '../ui/provider-settings.js';
 import { loadSkills, formatSkillsForPrompt, createDefaultSkills, type Skill } from './skills.js';
@@ -90,7 +90,8 @@ export class ScoopContext {
 
       // Create shell — cone starts at /, scoops at /scoops/{folder}/workspace
       const cwd = this.scoop.isCone ? '/' : `/scoops/${this.scoop.folder}/workspace`;
-      this.shell = new WasmShell({ fs: this.fs as VirtualFS, cwd });
+      const browser = this.callbacks.getBrowserAPI();
+      this.shell = new WasmShell({ fs: this.fs as VirtualFS, cwd, browserAPI: browser });
       log.info('WasmShell initialized', { folder: this.scoop.folder });
 
       // Create default skills if needed
@@ -115,12 +116,10 @@ export class ScoopContext {
       };
       const nanoClawTools = createNanoClawTools(nanoClawToolsConfig);
 
-      // Create tools (including browser and javascript)
-      const browser = this.callbacks.getBrowserAPI();
+      // Create tools (browser automation is now via playwright-cli shell command)
       const legacyTools = [
         ...createFileTools(this.fs as VirtualFS),
         createBashTool(this.shell),
-        createBrowserTool(browser, this.fs as VirtualFS),
         ...createSearchTools(this.fs as VirtualFS),
         createJavaScriptTool(this.fs as VirtualFS),
         ...nanoClawTools,

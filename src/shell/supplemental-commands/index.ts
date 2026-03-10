@@ -9,6 +9,7 @@ import type { ImgcatCommandOptions } from './imgcat-command.js';
 import { createNodeCommand } from './node-command.js';
 import { createOpenCommand } from './open-command.js';
 import { createPdftkCommand } from './pdftk-command.js';
+import { createPlaywrightCommand } from './playwright-command.js';
 import { createPython3LikeCommand } from './python-command.js';
 import { createSqliteCommand } from './sqlite-command.js';
 import { createUnzipCommand } from './unzip-command.js';
@@ -16,6 +17,7 @@ import { createWebhookCommand } from './webhook-command.js';
 import { createCrontaskCommand } from './crontask-command.js';
 import { createWhichCommand } from './which-command.js';
 import { createZipCommand } from './zip-command.js';
+import type { BrowserAPI } from '../../cdp/index.js';
 export type {
   ImgcatCommandOptions as SupplementalCommandOptions,
   MediaPreviewItem,
@@ -24,12 +26,14 @@ export type {
 export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   /** Function that returns discovered .jsh command names (for `commands` listing). */
   getJshCommands?: () => Promise<string[]>;
-  /** VirtualFS instance for .jsh file discovery (used by `which` command). */
+  /** VirtualFS instance for .jsh discovery, `which`, and playwright-cli session files. */
   fs?: VirtualFS;
+  /** Browser automation backend for playwright-cli aliases. */
+  browserAPI?: BrowserAPI;
 }
 
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
-  return [
+  const commands: Command[] = [
     createCommandsCommand({ getJshCommands: options.getJshCommands }),
     createOpenCommand(),
     createImgcatCommand(options),
@@ -48,4 +52,14 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createConvertCommand('magick'),
     createWhichCommand(options.fs),
   ];
+
+  if (options.browserAPI && options.fs) {
+    commands.push(
+      createPlaywrightCommand('playwright-cli', options.browserAPI, options.fs),
+      createPlaywrightCommand('playwright', options.browserAPI, options.fs),
+      createPlaywrightCommand('puppeteer', options.browserAPI, options.fs),
+    );
+  }
+
+  return commands;
 }
