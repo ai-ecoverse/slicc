@@ -87,18 +87,14 @@ function parseYaml(content: string): Record<string, unknown> {
 }
 
 /**
- * Read and parse a skill manifest from the virtual filesystem.
+ * Parse manifest YAML content and validate required fields.
  */
-export async function readManifest(
-  fs: VirtualFS,
-  skillDir: string,
-): Promise<SkillManifest> {
-  const manifestPath = `${skillDir}/${MANIFEST_FILE}`;
-  
-  const content = await fs.readTextFile(manifestPath);
+export function parseManifestContent(
+  content: string,
+  manifestPath: string = MANIFEST_FILE,
+): SkillManifest {
   const parsed = parseYaml(content);
 
-  // Validate required fields
   if (!parsed.skill || typeof parsed.skill !== 'string') {
     throw new Error(`Invalid manifest: missing 'skill' field in ${manifestPath}`);
   }
@@ -118,6 +114,18 @@ export async function readManifest(
     test: parsed.test as string | undefined,
     author: parsed.author as string | undefined,
   };
+}
+
+/**
+ * Read and parse a skill manifest from the virtual filesystem.
+ */
+export async function readManifest(
+  fs: VirtualFS,
+  skillDir: string,
+): Promise<SkillManifest> {
+  const manifestPath = `${skillDir}/${MANIFEST_FILE}`;
+  const content = await fs.readTextFile(manifestPath);
+  return parseManifestContent(content, manifestPath);
 }
 
 /**

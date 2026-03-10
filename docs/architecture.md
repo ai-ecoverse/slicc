@@ -124,6 +124,7 @@
 |---|---|
 | `apply.ts` | applySkill: installs a skill from `/workspace/skills/`, validates manifest, executes post-install steps |
 | `discover.ts` | discoverSkills: scans VFS for `SKILL.md` files; getSkillInfo: fetch skill metadata; readSkillInstructions: load skill instructions |
+| `install-from-drop.ts` | installSkillFromDrop: validates and unpacks dropped `.skill` ZIP archives into `/workspace/skills/{name}` |
 | `uninstall.ts` | uninstallSkill: removes skill from state, rolls back installed files |
 | `state.ts` | initSkillsSystem: init `.slicc/state.json`; readState/writeState: persistent skill state |
 | `manifest.ts` | parseManifest: YAML parser for `manifest.yaml` (name, version, dependencies, conflicts, files) |
@@ -161,7 +162,7 @@
 
 | File | Purpose |
 |---|---|
-| `main.ts` | Entry point: initializes layout, checks API key, bootstraps orchestrator, wires events |
+| `main.ts` | Entry point: initializes layout, checks API key, bootstraps orchestrator, wires events, handles global `.skill` drag/drop install UX |
 | `layout.ts` | Split-pane (CLI) or tabbed (extension) layout; auto-selects based on extension detection |
 | `chat-panel.ts` | Message list + input with streaming support; connects to AgentHandle |
 | `terminal-panel.ts` | xterm.js terminal UI; exposes WasmShell output |
@@ -172,6 +173,7 @@
 | `message-renderer.ts` | Renders user messages, assistant messages, tool calls, tool results as HTML |
 | `chat-panel.ts` | Message list + input; voice input support (Web Speech API) |
 | `voice-input.ts` | Voice mode toggle; auto-sends on 2.5s silence; falls back to popup in extension mode |
+| `skill-drop.ts` | Pure helpers for detecting supported dropped `.skill` files |
 | `preview-sw.ts` | Service Worker that intercepts `/preview/*` and serves VFS content (enables in-browser app previews) |
 | `session-store.ts` | IndexedDB session storage (`browser-coding-agent` DB): conversation history per session |
 | `provider-settings.ts` | API provider + model selection; stores settings in localStorage |
@@ -404,7 +406,7 @@ Scoop removal / app clear
 
 | I need to... | Modify |
 |---|---|
-| Change skill installation logic | `src/skills/apply.ts` |
+| Change skill installation logic | `src/skills/apply.ts`, `src/skills/install-from-drop.ts` |
 | Change skill discovery | `src/skills/discover.ts` |
 | Change skill uninstall logic | `src/skills/uninstall.ts` |
 | Change skill state persistence | `src/skills/state.ts` |

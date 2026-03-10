@@ -11,6 +11,9 @@ import { getApiKey, showProviderSettings } from './provider-settings.js';
 import { initTheme } from './theme.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent, ChatMessage, ToolCall } from './types.js';
 import { createLogger } from '../core/index.js';
+import type { VirtualFS } from '../fs/index.js';
+import { installSkillFromDrop } from '../skills/install-from-drop.js';
+import { findDroppedSkillTransferFile } from './skill-drop.js';
 // Register custom API providers (side-effect import triggers registerApiProvider)
 import '../providers/bedrock-camp.js';
 import { BrowserAPI, DebuggerClient } from '../cdp/index.js';
@@ -19,6 +22,147 @@ import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 
 const log = createLogger('main');
+
+type SkillDropNoticeKind = 'success' | 'error';
+
+function createSkillDropOverlay(): {
+  show(title: string, description: string): void;
+  hide(): void;
+} {
+  const overlay = document.createElement('div');
+  overlay.className = 'skill-drop-overlay';
+
+  const card = document.createElement('div');
+  card.className = 'skill-drop-overlay__card';
+
+  const titleEl = document.createElement('div');
+  titleEl.className = 'skill-drop-overlay__title';
+  card.appendChild(titleEl);
+
+  const descEl = document.createElement('div');
+  descEl.className = 'skill-drop-overlay__desc';
+  card.appendChild(descEl);
+
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+
+  return {
+    show(title: string, description: string): void {
+      titleEl.textContent = title;
+      descEl.textContent = description;
+      overlay.classList.add('skill-drop-overlay--visible');
+    },
+    hide(): void {
+      overlay.classList.remove('skill-drop-overlay--visible');
+    },
+  };
+}
+
+function createSkillDropToast(): (message: string, kind: SkillDropNoticeKind) => void {
+  const container = document.createElement('div');
+  container.className = 'skill-drop-toast-container';
+  document.body.appendChild(container);
+
+  return (message: string, kind: SkillDropNoticeKind): void => {
+    const toast = document.createElement('div');
+    toast.className = `skill-drop-toast skill-drop-toast--${kind}`;
+    toast.textContent = message;
+    container.appendChild(toast);
+
+    requestAnimationFrame(() => toast.classList.add('skill-drop-toast--visible'));
+
+    const dismiss = () => {
+      toast.classList.remove('skill-drop-toast--visible');
+      window.setTimeout(() => toast.remove(), 180);
+    };
+
+    window.setTimeout(dismiss, 4200);
+  };
+}
+
+function registerSkillDropInstall(
+  fs: VirtualFS,
+  onNotice: (message: string, kind: SkillDropNoticeKind) => void,
+  onInstalled: () => Promise<void>,
+): void {
+  const overlay = createSkillDropOverlay();
+  let dragDepth = 0;
+  let installInProgress = false;
+
+  const resetDrag = (): void => {
+    dragDepth = 0;
+    if (!installInProgress) overlay.hide();
+  };
+
+  window.addEventListener('dragenter', (event) => {
+    const skillFile = findDroppedSkillTransferFile(event.dataTransfer);
+    if (!skillFile) return;
+
+    event.preventDefault();
+    dragDepth += 1;
+    if (!installInProgress) {
+      overlay.show('Drop .skill to install', 'Unpack into /workspace/skills/{name}.');
+    }
+  });
+
+  window.addEventListener('dragover', (event) => {
+    const skillFile = findDroppedSkillTransferFile(event.dataTransfer);
+    if (!skillFile) return;
+
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+    if (!installInProgress) {
+      overlay.show('Drop .skill to install', 'Unpack into /workspace/skills/{name}.');
+    }
+  });
+
+  window.addEventListener('dragleave', () => {
+    if (dragDepth === 0) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0 && !installInProgress) {
+      overlay.hide();
+    }
+  });
+
+  window.addEventListener('dragend', resetDrag);
+  window.addEventListener('blur', resetDrag);
+
+  window.addEventListener('drop', async (event) => {
+    const skillFile = findDroppedSkillTransferFile(event.dataTransfer);
+
+    if (!skillFile) {
+      resetDrag();
+      return;
+    }
+
+    event.preventDefault();
+    dragDepth = 0;
+
+    if (installInProgress) {
+      overlay.hide();
+      onNotice('Another .skill installation is already in progress.', 'error');
+      return;
+    }
+
+    installInProgress = true;
+    overlay.show('Installing skill…', skillFile.name);
+
+    try {
+      const result = await installSkillFromDrop(fs, skillFile);
+      await onInstalled();
+      onNotice(
+        `Installed "${result.skillName}" to ${result.destinationPath} (${result.fileCount} files). Run "skill install ${result.skillName}" to apply it.`,
+        'success',
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      onNotice(`Failed to install dropped skill: ${message}`, 'error');
+    } finally {
+      installInProgress = false;
+      overlay.hide();
+    }
+  });
+}
 
 async function main(): Promise<void> {
   initTheme();
@@ -43,6 +187,7 @@ async function main(): Promise<void> {
   // Build the layout — tabbed in extension mode, split panels in standalone
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   const layout = new Layout(app, isExtension);
+  const showSkillDropToast = createSkillDropToast();
 
   // Initialize session persistence — use 'session-cone' from the start
   // so it matches the contextId used in switchToContext()
@@ -272,6 +417,21 @@ async function main(): Promise<void> {
   if (sharedFs) {
     layout.panels.fileBrowser.setFs(sharedFs);
     log.info('File browser wired to shared VFS');
+
+    registerSkillDropInstall(
+      sharedFs,
+      (message, kind) => {
+        if (kind === 'error') {
+          log.warn('Dropped skill install failed', { message });
+        } else {
+          log.info('Dropped skill installed', { message });
+        }
+        showSkillDropToast(message, kind);
+      },
+      async () => {
+        await layout.panels.fileBrowser.refresh();
+      },
+    );
 
     try {
       const { WasmShell } = await import('../shell/index.js');
