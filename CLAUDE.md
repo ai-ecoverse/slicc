@@ -259,7 +259,7 @@ Vanilla TypeScript, no framework. Two layout modes selected by `isExtension` det
 - **Extension mode**: Compact single-row header (slicc + scoop dropdown + model dropdown + icon buttons). Tabbed interface (Chat/Terminal/Files/Memory). Scoop switcher as dropdown menu.
 - **Standalone mode**: Resizable split layout — scoops panel (left) + chat + terminal (top-right) + files/memory tabs (bottom-right).
 
-main.ts bootstraps the orchestrator (always cone+orchestrator, no direct agent mode), wires events, and registers global `.skill` drag/drop handlers with overlay + toast feedback. Per-scoop message buffers capture tool calls even when viewing a different scoop. Input locks immediately when the cone starts processing (including auto-activation from scoop notifications). Assistant label is "sliccy" for the cone, `{name}-scoop` for scoops.
+main.ts has two entry paths: in extension mode, `main()` delegates to `mainExtension()` which creates an `OffscreenClient` (no local Orchestrator); in CLI mode, it bootstraps the Orchestrator directly. Both modes wire events and register `.skill` drag/drop handlers with overlay + toast feedback. Per-scoop message buffers capture tool calls even when viewing a different scoop. Input locks immediately when the cone starts processing (including auto-activation from scoop notifications). Assistant label is "sliccy" for the cone, `{name}-scoop` for scoops.
 
 File browser supports clicking files to download and a ZIP button on folders (uses fflate) to download entire directories.
 
@@ -323,7 +323,7 @@ Delegation:
 ## Key Conventions
 
 - **Two type systems**: Legacy ToolDefinition/ToolResult (in src/tools/) and pi-compatible AgentTool/AgentToolResult (in src/core/). The adapter in tool-adapter.ts bridges them.
-- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 856 tests across 47 files.
+- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 996 tests across 51 files.
 - **Logging**: createLogger('namespace') from src/core/logger.ts. Level-filtered, DEBUG in dev, ERROR in prod. Uses __DEV__ global (set by Vite define).
 - **Node shims**: Browser-bundle shims live in `src/shims/`. `empty.ts` stubs `node:zlib` and `node:module`; additional shim/polyfill files include `buffer-polyfill.ts`, `http.ts`, `https.ts`, `http2.ts`, and `stream.ts`.
 - **Multi-provider auth**: Provider settings in `src/ui/provider-settings.ts`. Supports Anthropic (direct), Azure AI Foundry (Claude on Azure), Azure OpenAI (GPT), AWS Bedrock, and many more via pi-ai. Provider/API key/baseUrl stored in localStorage. Model resolved via `resolveCurrentModel()` with baseUrl override.

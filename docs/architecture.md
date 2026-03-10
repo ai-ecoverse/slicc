@@ -170,14 +170,13 @@
 | `main.ts` | Entry point: `main()` for CLI, `mainExtension()` for extension (uses OffscreenClient). Handles layout, API key, orchestrator, skill drag/drop |
 | `offscreen-client.ts` | Extension-only: side panel's interface to offscreen engine. Provides AgentHandle + Orchestrator-compatible facade via chrome.runtime messages |
 | `layout.ts` | Split-pane (CLI) or tabbed (extension) layout; auto-selects based on extension detection |
-| `chat-panel.ts` | Message list + input with streaming support; connects to AgentHandle |
+| `chat-panel.ts` | Message list + input with streaming support; voice input (Web Speech API); connects to AgentHandle |
 | `terminal-panel.ts` | xterm.js terminal UI; exposes WasmShell output |
 | `file-browser-panel.ts` | File tree browser; download files/ZIP folders; navigate filesystem |
 | `memory-panel.ts` | Global memory editor (IndexedDB-backed; shared across all scoops) |
 | `scoops-panel.ts` | Scoop list (CLI mode left sidebar); create/delete/view scoops |
 | `scoop-switcher.ts` | Dropdown menu for scoop selection (extension mode) |
 | `message-renderer.ts` | Renders user messages, assistant messages, tool calls, tool results as HTML |
-| `chat-panel.ts` | Message list + input; voice input support (Web Speech API) |
 | `voice-input.ts` | Voice mode toggle; auto-sends on 2.5s silence; falls back to popup in extension mode |
 | `skill-drop.ts` | Pure helpers for detecting supported dropped `.skill` files |
 | `preview-sw.ts` | Service Worker that intercepts `/preview/*` and serves VFS content (enables in-browser app previews) |
