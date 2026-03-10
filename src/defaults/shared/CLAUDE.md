@@ -84,8 +84,8 @@ You do NOT have a `browser` or `show_image` tool. To view images:
 1. `open /workspace/app/index.html` — serves it in a tab (human can see it)
 2. `playwright-cli tab-list` — find the tab by matching the preview URL from step 1
 3. `playwright-cli tab-select <targetId>` — target that tab
-4. `playwright-cli snapshot` — read the content (text, always works)
-5. `playwright-cli screenshot` — see it visually (returned inline as base64)
+4. `playwright-cli snapshot` — read the content as text AND required before screenshot
+5. `playwright-cli screenshot` — see it visually (saved to file + returned inline as base64)
 
 Do NOT try to `read_file` on a PNG, `base64` encode it, or `convert` it — none of these feed images back into your visual input.
 
