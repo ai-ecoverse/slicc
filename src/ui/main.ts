@@ -278,15 +278,19 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       }
     },
     onReady: async () => {
-      log.info('Offscreen engine ready, scoop count:', client.getScoops().length);
+      try {
+        log.info('Offscreen engine ready, scoop count:', client.getScoops().length);
 
-      // Pick the cone (or first scoop) and run full scoop selection.
-      // switchToContext inside selectScoop loads from shared IndexedDB.
-      const target = selectedScoop ?? client.getScoops().find(s => s.isCone) ?? client.getScoops()[0];
-      if (target) {
-        selectedScoop = target;
-        client.selectedScoopJid = target.jid;
-        await selectScoop(target);
+        // Pick the cone (or first scoop) and run full scoop selection.
+        // switchToContext inside selectScoop loads from shared IndexedDB.
+        const target = selectedScoop ?? client.getScoops().find(s => s.isCone) ?? client.getScoops()[0];
+        if (target) {
+          selectedScoop = target;
+          client.selectedScoopJid = target.jid;
+          await selectScoop(target);
+        }
+      } catch (err) {
+        log.error('Failed to initialize on ready', { error: err instanceof Error ? err.message : String(err) });
       }
     },
   });

@@ -89,7 +89,10 @@ export class OffscreenCdpProxy implements CDPTransport {
     };
 
     return new Promise((resolve, reject) => {
+      let settled = false;
       const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
         this.pendingCommands.delete(id);
         reject(new Error(`CDP command timed out after ${timeout}ms: ${method}`));
       }, timeout);
@@ -101,6 +104,8 @@ export class OffscreenCdpProxy implements CDPTransport {
         source: 'offscreen' as const,
         payload: cmd,
       }).catch((err) => {
+        if (settled) return;
+        settled = true;
         this.pendingCommands.delete(id);
         clearTimeout(timer);
         reject(new Error(`Failed to send CDP command: ${err instanceof Error ? err.message : String(err)}`));

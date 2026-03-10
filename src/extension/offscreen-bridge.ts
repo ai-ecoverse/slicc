@@ -300,8 +300,16 @@ export class OffscreenBridge {
         if (msg.source !== 'panel') return false;
 
         this.handlePanelMessage(msg.payload as PanelToOffscreenMessage).catch((err) => {
-          // Log but don't crash — panel message handler errors shouldn't kill the listener
           console.error('[offscreen-bridge] handlePanelMessage error:', err);
+          // Surface error to the panel so the user sees something instead of a silent hang
+          const scoopJid = (msg.payload as { scoopJid?: string }).scoopJid;
+          if (scoopJid) {
+            this.emit({
+              type: 'error',
+              scoopJid,
+              error: err instanceof Error ? err.message : String(err),
+            } as import('./messages.js').ErrorMsg);
+          }
         });
         return false;
       },
@@ -373,7 +381,9 @@ export class OffscreenBridge {
         this.scoopStatuses.delete(msg.scoopJid);
         if (droppedScoop && this.sessionStore) {
           const sessionId = droppedScoop.isCone ? 'session-cone' : `session-${droppedScoop.folder}`;
-          this.sessionStore.delete(sessionId).catch(() => {});
+          this.sessionStore.delete(sessionId).catch((err) => {
+            console.warn('[offscreen-bridge] Failed to delete session on scoop drop:', sessionId, err);
+          });
         }
         this.emitScoopList();
         break;
@@ -381,7 +391,9 @@ export class OffscreenBridge {
 
       case 'abort': {
         this.orchestrator.stopScoop(msg.scoopJid);
-        this.orchestrator.clearQueuedMessages(msg.scoopJid).catch(() => {});
+        this.orchestrator.clearQueuedMessages(msg.scoopJid).catch((err) => {
+          console.warn('[offscreen-bridge] Failed to clear queued messages on abort:', err);
+        });
         break;
       }
 
