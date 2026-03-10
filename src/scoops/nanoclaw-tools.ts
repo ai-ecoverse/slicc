@@ -129,23 +129,27 @@ export function createNanoClawTools(config: NanoClawToolsConfig): ToolDefinition
     if (onScoopScoop) {
       tools.push({
         name: 'scoop_scoop',
-        description: 'Create a new scoop. The scoop will be registered but not activated — use feed_scoop to give it a task. Optionally specify a model (e.g., "claude-sonnet-4-20250514") to use a different model than the cone.',
+        description: 'Create a new scoop. Optionally specify a model and/or a prompt. If prompt is provided, the scoop starts working immediately after creation (no separate feed_scoop needed).',
         inputSchema: {
           type: 'object',
           properties: {
             name: {
               type: 'string',
-              description: 'Display name for the scoop (e.g., "Andy")',
+              description: 'Display name for the scoop (e.g., "hero-block")',
             },
             model: {
               type: 'string',
-              description: 'Model ID for this scoop (e.g., "claude-sonnet-4-20250514"). If omitted, uses the same model as the cone.',
+              description: 'Model ID for this scoop (e.g., "claude-sonnet-4-6"). If omitted, uses the same model as the cone.',
+            },
+            prompt: {
+              type: 'string',
+              description: 'Task prompt for the scoop. If provided, the scoop starts working immediately after creation.',
             },
           },
           required: ['name'],
         },
         execute: async (input) => {
-          const { name, model } = input as { name: string; model?: string };
+          const { name, model, prompt: taskPrompt } = input as { name: string; model?: string; prompt?: string };
           const folder = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50) + '-scoop';
 
           try {
@@ -162,6 +166,16 @@ export function createNanoClawTools(config: NanoClawToolsConfig): ToolDefinition
             });
 
             log.info('Scoop created', { name, folder });
+
+            // If prompt provided, feed immediately (fire-and-forget)
+            if (taskPrompt && onFeedScoop) {
+              onFeedScoop(newScoop.jid, taskPrompt).catch((err) => {
+                const msg = err instanceof Error ? err.message : String(err);
+                log.error('Auto-feed failed', { name, error: msg });
+              });
+              return { content: `Scoop "${name}" created as "${folder}" and task sent. It will start working as soon as initialization completes.` };
+            }
+
             return { content: `Scoop "${name}" created as "${folder}". Use feed_scoop to give it a task.` };
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);

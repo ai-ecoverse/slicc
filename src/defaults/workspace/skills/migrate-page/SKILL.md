@@ -292,33 +292,22 @@ batching operations:
 read_file({ "path": "/shared/{repo-name}/head.html" })
 ```
 
-**Step 2 — Create ALL scoops in a SINGLE response** (N tool calls, 1 LLM turn):
-Call `scoop_scoop` for every block in the same response. Scoop init runs
-in the background — don't wait for each to complete before creating the next.
+**Step 2 — Create AND feed ALL scoops in a SINGLE response** (N tool calls, 1 LLM turn):
+Call `scoop_scoop` with `name`, `model`, AND `prompt` for every block in
+the same response. Each scoop starts working immediately after creation —
+no separate `feed_scoop` needed.
 
 **MANDATORY: All scoops MUST use `"model": "claude-sonnet-4-6"`.** Block
 migration is code generation — it doesn't need the cone's reasoning power.
-Sonnet is faster and cheaper for this work.
 ```
-scoop_scoop({ "name": "hero-block", "model": "claude-sonnet-4-6" })
-scoop_scoop({ "name": "cards-block", "model": "claude-sonnet-4-6" })
-scoop_scoop({ "name": "nav-bar-block", "model": "claude-sonnet-4-6" })
-scoop_scoop({ "name": "footer-block", "model": "claude-sonnet-4-6" })
+scoop_scoop({ "name": "hero-block", "model": "claude-sonnet-4-6", "prompt": "You are migrating..." })
+scoop_scoop({ "name": "cards-block", "model": "claude-sonnet-4-6", "prompt": "You are migrating..." })
+scoop_scoop({ "name": "nav-bar-block", "model": "claude-sonnet-4-6", "prompt": "You are migrating..." })
+scoop_scoop({ "name": "footer-block", "model": "claude-sonnet-4-6", "prompt": "You are migrating..." })
 ... all in ONE response
 ```
 
-**Step 3 — Feed ALL scoops in a SINGLE response** (N tool calls, 1 LLM turn):
-Call `feed_scoop` for every scoop in the same response. Each feed is
-fire-and-forget — scoops start processing in parallel immediately.
-```
-feed_scoop({ "name": "hero-block-scoop", "prompt": "..." })
-feed_scoop({ "name": "cards-block-scoop", "prompt": "..." })
-feed_scoop({ "name": "nav-bar-block-scoop", "prompt": "..." })
-feed_scoop({ "name": "footer-block-scoop", "prompt": "..." })
-... all in ONE response
-```
-
-This reduces scoop setup from ~12 LLM turns to ~3 (read + create all + feed all).
+This reduces scoop setup from ~12 LLM turns to ~2 (read head.html + create-and-feed all).
 
 ### Scoop Delegation Pattern
 
