@@ -18,7 +18,7 @@ import { Agent, adaptTools, createLogger } from '../core/index.js';
 import { compactContext } from '../core/context-compaction.js';
 import type { AgentEvent as CoreAgentEvent, AgentMessage, AssistantMessage, AssistantMessageEvent, TextContent, Model } from '../core/index.js';
 import type { SessionStore } from '../core/session.js';
-import { createFileTools, createBashTool, createSearchTools, createBrowserTool, createJavaScriptTool } from '../tools/index.js';
+import { createFileTools, createBashTool, createBrowserTool, createJavaScriptTool } from '../tools/index.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import { getApiKey, resolveCurrentModel, getSelectedProvider } from '../ui/provider-settings.js';
 import { loadSkills, formatSkillsForPrompt, createDefaultSkills, type Skill } from './skills.js';
@@ -121,7 +121,6 @@ export class ScoopContext {
         ...createFileTools(this.fs as VirtualFS),
         createBashTool(this.shell),
         createBrowserTool(browser, this.fs as VirtualFS),
-        ...createSearchTools(this.fs as VirtualFS),
         createJavaScriptTool(this.fs as VirtualFS),
         ...nanoClawTools,
       ];
@@ -441,7 +440,7 @@ You have access to:
 - A virtual filesystem at ${this.scoop.isCone ? '/' : `/scoops/${this.scoop.folder}/workspace`} (your working directory)
 - A bash shell for running commands (via the bash tool)
 - File reading, writing, and editing tools
-- Search tools (grep, find)
+- Shell search commands (grep, find, rg) via the bash tool
 - **send_message**: Send messages immediately while working (for progress updates)
 - **schedule_task**: Schedule recurring or one-time tasks
 - **list_tasks**, **pause_task**, **resume_task**, **cancel_task**: Manage scheduled tasks

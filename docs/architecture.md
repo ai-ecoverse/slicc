@@ -154,7 +154,6 @@
 | `file-tools.ts` | `read_file`, `write_file`, `edit_file` tools for VirtualFS operations |
 | `browser-tool.ts` | `browser` tool with sub-actions: list_tabs, navigate, screenshot, evaluate, click, type, serve, show_image, record_network |
 | `javascript-tool.ts` | `javascript` tool: execute JS in the browser context (fs.readDir, fs.readFile, fs.readFileBinary access) |
-| `search-tools.ts` | `grep` and `find` tools: content search and file pattern matching |
 | `index.ts` | Tool factory functions (createBashTool, createFileTools, createBrowserTool, etc.) |
 
 ### src/ui/ — User Interface
