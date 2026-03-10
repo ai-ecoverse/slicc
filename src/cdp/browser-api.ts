@@ -16,16 +16,47 @@ import type {
   BoundingBox,
   AccessibilityNode,
 } from './types.js';
+import { createLogger } from '../core/logger.js';
 
 const DEFAULT_CDP_URL = 'ws://localhost:3000/cdp';
+const log = createLogger('browser-api');
 
 export class BrowserAPI {
   private client: CDPTransport;
   private sessionId: string | null = null;
   private attachedTargetId: string | null = null;
+  private readonly handleJavaScriptDialogOpening = async (
+    params: Record<string, unknown>,
+  ): Promise<void> => {
+    const sessionId = typeof params['sessionId'] === 'string'
+      ? params['sessionId'] as string
+      : this.sessionId;
+    if (!sessionId) return;
+
+    try {
+      await this.client.send(
+        'Page.handleJavaScriptDialog',
+        { accept: false },
+        sessionId,
+        5000,
+      );
+      log.warn('Auto-dismissed unexpected JavaScript dialog', {
+        sessionId,
+        type: params['type'],
+        message: params['message'],
+        url: params['url'],
+      });
+    } catch (error) {
+      log.warn('Failed to auto-dismiss JavaScript dialog', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
 
   constructor(client?: CDPTransport) {
     this.client = client ?? new CDPClient();
+    this.client.on('Page.javascriptDialogOpening', this.handleJavaScriptDialogOpening);
   }
 
   /**
@@ -118,6 +149,9 @@ export class BrowserAPI {
     });
     this.sessionId = result['sessionId'] as string;
     this.attachedTargetId = targetId;
+    // Keep Page events available so unexpected dialogs can be auto-dismissed
+    // before they stall the current CDP command.
+    await this.client.send('Page.enable', {}, this.sessionId);
     return this.sessionId;
   }
 

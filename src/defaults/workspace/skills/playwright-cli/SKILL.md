@@ -12,6 +12,9 @@ Use `playwright-cli` (also aliased as `playwright` and `puppeteer`) via the bash
 
 **Always snapshot first**, then interact using element refs.
 
+- `playwright-cli`, `playwright`, and `puppeteer` are interchangeable. Pick one prefix and stay consistent within a session so your transcript is easier to read.
+- Ref-based commands operate on the **current tab only**. If you opened multiple tabs or used `open`/`tab-new` without `--foreground`, verify the target with `tab-list` and `tab-select` before using refs.
+
 ```bash
 # 1. Open a page
 playwright-cli open https://example.com
@@ -26,6 +29,13 @@ playwright-cli fill e12 "hello world"
 # 4. Re-snapshot after interactions (refs change)
 playwright-cli snapshot
 ```
+
+## Common Failure Modes
+
+- `No snapshot available` usually means you never ran `snapshot` on the current tab, the current tab changed, or a previous command invalidated the old refs.
+- Refs are tied to **one tab + one snapshot**. They do not carry across tabs, navigations, reloads, or stale page states.
+- `screenshot e5` is snapshot-dependent too; if it targets an element ref, run `snapshot` first.
+- Auto-saved snapshots in `/.playwright/snapshots/` are for history recovery. They do **not** refresh the in-memory refs for the next command; run `snapshot` again before more ref-based actions.
 
 ## Element Refs
 
@@ -155,6 +165,9 @@ This shows the full chronological log of all browser commands, their results, an
 
 - **Refs change after every interaction** — always re-snapshot before clicking or filling.
 - `open` and `tab-new` open tabs in the **background** by default. Use `--foreground` or `--fg` to make the new tab the current tab. If there is no current browser target yet, the first background tab becomes current so `snapshot` works right away.
+- If tab focus seems to drift during a multi-step session, run `tab-list`, `tab-select <index>`, then `snapshot` before continuing.
+- After `click`, `fill`, `goto`, `go-back`, `go-forward`, `reload`, `select`, `check`, `uncheck`, `drag`, or `dialog-*`, take a fresh `snapshot` before using refs again.
+- Unexpected JavaScript dialogs are auto-dismissed on attached pages so a stray `alert()` does not block the session forever.
 - Use `eval` for DOM operations not covered by built-in commands.
 - The SLICC app tab is automatically excluded — you can't accidentally interact with it.
 - The current tab is auto-selected. Use `tab-select` to switch between multiple tabs.
