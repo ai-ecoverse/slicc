@@ -425,6 +425,11 @@ export class OffscreenBridge {
         break;
       }
 
+      case 'clear-filesystem': {
+        await this.orchestrator.resetFilesystem();
+        break;
+      }
+
       case 'refresh-model': {
         // Side panel already wrote to localStorage (shared origin).
         // Just tell all running ScoopContexts to re-read the model.

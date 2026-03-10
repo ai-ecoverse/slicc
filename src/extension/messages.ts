@@ -56,6 +56,10 @@ export interface ClearChatMsg {
   type: 'clear-chat';
 }
 
+export interface ClearFilesystemMsg {
+  type: 'clear-filesystem';
+}
+
 export interface RefreshModelMsg {
   type: 'refresh-model';
 }
@@ -69,6 +73,7 @@ export type PanelToOffscreenMessage =
   | SetModelMsg
   | RequestStateMsg
   | ClearChatMsg
+  | ClearFilesystemMsg
   | RefreshModelMsg;
 
 // ---------------------------------------------------------------------------

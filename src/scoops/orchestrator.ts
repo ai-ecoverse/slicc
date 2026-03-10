@@ -242,6 +242,20 @@ export class Orchestrator {
     return this.scoops.get(jid);
   }
 
+  /** Wipe the virtual filesystem and re-seed default files (skills, shared CLAUDE.md). */
+  async resetFilesystem(): Promise<void> {
+    // Destroy all scoop contexts (they hold references to the old VFS)
+    for (const [jid, ctx] of this.contexts.entries()) {
+      ctx.stop();
+      this.contexts.delete(jid);
+    }
+    // Re-create the VFS with wipe: true
+    this.sharedFs = await VirtualFS.create({ dbName: 'slicc-fs', wipe: true });
+    await this.ensureRootStructure();
+    await this.ensureGlobalMemory();
+    log.info('Filesystem reset and defaults re-seeded');
+  }
+
   /** Clear all messages from the orchestrator DB, agent sessions, and live agent contexts. */
   async clearAllMessages(): Promise<void> {
     await db.clearAllMessages();
