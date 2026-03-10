@@ -1,6 +1,6 @@
 # Tools Reference
 
-Complete reference for all agent tools in SLICC. Tools are invoked by the agent during message processing.
+Complete reference for the tool modules and active agent tool surface in SLICC. `src/tools/` contains file, bash, browser, search, and javascript tool factories, but the current scoop/cone surface wired in `src/scoops/scoop-context.ts` is: `read_file`, `write_file`, `edit_file`, `bash`, `grep`, `find`, `javascript`, and NanoClaw tools. Browser automation for active scoop agents now runs through the `playwright-cli` / `playwright` / `puppeteer` shell commands via `bash`.
 
 ---
 
@@ -117,10 +117,11 @@ Execute shell commands in a full Unix-like environment (just-bash 2.11.7).
 **Features**:
 - 78+ commands (grep, sed, awk, find, jq, tar, curl, git, node, python3, etc.)
 - Pipes, redirects, control flow, command substitution
-- Custom commands: `git`, `node -e`, `python3 -c`, `sqlite3`, `zip/unzip`, `webhook`, `crontask`, `convert`, `which`
+- Custom commands: `git`, `node -e`, `python3 -c`, `sqlite3`, `zip/unzip`, `webhook`, `crontask`, `convert`, `which`, `playwright-cli` / `playwright` / `puppeteer`
 - Networking: Full `curl` with HTTP methods, headers, auth, body
 - Text processing: grep, rg, sed, awk, cut, tr, sort, uniq, wc, head, tail
-- Search is shell-native: use `grep`, `find`, and `rg` through `bash` rather than separate agent tools
+- Browser automation for active agents runs through `playwright-cli` / `playwright` / `puppeteer`
+- Search is available both through dedicated `grep` / `find` agent tools and shell-native `grep` / `find` / `rg` via `bash`
 - Data: jq (JSON), base64, md5sum, sha256sum
 
 **Exit status handling**:
@@ -241,7 +242,76 @@ Apply a string replacement edit to an existing file.
 
 ---
 
+### grep
+
+**File**: `src/tools/search-tools.ts`
+
+Search file contents recursively in VirtualFS using a JavaScript regular expression.
+
+| Property | Value |
+|----------|-------|
+| **Name** | `grep` |
+| **Input** | `{ pattern: string, path?: string, include?: string }` |
+| **Output** | `{ content: matches or "No matches found." }` |
+
+**Schema**:
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "pattern": { "type": "string", "description": "Regular expression pattern to search for." },
+    "path": { "type": "string", "description": "Directory to search in. Default: /." },
+    "include": { "type": "string", "description": "Optional glob filter such as *.ts." }
+  },
+  "required": ["pattern"]
+}
+```
+
+**Behavior**:
+- Recursively walks VirtualFS from `path` (default `/`)
+- Returns matches as `path:line: content`
+- Optional `include` limits files by glob pattern
+- Skips unreadable/binary files
+- Truncates after 200 matches
+
+---
+
+### find
+
+**File**: `src/tools/search-tools.ts`
+
+List files and directories recursively in VirtualFS using simple glob matching.
+
+| Property | Value |
+|----------|-------|
+| **Name** | `find` |
+| **Input** | `{ pattern?: string, path?: string }` |
+| **Output** | `{ content: matching paths or "No files found." }` |
+
+**Schema**:
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "pattern": { "type": "string", "description": "Glob pattern to match. Default: *." },
+    "path": { "type": "string", "description": "Directory to search in. Default: /." }
+  }
+}
+```
+
+**Behavior**:
+- Recursively walks VirtualFS from `path` (default `/`)
+- Uses simple glob matching with `*`, `**`, and `?`
+- Default `pattern` is `*`
+- Truncates after 500 results
+
+---
+
 ### browser
+
+Maintainer-facing tool module. The `browser` tool still exists in `src/tools/browser-tool.ts`, but current scoop contexts do **not** register it. Active agent browser automation now goes through `playwright-cli` / `playwright` / `puppeteer` shell commands via `bash`.
 
 **File**: `src/tools/browser-tool.ts`
 
@@ -338,9 +408,9 @@ console.log(result);
 
 ---
 
-### CLI search commands (via `bash`)
+### Search via `bash` (shell alternatives)
 
-Search remains documented here because it is part of the CLI/shell surface area, but these are **not** separate agent tools. Agents use them by calling the `bash` tool with standard shell commands.
+In addition to the dedicated `grep` and `find` agent tools above, the shell also exposes `grep`, `find`, and `rg` through `bash`. Use these when you need shell composition, pipes, or ripgrep-specific behavior.
 
 | Command | Purpose | Example |
 |---------|---------|---------|
@@ -349,7 +419,7 @@ Search remains documented here because it is part of the CLI/shell surface area,
 | `rg` | Fast recursive text search | `rg "function main" /workspace/src --type ts` |
 
 **Behavior notes**:
-- Use these through `bash`; there is no dedicated `find` or `search` agent tool
+- Use these through `bash`; `rg` is shell-only, while `grep` and `find` are also available as dedicated agent tools
 - `grep` and `rg` return exit code `1` when no matches are found; the `bash` tool preserves that output without surfacing it as an agent error when stderr is empty
 
 **Examples**:
@@ -459,20 +529,22 @@ Cone-only. Update the shared global memory file (`/shared/CLAUDE.md`).
 
 ## Tool Availability by Scope
 
-| Tool | Cone | Scoop |
-|------|------|-------|
-| bash | ✓ | ✓ |
-| read_file | ✓ | ✓ (restricted) |
-| write_file | ✓ | ✓ (restricted) |
-| edit_file | ✓ | ✓ (restricted) |
-| browser | ✓ | ✓ |
-| javascript | ✓ | ✓ |
-| **send_message** | ✓ | ✓ |
-| **list_scoops** | ✓ | ✗ |
-| **scoop_scoop** | ✓ | ✗ |
-| **feed_scoop** | ✓ | ✗ |
-| **drop_scoop** | ✓ | ✗ |
-| **update_global_memory** | ✓ | ✗ |
+| Tool | Cone | Scoop | Notes |
+|------|------|-------|-------|
+| bash | ✓ | ✓ | Includes `playwright-cli` / `playwright` / `puppeteer` shell commands |
+| read_file | ✓ | ✓ (restricted) | Active in `ScoopContext` |
+| write_file | ✓ | ✓ (restricted) | Active in `ScoopContext` |
+| edit_file | ✓ | ✓ (restricted) | Active in `ScoopContext` |
+| grep | ✓ | ✓ (restricted) | Active search tool from `src/tools/search-tools.ts` |
+| find | ✓ | ✓ (restricted) | Active search tool from `src/tools/search-tools.ts` |
+| javascript | ✓ | ✓ | Active in `ScoopContext` |
+| browser | — | — | Tool module exists in `src/tools/browser-tool.ts` but is not currently registered by `ScoopContext` |
+| **send_message** | ✓ | ✓ | NanoClaw tool |
+| **list_scoops** | ✓ | ✗ | Cone-only NanoClaw tool |
+| **scoop_scoop** | ✓ | ✗ | Cone-only NanoClaw tool |
+| **feed_scoop** | ✓ | ✗ | Cone-only NanoClaw tool |
+| **drop_scoop** | ✓ | ✗ | Cone-only NanoClaw tool |
+| **update_global_memory** | ✓ | ✗ | Cone-only NanoClaw tool |
 
 ---
 
@@ -520,7 +592,7 @@ The agent can inspect `isError` to determine if a tool call succeeded or needs r
 ## Performance Notes
 
 - **bash**: Each command is synchronous in just-bash; avoid blocking operations
-- **browser**: Screenshots and evaluations are fast (<100ms on local tabs). Network delays dominate remote sites
+- **BrowserAPI-backed automation**: Screenshots and evaluations are fast (<100ms on local tabs). Network delays dominate remote sites whether invoked via the maintained `browser` tool module or via `playwright-cli`
 - **javascript**: Sandbox message passing adds ~10ms overhead per call
 - **read_file**: LineNumber formatting is O(file size); reading huge files (>1MB) may be slow
 - **context-compaction**: Runs before every LLM call; O(message count), not a bottleneck

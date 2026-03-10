@@ -175,16 +175,16 @@ CDPTransport interface (`transport.ts`) abstracts the underlying protocol. Two i
 - **CDPClient**: WebSocket-based, used in CLI mode. Connects through ws://localhost:3000/cdp proxy.
 - **DebuggerClient** (`debugger-client.ts`): Uses `chrome.debugger` API in extension mode. Intercepts `Target.*` commands and maps them to `chrome.tabs`/`chrome.debugger`. Manages tab attach/detach lifecycle with session-to-tab mapping.
 
-BrowserAPI: high-level Playwright-style API built on either transport (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree). Auto-selects transport based on extension detection. TargetInfo and PageInfo types include `active` field (boolean, extension mode only) to identify the user's currently focused tab, enabling intelligent tool auto-dispatch.
+BrowserAPI: high-level Playwright-style API built on either transport (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree). Auto-selects transport based on extension detection. It underpins both the maintained `src/tools/browser-tool.ts` module and the `playwright-cli`/`playwright`/`puppeteer` shell-command path used by active scoop agents. TargetInfo and PageInfo types include `active` field (boolean, extension mode only) to identify the user's currently focused tab, enabling intelligent tool auto-dispatch.
 
 **HarRecorder** (`har-recorder.ts`): Records network traffic from browser tabs as HAR 1.2 files. Supports user-provided JS filter functions (`(entry) => false | true | object`). Filter application is deferred to snapshot save time (batch, not per-entry) to support extension mode — in extensions, filter code is sent to the sandbox iframe (CSP-exempt) via `postMessage`; in CLI mode, compiled directly. Snapshots saved to `/recordings/{id}/` on navigation and recording stop. Graceful fallback: filter errors return unfiltered entries.
 
 ### Tools (src/tools/)
-All tools use the legacy ToolDefinition interface (name, description, inputSchema, execute). Active agent tools: bash, read_file, write_file, edit_file, browser (with sub-actions), javascript. Factory functions take their dependency (VirtualFS, WasmShell, or BrowserAPI).
+All tools use the legacy ToolDefinition interface (name, description, inputSchema, execute). `src/tools/` currently contains factories for file, bash, browser, search, and javascript tools. The active scoop/cone tool surface wired in `src/scoops/scoop-context.ts` is: `read_file`, `write_file`, `edit_file`, `bash`, `grep`, `find`, `javascript`, plus NanoClaw tools. Browser automation for agents now goes through the `playwright-cli` / `playwright` / `puppeteer` shell commands via the `bash` tool.
 
 **NanoClaw tools** (src/scoops/nanoclaw-tools.ts): Per-scoop tools for messaging — `send_message`. Cone-only tools: `list_scoops`, `scoop_scoop` (create), `feed_scoop` (delegate), `drop_scoop` (remove), `update_global_memory`. Task scheduling moved to the `crontask` shell command.
 
-**Browser tool enhancements:**
+**Browser tool module** (`src/tools/browser-tool.ts`): Maintainer-facing `browser` tool implementation. It still exists, but it is not part of the current scoop/cone tool surface from `src/scoops/scoop-context.ts`.
 - `new_tab` opens a new tab, navigates it to the requested URL, and returns its `targetId`
 - `new_recorded_tab` opens a new tab with HAR recording enabled, accepts an optional JS `filter`, and saves recordings under `/recordings/<recordingId>/`
 - `stop_recording` stops an active HAR capture and saves the final recording snapshot to VFS
@@ -198,6 +198,8 @@ All tools use the legacy ToolDefinition interface (name, description, inputSchem
 - Auto-resolves to the user's active/focused tab when targetId is omitted (CDP types TargetInfo/PageInfo now include `active` field)
 - VFS access via `path` parameter to save results without bloating conversation history
 - App tab detection excludes `/preview/` URLs to prevent preview tabs from being misidentified as the SLICC app tab in extension mode
+
+**Search tools** (`src/tools/search-tools.ts`): Active agent tools `grep` and `find` operate directly on VirtualFS and are wired into `src/scoops/scoop-context.ts` alongside `bash`. Use these when you want structured search results without invoking shell commands; use shell-native `rg`/`grep`/`find` through `bash` when you need pipes or CLI-specific behavior.
 
 **JavaScript tool**: `fs.readDir(path)` returns `string[]` (filenames). `fs.readFileBinary(path)` returns `Uint8Array` directly.
 

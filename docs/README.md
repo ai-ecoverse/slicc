@@ -27,13 +27,24 @@ For architecture philosophy and principles, see the project's `CLAUDE.md` file.
 | Virtual Filesystem  | `src/fs/`        | `virtual-fs.ts`     | POSIX-like FS backed by LightningFS (IndexedDB)        |
 | Shell               | `src/shell/`     | `wasm-shell.ts`     | just-bash WASM interpreter + xterm.js terminal         |
 | CDP                 | `src/cdp/`       | `browser-api.ts`    | Chrome DevTools Protocol client (Playwright-style API) |
-| Tools               | `src/tools/`     | `bash-tool.ts`      | Agent tools: bash, file, browser, javascript, search   |
+| Tools               | `src/tools/`     | `bash-tool.ts`      | Tool factories; active scoop surface is file + bash + grep/find + javascript |
 | Core Agent          | `src/core/`      | `index.ts`          | pi-mono agent loop, streaming, context compaction      |
 | Scoops Orchestrator | `src/scoops/`    | `orchestrator.ts`   | Multi-agent system (cone + scoops), message routing    |
 | UI                  | `src/ui/`        | `main.ts`           | Vanilla TS layout: Chat + Terminal + Browser Preview   |
 | CLI Server          | `src/cli/`       | `index.ts`          | Express + CDP WebSocket proxy, Chrome launcher         |
 | Extension           | `src/extension/` | `service-worker.ts` | Chrome Manifest V3 extension (side panel)              |
 
+
+## Active Scoop Tool Surface
+
+The active tool surface wired in `src/scoops/scoop-context.ts` is:
+
+- File tools: `read_file`, `write_file`, `edit_file`
+- Search tools: `grep`, `find`
+- Execution tools: `bash`, `javascript`
+- NanoClaw tools: `send_message` for all scoops, plus cone-only scoop-management tools
+
+Browser automation for agents now happens through the `playwright-cli` / `playwright` / `puppeteer` shell commands via `bash`. The `src/tools/browser-tool.ts` module still exists and is documented for maintainers, but it is not part of the current scoop/cone tool surface.
 
 ## Ice Cream Vocabulary
 
