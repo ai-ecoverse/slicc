@@ -244,7 +244,9 @@ export class OffscreenBridge {
     const buf = this.messageBuffers.get(jid);
     if (!buf || buf.length === 0) return;
     // BufferedChatMessage is structurally compatible with ChatMessage
-    this.sessionStore.saveMessages(sessionId, buf as unknown as ChatMessage[]).catch(() => {});
+    this.sessionStore.saveMessages(sessionId, buf as unknown as ChatMessage[]).catch((err) => {
+      console.warn('[offscreen-bridge] persistScoop failed:', sessionId, err);
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -297,7 +299,10 @@ export class OffscreenBridge {
         // Only handle messages from the panel (relayed by service worker)
         if (msg.source !== 'panel') return false;
 
-        this.handlePanelMessage(msg.payload as PanelToOffscreenMessage);
+        this.handlePanelMessage(msg.payload as PanelToOffscreenMessage).catch((err) => {
+          // Log but don't crash — panel message handler errors shouldn't kill the listener
+          console.error('[offscreen-bridge] handlePanelMessage error:', err);
+        });
         return false;
       },
     );
@@ -381,7 +386,8 @@ export class OffscreenBridge {
       }
 
       case 'set-model': {
-        storeModelConfig(msg.provider, msg.model, msg.apiKey, msg.baseUrl);
+        // Side panel already wrote to localStorage (shared origin).
+        // Just tell all running ScoopContexts to re-read the model.
         this.orchestrator.updateModel();
         break;
       }
@@ -452,19 +458,3 @@ function isExtMsg(msg: unknown): boolean {
   );
 }
 
-/** Store model config in IndexedDB so the offscreen engine can read it. */
-function storeModelConfig(provider: string, model: string, apiKey: string, baseUrl?: string): void {
-  const dbReq = indexedDB.open('slicc-offscreen-config', 1);
-  dbReq.onupgradeneeded = () => {
-    const db = dbReq.result;
-    if (!db.objectStoreNames.contains('config')) {
-      db.createObjectStore('config', { keyPath: 'key' });
-    }
-  };
-  dbReq.onsuccess = () => {
-    const db = dbReq.result;
-    const tx = db.transaction('config', 'readwrite');
-    const store = tx.objectStore('config');
-    store.put({ key: 'model', provider, model, apiKey, baseUrl });
-  };
-}

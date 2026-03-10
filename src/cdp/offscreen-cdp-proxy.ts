@@ -15,10 +15,9 @@ import type {
   ExtensionMessage,
 } from '../extension/messages.js';
 
-let nextCommandId = 1;
-
 export class OffscreenCdpProxy implements CDPTransport {
   private _state: ConnectionState = 'disconnected';
+  private nextCommandId = 1;
   private listeners = new Map<string, Set<CDPEventListener>>();
   private pendingCommands = new Map<number, {
     resolve: (result: Record<string, unknown>) => void;
@@ -80,7 +79,7 @@ export class OffscreenCdpProxy implements CDPTransport {
       throw new Error('OffscreenCdpProxy is not connected');
     }
 
-    const id = nextCommandId++;
+    const id = this.nextCommandId++;
     const cmd: CdpCommandMsg = {
       type: 'cdp-command',
       id,

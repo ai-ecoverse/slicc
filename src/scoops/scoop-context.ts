@@ -202,7 +202,7 @@ export class ScoopContext {
       const message = err instanceof Error ? err.message
         : (typeof err === 'object' && err !== null) ? JSON.stringify(err)
         : String(err);
-      log.error('ScoopContext init failed', err);
+      log.error('ScoopContext init failed', { folder: this.scoop.folder, error: message });
       this.setStatus('error');
       this.callbacks.onError(`Failed to initialize: ${message}`);
     }
