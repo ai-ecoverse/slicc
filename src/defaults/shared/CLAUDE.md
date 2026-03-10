@@ -97,7 +97,8 @@ This is a sandboxed browser-based VFS environment. Many standard tools (e.g. `py
 **Before reaching for familiar patterns, run `commands` to see what's actually available**, and use `<command> --help` when unsure how something works.
 
 Key things that work differently:
-- **Serving files**: Use `open /path/to/file` — it serves VFS files via the preview service worker. No HTTP server needed.
+- **Serving files**: Use `open /path/to/file` — it serves VFS files via the preview service worker. No HTTP server needed. The output includes the preview URL (e.g. `opened /workspace/app/index.html → http://localhost:3000/preview/workspace/app/index.html`).
+- **Serving + screenshotting**: `open` serves a VFS file and prints the preview URL. To then interact with that tab via `playwright-cli`, use `playwright-cli tab-list` to find the tab, or `playwright-cli open <the-preview-url>` to open it as an automation target. **Never manually construct preview URLs** — always use the URL from `open`'s output.
 - **No long-running servers**: You can't start background daemons. The `open` command handles serving.
 - **No package managers**: No `apt`, `npm install`, `pip install`. Use what's already available or write `.jsh` scripts.
 
