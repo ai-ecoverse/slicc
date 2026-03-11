@@ -448,6 +448,7 @@ export class OffscreenBridge {
       case 'panel-cdp-command': {
         const { id, method, params, sessionId } = msg;
         if (!this.browserAPI) {
+          console.warn('[offscreen-bridge] Panel CDP command received but BrowserAPI is null');
           this.emit({ type: 'panel-cdp-response', id, error: 'BrowserAPI not available' } satisfies PanelCdpResponseMsg);
           break;
         }

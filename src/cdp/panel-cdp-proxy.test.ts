@@ -228,4 +228,54 @@ describe('PanelCdpProxy', () => {
 
     await expect(sendPromise).rejects.toThrow('disconnected');
   });
+
+  it('matches out-of-order responses to correct commands by ID', async () => {
+    await proxy.connect();
+
+    const send1 = proxy.send('Page.navigate', { url: 'url1' });
+    const send2 = proxy.send('Page.evaluate', { expression: 'code' });
+
+    expect(sentMessages.length).toBe(2);
+    const id1 = (sentMessages[0] as any).payload.id;
+    const id2 = (sentMessages[1] as any).payload.id;
+
+    // Send responses in REVERSE order
+    for (const listener of messageListeners) {
+      listener(
+        { source: 'offscreen', payload: { type: 'panel-cdp-response', id: id2, result: { value: 'eval-result' } } },
+        {},
+        () => {},
+      );
+      listener(
+        { source: 'offscreen', payload: { type: 'panel-cdp-response', id: id1, result: { frameId: '123' } } },
+        {},
+        () => {},
+      );
+    }
+
+    const [result1, result2] = await Promise.all([send1, send2]);
+    expect(result1).toEqual({ frameId: '123' });
+    expect(result2).toEqual({ value: 'eval-result' });
+  });
+
+  it('continues firing subsequent listeners even if one throws', async () => {
+    await proxy.connect();
+
+    const handler1 = vi.fn(() => { throw new Error('oops'); });
+    const handler2 = vi.fn();
+
+    proxy.on('Test.event', handler1);
+    proxy.on('Test.event', handler2);
+
+    for (const listener of messageListeners) {
+      listener(
+        { source: 'service-worker', payload: { type: 'cdp-event', method: 'Test.event', params: { data: 1 } } },
+        {},
+        () => {},
+      );
+    }
+
+    expect(handler1).toHaveBeenCalled();
+    expect(handler2).toHaveBeenCalled();
+  });
 });

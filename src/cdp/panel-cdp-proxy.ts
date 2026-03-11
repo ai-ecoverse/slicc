@@ -39,17 +39,21 @@ export class PanelCdpProxy implements CDPTransport {
     }
 
     this.messageHandler = (message: unknown) => {
-      if (!isExtMsg(message)) return;
-      const msg = message as ExtensionMessage;
+      try {
+        if (!isExtMsg(message)) return;
+        const msg = message as ExtensionMessage;
 
-      // Handle CDP command responses from offscreen
-      if (msg.source === 'offscreen' && msg.payload.type === 'panel-cdp-response') {
-        this.handleCdpResponse(msg.payload as PanelCdpResponseMsg);
-      }
+        // Handle CDP command responses from offscreen
+        if (msg.source === 'offscreen' && msg.payload.type === 'panel-cdp-response') {
+          this.handleCdpResponse(msg.payload as PanelCdpResponseMsg);
+        }
 
-      // Handle CDP events broadcast from service worker
-      if (msg.source === 'service-worker' && msg.payload.type === 'cdp-event') {
-        this.handleCdpEvent(msg.payload as CdpEventMsg);
+        // Handle CDP events broadcast from service worker
+        if (msg.source === 'service-worker' && msg.payload.type === 'cdp-event') {
+          this.handleCdpEvent(msg.payload as CdpEventMsg);
+        }
+      } catch (err) {
+        console.error('[panel-cdp-proxy] Error in message handler:', err);
       }
     };
 
@@ -156,7 +160,10 @@ export class PanelCdpProxy implements CDPTransport {
 
   private handleCdpResponse(resp: PanelCdpResponseMsg): void {
     const pending = this.pendingCommands.get(resp.id);
-    if (!pending) return;
+    if (!pending) {
+      console.warn(`[panel-cdp-proxy] Ignoring CDP response with unknown id ${resp.id}`);
+      return;
+    }
 
     this.pendingCommands.delete(resp.id);
     clearTimeout(pending.timer);
@@ -174,8 +181,8 @@ export class PanelCdpProxy implements CDPTransport {
       for (const listener of set) {
         try {
           listener(event.params ?? {});
-        } catch {
-          // Listener errors should not break the event loop
+        } catch (err) {
+          console.error(`[panel-cdp-proxy] Listener error for event "${event.method}":`, err);
         }
       }
     }
