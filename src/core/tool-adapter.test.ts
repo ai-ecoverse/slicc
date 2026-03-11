@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseToolResultContent, adaptTool, MAX_SINGLE_RESULT_CHARS } from './tool-adapter.js';
+import { parseToolResultContent, adaptTool } from './tool-adapter.js';
 import type { ToolDefinition } from './types.js';
 
 describe('parseToolResultContent', () => {
@@ -87,12 +87,8 @@ describe('parseToolResultContent', () => {
 });
 
 describe('adaptTool', () => {
-  it('exports MAX_SINGLE_RESULT_CHARS as 50000', () => {
-    expect(MAX_SINGLE_RESULT_CHARS).toBe(50000);
-  });
-
-  it('truncates tool results exceeding 50K chars safety cap', async () => {
-    const hugeContent = 'x'.repeat(MAX_SINGLE_RESULT_CHARS + 1000);
+  it('passes through tool results at full size (no truncation)', async () => {
+    const hugeContent = 'x'.repeat(100000);
     const mockTool: ToolDefinition = {
       name: 'test_tool',
       description: 'A test tool',
@@ -104,34 +100,15 @@ describe('adaptTool', () => {
     const result = await adapted.execute('call-1', {});
 
     const textBlock = (result.content as any[]).find((c: any) => c.type === 'text');
-    expect(textBlock.text.length).toBeLessThan(hugeContent.length);
-    expect(textBlock.text).toContain('truncated');
-    expect(textBlock.text).toContain('50K');
+    expect(textBlock.text).toBe(hugeContent);
   });
 
-  it('does not truncate tool results at exactly 50K chars boundary', async () => {
-    const exactContent = 'x'.repeat(MAX_SINGLE_RESULT_CHARS);
+  it('preserves isError flag', async () => {
     const mockTool: ToolDefinition = {
       name: 'test_tool',
       description: 'A test tool',
       inputSchema: { type: 'object', properties: {} },
-      execute: async () => ({ content: exactContent, isError: false }),
-    };
-
-    const adapted = adaptTool(mockTool);
-    const result = await adapted.execute('call-1', {});
-
-    const textBlock = (result.content as any[]).find((c: any) => c.type === 'text');
-    expect(textBlock.text).toBe(exactContent);
-  });
-
-  it('preserves isError flag through truncation', async () => {
-    const hugeContent = 'x'.repeat(MAX_SINGLE_RESULT_CHARS + 1000);
-    const mockTool: ToolDefinition = {
-      name: 'test_tool',
-      description: 'A test tool',
-      inputSchema: { type: 'object', properties: {} },
-      execute: async () => ({ content: hugeContent, isError: true }),
+      execute: async () => ({ content: 'error output', isError: true }),
     };
 
     const adapted = adaptTool(mockTool);
@@ -140,8 +117,25 @@ describe('adaptTool', () => {
     expect(result.details).toEqual({ isError: true });
   });
 
-  it('preserves image blocks even when base64 data exceeds 50K chars', async () => {
-    const largeBase64 = 'A'.repeat(MAX_SINGLE_RESULT_CHARS * 2); // 100K of base64
+  it('parses image tags into ImageContent blocks', async () => {
+    const content = 'Screenshot saved\n<img:data:image/png;base64,abc123>';
+    const mockTool: ToolDefinition = {
+      name: 'test_tool',
+      description: 'A test tool',
+      inputSchema: { type: 'object', properties: {} },
+      execute: async () => ({ content, isError: false }),
+    };
+
+    const adapted = adaptTool(mockTool);
+    const result = await adapted.execute('call-1', {});
+
+    const blocks = result.content as any[];
+    expect(blocks[0]).toEqual({ type: 'text', text: 'Screenshot saved' });
+    expect(blocks[1]).toEqual({ type: 'image', mimeType: 'image/png', data: 'abc123' });
+  });
+
+  it('preserves large image blocks at full size', async () => {
+    const largeBase64 = 'A'.repeat(200000);
     const content = `Screenshot saved\n<img:data:image/png;base64,${largeBase64}>`;
     const mockTool: ToolDefinition = {
       name: 'test_tool',
@@ -154,50 +148,9 @@ describe('adaptTool', () => {
     const result = await adapted.execute('call-1', {});
 
     const blocks = result.content as any[];
-    // Text block preserved
     expect(blocks[0]).toEqual({ type: 'text', text: 'Screenshot saved' });
-    // Image block preserved in full — NOT truncated
     expect(blocks[1].type).toBe('image');
-    expect(blocks[1].mimeType).toBe('image/png');
     expect(blocks[1].data).toBe(largeBase64);
-    expect(blocks[1].data.length).toBe(MAX_SINGLE_RESULT_CHARS * 2);
-  });
-
-  it('truncates large text before image but preserves the image', async () => {
-    const largeText = 'x'.repeat(MAX_SINGLE_RESULT_CHARS + 5000);
-    const content = `${largeText}\n<img:data:image/png;base64,abc123>`;
-    const mockTool: ToolDefinition = {
-      name: 'test_tool',
-      description: 'A test tool',
-      inputSchema: { type: 'object', properties: {} },
-      execute: async () => ({ content, isError: false }),
-    };
-
-    const adapted = adaptTool(mockTool);
-    const result = await adapted.execute('call-1', {});
-
-    const blocks = result.content as any[];
-    // Text block truncated
-    expect(blocks[0].type).toBe('text');
-    expect(blocks[0].text).toContain('truncated');
-    expect(blocks[0].text.length).toBeLessThan(largeText.length);
-    // Image block still preserved
-    expect(blocks[1]).toEqual({ type: 'image', mimeType: 'image/png', data: 'abc123' });
-  });
-
-  it('does not truncate tool results under 50K chars', async () => {
-    const normalContent = 'x'.repeat(MAX_SINGLE_RESULT_CHARS - 100);
-    const mockTool: ToolDefinition = {
-      name: 'test_tool',
-      description: 'A test tool',
-      inputSchema: { type: 'object', properties: {} },
-      execute: async () => ({ content: normalContent, isError: false }),
-    };
-
-    const adapted = adaptTool(mockTool);
-    const result = await adapted.execute('call-1', {});
-
-    const textBlock = (result.content as any[]).find((c: any) => c.type === 'text');
-    expect(textBlock.text).toBe(normalContent);
+    expect(blocks[1].data.length).toBe(200000);
   });
 });

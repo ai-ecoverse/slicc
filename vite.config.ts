@@ -133,6 +133,10 @@ export default defineConfig(({ mode }) => ({
         __dirname,
         'node_modules/@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js',
       ),
+      '@mariozechner/pi-ai/dist/utils/overflow.js': resolve(
+        __dirname,
+        'node_modules/@mariozechner/pi-ai/dist/utils/overflow.js',
+      ),
     },
   },
   esbuild: {

@@ -38,7 +38,7 @@ export type {
 
 // Local utilities
 export { SessionStore } from './session.js';
-export { adaptTool, adaptTools, MAX_SINGLE_RESULT_CHARS } from './tool-adapter.js';
+export { adaptTool, adaptTools } from './tool-adapter.js';
 export { ToolRegistry } from './tool-registry.js';
 export { createLogger, setLogLevel, getLogLevel, LogLevel } from './logger.js';
 export type { Logger } from './logger.js';

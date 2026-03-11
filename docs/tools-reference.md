@@ -504,7 +504,6 @@ LLM-summarized context compaction (`src/core/context-compaction.ts`), aligned wi
 contextWindow = 200000;       // Claude's context window
 reserveTokens = 16384;        // Headroom below context limit
 keepRecentTokens = 20000;     // Recent messages to preserve
-MAX_SINGLE_RESULT_CHARS = 50000;  // Safety cap per tool result (tool-adapter.ts)
 ```
 
 **Algorithm**:
@@ -514,7 +513,9 @@ MAX_SINGLE_RESULT_CHARS = 50000;  // Safety cap per tool result (tool-adapter.ts
 3. **LLM summarization**: Calls `generateSummary()` to produce a structured summary (Goal, Progress, Key Decisions, Next Steps, Critical Context)
 4. **Fallback**: If LLM call fails or no API key, falls back to naive message dropping with a compaction marker
 
-**Safety cap**: Image tags (`<img:...>`) are parsed into `ImageContent` blocks first, then only text blocks >50K chars are truncated (`MAX_SINGLE_RESULT_CHARS` in `tool-adapter.ts`). Image data passes through untouched — it's handled natively by the LLM API, not as text tokens. Smaller text results stay full-size until compaction summarizes them.
+**No truncation**: Tool results pass through at full fidelity. Image tags (`<img:...>`) are parsed into `ImageContent` blocks by `tool-adapter.ts`, but neither text nor image content is truncated. Full-size data is preserved until compaction summarizes older messages.
+
+**Overflow recovery**: If the context still exceeds the API limit after compaction (e.g., due to token estimation inaccuracy, system prompt size, or multiple large recent results), `ScoopContext` catches the "prompt too long" error via `isContextOverflow()` from pi-ai, replaces oversized messages (>40K chars) with placeholders, and re-prompts the agent with an explanation. Limited to 1 retry to prevent infinite loops.
 
 ---
 

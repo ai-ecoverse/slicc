@@ -302,7 +302,8 @@ LLM-summarized context compaction aligned with pi-mono's strategy. When context 
 - **Cut point**: Walks backward from newest to keep ~`keepRecentTokens` (20000 tokens) of recent messages. Never splits assistant+toolResult pairs.
 - **Summarization**: `generateSummary()` from pi-coding-agent makes an LLM call producing a structured summary (Goal, Progress, Key Decisions, Next Steps, Critical Context).
 - **Fallback**: If the LLM call fails or no API key is available, falls back to naive message dropping with a compaction marker.
-- **Safety cap**: Image tags are parsed into `ImageContent` blocks first, then only text blocks >50K chars are truncated at execution time in `tool-adapter.ts` (`MAX_SINGLE_RESULT_CHARS`). Image data passes through untouched (handled natively by the API). No eager truncation of smaller text results.
+- **No truncation**: Tool results pass through at full fidelity — no safety cap or truncation. Image tags are parsed into `ImageContent` blocks by `tool-adapter.ts`. If oversized content causes a context overflow, the overflow recovery mechanism handles it.
+- **Overflow recovery** (`scoop-context.ts`): When the API returns a "prompt too long" error, `ScoopContext` catches it via `isContextOverflow()` from pi-ai, removes the error message, replaces oversized messages (>40K chars) with placeholders, and re-prompts the agent with an explanation. Limited to 1 retry to prevent infinite loops. Uses deep import from `@mariozechner/pi-ai/dist/utils/overflow.js` (Vite alias in both configs).
 - **Factory**: `createCompactContext(config)` returns a `transformContext` function wired into each `ScoopContext`.
 - **Import**: Deep import from `@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js` (browser-safe submodule). Vite alias in `vite.config.ts` and `vite.config.extension.ts`. Types in `src/types/pi-coding-agent-compaction.d.ts`.
 

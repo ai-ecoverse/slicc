@@ -28,7 +28,6 @@ vi.mock('@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js', () =
 }));
 
 import { compactContext, createCompactContext } from './context-compaction.js';
-import { MAX_SINGLE_RESULT_CHARS } from './tool-adapter.js';
 
 /** Helper to create an AgentMessage */
 function createMessage(role: 'user' | 'assistant' | 'toolResult', text: string): AgentMessage {
@@ -397,7 +396,7 @@ describe('createCompactContext', () => {
 
   it('full-size tool results survive until compaction', async () => {
     const compact = createCompactContext(mockConfig);
-    // A 40K tool result should NOT be truncated (under 50K safety cap)
+    // Tool results pass through at full fidelity — overflow recovery handles sizing if needed
     const largeResult = 'x'.repeat(40000);
     const messages = [
       createMessage('user', 'run tool'),
@@ -415,8 +414,3 @@ describe('createCompactContext', () => {
   });
 });
 
-describe('MAX_SINGLE_RESULT_CHARS', () => {
-  it('is 50000', () => {
-    expect(MAX_SINGLE_RESULT_CHARS).toBe(50000);
-  });
-});
