@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { BrowserAPI } from './browser-api.js';
+import { BrowserAPI, getDefaultCdpUrl } from './browser-api.js';
 import { CDPClient } from './cdp-client.js';
 
 // ---------------------------------------------------------------------------
@@ -56,6 +56,11 @@ describe('BrowserAPI', () => {
   });
 
   describe('connect / disconnect', () => {
+    it('derives the default URL from the current location when available', () => {
+      expect(getDefaultCdpUrl({ protocol: 'https:', host: 'example.com' })).toBe('wss://example.com/cdp');
+      expect(getDefaultCdpUrl({ protocol: 'http:', host: 'localhost:3030' })).toBe('ws://localhost:3030/cdp');
+    });
+
     it('connects with default URL', async () => {
       await api.connect();
       expect(mockClient.connect).toHaveBeenCalledWith({

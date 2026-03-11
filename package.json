@@ -9,8 +9,10 @@
     "build:ui": "vite build",
     "build:cli": "tsc -p tsconfig.cli.json",
     "start": "node dist/cli/index.js",
+    "start:electron": "node dist/cli/index.js --electron",
     "typecheck": "tsc --noEmit -p tsconfig.cli.json && tsc --noEmit -p tsconfig.json",
     "dev:full": "npx tsx src/cli/index.ts --dev",
+    "dev:electron": "npx tsx src/cli/index.ts --dev --electron",
     "build:extension": "vite build --config vite.config.extension.ts",
     "test": "vitest run",
     "test:watch": "vitest"
@@ -37,6 +39,7 @@
     "@types/express": "^5.0.0",
     "@types/node": "^22.13.0",
     "@types/ws": "^8.5.14",
+    "electron": "41.0.0",
     "fake-indexeddb": "6.2.5",
     "jsdom": "^28.1.0",
     "typescript": "^5.7.3",
