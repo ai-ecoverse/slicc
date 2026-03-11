@@ -288,6 +288,36 @@ describe('OffscreenBridge createCallbacks', () => {
     expect(emitted.payload.scoopJid).toBe(scoopJid);
     expect(emitted.payload.error).toBe('Something went wrong');
   });
+
+  it('onSendMessage buffers, persists, and emits text_delta + response_done', () => {
+    (bridge as any).orchestrator = mockOrchestrator;
+    const mockStore = new SessionStore();
+    (bridge as any).sessionStore = mockStore;
+
+    const targetJid = 'cone_1';
+    callbacks.onSendMessage(targetJid, 'Hello from scoop!');
+
+    // Should buffer
+    const buf = (bridge as any).getBuffer(targetJid);
+    expect(buf.length).toBe(1);
+    expect(buf[0].role).toBe('assistant');
+    expect(buf[0].content).toBe('Hello from scoop!');
+
+    // Should persist
+    expect(mockStore.saveMessages).toHaveBeenCalledWith('session-cone', expect.anything());
+
+    // Should emit text_delta then response_done
+    const events = sentMessages.map((m: any) => m.payload);
+    const textDelta = events.find((e: any) => e.eventType === 'text_delta');
+    const responseDone = events.find((e: any) => e.eventType === 'response_done');
+
+    expect(textDelta).toBeDefined();
+    expect(textDelta.scoopJid).toBe(targetJid);
+    expect(textDelta.text).toBe('Hello from scoop!');
+
+    expect(responseDone).toBeDefined();
+    expect(responseDone.scoopJid).toBe(targetJid);
+  });
 });
 
 describe('OffscreenBridge buildStateSnapshot', () => {
