@@ -54,6 +54,15 @@ interface ChromeMessageSender {
   tab?: ChromeTab;
 }
 
+interface ChromeOffscreenAPI {
+  createDocument(params: {
+    url: string;
+    reasons: string[];
+    justification: string;
+  }): Promise<void>;
+  hasDocument(): Promise<boolean>;
+}
+
 interface ChromeAPI {
   runtime: {
     /** Extension ID — truthy when running as a Chrome extension. */
@@ -61,7 +70,10 @@ interface ChromeAPI {
     /** Get the full URL to an extension-bundled resource. */
     getURL(path: string): string;
     lastError: { message?: string } | undefined;
-    sendMessage(message: unknown, callback?: (response: unknown) => void): void;
+    sendMessage(message: unknown, callback?: (response: unknown) => void): Promise<void>;
+    onInstalled?: {
+      addListener?(callback: () => void): void;
+    };
     onMessage: {
       addListener(
         callback: (
@@ -92,10 +104,12 @@ interface ChromeAPI {
     }): Promise<{ id?: number }>;
     remove(windowId: number): Promise<void>;
   };
+  offscreen: ChromeOffscreenAPI;
   debugger: ChromeDebuggerAPI;
   tabs: {
     query(queryInfo: Record<string, unknown>): Promise<ChromeTab[]>;
     create(properties: { url?: string; active?: boolean }): Promise<{ id: number }>;
+    remove(tabId: number): Promise<void>;
   };
 }
 

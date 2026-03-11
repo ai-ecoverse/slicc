@@ -16,16 +16,47 @@ import type {
   BoundingBox,
   AccessibilityNode,
 } from './types.js';
+import { createLogger } from '../core/logger.js';
 
 const DEFAULT_CDP_URL = 'ws://localhost:3000/cdp';
+const log = createLogger('browser-api');
 
 export class BrowserAPI {
   private client: CDPTransport;
   private sessionId: string | null = null;
   private attachedTargetId: string | null = null;
+  private readonly handleJavaScriptDialogOpening = async (
+    params: Record<string, unknown>,
+  ): Promise<void> => {
+    const sessionId = typeof params['sessionId'] === 'string'
+      ? params['sessionId'] as string
+      : this.sessionId;
+    if (!sessionId) return;
+
+    try {
+      await this.client.send(
+        'Page.handleJavaScriptDialog',
+        { accept: false },
+        sessionId,
+        5000,
+      );
+      log.warn('Auto-dismissed unexpected JavaScript dialog', {
+        sessionId,
+        type: params['type'],
+        message: params['message'],
+        url: params['url'],
+      });
+    } catch (error) {
+      log.warn('Failed to auto-dismiss JavaScript dialog', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
 
   constructor(client?: CDPTransport) {
     this.client = client ?? new CDPClient();
+    this.client.on('Page.javascriptDialogOpening', this.handleJavaScriptDialogOpening);
   }
 
   /**
@@ -118,6 +149,9 @@ export class BrowserAPI {
     });
     this.sessionId = result['sessionId'] as string;
     this.attachedTargetId = targetId;
+    // Keep Page events available so unexpected dialogs can be auto-dismissed
+    // before they stall the current CDP command.
+    await this.client.send('Page.enable', {}, this.sessionId);
     return this.sessionId;
   }
 
@@ -336,6 +370,7 @@ export class BrowserAPI {
 
     const nodes = result['nodes'] as Array<{
       nodeId: string;
+      backendDOMNodeId?: number;
       role: { value: string };
       name: { value: string };
       description?: { value: string };
@@ -359,6 +394,7 @@ export class BrowserAPI {
       };
       if (n.value?.value) node.value = n.value.value;
       if (n.description?.value) node.description = n.description.value;
+      if (n.backendDOMNodeId) node.backendNodeId = n.backendDOMNodeId;
       if (n.childIds) node.childIds = n.childIds;
       nodeMap.set(n.nodeId, node);
 
@@ -376,6 +412,7 @@ export class BrowserAPI {
       };
       if (node.value) result.value = node.value;
       if (node.description) result.description = node.description;
+      if (node.backendNodeId) result.backendNodeId = node.backendNodeId;
 
       if (node.childIds && node.childIds.length > 0) {
         result.children = node.childIds
@@ -389,9 +426,264 @@ export class BrowserAPI {
     return rootId ? buildTree(rootId) : { role: 'RootWebArea', name: '' };
   }
 
+  /**
+   * Click an element by its CDP backend node ID.
+   * Uses DOM.resolveNode to get an objectId, then calls .click() on it.
+   * Falls back to bounding-box click if .click() is not appropriate.
+   */
+  async clickByBackendNodeId(backendNodeId: number): Promise<void> {
+    await this.ensureConnected();
+    this.ensureAttached();
+
+    await this.client.send('DOM.enable', {}, this.sessionId!);
+    await this.client.send('Runtime.enable', {}, this.sessionId!);
+
+    // Resolve backendNodeId to a remote object
+    const resolveResult = await this.client.send(
+      'DOM.resolveNode',
+      { backendNodeId },
+      this.sessionId!,
+    );
+    const object = resolveResult['object'] as { objectId?: string } | undefined;
+    if (!object?.objectId) {
+      throw new Error(`Could not resolve backend node ${backendNodeId} to a DOM element`);
+    }
+
+    // Scroll into view and get bounding box via JS
+    const boxResult = await this.client.send(
+      'Runtime.callFunctionOn',
+      {
+        objectId: object.objectId,
+        functionDeclaration: `function() {
+          this.scrollIntoView({ block: 'center', inline: 'center' });
+          const r = this.getBoundingClientRect();
+          return { x: r.x, y: r.y, width: r.width, height: r.height };
+        }`,
+        returnByValue: true,
+      },
+      this.sessionId!,
+    );
+
+    const boxValue = (boxResult['result'] as { value?: BoundingBox })?.value;
+    if (!boxValue || boxValue.width === 0 || boxValue.height === 0) {
+      // Element has no dimensions — fall back to programmatic click
+      await this.client.send(
+        'Runtime.callFunctionOn',
+        {
+          objectId: object.objectId,
+          functionDeclaration: 'function() { this.click(); }',
+        },
+        this.sessionId!,
+      );
+      return;
+    }
+
+    // Click at center of the element's bounding box
+    const x = boxValue.x + boxValue.width / 2;
+    const y = boxValue.y + boxValue.height / 2;
+
+    await this.client.send(
+      'Input.dispatchMouseEvent',
+      { type: 'mousePressed', x, y, button: 'left', clickCount: 1 },
+      this.sessionId!,
+    );
+    await this.client.send(
+      'Input.dispatchMouseEvent',
+      { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 },
+      this.sessionId!,
+    );
+  }
+
+  /**
+   * Double-click an element by its CDP backend node ID.
+   */
+  async dblclickByBackendNodeId(backendNodeId: number, button: 'left' | 'right' | 'middle' = 'left'): Promise<void> {
+    await this.ensureConnected();
+    this.ensureAttached();
+
+    const { x, y } = await this.resolveNodeCenter(backendNodeId);
+
+    await this.client.send(
+      'Input.dispatchMouseEvent',
+      { type: 'mousePressed', x, y, button, clickCount: 1 },
+      this.sessionId!,
+    );
+    await this.client.send(
+      'Input.dispatchMouseEvent',
+      { type: 'mouseReleased', x, y, button, clickCount: 1 },
+      this.sessionId!,
+    );
+    await this.client.send(
+      'Input.dispatchMouseEvent',
+      { type: 'mousePressed', x, y, button, clickCount: 2 },
+      this.sessionId!,
+    );
+    await this.client.send(
+      'Input.dispatchMouseEvent',
+      { type: 'mouseReleased', x, y, button, clickCount: 2 },
+      this.sessionId!,
+    );
+  }
+
+  /**
+   * Hover over an element by its CDP backend node ID.
+   */
+  async hoverByBackendNodeId(backendNodeId: number): Promise<void> {
+    await this.ensureConnected();
+    this.ensureAttached();
+
+    const { x, y } = await this.resolveNodeCenter(backendNodeId);
+
+    await this.client.send(
+      'Input.dispatchMouseEvent',
+      { type: 'mouseMoved', x, y },
+      this.sessionId!,
+    );
+  }
+
+  /**
+   * Select a value on a <select> element by its CDP backend node ID.
+   */
+  async selectByBackendNodeId(backendNodeId: number, value: string): Promise<void> {
+    await this.ensureConnected();
+    this.ensureAttached();
+
+    const objectId = await this.resolveNodeObjectId(backendNodeId);
+
+    await this.client.send(
+      'Runtime.callFunctionOn',
+      {
+        objectId,
+        functionDeclaration: `function(val) { this.value = val; this.dispatchEvent(new Event('change', { bubbles: true })); }`,
+        arguments: [{ value }],
+        returnByValue: true,
+      },
+      this.sessionId!,
+    );
+  }
+
+  /**
+   * Check or uncheck a checkbox/radio element by its CDP backend node ID.
+   * Only clicks if the current state differs from the desired state.
+   * Returns the action taken.
+   */
+  async setCheckedByBackendNodeId(backendNodeId: number, checked: boolean): Promise<'toggled' | 'already'> {
+    await this.ensureConnected();
+    this.ensureAttached();
+
+    const objectId = await this.resolveNodeObjectId(backendNodeId);
+
+    const stateResult = await this.client.send(
+      'Runtime.callFunctionOn',
+      {
+        objectId,
+        functionDeclaration: `function() { return this.checked; }`,
+        returnByValue: true,
+      },
+      this.sessionId!,
+    );
+    const currentChecked = (stateResult['result'] as { value?: boolean })?.value;
+
+    if (currentChecked === checked) {
+      return 'already';
+    }
+
+    // Click to toggle
+    await this.clickByBackendNodeId(backendNodeId);
+    return 'toggled';
+  }
+
+  /**
+   * Drag from one element to another by their CDP backend node IDs.
+   */
+  async dragByBackendNodeIds(startBackendNodeId: number, endBackendNodeId: number): Promise<void> {
+    await this.ensureConnected();
+    this.ensureAttached();
+
+    const start = await this.resolveNodeCenter(startBackendNodeId);
+    const end = await this.resolveNodeCenter(endBackendNodeId);
+
+    await this.client.send(
+      'Input.dispatchMouseEvent',
+      { type: 'mousePressed', x: start.x, y: start.y, button: 'left', clickCount: 1 },
+      this.sessionId!,
+    );
+    await this.client.send(
+      'Input.dispatchMouseEvent',
+      { type: 'mouseMoved', x: end.x, y: end.y },
+      this.sessionId!,
+    );
+    await this.client.send(
+      'Input.dispatchMouseEvent',
+      { type: 'mouseReleased', x: end.x, y: end.y, button: 'left', clickCount: 1 },
+      this.sessionId!,
+    );
+  }
+
+  /**
+   * Send a raw CDP command on the current session.
+   * Used by playwright-cli for cookie operations via the Network domain.
+   */
+  async sendCDP(method: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+    await this.ensureConnected();
+    this.ensureAttached();
+    return await this.client.send(method, params, this.sessionId!);
+  }
+
   // -------------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------------
+
+  /**
+   * Resolve a backend node ID to a remote object ID.
+   */
+  private async resolveNodeObjectId(backendNodeId: number): Promise<string> {
+    await this.client.send('DOM.enable', {}, this.sessionId!);
+    await this.client.send('Runtime.enable', {}, this.sessionId!);
+
+    const resolveResult = await this.client.send(
+      'DOM.resolveNode',
+      { backendNodeId },
+      this.sessionId!,
+    );
+    const object = resolveResult['object'] as { objectId?: string } | undefined;
+    if (!object?.objectId) {
+      throw new Error(`Could not resolve backend node ${backendNodeId} to a DOM element`);
+    }
+    return object.objectId;
+  }
+
+  /**
+   * Resolve a backend node ID to the center point of its bounding box.
+   * Scrolls the element into view first.
+   */
+  private async resolveNodeCenter(backendNodeId: number): Promise<{ x: number; y: number }> {
+    const objectId = await this.resolveNodeObjectId(backendNodeId);
+
+    const boxResult = await this.client.send(
+      'Runtime.callFunctionOn',
+      {
+        objectId,
+        functionDeclaration: `function() {
+          this.scrollIntoView({ block: 'center', inline: 'center' });
+          const r = this.getBoundingClientRect();
+          return { x: r.x, y: r.y, width: r.width, height: r.height };
+        }`,
+        returnByValue: true,
+      },
+      this.sessionId!,
+    );
+
+    const boxValue = (boxResult['result'] as { value?: BoundingBox })?.value;
+    if (!boxValue || boxValue.width === 0 || boxValue.height === 0) {
+      throw new Error(`Element with backend node ${backendNodeId} has no dimensions`);
+    }
+
+    return {
+      x: boxValue.x + boxValue.width / 2,
+      y: boxValue.y + boxValue.height / 2,
+    };
+  }
 
   /**
    * Lazily connect (or reconnect) to the CDP proxy.

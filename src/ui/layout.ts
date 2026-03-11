@@ -90,6 +90,7 @@ export class Layout {
   public onModelChange?: (model: string) => void;
   public onScoopSelect?: (scoop: RegisteredScoop) => void;
   public onClearChat?: () => Promise<void>;
+  public onClearFilesystem?: () => Promise<void>;
 
   private scoopsWidth = 0.15;
   private leftWidth = 0.45;
@@ -113,6 +114,16 @@ export class Layout {
   /** Update scoop switcher status (extension mode). */
   updateScoopSwitcherStatus?(scoopJid: string, status: ScoopTabState['status']): void {
     this.scoopSwitcher?.updateStatus(scoopJid, status);
+  }
+
+  /** Set the selected scoop in the switcher dropdown (extension mode). */
+  setScoopSwitcherSelected?(jid: string): void {
+    this.scoopSwitcher?.setSelected(jid);
+  }
+
+  /** Re-render the scoop switcher dropdown (extension mode). */
+  refreshScoopSwitcher?(): void {
+    this.scoopSwitcher?.refresh();
   }
 
   // ── Shared: Header ──────────────────────────────────────────────────
@@ -588,16 +599,7 @@ export class Layout {
     // Clear FS
     this.clearFsBtn = this.iconBtn(this.svgIcon(icons.database), 'Clear Filesystem');
     this.clearFsBtn.addEventListener('click', async () => {
-      indexedDB.deleteDatabase('virtual-fs');
-      indexedDB.deleteDatabase('slicc-fs');
-      try {
-        const root = await navigator.storage.getDirectory();
-        const dir = root as FileSystemDirectoryHandle &
-          { keys(): AsyncIterableIterator<string> };
-        for await (const name of dir.keys()) {
-          await dir.removeEntry(name, { recursive: true });
-        }
-      } catch { /* OPFS not available or already empty */ }
+      await this.onClearFilesystem?.();
       location.reload();
     });
     this.actionsEl.appendChild(this.clearFsBtn);

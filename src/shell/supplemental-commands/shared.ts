@@ -104,6 +104,12 @@ export function detectMimeType(path: string): string {
   return getMimeType(path);
 }
 
+export function toPreviewUrl(vfsPath: string): string {
+  const isExt = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+  const previewPath = `/preview${vfsPath}`;
+  return isExt ? chrome.runtime.getURL(previewPath) : `http://localhost:3000${previewPath}`;
+}
+
 export function formatConsoleArg(value: unknown): string {
   if (typeof value === 'string') return value;
   if (value === null || value === undefined) return String(value);

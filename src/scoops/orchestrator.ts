@@ -242,13 +242,31 @@ export class Orchestrator {
     return this.scoops.get(jid);
   }
 
-  /** Clear all messages from the orchestrator DB and reset timestamps. */
+  /** Wipe the virtual filesystem and re-seed default files (skills, shared CLAUDE.md). */
+  async resetFilesystem(): Promise<void> {
+    // Destroy all scoop contexts (they hold references to the old VFS)
+    for (const [jid, ctx] of this.contexts.entries()) {
+      ctx.stop();
+      this.contexts.delete(jid);
+    }
+    // Re-create the VFS with wipe: true
+    this.sharedFs = await VirtualFS.create({ dbName: 'slicc-fs', wipe: true });
+    await this.ensureRootStructure();
+    await this.ensureGlobalMemory();
+    log.info('Filesystem reset and defaults re-seeded');
+  }
+
+  /** Clear all messages from the orchestrator DB, agent sessions, and live agent contexts. */
   async clearAllMessages(): Promise<void> {
     await db.clearAllMessages();
     if (this.sessionStore) {
       await this.sessionStore.clearAll().catch((err) => {
         log.warn('Failed to clear agent sessions', { error: err instanceof Error ? err.message : String(err) });
       });
+    }
+    // Clear in-memory conversation history from all live scoop agents
+    for (const ctx of this.contexts.values()) {
+      ctx.clearMessages();
     }
     this.lastAgentTimestamp.clear();
     for (const jid of this.scoops.keys()) {

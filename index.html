@@ -415,10 +415,49 @@
         white-space: normal;
         color: var(--s2-gray-800);
       }
+      .msg--assistant .msg__error {
+        margin: var(--s2-spacing-75) 0;
+      }
+      .msg--assistant .msg__error-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--s2-negative);
+        font-size: 10px;
+        font-weight: 600;
+        font-family: var(--s2-font-mono);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .msg--assistant .msg__error-label::before {
+        content: '!';
+        width: 16px;
+        height: 16px;
+        border-radius: var(--s2-radius-s);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: color-mix(in srgb, var(--s2-negative) 18%, transparent);
+        border: 1px solid color-mix(in srgb, var(--s2-negative) 45%, var(--s2-border-subtle));
+      }
+      .msg--assistant .msg__error-body {
+        margin-top: 2px;
+        padding: var(--s2-spacing-75);
+        border-left: 2px solid color-mix(in srgb, var(--s2-negative) 60%, var(--s2-border-subtle));
+        background: color-mix(in srgb, var(--s2-negative) 8%, var(--s2-bg-sunken));
+        border-radius: var(--s2-radius-s);
+        color: var(--s2-content-secondary);
+        font-family: var(--s2-font-mono);
+        font-size: var(--s2-font-size-50);
+        white-space: pre-wrap;
+        overflow-x: auto;
+      }
+      .msg--assistant .msg__error-body code {
+        font-size: inherit;
+      }
 
-      /* Continuation messages (same sender, no label) — indent to align with content */
+      /* Continuation messages (same sender, no label) — indent message content only */
       .msg-group--continuation .msg { padding-left: 26px; }
-      .msg-group--continuation .tool-call { margin-left: 26px; }
 
       /* S2 Detail typography for role labels */
       .msg__role {
@@ -1030,6 +1069,77 @@
         color: var(--s2-content-default);
       }
       .dialog__btn--secondary:hover { background: var(--s2-gray-200); }
+
+      /* ================================================================== */
+      /* Skill drag/drop install feedback                                   */
+      /* ================================================================== */
+      .skill-drop-overlay {
+        position: fixed; inset: 0;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(0,0,0,.38);
+        backdrop-filter: blur(3px);
+        opacity: 0; pointer-events: none;
+        transition: opacity var(--s2-transition-default);
+        z-index: 180;
+      }
+      .skill-drop-overlay--visible { opacity: 1; }
+      .skill-drop-overlay__card {
+        min-width: min(420px, calc(100vw - 32px));
+        max-width: calc(100vw - 32px);
+        padding: var(--s2-spacing-400);
+        border-radius: var(--s2-radius-xl);
+        background: color-mix(in srgb, var(--s2-bg-layer-2) 92%, transparent);
+        border: 1px dashed var(--s2-accent);
+        box-shadow: var(--s2-shadow-elevated);
+        text-align: center;
+      }
+      .skill-drop-overlay__title {
+        font-size: var(--s2-font-size-300);
+        font-weight: 700;
+        color: var(--s2-content-default);
+      }
+      .skill-drop-overlay__desc {
+        margin-top: var(--s2-spacing-75);
+        color: var(--s2-content-secondary);
+        font-size: var(--s2-font-size-75);
+        font-family: var(--s2-font-mono);
+        word-break: break-word;
+      }
+
+      .skill-drop-toast-container {
+        position: fixed;
+        top: calc(var(--s2-header-height) + var(--s2-spacing-200));
+        right: var(--s2-spacing-200);
+        display: flex;
+        flex-direction: column;
+        gap: var(--s2-spacing-100);
+        z-index: 190;
+        pointer-events: none;
+      }
+      .skill-drop-toast {
+        max-width: min(420px, calc(100vw - 32px));
+        padding: var(--s2-spacing-200) var(--s2-spacing-300);
+        border-radius: var(--s2-radius-default);
+        background: var(--s2-bg-layer-2);
+        color: var(--s2-content-default);
+        border: 1px solid var(--s2-border-subtle);
+        box-shadow: var(--s2-shadow-elevated);
+        font-size: var(--s2-font-size-75);
+        line-height: 1.45;
+        opacity: 0;
+        transform: translateY(-8px);
+        transition: opacity 160ms ease, transform 160ms ease;
+      }
+      .skill-drop-toast--visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      .skill-drop-toast--success {
+        border-color: color-mix(in srgb, var(--s2-positive) 55%, var(--s2-border-subtle));
+      }
+      .skill-drop-toast--error {
+        border-color: color-mix(in srgb, var(--s2-negative) 65%, var(--s2-border-subtle));
+      }
     </style>
   </head>
   <body>

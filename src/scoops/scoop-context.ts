@@ -18,7 +18,7 @@ import { Agent, adaptTools, createLogger } from '../core/index.js';
 import { compactContext } from '../core/context-compaction.js';
 import type { AgentEvent as CoreAgentEvent, AgentMessage, AssistantMessage, AssistantMessageEvent, TextContent, Model } from '../core/index.js';
 import type { SessionStore } from '../core/session.js';
-import { createFileTools, createBashTool, createSearchTools, createBrowserTool, createJavaScriptTool } from '../tools/index.js';
+import { createFileTools, createBashTool, createSearchTools, createJavaScriptTool } from '../tools/index.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import { getApiKey, resolveCurrentModel, getSelectedProvider } from '../ui/provider-settings.js';
 import { loadSkills, formatSkillsForPrompt, createDefaultSkills, type Skill } from './skills.js';
@@ -90,7 +90,8 @@ export class ScoopContext {
 
       // Create shell — cone starts at /, scoops at /scoops/{folder}/workspace
       const cwd = this.scoop.isCone ? '/' : `/scoops/${this.scoop.folder}/workspace`;
-      this.shell = new WasmShell({ fs: this.fs as VirtualFS, cwd });
+      const browser = this.callbacks.getBrowserAPI();
+      this.shell = new WasmShell({ fs: this.fs as VirtualFS, cwd, browserAPI: browser });
       log.info('WasmShell initialized', { folder: this.scoop.folder });
 
       // Create default skills if needed
@@ -115,12 +116,10 @@ export class ScoopContext {
       };
       const nanoClawTools = createNanoClawTools(nanoClawToolsConfig);
 
-      // Create tools (including browser and javascript)
-      const browser = this.callbacks.getBrowserAPI();
+      // Create tools (browser automation is now via playwright-cli shell command)
       const legacyTools = [
         ...createFileTools(this.fs as VirtualFS),
         createBashTool(this.shell),
-        createBrowserTool(browser, this.fs as VirtualFS),
         ...createSearchTools(this.fs as VirtualFS),
         createJavaScriptTool(this.fs as VirtualFS),
         ...nanoClawTools,
@@ -200,7 +199,9 @@ export class ScoopContext {
       log.info('ScoopContext initialized', { folder: this.scoop.folder, toolCount: tools.length });
 
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = err instanceof Error ? err.message
+        : (typeof err === 'object' && err !== null) ? JSON.stringify(err)
+        : String(err);
       log.error('ScoopContext init failed', { folder: this.scoop.folder, error: message });
       this.setStatus('error');
       this.callbacks.onError(`Failed to initialize: ${message}`);
@@ -278,6 +279,11 @@ export class ScoopContext {
     this.setStatus('ready');
   }
 
+  /** Clear the agent's in-memory conversation history (used by clear-chat). */
+  clearMessages(): void {
+    this.agent?.clearMessages();
+  }
+
   /** Get the scoop's filesystem */
   getFS(): VirtualFS | RestrictedFS | null {
     return this.fs;
@@ -327,12 +333,13 @@ export class ScoopContext {
       }
 
       case 'tool_execution_end': {
-        const result = event.result as { content: Array<{ type: string; text?: string }> };
-        const textContent = result?.content
-          ?.filter((c) => c.type === 'text')
-          .map((c) => c.text)
-          .join('\n') ?? '';
-        this.callbacks.onToolEnd?.(event.toolName, textContent, event.isError);
+        const result = event.result as { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> };
+        const parts: string[] = [];
+        for (const c of result?.content ?? []) {
+          if (c.type === 'text' && c.text) parts.push(c.text);
+          if (c.type === 'image' && c.data && c.mimeType) parts.push(`<img:data:${c.mimeType};base64,${c.data}>`);
+        }
+        this.callbacks.onToolEnd?.(event.toolName, parts.join('\n'), event.isError);
         break;
       }
 

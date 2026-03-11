@@ -8,7 +8,42 @@
  */
 
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
-import type { ToolDefinition } from './types.js';
+import type { ToolDefinition, ImageContent, TextContent } from './types.js';
+
+/** Regex to match `<img:data:image/TYPE;base64,DATA>` tags in tool result text. */
+const IMG_TAG_RE = /<img:(data:(image\/[^;]+);base64,([^>]+))>/g;
+
+/**
+ * Parse a tool result string, extracting `<img:...>` tags into ImageContent blocks.
+ * Returns an array of TextContent and ImageContent blocks suitable for the agent message.
+ */
+export function parseToolResultContent(text: string): (TextContent | ImageContent)[] {
+  const blocks: (TextContent | ImageContent)[] = [];
+  let lastIndex = 0;
+
+  for (const match of text.matchAll(IMG_TAG_RE)) {
+    // Add any text before this match
+    const before = text.slice(lastIndex, match.index);
+    if (before.trim()) {
+      blocks.push({ type: 'text', text: before.trimEnd() });
+    }
+    // Add the image as a proper content block
+    blocks.push({
+      type: 'image',
+      mimeType: match[2],
+      data: match[3],
+    });
+    lastIndex = match.index! + match[0].length;
+  }
+
+  // Add any remaining text after the last match
+  const remaining = text.slice(lastIndex);
+  if (remaining.trim() || blocks.length === 0) {
+    blocks.push({ type: 'text', text: remaining || text });
+  }
+
+  return blocks;
+}
 
 /**
  * Wrap a legacy ToolDefinition as a pi-compatible AgentTool.
@@ -27,7 +62,7 @@ export function adaptTool(tool: ToolDefinition): AgentTool<any> {
     ): Promise<AgentToolResult<any>> {
       const result = await tool.execute(params);
       return {
-        content: [{ type: 'text', text: result.content }],
+        content: parseToolResultContent(result.content),
         details: { isError: result.isError },
       };
     },

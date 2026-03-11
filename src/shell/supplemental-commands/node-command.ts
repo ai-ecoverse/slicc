@@ -194,6 +194,60 @@ export function createNodeCommand(): Command {
         }
 
         const execId = `node-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+        // Register a temporary VFS handler so fs.* calls from the sandbox
+        // are handled against the real VFS via ctx.fs (same pattern as jsh-executor.ts).
+        const vfsHandler = (event: MessageEvent) => {
+          const msg = event.data;
+          if (!msg || msg.type !== 'vfs') return;
+          (async () => {
+            try {
+              let result: unknown;
+              const resolved = msg.args?.[0] ? ctx.fs.resolvePath(ctx.cwd, msg.args[0]) : msg.args?.[0];
+              switch (msg.op) {
+                case 'readFile':
+                  result = await ctx.fs.readFile(resolved);
+                  break;
+                case 'readFileBinary':
+                  result = await ctx.fs.readFileBuffer(resolved);
+                  break;
+                case 'writeFile':
+                  await ctx.fs.writeFile(resolved, msg.args[1]);
+                  result = true;
+                  break;
+                case 'writeFileBinary':
+                  await ctx.fs.writeFile(resolved, msg.binaryData ?? new Uint8Array());
+                  result = true;
+                  break;
+                case 'readDir':
+                  result = await ctx.fs.readdir(resolved);
+                  break;
+                case 'exists':
+                  result = await ctx.fs.exists(resolved);
+                  break;
+                case 'stat': {
+                  const st = await ctx.fs.stat(resolved);
+                  result = { isDirectory: st.isDirectory, isFile: st.isFile, size: st.size };
+                  break;
+                }
+                case 'mkdir':
+                  await ctx.fs.mkdir(resolved, { recursive: true });
+                  result = true;
+                  break;
+                case 'rm':
+                  await ctx.fs.rm(resolved, { recursive: true });
+                  result = true;
+                  break;
+              }
+              sandbox!.contentWindow!.postMessage({ type: 'vfs_response', id: msg.id, result }, '*');
+            } catch (err) {
+              const errMsg = err instanceof Error ? err.message : String(err);
+              sandbox!.contentWindow!.postMessage({ type: 'vfs_response', id: msg.id, error: errMsg }, '*');
+            }
+          })();
+        };
+        window.addEventListener('message', vfsHandler);
+
         const result = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
           let timeout: ReturnType<typeof setTimeout>;
           const handler = (event: MessageEvent) => {
@@ -219,6 +273,9 @@ export function createNodeCommand(): Command {
           window.addEventListener('message', handler);
           sandbox!.contentWindow!.postMessage({ type: 'exec', id: execId, code: wrappedCode }, '*');
         });
+
+        // Clean up VFS listener after execution completes
+        window.removeEventListener('message', vfsHandler);
 
         return {
           stdout: result.stdout,

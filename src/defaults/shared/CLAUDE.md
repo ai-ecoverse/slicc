@@ -71,6 +71,30 @@ To close a tab: use `browser` action `evaluate` with expression `window.close()`
 - Delegate work to scoops and react when they finish
 - Respond to licks (webhooks, scheduled tasks)
 
+## Viewing Pages and Images
+
+**What you CAN see:**
+- **`open --view <path>`** (or `-v`) — reads an image from VFS and returns it so you can see it. Works with PNG, JPEG, GIF, WebP, SVG.
+- **`playwright-cli screenshot`** + **`open --view <path>`** — take a screenshot to file, then view it. Example: `playwright-cli screenshot --filename=/tmp/shot.png && open --view /tmp/shot.png`
+- **`playwright-cli snapshot`** — returns an accessibility tree (text). Use this to verify page content without vision, or as a required step before `screenshot`.
+
+**What only the human sees:**
+- **`open <path>`** (no flags) — opens VFS files in a browser tab.
+- **`imgcat <path>`** — displays an image in the terminal preview.
+
+**Workflow to verify a page you created:**
+1. `open /workspace/app/index.html` — serves it in a tab (human can see it)
+2. `playwright-cli tab-list` — find the tab by matching the preview URL from step 1
+3. `playwright-cli tab-select <targetId>` — target that tab
+4. `playwright-cli snapshot` — required before screenshot; also gives you text content
+5. `playwright-cli screenshot --filename=/tmp/shot.png` — save screenshot to file
+6. `open --view /tmp/shot.png` — now you can see it
+
+**Do NOT:**
+- Try to `read_file` on a PNG, `base64` encode it, or `convert` it to view images
+- Run `imgcat` or `cat` on screenshots expecting to see them yourself
+- Open a screenshot with `open` and then try to screenshot *that* tab
+
 ## Filesystem
 
 The virtual filesystem is stored in IndexedDB and survives tab closes and page refreshes. To keep work on disk, mount a local directory:
@@ -88,7 +112,20 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **webhook/crontask** — Set up licks (external event triggers)
 - **git** — Full git support (clone, commit, push, pull)
 - **node -e / python3 -c** — Execute JavaScript or Python
-- **open <url>** — Open URL in browser
+- **open <path|url>** — Preview/serve VFS files or open URLs in a new browser tab. Use this to serve HTML, images, etc. to the user. Example: `open /workspace/myapp/index.html`
+- **playwright-cli** — Browser automation (built-in, no SKILL.md lookup needed). Key subcommands: `tab-list`, `tab-select <id>`, `snapshot`, `screenshot [--filename=<path>]`, `open <url>`, `click <ref>`, `fill <ref> "text"`, `close`. Run `playwright-cli --help` for full list.
+
+## Environment: This Is NOT a Regular Linux Box
+
+This is a sandboxed browser-based VFS environment. Many standard tools (e.g. `python3 -m http.server`, `npx serve`, `nginx`) do **not exist or don't work here**.
+
+**Before reaching for familiar patterns, run `commands` to see what's actually available**, and use `<command> --help` when unsure how something works.
+
+Key things that work differently:
+- **Serving files**: Use `open /path/to/file` — it serves VFS files via the preview service worker. No HTTP server needed. The output includes the preview URL (e.g. `opened /workspace/app/index.html → http://localhost:3000/preview/workspace/app/index.html`).
+- **Serving + screenshotting**: `open` already opens the tab. Do NOT use `playwright-cli open` with the same URL — that opens a duplicate tab. Instead, use `playwright-cli tab-list` to find the tab `open` created (match by URL from the output), then `playwright-cli tab-select <targetId>` to target it for screenshots/snapshots. **Never manually construct preview URLs** — always use the URL from `open`'s output.
+- **No long-running servers**: You can't start background daemons. The `open` command handles serving.
+- **No package managers**: No `apt`, `npm install`, `pip install`. Use what's already available or write `.jsh` scripts.
 
 ## Skills
 

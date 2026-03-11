@@ -164,6 +164,7 @@ describe('BrowserAPI', () => {
         targetId: 'target-1',
         flatten: true,
       });
+      expect(mockClient.send).toHaveBeenCalledWith('Page.enable', {}, 'sess-1');
     });
 
     it('detaches from current target before attaching to new one', async () => {
@@ -189,6 +190,28 @@ describe('BrowserAPI', () => {
       expect(mockClient.send).not.toHaveBeenCalledWith(
         'Target.detachFromTarget',
         expect.anything(),
+      );
+    });
+
+    it('auto-dismisses unexpected JavaScript dialogs for the attached session', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        sessionId: 'sess-1',
+      });
+      await api.attachToPage('target-1');
+
+      mockClient._fireEvent('Page.javascriptDialogOpening', {
+        sessionId: 'sess-1',
+        type: 'alert',
+        message: 'blocked',
+      });
+
+      await Promise.resolve();
+
+      expect(mockClient.send).toHaveBeenCalledWith(
+        'Page.handleJavaScriptDialog',
+        { accept: false },
+        'sess-1',
+        5000,
       );
     });
   });

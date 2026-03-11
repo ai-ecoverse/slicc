@@ -12,6 +12,62 @@ import { createLogger } from '../core/logger.js';
 
 const log = createLogger('tool:bash');
 
+const SEARCH_COMMAND_PREFIX = /^(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:command\s+)?(?:grep|egrep|fgrep|rg)\b/;
+
+function getLastCommandSegment(command: string): string {
+  let current = '';
+  let quote: '"' | '\'' | null = null;
+  let escaped = false;
+
+  for (let i = 0; i < command.length; i++) {
+    const char = command[i];
+
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      current += char;
+      escaped = true;
+      continue;
+    }
+
+    if (quote) {
+      current += char;
+      if (char === quote) quote = null;
+      continue;
+    }
+
+    if (char === '"' || char === '\'') {
+      current += char;
+      quote = char;
+      continue;
+    }
+
+    if (char === ';' || char === '|') {
+      current = '';
+      continue;
+    }
+
+    if ((char === '&' || char === '|') && command[i + 1] === char) {
+      current = '';
+      i++;
+      continue;
+    }
+
+    current += char;
+  }
+
+  return current.trim();
+}
+
+function isExpectedNoMatchSearch(command: string, exitCode: number, stderr: string): boolean {
+  if (exitCode !== 1 || stderr.trim()) return false;
+  return SEARCH_COMMAND_PREFIX.test(getLastCommandSegment(command));
+}
+
 /** Create the bash tool bound to a WasmShell instance. */
 export function createBashTool(shell: WasmShell): ToolDefinition {
   return {
@@ -25,7 +81,7 @@ export function createBashTool(shell: WasmShell): ToolDefinition {
       'head, tail, fold, nl, rev, column, paste, join, comm, expand, strings, od. ' +
       'Data formats: jq (JSON), base64, md5sum, sha256sum. ' +
       'File operations: find, diff, tar, gzip, gunzip, cp, mv, rm, mkdir, touch, chmod, du, file, dirname, basename, tee, xargs, zip, unzip. ' +
-      'Custom commands: git, open (URL tab/file download), sqlite3, node (-e shim with fs bridge), python3/python. ' +
+      'Custom commands: git, open (serve VFS files in browser tab, --view for agent vision, --download for file save), sqlite3, node (-e shim with fs bridge), python3/python. ' +
       'Networking: curl (full HTTP client — GET, POST, PUT, DELETE with headers, data, auth). ' +
       'Utilities: seq, date, printf, expr, env, export, test/[, true, false, read.',
     inputSchema: {
@@ -54,7 +110,7 @@ export function createBashTool(shell: WasmShell): ToolDefinition {
 
         return {
           content: output,
-          isError: result.exitCode !== 0,
+          isError: result.exitCode !== 0 && !isExpectedNoMatchSearch(command, result.exitCode, result.stderr),
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

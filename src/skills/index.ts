@@ -22,6 +22,7 @@
 
 export { applySkill } from './apply.js';
 export { discoverSkills, getSkillInfo, readSkillInstructions } from './discover.js';
+export { installSkillFromDrop } from './install-from-drop.js';
 export { uninstallSkill } from './uninstall.js';
 export {
   initSkillsSystem,
@@ -30,6 +31,7 @@ export {
 } from './state.js';
 export {
   readManifest,
+  parseManifestContent,
   checkDependencies,
   checkConflicts,
 } from './manifest.js';
@@ -38,6 +40,9 @@ export {
   STATE_FILE,
   SKILLS_DIR,
   MANIFEST_FILE,
+  SKILL_ARCHIVE_EXTENSION,
+  MAX_SKILL_ARCHIVE_SIZE_BYTES,
+  WORKSPACE_SKILLS_PATH,
   SKILL_FILE,
   SKILLS_SYSTEM_VERSION,
 } from './constants.js';

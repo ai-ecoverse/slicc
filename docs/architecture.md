@@ -10,7 +10,7 @@
 | Git | `src/git/` | isomorphic-git wrapper | `git-commands.ts` | N/A |
 | Skills | `src/skills/` | Skill package manager | `apply.ts` | N/A |
 | CDP | `src/cdp/` | Chrome DevTools Protocol | `browser-api.ts` | `browser-api.test.ts` |
-| Tools | `src/tools/` | Agent tools (bash, file, browser, javascript, search) | `bash-tool.ts` | `bash-tool.test.ts` |
+| Tools | `src/tools/` | Tool factories; active scoop surface is file + bash + grep/find + javascript | `bash-tool.ts` | `bash-tool.test.ts` |
 | Core Agent | `src/core/` | pi-mono agent loop + streaming | `index.ts` | `agent.test.ts` |
 | Scoops Orchestrator | `src/scoops/` | Multi-agent system (cone + scoops) | `orchestrator.ts` | N/A |
 | UI | `src/ui/` | Chat, Terminal, Files, Memory panels | `main.ts` | `types.test.ts` |
@@ -24,13 +24,14 @@
 
 | File | Purpose |
 |---|---|
-| `browser-api.ts` | High-level Playwright-inspired API (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree) |
+| `browser-api.ts` | High-level Playwright-inspired API (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree); used by both `browser-tool.ts` and the `playwright-cli` shell command path |
 | `cdp-client.ts` | WebSocket-based CDP client (CLI mode, connects to `ws://localhost:3000/cdp`) |
 | `debugger-client.ts` | Chrome debugger API client (extension mode, uses `chrome.debugger`) |
 | `har-recorder.ts` | HAR 1.2 recorder for network traffic; saves snapshots to VFS on navigation |
 | `transport.ts` | CDPTransport interface (abstracts CDP/debugger implementations) |
 | `index.ts` | Re-exports + auto-selects transport based on extension detection |
 | `types.ts` | TargetInfo, PageInfo, EvaluateOptions, AccessibilityNode, etc. |
+| `offscreen-cdp-proxy.ts` | CDPTransport over chrome.runtime messages (offscreen → service worker → chrome.debugger) |
 
 ### src/cli/ — Standalone CLI Server
 
@@ -55,8 +56,11 @@
 
 | File | Purpose |
 |---|---|
-| `service-worker.ts` | Manifest V3 service worker; opens side panel on action click |
-| `chrome.d.ts` | Minimal typed declarations for chrome.debugger, chrome.tabs, chrome.sidePanel, etc. |
+| `service-worker.ts` | Manifest V3 service worker; message relay between panel and offscreen + CDP proxy via chrome.debugger |
+| `offscreen.ts` | Agent engine bootstrap in offscreen document (Orchestrator, VFS, Shell, tools) |
+| `offscreen-bridge.ts` | Orchestrator ↔ chrome.runtime message bridge; persists chat to `browser-coding-agent` IndexedDB |
+| `messages.ts` | Typed message envelopes: PanelToOffscreen, OffscreenToPanel, CdpProxy |
+| `chrome.d.ts` | Typed declarations for chrome.debugger, chrome.tabs, chrome.sidePanel, chrome.offscreen, etc. |
 
 ### src/fs/ — Virtual Filesystem
 
@@ -107,13 +111,14 @@
 | `crontask-command.ts` | `crontask` — schedule cron jobs (dispatches licks to scoops); backed by node-cron |
 | `imgcat-command.ts` | `imgcat` — display images inline in terminal |
 | `node-command.ts` | `node -e` — execute JavaScript (CLI: AsyncFunction, extension: sandbox iframe) |
-| `open-command.ts` | `open <url>` — open URL in new browser tab or download file |
+| `open-command.ts` | `open <path\|url>` — serve VFS files via preview SW or open URLs in browser tab; `--download` / `-d` forces download; `--view` / `-v` returns image inline for agent vision |
 | `pdftk-command.ts` | `pdftk` — PDF manipulation (concat, split, rotate, burst, etc.) |
 | `python-command.ts` | `python3/python -c` — execute Python via Pyodide (~13MB bundled, loaded from `chrome.runtime.getURL('pyodide/')`) |
-| `shared.ts` | NodeExitError, nodeRuntimeState, formatConsoleArg utilities |
+| `shared.ts` | Shared utilities: `toPreviewUrl()` (dual-mode preview SW URL), `isLikelyUrl()`, `basename()`, `dirname()`, NodeExitError, nodeRuntimeState, formatConsoleArg |
 | `sqlite-command.ts` | `sqlite3` — SQLite database operations (in-memory or VFS-backed) |
 | `unzip-command.ts` | `unzip` — extract archives |
 | `upskill-command.ts` | `upskill` — install skills from GitHub/ClawHub |
+| `uname-command.ts` | `uname` — print the current browser user agent |
 | `webhook-command.ts` | `webhook` — manage webhooks for event-driven automation |
 | `which-command.ts` | `which` — resolve command to path (built-ins: `/usr/bin/<name>`, `.jsh` scripts: actual VFS path) |
 | `zip-command.ts` | `zip` — create archives |
@@ -124,6 +129,7 @@
 |---|---|
 | `apply.ts` | applySkill: installs a skill from `/workspace/skills/`, validates manifest, executes post-install steps |
 | `discover.ts` | discoverSkills: scans VFS for `SKILL.md` files; getSkillInfo: fetch skill metadata; readSkillInstructions: load skill instructions |
+| `install-from-drop.ts` | installSkillFromDrop: validates and unpacks dropped `.skill` ZIP archives into `/workspace/skills/{name}` |
 | `uninstall.ts` | uninstallSkill: removes skill from state, rolls back installed files |
 | `state.ts` | initSkillsSystem: init `.slicc/state.json`; readState/writeState: persistent skill state |
 | `manifest.ts` | parseManifest: YAML parser for `manifest.yaml` (name, version, dependencies, conflicts, files) |
@@ -136,7 +142,7 @@
 | File | Purpose |
 |---|---|
 | `orchestrator.ts` | Manages scoop contexts, routes messages, handles responses, owns shared VirtualFS |
-| `scoop-context.ts` | Per-scoop agent instance (RestrictedFS, WasmShell, Agent, skills, NanoClaw tools) |
+| `scoop-context.ts` | Per-scoop agent instance (RestrictedFS, WasmShell, Agent, skills, NanoClaw tools); wires file tools + `bash` + `grep`/`find` + `javascript`, with browser automation via `playwright-cli` shell commands |
 | `nanoclaw-tools.ts` | Scoop tools: `send_message`; cone-only tools: `list_scoops`, `scoop_scoop`, `feed_scoop`, `drop_scoop`, `update_global_memory` |
 | `db.ts` | IndexedDB (`slicc-groups` DB v3): scoops, messages, sessions, tasks, state, webhooks, crontasks stores |
 | `lick-manager.ts` | Browser-side lick management (webhooks + crontasks); all state in IndexedDB |
@@ -152,26 +158,27 @@
 |---|---|
 | `bash-tool.ts` | `bash` tool: execute shell commands via WasmShell |
 | `file-tools.ts` | `read_file`, `write_file`, `edit_file` tools for VirtualFS operations |
-| `browser-tool.ts` | `browser` tool with sub-actions: list_tabs, navigate, screenshot, evaluate, click, type, serve, show_image, record_network |
+| `browser-tool.ts` | Maintained `browser` tool module with tab/snapshot/screenshot actions; not currently wired into `src/scoops/scoop-context.ts` |
 | `javascript-tool.ts` | `javascript` tool: execute JS in the browser context (fs.readDir, fs.readFile, fs.readFileBinary access) |
-| `search-tools.ts` | `grep` and `find` tools: content search and file pattern matching |
+| `search-tools.ts` | `grep` and `find` agent tools for recursive VirtualFS search |
 | `index.ts` | Tool factory functions (createBashTool, createFileTools, createBrowserTool, etc.) |
 
 ### src/ui/ — User Interface
 
 | File | Purpose |
 |---|---|
-| `main.ts` | Entry point: initializes layout, checks API key, bootstraps orchestrator, wires events |
+| `main.ts` | Entry point: `main()` for CLI, `mainExtension()` for extension (uses OffscreenClient). Handles layout, API key, orchestrator, skill drag/drop |
+| `offscreen-client.ts` | Extension-only: side panel's interface to offscreen engine. Provides AgentHandle + Orchestrator-compatible facade via chrome.runtime messages |
 | `layout.ts` | Split-pane (CLI) or tabbed (extension) layout; auto-selects based on extension detection |
-| `chat-panel.ts` | Message list + input with streaming support; connects to AgentHandle |
+| `chat-panel.ts` | Message list + input with streaming support; voice input (Web Speech API); connects to AgentHandle |
 | `terminal-panel.ts` | xterm.js terminal UI; exposes WasmShell output |
 | `file-browser-panel.ts` | File tree browser; download files/ZIP folders; navigate filesystem |
 | `memory-panel.ts` | Global memory editor (IndexedDB-backed; shared across all scoops) |
 | `scoops-panel.ts` | Scoop list (CLI mode left sidebar); create/delete/view scoops |
 | `scoop-switcher.ts` | Dropdown menu for scoop selection (extension mode) |
 | `message-renderer.ts` | Renders user messages, assistant messages, tool calls, tool results as HTML |
-| `chat-panel.ts` | Message list + input; voice input support (Web Speech API) |
 | `voice-input.ts` | Voice mode toggle; auto-sends on 2.5s silence; falls back to popup in extension mode |
+| `skill-drop.ts` | Pure helpers for detecting supported dropped `.skill` files |
 | `preview-sw.ts` | Service Worker that intercepts `/preview/*` and serves VFS content (enables in-browser app previews) |
 | `session-store.ts` | IndexedDB session storage (`browser-coding-agent` DB): conversation history per session |
 | `provider-settings.ts` | API provider + model selection; stores settings in localStorage |
@@ -205,8 +212,46 @@
 ### Special Build Artifacts
 
 - **preview-sw.ts**: Built as standalone IIFE via esbuild (not rollup). Dev: Vite plugin bundles on-the-fly. Prod: `closeBundle` hook writes bundle.
-- **Extension assets**: Pyodide (~13MB), ImageMagick WASM, `sandbox.html`, `voice-popup.html` copied to `dist/extension/` by `vite.config.extension.ts`.
+- **Extension assets**: Pyodide (~13MB), ImageMagick WASM, `sandbox.html`, `voice-popup.html`, `offscreen.html` copied to `dist/extension/` by `vite.config.extension.ts`. The `offscreen.html` entry point runs the agent orchestrator in an unrestricted context separate from the side panel.
 - **Node shims**: `src/shims/` provide no-op implementations for Node modules (just-bash references them).
+
+## Extension Three-Layer Architecture
+
+The Chrome extension uses a three-layer design to keep the agent engine alive across side panel close/reopen cycles:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ Side Panel (UI)                                               │
+│  offscreen-client.ts — Chat, Terminal, Files, Memory          │
+│  Sends: PanelToOffscreenMessage (user input, commands)        │
+│  Receives: OffscreenToPanelMessage (agent events, state)      │
+└─────────────────────────┬────────────────────────────────────┘
+                          │ chrome.runtime messages
+┌─────────────────────────▼────────────────────────────────────┐
+│ Service Worker Relay (service-worker.ts)                      │
+│  Routes Panel ↔ Offscreen messages                            │
+│  Proxies CDP: CdpProxyMessage ↔ chrome.debugger               │
+└─────────────────────────┬────────────────────────────────────┘
+                          │ chrome.runtime messages
+┌─────────────────────────▼────────────────────────────────────┐
+│ Offscreen Document (offscreen.ts, offscreen-bridge.ts)        │
+│  Agent Engine — Orchestrator, VFS, Shell, Tools               │
+│  Persists chat to: browser-coding-agent IndexedDB             │
+│  Dispatches CDP via service worker proxy                      │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Message Flow:**
+- **PanelToOffscreenMessage**: User input flows from panel → service worker → offscreen
+- **OffscreenToPanelMessage**: Agent responses flow from offscreen → service worker → panel
+- **CdpProxyMessage**: Browser automation (screenshot, click, evaluate) flows from offscreen → service worker → chrome.debugger
+
+**IndexedDB Persistence:**
+- `browser-coding-agent` DB: Chat display messages (single source of truth, written by offscreen bridge, read by side panel on reconnect)
+- `agent-sessions` DB: Agent LLM conversation history (restored by ScoopContext on restart)
+- `slicc-groups` DB: Orchestrator routing data (scoops, tasks, webhooks, crontasks)
+
+**CDP Proxy:** Offscreen documents can't call `chrome.debugger` directly. Instead, offscreen sends `CdpProxyMessage` through the service worker, which translates to `chrome.debugger` commands and routes results back.
 
 ## Data Flow Diagrams
 
@@ -225,7 +270,7 @@ User input in chat → ChatPanel.sendMessage()
                 → per-scoop message buffer
                   → emitToUI() [if scoop is selected]
                     → ChatPanel DOM update (streaming)
-      → Tool calls [bash, file, browser, javascript, etc.]
+      → Tool calls [bash, file, grep/find, javascript, NanoClaw, etc.]
         → RestrictedFS / WasmShell / BrowserAPI
           → results
           → back to agent loop
@@ -343,7 +388,8 @@ Scoop removal / app clear
 | Add a new agent tool | `src/tools/<name>-tool.ts` + register in `index.ts` |
 | Change bash tool behavior | `src/tools/bash-tool.ts` |
 | Change file tool behavior | `src/tools/file-tools.ts` |
-| Change browser tool actions | `src/tools/browser-tool.ts` |
+| Change browser tool actions | `src/tools/browser-tool.ts` (module exists, but current scoop browser automation flows through `playwright-cli` via `bash`) |
+| Change grep/find tool behavior | `src/tools/search-tools.ts` |
 | Change tool input/output format | `src/core/types.ts` (ToolDefinition, ToolResult) |
 | Adapt tools to pi-agent-core | `src/core/tool-adapter.ts` |
 
@@ -404,7 +450,7 @@ Scoop removal / app clear
 
 | I need to... | Modify |
 |---|---|
-| Change skill installation logic | `src/skills/apply.ts` |
+| Change skill installation logic | `src/skills/apply.ts`, `src/skills/install-from-drop.ts` |
 | Change skill discovery | `src/skills/discover.ts` |
 | Change skill uninstall logic | `src/skills/uninstall.ts` |
 | Change skill state persistence | `src/skills/state.ts` |
