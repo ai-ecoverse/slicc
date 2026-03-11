@@ -37,6 +37,7 @@ import {
   getAllAvailableModels,
   getProviderConfig,
 } from './provider-settings.js';
+import { EXTENSION_TAB_SPECS, type ExtensionTabId } from './tabbed-ui.js';
 import type { ChatMessage } from './types.js';
 import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
 
@@ -48,7 +49,7 @@ export interface LayoutPanels {
   scoops: ScoopsPanel;
 }
 
-type TabId = 'chat' | 'terminal' | 'files' | 'memory';
+type TabId = ExtensionTabId;
 
 export class Layout {
   private root: HTMLElement;
@@ -124,6 +125,15 @@ export class Layout {
   /** Re-render the scoop switcher dropdown (extension mode). */
   refreshScoopSwitcher?(): void {
     this.scoopSwitcher?.refresh();
+  }
+
+  setActiveTab(id: TabId): void {
+    if (!this.isExtension) return;
+    this.switchTab(id);
+  }
+
+  getActiveTab(): TabId {
+    return this.activeTab;
   }
 
   // ── Shared: Header ──────────────────────────────────────────────────
@@ -663,14 +673,9 @@ export class Layout {
     const tabBar = document.createElement('div');
     tabBar.className = 'tab-bar';
 
-    const tabs: [TabId, string][] = [
-      ['chat', 'Chat'],
-      ['terminal', 'Terminal'],
-      ['files', 'Files'],
-      ['memory', 'Memory'],
-    ];
+    const tabs = EXTENSION_TAB_SPECS;
 
-    for (const [id, label] of tabs) {
+    for (const { id, label } of tabs) {
       const btn = document.createElement('button');
       btn.className = 'tab-bar__tab';
       btn.textContent = label;
@@ -687,7 +692,7 @@ export class Layout {
     const content = document.createElement('div');
     content.className = 'tab-content';
 
-    for (const [id] of tabs) {
+    for (const { id } of tabs) {
       const container = document.createElement('div');
       container.className = 'tab-content__panel';
       container.dataset.tab = id;

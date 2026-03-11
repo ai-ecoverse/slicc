@@ -20,7 +20,7 @@ import type { AgentEvent as CoreAgentEvent, AgentMessage, AssistantMessage, Assi
 import type { SessionStore } from '../core/session.js';
 import { createFileTools, createBashTool, createSearchTools, createJavaScriptTool } from '../tools/index.js';
 import type { BrowserAPI } from '../cdp/index.js';
-import { getApiKey, resolveCurrentModel, getSelectedProvider } from '../ui/provider-settings.js';
+import { getApiKey, resolveCurrentModel, resolveModelById, getSelectedProvider } from '../ui/provider-settings.js';
 import { loadSkills, formatSkillsForPrompt, createDefaultSkills, type Skill } from './skills.js';
 import { createNanoClawTools, type NanoClawToolsConfig } from './nanoclaw-tools.js';
 
@@ -161,7 +161,9 @@ export class ScoopContext {
         throw new Error(`No API key configured for provider "${provider}"`);
       }
 
-      const model = resolveCurrentModel();
+      const model = this.scoop.config?.modelId
+        ? resolveModelById(this.scoop.config.modelId)
+        : resolveCurrentModel();
 
       const systemPrompt = this.buildSystemPrompt(globalMemory, scoopMemory, skills);
 
@@ -199,9 +201,7 @@ export class ScoopContext {
       log.info('ScoopContext initialized', { folder: this.scoop.folder, toolCount: tools.length });
 
     } catch (err) {
-      const message = err instanceof Error ? err.message
-        : (typeof err === 'object' && err !== null) ? JSON.stringify(err)
-        : String(err);
+      const message = err instanceof Error ? err.message : String(err);
       log.error('ScoopContext init failed', { folder: this.scoop.folder, error: message });
       this.setStatus('error');
       this.callbacks.onError(`Failed to initialize: ${message}`);
@@ -345,10 +345,10 @@ export class ScoopContext {
 
       case 'message_end': {
         if (event.message.role === 'assistant') {
-          const content = event.message.content;
-          const fullText = content
-            .filter((c: any) => c.type === 'text')
-            .map((c: any) => c.text)
+          const msg = event.message as AssistantMessage;
+          const fullText = msg.content
+            .filter((c): c is TextContent => c.type === 'text')
+            .map((c) => c.text)
             .join('');
 
           // Only emit full text if we haven't been streaming deltas

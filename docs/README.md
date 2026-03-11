@@ -1,6 +1,6 @@
 # SLICC Documentation
 
-**SLICC is a browser-based AI coding agent** — a self-contained development environment where Claude writes code, runs shell commands, and automates browser tabs entirely within Chrome. Runs as a Chrome extension (side panel) or standalone CLI server.
+**SLICC is a browser-based AI coding agent** — a self-contained development environment where Claude writes code, runs shell commands, and automates browser tabs entirely within Chrome. Runs as a Chrome extension (side panel), standalone CLI server, or Electron float.
 
 For architecture philosophy and principles, see the project's `CLAUDE.md` file.
 
@@ -14,6 +14,7 @@ For architecture philosophy and principles, see the project's `CLAUDE.md` file.
 | Add an agent tool                      | [tools-reference.md](./tools-reference.md) + [adding-features.md](./adding-features.md) |
 | Write tests                            | [testing.md](./testing.md)                                                              |
 | Build, run, or debug                   | [development.md](./development.md)                                                      |
+| Run or debug Electron mode             | [electron.md](./electron.md) + [development.md](./development.md)                       |
 | Avoid breaking the extension           | [pitfalls.md](./pitfalls.md)                                                            |
 | Add a UI panel or skill                | [adding-features.md](./adding-features.md)                                              |
 | Add a provider (Anthropic, AWS, Azure) | [adding-features.md](./adding-features.md)                                              |
@@ -53,8 +54,9 @@ SLICC uses ice cream terminology to describe its multi-agent system:
 - **Cone**: The main agent ("sliccy"). Human's point of interaction. Full filesystem and tool access. Orchestrates scoops. Type: `RegisteredScoop` with `isCone: true`.
 - **Scoops**: Isolated sub-agents. Each has sandboxed filesystem (`/scoops/{name}/` + `/shared/`), own shell, own conversation. Created via `scoop_scoop`, fed via `feed_scoop`, removed via `drop_scoop`.
 - **Licks**: External events (webhooks, cron tasks) that trigger scoops. Unified under `LickManager` and `LickEvent`. Shell commands: `webhook`, `crontask`. A lick arrives, the scoop reacts — no human in the loop.
-- **Floats**: Runtime environments. Three exist:
+- **Floats**: Runtime environments. Four are tracked:
   - **CLI float**: Node.js/Express + Chrome. Code: `src/cli/`.
   - **Extension float**: Chrome extension side panel, zero server. Code: `src/extension/`.
+  - **Electron float**: Electron BrowserWindow + injected overlay shell + serve-only CLI reuse. Code: `src/cli/electron-main.ts` + `src/ui/electron-overlay.ts`.
   - **Cloud float**: Planned — Cloudflare Containers or E2B sandboxes.
 
