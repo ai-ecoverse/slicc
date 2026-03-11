@@ -457,6 +457,39 @@ export function clearBaseUrl(): void {
   }
 }
 
+// --- Export accounts as providers.json ---
+
+/** Build a ProviderDefault[] from current accounts (pure, testable). */
+export function exportProviders(): ProviderDefault[] {
+  const accounts = getAccounts();
+  const selectedProvider = getSelectedProvider();
+  const selectedModel = getSelectedModelId();
+
+  return accounts.map((account) => {
+    const entry: ProviderDefault = {
+      providerId: account.providerId,
+      apiKey: account.apiKey,
+    };
+    if (account.baseUrl) entry.baseUrl = account.baseUrl;
+    if (account.providerId === selectedProvider && selectedModel) {
+      entry.model = selectedModel;
+    }
+    return entry;
+  });
+}
+
+/** Trigger a browser download of the current accounts as providers.json. */
+export function downloadProviders(): void {
+  const json = JSON.stringify(exportProviders(), null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'providers.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 // Clear all provider settings
 export function clearAllSettings(): void {
   localStorage.removeItem(ACCOUNTS_KEY);
@@ -687,12 +720,25 @@ export function showProviderSettings(): Promise<void> {
         dialog.appendChild(list);
       }
 
-      // Add Account button
+      // Action buttons row
+      const btnRow = document.createElement('div');
+      btnRow.style.cssText = 'display: flex; gap: 8px;';
+
       const addBtn = document.createElement('button');
       addBtn.className = 'dialog__btn';
+      addBtn.style.flex = '1';
       addBtn.textContent = 'Add Account';
       addBtn.addEventListener('click', () => renderAccountForm());
-      dialog.appendChild(addBtn);
+      btnRow.appendChild(addBtn);
+
+      const exportBtn = document.createElement('button');
+      exportBtn.className = 'dialog__btn dialog__btn--secondary';
+      exportBtn.style.flex = '1';
+      exportBtn.textContent = 'Export';
+      exportBtn.addEventListener('click', () => downloadProviders());
+      btnRow.appendChild(exportBtn);
+
+      dialog.appendChild(btnRow);
 
       // ── Theme section ───────────────────────────────────────────
       const themeSep = document.createElement('hr');
