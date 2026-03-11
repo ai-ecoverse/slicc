@@ -141,6 +141,7 @@ export class ChatPanel {
     // from locking the input in the new context
     this.setStreamingState(false);
     this.currentStreamId = null;
+    this.cancelPendingDelta();
 
     // Switch
     this.sessionId = contextId;
@@ -536,6 +537,11 @@ export class ChatPanel {
   }
 
   private handleContentDone(messageId: string): void {
+    if (this.pendingDeltaText && this.currentStreamId === messageId) {
+      const msg = this.findMessage(messageId);
+      if (msg) msg.content += this.pendingDeltaText;
+    }
+    this.cancelPendingDelta();
     const msg = this.findMessage(messageId);
     if (!msg) return;
     msg.isStreaming = false;
@@ -1011,6 +1017,7 @@ export class ChatPanel {
 
   /** Dispose the panel. */
   dispose(): void {
+    this.cancelPendingDelta();
     this.unsubscribe?.();
     this.voiceInput?.destroy();
     if (this.keydownListener) {
