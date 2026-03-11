@@ -7,6 +7,7 @@ import {
 export type UiRuntimeMode = 'standalone' | 'extension' | 'electron-overlay';
 
 export const ELECTRON_OVERLAY_RUNTIME_QUERY_VALUE = 'electron-overlay';
+export const ELECTRON_OVERLAY_RUNTIME_PATH = '/electron';
 export const ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE = 'slicc-electron-overlay:set-tab';
 
 export interface ElectronOverlaySetTabMessage {
@@ -19,7 +20,7 @@ export function resolveUiRuntimeMode(locationHref: string, isExtension: boolean)
 
   try {
     const url = new URL(locationHref);
-    return url.searchParams.get('runtime') === ELECTRON_OVERLAY_RUNTIME_QUERY_VALUE
+    return isElectronOverlayUrl(url)
       ? 'electron-overlay'
       : 'standalone';
   } catch {
@@ -34,6 +35,14 @@ export function getElectronOverlayInitialTab(locationHref: string): ExtensionTab
   } catch {
     return DEFAULT_EXTENSION_TAB_ID;
   }
+}
+
+function isElectronOverlayUrl(url: URL): boolean {
+  return (
+    url.pathname === ELECTRON_OVERLAY_RUNTIME_PATH ||
+    url.pathname === `${ELECTRON_OVERLAY_RUNTIME_PATH}/` ||
+    url.searchParams.get('runtime') === ELECTRON_OVERLAY_RUNTIME_QUERY_VALUE
+  );
 }
 
 export function getLickWebSocketUrl(locationHref: string): string {

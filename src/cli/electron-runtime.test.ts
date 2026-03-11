@@ -103,8 +103,11 @@ describe('electron-runtime', () => {
   it('builds the electron serve and overlay urls', () => {
     const serveOrigin = getElectronServeOrigin(3005);
     expect(serveOrigin).toBe(`http://${DEFAULT_ELECTRON_SERVE_HOST}:3005`);
+    expect(buildElectronOverlayAppUrl(serveOrigin)).toBe(
+      `http://${DEFAULT_ELECTRON_SERVE_HOST}:3005/electron`,
+    );
     expect(buildElectronOverlayAppUrl(serveOrigin, 'memory')).toBe(
-      `http://${DEFAULT_ELECTRON_SERVE_HOST}:3005/?runtime=electron-overlay&tab=memory`,
+      `http://${DEFAULT_ELECTRON_SERVE_HOST}:3005/electron?tab=memory`,
     );
     expect(buildElectronOverlayEntryUrl(serveOrigin)).toBe(
       `http://${DEFAULT_ELECTRON_SERVE_HOST}:3005/electron-overlay-entry.js`,
@@ -115,12 +118,12 @@ describe('electron-runtime', () => {
   it('serializes the overlay injection call', () => {
     expect(
       buildElectronOverlayInjectionCall({
-        appUrl: `http://${DEFAULT_ELECTRON_SERVE_HOST}:3000/?runtime=electron-overlay`,
+        appUrl: `http://${DEFAULT_ELECTRON_SERVE_HOST}:3000/electron`,
         open: true,
         activeTab: 'files',
       }),
     ).toBe(
-      `window.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://${DEFAULT_ELECTRON_SERVE_HOST}:3000/?runtime=electron-overlay","open":true,"activeTab":"files"});`,
+      `window.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://${DEFAULT_ELECTRON_SERVE_HOST}:3000/electron","open":true,"activeTab":"files"});`,
     );
   });
 
@@ -166,10 +169,10 @@ describe('electron-runtime', () => {
     expect(
       buildElectronOverlayBootstrapScript({
         bundleSource: 'window.__overlayLoaded = true;',
-        appUrl: 'http://localhost:3000/?runtime=electron-overlay',
+        appUrl: 'http://localhost:3000/electron',
       }),
     ).toBe(
-      'window.__overlayLoaded = true;\nwindow.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://localhost:3000/?runtime=electron-overlay"});',
+      'window.__overlayLoaded = true;\nwindow.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://localhost:3000/electron"});',
     );
   });
 

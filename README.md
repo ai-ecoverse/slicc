@@ -15,9 +15,9 @@ A browser-based coding agent that runs as a **Chrome extension**, with a thin **
 ## Features
 
 - 🚡 **Chrome Extension** — runs as a side panel in Chrome, no server required. Tabbed UI (Chat/Terminal/Files/Memory) optimized for the side panel form factor. **Agent work continues in the background** when the side panel is closed — reopening catches up via state sync
-- :ice_cream: **Electron Float** — attaches from the main CLI entrypoint to a real Electron app, relaunches it with remote debugging when needed, and injects the shared overlay shell persistently across navigations while reusing the existing local server/CDP path
+- :globe_with_meridians: **Browser-First Core** — runs Claude directly in the browser; the extension and CLI reuse the same browser-side app, shell, VFS, and agent runtime
+- :ice_cream: **Electron Float** — if you want Electron too, SLICC can attach from the main CLI entrypoint to a real Electron app, relaunch it with remote debugging when needed, and inject the shared overlay shell persistently across navigations while reusing the existing local server/CDP path
 - :satellite: **CLI Server** — alternative mode: thin Node.js/Express server launches Chrome and proxies CDP connections
-- :globe_with_meridians: **Browser-First Core** — the extension, CLI, and Electron float all reuse the same browser-side app, shell, VFS, and agent runtime
 - :file_folder: **Virtual Filesystem** — OPFS + IndexedDB-backed filesystem right in the browser, with folder ZIP download
 - :shell: **WebAssembly Bash Shell** — real Bash via [just-bash](https://github.com/nicolo-ribaudo/just-bash) compiled to WASM
 - :git: **Git Support** — clone, commit, push, pull via [isomorphic-git](https://isomorphic-git.org/) (see [available commands](#git-commands))

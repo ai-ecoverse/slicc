@@ -11,17 +11,20 @@ import {
 
 describe('runtime-mode', () => {
   it('prefers extension mode when chrome runtime is present', () => {
-    expect(resolveUiRuntimeMode('http://localhost:3000/?runtime=electron-overlay', true)).toBe('extension');
+    expect(resolveUiRuntimeMode('http://localhost:3000/electron', true)).toBe('extension');
   });
 
-  it('detects electron overlay mode from the runtime query param', () => {
+  it('detects electron overlay mode from the path and legacy query param', () => {
+    expect(resolveUiRuntimeMode('http://localhost:3000/electron', false)).toBe('electron-overlay');
+    expect(resolveUiRuntimeMode('http://localhost:3000/electron/', false)).toBe('electron-overlay');
     expect(resolveUiRuntimeMode('http://localhost:3000/?runtime=electron-overlay', false)).toBe('electron-overlay');
     expect(resolveUiRuntimeMode('http://localhost:3000/', false)).toBe('standalone');
   });
 
   it('normalizes the initial overlay tab from the URL', () => {
-    expect(getElectronOverlayInitialTab('http://localhost:3000/?tab=memory')).toBe('memory');
-    expect(getElectronOverlayInitialTab('http://localhost:3000/?tab=nope')).toBe('chat');
+    expect(getElectronOverlayInitialTab('http://localhost:3000/electron?tab=memory')).toBe('memory');
+    expect(getElectronOverlayInitialTab('http://localhost:3000/electron')).toBe('chat');
+    expect(getElectronOverlayInitialTab('http://localhost:3000/electron?tab=nope')).toBe('chat');
   });
 
   it('builds lick websocket and webhook urls from the current origin', () => {
