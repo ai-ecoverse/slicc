@@ -12,6 +12,7 @@
 
 import type { BrowserAPI } from '../cdp/index.js';
 import { HarRecorder } from '../cdp/index.js';
+import { normalizeAccessibilityText } from '../cdp/normalize-accessibility-text.js';
 import type { AccessibilityNode } from '../cdp/types.js';
 import type { VirtualFS } from '../fs/index.js';
 import type { ToolDefinition, ToolResult } from '../core/types.js';
@@ -306,8 +307,9 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
             // Convert accessibility tree to YAML-like snapshot format with refs
             function renderNode(node: AccessibilityNode, indent: string = ''): string[] {
               const lines: string[] = [];
-              const role = (node.role || 'unknown').toLowerCase();
-              const name = node.name || '';
+              const role = normalizeAccessibilityText(node.role, 'unknown').toLowerCase();
+              const name = normalizeAccessibilityText(node.name);
+              const value = normalizeAccessibilityText(node.value);
 
               // Skip certain roles that don't need refs
               const skipRoles = ['none', 'presentation', 'generic', 'rootwebarea'];
@@ -351,7 +353,7 @@ export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): T
               let line = `${indent}- ${role}`;
               if (name) line += ` "${escapeYaml(name)}"`;
               if (ref) line += ` [ref=${ref}]`;
-              if (node.value) line += `: "${escapeYaml(node.value)}"`;
+              if (value) line += `: "${escapeYaml(value)}"`;
               lines.push(line);
 
               // Recurse into children
