@@ -14,7 +14,7 @@
 | Core Agent | `src/core/` | pi-mono agent loop + streaming | `index.ts` | `agent.test.ts` |
 | Scoops Orchestrator | `src/scoops/` | Multi-agent system (cone + scoops) | `orchestrator.ts` | N/A |
 | UI | `src/ui/` | Chat, Terminal, Files, Memory panels | `main.ts` | `types.test.ts` |
-| CLI Server | `src/cli/` | Express server + Chrome launcher | `index.ts` | N/A |
+| CLI / Electron Node Runtime | `src/cli/` | Express server, Chrome launcher, Electron float entrypoint | `index.ts` | `electron-runtime.test.ts` |
 | Extension | `src/extension/` | Chrome Manifest V3 entry point | `service-worker.ts` | N/A |
 | Providers | `src/providers/` | Custom API provider integrations | `bedrock-camp.ts` | N/A |
 
@@ -24,7 +24,7 @@
 
 | File | Purpose |
 |---|---|
-| `browser-api.ts` | High-level Playwright-inspired API (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree); used by both `browser-tool.ts` and the `playwright-cli` shell command path |
+| `browser-api.ts` | High-level Playwright-inspired API (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree); used by the `playwright-cli` shell command path and related browser automation commands |
 | `cdp-client.ts` | WebSocket-based CDP client (CLI mode, connects to `ws://localhost:3000/cdp`) |
 | `debugger-client.ts` | Chrome debugger API client (extension mode, uses `chrome.debugger`) |
 | `har-recorder.ts` | HAR 1.2 recorder for network traffic; saves snapshots to VFS on navigation |
@@ -34,11 +34,14 @@
 | `offscreen-cdp-proxy.ts` | CDPTransport over chrome.runtime messages (offscreen → service worker → chrome.debugger) |
 | `panel-cdp-proxy.ts` | CDPTransport for side panel terminal (panel → offscreen → service worker → chrome.debugger) |
 
-### src/cli/ — Standalone CLI Server
+### src/cli/ — CLI + Electron Runtimes
 
 | File | Purpose |
 |---|---|
-| `index.ts` | Express server (port 3000): launches Chrome with CDP, serves UI, proxies WebSocket to CDP, provides `/api/fetch-proxy` for CORS |
+| `index.ts` | Main CLI entrypoint: launches Chrome by default, or in `--electron` mode launches/relaunches a target Electron app, serves UI, proxies WebSocket CDP traffic, and provides `/api/fetch-proxy` for CORS |
+| `runtime-flags.ts` | Shared CLI/runtime flag parsing for `--dev`, `--serve-only`, `--cdp-port`, `--electron`, `--electron-app`, and `--kill` |
+| `electron-runtime.ts` | Pure Electron helpers for target app path resolution, overlay URLs/bootstrap scripts, dist paths, and injectable-target filtering |
+| `electron-controller.ts` | Electron app lifecycle management: detect running app processes, enforce `--kill`, launch with remote debugging, and inject/reinject the overlay across navigations |
 
 ### src/core/ — Agent Core
 
@@ -159,18 +162,21 @@
 |---|---|
 | `bash-tool.ts` | `bash` tool: execute shell commands via WasmShell |
 | `file-tools.ts` | `read_file`, `write_file`, `edit_file` tools for VirtualFS operations |
-| `browser-tool.ts` | Maintained `browser` tool module with tab/snapshot/screenshot actions; not currently wired into `src/scoops/scoop-context.ts` |
 | `javascript-tool.ts` | `javascript` tool: execute JS in the browser context (fs.readDir, fs.readFile, fs.readFileBinary access) |
-| `search-tools.ts` | `grep` and `find` agent tools for recursive VirtualFS search |
-| `index.ts` | Tool factory functions (createBashTool, createFileTools, createBrowserTool, etc.) |
+| `search-tools.ts` | `grep` and `find` tool factories for recursive VirtualFS search (not part of the active ScoopContext surface) |
+| `index.ts` | Tool factory functions (createBashTool, createFileTools, createSearchTools, createJavaScriptTool) |
 
 ### src/ui/ — User Interface
 
 | File | Purpose |
 |---|---|
-| `main.ts` | Entry point: `main()` for CLI, `mainExtension()` for extension (uses OffscreenClient). Handles layout, API key, orchestrator, skill drag/drop |
+| `main.ts` | Entry point: `main()` for CLI/Electron embedded app, `mainExtension()` for extension (uses OffscreenClient). Handles layout, API key, orchestrator, skill drag/drop |
 | `offscreen-client.ts` | Extension-only: side panel's interface to offscreen engine. Provides AgentHandle + Orchestrator-compatible facade via chrome.runtime messages |
 | `layout.ts` | Split-pane (CLI) or tabbed (extension) layout; auto-selects based on extension detection |
+| `tabbed-ui.ts` | Shared Chat/Terminal/Files/Memory tab definitions + normalization helpers reused by the extension layout and injected overlay shell |
+| `overlay-shell-state.ts` | Pure state transitions for the injected Electron overlay shell (open/close + active tab) |
+| `electron-overlay.ts` | Browser-side custom elements for the injected Electron overlay shell: launcher button, sidebar, persistent iframe host, and parent→iframe tab sync |
+| `electron-overlay-entry.ts` | Standalone injected bundle entry that exposes `window.__SLICC_ELECTRON_OVERLAY__.inject()` / `remove()` for Electron reinjection |
 | `chat-panel.ts` | Message list + input with streaming support; voice input (Web Speech API); connects to AgentHandle |
 | `terminal-panel.ts` | xterm.js terminal UI; exposes WasmShell output |
 | `file-browser-panel.ts` | File tree browser; download files/ZIP folders; navigate filesystem |
@@ -207,12 +213,13 @@
 | Target | tsconfig | Input | Output | Module Resolution |
 |---|---|---|---|---|
 | Browser bundle | `tsconfig.json` | `src/` except `src/cli/` | `dist/ui/` (via Vite) | bundler |
-| CLI server | `tsconfig.cli.json` | `src/cli/` | `dist/cli/` (via TSC) | NodeNext |
+| CLI + Electron Node target | `tsconfig.cli.json` | `src/cli/` | `dist/cli/` (via TSC) | NodeNext |
 | Extension | `vite.config.extension.ts` | Browser bundle + extension entries | `dist/extension/` | bundler |
 
 ### Special Build Artifacts
 
 - **preview-sw.ts**: Built as standalone IIFE via esbuild (not rollup). Dev: Vite plugin bundles on-the-fly. Prod: `closeBundle` hook writes bundle.
+- **electron-overlay-entry.ts**: Built as standalone IIFE alongside `dist/ui/electron-overlay-entry.js`. Dev: Vite plugin serves it at `/electron-overlay-entry.js`. Prod: `closeBundle` writes the bundle for Electron reinjection.
 - **Extension assets**: Pyodide (~13MB), ImageMagick WASM, `sandbox.html`, `voice-popup.html`, `offscreen.html` copied to `dist/extension/` by `vite.config.extension.ts`. The `offscreen.html` entry point runs the agent orchestrator in an unrestricted context separate from the side panel.
 - **Node shims**: `src/shims/` provide no-op implementations for Node modules (just-bash references them).
 
@@ -389,7 +396,7 @@ Scoop removal / app clear
 | Add a new agent tool | `src/tools/<name>-tool.ts` + register in `index.ts` |
 | Change bash tool behavior | `src/tools/bash-tool.ts` |
 | Change file tool behavior | `src/tools/file-tools.ts` |
-| Change browser tool actions | `src/tools/browser-tool.ts` (module exists, but current scoop browser automation flows through `playwright-cli` via `bash`) |
+| Change browser automation shell behavior | `src/shell/supplemental-commands/playwright-command.ts` and `src/shell/supplemental-commands/serve-command.ts` |
 | Change grep/find tool behavior | `src/tools/search-tools.ts` |
 | Change tool input/output format | `src/core/types.ts` (ToolDefinition, ToolResult) |
 | Adapt tools to pi-agent-core | `src/core/tool-adapter.ts` |

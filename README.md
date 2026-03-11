@@ -6,7 +6,7 @@
 
 > *An AI coding agent that builds itself. The snake that eats its own tail, but productive.*
 
-A browser-based coding agent that runs as a **Chrome extension** or with a thin CLI server. Runs Claude directly in the browser with full filesystem access, a WebAssembly shell, browser automation via CDP, and a complete suite of code editing tools — all without leaving your browser.
+A browser-based coding agent that runs as a **Chrome extension**, with a thin **CLI server**, or inside an **Electron float**. Runs Claude directly in the browser with full filesystem access, a WebAssembly shell, browser automation via CDP, and a complete suite of code editing tools — all without leaving your browser.
 
 > slicc is to Chrome what OpenClaw is to a Mac mini or to put it another way, like NanoClaw just in obese.
 
@@ -15,13 +15,14 @@ A browser-based coding agent that runs as a **Chrome extension** or with a thin 
 ## Features
 
 - 🚡 **Chrome Extension** — runs as a side panel in Chrome, no server required. Tabbed UI (Chat/Terminal/Files/Memory) optimized for the side panel form factor. **Agent work continues in the background** when the side panel is closed — reopening catches up via state sync
-- :globe_with_meridians: **Browser-Native** — runs entirely in the browser, no Electron, no desktop app
+- :globe_with_meridians: **Browser-First Core** — runs Claude directly in the browser; the extension and CLI reuse the same browser-side app, shell, VFS, and agent runtime
+- :ice_cream: **Electron Float** — if you want Electron too, SLICC can attach from the main CLI entrypoint to a real Electron app, relaunch it with remote debugging when needed, and inject the shared overlay shell persistently across navigations while reusing the existing local server/CDP path
 - :satellite: **CLI Server** — alternative mode: thin Node.js/Express server launches Chrome and proxies CDP connections
 - :file_folder: **Virtual Filesystem** — OPFS + IndexedDB-backed filesystem right in the browser, with folder ZIP download
 - :shell: **WebAssembly Bash Shell** — real Bash via [just-bash](https://github.com/nicolo-ribaudo/just-bash) compiled to WASM
 - :git: **Git Support** — clone, commit, push, pull via [isomorphic-git](https://isomorphic-git.org/) (see [available commands](#git-commands))
 - :robot: **Browser Automation** — screenshots (full page / element / saved to VFS), inline image display, navigation, JS eval, element clicking via Chrome DevTools Protocol (chrome.debugger in extension, WebSocket in CLI), plus `playwright-cli` / `playwright` / `puppeteer` shell commands for tab control, snapshots, cookies, storage, and HAR recording. Auto-detects user's active tab.
-- :earth_americas: **VFS Web Preview** — serve agent-created HTML/CSS/JS apps in real browser tabs via a Service Worker that reads directly from the virtual filesystem. The agent can build a UI, preview it, screenshot it, and iterate — all without leaving Chrome.
+- :earth_americas: **VFS Web Preview** — `serve <dir>` opens agent-created HTML/CSS/JS apps in real browser tabs via a Service Worker that reads directly from the virtual filesystem. The agent can build a UI, preview it, screenshot it, and iterate — all without leaving Chrome.
 - :art: **Image Processing** — `convert` command for resize, rotate, crop, and quality adjustment via ImageMagick WASM
 - :pencil2: **File Operations** — read, write, edit files with syntax-aware tools
 - :mag: **Shell Search Commands** — use `grep`, `find`, and `rg` via the bash shell
@@ -61,7 +62,7 @@ SLICC is a claw too, but one that lives entirely in the browser. Its messaging a
 
 Mario Zechner, creator of [Pi](https://github.com/badlogic/pi-mono) (the agent engine at SLICC's core), demonstrated that [you might not need MCP at all](https://mariozechner.at/posts/2025-11-02-what-if-you-dont-need-mcp/). His philosophy: "Bash is all you need." Frontier models already know bash. CLI tools compose naturally through pipes and redirection. MCP server definitions burn context tokens on ceremony.
 
-Pi ships with exactly four tools: `read`, `write`, `edit`, `bash`. SLICC adds one more — `browser` — because the browser is our operating system. Everything else is a shell command: `git`, `node`, `python3`, `uname`, `webhook`, `crontask`, `skill`, `upskill`. No tool wrappers, no protocol adapters, no JSON schemas for things that already have man pages.
+Pi ships with exactly four tools: `read`, `write`, `edit`, `bash`. SLICC keeps that shell-first core and layers browser automation on top through `playwright-cli` / `playwright` / `puppeteer`, plus preview helpers like `serve`. Everything else is a shell command: `git`, `node`, `python3`, `uname`, `webhook`, `crontask`, `skill`, `upskill`. No tool wrappers, no protocol adapters, no JSON schemas for things that already have man pages.
 
 Further reading:
 - [Pi: A Coding Agent](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/)
@@ -115,10 +116,11 @@ Licks are events that come from the outside world and make scoops react. A webho
 
 ### Floats
 
-A float is the environment the ice cream sits in — like a root beer float. It's the runtime that keeps everything running. Three floats exist today (two implemented, one planned):
+A float is the environment the ice cream sits in — like a root beer float. It's the runtime that keeps everything running. Four floats are tracked today (three implemented, one planned):
 
 - **CLI float** — A thin Node.js/Express server that launches Chrome, proxies CDP, and serves the UI. For local development.
 - **Extension float** — A Chrome extension side panel. Zero server. The purest expression of the "browser is the OS" philosophy.
+- **Electron float** — The main CLI entrypoint launched with `--electron`, targeting an Electron app path, reusing the local SLICC server, and injecting the shared overlay into the target app over Electron CDP.
 - **Cloud float** *(planned)* — Cloud containers (Cloudflare Containers, E2B) that provide real filesystems, real shells, and real browsers. For persistent, always-on agents that don't need your laptop running.
 
 ---
@@ -133,7 +135,7 @@ These screenshots capture a historic moment: **SLICC using browser automation to
 
 Here's what happened:
 
-1. SLICC (running in localhost:3000) used its browser tool to navigate to a Claude.ai conversation
+1. SLICC (running in localhost:3000) used its browser automation commands to navigate to a Claude.ai conversation
 2. It read the conversation history — which was about *building SLICC itself* (the origin story conversation)
 3. When asked "what would be even more meta?", SLICC suggested typing a message into that very Claude.ai tab
 4. It then used CDP (Chrome DevTools Protocol) to click on the ProseMirror editor, compose a message, and hit send
@@ -175,13 +177,15 @@ The scoops do the heavy lifting. The cone philosophizes about it. Karl watches f
 
 ## Architecture
 
-slicc runs in two modes: as a **Chrome extension** (side panel) or as a **standalone CLI** with a browser window.
+slicc runs in three modes: as a **Chrome extension** (side panel), a **standalone CLI** with a browser window, or an **Electron float** where the main CLI attaches to an Electron app and injects the shared overlay into its pages.
 
 **Chrome Extension** (Manifest V3) — three-layer architecture: the **side panel** is pure UI, a **service worker** relays messages and proxies `chrome.debugger`, and an **offscreen document** runs the agent engine (orchestrator, VFS, shell, tools). The agent survives side panel close/reopen — all state persists to IndexedDB. No server needed.
 
 **CLI Server** (Node.js/Express) — launches a headless Chrome instance, establishes a CDP WebSocket proxy, provides a fetch proxy for cross-origin requests, and serves the UI assets.
 
-**Browser App** (Vite/TypeScript) — the agent loop (powered by [pi-mono](https://github.com/badlogic/pi-mono)), tool execution, chat UI, integrated terminal, and file browser all run client-side in both modes.
+**Electron Float** — the main CLI runs in `--electron` mode, launches or relaunches a target Electron app with remote debugging enabled, injects `electron-overlay-entry.js` into Electron page targets over CDP, and serves the embedded SLICC app from the same local origin.
+
+**Browser App** (Vite/TypeScript) — the agent loop (powered by [pi-mono](https://github.com/badlogic/pi-mono)), tool execution, chat UI, integrated terminal, and file browser all run client-side in all three modes.
 
 ```
 Chrome Extension Mode:                 CLI Mode:
@@ -232,7 +236,7 @@ Source layout:
 | `src/shell/` | WebAssembly Bash shell + supplemental commands (node, python, sqlite, convert, skill, mount, webhook, which, uname) + `.jsh` script discovery and execution |
 | `src/git/` | Git via isomorphic-git (clone, commit, push, pull, etc.) |
 | `src/cdp/` | Chrome DevTools Protocol client (WebSocket + chrome.debugger), HAR recorder |
-| `src/cli/` | CLI server — Chrome launch, CDP proxy, Express |
+| `src/cli/` | Main CLI entrypoint + Electron attach mode — Chrome launch, Electron app lifecycle management, CDP proxy, overlay reinjection |
 | `src/extension/` | Chrome extension service worker and type declarations |
 
 ## Getting Started
@@ -290,6 +294,22 @@ Each entry needs `providerId` and `apiKey`. The `baseUrl` and `model` fields are
 
 The file is gitignored and excluded from Claude Code's `Read` tool by default.
 
+### Electron Float
+
+```bash
+npm install
+npm run dev:electron -- /Applications/Slack.app
+
+# If the app is already running:
+# npm run dev:electron -- --kill /Applications/Slack.app
+
+# Or after building:
+# npm run build
+# npm run start:electron -- /Applications/Slack.app
+```
+
+Pass the Electron app bundle/executable path to the main CLI's `--electron` mode. If the app is already running, SLICC exits with a clear message unless you also pass `--kill`, in which case it stops the running app, relaunches it with remote debugging enabled, starts the local server, and keeps the injected launcher/overlay alive across navigations. The overlay iframe is still loaded from the same local SLICC origin that the CLI server serves (default `http://localhost:3000`).
+
 ## Tech Stack
 
 | Dependency | Role |
@@ -297,6 +317,7 @@ The file is gitignored and excluded from Claude Code's `Read` tool by default.
 | [@mariozechner/pi-agent-core](https://github.com/badlogic/pi-mono) | Agent loop, tool execution, event system |
 | [@mariozechner/pi-ai](https://github.com/badlogic/pi-mono) | Unified LLM API (Anthropic provider) |
 | [express](https://expressjs.com/) | CLI server framework |
+| [electron](https://www.electronjs.org/) | Electron float runtime and injected desktop shell |
 | [just-bash](https://github.com/nicolo-ribaudo/just-bash) | WebAssembly Bash shell |
 | [ws](https://github.com/websockets/ws) | WebSocket for CDP proxy (CLI mode) |
 | [@xterm/xterm](https://xtermjs.org/) | Terminal emulator in the browser |
@@ -314,13 +335,19 @@ npm run dev:full
 # Run just the Vite dev server (no CLI/Chrome)
 npm run dev
 
-# Build everything (UI + CLI)
+# Run the Electron float against an Electron app path
+npm run dev:electron -- /Applications/Slack.app
+
+# Build everything (UI + CLI/Electron)
 npm run build
+
+# Start the built Electron float
+npm run start:electron -- /Applications/Slack.app
 
 # Build Chrome extension
 npm run build:extension
 
-# Type-check both CLI and browser code
+# Type-check browser + Node targets
 npm run typecheck
 
 # Run tests

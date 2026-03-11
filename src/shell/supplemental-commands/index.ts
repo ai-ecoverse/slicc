@@ -11,6 +11,7 @@ import { createOpenCommand } from './open-command.js';
 import { createPdftkCommand } from './pdftk-command.js';
 import { createPlaywrightCommand, PLAYWRIGHT_COMMAND_NAMES } from './playwright-command.js';
 import { createPython3LikeCommand } from './python-command.js';
+import { createServeCommand } from './serve-command.js';
 import { createSqliteCommand } from './sqlite-command.js';
 import { createUnameCommand } from './uname-command.js';
 import { createUnzipCommand } from './unzip-command.js';
@@ -36,6 +37,7 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
   const commands: Command[] = [
     createCommandsCommand({ getJshCommands: options.getJshCommands }),
+    createServeCommand(),
     createOpenCommand(),
     createImgcatCommand(options),
     createZipCommand(),

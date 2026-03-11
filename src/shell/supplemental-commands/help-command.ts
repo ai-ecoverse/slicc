@@ -15,7 +15,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
   ['Version control', ['git']],
   ['Languages', ['node', 'python', 'python3', 'sqlite3']],
   ['Skills', ['skill', 'upskill']],
-  ['Browser & UI', ['open', 'imgcat', ...PLAYWRIGHT_COMMAND_NAMES, 'webhook']],
+  ['Browser & UI', ['serve', 'open', 'imgcat', ...PLAYWRIGHT_COMMAND_NAMES, 'webhook']],
   ['Filesystem', ['mount']],
 ]);
 

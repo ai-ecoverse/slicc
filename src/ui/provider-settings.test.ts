@@ -88,6 +88,7 @@ import {
   getBaseUrlForProvider,
   getAllAvailableModels,
   applyProviderDefaults,
+  exportProviders,
 } from './provider-settings.js';
 import type { ProviderDefault } from './provider-settings.js';
 
@@ -463,5 +464,67 @@ describe('applyProviderDefaults', () => {
     ];
     applyProviderDefaults(defaults);
     expect(storage.get('selected-model')).toBe('openai:gpt-5');
+  });
+});
+
+describe('exportProviders', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('returns empty array when no accounts', () => {
+    expect(exportProviders()).toEqual([]);
+  });
+
+  it('exports all accounts with providerId and apiKey', () => {
+    addAccount('anthropic', 'ant-key');
+    addAccount('openai', 'oai-key');
+    const result = exportProviders();
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual({ providerId: 'anthropic', apiKey: 'ant-key' });
+    expect(result[1]).toEqual({ providerId: 'openai', apiKey: 'oai-key' });
+  });
+
+  it('includes baseUrl only when present', () => {
+    addAccount('anthropic', 'ant-key');
+    addAccount('azure-ai-foundry', 'az-key', 'https://contoso.azure.com/anthropic');
+    const result = exportProviders();
+    expect(result[0].baseUrl).toBeUndefined();
+    expect(result[1].baseUrl).toBe('https://contoso.azure.com/anthropic');
+  });
+
+  it('attaches model to matching selected provider', () => {
+    addAccount('anthropic', 'ant-key');
+    addAccount('openai', 'oai-key');
+    storage.set('selected-model', 'openai:gpt-5');
+    const result = exportProviders();
+    expect(result[0].model).toBeUndefined();
+    expect(result[1].model).toBe('gpt-5');
+  });
+
+  it('omits model when no model is selected', () => {
+    addAccount('anthropic', 'ant-key');
+    const result = exportProviders();
+    expect(result[0].model).toBeUndefined();
+  });
+
+  it('round-trips with applyProviderDefaults', () => {
+    addAccount('anthropic', 'ant-key');
+    addAccount('openai', 'oai-key', 'https://proxy.example.com');
+    storage.set('selected-model', 'anthropic:claude-sonnet-4-20250514');
+
+    const exported = exportProviders();
+
+    // Clear and re-apply
+    storage.clear();
+    applyProviderDefaults(exported);
+
+    expect(getAccounts()).toHaveLength(2);
+    expect(getApiKeyForProvider('anthropic')).toBe('ant-key');
+    expect(getApiKeyForProvider('openai')).toBe('oai-key');
+    expect(getBaseUrlForProvider('openai')).toBe('https://proxy.example.com');
+    expect(getSelectedModelId()).toBe('claude-sonnet-4-20250514');
+    expect(getSelectedProvider()).toBe('anthropic');
   });
 });

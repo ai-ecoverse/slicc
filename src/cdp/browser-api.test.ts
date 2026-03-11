@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { BrowserAPI } from './browser-api.js';
+import { BrowserAPI, getDefaultCdpUrl } from './browser-api.js';
 import { CDPClient } from './cdp-client.js';
 
 // ---------------------------------------------------------------------------
@@ -56,6 +56,11 @@ describe('BrowserAPI', () => {
   });
 
   describe('connect / disconnect', () => {
+    it('derives the default URL from the current location when available', () => {
+      expect(getDefaultCdpUrl({ protocol: 'https:', host: 'example.com' })).toBe('wss://example.com/cdp');
+      expect(getDefaultCdpUrl({ protocol: 'http:', host: 'localhost:3030' })).toBe('ws://localhost:3030/cdp');
+    });
+
     it('connects with default URL', async () => {
       await api.connect();
       expect(mockClient.connect).toHaveBeenCalledWith({
@@ -535,6 +540,35 @@ describe('BrowserAPI', () => {
       const tree = await api.getAccessibilityTree();
       expect(tree.role).toBe('RootWebArea');
       expect(tree.name).toBe('');
+    });
+
+    it('normalizes non-string accessibility values', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({}) // Accessibility.enable
+        .mockResolvedValueOnce({
+          nodes: [
+            {
+              nodeId: '1',
+              role: { value: 'RootWebArea' },
+              name: { value: 'Slack' },
+              childIds: ['2'],
+            },
+            {
+              nodeId: '2',
+              role: { value: 'textbox' },
+              name: { value: { label: 'Message' } },
+              value: { value: 0 },
+              description: { value: ['composer'] },
+              parentId: '1',
+            },
+          ],
+        });
+
+      const tree = await api.getAccessibilityTree();
+      expect(tree.children).toHaveLength(1);
+      expect(tree.children![0].name).toBe('{"label":"Message"}');
+      expect(tree.children![0].value).toBe('0');
+      expect(tree.children![0].description).toBe('["composer"]');
     });
   });
 });
