@@ -5,9 +5,20 @@ import { join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import { WebSocketServer, WebSocket } from 'ws';
+import {
+  ElectronAppAlreadyRunningError,
+  ElectronOverlayInjector,
+  launchElectronApp,
+} from './electron-controller.js';
+import { parseCliRuntimeFlags } from './runtime-flags.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
-const DEV_MODE = process.argv.includes('--dev');
+const RUNTIME_FLAGS = parseCliRuntimeFlags(process.argv.slice(2));
+const DEV_MODE = RUNTIME_FLAGS.dev;
+const SERVE_ONLY = RUNTIME_FLAGS.serveOnly;
+const ELECTRON_MODE = RUNTIME_FLAGS.electron;
+const ELECTRON_APP = RUNTIME_FLAGS.electronApp;
+const KILL_EXISTING_ELECTRON_APP = RUNTIME_FLAGS.kill;
 
 // ---------------------------------------------------------------------------
 // Request logging middleware
@@ -94,6 +105,15 @@ const ANSI_RED = '\x1b[31m';
 const ANSI_YELLOW = '\x1b[33m';
 const ANSI_CYAN = '\x1b[36m';
 const ANSI_RESET = '\x1b[0m';
+
+function pipeChildOutput(child: ChildProcess, label: string): void {
+  child.stdout?.on('data', (data: Buffer) => {
+    process.stdout.write(`[${label}:out] ${data}`);
+  });
+  child.stderr?.on('data', (data: Buffer) => {
+    process.stderr.write(`[${label}:err] ${data}`);
+  });
+}
 
 // ---------------------------------------------------------------------------
 // CDP console forwarder — forwards in-page console output to CLI stdout
@@ -260,50 +280,90 @@ async function attachConsoleForwarder(
 // Main
 // ---------------------------------------------------------------------------
 
-const CDP_PORT = 9222;
+const CDP_PORT = RUNTIME_FLAGS.cdpPort;
 const SERVE_PORT = parseInt(process.env['PORT'] ?? '3000', 10);
 
 async function main() {
   if (DEV_MODE) {
     console.log('Starting in dev mode (Vite HMR enabled)');
   }
-
-  // 1. Find Chrome
-  const chromePath = findChrome();
-  if (!chromePath) {
-    console.error(
-      'Could not find Chrome/Chromium. Please install Chrome or set CHROME_PATH.',
-    );
-    process.exit(1);
+  if (SERVE_ONLY) {
+    console.log(`Starting in serve-only mode (reusing external CDP on port ${CDP_PORT})`);
   }
-  console.log(`Found Chrome: ${chromePath}`);
+  if (ELECTRON_MODE) {
+    console.log('Starting in Electron mode');
+  }
 
-  // 2. Launch Chrome with remote debugging — forward stdout/stderr
-  const chromeArgs = [
-    `--remote-debugging-port=${CDP_PORT}`,
-    '--no-first-run',
-    '--no-default-browser-check',
-    `--user-data-dir=${join(process.env['TMPDIR'] ?? '/tmp', 'browser-coding-agent-chrome')}`,
-    `http://localhost:${SERVE_PORT}`,
-  ];
+  let launchedBrowserProcess: ChildProcess | null = null;
+  let launchedBrowserLabel = 'Browser';
+  let overlayInjector: ElectronOverlayInjector | null = null;
+  let shuttingDown = false;
 
-  const chrome: ChildProcess = spawn(chromePath, chromeArgs, {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    detached: false,
-  });
+  // 1. Launch Chrome unless an external CDP provider is already running.
+  if (ELECTRON_MODE && !SERVE_ONLY) {
+    if (!ELECTRON_APP) {
+      console.error('Electron mode requires an app path. Pass --electron <path> or --electron-app=<path>.');
+      process.exit(1);
+    }
 
-  // Forward Chrome's stdout/stderr so we can see console output and errors
-  chrome.stdout?.on('data', (data: Buffer) => {
-    process.stdout.write(`[chrome:out] ${data}`);
-  });
-  chrome.stderr?.on('data', (data: Buffer) => {
-    process.stderr.write(`[chrome:err] ${data}`);
-  });
+    try {
+      const { child, displayName } = await launchElectronApp({
+        appPath: ELECTRON_APP,
+        cdpPort: CDP_PORT,
+        kill: KILL_EXISTING_ELECTRON_APP,
+      });
 
-  chrome.on('exit', (code) => {
-    console.log(`Chrome exited with code ${code}`);
-    process.exit(0);
-  });
+      launchedBrowserProcess = child;
+      launchedBrowserLabel = displayName;
+      pipeChildOutput(child, 'electron-app');
+
+      child.on('exit', (code) => {
+        if (shuttingDown) return;
+        console.log(`${displayName} exited with code ${code}`);
+        process.exit(0);
+      });
+
+      await waitForCDP(CDP_PORT, 40, 500);
+      console.log(`Connected to ${displayName} on CDP port ${CDP_PORT}`);
+    } catch (error: unknown) {
+      if (error instanceof ElectronAppAlreadyRunningError) {
+        console.error(error.message);
+        process.exit(1);
+      }
+      throw error;
+    }
+  } else if (!SERVE_ONLY) {
+    const chromePath = findChrome();
+    if (!chromePath) {
+      console.error(
+        'Could not find Chrome/Chromium. Please install Chrome or set CHROME_PATH.',
+      );
+      process.exit(1);
+    }
+    console.log(`Found Chrome: ${chromePath}`);
+
+    const chromeArgs = [
+      `--remote-debugging-port=${CDP_PORT}`,
+      '--no-first-run',
+      '--no-default-browser-check',
+      `--user-data-dir=${join(process.env['TMPDIR'] ?? '/tmp', 'browser-coding-agent-chrome')}`,
+      `http://localhost:${SERVE_PORT}`,
+    ];
+
+    launchedBrowserProcess = spawn(chromePath, chromeArgs, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: false,
+    });
+    launchedBrowserLabel = 'Chrome';
+
+    pipeChildOutput(launchedBrowserProcess, 'chrome');
+
+    launchedBrowserProcess.on('exit', (code) => {
+      if (shuttingDown) return;
+      console.log(`Chrome exited with code ${code}`);
+      process.exit(0);
+    });
+  }
 
   // 3. Set up express app with request logging
   const app = express();
@@ -627,11 +687,13 @@ async function main() {
   let messageBuffer: unknown[] | null = null;
 
   // Ensure everything is cleaned up when CLI exits
-  let shuttingDown = false;
   const gracefulShutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log('\nShutting down...');
+
+    overlayInjector?.stop();
+    overlayInjector = null;
 
     // Close the shared Chrome WebSocket and all client connections
     if (chromeWs) {
@@ -650,47 +712,47 @@ async function main() {
     // Stop accepting new HTTP connections
     server.close();
 
-    // Try to close Chrome gracefully via CDP Browser.close
-    let chromeExited = false;
-    chrome.on('exit', () => { chromeExited = true; });
+    if (launchedBrowserProcess) {
+      let browserExited = false;
+      launchedBrowserProcess.on('exit', () => { browserExited = true; });
 
-    try {
-      const res = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`);
-      const json = (await res.json()) as { webSocketDebuggerUrl: string };
-      const browserWs = new WebSocket(json.webSocketDebuggerUrl);
-      await new Promise<void>((resolve, reject) => {
-        browserWs.on('open', () => {
-          browserWs.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
-          resolve();
-        });
-        browserWs.on('error', reject);
-      });
-    } catch {
-      // CDP not available — Chrome may still be starting up; fall through to kill
-    }
-
-    // Wait up to 3 seconds for Chrome to exit, then force-kill
-    const deadline = Date.now() + 3000;
-    while (!chromeExited && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 100));
-    }
-
-    if (!chromeExited) {
       try {
-        chrome.kill('SIGKILL');
-      } catch { /* ignore */ }
-    }
+        const res = await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`);
+        const json = (await res.json()) as { webSocketDebuggerUrl: string };
+        const browserWs = new WebSocket(json.webSocketDebuggerUrl);
+        await new Promise<void>((resolve, reject) => {
+          browserWs.on('open', () => {
+            browserWs.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
+            resolve();
+          });
+          browserWs.on('error', reject);
+        });
+      } catch {
+        // CDP not available — the launched browser may still be starting up; fall through to kill.
+      }
 
-    console.log('Chrome closed');
+      const deadline = Date.now() + 3000;
+      while (!browserExited && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+
+      if (!browserExited) {
+        try {
+          launchedBrowserProcess.kill('SIGKILL');
+        } catch { /* ignore */ }
+      }
+
+      console.log(`${launchedBrowserLabel} closed`);
+    }
     process.exit(0);
   };
 
   process.on('SIGINT', () => { gracefulShutdown(); });
   process.on('SIGTERM', () => { gracefulShutdown(); });
   process.on('exit', () => {
-    // Synchronous last-resort cleanup — kill Chrome if still running
-    if (!shuttingDown) {
-      try { chrome.kill(); } catch { /* ignore */ }
+    // Synchronous last-resort cleanup — kill the launched browser if it is still running.
+    if (!shuttingDown && launchedBrowserProcess) {
+      try { launchedBrowserProcess.kill(); } catch { /* ignore */ }
     }
   });
 
@@ -825,12 +887,31 @@ async function main() {
       }
     })();
 
-    // Attach console forwarder after a delay to let Chrome load the page
-    setTimeout(() => {
-      attachConsoleForwarder(CDP_PORT, String(SERVE_PORT)).catch((err) => {
-        console.error('[page] Console forwarder error:', err);
-      });
-    }, 2500);
+    if (ELECTRON_MODE) {
+      void (async () => {
+        try {
+          overlayInjector = await ElectronOverlayInjector.create({
+            cdpPort: CDP_PORT,
+            servePort: SERVE_PORT,
+            dev: DEV_MODE,
+            projectRoot: resolve(__dirname, '..', '..'),
+          });
+          await overlayInjector.start();
+          console.log('[electron-float] Overlay injector is watching Electron page targets');
+        } catch (error: unknown) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error('[electron-float] Failed to start overlay injector:', message);
+        }
+      })();
+    }
+
+    if (!ELECTRON_MODE && launchedBrowserProcess) {
+      setTimeout(() => {
+        attachConsoleForwarder(CDP_PORT, String(SERVE_PORT)).catch((err) => {
+          console.error('[page] Console forwarder error:', err);
+        });
+      }, 2500);
+    }
   });
 }
 

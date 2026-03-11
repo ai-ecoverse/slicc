@@ -16,6 +16,9 @@ export default defineConfig(({ mode }) => ({
         let cachedCode: string | null = null;
         let cachedMtime = 0;
         const swPath = resolve(__dirname, 'src/ui/preview-sw.ts');
+        let cachedOverlayCode: string | null = null;
+        let cachedOverlayMtime = 0;
+        const overlayEntryPath = resolve(__dirname, 'src/ui/electron-overlay-entry.ts');
 
         server.middlewares.use('/preview-sw.js', async (_req, res) => {
           try {
@@ -46,6 +49,36 @@ export default defineConfig(({ mode }) => ({
             res.end(`console.error('[preview-sw] Build failed: ${msg.replace(/'/g, "\\'")}');`);
           }
         });
+
+        server.middlewares.use('/electron-overlay-entry.js', async (_req, res) => {
+          try {
+            const { statSync } = await import('fs');
+            const mtime = statSync(overlayEntryPath).mtimeMs;
+
+            if (!cachedOverlayCode || mtime > cachedOverlayMtime) {
+              const esbuild = await import('esbuild');
+              const result = await esbuild.build({
+                entryPoints: [overlayEntryPath],
+                bundle: true,
+                write: false,
+                format: 'iife',
+                target: 'esnext',
+                define: { __DEV__: 'true', global: 'globalThis' },
+              });
+              cachedOverlayCode = result.outputFiles![0].text;
+              cachedOverlayMtime = mtime;
+            }
+
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(cachedOverlayCode);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error('[electron-overlay-builder] Failed to build:', msg);
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(`console.error('[electron-overlay] Build failed: ${msg.replace(/'/g, "\\'")}');`);
+          }
+        });
       },
       async closeBundle() {
         // Production: build the SW as a self-contained IIFE via esbuild.
@@ -55,6 +88,15 @@ export default defineConfig(({ mode }) => ({
           entryPoints: [resolve(__dirname, 'src/ui/preview-sw.ts')],
           bundle: true,
           outfile: resolve(__dirname, 'dist/ui/preview-sw.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
+        });
+        await esbuild.build({
+          entryPoints: [resolve(__dirname, 'src/ui/electron-overlay-entry.ts')],
+          bundle: true,
+          outfile: resolve(__dirname, 'dist/ui/electron-overlay-entry.js'),
           format: 'iife',
           target: 'esnext',
           minify: true,

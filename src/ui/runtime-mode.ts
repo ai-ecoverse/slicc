@@ -1,0 +1,59 @@
+import {
+  DEFAULT_EXTENSION_TAB_ID,
+  normalizeExtensionTabId,
+  type ExtensionTabId,
+} from './tabbed-ui.js';
+
+export type UiRuntimeMode = 'standalone' | 'extension' | 'electron-overlay';
+
+export const ELECTRON_OVERLAY_RUNTIME_QUERY_VALUE = 'electron-overlay';
+export const ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE = 'slicc-electron-overlay:set-tab';
+
+export interface ElectronOverlaySetTabMessage {
+  type: typeof ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE;
+  tab?: string;
+}
+
+export function resolveUiRuntimeMode(locationHref: string, isExtension: boolean): UiRuntimeMode {
+  if (isExtension) return 'extension';
+
+  try {
+    const url = new URL(locationHref);
+    return url.searchParams.get('runtime') === ELECTRON_OVERLAY_RUNTIME_QUERY_VALUE
+      ? 'electron-overlay'
+      : 'standalone';
+  } catch {
+    return 'standalone';
+  }
+}
+
+export function getElectronOverlayInitialTab(locationHref: string): ExtensionTabId {
+  try {
+    const url = new URL(locationHref);
+    return normalizeExtensionTabId(url.searchParams.get('tab'), DEFAULT_EXTENSION_TAB_ID);
+  } catch {
+    return DEFAULT_EXTENSION_TAB_ID;
+  }
+}
+
+export function getLickWebSocketUrl(locationHref: string): string {
+  const url = new URL(locationHref);
+  const protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${url.host}/licks-ws`;
+}
+
+export function getWebhookUrl(locationHref: string, webhookId: string): string {
+  const url = new URL(locationHref);
+  return `${url.origin}/webhooks/${webhookId}`;
+}
+
+export function isElectronOverlaySetTabMessage(
+  value: unknown,
+): value is ElectronOverlaySetTabMessage {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'type' in value &&
+    (value as Record<string, unknown>).type === ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE
+  );
+}
