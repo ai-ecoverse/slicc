@@ -9,6 +9,7 @@ import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
 import type { BrowserAPI, PageInfo } from '../../cdp/index.js';
 import { HarRecorder } from '../../cdp/index.js';
+import { normalizeAccessibilityText } from '../../cdp/normalize-accessibility-text.js';
 import type { AccessibilityNode } from '../../cdp/types.js';
 import { FsError, type VirtualFS } from '../../fs/index.js';
 
@@ -30,20 +31,6 @@ function base64ToBytes(base64: string): Uint8Array {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes;
-}
-
-function normalizeSnapshotText(value: unknown, fallback = ''): string {
-  if (value == null) return fallback;
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
-    return String(value);
-  }
-  try {
-    const json = JSON.stringify(value);
-    return json ?? fallback;
-  } catch {
-    return String(value);
-  }
 }
 
 /** Shared state across invocations (persists for the lifetime of the shell). */
@@ -258,9 +245,9 @@ function renderNode(
   indent: string = '',
 ): string[] {
   const lines: string[] = [];
-  const role = normalizeSnapshotText(node.role, 'unknown').toLowerCase();
-  const name = normalizeSnapshotText(node.name);
-  const value = normalizeSnapshotText(node.value);
+  const role = normalizeAccessibilityText(node.role, 'unknown').toLowerCase();
+  const name = normalizeAccessibilityText(node.name);
+  const value = normalizeAccessibilityText(node.value);
 
   const skipRoles = ['none', 'presentation', 'generic', 'rootwebarea'];
   const needsRef =

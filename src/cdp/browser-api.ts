@@ -16,24 +16,11 @@ import type {
   BoundingBox,
   AccessibilityNode,
 } from './types.js';
+import { normalizeAccessibilityText } from './normalize-accessibility-text.js';
 import { createLogger } from '../core/logger.js';
 
 const DEFAULT_CDP_URL = 'ws://localhost:3000/cdp';
 const log = createLogger('browser-api');
-
-function normalizeAXText(value: unknown, fallback = ''): string {
-  if (value == null) return fallback;
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
-    return String(value);
-  }
-  try {
-    const json = JSON.stringify(value);
-    return json ?? fallback;
-  } catch {
-    return String(value);
-  }
-}
 
 export class BrowserAPI {
   private client: CDPTransport;
@@ -453,11 +440,11 @@ export class BrowserAPI {
     let rootId: string | undefined;
 
     for (const n of nodes) {
-      const value = normalizeAXText(n.value?.value);
-      const description = normalizeAXText(n.description?.value);
+      const value = normalizeAccessibilityText(n.value?.value);
+      const description = normalizeAccessibilityText(n.description?.value);
       const node: AccessibilityNode & { childIds?: string[] } = {
-        role: normalizeAXText(n.role?.value, 'unknown'),
-        name: normalizeAXText(n.name?.value),
+        role: normalizeAccessibilityText(n.role?.value, 'unknown'),
+        name: normalizeAccessibilityText(n.name?.value),
       };
       if (value !== '') node.value = value;
       if (description !== '') node.description = description;
