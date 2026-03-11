@@ -253,22 +253,27 @@ describe('BrowserAPI', () => {
     });
 
     it('captures a screenshot', async () => {
-      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-        data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8/x8AAwAB/aurH8kAAAAASUVORK5CYII=',
-      });
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({}) // Runtime.enable
+        .mockResolvedValueOnce({ result: { value: 1 } }) // Runtime.evaluate (DPR=1)
+        .mockResolvedValueOnce({
+          data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8/x8AAwAB/aurH8kAAAAASUVORK5CYII=',
+        }); // Page.captureScreenshot
 
       const data = await api.screenshot();
       expect(typeof data).toBe('string');
       expect(data.length).toBeGreaterThan(0);
       expect(mockClient.send).toHaveBeenCalledWith(
         'Page.captureScreenshot',
-        { format: 'png' },
+        { format: 'png', captureBeyondViewport: true },
         'sess-1',
       );
     });
 
     it('captures full page screenshot', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({}) // Runtime.enable
+        .mockResolvedValueOnce({ result: { value: 1 } }) // Runtime.evaluate (DPR=1)
         .mockResolvedValueOnce({
           contentSize: { width: 1024, height: 5000 },
         }) // getLayoutMetrics
@@ -276,6 +281,69 @@ describe('BrowserAPI', () => {
 
       const data = await api.screenshot({ fullPage: true });
       expect(data).toBe('base64data');
+    });
+
+    it('normalizes DPR to 1 on HiDPI displays', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({}) // Runtime.enable
+        .mockResolvedValueOnce({ result: { value: 2 } }) // Runtime.evaluate (DPR=2)
+        .mockResolvedValueOnce({
+          layoutViewport: { clientWidth: 1920, clientHeight: 1080 },
+        }) // Page.getLayoutMetrics
+        .mockResolvedValueOnce({}) // Emulation.setDeviceMetricsOverride
+        .mockResolvedValueOnce({ data: 'normalized' }) // Page.captureScreenshot
+        .mockResolvedValueOnce({}); // Emulation.clearDeviceMetricsOverride
+
+      const data = await api.screenshot();
+      expect(data).toBe('normalized');
+      expect(mockClient.send).toHaveBeenCalledWith(
+        'Emulation.setDeviceMetricsOverride',
+        { width: 1920, height: 1080, deviceScaleFactor: 1, mobile: false },
+        'sess-1',
+      );
+      expect(mockClient.send).toHaveBeenCalledWith(
+        'Emulation.clearDeviceMetricsOverride',
+        {},
+        'sess-1',
+      );
+    });
+
+    it('skips DPR normalization when DPR is already 1', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({}) // Runtime.enable
+        .mockResolvedValueOnce({ result: { value: 1 } }) // Runtime.evaluate (DPR=1)
+        .mockResolvedValueOnce({ data: 'noop' }); // Page.captureScreenshot
+
+      await api.screenshot();
+      expect(mockClient.send).not.toHaveBeenCalledWith(
+        'Emulation.setDeviceMetricsOverride',
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
+    it('falls back to native DPR when normalization fails', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockRejectedValueOnce(new Error('Runtime.enable failed')) // Runtime.enable throws
+        .mockResolvedValueOnce({ data: 'fallback' }); // Page.captureScreenshot
+
+      const data = await api.screenshot();
+      expect(data).toBe('fallback');
+    });
+
+    it('returns screenshot even when cleanup fails', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({}) // Runtime.enable
+        .mockResolvedValueOnce({ result: { value: 2 } }) // Runtime.evaluate (DPR=2)
+        .mockResolvedValueOnce({
+          layoutViewport: { clientWidth: 1920, clientHeight: 1080 },
+        }) // Page.getLayoutMetrics
+        .mockResolvedValueOnce({}) // Emulation.setDeviceMetricsOverride
+        .mockResolvedValueOnce({ data: 'ok' }) // Page.captureScreenshot
+        .mockRejectedValueOnce(new Error('cleanup failed')); // Emulation.clearDeviceMetricsOverride
+
+      const data = await api.screenshot();
+      expect(data).toBe('ok');
     });
   });
 
