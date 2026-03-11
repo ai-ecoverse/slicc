@@ -2,9 +2,9 @@
 
 ## Problem
 
-LLM streaming in the slicc chat feels sluggish. Every token delta triggers a full message element rebuild including a synchronous unified.js markdown pipeline on the entire accumulated content. Three compounding issues:
+LLM streaming in the slicc chat feels sluggish. Every token delta triggers a full message element rebuild including a synchronous markdown pipeline on the entire accumulated content. Three compounding issues:
 
-1. **O(n^2) markdown rendering** -- unified.js (6-stage AST pipeline) re-parses the full accumulated content on every token.
+1. **O(n^2) markdown rendering** -- the markdown pipeline re-parses the full accumulated content on every token.
 2. **Full DOM destruction/recreation** -- the entire message element (role label, content, tool calls) is destroyed and rebuilt via `replaceWith()` per token.
 3. **Zero throttling** -- no batching between token arrival and DOM update.
 
@@ -71,7 +71,7 @@ Cancel any pending rAF and flush remaining text in:
 
 ## What stays the same
 
-- **Markdown pipeline** -- unified.js runs on every rAF-batched render, at ~60fps max instead of per-token.
+- **Markdown pipeline** -- markdown is still fully re-parsed on every rAF-batched render (currently via `marked` + `DOMPurify`), at ~60fps max instead of per-token.
 - **Event flow** -- ScoopContext, Orchestrator, offscreen bridge, offscreen client are untouched.
 - **`scrollToBottom()`** -- already uses rAF internally; called once per batched render.
 - **Session persistence** -- only fires on `content_done` / `turn_end`, unaffected.

@@ -129,12 +129,21 @@ function forceNewTabLinks(html: string): string {
     /<a\s([^>]*?)>/g,
     (_match, attrs: string) => {
       let result = attrs;
-      if (!result.includes('target=')) {
+      // Ensure target="_blank" (replace existing or add new)
+      if (/(^|\s)target\s*=/i.test(result)) {
+        result = result.replace(
+          /(^|\s)target\s*=\s*(['"])[^'"]*\2/gi,
+          '$1target="_blank"',
+        );
+      } else {
         result += ' target="_blank"';
       }
-      // Replace or add rel
-      if (result.includes('rel=')) {
-        result = result.replace(/rel="[^"]*"/, 'rel="noopener noreferrer"');
+      // Ensure rel="noopener noreferrer" (replace existing or add new)
+      if (/(^|\s)rel\s*=/i.test(result)) {
+        result = result.replace(
+          /(^|\s)rel\s*=\s*(['"])[^'"]*\2/gi,
+          '$1rel="noopener noreferrer"',
+        );
       } else {
         result += ' rel="noopener noreferrer"';
       }
