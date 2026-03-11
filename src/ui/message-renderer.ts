@@ -1,25 +1,13 @@
 /**
  * Message renderer — converts message content to HTML with
- * syntax-highlighted code blocks and full GFM markdown support via unified.js.
+ * syntax-highlighted code blocks and full GFM markdown support via marked.
+ *
+ * Replaces the unified.js 7-plugin pipeline with a single marked.parse()
+ * call + DOMPurify sanitization for faster streaming rendering (~60fps).
  */
 
-import { unified } from 'unified';
-import remarkParse from 'remark-parse';
-import remarkGfm from 'remark-gfm';
-import remarkBreaks from 'remark-breaks';
-import remarkRehype from 'remark-rehype';
-import rehypeRaw from 'rehype-raw';
-import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
-import type { Schema } from 'hast-util-sanitize';
-import rehypeStringify from 'rehype-stringify';
-import type { Code } from 'mdast';
-import type { Element } from 'hast';
-
-/** Minimal raw-HTML node type used by rehype-raw / hast-util-raw. */
-interface RawNode {
-  type: 'raw';
-  value: string;
-}
+import { Marked, type Tokens } from 'marked';
+import { sanitize as purify } from 'isomorphic-dompurify';
 
 /** Escape HTML special characters. */
 export function escapeHtml(text: string): string {
@@ -88,87 +76,80 @@ function highlightBash(html: string): string {
   return html;
 }
 
-/** remark-rehype handler for fenced code blocks — applies tok-* syntax highlighting. */
-function codeHandler(_state: unknown, node: Code): Element {
-  const lang = node.lang ?? '';
-  const highlighted = highlightCode(node.value, lang);
-  const rawNode: RawNode = { type: 'raw', value: highlighted };
-  return {
-    type: 'element',
-    tagName: 'pre',
-    properties: {},
-    children: [{
-      type: 'element',
-      tagName: 'code',
-      properties: lang ? { className: [`language-${lang}`] } : {},
-      children: [rawNode as unknown as Element],
-    }],
-  };
-}
+// -- Marked instance with custom renderers --
 
-function ensureSafeLinkRel(): string {
-  return 'noopener noreferrer';
-}
-
-function addNewTabToLinks() {
-  return (tree: unknown) => {
-    visitNode(tree);
-  };
-}
-
-function visitNode(node: unknown): void {
-  if (!node || typeof node !== 'object') return;
-
-  const hastNode = node as {
-    type?: string;
-    tagName?: string;
-    properties?: Record<string, unknown>;
-    children?: unknown[];
-  };
-
-  if (hastNode.type === 'element' && hastNode.tagName === 'a' && hastNode.properties?.href) {
-    hastNode.properties = {
-      ...hastNode.properties,
-      target: '_blank',
-      rel: ensureSafeLinkRel(),
-    };
-  }
-
-  if (Array.isArray(hastNode.children)) {
-    for (const child of hastNode.children) {
-      visitNode(child);
-    }
-  }
-}
-
-/**
- * Sanitize schema: extends the default (safe HTML subset) to also allow
- * - `span` with `class` — for tok-* syntax-highlighting spans
- * - `class` on `code` — for language-* identifiers
- */
-const sanitizeSchema: Schema = {
-  ...defaultSchema,
-  attributes: {
-    ...defaultSchema.attributes,
-    span: ['className'],
-    code: [['className', /^language-/]],
+const marked = new Marked({
+  gfm: true,
+  breaks: true,
+  async: false,
+  renderer: {
+    code({ text, lang }: Tokens.Code): string {
+      const language = lang ?? '';
+      const highlighted = highlightCode(text, language);
+      const langClass = language ? ` class="language-${escapeHtml(language)}"` : '';
+      return `<pre><code${langClass}>${highlighted}</code></pre>\n`;
+    },
+    link({ href, title, tokens }: Tokens.Link): string {
+      const url = href ?? '';
+      if (url.startsWith('javascript:')) {
+        return this.parser.parseInline(tokens);
+      }
+      const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
+      const text = this.parser.parseInline(tokens);
+      return `<a href="${escapeHtml(url)}"${titleAttr} target="_blank" rel="noopener noreferrer">${text}</a>`;
+    },
   },
+});
+
+// -- DOMPurify configuration --
+
+const PURIFY_CONFIG = {
+  ALLOWED_TAGS: [
+    'a', 'b', 'i', 'em', 'strong', 'p', 'br', 'code', 'pre',
+    'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'table', 'thead', 'tbody', 'tr', 'th', 'td',
+    'del', 'blockquote', 'hr', 'img', 'span', 'div',
+    'details', 'summary', 'input',
+  ],
+  ALLOWED_ATTR: [
+    'href', 'src', 'alt', 'title', 'class',
+    'target', 'rel', 'type', 'checked', 'disabled',
+  ],
+  ALLOW_DATA_ATTR: false,
 };
 
-const processor = unified()
-  .use(remarkParse)
-  .use(remarkGfm)
-  .use(remarkBreaks)
-  .use(remarkRehype, { allowDangerousHtml: true, handlers: { code: codeHandler } })
-  .use(rehypeRaw)                          // parse raw nodes (incl. our tok-* spans) into hast
-  .use(rehypeSanitize, sanitizeSchema)     // strip XSS vectors, keep safe subset + tok-* spans
-  .use(addNewTabToLinks)                   // force safe new-tab behavior for rendered message links
-  .use(rehypeStringify);
+function sanitize(html: string): string {
+  return purify(html, PURIFY_CONFIG) as string;
+}
+
+// Force target="_blank" on all links after sanitization (catches autolinks
+// and any raw HTML <a> tags that DOMPurify let through).
+function forceNewTabLinks(html: string): string {
+  return html.replace(
+    /<a\s([^>]*?)>/g,
+    (_match, attrs: string) => {
+      let result = attrs;
+      if (!result.includes('target=')) {
+        result += ' target="_blank"';
+      }
+      // Replace or add rel
+      if (result.includes('rel=')) {
+        result = result.replace(/rel="[^"]*"/, 'rel="noopener noreferrer"');
+      } else {
+        result += ' rel="noopener noreferrer"';
+      }
+      return `<a ${result}>`;
+    },
+  );
+}
+
+// -- Public API (same exports as before) --
 
 const SURFACED_ERROR_PARAGRAPH_RE = /<p><strong>Error:<\/strong>\s*([\s\S]*?)<\/p>/g;
 
 function renderBaseMessageContent(content: string): string {
-  return String(processor.processSync(content));
+  const raw = marked.parse(content) as string;
+  return forceNewTabLinks(sanitize(raw));
 }
 
 function renderSurfacedErrorBlocks(html: string): string {
@@ -180,7 +161,7 @@ function renderSurfacedErrorBlocks(html: string): string {
 
 /**
  * Render a message content string to HTML.
- * Uses unified.js with remark-gfm for full GFM support:
+ * Uses marked with GFM for full GFM support:
  * tables, strikethrough, task lists, autolinks, and more.
  */
 export function renderMessageContent(content: string): string {
