@@ -65,7 +65,17 @@ jobs:
             echo "Missing deployment URL from cloudflare/wrangler-action output"
             exit 1
           fi
-          npx vitest run src/worker/deployed.test.ts
+          for attempt in 1 2 3 4 5 6; do
+            if npx vitest run src/worker/deployed.test.ts; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 6 ]; then
+              echo "Deployed smoke test failed after ${attempt} attempts"
+              exit 1
+            fi
+            echo "Deployed smoke test failed on attempt ${attempt}; waiting for workers.dev propagation before retrying..."
+            sleep 15
+          done
 
   deploy-production:
     name: Deploy production + smoke test
@@ -104,4 +114,14 @@ jobs:
             echo "Missing deployment URL from cloudflare/wrangler-action output"
             exit 1
           fi
-          npx vitest run src/worker/deployed.test.ts
+          for attempt in 1 2 3 4 5 6; do
+            if npx vitest run src/worker/deployed.test.ts; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 6 ]; then
+              echo "Deployed smoke test failed after ${attempt} attempts"
+              exit 1
+            fi
+            echo "Deployed smoke test failed on attempt ${attempt}; waiting for workers.dev propagation before retrying..."
+            sleep 15
+          done

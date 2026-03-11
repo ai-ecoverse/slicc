@@ -101,6 +101,7 @@ Nothing else is required for CI configuration:
   - runs production deploy + smoke test on pushes to `main` that touch the Worker/Wrangler config
   - supports manual dispatch with `target=staging|production`
   - uses `cloudflare/wrangler-action@v3`, pins Wrangler `3.91.0` (first release with `wrangler.jsonc` support), and passes its `deployment-url` output into `src/worker/deployed.test.ts`
+  - retries the deployed smoke test for up to ~90 seconds after deploy so brief `workers.dev` propagation lag does not fail an otherwise healthy rollout
 
 ### Local validation commands
 
