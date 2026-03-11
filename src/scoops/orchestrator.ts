@@ -39,7 +39,7 @@ export interface OrchestratorCallbacks {
   onStatusChange: (scoopJid: string, status: ScoopTabState['status']) => void;
   /** Called on error */
   onError: (scoopJid: string, error: string) => void;
-  /** Get the browser API for browser tool */
+  /** Get the BrowserAPI used by browser automation commands */
   getBrowserAPI: () => BrowserAPI;
   /** Called when a tool starts executing */
   onToolStart?: (scoopJid: string, toolName: string, toolInput: unknown) => void;
