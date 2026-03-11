@@ -22,38 +22,49 @@ const mockStorage = {
 
 Object.defineProperty(globalThis, 'localStorage', { value: mockStorage, configurable: true });
 
-const { mockGetProviders, mockGetModels, mockGetModel } = vi.hoisted(() => ({
-  mockGetProviders: vi.fn(() => [
-    'anthropic',
-    'openai',
-    'azure-openai-responses',
-    'amazon-bedrock',
-  ]),
-  mockGetModels: vi.fn((providerId: string) => {
-    if (providerId === 'anthropic') {
-      return [{ id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', reasoning: true }];
-    }
-    if (providerId === 'openai') {
-      return [{ id: 'gpt-5', name: 'GPT-5', reasoning: true }];
-    }
-    if (providerId === 'amazon-bedrock') {
-      return [{ id: 'anthropic.claude-3-sonnet', name: 'Claude 3 Sonnet', reasoning: true }];
-    }
-    throw new Error(`Unknown provider: ${providerId}`);
-  }),
-  mockGetModel: vi.fn((providerId: string, modelId: string) => ({
-    id: modelId,
-    name: modelId,
-    provider: providerId,
-    api: 'mock-api',
-    baseUrl: 'https://default.example.com',
-  })),
-}));
+const { mockGetProviders, mockGetModels, mockGetModel, mockCreateLogger, mockLog } = vi.hoisted(() => {
+  const mockLog = {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  };
+  return {
+    mockLog,
+    mockCreateLogger: vi.fn(() => mockLog),
+    mockGetProviders: vi.fn(() => [
+      'anthropic',
+      'openai',
+      'azure-openai-responses',
+      'amazon-bedrock',
+    ]),
+    mockGetModels: vi.fn((providerId: string) => {
+      if (providerId === 'anthropic') {
+        return [{ id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', reasoning: true }];
+      }
+      if (providerId === 'openai') {
+        return [{ id: 'gpt-5', name: 'GPT-5', reasoning: true }];
+      }
+      if (providerId === 'amazon-bedrock') {
+        return [{ id: 'anthropic.claude-3-sonnet', name: 'Claude 3 Sonnet', reasoning: true }];
+      }
+      throw new Error(`Unknown provider: ${providerId}`);
+    }),
+    mockGetModel: vi.fn((providerId: string, modelId: string) => ({
+      id: modelId,
+      name: modelId,
+      provider: providerId,
+      api: 'mock-api',
+      baseUrl: 'https://default.example.com',
+    })),
+  };
+});
 
 vi.mock('../core/index.js', () => ({
   getProviders: mockGetProviders,
   getModels: mockGetModels,
   getModel: mockGetModel,
+  createLogger: mockCreateLogger,
 }));
 
 import {
@@ -76,7 +87,9 @@ import {
   getApiKeyForProvider,
   getBaseUrlForProvider,
   getAllAvailableModels,
+  applyProviderDefaults,
 } from './provider-settings.js';
+import type { ProviderDefault } from './provider-settings.js';
 
 describe('multi-account storage', () => {
   beforeEach(() => {
@@ -260,7 +273,7 @@ describe('resolveCurrentModel', () => {
 
     expect(mockGetModel).toHaveBeenCalledWith('openai', 'gpt-5');
     expect(model.id).toBe('gpt-5');
-    expect((model as any).baseUrl).toBe('https://proxy.example.com');
+    expect((model as unknown as Record<string, unknown>).baseUrl).toBe('https://proxy.example.com');
   });
 
   it('falls back to anthropic default model when model lookup fails', () => {
@@ -273,7 +286,7 @@ describe('resolveCurrentModel', () => {
     const model = resolveCurrentModel();
 
     expect(mockGetModel).toHaveBeenNthCalledWith(2, 'anthropic', 'claude-sonnet-4-20250514');
-    expect((model as any).provider).toBe('anthropic');
+    expect((model as unknown as Record<string, unknown>).provider).toBe('anthropic');
     expect(model.id).toBe('claude-sonnet-4-20250514');
   });
 
@@ -283,7 +296,7 @@ describe('resolveCurrentModel', () => {
 
     const model = resolveCurrentModel();
 
-    expect((model as any).baseUrl).toBe('https://default.example.com');
+    expect((model as unknown as Record<string, unknown>).baseUrl).toBe('https://default.example.com');
   });
 });
 
@@ -339,5 +352,116 @@ describe('legacy key cleanup', () => {
     for (const key of legacyKeys) {
       expect(storage.get(key)).toBeUndefined();
     }
+  });
+});
+
+describe('applyProviderDefaults', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('no-op when defaults array is empty', () => {
+    applyProviderDefaults([]);
+    expect(getAccounts()).toEqual([]);
+  });
+
+  it('no-op when accounts already exist', () => {
+    addAccount('openai', 'existing-key');
+    const defaults: ProviderDefault[] = [
+      { providerId: 'anthropic', apiKey: 'new-key' },
+    ];
+    applyProviderDefaults(defaults);
+    const accounts = getAccounts();
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0].providerId).toBe('openai');
+  });
+
+  it('adds accounts from defaults when none exist', () => {
+    const defaults: ProviderDefault[] = [
+      { providerId: 'anthropic', apiKey: 'ant-key' },
+      { providerId: 'openai', apiKey: 'oai-key' },
+    ];
+    applyProviderDefaults(defaults);
+    const accounts = getAccounts();
+    expect(accounts).toHaveLength(2);
+    expect(accounts[0].providerId).toBe('anthropic');
+    expect(accounts[1].providerId).toBe('openai');
+  });
+
+  it('sets selected model from first entry', () => {
+    const defaults: ProviderDefault[] = [
+      { providerId: 'anthropic', apiKey: 'ant-key', model: 'claude-sonnet-4-20250514' },
+      { providerId: 'openai', apiKey: 'oai-key', model: 'gpt-5' },
+    ];
+    applyProviderDefaults(defaults);
+    expect(getSelectedModelId()).toBe('claude-sonnet-4-20250514');
+    expect(getSelectedProvider()).toBe('anthropic');
+  });
+
+  it('skips entries missing providerId or apiKey', () => {
+    const defaults: ProviderDefault[] = [
+      { providerId: '', apiKey: 'key-1' },
+      { providerId: 'anthropic', apiKey: '' },
+      { providerId: 'openai', apiKey: 'oai-key' },
+    ];
+    applyProviderDefaults(defaults);
+    const accounts = getAccounts();
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0].providerId).toBe('openai');
+  });
+
+  it('warns and skips unknown providers', () => {
+    const defaults: ProviderDefault[] = [
+      { providerId: 'unknown-provider', apiKey: 'key-1' },
+      { providerId: 'anthropic', apiKey: 'ant-key' },
+    ];
+    applyProviderDefaults(defaults);
+    const accounts = getAccounts();
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0].providerId).toBe('anthropic');
+    expect(mockLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining('unknown-provider'),
+    );
+  });
+
+  it('stores baseUrl when provided', () => {
+    const defaults: ProviderDefault[] = [
+      {
+        providerId: 'amazon-bedrock',
+        apiKey: 'aws-key',
+        baseUrl: 'https://bedrock.us-east-1.amazonaws.com',
+      },
+    ];
+    applyProviderDefaults(defaults);
+    expect(getBaseUrlForProvider('amazon-bedrock')).toBe('https://bedrock.us-east-1.amazonaws.com');
+  });
+
+  it('makes getApiKey() return non-null (skips settings dialog)', () => {
+    const defaults: ProviderDefault[] = [
+      { providerId: 'anthropic', apiKey: 'ant-key', model: 'claude-sonnet-4-20250514' },
+    ];
+    applyProviderDefaults(defaults);
+    expect(getApiKey()).toBe('ant-key');
+    expect(getSelectedProvider()).toBe('anthropic');
+  });
+
+  it('duplicate providerId keeps last entry', () => {
+    const defaults: ProviderDefault[] = [
+      { providerId: 'anthropic', apiKey: 'first-key' },
+      { providerId: 'anthropic', apiKey: 'second-key' },
+    ];
+    applyProviderDefaults(defaults);
+    expect(getApiKeyForProvider('anthropic')).toBe('second-key');
+    expect(getAccounts()).toHaveLength(1);
+  });
+
+  it('does not override existing selected model', () => {
+    storage.set('selected-model', 'openai:gpt-5');
+    const defaults: ProviderDefault[] = [
+      { providerId: 'anthropic', apiKey: 'ant-key', model: 'claude-sonnet-4-20250514' },
+    ];
+    applyProviderDefaults(defaults);
+    expect(storage.get('selected-model')).toBe('openai:gpt-5');
   });
 });
