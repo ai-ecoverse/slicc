@@ -7,14 +7,16 @@ Build, run, test, and debug SLICC locally.
 | Command | What It Does | When to Use |
 |---------|-------------|-----------|
 | `npm run dev:full` | Full dev mode: Vite HMR + Chrome + CDP proxy (port 3000) | Interactive development; live reload; test browser features |
+| `npm run dev:electron -- /Applications/Slack.app` | Launch the main CLI in Electron attach mode against an Electron app | Electron overlay/runtime work |
 | `npm run dev` | Vite dev server only (no Chrome/CDP) | Quick UI iteration without launching browser |
-| `npm run build` | Production build: Vite UI + TSC CLI | Pre-deployment validation; final bundle check |
+| `npm run build` | Production build: Vite UI + TSC CLI/Electron Node target | Pre-deployment validation; final bundle check |
 | `npm run build:ui` | Vite build only into `dist/ui/` | Build UI assets separately |
-| `npm run build:cli` | TSC build only into `dist/cli/` | Build CLI server separately |
+| `npm run build:cli` | TSC build only into `dist/cli/` | Build CLI server + Electron attach helpers separately |
 | `npm run build:extension` | Chrome extension bundle into `dist/extension/` | Build extension; load in `chrome://extensions` |
 | `npm run start` | Run production CLI (requires build first) | Run built production bundle |
-| `npm run typecheck` | Typecheck both tsconfig targets | Verify no type errors before committing |
-| `npm run test` | Vitest run (all 1003 tests) | Run full test suite; CI validation |
+| `npm run start:electron -- /Applications/Slack.app` | Run the built Electron attach mode | Smoke-test production Electron output |
+| `npm run typecheck` | Typecheck browser + Node targets | Verify no type errors before committing |
+| `npm run test` | Vitest run (all tests) | Run full test suite; CI validation |
 | `npm run test:watch` | Vitest watch mode | Iterate on test changes; TDD workflow |
 | `npx vitest run src/fs/virtual-fs.test.ts` | Run single test file | Debug a specific module |
 
@@ -22,9 +24,10 @@ Build, run, test, and debug SLICC locally.
 
 | Port | Service | Mode |
 |------|---------|------|
-| 3000 | UI server | CLI only |
+| 3000 | UI server | CLI + Electron embedded app |
 | 9222 | Chrome CDP | CLI only |
-| 24679 | Vite HMR WebSocket | CLI only (dev mode) |
+| 9223 | Electron CDP | Electron float only |
+| 24679 | Vite HMR WebSocket | CLI/Electron dev mode |
 
 ## Environment Variables
 
@@ -34,21 +37,21 @@ Build, run, test, and debug SLICC locally.
 ## Development Cycle
 
 1. **Edit** — Change source code in `src/`
-2. **Typecheck** — Run `npm run typecheck` (both tsconfigs: browser + Node)
+2. **Typecheck** — Run `npm run typecheck` (browser + Node targets)
 3. **Test** — Run `npm run test` (or `npm run test:watch` for rapid iteration)
 4. **Build** — Run all four build gates: `npm run typecheck`, `npm run test`, `npm run build`, `npm run build:extension`
-5. **Verify manually** — Test in both CLI mode and extension mode (see checklist below)
+5. **Verify manually** — Test in the relevant runtimes; include Electron mode when touching float/runtime code (see checklist below)
 
 ## Verification Checklist (Before Committing)
 
 All four build gates MUST pass:
 
-- [ ] `npm run typecheck` — Both tsconfig targets (browser + CLI)
+- [ ] `npm run typecheck` — Browser + Node targets
 - [ ] `npm run test` — Vitest (all tests)
-- [ ] `npm run build` — Production build (UI via Vite + CLI via TSC)
+- [ ] `npm run build` — Production build (UI via Vite + CLI/Electron Node target via TSC)
 - [ ] `npm run build:extension` — Extension build (Vite with extension config)
 
-Manual verification in both modes:
+Manual verification in the relevant runtimes:
 
 - [ ] Feature works in CLI mode (`npm run dev:full`)
   - Launch Chrome automatically
@@ -58,6 +61,10 @@ Manual verification in both modes:
   - Load `dist/extension/` as unpacked extension
   - Open side panel
   - Interact with UI; check functionality
+- [ ] Electron-specific changes work in Electron mode (`npm run dev:electron -- /Applications/Slack.app`)
+  - The CLI launches or relaunches the target Electron app with remote debugging enabled
+  - If the app is already running, the CLI exits clearly unless `--kill` is also supplied
+  - The overlay launcher appears in the target app and survives page navigation via reinjection
 - [ ] No console errors in DevTools (F12 in CLI mode)
 - [ ] No TypeScript errors in browser console (watch CLI stdout)
 
@@ -104,6 +111,21 @@ This launches:
 - Express server on port 3000
 - Chrome with remote debugging on port 9222
 - Vite HMR WebSocket on port 24679
+
+### Electron float debugging
+
+Start Electron attach mode against an Electron app:
+```bash
+npm run dev:electron -- /Applications/Slack.app
+
+# If the app is already running:
+# npm run dev:electron -- --kill /Applications/Slack.app
+```
+
+This launches:
+- The main CLI entrypoint in `--electron` mode
+- The target Electron app with remote debugging on port 9223
+- The same local UI server on port 3000 plus persistent overlay injection from `electron-overlay-entry.js`
 
 ### Viewing console output
 
@@ -166,7 +188,7 @@ log.error('error message');
 
 ## Multi-Mode Compatibility Checklist
 
-New features MUST work in both modes:
+New features MUST work in the relevant runtimes:
 
 - **CLI mode** (`npm run dev:full`)
   - Runs in browser launched by Node/Express
@@ -180,6 +202,12 @@ New features MUST work in both modes:
   - Must use sandbox iframe for dynamic code (`sandbox.html`)
   - Must use `chrome.runtime.getURL()` for bundled assets
   - Must detect runtime via `typeof chrome !== 'undefined' && !!chrome?.runtime?.id`
+
+- **Electron float** (`npm run dev:electron -- /Applications/Slack.app`)
+  - Reuses the main CLI entrypoint instead of a separate Electron-only launcher
+  - Injects `electron-overlay-entry.js` into Electron page targets over CDP
+  - Uses Electron CDP (`9223` by default) instead of launching Chrome
+  - Requires `--kill` to stop and relaunch an already running target app with remote debugging enabled
 
 ### Dual-mode pattern
 
@@ -239,6 +267,6 @@ docs/
 
 dist/
   ui/              Production browser bundle (Vite output)
-  cli/             Production CLI server (TSC output)
+  cli/             Production CLI server + Electron entrypoint (TSC output)
   extension/       Production extension bundle
 ```

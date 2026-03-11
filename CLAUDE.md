@@ -7,17 +7,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 # Standalone CLI mode
 npm run dev:full        # Full dev mode: Vite HMR + Chrome + CDP proxy (port 3000)
+npm run dev:electron -- /Applications/Slack.app  # Main CLI in Electron attach mode
 npm run dev             # Vite dev server only (no Chrome/CDP)
-npm run build           # Production build (UI via Vite + CLI via TSC)
+npm run build           # Production build (UI via Vite + CLI/Electron Node target via TSC)
 npm run build:ui        # Vite build only into dist/ui/
-npm run build:cli       # TSC build only into dist/cli/
+npm run build:cli       # TSC build only into dist/cli/ (CLI server + Electron entrypoint)
 npm run start           # Run production CLI (requires build first)
+npm run start:electron -- /Applications/Slack.app  # Run built Electron attach mode
 
 # Chrome extension
 npm run build:extension # Build extension into dist/extension/ (load in chrome://extensions)
 
 # Shared
-npm run typecheck       # Typecheck both tsconfig targets
+npm run typecheck       # Typecheck browser + Node targets
 npm run test            # Vitest run (all tests)
 npm run test:watch      # Vitest watch mode
 npx vitest run src/fs/virtual-fs.test.ts  # Run a single test file
@@ -25,7 +27,7 @@ npx vitest run src/fs/virtual-fs.test.ts  # Run a single test file
 
 **Requires Node >= 22** (LTS). LightningFS uses `navigator` which is only available as a global from Node 21+. Tests will fail on Node 20 or earlier.
 
-Ports (CLI mode only): 3000 (UI server), 9222 (Chrome CDP), 24679 (Vite HMR WebSocket)
+Ports: 3000 (UI server for CLI + Electron), 9222 (Chrome CDP), 9223 (Electron CDP), 24679 (Vite HMR WebSocket)
 
 ## Philosophy
 
@@ -59,21 +61,23 @@ The codebase uses ice cream terminology consistently. When working on this code,
 
 - **Licks**: External events that trigger scoops. Types: webhooks, cron tasks, browser events (planned). Unified under `LickManager` and `LickEvent`. Shell commands: `webhook`, `crontask`. A lick arrives, the scoop reacts — no human in the loop.
 
-- **Floats**: Runtime environments. Three exist:
+- **Floats**: Runtime environments. Four are tracked:
   - CLI float: Node.js/Express + Chrome. Code: `src/cli/`.
   - Extension float: Chrome extension side panel, zero server. Code: `src/extension/`.
+  - Electron float: Electron BrowserWindow + injected overlay shell + serve-only CLI reuse. Code: `src/cli/electron-main.ts` + `src/ui/electron-overlay.ts`.
   - Cloud float (planned): Cloudflare Containers or E2B sandboxes.
 
 When renaming or refactoring, prefer ice cream terms over technical jargon (e.g., "feed_scoop" not "delegate_to_scoop", "lick" not "event").
 
 ## Architecture
 
-Browser-based AI coding agent: a self-contained development environment where Claude writes code, runs shell commands, and automates browser tabs entirely within Chrome, without touching the host filesystem. Runs as a **Chrome extension** (side panel) or as a **standalone CLI** server.
+Browser-based AI coding agent: a self-contained development environment where Claude writes code, runs shell commands, and automates browser tabs entirely within Chrome, without touching the host filesystem. Runs as a **Chrome extension** (side panel), as a **standalone CLI** server, or as an **Electron float** with an injected overlay.
 
-### Two Deployment Modes
+### Three Deployment Modes
 
 - **Chrome extension** (Manifest V3): Three-layer architecture — **side panel** (pure UI), **service worker** (message relay + CDP proxy), **offscreen document** (agent engine). Agent work survives side panel close/reopen. Built via `npm run build:extension` -> `dist/extension/`. Load as unpacked extension in `chrome://extensions`. Pyodide bundled for Python support (~13MB).
 - **Standalone CLI**: Express server launches Chrome, proxies CDP over WebSocket. Resizable split layout with scoops panel + chat + terminal + files/memory. Built via `npm run build` -> `dist/ui/` + `dist/cli/`.
+- **Electron float**: `src/cli/electron-main.ts` launches Electron, reuses the CLI server in `--serve-only` mode, enables CDP on the Electron window, strips host-page CSP in a dedicated partition, and injects the shared overlay shell via `dist/ui/electron-overlay-entry.js`.
 
 ### Extension Architecture (Three-Layer)
 
@@ -120,7 +124,7 @@ Key files:
 ### Three Build Targets
 
 - **Browser bundle** (tsconfig.json): Everything in src/ except src/cli/. Bundled by Vite, module resolution: bundler. Runs in Chrome.
-- **CLI server** (tsconfig.cli.json): Only src/cli/. Compiled by TSC to dist/cli/, module resolution: NodeNext. Runs in Node.
+- **CLI/Electron Node target** (tsconfig.cli.json): Only src/cli/. Compiled by TSC to dist/cli/, module resolution: NodeNext. Runs in Node/Electron.
 - **Extension bundle** (vite.config.extension.ts): Same browser bundle with extension-specific entry points (service-worker.js, offscreen.html, sandbox.html, manifest.json) plus bundled Pyodide. Output: dist/extension/.
 
 ### Layer Stack (bottom-up)
@@ -135,7 +139,7 @@ Virtual Filesystem (src/fs/)
     -> Core Agent (src/core/)
       -> Scoops Orchestrator (src/scoops/)
         -> UI (src/ui/)
-          -> CLI Server (src/cli/) | Extension (src/extension/)
+          -> CLI Server / Electron (src/cli/) | Extension (src/extension/)
 ```
 
 ### The Cone and Scoops (src/scoops/)
@@ -256,11 +260,13 @@ Uses @mariozechner/pi-agent-core for the agent loop and @mariozechner/pi-ai for 
 - **Session persistence** (`session.ts`): `SessionStore` persists `AgentMessage[]` to IndexedDB (`agent-sessions` DB) keyed by scoop JID. `ScoopContext` restores messages on init and saves on `agent_end`, enabling agents to resume conversations across restarts. Errors are caught and logged without breaking agent flow; `compactContext` handles large restored sessions at prompt time.
 
 ### UI (src/ui/)
-Vanilla TypeScript, no framework. Two layout modes selected by `isExtension` detection:
+Vanilla TypeScript, no framework. Two base layout modes selected by `isExtension` detection:
 - **Extension mode**: Compact single-row header (slicc + scoop dropdown + model dropdown + icon buttons). Tabbed interface (Chat/Terminal/Files/Memory). Scoop switcher as dropdown menu.
 - **Standalone mode**: Resizable split layout — scoops panel (left) + chat + terminal (top-right) + files/memory tabs (bottom-right).
 
-main.ts has two entry paths: in extension mode, `main()` delegates to `mainExtension()` which creates an `OffscreenClient` (no local Orchestrator); in CLI mode, it bootstraps the Orchestrator directly. Both modes wire events and register `.skill` drag/drop handlers with overlay + toast feedback. Per-scoop message buffers capture tool calls even when viewing a different scoop. Input locks immediately when the cone starts processing (including auto-activation from scoop notifications). Assistant label is "sliccy" for the cone, `{name}-scoop` for scoops.
+The Electron float reuses `src/ui/electron-overlay.ts` as an injected overlay shell built from custom elements with shadow DOM. It reuses the shared Chat/Terminal/Files/Memory tab definitions from `src/ui/tabbed-ui.ts`, while `src/ui/overlay-shell-state.ts` holds the pure open/close + active-tab state transitions used by tests. The actual Electron runtime wiring lives in `src/cli/electron-main.ts`.
+
+main.ts has two entry paths: in extension mode, `main()` delegates to `mainExtension()` which creates an `OffscreenClient` (no local Orchestrator); in CLI/Electron mode, it bootstraps the Orchestrator directly. A third runtime flag (`electron-overlay`) hides the top tab bar, mounts the compact tabbed layout inside the injected iframe, and listens for parent `postMessage` tab changes from the Electron overlay shell. Both non-extension runtimes still use `BrowserAPI` and the local `/cdp` proxy.
 
 File browser supports clicking files to download and a ZIP button on folders (uses fflate) to download entire directories.
 
@@ -300,7 +306,7 @@ A Service Worker that intercepts `/preview/*` fetch requests and serves content 
 - MIME type mapping via inline `getMimeType()` (same logic as `src/core/mime-types.ts` but inlined since the SW is a separate bundle)
 
 ### CLI Server (src/cli/index.ts)
-Express server that launches Chrome with remote debugging, serves the UI (Vite middleware in dev, static files in prod), and runs a WebSocket proxy at /cdp. Provides `/api/fetch-proxy` endpoint for cross-origin fetch (replaces CORS proxy). Single shared Chrome WebSocket connection with client message buffering. Console forwarder pipes in-page console output to CLI stdout.
+Express server that launches Chrome with remote debugging, serves the UI (Vite middleware in dev, static files in prod), and runs a WebSocket proxy at /cdp. Provides `/api/fetch-proxy` endpoint for cross-origin fetch (replaces CORS proxy). Single shared Chrome WebSocket connection with client message buffering. Console forwarder pipes in-page console output to CLI stdout. In Electron mode, this same server is reused in `--serve-only` mode instead of launching Chrome.
 
 ### Context Compaction (src/core/context-compaction.ts)
 To prevent context overflow (200K token limit), the agent applies two-phase message compaction before each API call:
@@ -359,9 +365,9 @@ Not every change hits all three tiers. A bug fix with no API change may only nee
 ### Verification
 Before committing, **all four** of these must pass:
 ```bash
-npm run typecheck          # Both tsconfig targets
+npm run typecheck          # Browser + Node targets
 npm run test               # Vitest (all tests)
-npm run build              # Production build (UI via Vite + CLI via TSC)
+npm run build              # Production build (UI via Vite + CLI/Electron Node target via TSC)
 npm run build:extension    # Extension build (Vite with extension config)
 ```
 Do not skip any. A typecheck pass does not guarantee the builds succeed (Vite bundling can fail independently). See `docs/development.md` for the full checklist.

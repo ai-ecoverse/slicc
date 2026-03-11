@@ -20,6 +20,13 @@ import { BrowserAPI } from '../cdp/index.js';
 import { Orchestrator } from '../scoops/index.js';
 import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
+import {
+  getElectronOverlayInitialTab,
+  getLickWebSocketUrl,
+  getWebhookUrl,
+  isElectronOverlaySetTabMessage,
+  resolveUiRuntimeMode,
+} from './runtime-mode.js';
 
 const log = createLogger('main');
 
@@ -370,13 +377,37 @@ async function main(): Promise<void> {
 
   // Build the layout — tabbed in extension mode, split panels in standalone
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+  const runtimeMode = resolveUiRuntimeMode(window.location.href, isExtension);
 
   // Extension mode: delegate to offscreen-backed UI
-  if (isExtension) {
+  if (runtimeMode === 'extension') {
     return mainExtension(app);
   }
 
-  const layout = new Layout(app, false);
+  const layout = new Layout(app, runtimeMode === 'electron-overlay');
+  if (runtimeMode === 'electron-overlay') {
+    const initialTab = getElectronOverlayInitialTab(window.location.href);
+    layout.setActiveTab(initialTab);
+
+    const runtimeStyle = document.createElement('style');
+    runtimeStyle.id = 'slicc-electron-overlay-runtime-style';
+    runtimeStyle.textContent = `
+      #app > .tab-bar { display: none !important; }
+      #app > .tab-content {
+        height: calc(100vh - var(--s2-header-height));
+      }
+      #app > .tab-content > .tab-content__panel {
+        height: 100%;
+      }
+    `;
+    document.head.appendChild(runtimeStyle);
+
+    window.addEventListener('message', (event: MessageEvent) => {
+      if (event.source !== window.parent) return;
+      if (!isElectronOverlaySetTabMessage(event.data)) return;
+      layout.setActiveTab(getElectronOverlayInitialTab(`http://localhost/?tab=${event.data.tab ?? ''}`));
+    });
+  }
   const showSkillDropToast = createSkillDropToast();
 
   // Initialize session persistence — use 'session-cone' from the start
@@ -726,165 +757,164 @@ async function main(): Promise<void> {
   // ---------------------------------------------------------------------------
   // Lick system — WebSocket for webhooks/crontasks (all logic runs in browser)
   // ---------------------------------------------------------------------------
-  if (!isExtension) {
-    // Initialize lick manager
-    const { getLickManager } = await import('../scoops/lick-manager.js');
-    const lickManager = getLickManager();
-    await lickManager.init();
-    orchestrator.setLickManager(lickManager);
+  // Extension mode returns earlier, so this path is standalone/electron-overlay only.
+  // Initialize lick manager
+  const { getLickManager } = await import('../scoops/lick-manager.js');
+  const lickManager = getLickManager();
+  await lickManager.init();
+  orchestrator.setLickManager(lickManager);
 
-    // Route lick events to scoops
-    const routeLickToScoop = (event: LickEvent) => {
-      const isWebhook = event.type === 'webhook';
-      const eventName = isWebhook ? event.webhookName : event.cronName;
-      const eventId = isWebhook ? event.webhookId : event.cronId;
-      const channel = event.type;
+  // Route lick events to scoops
+  const routeLickToScoop = (event: LickEvent) => {
+    const isWebhook = event.type === 'webhook';
+    const eventName = isWebhook ? event.webhookName : event.cronName;
+    const eventId = isWebhook ? event.webhookId : event.cronId;
+    const channel = event.type;
 
-      log.debug('Lick event', { type: event.type, name: eventName, targetScoop: event.targetScoop });
+    log.debug('Lick event', { type: event.type, name: eventName, targetScoop: event.targetScoop });
 
-      if (event.targetScoop) {
-        const scoops = orchestrator.getScoops();
-        const targetScoop = scoops.find(s =>
-          s.name === event.targetScoop ||
-          s.folder === event.targetScoop ||
-          s.folder === `${event.targetScoop}-scoop`
-        );
+    if (event.targetScoop) {
+      const scoops = orchestrator.getScoops();
+      const targetScoop = scoops.find(s =>
+        s.name === event.targetScoop ||
+        s.folder === event.targetScoop ||
+        s.folder === `${event.targetScoop}-scoop`
+      );
 
-        if (targetScoop) {
-          const msgId = `${channel}-${eventId}-${Date.now()}`;
-          const eventLabel = isWebhook ? 'Webhook Event' : 'Cron Event';
-          const content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
+      if (targetScoop) {
+        const msgId = `${channel}-${eventId}-${Date.now()}`;
+        const eventLabel = isWebhook ? 'Webhook Event' : 'Cron Event';
+        const content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
 
-          const msg: ChannelMessage = {
-            id: msgId,
-            chatJid: targetScoop.jid,
-            senderId: channel,
-            senderName: `${channel}:${eventName}`,
-            content,
-            timestamp: event.timestamp,
-            fromAssistant: false,
-            channel,
-          };
+        const msg: ChannelMessage = {
+          id: msgId,
+          chatJid: targetScoop.jid,
+          senderId: channel,
+          senderName: `${channel}:${eventName}`,
+          content,
+          timestamp: event.timestamp,
+          fromAssistant: false,
+          channel,
+        };
 
-          getBuffer(targetScoop.jid).push({
-            id: msgId,
-            role: 'user',
-            content,
-            timestamp: Date.now(),
-            source: 'lick',
-            channel,
-          });
+        getBuffer(targetScoop.jid).push({
+          id: msgId,
+          role: 'user',
+          content,
+          timestamp: Date.now(),
+          source: 'lick',
+          channel,
+        });
 
-          if (selectedScoop?.jid === targetScoop.jid) {
-            layout.panels.chat.addLickMessage(msgId, content, channel as 'webhook' | 'cron');
+        if (selectedScoop?.jid === targetScoop.jid) {
+          layout.panels.chat.addLickMessage(msgId, content, channel as 'webhook' | 'cron');
+        }
+
+        log.info('Routing lick to scoop', { type: channel, name: eventName, scoopJid: targetScoop.jid });
+        orchestrator.handleMessage(msg);
+      } else {
+        log.warn('Lick target scoop not found', { targetScoop: event.targetScoop });
+      }
+    }
+  };
+
+  lickManager.setEventHandler(routeLickToScoop);
+
+  // Connect WebSocket for server communication
+  const connectLickWs = () => {
+    const wsUrl = getLickWebSocketUrl(window.location.href);
+    const ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      log.info('Lick WebSocket connected');
+    };
+
+    ws.onmessage = async (event) => {
+      try {
+        const data = JSON.parse(event.data) as { type: string; requestId?: string; [key: string]: unknown };
+
+        // Handle management requests from server
+        if (data.requestId) {
+          let response: { type: string; requestId: string; data?: unknown; error?: string };
+
+          try {
+            switch (data.type) {
+              case 'list_webhooks':
+                response = { type: 'response', requestId: data.requestId, data: lickManager.listWebhooks() };
+                break;
+              case 'create_webhook': {
+                const wh = await lickManager.createWebhook(
+                  (data.name as string) || 'default',
+                  data.scoop as string | undefined,
+                  data.filter as string | undefined,
+                );
+                response = { type: 'response', requestId: data.requestId, data: { ...wh, url: getWebhookUrl(window.location.href, wh.id) } };
+                break;
+              }
+              case 'delete_webhook': {
+                const ok = await lickManager.deleteWebhook(data.id as string);
+                response = ok
+                  ? { type: 'response', requestId: data.requestId, data: { ok: true } }
+                  : { type: 'response', requestId: data.requestId, data: { error: 'Webhook not found' } };
+                break;
+              }
+              case 'list_crontasks':
+                response = { type: 'response', requestId: data.requestId, data: lickManager.listCronTasks() };
+                break;
+              case 'create_crontask': {
+                if (!data.name) throw new Error('name is required');
+                if (!data.cron) throw new Error('cron is required');
+                const ct = await lickManager.createCronTask(
+                  data.name as string,
+                  data.cron as string,
+                  data.scoop as string | undefined,
+                  data.filter as string | undefined,
+                );
+                response = { type: 'response', requestId: data.requestId, data: ct };
+                break;
+              }
+              case 'delete_crontask': {
+                const ok = await lickManager.deleteCronTask(data.id as string);
+                response = ok
+                  ? { type: 'response', requestId: data.requestId, data: { ok: true } }
+                  : { type: 'response', requestId: data.requestId, data: { error: 'Cron task not found' } };
+                break;
+              }
+              default:
+                response = { type: 'response', requestId: data.requestId, error: `Unknown request type: ${data.type}` };
+            }
+          } catch (err) {
+            response = { type: 'response', requestId: data.requestId, error: err instanceof Error ? err.message : String(err) };
           }
 
-          log.info('Routing lick to scoop', { type: channel, name: eventName, scoopJid: targetScoop.jid });
-          orchestrator.handleMessage(msg);
-        } else {
-          log.warn('Lick target scoop not found', { targetScoop: event.targetScoop });
+          ws.send(JSON.stringify(response));
+          return;
         }
+
+        // Handle incoming webhook events from server
+        if (data.type === 'webhook_event') {
+          lickManager.handleWebhookEvent(
+            data.webhookId as string,
+            data.headers as Record<string, string>,
+            data.body,
+          );
+        }
+      } catch (err) {
+        log.error('Failed to process lick message', { error: err instanceof Error ? err.message : String(err) });
       }
     };
 
-    lickManager.setEventHandler(routeLickToScoop);
-
-    // Connect WebSocket for server communication
-    const connectLickWs = () => {
-      const wsUrl = `ws://${window.location.host}/licks-ws`;
-      const ws = new WebSocket(wsUrl);
-
-      ws.onopen = () => {
-        log.info('Lick WebSocket connected');
-      };
-
-      ws.onmessage = async (event) => {
-        try {
-          const data = JSON.parse(event.data) as { type: string; requestId?: string; [key: string]: unknown };
-
-          // Handle management requests from server
-          if (data.requestId) {
-            let response: { type: string; requestId: string; data?: unknown; error?: string };
-            
-            try {
-              switch (data.type) {
-                case 'list_webhooks':
-                  response = { type: 'response', requestId: data.requestId, data: lickManager.listWebhooks() };
-                  break;
-                case 'create_webhook': {
-                  const wh = await lickManager.createWebhook(
-                    (data.name as string) || 'default',
-                    data.scoop as string | undefined,
-                    data.filter as string | undefined,
-                  );
-                  response = { type: 'response', requestId: data.requestId, data: { ...wh, url: `http://${window.location.host}/webhooks/${wh.id}` } };
-                  break;
-                }
-                case 'delete_webhook': {
-                  const ok = await lickManager.deleteWebhook(data.id as string);
-                  response = ok
-                    ? { type: 'response', requestId: data.requestId, data: { ok: true } }
-                    : { type: 'response', requestId: data.requestId, data: { error: 'Webhook not found' } };
-                  break;
-                }
-                case 'list_crontasks':
-                  response = { type: 'response', requestId: data.requestId, data: lickManager.listCronTasks() };
-                  break;
-                case 'create_crontask': {
-                  if (!data.name) throw new Error('name is required');
-                  if (!data.cron) throw new Error('cron is required');
-                  const ct = await lickManager.createCronTask(
-                    data.name as string,
-                    data.cron as string,
-                    data.scoop as string | undefined,
-                    data.filter as string | undefined,
-                  );
-                  response = { type: 'response', requestId: data.requestId, data: ct };
-                  break;
-                }
-                case 'delete_crontask': {
-                  const ok = await lickManager.deleteCronTask(data.id as string);
-                  response = ok
-                    ? { type: 'response', requestId: data.requestId, data: { ok: true } }
-                    : { type: 'response', requestId: data.requestId, data: { error: 'Cron task not found' } };
-                  break;
-                }
-                default:
-                  response = { type: 'response', requestId: data.requestId, error: `Unknown request type: ${data.type}` };
-              }
-            } catch (err) {
-              response = { type: 'response', requestId: data.requestId, error: err instanceof Error ? err.message : String(err) };
-            }
-
-            ws.send(JSON.stringify(response));
-            return;
-          }
-
-          // Handle incoming webhook events from server
-          if (data.type === 'webhook_event') {
-            lickManager.handleWebhookEvent(
-              data.webhookId as string,
-              data.headers as Record<string, string>,
-              data.body,
-            );
-          }
-        } catch (err) {
-          log.error('Failed to process lick message', { error: err instanceof Error ? err.message : String(err) });
-        }
-      };
-
-      ws.onclose = () => {
-        log.warn('Lick WebSocket disconnected, reconnecting in 3s...');
-        setTimeout(connectLickWs, 3000);
-      };
-
-      ws.onerror = (err) => {
-        log.error('Lick WebSocket error', { error: String(err) });
-      };
+    ws.onclose = () => {
+      log.warn('Lick WebSocket disconnected, reconnecting in 3s...');
+      setTimeout(connectLickWs, 3000);
     };
 
-    connectLickWs();
-  }
+    ws.onerror = (err) => {
+      log.error('Lick WebSocket error', { error: String(err) });
+    };
+  };
+
+  connectLickWs();
 
   // Wire model picker changes
   layout.onModelChange = (modelId) => {
