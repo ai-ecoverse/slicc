@@ -10,6 +10,7 @@ function openHelp(): { stdout: string; stderr: string; exitCode: number } {
       'usage: open [--download|-d] [--view|-v] <url|path> [url|path...]\n\n' +
       '  VFS paths are served in a new browser tab via the preview service worker.\n' +
       '  URLs (http/https/etc.) are opened directly in a new tab.\n' +
+      '  For app directories with a default entry file, prefer serve <dir>.\n' +
       '  --download, -d  Force download instead of opening in a tab.\n' +
       '  --view, -v      Return image inline so the agent can see it.\n',
     stderr: '',

@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { toPreviewUrl, isLikelyUrl, basename, dirname, joinPath, ensureWithinRoot } from './shared.js';
+import {
+  toPreviewUrl,
+  isLikelyUrl,
+  basename,
+  dirname,
+  joinPath,
+  ensureWithinRoot,
+  isSafeServeEntry,
+  resolveServeEntryPath,
+} from './shared.js';
 
 describe('toPreviewUrl', () => {
   it('returns localhost preview URL in non-extension environment', () => {
@@ -101,5 +110,59 @@ describe('ensureWithinRoot', () => {
 
   it('returns false for prefix-but-not-child', () => {
     expect(ensureWithinRoot('/workspace', '/workspace2/file.txt')).toBe(false);
+  });
+});
+
+describe('isSafeServeEntry', () => {
+  it('accepts simple filename', () => {
+    expect(isSafeServeEntry('index.html')).toBe(true);
+  });
+
+  it('accepts subdirectory entry', () => {
+    expect(isSafeServeEntry('pages/about.html')).toBe(true);
+  });
+
+  it('rejects parent traversal', () => {
+    expect(isSafeServeEntry('../escape.html')).toBe(false);
+  });
+
+  it('rejects nested parent traversal', () => {
+    expect(isSafeServeEntry('pages/../../escape.html')).toBe(false);
+  });
+
+  it('rejects absolute path', () => {
+    expect(isSafeServeEntry('/etc/passwd')).toBe(false);
+  });
+});
+
+describe('resolveServeEntryPath', () => {
+  it('constructs entry path for absolute directory', () => {
+    expect(resolveServeEntryPath('/workspace/my-app', 'index.html'))
+      .toBe('/workspace/my-app/index.html');
+  });
+
+  it('constructs entry path for relative-looking nested paths', () => {
+    expect(resolveServeEntryPath('workspace/my-app', 'index.html'))
+      .toBe('workspace/my-app/index.html');
+  });
+
+  it('handles directory with trailing slash', () => {
+    expect(resolveServeEntryPath('/workspace/my-app/', 'index.html'))
+      .toBe('/workspace/my-app/index.html');
+  });
+
+  it('handles custom entry file', () => {
+    expect(resolveServeEntryPath('/html', 'hello.html'))
+      .toBe('/html/hello.html');
+  });
+
+  it('handles root directory', () => {
+    expect(resolveServeEntryPath('/', 'index.html'))
+      .toBe('/index.html');
+  });
+
+  it('handles nested directories', () => {
+    expect(resolveServeEntryPath('/workspace/my-app/pages', 'about.html'))
+      .toBe('/workspace/my-app/pages/about.html');
   });
 });

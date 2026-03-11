@@ -110,6 +110,17 @@ export function toPreviewUrl(vfsPath: string): string {
   return isExt ? chrome.runtime.getURL(previewPath) : `http://localhost:3000${previewPath}`;
 }
 
+export function isSafeServeEntry(entry: string): boolean {
+  if (entry.length === 0 || entry.startsWith('/')) return false;
+  return !entry.split('/').some((segment) => segment === '..');
+}
+
+export function resolveServeEntryPath(directory: string, entry: string): string {
+  const normalizedDir = directory !== '/' && directory.endsWith('/') ? directory.slice(0, -1) : directory;
+  if (normalizedDir === '/') return `/${entry}`;
+  return `${normalizedDir}/${entry}`;
+}
+
 export function formatConsoleArg(value: unknown): string {
   if (typeof value === 'string') return value;
   if (value === null || value === undefined) return String(value);

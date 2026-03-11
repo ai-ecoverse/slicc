@@ -323,102 +323,30 @@ describe('my_tool', () => {
 
 ---
 
-## 4. Add a Browser Tool Sub-Action
+## 4. Extend Browser Automation Shell Commands
 
-**When**: To extend the `browser` tool with a new action (e.g., `get_page_cookies`, `record_video`).
+**When**: To add or change browser automation behavior, tab workflows, or preview-serving commands.
 
 **Files to modify**:
-- Modify: `src/tools/browser-tool.ts`
+- Modify: `src/shell/supplemental-commands/playwright-command.ts`
+- Modify: `src/shell/supplemental-commands/serve-command.ts`
+- Modify: `src/shell/supplemental-commands/shared.ts` (shared preview/path helpers)
+- Update guidance if needed: `src/defaults/workspace/skills/playwright-cli/SKILL.md`
 
 **Implementation**:
 
-In the `execute` switch statement:
-
-```typescript
-// src/tools/browser-tool.ts
-export function createBrowserTool(browser: BrowserAPI, fs?: VirtualFS | null): ToolDefinition {
-  return {
-    name: 'browser',
-    description: '... existing description ... new_action (description of new action)',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        action: {
-          type: 'string',
-          enum: [
-            // ... existing actions ...
-            'my_new_action',
-          ],
-        },
-        // ... new parameters ...
-        myParam: {
-          type: 'string',
-          description: 'Description of myParam',
-        },
-      },
-    },
-    async execute(input: Record<string, unknown>): Promise<ToolResult> {
-      const action = input['action'] as string;
-
-      switch (action) {
-        // ... existing cases ...
-
-        case 'my_new_action': {
-          const targetId = (input['targetId'] as string) ?? (await getActiveTab());
-          if (!targetId) return { content: 'No active tab', isError: true };
-
-          try {
-            const result = await browser.myNewMethod(targetId);
-            return { content: JSON.stringify(result) };
-          } catch (err) {
-            return { content: `Error: ${err}`, isError: true };
-          }
-        }
-
-        default:
-          return { content: `Unknown action: ${action}`, isError: true };
-      }
-    },
-  };
-}
-```
-
-**Pattern**:
-
-- Check for optional `targetId`; call `getActiveTab()` if not provided
-- Wrap BrowserAPI calls in try/catch
-- Return `ToolResult` with JSON stringification for complex data
-- Add the action to the `enum` in `inputSchema`
+- Keep browser automation shell-first through `playwright-cli` / `playwright` / `puppeteer`.
+- Reuse shared preview helpers for VFS URLs instead of manually constructing `/preview/...` paths.
+- Use `serve <dir>` for app directories (default `index.html`, optional `--entry`) and `open` for single files, URLs, downloads, or inline image viewing.
+- Preserve the current tab + snapshot model in `playwright-command.ts` when adding stateful browser actions.
 
 **Test pattern**:
 
-```typescript
-// src/tools/browser-tool.test.ts
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { createBrowserTool } from './browser-tool.js';
+- Add colocated tests next to the command you changed (for example `playwright-command.test.ts` or `serve-command.test.ts`).
+- Put pure helper coverage in `shared.test.ts`.
+- Prefer focused command-level assertions over large integration fixtures.
 
-describe('browser_tool', () => {
-  let mockBrowser: BrowserAPI;
-
-  beforeEach(() => {
-    mockBrowser = {
-      myNewMethod: vi.fn().mockResolvedValue({ success: true }),
-      // ... other methods ...
-    } as unknown as BrowserAPI;
-  });
-
-  it('should handle my_new_action', async () => {
-    const tool = createBrowserTool(mockBrowser);
-    const result = await tool.execute({
-      action: 'my_new_action',
-      targetId: 'tab-1',
-    });
-    expect(result.isError).toBeFalsy();
-  });
-});
-```
-
-**Reference file**: `src/tools/browser-tool.ts` (lines 200+)
+**Reference files**: `src/shell/supplemental-commands/playwright-command.ts`, `src/shell/supplemental-commands/serve-command.ts`
 
 ---
 
@@ -961,7 +889,7 @@ npm run build:extension
 
 **Shell commands**: Prefer shell commands (bash tool) for new capabilities. Dedicated tools only if the capability needs binary data (browser screenshots, network recording).
 
-**Browser automation**: Use the `browser` tool for tab control. Multi-page apps use the preview Service Worker (serve action).
+**Browser automation**: Use `playwright-cli` / `playwright` / `puppeteer` for tab control. Use `serve <dir>` for app directories and `open` for single preview files.
 
 ---
 

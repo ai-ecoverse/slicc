@@ -21,6 +21,7 @@ Custom commands implemented in TypeScript and registered in just-bash.
 | **commands** | `help-command.ts` | List all available commands (built-ins + .jsh) | None |
 | **which** | `which-command.ts` | Resolve a command path | `<command>` — returns `/usr/bin/<name>` or VFS path |
 | **uname** | `uname-command.ts` | Print the current browser user agent | None |
+| **serve** | `serve-command.ts` | Open a VFS app directory in a browser tab | `[--entry <relative-path>] <directory>` — defaults to `index.html`; rejects absolute/traversal entry paths |
 | **open** | `open-command.ts` | Open URL or VFS file in browser tab | `<url\|path>` — serves VFS files via preview SW; `--download` / `-d` forces download; `--view` / `-v` returns image inline for agent vision |
 | **imgcat** | `imgcat-command.ts` | Display image inline in terminal | `<path>` — base64 + ansi escape codes |
 | **zip** | `zip-command.ts` | Create ZIP archive | `<archive.zip> <file1> [file2...]` |
@@ -51,6 +52,12 @@ uname
 
 # Open a URL in a browser tab
 open https://example.com
+
+# Serve a VFS app directory (defaults to index.html)
+serve /workspace/app
+
+# Serve the same app with a custom entry file
+serve --entry pages/home.html /workspace/app
 
 # Open a VFS file in a browser tab (served via preview service worker)
 open /workspace/app/index.html
@@ -335,7 +342,7 @@ await fs.writeFile('/output.jpg', newBytes);
 
 ### Tools Supporting Binary
 
-- **browser** tool: `screenshot` action saves PNG directly via `path` parameter
+- **playwright-cli**: `screenshot --filename=<path>` saves PNGs directly to the VFS
 - **javascript** tool: `fs.readFileBinary()`, `fs.writeFileBinary()` preserve byte fidelity
 - **node** / **.jsh**: `fs.readFileBinary()`, `fs.writeFileBinary()` available
 - **bash**: Limited binary support (command output truncated at 100KB)

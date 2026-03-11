@@ -307,60 +307,7 @@ List files and directories recursively in VirtualFS using simple glob matching.
 - Default `pattern` is `*`
 - Truncates after 500 results
 
----
 
-### browser
-
-Maintainer-facing tool module. The `browser` tool still exists in `src/tools/browser-tool.ts`, but current scoop contexts do **not** register it. Active agent browser automation now goes through `playwright-cli` / `playwright` / `puppeteer` shell commands via `bash`.
-
-**File**: `src/tools/browser-tool.ts`
-
-Control browser tabs via Chrome DevTools Protocol.
-
-| Property | Value |
-|----------|-------|
-| **Name** | `browser` |
-| **Actions** | 13 sub-actions (see below) |
-
-**Auto-dispatch**: If `targetId` is omitted, the user's currently focused tab is resolved automatically.
-
-**App tab protection**: The SLICC app's own tab is hidden and cannot be navigated or modified.
-
-#### Actions
-
-| Action | Parameters | Returns |
-|--------|-----------|---------|
-| **list_tabs** | None | `{ tabs: { targetId, url, title, active }[] }` |
-| **new_tab** | `url: string` | `{ targetId: string }` — creates and navigates tab |
-| **new_recorded_tab** | `url: string`, `filter?: string` (JS function) | `{ recordingId: string }` — starts HAR recording |
-| **stop_recording** | `recordingId: string` | `{ message: "Recording saved" }` — saves HAR snapshot |
-| **navigate** | `url: string`, `targetId?: string` | Page loads, returns when ready |
-| **snapshot** | `targetId?: string` | `{ snapshot: string }` — accessibility tree with element refs (e1, e2, ...) |
-| **screenshot** | `targetId?: string`, `path?: string`, `fullPage?: boolean`, `selector?: string` | Base64 PNG or saved to `path` in VFS |
-| **evaluate** | `expression: string`, `targetId?: string` | JavaScript result (JSON stringified) |
-| **click** | `ref: string \| selector: string`, `targetId?: string` | Clicks element by ref (e.g., "e5") or CSS selector |
-| **type** | `text: string`, `targetId?: string` | Types into focused input |
-| **evaluate_persistent** | `expression: string` | Runs JS in persistent blank tab, preserves variables |
-| **serve** | `directory: string`, `entry?: string` | `{ targetId: string }` — serves VFS directory as web app |
-| **show_image** | `path: string` | Displays image from VFS inline in chat |
-
-**Recording filter** (JavaScript string):
-
-The `filter` parameter for `new_recorded_tab` is a JavaScript function string:
-
-```javascript
-(entry) => false | true | object
-```
-
-- `false` → exclude entry
-- `true` → include entry (default)
-- `object` → transform entry (e.g., remove response body: `{ ...entry, response: { ...entry.response, content: { ...entry.response.content, text: '' } } }`)
-
-Filter is applied at snapshot save time (batch), not per-entry. In extension mode, filter code is sent to the sandbox iframe via postMessage.
-
-Recordings saved to `/recordings/{id}/` with HAR 1.2 format. Response bodies are captured by default (can be large); use filter to exclude.
-
----
 
 ### javascript
 
@@ -538,7 +485,6 @@ Cone-only. Update the shared global memory file (`/shared/CLAUDE.md`).
 | grep | ✓ | ✓ (restricted) | Active search tool from `src/tools/search-tools.ts` |
 | find | ✓ | ✓ (restricted) | Active search tool from `src/tools/search-tools.ts` |
 | javascript | ✓ | ✓ | Active in `ScoopContext` |
-| browser | — | — | Tool module exists in `src/tools/browser-tool.ts` but is not currently registered by `ScoopContext` |
 | **send_message** | ✓ | ✓ | NanoClaw tool |
 | **list_scoops** | ✓ | ✗ | Cone-only NanoClaw tool |
 | **scoop_scoop** | ✓ | ✗ | Cone-only NanoClaw tool |
@@ -592,7 +538,7 @@ The agent can inspect `isError` to determine if a tool call succeeded or needs r
 ## Performance Notes
 
 - **bash**: Each command is synchronous in just-bash; avoid blocking operations
-- **BrowserAPI-backed automation**: Screenshots and evaluations are fast (<100ms on local tabs). Network delays dominate remote sites whether invoked via the maintained `browser` tool module or via `playwright-cli`
+- **BrowserAPI-backed automation**: Screenshots and evaluations are fast (<100ms on local tabs). Network delays dominate remote sites whether invoked via `playwright-cli`, `playwright`, or `puppeteer`
 - **javascript**: Sandbox message passing adds ~10ms overhead per call
 - **read_file**: LineNumber formatting is O(file size); reading huge files (>1MB) may be slow
 - **context-compaction**: Runs before every LLM call; O(message count), not a bottleneck

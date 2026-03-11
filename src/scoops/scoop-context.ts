@@ -49,7 +49,7 @@ export interface ScoopContextCallbacks {
   getGlobalMemory: () => Promise<string>;
   /** Update global CLAUDE.md (cone only) */
   setGlobalMemory?: (content: string) => Promise<void>;
-  /** Browser API for browser tool */
+  /** BrowserAPI provider for browser automation commands */
   getBrowserAPI: () => BrowserAPI;
 }
 

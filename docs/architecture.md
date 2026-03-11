@@ -24,7 +24,7 @@
 
 | File | Purpose |
 |---|---|
-| `browser-api.ts` | High-level Playwright-inspired API (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree); used by both `browser-tool.ts` and the `playwright-cli` shell command path |
+| `browser-api.ts` | High-level Playwright-inspired API (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree); used by the `playwright-cli` shell command path and related browser automation commands |
 | `cdp-client.ts` | WebSocket-based CDP client (CLI mode, connects to `ws://localhost:3000/cdp`) |
 | `debugger-client.ts` | Chrome debugger API client (extension mode, uses `chrome.debugger`) |
 | `har-recorder.ts` | HAR 1.2 recorder for network traffic; saves snapshots to VFS on navigation |
@@ -162,10 +162,9 @@
 |---|---|
 | `bash-tool.ts` | `bash` tool: execute shell commands via WasmShell |
 | `file-tools.ts` | `read_file`, `write_file`, `edit_file` tools for VirtualFS operations |
-| `browser-tool.ts` | Maintained `browser` tool module with tab/snapshot/screenshot actions; not currently wired into `src/scoops/scoop-context.ts` |
 | `javascript-tool.ts` | `javascript` tool: execute JS in the browser context (fs.readDir, fs.readFile, fs.readFileBinary access) |
 | `search-tools.ts` | `grep` and `find` agent tools for recursive VirtualFS search |
-| `index.ts` | Tool factory functions (createBashTool, createFileTools, createBrowserTool, etc.) |
+| `index.ts` | Tool factory functions (createBashTool, createFileTools, createSearchTools, createJavaScriptTool) |
 
 ### src/ui/ — User Interface
 
@@ -397,7 +396,7 @@ Scoop removal / app clear
 | Add a new agent tool | `src/tools/<name>-tool.ts` + register in `index.ts` |
 | Change bash tool behavior | `src/tools/bash-tool.ts` |
 | Change file tool behavior | `src/tools/file-tools.ts` |
-| Change browser tool actions | `src/tools/browser-tool.ts` (module exists, but current scoop browser automation flows through `playwright-cli` via `bash`) |
+| Change browser automation shell behavior | `src/shell/supplemental-commands/playwright-command.ts` and `src/shell/supplemental-commands/serve-command.ts` |
 | Change grep/find tool behavior | `src/tools/search-tools.ts` |
 | Change tool input/output format | `src/core/types.ts` (ToolDefinition, ToolResult) |
 | Adapt tools to pi-agent-core | `src/core/tool-adapter.ts` |
