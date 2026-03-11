@@ -20,18 +20,18 @@ describe('Skills', () => {
       await vfs.writeFile('/skills/browser/SKILL.md', `---
 name: browser
 description: Browse the web
-allowed-tools: browser, screenshot
+allowed-tools: bash
 ---
 
 # Browser Skill
 
-Use the browser tool to navigate pages.
+Use the playwright-cli shell command via bash to navigate pages.
 `);
       const skills = await loadSkills(vfs, '/skills');
       expect(skills).toHaveLength(1);
       expect(skills[0].metadata.name).toBe('browser');
       expect(skills[0].metadata.description).toBe('Browse the web');
-      expect(skills[0].metadata.allowedTools).toEqual(['browser', 'screenshot']);
+      expect(skills[0].metadata.allowedTools).toEqual(['bash']);
       expect(skills[0].content).toContain('# Browser Skill');
     });
 

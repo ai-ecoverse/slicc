@@ -1,6 +1,7 @@
 import { loadPyodide } from 'pyodide';
 import type { PyodideInterface } from 'pyodide';
 import { getMimeType } from '../../core/mime-types.js';
+import { normalizePath } from '../../fs/path-utils.js';
 
 export interface SqlJsResultSet {
   columns: string[];
@@ -108,6 +109,15 @@ export function toPreviewUrl(vfsPath: string): string {
   const isExt = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   const previewPath = `/preview${vfsPath}`;
   return isExt ? chrome.runtime.getURL(previewPath) : `http://localhost:3000${previewPath}`;
+}
+
+export function isSafeServeEntry(entry: string): boolean {
+  if (entry.length === 0 || entry.startsWith('/')) return false;
+  return !entry.split('/').some((segment) => segment === '..');
+}
+
+export function resolveServeEntryPath(directory: string, entry: string): string {
+  return normalizePath(`${directory}/${entry}`);
 }
 
 export function formatConsoleArg(value: unknown): string {

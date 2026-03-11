@@ -45,7 +45,7 @@ The active tool surface wired in `src/scoops/scoop-context.ts` is:
 - Execution tools: `bash`, `javascript`
 - NanoClaw tools: `send_message` for all scoops, plus cone-only scoop-management tools
 
-Browser automation for agents now happens through the `playwright-cli` / `playwright` / `puppeteer` shell commands via `bash`. The `src/tools/browser-tool.ts` module still exists and is documented for maintainers, but it is not part of the current scoop/cone tool surface.
+Browser automation for agents now happens through the `playwright-cli` / `playwright` / `puppeteer` shell commands via `bash`, with `serve <dir>` for previewing VFS app directories and `open` for single files or URLs.
 
 ## Ice Cream Vocabulary
 
