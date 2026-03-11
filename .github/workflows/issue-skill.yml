@@ -1,0 +1,179 @@
+name: Issue Skill
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  skill-issue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure label, tag issue, and post a witty remark
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = context.payload.issue.number;
+            const labelName = 'skill issue';
+
+            const labelAlreadyExists = (error) => {
+              const errors = error.response?.data?.errors ?? [];
+              return error.status === 422 && errors.some((entry) => entry.code === 'already_exists');
+            };
+
+            try {
+              await github.rest.issues.getLabel({ owner, repo, name: labelName });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+
+              try {
+                await github.rest.issues.createLabel({
+                  owner,
+                  repo,
+                  name: labelName,
+                  color: '5319e7',
+                  description: 'For issues that arrive with undeniable skill issue energy.',
+                });
+              } catch (createError) {
+                if (!labelAlreadyExists(createError)) throw createError;
+              }
+            }
+
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number,
+              labels: [labelName],
+            });
+
+            const commentPool = `
+            My grandmother always said: "it's a skill issue, darling."
+            The bug reports have unionized and picked this one as their mascot.
+            This issue arrived wearing clown shoes and a confident smile.
+            Somewhere, a rubber duck heard this and asked for hazard pay.
+            I consulted the vibes, and the vibes said "skill issue."
+            The code spirits reviewed this and sighed theatrically.
+            This bug has big "I watched one tutorial" energy.
+            The compiler didn't say no; it just looked disappointed.
+            We regret to inform you that this issue has been diagnosed as extremely artisanal.
+            The stack trace called its lawyer and declined to comment.
+            This report hit the inbox like a banana peel in a server room.
+            The electrons are doing their best, but they have concerns.
+            A senior engineer glanced at this and quietly opened a window.
+            This issue is why the README keeps a stress ball nearby.
+            The semicolons formed a support group after seeing this.
+            The linter fainted onto a chaise longue.
+            This bug was handcrafted by chaos goblins with excellent posture.
+            The debugger lit a candle and whispered, "not again."
+            The repo felt a disturbance in the force and it was this.
+            We ran this past the committee of tiny imaginary owls; they voted skill issue.
+            This one has the unmistakable scent of overconfidence and copy-paste.
+            The codebase has seen things, and now it has seen this.
+            This issue walked in like it pays rent here.
+            The tests are circling this like suspicious pigeons.
+            A rubber duck has requested to be reassigned.
+            This report came in hot and somehow still undercooked.
+            I asked the logs for wisdom; they laughed for a full minute.
+            The function responsible has entered a period of quiet reflection.
+            This issue is 30% typo and 70% audacity.
+            The variables are no longer on speaking terms.
+            This bug is giving "ctrl-c ctrl-v and pray".
+            The CI pipeline saw this coming and pretended it didn't.
+            This one was forged in the fires of impeccable bad timing.
+            The comments in the code are suddenly looking very smug.
+            The exception handler is taking a personal day.
+            This issue put the "oops" in DevOops.
+            The error message was trying to be subtle, but here we are.
+            This bug has the charisma of a loose shopping cart.
+            The code review gods demand a small offering and maybe a nap.
+            This report is surprisingly bold for something so avoidable.
+            The keyboard did not make this choice alone.
+            The branch name probably knew this would happen.
+            This issue is sponsored by mystery meat logic.
+            The runtime would like everyone to lower their expectations.
+            This bug came from the land of "close enough".
+            The logs described this as "a bit much," technically.
+            This report has strong "works on my machine because my machine is complicit" energy.
+            The algorithm looked at this and started learning jazz instead.
+            This issue arrived wearing sunglasses indoors.
+            The config file says it's innocent, but we all know better.
+            This bug has a black belt in side effects.
+            The code path involved is now under witness protection.
+            This is less a defect and more a cry for structure.
+            The stack trace is doing improv and refusing notes.
+            This issue is built different, unfortunately.
+            The source of truth has left the chat.
+            This bug was apparently peer-reviewed by raccoons.
+            The parser stared into the abyss and the abyss returned invalid JSON.
+            This report has the confidence of a cat on a keyboard.
+            The nearest senior dev just felt a cold breeze.
+            This one is pure farm-to-table spaghetti.
+            The code involved is technically legal in several jurisdictions.
+            This issue is what happens when hope outruns syntax.
+            The compiler wanted to help but chose self-preservation.
+            This bug has been gently placed in the "skill issue" basket.
+            Somewhere, a unit test is sharpening a tiny knife.
+            This report is delightfully chaotic in a way HR would not approve.
+            The git blame output is blushing.
+            This issue has all the grace of a laptop falling off a couch.
+            The function call stack is now a call stack family feud.
+            This bug brought a kazoo to a string quartet.
+            The YAML alone asked for a safe word.
+            This one got past common sense with forged credentials.
+            The codebase would like to speak to a responsible adult.
+            This issue is 100% organic, free-range confusion.
+            The debugger found this and immediately requested overtime.
+            The app attempted to process this and briefly considered gardening instead.
+            This report has been classified as a whimsical misadventure.
+            The nearest abstraction layer is pretending not to know it.
+            This bug has real "typed from memory and lost" energy.
+            The schema is making that face again.
+            The machine is technically obeying; that's the scary part.
+            This issue entered production wearing a fake mustache.
+            The code involved is a little too into performance art.
+            This bug was assembled with spare parts and optimism.
+            The error boundary has started boundarying emotionally.
+            This one tastes faintly of race condition and regret.
+            The logs tried to warn us, but we were all younger then.
+            This issue is why coffee was invented.
+            The package manager saw this and locked the door.
+            This bug has strong main-character energy for a supporting problem.
+            The implementation is currently in its flop era.
+            This report is a beautiful reminder that syntax is optional only in poetry.
+            The stack is intact; the vibes are not.
+            This issue has been found guilty of first-degree silliness.
+            The runtime hit this and made the cartoon tire-screech sound.
+            This bug looks handcrafted by someone who says "ship it" with their whole chest.
+            The code review on this would require snacks and a mediator.
+            This report showed up like a seagull at a french fry convention.
+            The failing path is now being studied by local cryptids.
+            This one has the elegance of a folding chair in a ballet.
+            The repo shook this issue out of its pant leg.
+            This bug has a doctorate in unfortunate outcomes.
+            The implementation briefly became conceptual art.
+            This issue came with extra crunch and no instructions.
+            The machine did exactly what it was told, which was the mistake.
+            This bug is so niche it probably owns vinyl.
+            The code involved has entered the find-out phase.
+            This report is powered by vibes, caffeine, and an alarming lack of commas.
+            This issue has the same energy as plugging in a toaster just to ask it questions.
+            The abstraction leaked so hard it became a water feature.
+            This bug has been lovingly stamped as a skill issue.
+            `.trim().split('\n').map((line) => line.trim()).filter(Boolean);
+
+            if (commentPool.length < 101) {
+              throw new Error(`Expected at least 101 humorous comments, found ${commentPool.length}.`);
+            }
+
+            const randomComment = commentPool[Math.floor(Math.random() * commentPool.length)];
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number,
+              body: randomComment,
+            });

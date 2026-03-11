@@ -90,10 +90,16 @@ To close a tab: use `browser` action `evaluate` with expression `window.close()`
 5. `playwright-cli screenshot --filename=/tmp/shot.png` — save screenshot to file
 6. `open --view /tmp/shot.png` — now you can see it
 
+**Understanding `tab-list` markers:**
+- `→` = playwright's current target (the tab your commands operate on)
+- `*` = the user's active/focused tab in Chrome
+- These can differ! If the user switches tabs in Chrome, `*` moves but `→` stays. Use `tab-select` to follow the user's active tab when needed.
+
 **Do NOT:**
 - Try to `read_file` on a PNG, `base64` encode it, or `convert` it to view images
 - Run `imgcat` or `cat` on screenshots expecting to see them yourself
 - Open a screenshot with `open` and then try to screenshot *that* tab
+- Use `eval` to check which tab is active — use `tab-list` and look for the `*` marker instead
 
 ## Filesystem
 

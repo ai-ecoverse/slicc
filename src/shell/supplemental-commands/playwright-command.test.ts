@@ -562,6 +562,35 @@ describe('playwright-cli tab management', () => {
     expect(result.stdout).toContain('No tabs open');
   });
 
+  it('tab-list shows → for current target and * for active tab', async () => {
+    (browser.listPages as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { targetId: 'tab-new', title: 'Page A', url: 'https://a.com', active: false },
+      { targetId: 'tab-2', title: 'Page B', url: 'https://b.com', active: true },
+    ]);
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    // open --foreground sets currentTarget to createPage result ('tab-new')
+    await cmd.execute(['open', 'https://a.com', '--foreground'], {} as any);
+
+    const result = await cmd.execute(['tab-list'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('→ 0: Page A');
+    expect(result.stdout).toContain('* 1: Page B');
+  });
+
+  it('tab-list shows → for tab that is both current and active', async () => {
+    (browser.listPages as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { targetId: 'tab-new', title: 'Page A', url: 'https://a.com', active: true },
+    ]);
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://a.com', '--foreground'], {} as any);
+
+    const result = await cmd.execute(['tab-list'], {} as any);
+    expect(result.exitCode).toBe(0);
+    // Current target takes priority over active marker
+    expect(result.stdout).toContain('→ 0: Page A');
+    expect(result.stdout).not.toContain('* ');
+  });
+
   it('tab-select requires an index', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(['tab-select'], {} as any);
