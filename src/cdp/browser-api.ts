@@ -16,6 +16,7 @@ import type {
   BoundingBox,
   AccessibilityNode,
 } from './types.js';
+import { normalizeAccessibilityText } from './normalize-accessibility-text.js';
 import { createLogger } from '../core/logger.js';
 
 const FALLBACK_CDP_URL = 'ws://localhost:3000/cdp';
@@ -432,10 +433,10 @@ export class BrowserAPI {
     const nodes = result['nodes'] as Array<{
       nodeId: string;
       backendDOMNodeId?: number;
-      role: { value: string };
-      name: { value: string };
-      description?: { value: string };
-      value?: { value: string };
+      role: { value: unknown };
+      name: { value: unknown };
+      description?: { value: unknown };
+      value?: { value: unknown };
       parentId?: string;
       childIds?: string[];
     }>;
@@ -449,12 +450,14 @@ export class BrowserAPI {
     let rootId: string | undefined;
 
     for (const n of nodes) {
+      const value = normalizeAccessibilityText(n.value?.value);
+      const description = normalizeAccessibilityText(n.description?.value);
       const node: AccessibilityNode & { childIds?: string[] } = {
-        role: n.role?.value ?? 'unknown',
-        name: n.name?.value ?? '',
+        role: normalizeAccessibilityText(n.role?.value, 'unknown'),
+        name: normalizeAccessibilityText(n.name?.value),
       };
-      if (n.value?.value) node.value = n.value.value;
-      if (n.description?.value) node.description = n.description.value;
+      if (value !== '') node.value = value;
+      if (description !== '') node.description = description;
       if (n.backendDOMNodeId) node.backendNodeId = n.backendDOMNodeId;
       if (n.childIds) node.childIds = n.childIds;
       nodeMap.set(n.nodeId, node);
