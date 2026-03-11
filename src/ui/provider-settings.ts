@@ -4,7 +4,7 @@
  * provider-specific options, and dynamic model population.
  */
 
-import { getProviders, getModels, getModel } from '../core/index.js';
+import { getProviders, getModels, getModel, createLogger } from '../core/index.js';
 import type { Model } from '../core/index.js';
 import type { Api } from '@mariozechner/pi-ai';
 import { getThemePreference, setThemePreference } from './theme.js';
@@ -244,6 +244,56 @@ export function getProviderModels(providerId: string): Model<Api>[] {
     return getModelsDynamic(effectiveProvider);
   } catch {
     return [];
+  }
+}
+
+// --- Build-time provider defaults from providers.json ---
+
+export interface ProviderDefault {
+  providerId: string;
+  apiKey: string;
+  baseUrl?: string;
+  model?: string;
+}
+
+// Vite resolves this at build time. Returns {} if providers.json doesn't exist.
+const providerFiles = import.meta.glob('/providers.json', {
+  eager: true,
+  import: 'default',
+}) as Record<string, ProviderDefault[]>;
+
+const providerDefaults: ProviderDefault[] = providerFiles['/providers.json'] ?? [];
+
+const log = createLogger('provider-settings');
+
+/**
+ * Auto-configure provider accounts from providers.json (bundled at build time).
+ * Only populates if no accounts exist yet — never overwrites manual config.
+ * The first entry's model becomes the selected model.
+ *
+ * Copy providers.example.json to providers.json and fill in your API keys.
+ */
+export function applyProviderDefaults(
+  defaults: ProviderDefault[] = providerDefaults,
+): void {
+  if (defaults.length === 0 || getAccounts().length > 0) return;
+
+  const knownProviders = new Set(getAvailableProviders());
+
+  for (const entry of defaults) {
+    if (!entry.providerId || !entry.apiKey) continue;
+    if (!knownProviders.has(entry.providerId)) {
+      log.warn(`Unknown provider "${entry.providerId}" in providers.json — skipping`);
+      continue;
+    }
+    addAccount(entry.providerId, entry.apiKey, entry.baseUrl);
+  }
+
+  const first = defaults.find(
+    e => e.providerId && e.apiKey && knownProviders.has(e.providerId),
+  );
+  if (first?.model && !localStorage.getItem(MODEL_KEY)) {
+    localStorage.setItem(MODEL_KEY, `${first.providerId}:${first.model}`);
   }
 }
 
