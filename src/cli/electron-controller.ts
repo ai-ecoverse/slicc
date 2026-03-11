@@ -25,6 +25,23 @@ interface RunningProcessInfo {
   executablePath: string | null;
 }
 
+export function findMatchingElectronAppPids(
+  runningProcesses: RunningProcessInfo[],
+  processMatchPatterns: string[],
+  currentPid = process.pid,
+): number[] {
+  const matches = runningProcesses.filter((processInfo) => {
+    return processMatchPatterns.some((pattern) => {
+      return processInfo.commandLine.includes(pattern)
+        || (processInfo.executablePath?.includes(pattern) ?? false);
+    });
+  });
+
+  return Array.from(
+    new Set(matches.map((processInfo) => processInfo.pid).filter((pid) => pid !== currentPid)),
+  );
+}
+
 export class ElectronAppAlreadyRunningError extends Error {
   constructor(message: string) {
     super(message);
@@ -137,14 +154,8 @@ async function findRunningElectronAppPids(
 ): Promise<number[]> {
   const { processMatchPatterns } = buildElectronAppLaunchSpec(appPath, { cdpPort: 0, platform });
   const runningProcesses = await listRunningProcesses(platform);
-  const matches = runningProcesses.filter((processInfo) => {
-    return processMatchPatterns.some((pattern) => {
-      return processInfo.commandLine.includes(pattern)
-        || (processInfo.executablePath?.includes(pattern) ?? false);
-    });
-  });
 
-  return Array.from(new Set(matches.map((processInfo) => processInfo.pid)));
+  return findMatchingElectronAppPids(runningProcesses, processMatchPatterns);
 }
 
 export async function launchElectronApp(options: {

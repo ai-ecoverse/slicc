@@ -69,4 +69,15 @@ describe('parseCliRuntimeFlags', () => {
       kill: true,
     });
   });
+
+  it('does not consume a following flag token as the electron app path', () => {
+    expect(parseCliRuntimeFlags(['--electron-app', '--kill'])).toEqual({
+      dev: false,
+      serveOnly: false,
+      cdpPort: DEFAULT_ELECTRON_ATTACH_CDP_PORT,
+      electron: true,
+      electronApp: null,
+      kill: true,
+    });
+  });
 });

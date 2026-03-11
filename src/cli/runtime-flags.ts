@@ -54,7 +54,7 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
     if (arg === '--electron-app') {
       electron = true;
       const nextArg = argv[index + 1];
-      if (nextArg) {
+      if (nextArg && !nextArg.startsWith('--')) {
         electronApp = nextArg.trim() || null;
         index += 1;
       }
