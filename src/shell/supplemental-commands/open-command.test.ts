@@ -242,6 +242,27 @@ describe('open command', () => {
     expect(result.stderr).toContain('no such file');
   });
 
+  it('fails --view for directory', async () => {
+    const cmd = createOpenCommand();
+    const ctx = createMockCtx();
+    ctx.fs.stat.mockResolvedValueOnce({ isFile: false, isDirectory: true });
+    const result = await cmd.execute(['--view', '/workspace/somedir'], ctx as any);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('not a file');
+  });
+
+  it('fails --view gracefully when read fails', async () => {
+    const cmd = createOpenCommand();
+    const ctx = createMockCtx();
+    ctx.fs.stat.mockResolvedValueOnce({ isFile: true, isDirectory: false });
+    ctx.fs.readFileBuffer.mockRejectedValueOnce(new Error('EIO'));
+    const result = await cmd.execute(['--view', '/workspace/broken.png'], ctx as any);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('failed to read');
+  });
+
   it('succeeds even when window.open returns null (extension mode)', async () => {
     openSpy.mockReturnValue(null);
     const cmd = createOpenCommand();

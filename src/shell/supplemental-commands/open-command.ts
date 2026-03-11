@@ -62,13 +62,30 @@ export function createOpenCommand(): Command {
 
       if (view) {
         // --view: read file and return as <img:> tag for agent vision
+        let stat;
+        try {
+          stat = await ctx.fs.stat(fullPath);
+        } catch {
+          return {
+            stdout: '',
+            stderr: `open: no such file: ${target}\n`,
+            exitCode: 1,
+          };
+        }
+        if (!stat.isFile) {
+          return {
+            stdout: '',
+            stderr: `open: not a file: ${target}\n`,
+            exitCode: 1,
+          };
+        }
         let bytes;
         try {
           bytes = await ctx.fs.readFileBuffer(fullPath);
         } catch {
           return {
             stdout: '',
-            stderr: `open: no such file: ${target}\n`,
+            stderr: `open: failed to read: ${target}\n`,
             exitCode: 1,
           };
         }

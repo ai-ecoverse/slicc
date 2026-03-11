@@ -64,4 +64,23 @@ describe('parseToolResultContent', () => {
     const blocks = parseToolResultContent(text);
     expect(blocks).toEqual([{ type: 'text', text }]);
   });
+
+  it('filters whitespace-only text between consecutive img tags', () => {
+    const text = '<img:data:image/png;base64,aaa>\n\n\n<img:data:image/png;base64,bbb>';
+    const blocks = parseToolResultContent(text);
+    // Whitespace-only text between images should be filtered (before.trim() check)
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toEqual({ type: 'image', mimeType: 'image/png', data: 'aaa' });
+    expect(blocks[1]).toEqual({ type: 'image', mimeType: 'image/png', data: 'bbb' });
+  });
+
+  it('parses open --view output correctly (integration)', () => {
+    // Simulates the output of: open --view /workspace/screenshot.png
+    const text = '/workspace/screenshot.png (500 KB)\n<img:data:image/png;base64,iVBORw0KGgo>';
+    const blocks = parseToolResultContent(text);
+
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toEqual({ type: 'text', text: '/workspace/screenshot.png (500 KB)' });
+    expect(blocks[1]).toEqual({ type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo' });
+  });
 });

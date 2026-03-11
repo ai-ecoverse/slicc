@@ -426,7 +426,11 @@ export class OffscreenBridge {
       }
 
       case 'clear-filesystem': {
-        await this.orchestrator.resetFilesystem();
+        try {
+          await this.orchestrator.resetFilesystem();
+        } catch (err) {
+          console.error('[offscreen-bridge] clear-filesystem failed:', err);
+        }
         break;
       }
 

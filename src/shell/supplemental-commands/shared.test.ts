@@ -16,6 +16,18 @@ describe('toPreviewUrl', () => {
     const url = toPreviewUrl('/');
     expect(url).toBe('http://localhost:3000/preview/');
   });
+
+  it('uses chrome.runtime.getURL in extension mode', () => {
+    const savedChrome = (globalThis as any).chrome;
+    (globalThis as any).chrome = {
+      runtime: { id: 'test-ext-id', getURL: (path: string) => `chrome-extension://test-ext-id${path}` },
+    };
+
+    const url = toPreviewUrl('/workspace/app/index.html');
+    expect(url).toBe('chrome-extension://test-ext-id/preview/workspace/app/index.html');
+
+    (globalThis as any).chrome = savedChrome;
+  });
 });
 
 describe('isLikelyUrl', () => {
