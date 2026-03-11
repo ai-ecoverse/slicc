@@ -26,9 +26,6 @@ import { createLogger } from './logger.js';
 
 const log = createLogger('context-compaction');
 
-/** Safety cap for a single tool result — prevents blowing the window in one turn. */
-export const MAX_SINGLE_RESULT_CHARS = 50000;
-
 /** Default context window for Claude models. */
 const DEFAULT_CONTEXT_WINDOW = 200000;
 

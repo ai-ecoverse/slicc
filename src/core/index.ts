@@ -38,11 +38,11 @@ export type {
 
 // Local utilities
 export { SessionStore } from './session.js';
-export { adaptTool, adaptTools } from './tool-adapter.js';
+export { adaptTool, adaptTools, MAX_SINGLE_RESULT_CHARS } from './tool-adapter.js';
 export { ToolRegistry } from './tool-registry.js';
 export { createLogger, setLogLevel, getLogLevel, LogLevel } from './logger.js';
 export type { Logger } from './logger.js';
-export { compactContext, createCompactContext, MAX_SINGLE_RESULT_CHARS } from './context-compaction.js';
+export { compactContext, createCompactContext } from './context-compaction.js';
 export type { CompactionConfig } from './context-compaction.js';
 export { getMimeType } from './mime-types.js';
 

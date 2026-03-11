@@ -184,7 +184,7 @@ export class ScoopContext {
 
       const compactFn = createCompactContext({
         model,
-        getApiKey: () => getApiKey() ?? '',
+        getApiKey: () => getApiKey() ?? undefined,
       });
 
       this.agent = new Agent({
