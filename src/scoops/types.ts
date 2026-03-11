@@ -38,6 +38,8 @@ export interface ScoopConfig {
   timeout?: number;
   /** Assistant name override for this scoop */
   assistantName?: string;
+  /** Model ID override (e.g., "claude-sonnet-4-20250514"). Uses globally selected model if not set. */
+  modelId?: string;
 }
 
 /** Message from any channel */
