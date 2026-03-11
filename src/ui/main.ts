@@ -327,6 +327,10 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     client.clearAllMessages();
   };
 
+  layout.onClearFilesystem = async () => {
+    client.clearFilesystem();
+  };
+
   // Request state from offscreen — retries automatically until ready
   client.requestState();
 
@@ -886,6 +890,10 @@ async function main(): Promise<void> {
   layout.onClearChat = async () => {
     await orchestrator.clearAllMessages();
     scoopMessageBuffers.clear();
+  };
+
+  layout.onClearFilesystem = async () => {
+    await orchestrator.resetFilesystem();
   };
 
   // Wire scoop selection

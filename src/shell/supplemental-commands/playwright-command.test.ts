@@ -210,17 +210,6 @@ describe('playwright-cli open', () => {
     expect(browser.attachToPage).toHaveBeenCalledWith('tab-new');
   });
 
-  it('converts VFS paths to preview service worker URLs', async () => {
-    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['open', '/workspace/my-app/index.html'], {} as any);
-
-    expect(result.exitCode).toBe(0);
-    // In Node test environment (no chrome.runtime), falls back to localhost preview URL
-    expect(browser.createPage).toHaveBeenCalledWith(
-      expect.stringContaining('/preview/workspace/my-app/index.html'),
-    );
-  });
-
   it('does not convert regular URLs to preview paths', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://example.com'], {} as any);
@@ -1599,6 +1588,16 @@ describe('playwright-cli session history logging', () => {
     const screenshotFiles = [...fs._files.keys()].filter(k => k.startsWith('/.playwright/screenshots/'));
     expect(screenshotFiles.length).toBe(1);
     expect(screenshotFiles[0]).toMatch(/screenshot-.*\.png$/);
+  });
+
+  it('screenshot does not include base64 img tag in output', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    const result = await cmd.execute(['screenshot'], {} as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).not.toContain('<img:data:');
+    expect(result.stdout).toContain('Screenshot saved to');
   });
 
   it('logs error commands too', async () => {

@@ -21,7 +21,7 @@ Custom commands implemented in TypeScript and registered in just-bash.
 | **commands** | `help-command.ts` | List all available commands (built-ins + .jsh) | None |
 | **which** | `which-command.ts` | Resolve a command path | `<command>` — returns `/usr/bin/<name>` or VFS path |
 | **uname** | `uname-command.ts` | Print the current browser user agent | None |
-| **open** | `open-command.ts` | Open URL in new tab or download file | `<url>` — navigates browser tab |
+| **open** | `open-command.ts` | Open URL or VFS file in browser tab | `<url\|path>` — serves VFS files via preview SW; `--download` / `-d` forces download; `--view` / `-v` returns image inline for agent vision |
 | **imgcat** | `imgcat-command.ts` | Display image inline in terminal | `<path>` — base64 + ansi escape codes |
 | **zip** | `zip-command.ts` | Create ZIP archive | `<archive.zip> <file1> [file2...]` |
 | **unzip** | `unzip-command.ts` | Extract ZIP archive | `<archive.zip> [-d output-dir]` |
@@ -49,8 +49,17 @@ which node
 # Print the current browser user agent
 uname
 
-# Open a URL
+# Open a URL in a browser tab
 open https://example.com
+
+# Open a VFS file in a browser tab (served via preview service worker)
+open /workspace/app/index.html
+
+# Force download instead of opening in tab
+open --download /workspace/report.pdf
+
+# View an image (agent can see it in the response)
+open --view /workspace/screenshot.png
 
 # Execute JavaScript
 node -e "console.log('Hello from Node')"

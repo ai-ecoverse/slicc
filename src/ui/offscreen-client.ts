@@ -178,6 +178,10 @@ export class OffscreenClient {
     this.send({ type: 'clear-chat' });
   }
 
+  clearFilesystem(): void {
+    this.send({ type: 'clear-filesystem' });
+  }
+
   /** Request full state from offscreen. Retries until state arrives. */
   requestState(): void {
     this.send({ type: 'request-state' });

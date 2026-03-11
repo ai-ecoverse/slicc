@@ -96,6 +96,8 @@ playwright-cli screenshot e5                    # Screenshot specific element
 playwright-cli screenshot --fullPage            # Full scrollable page
 ```
 
+To view a screenshot yourself, use `open --view <path>` after taking it.
+
 ### Tab Management
 
 ```bash
@@ -173,4 +175,4 @@ This shows the full chronological log of all browser commands, their results, an
 - The SLICC app tab and Chrome internal UI tabs (for example `Omnibox Popup` / `chrome://...`) are automatically excluded from normal tab selection and interaction.
 - The current tab is auto-selected. Use `tab-select` to switch between multiple tabs.
 - `fill` clears and types into regular inputs, textareas, and `contenteditable` elements.
-- Screenshots default to `/tmp/screenshot-<timestamp>.png`. Use `--filename=path` to save elsewhere.
+- Screenshots default to `/tmp/screenshot-<timestamp>.png`. Use `--filename=path` to save elsewhere. Use `open --view <path>` to see the image yourself.
