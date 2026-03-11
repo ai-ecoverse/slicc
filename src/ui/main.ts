@@ -7,7 +7,7 @@
  */
 
 import { Layout } from './layout.js';
-import { getApiKey, showProviderSettings } from './provider-settings.js';
+import { getApiKey, showProviderSettings, applyProviderDefaults } from './provider-settings.js';
 import { initTheme } from './theme.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent, ChatMessage } from './types.js';
 import { createLogger } from '../core/index.js';
@@ -353,6 +353,9 @@ async function main(): Promise<void> {
       .then(() => log.info('Preview SW registered'))
       .catch(err => log.error('Preview SW registration failed — preview feature will not work', err));
   }
+
+  // Apply providers.json defaults before checking for API key
+  applyProviderDefaults();
 
   // Check for API key (first-run dialog)
   let apiKey = getApiKey();
