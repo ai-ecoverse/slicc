@@ -163,7 +163,7 @@
 | `bash-tool.ts` | `bash` tool: execute shell commands via WasmShell |
 | `file-tools.ts` | `read_file`, `write_file`, `edit_file` tools for VirtualFS operations |
 | `javascript-tool.ts` | `javascript` tool: execute JS in the browser context (fs.readDir, fs.readFile, fs.readFileBinary access) |
-| `search-tools.ts` | `grep` and `find` agent tools for recursive VirtualFS search |
+| `search-tools.ts` | `grep` and `find` tool factories for recursive VirtualFS search (not part of the active ScoopContext surface) |
 | `index.ts` | Tool factory functions (createBashTool, createFileTools, createSearchTools, createJavaScriptTool) |
 
 ### src/ui/ — User Interface

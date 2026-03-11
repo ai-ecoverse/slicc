@@ -341,6 +341,10 @@ src/fs/
 src/tools/
   bash-tool.ts
   bash-tool.test.ts         ← colocated
+  file-tools.ts
+  file-tools.test.ts        ← colocated
+  javascript-tool.ts
+  javascript-tool.test.ts   ← colocated
   search-tools.ts
   search-tools.test.ts      ← colocated
 

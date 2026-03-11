@@ -18,7 +18,7 @@ import { Agent, adaptTools, createLogger } from '../core/index.js';
 import { compactContext } from '../core/context-compaction.js';
 import type { AgentEvent as CoreAgentEvent, AgentMessage, AssistantMessage, AssistantMessageEvent, TextContent, Model } from '../core/index.js';
 import type { SessionStore } from '../core/session.js';
-import { createFileTools, createBashTool, createSearchTools, createJavaScriptTool } from '../tools/index.js';
+import { createFileTools, createBashTool, createJavaScriptTool } from '../tools/index.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import { getApiKey, resolveCurrentModel, resolveModelById, getSelectedProvider } from '../ui/provider-settings.js';
 import { loadSkills, formatSkillsForPrompt, createDefaultSkills, type Skill } from './skills.js';
@@ -116,11 +116,10 @@ export class ScoopContext {
       };
       const nanoClawTools = createNanoClawTools(nanoClawToolsConfig);
 
-      // Create tools (browser automation is now via playwright-cli shell command)
+      // Create tools (browser automation and search are now via shell commands through bash)
       const legacyTools = [
         ...createFileTools(this.fs as VirtualFS),
         createBashTool(this.shell),
-        ...createSearchTools(this.fs as VirtualFS),
         createJavaScriptTool(this.fs as VirtualFS),
         ...nanoClawTools,
       ];
@@ -448,7 +447,7 @@ You have access to:
 - A virtual filesystem at ${this.scoop.isCone ? '/' : `/scoops/${this.scoop.folder}/workspace`} (your working directory)
 - A bash shell for running commands (via the bash tool)
 - File reading, writing, and editing tools
-- Search tools (grep, find)
+- Use shell commands like \`rg\`, \`grep\`, and \`find\` through the bash tool for search
 - **send_message**: Send messages immediately while working (for progress updates)
 - **schedule_task**: Schedule recurring or one-time tasks
 - **list_tasks**, **pause_task**, **resume_task**, **cancel_task**: Manage scheduled tasks

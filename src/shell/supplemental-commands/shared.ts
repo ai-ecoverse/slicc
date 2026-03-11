@@ -1,6 +1,7 @@
 import { loadPyodide } from 'pyodide';
 import type { PyodideInterface } from 'pyodide';
 import { getMimeType } from '../../core/mime-types.js';
+import { normalizePath } from '../../fs/path-utils.js';
 
 export interface SqlJsResultSet {
   columns: string[];
@@ -116,9 +117,7 @@ export function isSafeServeEntry(entry: string): boolean {
 }
 
 export function resolveServeEntryPath(directory: string, entry: string): string {
-  const normalizedDir = directory !== '/' && directory.endsWith('/') ? directory.slice(0, -1) : directory;
-  if (normalizedDir === '/') return `/${entry}`;
-  return `${normalizedDir}/${entry}`;
+  return normalizePath(`${directory}/${entry}`);
 }
 
 export function formatConsoleArg(value: unknown): string {

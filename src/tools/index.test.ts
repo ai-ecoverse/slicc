@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as tools from './index.js';
 
 describe('tools/index exports', () => {
-  it('keeps the active tool factories exported', () => {
+  it('keeps the shared tool factories exported', () => {
     expect(tools.createFileTools).toBeTypeOf('function');
     expect(tools.createBashTool).toBeTypeOf('function');
     expect(tools.createSearchTools).toBeTypeOf('function');

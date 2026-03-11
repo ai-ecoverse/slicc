@@ -1,25 +1,40 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createServeCommand } from './serve-command.js';
 
+function normalizeMockPath(path: string): string {
+  const resolved: string[] = [];
+
+  for (const segment of path.split('/')) {
+    if (segment === '' || segment === '.') continue;
+    if (segment === '..') {
+      resolved.pop();
+      continue;
+    }
+    resolved.push(segment);
+  }
+
+  return `/${resolved.join('/')}`;
+}
+
 function createMockCtx(opts: {
   directories?: string[];
   files?: string[];
   cwd?: string;
 } = {}) {
-  const directories = new Set(opts.directories ?? []);
-  const files = new Set(opts.files ?? []);
+  const directories = new Set((opts.directories ?? []).map(normalizeMockPath));
+  const files = new Set((opts.files ?? []).map(normalizeMockPath));
 
   return {
     cwd: opts.cwd ?? '/workspace',
     fs: {
       resolvePath: (cwd: string, target: string) => {
-        if (target.startsWith('/')) return target;
-        return `${cwd}/${target}`;
+        return normalizeMockPath(target.startsWith('/') ? target : `${cwd}/${target}`);
       },
       stat: vi.fn().mockImplementation(async (path: string) => {
-        if (directories.has(path)) return { isFile: false, isDirectory: true };
-        if (files.has(path)) return { isFile: true, isDirectory: false };
-        throw new Error(`ENOENT: ${path}`);
+        const normalizedPath = normalizeMockPath(path);
+        if (directories.has(normalizedPath)) return { isFile: false, isDirectory: true };
+        if (files.has(normalizedPath)) return { isFile: true, isDirectory: false };
+        throw new Error(`ENOENT: ${normalizedPath}`);
       }),
     },
   };
@@ -110,6 +125,40 @@ describe('serve command', () => {
     });
 
     const result = await cmd.execute(['--entry', 'pages/home.html', '/workspace/app'], ctx as never);
+
+    expect(result.exitCode).toBe(0);
+    expect(openSpy).toHaveBeenCalledWith(
+      'http://localhost:3000/preview/workspace/app/pages/home.html',
+      '_blank',
+      'noopener,noreferrer',
+    );
+  });
+
+  it('normalizes dot segments in a custom entry before opening the preview URL', async () => {
+    const cmd = createServeCommand();
+    const ctx = createMockCtx({
+      directories: ['/workspace/app'],
+      files: ['/workspace/app/index.html'],
+    });
+
+    const result = await cmd.execute(['--entry', './index.html', '/workspace/app'], ctx as never);
+
+    expect(result.exitCode).toBe(0);
+    expect(openSpy).toHaveBeenCalledWith(
+      'http://localhost:3000/preview/workspace/app/index.html',
+      '_blank',
+      'noopener,noreferrer',
+    );
+  });
+
+  it('normalizes repeated separators in a custom entry before opening the preview URL', async () => {
+    const cmd = createServeCommand();
+    const ctx = createMockCtx({
+      directories: ['/workspace/app'],
+      files: ['/workspace/app/pages/home.html'],
+    });
+
+    const result = await cmd.execute(['--entry', 'pages//home.html', '/workspace/app'], ctx as never);
 
     expect(result.exitCode).toBe(0);
     expect(openSpy).toHaveBeenCalledWith(

@@ -1,6 +1,6 @@
 # Tools Reference
 
-Complete reference for the tool modules and active agent tool surface in SLICC. `src/tools/` contains file, bash, browser, search, and javascript tool factories, but the current scoop/cone surface wired in `src/scoops/scoop-context.ts` is: `read_file`, `write_file`, `edit_file`, `bash`, `grep`, `find`, `javascript`, and NanoClaw tools. Browser automation for active scoop agents now runs through the `playwright-cli` / `playwright` / `puppeteer` shell commands via `bash`.
+Complete reference for the tool modules and active agent tool surface in SLICC. `src/tools/` contains file, bash, browser, search, and javascript tool factories, but the current scoop/cone surface wired in `src/scoops/scoop-context.ts` is: `read_file`, `write_file`, `edit_file`, `bash`, `javascript`, and NanoClaw tools. Browser automation and search for active scoop agents now run through shell commands via `bash` (`playwright-cli` / `playwright` / `puppeteer`, plus shell-native `rg` / `grep` / `find`).
 
 ---
 
@@ -121,7 +121,7 @@ Execute shell commands in a full Unix-like environment (just-bash 2.11.7).
 - Networking: Full `curl` with HTTP methods, headers, auth, body
 - Text processing: grep, rg, sed, awk, cut, tr, sort, uniq, wc, head, tail
 - Browser automation for active agents runs through `playwright-cli` / `playwright` / `puppeteer`
-- Search is available both through dedicated `grep` / `find` agent tools and shell-native `grep` / `find` / `rg` via `bash`
+- Active agents perform search through shell-native `grep` / `find` / `rg` via `bash`
 - Data: jq (JSON), base64, md5sum, sha256sum
 
 **Exit status handling**:
@@ -242,11 +242,11 @@ Apply a string replacement edit to an existing file.
 
 ---
 
-### grep
+### grep (module factory, not active in ScoopContext)
 
 **File**: `src/tools/search-tools.ts`
 
-Search file contents recursively in VirtualFS using a JavaScript regular expression.
+Search file contents recursively in VirtualFS using a JavaScript regular expression. This factory remains in `src/tools/search-tools.ts` for module-level use and tests, but active scoop/cone agents search through `bash` instead.
 
 | Property | Value |
 |----------|-------|
@@ -277,11 +277,11 @@ Search file contents recursively in VirtualFS using a JavaScript regular express
 
 ---
 
-### find
+### find (module factory, not active in ScoopContext)
 
 **File**: `src/tools/search-tools.ts`
 
-List files and directories recursively in VirtualFS using simple glob matching.
+List files and directories recursively in VirtualFS using simple glob matching. This factory remains in `src/tools/search-tools.ts` for module-level use and tests, but active scoop/cone agents search through `bash` instead.
 
 | Property | Value |
 |----------|-------|
@@ -357,7 +357,7 @@ console.log(result);
 
 ### Search via `bash` (shell alternatives)
 
-In addition to the dedicated `grep` and `find` agent tools above, the shell also exposes `grep`, `find`, and `rg` through `bash`. Use these when you need shell composition, pipes, or ripgrep-specific behavior.
+Active agents should use the shell's `grep`, `find`, and `rg` commands through `bash` for search. Use these when you need shell composition, pipes, or ripgrep-specific behavior.
 
 | Command | Purpose | Example |
 |---------|---------|---------|
@@ -366,7 +366,7 @@ In addition to the dedicated `grep` and `find` agent tools above, the shell also
 | `rg` | Fast recursive text search | `rg "function main" /workspace/src --type ts` |
 
 **Behavior notes**:
-- Use these through `bash`; `rg` is shell-only, while `grep` and `find` are also available as dedicated agent tools
+- Use these through `bash`; this is the active search path for scoop/cone agents
 - `grep` and `rg` return exit code `1` when no matches are found; the `bash` tool preserves that output without surfacing it as an agent error when stderr is empty
 
 **Examples**:
@@ -482,8 +482,6 @@ Cone-only. Update the shared global memory file (`/shared/CLAUDE.md`).
 | read_file | ✓ | ✓ (restricted) | Active in `ScoopContext` |
 | write_file | ✓ | ✓ (restricted) | Active in `ScoopContext` |
 | edit_file | ✓ | ✓ (restricted) | Active in `ScoopContext` |
-| grep | ✓ | ✓ (restricted) | Active search tool from `src/tools/search-tools.ts` |
-| find | ✓ | ✓ (restricted) | Active search tool from `src/tools/search-tools.ts` |
 | javascript | ✓ | ✓ | Active in `ScoopContext` |
 | **send_message** | ✓ | ✓ | NanoClaw tool |
 | **list_scoops** | ✓ | ✗ | Cone-only NanoClaw tool |

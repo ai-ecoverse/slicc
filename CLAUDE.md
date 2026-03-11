@@ -226,13 +226,13 @@ BrowserAPI: high-level Playwright-style API built on either transport (listPages
 **HarRecorder** (`har-recorder.ts`): Records network traffic from browser tabs as HAR 1.2 files. Supports user-provided JS filter functions (`(entry) => false | true | object`). Filter application is deferred to snapshot save time (batch, not per-entry) to support extension mode — in extensions, filter code is sent to the sandbox iframe (CSP-exempt) via `postMessage`; in CLI mode, compiled directly. Snapshots saved to `/recordings/{id}/` on navigation and recording stop. Graceful fallback: filter errors return unfiltered entries.
 
 ### Tools (src/tools/)
-All tools use the legacy ToolDefinition interface (name, description, inputSchema, execute). `src/tools/` currently contains factories for file, bash, search, and javascript tools. The active scoop/cone tool surface wired in `src/scoops/scoop-context.ts` is: `read_file`, `write_file`, `edit_file`, `bash`, `grep`, `find`, `javascript`, plus NanoClaw tools. Browser automation for agents now goes through the `playwright-cli` / `playwright` / `puppeteer` shell commands via the `bash` tool.
+All tools use the legacy ToolDefinition interface (name, description, inputSchema, execute). `src/tools/` currently contains factories for file, bash, search, and javascript tools. The active scoop/cone tool surface wired in `src/scoops/scoop-context.ts` is: `read_file`, `write_file`, `edit_file`, `bash`, `javascript`, plus NanoClaw tools. Browser automation and search for active agents go through shell commands via the `bash` tool (`playwright-cli` / `playwright` / `puppeteer`, plus shell-native `rg` / `grep` / `find`).
 
 **NanoClaw tools** (src/scoops/nanoclaw-tools.ts): Per-scoop tools for messaging — `send_message`. Cone-only tools: `list_scoops`, `scoop_scoop` (create), `feed_scoop` (delegate), `drop_scoop` (remove), `update_global_memory`. Task scheduling moved to the `crontask` shell command.
 
 **Browser automation shell path**: Active agents use `playwright-cli` / `playwright` / `puppeteer` for tab management, snapshots, screenshots, cookies/storage, dialogs, and HAR recording. The standalone `serve <dir>` command opens a VFS app directory in a preview tab (default entry `index.html`, optional `--entry` override), while `open` still handles single files, URLs, downloads, and inline image viewing.
 
-**Search tools** (`src/tools/search-tools.ts`): Active agent tools `grep` and `find` operate directly on VirtualFS and are wired into `src/scoops/scoop-context.ts` alongside `bash`. Use these when you want structured search results without invoking shell commands; use shell-native `rg`/`grep`/`find` through `bash` when you need pipes or CLI-specific behavior.
+**Search tools** (`src/tools/search-tools.ts`): `createSearchTools()` still provides the dedicated `grep` and `find` tool factories for module-level use and tests, but they are no longer part of the active scoop/cone tool surface. Active agents should use shell-native `rg` / `grep` / `find` through `bash`.
 
 **JavaScript tool**: `fs.readDir(path)` returns `string[]` (filenames). `fs.readFileBinary(path)` returns `Uint8Array` directly.
 

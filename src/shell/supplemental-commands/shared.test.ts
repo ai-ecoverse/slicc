@@ -141,9 +141,9 @@ describe('resolveServeEntryPath', () => {
       .toBe('/workspace/my-app/index.html');
   });
 
-  it('constructs entry path for relative-looking nested paths', () => {
+  it('normalizes relative-looking nested paths to a VFS path', () => {
     expect(resolveServeEntryPath('workspace/my-app', 'index.html'))
-      .toBe('workspace/my-app/index.html');
+      .toBe('/workspace/my-app/index.html');
   });
 
   it('handles directory with trailing slash', () => {
@@ -163,6 +163,16 @@ describe('resolveServeEntryPath', () => {
 
   it('handles nested directories', () => {
     expect(resolveServeEntryPath('/workspace/my-app/pages', 'about.html'))
+      .toBe('/workspace/my-app/pages/about.html');
+  });
+
+  it('normalizes dot segments in the entry path', () => {
+    expect(resolveServeEntryPath('/workspace/my-app', './index.html'))
+      .toBe('/workspace/my-app/index.html');
+  });
+
+  it('collapses repeated separators in the entry path', () => {
+    expect(resolveServeEntryPath('/workspace/my-app', 'pages//about.html'))
       .toBe('/workspace/my-app/pages/about.html');
   });
 });
