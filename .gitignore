@@ -5,4 +5,5 @@ dist/
 /workspace/
 coverage/
 .worktrees/
+.wrangler/
 providers.json

@@ -36,6 +36,13 @@ describeIfConfigured('deployed tray worker', () => {
       canonical: 'POST /tray',
     });
 
+    const legacyPluralCreate = await fetch(new URL('/trays', baseUrl), { method: 'POST' });
+    expect(legacyPluralCreate.status).toBe(410);
+    await expect(legacyPluralCreate.json()).resolves.toMatchObject({
+      code: 'TRAY_CREATE_ENDPOINT_MOVED',
+      canonical: 'POST /tray',
+    });
+
     const createResponse = await fetch(new URL('/tray', baseUrl), { method: 'POST' });
     expect(createResponse.status).toBe(201);
     const created = (await createResponse.json()) as CreateTrayResponse;

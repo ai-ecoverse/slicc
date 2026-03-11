@@ -1,0 +1,105 @@
+name: Worker
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/worker/**'
+      - 'wrangler.jsonc'
+      - '.github/workflows/worker.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/worker/**'
+      - 'wrangler.jsonc'
+      - '.github/workflows/worker.yml'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Worker environment to deploy
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+        default: staging
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-staging:
+    name: Deploy staging + smoke test
+    if: |
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false) ||
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'staging')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Verify worker unit tests before deploy
+        run: npx vitest run src/worker/index.test.ts
+
+      - name: Deploy staging worker
+        id: deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --env staging
+
+      - name: Run deployed smoke test against staging
+        env:
+          WORKER_BASE_URL: ${{ steps.deploy.outputs.deployment-url }}
+        run: |
+          if [ -z "$WORKER_BASE_URL" ]; then
+            echo "Missing deployment URL from cloudflare/wrangler-action output"
+            exit 1
+          fi
+          npx vitest run src/worker/deployed.test.ts
+
+  deploy-production:
+    name: Deploy production + smoke test
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'production' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Verify worker unit tests before deploy
+        run: npx vitest run src/worker/index.test.ts
+
+      - name: Deploy production worker
+        id: deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
+
+      - name: Run deployed smoke test against production
+        env:
+          WORKER_BASE_URL: ${{ steps.deploy.outputs.deployment-url }}
+        run: |
+          if [ -z "$WORKER_BASE_URL" ]; then
+            echo "Missing deployment URL from cloudflare/wrangler-action output"
+            exit 1
+          fi
+          npx vitest run src/worker/deployed.test.ts

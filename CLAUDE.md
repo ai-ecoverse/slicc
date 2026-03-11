@@ -22,7 +22,7 @@ npm run build:extension # Build extension into dist/extension/ (load in chrome:/
 npm run typecheck       # Typecheck browser + Node targets
 npm run test            # Vitest run (all tests)
 npx wrangler dev        # Run the Cloudflare Worker tray hub locally (requires Wrangler)
-npx wrangler deploy --env staging  # Deploy the staging tray hub from wrangler.jsonc
+npx wrangler deploy --env staging  # Deploy the staging tray hub (slicc-tray-hub-staging) from wrangler.jsonc
 npx wrangler deploy     # Deploy the Cloudflare Worker tray hub from wrangler.jsonc
 WORKER_BASE_URL=https://... npx vitest run src/worker/deployed.test.ts  # Smoke-test a deployed tray hub
 npm run test:watch      # Vitest watch mode
@@ -370,7 +370,7 @@ Do not skip any. A typecheck pass does not guarantee the builds succeed (Vite bu
 
 **CI**: These same four gates run automatically on every PR to `main` via GitHub Actions (`.github/workflows/ci.yml`).
 
-**Worker deploy CI**: the tray hub also has dedicated staging/production workflows (`.github/workflows/worker-staging.yml`, `.github/workflows/worker-production.yml`) that deploy with Wrangler and then run `src/worker/deployed.test.ts` against the live Worker URL configured in GitHub environment variables.
+**Worker deploy CI**: the tray hub uses `.github/workflows/worker.yml` for both staging and production. It does not require separate GitHub environments: use the repo-level `CLOUDFLARE_API_TOKEN` secret plus `CLOUDFLARE_ACCOUNT_ID` variable, and let `cloudflare/wrangler-action` provide the deployed URL for `src/worker/deployed.test.ts`.
 
 ## Git Integration (src/git/)
 Git support via isomorphic-git with LightningFS as the backing store. GitCommands class provides CLI-like interface for git operations (init, clone, add, commit, status, log, branch, checkout, diff, remote, fetch, pull, push, config, rev-parse). Registered as a custom command in just-bash so it works in compound commands and via the bash tool.

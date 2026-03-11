@@ -20,6 +20,7 @@
   ],
   "env": {
     "staging": {
+      "name": "slicc-tray-hub-staging",
       "workers_dev": true,
       "durable_objects": {
         "bindings": [

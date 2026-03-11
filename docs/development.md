@@ -20,7 +20,7 @@ Build, run, test, and debug SLICC locally.
 | `npm run test:watch` | Vitest watch mode | Iterate on test changes; TDD workflow |
 | `npx vitest run src/fs/virtual-fs.test.ts` | Run single test file | Debug a specific module |
 | `npx wrangler dev` | Run the Cloudflare Worker tray hub locally (if Wrangler is installed/authenticated) | Exercise `src/worker/` against a real Worker runtime |
-| `npx wrangler deploy --env staging` | Deploy the staging Cloudflare Worker tray hub using `wrangler.jsonc` | Publish the staging tray hub used by GitHub Actions |
+| `npx wrangler deploy --env staging` | Deploy the staging Cloudflare Worker tray hub using `wrangler.jsonc` | Publish the staging tray hub (`slicc-tray-hub-staging`) used by GitHub Actions |
 | `npx wrangler deploy` | Deploy the production Cloudflare Worker tray hub using `wrangler.jsonc` | Publish the production tray hub |
 | `WORKER_BASE_URL=https://... npx vitest run src/worker/deployed.test.ts` | Run the deployed tray-hub smoke test | Verify the live Worker contract (`POST /tray`, controller attach, leader WebSocket, webhook responses) |
 
@@ -76,34 +76,31 @@ Manual verification in the relevant runtimes:
 
 The tray hub now assumes **`POST /tray` is the only canonical tray-creation endpoint**. `POST /session` and `POST /trays` are intentionally rejected with `410` so callers move to the single public route.
 
-### GitHub Actions environments to create
+### GitHub repo settings to create
 
-Create two GitHub environments in the repository settings:
+This pipeline no longer relies on separate GitHub `staging` / `production` environments.
 
-- `staging`
-- `production`
-
-For **each** environment, add:
+Add these at the **repository** level instead:
 
 - **Secret:** `CLOUDFLARE_API_TOKEN`
   - should have permission to deploy Workers and manage Durable Objects for the target account
 - **Variable:** `CLOUDFLARE_ACCOUNT_ID`
   - the Cloudflare account ID used by Wrangler in CI
-- **Variable:** `WORKER_BASE_URL`
-  - full base URL for the deployed Worker used by the post-deploy smoke test
-  - examples:
-    - staging: `https://slicc-tray-hub-staging.<your-subdomain>.workers.dev`
-    - production: `https://slicc-tray-hub.<your-subdomain>.workers.dev`
+
+Nothing else is required for CI configuration:
+
+- production deploys use the default Worker name from `wrangler.jsonc`: `slicc-tray-hub`
+- staging deploys use the hardcoded staging Worker name in `wrangler.jsonc`: `slicc-tray-hub-staging`
+- the post-deploy smoke test reads the deployed URL from `cloudflare/wrangler-action` output, so GitHub does **not** need a `WORKER_BASE_URL` variable
 
 ### Workflow behavior
 
-- `.github/workflows/worker-staging.yml`
-  - runs on pull requests to `main` that touch the Worker/Wrangler config
+- `.github/workflows/worker.yml`
+  - runs staging deploy + smoke test on pull requests to `main` that touch the Worker/Wrangler config
   - skips forked PRs because GitHub does not expose deployment secrets there
-  - runs `src/worker/index.test.ts`, deploys with `wrangler deploy --env staging`, then runs `src/worker/deployed.test.ts`
-- `.github/workflows/worker-production.yml`
-  - runs on pushes to `main` that touch the Worker/Wrangler config
-  - deploys the default production Worker, then runs the same deployed smoke test against the production URL
+  - runs production deploy + smoke test on pushes to `main` that touch the Worker/Wrangler config
+  - supports manual dispatch with `target=staging|production`
+  - uses `cloudflare/wrangler-action@v3` and passes its `deployment-url` output into `src/worker/deployed.test.ts`
 
 ### Local validation commands
 
