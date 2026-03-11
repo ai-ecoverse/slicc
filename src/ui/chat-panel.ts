@@ -76,6 +76,8 @@ export class ChatPanel {
   private lastScrollTop = 0;
   private jumpPill!: HTMLElement;
   private onDeleteQueuedMessage: ((messageId: string) => void) | null = null;
+  private pendingDeltaText = '';
+  private streamingRafId: number | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -635,6 +637,47 @@ export class ChatPanel {
 
   private findMessage(id: string): ChatMessage | undefined {
     return this.messages.find((m) => m.id === id);
+  }
+
+  private flushPendingDelta(): void {
+    this.streamingRafId = null;
+    if (!this.pendingDeltaText || !this.currentStreamId) return;
+    const msg = this.findMessage(this.currentStreamId);
+    if (!msg) {
+      this.pendingDeltaText = '';
+      return;
+    }
+    msg.content += this.pendingDeltaText;
+    this.pendingDeltaText = '';
+    this.updateStreamingContent(this.currentStreamId);
+  }
+
+  private cancelPendingDelta(): void {
+    if (this.streamingRafId !== null) {
+      cancelAnimationFrame(this.streamingRafId);
+      this.streamingRafId = null;
+    }
+    this.pendingDeltaText = '';
+  }
+
+  private updateStreamingContent(messageId: string): void {
+    const msg = this.findMessage(messageId);
+    if (!msg) return;
+    const wrapper = this.messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
+    if (!wrapper) return;
+    const contentEl = wrapper.querySelector('.msg__content');
+    if (contentEl) {
+      contentEl.innerHTML = renderChatMessageContent(msg);
+      if (msg.isStreaming) {
+        const cursor = document.createElement('span');
+        cursor.className = 'streaming-cursor';
+        contentEl.appendChild(cursor);
+      }
+    } else if (msg.content.trim().length > 0) {
+      this.updateMessageEl(messageId);
+      return;
+    }
+    this.scrollToBottom();
   }
 
   // -- DOM rendering --
