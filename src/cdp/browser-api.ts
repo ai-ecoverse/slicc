@@ -202,40 +202,91 @@ export class BrowserAPI {
     await this.ensureConnected();
     this.ensureAttached();
 
-    const params: Record<string, unknown> = {
-      format: options?.format ?? 'png',
-    };
-    if (options?.quality !== undefined) params['quality'] = options.quality;
-    if (options?.clip) {
-      params['clip'] = { ...options.clip, scale: options.clip.scale ?? 1 };
-      params['captureBeyondViewport'] = true;
-    } else if (options?.fullPage) {
-      // Get full page metrics for a full-page screenshot
-      const metrics = await this.client.send(
-        'Page.getLayoutMetrics',
-        {},
+    // Normalize DPR to 1 to prevent oversized screenshots on HiDPI displays.
+    // When DPR is already 1 (e.g. after an explicit resize), normalization is
+    // skipped and existing overrides are preserved.
+    let didOverrideMetrics = false;
+    try {
+      await this.client.send('Runtime.enable', {}, this.sessionId!);
+      const dprResult = await this.client.send(
+        'Runtime.evaluate',
+        { expression: 'window.devicePixelRatio', returnByValue: true },
         this.sessionId!,
       );
-      const contentSize = metrics['contentSize'] as {
-        width: number;
-        height: number;
-      };
-      params['clip'] = {
-        x: 0,
-        y: 0,
-        width: contentSize.width,
-        height: contentSize.height,
-        scale: 1,
-      };
-      params['captureBeyondViewport'] = true;
+      const currentDpr = (dprResult['result'] as { value?: number })?.value ?? 1;
+      if (currentDpr > 1) {
+        const metrics = await this.client.send(
+          'Page.getLayoutMetrics',
+          {},
+          this.sessionId!,
+        );
+        const viewport = metrics['layoutViewport'] as {
+          clientWidth: number;
+          clientHeight: number;
+        };
+        await this.client.send(
+          'Emulation.setDeviceMetricsOverride',
+          {
+            width: viewport.clientWidth,
+            height: viewport.clientHeight,
+            deviceScaleFactor: 1,
+            mobile: false,
+          },
+          this.sessionId!,
+        );
+        didOverrideMetrics = true;
+      }
+    } catch {
+      // Best-effort: proceed with native DPR if normalization fails
     }
 
-    const result = await this.client.send(
-      'Page.captureScreenshot',
-      params,
-      this.sessionId!,
-    );
-    return result['data'] as string;
+    try {
+      const params: Record<string, unknown> = {
+        format: options?.format ?? 'png',
+        captureBeyondViewport: true,
+      };
+      if (options?.quality !== undefined) params['quality'] = options.quality;
+      if (options?.clip) {
+        params['clip'] = { ...options.clip, scale: options.clip.scale ?? 1 };
+      } else if (options?.fullPage) {
+        // Get full page metrics for a full-page screenshot
+        const metrics = await this.client.send(
+          'Page.getLayoutMetrics',
+          {},
+          this.sessionId!,
+        );
+        const contentSize = metrics['contentSize'] as {
+          width: number;
+          height: number;
+        };
+        params['clip'] = {
+          x: 0,
+          y: 0,
+          width: contentSize.width,
+          height: contentSize.height,
+          scale: 1,
+        };
+      }
+
+      const result = await this.client.send(
+        'Page.captureScreenshot',
+        params,
+        this.sessionId!,
+      );
+      return result['data'] as string;
+    } finally {
+      if (didOverrideMetrics) {
+        try {
+          await this.client.send(
+            'Emulation.clearDeviceMetricsOverride',
+            {},
+            this.sessionId!,
+          );
+        } catch {
+          // Best-effort cleanup
+        }
+      }
+    }
   }
 
   /**
