@@ -32,6 +32,20 @@ function base64ToBytes(base64: string): Uint8Array {
   return bytes;
 }
 
+function normalizeSnapshotText(value: unknown, fallback = ''): string {
+  if (value == null) return fallback;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value);
+  }
+  try {
+    const json = JSON.stringify(value);
+    return json ?? fallback;
+  } catch {
+    return String(value);
+  }
+}
+
 /** Shared state across invocations (persists for the lifetime of the shell). */
 interface PlaywrightState {
   /** Currently active targetId (the "current tab") */
@@ -244,8 +258,9 @@ function renderNode(
   indent: string = '',
 ): string[] {
   const lines: string[] = [];
-  const role = (node.role || 'unknown').toLowerCase();
-  const name = node.name || '';
+  const role = normalizeSnapshotText(node.role, 'unknown').toLowerCase();
+  const name = normalizeSnapshotText(node.name);
+  const value = normalizeSnapshotText(node.value);
 
   const skipRoles = ['none', 'presentation', 'generic', 'rootwebarea'];
   const needsRef =
@@ -293,7 +308,7 @@ function renderNode(
   let line = `${indent}- ${role}`;
   if (name) line += ` "${escapeYaml(name)}"`;
   if (ref) line += ` [ref=${ref}]`;
-  if (node.value) line += `: "${escapeYaml(node.value)}"`;
+  if (value) line += `: "${escapeYaml(value)}"`;
   lines.push(line);
 
   if (node.children) {

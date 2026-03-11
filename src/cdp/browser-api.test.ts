@@ -536,5 +536,34 @@ describe('BrowserAPI', () => {
       expect(tree.role).toBe('RootWebArea');
       expect(tree.name).toBe('');
     });
+
+    it('normalizes non-string accessibility values', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({}) // Accessibility.enable
+        .mockResolvedValueOnce({
+          nodes: [
+            {
+              nodeId: '1',
+              role: { value: 'RootWebArea' },
+              name: { value: 'Slack' },
+              childIds: ['2'],
+            },
+            {
+              nodeId: '2',
+              role: { value: 'textbox' },
+              name: { value: { label: 'Message' } },
+              value: { value: 0 },
+              description: { value: ['composer'] },
+              parentId: '1',
+            },
+          ],
+        });
+
+      const tree = await api.getAccessibilityTree();
+      expect(tree.children).toHaveLength(1);
+      expect(tree.children![0].name).toBe('{"label":"Message"}');
+      expect(tree.children![0].value).toBe('0');
+      expect(tree.children![0].description).toBe('["composer"]');
+    });
   });
 });

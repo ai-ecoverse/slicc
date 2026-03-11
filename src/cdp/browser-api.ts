@@ -21,6 +21,20 @@ import { createLogger } from '../core/logger.js';
 const DEFAULT_CDP_URL = 'ws://localhost:3000/cdp';
 const log = createLogger('browser-api');
 
+function normalizeAXText(value: unknown, fallback = ''): string {
+  if (value == null) return fallback;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value);
+  }
+  try {
+    const json = JSON.stringify(value);
+    return json ?? fallback;
+  } catch {
+    return String(value);
+  }
+}
+
 export class BrowserAPI {
   private client: CDPTransport;
   private sessionId: string | null = null;
@@ -422,10 +436,10 @@ export class BrowserAPI {
     const nodes = result['nodes'] as Array<{
       nodeId: string;
       backendDOMNodeId?: number;
-      role: { value: string };
-      name: { value: string };
-      description?: { value: string };
-      value?: { value: string };
+      role: { value: unknown };
+      name: { value: unknown };
+      description?: { value: unknown };
+      value?: { value: unknown };
       parentId?: string;
       childIds?: string[];
     }>;
@@ -439,12 +453,14 @@ export class BrowserAPI {
     let rootId: string | undefined;
 
     for (const n of nodes) {
+      const value = normalizeAXText(n.value?.value);
+      const description = normalizeAXText(n.description?.value);
       const node: AccessibilityNode & { childIds?: string[] } = {
-        role: n.role?.value ?? 'unknown',
-        name: n.name?.value ?? '',
+        role: normalizeAXText(n.role?.value, 'unknown'),
+        name: normalizeAXText(n.name?.value),
       };
-      if (n.value?.value) node.value = n.value.value;
-      if (n.description?.value) node.description = n.description.value;
+      if (value !== '') node.value = value;
+      if (description !== '') node.description = description;
       if (n.backendDOMNodeId) node.backendNodeId = n.backendDOMNodeId;
       if (n.childIds) node.childIds = n.childIds;
       nodeMap.set(n.nodeId, node);
