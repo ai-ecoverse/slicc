@@ -33,12 +33,10 @@ function requestLogger(req: Request, res: Response, next: NextFunction) {
 // ---------------------------------------------------------------------------
 
 function findChrome(): string | null {
-  // CHROME_PATH env var takes priority (set in .env for isolation)
   const envPath = process.env['CHROME_PATH'];
   if (envPath && existsSync(envPath)) return envPath;
 
-  // Prefer Canary/Chromium over regular Chrome — they run as separate
-  // processes and won't interfere with the user's main Chrome.
+
   const candidates: Record<string, string[]> = {
     darwin: [
       '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
