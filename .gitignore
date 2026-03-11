@@ -6,3 +6,5 @@ dist/
 coverage/
 .worktrees/
 providers.json
+okta-captured-state.json
+okta-session-state.json
