@@ -10,6 +10,9 @@
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { ToolDefinition, ImageContent, TextContent } from './types.js';
 
+/** Safety cap: truncate truly enormous single tool results that would blow the context window. */
+export const MAX_SINGLE_RESULT_CHARS = 50000;
+
 /** Regex to match `<img:data:image/TYPE;base64,DATA>` tags in tool result text. */
 const IMG_TAG_RE = /<img:(data:(image\/[^;]+);base64,([^>]+))>/g;
 
@@ -61,8 +64,12 @@ export function adaptTool(tool: ToolDefinition): AgentTool<any> {
       _onUpdate?: (partialResult: AgentToolResult<any>) => void,
     ): Promise<AgentToolResult<any>> {
       const result = await tool.execute(params);
+      // Safety cap: truncate truly enormous results that would blow the context window
+      const content = result.content.length > MAX_SINGLE_RESULT_CHARS
+        ? result.content.slice(0, MAX_SINGLE_RESULT_CHARS) + '\n... (truncated — exceeded 50K char safety limit)'
+        : result.content;
       return {
-        content: parseToolResultContent(result.content),
+        content: parseToolResultContent(content),
         details: { isError: result.isError },
       };
     },

@@ -316,7 +316,7 @@ Scoops have a **sequential message queue**:
 - No dropped messages
 - Applies to cone and all scoops
 
-**Related**: Context compaction may truncate very old messages if total context exceeds token limit (see `src/core/context-compaction.ts`).
+**Related**: Context compaction replaces old messages with an LLM-generated summary when context approaches the token limit (see `src/core/context-compaction.ts`). Falls back to naive message dropping if the summarization call fails.
 
 ## Preview Service Worker: Build Strategy
 

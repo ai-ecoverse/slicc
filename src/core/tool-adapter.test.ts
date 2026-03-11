@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { parseToolResultContent } from './tool-adapter.js';
+import { parseToolResultContent, adaptTool, MAX_SINGLE_RESULT_CHARS } from './tool-adapter.js';
+import type { ToolDefinition } from './types.js';
 
 describe('parseToolResultContent', () => {
   it('returns plain text as a single TextContent block', () => {
@@ -82,5 +83,76 @@ describe('parseToolResultContent', () => {
     expect(blocks).toHaveLength(2);
     expect(blocks[0]).toEqual({ type: 'text', text: '/workspace/screenshot.png (500 KB)' });
     expect(blocks[1]).toEqual({ type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo' });
+  });
+});
+
+describe('adaptTool', () => {
+  it('exports MAX_SINGLE_RESULT_CHARS as 50000', () => {
+    expect(MAX_SINGLE_RESULT_CHARS).toBe(50000);
+  });
+
+  it('truncates tool results exceeding 50K chars safety cap', async () => {
+    const hugeContent = 'x'.repeat(MAX_SINGLE_RESULT_CHARS + 1000);
+    const mockTool: ToolDefinition = {
+      name: 'test_tool',
+      description: 'A test tool',
+      inputSchema: { type: 'object', properties: {} },
+      execute: async () => ({ content: hugeContent, isError: false }),
+    };
+
+    const adapted = adaptTool(mockTool);
+    const result = await adapted.execute('call-1', {});
+
+    const textBlock = (result.content as any[]).find((c: any) => c.type === 'text');
+    expect(textBlock.text.length).toBeLessThan(hugeContent.length);
+    expect(textBlock.text).toContain('truncated');
+    expect(textBlock.text).toContain('50K');
+  });
+
+  it('does not truncate tool results at exactly 50K chars boundary', async () => {
+    const exactContent = 'x'.repeat(MAX_SINGLE_RESULT_CHARS);
+    const mockTool: ToolDefinition = {
+      name: 'test_tool',
+      description: 'A test tool',
+      inputSchema: { type: 'object', properties: {} },
+      execute: async () => ({ content: exactContent, isError: false }),
+    };
+
+    const adapted = adaptTool(mockTool);
+    const result = await adapted.execute('call-1', {});
+
+    const textBlock = (result.content as any[]).find((c: any) => c.type === 'text');
+    expect(textBlock.text).toBe(exactContent);
+  });
+
+  it('preserves isError flag through truncation', async () => {
+    const hugeContent = 'x'.repeat(MAX_SINGLE_RESULT_CHARS + 1000);
+    const mockTool: ToolDefinition = {
+      name: 'test_tool',
+      description: 'A test tool',
+      inputSchema: { type: 'object', properties: {} },
+      execute: async () => ({ content: hugeContent, isError: true }),
+    };
+
+    const adapted = adaptTool(mockTool);
+    const result = await adapted.execute('call-1', {});
+
+    expect(result.details).toEqual({ isError: true });
+  });
+
+  it('does not truncate tool results under 50K chars', async () => {
+    const normalContent = 'x'.repeat(MAX_SINGLE_RESULT_CHARS - 100);
+    const mockTool: ToolDefinition = {
+      name: 'test_tool',
+      description: 'A test tool',
+      inputSchema: { type: 'object', properties: {} },
+      execute: async () => ({ content: normalContent, isError: false }),
+    };
+
+    const adapted = adaptTool(mockTool);
+    const result = await adapted.execute('call-1', {});
+
+    const textBlock = (result.content as any[]).find((c: any) => c.type === 'text');
+    expect(textBlock.text).toBe(normalContent);
   });
 });

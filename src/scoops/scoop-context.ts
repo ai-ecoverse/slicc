@@ -15,7 +15,7 @@ import type { VirtualFS } from '../fs/index.js';
 import type { RestrictedFS } from '../fs/restricted-fs.js';
 import { WasmShell } from '../shell/index.js';
 import { Agent, adaptTools, createLogger } from '../core/index.js';
-import { compactContext } from '../core/context-compaction.js';
+import { createCompactContext } from '../core/context-compaction.js';
 import type { AgentEvent as CoreAgentEvent, AgentMessage, AssistantMessage, AssistantMessageEvent, TextContent, Model } from '../core/index.js';
 import type { SessionStore } from '../core/session.js';
 import { createFileTools, createBashTool, createJavaScriptTool } from '../tools/index.js';
@@ -182,6 +182,11 @@ export class ScoopContext {
         }
       }
 
+      const compactFn = createCompactContext({
+        model,
+        getApiKey: () => getApiKey() ?? '',
+      });
+
       this.agent = new Agent({
         initialState: {
           model,
@@ -190,7 +195,7 @@ export class ScoopContext {
           messages: restoredMessages,
         },
         getApiKey: () => apiKey,
-        transformContext: compactContext,
+        transformContext: compactFn,
       });
 
       // Subscribe to agent events
