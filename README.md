@@ -258,6 +258,38 @@ npm run dev:full
 
 The `dev:full` command starts both the CLI server and Vite dev server, launches Chrome, and opens the agent UI.
 
+### Pre-configuring LLM Providers
+
+To skip the settings dialog on first launch, create a `providers.json` file at the project root:
+
+```bash
+cp providers.example.json providers.json
+```
+
+Fill in your API keys and provider details:
+
+```json
+[
+  {
+    "providerId": "anthropic",
+    "apiKey": "sk-ant-...",
+    "model": "claude-sonnet-4-20250514"
+  },
+  {
+    "providerId": "azure-ai-foundry",
+    "apiKey": "your-azure-key",
+    "baseUrl": "https://your-resource.services.ai.azure.com/anthropic",
+    "model": "claude-haiku-4-5"
+  }
+]
+```
+
+Each entry needs `providerId` and `apiKey`. The `baseUrl` and `model` fields are optional. The first entry's model becomes the default selection. Providers are loaded at build time and applied on first launch only — they never overwrite settings you've configured manually.
+
+> **Tip:** You can ask Claude Code to generate this file for you: *"Create a providers.json with Azure Claude Sonnet and direct Anthropic Opus."* Claude Code can write the file but cannot read it back (blocked by `.claude/settings.json` deny rules), so your API keys stay private.
+
+The file is gitignored and excluded from Claude Code's `Read` tool by default.
+
 ## Tech Stack
 
 | Dependency | Role |
