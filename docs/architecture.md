@@ -32,6 +32,7 @@
 | `index.ts` | Re-exports + auto-selects transport based on extension detection |
 | `types.ts` | TargetInfo, PageInfo, EvaluateOptions, AccessibilityNode, etc. |
 | `offscreen-cdp-proxy.ts` | CDPTransport over chrome.runtime messages (offscreen → service worker → chrome.debugger) |
+| `panel-cdp-proxy.ts` | CDPTransport for side panel terminal (panel → offscreen → service worker → chrome.debugger) |
 
 ### src/cli/ — Standalone CLI Server
 

@@ -630,4 +630,74 @@ describe('OffscreenBridge handlePanelMessage', () => {
 
     expect(mockOrchestrator.handleMessage).not.toHaveBeenCalled();
   });
+
+  it('forwards panel-cdp-command through BrowserAPI transport', async () => {
+    const mockTransport = {
+      send: vi.fn().mockResolvedValue({ frameId: '123' }),
+    };
+    const mockBrowserAPI = {
+      getTransport: vi.fn(() => mockTransport),
+    };
+    (bridge as any).browserAPI = mockBrowserAPI;
+
+    simulatePanelMessage({
+      type: 'panel-cdp-command',
+      id: 42,
+      method: 'Page.navigate',
+      params: { url: 'https://example.com' },
+      sessionId: 'session-1',
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+
+    expect(mockTransport.send).toHaveBeenCalledWith('Page.navigate', { url: 'https://example.com' }, 'session-1');
+
+    // Should emit panel-cdp-response with result
+    const response = sentMessages.find((m: any) => m.payload?.type === 'panel-cdp-response') as any;
+    expect(response).toBeDefined();
+    expect(response.payload.id).toBe(42);
+    expect(response.payload.result).toEqual({ frameId: '123' });
+  });
+
+  it('returns error response when BrowserAPI is not available', async () => {
+    (bridge as any).browserAPI = null;
+
+    simulatePanelMessage({
+      type: 'panel-cdp-command',
+      id: 99,
+      method: 'Page.navigate',
+      params: { url: 'https://example.com' },
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+
+    const response = sentMessages.find((m: any) => m.payload?.type === 'panel-cdp-response') as any;
+    expect(response).toBeDefined();
+    expect(response.payload.id).toBe(99);
+    expect(response.payload.error).toBe('BrowserAPI not available');
+  });
+
+  it('returns error response when transport.send throws', async () => {
+    const mockTransport = {
+      send: vi.fn().mockRejectedValue(new Error('Tab not found')),
+    };
+    const mockBrowserAPI = {
+      getTransport: vi.fn(() => mockTransport),
+    };
+    (bridge as any).browserAPI = mockBrowserAPI;
+
+    simulatePanelMessage({
+      type: 'panel-cdp-command',
+      id: 77,
+      method: 'Page.navigate',
+      params: { url: 'https://bad.example' },
+    });
+
+    await new Promise(r => setTimeout(r, 10));
+
+    const response = sentMessages.find((m: any) => m.payload?.type === 'panel-cdp-response') as any;
+    expect(response).toBeDefined();
+    expect(response.payload.id).toBe(77);
+    expect(response.payload.error).toBe('Tab not found');
+  });
 });

@@ -2,6 +2,7 @@ export { CDPClient } from './cdp-client.js';
 export { BrowserAPI } from './browser-api.js';
 export { DebuggerClient } from './debugger-client.js';
 export { OffscreenCdpProxy } from './offscreen-cdp-proxy.js';
+export { PanelCdpProxy } from './panel-cdp-proxy.js';
 export { HarRecorder } from './har-recorder.js';
 export type { CDPTransport } from './transport.js';
 export type {

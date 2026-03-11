@@ -108,7 +108,8 @@ Key files:
 - `src/extension/service-worker.ts` — Message relay + CDP proxy
 - `src/extension/offscreen.ts` — Agent engine bootstrap
 - `src/extension/offscreen-bridge.ts` — Orchestrator ↔ message bridge
-- `src/cdp/offscreen-cdp-proxy.ts` — CDPTransport via chrome.runtime messages
+- `src/cdp/offscreen-cdp-proxy.ts` — CDPTransport via chrome.runtime messages (offscreen → service worker)
+- `src/cdp/panel-cdp-proxy.ts` — CDPTransport for side panel terminal (panel → offscreen → service worker)
 - `src/ui/offscreen-client.ts` — Side panel's interface to offscreen engine
 - `offscreen.html` — Offscreen document entry point
 
@@ -279,7 +280,8 @@ Chrome Manifest V3 extension with three-layer architecture for background agent 
 - **Service worker** (`service-worker.ts`): Creates offscreen document on install/startup, relays messages between side panel and offscreen, proxies `chrome.debugger` CDP commands (offscreen docs can't use `chrome.debugger` directly), forwards CDP events back to offscreen.
 - **Offscreen document** (`offscreen.ts`, `offscreen-bridge.ts`): Long-lived extension page that runs the agent engine (Orchestrator, VFS, Shell, tools). Survives side panel close. `OffscreenBridge` translates between Orchestrator callbacks and chrome.runtime messages.
 - **Message types** (`messages.ts`): Typed envelopes (`PanelEnvelope`, `OffscreenEnvelope`, `ServiceWorkerEnvelope`) with `source` + `payload` for routing.
-- **CDP proxy** (`src/cdp/offscreen-cdp-proxy.ts`): `CDPTransport` implementation that routes commands through chrome.runtime messages to the service worker's `chrome.debugger`.
+- **CDP proxy** (`src/cdp/offscreen-cdp-proxy.ts`): `CDPTransport` implementation that routes commands through chrome.runtime messages to the service worker's `chrome.debugger`. Used by the offscreen agent engine.
+- **Panel CDP proxy** (`src/cdp/panel-cdp-proxy.ts`): `CDPTransport` for the side panel terminal. Routes commands through the offscreen bridge (which forwards to its own CDP transport). Receives CDP events directly from the service worker broadcast. This gives the side panel terminal a working `BrowserAPI` for `playwright-cli` and browser automation commands.
 - `chrome.d.ts` provides typed declarations for Chrome APIs (debugger, tabs, sidePanel, runtime, offscreen, windows, messaging).
 - `sandbox.html` (project root) provides isolated execution for JavaScript tool and `node -e` — exempt from extension CSP. Both the side panel and offscreen document can host sandbox iframes.
 - Pyodide (~13MB) bundled at `dist/extension/pyodide/` for Python support (loaded from `'self'` origin).
@@ -325,7 +327,7 @@ Delegation:
 ## Key Conventions
 
 - **Two type systems**: Legacy ToolDefinition/ToolResult (in src/tools/) and pi-compatible AgentTool/AgentToolResult (in src/core/). The adapter in tool-adapter.ts bridges them.
-- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 1058 tests across 54 files.
+- **Tests are colocated**: foo.test.ts next to foo.ts. Vitest with globals: true, environment: node. New pure-logic code (utilities, adapters, data transformations) should always have tests. DOM-dependent code (UI panels, layout) and chrome.* API code (DebuggerClient) are acceptable to skip in Node tests but should be manually verified. Use `fake-indexeddb/auto` for tests that need VFS. Current count: 1076 tests across 55 files.
 - **Logging**: createLogger('namespace') from src/core/logger.ts. Level-filtered, DEBUG in dev, ERROR in prod. Uses __DEV__ global (set by Vite define).
 - **Node shims**: Browser-bundle shims live in `src/shims/`. `empty.ts` stubs `node:zlib` and `node:module`; additional shim/polyfill files include `buffer-polyfill.ts`, `http.ts`, `https.ts`, `http2.ts`, and `stream.ts`.
 - **Multi-provider auth**: Provider settings in `src/ui/provider-settings.ts`. Supports Anthropic (direct), Azure AI Foundry (Claude on Azure), Azure OpenAI (GPT), AWS Bedrock, and many more via pi-ai. Provider/API key/baseUrl stored in localStorage. Model resolved via `resolveCurrentModel()` with baseUrl override. Accounts can be pre-configured via `providers.json` at the project root (bundled at build time via `import.meta.glob`, gitignored, and denied from Claude Code's `Read` tool via `.claude/settings.json`).
