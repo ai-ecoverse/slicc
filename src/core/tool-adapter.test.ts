@@ -140,6 +140,51 @@ describe('adaptTool', () => {
     expect(result.details).toEqual({ isError: true });
   });
 
+  it('preserves image blocks even when base64 data exceeds 50K chars', async () => {
+    const largeBase64 = 'A'.repeat(MAX_SINGLE_RESULT_CHARS * 2); // 100K of base64
+    const content = `Screenshot saved\n<img:data:image/png;base64,${largeBase64}>`;
+    const mockTool: ToolDefinition = {
+      name: 'test_tool',
+      description: 'A test tool',
+      inputSchema: { type: 'object', properties: {} },
+      execute: async () => ({ content, isError: false }),
+    };
+
+    const adapted = adaptTool(mockTool);
+    const result = await adapted.execute('call-1', {});
+
+    const blocks = result.content as any[];
+    // Text block preserved
+    expect(blocks[0]).toEqual({ type: 'text', text: 'Screenshot saved' });
+    // Image block preserved in full — NOT truncated
+    expect(blocks[1].type).toBe('image');
+    expect(blocks[1].mimeType).toBe('image/png');
+    expect(blocks[1].data).toBe(largeBase64);
+    expect(blocks[1].data.length).toBe(MAX_SINGLE_RESULT_CHARS * 2);
+  });
+
+  it('truncates large text before image but preserves the image', async () => {
+    const largeText = 'x'.repeat(MAX_SINGLE_RESULT_CHARS + 5000);
+    const content = `${largeText}\n<img:data:image/png;base64,abc123>`;
+    const mockTool: ToolDefinition = {
+      name: 'test_tool',
+      description: 'A test tool',
+      inputSchema: { type: 'object', properties: {} },
+      execute: async () => ({ content, isError: false }),
+    };
+
+    const adapted = adaptTool(mockTool);
+    const result = await adapted.execute('call-1', {});
+
+    const blocks = result.content as any[];
+    // Text block truncated
+    expect(blocks[0].type).toBe('text');
+    expect(blocks[0].text).toContain('truncated');
+    expect(blocks[0].text.length).toBeLessThan(largeText.length);
+    // Image block still preserved
+    expect(blocks[1]).toEqual({ type: 'image', mimeType: 'image/png', data: 'abc123' });
+  });
+
   it('does not truncate tool results under 50K chars', async () => {
     const normalContent = 'x'.repeat(MAX_SINGLE_RESULT_CHARS - 100);
     const mockTool: ToolDefinition = {

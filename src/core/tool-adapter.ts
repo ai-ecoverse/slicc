@@ -64,12 +64,21 @@ export function adaptTool(tool: ToolDefinition): AgentTool<any> {
       _onUpdate?: (partialResult: AgentToolResult<any>) => void,
     ): Promise<AgentToolResult<any>> {
       const result = await tool.execute(params);
-      // Safety cap: truncate truly enormous results that would blow the context window
-      const content = result.content.length > MAX_SINGLE_RESULT_CHARS
-        ? result.content.slice(0, MAX_SINGLE_RESULT_CHARS) + '\n... (truncated — exceeded 50K char safety limit)'
-        : result.content;
+      // Parse image tags FIRST — before any truncation. Image blocks (base64 data)
+      // are handled natively by the API and don't consume text tokens the same way.
+      // Truncating the raw string before parsing would slice mid-base64, breaking
+      // image tags into garbage text that wastes the entire context window.
+      const blocks = parseToolResultContent(result.content);
+      // Safety cap: truncate only text blocks that exceed the limit.
+      // Image blocks pass through untouched (they're sent as binary content).
+      const cappedBlocks = blocks.map((block) => {
+        if (block.type === 'text' && block.text && block.text.length > MAX_SINGLE_RESULT_CHARS) {
+          return { ...block, text: block.text.slice(0, MAX_SINGLE_RESULT_CHARS) + '\n... (truncated — exceeded 50K char safety limit)' };
+        }
+        return block;
+      });
       return {
-        content: parseToolResultContent(content),
+        content: cappedBlocks,
         details: { isError: result.isError },
       };
     },

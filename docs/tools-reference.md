@@ -514,7 +514,7 @@ MAX_SINGLE_RESULT_CHARS = 50000;  // Safety cap per tool result (tool-adapter.ts
 3. **LLM summarization**: Calls `generateSummary()` to produce a structured summary (Goal, Progress, Key Decisions, Next Steps, Critical Context)
 4. **Fallback**: If LLM call fails or no API key, falls back to naive message dropping with a compaction marker
 
-**Safety cap**: Tool results >50K chars are truncated at execution time in `tool-adapter.ts`. No eager truncation of smaller results — they stay full-size until compaction summarizes them.
+**Safety cap**: Image tags (`<img:...>`) are parsed into `ImageContent` blocks first, then only text blocks >50K chars are truncated (`MAX_SINGLE_RESULT_CHARS` in `tool-adapter.ts`). Image data passes through untouched — it's handled natively by the LLM API, not as text tokens. Smaller text results stay full-size until compaction summarizes them.
 
 ---
 
