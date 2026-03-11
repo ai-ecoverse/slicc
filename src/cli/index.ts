@@ -33,6 +33,9 @@ function requestLogger(req: Request, res: Response, next: NextFunction) {
 // ---------------------------------------------------------------------------
 
 function findChrome(): string | null {
+  const envPath = process.env['CHROME_PATH'];
+  if (envPath && existsSync(envPath)) return envPath;
+
   const candidates: Record<string, string[]> = {
     darwin: [
       '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
