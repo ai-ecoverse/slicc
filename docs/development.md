@@ -100,7 +100,7 @@ Nothing else is required for CI configuration:
   - skips forked PRs because GitHub does not expose deployment secrets there
   - runs production deploy + smoke test on pushes to `main` that touch the Worker/Wrangler config
   - supports manual dispatch with `target=staging|production`
-  - uses `cloudflare/wrangler-action@v3` and passes its `deployment-url` output into `src/worker/deployed.test.ts`
+  - uses `cloudflare/wrangler-action@v3`, pins Wrangler `3.91.0` (first release with `wrangler.jsonc` support), and passes its `deployment-url` output into `src/worker/deployed.test.ts`
 
 ### Local validation commands
 
