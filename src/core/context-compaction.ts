@@ -49,16 +49,26 @@ export async function compactContext(messages: AgentMessage[]): Promise<AgentMes
   let result = truncated;
   let totalChars = estimateSize(result);
 
-  // Keep dropping oldest non-system messages until under limit (preserve first 2 and last 10)
+  // Keep dropping oldest non-system messages until under limit (preserve first 2 and last N)
   // Safety limit to prevent infinite loop if compaction can't reduce size enough
   let compactionRounds = 0;
-  while (totalChars > MAX_CONTEXT_CHARS && result.length > 12 && compactionRounds < 50) {
+  const KEEP_LAST = 10;
+  while (totalChars > MAX_CONTEXT_CHARS && result.length > KEEP_LAST + 2 && compactionRounds < 50) {
     compactionRounds++;
     const compactedMsg = {
       role: 'user' as const,
       content: [{ type: 'text' as const, text: '[Earlier conversation messages were compacted to save context space]' }],
     };
-    result = [result[0], result[1], compactedMsg as any, ...result.slice(result.length - 10)];
+    // Find a safe cut point that doesn't split assistant+toolResult pairs.
+    // Walk backward from the target cut to find a message that isn't a toolResult.
+    let cutIndex = result.length - KEEP_LAST;
+    while (cutIndex > 2 && (result[cutIndex] as any).role === 'toolResult') {
+      cutIndex--;
+    }
+    // If we walked all the way back to index 2, we can't compact further without
+    // breaking pairs — stop trying.
+    if (cutIndex <= 2) break;
+    result = [result[0], result[1], compactedMsg as any, ...result.slice(cutIndex)];
     totalChars = estimateSize(result);
   }
   if (compactionRounds >= 50) {

@@ -11,10 +11,27 @@ function createMessage(role: 'user' | 'assistant' | 'toolResult', text: string):
 }
 
 /** Helper to create a toolResult message */
-function createToolResult(text: string): AgentMessage {
+function createToolResult(text: string, toolCallId = 'tool-1'): AgentMessage {
   return {
     role: 'toolResult',
+    toolCallId,
     content: [{ type: 'text' as const, text }],
+  } as any;
+}
+
+/** Helper to create an assistant message with tool calls */
+function createAssistantWithToolCalls(text: string, toolCallIds: string[]): AgentMessage {
+  return {
+    role: 'assistant',
+    content: [
+      { type: 'text' as const, text },
+      ...toolCallIds.map((id) => ({
+        type: 'toolCall' as const,
+        id,
+        name: 'test_tool',
+        arguments: {},
+      })),
+    ],
   } as any;
 }
 
@@ -275,6 +292,85 @@ describe('compactContext', () => {
     const lastMsg = result[result.length - 1];
     expect((firstMsg.content as any)[0].text).toContain('message-0');
     expect((lastMsg.content as any)[0].text).toContain('message-19');
+  });
+
+  it('never splits assistant+toolResult pairs when compacting', async () => {
+    // Reproduce the bug: compaction drops the assistant message with tool_use
+    // but keeps the orphaned toolResult, causing API error:
+    // "unexpected tool_use_id found in tool_result blocks"
+    const baseMsg = 'x'.repeat(65000);
+    const messages: AgentMessage[] = [
+      createMessage('user', baseMsg),                                    // 0 - preserved (first 2)
+      createMessage('assistant', baseMsg),                               // 1 - preserved (first 2)
+      createMessage('user', baseMsg),                                    // 2 - droppable
+      createMessage('assistant', baseMsg),                               // 3 - droppable
+      createMessage('user', baseMsg),                                    // 4 - droppable
+      createMessage('assistant', baseMsg),                               // 5 - droppable
+      createMessage('user', baseMsg),                                    // 6 - droppable
+      createMessage('assistant', baseMsg),                               // 7 - droppable
+      createMessage('user', baseMsg),                                    // 8 - droppable
+      createAssistantWithToolCalls(baseMsg, ['tool-a', 'tool-b']),       // 9 - has tool calls
+      createToolResult(baseMsg, 'tool-a'),                               // 10 - must stay with 9
+      createToolResult(baseMsg, 'tool-b'),                               // 11 - must stay with 9
+      createMessage('user', 'follow up'),                                // 12
+      createMessage('assistant', 'response'),                            // 13
+    ];
+
+    const result = await compactContext(messages);
+
+    // Verify: every toolResult must have a preceding assistant with matching toolCall
+    for (let i = 0; i < result.length; i++) {
+      const msg = result[i] as any;
+      if (msg.role === 'toolResult' && msg.toolCallId) {
+        // Find the preceding assistant message
+        let found = false;
+        for (let j = i - 1; j >= 0; j--) {
+          const prev = result[j] as any;
+          if (prev.role === 'assistant' && Array.isArray(prev.content)) {
+            const hasToolCall = prev.content.some(
+              (c: any) => c.type === 'toolCall' && c.id === msg.toolCallId,
+            );
+            if (hasToolCall) { found = true; break; }
+          }
+          // Stop searching at non-toolResult, non-assistant boundaries
+          if (prev.role !== 'toolResult') break;
+        }
+        expect(found).toBe(true);
+      }
+    }
+  });
+
+  it('keeps toolResult with its assistant when at compaction boundary', async () => {
+    // The "last 10" boundary might land on a toolResult — compaction must
+    // include the assistant message too
+    const baseMsg = 'x'.repeat(65000);
+    const messages: AgentMessage[] = [
+      createMessage('user', baseMsg),                                    // 0
+      createMessage('assistant', baseMsg),                               // 1
+      createMessage('user', baseMsg),                                    // 2
+      createMessage('assistant', baseMsg),                               // 3
+      createAssistantWithToolCalls(baseMsg, ['t1']),                     // 4 - tool call
+      createToolResult(baseMsg, 't1'),                                   // 5 - result
+      createMessage('user', baseMsg),                                    // 6
+      createMessage('assistant', baseMsg),                               // 7
+      createMessage('user', baseMsg),                                    // 8
+      createMessage('assistant', baseMsg),                               // 9
+      createMessage('user', baseMsg),                                    // 10
+      createMessage('assistant', baseMsg),                               // 11
+      createMessage('user', baseMsg),                                    // 12
+      createMessage('assistant', baseMsg),                               // 13
+    ];
+
+    const result = await compactContext(messages);
+
+    // If toolResult 't1' is in the result, its assistant must also be present
+    const hasToolResult = result.some((m: any) => m.toolCallId === 't1');
+    if (hasToolResult) {
+      const hasMatchingAssistant = result.some(
+        (m: any) => m.role === 'assistant' && m.content?.some?.((c: any) => c.type === 'toolCall' && c.id === 't1'),
+      );
+      expect(hasMatchingAssistant).toBe(true);
+    }
   });
 
   it('does not modify input messages array', async () => {
