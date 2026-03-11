@@ -499,7 +499,35 @@ export function clearAllSettings(): void {
   }
 }
 
-// Resolve the current model with provider-specific baseUrl override
+/**
+ * Resolve a specific model by ID, using the current provider's
+ * baseUrl and API routing. Falls back to resolveCurrentModel() if
+ * modelId is not provided.
+ */
+export function resolveModelById(modelId?: string): Model<Api> {
+  if (!modelId) return resolveCurrentModel();
+
+  const providerId = getSelectedProvider();
+  const baseUrl = getBaseUrlForProvider(providerId);
+
+  try {
+    const effectiveProvider = providerId === 'azure-ai-foundry' ? 'anthropic'
+      : providerId === 'bedrock-camp' ? 'amazon-bedrock'
+      : providerId;
+    let model = getModelDynamic(effectiveProvider, modelId);
+
+    if (providerId === 'bedrock-camp') {
+      model = { ...model, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
+    }
+    if (baseUrl) {
+      model = { ...model, baseUrl };
+    }
+    return model;
+  } catch {
+    return resolveCurrentModel();
+  }
+}
+
 export function resolveCurrentModel(): Model<Api> {
   const providerId = getSelectedProvider();
   const modelId = getSelectedModelId();
