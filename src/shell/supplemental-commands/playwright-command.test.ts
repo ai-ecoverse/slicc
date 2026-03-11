@@ -272,6 +272,38 @@ describe('playwright-cli snapshot', () => {
     expect(result.stdout).toContain('[ref=e3]');
   });
 
+  it('does not crash on non-string accessibility fields', async () => {
+    browser = createMockBrowser({
+      getAccessibilityTree: vi.fn().mockResolvedValue({
+        role: 'RootWebArea',
+        name: 'Slack',
+        children: [
+          {
+            role: 'textbox',
+            name: { label: 'Message' },
+            value: 0,
+            backendNodeId: 44,
+            children: [],
+          },
+        ],
+      } as any),
+    });
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
+      JSON.stringify({ url: 'https://app.slack.com/client', title: 'Slack' }),
+    );
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://app.slack.com/client', '--foreground'], {} as any);
+    const result = await cmd.execute(['snapshot'], {} as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Page Title: Slack');
+    expect(result.stdout).toContain('textbox');
+    expect(result.stdout).toContain('Message');
+    expect(result.stdout).toContain('[ref=e1]');
+    expect(result.stdout).toContain(': "0"');
+  });
+
   it('saves snapshot to file with --filename', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
