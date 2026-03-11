@@ -13,6 +13,7 @@ import type { RegisteredScoop, ChannelMessage, ScoopTabState } from '../scoops/t
 import type {
   ExtensionMessage,
   PanelToOffscreenMessage,
+  PanelCdpResponseMsg,
   ScoopStatusMsg,
   ScoopListMsg,
   StateSnapshotMsg,
@@ -22,6 +23,7 @@ import type {
 } from './messages.js';
 import { SessionStore } from '../ui/session-store.js';
 import type { ChatMessage } from '../ui/types.js';
+import type { BrowserAPI } from '../cdp/index.js';
 
 /** Buffered message for state sync */
 interface BufferedChatMessage {
@@ -43,6 +45,7 @@ interface BufferedChatMessage {
 
 export class OffscreenBridge {
   private orchestrator: Orchestrator | null = null;
+  private browserAPI: BrowserAPI | null = null;
   /** Per-scoop message buffers (mirrors main.ts pattern) */
   private messageBuffers = new Map<string, BufferedChatMessage[]>();
   /** Current assistant message ID per scoop */
@@ -56,8 +59,9 @@ export class OffscreenBridge {
    * Bind the orchestrator and start listening for panel messages.
    * Called after the Orchestrator is constructed with callbacks from createCallbacks().
    */
-  async bind(orchestrator: Orchestrator): Promise<void> {
+  async bind(orchestrator: Orchestrator, browserAPI?: BrowserAPI): Promise<void> {
     this.orchestrator = orchestrator;
+    this.browserAPI = browserAPI ?? null;
     this.setupMessageListener();
     const store = new SessionStore();
     await store.init();
@@ -438,6 +442,25 @@ export class OffscreenBridge {
         // Side panel already wrote to localStorage (shared origin).
         // Just tell all running ScoopContexts to re-read the model.
         this.orchestrator.updateModel();
+        break;
+      }
+
+      case 'panel-cdp-command': {
+        const { id, method, params, sessionId } = msg;
+        if (!this.browserAPI) {
+          this.emit({ type: 'panel-cdp-response', id, error: 'BrowserAPI not available' } satisfies PanelCdpResponseMsg);
+          break;
+        }
+        try {
+          const result = await this.browserAPI.getTransport().send(method, params, sessionId);
+          this.emit({ type: 'panel-cdp-response', id, result } satisfies PanelCdpResponseMsg);
+        } catch (err) {
+          this.emit({
+            type: 'panel-cdp-response',
+            id,
+            error: err instanceof Error ? err.message : String(err),
+          } satisfies PanelCdpResponseMsg);
+        }
         break;
       }
     }

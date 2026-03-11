@@ -189,12 +189,16 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     await layout.panels.fileBrowser.refresh();
   });
 
-  // Mount a terminal shell on the local VFS
+  // Mount a terminal shell on the local VFS with BrowserAPI via CDP proxy
   try {
     const { WasmShell } = await import('../shell/index.js');
-    const shell = new WasmShell({ fs: localFs });
+    const { PanelCdpProxy, BrowserAPI: BrowserAPIClass } = await import('../cdp/index.js');
+    const panelCdp = new PanelCdpProxy();
+    await panelCdp.connect();
+    const panelBrowser = new BrowserAPIClass(panelCdp);
+    const shell = new WasmShell({ fs: localFs, browserAPI: panelBrowser });
     await layout.panels.terminal.mountShell(shell);
-    log.info('Terminal mounted with shared VFS');
+    log.info('Terminal mounted with shared VFS and BrowserAPI (CDP proxy)');
   } catch (e) {
     log.warn('Failed to mount shell to terminal', e);
   }

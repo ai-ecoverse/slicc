@@ -64,6 +64,14 @@ export interface RefreshModelMsg {
   type: 'refresh-model';
 }
 
+export interface PanelCdpCommandMsg {
+  type: 'panel-cdp-command';
+  id: number;
+  method: string;
+  params?: Record<string, unknown>;
+  sessionId?: string;
+}
+
 export type PanelToOffscreenMessage =
   | UserMessageMsg
   | ScoopCreateMsg
@@ -74,7 +82,8 @@ export type PanelToOffscreenMessage =
   | RequestStateMsg
   | ClearChatMsg
   | ClearFilesystemMsg
-  | RefreshModelMsg;
+  | RefreshModelMsg
+  | PanelCdpCommandMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen → Side Panel (via service worker relay)
@@ -143,6 +152,13 @@ export interface OffscreenReadyMsg {
   type: 'offscreen-ready';
 }
 
+export interface PanelCdpResponseMsg {
+  type: 'panel-cdp-response';
+  id: number;
+  result?: Record<string, unknown>;
+  error?: string;
+}
+
 export type OffscreenToPanelMessage =
   | OffscreenReadyMsg
   | AgentEventMsg
@@ -151,7 +167,8 @@ export type OffscreenToPanelMessage =
   | StateSnapshotMsg
   | ErrorMsg
   | ScoopCreatedMsg
-  | IncomingMessageMsg;
+  | IncomingMessageMsg
+  | PanelCdpResponseMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen ↔ Service Worker (CDP proxy)

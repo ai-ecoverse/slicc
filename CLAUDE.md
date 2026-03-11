@@ -108,7 +108,8 @@ Key files:
 - `src/extension/service-worker.ts` — Message relay + CDP proxy
 - `src/extension/offscreen.ts` — Agent engine bootstrap
 - `src/extension/offscreen-bridge.ts` — Orchestrator ↔ message bridge
-- `src/cdp/offscreen-cdp-proxy.ts` — CDPTransport via chrome.runtime messages
+- `src/cdp/offscreen-cdp-proxy.ts` — CDPTransport via chrome.runtime messages (offscreen → service worker)
+- `src/cdp/panel-cdp-proxy.ts` — CDPTransport for side panel terminal (panel → offscreen → service worker)
 - `src/ui/offscreen-client.ts` — Side panel's interface to offscreen engine
 - `offscreen.html` — Offscreen document entry point
 
@@ -279,7 +280,8 @@ Chrome Manifest V3 extension with three-layer architecture for background agent 
 - **Service worker** (`service-worker.ts`): Creates offscreen document on install/startup, relays messages between side panel and offscreen, proxies `chrome.debugger` CDP commands (offscreen docs can't use `chrome.debugger` directly), forwards CDP events back to offscreen.
 - **Offscreen document** (`offscreen.ts`, `offscreen-bridge.ts`): Long-lived extension page that runs the agent engine (Orchestrator, VFS, Shell, tools). Survives side panel close. `OffscreenBridge` translates between Orchestrator callbacks and chrome.runtime messages.
 - **Message types** (`messages.ts`): Typed envelopes (`PanelEnvelope`, `OffscreenEnvelope`, `ServiceWorkerEnvelope`) with `source` + `payload` for routing.
-- **CDP proxy** (`src/cdp/offscreen-cdp-proxy.ts`): `CDPTransport` implementation that routes commands through chrome.runtime messages to the service worker's `chrome.debugger`.
+- **CDP proxy** (`src/cdp/offscreen-cdp-proxy.ts`): `CDPTransport` implementation that routes commands through chrome.runtime messages to the service worker's `chrome.debugger`. Used by the offscreen agent engine.
+- **Panel CDP proxy** (`src/cdp/panel-cdp-proxy.ts`): `CDPTransport` for the side panel terminal. Routes commands through the offscreen bridge (which forwards to its own CDP transport). Receives CDP events directly from the service worker broadcast. This gives the side panel terminal a working `BrowserAPI` for `playwright-cli` and browser automation commands.
 - `chrome.d.ts` provides typed declarations for Chrome APIs (debugger, tabs, sidePanel, runtime, offscreen, windows, messaging).
 - `sandbox.html` (project root) provides isolated execution for JavaScript tool and `node -e` — exempt from extension CSP. Both the side panel and offscreen document can host sandbox iframes.
 - Pyodide (~13MB) bundled at `dist/extension/pyodide/` for Python support (loaded from `'self'` origin).

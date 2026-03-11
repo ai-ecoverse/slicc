@@ -41,7 +41,8 @@ async function init(): Promise<void> {
   );
 
   // Bind the orchestrator to the bridge (sets up message listener + session store)
-  await bridge.bind(orchestrator);
+  // Pass BrowserAPI so the bridge can proxy panel CDP commands through the offscreen transport.
+  await bridge.bind(orchestrator, browser);
 
   console.log('[slicc-offscreen] Orchestrator created, calling init()...');
   await orchestrator.init();
