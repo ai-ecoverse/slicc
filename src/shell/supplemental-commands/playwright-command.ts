@@ -817,7 +817,9 @@ export function createPlaywrightCommand(
             result = { stdout: 'No tabs open\n', stderr: '', exitCode: 0 }; break;
           }
           const lines = pages.map((p, i) => {
-            const marker = p.targetId === state.currentTarget ? '→ ' : '  ';
+            const isCurrent = p.targetId === state.currentTarget;
+            const isActive = !!p.active;
+            const marker = isCurrent ? '→ ' : isActive ? '* ' : '  ';
             return `${marker}${i}: ${p.title} (${p.url})`;
           });
           result = { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 }; break;

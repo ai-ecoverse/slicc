@@ -101,12 +101,14 @@ To view a screenshot yourself, use `open --view <path>` after taking it.
 ### Tab Management
 
 ```bash
-playwright-cli tab-list                              # List open tabs
+playwright-cli tab-list                              # List open tabs (→ = your target, * = user's active tab)
 playwright-cli tab-new [url] [--foreground|--fg]     # New tab (default: background)
 playwright-cli tab-select <index>                    # Switch to tab by index
 playwright-cli tab-close [index]                     # Close tab (default: current)
 playwright-cli close                                 # Close current tab
 ```
+
+The `→` marker shows which tab your commands operate on. The `*` marker shows which tab the user is actually looking at in Chrome. If the user switches tabs, use `tab-list` to find the `*` tab and `tab-select` to follow it.
 
 ### Cookies
 
