@@ -529,8 +529,10 @@ export class ChatPanel {
   private handleContentDelta(messageId: string, text: string): void {
     const msg = this.findMessage(messageId);
     if (!msg) return;
-    msg.content += text;
-    this.updateMessageEl(messageId);
+    this.pendingDeltaText += text;
+    if (this.streamingRafId === null) {
+      this.streamingRafId = requestAnimationFrame(() => this.flushPendingDelta());
+    }
   }
 
   private handleContentDone(messageId: string): void {
