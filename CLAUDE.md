@@ -296,11 +296,16 @@ A Service Worker that intercepts `/preview/*` fetch requests and serves content 
 Express server that launches Chrome with remote debugging, serves the UI (Vite middleware in dev, static files in prod), and runs a WebSocket proxy at /cdp. Provides `/api/fetch-proxy` endpoint for cross-origin fetch (replaces CORS proxy). Single shared Chrome WebSocket connection with client message buffering. Console forwarder pipes in-page console output to CLI stdout. In Electron mode, this same server is reused in `--serve-only` mode instead of launching Chrome.
 
 ### Context Compaction (src/core/context-compaction.ts)
-To prevent context overflow (200K token limit), the agent applies two-phase message compaction before each API call:
-1. **Result truncation**: Tool results larger than 8000 chars (~2K tokens) are truncated with a marker
-2. **Message dropping**: If total context exceeds ~150K tokens, old messages (except first 2 and last 10) are dropped and replaced with a compaction marker message
+LLM-summarized context compaction aligned with pi-mono's strategy. When context approaches the limit, an LLM call generates a structured summary of older messages, replacing them with a single user message. This preserves the conversation prefix (cache-friendly) and keeps recent messages intact.
 
-This preserves recent context and the initial exchange while preventing runaway token usage. Applied to every scoop context via `transformContext: compactContext`.
+- **Threshold**: `contextWindow - reserveTokens` (200K - 16384 = ~183K tokens), using `shouldCompact()` and `estimateTokens()` from pi-coding-agent
+- **Cut point**: Walks backward from newest to keep ~`keepRecentTokens` (20000 tokens) of recent messages. Never splits assistant+toolResult pairs.
+- **Summarization**: `generateSummary()` from pi-coding-agent makes an LLM call producing a structured summary (Goal, Progress, Key Decisions, Next Steps, Critical Context).
+- **Fallback**: If the LLM call fails or no API key is available, falls back to naive message dropping with a compaction marker.
+- **No truncation**: Tool results pass through at full fidelity — no safety cap or truncation. Image tags are parsed into `ImageContent` blocks by `tool-adapter.ts`. If oversized content causes a context overflow, the overflow recovery mechanism handles it.
+- **Overflow recovery** (`scoop-context.ts`): When the API returns a "prompt too long" error, `ScoopContext` catches it via `isContextOverflow()` from pi-ai, removes the error message, replaces oversized messages (>40K chars) with placeholders, and re-prompts the agent with an explanation. Limited to 1 retry to prevent infinite loops. Uses deep import from `@mariozechner/pi-ai/dist/utils/overflow.js` (Vite alias in both configs).
+- **Factory**: `createCompactContext(config)` returns a `transformContext` function wired into each `ScoopContext`.
+- **Import**: Deep import from `@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js` (browser-safe submodule). Vite alias in `vite.config.ts` and `vite.config.extension.ts`. Types in `src/types/pi-coding-agent-compaction.d.ts`.
 
 ### Data Flow
 ```

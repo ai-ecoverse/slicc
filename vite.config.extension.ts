@@ -28,6 +28,15 @@ export default defineConfig(({ mode }) => ({
       'http': resolve(__dirname, 'src/shims/http.ts'),
       'https': resolve(__dirname, 'src/shims/https.ts'),
       'http2': resolve(__dirname, 'src/shims/http2.ts'),
+      // Deep import into pi-coding-agent's compaction submodule (see vite.config.ts)
+      '@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js': resolve(
+        __dirname,
+        'node_modules/@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js',
+      ),
+      '@mariozechner/pi-ai/dist/utils/overflow.js': resolve(
+        __dirname,
+        'node_modules/@mariozechner/pi-ai/dist/utils/overflow.js',
+      ),
     },
   },
   esbuild: {

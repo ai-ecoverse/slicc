@@ -15,8 +15,10 @@ import type { VirtualFS } from '../fs/index.js';
 import type { RestrictedFS } from '../fs/restricted-fs.js';
 import { WasmShell } from '../shell/index.js';
 import { Agent, adaptTools, createLogger } from '../core/index.js';
-import { compactContext } from '../core/context-compaction.js';
+import { createCompactContext } from '../core/context-compaction.js';
 import type { AgentEvent as CoreAgentEvent, AgentMessage, AssistantMessage, AssistantMessageEvent, TextContent, Model } from '../core/index.js';
+import { isContextOverflow } from '@mariozechner/pi-ai/dist/utils/overflow.js';
+import type { AssistantMessage as PiAssistantMessage } from '@mariozechner/pi-ai';
 import type { SessionStore } from '../core/session.js';
 import { createFileTools, createBashTool, createJavaScriptTool } from '../tools/index.js';
 import type { BrowserAPI } from '../cdp/index.js';
@@ -67,6 +69,7 @@ export class ScoopContext {
   private sessionStore: SessionStore | null = null;
   private sessionId: string;
   private sessionCreatedAt: number = 0;
+  private isRecoveringFromOverflow = false;
 
   constructor(scoop: RegisteredScoop, callbacks: ScoopContextCallbacks, fs: VirtualFS | RestrictedFS, sessionStore?: SessionStore) {
     this.scoop = scoop;
@@ -182,6 +185,11 @@ export class ScoopContext {
         }
       }
 
+      const compactFn = createCompactContext({
+        model,
+        getApiKey: () => getApiKey() ?? undefined,
+      });
+
       this.agent = new Agent({
         initialState: {
           model,
@@ -190,7 +198,7 @@ export class ScoopContext {
           messages: restoredMessages,
         },
         getApiKey: () => apiKey,
-        transformContext: compactContext,
+        transformContext: compactFn,
       });
 
       // Subscribe to agent events
@@ -382,11 +390,93 @@ export class ScoopContext {
         if (messages.length > 0) {
           const last = messages[messages.length - 1];
           if (last.role === 'assistant' && (last as AssistantMessage).errorMessage) {
+            // Check for context overflow — attempt recovery instead of surfacing error
+            if (!this.isRecoveringFromOverflow && isContextOverflow(last as PiAssistantMessage)) {
+              this.recoverFromOverflow(messages);
+              break;
+            }
+            this.isRecoveringFromOverflow = false;
             this.callbacks.onError((last as AssistantMessage).errorMessage!);
+          } else {
+            // Successful completion — reset overflow recovery flag
+            this.isRecoveringFromOverflow = false;
           }
         }
         break;
       }
+    }
+  }
+
+  /**
+   * Recover from a context overflow error by trimming oversized messages
+   * and re-prompting the agent with an explanation.
+   *
+   * Strategy: remove the error assistant message, find and replace oversized
+   * content (>10K estimated tokens) in recent messages with placeholders,
+   * then re-prompt so transformContext (compaction) runs on the next attempt.
+   */
+  private recoverFromOverflow(messages: AgentMessage[]): void {
+    if (!this.agent) return;
+
+    log.warn('Context overflow detected, attempting recovery', { folder: this.scoop.folder, messageCount: messages.length });
+
+    this.isRecoveringFromOverflow = true;
+
+    // Notify the user that recovery is in progress
+    this.callbacks.onResponse('Context window exceeded — recovering by trimming oversized messages...', false);
+
+    try {
+      // Remove the error assistant message (last message)
+      const trimmed = messages.slice(0, -1);
+
+      // Walk backward through recent messages and replace oversized content.
+      // 10K tokens ≈ 40K chars — anything larger is a candidate for replacement.
+      const TOKEN_THRESHOLD = 10000;
+      const CHAR_THRESHOLD = TOKEN_THRESHOLD * 4;
+      let replaced = 0;
+
+      for (let i = trimmed.length - 1; i >= 0 && replaced < 5; i--) {
+        const msg = trimmed[i] as any;
+        if (!Array.isArray(msg.content)) continue;
+
+        let msgSize = 0;
+        for (const block of msg.content) {
+          if (block.type === 'text' && block.text) msgSize += block.text.length;
+          if (block.type === 'image' && block.data) msgSize += block.data.length;
+        }
+
+        if (msgSize > CHAR_THRESHOLD) {
+          // Replace content with a placeholder
+          const role = msg.role === 'toolResult' ? 'tool result' : msg.role;
+          trimmed[i] = {
+            ...msg,
+            content: [{
+              type: 'text' as const,
+              text: `[Content removed: ${role} was too large for context window (${Math.round(msgSize / 1000)}K chars). The operation completed but output could not be retained.]`,
+            }],
+          };
+          replaced++;
+          log.info('Replaced oversized message', { index: i, role: msg.role, size: msgSize });
+        }
+      }
+
+      // Replace the agent's message history with the trimmed version
+      this.agent.replaceMessages(trimmed);
+
+      // Re-prompt with an explanation so the agent can adapt
+      const explanation = replaced > 0
+        ? `[System: Context overflow recovered. ${replaced} oversized message(s) were replaced with placeholders to fit within the context window. The conversation continues — you may need to re-read files or re-run commands if their output was removed.]`
+        : `[System: Context overflow recovered. Older messages were trimmed. The conversation continues — compaction will summarize history on the next turn.]`;
+
+      this.agent.prompt(explanation).catch((err) => {
+        log.error('Recovery re-prompt failed', { folder: this.scoop.folder, error: err instanceof Error ? err.message : String(err) });
+        this.isRecoveringFromOverflow = false;
+        this.callbacks.onError(`Context overflow recovery failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    } catch (err) {
+      log.error('Recovery failed', { folder: this.scoop.folder, error: err instanceof Error ? err.message : String(err) });
+      this.isRecoveringFromOverflow = false;
+      this.callbacks.onError(`Context overflow recovery failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

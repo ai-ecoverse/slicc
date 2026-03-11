@@ -494,21 +494,28 @@ Cone-only. Update the shared global memory file (`/shared/CLAUDE.md`).
 
 ## Context Compaction
 
-To prevent context overflow (200K token limit), the agent applies automatic compaction before each LLM call.
+LLM-summarized context compaction (`src/core/context-compaction.ts`), aligned with pi-mono's strategy.
 
-**Thresholds** (`src/core/context-compaction.ts`):
+**How it works**: When context approaches the token limit, an LLM call generates a structured summary of older messages, which replaces them as a single user message. This preserves the conversation prefix (Anthropic cache-friendly) and keeps recent messages intact.
+
+**Constants** (from pi-coding-agent's `DEFAULT_COMPACTION_SETTINGS`):
 
 ```typescript
-const MAX_RESULT_CHARS = 8000;        // ~2000 tokens per tool result
-const MAX_CONTEXT_CHARS = 600000;     // ~150K tokens total
+contextWindow = 200000;       // Claude's context window
+reserveTokens = 16384;        // Headroom below context limit
+keepRecentTokens = 20000;     // Recent messages to preserve
 ```
 
-**Two-phase compaction**:
+**Algorithm**:
 
-1. **Result truncation**: Tool results > 8000 chars are truncated with `\n... (truncated)` marker
-2. **Message dropping**: If total context exceeds 600K chars, old messages are dropped
+1. **Threshold check**: Triggers when estimated tokens exceed `contextWindow - reserveTokens` (~183K tokens)
+2. **Cut point**: Walks backward from newest, keeping ~`keepRecentTokens` of recent messages. Never splits assistant+toolResult pairs.
+3. **LLM summarization**: Calls `generateSummary()` to produce a structured summary (Goal, Progress, Key Decisions, Next Steps, Critical Context)
+4. **Fallback**: If LLM call fails or no API key, falls back to naive message dropping with a compaction marker
 
-**Preservation**: First 2 messages (system context) and last 10 messages (recent context) are always kept.
+**No truncation**: Tool results pass through at full fidelity. Image tags (`<img:...>`) are parsed into `ImageContent` blocks by `tool-adapter.ts`, but neither text nor image content is truncated. Full-size data is preserved until compaction summarizes older messages.
+
+**Overflow recovery**: If the context still exceeds the API limit after compaction (e.g., due to token estimation inaccuracy, system prompt size, or multiple large recent results), `ScoopContext` catches the "prompt too long" error via `isContextOverflow()` from pi-ai, replaces oversized messages (>40K chars) with placeholders, and re-prompts the agent with an explanation. Limited to 1 retry to prevent infinite loops.
 
 ---
 
@@ -539,7 +546,7 @@ The agent can inspect `isError` to determine if a tool call succeeded or needs r
 - **BrowserAPI-backed automation**: Screenshots and evaluations are fast (<100ms on local tabs). Network delays dominate remote sites whether invoked via `playwright-cli`, `playwright`, or `puppeteer`
 - **javascript**: Sandbox message passing adds ~10ms overhead per call
 - **read_file**: LineNumber formatting is O(file size); reading huge files (>1MB) may be slow
-- **context-compaction**: Runs before every LLM call; O(message count), not a bottleneck
+- **context-compaction**: Runs before every LLM call; threshold check is O(message count). When compaction triggers, an LLM call adds latency but only happens when approaching context limits.
 
 ---
 

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { parseToolResultContent } from './tool-adapter.js';
+import { parseToolResultContent, adaptTool } from './tool-adapter.js';
+import type { ToolDefinition } from './types.js';
 
 describe('parseToolResultContent', () => {
   it('returns plain text as a single TextContent block', () => {
@@ -82,5 +83,74 @@ describe('parseToolResultContent', () => {
     expect(blocks).toHaveLength(2);
     expect(blocks[0]).toEqual({ type: 'text', text: '/workspace/screenshot.png (500 KB)' });
     expect(blocks[1]).toEqual({ type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo' });
+  });
+});
+
+describe('adaptTool', () => {
+  it('passes through tool results at full size (no truncation)', async () => {
+    const hugeContent = 'x'.repeat(100000);
+    const mockTool: ToolDefinition = {
+      name: 'test_tool',
+      description: 'A test tool',
+      inputSchema: { type: 'object', properties: {} },
+      execute: async () => ({ content: hugeContent, isError: false }),
+    };
+
+    const adapted = adaptTool(mockTool);
+    const result = await adapted.execute('call-1', {});
+
+    const textBlock = (result.content as any[]).find((c: any) => c.type === 'text');
+    expect(textBlock.text).toBe(hugeContent);
+  });
+
+  it('preserves isError flag', async () => {
+    const mockTool: ToolDefinition = {
+      name: 'test_tool',
+      description: 'A test tool',
+      inputSchema: { type: 'object', properties: {} },
+      execute: async () => ({ content: 'error output', isError: true }),
+    };
+
+    const adapted = adaptTool(mockTool);
+    const result = await adapted.execute('call-1', {});
+
+    expect(result.details).toEqual({ isError: true });
+  });
+
+  it('parses image tags into ImageContent blocks', async () => {
+    const content = 'Screenshot saved\n<img:data:image/png;base64,abc123>';
+    const mockTool: ToolDefinition = {
+      name: 'test_tool',
+      description: 'A test tool',
+      inputSchema: { type: 'object', properties: {} },
+      execute: async () => ({ content, isError: false }),
+    };
+
+    const adapted = adaptTool(mockTool);
+    const result = await adapted.execute('call-1', {});
+
+    const blocks = result.content as any[];
+    expect(blocks[0]).toEqual({ type: 'text', text: 'Screenshot saved' });
+    expect(blocks[1]).toEqual({ type: 'image', mimeType: 'image/png', data: 'abc123' });
+  });
+
+  it('preserves large image blocks at full size', async () => {
+    const largeBase64 = 'A'.repeat(200000);
+    const content = `Screenshot saved\n<img:data:image/png;base64,${largeBase64}>`;
+    const mockTool: ToolDefinition = {
+      name: 'test_tool',
+      description: 'A test tool',
+      inputSchema: { type: 'object', properties: {} },
+      execute: async () => ({ content, isError: false }),
+    };
+
+    const adapted = adaptTool(mockTool);
+    const result = await adapted.execute('call-1', {});
+
+    const blocks = result.content as any[];
+    expect(blocks[0]).toEqual({ type: 'text', text: 'Screenshot saved' });
+    expect(blocks[1].type).toBe('image');
+    expect(blocks[1].data).toBe(largeBase64);
+    expect(blocks[1].data.length).toBe(200000);
   });
 });

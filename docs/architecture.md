@@ -51,7 +51,7 @@
 | `types.ts` | Legacy ToolDefinition, ToolResult, AgentConfig, SessionData |
 | `tool-adapter.ts` | Wraps legacy ToolDefinition as pi-compatible AgentTool |
 | `tool-registry.ts` | Registry of active tools with lookup by name |
-| `context-compaction.ts` | Truncates oversized results + drops old messages to stay under 200K token limit |
+| `context-compaction.ts` | LLM-summarized context compaction (pi-mono aligned) with naive-drop fallback |
 | `logger.ts` | createLogger factory with level filtering (DEBUG dev, ERROR prod) |
 | `session.ts` | IndexedDB session storage (`agent-sessions` DB) |
 | `mime-types.ts` | MIME type mappings (html, css, js, json, image, etc.) |
@@ -339,7 +339,7 @@ Scoop removal / app clear
 - Key: scoop JID (e.g., `cone`, `analysis-scoop`)
 - Value: `SessionData` (`AgentMessage[]` + config + timestamps)
 - Lifecycle: Loaded on scoop init, saved on agent_end (error-tolerant), deleted on scoop removal
-- Design: Messages are model-agnostic and work with any LLM. `compactContext` trims at prompt time (existing mechanism), so large sessions don't cause token bloat.
+- Design: Messages are model-agnostic and work with any LLM. `createCompactContext()` provides LLM-summarized compaction at prompt time, so large sessions don't cause token bloat.
 
 ## IndexedDB Databases
 
