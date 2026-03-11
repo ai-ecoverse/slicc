@@ -21,6 +21,10 @@ npm run build:extension # Build extension into dist/extension/ (load in chrome:/
 # Shared
 npm run typecheck       # Typecheck browser + Node targets
 npm run test            # Vitest run (all tests)
+npx wrangler dev        # Run the Cloudflare Worker tray hub locally (requires Wrangler)
+npx wrangler deploy --env staging  # Deploy the staging tray hub from wrangler.jsonc
+npx wrangler deploy     # Deploy the Cloudflare Worker tray hub from wrangler.jsonc
+WORKER_BASE_URL=https://... npx vitest run src/worker/deployed.test.ts  # Smoke-test a deployed tray hub
 npm run test:watch      # Vitest watch mode
 npx vitest run src/fs/virtual-fs.test.ts  # Run a single test file
 ```
@@ -127,6 +131,9 @@ Key files:
 - **CLI/Electron Node target** (tsconfig.cli.json): Only src/cli/. Compiled by TSC to dist/cli/, module resolution: NodeNext. Runs in Node/Electron.
 - **Extension bundle** (vite.config.extension.ts): Same browser bundle with extension-specific entry points (service-worker.js, offscreen.html, sandbox.html, manifest.json) plus bundled Pyodide. Output: dist/extension/.
 
+Cloud tray hub scaffold:
+- **Cloudflare Worker / Durable Object** (`wrangler.jsonc` + `src/worker/`): separate Wrangler-managed runtime for `POST /tray`, controller attach, leader-only WebSocket control, deployed smoke tests, and webhook ingress rejection.
+
 ### Layer Stack (bottom-up)
 
 ```
@@ -141,6 +148,8 @@ Virtual Filesystem (src/fs/)
         -> UI (src/ui/)
           -> CLI Server / Electron (src/cli/) | Extension (src/extension/)
 ```
+
+Cloud tray hub runtime lives alongside the main app in `src/worker/` and is deployed separately via Wrangler.
 
 ### The Cone and Scoops (src/scoops/)
 
@@ -360,6 +369,8 @@ npm run build:extension    # Extension build (Vite with extension config)
 Do not skip any. A typecheck pass does not guarantee the builds succeed (Vite bundling can fail independently). See `docs/development.md` for the full checklist.
 
 **CI**: These same four gates run automatically on every PR to `main` via GitHub Actions (`.github/workflows/ci.yml`).
+
+**Worker deploy CI**: the tray hub also has dedicated staging/production workflows (`.github/workflows/worker-staging.yml`, `.github/workflows/worker-production.yml`) that deploy with Wrangler and then run `src/worker/deployed.test.ts` against the live Worker URL configured in GitHub environment variables.
 
 ## Git Integration (src/git/)
 Git support via isomorphic-git with LightningFS as the backing store. GitCommands class provides CLI-like interface for git operations (init, clone, add, commit, status, log, branch, checkout, diff, remote, fetch, pull, push, config, rev-parse). Registered as a custom command in just-bash so it works in compound commands and via the bash tool.

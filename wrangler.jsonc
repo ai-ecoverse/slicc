@@ -1,0 +1,34 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "slicc-tray-hub",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-03-11",
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "TRAY_HUB",
+        "class_name": "SessionTrayDurableObject"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["SessionTrayDurableObject"]
+    }
+  ],
+  "env": {
+    "staging": {
+      "workers_dev": true,
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "TRAY_HUB",
+            "class_name": "SessionTrayDurableObject"
+          }
+        ]
+      }
+    }
+  }
+}

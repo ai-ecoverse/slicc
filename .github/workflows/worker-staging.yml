@@ -1,0 +1,45 @@
+name: Worker Staging
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/worker/**'
+      - 'wrangler.jsonc'
+      - '.github/workflows/worker-staging.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-staging:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: staging
+      url: ${{ vars.WORKER_BASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Verify worker unit tests before deploy
+        run: npx vitest run src/worker/index.test.ts
+
+      - name: Deploy staging worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler deploy --env staging
+
+      - name: Run deployed smoke test against staging
+        env:
+          WORKER_BASE_URL: ${{ vars.WORKER_BASE_URL }}
+        run: npx vitest run src/worker/deployed.test.ts

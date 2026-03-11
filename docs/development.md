@@ -19,6 +19,10 @@ Build, run, test, and debug SLICC locally.
 | `npm run test` | Vitest run (all tests) | Run full test suite; CI validation |
 | `npm run test:watch` | Vitest watch mode | Iterate on test changes; TDD workflow |
 | `npx vitest run src/fs/virtual-fs.test.ts` | Run single test file | Debug a specific module |
+| `npx wrangler dev` | Run the Cloudflare Worker tray hub locally (if Wrangler is installed/authenticated) | Exercise `src/worker/` against a real Worker runtime |
+| `npx wrangler deploy --env staging` | Deploy the staging Cloudflare Worker tray hub using `wrangler.jsonc` | Publish the staging tray hub used by GitHub Actions |
+| `npx wrangler deploy` | Deploy the production Cloudflare Worker tray hub using `wrangler.jsonc` | Publish the production tray hub |
+| `WORKER_BASE_URL=https://... npx vitest run src/worker/deployed.test.ts` | Run the deployed tray-hub smoke test | Verify the live Worker contract (`POST /tray`, controller attach, leader WebSocket, webhook responses) |
 
 ## Ports (CLI Mode Only)
 
@@ -67,6 +71,47 @@ Manual verification in the relevant runtimes:
   - The overlay launcher appears in the target app and survives page navigation via reinjection
 - [ ] No console errors in DevTools (F12 in CLI mode)
 - [ ] No TypeScript errors in browser console (watch CLI stdout)
+
+## Cloudflare Worker Deploy Pipeline
+
+The tray hub now assumes **`POST /tray` is the only canonical tray-creation endpoint**. `POST /session` and `POST /trays` are intentionally rejected with `410` so callers move to the single public route.
+
+### GitHub Actions environments to create
+
+Create two GitHub environments in the repository settings:
+
+- `staging`
+- `production`
+
+For **each** environment, add:
+
+- **Secret:** `CLOUDFLARE_API_TOKEN`
+  - should have permission to deploy Workers and manage Durable Objects for the target account
+- **Variable:** `CLOUDFLARE_ACCOUNT_ID`
+  - the Cloudflare account ID used by Wrangler in CI
+- **Variable:** `WORKER_BASE_URL`
+  - full base URL for the deployed Worker used by the post-deploy smoke test
+  - examples:
+    - staging: `https://slicc-tray-hub-staging.<your-subdomain>.workers.dev`
+    - production: `https://slicc-tray-hub.<your-subdomain>.workers.dev`
+
+### Workflow behavior
+
+- `.github/workflows/worker-staging.yml`
+  - runs on pull requests to `main` that touch the Worker/Wrangler config
+  - skips forked PRs because GitHub does not expose deployment secrets there
+  - runs `src/worker/index.test.ts`, deploys with `wrangler deploy --env staging`, then runs `src/worker/deployed.test.ts`
+- `.github/workflows/worker-production.yml`
+  - runs on pushes to `main` that touch the Worker/Wrangler config
+  - deploys the default production Worker, then runs the same deployed smoke test against the production URL
+
+### Local validation commands
+
+Use these before relying on CI:
+
+- `npx wrangler deploy --dry-run --env staging`
+- `npx wrangler deploy --dry-run`
+- `WORKER_BASE_URL=<deployed-worker-url> npx vitest run src/worker/deployed.test.ts`
 
 ## Extension Testing Steps
 
@@ -256,6 +301,7 @@ src/
   ui/              Chat, terminal, file browser UI
   cli/             Express server + Chrome launcher
   extension/       Chrome Manifest V3 extension files
+  worker/          Cloudflare Worker + Durable Object tray hub
   shims/           Node module shims for browser bundle
   defaults/        Bundled default skills and workspace
   skills/          Skill installation engine

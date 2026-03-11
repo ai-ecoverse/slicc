@@ -16,6 +16,7 @@
 | UI | `src/ui/` | Chat, Terminal, Files, Memory panels | `main.ts` | `types.test.ts` |
 | CLI / Electron Node Runtime | `src/cli/` | Express server, Chrome launcher, Electron float entrypoint | `index.ts` | `electron-runtime.test.ts` |
 | Extension | `src/extension/` | Chrome Manifest V3 entry point | `service-worker.ts` | N/A |
+| Cloud Tray Hub | `src/worker/` | Cloudflare Worker + Durable Object control-plane skeleton + deployed smoke test | `index.ts` | `index.test.ts`, `deployed.test.ts` |
 | Providers | `src/providers/` | Custom API provider integrations | `bedrock-camp.ts` | N/A |
 
 ## Source File Tree

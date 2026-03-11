@@ -1,0 +1,126 @@
+import { describe, expect, it } from 'vitest';
+import { WebSocket } from 'ws';
+
+interface CreateTrayResponse {
+  trayId: string;
+  capabilities: {
+    join: { url: string };
+    controller: { url: string };
+    webhook: { url: string };
+  };
+}
+
+interface ControllerAttachResponse {
+  role: string;
+  leaderKey?: string;
+  websocket?: { url: string } | null;
+}
+
+const workerBaseUrl = process.env.WORKER_BASE_URL;
+const describeIfConfigured = workerBaseUrl ? describe : describe.skip;
+
+describeIfConfigured('deployed tray worker', () => {
+  it('exercises the phase 1 flow against a deployed worker', async () => {
+    const baseUrl = new URL(workerBaseUrl!);
+
+    const rootResponse = await fetch(baseUrl);
+    expect(rootResponse.status).toBe(200);
+    await expect(rootResponse.json()).resolves.toMatchObject({
+      routes: ['POST /tray', 'GET|POST /join/:token', 'GET|POST /controller/:token', 'POST /webhook/:token'],
+    });
+
+    const legacyCreate = await fetch(new URL('/session', baseUrl), { method: 'POST' });
+    expect(legacyCreate.status).toBe(410);
+    await expect(legacyCreate.json()).resolves.toMatchObject({
+      code: 'TRAY_CREATE_ENDPOINT_MOVED',
+      canonical: 'POST /tray',
+    });
+
+    const createResponse = await fetch(new URL('/tray', baseUrl), { method: 'POST' });
+    expect(createResponse.status).toBe(201);
+    const created = (await createResponse.json()) as CreateTrayResponse;
+
+    const joinResponse = await fetch(created.capabilities.join.url);
+    expect(joinResponse.status).toBe(200);
+    await expect(joinResponse.json()).resolves.toMatchObject({
+      trayId: created.trayId,
+      capability: 'join',
+    });
+
+    const attachResponse = await fetch(created.capabilities.controller.url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ controllerId: 'ci-live-check', runtime: 'github-actions' }),
+    });
+    expect(attachResponse.status).toBe(200);
+    const controller = (await attachResponse.json()) as ControllerAttachResponse;
+    expect(controller.role).toBe('leader');
+    expect(controller.leaderKey).toBeTruthy();
+    expect(controller.websocket?.url).toBeTruthy();
+
+    const webhookBeforeLeader = await fetch(created.capabilities.webhook.url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ hello: 'world' }),
+    });
+    expect(webhookBeforeLeader.status).toBe(410);
+    await expect(webhookBeforeLeader.json()).resolves.toMatchObject({ code: 'NO_LIVE_LEADER' });
+
+    const socket = await openWebSocket(controller.websocket!.url);
+    const connected = await waitForJsonMessage(socket);
+    expect(connected).toMatchObject({
+      type: 'leader.connected',
+      trayId: created.trayId,
+      controllerId: 'ci-live-check',
+    });
+
+    socket.send(JSON.stringify({ type: 'ping' }));
+    const pong = await waitForJsonMessage(socket);
+    expect(pong).toMatchObject({ type: 'pong', trayId: created.trayId });
+
+    const webhookWithLeader = await fetch(created.capabilities.webhook.url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ hello: 'leader' }),
+    });
+    expect(webhookWithLeader.status).toBe(501);
+    await expect(webhookWithLeader.json()).resolves.toMatchObject({ code: 'WEBHOOK_FORWARDING_NOT_IMPLEMENTED' });
+
+    socket.close();
+  }, 30_000);
+});
+
+function openWebSocket(url: string): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(url);
+    socket.once('open', () => resolve(socket));
+    socket.once('error', reject);
+  });
+}
+
+function waitForJsonMessage(socket: WebSocket): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const onMessage = (data: Buffer | ArrayBuffer | Buffer[]) => {
+      cleanup();
+      try {
+        const raw = Array.isArray(data) ? Buffer.concat(data).toString('utf8') : Buffer.from(data as ArrayBuffer).toString('utf8');
+        resolve(JSON.parse(raw) as Record<string, unknown>);
+      } catch (error) {
+        reject(error);
+      }
+    };
+
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+
+    const cleanup = () => {
+      socket.off('message', onMessage);
+      socket.off('error', onError);
+    };
+
+    socket.on('message', onMessage);
+    socket.on('error', onError);
+  });
+}
