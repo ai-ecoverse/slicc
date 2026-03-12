@@ -14,7 +14,9 @@ import { createLogger } from '../core/index.js';
 import type { VirtualFS } from '../fs/index.js';
 import { installSkillFromDrop } from '../skills/install-from-drop.js';
 import { findDroppedSkillTransferFile, hasDroppedFiles } from './skill-drop.js';
-// Register custom API providers (side-effect import triggers registerApiProvider)
+// Register custom API providers (side-effect import triggers registerApiProvider).
+// IMPORTANT: Any new provider added here must also be imported in src/extension/offscreen.ts
+// — the extension agent engine runs in the offscreen document, not in this file.
 import '../providers/bedrock-camp.js';
 import { BrowserAPI } from '../cdp/index.js';
 import { Orchestrator } from '../scoops/index.js';
