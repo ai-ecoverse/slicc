@@ -9,6 +9,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm run dev:full        # Full dev mode: Vite HMR + Chrome + CDP proxy (port 3000)
 npm run dev:electron -- /Applications/Slack.app  # Main CLI in Electron attach mode
 npm run dev             # Vite dev server only (no Chrome/CDP)
+npm run qa:setup        # Build dist/extension and scaffold dedicated leader/follower/extension Chrome QA profiles
+npm run qa:leader       # Launch CLI dev mode with the isolated leader Chrome profile
+npm run qa:follower     # Launch CLI dev mode with the isolated follower Chrome profile
+npm run qa:extension    # Rebuild/load the unpacked extension in the isolated extension Chrome profile
 npm run build           # Production build (UI via Vite + CLI/Electron Node target via TSC)
 npm run build:ui        # Vite build only into dist/ui/
 npm run build:cli       # TSC build only into dist/cli/ (CLI server + Electron entrypoint)
@@ -303,7 +307,7 @@ A Service Worker that intercepts `/preview/*` fetch requests and serves content 
 - MIME type mapping via inline `getMimeType()` (same logic as `src/core/mime-types.ts` but inlined since the SW is a separate bundle)
 
 ### CLI Server (src/cli/index.ts)
-Express server that launches Chrome with remote debugging, serves the UI (Vite middleware in dev, static files in prod), and runs a WebSocket proxy at /cdp. Provides `/api/fetch-proxy` endpoint for cross-origin fetch (replaces CORS proxy). Single shared Chrome WebSocket connection with client message buffering. Console forwarder pipes in-page console output to CLI stdout. In Electron mode, this same server is reused in `--serve-only` mode instead of launching Chrome.
+Express server that launches Chrome with remote debugging, serves the UI (Vite middleware in dev, static files in prod), and runs a WebSocket proxy at /cdp. Provides `/api/fetch-proxy` endpoint for cross-origin fetch (replaces CORS proxy). Single shared Chrome WebSocket connection with client message buffering. Console forwarder pipes in-page console output to CLI stdout. In Electron mode, this same server is reused in `--serve-only` mode instead of launching Chrome. QA/manual-verification flows use `src/cli/chrome-launch.ts` plus `--profile=<leader|follower|extension>` to select dedicated `.qa/chrome/*` user-data directories and auto-load `dist/extension` for the extension profile.
 
 ### Context Compaction (src/core/context-compaction.ts)
 To prevent context overflow (200K token limit), the agent applies two-phase message compaction before each API call:

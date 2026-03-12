@@ -9,6 +9,10 @@ Build, run, test, and debug SLICC locally.
 | `npm run dev:full` | Full dev mode: Vite HMR + Chrome + CDP proxy (port 3000) | Interactive development; live reload; test browser features |
 | `npm run dev:electron -- /Applications/Slack.app` | Launch the main CLI in Electron attach mode against an Electron app | Electron overlay/runtime work |
 | `npm run dev` | Vite dev server only (no Chrome/CDP) | Quick UI iteration without launching browser |
+| `npm run qa:setup` | Build the extension and scaffold dedicated `leader` / `follower` / `extension` Chrome QA profiles | First-time manual verification setup; reset profile colors/state |
+| `npm run qa:leader` | Launch the CLI with the dedicated leader Chrome profile | Manual tray-leader verification with isolated browser state |
+| `npm run qa:follower` | Launch the CLI with the dedicated follower Chrome profile | Manual follower-join verification with isolated browser state |
+| `npm run qa:extension` | Rebuild the extension, then launch the CLI with the dedicated extension profile auto-loading `dist/extension` | Extension verification without re-loading unpacked extension by hand |
 | `npm run build` | Production build: Vite UI + TSC CLI/Electron Node target | Pre-deployment validation; final bundle check |
 | `npm run build:ui` | Vite build only into `dist/ui/` | Build UI assets separately |
 | `npm run build:cli` | TSC build only into `dist/cli/` | Build CLI server + Electron attach helpers separately |
@@ -24,7 +28,7 @@ Build, run, test, and debug SLICC locally.
 | `npx wrangler deploy` | Deploy the production Cloudflare Worker tray hub using `wrangler.jsonc` | Publish the production tray hub |
 | `WORKER_BASE_URL=https://... npx vitest run src/worker/deployed.test.ts` | Run the deployed tray-hub smoke test | Verify the live Worker contract (`POST /tray`, controller attach, leader WebSocket, webhook responses) |
 
-When `WORKER_BASE_URL` is set for the CLI/Electron server, the standalone browser runtime now exposes it at `/api/runtime-config` and the cone runtime will automatically create/attach a tray leader session on startup. Passing `--lead` to the CLI launches Chrome with the canonical `?tray=<worker-base-url>` query, and successful leader attach rewrites the visible URL to `?tray=<worker-base-url>/tray/<trayId>`. Extension/offscreen builds can use `VITE_WORKER_BASE_URL`, persisted runtime storage, or URL overrides via `tray` (canonical) plus legacy `lead` / `trayWorkerUrl` for the same leader-join path. `GET /join/:token` now reports readiness plus the supported bootstrap transport (`409 FOLLOWER_JOIN_NOT_READY` before a live leader, `200` with `signaling.transport = 'http-poll'` once the leader WebSocket is live), while **`POST /join/:token` remains the follower HTTP contract**: initial attach returns `result.action = wait|signal|fail`, and subsequent `poll` / `answer` / `ice-candidate` / `retry` actions drive the offer/answer/ICE bootstrap without requiring follower-owned tray WebSockets.
+When `WORKER_BASE_URL` is set for the CLI/Electron server, the standalone browser runtime now exposes it at `/api/runtime-config` and the cone runtime will automatically create/attach a tray leader session on startup. Passing `--lead` to the CLI launches Chrome with the canonical `?tray=<worker-base-url>` query, and successful leader attach rewrites the visible URL to `?tray=<worker-base-url>/tray/<trayId>`. Passing `--join <join-url>` launches Chrome with the canonical `?tray=<join-url>` follower capability instead; the CLI validates that the value parses as a tray `.../join/<trayId>.<secret>` URL and strips any hash/query suffixes before launch. Extension/offscreen builds can use `VITE_WORKER_BASE_URL`, persisted runtime storage, or URL overrides via `tray` (canonical) plus legacy `lead` / `trayWorkerUrl` for the same leader-join path. `GET /join/:token` now reports readiness plus the supported bootstrap transport (`409 FOLLOWER_JOIN_NOT_READY` before a live leader, `200` with `signaling.transport = 'http-poll'` once the leader WebSocket is live), while **`POST /join/:token` remains the follower HTTP contract**: initial attach returns `result.action = wait|signal|fail`, and subsequent `poll` / `answer` / `ice-candidate` / `retry` actions drive the offer/answer/ICE bootstrap without requiring follower-owned tray WebSockets.
 
 ## Ports (CLI Mode Only)
 
@@ -63,6 +67,10 @@ Manual verification in the relevant runtimes:
   - Launch Chrome automatically
   - Navigate to http://localhost:3000
   - Interact with UI; check functionality
+- [ ] Feature works with QA Chrome profiles when browser isolation matters (`npm run qa:setup`, then `qa:leader` / `qa:follower` / `qa:extension`)
+  - Dedicated profile colors are visible
+  - Leader/follower state stays isolated between windows
+  - Extension profile auto-loads `dist/extension`
 - [ ] Feature works in extension mode (load `dist/extension/` unpacked in `chrome://extensions`)
   - Load `dist/extension/` as unpacked extension
   - Open side panel
@@ -114,6 +122,8 @@ Use these before relying on CI:
 - `WORKER_BASE_URL=<deployed-worker-url> npx vitest run src/worker/deployed.test.ts`
 
 ## Extension Testing Steps
+
+If you want a reusable browser profile instead of re-loading the unpacked extension by hand every time, run `npm run qa:setup` once and use `npm run qa:extension` for subsequent launches.
 
 1. **Build extension bundle**
    ```bash
