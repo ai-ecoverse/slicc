@@ -17,7 +17,7 @@ function hostHelp(): { stdout: string; stderr: string; exitCode: number } {
 
 Usage: host
 
-Shows the current leader tray state and, when available, the canonical tray launch URL.
+Shows the current leader tray state and, when available, the canonical tray launch URL and join URL.
 `,
     stderr: '',
     exitCode: 0,
@@ -34,10 +34,12 @@ function formatHostOutput(status: LeaderTrayRuntimeStatus, locationHref: string 
         ? buildTrayLaunchUrl(locationHref, status.session.workerBaseUrl, status.session.trayId)
         : null;
     lines.push(`launch_url: ${launchUrl ?? 'unavailable'}`);
+    lines.push(`join_url: ${status.session.joinUrl}`);
     lines.push(`worker_base_url: ${status.session.workerBaseUrl}`);
     lines.push(`tray_id: ${status.session.trayId}`);
   } else {
     lines.push('launch_url: unavailable');
+    lines.push('join_url: unavailable');
   }
 
   if (status.error) {

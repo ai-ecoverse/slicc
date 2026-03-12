@@ -12,7 +12,7 @@ describe('host command', () => {
     expect(result.stdout).toContain('display the current tray host status');
   });
 
-  it('prints the leader launch URL and tray details', async () => {
+  it('prints the leader launch URL, join URL, and tray details', async () => {
     const cmd = createHostCommand({
       getStatus: () => ({
         state: 'leader',
@@ -37,6 +37,7 @@ describe('host command', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('status: leader');
     expect(result.stdout).toContain('launch_url: https://tray.example.com/base/tray/tray-123');
+    expect(result.stdout).toContain('join_url: https://tray.example.com/join/tray-123');
     expect(result.stdout).toContain('worker_base_url: https://tray.example.com/base');
     expect(result.stdout).toContain('tray_id: tray-123');
   });
@@ -65,6 +66,7 @@ describe('host command', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('status: error');
     expect(result.stdout).toContain('launch_url: http://localhost:3000/?scoop=cone&tray=https%3A%2F%2Ftray.example.com%2Fbase%2Ftray%2Ftray-123');
+    expect(result.stdout).toContain('join_url: https://tray.example.com/join/tray-123');
     expect(result.stdout).toContain('error: boom');
   });
 
@@ -75,7 +77,7 @@ describe('host command', () => {
     }).execute([], {} as never);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe('status: error\nlaunch_url: unavailable\nerror: boom\n');
+    expect(result.stdout).toBe('status: error\nlaunch_url: unavailable\njoin_url: unavailable\nerror: boom\n');
   });
 
   it('rejects unsupported arguments', async () => {
