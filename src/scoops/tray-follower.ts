@@ -60,7 +60,7 @@ export async function attachTrayFollower(options: FollowerAttachOptions): Promis
   });
 
   const body = await readFollowerAttachResponse(response);
-  log.debug('Follower tray attach response', { trayId: body.trayId, action: body.result.action, code: body.result.code, participantCount: body.participantCount });
+  log.info('Follower tray attach response', { trayId: body.trayId, action: body.result.action, code: body.result.code, participantCount: body.participantCount });
   return normalizeFollowerAttachResponse(body);
 }
 
