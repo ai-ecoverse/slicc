@@ -47,18 +47,19 @@ function findChrome(): string | null {
   const envPath = process.env['CHROME_PATH'];
   if (envPath && existsSync(envPath)) return envPath;
 
+
   const candidates: Record<string, string[]> = {
     darwin: [
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
       '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
       '/Applications/Chromium.app/Contents/MacOS/Chromium',
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
     ],
     linux: [
-      '/usr/bin/google-chrome',
-      '/usr/bin/google-chrome-stable',
       '/usr/bin/chromium',
       '/usr/bin/chromium-browser',
       '/snap/bin/chromium',
+      '/usr/bin/google-chrome',
+      '/usr/bin/google-chrome-stable',
     ],
     win32: [
       `${process.env['LOCALAPPDATA']}\\Google\\Chrome\\Application\\chrome.exe`,
