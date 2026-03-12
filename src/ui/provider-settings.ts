@@ -114,7 +114,8 @@ export function getProviderModels(providerId: string): Model<Api>[] {
     }
     const effectiveProvider = providerId === 'azure-ai-foundry' ? 'anthropic' : providerId;
     return getModelsDynamic(effectiveProvider);
-  } catch {
+  } catch (err) {
+    log.error('Failed to load models', { providerId, error: err instanceof Error ? err.message : String(err) });
     return [];
   }
 }

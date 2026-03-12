@@ -90,7 +90,9 @@ async function launchOAuthExtension(authorizeUrl: string): Promise<string | null
     (chrome as any).runtime.sendMessage({
       source: 'panel',
       payload: { type: 'oauth-request', providerId: 'oauth', authorizeUrl },
-    }).catch(() => {});
+    }).catch((err: unknown) => {
+      console.error('[oauth-service] Failed to send OAuth request to service worker:', err);
+    });
 
     // Timeout after 2 minutes (same as CLI launcher)
     const timer = setTimeout(() => {

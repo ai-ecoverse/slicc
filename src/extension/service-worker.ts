@@ -88,7 +88,9 @@ chrome.runtime.onMessage.addListener(
             chrome.runtime.sendMessage({
               source: 'service-worker' as const,
               payload: result,
-            }).catch(() => {});
+            }).catch((e) => {
+              console.error('[slicc-sw] Failed to send OAuth result:', e);
+            });
           })
           .catch((err) => {
             chrome.runtime.sendMessage({
@@ -98,7 +100,9 @@ chrome.runtime.onMessage.addListener(
                 providerId: oauthMsg.providerId,
                 error: err instanceof Error ? err.message : String(err),
               } satisfies OAuthResultMsg,
-            }).catch(() => {});
+            }).catch((e) => {
+              console.error('[slicc-sw] Failed to send OAuth error:', e);
+            });
           });
         return false;
       }
