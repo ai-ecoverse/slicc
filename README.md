@@ -263,6 +263,17 @@ npm run dev:full
 
 The `dev:full` command starts both the CLI server and Vite dev server, launches Chrome, and opens the agent UI.
 
+To launch directly into standalone tray leader mode, pass `--lead` and provide a worker base URL either inline or via `WORKER_BASE_URL`:
+
+```bash
+WORKER_BASE_URL=https://tray.example.com/base npm run dev:full -- --lead
+
+# or against the built CLI:
+npm run start -- --lead=https://tray.example.com/base
+```
+
+The `--lead` flow opens the browser with the canonical `?tray=<worker-base-url>` query. Once the leader attaches, the browser URL is rewritten to `?tray=<worker-base-url>/tray/<trayId>` so the active tray/session id stays visible. Inside the terminal, run `host` to print the current leader status and launch URL.
+
 ### Pre-configuring LLM Providers
 
 To skip the settings dialog on first launch, create a `providers.json` file at the project root:

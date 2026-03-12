@@ -10,6 +10,7 @@ import {
   ElectronOverlayInjector,
   launchElectronApp,
 } from './electron-controller.js';
+import { resolveCliBrowserLaunchUrl } from './launch-url.js';
 import { parseCliRuntimeFlags } from './runtime-flags.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
@@ -282,6 +283,7 @@ async function attachConsoleForwarder(
 
 const CDP_PORT = RUNTIME_FLAGS.cdpPort;
 const SERVE_PORT = parseInt(process.env['PORT'] ?? '3000', 10);
+const SERVE_ORIGIN = `http://localhost:${SERVE_PORT}`;
 
 async function main() {
   if (DEV_MODE) {
@@ -342,12 +344,22 @@ async function main() {
     }
     console.log(`Found Chrome: ${chromePath}`);
 
+    const browserLaunchUrl = resolveCliBrowserLaunchUrl({
+      serveOrigin: SERVE_ORIGIN,
+      lead: RUNTIME_FLAGS.lead,
+      leadWorkerBaseUrl: RUNTIME_FLAGS.leadWorkerBaseUrl,
+      envWorkerBaseUrl: process.env['WORKER_BASE_URL'] ?? null,
+    });
+    if (RUNTIME_FLAGS.lead) {
+      console.log(`Lead launch URL: ${browserLaunchUrl}`);
+    }
+
     const chromeArgs = [
       `--remote-debugging-port=${CDP_PORT}`,
       '--no-first-run',
       '--no-default-browser-check',
       `--user-data-dir=${join(process.env['TMPDIR'] ?? '/tmp', 'browser-coding-agent-chrome')}`,
-      `http://localhost:${SERVE_PORT}`,
+      browserLaunchUrl,
     ];
 
     launchedBrowserProcess = spawn(chromePath, chromeArgs, {
@@ -877,7 +889,7 @@ async function main() {
   });
 
   server.listen(SERVE_PORT, () => {
-    console.log(`Serving UI at http://localhost:${SERVE_PORT}`);
+    console.log(`Serving UI at ${SERVE_ORIGIN}`);
     console.log(`CDP proxy at ws://localhost:${SERVE_PORT}/cdp`);
 
     // Pre-connect to Chrome's CDP so the proxy is warm when the first client connects.

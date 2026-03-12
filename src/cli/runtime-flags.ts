@@ -5,10 +5,16 @@ export interface CliRuntimeFlags {
   electron: boolean;
   electronApp: string | null;
   kill: boolean;
+  lead: boolean;
+  leadWorkerBaseUrl: string | null;
 }
 
 export const DEFAULT_CLI_CDP_PORT = 9222;
 export const DEFAULT_ELECTRON_ATTACH_CDP_PORT = 9223;
+
+function looksLikeUrl(value: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(value.trim());
+}
 
 export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
   let dev = false;
@@ -18,6 +24,8 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
   let electron = false;
   let electronApp: string | null = null;
   let kill = false;
+  let lead = false;
+  let leadWorkerBaseUrl: string | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
@@ -51,6 +59,20 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
       kill = true;
       continue;
     }
+    if (arg === '--lead') {
+      lead = true;
+      const nextArg = argv[index + 1];
+      if (nextArg && !nextArg.startsWith('--') && looksLikeUrl(nextArg)) {
+        leadWorkerBaseUrl = nextArg.trim() || null;
+        index += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith('--lead=')) {
+      lead = true;
+      leadWorkerBaseUrl = arg.slice('--lead='.length).trim() || null;
+      continue;
+    }
     if (arg === '--electron-app') {
       electron = true;
       const nextArg = argv[index + 1];
@@ -81,5 +103,7 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
     electron,
     electronApp,
     kill,
+    lead,
+    leadWorkerBaseUrl,
   };
 }

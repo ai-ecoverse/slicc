@@ -37,6 +37,32 @@ export interface LeaderTraySession {
   runtime: string;
 }
 
+export interface LeaderTrayRuntimeStatus {
+  state: 'inactive' | 'connecting' | 'leader' | 'error';
+  session: LeaderTraySession | null;
+  error: string | null;
+}
+
+let leaderTrayRuntimeStatus: LeaderTrayRuntimeStatus = {
+  state: 'inactive',
+  session: null,
+  error: null,
+};
+
+export function getLeaderTrayRuntimeStatus(): LeaderTrayRuntimeStatus {
+  return {
+    ...leaderTrayRuntimeStatus,
+    session: leaderTrayRuntimeStatus.session ? { ...leaderTrayRuntimeStatus.session } : null,
+  };
+}
+
+function setLeaderTrayRuntimeStatus(status: LeaderTrayRuntimeStatus): void {
+  leaderTrayRuntimeStatus = {
+    ...status,
+    session: status.session ? { ...status.session } : null,
+  };
+}
+
 export interface LeaderTraySessionStore {
   load(): Promise<LeaderTraySession | null>;
   save(session: LeaderTraySession): Promise<void>;
@@ -127,20 +153,33 @@ export class LeaderTrayManager {
 
   async start(): Promise<LeaderTraySession> {
     if (this.currentSession && this.socket) {
+      setLeaderTrayRuntimeStatus({ state: 'leader', session: this.currentSession, error: null });
       return this.currentSession;
     }
 
-    const storedSession = await this.store.load();
-    const reusableSession = storedSession?.workerBaseUrl === this.options.workerBaseUrl ? storedSession : null;
+    setLeaderTrayRuntimeStatus({ state: 'connecting', session: null, error: null });
 
-    const session = await this.attachWithRecovery(reusableSession);
-    const socket = await this.openLeaderSocket(session.leaderWebSocketUrl!);
-    this.socket = socket;
-    this.currentSession = session;
-    this.startPingLoop(socket);
+    try {
+      const storedSession = await this.store.load();
+      const reusableSession = storedSession?.workerBaseUrl === this.options.workerBaseUrl ? storedSession : null;
 
-    log.info('Leader joined tray', { trayId: session.trayId, controllerId: session.controllerId, runtime: session.runtime });
-    return session;
+      const session = await this.attachWithRecovery(reusableSession);
+      const socket = await this.openLeaderSocket(session.leaderWebSocketUrl!);
+      this.socket = socket;
+      this.currentSession = session;
+      this.startPingLoop(socket);
+      setLeaderTrayRuntimeStatus({ state: 'leader', session, error: null });
+
+      log.info('Leader joined tray', { trayId: session.trayId, controllerId: session.controllerId, runtime: session.runtime });
+      return session;
+    } catch (error) {
+      setLeaderTrayRuntimeStatus({
+        state: 'error',
+        session: this.currentSession,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
   }
 
   stop(): void {
@@ -157,6 +196,9 @@ export class LeaderTrayManager {
       }
       this.socket = null;
     }
+
+    this.currentSession = null;
+    setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
   }
 
   private async attachWithRecovery(session: LeaderTraySession | null): Promise<LeaderTraySession> {

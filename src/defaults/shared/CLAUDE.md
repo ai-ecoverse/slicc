@@ -121,6 +121,7 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **node -e / python3 -c** — Execute JavaScript or Python
 - **serve <dir>** — Open a VFS app directory in a new browser tab. Defaults to `index.html`; use `--entry` to override the entry file.
 - **open <path|url>** — Open a URL or single VFS file in a new browser tab. Use `open --view` when you need to see an image inline.
+- **host** — Print the current leader tray status and launch URL. When this runtime is leader, `launch_url` is the tray URL itself (`https://.../tray/<id>`).
 - **playwright-cli** — Browser automation (built-in, no SKILL.md lookup needed). Key subcommands: `tab-list`, `tab-select <index>`, `snapshot`, `screenshot [--filename=<path>]`, `open <url>`, `click <ref>`, `fill <ref> "text"`, `close`. Run `playwright-cli --help` for full list.
 
 ## Environment: This Is NOT a Regular Linux Box

@@ -15,6 +15,8 @@ describe('parseCliRuntimeFlags', () => {
       electron: false,
       electronApp: null,
       kill: false,
+      lead: false,
+      leadWorkerBaseUrl: null,
     });
   });
 
@@ -26,6 +28,8 @@ describe('parseCliRuntimeFlags', () => {
       electron: false,
       electronApp: null,
       kill: false,
+      lead: false,
+      leadWorkerBaseUrl: null,
     });
   });
 
@@ -45,6 +49,8 @@ describe('parseCliRuntimeFlags', () => {
       electron: true,
       electronApp: '/Applications/Slack.app',
       kill: false,
+      lead: false,
+      leadWorkerBaseUrl: null,
     });
   });
 
@@ -56,6 +62,8 @@ describe('parseCliRuntimeFlags', () => {
       electron: true,
       electronApp: '/Applications/Slack.app',
       kill: false,
+      lead: false,
+      leadWorkerBaseUrl: null,
     });
   });
 
@@ -67,6 +75,8 @@ describe('parseCliRuntimeFlags', () => {
       electron: true,
       electronApp: '/Applications/Linear.app',
       kill: true,
+      lead: false,
+      leadWorkerBaseUrl: null,
     });
   });
 
@@ -78,6 +88,41 @@ describe('parseCliRuntimeFlags', () => {
       electron: true,
       electronApp: null,
       kill: true,
+      lead: false,
+      leadWorkerBaseUrl: null,
+    });
+  });
+
+  it('parses lead mode with an explicit worker base URL', () => {
+    expect(parseCliRuntimeFlags(['--lead', 'https://tray.example.com/base'])).toEqual({
+      dev: false,
+      serveOnly: false,
+      cdpPort: DEFAULT_CLI_CDP_PORT,
+      electron: false,
+      electronApp: null,
+      kill: false,
+      lead: true,
+      leadWorkerBaseUrl: 'https://tray.example.com/base',
+    });
+  });
+
+  it('supports --lead without consuming unrelated positional arguments', () => {
+    expect(parseCliRuntimeFlags(['--lead', '--electron', '/Applications/Slack.app'])).toEqual({
+      dev: false,
+      serveOnly: false,
+      cdpPort: DEFAULT_ELECTRON_ATTACH_CDP_PORT,
+      electron: true,
+      electronApp: '/Applications/Slack.app',
+      kill: false,
+      lead: true,
+      leadWorkerBaseUrl: null,
+    });
+  });
+
+  it('parses --lead=<url> syntax', () => {
+    expect(parseCliRuntimeFlags(['--lead=https://tray.example.com'])).toMatchObject({
+      lead: true,
+      leadWorkerBaseUrl: 'https://tray.example.com',
     });
   });
 });

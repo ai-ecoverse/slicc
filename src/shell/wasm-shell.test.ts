@@ -89,22 +89,27 @@ describe('WasmShell playwright command discoverability', () => {
     });
   });
 
-  it('exposes playwright aliases through which, commands, and /usr/bin when browserAPI is provided', async () => {
+  it('exposes playwright aliases and host through which, commands, and /usr/bin when browserAPI is provided', async () => {
     const shell = new WasmShell({
       fs,
       browserAPI: {} as BrowserAPI,
     });
 
-    const whichResult = await shell.executeCommand('which playwright-cli playwright puppeteer');
+    const whichResult = await shell.executeCommand('which playwright-cli playwright puppeteer host');
     expect(whichResult.exitCode).toBe(0);
     expect(whichResult.stdout).toContain('/usr/bin/playwright-cli');
     expect(whichResult.stdout).toContain('/usr/bin/playwright');
     expect(whichResult.stdout).toContain('/usr/bin/puppeteer');
+    expect(whichResult.stdout).toContain('/usr/bin/host');
 
     const commandsResult = await shell.executeCommand('commands | grep playwright');
     expect(commandsResult.exitCode).toBe(0);
     expect(commandsResult.stdout).toContain('playwright');
     expect(commandsResult.stdout).toContain('playwright-cli');
+
+    const hostCommandsResult = await shell.executeCommand('commands | grep host');
+    expect(hostCommandsResult.exitCode).toBe(0);
+    expect(hostCommandsResult.stdout).toContain('host');
 
     const usrBinResult = await shell.executeCommand('ls /usr/bin | grep playwright');
     expect(usrBinResult.exitCode).toBe(0);
@@ -112,17 +117,22 @@ describe('WasmShell playwright command discoverability', () => {
     expect(usrBinResult.stdout).toContain('playwright-cli');
   });
 
-  it('keeps playwright aliases discoverable even without browserAPI', async () => {
+  it('keeps playwright aliases and host discoverable even without browserAPI', async () => {
     const shell = new WasmShell({ fs });
 
-    const whichResult = await shell.executeCommand('which playwright-cli');
+    const whichResult = await shell.executeCommand('which playwright-cli host');
     expect(whichResult.exitCode).toBe(0);
     expect(whichResult.stdout).toContain('/usr/bin/playwright-cli');
+    expect(whichResult.stdout).toContain('/usr/bin/host');
 
     const commandsResult = await shell.executeCommand('commands | grep playwright');
     expect(commandsResult.exitCode).toBe(0);
     expect(commandsResult.stdout).toContain('playwright-cli');
     expect(commandsResult.stdout).toContain('puppeteer');
+
+    const hostCommandsResult = await shell.executeCommand('commands | grep host');
+    expect(hostCommandsResult.exitCode).toBe(0);
+    expect(hostCommandsResult.stdout).toContain('host');
 
     const usrBinResult = await shell.executeCommand('ls /usr/bin | grep playwright');
     expect(usrBinResult.exitCode).toBe(0);

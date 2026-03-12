@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  buildTrayLaunchUrl,
+  buildTrayUrlValue,
   buildTrayWorkerUrl,
   fetchRuntimeConfig,
   normalizeTrayWorkerBaseUrl,
+  parseTrayUrlValue,
   resolveTrayWorkerBaseUrl,
   type RuntimeConfigStorage,
 } from './tray-runtime-config.js';
@@ -32,19 +35,57 @@ describe('tray-runtime-config', () => {
     expect(buildTrayWorkerUrl('https://tray.example.com', 'controller/token')).toBe('https://tray.example.com/controller/token');
   });
 
+  it('parses and builds tray values with an optional tray id', () => {
+    expect(buildTrayUrlValue('https://tray.example.com/base')).toBe('https://tray.example.com/base');
+    expect(buildTrayUrlValue('https://tray.example.com/base', 'tray-123')).toBe('https://tray.example.com/base/tray/tray-123');
+    expect(parseTrayUrlValue('https://tray.example.com/base/tray/tray-123')).toEqual({
+      workerBaseUrl: 'https://tray.example.com/base',
+      trayId: 'tray-123',
+    });
+    expect(parseTrayUrlValue('https://tray.example.com/base')).toEqual({
+      workerBaseUrl: 'https://tray.example.com/base',
+      trayId: null,
+    });
+    expect(parseTrayUrlValue('not-a-url')).toBeNull();
+  });
+
+  it('builds launch URLs with the canonical tray parameter and removes legacy query params', () => {
+    expect(buildTrayLaunchUrl(
+      'http://localhost:3000/?scoop=cone&trayWorkerUrl=https://old.example.com&lead=https://older.example.com',
+      'https://tray.example.com/base',
+      'tray-123',
+    )).toBe('http://localhost:3000/?scoop=cone&tray=https%3A%2F%2Ftray.example.com%2Fbase%2Ftray%2Ftray-123');
+  });
+
   it('prefers query and server runtime config over stored and build defaults', async () => {
     const storage = new MemoryStorage();
     storage.setItem('slicc.trayWorkerBaseUrl', 'https://stored.example.com');
 
     const resolved = await resolveTrayWorkerBaseUrl({
-      locationHref: 'http://localhost:3000/?trayWorkerUrl=https://query.example.com/',
+      locationHref: 'http://localhost:3000/?tray=https://query.example.com/base/tray/tray-123',
       storage,
       envBaseUrl: 'https://env.example.com',
       runtimeConfigFetcher: async () => ({ trayWorkerBaseUrl: 'https://server.example.com' }),
     });
 
-    expect(resolved).toBe('https://query.example.com');
-    expect(storage.getItem('slicc.trayWorkerBaseUrl')).toBe('https://query.example.com');
+    expect(resolved).toBe('https://query.example.com/base');
+    expect(storage.getItem('slicc.trayWorkerBaseUrl')).toBe('https://query.example.com/base');
+  });
+
+  it('continues to recognize the legacy lead and trayWorkerUrl query parameters for backward compatibility', async () => {
+    await expect(resolveTrayWorkerBaseUrl({
+      locationHref: 'http://localhost:3000/?lead=https://legacy-lead.example.com/base/tray/tray-123',
+      storage: new MemoryStorage(),
+      envBaseUrl: null,
+      runtimeConfigFetcher: async () => null,
+    })).resolves.toBe('https://legacy-lead.example.com/base');
+
+    await expect(resolveTrayWorkerBaseUrl({
+      locationHref: 'http://localhost:3000/?trayWorkerUrl=https://legacy.example.com/',
+      storage: new MemoryStorage(),
+      envBaseUrl: null,
+      runtimeConfigFetcher: async () => null,
+    })).resolves.toBe('https://legacy.example.com');
   });
 
   it('falls back to the server runtime config, then stored config, then build config', async () => {

@@ -1,5 +1,12 @@
-const TRAY_WORKER_STORAGE_KEY = 'slicc.trayWorkerBaseUrl';
-const TRAY_WORKER_QUERY_PARAM = 'trayWorkerUrl';
+export const TRAY_WORKER_STORAGE_KEY = 'slicc.trayWorkerBaseUrl';
+export const TRAY_WORKER_QUERY_PARAM = 'trayWorkerUrl';
+export const TRAY_QUERY_PARAM = 'tray';
+export const TRAY_LEGACY_LEAD_QUERY_PARAM = 'lead';
+
+export interface TrayUrlConfig {
+  workerBaseUrl: string;
+  trayId: string | null;
+}
 
 export interface RuntimeConfigStorage {
   getItem(key: string): string | null;
@@ -36,6 +43,67 @@ export function buildTrayWorkerUrl(baseUrl: string, path: string): string {
   return new URL(relativePath, `${normalizedBase}/`).toString();
 }
 
+export function parseTrayUrlValue(raw: string | null | undefined): TrayUrlConfig | null {
+  if (!raw) return null;
+
+  try {
+    const url = new URL(raw.trim());
+    url.search = '';
+    url.hash = '';
+
+    const segments = url.pathname.split('/').filter(Boolean);
+    let trayId: string | null = null;
+    if (segments.length >= 2 && segments.at(-2) === 'tray') {
+      trayId = decodeURIComponent(segments.at(-1)!);
+      segments.splice(-2, 2);
+      url.pathname = segments.length > 0 ? `/${segments.join('/')}` : '/';
+    }
+
+    const workerBaseUrl = normalizeTrayWorkerBaseUrl(url.toString());
+    if (!workerBaseUrl) {
+      return null;
+    }
+
+    return { workerBaseUrl, trayId };
+  } catch {
+    return null;
+  }
+}
+
+export function buildTrayUrlValue(workerBaseUrl: string, trayId?: string | null): string {
+  const normalizedBase = normalizeTrayWorkerBaseUrl(workerBaseUrl);
+  if (!normalizedBase) {
+    throw new Error(`Invalid tray worker base URL: ${workerBaseUrl}`);
+  }
+
+  const normalizedTrayId = trayId?.trim();
+  if (!normalizedTrayId) {
+    return normalizedBase;
+  }
+
+  return new URL(`tray/${encodeURIComponent(normalizedTrayId)}`, `${normalizedBase}/`).toString();
+}
+
+export function buildTrayLaunchUrl(locationHref: string, workerBaseUrl: string, trayId?: string | null): string {
+  const url = new URL(locationHref);
+  url.searchParams.delete(TRAY_WORKER_QUERY_PARAM);
+  url.searchParams.delete(TRAY_LEGACY_LEAD_QUERY_PARAM);
+  url.searchParams.set(TRAY_QUERY_PARAM, buildTrayUrlValue(workerBaseUrl, trayId));
+  return url.toString();
+}
+
+export function parseTrayLeadValue(raw: string | null | undefined): TrayUrlConfig | null {
+  return parseTrayUrlValue(raw);
+}
+
+export function buildTrayLeadValue(workerBaseUrl: string, trayId?: string | null): string {
+  return buildTrayUrlValue(workerBaseUrl, trayId);
+}
+
+export function buildTrayLeadLaunchUrl(locationHref: string, workerBaseUrl: string, trayId?: string | null): string {
+  return buildTrayLaunchUrl(locationHref, workerBaseUrl, trayId);
+}
+
 export async function resolveTrayWorkerBaseUrl(options: {
   locationHref: string;
   storage?: RuntimeConfigStorage | null;
@@ -69,6 +137,17 @@ export async function fetchRuntimeConfig(fetchImpl: typeof fetch = fetch): Promi
 function readQueryTrayWorkerBaseUrl(locationHref: string): string | null {
   try {
     const url = new URL(locationHref);
+
+    const trayConfig = parseTrayUrlValue(url.searchParams.get(TRAY_QUERY_PARAM));
+    if (trayConfig) {
+      return trayConfig.workerBaseUrl;
+    }
+
+    const legacyLeadConfig = parseTrayUrlValue(url.searchParams.get(TRAY_LEGACY_LEAD_QUERY_PARAM));
+    if (legacyLeadConfig) {
+      return legacyLeadConfig.workerBaseUrl;
+    }
+
     return normalizeTrayWorkerBaseUrl(url.searchParams.get(TRAY_WORKER_QUERY_PARAM));
   } catch {
     return null;

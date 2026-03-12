@@ -190,6 +190,7 @@ WasmShell wraps just-bash 2.11.7 (WASM Bash interpreter) and connects it to Virt
 - `node -e "code"` — Execute JavaScript
 - `python3 -c "code"` / `python -c "code"` — Execute Python via Pyodide
 - `open <path|url>` — Preview/serve VFS files or open URLs in a new browser tab. `--download` / `-d` forces file download. `--view` / `-v` returns image inline for agent vision (produces `<img:>` tag converted to `ImageContent` by tool adapter)
+- `host` — Report the current leader tray status and canonical launch URL
 - `zip/unzip` — Archive compression
 - `webhook` — Manage webhooks for event-driven automation
 - `crontask` — Schedule cron jobs that dispatch licks to scoops

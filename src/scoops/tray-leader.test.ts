@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { LeaderTrayManager, parseLeaderTraySession, type LeaderTraySession, type LeaderTraySessionStore, type LeaderTrayWebSocket } from './tray-leader.js';
+import {
+  LeaderTrayManager,
+  getLeaderTrayRuntimeStatus,
+  parseLeaderTraySession,
+  type LeaderTraySession,
+  type LeaderTraySessionStore,
+  type LeaderTrayWebSocket,
+} from './tray-leader.js';
 
 class MemorySessionStore implements LeaderTraySessionStore {
   value: LeaderTraySession | null = null;
@@ -82,7 +89,7 @@ describe('tray-leader', () => {
         websocket: { url: 'wss://tray.example.com/controller/token?controllerId=controller-1&leaderKey=leader-key-1' },
       }), { status: 200, headers: { 'content-type': 'application/json' } }));
 
-    const startPromise = new LeaderTrayManager({
+    const manager = new LeaderTrayManager({
       workerBaseUrl: 'https://tray.example.com',
       runtime: 'slicc-standalone',
       store,
@@ -92,7 +99,8 @@ describe('tray-leader', () => {
         return socket;
       },
       pingIntervalMs: 60_000,
-    }).start();
+    });
+    const startPromise = manager.start();
 
     await socketReady;
     socket.dispatch('message', { data: JSON.stringify({ type: 'leader.connected', trayId: 'tray-1' }) });
@@ -103,6 +111,14 @@ describe('tray-leader', () => {
     expect(store.value?.leaderWebSocketUrl).toContain('leaderKey=leader-key-1');
     expect(socket.sent[0]).toBe(JSON.stringify({ type: 'ping' }));
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(getLeaderTrayRuntimeStatus()).toMatchObject({
+      state: 'leader',
+      session: { trayId: 'tray-1', workerBaseUrl: 'https://tray.example.com' },
+      error: null,
+    });
+
+    manager.stop();
+    expect(getLeaderTrayRuntimeStatus()).toEqual({ state: 'inactive', session: null, error: null });
   });
 
   it('recreates the tray when the persisted controller capability is stale', async () => {
@@ -147,7 +163,7 @@ describe('tray-leader', () => {
         websocket: { url: 'wss://tray.example.com/controller/fresh-token?controllerId=controller-2&leaderKey=fresh-key' },
       }), { status: 200, headers: { 'content-type': 'application/json' } }));
 
-    const startPromise = new LeaderTrayManager({
+    const manager = new LeaderTrayManager({
       workerBaseUrl: 'https://tray.example.com',
       runtime: 'slicc-standalone',
       store,
@@ -157,7 +173,8 @@ describe('tray-leader', () => {
         return socket;
       },
       pingIntervalMs: 60_000,
-    }).start();
+    });
+    const startPromise = manager.start();
 
     await socketReady;
     socket.dispatch('message', { data: JSON.stringify({ type: 'leader.connected', trayId: 'fresh-tray' }) });
@@ -166,5 +183,7 @@ describe('tray-leader', () => {
     expect(session.trayId).toBe('fresh-tray');
     expect(fetchImpl).toHaveBeenCalledTimes(3);
     expect(store.value?.controllerUrl).toBe('https://tray.example.com/controller/fresh-token');
+
+    manager.stop();
   });
 });

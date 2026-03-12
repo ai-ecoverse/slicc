@@ -21,7 +21,11 @@ import { Orchestrator } from '../scoops/index.js';
 import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import { LeaderTrayManager } from '../scoops/tray-leader.js';
-import { fetchRuntimeConfig, resolveTrayWorkerBaseUrl } from '../scoops/tray-runtime-config.js';
+import {
+  buildTrayLaunchUrl,
+  fetchRuntimeConfig,
+  resolveTrayWorkerBaseUrl,
+} from '../scoops/tray-runtime-config.js';
 import {
   getElectronOverlayInitialTab,
   getLickWebSocketUrl,
@@ -1034,9 +1038,16 @@ async function main(): Promise<void> {
         workerBaseUrl: trayWorkerBaseUrl,
         runtime: 'slicc-standalone',
       });
-      void trayLeader.start().catch((error) => {
-        log.warn('Leader tray join failed', { error: error instanceof Error ? error.message : String(error) });
-      });
+      void trayLeader.start()
+        .then((session) => {
+          const trayUrl = buildTrayLaunchUrl(window.location.href, session.workerBaseUrl, session.trayId);
+          if (trayUrl !== window.location.href) {
+            window.history.replaceState(window.history.state, '', trayUrl);
+          }
+        })
+        .catch((error) => {
+          log.warn('Leader tray join failed', { error: error instanceof Error ? error.message : String(error) });
+        });
       window.addEventListener('beforeunload', () => trayLeader.stop(), { once: true });
     }
   }
