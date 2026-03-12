@@ -601,10 +601,13 @@ const ICON_PATHS = {
 
 /**
  * Show the Accounts management dialog.
- * Returns a promise that resolves when the user closes the dialog.
+ * Returns a promise that resolves to `true` if accounts were modified,
+ * `false` if the user closed without changes (so callers can skip reload).
  */
-export function showProviderSettings(): Promise<void> {
+export function showProviderSettings(): Promise<boolean> {
   return new Promise((resolve) => {
+    const accountsBefore = JSON.stringify(getAccounts());
+
     const overlay = document.createElement('div');
     overlay.className = 'dialog-overlay';
 
@@ -814,7 +817,7 @@ export function showProviderSettings(): Promise<void> {
       closeBtn.textContent = 'Close';
       closeBtn.addEventListener('click', () => {
         overlay.remove();
-        resolve();
+        resolve(JSON.stringify(getAccounts()) !== accountsBefore);
       });
       dialog.appendChild(closeBtn);
     }
