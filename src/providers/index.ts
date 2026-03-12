@@ -1,19 +1,28 @@
 /**
  * Provider auto-discovery and registration.
  *
- * Discovers providers from two locations:
- * 1. src/providers/built-in/*.ts — built-in providers, filtered by providers.build.json
- * 2. /providers/*.ts — external providers (gitignored directory at root), always included
+ * Pi-ai providers are auto-discovered via getProviders() — no config files needed.
+ * This module handles two additional concerns:
+ *
+ * 1. Built-in extensions (src/providers/built-in/*.ts) — providers that need custom
+ *    stream functions via register(). Pure config-only providers don't need files here;
+ *    they get fallback configs from provider-settings.ts.
+ *
+ * 2. External providers (/providers/*.ts) — gitignored directory at project root,
+ *    always included. Used for custom OAuth providers (corporate SSO, API proxies).
+ *
+ * 3. Build-time filtering via providers.build.json — controls which pi-ai providers
+ *    appear in the UI. External providers are never filtered.
  *
  * Each provider module must export a `config: ProviderConfig`.
- * Modules may also export a `register(): void` function to register custom stream functions.
+ * Modules may also export a `register(): void` function for custom stream functions.
  */
 
 import type { ProviderConfig } from './types.js';
 
 export type { ProviderConfig } from './types.js';
 
-// ── Build config ────────────────────────────────────────────────────
+// ── Build config (controls which pi-ai providers appear in the UI) ───
 
 interface BuildConfig {
   include: string[];
@@ -30,6 +39,15 @@ const buildConfig: BuildConfig = buildConfigFiles['/providers.build.json'] ?? {
   exclude: [],
 };
 
+/** Check if a pi-ai provider should be shown based on providers.build.json. */
+export function shouldIncludeProvider(providerId: string): boolean {
+  const { include, exclude } = buildConfig;
+  if (exclude.includes('*') || exclude.includes(providerId)) return false;
+  if (include.includes('*')) return true;
+  if (include.includes(providerId)) return true;
+  return false;
+}
+
 // ── Provider module shape ───────────────────────────────────────────
 
 interface ProviderModule {
@@ -37,7 +55,7 @@ interface ProviderModule {
   register?: () => void;
 }
 
-// ── Discover built-in providers ─────────────────────────────────────
+// ── Discover built-in extensions (only those needing register()) ─────
 
 const builtInModules = import.meta.glob('./built-in/*.ts', {
   eager: true,
@@ -49,43 +67,19 @@ const externalModules = import.meta.glob('/providers/*.ts', {
   eager: true,
 }) as Record<string, ProviderModule>;
 
-// ── Filtering logic ─────────────────────────────────────────────────
-
-function shouldIncludeBuiltIn(providerId: string): boolean {
-  const { include, exclude } = buildConfig;
-
-  // Check exclude first — exclude: ["*"] blocks everything
-  if (exclude.includes('*') || exclude.includes(providerId)) {
-    return false;
-  }
-
-  // include: ["*"] means all built-ins (minus excluded)
-  if (include.includes('*')) {
-    return true;
-  }
-
-  // Explicit include list — only those providers
-  if (include.includes(providerId)) {
-    return true;
-  }
-
-  // Not in include list (or include is empty) — exclude
-  return false;
-}
-
 // ── Build registry ──────────────────────────────────────────────────
 
 const providerConfigRegistry = new Map<string, ProviderConfig>();
 
-// Process built-in providers (filtered by build config)
+// Process built-in extensions (filtered by build config)
 for (const [_path, mod] of Object.entries(builtInModules)) {
   if (!mod.config) continue;
-  if (!shouldIncludeBuiltIn(mod.config.id)) continue;
+  if (!shouldIncludeProvider(mod.config.id)) continue;
   providerConfigRegistry.set(mod.config.id, mod.config);
   mod.register?.();
 }
 
-// Process external providers (always included)
+// Process external providers (always included, never filtered)
 for (const [_path, mod] of Object.entries(externalModules)) {
   if (!mod.config) continue;
   providerConfigRegistry.set(mod.config.id, mod.config);
@@ -94,10 +88,10 @@ for (const [_path, mod] of Object.entries(externalModules)) {
 
 // ── Public API ──────────────────────────────────────────────────────
 
-/** All registered provider configs (built-in + external, post-filtering). */
+/** All registered provider configs (built-in extensions + external, post-filtering). */
 export const allProviderConfigs: ReadonlyMap<string, ProviderConfig> = providerConfigRegistry;
 
-/** Get a provider config by ID, with fallback for unknown providers. */
+/** Get a provider config by ID (registered providers only). */
 export function getRegisteredProviderConfig(providerId: string): ProviderConfig | undefined {
   return providerConfigRegistry.get(providerId);
 }

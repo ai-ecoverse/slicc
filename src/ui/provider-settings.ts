@@ -12,6 +12,7 @@ import type { ThemePreference } from './theme.js';
 import {
   getRegisteredProviderConfig,
   getRegisteredProviderIds,
+  shouldIncludeProvider,
 } from '../providers/index.js';
 import type { ProviderConfig } from '../providers/index.js';
 
@@ -76,10 +77,10 @@ export const __test__ = { _resetLegacyCleanup };
 // Provider configs are now loaded dynamically from src/providers/index.ts
 // (built-in providers in src/providers/built-in/ + external providers in /providers/)
 
-// Get all available providers — union of pi-ai providers + registered provider configs
+// Get all available providers — pi-ai providers (filtered by build config) + registered configs
 export function getAvailableProviders(): string[] {
-  const piProviders = getProviders() as string[];
-  const registeredIds = getRegisteredProviderIds();
+  const piProviders = (getProviders() as string[]).filter(shouldIncludeProvider);
+  const registeredIds = getRegisteredProviderIds(); // external + built-in extensions, already filtered
   const merged = new Set([...piProviders, ...registeredIds]);
   return [...merged];
 }

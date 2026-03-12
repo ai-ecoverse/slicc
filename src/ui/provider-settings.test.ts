@@ -87,6 +87,7 @@ const { mockGetRegisteredProviderConfig, mockGetRegisteredProviderIds } = vi.hoi
 vi.mock('../providers/index.js', () => ({
   getRegisteredProviderConfig: mockGetRegisteredProviderConfig,
   getRegisteredProviderIds: mockGetRegisteredProviderIds,
+  shouldIncludeProvider: () => true,
 }));
 
 import {
