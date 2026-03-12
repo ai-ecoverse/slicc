@@ -17,7 +17,7 @@ For architecture philosophy and principles, see the project's `CLAUDE.md` file.
 | Run or debug Electron mode             | [electron.md](./electron.md) + [development.md](./development.md)                       |
 | Avoid breaking the extension           | [pitfalls.md](./pitfalls.md)                                                            |
 | Add a UI panel or skill                | [adding-features.md](./adding-features.md)                                              |
-| Add a provider (Anthropic, AWS, Azure) | [adding-features.md](./adding-features.md)                                              |
+| Add a provider (API key or OAuth)      | [adding-features.md](./adding-features.md)                                              |
 
 
 ## Layer Quick Reference

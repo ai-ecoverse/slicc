@@ -1,12 +1,12 @@
 /**
- * Bedrock CAMP provider — uses the Converse API with Bearer token auth
- * instead of SigV4. Routes through /api/fetch-proxy in CLI mode,
- * direct fetch in extension mode.
+ * Bedrock CAMP provider — config + stream function registration.
  *
+ * Uses the Converse API with Bearer token auth instead of SigV4.
+ * Routes through /api/fetch-proxy in CLI mode, direct fetch in extension mode.
  * Registers as api: "bedrock-camp-converse" via pi-ai's registerApiProvider().
- * Uses the non-streaming /converse endpoint (returns JSON, not binary eventstream).
  */
 
+import type { ProviderConfig } from '../types.js';
 import {
   registerApiProvider,
   calculateCost,
@@ -24,6 +24,18 @@ import type {
   ThinkingLevel,
   ThinkingBudgets,
 } from '@mariozechner/pi-ai';
+
+export const config: ProviderConfig = {
+  id: 'bedrock-camp',
+  name: 'AWS Bedrock (CAMP)',
+  description: 'Claude on AWS Bedrock via CAMP Bearer token',
+  requiresApiKey: true,
+  apiKeyPlaceholder: 'ABSK...',
+  apiKeyEnvVar: 'BEDROCK_CAMP_API_KEY',
+  requiresBaseUrl: true,
+  baseUrlPlaceholder: 'https://bedrock-runtime.us-west-2.amazonaws.com',
+  baseUrlDescription: 'Bedrock runtime endpoint from CAMP portal',
+};
 
 // Extension detection
 const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
@@ -43,7 +55,6 @@ function normalizeToolCallId(id: string): string {
 
 function sanitize(text: string | undefined | null): string {
   if (!text) return '';
-  // Strip unpaired surrogates (same as pi-ai's sanitizeSurrogates)
   return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD');
 }
 
@@ -447,8 +458,10 @@ export const streamSimpleBedrockCamp = (
 
 // ── Registration ────────────────────────────────────────────────────
 
-registerApiProvider({
-  api: 'bedrock-camp-converse' as Api,
-  stream: streamBedrockCamp,
-  streamSimple: streamSimpleBedrockCamp,
-});
+export function register(): void {
+  registerApiProvider({
+    api: 'bedrock-camp-converse' as Api,
+    stream: streamBedrockCamp,
+    streamSimple: streamSimpleBedrockCamp,
+  });
+}

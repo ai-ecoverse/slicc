@@ -104,6 +104,13 @@ interface ChromeAPI {
     }): Promise<{ id?: number }>;
     remove(windowId: number): Promise<void>;
   };
+  identity: {
+    launchWebAuthFlow(options: {
+      url: string;
+      interactive: boolean;
+    }): Promise<string | undefined>;
+    getRedirectURL(path?: string): string;
+  };
   offscreen: ChromeOffscreenAPI;
   debugger: ChromeDebuggerAPI;
   tabs: {
