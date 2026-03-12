@@ -54,11 +54,34 @@ export async function processImageContent(image: ImageContent): Promise<ImageCon
   // Over 5MB — attempt resize via ImageMagick WASM
   log.info('Image exceeds 5MB, attempting resize', { byteSize, mimeType: image.mimeType });
 
+  // Step 1: Load ImageMagick WASM
+  let getMagick: typeof import('../shell/supplemental-commands/magick-wasm.js').getMagick;
+  let MIME_TO_MAGICK_FORMAT: typeof import('../shell/supplemental-commands/magick-wasm.js').MIME_TO_MAGICK_FORMAT;
   try {
-    const { getMagick } = await import('../shell/supplemental-commands/magick-wasm.js');
-    const magick = await getMagick();
+    const mod = await import('../shell/supplemental-commands/magick-wasm.js');
+    getMagick = mod.getMagick;
+    MIME_TO_MAGICK_FORMAT = mod.MIME_TO_MAGICK_FORMAT;
+  } catch (err) {
+    log.error('ImageMagick WASM module unavailable', { error: err instanceof Error ? err.message : String(err) });
+    return {
+      type: 'text',
+      text: `[Image removed: resize service unavailable (ImageMagick WASM could not be loaded)]`,
+    };
+  }
 
-    // Decode base64 to bytes
+  let magick: Awaited<ReturnType<typeof getMagick>>;
+  try {
+    magick = await getMagick();
+  } catch (err) {
+    log.error('ImageMagick WASM initialization failed', { error: err instanceof Error ? err.message : String(err) });
+    return {
+      type: 'text',
+      text: `[Image removed: resize service unavailable (WASM init failed)]`,
+    };
+  }
+
+  // Step 2: Decode and process
+  try {
     const binaryString = atob(image.data);
     const bytes = new Uint8Array(binaryString.length);
     for (let i = 0; i < binaryString.length; i++) {
@@ -81,14 +104,7 @@ export async function processImageContent(image: ImageContent): Promise<ImageCon
         log.info('Resized image', { from: `${w}x${h}`, to: `${newW}x${newH}` });
       }
 
-      // Write in original format first
-      const formatMap: Record<string, string> = {
-        'image/jpeg': 'JPEG',
-        'image/png': 'PNG',
-        'image/gif': 'GIF',
-        'image/webp': 'WEBP',
-      };
-      const format = formatMap[image.mimeType] || 'JPEG';
+      const format = MIME_TO_MAGICK_FORMAT[image.mimeType] || 'JPEG';
 
       img.write(format, (data: Uint8Array) => {
         output.data = new Uint8Array(data);
@@ -148,10 +164,14 @@ export async function processImageContent(image: ImageContent): Promise<ImageCon
       mimeType: output.mime,
     };
   } catch (err) {
-    log.error('Failed to process image', { error: err instanceof Error ? err.message : String(err) });
+    log.error('Image data processing failed (corrupt or unreadable)', {
+      mimeType: image.mimeType,
+      estimatedBytes: byteSize,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return {
       type: 'text',
-      text: `[Image removed: processing failed (${err instanceof Error ? err.message : 'unknown error'})]`,
+      text: `[Image removed: image data could not be processed (${err instanceof Error ? err.message : 'corrupt or unreadable'})]`,
     };
   }
 }

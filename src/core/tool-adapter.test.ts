@@ -114,6 +114,20 @@ describe('parseToolResultContent (async)', () => {
     const result = parseToolResultContent('test');
     expect(result).toBeInstanceOf(Promise);
   });
+
+  it('handles mixed valid and unsupported images in one result', async () => {
+    const text = 'Result:\n<img:data:image/bmp;base64,bad>\nMiddle\n<img:data:image/png;base64,good>';
+    const blocks = await parseToolResultContent(text);
+
+    expect(blocks).toHaveLength(4);
+    expect(blocks[0]).toEqual({ type: 'text', text: 'Result:' });
+    // BMP is unsupported → text placeholder
+    expect(blocks[1].type).toBe('text');
+    expect((blocks[1] as any).text).toContain('unsupported format');
+    expect(blocks[2]).toEqual({ type: 'text', text: '\nMiddle' });
+    // PNG is supported → passes through
+    expect(blocks[3]).toEqual({ type: 'image', mimeType: 'image/png', data: 'good' });
+  });
 });
 
 describe('adaptTool', () => {

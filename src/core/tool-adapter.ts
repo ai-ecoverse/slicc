@@ -82,8 +82,15 @@ export function adaptTool(tool: ToolDefinition): AgentTool<any> {
       _onUpdate?: (partialResult: AgentToolResult<any>) => void,
     ): Promise<AgentToolResult<any>> {
       const result = await tool.execute(params);
+      let content: (TextContent | ImageContent)[];
+      try {
+        content = await parseToolResultContent(result.content);
+      } catch {
+        // If image processing fails unexpectedly, fall back to raw text
+        content = parseToolResultContentRaw(result.content);
+      }
       return {
-        content: await parseToolResultContent(result.content),
+        content,
         details: { isError: result.isError },
       };
     },

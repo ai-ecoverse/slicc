@@ -43,6 +43,17 @@ export interface IMagickImage {
   write(callback: (data: Uint8Array) => void): void;
 }
 
+/** MIME type to ImageMagick format string mapping. Single source of truth. */
+export const MIME_TO_MAGICK_FORMAT: Record<string, string> = {
+  'image/jpeg': 'JPEG',
+  'image/png': 'PNG',
+  'image/gif': 'GIF',
+  'image/webp': 'WEBP',
+  'image/bmp': 'BMP',
+  'image/tiff': 'TIFF',
+  'image/avif': 'AVIF',
+};
+
 let magickPromise: Promise<ImageMagickModule> | null = null;
 export const MAGICK_WASM_CDN = 'https://cdn.jsdelivr.net/npm/@imagemagick/magick-wasm@0.0.38/dist/';
 export const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
@@ -50,23 +61,32 @@ export const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.i
 export async function getMagick(): Promise<ImageMagickModule> {
   if (!magickPromise) {
     magickPromise = (async () => {
-      const magickModule = await import('@imagemagick/magick-wasm');
-      if (isExtension) {
-        // Chrome extension — fetch bundled WASM as bytes
-        // initializeImageMagick rejects chrome-extension:// URLs, so pass Uint8Array
-        const wasmUrl = chrome.runtime.getURL('magick.wasm');
-        const resp = await fetch(wasmUrl);
-        const wasmBytes = new Uint8Array(await resp.arrayBuffer());
-        await magickModule.initializeImageMagick(wasmBytes);
-      } else {
-        const wasmBase = typeof window === 'undefined'
-          ? new URL('../../../node_modules/@imagemagick/magick-wasm/dist/', import.meta.url).toString()
-          : MAGICK_WASM_CDN;
-        const wasmUrl = new URL('magick.wasm', wasmBase);
-        await magickModule.initializeImageMagick(wasmUrl);
-      }
+      try {
+        const magickModule = await import('@imagemagick/magick-wasm');
+        if (isExtension) {
+          // Chrome extension — fetch bundled WASM as bytes
+          // initializeImageMagick rejects chrome-extension:// URLs, so pass Uint8Array
+          const wasmUrl = chrome.runtime.getURL('magick.wasm');
+          const resp = await fetch(wasmUrl);
+          if (!resp.ok) {
+            throw new Error(`Failed to fetch magick.wasm: ${resp.status} ${resp.statusText}`);
+          }
+          const wasmBytes = new Uint8Array(await resp.arrayBuffer());
+          await magickModule.initializeImageMagick(wasmBytes);
+        } else {
+          const wasmBase = typeof window === 'undefined'
+            ? new URL('../../../node_modules/@imagemagick/magick-wasm/dist/', import.meta.url).toString()
+            : MAGICK_WASM_CDN;
+          const wasmUrl = new URL('magick.wasm', wasmBase);
+          await magickModule.initializeImageMagick(wasmUrl);
+        }
 
-      return magickModule as unknown as ImageMagickModule;
+        return magickModule as unknown as ImageMagickModule;
+      } catch (err) {
+        // Reset so subsequent calls retry instead of returning the rejected promise
+        magickPromise = null;
+        throw err;
+      }
     })();
   }
   return magickPromise;
