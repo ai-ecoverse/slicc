@@ -9,15 +9,19 @@
 
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { ToolDefinition, ImageContent, TextContent } from './types.js';
+import { processImageContent } from './image-processor.js';
+import { createLogger } from './logger.js';
+
+const log = createLogger('tool-adapter');
 
 /** Regex to match `<img:data:image/TYPE;base64,DATA>` tags in tool result text. */
 const IMG_TAG_RE = /<img:(data:(image\/[^;]+);base64,([^>]+))>/g;
 
 /**
  * Parse a tool result string, extracting `<img:...>` tags into ImageContent blocks.
- * Returns an array of TextContent and ImageContent blocks suitable for the agent message.
+ * Sync version — extracts tags without image processing.
  */
-export function parseToolResultContent(text: string): (TextContent | ImageContent)[] {
+export function parseToolResultContentRaw(text: string): (TextContent | ImageContent)[] {
   const blocks: (TextContent | ImageContent)[] = [];
   let lastIndex = 0;
 
@@ -46,6 +50,26 @@ export function parseToolResultContent(text: string): (TextContent | ImageConten
 }
 
 /**
+ * Parse a tool result string, extracting `<img:...>` tags into ImageContent blocks,
+ * then validate and resize any images that exceed API limits.
+ */
+export async function parseToolResultContent(text: string): Promise<(TextContent | ImageContent)[]> {
+  const raw = parseToolResultContentRaw(text);
+
+  // Process each image block through validation/resize
+  const processed: (TextContent | ImageContent)[] = [];
+  for (const block of raw) {
+    if (block.type === 'image') {
+      processed.push(await processImageContent(block));
+    } else {
+      processed.push(block);
+    }
+  }
+
+  return processed;
+}
+
+/**
  * Wrap a legacy ToolDefinition as a pi-compatible AgentTool.
  */
 export function adaptTool(tool: ToolDefinition): AgentTool<any> {
@@ -61,8 +85,18 @@ export function adaptTool(tool: ToolDefinition): AgentTool<any> {
       _onUpdate?: (partialResult: AgentToolResult<any>) => void,
     ): Promise<AgentToolResult<any>> {
       const result = await tool.execute(params);
+      let content: (TextContent | ImageContent)[];
+      try {
+        content = await parseToolResultContent(result.content);
+      } catch (err) {
+        log.warn('Image processing failed, falling back to raw content', {
+          tool: tool.name,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        content = parseToolResultContentRaw(result.content);
+      }
       return {
-        content: parseToolResultContent(result.content),
+        content,
         details: { isError: result.isError },
       };
     },

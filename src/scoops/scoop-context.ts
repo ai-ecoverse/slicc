@@ -28,6 +28,14 @@ import { createNanoClawTools, type NanoClawToolsConfig } from './nanoclaw-tools.
 
 const log = createLogger('scoop-context');
 
+/** Detect API errors caused by invalid/oversized images. */
+export function isImageProcessingError(msg: string): boolean {
+  return /image exceeds.*maximum/i.test(msg)
+    || /Could not process image/i.test(msg)
+    || /invalid.*image/i.test(msg)
+    || /image.*too (large|big)/i.test(msg);
+}
+
 export interface ScoopContextCallbacks {
   onResponse: (text: string, isPartial: boolean) => void;
   onResponseDone: () => void;
@@ -69,7 +77,7 @@ export class ScoopContext {
   private sessionStore: SessionStore | null = null;
   private sessionId: string;
   private sessionCreatedAt: number = 0;
-  private isRecoveringFromOverflow = false;
+  private isRecovering: 'overflow' | 'image' | false = false;
 
   constructor(scoop: RegisteredScoop, callbacks: ScoopContextCallbacks, fs: VirtualFS | RestrictedFS, sessionStore?: SessionStore) {
     this.scoop = scoop;
@@ -390,16 +398,22 @@ export class ScoopContext {
         if (messages.length > 0) {
           const last = messages[messages.length - 1];
           if (last.role === 'assistant' && (last as AssistantMessage).errorMessage) {
-            // Check for context overflow — attempt recovery instead of surfacing error
-            if (!this.isRecoveringFromOverflow && isContextOverflow(last as PiAssistantMessage)) {
+            const errorMsg = (last as AssistantMessage).errorMessage!;
+            // Check for image processing error first, then context overflow
+            if (!this.isRecovering && isImageProcessingError(errorMsg)) {
+              this.recoverFromImageError(messages);
+              break;
+            }
+            if (!this.isRecovering && isContextOverflow(last as PiAssistantMessage)) {
               this.recoverFromOverflow(messages);
               break;
             }
-            this.isRecoveringFromOverflow = false;
-            this.callbacks.onError((last as AssistantMessage).errorMessage!);
+            // Already recovering (either type) — surface error, reset flag
+            this.isRecovering = false;
+            this.callbacks.onError(errorMsg);
           } else {
-            // Successful completion — reset overflow recovery flag
-            this.isRecoveringFromOverflow = false;
+            // Successful completion — reset recovery flag
+            this.isRecovering = false;
           }
         }
         break;
@@ -420,7 +434,7 @@ export class ScoopContext {
 
     log.warn('Context overflow detected, attempting recovery', { folder: this.scoop.folder, messageCount: messages.length });
 
-    this.isRecoveringFromOverflow = true;
+    this.isRecovering = 'overflow';
 
     // Notify the user that recovery is in progress
     this.callbacks.onResponse('Context window exceeded — recovering by trimming oversized messages...', false);
@@ -470,13 +484,72 @@ export class ScoopContext {
 
       this.agent.prompt(explanation).catch((err) => {
         log.error('Recovery re-prompt failed', { folder: this.scoop.folder, error: err instanceof Error ? err.message : String(err) });
-        this.isRecoveringFromOverflow = false;
+        this.isRecovering = false;
         this.callbacks.onError(`Context overflow recovery failed: ${err instanceof Error ? err.message : String(err)}`);
       });
     } catch (err) {
       log.error('Recovery failed', { folder: this.scoop.folder, error: err instanceof Error ? err.message : String(err) });
-      this.isRecoveringFromOverflow = false;
+      this.isRecovering = false;
       this.callbacks.onError(`Context overflow recovery failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
+   * Recover from an image processing error by stripping ImageContent blocks
+   * from recent messages and re-prompting the agent.
+   */
+  private recoverFromImageError(messages: AgentMessage[]): void {
+    if (!this.agent) return;
+
+    log.warn('Image processing error detected, attempting recovery', { folder: this.scoop.folder, messageCount: messages.length });
+
+    this.isRecovering = 'image';
+
+    this.callbacks.onResponse('Image rejected by API — removing problematic images and continuing...', false);
+
+    try {
+      // Remove the error assistant message (last)
+      const trimmed = messages.slice(0, -1);
+
+      // Walk backward through last 10 messages, strip all ImageContent blocks
+      let stripped = 0;
+      const limit = Math.max(0, trimmed.length - 10);
+
+      for (let i = trimmed.length - 1; i >= limit; i--) {
+        const msg = trimmed[i] as any;
+        if (!Array.isArray(msg.content)) continue;
+
+        const hasImages = msg.content.some((block: any) => block.type === 'image');
+        if (!hasImages) continue;
+
+        // Remove image blocks, keep text blocks
+        const filtered = msg.content.filter((block: any) => block.type !== 'image');
+
+        if (filtered.length === 0) {
+          // All content was images — replace with placeholder
+          trimmed[i] = {
+            ...msg,
+            content: [{ type: 'text' as const, text: '[Image removed: rejected by API]' }],
+          };
+        } else {
+          trimmed[i] = { ...msg, content: filtered };
+        }
+        stripped++;
+      }
+
+      this.agent.replaceMessages(trimmed);
+
+      const explanation = `[System: An image was rejected by the API and has been removed from the conversation (${stripped} message(s) affected). The conversation continues without the image.]`;
+
+      this.agent.prompt(explanation).catch((err) => {
+        log.error('Image recovery re-prompt failed', { folder: this.scoop.folder, error: err instanceof Error ? err.message : String(err) });
+        this.isRecovering = false;
+        this.callbacks.onError(`Image error recovery failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    } catch (err) {
+      log.error('Image recovery failed', { folder: this.scoop.folder, error: err instanceof Error ? err.message : String(err) });
+      this.isRecovering = false;
+      this.callbacks.onError(`Image error recovery failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
