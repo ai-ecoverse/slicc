@@ -1048,15 +1048,31 @@ async function main(): Promise<void> {
       runtimeConfigFetcher: () => fetchRuntimeConfig(),
     });
 
-    if (trayRuntimeConfig?.joinUrl) {
+    // Start follower join from a joinUrl. Reusable — called at startup
+    // and when the user pastes a join URL in the settings dialog.
+    let activeFollower: FollowerTrayManager | null = null;
+    const startFollowerJoin = (joinUrl: string) => {
+      activeFollower?.stop();
       const trayFollower = new FollowerTrayManager({
-        joinUrl: trayRuntimeConfig.joinUrl,
+        joinUrl,
         runtime: 'slicc-standalone',
       });
+      activeFollower = trayFollower;
       void trayFollower.start().catch((error) => {
         log.warn('Follower tray join failed', { error: error instanceof Error ? error.message : String(error) });
       });
-      window.addEventListener('beforeunload', () => trayFollower.stop(), { once: true });
+    };
+
+    // Listen for join events from the settings dialog
+    window.addEventListener('slicc:tray-join', ((event: CustomEvent<{ joinUrl: string }>) => {
+      startFollowerJoin(event.detail.joinUrl);
+    }) as EventListener);
+
+    // Clean up on page unload
+    window.addEventListener('beforeunload', () => activeFollower?.stop(), { once: true });
+
+    if (trayRuntimeConfig?.joinUrl) {
+      startFollowerJoin(trayRuntimeConfig.joinUrl);
     } else if (trayRuntimeConfig?.workerBaseUrl) {
       let leaderTray!: LeaderTrayManager;
       const trayPeers = new LeaderTrayPeerManager({

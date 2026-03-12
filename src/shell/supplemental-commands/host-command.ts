@@ -4,10 +4,15 @@ import {
   getLeaderTrayRuntimeStatus,
   type LeaderTrayRuntimeStatus,
 } from '../../scoops/tray-leader.js';
+import {
+  getFollowerTrayRuntimeStatus,
+  type FollowerTrayRuntimeStatus,
+} from '../../scoops/tray-follower-status.js';
 import { buildTrayLaunchUrl, buildTrayUrlValue } from '../../scoops/tray-runtime-config.js';
 
 export interface HostCommandOptions {
   getStatus?: () => LeaderTrayRuntimeStatus;
+  getFollowerStatus?: () => FollowerTrayRuntimeStatus;
   getLocationHref?: () => string | null;
 }
 
@@ -17,14 +22,14 @@ function hostHelp(): { stdout: string; stderr: string; exitCode: number } {
 
 Usage: host
 
-Shows the current leader tray state and, when available, the canonical tray launch URL and join URL.
+Shows the current tray state (leader or follower) and, when available, the canonical tray launch URL and join URL.
 `,
     stderr: '',
     exitCode: 0,
   };
 }
 
-function formatHostOutput(status: LeaderTrayRuntimeStatus, locationHref: string | null): string {
+function formatLeaderOutput(status: LeaderTrayRuntimeStatus, locationHref: string | null): string {
   const lines = [`status: ${status.state}`];
 
   if (status.session) {
@@ -49,8 +54,25 @@ function formatHostOutput(status: LeaderTrayRuntimeStatus, locationHref: string 
   return `${lines.join('\n')}\n`;
 }
 
+export function formatFollowerOutput(status: FollowerTrayRuntimeStatus): string {
+  const lines = [`status: follower (${status.state})`];
+
+  if (status.joinUrl) {
+    lines.push(`join_url: ${status.joinUrl}`);
+  }
+  if (status.trayId) {
+    lines.push(`tray_id: ${status.trayId}`);
+  }
+  if (status.error) {
+    lines.push(`error: ${status.error}`);
+  }
+
+  return `${lines.join('\n')}\n`;
+}
+
 export function createHostCommand(options: HostCommandOptions = {}): Command {
   const getStatus = options.getStatus ?? getLeaderTrayRuntimeStatus;
+  const getFollowerSt = options.getFollowerStatus ?? getFollowerTrayRuntimeStatus;
   const getLocationHref = options.getLocationHref ?? (() => globalThis.location?.href ?? null);
 
   return defineCommand('host', async (args) => {
@@ -66,8 +88,18 @@ export function createHostCommand(options: HostCommandOptions = {}): Command {
       };
     }
 
+    // Show follower status if follower is active (connecting, connected, or error)
+    const followerStatus = getFollowerSt();
+    if (followerStatus.state !== 'inactive') {
+      return {
+        stdout: formatFollowerOutput(followerStatus),
+        stderr: '',
+        exitCode: 0,
+      };
+    }
+
     return {
-      stdout: formatHostOutput(getStatus(), getLocationHref()),
+      stdout: formatLeaderOutput(getStatus(), getLocationHref()),
       stderr: '',
       exitCode: 0,
     };

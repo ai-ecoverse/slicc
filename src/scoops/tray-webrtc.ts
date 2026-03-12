@@ -8,6 +8,7 @@ import {
   sendTrayFollowerAnswer,
   sendTrayFollowerIceCandidate,
 } from './tray-follower.js';
+import { setFollowerTrayRuntimeStatus } from './tray-follower-status.js';
 
 const log = createLogger('tray-webrtc');
 const DEFAULT_DATA_CHANNEL_LABEL = 'tray-control';
@@ -223,6 +224,14 @@ export class FollowerTrayManager {
     this.stopped = false;
     const controllerId = this.controllerIdFactory();
 
+    setFollowerTrayRuntimeStatus({
+      state: 'connecting',
+      joinUrl: this.options.joinUrl,
+      trayId: null,
+      error: null,
+    });
+    log.info('Follower tray join starting', { joinUrl: this.options.joinUrl });
+
     for (;;) {
       ensureNotStopped(this.stopped);
       const attach = await attachTrayFollower({
@@ -236,9 +245,36 @@ export class FollowerTrayManager {
         continue;
       }
       if (attach.action === 'fail' || !attach.bootstrap) {
-        throw new Error(attach.error ?? `Tray follower attach failed (${attach.code})`);
+        const errorMsg = attach.error ?? `Tray follower attach failed (${attach.code})`;
+        setFollowerTrayRuntimeStatus({
+          state: 'error',
+          joinUrl: this.options.joinUrl,
+          trayId: null,
+          error: errorMsg,
+        });
+        log.warn('Follower tray attach failed', { error: errorMsg });
+        throw new Error(errorMsg);
       }
-      return await this.completeBootstrap(attach.trayId, controllerId, attach.bootstrap);
+      try {
+        const connection = await this.completeBootstrap(attach.trayId, controllerId, attach.bootstrap);
+        setFollowerTrayRuntimeStatus({
+          state: 'connected',
+          joinUrl: this.options.joinUrl,
+          trayId: connection.trayId,
+          error: null,
+        });
+        log.info('Follower tray connected', { trayId: connection.trayId, controllerId });
+        return connection;
+      } catch (error) {
+        setFollowerTrayRuntimeStatus({
+          state: 'error',
+          joinUrl: this.options.joinUrl,
+          trayId: attach.trayId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        log.warn('Follower tray bootstrap failed', { error: error instanceof Error ? error.message : String(error) });
+        throw error;
+      }
     }
   }
 
@@ -247,6 +283,12 @@ export class FollowerTrayManager {
     this.activePeer?.peer.close();
     this.activePeer?.channel?.close();
     this.activePeer = null;
+    setFollowerTrayRuntimeStatus({
+      state: 'inactive',
+      joinUrl: null,
+      trayId: null,
+      error: null,
+    });
   }
 
   private async completeBootstrap(

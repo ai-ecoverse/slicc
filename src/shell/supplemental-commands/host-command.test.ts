@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createHostCommand } from './host-command.js';
+import { createHostCommand, formatFollowerOutput } from './host-command.js';
 
 describe('host command', () => {
   it('has the correct name', () => {
@@ -84,5 +84,100 @@ describe('host command', () => {
     const result = await createHostCommand().execute(['nope'], {} as never);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe('host: unsupported arguments\n');
+  });
+
+  it('shows follower status when follower is connected', async () => {
+    const result = await createHostCommand({
+      getFollowerStatus: () => ({
+        state: 'connected',
+        joinUrl: 'https://tray.example.com/join/token',
+        trayId: 'tray-456',
+        error: null,
+      }),
+    }).execute([], {} as never);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('status: follower (connected)');
+    expect(result.stdout).toContain('join_url: https://tray.example.com/join/token');
+    expect(result.stdout).toContain('tray_id: tray-456');
+  });
+
+  it('shows follower connecting status', async () => {
+    const result = await createHostCommand({
+      getFollowerStatus: () => ({
+        state: 'connecting',
+        joinUrl: 'https://tray.example.com/join/token',
+        trayId: null,
+        error: null,
+      }),
+    }).execute([], {} as never);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('status: follower (connecting)');
+    expect(result.stdout).toContain('join_url: https://tray.example.com/join/token');
+    expect(result.stdout).not.toContain('tray_id:');
+  });
+
+  it('shows follower error status', async () => {
+    const result = await createHostCommand({
+      getFollowerStatus: () => ({
+        state: 'error',
+        joinUrl: 'https://tray.example.com/join/token',
+        trayId: null,
+        error: 'WebRTC failed',
+      }),
+    }).execute([], {} as never);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('status: follower (error)');
+    expect(result.stdout).toContain('error: WebRTC failed');
+  });
+
+  it('falls back to leader status when follower is inactive', async () => {
+    const result = await createHostCommand({
+      getFollowerStatus: () => ({
+        state: 'inactive',
+        joinUrl: null,
+        trayId: null,
+        error: null,
+      }),
+      getStatus: () => ({ state: 'inactive', session: null, error: null }),
+    }).execute([], {} as never);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('status: inactive');
+    expect(result.stdout).not.toContain('follower');
+  });
+});
+
+describe('formatFollowerOutput', () => {
+  it('formats connected follower with all fields', () => {
+    const output = formatFollowerOutput({
+      state: 'connected',
+      joinUrl: 'https://tray.example.com/join/token',
+      trayId: 'tray-789',
+      error: null,
+    });
+    expect(output).toBe('status: follower (connected)\njoin_url: https://tray.example.com/join/token\ntray_id: tray-789\n');
+  });
+
+  it('omits tray_id when null', () => {
+    const output = formatFollowerOutput({
+      state: 'connecting',
+      joinUrl: 'https://tray.example.com/join/token',
+      trayId: null,
+      error: null,
+    });
+    expect(output).not.toContain('tray_id');
+  });
+
+  it('includes error when present', () => {
+    const output = formatFollowerOutput({
+      state: 'error',
+      joinUrl: null,
+      trayId: null,
+      error: 'something broke',
+    });
+    expect(output).toContain('error: something broke');
   });
 });

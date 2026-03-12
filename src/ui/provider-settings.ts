@@ -7,7 +7,8 @@
 import { getProviders, getModels, getModel, createLogger } from '../core/index.js';
 import type { Model } from '../core/index.js';
 import type { Api } from '@mariozechner/pi-ai';
-import { storeTrayJoinUrl } from '../scoops/tray-runtime-config.js';
+import { storeTrayJoinUrl, hasStoredTrayJoinUrl } from '../scoops/tray-runtime-config.js';
+import { getFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import { getThemePreference, setThemePreference } from './theme.js';
 import type { ThemePreference } from './theme.js';
 import type { RefreshTrayRuntimeMsg } from '../extension/messages.js';
@@ -746,6 +747,41 @@ export function showProviderSettings(): Promise<void> {
 
       dialog.appendChild(btnRow);
 
+      // ── Tray section ────────────────────────────────────────────
+      const traySep = document.createElement('hr');
+      traySep.style.cssText =
+        'border: none; border-top: 1px solid var(--s2-border-subtle); margin: 16px 0;';
+      dialog.appendChild(traySep);
+
+      const trayLabel = document.createElement('div');
+      trayLabel.className = 'dialog__desc';
+      trayLabel.style.cssText = 'font-weight: 600; margin-bottom: 8px;';
+      trayLabel.textContent = 'Tray';
+      dialog.appendChild(trayLabel);
+
+      const followerStatus = getFollowerTrayRuntimeStatus();
+      const isFollowerActive = followerStatus.state !== 'inactive';
+      const hasJoinUrl = hasStoredTrayJoinUrl(window.localStorage);
+
+      if (isFollowerActive || hasJoinUrl) {
+        const trayStatus = document.createElement('div');
+        trayStatus.style.cssText =
+          'font-size: 12px; color: var(--s2-content-secondary); margin-bottom: 8px;';
+        const stateLabel = isFollowerActive ? followerStatus.state : 'configured';
+        trayStatus.textContent = `Follower: ${stateLabel}`;
+        if (followerStatus.error) {
+          trayStatus.textContent += ` — ${followerStatus.error}`;
+          trayStatus.style.color = 'var(--slicc-cone)';
+        }
+        dialog.appendChild(trayStatus);
+      }
+
+      const joinTrayBtn = document.createElement('button');
+      joinTrayBtn.className = 'dialog__btn dialog__btn--secondary';
+      joinTrayBtn.textContent = isFollowerActive || hasJoinUrl ? 'Rejoin tray' : 'Join a tray';
+      joinTrayBtn.addEventListener('click', () => renderJoinTrayForm());
+      dialog.appendChild(joinTrayBtn);
+
       // ── Theme section ───────────────────────────────────────────
       const themeSep = document.createElement('hr');
       themeSep.style.cssText =
@@ -1055,6 +1091,9 @@ export function showProviderSettings(): Promise<void> {
       errorEl.style.cssText = 'color: var(--slicc-cone); font-size: 12px; margin-bottom: 8px; display: none;';
       dialog.appendChild(errorEl);
 
+      const statusEl = document.createElement('div');
+      statusEl.style.cssText = 'font-size: 12px; color: var(--s2-content-secondary); margin-bottom: 8px; display: none;';
+
       const joinBtn = document.createElement('button');
       joinBtn.className = 'dialog__btn';
       joinBtn.textContent = 'Join tray';
@@ -1072,12 +1111,25 @@ export function showProviderSettings(): Promise<void> {
           void chrome.runtime.sendMessage({ source: 'panel' as const, payload }).catch(() => {
             // Offscreen may not be ready yet; mainExtension will reconnect shortly.
           });
+        } else {
+          // Trigger follower join in standalone mode without page reload
+          window.dispatchEvent(new CustomEvent('slicc:tray-join', {
+            detail: { joinUrl: stored.joinUrl },
+          }));
         }
 
-        overlay.remove();
-        resolve();
+        statusEl.textContent = 'Connecting to tray...';
+        statusEl.style.display = '';
+        statusEl.style.color = 'var(--s2-content-secondary)';
+
+        // Close dialog after brief feedback
+        setTimeout(() => {
+          overlay.remove();
+          resolve();
+        }, 800);
       });
       dialog.appendChild(joinBtn);
+      dialog.appendChild(statusEl);
 
       const backBtn = document.createElement('button');
       backBtn.className = 'dialog__btn dialog__btn--secondary';
