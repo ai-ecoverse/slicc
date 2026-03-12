@@ -48,10 +48,27 @@ describeIfConfigured('deployed tray worker', () => {
     const created = (await createResponse.json()) as CreateTrayResponse;
 
     const joinResponse = await fetch(created.capabilities.join.url);
-    expect(joinResponse.status).toBe(200);
+    expect(joinResponse.status).toBe(409);
     await expect(joinResponse.json()).resolves.toMatchObject({
       trayId: created.trayId,
       capability: 'join',
+      code: 'FOLLOWER_JOIN_NOT_READY',
+      retryable: true,
+    });
+
+    const waitingFollowerResponse = await fetch(created.capabilities.join.url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ controllerId: 'ci-follower-wait', runtime: 'github-actions' }),
+    });
+    expect(waitingFollowerResponse.status).toBe(200);
+    await expect(waitingFollowerResponse.json()).resolves.toMatchObject({
+      role: 'follower',
+      controllerId: 'ci-follower-wait',
+      result: {
+        action: 'wait',
+        code: 'LEADER_NOT_ELECTED',
+      },
     });
 
     const attachResponse = await fetch(created.capabilities.controller.url, {
@@ -81,9 +98,96 @@ describeIfConfigured('deployed tray worker', () => {
       controllerId: 'ci-live-check',
     });
 
+    const signalFollowerResponse = await fetch(created.capabilities.join.url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ controllerId: 'ci-follower-signal', runtime: 'github-actions' }),
+    });
+    expect(signalFollowerResponse.status).toBe(200);
+    const signalFollower = (await signalFollowerResponse.json()) as {
+      controllerId: string;
+      result: { action: string; code: string; bootstrap: { bootstrapId: string; attempt: number } };
+    };
+    expect(signalFollower).toMatchObject({
+      role: 'follower',
+      controllerId: 'ci-follower-signal',
+      result: {
+        action: 'signal',
+        code: 'LEADER_CONNECTED',
+        bootstrap: { attempt: 1 },
+      },
+    });
+
+    const joinRequested = await waitForJsonMessage(socket);
+    expect(joinRequested).toMatchObject({
+      type: 'follower.join_requested',
+      controllerId: 'ci-follower-signal',
+      bootstrapId: signalFollower.result.bootstrap.bootstrapId,
+      attempt: 1,
+    });
+
     socket.send(JSON.stringify({ type: 'ping' }));
     const pong = await waitForJsonMessage(socket);
     expect(pong).toMatchObject({ type: 'pong', trayId: created.trayId });
+
+    const joinWithLeader = await fetch(created.capabilities.join.url);
+    expect(joinWithLeader.status).toBe(200);
+    await expect(joinWithLeader.json()).resolves.toMatchObject({
+      trayId: created.trayId,
+      capability: 'join',
+      leader: { controllerId: 'ci-live-check', connected: true },
+      signaling: {
+        transport: 'http-poll',
+        maxRetries: 3,
+      },
+    });
+
+    socket.send(JSON.stringify({
+      type: 'bootstrap.offer',
+      controllerId: 'ci-follower-signal',
+      bootstrapId: signalFollower.result.bootstrap.bootstrapId,
+      offer: { type: 'offer', sdp: 'offer-sdp' },
+    }));
+
+    const polledBootstrap = await fetch(created.capabilities.join.url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        action: 'poll',
+        controllerId: 'ci-follower-signal',
+        bootstrapId: signalFollower.result.bootstrap.bootstrapId,
+        cursor: 0,
+      }),
+    });
+    expect(polledBootstrap.status).toBe(200);
+    await expect(polledBootstrap.json()).resolves.toMatchObject({
+      controllerId: 'ci-follower-signal',
+      bootstrap: { bootstrapId: signalFollower.result.bootstrap.bootstrapId, state: 'offered' },
+      events: [{ type: 'bootstrap.offer', offer: { type: 'offer', sdp: 'offer-sdp' } }],
+    });
+
+    const answeredBootstrap = await fetch(created.capabilities.join.url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        action: 'answer',
+        controllerId: 'ci-follower-signal',
+        bootstrapId: signalFollower.result.bootstrap.bootstrapId,
+        answer: { type: 'answer', sdp: 'answer-sdp' },
+      }),
+    });
+    expect(answeredBootstrap.status).toBe(200);
+    await expect(answeredBootstrap.json()).resolves.toMatchObject({
+      bootstrap: { bootstrapId: signalFollower.result.bootstrap.bootstrapId, state: 'connected' },
+    });
+
+    const answerMessage = await waitForJsonMessage(socket);
+    expect(answerMessage).toMatchObject({
+      type: 'bootstrap.answer',
+      controllerId: 'ci-follower-signal',
+      bootstrapId: signalFollower.result.bootstrap.bootstrapId,
+      answer: { type: 'answer', sdp: 'answer-sdp' },
+    });
 
     const webhookWithLeader = await fetch(created.capabilities.webhook.url, {
       method: 'POST',

@@ -1,10 +1,12 @@
 import { createLogger } from '../core/logger.js';
+import type { LeaderToWorkerControlMessage, WorkerToLeaderControlMessage } from '../worker/tray-signaling.js';
 import * as db from './db.js';
 import { buildTrayWorkerUrl } from './tray-runtime-config.js';
 
 const log = createLogger('tray-leader');
 const LEADER_TRAY_STATE_KEY = 'leader-tray-session';
 const LEADER_TRAY_PING_INTERVAL_MS = 30_000;
+const LEADER_TRAY_CONNECT_TIMEOUT_MS = 10_000;
 
 interface CreateTrayResponse {
   trayId: string;
@@ -81,7 +83,9 @@ export interface LeaderTrayManagerOptions {
   store?: LeaderTraySessionStore;
   fetchImpl?: typeof fetch;
   webSocketFactory?: (url: string) => LeaderTrayWebSocket;
+  onControlMessage?: (message: WorkerToLeaderControlMessage) => void;
   pingIntervalMs?: number;
+  connectTimeoutMs?: number;
 }
 
 export class IndexedDbLeaderTraySessionStore implements LeaderTraySessionStore {
@@ -140,6 +144,7 @@ export class LeaderTrayManager {
   private readonly fetchImpl: typeof fetch;
   private readonly webSocketFactory: (url: string) => LeaderTrayWebSocket;
   private readonly pingIntervalMs: number;
+  private readonly connectTimeoutMs: number;
   private socket: LeaderTrayWebSocket | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private currentSession: LeaderTraySession | null = null;
@@ -149,6 +154,7 @@ export class LeaderTrayManager {
     this.fetchImpl = options.fetchImpl ?? createLeaderTrayFetch();
     this.webSocketFactory = options.webSocketFactory ?? (url => new WebSocket(url));
     this.pingIntervalMs = options.pingIntervalMs ?? LEADER_TRAY_PING_INTERVAL_MS;
+    this.connectTimeoutMs = options.connectTimeoutMs ?? LEADER_TRAY_CONNECT_TIMEOUT_MS;
   }
 
   async start(): Promise<LeaderTraySession> {
@@ -158,15 +164,16 @@ export class LeaderTrayManager {
     }
 
     setLeaderTrayRuntimeStatus({ state: 'connecting', session: null, error: null });
+    this.currentSession = null;
 
     try {
       const storedSession = await this.store.load();
       const reusableSession = storedSession?.workerBaseUrl === this.options.workerBaseUrl ? storedSession : null;
 
       const session = await this.attachWithRecovery(reusableSession);
+      this.currentSession = session;
       const socket = await this.openLeaderSocket(session.leaderWebSocketUrl!);
       this.socket = socket;
-      this.currentSession = session;
       this.startPingLoop(socket);
       setLeaderTrayRuntimeStatus({ state: 'leader', session, error: null });
 
@@ -199,6 +206,13 @@ export class LeaderTrayManager {
 
     this.currentSession = null;
     setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
+  }
+
+  sendControlMessage(message: LeaderToWorkerControlMessage): void {
+    if (!this.socket) {
+      throw new Error('Tray leader WebSocket is not connected');
+    }
+    this.socket.send(JSON.stringify(message));
   }
 
   private async attachWithRecovery(session: LeaderTraySession | null): Promise<LeaderTraySession> {
@@ -268,10 +282,19 @@ export class LeaderTrayManager {
     return await new Promise((resolve, reject) => {
       const socket = this.webSocketFactory(url);
       let settled = false;
+      const timeout = setTimeout(() => {
+        fail(`Tray leader WebSocket timed out after ${this.connectTimeoutMs}ms waiting for leader.connected`);
+        try {
+          socket.close(1000, 'leader.connected timeout');
+        } catch {
+          // Ignore best-effort socket teardown.
+        }
+      }, this.connectTimeoutMs);
 
       const fail = (reason: string) => {
         if (settled) return;
         settled = true;
+        clearTimeout(timeout);
         reject(new Error(reason));
       };
 
@@ -282,6 +305,7 @@ export class LeaderTrayManager {
         if (payload.type === 'leader.connected') {
           if (!settled) {
             settled = true;
+            clearTimeout(timeout);
             resolve(socket);
           }
           return;
@@ -289,7 +313,10 @@ export class LeaderTrayManager {
 
         if (payload.type === 'pong') {
           log.debug('Tray leader heartbeat acknowledged', { trayId: this.currentSession?.trayId });
+          return;
         }
+
+        this.options.onControlMessage?.(payload);
       });
       socket.addEventListener('close', () => fail('Tray leader WebSocket closed before leader.connected'));
       socket.addEventListener('error', () => fail('Tray leader WebSocket failed before leader.connected'));
@@ -348,10 +375,10 @@ function shouldRecreateTray(error: unknown): boolean {
   return error instanceof LeaderTrayHttpError && [403, 404, 410].includes(error.status);
 }
 
-function parseSocketMessage(data: unknown): { type?: string } | null {
+function parseSocketMessage(data: unknown): WorkerToLeaderControlMessage | null {
   if (typeof data !== 'string') return null;
   try {
-    return JSON.parse(data) as { type?: string };
+    return JSON.parse(data) as WorkerToLeaderControlMessage;
   } catch {
     return null;
   }

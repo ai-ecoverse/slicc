@@ -1,4 +1,11 @@
+import type {
+  TrayBootstrapEvent,
+  TrayBootstrapRecord,
+  TrayBootstrapStatus,
+} from './tray-signaling.js';
+
 export const TRAY_RECLAIM_TTL_MS = 60 * 60 * 1000;
+export const FOLLOWER_ATTACH_RETRY_AFTER_MS = 1_000;
 
 export interface DurableObjectIdLike {
   toString(): string;
@@ -45,6 +52,7 @@ export interface TrayRecord {
   controllerToken: string;
   webhookToken: string;
   controllers: Record<string, ControllerRecord>;
+  bootstraps: Record<string, TrayBootstrapRecord>;
   leader: LeaderRecord | null;
   expiredAt?: string;
 }
@@ -55,6 +63,53 @@ export interface CreateTrayRequest {
   joinToken: string;
   controllerToken: string;
   webhookToken: string;
+}
+
+export interface TrayLeaderSummary {
+  controllerId: string;
+  connected: boolean;
+  reconnectDeadline: string | null;
+}
+
+export interface FollowerJoinRequest {
+  controllerId?: string;
+  runtime?: string;
+}
+
+export type FollowerAttachResult =
+  | {
+      action: 'wait';
+      code: 'LEADER_NOT_ELECTED' | 'LEADER_NOT_CONNECTED';
+      retryAfterMs: number;
+    }
+  | {
+      action: 'signal';
+      code: 'LEADER_CONNECTED';
+      bootstrap: TrayBootstrapStatus;
+    }
+  | {
+      action: 'fail';
+      code: 'INVALID_JOIN_CAPABILITY' | 'TRAY_EXPIRED';
+      error: string;
+    };
+
+export interface FollowerAttachResponse {
+  trayId: string;
+  controllerId: string;
+  role: 'follower';
+  leader: TrayLeaderSummary | null;
+  participantCount: number;
+  result: FollowerAttachResult;
+}
+
+export interface FollowerBootstrapResponse {
+  trayId: string;
+  controllerId: string;
+  role: 'follower';
+  leader: TrayLeaderSummary | null;
+  participantCount: number;
+  bootstrap: TrayBootstrapStatus;
+  events: TrayBootstrapEvent[];
 }
 
 export function createCapabilityToken(trayId: string, bytes = 18): string {

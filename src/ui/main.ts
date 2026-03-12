@@ -24,8 +24,9 @@ import { LeaderTrayManager } from '../scoops/tray-leader.js';
 import {
   buildTrayLaunchUrl,
   fetchRuntimeConfig,
-  resolveTrayWorkerBaseUrl,
+  resolveTrayRuntimeConfig,
 } from '../scoops/tray-runtime-config.js';
+import { FollowerTrayManager, LeaderTrayPeerManager } from '../scoops/tray-webrtc.js';
 import {
   getElectronOverlayInitialTab,
   getLickWebSocketUrl,
@@ -1026,19 +1027,46 @@ async function main(): Promise<void> {
   }
 
   if (runtimeMode === 'standalone') {
-    const trayWorkerBaseUrl = await resolveTrayWorkerBaseUrl({
+    const trayRuntimeConfig = await resolveTrayRuntimeConfig({
       locationHref: window.location.href,
       storage: window.localStorage,
       envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
       runtimeConfigFetcher: () => fetchRuntimeConfig(),
     });
 
-    if (trayWorkerBaseUrl) {
-      const trayLeader = new LeaderTrayManager({
-        workerBaseUrl: trayWorkerBaseUrl,
+    if (trayRuntimeConfig?.joinUrl) {
+      const trayFollower = new FollowerTrayManager({
+        joinUrl: trayRuntimeConfig.joinUrl,
         runtime: 'slicc-standalone',
       });
-      void trayLeader.start()
+      void trayFollower.start().catch((error) => {
+        log.warn('Follower tray join failed', { error: error instanceof Error ? error.message : String(error) });
+      });
+      window.addEventListener('beforeunload', () => trayFollower.stop(), { once: true });
+    } else if (trayRuntimeConfig?.workerBaseUrl) {
+      let leaderTray!: LeaderTrayManager;
+      const trayPeers = new LeaderTrayPeerManager({
+        sendControlMessage: message => leaderTray.sendControlMessage(message),
+        onPeerConnected: peer => {
+          log.info('Tray follower data channel opened', {
+            controllerId: peer.controllerId,
+            bootstrapId: peer.bootstrapId,
+            attempt: peer.attempt,
+          });
+        },
+      });
+      leaderTray = new LeaderTrayManager({
+        workerBaseUrl: trayRuntimeConfig.workerBaseUrl,
+        runtime: 'slicc-standalone',
+        onControlMessage: message => {
+          void trayPeers.handleControlMessage(message).catch((error) => {
+            log.warn('Tray leader bootstrap handling failed', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        },
+      });
+      void leaderTray.start()
         .then((session) => {
           const trayUrl = buildTrayLaunchUrl(window.location.href, session.workerBaseUrl, session.trayId);
           if (trayUrl !== window.location.href) {
@@ -1048,7 +1076,10 @@ async function main(): Promise<void> {
         .catch((error) => {
           log.warn('Leader tray join failed', { error: error instanceof Error ? error.message : String(error) });
         });
-      window.addEventListener('beforeunload', () => trayLeader.stop(), { once: true });
+      window.addEventListener('beforeunload', () => {
+        trayPeers.stop();
+        leaderTray.stop();
+      }, { once: true });
     }
   }
 

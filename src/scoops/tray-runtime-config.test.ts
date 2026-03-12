@@ -7,6 +7,7 @@ import {
   fetchRuntimeConfig,
   normalizeTrayWorkerBaseUrl,
   parseTrayUrlValue,
+  resolveTrayRuntimeConfig,
   resolveTrayWorkerBaseUrl,
   type RuntimeConfigStorage,
 } from './tray-runtime-config.js';
@@ -41,10 +42,17 @@ describe('tray-runtime-config', () => {
     expect(parseTrayUrlValue('https://tray.example.com/base/tray/tray-123')).toEqual({
       workerBaseUrl: 'https://tray.example.com/base',
       trayId: 'tray-123',
+      joinUrl: null,
     });
     expect(parseTrayUrlValue('https://tray.example.com/base')).toEqual({
       workerBaseUrl: 'https://tray.example.com/base',
       trayId: null,
+      joinUrl: null,
+    });
+    expect(parseTrayUrlValue('https://tray.example.com/base/join/tray-join.secret')).toEqual({
+      workerBaseUrl: 'https://tray.example.com/base',
+      trayId: 'tray-join',
+      joinUrl: 'https://tray.example.com/base/join/tray-join.secret',
     });
     expect(parseTrayUrlValue('not-a-url')).toBeNull();
   });
@@ -70,6 +78,23 @@ describe('tray-runtime-config', () => {
 
     expect(resolved).toBe('https://query.example.com/base');
     expect(storage.getItem('slicc.trayWorkerBaseUrl')).toBe('https://query.example.com/base');
+  });
+
+  it('resolves join-launch query state without losing the worker base URL', async () => {
+    const storage = new MemoryStorage();
+
+    await expect(resolveTrayRuntimeConfig({
+      locationHref: 'http://localhost:3000/?tray=https://tray.example.com/base/join/tray-join.secret',
+      storage,
+      envBaseUrl: 'https://env.example.com',
+      runtimeConfigFetcher: async () => ({ trayWorkerBaseUrl: 'https://server.example.com' }),
+    })).resolves.toEqual({
+      workerBaseUrl: 'https://tray.example.com/base',
+      trayId: 'tray-join',
+      joinUrl: 'https://tray.example.com/base/join/tray-join.secret',
+    });
+
+    expect(storage.getItem('slicc.trayWorkerBaseUrl')).toBe('https://tray.example.com/base');
   });
 
   it('continues to recognize the legacy lead and trayWorkerUrl query parameters for backward compatibility', async () => {

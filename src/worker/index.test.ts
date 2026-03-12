@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { handleWorkerRequest } from './index.js';
-import { TRAY_RECLAIM_TTL_MS, type DurableObjectIdLike, type DurableObjectStateLike, type TrayRecord } from './shared.js';
+import {
+  FOLLOWER_ATTACH_RETRY_AFTER_MS,
+  TRAY_RECLAIM_TTL_MS,
+  type DurableObjectIdLike,
+  type DurableObjectStateLike,
+  type TrayRecord,
+} from './shared.js';
 import { SessionTrayDurableObject } from './session-tray.js';
+import { TRAY_BOOTSTRAP_TIMEOUT_MS } from './tray-signaling.js';
 
 class FakeStorage {
   private readonly data = new Map<string, unknown>();
@@ -146,16 +153,13 @@ describe('tray worker skeleton', () => {
     }
   });
 
-  it('elects the first controller as leader and leaves later controllers as followers', async () => {
+  it('returns an explicit wait instruction when a follower attaches before a live leader exists', async () => {
     const { env } = createTestHarness();
     const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
     const session = (await created.json()) as {
       trayId: string;
       capabilities: { controller: { url: string }; join: { url: string } };
     };
-
-    const joinResponse = await handleWorkerRequest(new Request(session.capabilities.join.url), env);
-    expect(joinResponse.status).toBe(200);
 
     const leaderAttach = await handleWorkerRequest(
       new Request(session.capabilities.controller.url, {
@@ -176,24 +180,393 @@ describe('tray worker skeleton', () => {
     expect(leader.websocket?.url).toContain('wss://tray.test/controller/');
 
     const followerAttach = await handleWorkerRequest(
-      new Request(session.capabilities.controller.url, {
+      new Request(session.capabilities.join.url, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'cone-2', runtime: 'electron' }),
       }),
       env,
     );
-    const follower = (await followerAttach.json()) as { role: string; websocket: unknown; leader: { controllerId: string } };
+    const follower = (await followerAttach.json()) as {
+      role: string;
+      leader: { controllerId: string; connected: boolean };
+      result: { action: string; code: string; retryAfterMs?: number };
+    };
 
     expect(follower.role).toBe('follower');
-    expect(follower.websocket).toBeNull();
     expect(follower.leader.controllerId).toBe('cone-1');
+    expect(follower.leader.connected).toBe(false);
+    expect(follower.result).toEqual({
+      action: 'wait',
+      code: 'LEADER_NOT_CONNECTED',
+      retryAfterMs: FOLLOWER_ATTACH_RETRY_AFTER_MS,
+    });
+  });
+
+  it('reports follower join readiness until the live leader websocket is available, then exposes signaling metadata', async () => {
+    const { env } = createTestHarness();
+    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
+    const session = (await created.json()) as {
+      trayId: string;
+      capabilities: { controller: { url: string }; join: { url: string } };
+    };
+
+    const waitingForLeader = await handleWorkerRequest(new Request(session.capabilities.join.url), env);
+    expect(waitingForLeader.status).toBe(409);
+    await expect(waitingForLeader.json()).resolves.toMatchObject({
+      trayId: session.trayId,
+      capability: 'join',
+      leader: null,
+      code: 'FOLLOWER_JOIN_NOT_READY',
+      retryable: true,
+    });
+
+    const leaderAttach = await handleWorkerRequest(
+      new Request(session.capabilities.controller.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'cone-1', runtime: 'cli' }),
+      }),
+      env,
+    );
+    const leader = (await leaderAttach.json()) as { websocket: { url: string } };
+
+    const waitingForSocket = await handleWorkerRequest(new Request(session.capabilities.join.url), env);
+    expect(waitingForSocket.status).toBe(409);
+    await expect(waitingForSocket.json()).resolves.toMatchObject({
+      code: 'FOLLOWER_JOIN_NOT_READY',
+      leader: { controllerId: 'cone-1', connected: false },
+      retryable: true,
+    });
+
+    const socketResponse = await handleWorkerRequest(new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }), env);
+    expect(socketResponse.status).toBe(101);
+
+    const signalingReady = await handleWorkerRequest(new Request(session.capabilities.join.url), env);
+    expect(signalingReady.status).toBe(200);
+    await expect(signalingReady.json()).resolves.toMatchObject({
+      trayId: session.trayId,
+      capability: 'join',
+      leader: { controllerId: 'cone-1', connected: true },
+      participantCount: 1,
+      signaling: {
+        transport: 'http-poll',
+        timeoutMs: TRAY_BOOTSTRAP_TIMEOUT_MS,
+        maxRetries: 3,
+        retryAfterMs: FOLLOWER_ATTACH_RETRY_AFTER_MS,
+      },
+    });
+  });
+
+  it('returns bootstrap metadata and notifies the leader when a follower attaches after the leader websocket is live', async () => {
+    const { env } = createTestHarness();
+    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
+    const session = (await created.json()) as {
+      capabilities: { controller: { url: string }; join: { url: string } };
+    };
+
+    const leaderAttach = await handleWorkerRequest(
+      new Request(session.capabilities.controller.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'cone-1', runtime: 'cli' }),
+      }),
+      env,
+    );
+    const leader = (await leaderAttach.json()) as { websocket: { url: string } };
+    const socketResponse = await handleWorkerRequest(new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }), env);
+    expect(socketResponse.status).toBe(101);
+    const clientSocket = (socketResponse as unknown as { webSocket: FakeWebSocket }).webSocket;
+
+    const followerAttach = await handleWorkerRequest(
+      new Request(session.capabilities.join.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'cone-2', runtime: 'electron' }),
+      }),
+      env,
+    );
+
+    expect(followerAttach.status).toBe(200);
+    const follower = (await followerAttach.json()) as {
+      controllerId: string;
+      result: {
+        action: string;
+        code: string;
+        bootstrap: { bootstrapId: string; attempt: number; state: string; retriesRemaining: number };
+      };
+    };
+    expect(follower).toMatchObject({
+      trayId: expect.any(String),
+      controllerId: 'cone-2',
+      role: 'follower',
+      leader: { controllerId: 'cone-1', connected: true, reconnectDeadline: null },
+      result: {
+        action: 'signal',
+        code: 'LEADER_CONNECTED',
+        bootstrap: {
+          attempt: 1,
+          state: 'pending',
+          retriesRemaining: 3,
+        },
+      },
+    });
+
+    expect(JSON.parse(clientSocket.received[1]!)).toMatchObject({
+      type: 'follower.join_requested',
+      controllerId: 'cone-2',
+      bootstrapId: follower.result.bootstrap.bootstrapId,
+      attempt: 1,
+    });
+  });
+
+  it('relays leader offers plus follower answers and ICE candidates over the bootstrap join path', async () => {
+    const { env } = createTestHarness();
+    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
+    const session = (await created.json()) as {
+      capabilities: { controller: { url: string }; join: { url: string } };
+    };
+
+    const leaderAttach = await handleWorkerRequest(
+      new Request(session.capabilities.controller.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'cone-1', runtime: 'cli' }),
+      }),
+      env,
+    );
+    const leader = (await leaderAttach.json()) as { websocket: { url: string } };
+    const socketResponse = await handleWorkerRequest(new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }), env);
+    const clientSocket = (socketResponse as unknown as { webSocket: FakeWebSocket }).webSocket;
+
+    const followerAttach = await handleWorkerRequest(
+      new Request(session.capabilities.join.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'cone-2', runtime: 'electron' }),
+      }),
+      env,
+    );
+    const follower = (await followerAttach.json()) as {
+      result: { bootstrap: { bootstrapId: string } };
+    };
+
+    clientSocket.send(JSON.stringify({
+      type: 'bootstrap.offer',
+      controllerId: 'cone-2',
+      bootstrapId: follower.result.bootstrap.bootstrapId,
+      offer: { type: 'offer', sdp: 'offer-sdp' },
+    }));
+    clientSocket.send(JSON.stringify({
+      type: 'bootstrap.ice_candidate',
+      controllerId: 'cone-2',
+      bootstrapId: follower.result.bootstrap.bootstrapId,
+      candidate: { candidate: 'leader-candidate' },
+    }));
+
+    const polled = await handleWorkerRequest(
+      new Request(session.capabilities.join.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          action: 'poll',
+          controllerId: 'cone-2',
+          bootstrapId: follower.result.bootstrap.bootstrapId,
+          cursor: 0,
+        }),
+      }),
+      env,
+    );
+    expect(polled.status).toBe(200);
+    await expect(polled.json()).resolves.toMatchObject({
+      controllerId: 'cone-2',
+      bootstrap: { bootstrapId: follower.result.bootstrap.bootstrapId, state: 'offered', cursor: 2 },
+      events: [
+        { type: 'bootstrap.offer', offer: { type: 'offer', sdp: 'offer-sdp' } },
+        { type: 'bootstrap.ice_candidate', candidate: { candidate: 'leader-candidate' } },
+      ],
+    });
+
+    const answered = await handleWorkerRequest(
+      new Request(session.capabilities.join.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          action: 'answer',
+          controllerId: 'cone-2',
+          bootstrapId: follower.result.bootstrap.bootstrapId,
+          answer: { type: 'answer', sdp: 'answer-sdp' },
+        }),
+      }),
+      env,
+    );
+    expect(answered.status).toBe(200);
+    await expect(answered.json()).resolves.toMatchObject({
+      bootstrap: { bootstrapId: follower.result.bootstrap.bootstrapId, state: 'connected' },
+    });
+
+    const followerIce = await handleWorkerRequest(
+      new Request(session.capabilities.join.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          action: 'ice-candidate',
+          controllerId: 'cone-2',
+          bootstrapId: follower.result.bootstrap.bootstrapId,
+          candidate: { candidate: 'follower-candidate' },
+        }),
+      }),
+      env,
+    );
+    expect(followerIce.status).toBe(200);
+
+    expect(JSON.parse(clientSocket.received[2]!)).toMatchObject({
+      type: 'bootstrap.answer',
+      controllerId: 'cone-2',
+      bootstrapId: follower.result.bootstrap.bootstrapId,
+      answer: { type: 'answer', sdp: 'answer-sdp' },
+    });
+    expect(JSON.parse(clientSocket.received[3]!)).toMatchObject({
+      type: 'bootstrap.ice_candidate',
+      controllerId: 'cone-2',
+      bootstrapId: follower.result.bootstrap.bootstrapId,
+      candidate: { candidate: 'follower-candidate' },
+    });
+  });
+
+  it('marks timed out bootstrap attempts as failed and requires explicit retries', async () => {
+    const { env, advance } = createTestHarness();
+    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
+    const session = (await created.json()) as {
+      capabilities: { controller: { url: string }; join: { url: string } };
+    };
+
+    const leaderAttach = await handleWorkerRequest(
+      new Request(session.capabilities.controller.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'cone-1', runtime: 'cli' }),
+      }),
+      env,
+    );
+    const leader = (await leaderAttach.json()) as { websocket: { url: string } };
+    const socketResponse = await handleWorkerRequest(new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }), env);
+    const clientSocket = (socketResponse as unknown as { webSocket: FakeWebSocket }).webSocket;
+
+    const followerAttach = await handleWorkerRequest(
+      new Request(session.capabilities.join.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'cone-2', runtime: 'electron' }),
+      }),
+      env,
+    );
+    const follower = (await followerAttach.json()) as {
+      result: { bootstrap: { bootstrapId: string } };
+    };
+
+    advance(TRAY_BOOTSTRAP_TIMEOUT_MS + 1);
+    const timedOut = await handleWorkerRequest(
+      new Request(session.capabilities.join.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          action: 'poll',
+          controllerId: 'cone-2',
+          bootstrapId: follower.result.bootstrap.bootstrapId,
+          cursor: 0,
+        }),
+      }),
+      env,
+    );
+    expect(timedOut.status).toBe(200);
+    await expect(timedOut.json()).resolves.toMatchObject({
+      bootstrap: {
+        bootstrapId: follower.result.bootstrap.bootstrapId,
+        state: 'failed',
+        failure: {
+          code: 'BOOTSTRAP_TIMEOUT',
+          retryable: true,
+          retryAfterMs: FOLLOWER_ATTACH_RETRY_AFTER_MS,
+        },
+      },
+      events: [{ type: 'bootstrap.failed', failure: { code: 'BOOTSTRAP_TIMEOUT' } }],
+    });
+
+    const retried = await handleWorkerRequest(
+      new Request(session.capabilities.join.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          action: 'retry',
+          controllerId: 'cone-2',
+          bootstrapId: follower.result.bootstrap.bootstrapId,
+          runtime: 'electron',
+        }),
+      }),
+      env,
+    );
+    expect(retried.status).toBe(200);
+    const retriedBody = (await retried.json()) as {
+      bootstrap: { bootstrapId: string; attempt: number; retriesRemaining: number; state: string };
+    };
+    expect(retriedBody.bootstrap).toMatchObject({ attempt: 2, retriesRemaining: 2, state: 'pending' });
+    expect(retriedBody.bootstrap.bootstrapId).not.toBe(follower.result.bootstrap.bootstrapId);
+    expect(JSON.parse(clientSocket.received[2]!)).toMatchObject({
+      type: 'follower.join_requested',
+      controllerId: 'cone-2',
+      bootstrapId: retriedBody.bootstrap.bootstrapId,
+      attempt: 2,
+    });
+  });
+
+  it('returns an explicit fail instruction when a follower attaches to an expired tray', async () => {
+    const { env, advance } = createTestHarness();
+    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
+    const session = (await created.json()) as {
+      capabilities: { controller: { url: string }; join: { url: string } };
+    };
+
+    const attach = await handleWorkerRequest(
+      new Request(session.capabilities.controller.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'lead-1' }),
+      }),
+      env,
+    );
+    const leader = (await attach.json()) as { websocket: { url: string } };
+    const socketResponse = await handleWorkerRequest(new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }), env);
+    const clientSocket = (socketResponse as unknown as { webSocket: FakeWebSocket }).webSocket;
+    clientSocket.close();
+
+    advance(TRAY_RECLAIM_TTL_MS + 1);
+    const expiredAttach = await handleWorkerRequest(
+      new Request(session.capabilities.join.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'follow-1', runtime: 'electron' }),
+      }),
+      env,
+    );
+
+    expect(expiredAttach.status).toBe(410);
+    await expect(expiredAttach.json()).resolves.toMatchObject({
+      trayId: expect.any(String),
+      controllerId: 'follow-1',
+      role: 'follower',
+      result: {
+        action: 'fail',
+        code: 'TRAY_EXPIRED',
+        error: 'Tray expired because the leader did not reclaim it within one hour',
+      },
+    });
   });
 
   it('allows only the leader to open the tray WebSocket', async () => {
     const { env } = createTestHarness();
     const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
-    const session = (await created.json()) as { capabilities: { controller: { url: string } } };
+    const session = (await created.json()) as { capabilities: { controller: { url: string }; join: { url: string } } };
 
     const leaderAttach = await handleWorkerRequest(
       new Request(session.capabilities.controller.url, {
@@ -206,7 +579,7 @@ describe('tray worker skeleton', () => {
     const leader = (await leaderAttach.json()) as { leaderKey: string; websocket: { url: string } };
 
     const followerAttach = await handleWorkerRequest(
-      new Request(session.capabilities.controller.url, {
+      new Request(session.capabilities.join.url, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'follow-1' }),

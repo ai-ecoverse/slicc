@@ -3,9 +3,12 @@ export const TRAY_WORKER_QUERY_PARAM = 'trayWorkerUrl';
 export const TRAY_QUERY_PARAM = 'tray';
 export const TRAY_LEGACY_LEAD_QUERY_PARAM = 'lead';
 
+import { parseCapabilityToken } from '../worker/shared.js';
+
 export interface TrayUrlConfig {
   workerBaseUrl: string;
   trayId: string | null;
+  joinUrl: string | null;
 }
 
 export interface RuntimeConfigStorage {
@@ -53,8 +56,19 @@ export function parseTrayUrlValue(raw: string | null | undefined): TrayUrlConfig
 
     const segments = url.pathname.split('/').filter(Boolean);
     let trayId: string | null = null;
+    let joinUrl: string | null = null;
     if (segments.length >= 2 && segments.at(-2) === 'tray') {
       trayId = decodeURIComponent(segments.at(-1)!);
+      segments.splice(-2, 2);
+      url.pathname = segments.length > 0 ? `/${segments.join('/')}` : '/';
+    } else if (segments.length >= 2 && segments.at(-2) === 'join') {
+      const token = decodeURIComponent(segments.at(-1)!);
+      const capability = parseCapabilityToken(token);
+      if (!capability) {
+        return null;
+      }
+      trayId = capability.trayId;
+      joinUrl = url.toString();
       segments.splice(-2, 2);
       url.pathname = segments.length > 0 ? `/${segments.join('/')}` : '/';
     }
@@ -64,7 +78,7 @@ export function parseTrayUrlValue(raw: string | null | undefined): TrayUrlConfig
       return null;
     }
 
-    return { workerBaseUrl, trayId };
+    return { workerBaseUrl, trayId, joinUrl };
   } catch {
     return null;
   }
@@ -104,22 +118,41 @@ export function buildTrayLeadLaunchUrl(locationHref: string, workerBaseUrl: stri
   return buildTrayLaunchUrl(locationHref, workerBaseUrl, trayId);
 }
 
+export async function resolveTrayRuntimeConfig(options: {
+  locationHref: string;
+  storage?: RuntimeConfigStorage | null;
+  envBaseUrl?: string | null;
+  runtimeConfigFetcher?: (() => Promise<RuntimeConfigResponse | null>) | null;
+}): Promise<TrayUrlConfig | null> {
+  const queryConfig = readQueryTrayConfig(options.locationHref);
+  if (queryConfig) {
+    if (options.storage) {
+      options.storage.setItem(TRAY_WORKER_STORAGE_KEY, queryConfig.workerBaseUrl);
+    }
+    return queryConfig;
+  }
+
+  const serverBaseUrl = options.runtimeConfigFetcher ? await readServerTrayWorkerBaseUrl(options.runtimeConfigFetcher) : null;
+  const storedBaseUrl = normalizeTrayWorkerBaseUrl(options.storage?.getItem(TRAY_WORKER_STORAGE_KEY) ?? null);
+  const envBaseUrl = normalizeTrayWorkerBaseUrl(options.envBaseUrl ?? null);
+
+  const workerBaseUrl = serverBaseUrl ?? storedBaseUrl ?? envBaseUrl;
+  if (!workerBaseUrl) {
+    return null;
+  }
+  if (options.storage) {
+    options.storage.setItem(TRAY_WORKER_STORAGE_KEY, workerBaseUrl);
+  }
+  return { workerBaseUrl, trayId: null, joinUrl: null };
+}
+
 export async function resolveTrayWorkerBaseUrl(options: {
   locationHref: string;
   storage?: RuntimeConfigStorage | null;
   envBaseUrl?: string | null;
   runtimeConfigFetcher?: (() => Promise<RuntimeConfigResponse | null>) | null;
 }): Promise<string | null> {
-  const queryBaseUrl = readQueryTrayWorkerBaseUrl(options.locationHref);
-  const serverBaseUrl = options.runtimeConfigFetcher ? await readServerTrayWorkerBaseUrl(options.runtimeConfigFetcher) : null;
-  const storedBaseUrl = normalizeTrayWorkerBaseUrl(options.storage?.getItem(TRAY_WORKER_STORAGE_KEY) ?? null);
-  const envBaseUrl = normalizeTrayWorkerBaseUrl(options.envBaseUrl ?? null);
-
-  const resolved = queryBaseUrl ?? serverBaseUrl ?? storedBaseUrl ?? envBaseUrl;
-  if (resolved && options.storage) {
-    options.storage.setItem(TRAY_WORKER_STORAGE_KEY, resolved);
-  }
-  return resolved;
+  return (await resolveTrayRuntimeConfig(options))?.workerBaseUrl ?? null;
 }
 
 export async function fetchRuntimeConfig(fetchImpl: typeof fetch = fetch): Promise<RuntimeConfigResponse | null> {
@@ -134,21 +167,22 @@ export async function fetchRuntimeConfig(fetchImpl: typeof fetch = fetch): Promi
   }
 }
 
-function readQueryTrayWorkerBaseUrl(locationHref: string): string | null {
+function readQueryTrayConfig(locationHref: string): TrayUrlConfig | null {
   try {
     const url = new URL(locationHref);
 
     const trayConfig = parseTrayUrlValue(url.searchParams.get(TRAY_QUERY_PARAM));
     if (trayConfig) {
-      return trayConfig.workerBaseUrl;
+      return trayConfig;
     }
 
     const legacyLeadConfig = parseTrayUrlValue(url.searchParams.get(TRAY_LEGACY_LEAD_QUERY_PARAM));
     if (legacyLeadConfig) {
-      return legacyLeadConfig.workerBaseUrl;
+      return legacyLeadConfig;
     }
 
-    return normalizeTrayWorkerBaseUrl(url.searchParams.get(TRAY_WORKER_QUERY_PARAM));
+    const workerBaseUrl = normalizeTrayWorkerBaseUrl(url.searchParams.get(TRAY_WORKER_QUERY_PARAM));
+    return workerBaseUrl ? { workerBaseUrl, trayId: null, joinUrl: null } : null;
   } catch {
     return null;
   }

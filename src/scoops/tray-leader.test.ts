@@ -27,6 +27,7 @@ class MemorySessionStore implements LeaderTraySessionStore {
 
 class FakeWebSocket implements LeaderTrayWebSocket {
   readonly sent: string[] = [];
+  closeCalls = 0;
   private readonly listeners = new Map<string, Array<(event: { data?: unknown }) => void>>();
 
   addEventListener(type: 'open' | 'message' | 'close' | 'error', listener: (event: { data?: unknown }) => void): void {
@@ -38,6 +39,7 @@ class FakeWebSocket implements LeaderTrayWebSocket {
   }
 
   close(): void {
+    this.closeCalls += 1;
     this.dispatch('close', {});
   }
 
@@ -121,6 +123,86 @@ describe('tray-leader', () => {
     expect(getLeaderTrayRuntimeStatus()).toEqual({ state: 'inactive', session: null, error: null });
   });
 
+  it('surfaces follower bootstrap control messages and can send bootstrap replies', async () => {
+    const store = new MemorySessionStore();
+    const socket = new FakeWebSocket();
+    const received: Array<Record<string, unknown>> = [];
+    let resolveSocketReady!: () => void;
+    const socketReady = new Promise<void>(resolve => {
+      resolveSocketReady = resolve;
+    });
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        trayId: 'tray-1',
+        createdAt: '2026-03-11T00:00:00.000Z',
+        capabilities: {
+          join: { url: 'https://tray.example.com/join/token' },
+          controller: { url: 'https://tray.example.com/controller/token' },
+          webhook: { url: 'https://tray.example.com/webhook/token' },
+        },
+      }), { status: 201, headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        trayId: 'tray-1',
+        controllerId: 'controller-1',
+        role: 'leader',
+        leaderKey: 'leader-key-1',
+        websocket: { url: 'wss://tray.example.com/controller/token?controllerId=controller-1&leaderKey=leader-key-1' },
+      }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+    const manager = new LeaderTrayManager({
+      workerBaseUrl: 'https://tray.example.com',
+      runtime: 'slicc-standalone',
+      store,
+      fetchImpl,
+      onControlMessage: message => received.push(message as Record<string, unknown>),
+      webSocketFactory: () => {
+        resolveSocketReady();
+        return socket;
+      },
+      pingIntervalMs: 60_000,
+    });
+
+    const startPromise = manager.start();
+    await socketReady;
+    socket.dispatch('message', { data: JSON.stringify({ type: 'leader.connected', trayId: 'tray-1' }) });
+    await startPromise;
+
+    socket.dispatch('message', {
+      data: JSON.stringify({
+        type: 'follower.join_requested',
+        trayId: 'tray-1',
+        controllerId: 'follower-1',
+        bootstrapId: 'bootstrap-1',
+        attempt: 1,
+        expiresAt: '2026-03-11T00:00:20.000Z',
+      }),
+    });
+
+    expect(received).toEqual([
+      expect.objectContaining({
+        type: 'follower.join_requested',
+        controllerId: 'follower-1',
+        bootstrapId: 'bootstrap-1',
+      }),
+    ]);
+
+    manager.sendControlMessage({
+      type: 'bootstrap.offer',
+      controllerId: 'follower-1',
+      bootstrapId: 'bootstrap-1',
+      offer: { type: 'offer', sdp: 'v=0' },
+    });
+
+    expect(socket.sent).toContain(JSON.stringify({
+      type: 'bootstrap.offer',
+      controllerId: 'follower-1',
+      bootstrapId: 'bootstrap-1',
+      offer: { type: 'offer', sdp: 'v=0' },
+    }));
+
+    manager.stop();
+  });
+
   it('recreates the tray when the persisted controller capability is stale', async () => {
     const store = new MemorySessionStore();
     store.value = {
@@ -185,5 +267,59 @@ describe('tray-leader', () => {
     expect(store.value?.controllerUrl).toBe('https://tray.example.com/controller/fresh-token');
 
     manager.stop();
+  });
+
+  it('fails leader startup when the websocket never confirms leader.connected', async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new MemorySessionStore();
+      const socket = new FakeWebSocket();
+      const fetchImpl = vi.fn<typeof fetch>()
+        .mockResolvedValueOnce(new Response(JSON.stringify({
+          trayId: 'tray-1',
+          createdAt: '2026-03-11T00:00:00.000Z',
+          capabilities: {
+            join: { url: 'https://tray.example.com/join/token' },
+            controller: { url: 'https://tray.example.com/controller/token' },
+            webhook: { url: 'https://tray.example.com/webhook/token' },
+          },
+        }), { status: 201, headers: { 'content-type': 'application/json' } }))
+        .mockResolvedValueOnce(new Response(JSON.stringify({
+          trayId: 'tray-1',
+          controllerId: 'controller-1',
+          role: 'leader',
+          leaderKey: 'leader-key-1',
+          websocket: { url: 'wss://tray.example.com/controller/token?controllerId=controller-1&leaderKey=leader-key-1' },
+        }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+      const manager = new LeaderTrayManager({
+        workerBaseUrl: 'https://tray.example.com',
+        runtime: 'slicc-standalone',
+        store,
+        fetchImpl,
+        webSocketFactory: () => socket,
+        pingIntervalMs: 60_000,
+        connectTimeoutMs: 5_000,
+      });
+
+      const startPromise = manager.start();
+      const startRejection = expect(startPromise).rejects.toThrow(
+        'Tray leader WebSocket timed out after 5000ms waiting for leader.connected',
+      );
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await startRejection;
+      expect(socket.closeCalls).toBe(1);
+      expect(getLeaderTrayRuntimeStatus()).toMatchObject({
+        state: 'error',
+        session: { trayId: 'tray-1', workerBaseUrl: 'https://tray.example.com' },
+        error: expect.stringContaining('timed out after 5000ms'),
+      });
+
+      manager.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
