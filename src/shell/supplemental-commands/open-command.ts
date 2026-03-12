@@ -61,6 +61,29 @@ export function createOpenCommand(): Command {
 
       const fullPath = ctx.fs.resolvePath(ctx.cwd, target);
 
+      // .shtml files → open as canvas panel via panel manager
+      if (fullPath.endsWith('.shtml')) {
+        // Access global panel manager if available
+        const mgr = typeof window !== 'undefined'
+          ? (window as unknown as Record<string, unknown>).__slicc_panelManager as import('../../ui/panel-manager.js').PanelManager | undefined
+          : undefined;
+        if (mgr) {
+          const name = (fullPath.split('/').pop() ?? '').replace(/\.shtml$/, '');
+          try {
+            await mgr.open(name);
+            results.push(`opened panel ${name} from ${fullPath}`);
+          } catch (err) {
+            return { stdout: '', stderr: `open: ${err instanceof Error ? err.message : String(err)}\n`, exitCode: 1 };
+          }
+        } else {
+          // Fallback: open in browser tab if no panel manager
+          const previewUrl = toPreviewUrl(fullPath);
+          window.open(previewUrl, '_blank', 'noopener,noreferrer');
+          results.push(`opened ${fullPath} → ${previewUrl}`);
+        }
+        continue;
+      }
+
       if (view) {
         // --view: read file and return as <img:> tag for agent vision
         let stat;

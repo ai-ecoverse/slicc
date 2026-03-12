@@ -17,6 +17,7 @@ import { createUnameCommand } from './uname-command.js';
 import { createUnzipCommand } from './unzip-command.js';
 import { createWebhookCommand } from './webhook-command.js';
 import { createCrontaskCommand } from './crontask-command.js';
+import { createPanelCommand } from './panel-command.js';
 import { createWhichCommand } from './which-command.js';
 import { createZipCommand } from './zip-command.js';
 import type { BrowserAPI } from '../../cdp/index.js';
@@ -49,6 +50,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createPython3LikeCommand('python'),
     createWebhookCommand(),
     createCrontaskCommand(),
+    createPanelCommand(),
     createPdftkCommand('pdftk'),
     createPdftkCommand('pdf'),
     createConvertCommand('convert'),

@@ -200,8 +200,8 @@ export class ChatPanel {
     this.persistSession();
   }
 
-  /** Add a lick message (webhook/cron event). */
-  addLickMessage(id: string, content: string, channel: 'webhook' | 'cron'): void {
+  /** Add a lick message (webhook/cron/panel event). */
+  addLickMessage(id: string, content: string, channel: 'webhook' | 'cron' | 'panel'): void {
     const msg: ChatMessage = {
       id,
       role: 'user',

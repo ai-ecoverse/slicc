@@ -117,10 +117,11 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **skill list/install/uninstall** — Manage skills from /workspace/skills/
 - **upskill** — Install skills from GitHub (`upskill owner/repo`) or ClawHub (`upskill clawhub:name`)
 - **webhook/crontask** — Set up licks (external event triggers)
+- **panel** — Manage SHTML canvas panels: `panel list`, `panel open <name>`, `panel close <name>`, `panel send <name> '<json>'` (push data to a panel)
 - **git** — Full git support (clone, commit, push, pull)
 - **node -e / python3 -c** — Execute JavaScript or Python
 - **serve <dir>** — Open a VFS app directory in a new browser tab. Defaults to `index.html`; use `--entry` to override the entry file.
-- **open <path|url>** — Open a URL or single VFS file in a new browser tab. Use `open --view` when you need to see an image inline.
+- **open <path|url>** — Open a URL or single VFS file in a new browser tab. Use `open --view` when you need to see an image inline. `.shtml` files are opened as canvas panels instead of browser tabs.
 - **playwright-cli** — Browser automation (built-in, no SKILL.md lookup needed). Key subcommands: `tab-list`, `tab-select <index>`, `snapshot`, `screenshot [--filename=<path>]`, `open <url>`, `click <ref>`, `fill <ref> "text"`, `close`. Run `playwright-cli --help` for full list.
 
 ## Environment: This Is NOT a Regular Linux Box
@@ -134,6 +135,27 @@ Key things that work differently:
 - **Serving + screenshotting**: `serve` and `open` already open the tab. Do NOT use `playwright-cli open` with the same URL — that opens a duplicate tab. Instead, use `playwright-cli tab-list` to find the tab they created (match by URL from the output), then `playwright-cli tab-select <index>` to target it for screenshots/snapshots. **Never manually construct preview URLs** — always use the URL from the command output.
 - **No long-running servers**: You can't start background daemons. The `serve` and `open` commands handle previewing.
 - **No package managers**: No `apt`, `npm install`, `pip install`. Use what's already available or write `.jsh` scripts.
+
+## SHTML Canvas Panels
+
+`.shtml` files on the VFS become interactive sidebar panels. Use them to create dashboards, forms, and visualizations alongside the chat.
+
+**Creating a panel**: Write an `.shtml` file to `/workspace/skills/<name>/<name>.shtml`. The file is plain HTML using `.shtml-*` CSS classes (cards, tables, badges, buttons, grids, etc.). Add a `<title>` tag for the panel display name.
+
+**Managing panels via bash**:
+- `panel list` — see available panels
+- `panel open <name>` — show a panel in the sidebar
+- `panel close <name>` — remove it
+- `panel send <name> '<json>'` — push data to the panel (single-quote the JSON to prevent shell brace expansion)
+- `open /path/to/file.shtml` — also opens as a panel
+
+**Panel scripts**: `<script>` tags in `.shtml` get a `slicc` bridge object:
+- `slicc.lick({action: 'refresh', data: {...}})` — send a lick event to you (arrives as a panel lick message)
+- `slicc.on('update', (data) => {...})` — receive data sent via `panel send`
+- `slicc.name` — the panel's name
+- `slicc.close()` — close the panel
+
+**Available CSS components**: `.shtml-card`, `.shtml-stat-card`, `.shtml-table`, `.shtml-badge` (with `--positive`/`--negative`/`--notice`/`--informative`), `.shtml-btn` (with `--primary`/`--secondary`/`--negative`), `.shtml-grid`, `.shtml-stack`, `.shtml-row`, `.shtml-heading`, `.shtml-body`, `.shtml-detail`, `.shtml-divider`, `.shtml-kv-list`, `.shtml-progress-bar`, `.shtml-meter`, `.shtml-empty-state`.
 
 ## Skills
 

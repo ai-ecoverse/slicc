@@ -29,6 +29,7 @@ import {
   isElectronOverlaySetTabMessage,
   resolveUiRuntimeMode,
 } from './runtime-mode.js';
+import { PanelManager } from './panel-manager.js';
 
 const log = createLogger('main');
 
@@ -769,58 +770,83 @@ async function main(): Promise<void> {
   // Route lick events to scoops
   const routeLickToScoop = (event: LickEvent) => {
     const isWebhook = event.type === 'webhook';
-    const eventName = isWebhook ? event.webhookName : event.cronName;
-    const eventId = isWebhook ? event.webhookId : event.cronId;
+    const isPanel = event.type === 'panel';
+    const eventName = isWebhook ? event.webhookName : isPanel ? event.panelName : event.cronName;
+    const eventId = isWebhook ? event.webhookId : isPanel ? event.panelName : event.cronId;
     const channel = event.type;
 
     log.debug('Lick event', { type: event.type, name: eventName, targetScoop: event.targetScoop });
 
+    // Determine the target: explicit scoop, or cone for panel events without a target
+    const scoops = orchestrator.getScoops();
+    let resolvedTarget: RegisteredScoop | undefined;
+
     if (event.targetScoop) {
-      const scoops = orchestrator.getScoops();
-      const targetScoop = scoops.find(s =>
+      resolvedTarget = scoops.find(s =>
         s.name === event.targetScoop ||
         s.folder === event.targetScoop ||
         s.folder === `${event.targetScoop}-scoop`
       );
+    } else if (isPanel) {
+      // Panel licks without explicit target go to the cone
+      resolvedTarget = scoops.find(s => s.isCone);
+    }
 
-      if (targetScoop) {
-        const msgId = `${channel}-${eventId}-${Date.now()}`;
-        const eventLabel = isWebhook ? 'Webhook Event' : 'Cron Event';
-        const content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
+    if (resolvedTarget) {
+      const msgId = `${channel}-${eventId}-${Date.now()}`;
+      const eventLabel = isWebhook ? 'Webhook Event' : isPanel ? 'Panel Event' : 'Cron Event';
+      const content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
 
-        const msg: ChannelMessage = {
-          id: msgId,
-          chatJid: targetScoop.jid,
-          senderId: channel,
-          senderName: `${channel}:${eventName}`,
-          content,
-          timestamp: event.timestamp,
-          fromAssistant: false,
-          channel,
-        };
+      const msg: ChannelMessage = {
+        id: msgId,
+        chatJid: resolvedTarget.jid,
+        senderId: channel,
+        senderName: `${channel}:${eventName}`,
+        content,
+        timestamp: event.timestamp,
+        fromAssistant: false,
+        channel,
+      };
 
-        getBuffer(targetScoop.jid).push({
-          id: msgId,
-          role: 'user',
-          content,
-          timestamp: Date.now(),
-          source: 'lick',
-          channel,
-        });
+      getBuffer(resolvedTarget.jid).push({
+        id: msgId,
+        role: 'user',
+        content,
+        timestamp: Date.now(),
+        source: 'lick',
+        channel,
+      });
 
-        if (selectedScoop?.jid === targetScoop.jid) {
-          layout.panels.chat.addLickMessage(msgId, content, channel as 'webhook' | 'cron');
-        }
-
-        log.info('Routing lick to scoop', { type: channel, name: eventName, scoopJid: targetScoop.jid });
-        orchestrator.handleMessage(msg);
-      } else {
-        log.warn('Lick target scoop not found', { targetScoop: event.targetScoop });
+      if (selectedScoop?.jid === resolvedTarget.jid) {
+        layout.panels.chat.addLickMessage(msgId, content, channel as 'webhook' | 'cron' | 'panel');
       }
+
+      log.info('Routing lick to scoop', { type: channel, name: eventName, scoopJid: resolvedTarget.jid });
+      orchestrator.handleMessage(msg);
+    } else {
+      log.warn('Lick target scoop not found', { targetScoop: event.targetScoop });
     }
   };
 
   lickManager.setEventHandler(routeLickToScoop);
+
+  // ── Panel Manager (SHTML canvas panels) ────────────────────────────
+  let panelManager: PanelManager | null = null;
+  if (sharedFs) {
+    panelManager = new PanelManager(
+      sharedFs,
+      routeLickToScoop,
+      {
+        addPanel: (name, title, element) => layout.addPanel(name, title, element),
+        removePanel: (name) => layout.removePanel(name),
+      },
+    );
+    // Expose for open command and panel shell command
+    (window as unknown as Record<string, unknown>).__slicc_panelManager = panelManager;
+    await panelManager.refresh();
+    layout.onPanelClose = (name) => panelManager!.close(name);
+    log.info('PanelManager initialized');
+  }
 
   // Connect WebSocket for server communication
   const connectLickWs = () => {
@@ -1038,6 +1064,28 @@ main().catch((err) => {
     p.textContent = err.message;
     errorDiv.appendChild(h1);
     errorDiv.appendChild(p);
+
+    const resetBtn = document.createElement('button');
+    resetBtn.textContent = 'Reset all data & reload';
+    resetBtn.style.cssText =
+      'margin-top: 1rem; padding: 0.5rem 1.5rem; background: #e94560; color: #fff; ' +
+      'border: none; border-radius: 6px; cursor: pointer; font-size: 14px;';
+    resetBtn.addEventListener('click', async () => {
+      resetBtn.disabled = true;
+      resetBtn.textContent = 'Resetting…';
+      const dbs = await indexedDB.databases();
+      await Promise.all(
+        dbs.map(db => db.name ? new Promise<void>((res) => {
+          const req = indexedDB.deleteDatabase(db.name!);
+          req.onsuccess = () => res();
+          req.onerror = () => res();
+          req.onblocked = () => res();
+        }) : Promise.resolve())
+      );
+      location.reload();
+    });
+    errorDiv.appendChild(resetBtn);
+
     while (app.firstChild) app.removeChild(app.firstChild);
     app.appendChild(errorDiv);
   }

@@ -49,7 +49,7 @@ export interface LayoutPanels {
   scoops: ScoopsPanel;
 }
 
-type TabId = ExtensionTabId;
+type TabId = ExtensionTabId | string;
 
 export class Layout {
   private root: HTMLElement;
@@ -92,6 +92,7 @@ export class Layout {
   public onScoopSelect?: (scoop: RegisteredScoop) => void;
   public onClearChat?: () => Promise<void>;
   public onClearFilesystem?: () => Promise<void>;
+  public onPanelClose?: (name: string) => void;
 
   private scoopsWidth = 0.15;
   private leftWidth = 0.45;
@@ -1023,6 +1024,118 @@ export class Layout {
       window.addEventListener('mousemove', onMouseMove);
       window.addEventListener('mouseup', onMouseUp);
     });
+  }
+
+  // ── Dynamic SHTML Panels ───────────────────────────────────────────
+
+  /** Track dynamic panel sections in standalone mode. */
+  private dynamicPanels = new Map<string, HTMLElement>();
+
+  /** Add a dynamic .shtml panel to the layout. */
+  addPanel(name: string, title: string, element: HTMLElement): void {
+    if (this.isExtension) {
+      // Extension mode: add as a new tab
+      const tabBar = this.root.querySelector('.tab-bar');
+      if (!tabBar) return;
+
+      const tabId = `shtml-${name}`;
+
+      const btn = document.createElement('button');
+      btn.className = 'tab-bar__tab';
+      btn.textContent = title;
+      btn.dataset.tab = tabId;
+      btn.addEventListener('click', () => this.switchTab(tabId));
+      tabBar.appendChild(btn);
+      this.tabButtons.set(tabId, btn);
+
+      const content = this.root.querySelector('.tab-content');
+      if (!content) return;
+
+      const container = document.createElement('div');
+      container.className = 'tab-content__panel';
+      container.dataset.tab = tabId;
+      container.style.display = 'none';
+      container.appendChild(element);
+      content.appendChild(container);
+      this.tabContainers.set(tabId, container);
+
+      this.dynamicPanels.set(name, container);
+
+      // Auto-switch to the new tab
+      this.switchTab(tabId);
+    } else {
+      // Standalone mode: add as a new section in the right column
+      const section = document.createElement('div');
+      section.className = 'shtml-panel-section';
+      section.dataset.panel = name;
+      section.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden;';
+
+      // Title bar
+      const titleBar = document.createElement('div');
+      titleBar.className = 'shtml-panel-titlebar';
+      const titleText = document.createElement('span');
+      titleText.textContent = title;
+      titleBar.appendChild(titleText);
+
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'shtml-panel-close';
+      closeBtn.textContent = '\u00D7';
+      closeBtn.title = 'Close panel';
+      closeBtn.addEventListener('click', () => {
+        this.onPanelClose?.(name);
+      });
+      titleBar.appendChild(closeBtn);
+      section.appendChild(titleBar);
+
+      // Content wrapper
+      const contentWrapper = document.createElement('div');
+      contentWrapper.style.cssText = 'flex: 1; overflow: auto; min-height: 0;';
+      contentWrapper.appendChild(element);
+      section.appendChild(contentWrapper);
+
+      // Divider
+      const divider = document.createElement('div');
+      divider.className = 'layout__right-divider';
+      section.appendChild(divider);
+
+      this.dynamicPanels.set(name, section);
+      this.rightEl.appendChild(section);
+      this.rebalanceRightColumn();
+    }
+  }
+
+  /** Remove a dynamic .shtml panel from the layout. */
+  removePanel(name: string): void {
+    if (this.isExtension) {
+      const tabId = `shtml-${name}`;
+      const wasActive = this.activeTab === tabId;
+
+      this.tabButtons.get(tabId)?.remove();
+      this.tabButtons.delete(tabId);
+
+      this.tabContainers.get(tabId)?.remove();
+      this.tabContainers.delete(tabId);
+
+      this.dynamicPanels.delete(name);
+
+      if (wasActive) {
+        this.switchTab('chat');
+      }
+    } else {
+      const section = this.dynamicPanels.get(name);
+      if (section) {
+        section.remove();
+        this.dynamicPanels.delete(name);
+        this.rebalanceRightColumn();
+      }
+    }
+  }
+
+  /** Rebalance right column heights after adding/removing dynamic panels. */
+  private rebalanceRightColumn(): void {
+    if (this.isExtension) return;
+    // Let CSS flex handle the distribution — just trigger a resize
+    this.applySizes();
   }
 
   // ── Cleanup ─────────────────────────────────────────────────────────
