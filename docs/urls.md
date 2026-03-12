@@ -7,6 +7,7 @@ SLICC serves a small set of stable routes from its local origin (`http://localho
 | `/` | Main browser app in standalone CLI mode |
 | `/electron` | Electron overlay app shell |
 | `/electron-overlay-entry.js` | Injected Electron overlay entry bundle |
+| `/auth/callback` | OAuth redirect target — reads query params + URL fragment, postMessages back to opener popup |
 | `/licks-ws` | WebSocket endpoint for lick events |
 | `/webhooks/:id` | Incoming webhook endpoint |
 

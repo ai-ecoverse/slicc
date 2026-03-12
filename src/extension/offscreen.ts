@@ -12,9 +12,9 @@ import { Orchestrator } from '../scoops/index.js';
 import { OffscreenBridge } from './offscreen-bridge.js';
 import { createLogger } from '../core/index.js';
 
-// Register custom API providers (side-effect import triggers registerApiProvider).
+// Auto-discover and register all providers (built-in + external).
 // IMPORTANT: Keep in sync with src/ui/main.ts — both entry points need all providers.
-import '../providers/bedrock-camp.js';
+import '../providers/index.js';
 
 const log = createLogger('offscreen');
 

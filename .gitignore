@@ -6,3 +6,5 @@ dist/
 coverage/
 .worktrees/
 providers.json
+providers/
+!providers/.gitkeep

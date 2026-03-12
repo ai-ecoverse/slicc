@@ -16,7 +16,7 @@
 | UI | `src/ui/` | Chat, Terminal, Files, Memory panels | `main.ts` | `types.test.ts` |
 | CLI / Electron Node Runtime | `src/cli/` | Express server, Chrome launcher, Electron float entrypoint | `index.ts` | `electron-runtime.test.ts` |
 | Extension | `src/extension/` | Chrome Manifest V3 entry point | `service-worker.ts` | N/A |
-| Providers | `src/providers/` | Custom API provider integrations | `bedrock-camp.ts` | N/A |
+| Providers | `src/providers/` | Provider types, OAuth service, auto-discovery | `types.ts`, `oauth-service.ts`, `index.ts` | N/A |
 
 ## Source File Tree
 
@@ -90,7 +90,9 @@
 
 | File | Purpose |
 |---|---|
-| `bedrock-camp.ts` | AWS Bedrock provider integration (registers with pi-ai) |
+| `types.ts` | `ProviderConfig` interface (id, name, isOAuth, onOAuthLogin, onOAuthLogout), `OAuthLauncher` type |
+| `index.ts` | Auto-discovery and registration of built-in + external providers; filtering via `providers.build.json` |
+| `oauth-service.ts` | Generic `OAuthLauncher` factory: CLI mode (popup → `/auth/callback` → postMessage) and extension mode (service worker → `chrome.identity.launchWebAuthFlow`) |
 
 ### src/shell/ — Shell & Terminal
 
@@ -468,4 +470,10 @@ Scoop removal / app clear
 
 | I need to... | Modify |
 |---|---|
-| Add a new API provider (Bedrock, Azure, etc.) | `src/providers/<provider>-camp.ts` + import in `src/ui/main.ts` |
+| Add an API-key provider (built-in) | `src/providers/built-in/<provider>.ts` (exports `config: ProviderConfig` + optional `register()`) |
+| Add an external/custom provider | `providers/<provider>.ts` (root, gitignored, auto-discovered) |
+| Add an OAuth provider | Same as above, but set `isOAuth: true` + `onOAuthLogin`/`onOAuthLogout` on the config |
+| Change the OAuth transport (popup, chrome.identity) | `src/providers/oauth-service.ts` |
+| Change provider types (ProviderConfig, OAuthLauncher) | `src/providers/types.ts` |
+| Change OAuth callback page (CLI mode) | `src/cli/index.ts` (`/auth/callback` route) |
+| Change provider settings UI | `src/ui/provider-settings.ts` |
