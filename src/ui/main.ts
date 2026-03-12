@@ -24,7 +24,9 @@ import { LeaderTrayManager } from '../scoops/tray-leader.js';
 import {
   buildTrayLaunchUrl,
   fetchRuntimeConfig,
+  hasStoredTrayJoinUrl,
   resolveTrayRuntimeConfig,
+  TRAY_JOIN_STORAGE_KEY,
 } from '../scoops/tray-runtime-config.js';
 import { FollowerTrayManager, LeaderTrayPeerManager } from '../scoops/tray-webrtc.js';
 import {
@@ -298,6 +300,15 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       try {
         log.info('Offscreen engine ready, scoop count:', client.getScoops().length);
 
+        if (window.localStorage.getItem(TRAY_JOIN_STORAGE_KEY)) {
+          void chrome.runtime.sendMessage({
+            source: 'panel' as const,
+            payload: { type: 'refresh-tray-runtime' as const },
+          }).catch(() => {
+            // Offscreen may already be syncing runtime state.
+          });
+        }
+
         // Pick the cone (or first scoop) and run full scoop selection.
         // switchToContext inside selectScoop loads from shared IndexedDB.
         const target = selectedScoop ?? client.getScoops().find(s => s.isCone) ?? client.getScoops()[0];
@@ -381,6 +392,7 @@ async function main(): Promise<void> {
     await showProviderSettings();
     apiKey = getApiKey();
   }
+  const allowProviderlessTrayJoin = !apiKey && hasStoredTrayJoinUrl(window.localStorage);
 
   // Build the layout — tabbed in extension mode, split panels in standalone
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
@@ -672,7 +684,9 @@ async function main(): Promise<void> {
   // Create cone if it doesn't exist
   const allScoops = orchestrator.getScoops();
   const hasCone = allScoops.some((s) => s.isCone);
-  if (!hasCone) {
+  if (allowProviderlessTrayJoin) {
+    log.info('Skipping local cone bootstrap while joining a tray without a configured provider');
+  } else if (!hasCone) {
     const cone = await layout.panels.scoops.createScoop('Cone', true);
     selectedScoop = cone;
     log.info('Created cone');

@@ -7,8 +7,10 @@
 import { getProviders, getModels, getModel, createLogger } from '../core/index.js';
 import type { Model } from '../core/index.js';
 import type { Api } from '@mariozechner/pi-ai';
+import { storeTrayJoinUrl } from '../scoops/tray-runtime-config.js';
 import { getThemePreference, setThemePreference } from './theme.js';
 import type { ThemePreference } from './theme.js';
+import type { RefreshTrayRuntimeMsg } from '../extension/messages.js';
 
 // Dynamic wrappers — pi-ai's getModel/getModels use strict generics
 // that require KnownProvider literals, but provider-settings works
@@ -21,6 +23,10 @@ const getModelDynamic = getModel as (
 const getModelsDynamic = getModels as (
   provider: string
 ) => Model<Api>[];
+
+function isExtensionRuntime(): boolean {
+  return typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+}
 
 // Storage keys
 const ACCOUNTS_KEY = 'slicc_accounts';
@@ -985,7 +991,16 @@ export function showProviderSettings(): Promise<void> {
 
       // Back button (only shown when accounts already exist)
       const hasAccounts = getAccounts().length > 0;
-      if (hasAccounts) {
+      if (!isEdit && !hasAccounts) {
+        const joinBtn = document.createElement('button');
+        joinBtn.className = 'dialog__btn dialog__btn--secondary';
+        joinBtn.style.marginTop = '8px';
+        joinBtn.textContent = 'Join a tray';
+        joinBtn.addEventListener('click', () => {
+          renderJoinTrayForm();
+        });
+        dialog.appendChild(joinBtn);
+      } else if (hasAccounts) {
         const backBtn = document.createElement('button');
         backBtn.className = 'dialog__btn dialog__btn--secondary';
         backBtn.style.marginTop = '8px';
@@ -1006,6 +1021,81 @@ export function showProviderSettings(): Promise<void> {
           baseUrlInput.focus();
         }
       });
+    }
+
+    function renderJoinTrayForm() {
+      dialog.innerHTML = '';
+
+      const title = document.createElement('div');
+      title.className = 'dialog__title';
+      title.textContent = 'Join a tray';
+      dialog.appendChild(title);
+
+      const desc = document.createElement('div');
+      desc.className = 'dialog__desc';
+      desc.style.marginBottom = '12px';
+      desc.textContent = 'Paste the tray join URL shared by the tray leader. It must include a /join/... capability.';
+      dialog.appendChild(desc);
+
+      const trayUrlLabel = document.createElement('div');
+      trayUrlLabel.className = 'dialog__desc';
+      trayUrlLabel.textContent = 'Tray URL:';
+      dialog.appendChild(trayUrlLabel);
+
+      const trayUrlInput = document.createElement('input');
+      trayUrlInput.className = 'dialog__input';
+      trayUrlInput.type = 'text';
+      trayUrlInput.autocomplete = 'off';
+      trayUrlInput.spellcheck = false;
+      trayUrlInput.placeholder = 'https://tray.example.com/base/join/tray-123.capability-token';
+      trayUrlInput.style.marginBottom = '12px';
+      dialog.appendChild(trayUrlInput);
+
+      const errorEl = document.createElement('div');
+      errorEl.style.cssText = 'color: var(--slicc-cone); font-size: 12px; margin-bottom: 8px; display: none;';
+      dialog.appendChild(errorEl);
+
+      const joinBtn = document.createElement('button');
+      joinBtn.className = 'dialog__btn';
+      joinBtn.textContent = 'Join tray';
+      joinBtn.addEventListener('click', () => {
+        const stored = storeTrayJoinUrl(window.localStorage, trayUrlInput.value);
+        if (!stored) {
+          errorEl.textContent = 'Enter a valid tray join URL with a /join/... capability.';
+          errorEl.style.display = '';
+          trayUrlInput.focus();
+          return;
+        }
+
+        if (isExtensionRuntime()) {
+          const payload: RefreshTrayRuntimeMsg = { type: 'refresh-tray-runtime' };
+          void chrome.runtime.sendMessage({ source: 'panel' as const, payload }).catch(() => {
+            // Offscreen may not be ready yet; mainExtension will reconnect shortly.
+          });
+        }
+
+        overlay.remove();
+        resolve();
+      });
+      dialog.appendChild(joinBtn);
+
+      const backBtn = document.createElement('button');
+      backBtn.className = 'dialog__btn dialog__btn--secondary';
+      backBtn.style.marginTop = '8px';
+      backBtn.textContent = 'Back';
+      backBtn.addEventListener('click', () => {
+        renderAccountForm();
+      });
+      dialog.appendChild(backBtn);
+
+      trayUrlInput.addEventListener('input', () => {
+        errorEl.style.display = 'none';
+      });
+      trayUrlInput.addEventListener('keydown', (e: KeyboardEvent) => {
+        if (e.key === 'Enter') joinBtn.click();
+      });
+
+      requestAnimationFrame(() => trayUrlInput.focus());
     }
   });
 }

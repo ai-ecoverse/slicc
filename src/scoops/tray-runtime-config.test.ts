@@ -5,10 +5,13 @@ import {
   buildTrayUrlValue,
   buildTrayWorkerUrl,
   fetchRuntimeConfig,
+  hasStoredTrayJoinUrl,
   normalizeTrayWorkerBaseUrl,
+  parseTrayJoinUrlValue,
   parseTrayUrlValue,
   resolveTrayRuntimeConfig,
   resolveTrayWorkerBaseUrl,
+  storeTrayJoinUrl,
   type RuntimeConfigStorage,
 } from './tray-runtime-config.js';
 
@@ -57,6 +60,36 @@ describe('tray-runtime-config', () => {
     expect(parseTrayUrlValue('not-a-url')).toBeNull();
   });
 
+  it('validates tray join URLs and strips hash/query noise', () => {
+    expect(parseTrayJoinUrlValue('https://tray.example.com/base/join/tray-join.secret?via=share#copied')).toEqual({
+      workerBaseUrl: 'https://tray.example.com/base',
+      trayId: 'tray-join',
+      joinUrl: 'https://tray.example.com/base/join/tray-join.secret',
+    });
+    expect(parseTrayJoinUrlValue('https://tray.example.com/base/tray/tray-123')).toBeNull();
+  });
+
+  it('stores normalized tray join URLs for later runtime resolution', () => {
+    const storage = new MemoryStorage();
+
+    expect(storeTrayJoinUrl(storage, 'https://tray.example.com/base/join/tray-join.secret?from=share')).toEqual({
+      workerBaseUrl: 'https://tray.example.com/base',
+      trayId: 'tray-join',
+      joinUrl: 'https://tray.example.com/base/join/tray-join.secret',
+    });
+    expect(storage.getItem('slicc.trayJoinUrl')).toBe('https://tray.example.com/base/join/tray-join.secret');
+    expect(storage.getItem('slicc.trayWorkerBaseUrl')).toBe('https://tray.example.com/base');
+  });
+
+  it('detects whether a normalized tray join URL is stored', () => {
+    const storage = new MemoryStorage();
+
+    expect(hasStoredTrayJoinUrl(storage)).toBe(false);
+
+    storeTrayJoinUrl(storage, 'https://tray.example.com/base/join/tray-join.secret?share=1');
+    expect(hasStoredTrayJoinUrl(storage)).toBe(true);
+  });
+
   it('builds launch URLs with the canonical tray parameter and removes legacy query params', () => {
     expect(buildTrayLaunchUrl(
       'http://localhost:3000/?scoop=cone&trayWorkerUrl=https://old.example.com&lead=https://older.example.com',
@@ -95,6 +128,23 @@ describe('tray-runtime-config', () => {
     });
 
     expect(storage.getItem('slicc.trayWorkerBaseUrl')).toBe('https://tray.example.com/base');
+  });
+
+  it('resolves stored tray join state before server, stored leader, or env defaults', async () => {
+    const storage = new MemoryStorage();
+    storeTrayJoinUrl(storage, 'https://tray.example.com/base/join/tray-join.secret');
+    storage.setItem('slicc.trayWorkerBaseUrl', 'https://stored.example.com');
+
+    await expect(resolveTrayRuntimeConfig({
+      locationHref: 'http://localhost:3000/',
+      storage,
+      envBaseUrl: 'https://env.example.com',
+      runtimeConfigFetcher: async () => ({ trayWorkerBaseUrl: 'https://server.example.com' }),
+    })).resolves.toEqual({
+      workerBaseUrl: 'https://tray.example.com/base',
+      trayId: 'tray-join',
+      joinUrl: 'https://tray.example.com/base/join/tray-join.secret',
+    });
   });
 
   it('continues to recognize the legacy lead and trayWorkerUrl query parameters for backward compatibility', async () => {

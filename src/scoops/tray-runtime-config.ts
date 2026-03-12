@@ -1,4 +1,5 @@
 export const TRAY_WORKER_STORAGE_KEY = 'slicc.trayWorkerBaseUrl';
+export const TRAY_JOIN_STORAGE_KEY = 'slicc.trayJoinUrl';
 export const TRAY_WORKER_QUERY_PARAM = 'trayWorkerUrl';
 export const TRAY_QUERY_PARAM = 'tray';
 export const TRAY_LEGACY_LEAD_QUERY_PARAM = 'lead';
@@ -10,6 +11,8 @@ export interface TrayUrlConfig {
   trayId: string | null;
   joinUrl: string | null;
 }
+
+export type TrayJoinConfig = TrayUrlConfig & { joinUrl: string };
 
 export interface RuntimeConfigStorage {
   getItem(key: string): string | null;
@@ -84,6 +87,28 @@ export function parseTrayUrlValue(raw: string | null | undefined): TrayUrlConfig
   }
 }
 
+export function parseTrayJoinUrlValue(raw: string | null | undefined): TrayJoinConfig | null {
+  const parsed = parseTrayUrlValue(raw);
+  return parsed?.joinUrl ? parsed as TrayJoinConfig : null;
+}
+
+export function storeTrayJoinUrl(
+  storage: RuntimeConfigStorage,
+  raw: string | null | undefined,
+): TrayJoinConfig | null {
+  const parsed = parseTrayJoinUrlValue(raw);
+  if (!parsed) {
+    return null;
+  }
+  storage.setItem(TRAY_JOIN_STORAGE_KEY, parsed.joinUrl);
+  storage.setItem(TRAY_WORKER_STORAGE_KEY, parsed.workerBaseUrl);
+  return parsed;
+}
+
+export function hasStoredTrayJoinUrl(storage: RuntimeConfigStorage | null | undefined): boolean {
+  return !!parseTrayJoinUrlValue(storage?.getItem(TRAY_JOIN_STORAGE_KEY) ?? null);
+}
+
 export function buildTrayUrlValue(workerBaseUrl: string, trayId?: string | null): string {
   const normalizedBase = normalizeTrayWorkerBaseUrl(workerBaseUrl);
   if (!normalizedBase) {
@@ -127,9 +152,20 @@ export async function resolveTrayRuntimeConfig(options: {
   const queryConfig = readQueryTrayConfig(options.locationHref);
   if (queryConfig) {
     if (options.storage) {
+      if (queryConfig.joinUrl) {
+        options.storage.setItem(TRAY_JOIN_STORAGE_KEY, queryConfig.joinUrl);
+      }
       options.storage.setItem(TRAY_WORKER_STORAGE_KEY, queryConfig.workerBaseUrl);
     }
     return queryConfig;
+  }
+
+  const storedJoinConfig = parseTrayJoinUrlValue(options.storage?.getItem(TRAY_JOIN_STORAGE_KEY) ?? null);
+  if (storedJoinConfig) {
+    if (options.storage) {
+      options.storage.setItem(TRAY_WORKER_STORAGE_KEY, storedJoinConfig.workerBaseUrl);
+    }
+    return storedJoinConfig;
   }
 
   const serverBaseUrl = options.runtimeConfigFetcher ? await readServerTrayWorkerBaseUrl(options.runtimeConfigFetcher) : null;
