@@ -1,4 +1,5 @@
 import { createServer } from 'http';
+import { createServer as createNetServer } from 'net';
 import { spawn, type ChildProcess } from 'child_process';
 import { existsSync } from 'fs';
 import { join, resolve } from 'path';
@@ -84,6 +85,33 @@ function pipeChildOutput(child: ChildProcess, label: string): void {
   child.stderr?.on('data', (data: Buffer) => {
     process.stderr.write(`[${label}:err] ${data}`);
   });
+}
+
+// ---------------------------------------------------------------------------
+// Port selection — tries the preferred port, falls back to OS-assigned
+// ---------------------------------------------------------------------------
+
+function tryListenOnPort(port: number): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createNetServer();
+    server.on('error', reject);
+    server.listen(port, () => {
+      const addr = server.address();
+      const assignedPort = addr && typeof addr === 'object' ? addr.port : port;
+      server.close(() => resolve(assignedPort));
+    });
+  });
+}
+
+async function findAvailablePort(preferred: number): Promise<number> {
+  try {
+    return await tryListenOnPort(preferred);
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+      return tryListenOnPort(0);
+    }
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -251,11 +279,32 @@ async function attachConsoleForwarder(
 // Main
 // ---------------------------------------------------------------------------
 
-const CDP_PORT = RUNTIME_FLAGS.cdpPort;
-const SERVE_PORT = parseInt(process.env['PORT'] ?? '3000', 10);
-const SERVE_ORIGIN = `http://localhost:${SERVE_PORT}`;
+const PREFERRED_SERVE_PORT = parseInt(process.env['PORT'] ?? '3000', 10);
+const PREFERRED_CDP_PORT = RUNTIME_FLAGS.cdpPort;
+const PREFERRED_HMR_PORT = 24679;
 
 async function main() {
+  // Resolve available ports before anything else — serve port must be known
+  // before Chrome launches (the launch URL contains it).
+  const SERVE_PORT = await findAvailablePort(PREFERRED_SERVE_PORT);
+  const CDP_PORT = ELECTRON_MODE
+    ? PREFERRED_CDP_PORT
+    : await findAvailablePort(PREFERRED_CDP_PORT);
+  const HMR_PORT = DEV_MODE
+    ? await findAvailablePort(PREFERRED_HMR_PORT)
+    : PREFERRED_HMR_PORT;
+  const SERVE_ORIGIN = `http://localhost:${SERVE_PORT}`;
+
+  if (SERVE_PORT !== PREFERRED_SERVE_PORT) {
+    console.log(`Port ${PREFERRED_SERVE_PORT} in use, serving on port ${SERVE_PORT}`);
+  }
+  if (!ELECTRON_MODE && CDP_PORT !== PREFERRED_CDP_PORT) {
+    console.log(`CDP port ${PREFERRED_CDP_PORT} in use, using port ${CDP_PORT}`);
+  }
+  if (DEV_MODE && HMR_PORT !== PREFERRED_HMR_PORT) {
+    console.log(`HMR port ${PREFERRED_HMR_PORT} in use, using port ${HMR_PORT}`);
+  }
+
   if (DEV_MODE) {
     console.log('Starting in dev mode (Vite HMR enabled)');
   }
@@ -664,13 +713,13 @@ async function main() {
       server: {
         middlewareMode: true,
         hmr: {
-          port: 24679, // Use a separate port for HMR WebSocket to avoid conflicting with /cdp
+          port: HMR_PORT, // Use a separate port for HMR WebSocket to avoid conflicting with /cdp
         },
       },
       root: process.cwd(),
     });
     app.use(vite.middlewares);
-    console.log('Vite dev server middleware attached (HMR active on port 24679)');
+    console.log(`Vite dev server middleware attached (HMR active on port ${HMR_PORT})`);
   } else {
     // Production mode: serve built static files
     const uiDir = resolve(__dirname, '..', 'ui');
