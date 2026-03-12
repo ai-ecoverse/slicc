@@ -10,6 +10,9 @@
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { ToolDefinition, ImageContent, TextContent } from './types.js';
 import { processImageContent } from './image-processor.js';
+import { createLogger } from './logger.js';
+
+const log = createLogger('tool-adapter');
 
 /** Regex to match `<img:data:image/TYPE;base64,DATA>` tags in tool result text. */
 const IMG_TAG_RE = /<img:(data:(image\/[^;]+);base64,([^>]+))>/g;
@@ -85,8 +88,11 @@ export function adaptTool(tool: ToolDefinition): AgentTool<any> {
       let content: (TextContent | ImageContent)[];
       try {
         content = await parseToolResultContent(result.content);
-      } catch {
-        // If image processing fails unexpectedly, fall back to raw text
+      } catch (err) {
+        log.warn('Image processing failed, falling back to raw content', {
+          tool: tool.name,
+          error: err instanceof Error ? err.message : String(err),
+        });
         content = parseToolResultContentRaw(result.content);
       }
       return {
