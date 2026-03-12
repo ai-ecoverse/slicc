@@ -46,10 +46,11 @@ export class ShtmlPanelRenderer {
       for (const attr of dead.attributes) {
         live.setAttribute(attr.name, attr.value);
       }
-      // Inject bridge access preamble + original code
+      // Inject bridge access preamble + original code.
+      // Also set window.slicc so onclick attributes (which run in global scope) can use it.
       if (!dead.src) {
         live.textContent =
-          `(function() { var slicc = window.__slicc_panels[${JSON.stringify(panelName)}];\n` +
+          `(function() { var slicc = window.__slicc_panels[${JSON.stringify(panelName)}]; window.slicc = slicc;\n` +
           dead.textContent +
           '\n})();';
       }
