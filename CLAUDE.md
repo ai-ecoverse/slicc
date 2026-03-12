@@ -335,6 +335,7 @@ Delegation:
 - **Two CLAUDE.md files**: The project root `CLAUDE.md` is for Claude Code (developer guidance). The file at `src/defaults/shared/CLAUDE.md` is the agent's system-level instructions — it gets bundled into the VFS at `/shared/CLAUDE.md` and is loaded into sliccy's context. When changing agent behavior or documenting agent-facing capabilities (like shell commands the agent uses), update `src/defaults/shared/CLAUDE.md`. When changing developer conventions or architecture docs, update the project root `CLAUDE.md`.
 - **Default VFS content**: `src/defaults/` contains files bundled into the VFS at startup via `import.meta.glob`. Structure: `src/defaults/shared/CLAUDE.md` → `/shared/CLAUDE.md`, `src/defaults/workspace/skills/` → `/workspace/skills/`. When adding default skills or agent config, add files here.
 - **Preview URL helper**: `toPreviewUrl(vfsPath)` in `src/shell/supplemental-commands/shared.ts` constructs the correct preview service worker URL for both CLI (`http://localhost:3000/preview/...`) and extension (`chrome-extension://.../preview/...`) modes. Use this instead of inlining the dual-mode URL logic.
+- **Custom API providers require dual registration**: Providers in `src/providers/` register via side-effect imports. These must be imported in **both** `src/ui/main.ts` (CLI entry point) and `src/extension/offscreen.ts` (extension agent engine). The extension agent runs in the offscreen document — `main.ts` only runs in the side panel UI.
 
 ## Change Requirements
 
