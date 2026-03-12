@@ -21,6 +21,7 @@ Custom commands implemented in TypeScript and registered in just-bash.
 | **commands** | `help-command.ts` | List all available commands (built-ins + .jsh) | None |
 | **which** | `which-command.ts` | Resolve a command path | `<command>` — returns `/usr/bin/<name>` or VFS path |
 | **uname** | `uname-command.ts` | Print the current browser user agent | None |
+| **oauth-token** | `oauth-token-command.ts` | Get an OAuth access token for a provider | `<providerId>`, `--provider <id>`, `--list`, no args = selected provider; auto-triggers login if needed |
 | **serve** | `serve-command.ts` | Open a VFS app directory in a browser tab | `[--entry <relative-path>] <directory>` — defaults to `index.html`; rejects absolute/traversal entry paths |
 | **open** | `open-command.ts` | Open URL or VFS file in browser tab | `<url\|path>` — serves VFS files via preview SW; `--download` / `-d` forces download; `--view` / `-v` returns image inline for agent vision |
 | **imgcat** | `imgcat-command.ts` | Display image inline in terminal | `<path>` — base64 + ansi escape codes |
