@@ -10,7 +10,7 @@ Build, run, test, and debug SLICC locally.
 | `npm run dev:electron -- /Applications/Slack.app` | Launch the main CLI in Electron attach mode against an Electron app | Electron overlay/runtime work |
 | `npm run dev` | Vite dev server only (no Chrome/CDP) | Quick UI iteration without launching browser |
 | `npm run qa:setup` | Build the extension and scaffold dedicated `leader` / `follower` / `extension` Chrome QA profiles | First-time manual verification setup; reset profile colors/state |
-| `npm run qa:leader` | Launch the CLI with the dedicated leader Chrome profile | Manual tray-leader verification with isolated browser state |
+| `npm run qa:leader` | Launch the CLI with the dedicated leader Chrome profile, auto-connected to the staging tray hub | Manual tray-leader verification; `host` should show `status: leader` |
 | `npm run qa:follower` | Launch the CLI with the dedicated follower Chrome profile | Manual follower-join verification with isolated browser state |
 | `npm run qa:extension` | Rebuild the extension, then launch the CLI with the dedicated extension profile auto-loading `dist/extension` | Extension verification without re-loading unpacked extension by hand |
 | `npm run build` | Production build: Vite UI + TSC CLI/Electron Node target | Pre-deployment validation; final bundle check |

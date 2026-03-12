@@ -10,7 +10,7 @@ npm run dev:full        # Full dev mode: Vite HMR + Chrome + CDP proxy (port 300
 npm run dev:electron -- /Applications/Slack.app  # Main CLI in Electron attach mode
 npm run dev             # Vite dev server only (no Chrome/CDP)
 npm run qa:setup        # Build dist/extension and scaffold dedicated leader/follower/extension Chrome QA profiles
-npm run qa:leader       # Launch CLI dev mode with the isolated leader Chrome profile
+npm run qa:leader       # Launch CLI dev mode with the isolated leader Chrome profile, auto-connected to staging tray hub
 npm run qa:follower     # Launch CLI dev mode with the isolated follower Chrome profile
 npm run qa:extension    # Rebuild/load the unpacked extension in the isolated extension Chrome profile
 npm run build           # Production build (UI via Vite + CLI/Electron Node target via TSC)
