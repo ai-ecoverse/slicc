@@ -40,6 +40,7 @@ async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
       cleanup();
 
       if (event.data.error) {
+        console.error('[oauth-service] CLI OAuth error:', event.data.error);
         resolve(null);
         return;
       }
