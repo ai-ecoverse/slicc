@@ -611,10 +611,12 @@ async function main() {
       res.status(upstream.status);
       res.setHeader('Cache-Control', 'no-store, no-cache');
 
-      // Forward response headers
+      // Forward response headers (strip www-authenticate to prevent
+      // the browser from showing a native Basic Auth dialog — isomorphic-git
+      // handles 401s through its own onAuth callback)
       upstream.headers.forEach((v, k) => {
         const lower = k.toLowerCase();
-        if (lower !== 'transfer-encoding' && lower !== 'content-encoding') {
+        if (lower !== 'transfer-encoding' && lower !== 'content-encoding' && lower !== 'www-authenticate') {
           res.setHeader(k, v);
         }
       });

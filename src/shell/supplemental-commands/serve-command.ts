@@ -5,24 +5,28 @@ import { isSafeServeEntry, resolveServeEntryPath, toPreviewUrl } from './shared.
 function serveHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout:
-      'usage: serve [--entry <relative-path>|--entry=<relative-path>] <directory>\n\n' +
+      'usage: serve [--entry <relative-path>] [--project] <directory>\n\n' +
       '  Serve a VFS directory in a new browser tab via the preview service worker.\n' +
-      '  Defaults to index.html inside the target directory.\n' +
-      '  --entry  Override the entry file within the directory.\n',
+      '  Defaults to index.html inside the target directory.\n\n' +
+      '  --entry    Override the entry file within the directory.\n' +
+      '  --project  Enable project serve mode. Root-relative paths (/scripts/,\n' +
+      '             /styles/, etc.) resolve against the served directory.\n' +
+      '             Use this for frameworks like EDS that expect a local dev server.\n',
     stderr: '',
     exitCode: 0,
   };
 }
 
-function parseServeArgs(args: string[]): { directory?: string; entry: string; error?: string } {
+function parseServeArgs(args: string[]): { directory?: string; entry: string; project: boolean; error?: string } {
   let entry = 'index.html';
   let directory: string | undefined;
+  let project = false;
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === '--entry') {
       const next = args[i + 1];
-      if (!next) return { entry, error: 'serve: missing value for --entry\n' };
+      if (!next) return { entry, project, error: 'serve: missing value for --entry\n' };
       entry = next;
       i += 1;
       continue;
@@ -31,16 +35,20 @@ function parseServeArgs(args: string[]): { directory?: string; entry: string; er
       entry = arg.slice('--entry='.length);
       continue;
     }
+    if (arg === '--project') {
+      project = true;
+      continue;
+    }
     if (arg.startsWith('-')) {
-      return { entry, error: `serve: unknown option: ${arg}\n` };
+      return { entry, project, error: `serve: unknown option: ${arg}\n` };
     }
     if (directory) {
-      return { entry, error: 'serve: expected a single directory argument\n' };
+      return { entry, project, error: 'serve: expected a single directory argument\n' };
     }
     directory = arg;
   }
 
-  return { directory, entry };
+  return { directory, entry, project };
 }
 
 export function createServeCommand(): Command {
@@ -110,7 +118,10 @@ export function createServeCommand(): Command {
       };
     }
 
-    const previewUrl = toPreviewUrl(entryPath);
+    let previewUrl = toPreviewUrl(entryPath);
+    if (parsed.project) {
+      previewUrl += `?projectRoot=${encodeURIComponent(fullDirectory)}`;
+    }
     // window.open() returns null in extension contexts (offscreen/side panel)
     // even when the tab opens successfully — don't treat null as failure
     window.open(previewUrl, '_blank', 'noopener,noreferrer');
