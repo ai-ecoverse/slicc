@@ -13,8 +13,8 @@ jobs:
     if: "!contains(github.event.head_commit.message, '[skip vibe-badge]')"
 
     steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - uses: ai-ecoverse/vibe-coded-badge-action@main
+      - uses: ai-ecoverse/vibe-coded-badge-action@main
