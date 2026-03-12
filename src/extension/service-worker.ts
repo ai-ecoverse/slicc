@@ -326,13 +326,15 @@ async function handleOAuthRequest(msg: OAuthRequestMsg): Promise<OAuthResultMsg>
     };
   }
 
-  const params = new URL(redirectUrl).searchParams;
-  const error = params.get('error');
+  const parsed = new URL(redirectUrl);
+  const params = parsed.searchParams;
+  const hashParams = new URLSearchParams(parsed.hash.slice(1));
+  const error = params.get('error') || hashParams.get('error');
   if (error) {
     return {
       type: 'oauth-result',
       providerId: msg.providerId,
-      error: params.get('error_description') || error,
+      error: params.get('error_description') || hashParams.get('error_description') || error,
     };
   }
 
