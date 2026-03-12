@@ -232,8 +232,10 @@ export class FollowerTrayManager {
     });
     log.info('Follower tray join starting', { joinUrl: this.options.joinUrl });
 
+    let attachAttempt = 0;
     for (;;) {
       ensureNotStopped(this.stopped);
+      attachAttempt++;
       const attach = await attachTrayFollower({
         joinUrl: this.options.joinUrl,
         controllerId,
@@ -241,7 +243,12 @@ export class FollowerTrayManager {
         fetchImpl: this.fetchImpl,
       });
       if (attach.action === 'wait') {
-        await this.sleep(attach.retryAfterMs ?? 1000);
+        const retryMs = attach.retryAfterMs ?? 1000;
+        log.info('Follower tray attach waiting', { attempt: attachAttempt, code: attach.code, retryAfterMs: retryMs });
+        if (attachAttempt % 10 === 0) {
+          log.warn(`Follower tray attach still waiting after ${attachAttempt} attempts`, { attempt: attachAttempt, code: attach.code, retryAfterMs: retryMs });
+        }
+        await this.sleep(retryMs);
         continue;
       }
       if (attach.action === 'fail' || !attach.bootstrap) {

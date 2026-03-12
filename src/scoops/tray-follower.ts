@@ -1,3 +1,4 @@
+import { createLogger } from '../core/logger.js';
 import type {
   FollowerAttachResponse,
   FollowerBootstrapResponse,
@@ -10,6 +11,8 @@ import type {
   TrayIceCandidate,
   TraySessionDescription,
 } from '../worker/tray-signaling.js';
+
+const log = createLogger('tray-follower');
 
 export interface FollowerAttachOptions extends FollowerJoinRequest {
   joinUrl: string;
@@ -56,7 +59,9 @@ export async function attachTrayFollower(options: FollowerAttachOptions): Promis
     }),
   });
 
-  return normalizeFollowerAttachResponse(await readFollowerAttachResponse(response));
+  const body = await readFollowerAttachResponse(response);
+  log.debug('Follower tray attach response', { trayId: body.trayId, action: body.result.action, code: body.result.code, participantCount: body.participantCount });
+  return normalizeFollowerAttachResponse(body);
 }
 
 export function normalizeFollowerAttachResponse(response: FollowerAttachResponse): FollowerAttachPlan {
