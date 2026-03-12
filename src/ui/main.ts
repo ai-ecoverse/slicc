@@ -20,6 +20,8 @@ import { BrowserAPI } from '../cdp/index.js';
 import { Orchestrator } from '../scoops/index.js';
 import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
+import { LeaderTrayManager } from '../scoops/tray-leader.js';
+import { fetchRuntimeConfig, resolveTrayWorkerBaseUrl } from '../scoops/tray-runtime-config.js';
 import {
   getElectronOverlayInitialTab,
   getLickWebSocketUrl,
@@ -1017,6 +1019,26 @@ async function main(): Promise<void> {
     orchestrator.createScoopTab(selectedScoop.jid);
     // Trigger scoop select to properly load the chat context
     await handleScoopSelect(selectedScoop);
+  }
+
+  if (runtimeMode === 'standalone') {
+    const trayWorkerBaseUrl = await resolveTrayWorkerBaseUrl({
+      locationHref: window.location.href,
+      storage: window.localStorage,
+      envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
+      runtimeConfigFetcher: () => fetchRuntimeConfig(),
+    });
+
+    if (trayWorkerBaseUrl) {
+      const trayLeader = new LeaderTrayManager({
+        workerBaseUrl: trayWorkerBaseUrl,
+        runtime: 'slicc-standalone',
+      });
+      void trayLeader.start().catch((error) => {
+        log.warn('Leader tray join failed', { error: error instanceof Error ? error.message : String(error) });
+      });
+      window.addEventListener('beforeunload', () => trayLeader.stop(), { once: true });
+    }
   }
 
   log.info('Orchestrator initialized — cone+scoops ready', { scoopCount: orchestrator.getScoops().length });

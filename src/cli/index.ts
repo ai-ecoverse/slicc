@@ -456,6 +456,12 @@ async function main() {
 
   app.use(express.json({ limit: '50mb' }));
 
+  app.get('/api/runtime-config', (_req, res) => {
+    res.json({
+      trayWorkerBaseUrl: process.env['WORKER_BASE_URL'] ?? null,
+    });
+  });
+
   // Webhook management API — forwards to browser
   app.get('/api/webhooks', async (_req, res) => {
     try {

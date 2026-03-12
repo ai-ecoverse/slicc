@@ -24,6 +24,8 @@ Build, run, test, and debug SLICC locally.
 | `npx wrangler deploy` | Deploy the production Cloudflare Worker tray hub using `wrangler.jsonc` | Publish the production tray hub |
 | `WORKER_BASE_URL=https://... npx vitest run src/worker/deployed.test.ts` | Run the deployed tray-hub smoke test | Verify the live Worker contract (`POST /tray`, controller attach, leader WebSocket, webhook responses) |
 
+When `WORKER_BASE_URL` is set for the CLI/Electron server, the standalone browser runtime now exposes it at `/api/runtime-config` and the cone runtime will automatically create/attach a tray leader session on startup. Extension/offscreen builds can use `VITE_WORKER_BASE_URL` (or a persisted `trayWorkerUrl` override in localStorage) for the same leader-join path.
+
 ## Ports (CLI Mode Only)
 
 | Port | Service | Mode |

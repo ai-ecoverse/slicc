@@ -9,6 +9,8 @@
 
 import { BrowserAPI, OffscreenCdpProxy } from '../cdp/index.js';
 import { Orchestrator } from '../scoops/index.js';
+import { LeaderTrayManager } from '../scoops/tray-leader.js';
+import { resolveTrayWorkerBaseUrl } from '../scoops/tray-runtime-config.js';
 import { OffscreenBridge } from './offscreen-bridge.js';
 import { createLogger } from '../core/index.js';
 
@@ -63,6 +65,22 @@ async function init(): Promise<void> {
       addedAt: new Date().toISOString(),
     });
     console.log('[slicc-offscreen] Created cone');
+  }
+
+  const trayWorkerBaseUrl = await resolveTrayWorkerBaseUrl({
+    locationHref: window.location.href,
+    storage: window.localStorage,
+    envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
+  });
+  if (trayWorkerBaseUrl) {
+    const trayLeader = new LeaderTrayManager({
+      workerBaseUrl: trayWorkerBaseUrl,
+      runtime: 'slicc-extension-offscreen',
+    });
+    void trayLeader.start().catch((error) => {
+      log.warn('Leader tray join failed', { error: error instanceof Error ? error.message : String(error) });
+    });
+    window.addEventListener('beforeunload', () => trayLeader.stop(), { once: true });
   }
 
   // Signal readiness to any connected panels + send initial state
