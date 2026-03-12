@@ -13,6 +13,10 @@
     "typecheck": "tsc --noEmit -p tsconfig.cli.json && tsc --noEmit -p tsconfig.json",
     "dev:full": "npx tsx src/cli/index.ts --dev",
     "dev:electron": "npx tsx src/cli/index.ts --dev --electron",
+    "qa:setup": "npm run build:extension && npx tsx src/cli/qa-setup.ts",
+    "qa:leader": "npm run dev:full -- --profile=leader",
+    "qa:follower": "npm run dev:full -- --profile=follower",
+    "qa:extension": "npm run build:extension && npm run dev:full -- --profile=extension",
     "build:extension": "vite build --config vite.config.extension.ts",
     "test": "vitest run",
     "test:watch": "vitest"

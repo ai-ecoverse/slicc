@@ -6,4 +6,5 @@ dist/
 coverage/
 .worktrees/
 .wrangler/
+.qa/
 providers.json

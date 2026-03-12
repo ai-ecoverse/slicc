@@ -10,10 +10,17 @@ import {
   ElectronOverlayInjector,
   launchElectronApp,
 } from './electron-controller.js';
+import {
+  buildChromeLaunchArgs,
+  ensureQaProfileScaffold,
+  findChromeExecutable,
+  resolveChromeLaunchProfile,
+} from './chrome-launch.js';
 import { resolveCliBrowserLaunchUrl } from './launch-url.js';
 import { parseCliRuntimeFlags } from './runtime-flags.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const PROJECT_ROOT = resolve(__dirname, '..', '..');
 const RUNTIME_FLAGS = parseCliRuntimeFlags(process.argv.slice(2));
 const DEV_MODE = RUNTIME_FLAGS.dev;
 const SERVE_ONLY = RUNTIME_FLAGS.serveOnly;
@@ -38,43 +45,6 @@ function requestLogger(req: Request, res: Response, next: NextFunction) {
   });
 
   next();
-}
-
-// ---------------------------------------------------------------------------
-// Chrome finder — checks common install paths per platform
-// ---------------------------------------------------------------------------
-
-function findChrome(): string | null {
-  const envPath = process.env['CHROME_PATH'];
-  if (envPath && existsSync(envPath)) return envPath;
-
-  const candidates: Record<string, string[]> = {
-    darwin: [
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
-      '/Applications/Chromium.app/Contents/MacOS/Chromium',
-    ],
-    linux: [
-      '/usr/bin/google-chrome',
-      '/usr/bin/google-chrome-stable',
-      '/usr/bin/chromium',
-      '/usr/bin/chromium-browser',
-      '/snap/bin/chromium',
-    ],
-    win32: [
-      `${process.env['LOCALAPPDATA']}\\Google\\Chrome\\Application\\chrome.exe`,
-      `${process.env['PROGRAMFILES']}\\Google\\Chrome\\Application\\chrome.exe`,
-      `${process.env['PROGRAMFILES(X86)']}\\Google\\Chrome\\Application\\chrome.exe`,
-    ],
-  };
-
-  const platform = process.platform;
-  const paths = candidates[platform] ?? [];
-
-  for (const p of paths) {
-    if (existsSync(p)) return p;
-  }
-  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -335,7 +305,7 @@ async function main() {
       throw error;
     }
   } else if (!SERVE_ONLY) {
-    const chromePath = findChrome();
+    const chromePath = findChromeExecutable();
     if (!chromePath) {
       console.error(
         'Could not find Chrome/Chromium. Please install Chrome or set CHROME_PATH.',
@@ -349,24 +319,60 @@ async function main() {
       lead: RUNTIME_FLAGS.lead,
       leadWorkerBaseUrl: RUNTIME_FLAGS.leadWorkerBaseUrl,
       envWorkerBaseUrl: process.env['WORKER_BASE_URL'] ?? null,
+      join: RUNTIME_FLAGS.join,
+      joinUrl: RUNTIME_FLAGS.joinUrl,
     });
-    if (RUNTIME_FLAGS.lead) {
+    if (RUNTIME_FLAGS.join) {
+      console.log(`Join launch URL: ${browserLaunchUrl}`);
+    } else if (RUNTIME_FLAGS.lead) {
       console.log(`Lead launch URL: ${browserLaunchUrl}`);
     }
 
-    const chromeArgs = [
-      `--remote-debugging-port=${CDP_PORT}`,
-      '--no-first-run',
-      '--no-default-browser-check',
-      `--user-data-dir=${join(process.env['TMPDIR'] ?? '/tmp', 'browser-coding-agent-chrome')}`,
-      browserLaunchUrl,
-    ];
+    const chromeProfile = (() => {
+      try {
+        return resolveChromeLaunchProfile({
+          projectRoot: PROJECT_ROOT,
+          tmpDir: process.env['TMPDIR'] ?? '/tmp',
+          profile: RUNTIME_FLAGS.profile,
+        });
+      } catch (error: unknown) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exit(1);
+      }
+
+      throw new Error('unreachable');
+    })();
+
+    if (chromeProfile.id) {
+      await ensureQaProfileScaffold(PROJECT_ROOT);
+    }
+
+    if (chromeProfile.extensionPath && !existsSync(chromeProfile.extensionPath)) {
+      console.error(
+        `Extension profile requires ${chromeProfile.extensionPath}. Run \`npm run qa:setup\` or \`npm run build:extension\` first.`,
+      );
+      process.exit(1);
+    }
+
+    if (chromeProfile.id) {
+      console.log(`Using QA Chrome profile: ${chromeProfile.id}`);
+      console.log(`Profile directory: ${chromeProfile.userDataDir}`);
+      if (chromeProfile.extensionPath) {
+        console.log(`Auto-loading unpacked extension from ${chromeProfile.extensionPath}`);
+      }
+    }
+
+    const chromeArgs = buildChromeLaunchArgs({
+      cdpPort: CDP_PORT,
+      launchUrl: browserLaunchUrl,
+      profile: chromeProfile,
+    });
 
     launchedBrowserProcess = spawn(chromePath, chromeArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,
     });
-    launchedBrowserLabel = 'Chrome';
+    launchedBrowserLabel = chromeProfile.displayName;
 
     pipeChildOutput(launchedBrowserProcess, 'chrome');
 
@@ -912,7 +918,7 @@ async function main() {
             cdpPort: CDP_PORT,
             servePort: SERVE_PORT,
             dev: DEV_MODE,
-            projectRoot: resolve(__dirname, '..', '..'),
+            projectRoot: PROJECT_ROOT,
           });
           await overlayInjector.start();
           console.log('[electron-float] Overlay injector is watching Electron page targets');

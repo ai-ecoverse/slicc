@@ -7,6 +7,9 @@ export interface CliRuntimeFlags {
   kill: boolean;
   lead: boolean;
   leadWorkerBaseUrl: string | null;
+  profile: string | null;
+  join: boolean;
+  joinUrl: string | null;
 }
 
 export const DEFAULT_CLI_CDP_PORT = 9222;
@@ -26,6 +29,9 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
   let kill = false;
   let lead = false;
   let leadWorkerBaseUrl: string | null = null;
+  let profile: string | null = null;
+  let join = false;
+  let joinUrl: string | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
@@ -59,6 +65,18 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
       kill = true;
       continue;
     }
+    if (arg === '--profile') {
+      const nextArg = argv[index + 1];
+      if (nextArg && !nextArg.startsWith('--')) {
+        profile = nextArg.trim() || null;
+        index += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith('--profile=')) {
+      profile = arg.slice('--profile='.length).trim() || null;
+      continue;
+    }
     if (arg === '--lead') {
       lead = true;
       const nextArg = argv[index + 1];
@@ -71,6 +89,20 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
     if (arg.startsWith('--lead=')) {
       lead = true;
       leadWorkerBaseUrl = arg.slice('--lead='.length).trim() || null;
+      continue;
+    }
+    if (arg === '--join') {
+      join = true;
+      const nextArg = argv[index + 1];
+      if (nextArg && !nextArg.startsWith('--') && looksLikeUrl(nextArg)) {
+        joinUrl = nextArg.trim() || null;
+        index += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith('--join=')) {
+      join = true;
+      joinUrl = arg.slice('--join='.length).trim() || null;
       continue;
     }
     if (arg === '--electron-app') {
@@ -105,5 +137,8 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
     kill,
     lead,
     leadWorkerBaseUrl,
+    profile,
+    join,
+    joinUrl,
   };
 }
