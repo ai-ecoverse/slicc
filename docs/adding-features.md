@@ -734,24 +734,26 @@ describe('loadSkills', () => {
 
 ## 8. Add a Provider
 
-Providers are auto-discovered at build time from two locations:
-- **Built-in**: `src/providers/built-in/*.ts` — filtered by `providers.build.json`
-- **External**: `providers/*.ts` (project root, gitignored) — always included
+Providers come from three sources:
+- **Pi-ai auto-discovery**: `getProviders()` returns all pi-ai providers automatically — no files needed. Filtered by `providers.build.json` (`include: ["*"]` = all, `exclude: ["*"]` = none).
+- **Built-in extensions**: `src/providers/built-in/*.ts` — only for providers needing custom `register()` functions (e.g., bedrock-camp). Also filtered by `providers.build.json`.
+- **External**: `providers/*.ts` (project root, gitignored) — always included, never filtered. For custom OAuth providers, corporate proxies, etc.
 
-Each provider module exports `config: ProviderConfig` and optionally `register(): void`.
+Built-in and external modules export `config: ProviderConfig` and optionally `register(): void`.
 
 ### 8a. Add an API-Key Provider
 
 **When**: To support a new LLM provider that uses an API key (e.g., Groq, Hugging Face).
 
-**Files to create**:
-- `src/providers/built-in/my-provider.ts` (or `providers/my-provider.ts` for external)
+**Most providers need no files at all.** Pi-ai auto-discovers its providers via `getProviders()`, and `provider-settings.ts` generates a fallback config (display name derived from ID, `requiresApiKey: true`, `requiresBaseUrl: false`). The provider appears in the Settings UI automatically.
 
-**Implementation**:
+**Only create a file in `src/providers/built-in/`** if the provider needs a custom `register()` function (e.g., custom stream functions). See `src/providers/built-in/bedrock-camp.ts` for an example.
+
+**For external providers** (gitignored, not in the open-source repo), create `providers/my-provider.ts`:
 
 ```typescript
-// src/providers/built-in/my-provider.ts
-import type { ProviderConfig } from '../types.js';
+// providers/my-provider.ts
+import type { ProviderConfig } from '../src/providers/types.js';
 
 export const config: ProviderConfig = {
   id: 'my-provider',
@@ -769,7 +771,7 @@ export function register(): void {
 }
 ```
 
-The provider appears automatically in the Settings UI. No changes to `provider-settings.ts` needed.
+External providers in `providers/` are always included (never filtered by `providers.build.json`).
 
 ### 8b. Add an OAuth Provider (Corporate Proxy / SSO)
 
