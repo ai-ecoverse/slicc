@@ -180,6 +180,22 @@ fs.rm(path): Promise<void> // Recursive delete
 fs.fetchToFile(url, path): Promise<number> // Download and save, returns byte count
 ```
 
+#### exec (shell command bridge)
+
+Run any shell command through just-bash and get the result. Works in both CLI and extension mode.
+
+```typescript
+exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }>
+
+// Example: get an OAuth token
+const r = await exec('oauth-token adobe');
+const token = r.stdout.trim();
+
+// Example: list files
+const ls = await exec('ls -la /workspace');
+console.log(ls.stdout);
+```
+
 #### require / module / exports
 
 ```typescript

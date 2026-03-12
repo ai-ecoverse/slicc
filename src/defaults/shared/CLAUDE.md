@@ -119,7 +119,7 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **webhook/crontask** — Set up licks (external event triggers)
 - **oauth-token** — Get an OAuth access token for a provider (`oauth-token adobe`); auto-triggers login if no valid token exists. Use in shell: `curl -H "Authorization: Bearer $(oauth-token adobe)" https://api.example.com`
 - **git** — Full git support (clone, commit, push, pull)
-- **node -e / python3 -c** — Execute JavaScript or Python
+- **node -e / python3 -c** — Execute JavaScript or Python. JSH/node scripts have access to `exec(command)` to run shell commands: `const r = await exec('oauth-token adobe'); const token = r.stdout.trim();`
 - **serve <dir>** — Open a VFS app directory in a new browser tab. Defaults to `index.html`; use `--entry` to override the entry file.
 - **open <path|url>** — Open a URL or single VFS file in a new browser tab. Use `open --view` when you need to see an image inline.
 - **playwright-cli** — Browser automation (built-in, no SKILL.md lookup needed). Key subcommands: `tab-list`, `tab-select <index>`, `snapshot`, `screenshot [--filename=<path>]`, `open <url>`, `click <ref>`, `fill <ref> "text"`, `close`. Run `playwright-cli --help` for full list.
