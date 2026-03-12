@@ -285,6 +285,36 @@ export function createNodeCommand(): Command {
         };
         window.addEventListener('message', shellExecHandler);
 
+        // Register a fetch proxy handler so cross-origin fetch() calls from the
+        // sandbox are routed through the host page (which has host_permissions).
+        const fetchProxyHandler = (event: MessageEvent) => {
+          const msg = event.data;
+          if (!msg || msg.type !== 'fetch_proxy') return;
+          (async () => {
+            try {
+              const init: RequestInit = { method: msg.init?.method ?? 'GET', cache: 'no-store' };
+              if (msg.init?.headers) init.headers = msg.init.headers;
+              if (msg.init?.body && !['GET', 'HEAD'].includes(init.method as string)) {
+                init.body = msg.init.body;
+              }
+              const resp = await fetch(msg.url, init);
+              const buf = await resp.arrayBuffer();
+              const headers: Record<string, string> = {};
+              resp.headers.forEach((v, k) => { headers[k] = v; });
+              sandbox!.contentWindow!.postMessage({
+                type: 'fetch_proxy_response', id: msg.id,
+                status: resp.status, statusText: resp.statusText,
+                headers, body: new Uint8Array(buf),
+              }, '*');
+            } catch (err) {
+              const errMsg = err instanceof Error ? err.message : String(err);
+              sandbox!.contentWindow!.postMessage(
+                { type: 'fetch_proxy_response', id: msg.id, error: errMsg }, '*',
+              );
+            }
+          })();
+        };
+        window.addEventListener('message', fetchProxyHandler);
 
         const result = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
           let timeout: ReturnType<typeof setTimeout>;
@@ -315,6 +345,7 @@ export function createNodeCommand(): Command {
         // Clean up listeners after execution completes
         window.removeEventListener('message', vfsHandler);
         window.removeEventListener('message', shellExecHandler);
+        window.removeEventListener('message', fetchProxyHandler);
 
         return {
           stdout: result.stdout,
