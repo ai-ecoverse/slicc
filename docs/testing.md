@@ -283,16 +283,21 @@ function createToolResult(text: string): AgentMessage {
   } as any;
 }
 
-describe('context compaction', () => {
-  it('truncates tool result content over 8000 chars', async () => {
-    const longText = 'x'.repeat(MAX_RESULT_CHARS + 100);
-    const messages = [createToolResult(longText)];
-    const result = await compactContext(messages);
+describe('createCompactContext', () => {
+  it('calls generateSummary when threshold exceeded', async () => {
+    const compact = createCompactContext({
+      model: mockModel,
+      getApiKey: () => 'test-key',
+      contextWindow: 200000,
+    });
+    const baseMsg = 'x'.repeat(65000);
+    const messages = Array.from({ length: 12 }, () => createMessage('user', baseMsg));
 
-    expect(result).toHaveLength(1);
-    const text = (result[0].content as any)[0].text;
-    expect(text.length).toBe(MAX_RESULT_CHARS + '\n... (truncated)'.length);
-    expect(text).toMatch(/\n\.\.\. \(truncated\)$/);
+    const result = await compact(messages);
+
+    expect(mockGenerateSummary).toHaveBeenCalledOnce();
+    expect(result.length).toBeLessThan(messages.length);
+    expect((result[0].content as any)[0].text).toContain('<context-summary>');
   });
 });
 ```
@@ -341,8 +346,12 @@ src/fs/
 src/tools/
   bash-tool.ts
   bash-tool.test.ts         ← colocated
-  browser-tool.ts
-  (no test: DOM-dependent)
+  file-tools.ts
+  file-tools.test.ts        ← colocated
+  javascript-tool.ts
+  javascript-tool.test.ts   ← colocated
+  search-tools.ts
+  search-tools.test.ts      ← colocated
 
 src/shell/supplemental-commands/
   which-command.ts

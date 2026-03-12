@@ -9,6 +9,7 @@ import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
 import type { BrowserAPI, PageInfo } from '../../cdp/index.js';
 import { HarRecorder } from '../../cdp/index.js';
+import { normalizeAccessibilityText } from '../../cdp/normalize-accessibility-text.js';
 import type { AccessibilityNode } from '../../cdp/types.js';
 import { FsError, type VirtualFS } from '../../fs/index.js';
 
@@ -244,8 +245,9 @@ function renderNode(
   indent: string = '',
 ): string[] {
   const lines: string[] = [];
-  const role = (node.role || 'unknown').toLowerCase();
-  const name = node.name || '';
+  const role = normalizeAccessibilityText(node.role, 'unknown').toLowerCase();
+  const name = normalizeAccessibilityText(node.name);
+  const value = normalizeAccessibilityText(node.value);
 
   const skipRoles = ['none', 'presentation', 'generic', 'rootwebarea'];
   const needsRef =
@@ -293,7 +295,7 @@ function renderNode(
   let line = `${indent}- ${role}`;
   if (name) line += ` "${escapeYaml(name)}"`;
   if (ref) line += ` [ref=${ref}]`;
-  if (node.value) line += `: "${escapeYaml(node.value)}"`;
+  if (value) line += `: "${escapeYaml(value)}"`;
   lines.push(line);
 
   if (node.children) {

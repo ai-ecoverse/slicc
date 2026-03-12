@@ -876,7 +876,7 @@ async function main() {
     console.log(`CDP proxy at ws://localhost:${SERVE_PORT}/cdp`);
 
     // Pre-connect to Chrome's CDP so the proxy is warm when the first client connects.
-    // Without this, the first browser tool call has to wait for CDP discovery + WS handshake.
+    // Without this, the first browser automation command has to wait for CDP discovery + WS handshake.
     (async () => {
       try {
         cdpUrl = await waitForCDP(CDP_PORT);

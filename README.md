@@ -22,7 +22,7 @@ A browser-based coding agent that runs as a **Chrome extension**, with a thin **
 - :shell: **WebAssembly Bash Shell** — real Bash via [just-bash](https://github.com/nicolo-ribaudo/just-bash) compiled to WASM
 - :git: **Git Support** — clone, commit, push, pull via [isomorphic-git](https://isomorphic-git.org/) (see [available commands](#git-commands))
 - :robot: **Browser Automation** — screenshots (full page / element / saved to VFS), inline image display, navigation, JS eval, element clicking via Chrome DevTools Protocol (chrome.debugger in extension, WebSocket in CLI), plus `playwright-cli` / `playwright` / `puppeteer` shell commands for tab control, snapshots, cookies, storage, and HAR recording. Auto-detects user's active tab.
-- :earth_americas: **VFS Web Preview** — serve agent-created HTML/CSS/JS apps in real browser tabs via a Service Worker that reads directly from the virtual filesystem. The agent can build a UI, preview it, screenshot it, and iterate — all without leaving Chrome.
+- :earth_americas: **VFS Web Preview** — `serve <dir>` opens agent-created HTML/CSS/JS apps in real browser tabs via a Service Worker that reads directly from the virtual filesystem. The agent can build a UI, preview it, screenshot it, and iterate — all without leaving Chrome.
 - :art: **Image Processing** — `convert` command for resize, rotate, crop, and quality adjustment via ImageMagick WASM
 - :pencil2: **File Operations** — read, write, edit files with syntax-aware tools
 - :mag: **Shell Search Commands** — use `grep`, `find`, and `rg` via the bash shell
@@ -62,7 +62,7 @@ SLICC is a claw too, but one that lives entirely in the browser. Its messaging a
 
 Mario Zechner, creator of [Pi](https://github.com/badlogic/pi-mono) (the agent engine at SLICC's core), demonstrated that [you might not need MCP at all](https://mariozechner.at/posts/2025-11-02-what-if-you-dont-need-mcp/). His philosophy: "Bash is all you need." Frontier models already know bash. CLI tools compose naturally through pipes and redirection. MCP server definitions burn context tokens on ceremony.
 
-Pi ships with exactly four tools: `read`, `write`, `edit`, `bash`. SLICC adds one more — `browser` — because the browser is our operating system. Everything else is a shell command: `git`, `node`, `python3`, `uname`, `webhook`, `crontask`, `skill`, `upskill`. No tool wrappers, no protocol adapters, no JSON schemas for things that already have man pages.
+Pi ships with exactly four tools: `read`, `write`, `edit`, `bash`. SLICC keeps that shell-first core and layers browser automation on top through `playwright-cli` / `playwright` / `puppeteer`, plus preview helpers like `serve`. Everything else is a shell command: `git`, `node`, `python3`, `uname`, `webhook`, `crontask`, `skill`, `upskill`. No tool wrappers, no protocol adapters, no JSON schemas for things that already have man pages.
 
 Further reading:
 - [Pi: A Coding Agent](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/)
@@ -135,7 +135,7 @@ These screenshots capture a historic moment: **SLICC using browser automation to
 
 Here's what happened:
 
-1. SLICC (running in localhost:3000) used its browser tool to navigate to a Claude.ai conversation
+1. SLICC (running in localhost:3000) used its browser automation commands to navigate to a Claude.ai conversation
 2. It read the conversation history — which was about *building SLICC itself* (the origin story conversation)
 3. When asked "what would be even more meta?", SLICC suggested typing a message into that very Claude.ai tab
 4. It then used CDP (Chrome DevTools Protocol) to click on the ProseMirror editor, compose a message, and hit send

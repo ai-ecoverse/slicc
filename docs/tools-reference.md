@@ -1,6 +1,6 @@
 # Tools Reference
 
-Complete reference for the tool modules and active agent tool surface in SLICC. `src/tools/` contains file, bash, browser, search, and javascript tool factories, but the current scoop/cone surface wired in `src/scoops/scoop-context.ts` is: `read_file`, `write_file`, `edit_file`, `bash`, `grep`, `find`, `javascript`, and NanoClaw tools. Browser automation for active scoop agents now runs through the `playwright-cli` / `playwright` / `puppeteer` shell commands via `bash`.
+Complete reference for the tool modules and active agent tool surface in SLICC. `src/tools/` contains file, bash, browser, search, and javascript tool factories, but the current scoop/cone surface wired in `src/scoops/scoop-context.ts` is: `read_file`, `write_file`, `edit_file`, `bash`, `javascript`, and NanoClaw tools. Browser automation and search for active scoop agents now run through shell commands via `bash` (`playwright-cli` / `playwright` / `puppeteer`, plus shell-native `rg` / `grep` / `find`).
 
 ---
 
@@ -121,7 +121,7 @@ Execute shell commands in a full Unix-like environment (just-bash 2.11.7).
 - Networking: Full `curl` with HTTP methods, headers, auth, body
 - Text processing: grep, rg, sed, awk, cut, tr, sort, uniq, wc, head, tail
 - Browser automation for active agents runs through `playwright-cli` / `playwright` / `puppeteer`
-- Search is available both through dedicated `grep` / `find` agent tools and shell-native `grep` / `find` / `rg` via `bash`
+- Active agents perform search through shell-native `grep` / `find` / `rg` via `bash`
 - Data: jq (JSON), base64, md5sum, sha256sum
 
 **Exit status handling**:
@@ -242,11 +242,11 @@ Apply a string replacement edit to an existing file.
 
 ---
 
-### grep
+### grep (module factory, not active in ScoopContext)
 
 **File**: `src/tools/search-tools.ts`
 
-Search file contents recursively in VirtualFS using a JavaScript regular expression.
+Search file contents recursively in VirtualFS using a JavaScript regular expression. This factory remains in `src/tools/search-tools.ts` for module-level use and tests, but active scoop/cone agents search through `bash` instead.
 
 | Property | Value |
 |----------|-------|
@@ -277,11 +277,11 @@ Search file contents recursively in VirtualFS using a JavaScript regular express
 
 ---
 
-### find
+### find (module factory, not active in ScoopContext)
 
 **File**: `src/tools/search-tools.ts`
 
-List files and directories recursively in VirtualFS using simple glob matching.
+List files and directories recursively in VirtualFS using simple glob matching. This factory remains in `src/tools/search-tools.ts` for module-level use and tests, but active scoop/cone agents search through `bash` instead.
 
 | Property | Value |
 |----------|-------|
@@ -307,60 +307,7 @@ List files and directories recursively in VirtualFS using simple glob matching.
 - Default `pattern` is `*`
 - Truncates after 500 results
 
----
 
-### browser
-
-Maintainer-facing tool module. The `browser` tool still exists in `src/tools/browser-tool.ts`, but current scoop contexts do **not** register it. Active agent browser automation now goes through `playwright-cli` / `playwright` / `puppeteer` shell commands via `bash`.
-
-**File**: `src/tools/browser-tool.ts`
-
-Control browser tabs via Chrome DevTools Protocol.
-
-| Property | Value |
-|----------|-------|
-| **Name** | `browser` |
-| **Actions** | 13 sub-actions (see below) |
-
-**Auto-dispatch**: If `targetId` is omitted, the user's currently focused tab is resolved automatically.
-
-**App tab protection**: The SLICC app's own tab is hidden and cannot be navigated or modified.
-
-#### Actions
-
-| Action | Parameters | Returns |
-|--------|-----------|---------|
-| **list_tabs** | None | `{ tabs: { targetId, url, title, active }[] }` |
-| **new_tab** | `url: string` | `{ targetId: string }` — creates and navigates tab |
-| **new_recorded_tab** | `url: string`, `filter?: string` (JS function) | `{ recordingId: string }` — starts HAR recording |
-| **stop_recording** | `recordingId: string` | `{ message: "Recording saved" }` — saves HAR snapshot |
-| **navigate** | `url: string`, `targetId?: string` | Page loads, returns when ready |
-| **snapshot** | `targetId?: string` | `{ snapshot: string }` — accessibility tree with element refs (e1, e2, ...) |
-| **screenshot** | `targetId?: string`, `path?: string`, `fullPage?: boolean`, `selector?: string` | Base64 PNG or saved to `path` in VFS |
-| **evaluate** | `expression: string`, `targetId?: string` | JavaScript result (JSON stringified) |
-| **click** | `ref: string \| selector: string`, `targetId?: string` | Clicks element by ref (e.g., "e5") or CSS selector |
-| **type** | `text: string`, `targetId?: string` | Types into focused input |
-| **evaluate_persistent** | `expression: string` | Runs JS in persistent blank tab, preserves variables |
-| **serve** | `directory: string`, `entry?: string` | `{ targetId: string }` — serves VFS directory as web app |
-| **show_image** | `path: string` | Displays image from VFS inline in chat |
-
-**Recording filter** (JavaScript string):
-
-The `filter` parameter for `new_recorded_tab` is a JavaScript function string:
-
-```javascript
-(entry) => false | true | object
-```
-
-- `false` → exclude entry
-- `true` → include entry (default)
-- `object` → transform entry (e.g., remove response body: `{ ...entry, response: { ...entry.response, content: { ...entry.response.content, text: '' } } }`)
-
-Filter is applied at snapshot save time (batch), not per-entry. In extension mode, filter code is sent to the sandbox iframe via postMessage.
-
-Recordings saved to `/recordings/{id}/` with HAR 1.2 format. Response bodies are captured by default (can be large); use filter to exclude.
-
----
 
 ### javascript
 
@@ -410,7 +357,7 @@ console.log(result);
 
 ### Search via `bash` (shell alternatives)
 
-In addition to the dedicated `grep` and `find` agent tools above, the shell also exposes `grep`, `find`, and `rg` through `bash`. Use these when you need shell composition, pipes, or ripgrep-specific behavior.
+Active agents should use the shell's `grep`, `find`, and `rg` commands through `bash` for search. Use these when you need shell composition, pipes, or ripgrep-specific behavior.
 
 | Command | Purpose | Example |
 |---------|---------|---------|
@@ -419,7 +366,7 @@ In addition to the dedicated `grep` and `find` agent tools above, the shell also
 | `rg` | Fast recursive text search | `rg "function main" /workspace/src --type ts` |
 
 **Behavior notes**:
-- Use these through `bash`; `rg` is shell-only, while `grep` and `find` are also available as dedicated agent tools
+- Use these through `bash`; this is the active search path for scoop/cone agents
 - `grep` and `rg` return exit code `1` when no matches are found; the `bash` tool preserves that output without surfacing it as an agent error when stderr is empty
 
 **Examples**:
@@ -535,10 +482,7 @@ Cone-only. Update the shared global memory file (`/shared/CLAUDE.md`).
 | read_file | ✓ | ✓ (restricted) | Active in `ScoopContext` |
 | write_file | ✓ | ✓ (restricted) | Active in `ScoopContext` |
 | edit_file | ✓ | ✓ (restricted) | Active in `ScoopContext` |
-| grep | ✓ | ✓ (restricted) | Active search tool from `src/tools/search-tools.ts` |
-| find | ✓ | ✓ (restricted) | Active search tool from `src/tools/search-tools.ts` |
 | javascript | ✓ | ✓ | Active in `ScoopContext` |
-| browser | — | — | Tool module exists in `src/tools/browser-tool.ts` but is not currently registered by `ScoopContext` |
 | **send_message** | ✓ | ✓ | NanoClaw tool |
 | **list_scoops** | ✓ | ✗ | Cone-only NanoClaw tool |
 | **scoop_scoop** | ✓ | ✗ | Cone-only NanoClaw tool |
@@ -550,21 +494,28 @@ Cone-only. Update the shared global memory file (`/shared/CLAUDE.md`).
 
 ## Context Compaction
 
-To prevent context overflow (200K token limit), the agent applies automatic compaction before each LLM call.
+LLM-summarized context compaction (`src/core/context-compaction.ts`), aligned with pi-mono's strategy.
 
-**Thresholds** (`src/core/context-compaction.ts`):
+**How it works**: When context approaches the token limit, an LLM call generates a structured summary of older messages, which replaces them as a single user message. This preserves the conversation prefix (Anthropic cache-friendly) and keeps recent messages intact.
+
+**Constants** (from pi-coding-agent's `DEFAULT_COMPACTION_SETTINGS`):
 
 ```typescript
-const MAX_RESULT_CHARS = 8000;        // ~2000 tokens per tool result
-const MAX_CONTEXT_CHARS = 600000;     // ~150K tokens total
+contextWindow = 200000;       // Claude's context window
+reserveTokens = 16384;        // Headroom below context limit
+keepRecentTokens = 20000;     // Recent messages to preserve
 ```
 
-**Two-phase compaction**:
+**Algorithm**:
 
-1. **Result truncation**: Tool results > 8000 chars are truncated with `\n... (truncated)` marker
-2. **Message dropping**: If total context exceeds 600K chars, old messages are dropped
+1. **Threshold check**: Triggers when estimated tokens exceed `contextWindow - reserveTokens` (~183K tokens)
+2. **Cut point**: Walks backward from newest, keeping ~`keepRecentTokens` of recent messages. Never splits assistant+toolResult pairs.
+3. **LLM summarization**: Calls `generateSummary()` to produce a structured summary (Goal, Progress, Key Decisions, Next Steps, Critical Context)
+4. **Fallback**: If LLM call fails or no API key, falls back to naive message dropping with a compaction marker
 
-**Preservation**: First 2 messages (system context) and last 10 messages (recent context) are always kept.
+**No truncation**: Tool results pass through at full fidelity. Image tags (`<img:...>`) are parsed into `ImageContent` blocks by `tool-adapter.ts`, but neither text nor image content is truncated. Full-size data is preserved until compaction summarizes older messages.
+
+**Overflow recovery**: If the context still exceeds the API limit after compaction (e.g., due to token estimation inaccuracy, system prompt size, or multiple large recent results), `ScoopContext` catches the "prompt too long" error via `isContextOverflow()` from pi-ai, replaces oversized messages (>40K chars) with placeholders, and re-prompts the agent with an explanation. Limited to 1 retry to prevent infinite loops.
 
 ---
 
@@ -592,10 +543,10 @@ The agent can inspect `isError` to determine if a tool call succeeded or needs r
 ## Performance Notes
 
 - **bash**: Each command is synchronous in just-bash; avoid blocking operations
-- **BrowserAPI-backed automation**: Screenshots and evaluations are fast (<100ms on local tabs). Network delays dominate remote sites whether invoked via the maintained `browser` tool module or via `playwright-cli`
+- **BrowserAPI-backed automation**: Screenshots and evaluations are fast (<100ms on local tabs). Network delays dominate remote sites whether invoked via `playwright-cli`, `playwright`, or `puppeteer`
 - **javascript**: Sandbox message passing adds ~10ms overhead per call
 - **read_file**: LineNumber formatting is O(file size); reading huge files (>1MB) may be slow
-- **context-compaction**: Runs before every LLM call; O(message count), not a bottleneck
+- **context-compaction**: Runs before every LLM call; threshold check is O(message count). When compaction triggers, an LLM call adds latency but only happens when approaching context limits.
 
 ---
 
