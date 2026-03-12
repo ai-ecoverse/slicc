@@ -192,6 +192,23 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   layout.panels.fileBrowser.setFs(localFs);
   log.info('File browser wired to shared VFS (local IndexedDB)');
 
+  // Listen for preview SW file-read requests (falls back here for mounted dirs).
+  // Uses BroadcastChannel because the SW's `/preview/` scope excludes this page.
+  const previewVfsCh = new BroadcastChannel('preview-vfs');
+  previewVfsCh.onmessage = (event) => {
+    if (event.data?.type !== 'preview-vfs-read') return;
+    const { id, path, asText } = event.data;
+    (async () => {
+      try {
+        const encoding = asText ? 'utf-8' : 'binary';
+        const content = await localFs.readFile(path, { encoding });
+        previewVfsCh.postMessage({ type: 'preview-vfs-response', id, content });
+      } catch {
+        previewVfsCh.postMessage({ type: 'preview-vfs-response', id, error: 'ENOENT' });
+      }
+    })();
+  };
+
   // Wire skill drop install with toast feedback
   const skillDropToast = createSkillDropToast();
   registerSkillDropInstall(localFs, skillDropToast, async () => {
@@ -638,6 +655,23 @@ async function main(): Promise<void> {
   if (sharedFs) {
     layout.panels.fileBrowser.setFs(sharedFs);
     log.info('File browser wired to shared VFS');
+
+    // Listen for preview SW file-read requests (falls back here for mounted dirs).
+    // Uses BroadcastChannel because the SW's `/preview/` scope excludes this page.
+    const previewVfsCh = new BroadcastChannel('preview-vfs');
+    previewVfsCh.onmessage = (event) => {
+      if (event.data?.type !== 'preview-vfs-read') return;
+      const { id, path, asText } = event.data;
+      (async () => {
+        try {
+          const encoding = asText ? 'utf-8' : 'binary';
+          const content = await sharedFs.readFile(path, { encoding });
+          previewVfsCh.postMessage({ type: 'preview-vfs-response', id, content });
+        } catch {
+          previewVfsCh.postMessage({ type: 'preview-vfs-response', id, error: 'ENOENT' });
+        }
+      })();
+    };
 
     registerSkillDropInstall(
       sharedFs,
