@@ -151,7 +151,7 @@ export class LeaderTrayManager {
 
   constructor(private readonly options: LeaderTrayManagerOptions) {
     this.store = options.store ?? new IndexedDbLeaderTraySessionStore();
-    this.fetchImpl = options.fetchImpl ?? createLeaderTrayFetch();
+    this.fetchImpl = options.fetchImpl ?? createTrayFetch();
     this.webSocketFactory = options.webSocketFactory ?? (url => new WebSocket(url));
     this.pingIntervalMs = options.pingIntervalMs ?? LEADER_TRAY_PING_INTERVAL_MS;
     this.connectTimeoutMs = options.connectTimeoutMs ?? LEADER_TRAY_CONNECT_TIMEOUT_MS;
@@ -384,7 +384,7 @@ function parseSocketMessage(data: unknown): WorkerToLeaderControlMessage | null 
   }
 }
 
-function createLeaderTrayFetch(fetchImpl: typeof fetch = fetch): typeof fetch {
+export function createTrayFetch(fetchImpl: typeof fetch = fetch): typeof fetch {
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   if (isExtension) {
     return fetchImpl;

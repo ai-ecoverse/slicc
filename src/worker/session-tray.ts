@@ -95,7 +95,19 @@ export class SessionTrayDurableObject {
 
     const joinMatch = url.pathname.match(/^\/join\/([^/]+)$/);
     if (joinMatch) {
-      return this.handleJoin(request, joinMatch[1], url);
+      if (request.method === 'OPTIONS') {
+        return new Response(null, {
+          status: 204,
+          headers: {
+            'access-control-allow-origin': '*',
+            'access-control-allow-methods': 'POST, OPTIONS',
+            'access-control-allow-headers': 'content-type',
+          },
+        });
+      }
+      const response = await this.handleJoin(request, joinMatch[1], url);
+      response.headers.set('access-control-allow-origin', '*');
+      return response;
     }
 
     const expiration = await this.ensureTrayIsActive();

@@ -20,7 +20,7 @@ import { BrowserAPI } from '../cdp/index.js';
 import { Orchestrator } from '../scoops/index.js';
 import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
-import { LeaderTrayManager } from '../scoops/tray-leader.js';
+import { LeaderTrayManager, createTrayFetch } from '../scoops/tray-leader.js';
 import {
   buildTrayLaunchUrl,
   fetchRuntimeConfig,
@@ -1056,6 +1056,7 @@ async function main(): Promise<void> {
       const trayFollower = new FollowerTrayManager({
         joinUrl,
         runtime: 'slicc-standalone',
+        fetchImpl: createTrayFetch(),
       });
       activeFollower = trayFollower;
       void trayFollower.start().catch((error) => {
@@ -1088,6 +1089,7 @@ async function main(): Promise<void> {
       leaderTray = new LeaderTrayManager({
         workerBaseUrl: trayRuntimeConfig.workerBaseUrl,
         runtime: 'slicc-standalone',
+        fetchImpl: createTrayFetch(),
         onControlMessage: message => {
           void trayPeers.handleControlMessage(message).catch((error) => {
             log.warn('Tray leader bootstrap handling failed', {

@@ -9,7 +9,9 @@ import {
   buildChromeLaunchArgs,
   ensureQaProfileScaffold,
   findChromeExecutable,
+  parseCdpPortFromStderr,
   resolveChromeLaunchProfile,
+  waitForCdpPortFromStderr,
 } from './chrome-launch.js';
 
 const tempDirs: string[] = [];
@@ -162,5 +164,100 @@ describe('chrome-launch', () => {
       ),
     ) as { profile?: { name?: string } };
     expect(preferences.profile?.name).toBe('SLICC QA Extension');
+  });
+});
+
+describe('parseCdpPortFromStderr', () => {
+  it('extracts the port from a standard Chrome DevTools line', () => {
+    expect(
+      parseCdpPortFromStderr(
+        'DevTools listening on ws://127.0.0.1:9222/devtools/browser/abc-123',
+      ),
+    ).toBe(9222);
+  });
+
+  it('extracts a non-default port', () => {
+    expect(
+      parseCdpPortFromStderr(
+        'DevTools listening on ws://127.0.0.1:41567/devtools/browser/abc-123',
+      ),
+    ).toBe(41567);
+  });
+
+  it('returns null for unrelated stderr output', () => {
+    expect(parseCdpPortFromStderr('[0312/120000:WARNING] something else')).toBe(null);
+  });
+
+  it('returns null for empty string', () => {
+    expect(parseCdpPortFromStderr('')).toBe(null);
+  });
+
+  it('handles 0.0.0.0 host binding', () => {
+    expect(
+      parseCdpPortFromStderr(
+        'DevTools listening on ws://0.0.0.0:9333/devtools/browser/xyz',
+      ),
+    ).toBe(9333);
+  });
+});
+
+describe('waitForCdpPortFromStderr', () => {
+  it('resolves with the port when Chrome prints the DevTools line', async () => {
+    const { EventEmitter } = await import('events');
+    const stderr = new EventEmitter();
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    (child as { stderr: typeof stderr }).stderr = stderr;
+
+    const promise = waitForCdpPortFromStderr(child, 5000);
+
+    // Simulate Chrome printing to stderr
+    stderr.emit(
+      'data',
+      Buffer.from('DevTools listening on ws://127.0.0.1:44123/devtools/browser/id\n'),
+    );
+
+    await expect(promise).resolves.toBe(44123);
+  });
+
+  it('handles multi-line chunks with the DevTools line after noise', async () => {
+    const { EventEmitter } = await import('events');
+    const stderr = new EventEmitter();
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    (child as { stderr: typeof stderr }).stderr = stderr;
+
+    const promise = waitForCdpPortFromStderr(child, 5000);
+
+    stderr.emit(
+      'data',
+      Buffer.from(
+        '[WARNING] some noise\nDevTools listening on ws://127.0.0.1:9222/devtools/browser/id\n',
+      ),
+    );
+
+    await expect(promise).resolves.toBe(9222);
+  });
+
+  it('rejects when Chrome exits before printing the DevTools line', async () => {
+    const { EventEmitter } = await import('events');
+    const stderr = new EventEmitter();
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    (child as { stderr: typeof stderr }).stderr = stderr;
+
+    const promise = waitForCdpPortFromStderr(child, 5000);
+
+    child.emit('exit', 1);
+
+    await expect(promise).rejects.toThrow(/exited with code 1/);
+  });
+
+  it('rejects on timeout', async () => {
+    const { EventEmitter } = await import('events');
+    const stderr = new EventEmitter();
+    const child = new EventEmitter() as unknown as import('child_process').ChildProcess;
+    (child as { stderr: typeof stderr }).stderr = stderr;
+
+    const promise = waitForCdpPortFromStderr(child, 50);
+
+    await expect(promise).rejects.toThrow(/Timed out/);
   });
 });

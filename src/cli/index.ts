@@ -16,6 +16,7 @@ import {
   ensureQaProfileScaffold,
   findChromeExecutable,
   resolveChromeLaunchProfile,
+  waitForCdpPortFromStderr,
 } from './chrome-launch.js';
 import { resolveCliBrowserLaunchUrl } from './launch-url.js';
 import { parseCliRuntimeFlags } from './runtime-flags.js';
@@ -95,7 +96,9 @@ function tryListenOnPort(port: number): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createNetServer();
     server.on('error', reject);
-    server.listen(port, () => {
+    // Bind on 127.0.0.1 specifically — Chrome's --remote-debugging-port binds
+    // on 127.0.0.1, so checking on 0.0.0.0/:: would miss the conflict.
+    server.listen(port, '127.0.0.1', () => {
       const addr = server.address();
       const assignedPort = addr && typeof addr === 'object' ? addr.port : port;
       server.close(() => resolve(assignedPort));
@@ -287,9 +290,12 @@ async function main() {
   // Resolve available ports before anything else — serve port must be known
   // before Chrome launches (the launch URL contains it).
   const SERVE_PORT = await findAvailablePort(PREFERRED_SERVE_PORT);
-  const CDP_PORT = ELECTRON_MODE
-    ? PREFERRED_CDP_PORT
-    : await findAvailablePort(PREFERRED_CDP_PORT);
+  // For Chrome CDP, we pass port 0 to let Chrome pick any available port,
+  // then parse the actual port from its stderr. This avoids race conditions
+  // where Node's port probe succeeds but Chrome still can't bind the port.
+  // Electron mode keeps the preferred port (external CDP, not launched by us).
+  const REQUESTED_CDP_PORT = ELECTRON_MODE ? PREFERRED_CDP_PORT : 0;
+  let CDP_PORT = ELECTRON_MODE ? PREFERRED_CDP_PORT : 0;
   const HMR_PORT = DEV_MODE
     ? await findAvailablePort(PREFERRED_HMR_PORT)
     : PREFERRED_HMR_PORT;
@@ -297,9 +303,6 @@ async function main() {
 
   if (SERVE_PORT !== PREFERRED_SERVE_PORT) {
     console.log(`Port ${PREFERRED_SERVE_PORT} in use, serving on port ${SERVE_PORT}`);
-  }
-  if (!ELECTRON_MODE && CDP_PORT !== PREFERRED_CDP_PORT) {
-    console.log(`CDP port ${PREFERRED_CDP_PORT} in use, using port ${CDP_PORT}`);
   }
   if (DEV_MODE && HMR_PORT !== PREFERRED_HMR_PORT) {
     console.log(`HMR port ${PREFERRED_HMR_PORT} in use, using port ${HMR_PORT}`);
@@ -412,7 +415,7 @@ async function main() {
     }
 
     const chromeArgs = buildChromeLaunchArgs({
-      cdpPort: CDP_PORT,
+      cdpPort: REQUESTED_CDP_PORT,
       launchUrl: browserLaunchUrl,
       profile: chromeProfile,
     });
@@ -422,6 +425,12 @@ async function main() {
       detached: false,
     });
     launchedBrowserLabel = chromeProfile.displayName;
+
+    // Parse the actual CDP port from Chrome's stderr before piping output.
+    // Chrome prints "DevTools listening on ws://HOST:PORT/..." to stderr.
+    const actualCdpPort = await waitForCdpPortFromStderr(launchedBrowserProcess);
+    CDP_PORT = actualCdpPort;
+    console.log(`Chrome CDP listening on port ${CDP_PORT}`);
 
     pipeChildOutput(launchedBrowserProcess, 'chrome');
 

@@ -258,6 +258,39 @@ describe('tray worker skeleton', () => {
     });
   });
 
+  it('returns CORS headers on join OPTIONS preflight and POST responses', async () => {
+    const { env } = createTestHarness();
+    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
+    const session = (await created.json()) as {
+      capabilities: { join: { url: string } };
+    };
+
+    // OPTIONS preflight
+    const preflight = await handleWorkerRequest(
+      new Request(session.capabilities.join.url, { method: 'OPTIONS' }),
+      env,
+    );
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get('access-control-allow-origin')).toBe('*');
+    expect(preflight.headers.get('access-control-allow-methods')).toContain('POST');
+    expect(preflight.headers.get('access-control-allow-headers')).toContain('content-type');
+
+    // GET (non-POST) join probe should also have CORS
+    const probe = await handleWorkerRequest(new Request(session.capabilities.join.url), env);
+    expect(probe.headers.get('access-control-allow-origin')).toBe('*');
+
+    // POST attach should also have CORS
+    const attach = await handleWorkerRequest(
+      new Request(session.capabilities.join.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'cors-test', runtime: 'test' }),
+      }),
+      env,
+    );
+    expect(attach.headers.get('access-control-allow-origin')).toBe('*');
+  });
+
   it('returns bootstrap metadata and notifies the leader when a follower attaches after the leader websocket is live', async () => {
     const { env } = createTestHarness();
     const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);

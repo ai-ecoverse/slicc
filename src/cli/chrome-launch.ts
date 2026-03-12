@@ -2,6 +2,7 @@ import { existsSync, readdirSync } from 'fs';
 import { mkdir, readFile, writeFile } from 'fs/promises';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
+import type { ChildProcess } from 'child_process';
 
 export const CLI_PROFILE_NAMES = ['leader', 'follower', 'extension'] as const;
 export type CliProfileName = (typeof CLI_PROFILE_NAMES)[number];
@@ -358,4 +359,72 @@ export async function ensureQaProfileScaffold(projectRoot: string): Promise<Chro
   }
 
   return profiles;
+}
+
+// ---------------------------------------------------------------------------
+// CDP port parsing — extract actual port from Chrome's stderr output
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse the CDP port from a Chrome stderr line.
+ * Chrome prints `DevTools listening on ws://HOST:PORT/devtools/browser/ID`
+ * to stderr when it starts. Returns the port number, or null if the line
+ * doesn't match.
+ */
+export function parseCdpPortFromStderr(line: string): number | null {
+  const match = line.match(/DevTools listening on ws:\/\/[^:]+:(\d+)\//);
+  if (!match) return null;
+  const port = Number.parseInt(match[1]!, 10);
+  return Number.isFinite(port) && port > 0 ? port : null;
+}
+
+/**
+ * Watch a Chrome child process's stderr for the `DevTools listening on` line
+ * and resolve with the actual CDP port. Rejects after `timeoutMs` if the line
+ * never appears (e.g. Chrome failed to start).
+ */
+export function waitForCdpPortFromStderr(
+  child: ChildProcess,
+  timeoutMs = 15000,
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    if (!child.stderr) {
+      reject(new Error('Chrome process has no stderr stream'));
+      return;
+    }
+
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        reject(new Error(`Timed out waiting for Chrome CDP port (${timeoutMs}ms)`));
+      }
+    }, timeoutMs);
+
+    const onData = (chunk: Buffer) => {
+      if (settled) return;
+      const text = chunk.toString('utf-8');
+      // stderr may deliver multiple lines in one chunk
+      for (const line of text.split('\n')) {
+        const port = parseCdpPortFromStderr(line);
+        if (port !== null) {
+          settled = true;
+          clearTimeout(timer);
+          child.stderr!.off('data', onData);
+          resolve(port);
+          return;
+        }
+      }
+    };
+
+    child.stderr.on('data', onData);
+
+    child.on('exit', (code) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        reject(new Error(`Chrome exited with code ${code} before reporting CDP port`));
+      }
+    });
+  });
 }
