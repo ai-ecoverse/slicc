@@ -62,10 +62,24 @@ export class Layout {
   private scoopsDivider!: HTMLElement;
   private verticalDivider!: HTMLElement;
   private horizontalDivider!: HTMLElement;
-  private bottomSection!: HTMLElement;
   private terminalContainer!: HTMLElement;
-  private fileBrowserContainer!: HTMLElement;
   private iframeContainer!: HTMLElement;
+
+  // Primary zone (top of right column — Terminal + SHTML panel tabs)
+  private primaryZone!: HTMLElement;
+  private primaryTabBar!: HTMLElement;
+  private primaryContentArea!: HTMLElement;
+  private primaryTabs = new Map<string, { btn: HTMLButtonElement; container: HTMLElement }>();
+  private activePrimaryTab = 'terminal';
+
+  // Drawer zone (bottom of right column — Files + Memory)
+  private drawerZone!: HTMLElement;
+  private drawerTabBar!: HTMLElement;
+  private drawerContentArea!: HTMLElement;
+  private drawerTabs = new Map<string, { btn: HTMLButtonElement; container: HTMLElement }>();
+  private activeDrawerTab = 'files';
+
+  private drawerHeightFraction = 0.35;
 
   // Tabbed-layout elements (extension only)
   private tabContainers = new Map<TabId, HTMLElement>();
@@ -96,7 +110,6 @@ export class Layout {
 
   private scoopsWidth = 0.15;
   private leftWidth = 0.45;
-  private topHeight = 0.65;
 
   constructor(root: HTMLElement, isExtension = false) {
     this.root = root;
@@ -794,70 +807,90 @@ export class Layout {
     this.rightEl = document.createElement('div');
     this.rightEl.className = 'layout__right';
 
-    this.terminalContainer = document.createElement('div');
-    this.terminalContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: none;';
-    this.rightEl.appendChild(this.terminalContainer);
+    // ── Primary zone (Terminal + SHTML panel tabs) ──
+    this.primaryZone = document.createElement('div');
+    this.primaryZone.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: none;';
 
+    this.primaryTabBar = document.createElement('div');
+    this.primaryTabBar.className = 'mini-tabs';
+    this.primaryZone.appendChild(this.primaryTabBar);
+
+    this.primaryContentArea = document.createElement('div');
+    this.primaryContentArea.style.cssText = 'flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;';
+    this.primaryZone.appendChild(this.primaryContentArea);
+
+    // Terminal tab (always first, no close button)
+    this.terminalContainer = document.createElement('div');
+    this.terminalContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1;';
+    this.primaryContentArea.appendChild(this.terminalContainer);
+
+    const terminalTabBtn = document.createElement('button');
+    terminalTabBtn.className = 'mini-tabs__tab mini-tabs__tab--active';
+    terminalTabBtn.textContent = 'Terminal';
+    terminalTabBtn.addEventListener('click', () => this.switchPrimaryTab('terminal'));
+    this.primaryTabBar.appendChild(terminalTabBtn);
+    this.primaryTabs.set('terminal', { btn: terminalTabBtn, container: this.terminalContainer });
+
+    this.rightEl.appendChild(this.primaryZone);
+
+    // ── Horizontal divider ──
     this.horizontalDivider = document.createElement('div');
     this.horizontalDivider.className = 'layout__right-divider';
     this.rightEl.appendChild(this.horizontalDivider);
 
-    // Bottom section with tabs for Files/Memory
-    this.bottomSection = document.createElement('div');
-    this.bottomSection.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden;';
+    // ── Drawer zone (Files + Memory) ──
+    this.drawerZone = document.createElement('div');
+    this.drawerZone.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden;';
 
-    const miniTabs = document.createElement('div');
-    miniTabs.className = 'mini-tabs';
+    this.drawerTabBar = document.createElement('div');
+    this.drawerTabBar.className = 'mini-tabs';
+    this.drawerZone.appendChild(this.drawerTabBar);
 
-    const filesTab = document.createElement('button');
-    filesTab.className = 'mini-tabs__tab mini-tabs__tab--active';
-    filesTab.textContent = 'Files';
-    filesTab.dataset.tab = 'files';
-    miniTabs.appendChild(filesTab);
+    this.drawerContentArea = document.createElement('div');
+    this.drawerContentArea.style.cssText = 'flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;';
+    this.drawerZone.appendChild(this.drawerContentArea);
 
-    const memoryTab = document.createElement('button');
-    memoryTab.className = 'mini-tabs__tab';
-    memoryTab.textContent = 'Memory';
-    memoryTab.dataset.tab = 'memory';
-    miniTabs.appendChild(memoryTab);
+    // Files tab
+    const fileBrowserContainer = document.createElement('div');
+    fileBrowserContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1;';
+    this.drawerContentArea.appendChild(fileBrowserContainer);
 
-    this.bottomSection.appendChild(miniTabs);
+    const filesTabBtn = document.createElement('button');
+    filesTabBtn.className = 'mini-tabs__tab mini-tabs__tab--active';
+    filesTabBtn.textContent = 'Files';
+    filesTabBtn.addEventListener('click', () => this.switchDrawerTab('files'));
+    this.drawerTabBar.appendChild(filesTabBtn);
+    this.drawerTabs.set('files', { btn: filesTabBtn, container: fileBrowserContainer });
 
-    this.fileBrowserContainer = document.createElement('div');
-    this.fileBrowserContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1;';
-    this.bottomSection.appendChild(this.fileBrowserContainer);
-
+    // Memory tab
     const memoryContainer = document.createElement('div');
     memoryContainer.style.cssText = 'display: none; flex-direction: column; min-height: 0; flex: 1;';
-    this.bottomSection.appendChild(memoryContainer);
+    this.drawerContentArea.appendChild(memoryContainer);
 
-    const setBottomTab = (tab: 'files' | 'memory') => {
-      if (tab === 'memory') {
-        memoryTab.classList.add('mini-tabs__tab--active');
-        filesTab.classList.remove('mini-tabs__tab--active');
-        memoryContainer.style.display = 'flex';
-        this.fileBrowserContainer.style.display = 'none';
-        this.panels?.memory?.refresh();
-      } else {
-        filesTab.classList.add('mini-tabs__tab--active');
-        memoryTab.classList.remove('mini-tabs__tab--active');
-        this.fileBrowserContainer.style.display = 'flex';
-        memoryContainer.style.display = 'none';
-      }
-      const url = new URL(window.location.href);
-      url.searchParams.set('bottomTab', tab);
-      history.replaceState(null, '', url.toString());
-    };
+    const memoryTabBtn = document.createElement('button');
+    memoryTabBtn.className = 'mini-tabs__tab';
+    memoryTabBtn.textContent = 'Memory';
+    memoryTabBtn.addEventListener('click', () => this.switchDrawerTab('memory'));
+    this.drawerTabBar.appendChild(memoryTabBtn);
+    this.drawerTabs.set('memory', { btn: memoryTabBtn, container: memoryContainer });
 
-    filesTab.addEventListener('click', () => setBottomTab('files'));
-    memoryTab.addEventListener('click', () => setBottomTab('memory'));
+    // Restore persisted drawer height
+    const savedDrawerHeight = localStorage.getItem('slicc-drawer-height');
+    if (savedDrawerHeight) this.drawerHeightFraction = parseFloat(savedDrawerHeight) || 0.35;
 
-    const initialTab = new URL(window.location.href).searchParams.get('bottomTab');
-    if (initialTab === 'memory') {
-      setBottomTab('memory');
+    // Restore persisted primary tab
+    const savedPrimaryTab = localStorage.getItem('slicc-primary-tab');
+    if (savedPrimaryTab && savedPrimaryTab !== 'terminal') this.activePrimaryTab = savedPrimaryTab;
+
+    // Restore persisted drawer tab
+    const initialDrawerTab = localStorage.getItem('slicc-drawer-tab')
+      || new URL(window.location.href).searchParams.get('bottomTab');
+    if (initialDrawerTab === 'memory') {
+      this.activeDrawerTab = 'memory';
+      this.switchDrawerTab('memory');
     }
 
-    this.rightEl.appendChild(this.bottomSection);
+    this.rightEl.appendChild(this.drawerZone);
     layout.appendChild(this.rightEl);
 
     // Hidden container for scoop iframes
@@ -872,7 +905,7 @@ export class Layout {
     this.panels = {
       chat: new ChatPanel(this.leftEl),
       terminal: new TerminalPanel(this.terminalContainer),
-      fileBrowser: new FileBrowserPanel(this.fileBrowserContainer, {
+      fileBrowser: new FileBrowserPanel(fileBrowserContainer, {
         onRunCommand: (command) => {
           void this.runFileBrowserCommand(command);
         },
@@ -907,13 +940,11 @@ export class Layout {
 
     const rightH = this.rightEl.clientHeight;
     const hDividerH = 4;
-    const topH = Math.round(rightH * this.topHeight);
-    const bottomH = rightH - topH - hDividerH;
+    const drawerH = Math.max(28, Math.round(rightH * this.drawerHeightFraction));
+    const primaryH = Math.max(100, rightH - drawerH - hDividerH);
 
-    this.terminalContainer.style.height = topH + 'px';
-    if (this.bottomSection) {
-      this.bottomSection.style.height = bottomH + 'px';
-    }
+    this.primaryZone.style.height = primaryH + 'px';
+    this.drawerZone.style.height = drawerH + 'px';
   }
 
   /** Get the iframe container for the orchestrator */
@@ -1001,8 +1032,11 @@ export class Layout {
     const onMouseMove = (e: MouseEvent) => {
       if (!dragging) return;
       const rect = this.rightEl.getBoundingClientRect();
+      const rightH = rect.height;
       const y = e.clientY - rect.top;
-      this.topHeight = Math.max(0.2, Math.min(0.8, y / rect.height));
+      // drawerHeightFraction = fraction from bottom
+      const primaryFraction = y / rightH;
+      this.drawerHeightFraction = Math.max(28 / rightH, Math.min(1 - 100 / rightH, 1 - primaryFraction));
       this.applySizes();
     };
 
@@ -1013,6 +1047,8 @@ export class Layout {
       document.body.style.userSelect = '';
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
+      localStorage.setItem('slicc-drawer-height', String(this.drawerHeightFraction));
+      this.panels?.terminal?.refit();
     };
 
     this.horizontalDivider.addEventListener('mousedown', (e) => {
@@ -1064,43 +1100,30 @@ export class Layout {
       // Auto-switch to the new tab
       this.switchTab(tabId);
     } else {
-      // Standalone mode: add as a new section in the right column
-      const section = document.createElement('div');
-      section.className = 'shtml-panel-section';
-      section.dataset.panel = name;
-      section.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden;';
+      // Standalone mode: add as a primary zone tab
+      const tabId = `shtml-${name}`;
 
-      // Title bar
-      const titleBar = document.createElement('div');
-      titleBar.className = 'shtml-panel-titlebar';
-      const titleText = document.createElement('span');
-      titleText.textContent = title;
-      titleBar.appendChild(titleText);
-
-      const closeBtn = document.createElement('button');
-      closeBtn.className = 'shtml-panel-close';
-      closeBtn.textContent = '\u00D7';
-      closeBtn.title = 'Close panel';
-      closeBtn.addEventListener('click', () => {
+      const btn = document.createElement('button');
+      btn.className = 'mini-tabs__tab';
+      btn.innerHTML = `${title}<span class="mini-tabs__tab-close" title="Close panel">\u00D7</span>`;
+      btn.addEventListener('click', () => this.switchPrimaryTab(tabId));
+      const closeSpan = btn.querySelector('.mini-tabs__tab-close')!;
+      closeSpan.addEventListener('click', (e) => {
+        e.stopPropagation();
         this.onPanelClose?.(name);
       });
-      titleBar.appendChild(closeBtn);
-      section.appendChild(titleBar);
+      this.primaryTabBar.appendChild(btn);
 
-      // Content wrapper
-      const contentWrapper = document.createElement('div');
-      contentWrapper.style.cssText = 'flex: 1; overflow: auto; min-height: 0;';
-      contentWrapper.appendChild(element);
-      section.appendChild(contentWrapper);
+      const container = document.createElement('div');
+      container.style.cssText = 'display: none; flex-direction: column; min-height: 0; overflow: auto; flex: 1;';
+      container.appendChild(element);
+      this.primaryContentArea.appendChild(container);
 
-      // Divider
-      const divider = document.createElement('div');
-      divider.className = 'layout__right-divider';
-      section.appendChild(divider);
+      this.primaryTabs.set(tabId, { btn: btn as HTMLButtonElement, container });
+      this.dynamicPanels.set(name, container);
 
-      this.dynamicPanels.set(name, section);
-      this.rightEl.appendChild(section);
-      this.rebalanceRightColumn();
+      // Auto-switch to the new tab
+      this.switchPrimaryTab(tabId);
     }
   }
 
@@ -1122,20 +1145,49 @@ export class Layout {
         this.switchTab('chat');
       }
     } else {
-      const section = this.dynamicPanels.get(name);
-      if (section) {
-        section.remove();
+      const tabId = `shtml-${name}`;
+      const entry = this.primaryTabs.get(tabId);
+      if (entry) {
+        entry.btn.remove();
+        entry.container.remove();
+        this.primaryTabs.delete(tabId);
         this.dynamicPanels.delete(name);
-        this.rebalanceRightColumn();
+        if (this.activePrimaryTab === tabId) {
+          this.switchPrimaryTab('terminal');
+        }
       }
     }
   }
 
-  /** Rebalance right column heights after adding/removing dynamic panels. */
-  private rebalanceRightColumn(): void {
-    if (this.isExtension) return;
-    // Let CSS flex handle the distribution — just trigger a resize
-    this.applySizes();
+  /** Switch the active tab in the primary zone (standalone mode). */
+  private switchPrimaryTab(id: string): void {
+    this.activePrimaryTab = id;
+    for (const [tabId, { btn, container }] of this.primaryTabs) {
+      const active = tabId === id;
+      btn.classList.toggle('mini-tabs__tab--active', active);
+      container.style.display = active ? 'flex' : 'none';
+    }
+    localStorage.setItem('slicc-primary-tab', id);
+    if (id === 'terminal') {
+      this.panels?.terminal?.refit();
+    }
+  }
+
+  /** Switch the active tab in the drawer zone (standalone mode). */
+  private switchDrawerTab(id: string): void {
+    this.activeDrawerTab = id;
+    for (const [tabId, { btn, container }] of this.drawerTabs) {
+      const active = tabId === id;
+      btn.classList.toggle('mini-tabs__tab--active', active);
+      container.style.display = active ? 'flex' : 'none';
+    }
+    localStorage.setItem('slicc-drawer-tab', id);
+    const url = new URL(window.location.href);
+    url.searchParams.set('bottomTab', id);
+    history.replaceState(null, '', url.toString());
+    if (id === 'memory') {
+      this.panels?.memory?.refresh();
+    }
   }
 
   // ── Cleanup ─────────────────────────────────────────────────────────

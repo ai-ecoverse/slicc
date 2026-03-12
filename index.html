@@ -1072,26 +1072,15 @@
       /* SHTML Canvas Panel Components                                      */
       /* ================================================================== */
 
-      /* Panel title bar (standalone mode) */
-      .shtml-panel-titlebar {
-        display: flex; align-items: center; justify-content: space-between;
-        padding: var(--s2-spacing-100) var(--s2-spacing-200);
-        background: var(--s2-bg-layer-2);
-        border-bottom: 1px solid var(--s2-border-subtle);
-        font-size: var(--s2-font-size-75);
-        font-weight: 600;
-        color: var(--s2-content-secondary);
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-      }
-      .shtml-panel-close {
-        background: none; border: none; cursor: pointer;
+      /* Close button for panel tabs (standalone mode) */
+      .mini-tabs__tab-close {
+        display: inline-flex; align-items: center; justify-content: center;
+        margin-left: 6px; width: 16px; height: 16px;
+        border-radius: var(--s2-radius-s);
+        font-size: 12px; line-height: 1;
         color: var(--s2-content-tertiary);
-        font-size: 16px; line-height: 1;
-        padding: 2px 6px; border-radius: var(--s2-radius-s);
-        transition: color var(--s2-transition-default), background var(--s2-transition-default);
       }
-      .shtml-panel-close:hover {
+      .mini-tabs__tab-close:hover {
         color: var(--s2-negative);
         background: color-mix(in srgb, var(--s2-negative) 10%, transparent);
       }
