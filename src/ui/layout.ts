@@ -825,8 +825,11 @@ export class Layout {
     this.primaryContentArea.appendChild(this.terminalContainer);
 
     const terminalTabBtn = document.createElement('button');
-    terminalTabBtn.className = 'mini-tabs__tab mini-tabs__tab--active';
-    terminalTabBtn.textContent = 'Terminal';
+    terminalTabBtn.className = 'mini-tabs__tab mini-tabs__tab--icon mini-tabs__tab--active';
+    terminalTabBtn.appendChild(this.svgIcon(
+      ['M3 4h14a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z', 'M6 10l2-2', 'M6 10l2 2', 'M11 12h3'],
+    ));
+    terminalTabBtn.title = 'Terminal';
     terminalTabBtn.addEventListener('click', () => this.switchPrimaryTab('terminal'));
     this.primaryTabBar.appendChild(terminalTabBtn);
     this.primaryTabs.set('terminal', { btn: terminalTabBtn, container: this.terminalContainer });
