@@ -952,7 +952,7 @@ async function main() {
     }
   });
 
-  server.listen(SERVE_PORT, () => {
+  server.listen(SERVE_PORT, '127.0.0.1', () => {
     console.log(`Serving UI at ${SERVE_ORIGIN}`);
     console.log(`CDP proxy at ws://localhost:${SERVE_PORT}/cdp`);
 
