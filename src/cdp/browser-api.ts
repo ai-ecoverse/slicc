@@ -163,33 +163,6 @@ export class BrowserAPI {
     // Keep Page events available so unexpected dialogs can be auto-dismissed
     // before they stall the current CDP command.
     await this.client.send('Page.enable', {}, this.sessionId);
-
-    // Normalize DPR to 1 for consistent screenshot output. Set once and
-    // leave active for the lifetime of the attachment (Playwright pattern).
-    // This makes Page.captureScreenshot produce CSS-pixel-sized output
-    // instead of 2x device pixels on Retina/HiDPI displays.
-    try {
-      const metrics = await this.client.send(
-        'Page.getLayoutMetrics', {}, this.sessionId,
-      );
-      const viewport = metrics['layoutViewport'] as {
-        clientWidth: number;
-        clientHeight: number;
-      };
-      await this.client.send(
-        'Emulation.setDeviceMetricsOverride',
-        {
-          width: viewport.clientWidth,
-          height: viewport.clientHeight,
-          deviceScaleFactor: 1,
-          mobile: false,
-        },
-        this.sessionId,
-      );
-    } catch {
-      // Best-effort — pages that don't support Emulation (e.g., chrome://)
-    }
-
     return this.sessionId;
   }
 
@@ -198,15 +171,6 @@ export class BrowserAPI {
    */
   async detach(): Promise<void> {
     if (this.sessionId) {
-      // Restore native DPR before detaching so the tab renders at
-      // full resolution when the user views it directly.
-      try {
-        await this.client.send(
-          'Emulation.clearDeviceMetricsOverride', {}, this.sessionId,
-        );
-      } catch {
-        // Best-effort cleanup
-      }
       try {
         await this.client.send('Target.detachFromTarget', {
           sessionId: this.sessionId,
