@@ -45,10 +45,23 @@ export class SprinkleRenderer {
     // Rewrite onclick `slicc` or `bridge` references to use the sprinkle-specific bridge.
     // This must run before script extraction so it applies even to sprinkles with no scripts.
     const bridgeExpr = `window.__slicc_sprinkles[${JSON.stringify(sprinkleName)}]`;
+    const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+    // In extension mode, CSP blocks inline event handlers. We convert onclick
+    // attributes to data-slicc-onclick and attach listeners via a blob script.
+    const onclickBindings: string[] = [];
+    let onclickIdx = 0;
     for (const el of wrapper.querySelectorAll('[onclick]')) {
       const attr = el.getAttribute('onclick') || '';
-      if (/\b(slicc|bridge)\b/.test(attr)) {
-        el.setAttribute('onclick', attr.replace(/\b(slicc|bridge)\b/g, bridgeExpr));
+      const rewritten = /\b(slicc|bridge)\b/.test(attr)
+        ? attr.replace(/\b(slicc|bridge)\b/g, bridgeExpr)
+        : attr;
+      if (isExtension) {
+        const id = `_slicc_oc_${onclickIdx++}`;
+        el.removeAttribute('onclick');
+        el.setAttribute('data-slicc-onclick', id);
+        onclickBindings.push(`document.querySelector('[data-slicc-onclick="${id}"]')?.addEventListener('click', function() { ${rewritten} });`);
+      } else {
+        el.setAttribute('onclick', rewritten);
       }
     }
 
@@ -83,14 +96,41 @@ export class SprinkleRenderer {
           .map(fn => `if (typeof ${fn} === 'function') window.${fn} = ${fn};`)
           .join('\n');
 
-        live.textContent =
+        const code =
           `(function() { var slicc = ${bridgeExpr}; var bridge = slicc;\n` +
           dead.textContent +
           (hoists ? '\n' + hoists : '') +
           '\n})();';
+
+        // In extension mode, CSP blocks inline scripts. Use a blob URL instead
+        // (blob: from the same extension origin is treated as 'self').
+        if (isExtension) {
+          const blob = new Blob([code], { type: 'application/javascript' });
+          const blobUrl = URL.createObjectURL(blob);
+          live.src = blobUrl;
+          // Clean up blob URL after script loads
+          live.onload = () => URL.revokeObjectURL(blobUrl);
+          live.onerror = () => URL.revokeObjectURL(blobUrl);
+        } else {
+          live.textContent = code;
+        }
       }
       wrapper.appendChild(live);
       this.scripts.push(live);
+    }
+
+    // In extension mode, add a blob script to bind onclick handlers
+    // (inline event handlers are blocked by CSP).
+    if (isExtension && onclickBindings.length > 0) {
+      const bindScript = document.createElement('script');
+      const bindCode = onclickBindings.join('\n');
+      const blob = new Blob([bindCode], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      bindScript.src = blobUrl;
+      bindScript.onload = () => URL.revokeObjectURL(blobUrl);
+      bindScript.onerror = () => URL.revokeObjectURL(blobUrl);
+      wrapper.appendChild(bindScript);
+      this.scripts.push(bindScript);
     }
   }
 
