@@ -563,6 +563,29 @@ async function main() {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // OAuth callback — generic redirect target for OAuth providers (implicit + PKCE)
+  // ---------------------------------------------------------------------------
+  app.get('/auth/callback', (_req: Request, res: Response) => {
+    res.send(`<!DOCTYPE html><html><body><script>
+      var q = new URLSearchParams(location.search);
+      var h = new URLSearchParams(location.hash.replace(/^#/, ''));
+      if (window.opener) {
+        window.opener.postMessage({
+          type: 'oauth-callback',
+          redirectUrl: location.href,
+          code: q.get('code'),
+          state: q.get('state') || h.get('state'),
+          error: q.get('error') || h.get('error'),
+          access_token: h.get('access_token'),
+          expires_in: h.get('expires_in'),
+          token_type: h.get('token_type')
+        }, '*');
+      }
+      window.close();
+    </script><p>Completing login... you can close this window.</p></body></html>`);
+  });
+
   app.use(express.json({ limit: '50mb' }));
 
   app.get('/api/runtime-config', (_req, res) => {
@@ -727,7 +750,8 @@ async function main() {
       }
       if (Object.keys(headers).length > 0) fetchInit.headers = headers;
       if (rawBody.length > 0 && !['GET', 'HEAD'].includes(req.method)) {
-        fetchInit.body = rawBody;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        fetchInit.body = rawBody as any;
       }
 
       const upstream = await fetch(targetUrl, fetchInit);

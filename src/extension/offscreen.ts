@@ -18,6 +18,10 @@ import { createLogger } from '../core/index.js';
 import type { ExtensionMessage } from './messages.js';
 import { getApiKey } from '../ui/provider-settings.js';
 
+// Auto-discover and register all providers (built-in + external).
+// IMPORTANT: Keep in sync with src/ui/main.ts — both entry points need all providers.
+import '../providers/index.js';
+
 const log = createLogger('offscreen');
 
 function isExtensionMessage(message: unknown): message is ExtensionMessage {

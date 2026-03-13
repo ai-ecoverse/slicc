@@ -1,88 +1,204 @@
 /**
- * Context compaction — truncates oversized tool results and drops old messages
- * to keep the conversation context within token limits.
+ * Context compaction — LLM-summarized context replacement.
+ *
+ * Aligned with pi-mono's compaction strategy: when context approaches the limit,
+ * an LLM call generates a structured summary of older messages, which replaces them
+ * as a single user message. This preserves the conversation prefix (cache-friendly)
+ * and keeps recent messages intact.
+ *
+ * Uses generateSummary(), estimateTokens(), shouldCompact(), and DEFAULT_COMPACTION_SETTINGS
+ * from @mariozechner/pi-coding-agent.
  */
 
 import type { AgentMessage } from '@mariozechner/pi-agent-core';
+import type { Model } from '@mariozechner/pi-ai';
+// Deep import to the compaction submodule — the main entry re-exports 113 Node-only
+// modules that would break Vite's browser bundle. The compaction submodule itself
+// only depends on @mariozechner/pi-ai (already a browser-safe dependency).
+// Types are declared in src/types/pi-coding-agent-compaction.d.ts.
+import {
+  generateSummary,
+  estimateTokens,
+  shouldCompact,
+  DEFAULT_COMPACTION_SETTINGS,
+} from '@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js';
 import { createLogger } from './logger.js';
 
 const log = createLogger('context-compaction');
 
-/** Max chars per tool result before truncation (~2000 tokens). */
-export const MAX_RESULT_CHARS = 8000;
+/** Default context window for Claude models. */
+const DEFAULT_CONTEXT_WINDOW = 200000;
 
-/** Max total context chars (~150K tokens — leave headroom below the 200K limit). */
-export const MAX_CONTEXT_CHARS = 600000;
+export interface CompactionConfig {
+  model: Model<any>;
+  getApiKey: () => string | undefined;
+  contextWindow?: number;
+  reserveTokens?: number;
+  keepRecentTokens?: number;
+}
 
 /**
- * Compact agent message context by:
- * 1. Truncating oversized tool result content
- * 2. Dropping older messages when total size exceeds the limit
+ * Create a transformContext function that uses LLM summarization for compaction.
  *
- * Preserves the first 2 messages (system context) and last 10 messages (recent context).
+ * The returned function:
+ * 1. Checks if total tokens exceed (contextWindow - reserveTokens)
+ * 2. If so, finds a cut point that keeps ~keepRecentTokens of recent messages
+ * 3. Calls generateSummary() to produce a structured summary of older messages
+ * 4. Replaces the older messages with a single summary user message
+ * 5. Falls back to naive drop if the LLM call fails
  */
-export async function compactContext(messages: AgentMessage[]): Promise<AgentMessage[]> {
-  // Step 1: truncate oversized content in tool result messages
-  const truncated = messages.map((msg) => {
-    if (msg.role === 'toolResult' && Array.isArray((msg as any).content)) {
-      const content = (msg as any).content as Array<{ type: 'text'; text?: string }>;
-      const needsTruncation = content.some((c) => c.type === 'text' && c.text && c.text.length > MAX_RESULT_CHARS);
-      if (needsTruncation) {
-        return {
-          ...msg,
-          content: content.map((c) =>
-            c.type === 'text' && c.text && c.text.length > MAX_RESULT_CHARS
-              ? { ...c, text: c.text.slice(0, MAX_RESULT_CHARS) + '\n... (truncated)' }
-              : c,
-          ),
-        } as typeof msg;
-      }
+export function createCompactContext(config: CompactionConfig): (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]> {
+  const contextWindow = config.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+  const reserveTokens = config.reserveTokens ?? DEFAULT_COMPACTION_SETTINGS.reserveTokens;
+  const keepRecentTokens = config.keepRecentTokens ?? DEFAULT_COMPACTION_SETTINGS.keepRecentTokens;
+
+  const settings = { enabled: true, reserveTokens, keepRecentTokens };
+
+  return async (messages: AgentMessage[], signal?: AbortSignal): Promise<AgentMessage[]> => {
+    if (messages.length === 0) return messages;
+
+    // Estimate total context tokens
+    let totalTokens = 0;
+    for (const msg of messages) {
+      totalTokens += estimateTokens(msg);
     }
-    return msg;
-  });
 
-  // Step 2: estimate total size and drop older messages if too large
-  const estimateSize = (msgs: typeof truncated): number => {
-    return msgs.reduce((sum, m) => sum + JSON.stringify(m).length, 0);
-  };
+    // Check if compaction is needed
+    if (!shouldCompact(totalTokens, contextWindow, settings)) {
+      return messages;
+    }
 
-  let result = truncated;
-  let totalChars = estimateSize(result);
+    log.info('Context compaction triggered', { totalTokens, contextWindow, threshold: contextWindow - reserveTokens, messageCount: messages.length });
 
-  // Keep dropping oldest non-system messages until under limit (preserve first 2 and last N)
-  // Safety limit to prevent infinite loop if compaction can't reduce size enough
-  let compactionRounds = 0;
-  const KEEP_LAST = 10;
-  while (totalChars > MAX_CONTEXT_CHARS && result.length > KEEP_LAST + 2 && compactionRounds < 50) {
-    compactionRounds++;
-    const compactedMsg = {
-      role: 'user' as const,
-      content: [{ type: 'text' as const, text: '[Earlier conversation messages were compacted to save context space]' }],
-    };
-    // Find a safe cut point that doesn't split assistant+toolResult pairs.
-    // Walk backward from the target cut to find a message that isn't a toolResult.
-    let cutIndex = result.length - KEEP_LAST;
-    while (cutIndex > 2 && (result[cutIndex] as any).role === 'toolResult') {
+    // Find cut point: walk backward from end to keep ~keepRecentTokens
+    let keptTokens = 0;
+    let cutIndex = messages.length;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msgTokens = estimateTokens(messages[i]);
+      if (keptTokens + msgTokens > keepRecentTokens && cutIndex < messages.length) {
+        break;
+      }
+      keptTokens += msgTokens;
+      cutIndex = i;
+    }
+
+    // Don't split assistant+toolResult pairs: if cutIndex lands on a toolResult,
+    // walk backward to include its assistant message
+    while (cutIndex > 0 && (messages[cutIndex] as any).role === 'toolResult') {
       cutIndex--;
     }
-    // If we walked all the way back to index 2, we can't compact further without
-    // breaking pairs — stop trying.
-    if (cutIndex <= 2) break;
-    result = [result[0], result[1], compactedMsg as any, ...result.slice(cutIndex)];
-    totalChars = estimateSize(result);
-  }
-  if (compactionRounds >= 50) {
-    log.warn('Context compaction hit iteration limit', { finalChars: totalChars, finalMessages: result.length });
+
+    // Need at least 1 message to summarize and 1 to keep
+    if (cutIndex <= 0 || cutIndex >= messages.length) {
+      log.warn('Cannot find valid cut point for compaction');
+      return messages;
+    }
+
+    const messagesToSummarize = messages.slice(0, cutIndex);
+    const messagesToKeep = messages.slice(cutIndex);
+
+    log.info('Compaction cut point', { summarizing: messagesToSummarize.length, keeping: messagesToKeep.length });
+
+    // Attempt LLM-powered summarization
+    const apiKey = config.getApiKey();
+    if (apiKey) {
+      try {
+        const summary = await generateSummary(
+          messagesToSummarize,
+          config.model,
+          reserveTokens,
+          apiKey,
+          signal,
+        );
+
+        const summaryMessage: AgentMessage = {
+          role: 'user',
+          content: [{ type: 'text', text: `<context-summary>\n${summary}\n</context-summary>` }],
+        } as any;
+
+        log.info('LLM summarization successful', {
+          originalMessages: messages.length,
+          compactedMessages: 1 + messagesToKeep.length,
+          summaryLength: summary.length,
+        });
+
+        return [summaryMessage, ...messagesToKeep];
+      } catch (err) {
+        log.warn('LLM summarization failed, falling back to naive drop', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    } else {
+      log.warn('No API key available for LLM summarization, falling back to naive drop');
+    }
+
+    // Fallback: naive drop (same as old behavior but without eager truncation)
+    const compactedMsg: AgentMessage = {
+      role: 'user',
+      content: [{ type: 'text', text: '[Earlier conversation messages were compacted to save context space]' }],
+    } as any;
+
+    log.info('Naive compaction applied', {
+      originalMessages: messages.length,
+      compactedMessages: 1 + messagesToKeep.length,
+    });
+
+    return [compactedMsg, ...messagesToKeep];
+  };
+}
+
+/**
+ * Legacy compactContext — naive drop strategy without LLM summarization.
+ * Kept for backwards compatibility and as the fallback when no model/apiKey is available.
+ */
+export async function compactContext(messages: AgentMessage[]): Promise<AgentMessage[]> {
+  if (messages.length === 0) return messages;
+
+  // Estimate total tokens
+  let totalTokens = 0;
+  for (const msg of messages) {
+    totalTokens += estimateTokens(msg);
   }
 
-  if (totalChars !== estimateSize(messages)) {
-    log.info('Context compacted', {
-      originalMessages: messages.length,
-      compactedMessages: result.length,
-      originalChars: estimateSize(messages),
-      compactedChars: totalChars,
-    });
+  // Use default settings for threshold check
+  if (!shouldCompact(totalTokens, DEFAULT_CONTEXT_WINDOW, DEFAULT_COMPACTION_SETTINGS)) {
+    return messages;
   }
+
+  const keepRecentTokens = DEFAULT_COMPACTION_SETTINGS.keepRecentTokens;
+
+  // Find cut point
+  let keptTokens = 0;
+  let cutIndex = messages.length;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msgTokens = estimateTokens(messages[i]);
+    if (keptTokens + msgTokens > keepRecentTokens && cutIndex < messages.length) {
+      break;
+    }
+    keptTokens += msgTokens;
+    cutIndex = i;
+  }
+
+  // Don't split assistant+toolResult pairs
+  while (cutIndex > 0 && (messages[cutIndex] as any).role === 'toolResult') {
+    cutIndex--;
+  }
+
+  if (cutIndex <= 0 || cutIndex >= messages.length) {
+    return messages;
+  }
+
+  const compactedMsg: AgentMessage = {
+    role: 'user',
+    content: [{ type: 'text', text: '[Earlier conversation messages were compacted to save context space]' }],
+  } as any;
+
+  const result = [compactedMsg, ...messages.slice(cutIndex)];
+
+  log.info('Context compacted (legacy)', {
+    originalMessages: messages.length,
+    compactedMessages: result.length,
+  });
 
   return result;
 }

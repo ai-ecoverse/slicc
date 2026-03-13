@@ -33,11 +33,12 @@ export interface CronTaskEntry {
 }
 
 export interface LickEvent {
-  type: 'webhook' | 'cron';
+  type: 'webhook' | 'cron' | 'sprinkle';
   webhookId?: string;
   webhookName?: string;
   cronId?: string;
   cronName?: string;
+  sprinkleName?: string;
   targetScoop?: string;
   timestamp: string;
   headers?: Record<string, string>;

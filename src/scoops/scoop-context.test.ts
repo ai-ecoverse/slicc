@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
+import { ScoopContext, isImageProcessingError, type ScoopContextCallbacks } from './scoop-context.js';
 import type { RegisteredScoop } from './types.js';
 
 // Minimal scoop registration for testing
@@ -416,5 +416,439 @@ describe('ScoopContext clearMessages', () => {
     expect(() => {
       ctx.clearMessages();
     }).not.toThrow();
+  });
+});
+
+describe('ScoopContext context overflow recovery', () => {
+  let ctx: ScoopContext;
+  let callbacks: ScoopContextCallbacks;
+
+  beforeEach(() => {
+    callbacks = createMockCallbacks();
+    ctx = new ScoopContext(testScoop, callbacks, {} as any);
+  });
+
+  function injectMockAgentWithReplace(
+    ctx: ScoopContext,
+    mockPrompt: (text: string) => Promise<void>,
+  ): { replaceMessages: ReturnType<typeof vi.fn>; mockPrompt: ReturnType<typeof vi.fn> } {
+    const replaceMessages = vi.fn();
+    const promptFn = vi.fn(mockPrompt);
+    const agent = {
+      prompt: promptFn,
+      abort: vi.fn(),
+      subscribe: vi.fn(() => () => {}),
+      replaceMessages,
+      state: { messages: [] },
+    };
+    (ctx as any).agent = agent;
+    (ctx as any).status = 'ready';
+    return { replaceMessages, mockPrompt: promptFn };
+  }
+
+  it('detects overflow error and triggers recovery', () => {
+    const { replaceMessages, mockPrompt } = injectMockAgentWithReplace(ctx, async () => {});
+    mockPrompt.mockResolvedValue(undefined);
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const overflowMessage = {
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
+      errorMessage: 'prompt is too long: 250000 tokens > 200000 maximum',
+      usage: { input: 250000, output: 0 },
+      timestamp: Date.now(),
+    };
+
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'hi' }], stopReason: 'stop', usage: { input: 100, output: 50 }, timestamp: Date.now() },
+      overflowMessage,
+    ];
+
+    handler({ type: 'agent_end', messages });
+
+    // Should NOT surface error to user
+    expect(callbacks.onError).not.toHaveBeenCalled();
+    // Should notify user that recovery is in progress
+    expect(callbacks.onResponse).toHaveBeenCalledWith(expect.stringContaining('recovering'), false);
+    // Should replace messages (removing the error message)
+    expect(replaceMessages).toHaveBeenCalled();
+    // Should re-prompt with explanation
+    expect(mockPrompt).toHaveBeenCalledWith(expect.stringContaining('Context overflow recovered'));
+  });
+
+  it('replaces oversized messages during recovery', () => {
+    const { replaceMessages, mockPrompt } = injectMockAgentWithReplace(ctx, async () => {});
+    mockPrompt.mockResolvedValue(undefined);
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const largeContent = 'x'.repeat(50000); // 50K chars > 40K threshold
+    const overflowMessage = {
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
+      errorMessage: 'prompt is too long: 250000 tokens > 200000 maximum',
+      usage: { input: 250000, output: 0 },
+      timestamp: Date.now(),
+    };
+
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
+      { role: 'toolResult', toolCallId: 't1', content: [{ type: 'text', text: largeContent }] },
+      overflowMessage,
+    ];
+
+    handler({ type: 'agent_end', messages });
+
+    const replacedMessages = replaceMessages.mock.calls[0][0];
+    // Should have removed the error message
+    expect(replacedMessages.length).toBe(2);
+    // The oversized tool result should be replaced with a placeholder
+    expect(replacedMessages[1].content[0].text).toContain('Content removed');
+    expect(replacedMessages[1].content[0].text).toContain('too large');
+  });
+
+  it('replaces oversized image content during recovery', () => {
+    const { replaceMessages, mockPrompt } = injectMockAgentWithReplace(ctx, async () => {});
+    mockPrompt.mockResolvedValue(undefined);
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const largeBase64 = 'A'.repeat(50000);
+    const overflowMessage = {
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
+      errorMessage: 'prompt is too long: 250000 tokens > 200000 maximum',
+      usage: { input: 250000, output: 0 },
+      timestamp: Date.now(),
+    };
+
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'show image' }] },
+      { role: 'toolResult', toolCallId: 't1', content: [{ type: 'image', data: largeBase64, mimeType: 'image/png' }] },
+      overflowMessage,
+    ];
+
+    handler({ type: 'agent_end', messages });
+
+    const replacedMessages = replaceMessages.mock.calls[0][0];
+    expect(replacedMessages[1].content[0].text).toContain('Content removed');
+  });
+
+  it('limits recovery to one attempt (no infinite loop)', () => {
+    const { replaceMessages, mockPrompt } = injectMockAgentWithReplace(ctx, async () => {});
+    mockPrompt.mockResolvedValue(undefined);
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const overflowMessage = {
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
+      errorMessage: 'prompt is too long: 250000 tokens > 200000 maximum',
+      usage: { input: 250000, output: 0 },
+      timestamp: Date.now(),
+    };
+
+    // First overflow — should trigger recovery
+    handler({ type: 'agent_end', messages: [
+      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
+      overflowMessage,
+    ]});
+
+    expect(callbacks.onError).not.toHaveBeenCalled();
+    expect(replaceMessages).toHaveBeenCalledTimes(1);
+
+    // Second overflow (recovery also overflowed) — should surface error
+    handler({ type: 'agent_end', messages: [
+      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
+      overflowMessage,
+    ]});
+
+    expect(callbacks.onError).toHaveBeenCalledWith(overflowMessage.errorMessage);
+  });
+
+  it('does not attempt recovery for non-overflow errors', () => {
+    const { replaceMessages } = injectMockAgentWithReplace(ctx, async () => {});
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const errorMessage = {
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
+      errorMessage: 'Internal server error',
+      usage: { input: 100, output: 0 },
+      timestamp: Date.now(),
+    };
+
+    handler({ type: 'agent_end', messages: [
+      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
+      errorMessage,
+    ]});
+
+    // Should surface error directly, not attempt recovery
+    expect(callbacks.onError).toHaveBeenCalledWith('Internal server error');
+    expect(replaceMessages).not.toHaveBeenCalled();
+  });
+
+  it('resets recovery flag after successful recovery', async () => {
+    const { mockPrompt } = injectMockAgentWithReplace(ctx, async () => {});
+    mockPrompt.mockResolvedValue(undefined);
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const overflowMessage = {
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
+      errorMessage: 'prompt is too long: 250000 tokens > 200000 maximum',
+      usage: { input: 250000, output: 0 },
+      timestamp: Date.now(),
+    };
+
+    // Trigger recovery
+    handler({ type: 'agent_end', messages: [
+      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
+      overflowMessage,
+    ]});
+
+    // Simulate successful recovery (agent_end with no error)
+    handler({ type: 'agent_end', messages: [
+      { role: 'user', content: [{ type: 'text', text: 'recovery prompt' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'recovered' }], stopReason: 'stop', usage: { input: 100, output: 50 }, timestamp: Date.now() },
+    ]});
+
+    // Flag should be reset — a new overflow should trigger recovery again
+    expect((ctx as any).isRecovering).toBe(false);
+
+    // Third agent_end with overflow should trigger recovery (flag was reset)
+    handler({ type: 'agent_end', messages: [
+      { role: 'user', content: [{ type: 'text', text: 'hello again' }] },
+      overflowMessage,
+    ]});
+
+    // Should have triggered recovery again (not surfaced error)
+    expect(callbacks.onError).not.toHaveBeenCalled();
+  });
+});
+
+describe('isImageProcessingError', () => {
+  it('matches "image exceeds 5 MB maximum"', () => {
+    expect(isImageProcessingError('image exceeds 5 MB maximum')).toBe(true);
+  });
+
+  it('matches "image exceeds 5MB maximum" (no space)', () => {
+    expect(isImageProcessingError('image exceeds 5MB maximum')).toBe(true);
+  });
+
+  it('matches "Could not process image"', () => {
+    expect(isImageProcessingError('Could not process image')).toBe(true);
+  });
+
+  it('matches "invalid base64 image data"', () => {
+    expect(isImageProcessingError('invalid base64 image data')).toBe(true);
+  });
+
+  it('matches "image is too large"', () => {
+    expect(isImageProcessingError('image is too large')).toBe(true);
+  });
+
+  it('matches "image is too big"', () => {
+    expect(isImageProcessingError('image is too big')).toBe(true);
+  });
+
+  it('does not match generic errors', () => {
+    expect(isImageProcessingError('Internal server error')).toBe(false);
+    expect(isImageProcessingError('Rate limit exceeded')).toBe(false);
+    expect(isImageProcessingError('Authentication failed')).toBe(false);
+  });
+
+  it('does not match context overflow errors', () => {
+    expect(isImageProcessingError('prompt is too long: 250000 tokens > 200000 maximum')).toBe(false);
+  });
+});
+
+describe('ScoopContext image error recovery', () => {
+  let ctx: ScoopContext;
+  let callbacks: ScoopContextCallbacks;
+
+  beforeEach(() => {
+    callbacks = createMockCallbacks();
+    ctx = new ScoopContext(testScoop, callbacks, {} as any);
+  });
+
+  function injectMockAgentWithReplace(
+    ctx: ScoopContext,
+    mockPrompt: (text: string) => Promise<void>,
+  ): { replaceMessages: ReturnType<typeof vi.fn>; mockPrompt: ReturnType<typeof vi.fn> } {
+    const replaceMessages = vi.fn();
+    const promptFn = vi.fn(mockPrompt);
+    const agent = {
+      prompt: promptFn,
+      abort: vi.fn(),
+      subscribe: vi.fn(() => () => {}),
+      replaceMessages,
+      state: { messages: [] },
+    };
+    (ctx as any).agent = agent;
+    (ctx as any).status = 'ready';
+    return { replaceMessages, mockPrompt: promptFn };
+  }
+
+  it('detects image error and triggers recovery', () => {
+    const { replaceMessages, mockPrompt } = injectMockAgentWithReplace(ctx, async () => {});
+    mockPrompt.mockResolvedValue(undefined);
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const imageErrorMessage = {
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
+      errorMessage: 'image exceeds 5 MB maximum: 7340032 bytes > 5242880 bytes limit',
+      usage: { input: 100, output: 0 },
+      timestamp: Date.now(),
+    };
+
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
+      { role: 'toolResult', toolCallId: 't1', content: [
+        { type: 'text', text: 'Screenshot saved' },
+        { type: 'image', data: 'A'.repeat(10000), mimeType: 'image/png' },
+      ]},
+      imageErrorMessage,
+    ];
+
+    handler({ type: 'agent_end', messages });
+
+    expect(callbacks.onError).not.toHaveBeenCalled();
+    expect(callbacks.onResponse).toHaveBeenCalledWith(expect.stringContaining('Image rejected'), false);
+    expect(replaceMessages).toHaveBeenCalled();
+    expect(mockPrompt).toHaveBeenCalledWith(expect.stringContaining('image was rejected'));
+  });
+
+  it('strips image blocks from recent messages during recovery', () => {
+    const { replaceMessages, mockPrompt } = injectMockAgentWithReplace(ctx, async () => {});
+    mockPrompt.mockResolvedValue(undefined);
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const imageErrorMessage = {
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
+      errorMessage: 'image exceeds 5 MB maximum',
+      usage: { input: 100, output: 0 },
+      timestamp: Date.now(),
+    };
+
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'show me' }] },
+      { role: 'toolResult', toolCallId: 't1', content: [
+        { type: 'text', text: 'Here is the screenshot' },
+        { type: 'image', data: 'huge-image-data', mimeType: 'image/png' },
+      ]},
+      imageErrorMessage,
+    ];
+
+    handler({ type: 'agent_end', messages });
+
+    const replacedMessages = replaceMessages.mock.calls[0][0];
+    // Should have removed the error message
+    expect(replacedMessages.length).toBe(2);
+    // The tool result should only have text, images stripped
+    const toolResult = replacedMessages[1];
+    expect(toolResult.content).toHaveLength(1);
+    expect(toolResult.content[0].type).toBe('text');
+    expect(toolResult.content[0].text).toBe('Here is the screenshot');
+  });
+
+  it('replaces messages that become empty after image stripping', () => {
+    const { replaceMessages, mockPrompt } = injectMockAgentWithReplace(ctx, async () => {});
+    mockPrompt.mockResolvedValue(undefined);
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const imageErrorMessage = {
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
+      errorMessage: 'image exceeds 5 MB maximum',
+      usage: { input: 100, output: 0 },
+      timestamp: Date.now(),
+    };
+
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'screenshot' }] },
+      { role: 'toolResult', toolCallId: 't1', content: [
+        { type: 'image', data: 'only-image', mimeType: 'image/png' },
+      ]},
+      imageErrorMessage,
+    ];
+
+    handler({ type: 'agent_end', messages });
+
+    const replacedMessages = replaceMessages.mock.calls[0][0];
+    const toolResult = replacedMessages[1];
+    expect(toolResult.content).toHaveLength(1);
+    expect(toolResult.content[0].text).toContain('Image removed');
+  });
+
+  it('limits recovery to one attempt (prevents infinite loop)', () => {
+    const { replaceMessages, mockPrompt } = injectMockAgentWithReplace(ctx, async () => {});
+    mockPrompt.mockResolvedValue(undefined);
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const imageErrorMessage = {
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
+      errorMessage: 'image exceeds 5 MB maximum',
+      usage: { input: 100, output: 0 },
+      timestamp: Date.now(),
+    };
+
+    // First image error — should trigger recovery
+    handler({ type: 'agent_end', messages: [
+      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
+      imageErrorMessage,
+    ]});
+
+    expect(callbacks.onError).not.toHaveBeenCalled();
+    expect(replaceMessages).toHaveBeenCalledTimes(1);
+
+    // Second image error (recovery also failed) — should surface error
+    handler({ type: 'agent_end', messages: [
+      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
+      imageErrorMessage,
+    ]});
+
+    expect(callbacks.onError).toHaveBeenCalledWith(imageErrorMessage.errorMessage);
+  });
+
+  it('resets recovery flag after successful recovery', () => {
+    const { mockPrompt } = injectMockAgentWithReplace(ctx, async () => {});
+    mockPrompt.mockResolvedValue(undefined);
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const imageErrorMessage = {
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
+      errorMessage: 'image exceeds 5 MB maximum',
+      usage: { input: 100, output: 0 },
+      timestamp: Date.now(),
+    };
+
+    // Trigger recovery
+    handler({ type: 'agent_end', messages: [
+      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
+      imageErrorMessage,
+    ]});
+
+    // Simulate successful recovery
+    handler({ type: 'agent_end', messages: [
+      { role: 'user', content: [{ type: 'text', text: 'recovery prompt' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'recovered' }], stopReason: 'stop', usage: { input: 100, output: 50 }, timestamp: Date.now() },
+    ]});
+
+    expect((ctx as any).isRecovering).toBe(false);
+    expect(callbacks.onError).not.toHaveBeenCalled();
   });
 });

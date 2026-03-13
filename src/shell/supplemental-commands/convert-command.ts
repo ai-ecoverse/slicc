@@ -1,68 +1,6 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
-
-interface ImageMagickModule {
-  initializeImageMagick: (wasmLocation: URL | Uint8Array) => Promise<void>;
-  ImageMagick: {
-    read: (data: Uint8Array, callback: (image: IMagickImage) => Promise<void>) => Promise<void>;
-  };
-  MagickFormat: Record<string, string>;
-  MagickGeometry: {
-    new (value: string): IMagickGeometry;
-    new (widthAndHeight: number): IMagickGeometry;
-    new (width: number, height: number): IMagickGeometry;
-  };
-  Percentage: new (value: number) => { toDouble(): number };
-}
-
-interface IMagickGeometry {
-  width: number;
-  height: number;
-  x: number;
-  y: number;
-  isPercentage: boolean;
-  ignoreAspectRatio: boolean;
-}
-
-interface IMagickImage {
-  resize(width: number, height: number): void;
-  resize(geometry: IMagickGeometry): void;
-  rotate(degrees: number): void;
-  crop(geometry: IMagickGeometry): void;
-  crop(width: number, height: number): void;
-  quality: number;
-  write(format: string, callback: (data: Uint8Array) => void): void;
-  write(callback: (data: Uint8Array) => void): void;
-}
-
-let magickPromise: Promise<ImageMagickModule> | null = null;
-const MAGICK_WASM_CDN = 'https://cdn.jsdelivr.net/npm/@imagemagick/magick-wasm@0.0.38/dist/';
-const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
-
-async function getMagick(): Promise<ImageMagickModule> {
-  if (!magickPromise) {
-    magickPromise = (async () => {
-      const magickModule = await import('@imagemagick/magick-wasm');
-      if (isExtension) {
-        // Chrome extension — fetch bundled WASM as bytes
-        // initializeImageMagick rejects chrome-extension:// URLs, so pass Uint8Array
-        const wasmUrl = chrome.runtime.getURL('magick.wasm');
-        const resp = await fetch(wasmUrl);
-        const wasmBytes = new Uint8Array(await resp.arrayBuffer());
-        await magickModule.initializeImageMagick(wasmBytes);
-      } else {
-        const wasmBase = typeof window === 'undefined'
-          ? new URL('../../../node_modules/@imagemagick/magick-wasm/dist/', import.meta.url).toString()
-          : MAGICK_WASM_CDN;
-        const wasmUrl = new URL('magick.wasm', wasmBase);
-        await magickModule.initializeImageMagick(wasmUrl);
-      }
-
-      return magickModule as unknown as ImageMagickModule;
-    })();
-  }
-  return magickPromise;
-}
+import { getMagick } from './magick-wasm.js';
 
 function inferFormat(path: string): string {
   const lower = path.toLowerCase();
@@ -201,8 +139,8 @@ export function createConvertCommand(name: string = 'convert'): Command {
               if (resizeMatch) {
                 // Percentage resize
                 const percent = parseInt(resizeMatch[1], 10);
-                const newWidth = Math.round((image as any).width * percent / 100);
-                const newHeight = Math.round((image as any).height * percent / 100);
+                const newWidth = Math.round(image.width * percent / 100);
+                const newHeight = Math.round(image.height * percent / 100);
                 image.resize(newWidth, newHeight);
               } else {
                 // WxH or WxH! format

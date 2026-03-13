@@ -6,7 +6,7 @@ Test patterns, conventions, and best practices for SLICC.
 
 - **Framework**: Vitest with `globals: true`, `environment: node`
 - **Convention**: `foo.test.ts` colocated next to `foo.ts`
-- **Test count**: 1003 tests across 51 files
+- **Test count**: 1237 tests across 68 files
 - **Import fake-indexeddb** when VirtualFS is used: `import 'fake-indexeddb/auto'`
 
 ## VirtualFS Test Setup
@@ -283,16 +283,21 @@ function createToolResult(text: string): AgentMessage {
   } as any;
 }
 
-describe('context compaction', () => {
-  it('truncates tool result content over 8000 chars', async () => {
-    const longText = 'x'.repeat(MAX_RESULT_CHARS + 100);
-    const messages = [createToolResult(longText)];
-    const result = await compactContext(messages);
+describe('createCompactContext', () => {
+  it('calls generateSummary when threshold exceeded', async () => {
+    const compact = createCompactContext({
+      model: mockModel,
+      getApiKey: () => 'test-key',
+      contextWindow: 200000,
+    });
+    const baseMsg = 'x'.repeat(65000);
+    const messages = Array.from({ length: 12 }, () => createMessage('user', baseMsg));
 
-    expect(result).toHaveLength(1);
-    const text = (result[0].content as any)[0].text;
-    expect(text.length).toBe(MAX_RESULT_CHARS + '\n... (truncated)'.length);
-    expect(text).toMatch(/\n\.\.\. \(truncated\)$/);
+    const result = await compact(messages);
+
+    expect(mockGenerateSummary).toHaveBeenCalledOnce();
+    expect(result.length).toBeLessThan(messages.length);
+    expect((result[0].content as any)[0].text).toContain('<context-summary>');
   });
 });
 ```
@@ -320,7 +325,7 @@ For skipped categories, ensure **manual verification in both CLI and extension m
 
 | Command | Purpose |
 |---------|---------|
-| `npm run test` | Run all 1003 tests once; fail fast on first error |
+| `npm run test` | Run all 1237 tests once; fail fast on first error |
 | `npm run test:watch` | Watch mode; re-run affected tests on file change |
 | `npx vitest run src/fs/virtual-fs.test.ts` | Run single test file |
 | `npx vitest run src/fs/` | Run all tests in directory |

@@ -67,6 +67,29 @@ vi.mock('../core/index.js', () => ({
   createLogger: mockCreateLogger,
 }));
 
+// Mock the providers/index.js module — return a minimal set of registered providers
+const { mockGetRegisteredProviderConfig, mockGetRegisteredProviderIds } = vi.hoisted(() => {
+  const providerConfigs = new Map([
+    ['anthropic', { id: 'anthropic', name: 'Anthropic', description: 'Claude', requiresApiKey: true, requiresBaseUrl: false }],
+    ['openai', { id: 'openai', name: 'OpenAI', description: 'GPT', requiresApiKey: true, requiresBaseUrl: false }],
+    ['bedrock-camp', { id: 'bedrock-camp', name: 'AWS Bedrock (CAMP)', description: 'CAMP', requiresApiKey: true, requiresBaseUrl: true }],
+    ['azure-ai-foundry', { id: 'azure-ai-foundry', name: 'Azure (Claude)', description: 'Azure', requiresApiKey: true, requiresBaseUrl: true }],
+    ['amazon-bedrock', { id: 'amazon-bedrock', name: 'AWS Bedrock', description: 'Bedrock', requiresApiKey: true, requiresBaseUrl: true }],
+    ['azure-openai-responses', { id: 'azure-openai-responses', name: 'Azure (OpenAI)', description: 'Azure OpenAI', requiresApiKey: true, requiresBaseUrl: true }],
+    ['test-oauth', { id: 'test-oauth', name: 'Test OAuth', description: 'OAuth test provider', requiresApiKey: false, requiresBaseUrl: false, isOAuth: true }],
+  ]);
+  return {
+    mockGetRegisteredProviderConfig: vi.fn((id: string) => providerConfigs.get(id)),
+    mockGetRegisteredProviderIds: vi.fn(() => [...providerConfigs.keys()]),
+  };
+});
+
+vi.mock('../providers/index.js', () => ({
+  getRegisteredProviderConfig: mockGetRegisteredProviderConfig,
+  getRegisteredProviderIds: mockGetRegisteredProviderIds,
+  shouldIncludeProvider: () => true,
+}));
+
 import {
   getSelectedProvider,
   setSelectedProvider,
@@ -89,6 +112,10 @@ import {
   getAllAvailableModels,
   applyProviderDefaults,
   exportProviders,
+  getAvailableProviders,
+  getProviderConfig,
+  saveOAuthAccount,
+  getOAuthAccountInfo,
 } from './provider-settings.js';
 import type { ProviderDefault } from './provider-settings.js';
 
@@ -526,5 +553,160 @@ describe('exportProviders', () => {
     expect(getBaseUrlForProvider('openai')).toBe('https://proxy.example.com');
     expect(getSelectedModelId()).toBe('claude-sonnet-4-20250514');
     expect(getSelectedProvider()).toBe('anthropic');
+  });
+});
+
+describe('dynamic provider registry', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('getAvailableProviders includes both pi-ai and registered providers', () => {
+    const providers = getAvailableProviders();
+    // Should include pi-ai providers AND registered providers (deduplicated)
+    expect(providers).toContain('anthropic');
+    expect(providers).toContain('openai');
+    expect(providers).toContain('test-oauth'); // from registered providers, not pi-ai
+  });
+
+  it('getProviderConfig returns registered config', () => {
+    const config = getProviderConfig('anthropic');
+    expect(config.id).toBe('anthropic');
+    expect(config.name).toBe('Anthropic');
+  });
+
+  it('getProviderConfig returns fallback for unknown providers', () => {
+    const config = getProviderConfig('unknown-provider');
+    expect(config.id).toBe('unknown-provider');
+    expect(config.name).toBe('Unknown Provider');
+    expect(config.requiresApiKey).toBe(true);
+  });
+
+  it('getProviderConfig returns isOAuth for OAuth providers', () => {
+    const config = getProviderConfig('test-oauth');
+    expect(config.isOAuth).toBe(true);
+    expect(config.requiresApiKey).toBe(false);
+  });
+});
+
+describe('OAuth account storage', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('saveOAuthAccount stores OAuth fields', () => {
+    saveOAuthAccount({
+      providerId: 'test-oauth',
+      accessToken: 'token-123',
+      refreshToken: 'refresh-456',
+      tokenExpiresAt: Date.now() + 86400000,
+      userName: 'karl@example.com',
+    });
+    const accounts = getAccounts();
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0].providerId).toBe('test-oauth');
+    expect(accounts[0].accessToken).toBe('token-123');
+    expect(accounts[0].refreshToken).toBe('refresh-456');
+    expect(accounts[0].userName).toBe('karl@example.com');
+    expect(accounts[0].apiKey).toBe(''); // OAuth providers don't use API keys
+  });
+
+  it('getApiKeyForProvider returns accessToken for OAuth providers', () => {
+    saveOAuthAccount({
+      providerId: 'test-oauth',
+      accessToken: 'oauth-token-xyz',
+    });
+    // The key bridge: getApiKeyForProvider returns the access token
+    expect(getApiKeyForProvider('test-oauth')).toBe('oauth-token-xyz');
+  });
+
+  it('getApiKeyForProvider prefers accessToken over apiKey', () => {
+    // Simulate an account with both (shouldn't happen in practice)
+    const accounts = getAccounts();
+    accounts.push({
+      providerId: 'hybrid',
+      apiKey: 'old-key',
+      accessToken: 'new-token',
+    });
+    storage.set('slicc_accounts', JSON.stringify(accounts));
+    expect(getApiKeyForProvider('hybrid')).toBe('new-token');
+  });
+
+  it('getApiKeyForProvider falls back to apiKey when no accessToken', () => {
+    addAccount('anthropic', 'sk-ant-123');
+    expect(getApiKeyForProvider('anthropic')).toBe('sk-ant-123');
+  });
+
+  it('saveOAuthAccount replaces existing account for same provider', () => {
+    saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'token-1' });
+    saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'token-2', userName: 'updated@example.com' });
+    const accounts = getAccounts();
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0].accessToken).toBe('token-2');
+    expect(accounts[0].userName).toBe('updated@example.com');
+  });
+});
+
+describe('getOAuthAccountInfo', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('returns null when no account exists', () => {
+    expect(getOAuthAccountInfo('nonexistent')).toBeNull();
+  });
+
+  it('returns null when account has no accessToken', () => {
+    addAccount('anthropic', 'sk-ant-123');
+    expect(getOAuthAccountInfo('anthropic')).toBeNull();
+  });
+
+  it('returns token info for OAuth account', () => {
+    const expiresAt = Date.now() + 3600000;
+    saveOAuthAccount({
+      providerId: 'test-oauth',
+      accessToken: 'tok-123',
+      tokenExpiresAt: expiresAt,
+      userName: 'karl@example.com',
+    });
+    const info = getOAuthAccountInfo('test-oauth');
+    expect(info).not.toBeNull();
+    expect(info!.token).toBe('tok-123');
+    expect(info!.expiresAt).toBe(expiresAt);
+    expect(info!.userName).toBe('karl@example.com');
+    expect(info!.expired).toBe(false);
+  });
+
+  it('marks token as expired when past expiry minus 60s buffer', () => {
+    saveOAuthAccount({
+      providerId: 'test-oauth',
+      accessToken: 'tok-expired',
+      tokenExpiresAt: Date.now() - 1000, // expired 1s ago
+    });
+    const info = getOAuthAccountInfo('test-oauth');
+    expect(info).not.toBeNull();
+    expect(info!.expired).toBe(true);
+  });
+
+  it('marks token as expired when within 60s buffer', () => {
+    saveOAuthAccount({
+      providerId: 'test-oauth',
+      accessToken: 'tok-almost',
+      tokenExpiresAt: Date.now() + 30000, // 30s from now (within 60s buffer)
+    });
+    const info = getOAuthAccountInfo('test-oauth');
+    expect(info!.expired).toBe(true);
+  });
+
+  it('returns expired false when no tokenExpiresAt', () => {
+    saveOAuthAccount({
+      providerId: 'test-oauth',
+      accessToken: 'tok-forever',
+    });
+    const info = getOAuthAccountInfo('test-oauth');
+    expect(info!.expired).toBe(false);
   });
 });

@@ -114,6 +114,20 @@ export class OffscreenBridge {
         const buf = bridge.getBuffer(targetJid);
         const msgId = `msg-${uid()}`;
         buf.push({ id: msgId, role: 'assistant', content: text, timestamp: Date.now() });
+        bridge.persistScoop(targetJid);
+
+        // Emit agent events so the panel renders the message in real-time
+        bridge.emit({
+          type: 'agent-event',
+          scoopJid: targetJid,
+          eventType: 'text_delta',
+          text,
+        });
+        bridge.emit({
+          type: 'agent-event',
+          scoopJid: targetJid,
+          eventType: 'response_done',
+        });
       },
 
       onStatusChange: (scoopJid, status) => {

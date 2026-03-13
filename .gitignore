@@ -8,3 +8,5 @@ coverage/
 .wrangler/
 .qa/
 providers.json
+/providers/
+!/providers/.gitkeep
