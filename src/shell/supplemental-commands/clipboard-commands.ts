@@ -1,6 +1,10 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
 
+function formatError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 function pbcopyHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout: 'usage: pbcopy\n\n  Copy stdin to the clipboard.\n  Example: echo hello | pbcopy\n',
@@ -20,10 +24,12 @@ function pbpasteHelp(): { stdout: string; stderr: string; exitCode: number } {
 function clipboardAutoHelp(name: string): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout:
-      `usage: ${name}\n\n` +
-      '  When stdin is provided, copies stdin to the clipboard.\n' +
-      '  When no stdin is provided, pastes clipboard contents to stdout.\n' +
-      `  Example: echo hello | ${name}\n`,
+      `usage: ${name} [-i|-o]\n\n` +
+      '  -i        Force copy mode (read from stdin)\n' +
+      '  -o        Force paste mode (write to stdout)\n' +
+      '  (default) Auto-detect: stdin present = copy, no stdin = paste\n' +
+      `  Example: echo hello | ${name}\n` +
+      `  Example: ${name} -o > file.txt\n`,
     stderr: '',
     exitCode: 0,
   };
@@ -44,7 +50,7 @@ async function copyToClipboard(stdin: string, cmdName: string): Promise<{ stdout
   } catch (err) {
     return {
       stdout: '',
-      stderr: `${cmdName}: failed to write to clipboard: ${err}\n`,
+      stderr: `${cmdName}: failed to write to clipboard: ${formatError(err)}\n`,
       exitCode: 1,
     };
   }
@@ -61,11 +67,12 @@ async function pasteFromClipboard(cmdName: string): Promise<{ stdout: string; st
 
   try {
     const text = await navigator.clipboard.readText();
-    return { stdout: text + '\n', stderr: '', exitCode: 0 };
+    // Return verbatim clipboard content without appending newline
+    return { stdout: text, stderr: '', exitCode: 0 };
   } catch (err) {
     return {
       stdout: '',
-      stderr: `${cmdName}: failed to read from clipboard: ${err}\n`,
+      stderr: `${cmdName}: failed to read from clipboard: ${formatError(err)}\n`,
       exitCode: 1,
     };
   }
@@ -94,7 +101,20 @@ export function createClipboardAutoCommand(name: string): Command {
     if (args.includes('--help') || args.includes('-h')) {
       return clipboardAutoHelp(name);
     }
-    if (ctx.stdin.length > 0) {
+    // Explicit mode flags override auto-detection
+    const forceInput = args.includes('-i');
+    const forceOutput = args.includes('-o');
+    if (forceInput && forceOutput) {
+      return {
+        stdout: '',
+        stderr: `${name}: cannot use both -i and -o\n`,
+        exitCode: 1,
+      };
+    }
+    if (forceOutput) {
+      return pasteFromClipboard(name);
+    }
+    if (forceInput || ctx.stdin.length > 0) {
       return copyToClipboard(ctx.stdin, name);
     }
     return pasteFromClipboard(name);

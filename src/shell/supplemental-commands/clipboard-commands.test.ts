@@ -109,13 +109,13 @@ describe('pbpaste command', () => {
     expect(result.stdout).toContain('usage: pbpaste');
   });
 
-  it('reads clipboard and outputs with trailing newline', async () => {
+  it('reads clipboard and outputs verbatim (no trailing newline)', async () => {
     const clipboard = stubClipboard();
     clipboard.readText.mockResolvedValue('clipboard content');
     const cmd = createPbpasteCommand();
     const result = await cmd.execute([], createMockCtx());
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe('clipboard content\n');
+    expect(result.stdout).toBe('clipboard content');
     expect(result.stderr).toBe('');
   });
 
@@ -174,7 +174,7 @@ describe('xclip / xsel auto-detect command', () => {
     const cmd = createClipboardAutoCommand('xsel');
     const result = await cmd.execute([], createMockCtx(''));
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe('pasted text\n');
+    expect(result.stdout).toBe('pasted text');
   });
 
   it('returns error when clipboard is unavailable (copy)', async () => {
@@ -199,7 +199,7 @@ describe('pbcopy + pbpaste integration', () => {
     vi.unstubAllGlobals();
   });
 
-  it('round-trips text through clipboard', async () => {
+  it('round-trips text through clipboard verbatim', async () => {
     stubClipboard();
     const copy = createPbcopyCommand();
     const paste = createPbpasteCommand();
@@ -208,6 +208,37 @@ describe('pbcopy + pbpaste integration', () => {
     const result = await paste.execute([], createMockCtx());
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe('round trip\n');
+    expect(result.stdout).toBe('round trip');
+  });
+});
+
+describe('xclip/xsel explicit mode flags', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('forces copy mode with -i even with empty stdin', async () => {
+    const clipboard = stubClipboard();
+    const cmd = createClipboardAutoCommand('xclip');
+    const result = await cmd.execute(['-i'], createMockCtx(''));
+    expect(result.exitCode).toBe(0);
+    expect(clipboard.writeText).toHaveBeenCalledWith('');
+  });
+
+  it('forces paste mode with -o even with stdin present', async () => {
+    const clipboard = stubClipboard();
+    clipboard.readText.mockResolvedValue('from clipboard');
+    const cmd = createClipboardAutoCommand('xsel');
+    const result = await cmd.execute(['-o'], createMockCtx('ignored stdin'));
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('from clipboard');
+  });
+
+  it('errors when both -i and -o are provided', async () => {
+    stubClipboard();
+    const cmd = createClipboardAutoCommand('xclip');
+    const result = await cmd.execute(['-i', '-o'], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('cannot use both -i and -o');
   });
 });
