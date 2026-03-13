@@ -1,6 +1,10 @@
 /**
  * Sprinkle Renderer — loads `.shtml` content from VFS and renders
  * it into a container div. Handles script extraction and re-execution.
+ *
+ * In extension mode, CSP blocks inline scripts and event handlers.
+ * The sprinkle renders inside a sandbox iframe (sprinkle-sandbox.html)
+ * which is CSP-exempt. Bridge communication uses postMessage.
  */
 
 import type { SprinkleBridgeAPI } from './sprinkle-bridge.js';
@@ -11,10 +15,14 @@ declare global {
   }
 }
 
+const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+
 export class SprinkleRenderer {
   private container: HTMLElement;
   private bridge: SprinkleBridgeAPI;
   private scripts: HTMLScriptElement[] = [];
+  private iframe: HTMLIFrameElement | null = null;
+  private messageHandler: ((event: MessageEvent) => void) | null = null;
 
   constructor(container: HTMLElement, bridge: SprinkleBridgeAPI) {
     this.container = container;
@@ -25,70 +33,110 @@ export class SprinkleRenderer {
   async render(content: string, sprinkleName: string): Promise<void> {
     this.dispose();
 
+    if (isExtension) {
+      await this.renderInSandbox(content, sprinkleName);
+    } else {
+      this.renderInline(content, sprinkleName);
+    }
+  }
+
+  /**
+   * Extension mode: render inside a sandbox iframe (CSP-exempt).
+   * Bridge communication happens via postMessage.
+   */
+  private async renderInSandbox(content: string, sprinkleName: string): Promise<void> {
+    const iframe = document.createElement('iframe');
+    iframe.src = chrome.runtime.getURL('sprinkle-sandbox.html');
+    iframe.style.cssText = 'width: 100%; height: 100%; border: none;';
+    this.iframe = iframe;
+
+    // Wait for iframe to load
+    await new Promise<void>((resolve) => {
+      iframe.addEventListener('load', () => resolve(), { once: true });
+      this.container.appendChild(iframe);
+    });
+
+    // Listen for messages from the sandbox
+    this.messageHandler = (event: MessageEvent) => {
+      // Only accept messages from our iframe
+      if (event.source !== iframe.contentWindow) return;
+      const msg = event.data;
+      if (!msg?.type) return;
+
+      if (msg.type === 'sprinkle-lick') {
+        this.bridge.lick({ action: msg.action, data: msg.data });
+      } else if (msg.type === 'sprinkle-close') {
+        this.bridge.close();
+      } else if (msg.type === 'sprinkle-readfile') {
+        this.bridge.readFile(msg.path).then(
+          (fileContent) => iframe.contentWindow?.postMessage(
+            { type: 'sprinkle-readfile-response', id: msg.id, content: fileContent }, '*',
+          ),
+          (err: unknown) => iframe.contentWindow?.postMessage(
+            { type: 'sprinkle-readfile-response', id: msg.id, error: err instanceof Error ? err.message : String(err) }, '*',
+          ),
+        );
+      }
+    };
+    window.addEventListener('message', this.messageHandler);
+
+    // Send content to the sandbox for rendering
+    iframe.contentWindow!.postMessage(
+      { type: 'sprinkle-render', content, name: sprinkleName }, '*',
+    );
+  }
+
+  /** Push an update to the sprinkle (agent -> sprinkle). */
+  pushUpdate(data: unknown): void {
+    if (this.iframe?.contentWindow) {
+      this.iframe.contentWindow.postMessage({ type: 'sprinkle-update', data }, '*');
+    }
+  }
+
+  /**
+   * CLI mode: render directly in the page DOM (no CSP restrictions).
+   */
+  private renderInline(content: string, sprinkleName: string): void {
     // Ensure the global sprinkle registry exists
     if (!window.__slicc_sprinkles) window.__slicc_sprinkles = {};
     window.__slicc_sprinkles[sprinkleName] = this.bridge;
 
-    // Parse HTML and set content (scripts won't execute via innerHTML)
+    // Parse HTML and set content (scripts won't execute via innerHTML).
+    // Content is user/agent-authored .shtml — trusted, not external input.
     const wrapper = document.createElement('div');
     wrapper.className = 'sprinkle-content';
     wrapper.innerHTML = content;
     this.container.appendChild(wrapper);
 
     // Auto-set width on .fill elements from data-value attribute
-    // so agents can write <div class="fill" data-value="75"> instead of inline style
     for (const fill of wrapper.querySelectorAll<HTMLElement>('.fill[data-value]')) {
       const v = parseFloat(fill.dataset.value || '0');
       if (v >= 0 && v <= 100) fill.style.width = `${v}%`;
     }
 
     // Rewrite onclick `slicc` or `bridge` references to use the sprinkle-specific bridge.
-    // This must run before script extraction so it applies even to sprinkles with no scripts.
     const bridgeExpr = `window.__slicc_sprinkles[${JSON.stringify(sprinkleName)}]`;
-    const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
-    // In extension mode, CSP blocks inline event handlers. We convert onclick
-    // attributes to data-slicc-onclick and attach listeners via a blob script.
-    const onclickBindings: string[] = [];
-    let onclickIdx = 0;
     for (const el of wrapper.querySelectorAll('[onclick]')) {
       const attr = el.getAttribute('onclick') || '';
-      const rewritten = /\b(slicc|bridge)\b/.test(attr)
-        ? attr.replace(/\b(slicc|bridge)\b/g, bridgeExpr)
-        : attr;
-      if (isExtension) {
-        const id = `_slicc_oc_${onclickIdx++}`;
-        el.removeAttribute('onclick');
-        el.setAttribute('data-slicc-onclick', id);
-        onclickBindings.push(`document.querySelector('[data-slicc-onclick="${id}"]')?.addEventListener('click', function() { ${rewritten} });`);
-      } else {
-        el.setAttribute('onclick', rewritten);
+      if (/\b(slicc|bridge)\b/.test(attr)) {
+        el.setAttribute('onclick', attr.replace(/\b(slicc|bridge)\b/g, bridgeExpr));
       }
     }
 
     // Extract <script> tags and re-create them as live elements.
-    // Scripts inserted via innerHTML don't execute, so we remove each dead
-    // script and append a fresh <script> element to the wrapper.
     const deadScripts = Array.from(wrapper.querySelectorAll('script'));
     for (const dead of deadScripts) {
       dead.remove();
       const live = document.createElement('script');
-      // Copy attributes
       for (const attr of dead.attributes) {
         live.setAttribute(attr.name, attr.value);
       }
-      // Inject bridge access preamble + original code.
-      // Functions called from onclick must be hoisted to window since the script
-      // runs inside an IIFE. We detect function names from onclick attributes and
-      // append window assignments after the user code.
       if (!dead.src) {
-        // Collect all function names referenced by onclick attributes in the sprinkle
         const onclickFns = new Set<string>();
         for (const el of wrapper.querySelectorAll('[onclick]')) {
           const attr = el.getAttribute('onclick') || '';
-          // Match all function calls, not just the first one at position 0
           for (const m of attr.matchAll(/\b(\w+)\s*\(/g)) {
             const name = m[1];
-            // Skip known non-user functions (typeof check in hoist handles the rest)
             if (!['slicc', 'bridge', 'lick', 'close'].includes(name)) onclickFns.add(name);
           }
         }
@@ -96,54 +144,33 @@ export class SprinkleRenderer {
           .map(fn => `if (typeof ${fn} === 'function') window.${fn} = ${fn};`)
           .join('\n');
 
-        const code =
+        live.textContent =
           `(function() { var slicc = ${bridgeExpr}; var bridge = slicc;\n` +
           dead.textContent +
           (hoists ? '\n' + hoists : '') +
           '\n})();';
-
-        // In extension mode, CSP blocks inline scripts. Use a blob URL instead
-        // (blob: from the same extension origin is treated as 'self').
-        if (isExtension) {
-          const blob = new Blob([code], { type: 'application/javascript' });
-          const blobUrl = URL.createObjectURL(blob);
-          live.src = blobUrl;
-          // Clean up blob URL after script loads
-          live.onload = () => URL.revokeObjectURL(blobUrl);
-          live.onerror = () => URL.revokeObjectURL(blobUrl);
-        } else {
-          live.textContent = code;
-        }
       }
       wrapper.appendChild(live);
       this.scripts.push(live);
-    }
-
-    // In extension mode, add a blob script to bind onclick handlers
-    // (inline event handlers are blocked by CSP).
-    if (isExtension && onclickBindings.length > 0) {
-      const bindScript = document.createElement('script');
-      const bindCode = onclickBindings.join('\n');
-      const blob = new Blob([bindCode], { type: 'application/javascript' });
-      const blobUrl = URL.createObjectURL(blob);
-      bindScript.src = blobUrl;
-      bindScript.onload = () => URL.revokeObjectURL(blobUrl);
-      bindScript.onerror = () => URL.revokeObjectURL(blobUrl);
-      wrapper.appendChild(bindScript);
-      this.scripts.push(bindScript);
     }
   }
 
   /** Clean up scripts and content. */
   dispose(): void {
+    if (this.messageHandler) {
+      window.removeEventListener('message', this.messageHandler);
+      this.messageHandler = null;
+    }
+    if (this.iframe) {
+      this.iframe.remove();
+      this.iframe = null;
+    }
     for (const script of this.scripts) {
       script.remove();
     }
     this.scripts = [];
-    // Remove sprinkle content
     const wrapper = this.container.querySelector('.sprinkle-content');
     if (wrapper) wrapper.remove();
-    // Clean up global reference
     if (window.__slicc_sprinkles) {
       delete window.__slicc_sprinkles[this.bridge.name];
     }

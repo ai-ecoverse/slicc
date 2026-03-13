@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: auto; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+</style>
+<script>
+/**
+ * Sprinkle Sandbox — CSP-exempt page for rendering .shtml sprinkles
+ * in Chrome extension mode. Receives content via postMessage from the
+ * parent page (side panel), executes scripts freely, and relays
+ * bridge API calls back to the parent.
+ */
+
+// Bridge proxy: sprinkle code calls slicc.lick(), slicc.on(), etc.
+// These are forwarded to the parent page which has the real bridge.
+const updateListeners = new Set();
+let sprinkleName = '';
+
+const slicc = {
+  get name() { return sprinkleName; },
+  lick(event) {
+    const action = typeof event === 'string' ? event : event.action;
+    const data = typeof event === 'string' ? undefined : event.data;
+    parent.postMessage({ type: 'sprinkle-lick', action, data }, '*');
+  },
+  on(event, callback) {
+    if (event === 'update') updateListeners.add(callback);
+  },
+  off(event, callback) {
+    if (event === 'update') updateListeners.delete(callback);
+  },
+  readFile(path) {
+    return new Promise((resolve, reject) => {
+      const id = 'rf-' + Math.random().toString(36).slice(2);
+      function handler(event) {
+        if (event.data?.type === 'sprinkle-readfile-response' && event.data.id === id) {
+          removeEventListener('message', handler);
+          if (event.data.error) reject(new Error(event.data.error));
+          else resolve(event.data.content);
+        }
+      }
+      addEventListener('message', handler);
+      parent.postMessage({ type: 'sprinkle-readfile', id, path }, '*');
+    });
+  },
+  close() {
+    parent.postMessage({ type: 'sprinkle-close' }, '*');
+  },
+};
+
+// Also expose as `bridge` for compatibility
+const bridge = slicc;
+
+addEventListener('message', (e) => {
+  const msg = e.data;
+  if (!msg || !msg.type) return;
+
+  if (msg.type === 'sprinkle-render') {
+    sprinkleName = msg.name || '';
+    // Render the SHTML content (trusted user-authored sprinkle, not external input)
+    document.body.innerHTML = msg.content;
+
+    // Auto-set width on .fill elements
+    for (const fill of document.querySelectorAll('.fill[data-value]')) {
+      const v = parseFloat(fill.dataset.value || '0');
+      if (v >= 0 && v <= 100) fill.style.width = v + '%';
+    }
+
+    // Execute scripts (sandbox is CSP-exempt)
+    const deadScripts = Array.from(document.querySelectorAll('script'));
+    for (const dead of deadScripts) {
+      dead.remove();
+      const live = document.createElement('script');
+      for (const attr of dead.attributes) {
+        live.setAttribute(attr.name, attr.value);
+      }
+      if (!dead.src) {
+        live.textContent = dead.textContent;
+      }
+      document.body.appendChild(live);
+    }
+
+    parent.postMessage({ type: 'sprinkle-rendered' }, '*');
+  }
+
+  if (msg.type === 'sprinkle-update') {
+    for (const cb of updateListeners) {
+      try { cb(msg.data); } catch { /* ignore listener errors */ }
+    }
+  }
+});
+</script>
+</head>
+<body></body>
+</html>

@@ -101,10 +101,15 @@ export class SprinkleManager {
 
   /** Push data to an open sprinkle (agent → sprinkle). */
   sendToSprinkle(name: string, data: unknown): void {
-    if (!this.openSprinkles.has(name)) {
+    const entry = this.openSprinkles.get(name);
+    if (!entry) {
       log.warn('Cannot send to closed sprinkle', { name });
       return;
     }
+    // In CLI mode, bridge listeners are on the real bridge object.
     this.bridge.pushUpdate(name, data);
+    // In extension mode, listeners are inside the sandbox iframe.
+    // Forward via the renderer's postMessage channel.
+    entry.renderer.pushUpdate(data);
   }
 }
