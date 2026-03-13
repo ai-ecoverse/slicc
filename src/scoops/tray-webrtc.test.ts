@@ -6,10 +6,17 @@ import type { LeaderToWorkerControlMessage, TrayBootstrapEvent, TrayBootstrapSta
 
 class FakeDataChannel implements TrayDataChannelLike {
   readyState = 'connecting';
-  private readonly listeners = new Map<string, Array<() => void>>();
+  readonly sent: string[] = [];
+  private readonly listeners = new Map<string, Array<Function>>();
 
-  addEventListener(type: 'open' | 'close' | 'error', listener: () => void): void {
+  addEventListener(type: 'open' | 'close' | 'error', listener: () => void): void;
+  addEventListener(type: 'message', listener: (event: { data: string }) => void): void;
+  addEventListener(type: string, listener: Function): void {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+
+  send(data: string): void {
+    this.sent.push(data);
   }
 
   close(): void {
@@ -22,9 +29,15 @@ class FakeDataChannel implements TrayDataChannelLike {
     this.dispatch('open');
   }
 
-  private dispatch(type: 'open' | 'close' | 'error'): void {
+  simulateMessage(data: string): void {
+    for (const listener of this.listeners.get('message') ?? []) {
+      listener({ data });
+    }
+  }
+
+  private dispatch(type: string): void {
     for (const listener of this.listeners.get(type) ?? []) {
-      listener();
+      (listener as () => void)();
     }
   }
 }
@@ -125,7 +138,7 @@ describe('tray-webrtc', () => {
           queuedEvents.push({ sequence, sentAt: '2026-03-12T00:00:02.000Z', type: 'bootstrap.ice_candidate', candidate: message.candidate });
         }
       },
-      onPeerConnected: peer => connectedPeers.push({ controllerId: peer.controllerId, bootstrapId: peer.bootstrapId }),
+      onPeerConnected: (peer, _channel) => connectedPeers.push({ controllerId: peer.controllerId, bootstrapId: peer.bootstrapId }),
     });
 
     let bootstrap: TrayBootstrapStatus = {

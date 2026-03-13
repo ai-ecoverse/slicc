@@ -29,6 +29,8 @@ import {
   TRAY_JOIN_STORAGE_KEY,
 } from '../scoops/tray-runtime-config.js';
 import { FollowerTrayManager, LeaderTrayPeerManager } from '../scoops/tray-webrtc.js';
+import { LeaderSyncManager } from '../scoops/tray-leader-sync.js';
+import { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
 import {
   getElectronOverlayInitialTab,
   getLickWebSocketUrl,
@@ -1051,7 +1053,10 @@ async function main(): Promise<void> {
     // Start follower join from a joinUrl. Reusable — called at startup
     // and when the user pastes a join URL in the settings dialog.
     let activeFollower: FollowerTrayManager | null = null;
+    let activeFollowerSync: FollowerSyncManager | null = null;
     const startFollowerJoin = (joinUrl: string) => {
+      activeFollowerSync?.close();
+      activeFollowerSync = null;
       activeFollower?.stop();
       const trayFollower = new FollowerTrayManager({
         joinUrl,
@@ -1059,7 +1064,23 @@ async function main(): Promise<void> {
         fetchImpl: createTrayFetch(),
       });
       activeFollower = trayFollower;
-      void trayFollower.start().catch((error) => {
+      void trayFollower.start().then((connection) => {
+        const followerSync = new FollowerSyncManager(connection.channel, {
+          onSnapshot: (messages) => {
+            // Replace chat panel messages with the leader's snapshot
+            layout.panels.chat.loadMessages(messages);
+          },
+          onStatus: (status) => {
+            layout.panels.chat.setProcessing(status === 'processing');
+          },
+        });
+        activeFollowerSync = followerSync;
+        // Replace the local agent handle with the follower sync (remote leader)
+        layout.panels.chat.setAgent(followerSync);
+        // Request initial snapshot
+        followerSync.requestSnapshot();
+        log.info('Follower sync wired to chat panel', { trayId: connection.trayId });
+      }).catch((error) => {
         log.warn('Follower tray join failed', { error: error instanceof Error ? error.message : String(error) });
       });
     };
@@ -1070,20 +1091,42 @@ async function main(): Promise<void> {
     }) as EventListener);
 
     // Clean up on page unload
-    window.addEventListener('beforeunload', () => activeFollower?.stop(), { once: true });
+    window.addEventListener('beforeunload', () => {
+      activeFollowerSync?.close();
+      activeFollower?.stop();
+    }, { once: true });
 
     if (trayRuntimeConfig?.joinUrl) {
       startFollowerJoin(trayRuntimeConfig.joinUrl);
     } else if (trayRuntimeConfig?.workerBaseUrl) {
       let leaderTray!: LeaderTrayManager;
+      const leaderSync = new LeaderSyncManager({
+        getMessages: () => {
+          if (!selectedScoop) return [];
+          return scoopMessageBuffers.get(selectedScoop.jid) ?? [];
+        },
+        getScoopJid: () => selectedScoop?.jid ?? 'cone',
+        onFollowerMessage: (text, messageId) => {
+          // Route follower messages through the same path as local user messages
+          coneAgentHandle.sendMessage(text, messageId);
+        },
+        onFollowerAbort: () => {
+          coneAgentHandle.stop();
+        },
+      });
+      // Tap into the event system to broadcast to followers
+      eventListeners.add((event: UIAgentEvent) => {
+        leaderSync.broadcastEvent(event);
+      });
       const trayPeers = new LeaderTrayPeerManager({
         sendControlMessage: message => leaderTray.sendControlMessage(message),
-        onPeerConnected: peer => {
+        onPeerConnected: (peer, channel) => {
           log.info('Tray follower data channel opened', {
             controllerId: peer.controllerId,
             bootstrapId: peer.bootstrapId,
             attempt: peer.attempt,
           });
+          leaderSync.addFollower(peer.bootstrapId, channel);
         },
       });
       leaderTray = new LeaderTrayManager({
@@ -1109,6 +1152,7 @@ async function main(): Promise<void> {
           log.warn('Leader tray join failed', { error: error instanceof Error ? error.message : String(error) });
         });
       window.addEventListener('beforeunload', () => {
+        leaderSync.stop();
         trayPeers.stop();
         leaderTray.stop();
       }, { once: true });

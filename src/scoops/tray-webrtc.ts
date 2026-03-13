@@ -17,6 +17,8 @@ const DEFAULT_POLL_INTERVAL_MS = 250;
 export interface TrayDataChannelLike {
   readyState?: string;
   addEventListener(type: 'open' | 'close' | 'error', listener: () => void): void;
+  addEventListener(type: 'message', listener: (event: { data: string }) => void): void;
+  send(data: string): void;
   close(): void;
 }
 
@@ -49,7 +51,7 @@ export interface LeaderTrayPeerManagerOptions {
   sendControlMessage: (message: LeaderToWorkerControlMessage) => void;
   peerConnectionFactory?: TrayPeerConnectionFactory;
   dataChannelLabel?: string;
-  onPeerConnected?: (peer: LeaderTrayPeerState) => void;
+  onPeerConnected?: (peer: LeaderTrayPeerState, channel: TrayDataChannelLike) => void;
 }
 
 export interface FollowerTrayConnection {
@@ -72,6 +74,7 @@ export interface FollowerTrayManagerOptions {
 interface ActiveLeaderPeer {
   state: LeaderTrayPeerState;
   peer: TrayPeerConnectionLike;
+  channel: TrayDataChannelLike;
 }
 
 interface ActiveFollowerPeer {
@@ -105,6 +108,10 @@ export class LeaderTrayPeerManager {
     return Array.from(this.peers.values()).map(({ state }) => ({ ...state }));
   }
 
+  getChannel(bootstrapId: string): TrayDataChannelLike | null {
+    return this.peers.get(bootstrapId)?.channel ?? null;
+  }
+
   stop(): void {
     for (const active of this.peers.values()) {
       active.peer.close();
@@ -122,7 +129,8 @@ export class LeaderTrayPeerManager {
       state: 'connecting',
       connectedAt: null,
     };
-    this.peers.set(message.bootstrapId, { state, peer });
+    const channel = peer.createDataChannel(this.dataChannelLabel);
+    this.peers.set(message.bootstrapId, { state, peer, channel });
 
     peer.addEventListener('icecandidate', ({ candidate }) => {
       const normalized = normalizeIceCandidate(candidate);
@@ -140,13 +148,12 @@ export class LeaderTrayPeerManager {
       }
     });
 
-    const channel = peer.createDataChannel(this.dataChannelLabel);
     channel.addEventListener('open', () => {
       const active = this.peers.get(message.bootstrapId);
       if (!active || active.state.state === 'connected') return;
       active.state.state = 'connected';
       active.state.connectedAt = new Date().toISOString();
-      this.options.onPeerConnected?.({ ...active.state });
+      this.options.onPeerConnected?.({ ...active.state }, active.channel);
     });
     channel.addEventListener('close', () => {
       if (this.peers.get(message.bootstrapId)?.state.state !== 'connected') {
