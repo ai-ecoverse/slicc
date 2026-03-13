@@ -185,6 +185,9 @@
         background: var(--s2-gray-900);
         color: var(--s2-gray-25);
       }
+      .theme-light [data-tooltip]::before {
+        border-bottom-color: var(--s2-gray-900);
+      }
 
       /* Scrollbar lighter */
       .theme-light ::-webkit-scrollbar-thumb { background: var(--s2-gray-300); }
@@ -344,33 +347,50 @@
       }
 
       /* ================================================================== */
-      /* Custom tooltips — fast, styled                                     */
+      /* S2 Tooltip — neutral variant with tip arrow (bottom placement)       */
       /* ================================================================== */
       [data-tooltip] { position: relative; }
+      /* Tooltip body */
       [data-tooltip]::after {
         content: attr(data-tooltip);
         position: absolute;
-        top: calc(100% + 6px); left: 50%;
-        transform: translateX(-50%) translateY(2px);
+        top: calc(100% + 8px); left: 50%;
+        transform: translateX(-50%) translateY(-4px);
         padding: 4px 8px;
+        max-width: 160px;
         background: var(--s2-gray-900);
         color: var(--s2-gray-25);
         font-size: 11px; font-weight: 500;
         font-family: var(--s2-font-family);
-        white-space: nowrap;
+        white-space: normal; text-align: center;
         border-radius: var(--s2-radius-s);
         pointer-events: none;
         opacity: 0;
-        transition: opacity 100ms ease, transform 100ms ease;
+        transition: opacity 130ms ease, transform 130ms ease;
         z-index: 1000;
         line-height: 1.3;
       }
-      [data-tooltip]:hover::after {
+      /* Tip arrow */
+      [data-tooltip]::before {
+        content: '';
+        position: absolute;
+        top: calc(100% + 0px); left: 50%;
+        transform: translateX(-50%) translateY(-4px);
+        border: 4px solid transparent;
+        border-bottom-color: var(--s2-gray-900);
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 130ms ease, transform 130ms ease;
+        z-index: 1000;
+      }
+      [data-tooltip]:hover::after,
+      [data-tooltip]:hover::before {
         opacity: 1;
         transform: translateX(-50%) translateY(0);
-        transition-delay: 150ms;
+        transition-delay: 300ms;
       }
-      [data-tooltip]:active::after { opacity: 0; transition-delay: 0ms; }
+      [data-tooltip]:active::after,
+      [data-tooltip]:active::before { opacity: 0; transition-delay: 0ms; }
 
       /* ================================================================== */
       /* Chat panel                                                         */
@@ -801,8 +821,40 @@
       /* Terminal panel — clean, minimal chrome                              */
       /* ================================================================== */
       .terminal-panel {
+        position: relative;
         flex: 1; min-height: 0; display: flex; flex-direction: column;
         background: var(--s2-bg-layer-1);
+      }
+      .terminal-panel__header {
+        position: absolute; top: 6px; right: var(--s2-spacing-200);
+        z-index: 1; display: flex; gap: 4px;
+      }
+      .terminal-panel__preview-btn {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 24px; height: 24px;
+        border: none; background: transparent;
+        color: var(--s2-content-disabled);
+        border-radius: var(--s2-radius-s);
+        cursor: default;
+        transition: color var(--s2-transition-default), background var(--s2-transition-default);
+      }
+      .terminal-panel__preview-btn:not(:disabled) {
+        color: var(--s2-content-tertiary); cursor: pointer;
+      }
+      .terminal-panel__preview-btn:not(:disabled):hover {
+        color: var(--s2-content-default);
+        background: var(--s2-gray-200);
+      }
+      .terminal-panel__preview-btn--active {
+        color: var(--s2-content-default);
+        background: var(--s2-gray-300);
+      }
+      .terminal-panel__preview-btn--active:hover {
+        background: var(--s2-gray-300);
+      }
+      .terminal-panel__preview-btn:focus-visible {
+        outline: 2px solid var(--s2-accent);
+        outline-offset: -2px;
       }
       .terminal-panel__view {
         flex: 1; min-height: 0; overflow: hidden;
@@ -947,28 +999,38 @@
       }
 
       /* ================================================================== */
-      /* Mini tabs (Files/Memory) — S2 Tabs pattern                         */
+      /* Mini tabs — S2 Tabs pattern                                         */
       /* ================================================================== */
       .mini-tabs {
-        display: flex; background: var(--s2-bg-layer-1);
+        display: flex; gap: var(--s2-spacing-100);
+        padding: 0 var(--s2-spacing-200);
         border-bottom: 1px solid var(--s2-border-subtle);
         flex-shrink: 0;
       }
       .mini-tabs__tab {
-        flex: 1; padding: var(--s2-spacing-100) var(--s2-spacing-100);
+        position: relative;
+        flex: none;
+        padding: var(--s2-spacing-100) var(--s2-spacing-100);
         border: none; background: transparent;
         color: var(--s2-content-tertiary);
-        font-size: var(--s2-font-size-50);
-        font-weight: 600; font-family: var(--s2-font-family);
-        cursor: pointer; text-align: center;
-        border-bottom: 2px solid transparent;
-        transition: color var(--s2-transition-default), border-color var(--s2-transition-default);
-        letter-spacing: 0.02em;
+        font-size: var(--s2-font-size-75);
+        font-weight: 500; font-family: var(--s2-font-family);
+        cursor: pointer; white-space: nowrap;
+        transition: color var(--s2-transition-default);
+      }
+      .mini-tabs__tab::after {
+        content: ''; position: absolute;
+        bottom: -1px; left: var(--s2-spacing-100); right: var(--s2-spacing-100);
+        height: 2px; border-radius: 1px;
+        background: transparent;
+        transition: background var(--s2-transition-default);
       }
       .mini-tabs__tab:hover { color: var(--s2-content-default); }
-      .mini-tabs__tab--active {
-        color: var(--s2-content-default);
-        border-bottom-color: var(--s2-accent);
+      .mini-tabs__tab--active { color: var(--s2-content-default); }
+      .mini-tabs__tab--active::after { background: var(--s2-content-default); }
+      .mini-tabs__tab:focus-visible {
+        outline: 2px solid var(--s2-accent);
+        outline-offset: -2px; border-radius: var(--s2-radius-s);
       }
       .mini-tabs__tab:disabled {
         color: var(--s2-content-disabled); cursor: not-allowed;
