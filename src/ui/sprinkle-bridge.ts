@@ -1,0 +1,92 @@
+/**
+ * Sprinkle Bridge — API available to `.shtml` sprinkle scripts for
+ * communicating with the agent via lick events.
+ */
+
+import type { VirtualFS } from '../fs/index.js';
+import type { LickEvent } from '../scoops/lick-manager.js';
+
+export interface SprinkleBridgeAPI {
+  /** Send a lick event to the agent. Accepts {action, data} or a plain action string. */
+  lick(event: { action: string; data?: unknown } | string): void;
+  /** Listen for updates from the agent */
+  on(event: 'update', callback: (data: unknown) => void): void;
+  /** Remove an update listener */
+  off(event: 'update', callback: (data: unknown) => void): void;
+  /** Read a file from VFS */
+  readFile(path: string): Promise<string>;
+  /** Close this sprinkle */
+  close(): void;
+  /** Sprinkle name */
+  readonly name: string;
+}
+
+type UpdateCallback = (data: unknown) => void;
+
+export class SprinkleBridge {
+  private listeners = new Map<string, Set<UpdateCallback>>();
+  private lickHandler: (event: LickEvent) => void;
+  private fs: VirtualFS;
+  private closeHandler: (name: string) => void;
+
+  constructor(
+    fs: VirtualFS,
+    lickHandler: (event: LickEvent) => void,
+    closeHandler: (name: string) => void,
+  ) {
+    this.fs = fs;
+    this.lickHandler = lickHandler;
+    this.closeHandler = closeHandler;
+  }
+
+  /** Create a bridge API for a specific sprinkle. */
+  createAPI(sprinkleName: string): SprinkleBridgeAPI {
+    return {
+      name: sprinkleName,
+      lick: (event: { action: string; data?: unknown } | string) => {
+        const action = typeof event === 'string' ? event : event.action;
+        const data = typeof event === 'string' ? undefined : event.data;
+        const lickEvent: LickEvent = {
+          type: 'sprinkle',
+          sprinkleName,
+          targetScoop: undefined,
+          timestamp: new Date().toISOString(),
+          body: { action, data },
+        };
+        this.lickHandler(lickEvent);
+      },
+      on: (event: string, callback: UpdateCallback) => {
+        const key = `${sprinkleName}:${event}`;
+        let set = this.listeners.get(key);
+        if (!set) { set = new Set(); this.listeners.set(key, set); }
+        set.add(callback);
+      },
+      off: (event: string, callback: UpdateCallback) => {
+        const key = `${sprinkleName}:${event}`;
+        this.listeners.get(key)?.delete(callback);
+      },
+      readFile: async (path: string) => await this.fs.readFile(path, { encoding: 'utf-8' }) as string,
+      close: () => this.closeHandler(sprinkleName),
+    };
+  }
+
+  /** Push data to a sprinkle's update listeners. */
+  pushUpdate(sprinkleName: string, data: unknown): void {
+    const key = `${sprinkleName}:update`;
+    const set = this.listeners.get(key);
+    if (set) {
+      for (const cb of set) {
+        try { cb(data); } catch { /* ignore listener errors */ }
+      }
+    }
+  }
+
+  /** Clean up listeners for a sprinkle. */
+  removeSprinkle(sprinkleName: string): void {
+    for (const key of this.listeners.keys()) {
+      if (key.startsWith(`${sprinkleName}:`)) {
+        this.listeners.delete(key);
+      }
+    }
+  }
+}

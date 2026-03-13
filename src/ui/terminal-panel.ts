@@ -2,7 +2,7 @@
  * Terminal Panel — embedded xterm.js terminal connected to the WasmShell.
  *
  * Wraps the WasmShell's mount/dispose lifecycle and provides
- * a tab bar (Terminal / Preview) + body container.
+ * a header with a preview toggle button + body container.
  */
 
 import type { WasmShell } from '../shell/index.js';
@@ -14,8 +14,7 @@ export class TerminalPanel {
   private terminalViewEl!: HTMLElement;
   private previewViewEl!: HTMLElement;
   private previewEmptyEl!: HTMLElement;
-  private terminalTabBtn!: HTMLButtonElement;
-  private previewTabBtn!: HTMLButtonElement;
+  private previewBtn!: HTMLButtonElement;
   private shell: WasmShell | null = null;
   private activeView: TerminalViewId = 'terminal';
 
@@ -81,25 +80,43 @@ export class TerminalPanel {
     this.container.innerHTML = '';
     this.container.classList.add('terminal-panel');
 
-    // Tabs act as the header — no separate panel-header needed
-    const tabs = document.createElement('div');
-    tabs.className = 'mini-tabs';
-    this.container.appendChild(tabs);
+    // Header bar with preview toggle
+    const header = document.createElement('div');
+    header.className = 'terminal-panel__header';
+    this.container.appendChild(header);
 
-    this.terminalTabBtn = document.createElement('button');
-    this.terminalTabBtn.className = 'mini-tabs__tab mini-tabs__tab--active';
-    this.terminalTabBtn.textContent = 'Terminal';
-    this.terminalTabBtn.addEventListener('click', () => this.setActiveView('terminal'));
-    tabs.appendChild(this.terminalTabBtn);
+    // Preview icon button (eye icon, S2 outline style)
+    this.previewBtn = document.createElement('button');
+    this.previewBtn.className = 'terminal-panel__preview-btn';
+    this.previewBtn.setAttribute('aria-label', 'Toggle preview');
+    this.previewBtn.dataset.tooltip = 'Preview';
+    this.previewBtn.disabled = true;
+    const svgNs = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNs, 'svg');
+    svg.setAttribute('width', '16');
+    svg.setAttribute('height', '16');
+    svg.setAttribute('viewBox', '0 0 20 20');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '1.5');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    // Eye icon paths
+    const path1 = document.createElementNS(svgNs, 'path');
+    path1.setAttribute('d', 'M2 10s3-6 8-6 8 6 8 6-3 6-8 6-8-6-8-6z');
+    svg.appendChild(path1);
+    const circle = document.createElementNS(svgNs, 'circle');
+    circle.setAttribute('cx', '10');
+    circle.setAttribute('cy', '10');
+    circle.setAttribute('r', '2.5');
+    svg.appendChild(circle);
+    this.previewBtn.appendChild(svg);
 
-    this.previewTabBtn = document.createElement('button');
-    this.previewTabBtn.className = 'mini-tabs__tab';
-    this.previewTabBtn.textContent = 'Preview';
-    this.previewTabBtn.disabled = true;
-    this.previewTabBtn.addEventListener('click', () => {
-      if (!this.previewTabBtn.disabled) this.setActiveView('preview');
+    this.previewBtn.addEventListener('click', () => {
+      if (this.previewBtn.disabled) return;
+      this.setActiveView(this.activeView === 'preview' ? 'terminal' : 'preview');
     });
-    tabs.appendChild(this.previewTabBtn);
+    header.appendChild(this.previewBtn);
 
     // Terminal view — direct container, no extra nesting
     this.terminalViewEl = document.createElement('div');
@@ -128,8 +145,7 @@ export class TerminalPanel {
 
   private setActiveView(view: TerminalViewId): void {
     this.activeView = view;
-    this.terminalTabBtn.classList.toggle('mini-tabs__tab--active', view === 'terminal');
-    this.previewTabBtn.classList.toggle('mini-tabs__tab--active', view === 'preview');
+    this.previewBtn.classList.toggle('terminal-panel__preview-btn--active', view === 'preview');
     this.terminalViewEl.style.display = view === 'terminal' ? 'flex' : 'none';
     this.previewViewEl.style.display = view === 'preview' ? 'flex' : 'none';
     if (view === 'terminal') {
@@ -138,7 +154,7 @@ export class TerminalPanel {
   }
 
   private handlePreviewStateChange(hasPreview: boolean): void {
-    this.previewTabBtn.disabled = !hasPreview;
+    this.previewBtn.disabled = !hasPreview;
     this.previewEmptyEl.style.display = hasPreview ? 'none' : 'flex';
     if (hasPreview) {
       this.setActiveView('preview');
