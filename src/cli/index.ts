@@ -625,7 +625,7 @@ async function main() {
       }
       if (Object.keys(headers).length > 0) fetchInit.headers = headers;
       if (rawBody.length > 0 && !['GET', 'HEAD'].includes(req.method)) {
-        fetchInit.body = rawBody;
+        fetchInit.body = rawBody as unknown as BodyInit;
       }
 
       const upstream = await fetch(targetUrl, fetchInit);
