@@ -47,7 +47,22 @@ export function createOAuthTokenCommand(): Command {
     } else if (args.length > 0) {
       providerId = args[0];
     } else {
-      providerId = getSelectedProvider();
+      // No args: try selected provider, fall back to first OAuth provider
+      const selected = getSelectedProvider();
+      const selectedConfig = getRegisteredProviderConfig(selected);
+      if (selectedConfig?.isOAuth && selectedConfig.onOAuthLogin) {
+        providerId = selected;
+      } else {
+        // Find the first available OAuth provider
+        const allIds = getRegisteredProviderIds();
+        providerId = allIds.find(id => {
+          const cfg = getRegisteredProviderConfig(id);
+          return cfg?.isOAuth && cfg.onOAuthLogin;
+        });
+        if (!providerId) {
+          return { stdout: '', stderr: 'oauth-token: no OAuth providers configured\n', exitCode: 1 };
+        }
+      }
     }
 
     // Look up provider config

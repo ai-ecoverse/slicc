@@ -235,6 +235,35 @@ describe('oauth-token command', () => {
     expect(mockGetSelectedProvider).toHaveBeenCalled();
   });
 
+  it('no args falls back to first OAuth provider when selected is not OAuth', async () => {
+    mockGetSelectedProvider.mockReturnValue('azure-ai-foundry');
+    mockGetRegisteredProviderConfig.mockImplementation((id) => {
+      if (id === 'azure-ai-foundry') return { id: 'azure-ai-foundry', name: 'Azure', description: '', requiresApiKey: true, requiresBaseUrl: true };
+      if (id === 'adobe') return { id: 'adobe', name: 'Adobe', description: '', requiresApiKey: false, requiresBaseUrl: false, isOAuth: true, onOAuthLogin: vi.fn() };
+      return undefined;
+    });
+    mockGetRegisteredProviderIds.mockReturnValue(['azure-ai-foundry', 'adobe']);
+    mockGetOAuthAccountInfo.mockReturnValue({ token: 'fallback-token', expired: false });
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute([], createMockCtx());
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('fallback-token\n');
+    // Should have called getOAuthAccountInfo with 'adobe', not 'azure-ai-foundry'
+    expect(mockGetOAuthAccountInfo).toHaveBeenCalledWith('adobe');
+  });
+
+  it('no args returns error when no OAuth providers exist', async () => {
+    mockGetSelectedProvider.mockReturnValue('anthropic');
+    mockGetRegisteredProviderConfig.mockReturnValue({ id: 'anthropic', name: 'Anthropic', description: '', requiresApiKey: true, requiresBaseUrl: false });
+    mockGetRegisteredProviderIds.mockReturnValue(['anthropic']);
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute([], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('no OAuth providers configured');
+  });
+
   it('--list shows no providers when none are OAuth', async () => {
     mockGetRegisteredProviderIds.mockReturnValue(['anthropic']);
     mockGetRegisteredProviderConfig.mockReturnValue({
