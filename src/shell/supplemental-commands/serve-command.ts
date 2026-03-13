@@ -1,5 +1,8 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import type { BrowserAPI } from '../../cdp/index.js';
+import type { VirtualFS } from '../../fs/index.js';
+import { getSharedState } from './playwright-command.js';
 import { isSafeServeEntry, resolveServeEntryPath, toPreviewUrl } from './shared.js';
 
 function serveHelp(): { stdout: string; stderr: string; exitCode: number } {
@@ -51,13 +54,15 @@ function parseServeArgs(args: string[]): { directory?: string; entry: string; pr
   return { directory, entry, project };
 }
 
-export function createServeCommand(): Command {
+export function createServeCommand(browserAPI?: BrowserAPI, vfs?: VirtualFS): Command {
   return defineCommand('serve', async (args, ctx) => {
     if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
       return serveHelp();
     }
 
-    if (typeof window === 'undefined' || typeof window.open !== 'function') {
+    // Need either BrowserAPI or window.open to open a tab
+    const hasWindowOpen = typeof window !== 'undefined' && typeof window.open === 'function';
+    if (!browserAPI && !hasWindowOpen) {
       return {
         stdout: '',
         stderr: 'serve: browser APIs are unavailable in this environment\n',
@@ -122,9 +127,27 @@ export function createServeCommand(): Command {
     if (parsed.project) {
       previewUrl += `?projectRoot=${encodeURIComponent(fullDirectory)}`;
     }
+
+    // Use BrowserAPI.createPage() when available — this integrates with
+    // playwright-cli's tab tracking so the scoop can immediately use
+    // screenshot/eval/snapshot on the served tab without tab-list + tab-select.
+    if (browserAPI && vfs) {
+      const targetId = await browserAPI.createPage(previewUrl);
+      const pwState = getSharedState(browserAPI, vfs);
+      pwState.currentTarget = targetId;
+      return {
+        stdout: `serving ${fullDirectory} → ${previewUrl} (targetId: ${targetId})\n`,
+        stderr: '',
+        exitCode: 0,
+      };
+    }
+
+    // Fallback: window.open() (no playwright-cli integration)
     // window.open() returns null in extension contexts (offscreen/side panel)
     // even when the tab opens successfully — don't treat null as failure
-    window.open(previewUrl, '_blank', 'noopener,noreferrer');
+    if (typeof window !== 'undefined' && typeof window.open === 'function') {
+      window.open(previewUrl, '_blank', 'noopener,noreferrer');
+    }
 
     return {
       stdout: `serving ${fullDirectory} → ${previewUrl}\n`,
