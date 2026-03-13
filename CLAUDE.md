@@ -189,6 +189,8 @@ WasmShell wraps just-bash 2.11.7 (WASM Bash interpreter) and connects it to Virt
 - `convert` / `magick` — ImageMagick-style image conversion (resize, rotate, crop, quality) via `@imagemagick/magick-wasm`
 - `playwright-cli` / `playwright` / `puppeteer` — Browser automation shell commands backed by `BrowserAPI`; aliases share the same tab/session state, snapshots, and session history
 - `which <command>` — Resolve a command to its path (`/usr/bin/<name>` for built-ins, actual VFS path for `.jsh` files)
+- `pbcopy` / `pbpaste` — Copy stdin to clipboard / paste clipboard to stdout via `navigator.clipboard`
+- `xclip` / `xsel` — Clipboard commands that auto-detect direction: stdin present = copy, no stdin = paste
 - `uname` — Print the current browser user agent
 - `oauth-token` — Get an OAuth access token for a provider (auto-triggers login if needed)
 - `commands` — Show all available commands (type `commands` in terminal)
