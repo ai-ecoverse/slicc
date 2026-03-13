@@ -26,7 +26,7 @@ describeIfConfigured('deployed tray worker', () => {
     const rootResponse = await fetch(baseUrl);
     expect(rootResponse.status).toBe(200);
     await expect(rootResponse.json()).resolves.toMatchObject({
-      routes: ['POST /tray', 'GET|POST /join/:token', 'GET|POST /controller/:token', 'POST /webhook/:token'],
+      routes: ['POST /tray', 'GET|POST /join/:token', 'GET|POST /controller/:token', 'POST /webhook/:token/:webhookId'],
     });
 
     const legacyCreate = await fetch(new URL('/session', baseUrl), { method: 'POST' });
@@ -87,11 +87,11 @@ describeIfConfigured('deployed tray worker', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ hello: 'world' }),
     });
-    expect(webhookBeforeLeader.status).toBe(410);
-    await expect(webhookBeforeLeader.json()).resolves.toMatchObject({ code: 'NO_LIVE_LEADER' });
+    expect(webhookBeforeLeader.status).toBe(400);
+    await expect(webhookBeforeLeader.json()).resolves.toMatchObject({ code: 'WEBHOOK_ID_REQUIRED' });
 
-    const socket = await openWebSocket(controller.websocket!.url);
-    const connected = await waitForJsonMessage(socket);
+    const { socket, nextMessage } = await openWebSocket(controller.websocket!.url);
+    const connected = await nextMessage();
     expect(connected).toMatchObject({
       type: 'leader.connected',
       trayId: created.trayId,
@@ -118,7 +118,7 @@ describeIfConfigured('deployed tray worker', () => {
       },
     });
 
-    const joinRequested = await waitForJsonMessage(socket);
+    const joinRequested = await nextMessage();
     expect(joinRequested).toMatchObject({
       type: 'follower.join_requested',
       controllerId: 'ci-follower-signal',
@@ -127,7 +127,7 @@ describeIfConfigured('deployed tray worker', () => {
     });
 
     socket.send(JSON.stringify({ type: 'ping' }));
-    const pong = await waitForJsonMessage(socket);
+    const pong = await nextMessage();
     expect(pong).toMatchObject({ type: 'pong', trayId: created.trayId });
 
     const joinWithLeader = await fetch(created.capabilities.join.url);
@@ -181,7 +181,7 @@ describeIfConfigured('deployed tray worker', () => {
       bootstrap: { bootstrapId: signalFollower.result.bootstrap.bootstrapId, state: 'connected' },
     });
 
-    const answerMessage = await waitForJsonMessage(socket);
+    const answerMessage = await nextMessage();
     expect(answerMessage).toMatchObject({
       type: 'bootstrap.answer',
       controllerId: 'ci-follower-signal',
@@ -194,44 +194,40 @@ describeIfConfigured('deployed tray worker', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ hello: 'leader' }),
     });
-    expect(webhookWithLeader.status).toBe(501);
-    await expect(webhookWithLeader.json()).resolves.toMatchObject({ code: 'WEBHOOK_FORWARDING_NOT_IMPLEMENTED' });
+    expect(webhookWithLeader.status).toBe(400);
+    await expect(webhookWithLeader.json()).resolves.toMatchObject({ code: 'WEBHOOK_ID_REQUIRED' });
 
     socket.close();
   }, 30_000);
 });
 
-function openWebSocket(url: string): Promise<WebSocket> {
+function openWebSocket(url: string): Promise<{ socket: WebSocket; nextMessage: () => Promise<Record<string, unknown>> }> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(url);
-    socket.once('open', () => resolve(socket));
-    socket.once('error', reject);
-  });
-}
+    const queue: Record<string, unknown>[] = [];
+    const waiters: Array<(msg: Record<string, unknown>) => void> = [];
 
-function waitForJsonMessage(socket: WebSocket): Promise<Record<string, unknown>> {
-  return new Promise((resolve, reject) => {
-    const onMessage = (data: Buffer | ArrayBuffer | Buffer[]) => {
-      cleanup();
-      try {
-        const raw = Array.isArray(data) ? Buffer.concat(data).toString('utf8') : Buffer.from(data as ArrayBuffer).toString('utf8');
-        resolve(JSON.parse(raw) as Record<string, unknown>);
-      } catch (error) {
-        reject(error);
+    socket.on('message', (data: Buffer | ArrayBuffer | Buffer[]) => {
+      const raw = Array.isArray(data) ? Buffer.concat(data).toString('utf8') : Buffer.from(data as ArrayBuffer).toString('utf8');
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      if (waiters.length > 0) {
+        waiters.shift()!(parsed);
+      } else {
+        queue.push(parsed);
       }
+    });
+
+    const nextMessage = (): Promise<Record<string, unknown>> => {
+      if (queue.length > 0) {
+        return Promise.resolve(queue.shift()!);
+      }
+      return new Promise((res, rej) => {
+        const timeout = setTimeout(() => rej(new Error('WebSocket message timeout')), 15_000);
+        waiters.push(msg => { clearTimeout(timeout); res(msg); });
+      });
     };
 
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-
-    const cleanup = () => {
-      socket.off('message', onMessage);
-      socket.off('error', onError);
-    };
-
-    socket.on('message', onMessage);
-    socket.on('error', onError);
+    socket.once('open', () => resolve({ socket, nextMessage }));
+    socket.once('error', reject);
   });
 }
