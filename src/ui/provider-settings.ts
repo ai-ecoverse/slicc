@@ -606,7 +606,7 @@ const ICON_PATHS = {
  */
 export function showProviderSettings(): Promise<boolean> {
   return new Promise((resolve) => {
-    const accountsBefore = JSON.stringify(getAccounts());
+    const accountsBefore = localStorage.getItem(ACCOUNTS_KEY) ?? '';
 
     const overlay = document.createElement('div');
     overlay.className = 'dialog-overlay';
@@ -817,7 +817,7 @@ export function showProviderSettings(): Promise<boolean> {
       closeBtn.textContent = 'Close';
       closeBtn.addEventListener('click', () => {
         overlay.remove();
-        resolve(JSON.stringify(getAccounts()) !== accountsBefore);
+        resolve((localStorage.getItem(ACCOUNTS_KEY) ?? '') !== accountsBefore);
       });
       dialog.appendChild(closeBtn);
     }
