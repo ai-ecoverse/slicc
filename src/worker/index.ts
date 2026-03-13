@@ -9,6 +9,8 @@ import { SessionTrayDurableObject } from './session-tray.js';
 
 export interface WorkerEnv {
   TRAY_HUB: DurableObjectNamespaceLike;
+  CLOUDFLARE_TURN_KEY_ID?: string;
+  CLOUDFLARE_TURN_API_TOKEN?: string;
 }
 
 export async function handleWorkerRequest(request: Request, env: WorkerEnv): Promise<Response> {

@@ -37,6 +37,12 @@ export interface TrayPeerConnectionLike {
   close(): void;
 }
 
+export interface TrayIceServerConfig {
+  urls: string[];
+  username: string;
+  credential: string;
+}
+
 export type TrayPeerConnectionFactory = () => TrayPeerConnectionLike;
 
 export interface LeaderTrayPeerState {
@@ -52,6 +58,7 @@ export interface LeaderTrayPeerManagerOptions {
   peerConnectionFactory?: TrayPeerConnectionFactory;
   dataChannelLabel?: string;
   onPeerConnected?: (peer: LeaderTrayPeerState, channel: TrayDataChannelLike) => void;
+  iceServers?: TrayIceServerConfig[];
 }
 
 export interface FollowerTrayConnection {
@@ -69,6 +76,7 @@ export interface FollowerTrayManagerOptions {
   controllerIdFactory?: () => string;
   sleep?: (ms: number) => Promise<void>;
   pollIntervalMs?: number;
+  iceServers?: TrayIceServerConfig[];
 }
 
 interface ActiveLeaderPeer {
@@ -88,14 +96,23 @@ export class LeaderTrayPeerManager {
   private readonly peerConnectionFactory: TrayPeerConnectionFactory;
   private readonly dataChannelLabel: string;
   private readonly peers = new Map<string, ActiveLeaderPeer>();
+  private iceServers: TrayIceServerConfig[] | undefined;
 
   constructor(private readonly options: LeaderTrayPeerManagerOptions) {
-    this.peerConnectionFactory = options.peerConnectionFactory ?? createBrowserPeerConnection;
+    this.iceServers = options.iceServers;
+    this.peerConnectionFactory = options.peerConnectionFactory ?? (() => createBrowserPeerConnection(this.iceServers));
     this.dataChannelLabel = options.dataChannelLabel ?? DEFAULT_DATA_CHANNEL_LABEL;
+  }
+
+  setIceServers(iceServers: TrayIceServerConfig[]): void {
+    this.iceServers = iceServers;
   }
 
   async handleControlMessage(message: WorkerToLeaderControlMessage): Promise<void> {
     if (message.type === 'follower.join_requested') {
+      if (message.iceServers && !this.iceServers) {
+        this.iceServers = message.iceServers;
+      }
       await this.handleJoinRequested(message);
     } else if (message.type === 'bootstrap.answer') {
       await this.peers.get(message.bootstrapId)?.peer.setRemoteDescription(message.answer);
@@ -216,12 +233,14 @@ export class FollowerTrayManager {
   private readonly controllerIdFactory: () => string;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly pollIntervalMs: number;
+  private iceServers: TrayIceServerConfig[] | undefined;
   private activePeer: ActiveFollowerPeer | null = null;
   private stopped = false;
 
   constructor(private readonly options: FollowerTrayManagerOptions) {
     this.fetchImpl = options.fetchImpl ?? fetch;
-    this.peerConnectionFactory = options.peerConnectionFactory ?? createBrowserPeerConnection;
+    this.iceServers = options.iceServers;
+    this.peerConnectionFactory = options.peerConnectionFactory ?? (() => createBrowserPeerConnection(this.iceServers));
     this.controllerIdFactory = options.controllerIdFactory ?? (() => crypto.randomUUID());
     this.sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
@@ -268,6 +287,9 @@ export class FollowerTrayManager {
         });
         log.warn('Follower tray attach failed', { error: errorMsg });
         throw new Error(errorMsg);
+      }
+      if (attach.iceServers) {
+        this.iceServers = attach.iceServers;
       }
       try {
         const connection = await this.completeBootstrap(attach.trayId, controllerId, attach.bootstrap);
@@ -408,11 +430,12 @@ export class FollowerTrayManager {
   }
 }
 
-function createBrowserPeerConnection(): TrayPeerConnectionLike {
+function createBrowserPeerConnection(iceServers?: TrayIceServerConfig[]): TrayPeerConnectionLike {
   if (typeof RTCPeerConnection === 'undefined') {
     throw new Error('RTCPeerConnection is not available in this runtime');
   }
-  return new RTCPeerConnection() as unknown as TrayPeerConnectionLike;
+  const config = iceServers?.length ? { iceServers } : undefined;
+  return new RTCPeerConnection(config) as unknown as TrayPeerConnectionLike;
 }
 
 function normalizeSessionDescription(

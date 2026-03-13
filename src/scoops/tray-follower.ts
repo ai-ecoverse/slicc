@@ -10,6 +10,7 @@ import type {
   TrayBootstrapStatus,
   TrayIceCandidate,
   TraySessionDescription,
+  TurnIceServer,
 } from '../worker/tray-signaling.js';
 
 const log = createLogger('tray-follower');
@@ -29,6 +30,7 @@ export interface FollowerAttachPlan {
   retryAfterMs?: number;
   error?: string;
   bootstrap?: TrayBootstrapStatus;
+  iceServers?: TurnIceServer[];
 }
 
 export interface FollowerBootstrapOptions {
@@ -72,6 +74,7 @@ export function normalizeFollowerAttachResponse(response: FollowerAttachResponse
     leader: response.leader,
     action: response.result.action,
     code: response.result.code,
+    iceServers: response.iceServers,
   } as const;
 
   if (response.result.action === 'wait') {

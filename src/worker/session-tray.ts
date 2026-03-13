@@ -23,8 +23,10 @@ import {
   type TrayBootstrapStatus,
   type TrayIceCandidate,
   type TraySessionDescription,
+  type TurnIceServer,
   type WorkerToLeaderControlMessage,
 } from './tray-signaling.js';
+import { fetchTURNCredentials } from './turn-credentials.js';
 
 interface ControllerAttachRequest {
   controllerId?: string;
@@ -49,9 +51,15 @@ interface TrayWebSocketLike {
   ): void;
 }
 
+export interface SessionTrayEnv {
+  CLOUDFLARE_TURN_KEY_ID?: string;
+  CLOUDFLARE_TURN_API_TOKEN?: string;
+}
+
 interface SessionTrayOptions {
   now?: () => number;
   webSocketPairFactory?: () => { client: unknown; server: TrayWebSocketLike };
+  fetchImpl?: typeof fetch;
 }
 
 const TRAY_STORAGE_KEY = 'tray';
@@ -59,15 +67,23 @@ const TRAY_STORAGE_KEY = 'tray';
 export class SessionTrayDurableObject {
   private readonly now: () => number;
   private readonly webSocketPairFactory: () => { client: unknown; server: TrayWebSocketLike };
+  private readonly fetchImpl: typeof fetch;
+  private readonly turnKeyId: string | undefined;
+  private readonly turnApiToken: string | undefined;
   private tray: TrayRecord | null = null;
   private leaderSocket: TrayWebSocketLike | null = null;
+  private cachedIceServers: TurnIceServer[] | null = null;
 
   constructor(
     private readonly state: DurableObjectStateLike,
-    _env: unknown,
+    env: SessionTrayEnv | unknown,
     options: SessionTrayOptions = {},
   ) {
     this.now = options.now ?? (() => Date.now());
+    this.fetchImpl = options.fetchImpl ?? fetch;
+    const typedEnv = (env && typeof env === 'object' ? env : {}) as SessionTrayEnv;
+    this.turnKeyId = typedEnv.CLOUDFLARE_TURN_KEY_ID;
+    this.turnApiToken = typedEnv.CLOUDFLARE_TURN_API_TOKEN;
     this.webSocketPairFactory = options.webSocketPairFactory ?? (() => {
       const PairCtor = (globalThis as { WebSocketPair?: new () => { 0: unknown; 1: unknown } }).WebSocketPair;
       if (!PairCtor) {
@@ -249,11 +265,12 @@ export class SessionTrayDurableObject {
       }
     }
 
+    let iceServers: TurnIceServer[] | undefined;
     const result: FollowerAttachResult = this.hasLiveLeader()
       ? {
           action: 'signal',
           code: 'LEADER_CONNECTED',
-          bootstrap: this.buildBootstrapStatus(this.ensureBootstrap(controllerId, attach.runtime)),
+          bootstrap: this.buildBootstrapStatus(await this.ensureBootstrap(controllerId, attach.runtime)),
         }
       : {
           action: 'wait',
@@ -261,9 +278,13 @@ export class SessionTrayDurableObject {
           retryAfterMs: FOLLOWER_ATTACH_RETRY_AFTER_MS,
         };
 
+    if (result.action === 'signal') {
+      iceServers = await this.getIceServers();
+    }
+
     await this.persistTray();
 
-    return this.buildFollowerAttachResponse(controllerId, result);
+    return this.buildFollowerAttachResponse(controllerId, result, 200, iceServers);
   }
 
   private async handleBootstrapRequest(request: FollowerBootstrapRequest): Promise<Response> {
@@ -588,7 +609,7 @@ export class SessionTrayDurableObject {
 
     this.refreshBootstrapState(bootstrap);
     await this.persistTray();
-    return this.buildFollowerBootstrapResponse(bootstrap, this.getBootstrapEventsAfter(bootstrap, cursor));
+    return await this.buildFollowerBootstrapResponse(bootstrap, this.getBootstrapEventsAfter(bootstrap, cursor));
   }
 
   private async handleBootstrapAnswer(
@@ -608,7 +629,7 @@ export class SessionTrayDurableObject {
     this.refreshBootstrapState(bootstrap);
     if (bootstrap.state === 'failed') {
       await this.persistTray();
-      return this.buildFollowerBootstrapResponse(bootstrap, [], 409);
+      return await this.buildFollowerBootstrapResponse(bootstrap, [], 409);
     }
 
     if (!this.sendToLeader({
@@ -625,14 +646,14 @@ export class SessionTrayDurableObject {
         retryAfterMs: this.canRetryBootstrap(bootstrap) ? TRAY_BOOTSTRAP_RETRY_AFTER_MS : null,
       });
       await this.persistTray();
-      return this.buildFollowerBootstrapResponse(bootstrap, [], 409);
+      return await this.buildFollowerBootstrapResponse(bootstrap, [], 409);
     }
 
     bootstrap.state = 'connected';
     bootstrap.failure = null;
     bootstrap.updatedAt = this.isoNow();
     await this.persistTray();
-    return this.buildFollowerBootstrapResponse(bootstrap, []);
+    return await this.buildFollowerBootstrapResponse(bootstrap, []);
   }
 
   private async handleBootstrapIceCandidate(
@@ -652,7 +673,7 @@ export class SessionTrayDurableObject {
     this.refreshBootstrapState(bootstrap);
     if (bootstrap.state === 'failed') {
       await this.persistTray();
-      return this.buildFollowerBootstrapResponse(bootstrap, [], 409);
+      return await this.buildFollowerBootstrapResponse(bootstrap, [], 409);
     }
 
     if (!this.sendToLeader({
@@ -669,12 +690,12 @@ export class SessionTrayDurableObject {
         retryAfterMs: this.canRetryBootstrap(bootstrap) ? TRAY_BOOTSTRAP_RETRY_AFTER_MS : null,
       });
       await this.persistTray();
-      return this.buildFollowerBootstrapResponse(bootstrap, [], 409);
+      return await this.buildFollowerBootstrapResponse(bootstrap, [], 409);
     }
 
     bootstrap.updatedAt = this.isoNow();
     await this.persistTray();
-    return this.buildFollowerBootstrapResponse(bootstrap, []);
+    return await this.buildFollowerBootstrapResponse(bootstrap, []);
   }
 
   private async handleBootstrapRetry(
@@ -695,17 +716,18 @@ export class SessionTrayDurableObject {
       || !this.hasLiveLeader()
     ) {
       await this.persistTray();
-      return this.buildFollowerBootstrapResponse(bootstrap, [], 409);
+      return await this.buildFollowerBootstrapResponse(bootstrap, [], 409);
     }
 
     const retried = this.createBootstrap(bootstrap.controllerId, runtime ?? bootstrap.runtime, bootstrap.retryCount + 1, bootstrap.maxRetries);
     this.requireTray().bootstraps[retried.bootstrapId] = retried;
-    this.notifyLeaderJoinRequested(retried);
+    const iceServers = await this.getIceServers();
+    this.notifyLeaderJoinRequested(retried, iceServers);
     await this.persistTray();
-    return this.buildFollowerBootstrapResponse(retried, []);
+    return await this.buildFollowerBootstrapResponse(retried, []);
   }
 
-  private ensureBootstrap(controllerId: string, runtime: string | undefined): TrayBootstrapRecord {
+  private async ensureBootstrap(controllerId: string, runtime: string | undefined): Promise<TrayBootstrapRecord> {
     const existing = this.findBootstrap(controllerId);
     if (existing) {
       this.refreshBootstrapState(existing);
@@ -714,7 +736,8 @@ export class SessionTrayDurableObject {
 
     const bootstrap = this.createBootstrap(controllerId, runtime);
     this.requireTray().bootstraps[bootstrap.bootstrapId] = bootstrap;
-    this.notifyLeaderJoinRequested(bootstrap);
+    const iceServers = await this.getIceServers();
+    this.notifyLeaderJoinRequested(bootstrap, iceServers);
     return bootstrap;
   }
 
@@ -742,8 +765,8 @@ export class SessionTrayDurableObject {
     };
   }
 
-  private notifyLeaderJoinRequested(bootstrap: TrayBootstrapRecord): void {
-    this.sendToLeader({
+  private notifyLeaderJoinRequested(bootstrap: TrayBootstrapRecord, iceServers?: TurnIceServer[]): void {
+    const message: WorkerToLeaderControlMessage = {
       type: 'follower.join_requested',
       trayId: this.requireTray().trayId,
       controllerId: bootstrap.controllerId,
@@ -751,7 +774,11 @@ export class SessionTrayDurableObject {
       bootstrapId: bootstrap.bootstrapId,
       attempt: bootstrap.attempt,
       expiresAt: bootstrap.expiresAt,
-    });
+    };
+    if (iceServers) {
+      (message as { iceServers?: TurnIceServer[] }).iceServers = iceServers;
+    }
+    this.sendToLeader(message);
   }
 
   private sendToLeader(message: WorkerToLeaderControlMessage): boolean {
@@ -871,12 +898,13 @@ export class SessionTrayDurableObject {
     };
   }
 
-  private buildFollowerBootstrapResponse(
+  private async buildFollowerBootstrapResponse(
     bootstrap: TrayBootstrapRecord,
     events: TrayBootstrapEvent[],
     status = 200,
-  ): Response {
+  ): Promise<Response> {
     const tray = this.requireTray();
+    const iceServers = await this.getIceServers();
     const payload: FollowerBootstrapResponse = {
       trayId: tray.trayId,
       controllerId: bootstrap.controllerId,
@@ -886,6 +914,9 @@ export class SessionTrayDurableObject {
       bootstrap: this.buildBootstrapStatus(bootstrap),
       events,
     };
+    if (iceServers) {
+      payload.iceServers = iceServers;
+    }
     return jsonResponse(payload, status);
   }
 
@@ -897,6 +928,7 @@ export class SessionTrayDurableObject {
     controllerId: string,
     result: FollowerAttachResult,
     status = 200,
+    iceServers?: TurnIceServer[],
   ): Response {
     const tray = this.requireTray();
     const payload: FollowerAttachResponse = {
@@ -907,6 +939,9 @@ export class SessionTrayDurableObject {
       participantCount: Object.keys(tray.controllers).length,
       result,
     };
+    if (iceServers) {
+      payload.iceServers = iceServers;
+    }
     return jsonResponse(payload, status);
   }
 
@@ -1091,6 +1126,23 @@ export class SessionTrayDurableObject {
       throw new Error('Tray not loaded');
     }
     return this.tray;
+  }
+
+  private async getIceServers(): Promise<TurnIceServer[] | undefined> {
+    if (!this.turnKeyId || !this.turnApiToken) {
+      return undefined;
+    }
+
+    if (this.cachedIceServers) {
+      return this.cachedIceServers;
+    }
+
+    try {
+      this.cachedIceServers = await fetchTURNCredentials(this.turnKeyId, this.turnApiToken, this.fetchImpl);
+      return this.cachedIceServers;
+    } catch {
+      return undefined;
+    }
   }
 
   private isoNow(): string {

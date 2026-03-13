@@ -73,6 +73,12 @@ export interface TrayBootstrapStatus {
   failure: TrayBootstrapFailure | null;
 }
 
+export interface TurnIceServer {
+  urls: string[];
+  username: string;
+  credential: string;
+}
+
 export interface FollowerJoinRequestedMessage {
   type: 'follower.join_requested';
   trayId: string;
@@ -81,6 +87,7 @@ export interface FollowerJoinRequestedMessage {
   bootstrapId: string;
   attempt: number;
   expiresAt: string;
+  iceServers?: TurnIceServer[];
 }
 
 export interface BootstrapAnswerMessage {

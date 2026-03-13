@@ -2,6 +2,7 @@ import type {
   TrayBootstrapEvent,
   TrayBootstrapRecord,
   TrayBootstrapStatus,
+  TurnIceServer,
 } from './tray-signaling.js';
 
 export const TRAY_RECLAIM_TTL_MS = 60 * 60 * 1000;
@@ -100,6 +101,7 @@ export interface FollowerAttachResponse {
   leader: TrayLeaderSummary | null;
   participantCount: number;
   result: FollowerAttachResult;
+  iceServers?: TurnIceServer[];
 }
 
 export interface FollowerBootstrapResponse {
@@ -110,6 +112,7 @@ export interface FollowerBootstrapResponse {
   participantCount: number;
   bootstrap: TrayBootstrapStatus;
   events: TrayBootstrapEvent[];
+  iceServers?: TurnIceServer[];
 }
 
 export function createCapabilityToken(trayId: string, bytes = 18): string {
