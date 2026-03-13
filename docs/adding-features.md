@@ -734,31 +734,153 @@ describe('loadSkills', () => {
 
 ## 8. Add a Provider
 
-**When**: To support a new LLM provider (e.g., Groq, Hugging Face).
+Providers come from three sources:
+- **Pi-ai auto-discovery**: `getProviders()` returns all pi-ai providers automatically — no files needed. Filtered by `providers.build.json` (`include: ["*"]` = all, `exclude: ["*"]` = none).
+- **Built-in extensions**: `src/providers/built-in/*.ts` — only for providers needing custom `register()` functions (e.g., bedrock-camp). Also filtered by `providers.build.json`.
+- **External**: `providers/*.ts` (project root, gitignored) — always included, never filtered. For custom OAuth providers, corporate proxies, etc.
 
-**Files to create/modify**:
-- Create: `src/providers/my-provider.ts` (optional, if custom logic needed)
-- Modify: `src/ui/provider-settings.ts`
+Built-in and external modules export `config: ProviderConfig` and optionally `register(): void`.
+
+### 8a. Add an API-Key Provider
+
+**When**: To support a new LLM provider that uses an API key (e.g., Groq, Hugging Face).
+
+**Most providers need no files at all.** Pi-ai auto-discovers its providers via `getProviders()`, and `provider-settings.ts` generates a fallback config (display name derived from ID, `requiresApiKey: true`, `requiresBaseUrl: false`). The provider appears in the Settings UI automatically.
+
+**Only create a file in `src/providers/built-in/`** if the provider needs a custom `register()` function (e.g., custom stream functions). See `src/providers/built-in/bedrock-camp.ts` for an example.
+
+**For external providers** (gitignored, not in the open-source repo), create `providers/my-provider.ts`:
+
+```typescript
+// providers/my-provider.ts
+import type { ProviderConfig } from '../src/providers/types.js';
+
+export const config: ProviderConfig = {
+  id: 'my-provider',
+  name: 'My Provider',
+  description: 'Models via My Provider API',
+  requiresApiKey: true,
+  apiKeyPlaceholder: 'your-api-key-here',
+  apiKeyEnvVar: 'MY_PROVIDER_API_KEY',
+  requiresBaseUrl: false,
+};
+
+// Optional: register custom stream functions with pi-ai
+export function register(): void {
+  // registerApiProvider({ api: 'my-provider' as Api, stream: ..., streamSimple: ... });
+}
+```
+
+External providers in `providers/` are always included (never filtered by `providers.build.json`).
+
+### 8b. Add an OAuth Provider (Corporate Proxy / SSO)
+
+**When**: To support a provider that authenticates via OAuth (implicit grant or PKCE) — typically a corporate LLM proxy behind SSO.
+
+**Files to create**:
+- `providers/my-corp.ts` (external, gitignored)
+- `providers/my-corp-config.json` (optional, for client ID / endpoints)
 
 **Implementation**:
 
-Providers are managed by pi-ai (`@mariozechner/pi-ai`). Register in provider-settings:
-
 ```typescript
-// src/ui/provider-settings.ts
-const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
-  // ... existing providers ...
-  'my-provider': {
-    id: 'my-provider',
-    name: 'My Provider',
-    description: 'Models via My Provider API',
-    requiresApiKey: true,
-    apiKeyPlaceholder: 'your-api-key-format',
-    apiKeyEnvVar: 'MY_PROVIDER_API_KEY',
-    requiresBaseUrl: false,
+// providers/my-corp.ts
+import type { ProviderConfig, OAuthLauncher } from '../src/providers/types.js';
+import { registerApiProvider, streamAnthropic } from '@mariozechner/pi-ai';
+import type { Api, Model, Context } from '@mariozechner/pi-ai';
+import { saveOAuthAccount, getAccounts } from '../src/ui/provider-settings.js';
+
+const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
+
+// Load config from a gitignored JSON file
+const configFiles = import.meta.glob('/providers/my-corp-config.json', {
+  eager: true, import: 'default',
+}) as Record<string, { clientId: string; proxyEndpoint: string; redirectUri?: string; extensionRedirectUri?: string }>;
+const corpConfig = configFiles['/providers/my-corp-config.json'] ?? { clientId: '', proxyEndpoint: '' };
+
+export const config: ProviderConfig = {
+  id: 'my-corp',
+  name: 'My Corp',
+  description: 'Claude via corporate proxy — login with SSO',
+  requiresApiKey: false,
+  requiresBaseUrl: false,
+  isOAuth: true,
+
+  onOAuthLogin: async (launcher: OAuthLauncher, onSuccess: () => void) => {
+    // Build the redirect URI based on runtime
+    const redirectUri = isExtension
+      ? (corpConfig.extensionRedirectUri ?? `https://${(chrome as any).runtime.id}.chromiumapp.org/`)
+      : (corpConfig.redirectUri ?? `${window.location.origin}/auth/callback`);
+
+    const params = new URLSearchParams({
+      client_id: corpConfig.clientId,
+      response_type: 'token',
+      redirect_uri: redirectUri,
+      scope: 'openid profile',
+    });
+    const authorizeUrl = `https://sso.mycorp.com/authorize?${params}`;
+
+    // Launch the OAuth flow — launcher handles CLI popup vs extension chrome.identity
+    const redirectUrl = await launcher(authorizeUrl);
+    if (!redirectUrl) return; // User cancelled or timed out
+
+    // Extract token from redirect URL (provider-specific: implicit grant has token in fragment)
+    const fragment = new URLSearchParams(redirectUrl.slice(redirectUrl.indexOf('#') + 1));
+    const accessToken = fragment.get('access_token');
+    if (!accessToken) return;
+
+    // Save the OAuth account — this makes the provider "logged in"
+    saveOAuthAccount({
+      providerId: 'my-corp',
+      accessToken,
+      tokenExpiresAt: Date.now() + parseInt(fragment.get('expires_in') ?? '86400', 10) * 1000,
+    });
+    onSuccess(); // Re-render the accounts list
+  },
+
+  onOAuthLogout: async () => {
+    // Optionally revoke the token with your IdP
+    saveOAuthAccount({ providerId: 'my-corp', accessToken: '' });
   },
 };
+
+// Register custom stream function that proxies through the corporate endpoint
+export function register(): void {
+  registerApiProvider({
+    api: 'my-corp-anthropic' as Api,
+    stream: (model: Model<Api>, context: Context, options: any = {}) => {
+      const account = getAccounts().find(a => a.providerId === 'my-corp');
+      const proxyModel = { ...model, baseUrl: corpConfig.proxyEndpoint, api: 'anthropic-messages' as Api };
+      return streamAnthropic(proxyModel as any, context, { ...options, apiKey: account?.accessToken });
+    },
+  });
+}
 ```
+
+**How the OAuth flow works**:
+
+1. User clicks "Login with My Corp" in the Settings dialog
+2. `provider-settings.ts` calls `config.onOAuthLogin(launcher, onSuccess)`
+3. The provider builds its authorize URL and calls `launcher(authorizeUrl)`
+4. The generic `OAuthLauncher` (from `src/providers/oauth-service.ts`) handles transport:
+   - **CLI**: Opens popup → IDP login → redirects to `http://localhost:3000/auth/callback` → callback page postMessages the redirect URL back → popup closes
+   - **Extension**: Sends `oauth-request` to service worker → `chrome.identity.launchWebAuthFlow` → returns redirect URL with token in fragment
+5. The provider extracts the token from the redirect URL and calls `saveOAuthAccount()`
+6. `onSuccess()` re-renders the accounts list showing the logged-in state
+
+**Key files**:
+- `src/providers/types.ts` — `ProviderConfig` (with `onOAuthLogin`, `onOAuthLogout`), `OAuthLauncher` type
+- `src/providers/oauth-service.ts` — `createOAuthLauncher()` factory (CLI popup vs extension chrome.identity)
+- `src/ui/provider-settings.ts` — Calls `config.onOAuthLogin(launcher, onSuccess)` when login button clicked
+- `src/cli/index.ts` — `/auth/callback` route (reads query params + fragment, postMessages to opener)
+- `src/extension/service-worker.ts` — `handleOAuthRequest()` (generic `chrome.identity.launchWebAuthFlow`)
+
+**Dual-mode redirect URIs**:
+
+| Mode | Redirect URI | Registration |
+|------|-------------|-------------|
+| CLI | `http://localhost:3000/auth/callback` | Register with your OAuth provider/IdP |
+| Extension | `https://<extension-id>.chromiumapp.org/` | Register with your OAuth provider/IdP |
 
 **Type**:
 
@@ -773,72 +895,31 @@ interface ProviderConfig {
   requiresBaseUrl: boolean;
   baseUrlPlaceholder?: string;
   baseUrlDescription?: string;
+  isOAuth?: boolean;
+  onOAuthLogin?: (launcher: OAuthLauncher, onSuccess: () => void) => Promise<void>;
+  onOAuthLogout?: () => Promise<void>;
 }
-```
 
-**Custom provider implementation**:
-
-If the provider needs custom logic (e.g., special header format, token counting):
-
-```typescript
-// src/providers/my-provider.ts
-import type { Api, StreamFn } from '@mariozechner/pi-ai';
-
-export const myProviderApi: Api = {
-  models: ['model-1', 'model-2'],
-  stream: async (context, options) => {
-    // Custom stream implementation
-  },
-};
-```
-
-**Wire into getProviders()** (from pi-ai):
-
-Provider support comes directly from pi-ai. If a custom implementation is needed, extend in `resolveCurrentModel()`:
-
-```typescript
-// src/ui/provider-settings.ts
-export function resolveCurrentModel(): Model<Api> {
-  const provider = getSelectedProvider();
-  const modelId = getSelectedModelId();
-
-  if (provider === 'my-provider') {
-    const customApi = getMyProviderApi(); // Your custom implementation
-    return { id: modelId, api: customApi, name: modelId };
-  }
-
-  return getModelDynamic(provider, modelId);
-}
-```
-
-**UI updates**:
-
-The provider selector in `showProviderSettings()` automatically includes all registered providers:
-
-```typescript
-// src/ui/provider-settings.ts
-export function showProviderSettings(): void {
-  const providers = getProviders(); // From pi-ai
-  // UI auto-populates with all registered providers
-}
+type OAuthLauncher = (authorizeUrl: string) => Promise<string | null>;
 ```
 
 **Test pattern**:
 
-```typescript
-// src/ui/provider-settings.test.ts
-import { describe, it, expect } from 'vitest';
-import { getSelectedProvider, setSelectedProvider } from './provider-settings.js';
+OAuth flow is runtime-dependent (browser popups, chrome.identity). Test the provider's token extraction and account saving logic in isolation:
 
-describe('provider-settings', () => {
-  it('should support my-provider', () => {
-    setSelectedProvider('my-provider', 'my-api-key');
-    expect(getSelectedProvider()).toBe('my-provider');
+```typescript
+import { describe, it, expect } from 'vitest';
+
+describe('my-corp provider', () => {
+  it('extracts token from redirect URL', () => {
+    const url = 'https://sso.mycorp.com/callback#access_token=abc123&expires_in=3600';
+    const fragment = new URLSearchParams(url.slice(url.indexOf('#') + 1));
+    expect(fragment.get('access_token')).toBe('abc123');
   });
 });
 ```
 
-**Reference file**: `src/ui/provider-settings.ts`
+**Reference files**: `src/providers/oauth-service.ts`, `src/providers/types.ts`, `src/ui/provider-settings.ts`
 
 ---
 

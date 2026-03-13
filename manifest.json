@@ -3,7 +3,8 @@
   "name": "slicc",
   "version": "0.1.0",
   "description": "Browser-based AI coding agent",
-  "permissions": ["debugger", "tabs", "sidePanel", "offscreen"],
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAs9C5LGAbvS34z/jAkmkd0E77Pw7+1vSjvieWsRvegpwrkHw6Kv4jbn+r6mImbCASgErQ7i+uaGfGlFXmm3w5ZsrU949Kht1PZxu2/z1os8X2xZ2D3h0DQq6FFpo6HAJKi+lcWjP7pd1OPt6uMLnhe72a5ZDBS+lkjhR4biKEKo/WuVHj55Y58yn644MtB7P7BzQUJtNvE5cG+u1gPbQ2YHLAEK4ou9INOOWUm30fKneL+jRfS7RtUzCNFElAPVB7vN8EvEgIJcIzG6ncaIIy6+O/7B0MMQN8O33bEeFxZ4epoffJ+k4suAWoPxAsXmOWvv6ROHhGhZuSV2q4WycELQIDAQAB",
+  "permissions": ["debugger", "tabs", "sidePanel", "offscreen", "identity"],
   "host_permissions": ["<all_urls>"],
   "side_panel": {
     "default_path": "index.html"

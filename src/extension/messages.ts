@@ -72,6 +72,13 @@ export interface PanelCdpCommandMsg {
   sessionId?: string;
 }
 
+/** Request OAuth flow via service worker (extension mode). */
+export interface OAuthRequestMsg {
+  type: 'oauth-request';
+  providerId: string;
+  authorizeUrl: string;
+}
+
 export type PanelToOffscreenMessage =
   | UserMessageMsg
   | ScoopCreateMsg
@@ -83,7 +90,8 @@ export type PanelToOffscreenMessage =
   | ClearChatMsg
   | ClearFilesystemMsg
   | RefreshModelMsg
-  | PanelCdpCommandMsg;
+  | PanelCdpCommandMsg
+  | OAuthRequestMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen → Side Panel (via service worker relay)
@@ -159,6 +167,17 @@ export interface PanelCdpResponseMsg {
   error?: string;
 }
 
+/** OAuth result from service worker back to requesting context. */
+export interface OAuthResultMsg {
+  type: 'oauth-result';
+  providerId: string;
+  code?: string;
+  state?: string;
+  error?: string;
+  /** Full redirect URL — needed for implicit grant (token in fragment). */
+  redirectUrl?: string;
+}
+
 export type OffscreenToPanelMessage =
   | OffscreenReadyMsg
   | AgentEventMsg
@@ -168,7 +187,8 @@ export type OffscreenToPanelMessage =
   | ErrorMsg
   | ScoopCreatedMsg
   | IncomingMessageMsg
-  | PanelCdpResponseMsg;
+  | PanelCdpResponseMsg
+  | OAuthResultMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen ↔ Service Worker (CDP proxy)
@@ -213,7 +233,7 @@ export interface PanelEnvelope {
 
 export interface ServiceWorkerEnvelope {
   source: 'service-worker';
-  payload: CdpProxyMessage;
+  payload: CdpProxyMessage | OAuthResultMsg;
 }
 
 export type ExtensionMessage = OffscreenEnvelope | PanelEnvelope | ServiceWorkerEnvelope;

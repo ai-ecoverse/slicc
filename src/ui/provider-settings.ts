@@ -9,6 +9,14 @@ import type { Model } from '../core/index.js';
 import type { Api } from '@mariozechner/pi-ai';
 import { getThemePreference, setThemePreference } from './theme.js';
 import type { ThemePreference } from './theme.js';
+import {
+  getRegisteredProviderConfig,
+  getRegisteredProviderIds,
+  shouldIncludeProvider,
+} from '../providers/index.js';
+import type { ProviderConfig } from '../providers/index.js';
+
+export type { ProviderConfig } from '../providers/index.js';
 
 // Dynamic wrappers — pi-ai's getModel/getModels use strict generics
 // that require KnownProvider literals, but provider-settings works
@@ -42,6 +50,11 @@ export interface Account {
   providerId: string;
   apiKey: string;
   baseUrl?: string;
+  // OAuth fields (used by OAuth providers)
+  accessToken?: string;
+  refreshToken?: string;
+  tokenExpiresAt?: number;
+  userName?: string;
 }
 
 // Delete legacy keys on first access
@@ -61,168 +74,20 @@ function _resetLegacyCleanup(): void {
 /** Test-only exports */
 export const __test__ = { _resetLegacyCleanup };
 
-// Provider metadata with display names and required fields
-interface ProviderConfig {
-  id: string;
-  name: string;
-  description: string;
-  requiresApiKey: boolean;
-  apiKeyPlaceholder?: string;
-  apiKeyEnvVar?: string;
-  requiresBaseUrl: boolean;
-  baseUrlPlaceholder?: string;
-  baseUrlDescription?: string;
-}
+// Provider configs are now loaded dynamically from src/providers/index.ts
+// (built-in providers in src/providers/built-in/ + external providers in /providers/)
 
-const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
-  'anthropic': {
-    id: 'anthropic',
-    name: 'Anthropic',
-    description: 'Claude models via Anthropic API',
-    requiresApiKey: true,
-    apiKeyPlaceholder: 'sk-ant-...',
-    apiKeyEnvVar: 'ANTHROPIC_API_KEY',
-    requiresBaseUrl: false,
-  },
-  'openai': {
-    id: 'openai',
-    name: 'OpenAI',
-    description: 'GPT and Codex models',
-    requiresApiKey: true,
-    apiKeyPlaceholder: 'sk-...',
-    apiKeyEnvVar: 'OPENAI_API_KEY',
-    requiresBaseUrl: false,
-  },
-  'openrouter': {
-    id: 'openrouter',
-    name: 'OpenRouter',
-    description: '200+ models from multiple providers',
-    requiresApiKey: true,
-    apiKeyPlaceholder: 'sk-or-...',
-    apiKeyEnvVar: 'OPENROUTER_API_KEY',
-    requiresBaseUrl: false,
-  },
-  'groq': {
-    id: 'groq',
-    name: 'Groq',
-    description: 'Fast inference for open models',
-    requiresApiKey: true,
-    apiKeyPlaceholder: 'gsk_...',
-    apiKeyEnvVar: 'GROQ_API_KEY',
-    requiresBaseUrl: false,
-  },
-  'google': {
-    id: 'google',
-    name: 'Google AI',
-    description: 'Gemini models via Google AI Studio',
-    requiresApiKey: true,
-    apiKeyPlaceholder: 'AI...',
-    apiKeyEnvVar: 'GOOGLE_API_KEY',
-    requiresBaseUrl: false,
-  },
-  'google-vertex': {
-    id: 'google-vertex',
-    name: 'Google Vertex AI',
-    description: 'Gemini and Claude on Vertex',
-    requiresApiKey: true,
-    apiKeyPlaceholder: 'Access token',
-    apiKeyEnvVar: 'GOOGLE_APPLICATION_CREDENTIALS',
-    requiresBaseUrl: true,
-    baseUrlPlaceholder: 'https://us-central1-aiplatform.googleapis.com',
-    baseUrlDescription: 'Vertex AI endpoint URL',
-  },
-  'amazon-bedrock': {
-    id: 'amazon-bedrock',
-    name: 'AWS Bedrock',
-    description: 'Claude, Llama, and more on AWS',
-    requiresApiKey: true,
-    apiKeyPlaceholder: 'Session token or credentials',
-    apiKeyEnvVar: 'AWS_SESSION_TOKEN',
-    requiresBaseUrl: true,
-    baseUrlPlaceholder: 'https://bedrock-runtime.us-east-1.amazonaws.com',
-    baseUrlDescription: 'Bedrock runtime endpoint (region-specific)',
-  },
-  'bedrock-camp': {
-    id: 'bedrock-camp',
-    name: 'AWS Bedrock (CAMP)',
-    description: 'Claude on AWS Bedrock via Adobe CAMP Bearer token',
-    requiresApiKey: true,
-    apiKeyPlaceholder: 'ABSK...',
-    apiKeyEnvVar: 'BEDROCK_CAMP_API_KEY',
-    requiresBaseUrl: true,
-    baseUrlPlaceholder: 'https://bedrock-runtime.us-west-2.amazonaws.com',
-    baseUrlDescription: 'Bedrock runtime endpoint from CAMP portal',
-  },
-  'azure-ai-foundry': {
-    id: 'azure-ai-foundry',
-    name: 'Azure (Claude)',
-    description: 'Claude models via Azure AI Foundry',
-    requiresApiKey: true,
-    apiKeyPlaceholder: 'Azure API key',
-    apiKeyEnvVar: 'AZURE_API_KEY',
-    requiresBaseUrl: true,
-    baseUrlPlaceholder: 'https://your-resource.services.ai.azure.com/anthropic',
-    baseUrlDescription: 'Azure AI Foundry endpoint — must end with /anthropic',
-  },
-  'azure-openai-responses': {
-    id: 'azure-openai-responses',
-    name: 'Azure (OpenAI/GPT)',
-    description: 'GPT and Codex models on Azure OpenAI',
-    requiresApiKey: true,
-    apiKeyPlaceholder: 'Azure API key',
-    apiKeyEnvVar: 'AZURE_OPENAI_API_KEY',
-    requiresBaseUrl: true,
-    baseUrlPlaceholder: 'https://your-resource.openai.azure.com',
-    baseUrlDescription: 'Azure OpenAI endpoint URL',
-  },
-  'mistral': {
-    id: 'mistral',
-    name: 'Mistral',
-    description: 'Mistral AI models',
-    requiresApiKey: true,
-    apiKeyPlaceholder: 'Mistral API key',
-    apiKeyEnvVar: 'MISTRAL_API_KEY',
-    requiresBaseUrl: false,
-  },
-  'xai': {
-    id: 'xai',
-    name: 'xAI',
-    description: 'Grok models',
-    requiresApiKey: true,
-    apiKeyPlaceholder: 'xAI API key',
-    apiKeyEnvVar: 'XAI_API_KEY',
-    requiresBaseUrl: false,
-  },
-  'cerebras': {
-    id: 'cerebras',
-    name: 'Cerebras',
-    description: 'Fast inference on Cerebras hardware',
-    requiresApiKey: true,
-    apiKeyPlaceholder: 'Cerebras API key',
-    apiKeyEnvVar: 'CEREBRAS_API_KEY',
-    requiresBaseUrl: false,
-  },
-  'huggingface': {
-    id: 'huggingface',
-    name: 'HuggingFace',
-    description: 'Inference API models',
-    requiresApiKey: true,
-    apiKeyPlaceholder: 'hf_...',
-    apiKeyEnvVar: 'HF_TOKEN',
-    requiresBaseUrl: false,
-  },
-};
-
-// Get all available providers — pi-ai providers + custom providers (e.g., azure-ai-foundry)
+// Get all available providers — pi-ai providers (filtered by build config) + registered configs
 export function getAvailableProviders(): string[] {
-  const piProviders = getProviders();
-  const customProviders = Object.keys(PROVIDER_CONFIGS).filter(id => !(piProviders as string[]).includes(id));
-  return [...piProviders, ...customProviders];
+  const piProviders = (getProviders() as string[]).filter(shouldIncludeProvider);
+  const registeredIds = getRegisteredProviderIds(); // external + built-in extensions, already filtered
+  const merged = new Set([...piProviders, ...registeredIds]);
+  return [...merged];
 }
 
 // Get provider config with fallback for unknown providers
 export function getProviderConfig(providerId: string): ProviderConfig {
-  return PROVIDER_CONFIGS[providerId] || {
+  return getRegisteredProviderConfig(providerId) || {
     id: providerId,
     name: providerId.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
     description: `${providerId} provider`,
@@ -234,17 +99,39 @@ export function getProviderConfig(providerId: string): ProviderConfig {
 // Get models for a provider
 export function getProviderModels(providerId: string): Model<Api>[] {
   try {
-    // Azure AI Foundry uses Anthropic's Claude models
     // Bedrock CAMP uses Amazon Bedrock models with custom API
     if (providerId === 'bedrock-camp') {
       const bedrockModels = getModelsDynamic('amazon-bedrock');
       return bedrockModels.map(m => ({ ...m, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' }));
     }
+    // Providers that use Anthropic's model registry with custom API
+    const providerConfig = getProviderConfig(providerId);
+    if (providerConfig.isOAuth) {
+      // OAuth providers use Anthropic models with custom API routing
+      const anthropicModels = getModelsDynamic('anthropic');
+      const customApi = `${providerId}-anthropic` as Api;
+      return anthropicModels.map(m => ({ ...m, api: customApi, provider: providerId }));
+    }
     const effectiveProvider = providerId === 'azure-ai-foundry' ? 'anthropic' : providerId;
     return getModelsDynamic(effectiveProvider);
-  } catch {
+  } catch (err) {
+    log.error('Failed to load models', { providerId, error: err instanceof Error ? err.message : String(err) });
     return [];
   }
+}
+
+// --- OAuth account info (used by oauth-token shell command) ---
+
+export function getOAuthAccountInfo(providerId: string): {
+  token: string;
+  expiresAt?: number;
+  userName?: string;
+  expired: boolean;
+} | null {
+  const account = getAccounts().find(a => a.providerId === providerId);
+  if (!account?.accessToken) return null;
+  const expired = !!account.tokenExpiresAt && Date.now() > account.tokenExpiresAt - 60000;
+  return { token: account.accessToken, expiresAt: account.tokenExpiresAt, userName: account.userName, expired };
 }
 
 // --- Build-time provider defaults from providers.json ---
@@ -362,8 +249,31 @@ export function removeAccount(providerId: string): void {
   saveAccounts(getAccounts().filter(a => a.providerId !== providerId));
 }
 
+/** Save an OAuth account (used by external providers after token exchange). */
+export function saveOAuthAccount(opts: {
+  providerId: string;
+  accessToken: string;
+  refreshToken?: string;
+  tokenExpiresAt?: number;
+  userName?: string;
+}): void {
+  const accounts = getAccounts().filter(a => a.providerId !== opts.providerId);
+  accounts.push({
+    providerId: opts.providerId,
+    apiKey: '', // OAuth providers don't use API keys
+    accessToken: opts.accessToken,
+    refreshToken: opts.refreshToken,
+    tokenExpiresAt: opts.tokenExpiresAt,
+    userName: opts.userName,
+  });
+  saveAccounts(accounts);
+}
+
 export function getApiKeyForProvider(providerId: string): string | null {
-  return getAccounts().find(a => a.providerId === providerId)?.apiKey ?? null;
+  const account = getAccounts().find(a => a.providerId === providerId);
+  if (!account) return null;
+  // OAuth providers use accessToken instead of apiKey
+  return account.accessToken || account.apiKey || null;
 }
 
 export function getBaseUrlForProvider(providerId: string): string | null {
@@ -511,12 +421,16 @@ export function resolveModelById(modelId?: string): Model<Api> {
   const baseUrl = getBaseUrlForProvider(providerId);
 
   try {
-    const effectiveProvider = providerId === 'azure-ai-foundry' ? 'anthropic'
+    const providerConfig = getProviderConfig(providerId);
+    const effectiveProvider = providerConfig.isOAuth ? 'anthropic'
+      : providerId === 'azure-ai-foundry' ? 'anthropic'
       : providerId === 'bedrock-camp' ? 'amazon-bedrock'
       : providerId;
     let model = getModelDynamic(effectiveProvider, modelId);
 
-    if (providerId === 'bedrock-camp') {
+    if (providerConfig.isOAuth) {
+      model = { ...model, api: `${providerId}-anthropic` as Api, provider: providerId };
+    } else if (providerId === 'bedrock-camp') {
       model = { ...model, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
     }
     if (baseUrl) {
@@ -538,15 +452,17 @@ export function resolveCurrentModel(): Model<Api> {
   const effectiveModelId = modelId || models[0]?.id || 'claude-sonnet-4-20250514';
 
   try {
-    // Azure AI Foundry uses Anthropic's model registry
-    // Bedrock CAMP uses Amazon Bedrock's model registry with custom API
-    const effectiveProvider = providerId === 'azure-ai-foundry' ? 'anthropic'
+    const providerConfig = getProviderConfig(providerId);
+    const effectiveProvider = providerConfig.isOAuth ? 'anthropic'
+      : providerId === 'azure-ai-foundry' ? 'anthropic'
       : providerId === 'bedrock-camp' ? 'amazon-bedrock'
       : providerId;
     let model = getModelDynamic(effectiveProvider, effectiveModelId);
 
-    // Bedrock CAMP: override api and provider to route through custom stream function
-    if (providerId === 'bedrock-camp') {
+    // Override api and provider for custom routing
+    if (providerConfig.isOAuth) {
+      model = { ...model, api: `${providerId}-anthropic` as Api, provider: providerId };
+    } else if (providerId === 'bedrock-camp') {
       model = { ...model, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
     }
 
@@ -601,10 +517,13 @@ const ICON_PATHS = {
 
 /**
  * Show the Accounts management dialog.
- * Returns a promise that resolves when the user closes the dialog.
+ * Returns a promise that resolves to `true` if accounts were modified,
+ * `false` if the user closed without changes (so callers can skip reload).
  */
-export function showProviderSettings(): Promise<void> {
+export function showProviderSettings(): Promise<boolean> {
   return new Promise((resolve) => {
+    const accountsBefore = localStorage.getItem(ACCOUNTS_KEY) ?? '';
+
     const overlay = document.createElement('div');
     overlay.className = 'dialog-overlay';
 
@@ -666,7 +585,13 @@ export function showProviderSettings(): Promise<void> {
 
           const detail = document.createElement('div');
           detail.style.cssText = 'font-size: 11px; color: var(--s2-content-disabled); font-family: monospace; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
-          detail.textContent = maskApiKey(account.apiKey);
+          if (account.userName) {
+            detail.textContent = account.userName;
+          } else if (account.accessToken) {
+            detail.textContent = 'Logged in';
+          } else {
+            detail.textContent = maskApiKey(account.apiKey);
+          }
           if (account.baseUrl) {
             detail.textContent += ' \u2022 ' + account.baseUrl;
           }
@@ -814,7 +739,7 @@ export function showProviderSettings(): Promise<void> {
       closeBtn.textContent = 'Close';
       closeBtn.addEventListener('click', () => {
         overlay.remove();
-        resolve();
+        resolve((localStorage.getItem(ACCOUNTS_KEY) ?? '') !== accountsBefore);
       });
       dialog.appendChild(closeBtn);
     }
@@ -873,6 +798,46 @@ export function showProviderSettings(): Promise<void> {
       providerDesc.style.cssText = 'font-size: 12px; color: var(--s2-content-tertiary); margin-bottom: 16px; margin-top: -4px;';
       dialog.appendChild(providerDesc);
 
+      // OAuth login section (shown for isOAuth providers)
+      const oauthSection = document.createElement('div');
+      oauthSection.style.cssText = 'margin-bottom: 16px; display: none;';
+
+      const oauthLoginBtn = document.createElement('button');
+      oauthLoginBtn.className = 'dialog__btn';
+      oauthLoginBtn.textContent = 'Login';
+      oauthLoginBtn.style.cssText = 'width: 100%; margin-bottom: 8px;';
+      oauthSection.appendChild(oauthLoginBtn);
+
+      const oauthStatus = document.createElement('div');
+      oauthStatus.className = 'dialog__desc';
+      oauthStatus.style.cssText = 'font-size: 12px; color: var(--s2-content-secondary); text-align: center;';
+      oauthSection.appendChild(oauthStatus);
+
+      // OAuth login handler — calls the provider's onOAuthLogin callback with a generic launcher
+      oauthLoginBtn.addEventListener('click', async () => {
+        const pid = providerSelect.value;
+        if (!pid) return;
+        const providerConfig = getProviderConfig(pid);
+        if (!providerConfig.onOAuthLogin) return;
+        oauthStatus.textContent = 'Opening login window...';
+        try {
+          const { createOAuthLauncher } = await import('../providers/oauth-service.js');
+          const launcher = createOAuthLauncher();
+          await providerConfig.onOAuthLogin(launcher, renderAccountsList);
+        } catch (err) {
+          log.error('OAuth login failed', { providerId: pid, error: err instanceof Error ? err.message : String(err) });
+          oauthStatus.textContent = `Login failed: ${err instanceof Error ? err.message : String(err)}`;
+        }
+      });
+
+      // Show logged-in user if editing an OAuth account
+      if (isEdit && editing.userName) {
+        oauthStatus.textContent = `Logged in as ${editing.userName}`;
+        oauthLoginBtn.textContent = 'Re-login';
+      }
+
+      dialog.appendChild(oauthSection);
+
       // API Key section
       const apiKeySection = document.createElement('div');
 
@@ -918,20 +883,35 @@ export function showProviderSettings(): Promise<void> {
       errorEl.style.cssText = 'color: var(--slicc-cone); font-size: 12px; margin-bottom: 8px; display: none;';
       dialog.appendChild(errorEl);
 
+      // Save button (created before updateFormFields so it can be toggled)
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'dialog__btn';
+      saveBtn.textContent = isEdit ? 'Save' : 'Add';
+
       function updateFormFields() {
         const pid = providerSelect.value;
         if (!pid) return;
-        const config = getProviderConfig(pid);
+        const providerConfig = getProviderConfig(pid);
 
-        providerDesc.textContent = config.description;
+        providerDesc.textContent = providerConfig.description;
 
-        apiKeyLabel.textContent = `API Key${config.apiKeyEnvVar ? ` (${config.apiKeyEnvVar})` : ''}:`;
-        apiKeyInput.placeholder = config.apiKeyPlaceholder || 'API key';
-        apiKeySection.style.display = config.requiresApiKey ? '' : 'none';
-
-        baseUrlInput.placeholder = config.baseUrlPlaceholder || 'https://...';
-        baseUrlDesc.textContent = config.baseUrlDescription || '';
-        baseUrlSection.style.display = config.requiresBaseUrl ? '' : 'none';
+        // OAuth providers show login button instead of API key input
+        if (providerConfig.isOAuth) {
+          oauthSection.style.display = '';
+          apiKeySection.style.display = 'none';
+          baseUrlSection.style.display = 'none';
+          oauthLoginBtn.textContent = `Login with ${providerConfig.name}`;
+          saveBtn.style.display = 'none';
+        } else {
+          oauthSection.style.display = 'none';
+          apiKeyLabel.textContent = `API Key${providerConfig.apiKeyEnvVar ? ` (${providerConfig.apiKeyEnvVar})` : ''}:`;
+          apiKeyInput.placeholder = providerConfig.apiKeyPlaceholder || 'API key';
+          apiKeySection.style.display = providerConfig.requiresApiKey ? '' : 'none';
+          baseUrlInput.placeholder = providerConfig.baseUrlPlaceholder || 'https://...';
+          baseUrlDesc.textContent = providerConfig.baseUrlDescription || '';
+          baseUrlSection.style.display = providerConfig.requiresBaseUrl ? '' : 'none';
+          saveBtn.style.display = '';
+        }
       }
 
       providerSelect.addEventListener('change', () => {
@@ -939,11 +919,6 @@ export function showProviderSettings(): Promise<void> {
         updateFormFields();
       });
       updateFormFields();
-
-      // Save button
-      const saveBtn = document.createElement('button');
-      saveBtn.className = 'dialog__btn';
-      saveBtn.textContent = isEdit ? 'Save' : 'Add';
 
       function validateAndSave() {
         const pid = providerSelect.value;

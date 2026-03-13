@@ -9,7 +9,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
   ['Navigation & paths', ['pwd', 'basename', 'dirname', 'tree', 'du', 'cd']],
   ['Archives', ['zip', 'unzip', 'pdftk', 'pdf']],
   ['Media', ['convert', 'magick']],
-  ['Environment & shell', ['echo', 'printf', 'env', 'printenv', 'export', 'alias', 'unalias', 'history', 'clear', 'true', 'false', 'bash', 'sh', 'commands', 'which', 'uname']],
+  ['Environment & shell', ['echo', 'printf', 'env', 'printenv', 'export', 'alias', 'unalias', 'history', 'clear', 'true', 'false', 'bash', 'sh', 'commands', 'which', 'uname', 'oauth-token']],
   ['Data processing', ['xargs', 'jq', 'base64', 'date']],
   ['Network', ['curl', 'wget', 'html-to-markdown']],
   ['Version control', ['git']],

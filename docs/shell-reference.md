@@ -21,6 +21,7 @@ Custom commands implemented in TypeScript and registered in just-bash.
 | **commands** | `help-command.ts` | List all available commands (built-ins + .jsh) | None |
 | **which** | `which-command.ts` | Resolve a command path | `<command>` — returns `/usr/bin/<name>` or VFS path |
 | **uname** | `uname-command.ts` | Print the current browser user agent | None |
+| **oauth-token** | `oauth-token-command.ts` | Get an OAuth access token for a provider | `<providerId>`, `--provider <id>`, `--list`, no args = selected provider; auto-triggers login if needed |
 | **serve** | `serve-command.ts` | Open a VFS app directory in a browser tab | `[--entry <relative-path>] <directory>` — defaults to `index.html`; rejects absolute/traversal entry paths |
 | **open** | `open-command.ts` | Open URL or VFS file in browser tab | `<url\|path>` — serves VFS files via preview SW; `--download` / `-d` forces download; `--view` / `-v` returns image inline for agent vision |
 | **imgcat** | `imgcat-command.ts` | Display image inline in terminal | `<path>` — base64 + ansi escape codes |
@@ -177,6 +178,22 @@ fs.stat(path): Promise<{ isDirectory, isFile, size }>
 fs.mkdir(path): Promise<void>
 fs.rm(path): Promise<void> // Recursive delete
 fs.fetchToFile(url, path): Promise<number> // Download and save, returns byte count
+```
+
+#### exec (shell command bridge)
+
+Run any shell command through just-bash and get the result. Works in both CLI and extension mode.
+
+```typescript
+exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }>
+
+// Example: get an OAuth token
+const r = await exec('oauth-token adobe');
+const token = r.stdout.trim();
+
+// Example: list files
+const ls = await exec('ls -la /workspace');
+console.log(ls.stdout);
 ```
 
 #### require / module / exports

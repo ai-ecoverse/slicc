@@ -315,6 +315,7 @@ export class WasmShell {
       cwd: this.cwd,
       env: new Map(Object.entries(this.lastEnv)),
       stdin: '',
+      exec: (cmd, opts) => this.bash.exec(cmd, { env: this.lastEnv, cwd: opts?.cwd ?? this.cwd }),
     });
 
     return {

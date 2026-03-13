@@ -135,6 +135,14 @@ export function createNodeCommand(): Command {
       },
     };
 
+    // Shell command bridge — lets node -e scripts run shell commands via exec('ls -la')
+    // Delegates to just-bash's WASM interpreter, NOT Node's child_process.
+    const execBridge = async (command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
+      if (!ctx.exec) throw new Error('exec is not available in this runtime');
+      const result = await ctx.exec(command, { cwd: ctx.cwd });
+      return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
+    };
+
     const requireShim = (id: string): never => {
       throw new Error(`require('${id}') is not supported in node shim`);
     };
@@ -164,6 +172,18 @@ export function createNodeCommand(): Command {
             stderr: { write: (s) => { __stderr.push(String(s)); return true; } },
             cwd: () => ${JSON.stringify(processShim.cwd())},
           };
+          const exec = (command) => new Promise((resolve, reject) => {
+            const id = 'shell_exec_' + Math.random().toString(36).slice(2);
+            const handler = (event) => {
+              if (event.data?.type === 'shell_exec_response' && event.data.id === id) {
+                self.removeEventListener('message', handler);
+                if (event.data.error) reject(new Error(event.data.error));
+                else resolve(event.data.result);
+              }
+            };
+            self.addEventListener('message', handler);
+            parent.postMessage({ type: 'shell_exec', id, command }, '*');
+          });
           const require = (id) => { throw new Error("require('" + id + "') is not supported"); };
           const module = { exports: {} };
           const exports = module.exports;
@@ -248,6 +268,54 @@ export function createNodeCommand(): Command {
         };
         window.addEventListener('message', vfsHandler);
 
+        // Register a shell exec handler so exec() calls from the sandbox
+        // are routed to the host's just-bash interpreter via ctx.exec.
+        const shellExecHandler = (event: MessageEvent) => {
+          const msg = event.data;
+          if (!msg || msg.type !== 'shell_exec') return;
+          (async () => {
+            try {
+              const result = await execBridge(msg.command);
+              sandbox!.contentWindow!.postMessage({ type: 'shell_exec_response', id: msg.id, result }, '*');
+            } catch (err) {
+              const errMsg = err instanceof Error ? err.message : String(err);
+              sandbox!.contentWindow!.postMessage({ type: 'shell_exec_response', id: msg.id, error: errMsg }, '*');
+            }
+          })();
+        };
+        window.addEventListener('message', shellExecHandler);
+
+        // Register a fetch proxy handler so cross-origin fetch() calls from the
+        // sandbox are routed through the host page (which has host_permissions).
+        const fetchProxyHandler = (event: MessageEvent) => {
+          const msg = event.data;
+          if (!msg || msg.type !== 'fetch_proxy') return;
+          (async () => {
+            try {
+              const init: RequestInit = { method: msg.init?.method ?? 'GET', cache: 'no-store' };
+              if (msg.init?.headers) init.headers = msg.init.headers;
+              if (msg.init?.body && !['GET', 'HEAD'].includes(init.method as string)) {
+                init.body = msg.init.body;
+              }
+              const resp = await fetch(msg.url, init);
+              const buf = await resp.arrayBuffer();
+              const headers: Record<string, string> = {};
+              resp.headers.forEach((v, k) => { headers[k] = v; });
+              sandbox!.contentWindow!.postMessage({
+                type: 'fetch_proxy_response', id: msg.id,
+                status: resp.status, statusText: resp.statusText,
+                headers, body: new Uint8Array(buf),
+              }, '*');
+            } catch (err) {
+              const errMsg = err instanceof Error ? err.message : String(err);
+              sandbox!.contentWindow!.postMessage(
+                { type: 'fetch_proxy_response', id: msg.id, error: errMsg }, '*',
+              );
+            }
+          })();
+        };
+        window.addEventListener('message', fetchProxyHandler);
+
         const result = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
           let timeout: ReturnType<typeof setTimeout>;
           const handler = (event: MessageEvent) => {
@@ -274,8 +342,10 @@ export function createNodeCommand(): Command {
           sandbox!.contentWindow!.postMessage({ type: 'exec', id: execId, code: wrappedCode }, '*');
         });
 
-        // Clean up VFS listener after execution completes
+        // Clean up listeners after execution completes
         window.removeEventListener('message', vfsHandler);
+        window.removeEventListener('message', shellExecHandler);
+        window.removeEventListener('message', fetchProxyHandler);
 
         return {
           stdout: result.stdout,
@@ -293,6 +363,7 @@ export function createNodeCommand(): Command {
           module: typeof moduleShim,
           exports: Record<string, unknown>,
           __state: Record<string, unknown>,
+          exec: typeof execBridge,
         ) => Promise<unknown>
       );
       const fn = new AsyncFunction(
@@ -303,9 +374,10 @@ export function createNodeCommand(): Command {
         'module',
         'exports',
         '__state',
+        'exec',
         `"use strict";\nconst globalThis = __state;\nconst global = __state;\n${code}`,
       );
-      await fn(fsBridge, processShim, nodeConsole, requireShim, moduleShim, moduleShim.exports, nodeRuntimeState);
+      await fn(fsBridge, processShim, nodeConsole, requireShim, moduleShim, moduleShim.exports, nodeRuntimeState, execBridge);
       return {
         stdout: stdoutChunks.join(''),
         stderr: stderrChunks.join(''),

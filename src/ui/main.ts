@@ -14,10 +14,10 @@ import { createLogger } from '../core/index.js';
 import type { VirtualFS } from '../fs/index.js';
 import { installSkillFromDrop } from '../skills/install-from-drop.js';
 import { findDroppedSkillTransferFile, hasDroppedFiles } from './skill-drop.js';
-// Register custom API providers (side-effect import triggers registerApiProvider).
-// IMPORTANT: Any new provider added here must also be imported in src/extension/offscreen.ts
+// Auto-discover and register all providers (built-in + external).
+// IMPORTANT: This import must also appear in src/extension/offscreen.ts
 // — the extension agent engine runs in the offscreen document, not in this file.
-import '../providers/bedrock-camp.js';
+import '../providers/index.js';
 import { BrowserAPI } from '../cdp/index.js';
 import { Orchestrator } from '../scoops/index.js';
 import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
@@ -192,6 +192,27 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   const localFs = await VirtualFS.create({ dbName: 'slicc-fs' });
   layout.panels.fileBrowser.setFs(localFs);
   log.info('File browser wired to shared VFS (local IndexedDB)');
+
+  // Listen for preview SW file-read requests (falls back here for mounted dirs).
+  // Uses BroadcastChannel because the SW's `/preview/` scope excludes this page.
+  const previewVfsCh = new BroadcastChannel('preview-vfs');
+  previewVfsCh.onmessage = (event) => {
+    if (event.data?.type !== 'preview-vfs-read') return;
+    const { id, path, asText } = event.data;
+    (async () => {
+      try {
+        const encoding = asText ? 'utf-8' : 'binary';
+        const content = await localFs.readFile(path, { encoding });
+        previewVfsCh.postMessage({ type: 'preview-vfs-response', id, content });
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (!errMsg.includes('ENOENT')) {
+          log.error('Preview VFS read failed', { path, error: errMsg });
+        }
+        previewVfsCh.postMessage({ type: 'preview-vfs-response', id, error: errMsg });
+      }
+    })();
+  };
 
   // Wire skill drop install with toast feedback
   const skillDropToast = createSkillDropToast();
@@ -644,6 +665,27 @@ async function main(): Promise<void> {
   if (sharedFs) {
     layout.panels.fileBrowser.setFs(sharedFs);
     log.info('File browser wired to shared VFS');
+
+    // Listen for preview SW file-read requests (falls back here for mounted dirs).
+    // Uses BroadcastChannel because the SW's `/preview/` scope excludes this page.
+    const previewVfsCh = new BroadcastChannel('preview-vfs');
+    previewVfsCh.onmessage = (event) => {
+      if (event.data?.type !== 'preview-vfs-read') return;
+      const { id, path, asText } = event.data;
+      (async () => {
+        try {
+          const encoding = asText ? 'utf-8' : 'binary';
+          const content = await sharedFs.readFile(path, { encoding });
+          previewVfsCh.postMessage({ type: 'preview-vfs-response', id, content });
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          if (!errMsg.includes('ENOENT')) {
+            log.error('Preview VFS read failed', { path, error: errMsg });
+          }
+          previewVfsCh.postMessage({ type: 'preview-vfs-response', id, error: errMsg });
+        }
+      })();
+    };
 
     registerSkillDropInstall(
       sharedFs,
