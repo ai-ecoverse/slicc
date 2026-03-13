@@ -296,6 +296,16 @@ A Service Worker that intercepts `/preview/*` fetch requests and serves content 
 ### CLI Server (src/cli/index.ts)
 Express server that launches Chrome with remote debugging, serves the UI (Vite middleware in dev, static files in prod), and runs a WebSocket proxy at /cdp. Provides `/api/fetch-proxy` endpoint for cross-origin fetch (replaces CORS proxy), and `/auth/callback` for OAuth redirect handling (reads query params + URL fragment, postMessages back to the opener popup). Single shared Chrome WebSocket connection with client message buffering. Console forwarder pipes in-page console output to CLI stdout. In Electron mode, this same server is reused in `--serve-only` mode instead of launching Chrome.
 
+### Persistent File Logger (src/cli/file-logger.ts)
+Every CLI run writes a log file to `~/.slicc/logs/` (overridable via `--log-dir`). `FileLogger` uses synchronous `node:fs` fd-based writes so log entries survive crashes. ANSI escape sequences are stripped from all output before writing.
+
+- **Dev mode** (`devMode: true`): monkey-patches `console.log/info/warn/error/debug` to tee all output to the log file while preserving original console behavior.
+- **Production mode**: call `fileLogger.log(level, message, data?)` for structured log entries. Console is not patched.
+- **Log levels**: `LogLevel` type (`'debug' | 'info' | 'warn' | 'error'`) exported from `src/cli/runtime-flags.ts`. Controlled via `--log-level=<level>` flag (default: `info`).
+- **Cleanup**: `cleanupOldLogs()` deletes `.log` files older than 7 days on startup. Errors are non-fatal.
+- **Shutdown**: `close()` flushes and closes the fd. Registered on `SIGINT`, `SIGTERM`, and `exit`. Also called explicitly in the CLI server's `gracefulShutdown()`.
+- **CLI integration**: instantiated at the top of `src/cli/index.ts`, before any Express setup. Log file path printed to stdout on startup.
+
 ### Context Compaction (src/core/context-compaction.ts)
 LLM-summarized context compaction aligned with pi-mono's strategy. When context approaches the limit, an LLM call generates a structured summary of older messages, replacing them with a single user message. This preserves the conversation prefix (cache-friendly) and keeps recent messages intact.
 
