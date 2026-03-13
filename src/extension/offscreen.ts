@@ -81,6 +81,12 @@ async function init(): Promise<void> {
     payload: snapshot,
   }).catch(() => { /* no panel yet */ });
 
+  // Set up sprinkle manager proxy so the `sprinkle` shell command works from scoops.
+  // The real SprinkleManager runs in the side panel (needs DOM). This proxy relays
+  // operations via BroadcastChannel.
+  const { createSprinkleManagerProxy } = await import('./sprinkle-proxy.js');
+  (globalThis as unknown as Record<string, unknown>).__slicc_sprinkleManager = createSprinkleManagerProxy();
+
   console.log('[slicc-offscreen] Agent engine ready, scoops:', orchestrator.getScoops().length);
 }
 

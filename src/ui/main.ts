@@ -381,6 +381,11 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     },
   );
   (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
+
+  // Register handler so the offscreen proxy can relay sprinkle operations here
+  const { registerSprinkleOpsHandler } = await import('../extension/sprinkle-proxy.js');
+  registerSprinkleOpsHandler(sprinkleManager);
+
   await sprinkleManager.refresh();
   layout.onSprinkleClose = (name) => sprinkleManager.close(name);
   layout.getAvailableSprinkles = () => {
