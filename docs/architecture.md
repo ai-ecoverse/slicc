@@ -16,7 +16,7 @@
 | UI | `src/ui/` | Chat, Terminal, Files, Memory panels | `main.ts` | `types.test.ts` |
 | CLI / Electron Node Runtime | `src/cli/` | Express server, Chrome launcher, Electron float entrypoint | `index.ts` | `electron-runtime.test.ts` |
 | Extension | `src/extension/` | Chrome Manifest V3 entry point | `service-worker.ts` | N/A |
-| Providers | `src/providers/` | Custom API provider integrations | `bedrock-camp.ts` | N/A |
+| Providers | `src/providers/` | Provider types, OAuth service, auto-discovery, build-time filtering | `types.ts`, `oauth-service.ts`, `index.ts` | `index.test.ts`, `oauth-service.test.ts` |
 
 ## Source File Tree
 
@@ -90,7 +90,10 @@
 
 | File | Purpose |
 |---|---|
-| `bedrock-camp.ts` | AWS Bedrock provider integration (registers with pi-ai) |
+| `types.ts` | `ProviderConfig` interface (id, name, isOAuth, onOAuthLogin, onOAuthLogout), `OAuthLauncher` type |
+| `index.ts` | Provider auto-discovery: pi-ai providers filtered by `providers.build.json`, built-in extensions via glob, external `/providers/*.ts` always included |
+| `oauth-service.ts` | Generic `OAuthLauncher` factory: CLI mode (popup → `/auth/callback` → postMessage) and extension mode (service worker → `chrome.identity.launchWebAuthFlow`) |
+| `built-in/bedrock-camp.ts` | AWS Bedrock CAMP provider — custom stream function via `register()` (only built-in that needs a file; pure-config providers use pi-ai auto-discovery) |
 
 ### src/shell/ — Shell & Terminal
 
@@ -468,4 +471,10 @@ Scoop removal / app clear
 
 | I need to... | Modify |
 |---|---|
-| Add a new API provider (Bedrock, Azure, etc.) | `src/providers/<provider>-camp.ts` + import in `src/ui/main.ts` |
+| Add an API-key provider (built-in, with custom stream) | `src/providers/built-in/<provider>.ts` (exports `config: ProviderConfig` + `register()`; pure-config providers need no file — pi-ai auto-discovers them) |
+| Add an external/custom provider | `providers/<provider>.ts` (root, gitignored, auto-discovered) |
+| Add an OAuth provider | Same as above, but set `isOAuth: true` + `onOAuthLogin`/`onOAuthLogout` on the config |
+| Change the OAuth transport (popup, chrome.identity) | `src/providers/oauth-service.ts` |
+| Change provider types (ProviderConfig, OAuthLauncher) | `src/providers/types.ts` |
+| Change OAuth callback page (CLI mode) | `src/cli/index.ts` (`/auth/callback` route) |
+| Change provider settings UI | `src/ui/provider-settings.ts` |

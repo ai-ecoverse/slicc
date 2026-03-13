@@ -15,6 +15,8 @@ import type {
   CdpCommandMsg,
   CdpResponseMsg,
   CdpEventMsg,
+  OAuthRequestMsg,
+  OAuthResultMsg,
 } from './messages.js';
 
 // ---------------------------------------------------------------------------
@@ -76,9 +78,37 @@ chrome.runtime.onMessage.addListener(
     const msg = message as ExtensionMessage;
 
     if (msg.source === 'panel') {
-      // Panel messages reach the offscreen doc directly via
+      const panelPayload = msg.payload;
+
+      // Handle OAuth requests — service worker has chrome.identity access
+      if (panelPayload.type === 'oauth-request') {
+        const oauthMsg = panelPayload as OAuthRequestMsg;
+        handleOAuthRequest(oauthMsg)
+          .then((result) => {
+            chrome.runtime.sendMessage({
+              source: 'service-worker' as const,
+              payload: result,
+            }).catch((e) => {
+              console.error('[slicc-sw] Failed to send OAuth result:', e);
+            });
+          })
+          .catch((err) => {
+            chrome.runtime.sendMessage({
+              source: 'service-worker' as const,
+              payload: {
+                type: 'oauth-result',
+                providerId: oauthMsg.providerId,
+                error: err instanceof Error ? err.message : String(err),
+              } satisfies OAuthResultMsg,
+            }).catch((e) => {
+              console.error('[slicc-sw] Failed to send OAuth error:', e);
+            });
+          });
+        return false;
+      }
+
+      // Other panel messages reach the offscreen doc directly via
       // chrome.runtime.sendMessage broadcast — no relay needed.
-      // Only the service worker needs to handle CDP proxy commands.
       return false;
     }
 
@@ -281,6 +311,45 @@ chrome.debugger.onEvent.addListener(
     });
   },
 );
+
+// ---------------------------------------------------------------------------
+// OAuth handler — generic chrome.identity.launchWebAuthFlow for any OAuth provider
+// ---------------------------------------------------------------------------
+
+async function handleOAuthRequest(msg: OAuthRequestMsg): Promise<OAuthResultMsg> {
+  const redirectUrl = await chrome.identity.launchWebAuthFlow({
+    url: msg.authorizeUrl,
+    interactive: true,
+  });
+
+  if (!redirectUrl) {
+    return {
+      type: 'oauth-result',
+      providerId: msg.providerId,
+      error: 'OAuth flow was cancelled or returned no URL',
+    };
+  }
+
+  const parsed = new URL(redirectUrl);
+  const params = parsed.searchParams;
+  const hashParams = new URLSearchParams(parsed.hash.slice(1));
+  const error = params.get('error') || hashParams.get('error');
+  if (error) {
+    return {
+      type: 'oauth-result',
+      providerId: msg.providerId,
+      error: params.get('error_description') || hashParams.get('error_description') || error,
+    };
+  }
+
+  return {
+    type: 'oauth-result',
+    providerId: msg.providerId,
+    code: params.get('code') ?? undefined,
+    state: params.get('state') ?? undefined,
+    redirectUrl,
+  };
+}
 
 chrome.debugger.onDetach.addListener(
   (source: { tabId: number }, _reason: string) => {

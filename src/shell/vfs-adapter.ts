@@ -203,8 +203,34 @@ export class VfsAdapter implements IFileSystem {
     await this.vfs.rm(normalizePath(path), options);
   }
 
-  async cp(src: string, dest: string, _options?: CpOptions): Promise<void> {
-    await this.vfs.copyFile(normalizePath(src), normalizePath(dest));
+  async cp(src: string, dest: string, options?: CpOptions): Promise<void> {
+    const normalizedSrc = normalizePath(src);
+    const normalizedDest = normalizePath(dest);
+    const stat = await this.vfs.stat(normalizedSrc);
+
+    if (stat.type === 'directory') {
+      if (!options?.recursive) {
+        throw new FsError('EISDIR', 'is a directory', normalizedSrc);
+      }
+      await this.cpDir(normalizedSrc, normalizedDest);
+    } else {
+      await this.vfs.copyFile(normalizedSrc, normalizedDest);
+    }
+  }
+
+  /** Recursively copy a directory tree. */
+  private async cpDir(src: string, dest: string): Promise<void> {
+    await this.vfs.mkdir(dest, { recursive: true });
+    const entries = await this.vfs.readDir(src);
+    for (const entry of entries) {
+      const srcChild = joinPath(src, entry.name);
+      const destChild = joinPath(dest, entry.name);
+      if (entry.type === 'directory') {
+        await this.cpDir(srcChild, destChild);
+      } else {
+        await this.vfs.copyFile(srcChild, destChild);
+      }
+    }
   }
 
   async mv(src: string, dest: string): Promise<void> {
