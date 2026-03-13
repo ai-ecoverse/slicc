@@ -3,11 +3,10 @@
  *
  * The real SprinkleManager runs in the side panel (it needs DOM access).
  * This proxy exposes the same interface but relays operations via
- * chrome.runtime messaging so the `sprinkle` shell command works from
- * scoops (whose bash runs in the offscreen document).
+ * chrome.runtime messaging (broadcast pattern with ID matching, same
+ * as the CDP proxy pattern used throughout the extension).
  *
- * Uses chrome.runtime.sendMessage (offscreen → SW broadcast → panel)
- * with sendResponse for request/response pattern.
+ * Flow: offscreen → broadcast request → panel handles → broadcast response → offscreen
  */
 
 import type { SprinkleManager } from '../ui/sprinkle-manager.js';
@@ -21,33 +20,36 @@ interface Sprinkle {
 const TIMEOUT = 8000;
 
 /**
- * Creates a proxy that implements the SprinkleManager interface
- * by relaying operations to the side panel via chrome.runtime messaging.
+ * Creates a proxy that implements the SprinkleManager interface.
+ * Runs in the offscreen document.
  */
 export function createSprinkleManagerProxy(): SprinkleManager {
 
   function request(op: string, args: Record<string, unknown> = {}): Promise<unknown> {
+    const id = `sp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
+        (chrome as any).runtime.onMessage.removeListener(handler);
         reject(new Error('sprinkle operation timed out'));
       }, TIMEOUT);
 
-      (chrome as any).runtime.sendMessage(
-        { source: 'offscreen', payload: { type: 'sprinkle-op', op, ...args } },
-        (response: { result?: unknown; error?: string } | undefined) => {
-          clearTimeout(timer);
-          if (chrome.runtime.lastError) {
-            reject(new Error(chrome.runtime.lastError.message));
-            return;
-          }
-          if (!response) {
-            reject(new Error('no response from side panel'));
-            return;
-          }
-          if (response.error) reject(new Error(response.error));
-          else resolve(response.result);
-        },
-      );
+      function handler(message: any): void {
+        if (message?.source !== 'panel') return;
+        if (message?.payload?.type !== 'sprinkle-op-response') return;
+        if (message?.payload?.id !== id) return;
+        (chrome as any).runtime.onMessage.removeListener(handler);
+        clearTimeout(timer);
+        if (message.payload.error) reject(new Error(message.payload.error));
+        else resolve(message.payload.result);
+      }
+
+      (chrome as any).runtime.onMessage.addListener(handler);
+
+      // Broadcast the request — panel will pick it up
+      (chrome as any).runtime.sendMessage({
+        source: 'offscreen',
+        payload: { type: 'sprinkle-op', id, op, ...args },
+      }).catch(() => {});
     });
   }
 
@@ -82,15 +84,17 @@ export function createSprinkleManagerProxy(): SprinkleManager {
  * Registers the handler on the side panel that executes sprinkle
  * operations on the real SprinkleManager. Call this in mainExtension().
  *
- * Listens for chrome.runtime messages with type 'sprinkle-op' and
- * uses sendResponse to return results.
+ * Listens for sprinkle-op messages and broadcasts the response back.
  */
 export function registerSprinkleOpsHandler(mgr: SprinkleManager): void {
   (chrome as any).runtime.onMessage.addListener(
-    (message: any, _sender: any, sendResponse: (response: any) => void) => {
-      // Accept from any source (offscreen sends with source: 'offscreen')
+    (message: any) => {
+      // Accept sprinkle-op from offscreen
+      if (message?.source !== 'offscreen') return;
       const payload = message?.payload;
-      if (payload?.type !== 'sprinkle-op') return false;
+      if (payload?.type !== 'sprinkle-op') return;
+
+      const id = payload.id;
 
       (async () => {
         try {
@@ -120,13 +124,17 @@ export function registerSprinkleOpsHandler(mgr: SprinkleManager): void {
               result = true;
               break;
           }
-          sendResponse({ result });
+          (chrome as any).runtime.sendMessage({
+            source: 'panel',
+            payload: { type: 'sprinkle-op-response', id, result },
+          }).catch(() => {});
         } catch (err) {
-          sendResponse({ error: err instanceof Error ? err.message : String(err) });
+          (chrome as any).runtime.sendMessage({
+            source: 'panel',
+            payload: { type: 'sprinkle-op-response', id, error: err instanceof Error ? err.message : String(err) },
+          }).catch(() => {});
         }
       })();
-
-      return true; // Keep sendResponse channel open for async response
     },
   );
 }
