@@ -1105,9 +1105,13 @@ export class Layout {
 
       const btn = document.createElement('button');
       btn.className = 'mini-tabs__tab';
-      btn.innerHTML = `${title}<span class="mini-tabs__tab-close" title="Close panel">\u00D7</span>`;
+      btn.appendChild(document.createTextNode(title));
+      const closeSpan = document.createElement('span');
+      closeSpan.className = 'mini-tabs__tab-close';
+      closeSpan.title = 'Close panel';
+      closeSpan.textContent = '\u00D7';
+      btn.appendChild(closeSpan);
       btn.addEventListener('click', () => this.switchPrimaryTab(tabId));
-      const closeSpan = btn.querySelector('.mini-tabs__tab-close')!;
       closeSpan.addEventListener('click', (e) => {
         e.stopPropagation();
         this.onPanelClose?.(name);
