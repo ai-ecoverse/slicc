@@ -209,6 +209,7 @@ export class BrowserAPI {
     quality?: number;
     fullPage?: boolean;
     clip?: { x: number; y: number; width: number; height: number; scale?: number };
+    maxWidth?: number;
   }): Promise<string> {
     await this.ensureConnected();
     this.ensureAttached();
@@ -221,11 +222,7 @@ export class BrowserAPI {
       if (options?.quality !== undefined) params['quality'] = options.quality;
 
       if (options?.clip || options?.fullPage) {
-        // Get DPR and CSS dimensions via Runtime.evaluate — reliable in all
-        // contexts (CLI, extension, with or without Emulation overrides).
-        // Output formula: image_px = clip_css_px × scale × DPR
-        // For 1x output: scale = 1/DPR
-        let dpr = 1;
+        // Get CSS dimensions for full-page clip
         let cssWidth = 0;
         let cssScrollHeight = 0;
         try {
@@ -233,22 +230,20 @@ export class BrowserAPI {
           const evalResult = await this.client.send(
             'Runtime.evaluate',
             {
-              expression: 'JSON.stringify({ dpr: window.devicePixelRatio, w: window.innerWidth, h: document.documentElement.scrollHeight })',
+              expression: 'JSON.stringify({ w: window.innerWidth, h: document.documentElement.scrollHeight })',
               returnByValue: true,
             },
             this.sessionId!,
           );
           const val = JSON.parse((evalResult['result'] as { value?: string })?.value ?? '{}');
-          dpr = val.dpr ?? 1;
           cssWidth = val.w ?? 0;
           cssScrollHeight = val.h ?? 0;
         } catch {
-          // Best-effort — fall back to no DPR normalization
+          // Best-effort
         }
-        const scale = dpr > 1 ? 1 / dpr : 1;
 
         if (options?.clip) {
-          params['clip'] = { ...options.clip, scale: options.clip.scale ?? scale };
+          params['clip'] = { ...options.clip, scale: options.clip.scale ?? 1 };
         } else {
           // Full-page: CSS viewport width + CSS scroll height
           params['clip'] = {
@@ -256,7 +251,7 @@ export class BrowserAPI {
             y: 0,
             width: cssWidth || 1280,
             height: cssScrollHeight || 800,
-            scale,
+            scale: 1,
           };
         }
       }
@@ -267,7 +262,39 @@ export class BrowserAPI {
         params,
         this.sessionId!,
       );
-      return result['data'] as string;
+      let base64 = result['data'] as string;
+
+      // Post-capture resize: downscale if image exceeds maxWidth.
+      // Uses OffscreenCanvas (available in Chrome workers and pages).
+      if (options?.maxWidth && typeof OffscreenCanvas !== 'undefined') {
+        try {
+          const binary = atob(base64);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          const blob = new Blob([bytes], { type: 'image/png' });
+          const bitmap = await createImageBitmap(blob);
+
+          if (bitmap.width > options.maxWidth) {
+            const ratio = options.maxWidth / bitmap.width;
+            const targetW = Math.round(bitmap.width * ratio);
+            const targetH = Math.round(bitmap.height * ratio);
+            const canvas = new OffscreenCanvas(targetW, targetH);
+            const ctx = canvas.getContext('2d')!;
+            ctx.drawImage(bitmap, 0, 0, targetW, targetH);
+            const outBlob = await canvas.convertToBlob({ type: 'image/png' });
+            const buffer = await outBlob.arrayBuffer();
+            const outBytes = new Uint8Array(buffer);
+            let outBinary = '';
+            for (let i = 0; i < outBytes.length; i++) outBinary += String.fromCharCode(outBytes[i]);
+            base64 = btoa(outBinary);
+          }
+          bitmap.close();
+        } catch {
+          // Best-effort — return original if resize fails
+        }
+      }
+
+      return base64;
     } finally {
     }
   }

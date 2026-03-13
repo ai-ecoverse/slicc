@@ -424,7 +424,9 @@ Commands:
   type <text>            Type text into focused element
   fill <ref> <text>      Fill an input by ref with text
   snapshot               Print accessibility tree with refs
-  screenshot [--filename=path]  Take screenshot
+  screenshot [--filename=path] [--max-width=N] [--fullPage=true]
+                         Take screenshot. --max-width downscales the image
+                         if wider than N pixels (e.g. --max-width=1024).
   eval <expression>      Evaluate JavaScript in tab
   dblclick <ref> [btn]   Double-click element by ref
   hover <ref>            Hover over element by ref
@@ -626,9 +628,11 @@ export function createPlaywrightCommand(
           }
 
           await browser.attachToPage(targetId);
+          const maxWidth = flags['max-width'] ? parseInt(flags['max-width'], 10) : undefined;
           const base64 = await browser.screenshot({
             fullPage: flags['fullPage'] === 'true',
             ...(clip ? { clip } : {}),
+            ...(maxWidth ? { maxWidth } : {}),
           });
           const savePath = flags['filename'] || `/tmp/screenshot-${Date.now()}.png`;
           const bytes = base64ToBytes(base64);
