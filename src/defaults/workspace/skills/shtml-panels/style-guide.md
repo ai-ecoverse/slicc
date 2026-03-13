@@ -1,16 +1,4 @@
-# Style Guide
-
-Write like a professional tool, not a chatbot. These rules apply to all output — chat messages, panels, and reports.
-
-## Chat Output
-
-- **No emoji in headings or labels.** Write "Issues" not "❌ Issues Found". Use markdown formatting (bold, code) for emphasis.
-- **Lead with a summary sentence.** Don't jump into bullet lists. One sentence of context first.
-- **Prefer prose over long lists.** 3–5 bullet items are fine; 10+ is a wall of text. Group, summarize, or use a panel for large datasets.
-- **Use markdown tables for structured data.** Findings, comparisons, and multi-column data belong in tables — not bullet lists.
-- **Keep it concise.** State the finding, the impact, and the fix. Don't pad with filler or repeat the same point in different words.
-
-## SHTML Panel Components
+# SHTML Panel Component Reference
 
 Use these CSS classes in `.shtml` panels. Do NOT write custom CSS — these components cover all common UI patterns.
 

@@ -13,7 +13,7 @@ allowed-tools: bash
 **IMPORTANT**: Panels are NOT iframes. They are plain divs injected into the sidebar. Do NOT use `<!DOCTYPE html>`, `<html>`, `<head>`, `<body>`, or custom CSS — use the built-in `.shtml-*` classes. Scripts get a `slicc` bridge object automatically — do NOT use `window.parent.postMessage` or `window.addEventListener('message')`.
 
 **Workflow**:
-1. `read_file /workspace/skills/style-guide/style-guide.md` — **always read first** before writing any panel
+1. `read_file /workspace/skills/shtml-panels/style-guide.md` — **always read first** before writing any panel
 2. `write_file` to `/workspace/skills/<name>/<name>.shtml` (follow the style guide templates)
 3. `bash` → `panel open <name>`
 4. `bash` → `panel send <name> '{"v1":"42","v2":"99%"}'` to push data
@@ -31,4 +31,4 @@ allowed-tools: bash
 - `slicc.name` — the panel's name
 - `slicc.close()` — close the panel
 
-**CSS components** — Do NOT write custom CSS. Use the built-in `.shtml-*` classes: cards, tables, badges, buttons, text fields, progress bars, meters, layout utilities, and more. For inputs use `class="shtml-text-field"`, never inline border/padding styles. Run `read_file /workspace/skills/style-guide/style-guide.md` for the full component reference with markup examples.
+**CSS components** — Do NOT write custom CSS. Use the built-in `.shtml-*` classes: cards, tables, badges, buttons, text fields, progress bars, meters, layout utilities, and more. For inputs use `class="shtml-text-field"`, never inline border/padding styles. Run `read_file /workspace/skills/shtml-panels/style-guide.md` for the full component reference with markup examples.
