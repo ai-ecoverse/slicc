@@ -3,8 +3,11 @@
  *
  * The real SprinkleManager runs in the side panel (it needs DOM access).
  * This proxy exposes the same interface but relays operations via
- * BroadcastChannel so the `sprinkle` shell command works from scoops
- * (whose bash runs in the offscreen document).
+ * chrome.runtime messaging so the `sprinkle` shell command works from
+ * scoops (whose bash runs in the offscreen document).
+ *
+ * Uses chrome.runtime.sendMessage (offscreen → SW broadcast → panel)
+ * with sendResponse for request/response pattern.
  */
 
 import type { SprinkleManager } from '../ui/sprinkle-manager.js';
@@ -15,49 +18,36 @@ interface Sprinkle {
   path: string;
 }
 
-type SprinkleRequest =
-  | { type: 'sprinkle-op'; id: string; op: 'list' }
-  | { type: 'sprinkle-op'; id: string; op: 'opened' }
-  | { type: 'sprinkle-op'; id: string; op: 'refresh' }
-  | { type: 'sprinkle-op'; id: string; op: 'open'; name: string }
-  | { type: 'sprinkle-op'; id: string; op: 'close'; name: string }
-  | { type: 'sprinkle-op'; id: string; op: 'send'; name: string; data: unknown };
-
-interface SprinkleResponse {
-  type: 'sprinkle-op-response';
-  id: string;
-  result?: unknown;
-  error?: string;
-}
-
-const TIMEOUT = 5000;
+const TIMEOUT = 8000;
 
 /**
  * Creates a proxy that implements the SprinkleManager interface
- * by relaying operations to the side panel via BroadcastChannel.
+ * by relaying operations to the side panel via chrome.runtime messaging.
  */
 export function createSprinkleManagerProxy(): SprinkleManager {
-  const bc = new BroadcastChannel('sprinkle-ops');
 
-  function request(req: Record<string, unknown>): Promise<unknown> {
-    const id = `sp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  function request(op: string, args: Record<string, unknown> = {}): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        bc.removeEventListener('message', handler);
         reject(new Error('sprinkle operation timed out'));
       }, TIMEOUT);
 
-      function handler(event: MessageEvent): void {
-        const msg = event.data as SprinkleResponse;
-        if (msg?.type !== 'sprinkle-op-response' || msg.id !== id) return;
-        bc.removeEventListener('message', handler);
-        clearTimeout(timer);
-        if (msg.error) reject(new Error(msg.error));
-        else resolve(msg.result);
-      }
-
-      bc.addEventListener('message', handler);
-      bc.postMessage({ ...req, id, type: 'sprinkle-op' });
+      (chrome as any).runtime.sendMessage(
+        { source: 'offscreen', payload: { type: 'sprinkle-op', op, ...args } },
+        (response: { result?: unknown; error?: string } | undefined) => {
+          clearTimeout(timer);
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          if (!response) {
+            reject(new Error('no response from side panel'));
+            return;
+          }
+          if (response.error) reject(new Error(response.error));
+          else resolve(response.result);
+        },
+      );
     });
   }
 
@@ -65,18 +55,16 @@ export function createSprinkleManagerProxy(): SprinkleManager {
   let cachedAvailable: Sprinkle[] = [];
   let cachedOpened: string[] = [];
 
-  // Return an object that quacks like SprinkleManager
   return {
     async refresh(): Promise<void> {
-      // Fetch both lists from the real manager
-      cachedAvailable = (await request({ op: 'list' }) as Sprinkle[]) ?? [];
-      cachedOpened = (await request({ op: 'opened' }) as string[]) ?? [];
+      cachedAvailable = (await request('list') as Sprinkle[]) ?? [];
+      cachedOpened = (await request('opened') as string[]) ?? [];
     },
     async open(name: string, _zone?: string): Promise<void> {
-      await request({ op: 'open', name });
+      await request('open', { name });
     },
     close(name: string): void {
-      request({ op: 'close', name }).catch(() => {});
+      request('close', { name }).catch(() => {});
     },
     available(): Sprinkle[] {
       return cachedAvailable;
@@ -85,7 +73,7 @@ export function createSprinkleManagerProxy(): SprinkleManager {
       return cachedOpened;
     },
     sendToSprinkle(name: string, data: unknown): void {
-      request({ op: 'send', name, data }).catch(() => {});
+      request('send', { name, data }).catch(() => {});
     },
   } as unknown as SprinkleManager;
 }
@@ -93,45 +81,52 @@ export function createSprinkleManagerProxy(): SprinkleManager {
 /**
  * Registers the handler on the side panel that executes sprinkle
  * operations on the real SprinkleManager. Call this in mainExtension().
+ *
+ * Listens for chrome.runtime messages with type 'sprinkle-op' and
+ * uses sendResponse to return results.
  */
 export function registerSprinkleOpsHandler(mgr: SprinkleManager): void {
-  const bc = new BroadcastChannel('sprinkle-ops');
-  bc.onmessage = (event) => {
-    const msg = event.data as SprinkleRequest;
-    if (msg?.type !== 'sprinkle-op') return;
-    (async () => {
-      try {
-        let result: unknown;
-        switch (msg.op) {
-          case 'list':
-            await mgr.refresh();
-            result = mgr.available();
-            break;
-          case 'opened':
-            result = mgr.opened();
-            break;
-          case 'refresh':
-            await mgr.refresh();
-            result = mgr.available().length;
-            break;
-          case 'open':
-            await mgr.open(msg.name);
-            result = true;
-            break;
-          case 'close':
-            mgr.close(msg.name);
-            result = true;
-            break;
-          case 'send':
-            mgr.sendToSprinkle(msg.name, msg.data);
-            result = true;
-            break;
+  (chrome as any).runtime.onMessage.addListener(
+    (message: any, _sender: any, sendResponse: (response: any) => void) => {
+      // Accept from any source (offscreen sends with source: 'offscreen')
+      const payload = message?.payload;
+      if (payload?.type !== 'sprinkle-op') return false;
+
+      (async () => {
+        try {
+          let result: unknown;
+          switch (payload.op) {
+            case 'list':
+              await mgr.refresh();
+              result = mgr.available();
+              break;
+            case 'opened':
+              result = mgr.opened();
+              break;
+            case 'refresh':
+              await mgr.refresh();
+              result = mgr.available().length;
+              break;
+            case 'open':
+              await mgr.open(payload.name);
+              result = true;
+              break;
+            case 'close':
+              mgr.close(payload.name);
+              result = true;
+              break;
+            case 'send':
+              mgr.sendToSprinkle(payload.name, payload.data);
+              result = true;
+              break;
+          }
+          sendResponse({ result });
+        } catch (err) {
+          sendResponse({ error: err instanceof Error ? err.message : String(err) });
         }
-        bc.postMessage({ type: 'sprinkle-op-response', id: msg.id, result });
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        bc.postMessage({ type: 'sprinkle-op-response', id: msg.id, error: errMsg });
-      }
-    })();
-  };
+      })();
+
+      return true; // Keep sendResponse channel open for async response
+    },
+  );
 }
