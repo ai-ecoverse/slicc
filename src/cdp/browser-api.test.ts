@@ -296,6 +296,7 @@ describe('BrowserAPI', () => {
           layoutViewport: { clientWidth: 1920, clientHeight: 1080 },
         }) // Page.getLayoutMetrics
         .mockResolvedValueOnce({}) // Emulation.setDeviceMetricsOverride
+        .mockResolvedValueOnce({ result: {} }) // Runtime.evaluate (repaint wait)
         .mockResolvedValueOnce({ data: 'normalized' }) // Page.captureScreenshot
         .mockResolvedValueOnce({}); // Emulation.clearDeviceMetricsOverride
 
@@ -344,6 +345,7 @@ describe('BrowserAPI', () => {
           layoutViewport: { clientWidth: 1920, clientHeight: 1080 },
         }) // Page.getLayoutMetrics
         .mockResolvedValueOnce({}) // Emulation.setDeviceMetricsOverride
+        .mockResolvedValueOnce({ result: {} }) // Runtime.evaluate (repaint wait)
         .mockResolvedValueOnce({ data: 'ok' }) // Page.captureScreenshot
         .mockRejectedValueOnce(new Error('cleanup failed')); // Emulation.clearDeviceMetricsOverride
 

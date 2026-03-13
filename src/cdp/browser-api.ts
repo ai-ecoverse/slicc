@@ -245,6 +245,18 @@ export class BrowserAPI {
           },
           this.sessionId!,
         );
+        // Wait for the DPR change to take effect — the override triggers an
+        // async reflow. Without this, getLayoutMetrics and captureScreenshot
+        // may use stale DPR 2 dimensions, producing oversized images with
+        // content squished to one corner.
+        await this.client.send(
+          'Runtime.evaluate',
+          {
+            expression: 'new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))',
+            awaitPromise: true,
+          },
+          this.sessionId!,
+        );
         didOverrideMetrics = true;
       }
     } catch {
