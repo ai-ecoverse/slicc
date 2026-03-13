@@ -1,17 +1,17 @@
 ---
-name: shtml-panels
-description: Create interactive SHTML sprinkles — dashboards, forms, and visualizations
+name: sprinkles
+description: Create interactive sprinkles — dashboards, forms, and visualizations
 allowed-tools: bash
 ---
 
-# Sprinkles (SHTML Panels)
+# Sprinkles
 
 `.shtml` files in `/shared/sprinkles/` become interactive UI panels. Use them to create dashboards, forms, and visualizations alongside the chat.
 
-**IMPORTANT**: Sprinkles are NOT iframes. They are plain divs injected into the sidebar. Do NOT use `<!DOCTYPE html>`, `<html>`, `<head>`, `<body>`, or custom CSS — use the built-in `.shtml-*` classes. Scripts get a `slicc` bridge object automatically — do NOT use `window.parent.postMessage` or `window.addEventListener('message')`.
+**IMPORTANT**: Sprinkles are NOT iframes. They are plain divs injected into the sidebar. Do NOT use `<!DOCTYPE html>`, `<html>`, `<head>`, `<body>`, or custom CSS — use the built-in `.sprinkle-*` classes. Scripts get a `slicc` bridge object automatically — do NOT use `window.parent.postMessage` or `window.addEventListener('message')`.
 
 **Creating a sprinkle**:
-1. `read_file /workspace/skills/shtml-panels/style-guide.md` — **always read first** before writing any sprinkle
+1. `read_file /workspace/skills/sprinkles/style-guide.md` — **always read first** before writing any sprinkle
 2. `write_file` to `/shared/sprinkles/<name>/<name>.shtml` (follow the style guide templates)
 3. `bash` → `sprinkle open <name>`
 4. **Stay alive** — do NOT end your turn. You own this sprinkle and will receive follow-up instructions (modifications, lick events) via `feed_scoop`.
@@ -42,4 +42,4 @@ The cone will send you a message describing the lick action (e.g. "Lick received
 
 **onclick attributes**: Always use `slicc` — e.g. `onclick="slicc.lick({action: 'add-year'})"`. The `slicc` variable is automatically resolved per-sprinkle, so multiple sprinkles won't collide. Do NOT use `bridge` or any other variable name in onclick.
 
-**CSS components** — Do NOT write custom CSS. Use the built-in `.shtml-*` classes: cards, tables, badges, buttons, text fields, progress bars, meters, layout utilities, and more. For inputs use `class="shtml-text-field"`, never inline border/padding styles. Run `read_file /workspace/skills/shtml-panels/style-guide.md` for the full component reference with markup examples.
+**CSS components** — Do NOT write custom CSS. Use the built-in `.sprinkle-*` classes: cards, tables, badges, buttons, text fields, progress bars, meters, layout utilities, and more. For inputs use `class="sprinkle-text-field"`, never inline border/padding styles. Run `read_file /workspace/skills/sprinkles/style-guide.md` for the full component reference with markup examples.

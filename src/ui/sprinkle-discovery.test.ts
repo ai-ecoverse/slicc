@@ -56,14 +56,14 @@ describe('discoverSprinkles', () => {
     expect(result.get('test')!.title).toBe('My Dashboard');
   });
 
-  it('extracts title from data-shtml-title attribute', async () => {
-    await vfs.writeFile('/shared/sprinkles/test/test.shtml', '<div data-shtml-title="Custom Title">hello</div>');
+  it('extracts title from data-sprinkle-title attribute', async () => {
+    await vfs.writeFile('/shared/sprinkles/test/test.shtml', '<div data-sprinkle-title="Custom Title">hello</div>');
     const result = await discoverSprinkles(vfs);
     expect(result.get('test')!.title).toBe('Custom Title');
   });
 
-  it('data-shtml-title takes priority over <title>', async () => {
-    await vfs.writeFile('/shared/sprinkles/test/test.shtml', '<title>Title Tag</title><div data-shtml-title="Attr Title">hello</div>');
+  it('data-sprinkle-title takes priority over <title>', async () => {
+    await vfs.writeFile('/shared/sprinkles/test/test.shtml', '<title>Title Tag</title><div data-sprinkle-title="Attr Title">hello</div>');
     const result = await discoverSprinkles(vfs);
     expect(result.get('test')!.title).toBe('Attr Title');
   });
@@ -91,16 +91,16 @@ describe('discoverSprinkles', () => {
 });
 
 describe('extractTitle', () => {
-  it('extracts from data-shtml-title', () => {
-    expect(extractTitle('<div data-shtml-title="Hello">content</div>', 'fallback')).toBe('Hello');
+  it('extracts from data-sprinkle-title', () => {
+    expect(extractTitle('<div data-sprinkle-title="Hello">content</div>', 'fallback')).toBe('Hello');
   });
 
   it('extracts from <title> tag', () => {
     expect(extractTitle('<title>My Sprinkle</title>', 'fallback')).toBe('My Sprinkle');
   });
 
-  it('prefers data-shtml-title over <title>', () => {
-    expect(extractTitle('<title>Tag</title><div data-shtml-title="Attr">x</div>', 'fallback')).toBe('Attr');
+  it('prefers data-sprinkle-title over <title>', () => {
+    expect(extractTitle('<title>Tag</title><div data-sprinkle-title="Attr">x</div>', 'fallback')).toBe('Attr');
   });
 
   it('returns fallback when no title found', () => {

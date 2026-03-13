@@ -15,7 +15,7 @@ export interface Sprinkle {
   name: string;
   /** VFS path */
   path: string;
-  /** Display title (from <title> tag, data-shtml-title, or name) */
+  /** Display title (from <title> tag, data-sprinkle-title, or name) */
   title: string;
 }
 
@@ -73,10 +73,10 @@ function sprinkleName(filePath: string): string {
   return base.endsWith('.shtml') ? base.slice(0, -6) : base;
 }
 
-/** Extract title from HTML content: <title>, data-shtml-title, or fallback to name. */
+/** Extract title from HTML content: <title>, data-sprinkle-title, or fallback to name. */
 export function extractTitle(content: string, fallback: string): string {
-  // Check data-shtml-title attribute
-  const attrMatch = content.match(/data-shtml-title=["']([^"']+)["']/);
+  // Check data-sprinkle-title attribute
+  const attrMatch = content.match(/data-sprinkle-title=["']([^"']+)["']/);
   if (attrMatch) return attrMatch[1];
 
   // Check <title> tag
