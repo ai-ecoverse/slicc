@@ -169,6 +169,11 @@ export class OffscreenClient {
     // Not supported through offscreen proxy
   }
 
+  /** Route a sprinkle lick event to the offscreen orchestrator's cone. */
+  sendSprinkleLick(sprinkleName: string, body: unknown): void {
+    this.send({ type: 'sprinkle-lick', sprinkleName, body });
+  }
+
   updateModel(): void {
     // Side panel already wrote to localStorage. Tell offscreen to re-read.
     this.send({ type: 'refresh-model' });

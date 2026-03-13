@@ -72,6 +72,13 @@ export interface PanelCdpCommandMsg {
   sessionId?: string;
 }
 
+/** Route a sprinkle lick event to the offscreen orchestrator. */
+export interface SprinkleLickMsg {
+  type: 'sprinkle-lick';
+  sprinkleName: string;
+  body: unknown;
+}
+
 /** Request OAuth flow via service worker (extension mode). */
 export interface OAuthRequestMsg {
   type: 'oauth-request';
@@ -91,7 +98,8 @@ export type PanelToOffscreenMessage =
   | ClearFilesystemMsg
   | RefreshModelMsg
   | PanelCdpCommandMsg
-  | OAuthRequestMsg;
+  | OAuthRequestMsg
+  | SprinkleLickMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen → Side Panel (via service worker relay)

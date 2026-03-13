@@ -459,6 +459,29 @@ export class OffscreenBridge {
         break;
       }
 
+      case 'sprinkle-lick': {
+        // Route sprinkle lick events to the cone (same as routeLickToScoop in CLI mode)
+        const scoops = this.orchestrator?.getScoops() ?? [];
+        const cone = scoops.find(s => s.isCone);
+        if (cone) {
+          const eventName = msg.sprinkleName;
+          const msgId = `sprinkle-${eventName}-${Date.now()}`;
+          const content = `[Sprinkle Event: ${eventName}]\n\`\`\`json\n${JSON.stringify(msg.body, null, 2)}\n\`\`\``;
+          const channelMsg: ChannelMessage = {
+            id: msgId,
+            chatJid: cone.jid,
+            senderId: 'sprinkle',
+            senderName: `sprinkle:${eventName}`,
+            content,
+            timestamp: new Date().toISOString(),
+            fromAssistant: false,
+            channel: 'sprinkle',
+          };
+          this.orchestrator!.handleMessage(channelMsg);
+        }
+        break;
+      }
+
       case 'panel-cdp-command': {
         const { id, method, params, sessionId } = msg;
         if (!this.browserAPI) {
