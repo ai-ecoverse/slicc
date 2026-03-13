@@ -150,8 +150,8 @@ export class Layout {
       'transition: color 130ms ease, background 130ms ease;';
     providerIndicator.dataset.tooltip = 'Change provider';
     providerIndicator.addEventListener('click', async () => {
-      await showProviderSettings();
-      location.reload();
+      const changed = await showProviderSettings();
+      if (changed) location.reload();
     });
 
     // ── Model picker (shared, created once) ───────────────────────
@@ -640,14 +640,9 @@ export class Layout {
       settingsBtn.style.color = 'var(--slicc-cone)'; // highlight unconfigured state
     }
     settingsBtn.addEventListener('click', async () => {
-      if (getApiKey()) {
-        await showProviderSettings();
-        location.reload();
-      } else {
-        clearAllSettings();
-        await showProviderSettings();
-        location.reload();
-      }
+      if (!getApiKey()) clearAllSettings();
+      const changed = await showProviderSettings();
+      if (changed) location.reload();
     });
     this.actionsEl.appendChild(settingsBtn);
   }
