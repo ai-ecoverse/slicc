@@ -313,8 +313,11 @@ describe('BrowserAPI', () => {
       );
     });
 
-    it('passes through provided clip with scale 1', async () => {
+    it('passes through provided clip with DPR-normalized scale', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({
+          visualViewport: { scale: 2 },
+        }) // getLayoutMetrics (for DPR detection)
         .mockResolvedValueOnce({ data: 'clipped' }); // captureScreenshot
 
       const data = await api.screenshot({ clip: { x: 10, y: 20, width: 300, height: 400 } });
@@ -324,7 +327,7 @@ describe('BrowserAPI', () => {
         {
           format: 'png',
           captureBeyondViewport: true,
-          clip: { x: 10, y: 20, width: 300, height: 400, scale: 1 },
+          clip: { x: 10, y: 20, width: 300, height: 400, scale: 0.5 },
         },
         'sess-1',
       );

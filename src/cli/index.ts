@@ -347,7 +347,6 @@ async function main() {
       `--remote-debugging-port=${CDP_PORT}`,
       '--no-first-run',
       '--no-default-browser-check',
-      '--force-device-scale-factor=1',
       `--user-data-dir=${join(process.env['TMPDIR'] ?? '/tmp', 'browser-coding-agent-chrome')}`,
       `http://localhost:${SERVE_PORT}`,
     ];

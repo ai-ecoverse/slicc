@@ -221,11 +221,26 @@ export class BrowserAPI {
       if (options?.quality !== undefined) params['quality'] = options.quality;
 
       if (options?.clip) {
-        params['clip'] = { ...options.clip, scale: options.clip.scale ?? 1 };
+        // Get DPR from layout metrics to normalize clip output to 1x.
+        // visualViewport.scale = pageZoom × DPR. On a Retina Mac with
+        // no zoom, scale=2. Setting clip.scale = 1/dpr produces output
+        // at CSS pixel dimensions instead of device pixel dimensions.
+        let clipScale = options.clip.scale ?? 1;
+        if (!options.clip.scale) {
+          try {
+            const metrics = await this.client.send(
+              'Page.getLayoutMetrics', {}, this.sessionId!,
+            );
+            const vvScale = (metrics['visualViewport'] as { scale?: number })?.scale ?? 1;
+            if (vvScale > 1) clipScale = 1 / vvScale;
+          } catch { /* best-effort */ }
+        }
+        params['clip'] = { ...options.clip, scale: clipScale };
       } else if (options?.fullPage) {
         // Full-page screenshot: use viewport WIDTH (not contentSize.width,
         // which includes overflow/off-screen elements) and content HEIGHT
-        // (to capture the full scrollable page).
+        // (to capture the full scrollable page). Normalize to 1x via
+        // visualViewport.scale.
         const metrics = await this.client.send(
           'Page.getLayoutMetrics',
           {},
@@ -241,13 +256,14 @@ export class BrowserAPI {
         const layoutViewport = metrics['layoutViewport'] as {
           clientWidth: number;
         };
+        const vvScale = (metrics['visualViewport'] as { scale?: number })?.scale ?? 1;
         const viewportWidth = cssViewport?.clientWidth ?? layoutViewport.clientWidth;
         params['clip'] = {
           x: 0,
           y: 0,
           width: viewportWidth,
           height: contentSize.height,
-          scale: 1,
+          scale: vvScale > 1 ? 1 / vvScale : 1,
         };
       }
       // No clip = viewport screenshot (Chrome's default behavior)
