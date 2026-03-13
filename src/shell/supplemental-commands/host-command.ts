@@ -8,12 +8,29 @@ import {
   getFollowerTrayRuntimeStatus,
   type FollowerTrayRuntimeStatus,
 } from '../../scoops/tray-follower-status.js';
-import { buildTrayLaunchUrl, buildTrayUrlValue } from '../../scoops/tray-runtime-config.js';
+
+export interface ConnectedFollowerInfo {
+  runtimeId: string;
+}
+
+/**
+ * Module-level callback for retrieving connected followers.
+ * Set by main.ts once the LeaderSyncManager is created.
+ */
+let connectedFollowersGetter: (() => ConnectedFollowerInfo[]) | null = null;
+
+export function setConnectedFollowersGetter(getter: (() => ConnectedFollowerInfo[]) | null): void {
+  connectedFollowersGetter = getter;
+}
+
+export function getConnectedFollowers(): ConnectedFollowerInfo[] {
+  return connectedFollowersGetter?.() ?? [];
+}
 
 export interface HostCommandOptions {
   getStatus?: () => LeaderTrayRuntimeStatus;
   getFollowerStatus?: () => FollowerTrayRuntimeStatus;
-  getLocationHref?: () => string | null;
+  getFollowers?: () => ConnectedFollowerInfo[];
 }
 
 function hostHelp(): { stdout: string; stderr: string; exitCode: number } {
@@ -22,34 +39,31 @@ function hostHelp(): { stdout: string; stderr: string; exitCode: number } {
 
 Usage: host
 
-Shows the current tray state (leader or follower) and, when available, the canonical tray launch URL and join URL.
+Shows the current tray state (leader or follower) and, when available, the join URL and connected followers.
 `,
     stderr: '',
     exitCode: 0,
   };
 }
 
-function formatLeaderOutput(status: LeaderTrayRuntimeStatus, locationHref: string | null): string {
+export function formatLeaderOutput(status: LeaderTrayRuntimeStatus, followers: ConnectedFollowerInfo[]): string {
   const lines = [`status: ${status.state}`];
 
   if (status.session) {
-    const launchUrl = status.state === 'leader'
-      ? buildTrayUrlValue(status.session.workerBaseUrl, status.session.trayId)
-      : locationHref
-        ? buildTrayLaunchUrl(locationHref, status.session.workerBaseUrl, status.session.trayId)
-        : null;
-    lines.push(`launch_url: ${launchUrl ?? 'unavailable'}`);
     lines.push(`join_url: ${status.session.joinUrl}`);
-    lines.push(`webhook_url: ${status.session.webhookUrl}/{webhookId}`);
-    lines.push(`worker_base_url: ${status.session.workerBaseUrl}`);
-    lines.push(`tray_id: ${status.session.trayId}`);
   } else {
-    lines.push('launch_url: unavailable');
     lines.push('join_url: unavailable');
   }
 
   if (status.error) {
     lines.push(`error: ${status.error}`);
+  }
+
+  if (followers.length > 0) {
+    lines.push('followers:');
+    for (const f of followers) {
+      lines.push(`  - ${f.runtimeId}`);
+    }
   }
 
   return `${lines.join('\n')}\n`;
@@ -61,9 +75,6 @@ export function formatFollowerOutput(status: FollowerTrayRuntimeStatus): string 
   if (status.joinUrl) {
     lines.push(`join_url: ${status.joinUrl}`);
   }
-  if (status.trayId) {
-    lines.push(`tray_id: ${status.trayId}`);
-  }
   if (status.error) {
     lines.push(`error: ${status.error}`);
   }
@@ -74,7 +85,7 @@ export function formatFollowerOutput(status: FollowerTrayRuntimeStatus): string 
 export function createHostCommand(options: HostCommandOptions = {}): Command {
   const getStatus = options.getStatus ?? getLeaderTrayRuntimeStatus;
   const getFollowerSt = options.getFollowerStatus ?? getFollowerTrayRuntimeStatus;
-  const getLocationHref = options.getLocationHref ?? (() => globalThis.location?.href ?? null);
+  const getFollowers = options.getFollowers ?? getConnectedFollowers;
 
   return defineCommand('host', async (args) => {
     if (args.includes('--help') || args.includes('-h')) {
@@ -100,7 +111,7 @@ export function createHostCommand(options: HostCommandOptions = {}): Command {
     }
 
     return {
-      stdout: formatLeaderOutput(getStatus(), getLocationHref()),
+      stdout: formatLeaderOutput(getStatus(), getFollowers()),
       stderr: '',
       exitCode: 0,
     };

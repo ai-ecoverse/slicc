@@ -184,6 +184,41 @@ describe('LeaderSyncManager', () => {
     expect(manager.hasFollowers).toBe(true);
   });
 
+  it('getConnectedFollowers returns runtimeIds of advertised followers', () => {
+    const { manager } = createManager();
+    const ch1 = new FakeChannel();
+    const ch2 = new FakeChannel();
+    manager.addFollower('b1', ch1);
+    manager.addFollower('b2', ch2);
+
+    // Initially no runtimeIds (advertise hasn't happened yet)
+    expect(manager.getConnectedFollowers()).toEqual([]);
+
+    // Follower b1 advertises targets
+    ch1.simulateMessage({
+      type: 'targets.advertise',
+      targets: [{ targetId: 'tab1', title: 'Tab', url: 'https://example.com' }],
+      runtimeId: 'follower-b1',
+    });
+
+    expect(manager.getConnectedFollowers()).toEqual([{ runtimeId: 'follower-b1' }]);
+
+    // Follower b2 advertises
+    ch2.simulateMessage({
+      type: 'targets.advertise',
+      targets: [{ targetId: 'tab2', title: 'Tab 2', url: 'https://example2.com' }],
+      runtimeId: 'follower-b2',
+    });
+
+    expect(manager.getConnectedFollowers()).toHaveLength(2);
+    expect(manager.getConnectedFollowers()).toContainEqual({ runtimeId: 'follower-b1' });
+    expect(manager.getConnectedFollowers()).toContainEqual({ runtimeId: 'follower-b2' });
+
+    // Remove follower b1
+    manager.removeFollower('b1');
+    expect(manager.getConnectedFollowers()).toEqual([{ runtimeId: 'follower-b2' }]);
+  });
+
   it('stop removes all followers', () => {
     const { manager } = createManager();
     const ch1 = new FakeChannel();
@@ -531,6 +566,244 @@ describe('LeaderSyncManager', () => {
         expect(sent[0].requestId).toBe('req-5');
         expect(sent[0].error).toContain('not connected');
       }
+    });
+  });
+
+  describe('tab.open routing', () => {
+    it('handles tab.open targeting leader — creates local tab and responds', async () => {
+      const fakeBrowserTransport = {
+        send: vi.fn().mockResolvedValue({ targetId: 'new-tab-1' }),
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        on: vi.fn(),
+        off: vi.fn(),
+        once: vi.fn(),
+        state: 'connected' as const,
+      };
+      const { manager } = createManager();
+      (manager as any).options.browserTransport = fakeBrowserTransport;
+
+      const ch1 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+      ch1.sent.length = 0;
+
+      ch1.simulateMessage({
+        type: 'tab.open',
+        requestId: 'tabopen-1',
+        targetRuntimeId: 'leader',
+        url: 'https://example.com',
+      } as any);
+
+      await vi.waitFor(() => {
+        expect(ch1.parseSent().length).toBeGreaterThan(0);
+      });
+
+      const sent = ch1.parseSent();
+      const response = sent.find(m => m.type === 'tab.opened');
+      expect(response).toBeDefined();
+      if (response && response.type === 'tab.opened') {
+        expect(response.requestId).toBe('tabopen-1');
+        expect(response.targetId).toBe('leader:new-tab-1');
+      }
+    });
+
+    it('handles tab.open targeting leader — returns error if no browser transport', async () => {
+      const { manager } = createManager();
+
+      const ch1 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+      ch1.sent.length = 0;
+
+      ch1.simulateMessage({
+        type: 'tab.open',
+        requestId: 'tabopen-2',
+        targetRuntimeId: 'leader',
+        url: 'https://example.com',
+      } as any);
+
+      await vi.waitFor(() => {
+        expect(ch1.parseSent().length).toBeGreaterThan(0);
+      });
+
+      const sent = ch1.parseSent();
+      const response = sent.find(m => m.type === 'tab.open.error');
+      expect(response).toBeDefined();
+      if (response && response.type === 'tab.open.error') {
+        expect(response.requestId).toBe('tabopen-2');
+        expect(response.error).toBe('Leader has no browser transport');
+      }
+    });
+
+    it('forwards tab.open to target follower', () => {
+      const { manager } = createManager();
+      const ch1 = new FakeChannel();
+      const ch2 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+      manager.addFollower('b2', ch2);
+
+      // Follower b2 advertises so leader knows its runtime mapping
+      ch2.simulateMessage({
+        type: 'targets.advertise',
+        targets: [{ targetId: 'tab1', title: 'Tab 1', url: 'https://example.com' }],
+        runtimeId: 'follower-b2',
+      });
+
+      ch1.sent.length = 0;
+      ch2.sent.length = 0;
+
+      ch1.simulateMessage({
+        type: 'tab.open',
+        requestId: 'tabopen-3',
+        targetRuntimeId: 'follower-b2',
+        url: 'https://new-tab.com',
+      } as any);
+
+      const sent2 = ch2.parseSent();
+      expect(sent2).toHaveLength(1);
+      expect(sent2[0].type).toBe('tab.open');
+      if (sent2[0].type === 'tab.open') {
+        expect(sent2[0].requestId).toBe('tabopen-3');
+        expect(sent2[0].url).toBe('https://new-tab.com');
+      }
+    });
+
+    it('forwards tab.opened response back to requester', () => {
+      const { manager } = createManager();
+      const ch1 = new FakeChannel();
+      const ch2 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+      manager.addFollower('b2', ch2);
+
+      ch2.simulateMessage({
+        type: 'targets.advertise',
+        targets: [{ targetId: 'tab1', title: 'Tab 1', url: 'https://example.com' }],
+        runtimeId: 'follower-b2',
+      });
+
+      ch1.sent.length = 0;
+      ch2.sent.length = 0;
+
+      ch1.simulateMessage({
+        type: 'tab.open',
+        requestId: 'tabopen-4',
+        targetRuntimeId: 'follower-b2',
+        url: 'https://new-tab.com',
+      } as any);
+
+      // Follower b2 responds with tab.opened
+      ch2.simulateMessage({
+        type: 'tab.opened',
+        requestId: 'tabopen-4',
+        targetId: 'follower-b2:new-tab-1',
+      } as any);
+
+      const sent1 = ch1.parseSent();
+      const response = sent1.find(m => m.type === 'tab.opened');
+      expect(response).toBeDefined();
+      if (response && response.type === 'tab.opened') {
+        expect(response.requestId).toBe('tabopen-4');
+        expect(response.targetId).toBe('follower-b2:new-tab-1');
+      }
+    });
+
+    it('forwards tab.open.error response back to requester', () => {
+      const { manager } = createManager();
+      const ch1 = new FakeChannel();
+      const ch2 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+      manager.addFollower('b2', ch2);
+
+      ch2.simulateMessage({
+        type: 'targets.advertise',
+        targets: [{ targetId: 'tab1', title: 'Tab 1', url: 'https://example.com' }],
+        runtimeId: 'follower-b2',
+      });
+
+      ch1.sent.length = 0;
+      ch2.sent.length = 0;
+
+      ch1.simulateMessage({
+        type: 'tab.open',
+        requestId: 'tabopen-5',
+        targetRuntimeId: 'follower-b2',
+        url: 'https://new-tab.com',
+      } as any);
+
+      ch2.simulateMessage({
+        type: 'tab.open.error',
+        requestId: 'tabopen-5',
+        error: 'Tab creation failed',
+      } as any);
+
+      const sent1 = ch1.parseSent();
+      const response = sent1.find(m => m.type === 'tab.open.error');
+      expect(response).toBeDefined();
+      if (response && response.type === 'tab.open.error') {
+        expect(response.requestId).toBe('tabopen-5');
+        expect(response.error).toBe('Tab creation failed');
+      }
+    });
+
+    it('returns error when target runtime is not connected', () => {
+      const { manager } = createManager();
+      const ch1 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+      ch1.sent.length = 0;
+
+      ch1.simulateMessage({
+        type: 'tab.open',
+        requestId: 'tabopen-6',
+        targetRuntimeId: 'unknown-runtime',
+        url: 'https://new-tab.com',
+      } as any);
+
+      const sent = ch1.parseSent();
+      expect(sent).toHaveLength(1);
+      expect(sent[0].type).toBe('tab.open.error');
+      if (sent[0].type === 'tab.open.error') {
+        expect(sent[0].requestId).toBe('tabopen-6');
+        expect(sent[0].error).toContain('not connected');
+      }
+    });
+
+    it('openRemoteTab sends tab.open and resolves with targetId', async () => {
+      const { manager } = createManager();
+      const ch1 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+
+      ch1.simulateMessage({
+        type: 'targets.advertise',
+        targets: [{ targetId: 'tab1', title: 'Tab 1', url: 'https://example.com' }],
+        runtimeId: 'follower-b1',
+      });
+
+      ch1.sent.length = 0;
+
+      const promise = manager.openRemoteTab('follower-b1', 'https://remote-tab.com');
+
+      // Check that the request was sent
+      const sent = ch1.parseSent();
+      const tabOpenMsg = sent.find(m => m.type === 'tab.open');
+      expect(tabOpenMsg).toBeDefined();
+      if (tabOpenMsg && tabOpenMsg.type === 'tab.open') {
+        expect(tabOpenMsg.url).toBe('https://remote-tab.com');
+
+        // Simulate follower responding
+        ch1.simulateMessage({
+          type: 'tab.opened',
+          requestId: tabOpenMsg.requestId,
+          targetId: 'follower-b1:new-tab-99',
+        } as any);
+      }
+
+      const targetId = await promise;
+      expect(targetId).toBe('follower-b1:new-tab-99');
+    });
+
+    it('openRemoteTab rejects when target runtime is not connected', async () => {
+      const { manager } = createManager();
+
+      await expect(manager.openRemoteTab('unknown', 'https://example.com')).rejects.toThrow('not connected');
     });
   });
 });

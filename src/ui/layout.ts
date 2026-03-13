@@ -28,7 +28,6 @@ import { ScoopsPanel } from './scoops-panel.js';
 import { ScoopSwitcher } from './scoop-switcher.js';
 import {
   getApiKey,
-  clearAllSettings,
   getSelectedProvider,
   getProviderModels,
   getSelectedModelId,
@@ -150,8 +149,12 @@ export class Layout {
       'transition: color 130ms ease, background 130ms ease;';
     providerIndicator.dataset.tooltip = 'Change provider';
     providerIndicator.addEventListener('click', async () => {
+      const keyBefore = getApiKey();
       await showProviderSettings();
-      location.reload();
+      const keyAfter = getApiKey();
+      if (keyBefore !== keyAfter) {
+        location.reload();
+      }
     });
 
     // ── Model picker (shared, created once) ───────────────────────
@@ -640,12 +643,11 @@ export class Layout {
       settingsBtn.style.color = 'var(--slicc-cone)'; // highlight unconfigured state
     }
     settingsBtn.addEventListener('click', async () => {
-      if (getApiKey()) {
-        await showProviderSettings();
-        location.reload();
-      } else {
-        clearAllSettings();
-        await showProviderSettings();
+      const keyBefore = getApiKey();
+      await showProviderSettings();
+      const keyAfter = getApiKey();
+      // Only reload if the API key actually changed (added, removed, or switched)
+      if (keyBefore !== keyAfter) {
         location.reload();
       }
     });

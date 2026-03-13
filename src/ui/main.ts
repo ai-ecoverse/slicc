@@ -39,6 +39,7 @@ import {
   isElectronOverlaySetTabMessage,
   resolveUiRuntimeMode,
 } from './runtime-mode.js';
+import { setConnectedFollowersGetter } from '../shell/supplemental-commands/host-command.js';
 
 const log = createLogger('main');
 
@@ -390,9 +391,13 @@ async function main(): Promise<void> {
   applyProviderDefaults();
 
   // Check for API key (first-run dialog)
+  // Skip the dialog if the user already has a stored tray join URL (providerless follower mode)
   let apiKey = getApiKey();
-  if (!apiKey) {
-    await showProviderSettings();
+  const hasTrayJoin = hasStoredTrayJoinUrl(window.localStorage);
+  if (!apiKey && !hasTrayJoin) {
+    // Default to tray-join form when not on the default dev port (3000)
+    const isDefaultPort = window.location.port === '3000' || window.location.port === '';
+    await showProviderSettings({ preferTrayJoin: !isDefaultPort });
     apiKey = getApiKey();
   }
   const allowProviderlessTrayJoin = !apiKey && hasStoredTrayJoinUrl(window.localStorage);
@@ -1096,6 +1101,8 @@ async function main(): Promise<void> {
           },
         });
         activeFollowerSync = followerSync;
+        // Wire the follower as a TrayTargetProvider so BrowserAPI can list remote targets
+        browser.setTrayTargetProvider(followerSync);
         // Replace the local agent handle with the follower sync (remote leader)
         layout.panels.chat.setAgent(followerSync);
         // Request initial snapshot
@@ -1154,6 +1161,9 @@ async function main(): Promise<void> {
         },
       });
       leaderSyncRef = leaderSync;
+      setConnectedFollowersGetter(() => leaderSync.getConnectedFollowers());
+      // Wire the leader as a TrayTargetProvider so BrowserAPI can list all tray targets
+      browser.setTrayTargetProvider(leaderSync);
 
       // Periodically refresh leader's own browser targets into the registry
       const refreshLeaderTargets = async () => {

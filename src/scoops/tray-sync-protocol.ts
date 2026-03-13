@@ -23,7 +23,10 @@ export type LeaderToFollowerMessage =
   | { type: 'error'; error: string }
   | { type: 'targets.registry'; targets: TrayTargetEntry[] }
   | { type: 'cdp.request'; requestId: string; localTargetId: string; method: string; params?: Record<string, unknown>; sessionId?: string }
-  | { type: 'cdp.response'; requestId: string; result?: Record<string, unknown>; error?: string };
+  | { type: 'cdp.response'; requestId: string; result?: Record<string, unknown>; error?: string }
+  | { type: 'tab.open'; requestId: string; url: string }
+  | { type: 'tab.opened'; requestId: string; targetId: string }
+  | { type: 'tab.open.error'; requestId: string; error: string };
 
 export type FollowerToLeaderMessage =
   | { type: 'user_message'; text: string; messageId: string }
@@ -31,7 +34,10 @@ export type FollowerToLeaderMessage =
   | { type: 'request_snapshot' }
   | { type: 'targets.advertise'; targets: RemoteTargetInfo[]; runtimeId: string }
   | { type: 'cdp.request'; requestId: string; targetRuntimeId: string; localTargetId: string; method: string; params?: Record<string, unknown>; sessionId?: string }
-  | { type: 'cdp.response'; requestId: string; result?: Record<string, unknown>; error?: string };
+  | { type: 'cdp.response'; requestId: string; result?: Record<string, unknown>; error?: string }
+  | { type: 'tab.open'; requestId: string; targetRuntimeId: string; url: string }
+  | { type: 'tab.opened'; requestId: string; targetId: string }
+  | { type: 'tab.open.error'; requestId: string; error: string };
 
 // ---------------------------------------------------------------------------
 // Target advertisement types

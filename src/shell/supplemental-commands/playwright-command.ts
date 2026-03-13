@@ -421,8 +421,9 @@ function formatHelp(commandName: string): string {
   return `Usage: ${commandName} <command> [args...]
 
 Commands:
-  open [url|/vfs/path] [--foreground|--fg]
+  open [url|/vfs/path] [--foreground|--fg] [--runtime=<id>]
                          Open a new tab (default: background). VFS paths are served via preview service worker.
+                         Use --runtime to open the tab on a remote tray runtime (e.g. --runtime=follower-abc).
   goto <url>             Navigate current tab to URL
   click <ref>            Click element by ref (e.g. e5)
   type <text>            Type text into focused element
@@ -444,8 +445,8 @@ Commands:
   go-forward             Navigate forward
   reload                 Reload current tab
   tab-list               List open tabs
-  tab-new [url] [--foreground|--fg]
-                         Open new tab (default: background)
+  tab-new [url] [--foreground|--fg] [--runtime=<id>]
+                         Open new tab (default: background). --runtime opens on a remote tray runtime.
   tab-select <index>     Switch to tab by index
   tab-close [index]      Close tab (default: current)
   close                  Close current tab
@@ -529,10 +530,18 @@ export function createPlaywrightCommand(
         case 'tab-new': {
           const url = positional[0] || 'about:blank';
           const foreground = flags['foreground'] === 'true' || flags['fg'] === 'true';
+          const runtimeFlag = flags['runtime'];
 
           const previousTarget = await ensureTarget(browser, state);
           await resolveAppTabId(browser, state);
-          const targetId = await browser.createPage(url);
+
+          let targetId: string;
+          if (runtimeFlag) {
+            // Open a tab on a remote runtime within the tray
+            targetId = await browser.createRemotePage(runtimeFlag, url);
+          } else {
+            targetId = await browser.createPage(url);
+          }
           if (foreground || !previousTarget) {
             state.currentTarget = targetId;
           }

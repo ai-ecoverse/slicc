@@ -583,6 +583,137 @@ describe('FollowerSyncManager', () => {
     });
   });
 
+  describe('tab.open handling', () => {
+    it('handles incoming tab.open — creates local tab and sends tab.opened', async () => {
+      const channel = new FakeChannel();
+      const fakeBrowserTransport = {
+        send: vi.fn().mockResolvedValue({ targetId: 'local-new-tab' }),
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        on: vi.fn(),
+        off: vi.fn(),
+        once: vi.fn(),
+        state: 'connected' as const,
+      };
+      const follower = new FollowerSyncManager(channel, { browserTransport: fakeBrowserTransport });
+
+      channel.simulateLeaderMessage({
+        type: 'tab.open',
+        requestId: 'tabopen-1',
+        url: 'https://example.com',
+      } as any);
+
+      await vi.waitFor(() => {
+        expect(channel.parseSent().length).toBeGreaterThan(0);
+      });
+
+      const sent = channel.parseSent();
+      const response = sent.find(m => m.type === 'tab.opened');
+      expect(response).toBeDefined();
+      if (response && response.type === 'tab.opened') {
+        expect(response.requestId).toBe('tabopen-1');
+        expect(response.targetId).toBe('local-new-tab');
+      }
+    });
+
+    it('handles incoming tab.open — returns error when no browser transport', async () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      channel.simulateLeaderMessage({
+        type: 'tab.open',
+        requestId: 'tabopen-2',
+        url: 'https://example.com',
+      } as any);
+
+      await vi.waitFor(() => {
+        expect(channel.parseSent().length).toBeGreaterThan(0);
+      });
+
+      const sent = channel.parseSent();
+      const response = sent.find(m => m.type === 'tab.open.error');
+      expect(response).toBeDefined();
+      if (response && response.type === 'tab.open.error') {
+        expect(response.requestId).toBe('tabopen-2');
+        expect(response.error).toBe('Follower has no browser transport');
+      }
+    });
+
+    it('handles incoming tab.open — returns error on transport failure', async () => {
+      const channel = new FakeChannel();
+      const fakeBrowserTransport = {
+        send: vi.fn().mockRejectedValue(new Error('Target creation failed')),
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        on: vi.fn(),
+        off: vi.fn(),
+        once: vi.fn(),
+        state: 'connected' as const,
+      };
+      const follower = new FollowerSyncManager(channel, { browserTransport: fakeBrowserTransport });
+
+      channel.simulateLeaderMessage({
+        type: 'tab.open',
+        requestId: 'tabopen-3',
+        url: 'https://example.com',
+      } as any);
+
+      await vi.waitFor(() => {
+        expect(channel.parseSent().length).toBeGreaterThan(0);
+      });
+
+      const sent = channel.parseSent();
+      const response = sent.find(m => m.type === 'tab.open.error');
+      expect(response).toBeDefined();
+      if (response && response.type === 'tab.open.error') {
+        expect(response.requestId).toBe('tabopen-3');
+        expect(response.error).toBe('Target creation failed');
+      }
+    });
+
+    it('openRemoteTab sends request and resolves on tab.opened', async () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      const promise = follower.openRemoteTab('leader', 'https://remote.com');
+
+      const sent = channel.parseSent();
+      expect(sent).toHaveLength(1);
+      expect(sent[0].type).toBe('tab.open');
+      if (sent[0].type === 'tab.open') {
+        expect((sent[0] as any).targetRuntimeId).toBe('leader');
+        expect((sent[0] as any).url).toBe('https://remote.com');
+
+        channel.simulateLeaderMessage({
+          type: 'tab.opened',
+          requestId: (sent[0] as any).requestId,
+          targetId: 'leader:new-tab-1',
+        } as any);
+      }
+
+      const targetId = await promise;
+      expect(targetId).toBe('leader:new-tab-1');
+    });
+
+    it('openRemoteTab rejects on tab.open.error', async () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      const promise = follower.openRemoteTab('unknown', 'https://remote.com');
+
+      const sent = channel.parseSent();
+      if (sent[0].type === 'tab.open') {
+        channel.simulateLeaderMessage({
+          type: 'tab.open.error',
+          requestId: (sent[0] as any).requestId,
+          error: 'Target runtime "unknown" not connected',
+        } as any);
+      }
+
+      await expect(promise).rejects.toThrow('not connected');
+    });
+  });
+
   describe('channel disconnect handling', () => {
     it('emits error event when channel closes', () => {
       const channel = new FakeChannel();

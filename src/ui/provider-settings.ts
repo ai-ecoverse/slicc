@@ -606,11 +606,16 @@ const ICON_PATHS = {
   ],
 };
 
+export interface ShowProviderSettingsOptions {
+  /** When true, start with the "Join a tray" form instead of the account form (when no accounts exist). */
+  preferTrayJoin?: boolean;
+}
+
 /**
  * Show the Accounts management dialog.
  * Returns a promise that resolves when the user closes the dialog.
  */
-export function showProviderSettings(): Promise<void> {
+export function showProviderSettings(options?: ShowProviderSettingsOptions): Promise<void> {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'dialog-overlay';
@@ -619,9 +624,11 @@ export function showProviderSettings(): Promise<void> {
     dialog.className = 'dialog';
     dialog.style.cssText = 'max-width: 480px; width: 90vw; padding: 32px;';
 
-    // Decide initial view: list if accounts exist, add-form if empty
+    // Decide initial view: list if accounts exist, tray-join or add-form if empty
     if (getAccounts().length > 0) {
       renderAccountsList();
+    } else if (options?.preferTrayJoin) {
+      renderJoinTrayForm();
     } else {
       renderAccountForm();
     }

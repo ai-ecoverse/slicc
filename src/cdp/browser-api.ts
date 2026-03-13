@@ -28,6 +28,8 @@ export interface TrayTargetProvider {
   getTargets(): TrayTargetEntry[];
   createRemoteTransport?(runtimeId: string, localTargetId: string): CDPTransport;
   removeRemoteTransport?(runtimeId: string, localTargetId: string): void;
+  /** Open a new tab on a remote runtime. Returns the composite targetId. */
+  openRemoteTab?(runtimeId: string, url: string): Promise<string>;
 }
 
 const FALLBACK_CDP_URL = 'ws://localhost:3000/cdp';
@@ -119,14 +121,16 @@ export class BrowserAPI {
   /**
    * List all pages — local + remote tray targets.
    * Remote targets have targetId format "{runtimeId}:{localTargetId}".
+   * Deduplicates by excluding registry entries whose localTargetId matches a local page.
    */
   async listAllTargets(): Promise<PageInfo[]> {
     const local = await this.listPages();
     if (!this.trayTargetProvider) return local;
 
+    const localIds = new Set(local.map(p => p.targetId));
     const remoteEntries = this.trayTargetProvider.getTargets();
     const remote: PageInfo[] = remoteEntries
-      .filter(t => !t.isLocal)
+      .filter(t => !localIds.has(t.localTargetId))
       .map(t => ({
         targetId: t.targetId,
         title: t.title,
@@ -159,6 +163,18 @@ export class BrowserAPI {
       background: true,
     });
     return result['targetId'] as string;
+  }
+
+  /**
+   * Create a new tab on a remote runtime within the tray.
+   * Requires a tray target provider with openRemoteTab support.
+   * Returns the composite targetId ("{runtimeId}:{localTargetId}").
+   */
+  async createRemotePage(runtimeId: string, url?: string): Promise<string> {
+    if (!this.trayTargetProvider?.openRemoteTab) {
+      throw new Error('Remote tab opening not available (no tray target provider)');
+    }
+    return this.trayTargetProvider.openRemoteTab(runtimeId, url ?? 'about:blank');
   }
 
   /**

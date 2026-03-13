@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createHostCommand, formatFollowerOutput } from './host-command.js';
+import { createHostCommand, formatFollowerOutput, formatLeaderOutput } from './host-command.js';
 
 describe('host command', () => {
   it('has the correct name', () => {
@@ -12,7 +12,7 @@ describe('host command', () => {
     expect(result.stdout).toContain('display the current tray host status');
   });
 
-  it('prints the leader launch URL, join URL, and tray details', async () => {
+  it('prints the leader status and join URL', async () => {
     const cmd = createHostCommand({
       getStatus: () => ({
         state: 'leader',
@@ -30,23 +30,23 @@ describe('host command', () => {
         },
         error: null,
       }),
-      getLocationHref: () => 'http://localhost:3000/?scoop=cone',
+      getFollowers: () => [],
     });
 
     const result = await cmd.execute([], {} as never);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('status: leader');
-    expect(result.stdout).toContain('launch_url: https://tray.example.com/base/tray/tray-123');
     expect(result.stdout).toContain('join_url: https://tray.example.com/join/tray-123');
-    expect(result.stdout).toContain('webhook_url: https://tray.example.com/webhooks/tray-123/{webhookId}');
-    expect(result.stdout).toContain('worker_base_url: https://tray.example.com/base');
-    expect(result.stdout).toContain('tray_id: tray-123');
+    expect(result.stdout).not.toContain('launch_url');
+    expect(result.stdout).not.toContain('webhook_url');
+    expect(result.stdout).not.toContain('worker_base_url');
+    expect(result.stdout).not.toContain('tray_id');
   });
 
-  it('keeps the local canonical launch URL for non-leader sessions', async () => {
-    const result = await createHostCommand({
+  it('shows followers when connected', async () => {
+    const cmd = createHostCommand({
       getStatus: () => ({
-        state: 'error',
+        state: 'leader',
         session: {
           workerBaseUrl: 'https://tray.example.com/base',
           trayId: 'tray-123',
@@ -59,26 +59,29 @@ describe('host command', () => {
           leaderWebSocketUrl: 'wss://tray.example.com/ws',
           runtime: 'slicc-standalone',
         },
-        error: 'boom',
+        error: null,
       }),
-      getLocationHref: () => 'http://localhost:3000/?scoop=cone',
-    }).execute([], {} as never);
+      getFollowers: () => [
+        { runtimeId: 'follower-abc123' },
+        { runtimeId: 'follower-def456' },
+      ],
+    });
 
+    const result = await cmd.execute([], {} as never);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('status: error');
-    expect(result.stdout).toContain('launch_url: http://localhost:3000/?scoop=cone&tray=https%3A%2F%2Ftray.example.com%2Fbase%2Ftray%2Ftray-123');
-    expect(result.stdout).toContain('join_url: https://tray.example.com/join/tray-123');
-    expect(result.stdout).toContain('error: boom');
+    expect(result.stdout).toContain('followers:');
+    expect(result.stdout).toContain('  - follower-abc123');
+    expect(result.stdout).toContain('  - follower-def456');
   });
 
   it('prints error details when leader startup failed', async () => {
     const result = await createHostCommand({
       getStatus: () => ({ state: 'error', session: null, error: 'boom' }),
-      getLocationHref: () => 'http://localhost:3000/',
+      getFollowers: () => [],
     }).execute([], {} as never);
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe('status: error\nlaunch_url: unavailable\njoin_url: unavailable\nerror: boom\n');
+    expect(result.stdout).toBe('status: error\njoin_url: unavailable\nerror: boom\n');
   });
 
   it('rejects unsupported arguments', async () => {
@@ -100,7 +103,7 @@ describe('host command', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('status: follower (connected)');
     expect(result.stdout).toContain('join_url: https://tray.example.com/join/token');
-    expect(result.stdout).toContain('tray_id: tray-456');
+    expect(result.stdout).not.toContain('tray_id');
   });
 
   it('shows follower connecting status', async () => {
@@ -116,7 +119,7 @@ describe('host command', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('status: follower (connecting)');
     expect(result.stdout).toContain('join_url: https://tray.example.com/join/token');
-    expect(result.stdout).not.toContain('tray_id:');
+    expect(result.stdout).not.toContain('tray_id');
   });
 
   it('shows follower error status', async () => {
@@ -143,6 +146,7 @@ describe('host command', () => {
         error: null,
       }),
       getStatus: () => ({ state: 'inactive', session: null, error: null }),
+      getFollowers: () => [],
     }).execute([], {} as never);
 
     expect(result.exitCode).toBe(0);
@@ -151,25 +155,83 @@ describe('host command', () => {
   });
 });
 
+describe('formatLeaderOutput', () => {
+  it('formats leader with session and no followers', () => {
+    const output = formatLeaderOutput(
+      {
+        state: 'leader',
+        session: {
+          workerBaseUrl: 'https://tray.example.com/base',
+          trayId: 'tray-123',
+          createdAt: '2026-03-12T00:00:00.000Z',
+          controllerId: 'controller-1',
+          controllerUrl: 'https://tray.example.com/controller/controller-1',
+          joinUrl: 'https://tray.example.com/join/tray-123',
+          webhookUrl: 'https://tray.example.com/webhooks/tray-123',
+          leaderKey: 'leader-key',
+          leaderWebSocketUrl: 'wss://tray.example.com/ws',
+          runtime: 'slicc-standalone',
+        },
+        error: null,
+      },
+      [],
+    );
+    expect(output).toBe('status: leader\njoin_url: https://tray.example.com/join/tray-123\n');
+  });
+
+  it('formats leader with followers', () => {
+    const output = formatLeaderOutput(
+      {
+        state: 'leader',
+        session: {
+          workerBaseUrl: 'https://tray.example.com/base',
+          trayId: 'tray-123',
+          createdAt: '2026-03-12T00:00:00.000Z',
+          controllerId: 'controller-1',
+          controllerUrl: 'https://tray.example.com/controller/controller-1',
+          joinUrl: 'https://tray.example.com/join/tray-123',
+          webhookUrl: 'https://tray.example.com/webhooks/tray-123',
+          leaderKey: 'leader-key',
+          leaderWebSocketUrl: 'wss://tray.example.com/ws',
+          runtime: 'slicc-standalone',
+        },
+        error: null,
+      },
+      [{ runtimeId: 'follower-abc' }],
+    );
+    expect(output).toContain('followers:');
+    expect(output).toContain('  - follower-abc');
+  });
+
+  it('formats leader with error and no session', () => {
+    const output = formatLeaderOutput(
+      { state: 'error', session: null, error: 'boom' },
+      [],
+    );
+    expect(output).toBe('status: error\njoin_url: unavailable\nerror: boom\n');
+  });
+});
+
 describe('formatFollowerOutput', () => {
-  it('formats connected follower with all fields', () => {
+  it('formats connected follower without tray_id', () => {
     const output = formatFollowerOutput({
       state: 'connected',
       joinUrl: 'https://tray.example.com/join/token',
       trayId: 'tray-789',
       error: null,
     });
-    expect(output).toBe('status: follower (connected)\njoin_url: https://tray.example.com/join/token\ntray_id: tray-789\n');
+    expect(output).toBe('status: follower (connected)\njoin_url: https://tray.example.com/join/token\n');
+    expect(output).not.toContain('tray_id');
   });
 
-  it('omits tray_id when null', () => {
+  it('omits join_url when null', () => {
     const output = formatFollowerOutput({
       state: 'connecting',
-      joinUrl: 'https://tray.example.com/join/token',
+      joinUrl: null,
       trayId: null,
       error: null,
     });
-    expect(output).not.toContain('tray_id');
+    expect(output).toBe('status: follower (connecting)\n');
   });
 
   it('includes error when present', () => {

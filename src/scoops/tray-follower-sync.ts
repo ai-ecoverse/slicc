@@ -46,6 +46,8 @@ export class FollowerSyncManager implements AgentHandle {
   private targetEntries: TrayTargetEntry[] = [];
   /** Active RemoteCDPTransport instances keyed by requestId prefix for response routing. */
   private readonly remoteTransports = new Map<string, RemoteCDPTransport>();
+  /** Resolvers for outgoing tab.open requests. */
+  private readonly tabOpenResolvers = new Map<string, { resolve: (targetId: string) => void; reject: (err: Error) => void }>();
 
   constructor(
     channel: TrayDataChannelLike,
@@ -170,6 +172,26 @@ export class FollowerSyncManager implements AgentHandle {
         this.routeCDPResponse(message.requestId, message.result, message.error);
         break;
       }
+      case 'tab.open': {
+        this.executeLocalTabOpen(message.requestId, message.url);
+        break;
+      }
+      case 'tab.opened': {
+        const resolver = this.tabOpenResolvers.get(message.requestId);
+        if (resolver) {
+          this.tabOpenResolvers.delete(message.requestId);
+          resolver.resolve(message.targetId);
+        }
+        break;
+      }
+      case 'tab.open.error': {
+        const resolver = this.tabOpenResolvers.get(message.requestId);
+        if (resolver) {
+          this.tabOpenResolvers.delete(message.requestId);
+          resolver.reject(new Error(message.error));
+        }
+        break;
+      }
     }
   }
 
@@ -219,6 +241,38 @@ export class FollowerSyncManager implements AgentHandle {
     if (transport) {
       transport.disconnect();
       this.remoteTransports.delete(key);
+    }
+  }
+
+  /**
+   * Open a tab on a remote runtime via the leader.
+   * Returns a promise that resolves with the composite targetId ("{runtimeId}:{localTargetId}").
+   */
+  openRemoteTab(targetRuntimeId: string, url: string): Promise<string> {
+    const requestId = `tab-open-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return new Promise<string>((resolve, reject) => {
+      this.tabOpenResolvers.set(requestId, { resolve, reject });
+      this.sync.send({ type: 'tab.open', requestId, targetRuntimeId, url });
+    });
+  }
+
+  /**
+   * Execute a tab.open on the follower's local browser transport.
+   * Sends tab.opened or tab.open.error back to the leader.
+   */
+  private async executeLocalTabOpen(requestId: string, url: string): Promise<void> {
+    const transport = this.options.browserTransport;
+    if (!transport) {
+      this.sync.send({ type: 'tab.open.error', requestId, error: 'Follower has no browser transport' });
+      return;
+    }
+
+    try {
+      const result = await transport.send('Target.createTarget', { url, background: true });
+      const targetId = result['targetId'] as string;
+      this.sync.send({ type: 'tab.opened', requestId, targetId });
+    } catch (err) {
+      this.sync.send({ type: 'tab.open.error', requestId, error: err instanceof Error ? err.message : String(err) });
     }
   }
 

@@ -11,9 +11,11 @@ import {
   type FollowerToLeaderMessage,
   type TraySyncChannel,
   type RemoteTargetInfo,
+  type TrayTargetEntry,
 } from './tray-sync-protocol.js';
 import { TrayTargetRegistry } from './tray-target-registry.js';
 import type { CDPTransport } from '../cdp/transport.js';
+import { RemoteCDPTransport, type RemoteCDPSender } from '../cdp/remote-cdp-transport.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('tray-leader-sync');
@@ -45,6 +47,14 @@ interface PendingCDPRoute {
   requestId: string;
 }
 
+/** Tracks a tab.open request being routed through the leader. */
+interface PendingTabOpenRoute {
+  /** bootstrapId of the follower that originated the request (or '__leader__') */
+  requesterBootstrapId: string;
+  /** The original requestId from the requester */
+  requestId: string;
+}
+
 export class LeaderSyncManager {
   private readonly followers = new Map<string, ConnectedFollower>();
   private readonly registry = new TrayTargetRegistry();
@@ -52,6 +62,12 @@ export class LeaderSyncManager {
   private readonly runtimeToBootstrap = new Map<string, string>();
   /** Maps requestId → routing info for CDP requests in flight through the leader. */
   private readonly pendingCDPRoutes = new Map<string, PendingCDPRoute>();
+  /** Active RemoteCDPTransport instances for the leader's own BrowserAPI (keyed by runtimeId:localTargetId). */
+  private readonly remoteTransports = new Map<string, RemoteCDPTransport>();
+  /** Maps requestId → routing info for tab.open requests in flight through the leader. */
+  private readonly pendingTabOpenRoutes = new Map<string, PendingTabOpenRoute>();
+  /** Resolvers for leader-originated tab.open requests. */
+  private readonly tabOpenResolvers = new Map<string, { resolve: (targetId: string) => void; reject: (err: Error) => void }>();
 
   constructor(private readonly options: LeaderSyncManagerOptions) {}
 
@@ -193,6 +209,23 @@ export class LeaderSyncManager {
         this.handleCDPResponse(message.requestId, message.result, message.error);
         break;
       }
+      case 'tab.open': {
+        const { requestId, targetRuntimeId, url } = message;
+        if (targetRuntimeId === 'leader') {
+          this.executeLocalTabOpen(requestId, url, bootstrapId);
+        } else {
+          this.forwardTabOpen(requestId, targetRuntimeId, url, bootstrapId);
+        }
+        break;
+      }
+      case 'tab.opened': {
+        this.handleTabOpenResponse(message.requestId, message.targetId);
+        break;
+      }
+      case 'tab.open.error': {
+        this.handleTabOpenError(message.requestId, message.error);
+        break;
+      }
     }
   }
 
@@ -217,6 +250,58 @@ export class LeaderSyncManager {
     for (const follower of this.followers.values()) {
       follower.sync.send(message);
     }
+  }
+
+  /**
+   * Get the merged target registry entries.
+   * Used to implement TrayTargetProvider for the leader's BrowserAPI.
+   */
+  getTargets(): TrayTargetEntry[] {
+    return this.registry.getEntries();
+  }
+
+  /**
+   * Create a RemoteCDPTransport that routes CDP commands from the leader's
+   * BrowserAPI to a follower that owns the target.
+   */
+  createRemoteTransport(targetRuntimeId: string, localTargetId: string): RemoteCDPTransport {
+    const sender: RemoteCDPSender = {
+      sendCDPRequest: (requestId, method, params, sessionId) => {
+        const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
+        const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
+        if (!targetFollower) {
+          // Immediately resolve as error — the transport will handle it
+          const transport = this.remoteTransports.get(`${targetRuntimeId}:${localTargetId}`);
+          transport?.handleResponse(requestId, undefined, `Target runtime "${targetRuntimeId}" not connected`);
+          return;
+        }
+        // Track the route so the response can be delivered to the RemoteCDPTransport
+        this.pendingCDPRoutes.set(requestId, { requesterBootstrapId: '__leader__', requestId });
+        targetFollower.sync.send({ type: 'cdp.request', requestId, localTargetId, method, params, sessionId });
+      },
+    };
+    const transport = new RemoteCDPTransport(sender);
+    this.remoteTransports.set(`${targetRuntimeId}:${localTargetId}`, transport);
+    return transport;
+  }
+
+  /**
+   * Remove a remote transport created for the leader's BrowserAPI.
+   */
+  removeRemoteTransport(targetRuntimeId: string, localTargetId: string): void {
+    const key = `${targetRuntimeId}:${localTargetId}`;
+    const transport = this.remoteTransports.get(key);
+    if (transport) {
+      transport.disconnect();
+      this.remoteTransports.delete(key);
+    }
+  }
+
+  /**
+   * Return the list of connected follower runtimeIds.
+   */
+  getConnectedFollowers(): { runtimeId: string }[] {
+    return [...this.runtimeToBootstrap.keys()].map(runtimeId => ({ runtimeId }));
   }
 
   /**
@@ -306,9 +391,128 @@ export class LeaderSyncManager {
     if (!route) return;
     this.pendingCDPRoutes.delete(requestId);
 
+    // Route to the leader's own RemoteCDPTransport if the requester is the leader itself
+    if (route.requesterBootstrapId === '__leader__') {
+      for (const transport of this.remoteTransports.values()) {
+        transport.handleResponse(requestId, result, error);
+      }
+      return;
+    }
+
     const requester = this.followers.get(route.requesterBootstrapId);
     if (requester) {
       requester.sync.send({ type: 'cdp.response', requestId, result, error });
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Tab open routing
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Open a tab on a remote runtime from the leader's own code.
+   * Returns a promise that resolves with the composite targetId ("{runtimeId}:{localTargetId}").
+   */
+  openRemoteTab(targetRuntimeId: string, url: string): Promise<string> {
+    const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
+    const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
+
+    if (!targetFollower) {
+      return Promise.reject(new Error(`Target runtime "${targetRuntimeId}" not connected`));
+    }
+
+    const requestId = `tab-open-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return new Promise<string>((resolve, reject) => {
+      this.tabOpenResolvers.set(requestId, { resolve, reject });
+      this.pendingTabOpenRoutes.set(requestId, { requesterBootstrapId: '__leader__', requestId });
+      targetFollower.sync.send({ type: 'tab.open', requestId, url });
+    });
+  }
+
+  /**
+   * Execute a tab.open on the leader's own browser transport.
+   */
+  private async executeLocalTabOpen(requestId: string, url: string, requesterBootstrapId: string): Promise<void> {
+    const follower = this.followers.get(requesterBootstrapId);
+    if (!follower) return;
+
+    const transport = this.options.browserTransport;
+    if (!transport) {
+      follower.sync.send({ type: 'tab.open.error', requestId, error: 'Leader has no browser transport' });
+      return;
+    }
+
+    try {
+      const result = await transport.send('Target.createTarget', { url, background: true });
+      const targetId = result['targetId'] as string;
+      follower.sync.send({ type: 'tab.opened', requestId, targetId: `leader:${targetId}` });
+    } catch (err) {
+      follower.sync.send({ type: 'tab.open.error', requestId, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  /**
+   * Forward a tab.open request from one follower to another.
+   */
+  private forwardTabOpen(requestId: string, targetRuntimeId: string, url: string, requesterBootstrapId: string): void {
+    const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
+    const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
+    const requester = this.followers.get(requesterBootstrapId);
+
+    if (!targetFollower) {
+      if (requester) {
+        requester.sync.send({ type: 'tab.open.error', requestId, error: `Target runtime "${targetRuntimeId}" not connected` });
+      }
+      return;
+    }
+
+    this.pendingTabOpenRoutes.set(requestId, { requesterBootstrapId, requestId });
+    targetFollower.sync.send({ type: 'tab.open', requestId, url });
+  }
+
+  /**
+   * Handle a tab.opened response from a follower.
+   */
+  private handleTabOpenResponse(requestId: string, targetId: string): void {
+    const route = this.pendingTabOpenRoutes.get(requestId);
+    if (!route) return;
+    this.pendingTabOpenRoutes.delete(requestId);
+
+    if (route.requesterBootstrapId === '__leader__') {
+      const resolver = this.tabOpenResolvers.get(requestId);
+      if (resolver) {
+        this.tabOpenResolvers.delete(requestId);
+        resolver.resolve(targetId);
+      }
+      return;
+    }
+
+    const requester = this.followers.get(route.requesterBootstrapId);
+    if (requester) {
+      requester.sync.send({ type: 'tab.opened', requestId, targetId });
+    }
+  }
+
+  /**
+   * Handle a tab.open.error response from a follower.
+   */
+  private handleTabOpenError(requestId: string, error: string): void {
+    const route = this.pendingTabOpenRoutes.get(requestId);
+    if (!route) return;
+    this.pendingTabOpenRoutes.delete(requestId);
+
+    if (route.requesterBootstrapId === '__leader__') {
+      const resolver = this.tabOpenResolvers.get(requestId);
+      if (resolver) {
+        this.tabOpenResolvers.delete(requestId);
+        resolver.reject(new Error(error));
+      }
+      return;
+    }
+
+    const requester = this.followers.get(route.requesterBootstrapId);
+    if (requester) {
+      requester.sync.send({ type: 'tab.open.error', requestId, error });
     }
   }
 }
