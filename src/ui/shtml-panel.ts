@@ -54,25 +54,39 @@ export class ShtmlPanelRenderer {
         live.setAttribute(attr.name, attr.value);
       }
       // Inject bridge access preamble + original code.
-      // Also set window.slicc so onclick attributes (which run in global scope) can use it.
       // Functions called from onclick must be hoisted to window since the script
       // runs inside an IIFE. We detect function names from onclick attributes and
       // append window assignments after the user code.
+      // onclick attributes that reference `slicc` are rewritten to use the
+      // panel-specific bridge from the registry, avoiding a global collision
+      // when multiple panels are open.
       if (!dead.src) {
-        // Collect function names referenced by onclick attributes in the panel
+        // Rewrite onclick `slicc` references to use the panel-specific bridge
+        const bridgeExpr = `window.__slicc_panels[${JSON.stringify(panelName)}]`;
+        for (const el of wrapper.querySelectorAll('[onclick]')) {
+          const attr = el.getAttribute('onclick') || '';
+          if (/\bslicc\b/.test(attr)) {
+            el.setAttribute('onclick', attr.replace(/\bslicc\b/g, bridgeExpr));
+          }
+        }
+
+        // Collect all function names referenced by onclick attributes in the panel
         const onclickFns = new Set<string>();
         for (const el of wrapper.querySelectorAll('[onclick]')) {
           const attr = el.getAttribute('onclick') || '';
-          // Match bare function calls like "doThing()" or "doThing(args)"
-          const match = attr.match(/^(\w+)\s*\(/);
-          if (match && match[1] !== 'slicc') onclickFns.add(match[1]);
+          // Match all function calls, not just the first one at position 0
+          for (const m of attr.matchAll(/\b(\w+)\s*\(/g)) {
+            const name = m[1];
+            // Skip known non-user functions (typeof check in hoist handles the rest)
+            if (name !== 'slicc') onclickFns.add(name);
+          }
         }
         const hoists = [...onclickFns]
           .map(fn => `if (typeof ${fn} === 'function') window.${fn} = ${fn};`)
           .join('\n');
 
         live.textContent =
-          `(function() { var slicc = window.__slicc_panels[${JSON.stringify(panelName)}]; window.slicc = slicc;\n` +
+          `(function() { var slicc = ${bridgeExpr};\n` +
           dead.textContent +
           (hoists ? '\n' + hoists : '') +
           '\n})();';
