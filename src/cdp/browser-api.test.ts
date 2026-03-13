@@ -259,6 +259,8 @@ describe('BrowserAPI', () => {
 
     it('captures a viewport screenshot (no clip, Chrome default)', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({}) // Runtime.enable
+        .mockResolvedValueOnce({ result: { value: 1 } }) // Runtime.evaluate (DPR=1)
         .mockResolvedValueOnce({ data: 'viewport-shot' }); // Page.captureScreenshot
 
       const data = await api.screenshot();
@@ -272,6 +274,8 @@ describe('BrowserAPI', () => {
 
     it('captures full page screenshot using viewport width and content height', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({}) // Runtime.enable
+        .mockResolvedValueOnce({ result: { value: 1 } }) // Runtime.evaluate (DPR=1)
         .mockResolvedValueOnce({
           contentSize: { width: 2560, height: 5000 },
           layoutViewport: { clientWidth: 1280 },
@@ -293,6 +297,8 @@ describe('BrowserAPI', () => {
 
     it('prefers cssLayoutViewport width when available', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({}) // Runtime.enable
+        .mockResolvedValueOnce({ result: { value: 1 } }) // Runtime.evaluate (DPR=1)
         .mockResolvedValueOnce({
           contentSize: { width: 2560, height: 3000 },
           cssLayoutViewport: { clientWidth: 1440 },
@@ -313,8 +319,10 @@ describe('BrowserAPI', () => {
       );
     });
 
-    it('passes through provided clip with default scale 1', async () => {
+    it('passes through provided clip with DPR-adjusted scale', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({}) // Runtime.enable
+        .mockResolvedValueOnce({ result: { value: 2 } }) // Runtime.evaluate (DPR=2)
         .mockResolvedValueOnce({ data: 'clipped' }); // captureScreenshot
 
       const data = await api.screenshot({ clip: { x: 10, y: 20, width: 300, height: 400 } });
@@ -324,10 +332,25 @@ describe('BrowserAPI', () => {
         {
           format: 'png',
           captureBeyondViewport: true,
-          clip: { x: 10, y: 20, width: 300, height: 400, scale: 1 },
+          clip: { x: 10, y: 20, width: 300, height: 400, scale: 0.5 },
         },
         'sess-1',
       );
+    });
+
+    it('uses clip.scale 0.5 for full page on HiDPI (DPR 2)', async () => {
+      // Re-attach to set up a fresh session (beforeEach already attached once)
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({}) // Runtime.enable (DPR detection)
+        .mockResolvedValueOnce({ result: { value: 2 } }) // Runtime.evaluate (DPR=2)
+        .mockResolvedValueOnce({
+          contentSize: { width: 2560, height: 5000 },
+          layoutViewport: { clientWidth: 1280 },
+        }) // Page.getLayoutMetrics
+        .mockResolvedValueOnce({ data: 'hidpi' }); // Page.captureScreenshot
+
+      const data = await api.screenshot({ fullPage: true });
+      expect(data).toBe('hidpi');
     });
   });
 

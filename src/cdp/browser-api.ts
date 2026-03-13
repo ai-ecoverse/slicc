@@ -213,6 +213,21 @@ export class BrowserAPI {
     await this.ensureConnected();
     this.ensureAttached();
 
+    // Detect DPR for scale compensation
+    let dpr = 1;
+    try {
+      await this.client.send('Runtime.enable', {}, this.sessionId!);
+      const dprResult = await this.client.send(
+        'Runtime.evaluate',
+        { expression: 'window.devicePixelRatio', returnByValue: true },
+        this.sessionId!,
+      );
+      dpr = (dprResult['result'] as { value?: number })?.value ?? 1;
+    } catch {
+      // Best-effort
+    }
+    const clipScale = 1 / dpr;
+
     try {
       const params: Record<string, unknown> = {
         format: options?.format ?? 'png',
@@ -221,7 +236,7 @@ export class BrowserAPI {
       if (options?.quality !== undefined) params['quality'] = options.quality;
 
       if (options?.clip) {
-        params['clip'] = { ...options.clip, scale: options.clip.scale ?? 1 };
+        params['clip'] = { ...options.clip, scale: options.clip.scale ?? clipScale };
       } else if (options?.fullPage) {
         // Full-page screenshot: use viewport WIDTH (not contentSize.width,
         // which includes overflow/off-screen elements) and content HEIGHT
