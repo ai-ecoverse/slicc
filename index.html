@@ -884,6 +884,16 @@
         transition: background var(--s2-transition-default);
       }
       .file-browser__item:hover { background: var(--s2-bg-elevated); }
+      .file-browser__item--selected {
+        background: var(--s2-bg-elevated);
+        box-shadow: inset 2px 0 0 var(--s2-accent);
+      }
+      .file-browser__item--selected:hover {
+        background: var(--s2-bg-elevated);
+      }
+      .file-browser__item--selected.file-browser__item--copy-flash {
+        background: color-mix(in srgb, var(--s2-positive) 20%, transparent);
+      }
       .file-browser__arrow {
         width: 12px; display: flex; align-items: center; justify-content: center;
         flex-shrink: 0; color: var(--s2-content-tertiary);
