@@ -1,29 +1,29 @@
 /**
- * SHTML Bridge — API available to `.shtml` panel scripts for
+ * Sprinkle Bridge — API available to `.shtml` sprinkle scripts for
  * communicating with the agent via lick events.
  */
 
 import type { VirtualFS } from '../fs/index.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 
-export interface ShtmlBridgeAPI {
-  /** Send a lick event to the agent */
-  lick(event: { action: string; data?: unknown }): void;
+export interface SprinkleBridgeAPI {
+  /** Send a lick event to the agent. Accepts {action, data} or a plain action string. */
+  lick(event: { action: string; data?: unknown } | string): void;
   /** Listen for updates from the agent */
   on(event: 'update', callback: (data: unknown) => void): void;
   /** Remove an update listener */
   off(event: 'update', callback: (data: unknown) => void): void;
   /** Read a file from VFS */
   readFile(path: string): Promise<string>;
-  /** Close this panel */
+  /** Close this sprinkle */
   close(): void;
-  /** Panel name */
+  /** Sprinkle name */
   readonly name: string;
 }
 
 type UpdateCallback = (data: unknown) => void;
 
-export class ShtmlBridge {
+export class SprinkleBridge {
   private listeners = new Map<string, Set<UpdateCallback>>();
   private lickHandler: (event: LickEvent) => void;
   private fs: VirtualFS;
@@ -39,38 +39,40 @@ export class ShtmlBridge {
     this.closeHandler = closeHandler;
   }
 
-  /** Create a bridge API for a specific panel. */
-  createAPI(panelName: string): ShtmlBridgeAPI {
+  /** Create a bridge API for a specific sprinkle. */
+  createAPI(sprinkleName: string): SprinkleBridgeAPI {
     return {
-      name: panelName,
-      lick: (event: { action: string; data?: unknown }) => {
+      name: sprinkleName,
+      lick: (event: { action: string; data?: unknown } | string) => {
+        const action = typeof event === 'string' ? event : event.action;
+        const data = typeof event === 'string' ? undefined : event.data;
         const lickEvent: LickEvent = {
-          type: 'panel',
-          panelName,
+          type: 'sprinkle',
+          sprinkleName,
           targetScoop: undefined,
           timestamp: new Date().toISOString(),
-          body: { action: event.action, data: event.data },
+          body: { action, data },
         };
         this.lickHandler(lickEvent);
       },
       on: (event: string, callback: UpdateCallback) => {
-        const key = `${panelName}:${event}`;
+        const key = `${sprinkleName}:${event}`;
         let set = this.listeners.get(key);
         if (!set) { set = new Set(); this.listeners.set(key, set); }
         set.add(callback);
       },
       off: (event: string, callback: UpdateCallback) => {
-        const key = `${panelName}:${event}`;
+        const key = `${sprinkleName}:${event}`;
         this.listeners.get(key)?.delete(callback);
       },
       readFile: async (path: string) => await this.fs.readFile(path, { encoding: 'utf-8' }) as string,
-      close: () => this.closeHandler(panelName),
+      close: () => this.closeHandler(sprinkleName),
     };
   }
 
-  /** Push data to a panel's update listeners. */
-  pushUpdate(panelName: string, data: unknown): void {
-    const key = `${panelName}:update`;
+  /** Push data to a sprinkle's update listeners. */
+  pushUpdate(sprinkleName: string, data: unknown): void {
+    const key = `${sprinkleName}:update`;
     const set = this.listeners.get(key);
     if (set) {
       for (const cb of set) {
@@ -79,10 +81,10 @@ export class ShtmlBridge {
     }
   }
 
-  /** Clean up listeners for a panel. */
-  removePanel(panelName: string): void {
+  /** Clean up listeners for a sprinkle. */
+  removeSprinkle(sprinkleName: string): void {
     for (const key of this.listeners.keys()) {
-      if (key.startsWith(`${panelName}:`)) {
+      if (key.startsWith(`${sprinkleName}:`)) {
         this.listeners.delete(key);
       }
     }

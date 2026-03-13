@@ -1,6 +1,6 @@
 /**
- * SHTML Discovery — scan VirtualFS for `.shtml` panel files and
- * build a map of panel names (basename without extension) to metadata.
+ * Sprinkle Discovery — scan VirtualFS for `.shtml` sprinkle files and
+ * build a map of sprinkle names (basename without extension) to metadata.
  *
  * Priority: `/workspace/skills/` is scanned first.
  */
@@ -8,9 +8,9 @@
 import type { VirtualFS } from '../fs/index.js';
 
 /** Priority roots to scan first (in order). */
-const PRIORITY_ROOTS = ['/workspace/skills'];
+const PRIORITY_ROOTS = ['/shared/sprinkles'];
 
-export interface ShtmlPanel {
+export interface Sprinkle {
   /** basename without .shtml */
   name: string;
   /** VFS path */
@@ -21,44 +21,44 @@ export interface ShtmlPanel {
 
 /**
  * Discover all `.shtml` files in the VFS and return a map of
- * panel name → ShtmlPanel. First occurrence of a basename wins.
+ * sprinkle name → Sprinkle. First occurrence of a basename wins.
  * Priority roots are scanned before the general `/` walk.
  */
-export async function discoverShtmlPanels(
+export async function discoverSprinkles(
   fs: VirtualFS,
-): Promise<Map<string, ShtmlPanel>> {
-  const panels = new Map<string, ShtmlPanel>();
+): Promise<Map<string, Sprinkle>> {
+  const sprinkles = new Map<string, Sprinkle>();
 
   // Scan priority roots first
   for (const root of PRIORITY_ROOTS) {
     if (await fs.exists(root)) {
-      await scanDir(fs, root, panels);
+      await scanDir(fs, root, sprinkles);
     }
   }
 
   // Scan everything from root, skipping already-found basenames
-  await scanDir(fs, '/', panels);
+  await scanDir(fs, '/', sprinkles);
 
-  return panels;
+  return sprinkles;
 }
 
 /** Walk a directory and collect .shtml files into the map (first wins). */
 async function scanDir(
   fs: VirtualFS,
   root: string,
-  panels: Map<string, ShtmlPanel>,
+  sprinkles: Map<string, Sprinkle>,
 ): Promise<void> {
   for await (const filePath of fs.walk(root)) {
     if (!filePath.endsWith('.shtml')) continue;
-    const name = panelName(filePath);
-    if (!panels.has(name)) {
+    const name = sprinkleName(filePath);
+    if (!sprinkles.has(name)) {
       let content: string;
       try {
         content = await fs.readFile(filePath, { encoding: 'utf-8' }) as string;
       } catch {
         content = '';
       }
-      panels.set(name, {
+      sprinkles.set(name, {
         name,
         path: filePath,
         title: extractTitle(content, name),
@@ -67,8 +67,8 @@ async function scanDir(
   }
 }
 
-/** Extract panel name from a .shtml file path (basename minus extension). */
-function panelName(filePath: string): string {
+/** Extract sprinkle name from a .shtml file path (basename minus extension). */
+function sprinkleName(filePath: string): string {
   const base = filePath.split('/').pop() ?? filePath;
   return base.endsWith('.shtml') ? base.slice(0, -6) : base;
 }

@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ShtmlBridge } from './shtml-bridge.js';
+import { SprinkleBridge } from './sprinkle-bridge.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import type { VirtualFS } from '../fs/index.js';
 
-describe('ShtmlBridge', () => {
-  let bridge: ShtmlBridge;
+describe('SprinkleBridge', () => {
+  let bridge: SprinkleBridge;
   let lickHandler: (event: LickEvent) => void;
   let lickHandlerMock: ReturnType<typeof vi.fn>;
   let closeHandler: (name: string) => void;
@@ -19,84 +19,94 @@ describe('ShtmlBridge', () => {
     mockFs = {
       readFile: vi.fn().mockResolvedValue('file content'),
     } as unknown as VirtualFS;
-    bridge = new ShtmlBridge(mockFs, lickHandler, closeHandler);
+    bridge = new SprinkleBridge(mockFs, lickHandler, closeHandler);
   });
 
-  it('creates an API with the panel name', () => {
-    const api = bridge.createAPI('test-panel');
-    expect(api.name).toBe('test-panel');
+  it('creates an API with the sprinkle name', () => {
+    const api = bridge.createAPI('test-sprinkle');
+    expect(api.name).toBe('test-sprinkle');
   });
 
   it('lick() sends a LickEvent through the handler', () => {
-    const api = bridge.createAPI('test-panel');
+    const api = bridge.createAPI('test-sprinkle');
     api.lick({ action: 'click', data: { id: 42 } });
 
     expect(lickHandlerMock).toHaveBeenCalledTimes(1);
     const event: LickEvent = lickHandlerMock.mock.calls[0][0];
-    expect(event.type).toBe('panel');
-    expect(event.panelName).toBe('test-panel');
+    expect(event.type).toBe('sprinkle');
+    expect(event.sprinkleName).toBe('test-sprinkle');
     expect(event.body).toEqual({ action: 'click', data: { id: 42 } });
   });
 
+  it('lick() accepts a plain string as action shorthand', () => {
+    const api = bridge.createAPI('test-sprinkle');
+    api.lick('add-year');
+
+    expect(lickHandlerMock).toHaveBeenCalledTimes(1);
+    const event: LickEvent = lickHandlerMock.mock.calls[0][0];
+    expect(event.type).toBe('sprinkle');
+    expect(event.body).toEqual({ action: 'add-year', data: undefined });
+  });
+
   it('close() calls the close handler', () => {
-    const api = bridge.createAPI('test-panel');
+    const api = bridge.createAPI('test-sprinkle');
     api.close();
-    expect(closeHandlerMock).toHaveBeenCalledWith('test-panel');
+    expect(closeHandlerMock).toHaveBeenCalledWith('test-sprinkle');
   });
 
   it('readFile() delegates to VFS', async () => {
-    const api = bridge.createAPI('test-panel');
+    const api = bridge.createAPI('test-sprinkle');
     const content = await api.readFile('/test.txt');
     expect(content).toBe('file content');
     expect(mockFs.readFile).toHaveBeenCalledWith('/test.txt', { encoding: 'utf-8' });
   });
 
   it('on/off registers and removes update listeners', () => {
-    const api = bridge.createAPI('test-panel');
+    const api = bridge.createAPI('test-sprinkle');
     const cb = vi.fn();
 
     api.on('update', cb);
-    bridge.pushUpdate('test-panel', { status: 'done' });
+    bridge.pushUpdate('test-sprinkle', { status: 'done' });
     expect(cb).toHaveBeenCalledWith({ status: 'done' });
 
     api.off('update', cb);
-    bridge.pushUpdate('test-panel', { status: 'again' });
+    bridge.pushUpdate('test-sprinkle', { status: 'again' });
     expect(cb).toHaveBeenCalledTimes(1); // not called again
   });
 
-  it('pushUpdate only fires for the correct panel', () => {
-    const api1 = bridge.createAPI('panel-a');
-    const api2 = bridge.createAPI('panel-b');
+  it('pushUpdate only fires for the correct sprinkle', () => {
+    const api1 = bridge.createAPI('sprinkle-a');
+    const api2 = bridge.createAPI('sprinkle-b');
     const cb1 = vi.fn();
     const cb2 = vi.fn();
 
     api1.on('update', cb1);
     api2.on('update', cb2);
 
-    bridge.pushUpdate('panel-a', 'data-a');
+    bridge.pushUpdate('sprinkle-a', 'data-a');
     expect(cb1).toHaveBeenCalledWith('data-a');
     expect(cb2).not.toHaveBeenCalled();
   });
 
-  it('removePanel cleans up all listeners for that panel', () => {
-    const api = bridge.createAPI('test-panel');
+  it('removeSprinkle cleans up all listeners for that sprinkle', () => {
+    const api = bridge.createAPI('test-sprinkle');
     const cb = vi.fn();
     api.on('update', cb);
 
-    bridge.removePanel('test-panel');
-    bridge.pushUpdate('test-panel', 'data');
+    bridge.removeSprinkle('test-sprinkle');
+    bridge.pushUpdate('test-sprinkle', 'data');
     expect(cb).not.toHaveBeenCalled();
   });
 
   it('listener errors are silently caught', () => {
-    const api = bridge.createAPI('test-panel');
+    const api = bridge.createAPI('test-sprinkle');
     const bad = vi.fn(() => { throw new Error('boom'); });
     const good = vi.fn();
 
     api.on('update', bad);
     api.on('update', good);
 
-    expect(() => bridge.pushUpdate('test-panel', 'data')).not.toThrow();
+    expect(() => bridge.pushUpdate('test-sprinkle', 'data')).not.toThrow();
     expect(good).toHaveBeenCalledWith('data');
   });
 });

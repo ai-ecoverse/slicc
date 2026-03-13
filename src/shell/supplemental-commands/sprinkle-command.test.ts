@@ -1,25 +1,25 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createPanelCommand } from './panel-command.js';
-import type { PanelManager } from '../../ui/panel-manager.js';
+import { createSprinkleCommand } from './sprinkle-command.js';
+import type { SprinkleManager } from '../../ui/sprinkle-manager.js';
 
-describe('panel command', () => {
-  let mockMgr: Partial<PanelManager>;
-  let command: ReturnType<typeof createPanelCommand>;
+describe('sprinkle command', () => {
+  let mockMgr: Partial<SprinkleManager>;
+  let command: ReturnType<typeof createSprinkleCommand>;
 
   beforeEach(() => {
     mockMgr = {
       refresh: vi.fn().mockResolvedValue(undefined),
       available: vi.fn().mockReturnValue([
-        { name: 'dash', path: '/workspace/skills/dash/dash.shtml', title: 'Dashboard' },
+        { name: 'dash', path: '/shared/sprinkles/dash/dash.shtml', title: 'Dashboard' },
       ]),
       opened: vi.fn().mockReturnValue([]),
       open: vi.fn().mockResolvedValue(undefined),
       close: vi.fn(),
-      sendToPanel: vi.fn(),
+      sendToSprinkle: vi.fn(),
     };
     // Set the global that the command reads from
-    (globalThis as any).window = { __slicc_panelManager: mockMgr };
-    command = createPanelCommand();
+    (globalThis as any).window = { __slicc_sprinkleManager: mockMgr };
+    command = createSprinkleCommand();
   });
 
   afterEach(() => {
@@ -40,14 +40,14 @@ describe('panel command', () => {
     expect(result.stdout).toContain('usage:');
   });
 
-  it('list shows available panels', async () => {
+  it('list shows available sprinkles', async () => {
     const result = await run(['list']);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('dash');
     expect(result.stdout).toContain('Dashboard');
   });
 
-  it('list shows [open] for open panels', async () => {
+  it('list shows [open] for open sprinkles', async () => {
     (mockMgr.opened as ReturnType<typeof vi.fn>).mockReturnValue(['dash']);
     const result = await run(['list']);
     expect(result.stdout).toContain('[open]');
@@ -79,14 +79,14 @@ describe('panel command', () => {
   it('refresh re-scans and reports count', async () => {
     const result = await run(['refresh']);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('1 panel');
+    expect(result.stdout).toContain('1 sprinkle');
     expect(mockMgr.refresh).toHaveBeenCalled();
   });
 
-  it('send pushes JSON data to panel', async () => {
+  it('send pushes JSON data to sprinkle', async () => {
     const result = await run(['send', 'dash', '{"status":"ok"}']);
     expect(result.exitCode).toBe(0);
-    expect(mockMgr.sendToPanel).toHaveBeenCalledWith('dash', { status: 'ok' });
+    expect(mockMgr.sendToSprinkle).toHaveBeenCalledWith('dash', { status: 'ok' });
   });
 
   it('send rejects invalid JSON', async () => {
@@ -111,9 +111,9 @@ describe('panel command', () => {
     expect(result.stderr).toContain('unknown subcommand');
   });
 
-  it('returns error when panel manager not initialized', async () => {
-    (globalThis as any).window = {}; // no __slicc_panelManager
-    const cmd = createPanelCommand();
+  it('returns error when sprinkle manager not initialized', async () => {
+    (globalThis as any).window = {}; // no __slicc_sprinkleManager
+    const cmd = createSprinkleCommand();
     const result = await (cmd as any).execute(['list'], { cwd: '/', env: {}, fs: {} });
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('not initialized');

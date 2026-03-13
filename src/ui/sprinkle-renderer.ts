@@ -1,37 +1,37 @@
 /**
- * SHTML Panel Renderer — loads `.shtml` content from VFS and renders
+ * Sprinkle Renderer — loads `.shtml` content from VFS and renders
  * it into a container div. Handles script extraction and re-execution.
  */
 
-import type { ShtmlBridgeAPI } from './shtml-bridge.js';
+import type { SprinkleBridgeAPI } from './sprinkle-bridge.js';
 
 declare global {
   interface Window {
-    __slicc_panels?: Record<string, ShtmlBridgeAPI>;
+    __slicc_sprinkles?: Record<string, SprinkleBridgeAPI>;
   }
 }
 
-export class ShtmlPanelRenderer {
+export class SprinkleRenderer {
   private container: HTMLElement;
-  private bridge: ShtmlBridgeAPI;
+  private bridge: SprinkleBridgeAPI;
   private scripts: HTMLScriptElement[] = [];
 
-  constructor(container: HTMLElement, bridge: ShtmlBridgeAPI) {
+  constructor(container: HTMLElement, bridge: SprinkleBridgeAPI) {
     this.container = container;
     this.bridge = bridge;
   }
 
   /** Render SHTML content into the container. */
-  async render(content: string, panelName: string): Promise<void> {
+  async render(content: string, sprinkleName: string): Promise<void> {
     this.dispose();
 
-    // Ensure the global panel registry exists
-    if (!window.__slicc_panels) window.__slicc_panels = {};
-    window.__slicc_panels[panelName] = this.bridge;
+    // Ensure the global sprinkle registry exists
+    if (!window.__slicc_sprinkles) window.__slicc_sprinkles = {};
+    window.__slicc_sprinkles[sprinkleName] = this.bridge;
 
     // Parse HTML and set content (scripts won't execute via innerHTML)
     const wrapper = document.createElement('div');
-    wrapper.className = 'shtml-panel-content';
+    wrapper.className = 'sprinkle-content';
     wrapper.innerHTML = content;
     this.container.appendChild(wrapper);
 
@@ -40,6 +40,16 @@ export class ShtmlPanelRenderer {
     for (const fill of wrapper.querySelectorAll<HTMLElement>('.fill[data-value]')) {
       const v = parseFloat(fill.dataset.value || '0');
       if (v >= 0 && v <= 100) fill.style.width = `${v}%`;
+    }
+
+    // Rewrite onclick `slicc` or `bridge` references to use the sprinkle-specific bridge.
+    // This must run before script extraction so it applies even to sprinkles with no scripts.
+    const bridgeExpr = `window.__slicc_sprinkles[${JSON.stringify(sprinkleName)}]`;
+    for (const el of wrapper.querySelectorAll('[onclick]')) {
+      const attr = el.getAttribute('onclick') || '';
+      if (/\b(slicc|bridge)\b/.test(attr)) {
+        el.setAttribute('onclick', attr.replace(/\b(slicc|bridge)\b/g, bridgeExpr));
+      }
     }
 
     // Extract <script> tags and re-create them as live elements.
@@ -57,20 +67,8 @@ export class ShtmlPanelRenderer {
       // Functions called from onclick must be hoisted to window since the script
       // runs inside an IIFE. We detect function names from onclick attributes and
       // append window assignments after the user code.
-      // onclick attributes that reference `slicc` are rewritten to use the
-      // panel-specific bridge from the registry, avoiding a global collision
-      // when multiple panels are open.
       if (!dead.src) {
-        // Rewrite onclick `slicc` references to use the panel-specific bridge
-        const bridgeExpr = `window.__slicc_panels[${JSON.stringify(panelName)}]`;
-        for (const el of wrapper.querySelectorAll('[onclick]')) {
-          const attr = el.getAttribute('onclick') || '';
-          if (/\bslicc\b/.test(attr)) {
-            el.setAttribute('onclick', attr.replace(/\bslicc\b/g, bridgeExpr));
-          }
-        }
-
-        // Collect all function names referenced by onclick attributes in the panel
+        // Collect all function names referenced by onclick attributes in the sprinkle
         const onclickFns = new Set<string>();
         for (const el of wrapper.querySelectorAll('[onclick]')) {
           const attr = el.getAttribute('onclick') || '';
@@ -78,7 +76,7 @@ export class ShtmlPanelRenderer {
           for (const m of attr.matchAll(/\b(\w+)\s*\(/g)) {
             const name = m[1];
             // Skip known non-user functions (typeof check in hoist handles the rest)
-            if (name !== 'slicc') onclickFns.add(name);
+            if (!['slicc', 'bridge', 'lick', 'close'].includes(name)) onclickFns.add(name);
           }
         }
         const hoists = [...onclickFns]
@@ -86,7 +84,7 @@ export class ShtmlPanelRenderer {
           .join('\n');
 
         live.textContent =
-          `(function() { var slicc = ${bridgeExpr};\n` +
+          `(function() { var slicc = ${bridgeExpr}; var bridge = slicc;\n` +
           dead.textContent +
           (hoists ? '\n' + hoists : '') +
           '\n})();';
@@ -102,12 +100,12 @@ export class ShtmlPanelRenderer {
       script.remove();
     }
     this.scripts = [];
-    // Remove panel content
-    const wrapper = this.container.querySelector('.shtml-panel-content');
+    // Remove sprinkle content
+    const wrapper = this.container.querySelector('.sprinkle-content');
     if (wrapper) wrapper.remove();
     // Clean up global reference
-    if (window.__slicc_panels) {
-      delete window.__slicc_panels[this.bridge.name];
+    if (window.__slicc_sprinkles) {
+      delete window.__slicc_sprinkles[this.bridge.name];
     }
   }
 }

@@ -13,7 +13,7 @@
   <div class="shtml-card">
     <div class="shtml-heading" style="font-size: 14px;">Quick start</div>
     <div class="shtml-body">
-      Type a message in the chat to get started. SLICC can write code, run shell commands, automate browser tabs, and build interactive panels.
+      Type a message in the chat to get started. SLICC can write code, run shell commands, automate browser tabs, and build interactive sprinkles.
     </div>
   </div>
 
@@ -24,8 +24,8 @@
       <dd>List all shell commands</dd>
       <dt><code>skill list</code></dt>
       <dd>Show installed skills</dd>
-      <dt><code>panel open &lt;name&gt;</code></dt>
-      <dd>Open a dashboard panel</dd>
+      <dt><code>sprinkle open &lt;name&gt;</code></dt>
+      <dd>Open a sprinkle panel</dd>
       <dt><code>git clone &lt;url&gt;</code></dt>
       <dd>Clone a repository</dd>
     </dl>

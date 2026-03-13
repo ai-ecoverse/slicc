@@ -26,7 +26,7 @@ describe('tabbed-ui', () => {
 
   it('accepts any non-empty string as a valid extension tab id', () => {
     expect(isExtensionTabId('chat')).toBe(true);
-    expect(isExtensionTabId('shtml-dashboard')).toBe(true);
+    expect(isExtensionTabId('sprinkle-dashboard')).toBe(true);
     expect(isExtensionTabId('')).toBe(false);
   });
 
@@ -36,8 +36,8 @@ describe('tabbed-ui', () => {
     expect(normalizeExtensionTabId('')).toBe(DEFAULT_EXTENSION_TAB_ID);
   });
 
-  it('passes through dynamic panel ids unchanged', () => {
-    expect(normalizeExtensionTabId('shtml-dash')).toBe('shtml-dash');
+  it('passes through dynamic sprinkle ids unchanged', () => {
+    expect(normalizeExtensionTabId('sprinkle-dash')).toBe('sprinkle-dash');
     expect(normalizeExtensionTabId('files')).toBe('files');
     expect(normalizeExtensionTabId(null, 'files')).toBe('files');
   });

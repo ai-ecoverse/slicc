@@ -29,7 +29,7 @@ import {
   isElectronOverlaySetTabMessage,
   resolveUiRuntimeMode,
 } from './runtime-mode.js';
-import { PanelManager } from './panel-manager.js';
+import { SprinkleManager } from './sprinkle-manager.js';
 
 const log = createLogger('main');
 
@@ -775,31 +775,33 @@ async function main(): Promise<void> {
   // Route lick events to scoops
   const routeLickToScoop = (event: LickEvent) => {
     const isWebhook = event.type === 'webhook';
-    const isPanel = event.type === 'panel';
-    const eventName = isWebhook ? event.webhookName : isPanel ? event.panelName : event.cronName;
-    const eventId = isWebhook ? event.webhookId : isPanel ? event.panelName : event.cronId;
+    const isSprinkle = event.type === 'sprinkle';
+    const eventName = isWebhook ? event.webhookName : isSprinkle ? event.sprinkleName : event.cronName;
+    const eventId = isWebhook ? event.webhookId : isSprinkle ? event.sprinkleName : event.cronId;
     const channel = event.type;
 
     log.debug('Lick event', { type: event.type, name: eventName, targetScoop: event.targetScoop });
 
-    // Determine the target: explicit scoop, or cone for panel events without a target
+    // Determine the target:
+    // - Sprinkle licks always go to the cone (cone decides which scoop handles it)
+    // - Webhook/cron licks use explicit targetScoop if set
     const scoops = orchestrator.getScoops();
     let resolvedTarget: RegisteredScoop | undefined;
 
-    if (event.targetScoop) {
+    if (isSprinkle) {
+      // Sprinkle licks always route to cone — cone picks or creates a scoop
+      resolvedTarget = scoops.find(s => s.isCone);
+    } else if (event.targetScoop) {
       resolvedTarget = scoops.find(s =>
         s.name === event.targetScoop ||
         s.folder === event.targetScoop ||
         s.folder === `${event.targetScoop}-scoop`
       );
-    } else if (isPanel) {
-      // Panel licks without explicit target go to the cone
-      resolvedTarget = scoops.find(s => s.isCone);
     }
 
     if (resolvedTarget) {
       const msgId = `${channel}-${eventId}-${Date.now()}`;
-      const eventLabel = isWebhook ? 'Webhook Event' : isPanel ? 'Panel Event' : 'Cron Event';
+      const eventLabel = isWebhook ? 'Webhook Event' : isSprinkle ? 'Sprinkle Event' : 'Cron Event';
       const content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
 
       const msg: ChannelMessage = {
@@ -823,7 +825,7 @@ async function main(): Promise<void> {
       });
 
       if (selectedScoop?.jid === resolvedTarget.jid) {
-        layout.panels.chat.addLickMessage(msgId, content, channel as 'webhook' | 'cron' | 'panel');
+        layout.panels.chat.addLickMessage(msgId, content, channel as 'webhook' | 'cron' | 'sprinkle');
       }
 
       log.info('Routing lick to scoop', { type: channel, name: eventName, scoopJid: resolvedTarget.jid });
@@ -835,43 +837,43 @@ async function main(): Promise<void> {
 
   lickManager.setEventHandler(routeLickToScoop);
 
-  // ── Panel Manager (SHTML canvas panels) ────────────────────────────
-  let panelManager: PanelManager | null = null;
+  // ── Sprinkle Manager (SHTML sprinkle panels) ────────────────────────
+  let sprinkleManager: SprinkleManager | null = null;
   if (sharedFs) {
-    panelManager = new PanelManager(
+    sprinkleManager = new SprinkleManager(
       sharedFs,
       routeLickToScoop,
       {
-        addPanel: (name, title, element, zone) => layout.addPanel(name, title, element, zone as 'primary' | 'drawer' | undefined),
-        removePanel: (name) => layout.removePanel(name),
+        addSprinkle: (name, title, element, zone) => layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined),
+        removeSprinkle: (name) => layout.removeSprinkle(name),
       },
     );
-    // Expose for open command and panel shell command
-    (window as unknown as Record<string, unknown>).__slicc_panelManager = panelManager;
-    await panelManager.refresh();
-    layout.onPanelClose = (name) => panelManager!.close(name);
+    // Expose for open command and sprinkle shell command
+    (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
+    await sprinkleManager.refresh();
+    layout.onSprinkleClose = (name) => sprinkleManager!.close(name);
 
-    // Wire [+] picker: available SHTML panels + open callback
-    layout.getAvailableShtmlPanels = () => {
-      const opened = new Set(panelManager!.opened());
-      return panelManager!.available()
+    // Wire [+] picker: available sprinkles + open callback
+    layout.getAvailableSprinkles = () => {
+      const opened = new Set(sprinkleManager!.opened());
+      return sprinkleManager!.available()
         .filter(p => !opened.has(p.name))
         .map(p => ({ name: p.name, title: p.title }));
     };
-    layout.onOpenShtmlPanel = (name, zone) => panelManager!.open(name, zone);
+    layout.onOpenSprinkle = (name, zone) => sprinkleManager!.open(name, zone);
     layout.updateAddButtons();
 
-    // Open welcome panel on first run
-    if (!localStorage.getItem('slicc-welcomed') && panelManager.available().some(p => p.name === 'welcome')) {
+    // Open welcome sprinkle on first run
+    if (!localStorage.getItem('slicc-welcomed') && sprinkleManager.available().some(p => p.name === 'welcome')) {
       try {
-        await panelManager.open('welcome');
+        await sprinkleManager.open('welcome');
         localStorage.setItem('slicc-welcomed', '1');
       } catch (e) {
-        log.warn('Failed to open welcome panel', e);
+        log.warn('Failed to open welcome sprinkle', e);
       }
     }
 
-    log.info('PanelManager initialized');
+    log.info('SprinkleManager initialized');
   }
 
   // Connect WebSocket for server communication

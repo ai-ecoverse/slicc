@@ -40,7 +40,7 @@ import {
 import { EXTENSION_TAB_SPECS, type ExtensionTabId } from './tabbed-ui.js';
 import { TabZone } from './tab-zone.js';
 import { PanelRegistry } from './panel-registry.js';
-import { showPanelPicker } from './panel-picker.js';
+import { showSprinklePicker } from './sprinkle-picker.js';
 import type { ZoneId } from './panel-types.js';
 import type { ChatMessage } from './types.js';
 import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
@@ -69,7 +69,7 @@ export class Layout {
   private terminalContainer!: HTMLElement;
   private iframeContainer!: HTMLElement;
 
-  // Primary zone (top of right column — Terminal + SHTML panel tabs)
+  // Primary zone (top of right column — Terminal + sprinkle tabs)
   private primaryZoneEl!: HTMLElement;
   private primaryZone!: TabZone;
 
@@ -104,12 +104,12 @@ export class Layout {
   public onScoopSelect?: (scoop: RegisteredScoop) => void;
   public onClearChat?: () => Promise<void>;
   public onClearFilesystem?: () => Promise<void>;
-  public onPanelClose?: (name: string) => void;
+  public onSprinkleClose?: (name: string) => void;
 
-  /** Callback to get available SHTML panels for the [+] picker. */
-  public getAvailableShtmlPanels?: () => Array<{ name: string; title: string }>;
-  /** Callback to open an SHTML panel by name. */
-  public onOpenShtmlPanel?: (name: string, zone?: ZoneId) => Promise<void>;
+  /** Callback to get available sprinkles for the [+] picker. */
+  public getAvailableSprinkles?: () => Array<{ name: string; title: string }>;
+  /** Callback to open a sprinkle by name. */
+  public onOpenSprinkle?: (name: string, zone?: ZoneId) => Promise<void>;
 
   private scoopsWidth = 0.15;
   private leftWidth = 0.45;
@@ -719,8 +719,8 @@ export class Layout {
         if (id === 'memory') this.panels?.memory?.refresh();
       },
       onTabClose: (id) => {
-        const name = id.startsWith('shtml-') ? id.slice(6) : id;
-        this.onPanelClose?.(name);
+        const name = id.startsWith('sprinkle-') ? id.slice(9) : id;
+        this.onSprinkleClose?.(name);
       },
       onAddClick: () => this.showExtensionPicker(tabBar),
     }, { classPrefix: 'tab-bar' });
@@ -793,22 +793,22 @@ export class Layout {
 
   /** Show the [+] picker in extension mode. */
   private showExtensionPicker(anchor: HTMLElement): void {
-    const shtmlPanels = (this.getAvailableShtmlPanels?.() ?? []);
+    const availableSprinkles = (this.getAvailableSprinkles?.() ?? []);
     // In extension mode, all panels are in one zone — filter already-open ones
     const openIds = new Set(this.extensionZone.getTabIds());
-    const available = shtmlPanels.filter(p => !openIds.has(`shtml-${p.name}`));
+    const available = availableSprinkles.filter(p => !openIds.has(`sprinkle-${p.name}`));
 
     if (available.length === 0) return;
 
-    showPanelPicker(anchor, 'primary', {
+    showSprinklePicker(anchor, 'primary', {
       registry: this.registry,
       callbacks: {
         onSelectPanel: () => {},
-        onSelectShtml: (name) => {
-          this.onOpenShtmlPanel?.(name);
+        onSelectSprinkle: (name) => {
+          this.onOpenSprinkle?.(name);
         },
       },
-      getAvailableShtml: () => available,
+      getAvailableSprinkles: () => available,
     });
   }
 
@@ -853,7 +853,7 @@ export class Layout {
     this.rightEl = document.createElement('div');
     this.rightEl.className = 'layout__right';
 
-    // ── Primary zone (Terminal + SHTML panel tabs) ──
+    // ── Primary zone (Terminal + sprinkle tabs) ──
     this.primaryZoneEl = document.createElement('div');
     this.primaryZoneEl.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: none;';
 
@@ -870,8 +870,8 @@ export class Layout {
         if (id === 'terminal') this.panels?.terminal?.refit();
       },
       onTabClose: (id) => {
-        const name = id.startsWith('shtml-') ? id.slice(6) : id;
-        this.onPanelClose?.(name);
+        const name = id.startsWith('sprinkle-') ? id.slice(9) : id;
+        this.onSprinkleClose?.(name);
       },
       onAddClick: () => this.showPickerForZone('primary', primaryTabBar),
     });
@@ -906,8 +906,8 @@ export class Layout {
         history.replaceState(null, '', url.toString());
       },
       onTabClose: (id) => {
-        const name = id.startsWith('shtml-') ? id.slice(6) : id;
-        this.onPanelClose?.(name);
+        const name = id.startsWith('sprinkle-') ? id.slice(9) : id;
+        this.onSprinkleClose?.(name);
       },
       onAddClick: () => this.showPickerForZone('drawer', drawerTabBar),
     });
@@ -1137,42 +1137,42 @@ export class Layout {
   /** Update [+] button enabled state based on available panels. */
   updateAddButtons(): void {
     const closedCount = this.registry.getClosed().length;
-    const availableShtml = this.getAvailableShtmlPanels?.() ?? [];
-    const openShtml = new Set<string>();
+    const availableSprinkles = this.getAvailableSprinkles?.() ?? [];
+    const openSprinkles = new Set<string>();
     for (const id of this.registry.ids()) {
-      if (id.startsWith('shtml-') && this.registry.get(id)?.descriptor.zone !== null) {
-        openShtml.add(id.slice(6));
+      if (id.startsWith('sprinkle-') && this.registry.get(id)?.descriptor.zone !== null) {
+        openSprinkles.add(id.slice(9));
       }
     }
-    const unopenedShtml = availableShtml.filter(p => !openShtml.has(p.name)).length;
-    const hasAvailable = closedCount + unopenedShtml > 0;
+    const unopenedSprinkles = availableSprinkles.filter(p => !openSprinkles.has(p.name)).length;
+    const hasAvailable = closedCount + unopenedSprinkles > 0;
     this.primaryZone?.setAddButtonEnabled(hasAvailable);
     this.drawerZone?.setAddButtonEnabled(hasAvailable);
   }
 
   /** Show the [+] panel picker for a zone. */
   private showPickerForZone(zone: ZoneId, anchor: HTMLElement): void {
-    // Collect available SHTML panels that are not currently open
-    const openShtml = new Set<string>();
+    // Collect available sprinkles that are not currently open
+    const openSprinkles = new Set<string>();
     for (const id of this.registry.ids()) {
-      if (id.startsWith('shtml-') && this.registry.get(id)?.descriptor.zone !== null) {
-        openShtml.add(id.slice(6)); // strip 'shtml-' prefix
+      if (id.startsWith('sprinkle-') && this.registry.get(id)?.descriptor.zone !== null) {
+        openSprinkles.add(id.slice(9)); // strip 'sprinkle-' prefix
       }
     }
-    const shtmlPanels = (this.getAvailableShtmlPanels?.() ?? [])
-      .filter(p => !openShtml.has(p.name));
+    const availableSprinkles = (this.getAvailableSprinkles?.() ?? [])
+      .filter(p => !openSprinkles.has(p.name));
 
-    showPanelPicker(anchor, zone, {
+    showSprinklePicker(anchor, zone, {
       registry: this.registry,
       callbacks: {
         onSelectPanel: (id, targetZone) => {
           this.openPanelInZone(id, targetZone);
         },
-        onSelectShtml: (name, targetZone) => {
-          this.onOpenShtmlPanel?.(name, targetZone);
+        onSelectSprinkle: (name, targetZone) => {
+          this.onOpenSprinkle?.(name, targetZone);
         },
       },
-      getAvailableShtml: () => shtmlPanels,
+      getAvailableSprinkles: () => availableSprinkles,
     });
   }
 
@@ -1193,16 +1193,16 @@ export class Layout {
     tabZone.activateTab(id);
   }
 
-  // ── Dynamic SHTML Panels ───────────────────────────────────────────
+  // ── Dynamic Sprinkles ────────────────────────────────────────────
 
-  /** Track dynamic panel sections in standalone mode. */
-  private dynamicPanels = new Map<string, HTMLElement>();
+  /** Track dynamic sprinkle sections in standalone mode. */
+  private dynamicSprinkles = new Map<string, HTMLElement>();
 
-  /** Add a dynamic .shtml panel to the layout. */
-  addPanel(name: string, title: string, element: HTMLElement, targetZone?: ZoneId): void {
+  /** Add a dynamic .shtml sprinkle to the layout. */
+  addSprinkle(name: string, title: string, element: HTMLElement, targetZone?: ZoneId): void {
     if (this.isExtension) {
       // Extension mode: add as a new tab via TabZone
-      const tabId = `shtml-${name}`;
+      const tabId = `sprinkle-${name}`;
 
       const container = document.createElement('div');
       container.className = 'tab-content__panel';
@@ -1215,7 +1215,7 @@ export class Layout {
         element: container,
       });
       this.tabContainers.set(tabId, container);
-      this.dynamicPanels.set(name, container);
+      this.dynamicSprinkles.set(name, container);
 
       // Auto-switch to the new tab
       this.extensionZone.activateTab(tabId);
@@ -1223,7 +1223,7 @@ export class Layout {
       // Standalone mode: add to the requested zone (default: primary)
       const zone = targetZone ?? 'primary';
       const tabZone = zone === 'primary' ? this.primaryZone : this.drawerZone;
-      const tabId = `shtml-${name}`;
+      const tabId = `sprinkle-${name}`;
 
       const container = document.createElement('div');
       container.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: auto; flex: 1;';
@@ -1236,7 +1236,7 @@ export class Layout {
         zone,
         closable: true,
         element: container,
-        onClose: () => this.onPanelClose?.(name),
+        onClose: () => this.onSprinkleClose?.(name),
       });
 
       tabZone.addTab({
@@ -1245,7 +1245,7 @@ export class Layout {
         closable: true,
         element: container,
       });
-      this.dynamicPanels.set(name, container);
+      this.dynamicSprinkles.set(name, container);
 
       // Auto-switch to the new tab
       tabZone.activateTab(tabId);
@@ -1253,21 +1253,21 @@ export class Layout {
     }
   }
 
-  /** Remove a dynamic .shtml panel from the layout. */
-  removePanel(name: string): void {
+  /** Remove a dynamic .shtml sprinkle from the layout. */
+  removeSprinkle(name: string): void {
     if (this.isExtension) {
-      const tabId = `shtml-${name}`;
+      const tabId = `sprinkle-${name}`;
       this.extensionZone.removeTab(tabId);
       this.tabContainers.delete(tabId);
-      this.dynamicPanels.delete(name);
+      this.dynamicSprinkles.delete(name);
     } else {
-      const tabId = `shtml-${name}`;
+      const tabId = `sprinkle-${name}`;
       const entry = this.registry.get(tabId);
       const zone = entry?.descriptor.zone;
       const tabZone = zone === 'drawer' ? this.drawerZone : this.primaryZone;
       tabZone.removeTab(tabId);
       this.registry.unregister(tabId);
-      this.dynamicPanels.delete(name);
+      this.dynamicSprinkles.delete(name);
       this.updateAddButtons();
     }
   }

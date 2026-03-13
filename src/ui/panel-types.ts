@@ -5,7 +5,7 @@
 export type ZoneId = 'primary' | 'drawer';
 
 export interface PanelDescriptor {
-  /** Unique panel identifier (e.g. 'terminal', 'files', 'memory', 'shtml-dash'). */
+  /** Unique panel identifier (e.g. 'terminal', 'files', 'memory', 'sprinkle-dash'). */
   id: string;
   /** Tab display text. */
   label: string;

@@ -1,50 +1,50 @@
 /**
- * Panel Picker — popup menu shown on [+] click.
- * Lists closed panels from the registry + available (unopened) SHTML panels.
+ * Sprinkle Picker — popup menu shown on [+] click.
+ * Lists closed panels from the registry + available (unopened) sprinkles.
  * Selecting one opens it in the zone that triggered the picker.
  */
 
 import type { PanelRegistry } from './panel-registry.js';
 import type { ZoneId } from './panel-types.js';
 
-export interface PanelPickerCallbacks {
+export interface SprinklePickerCallbacks {
   /** Called when a registered (closed) panel is selected. */
   onSelectPanel(id: string, zone: ZoneId): void;
-  /** Called when an SHTML panel (not yet opened) is selected. */
-  onSelectShtml(name: string, zone: ZoneId): void;
+  /** Called when a sprinkle (not yet opened) is selected. */
+  onSelectSprinkle(name: string, zone: ZoneId): void;
 }
 
-export interface PanelPickerOptions {
+export interface SprinklePickerOptions {
   registry: PanelRegistry;
-  callbacks: PanelPickerCallbacks;
-  /** Return available SHTML panels that are not yet open. */
-  getAvailableShtml?: () => Array<{ name: string; title: string }>;
+  callbacks: SprinklePickerCallbacks;
+  /** Return available sprinkles that are not yet open. */
+  getAvailableSprinkles?: () => Array<{ name: string; title: string }>;
 }
 
 /**
- * Show a panel picker popup anchored to a button element.
+ * Show a sprinkle picker popup anchored to a button element.
  * Closes itself on selection or outside click.
  */
-export function showPanelPicker(
+export function showSprinklePicker(
   anchor: HTMLElement,
   zone: ZoneId,
-  options: PanelPickerOptions,
+  options: SprinklePickerOptions,
 ): void {
   // Remove any existing picker
-  const existing = document.querySelector('.panel-picker');
+  const existing = document.querySelector('.sprinkle-picker');
   if (existing) existing.remove();
 
-  const { registry, callbacks, getAvailableShtml } = options;
+  const { registry, callbacks, getAvailableSprinkles } = options;
 
   const closedPanels = registry.getClosed();
-  const shtmlPanels = getAvailableShtml?.() ?? [];
+  const sprinkles = getAvailableSprinkles?.() ?? [];
 
-  if (closedPanels.length === 0 && shtmlPanels.length === 0) {
+  if (closedPanels.length === 0 && sprinkles.length === 0) {
     return; // Nothing to show
   }
 
   const menu = document.createElement('div');
-  menu.className = 'panel-picker';
+  menu.className = 'sprinkle-picker';
   menu.style.cssText =
     'position: absolute; min-width: 160px; max-height: 300px; ' +
     'overflow-y: auto; background: var(--s2-bg-layer-2); border: 1px solid var(--s2-border-default); ' +
@@ -65,16 +65,16 @@ export function showPanelPicker(
   }
 
   // Separator if both groups exist
-  if (closedPanels.length > 0 && shtmlPanels.length > 0) {
+  if (closedPanels.length > 0 && sprinkles.length > 0) {
     const sep = document.createElement('div');
     sep.style.cssText = 'height: 1px; background: var(--s2-border-default); margin: 4px 0;';
     menu.appendChild(sep);
   }
 
-  // Available SHTML panels
-  for (const panel of shtmlPanels) {
-    const item = createMenuItem(panel.title, () => {
-      callbacks.onSelectShtml(panel.name, zone);
+  // Available sprinkles
+  for (const sprinkle of sprinkles) {
+    const item = createMenuItem(sprinkle.title, () => {
+      callbacks.onSelectSprinkle(sprinkle.name, zone);
       dismiss();
     });
     menu.appendChild(item);
@@ -100,7 +100,7 @@ export function showPanelPicker(
 
 function createMenuItem(label: string, onClick: () => void): HTMLElement {
   const item = document.createElement('div');
-  item.className = 'panel-picker__item';
+  item.className = 'sprinkle-picker__item';
   item.style.cssText =
     'padding: 6px 12px; cursor: pointer; font-size: 12px; color: var(--s2-content-default); ' +
     'border-radius: var(--s2-radius-s); margin: 0 4px; transition: background 130ms ease;';

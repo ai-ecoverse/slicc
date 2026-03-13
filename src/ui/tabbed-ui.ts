@@ -1,4 +1,4 @@
-/** Built-in extension tab specs. Dynamic panels (SHTML) are added at runtime. */
+/** Built-in extension tab specs. Dynamic sprinkles are added at runtime. */
 export const EXTENSION_TAB_SPECS = [
   { id: 'chat', label: 'Chat' },
   { id: 'terminal', label: 'Terminal' },
@@ -6,11 +6,11 @@ export const EXTENSION_TAB_SPECS = [
   { id: 'memory', label: 'Memory' },
 ] as const;
 
-/** Built-in tab id union. Dynamic panels use arbitrary string ids. */
+/** Built-in tab id union. Dynamic sprinkles use arbitrary string ids. */
 export type BuiltinExtensionTabId = (typeof EXTENSION_TAB_SPECS)[number]['id'];
 
 /**
- * Extension tab id — widened to `string` so dynamic panel ids (e.g. 'shtml-dash')
+ * Extension tab id — widened to `string` so dynamic sprinkle ids (e.g. 'sprinkle-dash')
  * work without type errors. Built-in ids are still checked where needed.
  */
 export type ExtensionTabId = string;
@@ -26,7 +26,7 @@ export function isBuiltinExtensionTabId(value: string): value is BuiltinExtensio
 
 /**
  * @deprecated Use isBuiltinExtensionTabId for strict checks.
- * This now returns true for any non-empty string (dynamic panels are valid).
+ * This now returns true for any non-empty string (dynamic sprinkles are valid).
  */
 export function isExtensionTabId(value: string): value is ExtensionTabId {
   return value.length > 0;
@@ -34,7 +34,7 @@ export function isExtensionTabId(value: string): value is ExtensionTabId {
 
 /**
  * Normalize a tab id. Returns the value if non-empty, otherwise the fallback.
- * Accepts both built-in and dynamic panel ids.
+ * Accepts both built-in and dynamic sprinkle ids.
  */
 export function normalizeExtensionTabId(
   value: string | null | undefined,

@@ -34,11 +34,11 @@ describe('overlay-shell-state', () => {
     expect(setElectronOverlayOpen(state, true)).toBe(state);
   });
 
-  it('accepts dynamic panel ids as valid tabs', () => {
+  it('accepts dynamic sprinkle ids as valid tabs', () => {
     const state = createElectronOverlayShellState({ activeTab: 'terminal' });
-    expect(setElectronOverlayTab(state, 'shtml-dash')).toEqual({
+    expect(setElectronOverlayTab(state, 'sprinkle-dash')).toEqual({
       ...state,
-      activeTab: 'shtml-dash',
+      activeTab: 'sprinkle-dash',
     });
   });
 
