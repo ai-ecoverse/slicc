@@ -213,23 +213,6 @@ export class BrowserAPI {
     await this.ensureConnected();
     this.ensureAttached();
 
-    // Detect device pixel ratio to normalize screenshot output to 1x.
-    // On HiDPI/Retina displays (DPR 2), Chrome captures at native resolution
-    // producing 2x-oversized images. We compensate via clip.scale = 1/DPR
-    // which tells Chrome to downscale the capture to CSS pixel dimensions.
-    let devicePixelRatio = 1;
-    try {
-      await this.client.send('Runtime.enable', {}, this.sessionId!);
-      const dprResult = await this.client.send(
-        'Runtime.evaluate',
-        { expression: 'window.devicePixelRatio', returnByValue: true },
-        this.sessionId!,
-      );
-      devicePixelRatio = (dprResult['result'] as { value?: number })?.value ?? 1;
-    } catch {
-      // Best-effort: proceed with DPR 1 assumption
-    }
-
     try {
       const params: Record<string, unknown> = {
         format: options?.format ?? 'png',
@@ -237,13 +220,12 @@ export class BrowserAPI {
       };
       if (options?.quality !== undefined) params['quality'] = options.quality;
 
-      // Scale factor for clip: 1/DPR produces CSS-pixel-sized output.
-      const clipScale = 1 / devicePixelRatio;
-
       if (options?.clip) {
-        params['clip'] = { ...options.clip, scale: options.clip.scale ?? clipScale };
+        params['clip'] = { ...options.clip, scale: options.clip.scale ?? 1 };
       } else if (options?.fullPage) {
-        // Get full page metrics for a full-page screenshot
+        // Full-page screenshot: use viewport WIDTH (not contentSize.width,
+        // which includes overflow/off-screen elements) and content HEIGHT
+        // (to capture the full scrollable page).
         const metrics = await this.client.send(
           'Page.getLayoutMetrics',
           {},
@@ -253,34 +235,22 @@ export class BrowserAPI {
           width: number;
           height: number;
         };
+        const cssViewport = metrics['cssLayoutViewport'] as {
+          clientWidth: number;
+        } | undefined;
+        const layoutViewport = metrics['layoutViewport'] as {
+          clientWidth: number;
+        };
+        const viewportWidth = cssViewport?.clientWidth ?? layoutViewport.clientWidth;
         params['clip'] = {
           x: 0,
           y: 0,
-          width: contentSize.width,
+          width: viewportWidth,
           height: contentSize.height,
-          scale: clipScale,
-        };
-      } else {
-        // Viewport screenshot — clip to viewport at 1x scale
-        const metrics = await this.client.send(
-          'Page.getLayoutMetrics',
-          {},
-          this.sessionId!,
-        );
-        const viewport = metrics['visualViewport'] as {
-          clientWidth: number;
-          clientHeight: number;
-          pageX: number;
-          pageY: number;
-        };
-        params['clip'] = {
-          x: viewport.pageX,
-          y: viewport.pageY,
-          width: viewport.clientWidth,
-          height: viewport.clientHeight,
-          scale: clipScale,
+          scale: 1,
         };
       }
+      // No clip = viewport screenshot (Chrome's default behavior)
 
       const result = await this.client.send(
         'Page.captureScreenshot',

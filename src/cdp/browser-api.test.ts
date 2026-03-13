@@ -257,108 +257,74 @@ describe('BrowserAPI', () => {
       await api.attachToPage('target-1');
     });
 
-    it('captures a viewport screenshot with DPR 1 clip scale', async () => {
+    it('captures a viewport screenshot (no clip, Chrome default)', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({}) // Runtime.enable
-        .mockResolvedValueOnce({ result: { value: 1 } }) // Runtime.evaluate (DPR=1)
-        .mockResolvedValueOnce({
-          visualViewport: { clientWidth: 1280, clientHeight: 800, pageX: 0, pageY: 0 },
-        }) // getLayoutMetrics (viewport)
-        .mockResolvedValueOnce({
-          data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8/x8AAwAB/aurH8kAAAAASUVORK5CYII=',
-        }); // Page.captureScreenshot
+        .mockResolvedValueOnce({ data: 'viewport-shot' }); // Page.captureScreenshot
 
       const data = await api.screenshot();
-      expect(typeof data).toBe('string');
-      expect(data.length).toBeGreaterThan(0);
+      expect(data).toBe('viewport-shot');
       expect(mockClient.send).toHaveBeenCalledWith(
         'Page.captureScreenshot',
-        {
-          format: 'png',
-          captureBeyondViewport: true,
-          clip: { x: 0, y: 0, width: 1280, height: 800, scale: 1 },
-        },
+        { format: 'png', captureBeyondViewport: true },
         'sess-1',
       );
     });
 
-    it('captures full page screenshot', async () => {
+    it('captures full page screenshot using viewport width and content height', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({}) // Runtime.enable
-        .mockResolvedValueOnce({ result: { value: 1 } }) // Runtime.evaluate (DPR=1)
         .mockResolvedValueOnce({
-          contentSize: { width: 1024, height: 5000 },
+          contentSize: { width: 2560, height: 5000 },
+          layoutViewport: { clientWidth: 1280 },
         }) // getLayoutMetrics
-        .mockResolvedValueOnce({ data: 'base64data' }); // captureScreenshot
+        .mockResolvedValueOnce({ data: 'fullpage' }); // captureScreenshot
 
       const data = await api.screenshot({ fullPage: true });
-      expect(data).toBe('base64data');
-    });
-
-    it('uses clip.scale 0.5 on HiDPI displays (DPR 2)', async () => {
-      (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({}) // Runtime.enable
-        .mockResolvedValueOnce({ result: { value: 2 } }) // Runtime.evaluate (DPR=2)
-        .mockResolvedValueOnce({
-          visualViewport: { clientWidth: 1920, clientHeight: 1080, pageX: 0, pageY: 0 },
-        }) // getLayoutMetrics (viewport)
-        .mockResolvedValueOnce({ data: 'normalized' }); // Page.captureScreenshot
-
-      const data = await api.screenshot();
-      expect(data).toBe('normalized');
+      expect(data).toBe('fullpage');
       expect(mockClient.send).toHaveBeenCalledWith(
         'Page.captureScreenshot',
         {
           format: 'png',
           captureBeyondViewport: true,
-          clip: { x: 0, y: 0, width: 1920, height: 1080, scale: 0.5 },
+          clip: { x: 0, y: 0, width: 1280, height: 5000, scale: 1 },
         },
         'sess-1',
       );
     });
 
-    it('uses clip.scale 1 when DPR is already 1', async () => {
+    it('prefers cssLayoutViewport width when available', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({}) // Runtime.enable
-        .mockResolvedValueOnce({ result: { value: 1 } }) // Runtime.evaluate (DPR=1)
         .mockResolvedValueOnce({
-          visualViewport: { clientWidth: 1280, clientHeight: 800, pageX: 0, pageY: 0 },
-        }) // getLayoutMetrics (viewport)
-        .mockResolvedValueOnce({ data: 'noop' }); // Page.captureScreenshot
-
-      const data = await api.screenshot();
-      expect(data).toBe('noop');
-    });
-
-    it('falls back to DPR 1 when detection fails', async () => {
-      (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockRejectedValueOnce(new Error('Runtime.enable failed')) // Runtime.enable throws
-        .mockResolvedValueOnce({
-          visualViewport: { clientWidth: 1280, clientHeight: 800, pageX: 0, pageY: 0 },
-        }) // getLayoutMetrics (viewport) — still works
-        .mockResolvedValueOnce({ data: 'fallback' }); // Page.captureScreenshot
-
-      const data = await api.screenshot();
-      expect(data).toBe('fallback');
-    });
-
-    it('full page screenshot uses clip.scale 0.5 on HiDPI', async () => {
-      (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({}) // Runtime.enable
-        .mockResolvedValueOnce({ result: { value: 2 } }) // Runtime.evaluate (DPR=2)
-        .mockResolvedValueOnce({
-          contentSize: { width: 1024, height: 5000 },
-        }) // getLayoutMetrics (fullPage)
-        .mockResolvedValueOnce({ data: 'ok' }); // Page.captureScreenshot
+          contentSize: { width: 2560, height: 3000 },
+          cssLayoutViewport: { clientWidth: 1440 },
+          layoutViewport: { clientWidth: 1280 },
+        }) // getLayoutMetrics
+        .mockResolvedValueOnce({ data: 'css-vp' }); // captureScreenshot
 
       const data = await api.screenshot({ fullPage: true });
-      expect(data).toBe('ok');
+      expect(data).toBe('css-vp');
       expect(mockClient.send).toHaveBeenCalledWith(
         'Page.captureScreenshot',
         {
           format: 'png',
           captureBeyondViewport: true,
-          clip: { x: 0, y: 0, width: 1024, height: 5000, scale: 0.5 },
+          clip: { x: 0, y: 0, width: 1440, height: 3000, scale: 1 },
+        },
+        'sess-1',
+      );
+    });
+
+    it('passes through provided clip with default scale 1', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ data: 'clipped' }); // captureScreenshot
+
+      const data = await api.screenshot({ clip: { x: 10, y: 20, width: 300, height: 400 } });
+      expect(data).toBe('clipped');
+      expect(mockClient.send).toHaveBeenCalledWith(
+        'Page.captureScreenshot',
+        {
+          format: 'png',
+          captureBeyondViewport: true,
+          clip: { x: 10, y: 20, width: 300, height: 400, scale: 1 },
         },
         'sess-1',
       );
