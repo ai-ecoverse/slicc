@@ -222,37 +222,46 @@ export class BrowserAPI {
       };
       if (options?.quality !== undefined) params['quality'] = options.quality;
 
-      if (options?.clip) {
-        params['clip'] = { ...options.clip, scale: options.clip.scale ?? 1 };
-      } else if (options?.fullPage) {
-        // Full-page screenshot: use viewport WIDTH (not contentSize.width,
-        // which includes overflow/off-screen elements) and content HEIGHT
-        // (to capture the full scrollable page).
+      if (options?.clip || options?.fullPage) {
+        // Detect DPR from layout metrics to normalize output to 1x.
+        // layoutViewport is in device pixels, cssLayoutViewport is in CSS pixels.
+        // Their ratio gives us the effective DPR.
+        // Output formula: image_px = clip_css_px × scale × DPR
+        // For 1x output: scale = 1/DPR
         const metrics = await this.client.send(
           'Page.getLayoutMetrics',
           {},
           this.sessionId!,
         );
-        const contentSize = metrics['contentSize'] as {
-          width: number;
-          height: number;
-        };
-        const cssViewport = metrics['cssLayoutViewport'] as {
-          clientWidth: number;
-        } | undefined;
-        const layoutViewport = metrics['layoutViewport'] as {
-          clientWidth: number;
-        };
-        const viewportWidth = cssViewport?.clientWidth ?? layoutViewport.clientWidth;
-        params['clip'] = {
-          x: 0,
-          y: 0,
-          width: viewportWidth,
-          height: contentSize.height,
-          scale: 1,
-        };
+        const layoutVp = metrics['layoutViewport'] as { clientWidth: number };
+        const cssVp = metrics['cssLayoutViewport'] as { clientWidth: number } | undefined;
+        const dpr = cssVp ? layoutVp.clientWidth / cssVp.clientWidth : 1;
+        const scale = dpr > 1 ? 1 / dpr : 1;
+
+        if (options?.clip) {
+          params['clip'] = { ...options.clip, scale: options.clip.scale ?? scale };
+        } else {
+          // Full-page: use CSS viewport width + CSS content height.
+          const cssContent = metrics['cssContentSize'] as {
+            width: number;
+            height: number;
+          } | undefined;
+          const contentSize = metrics['contentSize'] as {
+            width: number;
+            height: number;
+          };
+          const clipWidth = cssVp?.clientWidth ?? layoutVp.clientWidth;
+          const clipHeight = cssContent?.height ?? contentSize.height;
+          params['clip'] = {
+            x: 0,
+            y: 0,
+            width: clipWidth,
+            height: clipHeight,
+            scale,
+          };
+        }
       }
-      // No clip = viewport screenshot (Chrome's default behavior)
+      // No clip/fullPage = viewport screenshot (Chrome's default behavior)
 
       const result = await this.client.send(
         'Page.captureScreenshot',

@@ -270,12 +270,14 @@ describe('BrowserAPI', () => {
       );
     });
 
-    it('captures full page screenshot using viewport width and content height', async () => {
+    it('full page screenshot at DPR 1 uses CSS dimensions with scale 1', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({
-          contentSize: { width: 2560, height: 5000 },
+          contentSize: { width: 1280, height: 5000 },
           layoutViewport: { clientWidth: 1280 },
-        }) // getLayoutMetrics
+          cssLayoutViewport: { clientWidth: 1280 },
+          cssContentSize: { width: 1280, height: 5000 },
+        }) // getLayoutMetrics (DPR 1)
         .mockResolvedValueOnce({ data: 'fullpage' }); // captureScreenshot
 
       const data = await api.screenshot({ fullPage: true });
@@ -291,30 +293,35 @@ describe('BrowserAPI', () => {
       );
     });
 
-    it('prefers cssLayoutViewport width when available', async () => {
+    it('full page screenshot at DPR 2 uses CSS dimensions with scale 0.5', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({
-          contentSize: { width: 2560, height: 3000 },
+          contentSize: { width: 2880, height: 6260 },
+          layoutViewport: { clientWidth: 2880 },
           cssLayoutViewport: { clientWidth: 1440 },
-          layoutViewport: { clientWidth: 1280 },
-        }) // getLayoutMetrics
-        .mockResolvedValueOnce({ data: 'css-vp' }); // captureScreenshot
+          cssContentSize: { width: 1440, height: 3130 },
+        }) // getLayoutMetrics (DPR 2)
+        .mockResolvedValueOnce({ data: 'hidpi' }); // captureScreenshot
 
       const data = await api.screenshot({ fullPage: true });
-      expect(data).toBe('css-vp');
+      expect(data).toBe('hidpi');
       expect(mockClient.send).toHaveBeenCalledWith(
         'Page.captureScreenshot',
         {
           format: 'png',
           captureBeyondViewport: true,
-          clip: { x: 0, y: 0, width: 1440, height: 3000, scale: 1 },
+          clip: { x: 0, y: 0, width: 1440, height: 3130, scale: 0.5 },
         },
         'sess-1',
       );
     });
 
-    it('passes through provided clip with scale 1', async () => {
+    it('passes through provided clip with DPR-normalized scale', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({
+          layoutViewport: { clientWidth: 2560 },
+          cssLayoutViewport: { clientWidth: 1280 },
+        }) // getLayoutMetrics (DPR = 2560/1280 = 2)
         .mockResolvedValueOnce({ data: 'clipped' }); // captureScreenshot
 
       const data = await api.screenshot({ clip: { x: 10, y: 20, width: 300, height: 400 } });
@@ -324,7 +331,7 @@ describe('BrowserAPI', () => {
         {
           format: 'png',
           captureBeyondViewport: true,
-          clip: { x: 10, y: 20, width: 300, height: 400, scale: 1 },
+          clip: { x: 10, y: 20, width: 300, height: 400, scale: 0.5 },
         },
         'sess-1',
       );
