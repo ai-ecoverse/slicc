@@ -96,6 +96,9 @@ To close the current tab: `playwright-cli close`. To close a specific tab: `play
 - `*` = the user's active/focused tab in Chrome
 - These can differ! If the user switches tabs in Chrome, `*` moves but `→` stays. Use `tab-select` to follow the user's active tab when needed.
 
+**Remote targets (tray mode):**
+When connected to a tray, `playwright-cli tab-list` shows browser tabs from all connected SLICC instances. Remote targets appear with a `[remote:runtimeId]` annotation. Use `playwright-cli tab-select <index>` to target a remote tab, then use the usual commands (`snapshot`, `screenshot`, `click`, `fill`, etc.) — CDP commands are routed transparently over the tray data channel to the runtime that owns the tab.
+
 **Do NOT:**
 - Try to `read_file` on a PNG, `base64` encode it, or `convert` it to view images
 - Run `imgcat` or `cat` on screenshots expecting to see them yourself

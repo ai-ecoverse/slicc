@@ -282,6 +282,8 @@ npm run start -- --join=https://tray.example.com/base/join/tray-123.capability-t
 
 The `--join` flow validates that the value is a tray follower join URL, strips any hash/query noise, and opens Chrome with the canonical `?tray=<join-url>` query so the runtime enters follower attach mode immediately.
 
+When connected to a tray, SLICC can see and automate browser tabs on any connected instance. Run `playwright-cli tab-list` to see all targets — local and remote — and use `playwright-cli tab-select` to operate on a remote target. CDP commands are routed over the tray data channel transparently.
+
 ### QA Chrome Profiles
 
 For manual verification, you can scaffold dedicated Chrome profiles for `leader`, `follower`, and `extension`:
