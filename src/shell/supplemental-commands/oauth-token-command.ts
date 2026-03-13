@@ -77,9 +77,11 @@ export function createOAuthTokenCommand(): Command {
         return { stdout: `${newInfo.token}\n`, stderr: '', exitCode: 0 };
       }
 
+      console.error(`[oauth-token] Provider ${providerId}: login completed but no token was saved`);
       return { stdout: '', stderr: 'oauth-token: login completed but no token was saved\n', exitCode: 1 };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[oauth-token] Provider ${providerId}: login failed:`, msg);
       return { stdout: '', stderr: `oauth-token: login failed: ${msg}\n`, exitCode: 1 };
     }
   });

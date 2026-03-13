@@ -203,8 +203,12 @@ async function mainExtension(app: HTMLElement): Promise<void> {
         const encoding = asText ? 'utf-8' : 'binary';
         const content = await localFs.readFile(path, { encoding });
         previewVfsCh.postMessage({ type: 'preview-vfs-response', id, content });
-      } catch {
-        previewVfsCh.postMessage({ type: 'preview-vfs-response', id, error: 'ENOENT' });
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (!errMsg.includes('ENOENT')) {
+          log.error('Preview VFS read failed', { path, error: errMsg });
+        }
+        previewVfsCh.postMessage({ type: 'preview-vfs-response', id, error: errMsg });
       }
     })();
   };
@@ -667,8 +671,12 @@ async function main(): Promise<void> {
           const encoding = asText ? 'utf-8' : 'binary';
           const content = await sharedFs.readFile(path, { encoding });
           previewVfsCh.postMessage({ type: 'preview-vfs-response', id, content });
-        } catch {
-          previewVfsCh.postMessage({ type: 'preview-vfs-response', id, error: 'ENOENT' });
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          if (!errMsg.includes('ENOENT')) {
+            log.error('Preview VFS read failed', { path, error: errMsg });
+          }
+          previewVfsCh.postMessage({ type: 'preview-vfs-response', id, error: errMsg });
         }
       })();
     };
