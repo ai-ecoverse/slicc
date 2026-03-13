@@ -257,10 +257,13 @@ describe('BrowserAPI', () => {
       await api.attachToPage('target-1');
     });
 
-    it('captures a screenshot', async () => {
+    it('captures a viewport screenshot with DPR 1 clip scale', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({}) // Runtime.enable
         .mockResolvedValueOnce({ result: { value: 1 } }) // Runtime.evaluate (DPR=1)
+        .mockResolvedValueOnce({
+          visualViewport: { clientWidth: 1280, clientHeight: 800, pageX: 0, pageY: 0 },
+        }) // getLayoutMetrics (viewport)
         .mockResolvedValueOnce({
           data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8/x8AAwAB/aurH8kAAAAASUVORK5CYII=',
         }); // Page.captureScreenshot
@@ -270,7 +273,11 @@ describe('BrowserAPI', () => {
       expect(data.length).toBeGreaterThan(0);
       expect(mockClient.send).toHaveBeenCalledWith(
         'Page.captureScreenshot',
-        { format: 'png', captureBeyondViewport: true },
+        {
+          format: 'png',
+          captureBeyondViewport: true,
+          clip: { x: 0, y: 0, width: 1280, height: 800, scale: 1 },
+        },
         'sess-1',
       );
     });
@@ -288,69 +295,73 @@ describe('BrowserAPI', () => {
       expect(data).toBe('base64data');
     });
 
-    it('normalizes DPR to 1 on HiDPI displays', async () => {
+    it('uses clip.scale 0.5 on HiDPI displays (DPR 2)', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({}) // Runtime.enable
         .mockResolvedValueOnce({ result: { value: 2 } }) // Runtime.evaluate (DPR=2)
         .mockResolvedValueOnce({
-          layoutViewport: { clientWidth: 1920, clientHeight: 1080 },
-        }) // Page.getLayoutMetrics
-        .mockResolvedValueOnce({}) // Emulation.setDeviceMetricsOverride
-        .mockResolvedValueOnce({ result: {} }) // Runtime.evaluate (repaint wait)
-        .mockResolvedValueOnce({ data: 'normalized' }) // Page.captureScreenshot
-        .mockResolvedValueOnce({}); // Emulation.clearDeviceMetricsOverride
+          visualViewport: { clientWidth: 1920, clientHeight: 1080, pageX: 0, pageY: 0 },
+        }) // getLayoutMetrics (viewport)
+        .mockResolvedValueOnce({ data: 'normalized' }); // Page.captureScreenshot
 
       const data = await api.screenshot();
       expect(data).toBe('normalized');
       expect(mockClient.send).toHaveBeenCalledWith(
-        'Emulation.setDeviceMetricsOverride',
-        { width: 1920, height: 1080, deviceScaleFactor: 1, mobile: false },
-        'sess-1',
-      );
-      expect(mockClient.send).toHaveBeenCalledWith(
-        'Emulation.clearDeviceMetricsOverride',
-        {},
+        'Page.captureScreenshot',
+        {
+          format: 'png',
+          captureBeyondViewport: true,
+          clip: { x: 0, y: 0, width: 1920, height: 1080, scale: 0.5 },
+        },
         'sess-1',
       );
     });
 
-    it('skips DPR normalization when DPR is already 1', async () => {
+    it('uses clip.scale 1 when DPR is already 1', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({}) // Runtime.enable
         .mockResolvedValueOnce({ result: { value: 1 } }) // Runtime.evaluate (DPR=1)
+        .mockResolvedValueOnce({
+          visualViewport: { clientWidth: 1280, clientHeight: 800, pageX: 0, pageY: 0 },
+        }) // getLayoutMetrics (viewport)
         .mockResolvedValueOnce({ data: 'noop' }); // Page.captureScreenshot
 
-      await api.screenshot();
-      expect(mockClient.send).not.toHaveBeenCalledWith(
-        'Emulation.setDeviceMetricsOverride',
-        expect.anything(),
-        expect.anything(),
-      );
+      const data = await api.screenshot();
+      expect(data).toBe('noop');
     });
 
-    it('falls back to native DPR when normalization fails', async () => {
+    it('falls back to DPR 1 when detection fails', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
         .mockRejectedValueOnce(new Error('Runtime.enable failed')) // Runtime.enable throws
+        .mockResolvedValueOnce({
+          visualViewport: { clientWidth: 1280, clientHeight: 800, pageX: 0, pageY: 0 },
+        }) // getLayoutMetrics (viewport) — still works
         .mockResolvedValueOnce({ data: 'fallback' }); // Page.captureScreenshot
 
       const data = await api.screenshot();
       expect(data).toBe('fallback');
     });
 
-    it('returns screenshot even when cleanup fails', async () => {
+    it('full page screenshot uses clip.scale 0.5 on HiDPI', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({}) // Runtime.enable
         .mockResolvedValueOnce({ result: { value: 2 } }) // Runtime.evaluate (DPR=2)
         .mockResolvedValueOnce({
-          layoutViewport: { clientWidth: 1920, clientHeight: 1080 },
-        }) // Page.getLayoutMetrics
-        .mockResolvedValueOnce({}) // Emulation.setDeviceMetricsOverride
-        .mockResolvedValueOnce({ result: {} }) // Runtime.evaluate (repaint wait)
-        .mockResolvedValueOnce({ data: 'ok' }) // Page.captureScreenshot
-        .mockRejectedValueOnce(new Error('cleanup failed')); // Emulation.clearDeviceMetricsOverride
+          contentSize: { width: 1024, height: 5000 },
+        }) // getLayoutMetrics (fullPage)
+        .mockResolvedValueOnce({ data: 'ok' }); // Page.captureScreenshot
 
-      const data = await api.screenshot();
+      const data = await api.screenshot({ fullPage: true });
       expect(data).toBe('ok');
+      expect(mockClient.send).toHaveBeenCalledWith(
+        'Page.captureScreenshot',
+        {
+          format: 'png',
+          captureBeyondViewport: true,
+          clip: { x: 0, y: 0, width: 1024, height: 5000, scale: 0.5 },
+        },
+        'sess-1',
+      );
     });
   });
 

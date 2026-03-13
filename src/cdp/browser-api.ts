@@ -213,10 +213,11 @@ export class BrowserAPI {
     await this.ensureConnected();
     this.ensureAttached();
 
-    // Normalize DPR to 1 to prevent oversized screenshots on HiDPI displays.
-    // When DPR is already 1 (e.g. after an explicit resize), normalization is
-    // skipped and existing overrides are preserved.
-    let didOverrideMetrics = false;
+    // Detect device pixel ratio to normalize screenshot output to 1x.
+    // On HiDPI/Retina displays (DPR 2), Chrome captures at native resolution
+    // producing 2x-oversized images. We compensate via clip.scale = 1/DPR
+    // which tells Chrome to downscale the capture to CSS pixel dimensions.
+    let devicePixelRatio = 1;
     try {
       await this.client.send('Runtime.enable', {}, this.sessionId!);
       const dprResult = await this.client.send(
@@ -224,43 +225,9 @@ export class BrowserAPI {
         { expression: 'window.devicePixelRatio', returnByValue: true },
         this.sessionId!,
       );
-      const currentDpr = (dprResult['result'] as { value?: number })?.value ?? 1;
-      if (currentDpr > 1) {
-        const metrics = await this.client.send(
-          'Page.getLayoutMetrics',
-          {},
-          this.sessionId!,
-        );
-        const viewport = metrics['layoutViewport'] as {
-          clientWidth: number;
-          clientHeight: number;
-        };
-        await this.client.send(
-          'Emulation.setDeviceMetricsOverride',
-          {
-            width: viewport.clientWidth,
-            height: viewport.clientHeight,
-            deviceScaleFactor: 1,
-            mobile: false,
-          },
-          this.sessionId!,
-        );
-        // Wait for the DPR change to take effect — the override triggers an
-        // async reflow. Without this, getLayoutMetrics and captureScreenshot
-        // may use stale DPR 2 dimensions, producing oversized images with
-        // content squished to one corner.
-        await this.client.send(
-          'Runtime.evaluate',
-          {
-            expression: 'new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))',
-            awaitPromise: true,
-          },
-          this.sessionId!,
-        );
-        didOverrideMetrics = true;
-      }
+      devicePixelRatio = (dprResult['result'] as { value?: number })?.value ?? 1;
     } catch {
-      // Best-effort: proceed with native DPR if normalization fails
+      // Best-effort: proceed with DPR 1 assumption
     }
 
     try {
@@ -269,8 +236,12 @@ export class BrowserAPI {
         captureBeyondViewport: true,
       };
       if (options?.quality !== undefined) params['quality'] = options.quality;
+
+      // Scale factor for clip: 1/DPR produces CSS-pixel-sized output.
+      const clipScale = 1 / devicePixelRatio;
+
       if (options?.clip) {
-        params['clip'] = { ...options.clip, scale: options.clip.scale ?? 1 };
+        params['clip'] = { ...options.clip, scale: options.clip.scale ?? clipScale };
       } else if (options?.fullPage) {
         // Get full page metrics for a full-page screenshot
         const metrics = await this.client.send(
@@ -287,7 +258,27 @@ export class BrowserAPI {
           y: 0,
           width: contentSize.width,
           height: contentSize.height,
-          scale: 1,
+          scale: clipScale,
+        };
+      } else {
+        // Viewport screenshot — clip to viewport at 1x scale
+        const metrics = await this.client.send(
+          'Page.getLayoutMetrics',
+          {},
+          this.sessionId!,
+        );
+        const viewport = metrics['visualViewport'] as {
+          clientWidth: number;
+          clientHeight: number;
+          pageX: number;
+          pageY: number;
+        };
+        params['clip'] = {
+          x: viewport.pageX,
+          y: viewport.pageY,
+          width: viewport.clientWidth,
+          height: viewport.clientHeight,
+          scale: clipScale,
         };
       }
 
@@ -298,17 +289,6 @@ export class BrowserAPI {
       );
       return result['data'] as string;
     } finally {
-      if (didOverrideMetrics) {
-        try {
-          await this.client.send(
-            'Emulation.clearDeviceMetricsOverride',
-            {},
-            this.sessionId!,
-          );
-        } catch {
-          // Best-effort cleanup
-        }
-      }
     }
   }
 
