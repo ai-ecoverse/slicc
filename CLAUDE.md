@@ -136,7 +136,7 @@ Key files:
 - **Extension bundle** (vite.config.extension.ts): Same browser bundle with extension-specific entry points (service-worker.js, offscreen.html, sandbox.html, manifest.json) plus bundled Pyodide. Output: dist/extension/.
 
 Cloud tray hub scaffold:
-- **Cloudflare Worker / Durable Object** (`wrangler.jsonc` + `src/worker/`): separate Wrangler-managed runtime for `POST /tray`, controller attach, leader-only WebSocket control, deployed smoke tests, and webhook ingress rejection.
+- **Cloudflare Worker / Durable Object** (`wrangler.jsonc` + `src/worker/`): separate Wrangler-managed runtime for `POST /tray`, controller attach, leader-only WebSocket control, deployed smoke tests, and webhook forwarding via `POST /webhook/:token/:webhookId` (reads the POST body, forwards a `webhook.event` control message to the leader over the existing WebSocket, returns 202 Accepted).
 
 ### Layer Stack (bottom-up)
 
@@ -196,7 +196,7 @@ WasmShell wraps just-bash 2.11.7 (WASM Bash interpreter) and connects it to Virt
 - `open <path|url>` — Preview/serve VFS files or open URLs in a new browser tab. `--download` / `-d` forces file download. `--view` / `-v` returns image inline for agent vision (produces `<img:>` tag converted to `ImageContent` by tool adapter)
 - `host` — Report the current leader tray status and canonical launch URL
 - `zip/unzip` — Archive compression
-- `webhook` — Manage webhooks for event-driven automation
+- `webhook` — Manage webhooks for event-driven automation (URLs point to the tray worker when a tray is active, otherwise to the CLI server)
 - `crontask` — Schedule cron jobs that dispatch licks to scoops
 - `pdftk` / `pdf` — Inspect, extract, rotate, and merge PDFs
 - `mount` — Mount a local directory into the virtual filesystem via the File System Access API

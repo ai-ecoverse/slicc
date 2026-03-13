@@ -29,7 +29,7 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
     );
   }
 
-  const tokenMatch = url.pathname.match(/^\/(join|controller|webhook)\/([^/]+)$/);
+  const tokenMatch = url.pathname.match(/^\/(join|controller|webhook)\/([^/]+?)(?:\/([^/]+))?$/);
   if (tokenMatch) {
     const token = tokenMatch[2];
     const parsed = parseCapabilityToken(token);
@@ -37,6 +37,12 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
       return jsonResponse({ error: 'Malformed capability token', code: 'MALFORMED_CAPABILITY' }, 400);
     }
     const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(parsed.trayId));
+    const webhookId = tokenMatch[1] === 'webhook' ? tokenMatch[3] : undefined;
+    if (webhookId) {
+      const doUrl = new URL(request.url);
+      doUrl.pathname = `/webhook/${token}/${webhookId}`;
+      return stub.fetch(new Request(doUrl, request));
+    }
     return stub.fetch(request);
   }
 
@@ -44,7 +50,7 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
     {
       service: 'slicc-tray-hub',
       phase: 1,
-      routes: ['POST /tray', 'GET|POST /join/:token', 'GET|POST /controller/:token', 'POST /webhook/:token'],
+      routes: ['POST /tray', 'GET|POST /join/:token', 'GET|POST /controller/:token', 'POST /webhook/:token/:webhookId'],
     },
     200,
   );

@@ -38,6 +38,7 @@ describe('host command', () => {
     expect(result.stdout).toContain('status: leader');
     expect(result.stdout).toContain('launch_url: https://tray.example.com/base/tray/tray-123');
     expect(result.stdout).toContain('join_url: https://tray.example.com/join/tray-123');
+    expect(result.stdout).toContain('webhook_url: https://tray.example.com/webhooks/tray-123/{webhookId}');
     expect(result.stdout).toContain('worker_base_url: https://tray.example.com/base');
     expect(result.stdout).toContain('tray_id: tray-123');
   });

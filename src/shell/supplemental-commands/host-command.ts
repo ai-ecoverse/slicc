@@ -40,6 +40,7 @@ function formatLeaderOutput(status: LeaderTrayRuntimeStatus, locationHref: strin
         : null;
     lines.push(`launch_url: ${launchUrl ?? 'unavailable'}`);
     lines.push(`join_url: ${status.session.joinUrl}`);
+    lines.push(`webhook_url: ${status.session.webhookUrl}/{webhookId}`);
     lines.push(`worker_base_url: ${status.session.workerBaseUrl}`);
     lines.push(`tray_id: ${status.session.trayId}`);
   } else {

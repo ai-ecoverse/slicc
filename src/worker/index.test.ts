@@ -651,7 +651,7 @@ describe('tray worker skeleton', () => {
     );
 
     const rejected = await handleWorkerRequest(
-      new Request(session.capabilities.webhook.url, {
+      new Request(`${session.capabilities.webhook.url}/test-webhook`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ hello: 'world' }),
@@ -663,6 +663,141 @@ describe('tray worker skeleton', () => {
     const tray = await readTray(session.trayId);
     expect(tray?.leader?.connected).toBe(false);
     expect(Object.keys(tray ?? {})).not.toContain('pendingWebhooks');
+  });
+
+  it('returns 400 when webhook POST has no webhookId suffix', async () => {
+    const { env } = createTestHarness();
+    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
+    const session = (await created.json()) as { capabilities: { controller: { url: string }; webhook: { url: string } } };
+
+    // Attach leader and connect WebSocket
+    const attach = await handleWorkerRequest(
+      new Request(session.capabilities.controller.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'lead-1' }),
+      }),
+      env,
+    );
+    const leader = (await attach.json()) as { leaderKey: string; websocket: { url: string } };
+    await handleWorkerRequest(new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }), env);
+
+    const rejected = await handleWorkerRequest(
+      new Request(session.capabilities.webhook.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ hello: 'world' }),
+      }),
+      env,
+    );
+
+    expect(rejected.status).toBe(400);
+    const body = (await rejected.json()) as { code: string };
+    expect(body.code).toBe('WEBHOOK_ID_REQUIRED');
+  });
+
+  it('forwards webhook POST to the live leader via the control WebSocket', async () => {
+    const { env } = createTestHarness();
+    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
+    const session = (await created.json()) as { capabilities: { controller: { url: string }; webhook: { url: string } } };
+
+    // Attach leader and connect WebSocket
+    const attach = await handleWorkerRequest(
+      new Request(session.capabilities.controller.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'lead-1' }),
+      }),
+      env,
+    );
+    const leader = (await attach.json()) as { leaderKey: string; websocket: { url: string } };
+    const wsResponse = await handleWorkerRequest(new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }), env);
+    const socket = (wsResponse as unknown as { webSocket: FakeWebSocket }).webSocket;
+
+    // POST webhook with a webhookId
+    const webhookResponse = await handleWorkerRequest(
+      new Request(`${session.capabilities.webhook.url}/my-webhook-123`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'opened', repo: 'test/repo' }),
+      }),
+      env,
+    );
+
+    expect(webhookResponse.status).toBe(202);
+    const webhookBody = (await webhookResponse.json()) as { ok: boolean; accepted: boolean };
+    expect(webhookBody.ok).toBe(true);
+    expect(webhookBody.accepted).toBe(true);
+
+    // Verify the leader WebSocket received the webhook event
+    // socket.received includes the initial leader.connected message + the webhook.event
+    const webhookMessages = socket.received
+      .map(raw => JSON.parse(raw) as { type: string })
+      .filter(msg => msg.type === 'webhook.event');
+    expect(webhookMessages).toHaveLength(1);
+    const forwarded = webhookMessages[0] as { type: string; webhookId: string; headers: Record<string, string>; body: unknown; timestamp: string };
+    expect(forwarded.webhookId).toBe('my-webhook-123');
+    expect(forwarded.body).toEqual({ action: 'opened', repo: 'test/repo' });
+    expect(forwarded.timestamp).toBeDefined();
+    expect(forwarded.headers['content-type']).toBe('application/json');
+  });
+
+  it('returns 403 for invalid webhook capability token', async () => {
+    const { env } = createTestHarness();
+    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
+    const session = (await created.json()) as { trayId: string; capabilities: { webhook: { url: string } } };
+
+    // Use the correct trayId but a wrong secret to get routed to the right DO
+    const rejected = await handleWorkerRequest(
+      new Request(`https://tray.test/webhook/${session.trayId}.wrongsecret/wh123`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ hello: 'world' }),
+      }),
+      env,
+    );
+
+    expect(rejected.status).toBe(403);
+    const body = (await rejected.json()) as { code: string };
+    expect(body.code).toBe('INVALID_WEBHOOK_CAPABILITY');
+  });
+
+  it('wraps non-JSON webhook body in a raw field', async () => {
+    const { env } = createTestHarness();
+    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
+    const session = (await created.json()) as { capabilities: { controller: { url: string }; webhook: { url: string } } };
+
+    // Attach leader and connect WebSocket
+    const attach = await handleWorkerRequest(
+      new Request(session.capabilities.controller.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'lead-1' }),
+      }),
+      env,
+    );
+    const leader = (await attach.json()) as { leaderKey: string; websocket: { url: string } };
+    const wsResponse = await handleWorkerRequest(new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }), env);
+    const socket = (wsResponse as unknown as { webSocket: FakeWebSocket }).webSocket;
+
+    // POST webhook with plain text body
+    const webhookResponse = await handleWorkerRequest(
+      new Request(`${session.capabilities.webhook.url}/text-wh`, {
+        method: 'POST',
+        headers: { 'content-type': 'text/plain' },
+        body: 'Hello, plain text webhook!',
+      }),
+      env,
+    );
+
+    expect(webhookResponse.status).toBe(202);
+
+    const webhookMessages = socket.received
+      .map(raw => JSON.parse(raw) as { type: string })
+      .filter(msg => msg.type === 'webhook.event');
+    expect(webhookMessages).toHaveLength(1);
+    const forwarded = webhookMessages[0] as unknown as { body: unknown };
+    expect(forwarded.body).toEqual({ raw: 'Hello, plain text webhook!' });
   });
 
   it('supports leader reconnect with the issued key and expires after one hour without reclaim', async () => {
@@ -723,7 +858,7 @@ describe('tray worker skeleton', () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      routes: ['POST /tray', 'GET|POST /join/:token', 'GET|POST /controller/:token', 'POST /webhook/:token'],
+      routes: ['POST /tray', 'GET|POST /join/:token', 'GET|POST /controller/:token', 'POST /webhook/:token/:webhookId'],
     });
   });
 });

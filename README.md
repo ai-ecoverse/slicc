@@ -238,7 +238,7 @@ Source layout:
 | `src/cdp/` | Chrome DevTools Protocol client (WebSocket + chrome.debugger), HAR recorder |
 | `src/cli/` | Main CLI entrypoint + Electron attach mode — Chrome launch, Electron app lifecycle management, CDP proxy, overlay reinjection |
 | `src/extension/` | Chrome extension service worker and type declarations |
-| `src/worker/` | Cloudflare Worker + Durable Object tray-hub skeleton for `POST /tray`, controller attach, leader WebSocket control, deployed smoke tests, and webhook ingress rejection |
+| `src/worker/` | Cloudflare Worker + Durable Object tray hub for `POST /tray`, controller attach, leader WebSocket control, webhook forwarding (`POST /webhook/:token/:webhookId` → leader), and deployed smoke tests |
 
 ## Getting Started
 

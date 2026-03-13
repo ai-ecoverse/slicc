@@ -123,7 +123,7 @@ export class SessionTrayDurableObject {
       return this.handleControllerAttach(request, controllerMatch[1], url);
     }
 
-    const webhookMatch = url.pathname.match(/^\/webhook\/([^/]+)$/);
+    const webhookMatch = url.pathname.match(/^\/webhook\/([^/]+?)(?:\/([^/]+))?$/);
     if (webhookMatch) {
       if (request.method === 'OPTIONS') {
         return new Response(null, {
@@ -140,7 +140,7 @@ export class SessionTrayDurableObject {
           allow: 'POST, OPTIONS',
         });
       }
-      return this.handleWebhook(webhookMatch[1]);
+      return this.handleWebhook(webhookMatch[1], request, webhookMatch[2]);
     }
 
     return jsonResponse({ error: 'Not found', code: 'NOT_FOUND' }, 404);
@@ -404,11 +404,22 @@ export class SessionTrayDurableObject {
     return websocketResponse(client);
   }
 
-  private async handleWebhook(token: string): Promise<Response> {
+  private async handleWebhook(token: string, request: Request, webhookId?: string): Promise<Response> {
     if (!this.matchesToken(token, this.requireTray().webhookToken)) {
       return jsonResponse({ error: 'Invalid webhook capability', code: 'INVALID_WEBHOOK_CAPABILITY' }, 403, {
         'access-control-allow-origin': '*',
       });
+    }
+
+    if (!webhookId) {
+      return jsonResponse(
+        {
+          error: 'Webhook ID is required. Use POST /webhook/{token}/{webhookId}',
+          code: 'WEBHOOK_ID_REQUIRED',
+        },
+        400,
+        { 'access-control-allow-origin': '*' },
+      );
     }
 
     if (!this.hasLiveLeader()) {
@@ -422,12 +433,55 @@ export class SessionTrayDurableObject {
       );
     }
 
+    // Read the request body
+    let body: unknown;
+    try {
+      const contentType = request.headers.get('content-type') ?? '';
+      if (contentType.includes('application/json')) {
+        body = await request.json();
+      } else {
+        const text = await request.text();
+        try {
+          body = JSON.parse(text);
+        } catch {
+          body = { raw: text };
+        }
+      }
+    } catch {
+      body = {};
+    }
+
+    // Collect relevant headers (skip Cloudflare-internal headers and host)
+    const headers: Record<string, string> = {};
+    for (const [key, value] of request.headers.entries()) {
+      if (!key.startsWith('cf-') && key !== 'host') {
+        headers[key] = value;
+      }
+    }
+
+    // Forward to leader via the control WebSocket
+    const sent = this.sendToLeader({
+      type: 'webhook.event',
+      webhookId,
+      headers,
+      body,
+      timestamp: this.isoNow(),
+    });
+
+    if (!sent) {
+      return jsonResponse(
+        {
+          error: 'Failed to forward webhook to leader',
+          code: 'LEADER_SEND_FAILED',
+        },
+        502,
+        { 'access-control-allow-origin': '*' },
+      );
+    }
+
     return jsonResponse(
-      {
-        error: 'Webhook forwarding to the live leader is deferred to a later phase',
-        code: 'WEBHOOK_FORWARDING_NOT_IMPLEMENTED',
-      },
-      501,
+      { ok: true, accepted: true },
+      202,
       { 'access-control-allow-origin': '*' },
     );
   }

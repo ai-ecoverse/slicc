@@ -20,7 +20,7 @@ import { BrowserAPI } from '../cdp/index.js';
 import { Orchestrator } from '../scoops/index.js';
 import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
-import { LeaderTrayManager, createTrayFetch } from '../scoops/tray-leader.js';
+import { LeaderTrayManager, createTrayFetch, getLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import {
   buildTrayLaunchUrl,
   fetchRuntimeConfig,
@@ -34,6 +34,7 @@ import { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
 import {
   getElectronOverlayInitialTab,
   getLickWebSocketUrl,
+  getTrayWebhookUrl,
   getWebhookUrl,
   isElectronOverlaySetTabMessage,
   resolveUiRuntimeMode,
@@ -878,7 +879,11 @@ async function main(): Promise<void> {
                   data.scoop as string | undefined,
                   data.filter as string | undefined,
                 );
-                response = { type: 'response', requestId: data.requestId, data: { ...wh, url: getWebhookUrl(window.location.href, wh.id) } };
+                const traySession = getLeaderTrayRuntimeStatus().session;
+                const webhookUrl = traySession?.webhookUrl
+                  ? getTrayWebhookUrl(traySession.webhookUrl, wh.id)
+                  : getWebhookUrl(window.location.href, wh.id);
+                response = { type: 'response', requestId: data.requestId, data: { ...wh, url: webhookUrl } };
                 break;
               }
               case 'delete_webhook': {
@@ -1148,6 +1153,10 @@ async function main(): Promise<void> {
         runtime: 'slicc-standalone',
         fetchImpl: createTrayFetch(),
         onControlMessage: message => {
+          if (message.type === 'webhook.event') {
+            lickManager.handleWebhookEvent(message.webhookId, message.headers, message.body);
+            return;
+          }
           void trayPeers.handleControlMessage(message).catch((error) => {
             log.warn('Tray leader bootstrap handling failed', {
               error: error instanceof Error ? error.message : String(error),

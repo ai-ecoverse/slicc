@@ -99,6 +99,14 @@ export interface BootstrapIceCandidateMessage {
   candidate: TrayIceCandidate;
 }
 
+export interface WebhookEventMessage {
+  type: 'webhook.event';
+  webhookId: string;
+  headers: Record<string, string>;
+  body: unknown;
+  timestamp: string;
+}
+
 export type WorkerToLeaderControlMessage =
   | {
       type: 'leader.connected';
@@ -111,7 +119,8 @@ export type WorkerToLeaderControlMessage =
     }
   | FollowerJoinRequestedMessage
   | BootstrapAnswerMessage
-  | BootstrapIceCandidateMessage;
+  | BootstrapIceCandidateMessage
+  | WebhookEventMessage;
 
 export interface LeaderBootstrapOfferMessage {
   type: 'bootstrap.offer';
