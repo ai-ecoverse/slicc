@@ -53,13 +53,13 @@ const sharedStateByBrowser = new WeakMap<BrowserAPI, WeakMap<VirtualFS, Playwrig
 
 /** Commands that invalidate ref snapshots because page state may have changed. */
 const SNAPSHOT_INVALIDATING_COMMANDS = new Set([
-  'click', 'dblclick', 'fill', 'type', 'press', 'goto', 'go-back', 'go-forward',
+  'click', 'dblclick', 'fill', 'type', 'press', 'goto', 'navigate', 'go-back', 'go-forward',
   'reload', 'select', 'check', 'uncheck', 'drag', 'dialog-accept', 'dialog-dismiss',
 ]);
 
 /** Commands that can safely auto-save a fresh accessibility snapshot after success. */
 const AUTO_SNAPSHOT_COMMANDS = new Set([
-  'click', 'dblclick', 'fill', 'type', 'press', 'goto',
+  'click', 'dblclick', 'fill', 'type', 'press', 'goto', 'navigate',
   'select', 'check', 'uncheck', 'drag', 'dialog-accept', 'dialog-dismiss',
 ]);
 
@@ -424,7 +424,7 @@ Commands:
   open [url|/vfs/path] [--foreground|--fg] [--runtime=<id>]
                          Open a new tab (default: background). VFS paths are served via preview service worker.
                          Use --runtime to open the tab on a remote tray runtime (e.g. --runtime=follower-abc).
-  goto <url>             Navigate current tab to URL
+  goto|navigate <url>    Navigate current tab to URL
   click <ref>            Click element by ref (e.g. e5)
   type <text>            Type text into focused element
   fill <ref> <text>      Fill an input by ref with text
@@ -548,7 +548,7 @@ export function createPlaywrightCommand(
           result = { stdout: `Opened tab (targetId: ${targetId}) at ${url}\n`, stderr: '', exitCode: 0 }; break;
         }
 
-        case 'goto': {
+        case 'goto': case 'navigate': {
           if (positional.length === 0) {
             result = { stdout: '', stderr: 'goto requires a URL\n', exitCode: 1 }; break;
           }

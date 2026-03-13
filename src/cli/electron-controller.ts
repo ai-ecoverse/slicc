@@ -31,6 +31,11 @@ export function findMatchingElectronAppPids(
   currentPid = process.pid,
 ): number[] {
   const matches = runningProcesses.filter((processInfo) => {
+    // Skip Node.js tool-chain processes — they may have the app path as a CLI argument
+    // but are not the Electron app itself (e.g. npx tsx src/cli/index.ts --electron /Applications/Slack.app)
+    const cmdTrimmed = processInfo.commandLine.trimStart();
+    if (/^(\/\S*\/)?(node|npx|tsx|npm|open)\b/i.test(cmdTrimmed)) return false;
+
     return processMatchPatterns.some((pattern) => {
       return processInfo.commandLine.includes(pattern)
         || (processInfo.executablePath?.includes(pattern) ?? false);
@@ -177,8 +182,10 @@ export async function launchElectronApp(options: {
       `Electron executable not found at ${launchSpec.command}. Pass the app executable path directly if needed.`,
     );
   }
-
   const runningPids = await findRunningElectronAppPids(launchSpec.resolvedAppPath, options.platform);
+  const platform = options.platform ?? process.platform;
+  const isMacAppBundle = platform === 'darwin' && launchSpec.resolvedAppPath.toLowerCase().endsWith('.app');
+
   if (runningPids.length > 0 && !options.kill) {
     throw new ElectronAppAlreadyRunningError(
       `${launchSpec.displayName} is already running. Re-run with --kill to relaunch it with remote debugging enabled.`,
@@ -188,11 +195,17 @@ export async function launchElectronApp(options: {
     await terminateRunningApp(runningPids);
   }
 
-  const child = spawn(launchSpec.command, launchSpec.args, {
-    env: process.env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    detached: false,
-  });
+  const child = isMacAppBundle
+    ? spawn('open', ['-n', '-a', launchSpec.resolvedAppPath, '-W', '--args', ...launchSpec.args], {
+        env: process.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: false,
+      })
+    : spawn(launchSpec.command, launchSpec.args, {
+        env: process.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: false,
+      });
 
   return {
     child,

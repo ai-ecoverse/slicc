@@ -347,6 +347,7 @@ async function main() {
         process.exit(0);
       });
 
+      console.log(`Waiting for ${displayName} CDP on port ${CDP_PORT}...`);
       await waitForCDP(CDP_PORT, 40, 500);
       console.log(`Connected to ${displayName} on CDP port ${CDP_PORT}`);
     } catch (error: unknown) {

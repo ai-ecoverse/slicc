@@ -1059,7 +1059,7 @@ async function main(): Promise<void> {
     await handleScoopSelect(selectedScoop);
   }
 
-  if (runtimeMode === 'standalone') {
+  if (runtimeMode === 'standalone' || runtimeMode === 'electron-overlay') {
     const trayRuntimeConfig = await resolveTrayRuntimeConfig({
       locationHref: window.location.href,
       storage: window.localStorage,
@@ -1088,6 +1088,7 @@ async function main(): Promise<void> {
       activeFollower = trayFollower;
       void trayFollower.start().then((connection) => {
         const followerSync = new FollowerSyncManager(connection.channel, {
+          browserTransport: browser.getTransport(),
           onSnapshot: (messages) => {
             // Replace chat panel messages with the leader's snapshot
             layout.panels.chat.loadMessages(messages);
@@ -1145,6 +1146,7 @@ async function main(): Promise<void> {
     } else if (trayRuntimeConfig?.workerBaseUrl) {
       let leaderTray!: LeaderTrayManager;
       const leaderSync = new LeaderSyncManager({
+        browserTransport: browser.getTransport(),
         getMessages: () => {
           return layout.panels.chat.getMessages();
         },
