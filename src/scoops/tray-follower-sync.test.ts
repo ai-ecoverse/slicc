@@ -173,6 +173,36 @@ describe('FollowerSyncManager', () => {
     });
   });
 
+  describe('user_message_echo handling', () => {
+    it('calls onUserMessage callback with text, messageId and scoopJid', () => {
+      const channel = new FakeChannel();
+      const onUserMessage = vi.fn();
+      const follower = new FollowerSyncManager(channel, { onUserMessage });
+
+      channel.simulateLeaderMessage({
+        type: 'user_message_echo',
+        text: 'hello from leader',
+        messageId: 'msg-42',
+        scoopJid: 'cone',
+      });
+
+      expect(onUserMessage).toHaveBeenCalledWith('hello from leader', 'msg-42', 'cone');
+    });
+
+    it('does not crash when onUserMessage is not provided', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      // Should not throw
+      channel.simulateLeaderMessage({
+        type: 'user_message_echo',
+        text: 'orphan message',
+        messageId: 'msg-99',
+        scoopJid: 'cone',
+      });
+    });
+  });
+
   describe('status handling', () => {
     it('calls onStatus callback', () => {
       const channel = new FakeChannel();

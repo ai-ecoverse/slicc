@@ -714,6 +714,10 @@ async function main(): Promise<void> {
     layout.panels.memory.setSelectedScoop(selectedScoop.jid);
   }
 
+  // Mutable reference to leader sync — set when tray leader mode is active.
+  // Used by coneAgentHandle to broadcast user messages to followers.
+  let leaderSyncRef: LeaderSyncManager | null = null;
+
   // Build the cone agent handle — all user input routes through orchestrator
   const coneAgentHandle: AgentHandle = {
     sendMessage(text: string, messageId?: string): void {
@@ -737,6 +741,9 @@ async function main(): Promise<void> {
       getBuffer(selectedScoop.jid).push({
         id: msg.id, role: 'user', content: text, timestamp: Date.now(),
       });
+
+      // Broadcast user message to all followers (leader mode)
+      leaderSyncRef?.broadcastUserMessage(text, msg.id);
 
       orchestrator.handleMessage(msg);
       orchestrator.createScoopTab(selectedScoop.jid);
@@ -1070,6 +1077,10 @@ async function main(): Promise<void> {
             // Replace chat panel messages with the leader's snapshot
             layout.panels.chat.loadMessages(messages);
           },
+          onUserMessage: (text) => {
+            // Display user message bubble from the leader's echo
+            layout.panels.chat.addUserMessage(text);
+          },
           onStatus: (status) => {
             layout.panels.chat.setProcessing(status === 'processing');
           },
@@ -1107,13 +1118,15 @@ async function main(): Promise<void> {
         },
         getScoopJid: () => selectedScoop?.jid ?? 'cone',
         onFollowerMessage: (text, messageId) => {
-          // Route follower messages through the same path as local user messages
+          // Route follower messages through the same path as local user messages.
+          // coneAgentHandle.sendMessage broadcasts user_message_echo to all followers.
           coneAgentHandle.sendMessage(text, messageId);
         },
         onFollowerAbort: () => {
           coneAgentHandle.stop();
         },
       });
+      leaderSyncRef = leaderSync;
       // Tap into the event system to broadcast to followers
       eventListeners.add((event: UIAgentEvent) => {
         leaderSync.broadcastEvent(event);

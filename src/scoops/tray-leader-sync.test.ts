@@ -197,4 +197,38 @@ describe('LeaderSyncManager', () => {
     expect(ch2.readyState).toBe('closed');
     expect(manager.hasFollowers).toBe(false);
   });
+
+  it('broadcasts user_message_echo to all followers', () => {
+    const { manager } = createManager();
+    const ch1 = new FakeChannel();
+    const ch2 = new FakeChannel();
+    manager.addFollower('b1', ch1);
+    manager.addFollower('b2', ch2);
+
+    manager.broadcastUserMessage('hello from user', 'msg-42');
+
+    // Each channel gets snapshot (1) + user_message_echo (1) = 2 messages
+    const sent1 = ch1.parseSent();
+    const sent2 = ch2.parseSent();
+    expect(sent1).toHaveLength(2);
+    expect(sent2).toHaveLength(2);
+    expect(sent1[1]).toEqual({
+      type: 'user_message_echo',
+      text: 'hello from user',
+      messageId: 'msg-42',
+      scoopJid: 'cone',
+    });
+    expect(sent2[1]).toEqual({
+      type: 'user_message_echo',
+      text: 'hello from user',
+      messageId: 'msg-42',
+      scoopJid: 'cone',
+    });
+  });
+
+  it('does not broadcast user_message_echo when no followers', () => {
+    const { manager } = createManager();
+    // Should not throw
+    manager.broadcastUserMessage('lonely message', 'msg-99');
+  });
 });

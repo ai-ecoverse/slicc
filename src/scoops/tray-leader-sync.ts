@@ -84,6 +84,19 @@ export class LeaderSyncManager {
   }
 
   /**
+   * Broadcast a user message to all connected followers.
+   * Called when any user message enters the leader (local or from a follower).
+   */
+  broadcastUserMessage(text: string, messageId: string): void {
+    if (this.followers.size === 0) return;
+    const scoopJid = this.options.getScoopJid();
+    const message: LeaderToFollowerMessage = { type: 'user_message_echo', text, messageId, scoopJid };
+    for (const follower of this.followers.values()) {
+      follower.sync.send(message);
+    }
+  }
+
+  /**
    * Broadcast a status change to all connected followers.
    */
   broadcastStatus(status: string): void {

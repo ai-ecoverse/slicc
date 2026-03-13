@@ -18,6 +18,7 @@ const log = createLogger('tray-sync');
 export type LeaderToFollowerMessage =
   | { type: 'snapshot'; messages: ChatMessage[]; scoopJid: string }
   | { type: 'agent_event'; event: AgentEvent; scoopJid: string }
+  | { type: 'user_message_echo'; text: string; messageId: string; scoopJid: string }
   | { type: 'status'; scoopStatus: string }
   | { type: 'error'; error: string };
 

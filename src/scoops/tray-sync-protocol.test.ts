@@ -164,5 +164,21 @@ describe('tray-sync-protocol', () => {
       dc.simulateMessage(JSON.stringify({ type: 'status', scoopStatus: 'processing' }));
       expect(received).toEqual([{ type: 'status', scoopStatus: 'processing' }]);
     });
+
+    it('receives user_message_echo from leader', () => {
+      const dc = new FakeSyncDataChannel();
+      const sync = createFollowerSyncChannel(dc);
+      const received: LeaderToFollowerMessage[] = [];
+      sync.onMessage(msg => received.push(msg));
+
+      const echo: LeaderToFollowerMessage = {
+        type: 'user_message_echo',
+        text: 'echoed',
+        messageId: 'e1',
+        scoopJid: 'cone',
+      };
+      dc.simulateMessage(JSON.stringify(echo));
+      expect(received).toEqual([echo]);
+    });
   });
 });

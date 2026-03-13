@@ -18,6 +18,8 @@ const log = createLogger('tray-follower-sync');
 export interface FollowerSyncManagerOptions {
   /** Called when the leader sends a snapshot (full state replacement). */
   onSnapshot?: (messages: ChatMessage[], scoopJid: string) => void;
+  /** Called when the leader echoes a user message (local or from any follower). */
+  onUserMessage?: (text: string, messageId: string, scoopJid: string) => void;
   /** Called when the leader sends a status update. */
   onStatus?: (scoopStatus: string) => void;
 }
@@ -108,6 +110,11 @@ export class FollowerSyncManager implements AgentHandle {
 
       case 'agent_event':
         this.emitEvent(message.event);
+        break;
+
+      case 'user_message_echo':
+        log.info('User message echo received', { messageId: message.messageId, scoopJid: message.scoopJid });
+        this.options.onUserMessage?.(message.text, message.messageId, message.scoopJid);
         break;
 
       case 'status':
