@@ -21,13 +21,17 @@ export type LeaderToFollowerMessage =
   | { type: 'user_message_echo'; text: string; messageId: string; scoopJid: string }
   | { type: 'status'; scoopStatus: string }
   | { type: 'error'; error: string }
-  | { type: 'targets.registry'; targets: TrayTargetEntry[] };
+  | { type: 'targets.registry'; targets: TrayTargetEntry[] }
+  | { type: 'cdp.request'; requestId: string; localTargetId: string; method: string; params?: Record<string, unknown>; sessionId?: string }
+  | { type: 'cdp.response'; requestId: string; result?: Record<string, unknown>; error?: string };
 
 export type FollowerToLeaderMessage =
   | { type: 'user_message'; text: string; messageId: string }
   | { type: 'abort' }
   | { type: 'request_snapshot' }
-  | { type: 'targets.advertise'; targets: RemoteTargetInfo[]; runtimeId: string };
+  | { type: 'targets.advertise'; targets: RemoteTargetInfo[]; runtimeId: string }
+  | { type: 'cdp.request'; requestId: string; targetRuntimeId: string; localTargetId: string; method: string; params?: Record<string, unknown>; sessionId?: string }
+  | { type: 'cdp.response'; requestId: string; result?: Record<string, unknown>; error?: string };
 
 // ---------------------------------------------------------------------------
 // Target advertisement types

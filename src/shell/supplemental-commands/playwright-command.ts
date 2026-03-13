@@ -345,7 +345,11 @@ async function getActionablePages(
   state: PlaywrightState,
 ): Promise<PageInfo[]> {
   await resolveAppTabId(browser, state);
-  return (await browser.listPages()).filter((page) => isActionablePage(state, page));
+  // Use listAllTargets when available (includes remote tray targets)
+  const pages = typeof browser.listAllTargets === 'function'
+    ? await browser.listAllTargets()
+    : await browser.listPages();
+  return pages.filter((page) => isActionablePage(state, page));
 }
 
 /** Ensure we have a current target; auto-selects the active tab if needed. */
@@ -821,8 +825,10 @@ export function createPlaywrightCommand(
           const lines = pages.map((p, i) => {
             const isCurrent = p.targetId === state.currentTarget;
             const isActive = !!p.active;
+            const isRemote = p.targetId.includes(':');
             const marker = isCurrent ? '→ ' : isActive ? '* ' : '  ';
-            return `${marker}${i}: ${p.title} (${p.url})`;
+            const remoteSuffix = isRemote ? ` [remote:${p.targetId.substring(0, p.targetId.indexOf(':'))}]` : '';
+            return `${marker}${i}: ${p.title} (${p.url})${remoteSuffix}`;
           });
           result = { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 }; break;
         }

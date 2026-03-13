@@ -16,8 +16,19 @@ import type {
   BoundingBox,
   AccessibilityNode,
 } from './types.js';
+import type { TrayTargetEntry } from '../scoops/tray-sync-protocol.js';
 import { normalizeAccessibilityText } from './normalize-accessibility-text.js';
 import { createLogger } from '../core/logger.js';
+
+/**
+ * Provider of remote tray targets and transport factory.
+ * Set via `setTrayTargetProvider()` to enable remote target support.
+ */
+export interface TrayTargetProvider {
+  getTargets(): TrayTargetEntry[];
+  createRemoteTransport?(runtimeId: string, localTargetId: string): CDPTransport;
+  removeRemoteTransport?(runtimeId: string, localTargetId: string): void;
+}
 
 const FALLBACK_CDP_URL = 'ws://localhost:3000/cdp';
 const log = createLogger('browser-api');
@@ -34,8 +45,11 @@ export function getDefaultCdpUrl(
 
 export class BrowserAPI {
   private client: CDPTransport;
+  private localClient: CDPTransport; // preserved original when using remote transport
   private sessionId: string | null = null;
   private attachedTargetId: string | null = null;
+  private trayTargetProvider: TrayTargetProvider | null = null;
+  private remoteTargetInfo: { runtimeId: string; localTargetId: string } | null = null;
   private readonly handleJavaScriptDialogOpening = async (
     params: Record<string, unknown>,
   ): Promise<void> => {
@@ -67,6 +81,7 @@ export class BrowserAPI {
 
   constructor(client?: CDPTransport) {
     this.client = client ?? new CDPClient();
+    this.localClient = this.client;
     this.client.on('Page.javascriptDialogOpening', this.handleJavaScriptDialogOpening);
   }
 
@@ -90,6 +105,35 @@ export class BrowserAPI {
    */
   getAttachedTargetId(): string | null {
     return this.attachedTargetId;
+  }
+
+  /**
+   * Set a provider of remote tray targets.
+   * When set, listAllTargets() includes remote targets and attachToPage()
+   * can attach to remote targets using the "{runtimeId}:{localTargetId}" format.
+   */
+  setTrayTargetProvider(provider: TrayTargetProvider | null): void {
+    this.trayTargetProvider = provider;
+  }
+
+  /**
+   * List all pages — local + remote tray targets.
+   * Remote targets have targetId format "{runtimeId}:{localTargetId}".
+   */
+  async listAllTargets(): Promise<PageInfo[]> {
+    const local = await this.listPages();
+    if (!this.trayTargetProvider) return local;
+
+    const remoteEntries = this.trayTargetProvider.getTargets();
+    const remote: PageInfo[] = remoteEntries
+      .filter(t => !t.isLocal)
+      .map(t => ({
+        targetId: t.targetId,
+        title: t.title,
+        url: t.url,
+      }));
+
+    return [...local, ...remote];
   }
 
   /**
@@ -146,12 +190,42 @@ export class BrowserAPI {
   /**
    * Attach to a specific page target, enabling page-level commands.
    * Returns the CDP session ID for the attached target.
+   *
+   * If the targetId contains a colon (format "{runtimeId}:{localTargetId}"),
+   * it's treated as a remote tray target and a RemoteCDPTransport is used.
    */
   async attachToPage(targetId: string): Promise<string> {
     await this.ensureConnected();
     // Detach from previous target if needed
     if (this.sessionId && this.attachedTargetId !== targetId) {
       await this.detach();
+    }
+
+    // Check if this is a remote tray target (format: "runtimeId:localTargetId")
+    if (this.trayTargetProvider?.createRemoteTransport && targetId.includes(':')) {
+      const colonIdx = targetId.indexOf(':');
+      const runtimeId = targetId.substring(0, colonIdx);
+      const localTargetId = targetId.substring(colonIdx + 1);
+
+      // Check if this target is actually in the remote registry
+      const remoteEntries = this.trayTargetProvider.getTargets();
+      const isRemote = remoteEntries.some(t => t.targetId === targetId && !t.isLocal);
+
+      if (isRemote) {
+        const remoteTransport = this.trayTargetProvider.createRemoteTransport(runtimeId, localTargetId);
+        this.client = remoteTransport;
+        this.remoteTargetInfo = { runtimeId, localTargetId };
+
+        // Send attachToTarget via the remote transport
+        const result = await this.client.send('Target.attachToTarget', {
+          targetId: localTargetId,
+          flatten: true,
+        });
+        this.sessionId = result['sessionId'] as string;
+        this.attachedTargetId = targetId;
+        await this.client.send('Page.enable', {}, this.sessionId);
+        return this.sessionId;
+      }
     }
 
     const result = await this.client.send('Target.attachToTarget', {
@@ -168,6 +242,7 @@ export class BrowserAPI {
 
   /**
    * Detach from the currently attached target.
+   * If attached to a remote target, restores the local transport.
    */
   async detach(): Promise<void> {
     if (this.sessionId) {
@@ -178,6 +253,17 @@ export class BrowserAPI {
       } catch {
         // Target may already be detached
       }
+
+      // Restore local transport if we were using a remote one
+      if (this.remoteTargetInfo && this.trayTargetProvider?.removeRemoteTransport) {
+        this.trayTargetProvider.removeRemoteTransport(
+          this.remoteTargetInfo.runtimeId,
+          this.remoteTargetInfo.localTargetId,
+        );
+        this.client = this.localClient;
+        this.remoteTargetInfo = null;
+      }
+
       this.sessionId = null;
       this.attachedTargetId = null;
     }

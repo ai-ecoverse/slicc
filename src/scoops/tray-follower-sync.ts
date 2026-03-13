@@ -13,6 +13,8 @@ import {
   type RemoteTargetInfo,
   type TrayTargetEntry,
 } from './tray-sync-protocol.js';
+import type { CDPTransport } from '../cdp/transport.js';
+import { RemoteCDPTransport, type RemoteCDPSender } from '../cdp/remote-cdp-transport.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('tray-follower-sync');
@@ -26,6 +28,8 @@ export interface FollowerSyncManagerOptions {
   onStatus?: (scoopStatus: string) => void;
   /** Called when the leader sends an updated target registry. */
   onTargetsUpdated?: (targets: TrayTargetEntry[]) => void;
+  /** Optional CDP transport for executing local CDP commands (follower's browser). */
+  browserTransport?: CDPTransport;
 }
 
 /**
@@ -40,6 +44,8 @@ export class FollowerSyncManager implements AgentHandle {
   private latestSnapshot: { messages: ChatMessage[]; scoopJid: string } | null = null;
   private readonly sentMessageIds = new Set<string>();
   private targetEntries: TrayTargetEntry[] = [];
+  /** Active RemoteCDPTransport instances keyed by requestId prefix for response routing. */
+  private readonly remoteTransports = new Map<string, RemoteCDPTransport>();
 
   constructor(
     channel: TrayDataChannelLike,
@@ -153,6 +159,17 @@ export class FollowerSyncManager implements AgentHandle {
         this.targetEntries = message.targets;
         this.options.onTargetsUpdated?.(this.targetEntries);
         break;
+
+      case 'cdp.request': {
+        const { requestId, localTargetId, method, params, sessionId } = message;
+        this.executeLocalCDP(requestId, localTargetId, method, params, sessionId);
+        break;
+      }
+
+      case 'cdp.response': {
+        this.routeCDPResponse(message.requestId, message.result, message.error);
+        break;
+      }
     }
   }
 
@@ -163,6 +180,80 @@ export class FollowerSyncManager implements AgentHandle {
       } catch (err) {
         log.error('Listener error', { eventType: event.type, error: err instanceof Error ? err.message : String(err) });
       }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // CDP routing
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Create a RemoteCDPTransport that routes CDP commands to a remote runtime
+   * via the leader data channel.
+   */
+  createRemoteTransport(targetRuntimeId: string, localTargetId: string): RemoteCDPTransport {
+    const sender: RemoteCDPSender = {
+      sendCDPRequest: (requestId, method, params, sessionId) => {
+        this.sync.send({
+          type: 'cdp.request',
+          requestId,
+          targetRuntimeId,
+          localTargetId,
+          method,
+          params,
+          sessionId,
+        });
+      },
+    };
+    const transport = new RemoteCDPTransport(sender);
+    this.remoteTransports.set(`${targetRuntimeId}:${localTargetId}`, transport);
+    return transport;
+  }
+
+  /**
+   * Remove a remote transport when no longer needed.
+   */
+  removeRemoteTransport(targetRuntimeId: string, localTargetId: string): void {
+    const key = `${targetRuntimeId}:${localTargetId}`;
+    const transport = this.remoteTransports.get(key);
+    if (transport) {
+      transport.disconnect();
+      this.remoteTransports.delete(key);
+    }
+  }
+
+  /**
+   * Execute a CDP command on the follower's local browser transport.
+   * Sends the response back to the leader.
+   */
+  private async executeLocalCDP(
+    requestId: string,
+    localTargetId: string,
+    method: string,
+    params: Record<string, unknown> | undefined,
+    sessionId: string | undefined,
+  ): Promise<void> {
+    const transport = this.options.browserTransport;
+    if (!transport) {
+      this.sync.send({ type: 'cdp.response', requestId, error: 'Follower has no browser transport' });
+      return;
+    }
+
+    try {
+      const result = await transport.send(method, params, sessionId);
+      this.sync.send({ type: 'cdp.response', requestId, result });
+    } catch (err) {
+      this.sync.send({ type: 'cdp.response', requestId, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  /**
+   * Route a CDP response from the leader to the appropriate RemoteCDPTransport.
+   */
+  private routeCDPResponse(requestId: string, result?: Record<string, unknown>, error?: string): void {
+    // Find the transport that has this pending request by checking all transports
+    for (const transport of this.remoteTransports.values()) {
+      transport.handleResponse(requestId, result, error);
     }
   }
 }

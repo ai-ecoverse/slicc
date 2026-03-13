@@ -355,4 +355,182 @@ describe('LeaderSyncManager', () => {
       manager.setLocalTargets([{ targetId: 't1', title: 'Tab', url: 'https://example.com' }]);
     });
   });
+
+  describe('CDP routing', () => {
+    it('handles cdp.request for leader targets — executes locally and returns response', async () => {
+      const fakeBrowserTransport = {
+        send: vi.fn().mockResolvedValue({ sessionId: 'sess-1' }),
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        on: vi.fn(),
+        off: vi.fn(),
+        once: vi.fn(),
+        state: 'connected' as const,
+      };
+      const { manager } = createManager();
+      (manager as any).options.browserTransport = fakeBrowserTransport;
+
+      const ch1 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+      ch1.sent.length = 0;
+
+      // Follower sends a CDP request targeting the leader
+      ch1.simulateMessage({
+        type: 'cdp.request',
+        requestId: 'req-1',
+        targetRuntimeId: 'leader',
+        localTargetId: 'lt1',
+        method: 'Target.attachToTarget',
+        params: { targetId: 'lt1', flatten: true },
+      } as any);
+
+      // Wait for async execution
+      await vi.waitFor(() => {
+        expect(ch1.parseSent().length).toBeGreaterThan(0);
+      });
+
+      const sent = ch1.parseSent();
+      const response = sent.find(m => m.type === 'cdp.response');
+      expect(response).toBeDefined();
+      if (response && response.type === 'cdp.response') {
+        expect(response.requestId).toBe('req-1');
+        expect(response.result).toEqual({ sessionId: 'sess-1' });
+      }
+    });
+
+    it('handles cdp.request for leader targets — returns error if no browser transport', async () => {
+      const { manager } = createManager();
+      // No browserTransport set
+
+      const ch1 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+      ch1.sent.length = 0;
+
+      ch1.simulateMessage({
+        type: 'cdp.request',
+        requestId: 'req-2',
+        targetRuntimeId: 'leader',
+        localTargetId: 'lt1',
+        method: 'Page.navigate',
+      } as any);
+
+      // Wait for async execution
+      await vi.waitFor(() => {
+        expect(ch1.parseSent().length).toBeGreaterThan(0);
+      });
+
+      const sent = ch1.parseSent();
+      const response = sent.find(m => m.type === 'cdp.response');
+      expect(response).toBeDefined();
+      if (response && response.type === 'cdp.response') {
+        expect(response.requestId).toBe('req-2');
+        expect(response.error).toBe('Leader has no browser transport');
+      }
+    });
+
+    it('forwards cdp.request to target follower', () => {
+      const { manager } = createManager();
+      const ch1 = new FakeChannel();
+      const ch2 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+      manager.addFollower('b2', ch2);
+
+      // Follower b2 advertises targets so leader knows its runtime mapping
+      ch2.simulateMessage({
+        type: 'targets.advertise',
+        targets: [{ targetId: 'tab1', title: 'Tab 1', url: 'https://example.com' }],
+        runtimeId: 'follower-b2',
+      });
+
+      ch1.sent.length = 0;
+      ch2.sent.length = 0;
+
+      // Follower b1 sends a CDP request targeting follower-b2
+      ch1.simulateMessage({
+        type: 'cdp.request',
+        requestId: 'req-3',
+        targetRuntimeId: 'follower-b2',
+        localTargetId: 'tab1',
+        method: 'Page.navigate',
+        params: { url: 'https://new.com' },
+      } as any);
+
+      // ch2 should receive the forwarded cdp.request
+      const sent2 = ch2.parseSent();
+      expect(sent2).toHaveLength(1);
+      expect(sent2[0].type).toBe('cdp.request');
+      if (sent2[0].type === 'cdp.request') {
+        expect(sent2[0].requestId).toBe('req-3');
+        expect(sent2[0].localTargetId).toBe('tab1');
+        expect(sent2[0].method).toBe('Page.navigate');
+      }
+    });
+
+    it('forwards cdp.response back to original requester', () => {
+      const { manager } = createManager();
+      const ch1 = new FakeChannel();
+      const ch2 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+      manager.addFollower('b2', ch2);
+
+      // Establish runtime mapping
+      ch2.simulateMessage({
+        type: 'targets.advertise',
+        targets: [{ targetId: 'tab1', title: 'Tab 1', url: 'https://example.com' }],
+        runtimeId: 'follower-b2',
+      });
+
+      ch1.sent.length = 0;
+      ch2.sent.length = 0;
+
+      // Follower b1 requests CDP from follower-b2
+      ch1.simulateMessage({
+        type: 'cdp.request',
+        requestId: 'req-4',
+        targetRuntimeId: 'follower-b2',
+        localTargetId: 'tab1',
+        method: 'Runtime.evaluate',
+        params: { expression: '1+1' },
+      } as any);
+
+      // Follower b2 responds
+      ch2.simulateMessage({
+        type: 'cdp.response',
+        requestId: 'req-4',
+        result: { result: { value: 2 } },
+      } as any);
+
+      // ch1 should receive the response
+      const sent1 = ch1.parseSent();
+      const response = sent1.find(m => m.type === 'cdp.response');
+      expect(response).toBeDefined();
+      if (response && response.type === 'cdp.response') {
+        expect(response.requestId).toBe('req-4');
+        expect(response.result).toEqual({ result: { value: 2 } });
+      }
+    });
+
+    it('returns error when target runtime is not connected', () => {
+      const { manager } = createManager();
+      const ch1 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+      ch1.sent.length = 0;
+
+      ch1.simulateMessage({
+        type: 'cdp.request',
+        requestId: 'req-5',
+        targetRuntimeId: 'unknown-runtime',
+        localTargetId: 'tab1',
+        method: 'Page.navigate',
+      } as any);
+
+      const sent = ch1.parseSent();
+      expect(sent).toHaveLength(1);
+      expect(sent[0].type).toBe('cdp.response');
+      if (sent[0].type === 'cdp.response') {
+        expect(sent[0].requestId).toBe('req-5');
+        expect(sent[0].error).toContain('not connected');
+      }
+    });
+  });
 });
