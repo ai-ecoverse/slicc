@@ -900,10 +900,6 @@ export class Layout {
       onTabActivate: (id) => {
         if (id === 'terminal') this.panels?.terminal?.refit();
         if (id === 'memory') this.panels?.memory?.refresh();
-        // Update URL param for drawer tab
-        const url = new URL(window.location.href);
-        url.searchParams.set('bottomTab', id);
-        history.replaceState(null, '', url.toString());
       },
       onTabClose: (id) => {
         const name = id.startsWith('sprinkle-') ? id.slice(9) : id;
@@ -952,13 +948,7 @@ export class Layout {
     // Restore persisted primary tab
     this.primaryZone.restoreActiveTab();
 
-    // Restore persisted drawer tab (also check URL param)
-    const urlDrawerTab = new URL(window.location.href).searchParams.get('bottomTab');
-    if (urlDrawerTab && this.drawerZone.hasTab(urlDrawerTab)) {
-      this.drawerZone.activateTab(urlDrawerTab);
-    } else {
-      this.drawerZone.restoreActiveTab();
-    }
+    this.drawerZone.restoreActiveTab();
 
     this.rightEl.appendChild(this.drawerZoneEl);
     layout.appendChild(this.rightEl);
