@@ -97,6 +97,7 @@
         --s2-font-size-200:  16px;
         --s2-font-size-300:  18px;
         --s2-font-size-400:  20px;
+        --s2-font-size-500:  22px;
         --s2-font-size-600:  25px;
 
         /* Line heights */
@@ -184,6 +185,9 @@
       .theme-light [data-tooltip]::after {
         background: var(--s2-gray-900);
         color: var(--s2-gray-25);
+      }
+      .theme-light [data-tooltip]::before {
+        border-bottom-color: var(--s2-gray-900);
       }
 
       /* Scrollbar lighter */
@@ -344,33 +348,50 @@
       }
 
       /* ================================================================== */
-      /* Custom tooltips — fast, styled                                     */
+      /* S2 Tooltip — neutral variant with tip arrow (bottom placement)       */
       /* ================================================================== */
       [data-tooltip] { position: relative; }
+      /* Tooltip body */
       [data-tooltip]::after {
         content: attr(data-tooltip);
         position: absolute;
-        top: calc(100% + 6px); left: 50%;
-        transform: translateX(-50%) translateY(2px);
+        top: calc(100% + 8px); left: 50%;
+        transform: translateX(-50%) translateY(-4px);
         padding: 4px 8px;
+        max-width: 160px;
         background: var(--s2-gray-900);
         color: var(--s2-gray-25);
         font-size: 11px; font-weight: 500;
         font-family: var(--s2-font-family);
-        white-space: nowrap;
+        white-space: normal; text-align: center;
         border-radius: var(--s2-radius-s);
         pointer-events: none;
         opacity: 0;
-        transition: opacity 100ms ease, transform 100ms ease;
+        transition: opacity 130ms ease, transform 130ms ease;
         z-index: 1000;
         line-height: 1.3;
       }
-      [data-tooltip]:hover::after {
+      /* Tip arrow */
+      [data-tooltip]::before {
+        content: '';
+        position: absolute;
+        top: calc(100% + 0px); left: 50%;
+        transform: translateX(-50%) translateY(-4px);
+        border: 4px solid transparent;
+        border-bottom-color: var(--s2-gray-900);
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 130ms ease, transform 130ms ease;
+        z-index: 1000;
+      }
+      [data-tooltip]:hover::after,
+      [data-tooltip]:hover::before {
         opacity: 1;
         transform: translateX(-50%) translateY(0);
-        transition-delay: 150ms;
+        transition-delay: 300ms;
       }
-      [data-tooltip]:active::after { opacity: 0; transition-delay: 0ms; }
+      [data-tooltip]:active::after,
+      [data-tooltip]:active::before { opacity: 0; transition-delay: 0ms; }
 
       /* ================================================================== */
       /* Chat panel                                                         */
@@ -801,8 +822,40 @@
       /* Terminal panel — clean, minimal chrome                              */
       /* ================================================================== */
       .terminal-panel {
+        position: relative;
         flex: 1; min-height: 0; display: flex; flex-direction: column;
         background: var(--s2-bg-layer-1);
+      }
+      .terminal-panel__header {
+        position: absolute; top: 6px; right: var(--s2-spacing-200);
+        z-index: 1; display: flex; gap: 4px;
+      }
+      .terminal-panel__preview-btn {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 24px; height: 24px;
+        border: none; background: transparent;
+        color: var(--s2-content-disabled);
+        border-radius: var(--s2-radius-s);
+        cursor: default;
+        transition: color var(--s2-transition-default), background var(--s2-transition-default);
+      }
+      .terminal-panel__preview-btn:not(:disabled) {
+        color: var(--s2-content-tertiary); cursor: pointer;
+      }
+      .terminal-panel__preview-btn:not(:disabled):hover {
+        color: var(--s2-content-default);
+        background: var(--s2-gray-200);
+      }
+      .terminal-panel__preview-btn--active {
+        color: var(--s2-content-default);
+        background: var(--s2-gray-300);
+      }
+      .terminal-panel__preview-btn--active:hover {
+        background: var(--s2-gray-300);
+      }
+      .terminal-panel__preview-btn:focus-visible {
+        outline: 2px solid var(--s2-accent);
+        outline-offset: -2px;
       }
       .terminal-panel__view {
         flex: 1; min-height: 0; overflow: hidden;
@@ -947,28 +1000,38 @@
       }
 
       /* ================================================================== */
-      /* Mini tabs (Files/Memory) — S2 Tabs pattern                         */
+      /* Mini tabs — S2 Tabs pattern                                         */
       /* ================================================================== */
       .mini-tabs {
-        display: flex; background: var(--s2-bg-layer-1);
+        display: flex; gap: var(--s2-spacing-100);
+        padding: 0 var(--s2-spacing-200);
         border-bottom: 1px solid var(--s2-border-subtle);
         flex-shrink: 0;
       }
       .mini-tabs__tab {
-        flex: 1; padding: var(--s2-spacing-100) var(--s2-spacing-100);
+        position: relative;
+        flex: none;
+        padding: var(--s2-spacing-100) var(--s2-spacing-100);
         border: none; background: transparent;
         color: var(--s2-content-tertiary);
-        font-size: var(--s2-font-size-50);
-        font-weight: 600; font-family: var(--s2-font-family);
-        cursor: pointer; text-align: center;
-        border-bottom: 2px solid transparent;
-        transition: color var(--s2-transition-default), border-color var(--s2-transition-default);
-        letter-spacing: 0.02em;
+        font-size: var(--s2-font-size-75);
+        font-weight: 500; font-family: var(--s2-font-family);
+        cursor: pointer; white-space: nowrap;
+        transition: color var(--s2-transition-default);
+      }
+      .mini-tabs__tab::after {
+        content: ''; position: absolute;
+        bottom: -1px; left: var(--s2-spacing-100); right: var(--s2-spacing-100);
+        height: 2px; border-radius: 1px;
+        background: transparent;
+        transition: background var(--s2-transition-default);
       }
       .mini-tabs__tab:hover { color: var(--s2-content-default); }
-      .mini-tabs__tab--active {
-        color: var(--s2-content-default);
-        border-bottom-color: var(--s2-accent);
+      .mini-tabs__tab--active { color: var(--s2-content-default); }
+      .mini-tabs__tab--active::after { background: var(--s2-content-default); }
+      .mini-tabs__tab:focus-visible {
+        outline: 2px solid var(--s2-accent);
+        outline-offset: -2px; border-radius: var(--s2-radius-s);
       }
       .mini-tabs__tab:disabled {
         color: var(--s2-content-disabled); cursor: not-allowed;
@@ -1067,6 +1130,399 @@
         color: var(--s2-content-default);
       }
       .dialog__btn--secondary:hover { background: var(--s2-gray-200); }
+
+      /* ================================================================== */
+      /* SHTML Canvas Panel Components                                      */
+      /* ================================================================== */
+
+      /* Close button for panel tabs (standalone mode) */
+      .mini-tabs__tab-close {
+        display: inline-flex; align-items: center; justify-content: center;
+        margin-left: 6px; width: 16px; height: 16px;
+        border-radius: var(--s2-radius-s);
+        font-size: 12px; line-height: 1;
+        color: var(--s2-content-tertiary);
+      }
+      .mini-tabs__tab-close:hover {
+        color: var(--s2-negative);
+        background: color-mix(in srgb, var(--s2-negative) 10%, transparent);
+      }
+
+      /* Sprinkle content wrapper */
+      .sprinkle-content { padding: var(--s2-spacing-200); }
+
+      /* ── Cards (S2 Cards — flex variant, 10px radius, shadow instead of border) ── */
+      .sprinkle-card {
+        background: var(--s2-bg-layer-2);
+        border-radius: var(--s2-radius-l);
+        padding: var(--s2-spacing-300);
+        margin-bottom: var(--s2-spacing-200);
+        box-shadow: var(--s2-shadow-container);
+        transition: box-shadow 130ms ease;
+      }
+      .sprinkle-card:hover {
+        box-shadow: var(--s2-shadow-elevated);
+      }
+      .sprinkle-stat-card {
+        background: var(--s2-bg-layer-2);
+        border-radius: var(--s2-radius-l);
+        padding: var(--s2-spacing-200) var(--s2-spacing-300);
+        text-align: center;
+        box-shadow: var(--s2-shadow-container);
+        transition: box-shadow 130ms ease;
+      }
+      .sprinkle-stat-card:hover {
+        box-shadow: var(--s2-shadow-elevated);
+      }
+      .sprinkle-stat-card .value {
+        font-size: var(--s2-font-size-500);
+        font-weight: 800;
+        color: var(--s2-content-default);
+        line-height: 1.2;
+      }
+      .sprinkle-stat-card .label {
+        font-size: var(--s2-font-size-75);
+        font-weight: 500;
+        color: var(--s2-content-secondary);
+        margin-top: var(--s2-spacing-50);
+      }
+
+      /* ── Tables (S2 Table — no uppercase, no letter-spacing, proper hierarchy) ── */
+      .sprinkle-table {
+        width: 100%; border-collapse: collapse;
+        font-size: var(--s2-font-size-75);
+      }
+      .sprinkle-table th {
+        text-align: left;
+        padding: var(--s2-spacing-100) var(--s2-spacing-200);
+        border-bottom: 2px solid var(--s2-border-default);
+        color: var(--s2-content-secondary);
+        font-weight: 700;
+        font-size: var(--s2-font-size-75);
+      }
+      .sprinkle-table td {
+        padding: var(--s2-spacing-100) var(--s2-spacing-200);
+        border-bottom: 1px solid var(--s2-border-subtle);
+        color: var(--s2-content-default);
+      }
+      .sprinkle-table tr:hover td {
+        background: color-mix(in srgb, var(--s2-bg-elevated) 50%, transparent);
+      }
+
+      /* ── Badges (S2 Badge — bold style default, 8px radius, solid fill + white text) ── */
+      .sprinkle-badge {
+        display: inline-flex; align-items: center;
+        padding: 3px 8px; border-radius: var(--s2-radius-default);
+        font-size: var(--s2-font-size-50); font-weight: 500;
+        line-height: var(--s2-line-height-50);
+        /* neutral/gray — bold style default */
+        background: var(--s2-gray-400); color: #fff;
+      }
+      .sprinkle-badge--positive { background: var(--s2-positive); color: #fff; }
+      .sprinkle-badge--negative { background: var(--s2-negative); color: #fff; }
+      .sprinkle-badge--notice { background: var(--s2-notice); color: #fff; }
+      .sprinkle-badge--informative { background: var(--s2-informative); color: #fff; }
+      .sprinkle-badge--accent { background: var(--s2-accent); color: #fff; }
+      /* subtle style variant — tinted backgrounds with colored text */
+      .sprinkle-badge--subtle {
+        background: color-mix(in srgb, var(--s2-gray-400) 15%, transparent);
+        color: var(--s2-content-secondary);
+      }
+      .sprinkle-badge--subtle.sprinkle-badge--positive { background: color-mix(in srgb, var(--s2-positive) 15%, transparent); color: var(--s2-positive); }
+      .sprinkle-badge--subtle.sprinkle-badge--negative { background: color-mix(in srgb, var(--s2-negative) 15%, transparent); color: var(--s2-negative); }
+      .sprinkle-badge--subtle.sprinkle-badge--notice { background: color-mix(in srgb, var(--s2-notice) 15%, transparent); color: var(--s2-notice); }
+      .sprinkle-badge--subtle.sprinkle-badge--informative { background: color-mix(in srgb, var(--s2-informative) 15%, transparent); color: var(--s2-informative); }
+      .sprinkle-badge--subtle.sprinkle-badge--accent { background: color-mix(in srgb, var(--s2-accent) 15%, transparent); color: var(--s2-accent); }
+      /* outline style variant — stroke with no fill */
+      .sprinkle-badge--outline {
+        background: transparent; color: var(--s2-content-secondary);
+        box-shadow: inset 0 0 0 1px var(--s2-border-default);
+      }
+      .sprinkle-badge--outline.sprinkle-badge--positive { color: var(--s2-positive); box-shadow: inset 0 0 0 1px var(--s2-positive); }
+      .sprinkle-badge--outline.sprinkle-badge--negative { color: var(--s2-negative); box-shadow: inset 0 0 0 1px var(--s2-negative); }
+      .sprinkle-badge--outline.sprinkle-badge--notice { color: var(--s2-notice); box-shadow: inset 0 0 0 1px var(--s2-notice); }
+      .sprinkle-badge--outline.sprinkle-badge--informative { color: var(--s2-informative); box-shadow: inset 0 0 0 1px var(--s2-informative); }
+
+      /* ── Status Lights (S2 Status Light — dot + label) ── */
+      .sprinkle-status-light {
+        display: inline-flex; align-items: center; gap: var(--s2-spacing-75);
+        font-size: var(--s2-font-size-75);
+        color: var(--s2-content-default);
+      }
+      .sprinkle-status-light::before {
+        content: ''; width: 8px; height: 8px;
+        border-radius: 50%; background: var(--s2-content-tertiary);
+        flex-shrink: 0;
+      }
+      .sprinkle-status-light--positive::before { background: var(--s2-positive); }
+      .sprinkle-status-light--negative::before { background: var(--s2-negative); }
+      .sprinkle-status-light--notice::before { background: var(--s2-notice); }
+      .sprinkle-status-light--informative::before { background: var(--s2-informative); }
+
+      /* ── Progress Bar (S2 Progress Bar — label + value above, track + fill) ── */
+      .sprinkle-progress-bar {
+        display: flex; flex-direction: column; gap: var(--s2-spacing-75);
+        --_bar-color: var(--s2-accent);
+      }
+      .sprinkle-progress-bar--positive { --_bar-color: var(--s2-positive); }
+      .sprinkle-progress-bar--negative { --_bar-color: var(--s2-negative); }
+      .sprinkle-progress-bar--notice   { --_bar-color: var(--s2-notice); }
+      .sprinkle-progress-bar--informative { --_bar-color: var(--s2-informative); }
+      .sprinkle-progress-bar__header {
+        display: flex; justify-content: space-between; align-items: baseline;
+        font-size: var(--s2-font-size-75); color: var(--s2-content-default);
+      }
+      .sprinkle-progress-bar__header .label { font-weight: 400; }
+      .sprinkle-progress-bar__header .value { font-weight: 400; color: var(--s2-content-secondary); }
+      .sprinkle-progress-bar__track {
+        height: 4px; border-radius: var(--s2-radius-pill);
+        background: var(--s2-gray-200); overflow: hidden;
+        position: relative;
+      }
+      .sprinkle-progress-bar__track .fill {
+        height: 100%; border-radius: var(--s2-radius-pill);
+        background: var(--fill-color, var(--_bar-color, var(--s2-accent)));
+        transition: width 300ms ease;
+      }
+      /* Auto-fill via --progress custom property on parent */
+      .sprinkle-progress-bar__track::after {
+        content: ''; position: absolute; inset: 0; right: auto;
+        width: var(--progress, var(--value, 0%));
+        border-radius: var(--s2-radius-pill);
+        background: var(--fill-color, var(--_bar-color, var(--s2-accent)));
+        transition: width 300ms ease;
+      }
+      .sprinkle-progress-bar__track:has(> .fill)::after { display: none; }
+      /* Legacy / simple bar (no __track child) — also supports --progress custom prop */
+      .sprinkle-progress-bar:not(:has(.sprinkle-progress-bar__track)) {
+        height: 4px; width: 100%; border-radius: var(--s2-radius-pill);
+        background: var(--s2-gray-200); overflow: hidden;
+        flex-direction: row; position: relative;
+      }
+      .sprinkle-progress-bar:not(:has(.sprinkle-progress-bar__track)) > .fill {
+        height: 100%; border-radius: var(--s2-radius-pill);
+        background: var(--fill-color, var(--_bar-color, var(--s2-accent)));
+        transition: width 300ms ease;
+      }
+      /* Auto-fill via --progress custom property (agent writes style="--progress: 75%") */
+      .sprinkle-progress-bar:not(:has(.sprinkle-progress-bar__track))::after {
+        content: ''; position: absolute; inset: 0; right: auto;
+        width: var(--progress, var(--value, 0%));
+        border-radius: var(--s2-radius-pill);
+        background: var(--fill-color, var(--_bar-color, var(--s2-accent)));
+        transition: width 300ms ease;
+      }
+      /* Hide pseudo when a .fill child exists (it handles its own width) */
+      .sprinkle-progress-bar:not(:has(.sprinkle-progress-bar__track)):has(> .fill)::after {
+        display: none;
+      }
+
+      /* ── Meter (S2 Meter — label + value above, track + fill, semantic variants) ── */
+      .sprinkle-meter {
+        display: flex; flex-direction: column; gap: var(--s2-spacing-75);
+        --_meter-color: var(--s2-informative);
+      }
+      .sprinkle-meter--positive { --_meter-color: var(--s2-positive); }
+      .sprinkle-meter--notice   { --_meter-color: var(--s2-notice); }
+      .sprinkle-meter--negative { --_meter-color: var(--s2-negative); }
+      .sprinkle-meter__header {
+        display: flex; justify-content: space-between; align-items: baseline;
+        font-size: var(--s2-font-size-75); color: var(--s2-content-default);
+      }
+      .sprinkle-meter__header .label { font-weight: 400; }
+      .sprinkle-meter__header .value { font-weight: 400; color: var(--s2-content-secondary); }
+      .sprinkle-meter__track {
+        height: 4px; border-radius: var(--s2-radius-pill);
+        background: var(--s2-gray-200); overflow: hidden;
+        position: relative;
+      }
+      .sprinkle-meter__track .fill {
+        height: 100%; border-radius: var(--s2-radius-pill);
+        background: var(--fill-color, var(--_meter-color));
+        transition: width 300ms ease;
+      }
+      .sprinkle-meter__track::after {
+        content: ''; position: absolute; inset: 0; right: auto;
+        width: var(--progress, var(--value, 0%));
+        border-radius: var(--s2-radius-pill);
+        background: var(--fill-color, var(--_meter-color));
+        transition: width 300ms ease;
+      }
+      .sprinkle-meter__track:has(> .fill)::after { display: none; }
+      /* Legacy / simple meter (no __track child) */
+      .sprinkle-meter:not(:has(.sprinkle-meter__track)) {
+        height: 4px; width: 100%; border-radius: var(--s2-radius-pill);
+        background: var(--s2-gray-200); overflow: hidden;
+        flex-direction: row; position: relative;
+      }
+      .sprinkle-meter:not(:has(.sprinkle-meter__track)) > .fill {
+        height: 100%; border-radius: var(--s2-radius-pill);
+        background: var(--fill-color, var(--_meter-color));
+        transition: width 300ms ease;
+      }
+      .sprinkle-meter:not(:has(.sprinkle-meter__track))::after {
+        content: ''; position: absolute; inset: 0; right: auto;
+        width: var(--progress, var(--value, 0%));
+        border-radius: var(--s2-radius-pill);
+        background: var(--fill-color, var(--_meter-color));
+        transition: width 300ms ease;
+      }
+      .sprinkle-meter:not(:has(.sprinkle-meter__track)):has(> .fill)::after { display: none; }
+
+      /* ── Key-Value List (supports <ul><li> with .key/.value, or <dl><dt><dd>) ── */
+      .sprinkle-kv-list {
+        list-style: none; padding: 0; margin: 0;
+      }
+      .sprinkle-kv-list li {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: var(--s2-spacing-100) 0;
+        border-bottom: 1px solid var(--s2-border-subtle);
+        font-size: var(--s2-font-size-75);
+      }
+      .sprinkle-kv-list li:last-child { border-bottom: none; }
+      .sprinkle-kv-list .key { color: var(--s2-content-secondary); font-weight: 400; }
+      .sprinkle-kv-list .value { color: var(--s2-content-default); font-weight: 700; }
+      /* <dl> variant */
+      dl.sprinkle-kv-list {
+        display: grid; grid-template-columns: auto 1fr;
+        gap: 0; font-size: var(--s2-font-size-75);
+      }
+      dl.sprinkle-kv-list dt,
+      dl.sprinkle-kv-list dd {
+        padding: var(--s2-spacing-100) 0;
+        border-bottom: 1px solid var(--s2-border-subtle);
+        margin: 0;
+      }
+      dl.sprinkle-kv-list dt {
+        color: var(--s2-content-secondary); font-weight: 400;
+        padding-right: var(--s2-spacing-300);
+      }
+      dl.sprinkle-kv-list dd {
+        color: var(--s2-content-default); font-weight: 700;
+        text-align: right;
+      }
+      dl.sprinkle-kv-list dt:last-of-type,
+      dl.sprinkle-kv-list dd:last-of-type { border-bottom: none; }
+
+      /* ── Buttons (S2 Button — pill rounding, cursor: default, all states) ── */
+      .sprinkle-btn {
+        display: inline-flex; align-items: center; justify-content: center; gap: var(--s2-spacing-75);
+        height: 32px;
+        padding: 0 16px;
+        border: 2px solid var(--s2-border-default);
+        border-radius: var(--s2-radius-pill);
+        background: transparent;
+        color: var(--s2-content-default);
+        font-size: var(--s2-font-size-100); font-weight: 700;
+        font-family: var(--s2-font-family);
+        cursor: default;
+        transition: background 130ms ease, border-color 130ms ease, transform 130ms ease, box-shadow 130ms ease;
+      }
+      .sprinkle-btn:hover { background: color-mix(in srgb, var(--s2-content-default) 6%, transparent); }
+      .sprinkle-btn:active { transform: scale(0.98); }
+      .sprinkle-btn:focus-visible {
+        outline: 2px solid var(--s2-border-focus);
+        outline-offset: 2px;
+      }
+      .sprinkle-btn:disabled, .sprinkle-btn[disabled] {
+        opacity: 0.4; pointer-events: none;
+      }
+      /* Accent (fill) — S2 default CTA */
+      .sprinkle-btn--primary {
+        background: var(--s2-accent); color: #fff; border-color: transparent;
+      }
+      .sprinkle-btn--primary:hover { background: var(--s2-accent-hover); }
+      .sprinkle-btn--primary:active { background: var(--s2-accent-down); transform: scale(0.98); }
+      /* Secondary (outline) — visible stroke, no fill */
+      .sprinkle-btn--secondary {
+        background: transparent; border-color: var(--s2-border-default);
+        color: var(--s2-content-default);
+      }
+      .sprinkle-btn--secondary:hover { background: color-mix(in srgb, var(--s2-content-default) 6%, transparent); }
+      /* Negative (fill) — destructive */
+      .sprinkle-btn--negative {
+        background: var(--s2-negative); color: #fff; border-color: transparent;
+      }
+      .sprinkle-btn--negative:hover { background: color-mix(in srgb, var(--s2-negative) 85%, #000); }
+
+      /* ── Button Groups (S2 Button Group — gap-based, each button keeps its pill shape) ── */
+      .sprinkle-btn-group {
+        display: inline-flex; gap: var(--s2-spacing-100);
+      }
+
+      /* ── Text Field (S2 Text Field — single-line input) ── */
+      .sprinkle-text-field {
+        width: 100%; padding: 7px 12px;
+        font-size: var(--s2-font-size-75); font-family: var(--s2-font-family);
+        color: var(--s2-content-default); background: var(--s2-bg-layer-2);
+        border: 1px solid var(--s2-border-subtle); border-radius: var(--s2-radius-default);
+        outline: none; transition: border-color var(--s2-transition-default);
+      }
+      .sprinkle-text-field::placeholder { color: var(--s2-content-disabled); }
+      .sprinkle-text-field:hover { border-color: var(--s2-content-secondary); }
+      .sprinkle-text-field:focus { border-color: var(--s2-accent); box-shadow: 0 0 0 1px var(--s2-accent); }
+
+      /* ── Layout Utilities ── */
+      .sprinkle-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: var(--s2-spacing-200);
+      }
+      .sprinkle-stack {
+        display: flex; flex-direction: column;
+        gap: var(--s2-spacing-200);
+      }
+      .sprinkle-row {
+        display: flex; align-items: center;
+        gap: var(--s2-spacing-200);
+      }
+
+      /* ── Typography (S2 Type Roles) ── */
+      /* Heading — ExtraBold 800, never below 18px */
+      .sprinkle-heading {
+        font-size: var(--s2-font-size-300);
+        font-weight: 800;
+        color: var(--s2-content-default);
+        margin: 0 0 var(--s2-spacing-100);
+        line-height: var(--s2-line-height-300);
+        letter-spacing: 0;
+      }
+      /* Body — Regular 400, 1.5× line-height */
+      .sprinkle-body {
+        font-size: var(--s2-font-size-100);
+        font-weight: 400;
+        color: var(--s2-content-default);
+        line-height: 1.5;
+        letter-spacing: 0;
+      }
+      /* Detail — Medium 500 */
+      .sprinkle-detail {
+        font-size: var(--s2-font-size-50);
+        font-weight: 500;
+        color: var(--s2-content-secondary);
+        line-height: var(--s2-line-height-50);
+        letter-spacing: 0;
+      }
+
+      /* ── Divider (S2 Divider — small = 1px, medium = 2px, large = 4px) ── */
+      .sprinkle-divider {
+        border: none;
+        border-top: 1px solid var(--s2-border-subtle);
+        margin: var(--s2-spacing-200) 0;
+      }
+      .sprinkle-divider--medium {
+        border-top-width: 2px;
+        border-top-color: var(--s2-border-default);
+        margin: var(--s2-spacing-300) 0;
+      }
+
+      /* ── Empty State ── */
+      .sprinkle-empty-state {
+        text-align: center;
+        padding: var(--s2-spacing-500) var(--s2-spacing-300);
+        color: var(--s2-content-tertiary);
+        font-size: var(--s2-font-size-100);
+      }
 
       /* ================================================================== */
       /* Skill drag/drop install feedback                                   */
