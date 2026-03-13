@@ -1,0 +1,38 @@
+<div data-sprinkle-title="Welcome" class="sprinkle-stack" style="padding: 20px; max-width: 520px; margin: 0 auto;">
+
+  <div class="sprinkle-heading" style="font-size: 18px; text-align: center;">
+    Welcome to SLICC
+  </div>
+
+  <div class="sprinkle-body" style="text-align: center; margin-bottom: 8px;">
+    Your browser-native AI coding agent.
+  </div>
+
+  <div class="sprinkle-divider"></div>
+
+  <div class="sprinkle-card">
+    <div class="sprinkle-heading" style="font-size: 14px;">Quick start</div>
+    <div class="sprinkle-body">
+      Type a message in the chat to get started. SLICC can write code, run shell commands, automate browser tabs, and build interactive sprinkles.
+    </div>
+  </div>
+
+  <div class="sprinkle-card">
+    <div class="sprinkle-heading" style="font-size: 14px;">Key commands</div>
+    <dl class="sprinkle-kv-list">
+      <dt><code>commands</code></dt>
+      <dd>List all shell commands</dd>
+      <dt><code>skill list</code></dt>
+      <dd>Show installed skills</dd>
+      <dt><code>sprinkle open &lt;name&gt;</code></dt>
+      <dd>Open a sprinkle panel</dd>
+      <dt><code>git clone &lt;url&gt;</code></dt>
+      <dd>Clone a repository</dd>
+    </dl>
+  </div>
+
+  <div class="sprinkle-detail" style="text-align: center;">
+    Close this tab anytime. Reopen it from the [+] menu.
+  </div>
+
+</div>
