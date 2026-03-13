@@ -10,7 +10,9 @@ import {
   type LeaderToFollowerMessage,
   type FollowerToLeaderMessage,
   type TraySyncChannel,
+  type RemoteTargetInfo,
 } from './tray-sync-protocol.js';
+import { TrayTargetRegistry } from './tray-target-registry.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('tray-leader-sync');
@@ -34,6 +36,9 @@ interface ConnectedFollower {
 
 export class LeaderSyncManager {
   private readonly followers = new Map<string, ConnectedFollower>();
+  private readonly registry = new TrayTargetRegistry();
+  /** Maps runtimeId → bootstrapId so we can clean up registry on disconnect. */
+  private readonly runtimeToBootstrap = new Map<string, string>();
 
   constructor(private readonly options: LeaderSyncManagerOptions) {}
 
@@ -56,6 +61,12 @@ export class LeaderSyncManager {
 
     // Send initial snapshot
     this.sendSnapshot(bootstrapId);
+
+    // Send current target registry to the new follower
+    const entries = this.registry.getEntries();
+    if (entries.length > 0) {
+      sync.send({ type: 'targets.registry', targets: entries });
+    }
   }
 
   /**
@@ -67,6 +78,20 @@ export class LeaderSyncManager {
     follower.unsubscribe();
     follower.sync.close();
     this.followers.delete(bootstrapId);
+
+    // Remove this follower's targets from the registry
+    // Find the runtimeId that maps to this bootstrapId
+    for (const [runtimeId, bId] of this.runtimeToBootstrap) {
+      if (bId === bootstrapId) {
+        this.registry.removeRuntime(runtimeId);
+        this.runtimeToBootstrap.delete(runtimeId);
+        break;
+      }
+    }
+    if (this.registry.hasChanged()) {
+      this.broadcastTargetRegistry();
+    }
+
     log.info('Follower removed from sync', { bootstrapId, followerCount: this.followers.size });
   }
 
@@ -136,6 +161,35 @@ export class LeaderSyncManager {
         log.info('Follower snapshot request received', { bootstrapId });
         this.sendSnapshot(bootstrapId);
         break;
+      case 'targets.advertise':
+        log.info('Follower targets advertised', { bootstrapId, runtimeId: message.runtimeId, targetCount: message.targets.length });
+        this.runtimeToBootstrap.set(message.runtimeId, bootstrapId);
+        this.registry.setTargets(message.runtimeId, message.targets);
+        this.broadcastTargetRegistry();
+        break;
+    }
+  }
+
+  /**
+   * Feed the leader's own local browser targets into the registry.
+   * Broadcasts the updated registry if targets changed.
+   */
+  setLocalTargets(targets: RemoteTargetInfo[]): void {
+    this.registry.setTargets('leader', targets);
+    if (this.registry.hasChanged()) {
+      this.broadcastTargetRegistry();
+    }
+  }
+
+  /**
+   * Broadcast the merged target registry to all connected followers.
+   */
+  broadcastTargetRegistry(): void {
+    if (this.followers.size === 0) return;
+    const entries = this.registry.getEntries();
+    const message: LeaderToFollowerMessage = { type: 'targets.registry', targets: entries };
+    for (const follower of this.followers.values()) {
+      follower.sync.send(message);
     }
   }
 

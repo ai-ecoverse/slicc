@@ -10,6 +10,8 @@ import {
   type LeaderToFollowerMessage,
   type FollowerToLeaderMessage,
   type TraySyncChannel,
+  type RemoteTargetInfo,
+  type TrayTargetEntry,
 } from './tray-sync-protocol.js';
 import { createLogger } from '../core/logger.js';
 
@@ -22,6 +24,8 @@ export interface FollowerSyncManagerOptions {
   onUserMessage?: (text: string, messageId: string, scoopJid: string) => void;
   /** Called when the leader sends a status update. */
   onStatus?: (scoopStatus: string) => void;
+  /** Called when the leader sends an updated target registry. */
+  onTargetsUpdated?: (targets: TrayTargetEntry[]) => void;
 }
 
 /**
@@ -35,6 +39,7 @@ export class FollowerSyncManager implements AgentHandle {
   private readonly unsubscribe: () => void;
   private latestSnapshot: { messages: ChatMessage[]; scoopJid: string } | null = null;
   private readonly sentMessageIds = new Set<string>();
+  private targetEntries: TrayTargetEntry[] = [];
 
   constructor(
     channel: TrayDataChannelLike,
@@ -98,6 +103,16 @@ export class FollowerSyncManager implements AgentHandle {
     log.info('Follower sync closed');
   }
 
+  /** Advertise local browser targets to the leader. */
+  advertiseTargets(targets: RemoteTargetInfo[], runtimeId: string): void {
+    this.sync.send({ type: 'targets.advertise', targets, runtimeId });
+  }
+
+  /** Get the stored target registry entries from the leader. */
+  getTargets(): TrayTargetEntry[] {
+    return this.targetEntries;
+  }
+
   // ---------------------------------------------------------------------------
   // Internal
   // ---------------------------------------------------------------------------
@@ -131,6 +146,12 @@ export class FollowerSyncManager implements AgentHandle {
       case 'error':
         log.warn('Error from leader', { error: message.error });
         this.emitEvent({ type: 'error', error: message.error });
+        break;
+
+      case 'targets.registry':
+        log.info('Target registry received from leader', { targetCount: message.targets.length });
+        this.targetEntries = message.targets;
+        this.options.onTargetsUpdated?.(this.targetEntries);
         break;
     }
   }

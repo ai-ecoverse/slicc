@@ -1066,7 +1066,12 @@ async function main(): Promise<void> {
     // and when the user pastes a join URL in the settings dialog.
     let activeFollower: FollowerTrayManager | null = null;
     let activeFollowerSync: FollowerSyncManager | null = null;
+    let followerTargetRefreshInterval: ReturnType<typeof setInterval> | null = null;
     const startFollowerJoin = (joinUrl: string) => {
+      if (followerTargetRefreshInterval) {
+        clearInterval(followerTargetRefreshInterval);
+        followerTargetRefreshInterval = null;
+      }
       activeFollowerSync?.close();
       activeFollowerSync = null;
       activeFollower?.stop();
@@ -1095,6 +1100,21 @@ async function main(): Promise<void> {
         layout.panels.chat.setAgent(followerSync);
         // Request initial snapshot
         followerSync.requestSnapshot();
+
+        // Periodically advertise local browser targets to the leader
+        const runtimeId = `follower-${connection.bootstrapId}`;
+        const refreshFollowerTargets = async () => {
+          try {
+            const pages = await browser.listPages();
+            followerSync.advertiseTargets(
+              pages.map(p => ({ targetId: p.targetId, title: p.title, url: p.url })),
+              runtimeId,
+            );
+          } catch { /* ignore errors */ }
+        };
+        followerTargetRefreshInterval = setInterval(refreshFollowerTargets, 5000);
+        void refreshFollowerTargets();
+
         log.info('Follower sync wired to chat panel', { trayId: connection.trayId });
       }).catch((error) => {
         log.warn('Follower tray join failed', { error: error instanceof Error ? error.message : String(error) });
@@ -1108,6 +1128,7 @@ async function main(): Promise<void> {
 
     // Clean up on page unload
     window.addEventListener('beforeunload', () => {
+      if (followerTargetRefreshInterval) clearInterval(followerTargetRefreshInterval);
       activeFollowerSync?.close();
       activeFollower?.stop();
     }, { once: true });
@@ -1133,6 +1154,17 @@ async function main(): Promise<void> {
         },
       });
       leaderSyncRef = leaderSync;
+
+      // Periodically refresh leader's own browser targets into the registry
+      const refreshLeaderTargets = async () => {
+        try {
+          const pages = await browser.listPages();
+          leaderSync.setLocalTargets(pages.map(p => ({ targetId: p.targetId, title: p.title, url: p.url })));
+        } catch { /* ignore errors */ }
+      };
+      const leaderTargetRefreshInterval = setInterval(refreshLeaderTargets, 5000);
+      void refreshLeaderTargets();
+
       // Tap into the event system to broadcast to followers
       eventListeners.add((event: UIAgentEvent) => {
         leaderSync.broadcastEvent(event);
@@ -1175,6 +1207,7 @@ async function main(): Promise<void> {
           log.warn('Leader tray join failed', { error: error instanceof Error ? error.message : String(error) });
         });
       window.addEventListener('beforeunload', () => {
+        clearInterval(leaderTargetRefreshInterval);
         leaderSync.stop();
         trayPeers.stop();
         leaderTray.stop();

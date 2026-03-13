@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { FollowerSyncManager } from './tray-follower-sync.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
 import type { AgentEvent, ChatMessage } from '../ui/types.js';
-import type { LeaderToFollowerMessage, FollowerToLeaderMessage } from './tray-sync-protocol.js';
+import type { LeaderToFollowerMessage, FollowerToLeaderMessage, TrayTargetEntry } from './tray-sync-protocol.js';
 
 // ---------------------------------------------------------------------------
 // Fake data channel
@@ -328,6 +328,91 @@ describe('FollowerSyncManager', () => {
       });
 
       expect(events).toEqual([{ type: 'turn_end', messageId: 'm1' }]);
+    });
+  });
+
+  describe('target advertising', () => {
+    it('advertiseTargets sends correct message to leader', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      follower.advertiseTargets(
+        [{ targetId: 'tab1', title: 'Google', url: 'https://google.com' }],
+        'follower-rt1',
+      );
+
+      const sent = channel.parseSent();
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toEqual({
+        type: 'targets.advertise',
+        targets: [{ targetId: 'tab1', title: 'Google', url: 'https://google.com' }],
+        runtimeId: 'follower-rt1',
+      });
+    });
+  });
+
+  describe('target registry receiving', () => {
+    it('receives targets.registry and stores entries', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      const targets: TrayTargetEntry[] = [
+        { targetId: 'leader:tab1', localTargetId: 'tab1', runtimeId: 'leader', title: 'Tab', url: 'https://example.com', isLocal: false },
+      ];
+      channel.simulateLeaderMessage({ type: 'targets.registry', targets });
+
+      expect(follower.getTargets()).toEqual(targets);
+    });
+
+    it('returns empty array before any registry is received', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      expect(follower.getTargets()).toEqual([]);
+    });
+
+    it('calls onTargetsUpdated callback when registry arrives', () => {
+      const channel = new FakeChannel();
+      const onTargetsUpdated = vi.fn();
+      const follower = new FollowerSyncManager(channel, { onTargetsUpdated });
+
+      const targets: TrayTargetEntry[] = [
+        { targetId: 'rt:t1', localTargetId: 't1', runtimeId: 'rt', title: 'Tab', url: 'https://example.com', isLocal: false },
+      ];
+      channel.simulateLeaderMessage({ type: 'targets.registry', targets });
+
+      expect(onTargetsUpdated).toHaveBeenCalledWith(targets);
+    });
+
+    it('does not crash when onTargetsUpdated is not provided', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      // Should not throw
+      channel.simulateLeaderMessage({
+        type: 'targets.registry',
+        targets: [{ targetId: 'rt:t1', localTargetId: 't1', runtimeId: 'rt', title: 'Tab', url: 'https://x.com', isLocal: false }],
+      });
+
+      expect(follower.getTargets()).toHaveLength(1);
+    });
+
+    it('replaces previous entries when new registry arrives', () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      channel.simulateLeaderMessage({
+        type: 'targets.registry',
+        targets: [{ targetId: 'a:t1', localTargetId: 't1', runtimeId: 'a', title: 'Old', url: 'https://old.com', isLocal: false }],
+      });
+      channel.simulateLeaderMessage({
+        type: 'targets.registry',
+        targets: [{ targetId: 'b:t2', localTargetId: 't2', runtimeId: 'b', title: 'New', url: 'https://new.com', isLocal: false }],
+      });
+
+      const targets = follower.getTargets();
+      expect(targets).toHaveLength(1);
+      expect(targets[0].title).toBe('New');
     });
   });
 
