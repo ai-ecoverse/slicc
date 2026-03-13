@@ -322,6 +322,9 @@ async function main() {
   let launchedBrowserLabel = 'Browser';
   let overlayInjector: ElectronOverlayInjector | null = null;
   let shuttingDown = false;
+  // Tray join URL discovered from an existing leader on the preferred port.
+  // Populated in Electron mode when auto-discovering the leader's tray.
+  let discoveredTrayJoinUrl: string | null = RUNTIME_FLAGS.joinUrl ?? null;
 
   // 1. Launch Chrome unless an external CDP provider is already running.
   if (ELECTRON_MODE && !SERVE_ONLY) {
@@ -350,6 +353,35 @@ async function main() {
       console.log(`Waiting for ${displayName} CDP on port ${CDP_PORT}...`);
       await waitForCDP(CDP_PORT, 40, 500);
       console.log(`Connected to ${displayName} on CDP port ${CDP_PORT}`);
+
+      // Auto-discover leader's tray join URL when another instance runs on the preferred port.
+      // The leader may still be creating its tray session, so retry a few times.
+      if (!discoveredTrayJoinUrl && SERVE_PORT !== PREFERRED_SERVE_PORT) {
+        const leaderOrigin = `http://localhost:${PREFERRED_SERVE_PORT}`;
+        for (let attempt = 0; attempt < 5 && !discoveredTrayJoinUrl; attempt++) {
+          try {
+            const resp = await fetch(`${leaderOrigin}/api/tray-status`, { signal: AbortSignal.timeout(3000) });
+            if (resp.ok) {
+              const status = await resp.json() as { state?: string; joinUrl?: string | null };
+              if (status.joinUrl) {
+                discoveredTrayJoinUrl = status.joinUrl;
+                console.log(`Discovered leader tray join URL: ${status.joinUrl}`);
+              } else if (status.state === 'connecting') {
+                // Leader is still setting up — wait and retry
+                await new Promise(r => setTimeout(r, 2000));
+              } else {
+                console.log(`Leader on port ${PREFERRED_SERVE_PORT} has no active tray (state: ${status.state ?? 'unknown'})`);
+                break;
+              }
+            } else {
+              break;
+            }
+          } catch {
+            // Leader not reachable or no tray status endpoint — continue without tray
+            break;
+          }
+        }
+      }
     } catch (error: unknown) {
       if (error instanceof ElectronAppAlreadyRunningError) {
         console.error(error.message);
@@ -535,8 +567,19 @@ async function main() {
 
   app.get('/api/runtime-config', (_req, res) => {
     res.json({
-      trayWorkerBaseUrl: process.env['WORKER_BASE_URL'] ?? null,
+      trayWorkerBaseUrl: RUNTIME_FLAGS.leadWorkerBaseUrl ?? process.env['WORKER_BASE_URL'] ?? null,
+      trayJoinUrl: discoveredTrayJoinUrl ?? null,
     });
+  });
+
+  // Tray status API — forwards to browser to get leader tray join info
+  app.get('/api/tray-status', async (_req, res) => {
+    try {
+      const data = await sendLickRequest('tray_status', {});
+      res.json(data);
+    } catch (err) {
+      res.status(503).json({ error: err instanceof Error ? err.message : 'Browser not connected' });
+    }
   });
 
   // Webhook management API — forwards to browser

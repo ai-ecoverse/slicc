@@ -920,6 +920,20 @@ async function main(): Promise<void> {
                   : { type: 'response', requestId: data.requestId, data: { error: 'Cron task not found' } };
                 break;
               }
+              case 'tray_status': {
+                const leaderStatus = getLeaderTrayRuntimeStatus();
+                response = {
+                  type: 'response',
+                  requestId: data.requestId,
+                  data: {
+                    state: leaderStatus.state,
+                    joinUrl: leaderStatus.session?.joinUrl ?? null,
+                    workerBaseUrl: leaderStatus.session?.workerBaseUrl ?? null,
+                    trayId: leaderStatus.session?.trayId ?? null,
+                  },
+                };
+                break;
+              }
               default:
                 response = { type: 'response', requestId: data.requestId, error: `Unknown request type: ${data.type}` };
             }

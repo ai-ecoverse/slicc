@@ -201,6 +201,60 @@ describe('tray-runtime-config', () => {
     })).resolves.toBeNull();
   });
 
+  it('resolves a tray join URL from the server runtime config (e.g. Electron auto-discovery)', async () => {
+    const storage = new MemoryStorage();
+
+    await expect(resolveTrayRuntimeConfig({
+      locationHref: 'http://localhost:49742/electron',
+      storage,
+      envBaseUrl: null,
+      runtimeConfigFetcher: async () => ({
+        trayWorkerBaseUrl: null,
+        trayJoinUrl: 'https://tray.example.com/base/join/tray-id.secret-token',
+      }),
+    })).resolves.toEqual({
+      workerBaseUrl: 'https://tray.example.com/base',
+      trayId: 'tray-id',
+      joinUrl: 'https://tray.example.com/base/join/tray-id.secret-token',
+    });
+
+    // Should persist both the join URL and worker base URL
+    expect(storage.getItem('slicc.trayJoinUrl')).toBe('https://tray.example.com/base/join/tray-id.secret-token');
+    expect(storage.getItem('slicc.trayWorkerBaseUrl')).toBe('https://tray.example.com/base');
+  });
+
+  it('prefers server join URL over server worker base URL', async () => {
+    await expect(resolveTrayRuntimeConfig({
+      locationHref: 'http://localhost:49742/electron',
+      storage: new MemoryStorage(),
+      envBaseUrl: null,
+      runtimeConfigFetcher: async () => ({
+        trayWorkerBaseUrl: 'https://other.example.com',
+        trayJoinUrl: 'https://tray.example.com/base/join/tray-id.secret',
+      }),
+    })).resolves.toEqual({
+      workerBaseUrl: 'https://tray.example.com/base',
+      trayId: 'tray-id',
+      joinUrl: 'https://tray.example.com/base/join/tray-id.secret',
+    });
+  });
+
+  it('falls back to server worker base URL when server join URL is absent', async () => {
+    await expect(resolveTrayRuntimeConfig({
+      locationHref: 'http://localhost:49742/electron',
+      storage: new MemoryStorage(),
+      envBaseUrl: null,
+      runtimeConfigFetcher: async () => ({
+        trayWorkerBaseUrl: 'https://tray.example.com',
+        trayJoinUrl: null,
+      }),
+    })).resolves.toEqual({
+      workerBaseUrl: 'https://tray.example.com',
+      trayId: null,
+      joinUrl: null,
+    });
+  });
+
   it('fetches runtime config from the local runtime endpoint when available', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(JSON.stringify({ trayWorkerBaseUrl: 'https://tray.example.com' }), {

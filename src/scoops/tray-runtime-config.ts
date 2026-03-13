@@ -21,6 +21,7 @@ export interface RuntimeConfigStorage {
 
 interface RuntimeConfigResponse {
   trayWorkerBaseUrl?: string | null;
+  trayJoinUrl?: string | null;
 }
 
 export function normalizeTrayWorkerBaseUrl(raw: string | null | undefined): string | null {
@@ -168,7 +169,18 @@ export async function resolveTrayRuntimeConfig(options: {
     return storedJoinConfig;
   }
 
-  const serverBaseUrl = options.runtimeConfigFetcher ? await readServerTrayWorkerBaseUrl(options.runtimeConfigFetcher) : null;
+  const serverConfig = options.runtimeConfigFetcher ? await readServerTrayConfig(options.runtimeConfigFetcher) : null;
+
+  // If the server provided a join URL, use it (e.g. Electron overlay joining a tray)
+  if (serverConfig?.joinConfig) {
+    if (options.storage) {
+      options.storage.setItem(TRAY_JOIN_STORAGE_KEY, serverConfig.joinConfig.joinUrl);
+      options.storage.setItem(TRAY_WORKER_STORAGE_KEY, serverConfig.joinConfig.workerBaseUrl);
+    }
+    return serverConfig.joinConfig;
+  }
+
+  const serverBaseUrl = serverConfig?.workerBaseUrl ?? null;
   const storedBaseUrl = normalizeTrayWorkerBaseUrl(options.storage?.getItem(TRAY_WORKER_STORAGE_KEY) ?? null);
   const envBaseUrl = normalizeTrayWorkerBaseUrl(options.envBaseUrl ?? null);
 
@@ -224,9 +236,19 @@ function readQueryTrayConfig(locationHref: string): TrayUrlConfig | null {
   }
 }
 
-async function readServerTrayWorkerBaseUrl(
+interface ServerTrayConfig {
+  workerBaseUrl: string | null;
+  joinConfig: TrayJoinConfig | null;
+}
+
+async function readServerTrayConfig(
   runtimeConfigFetcher: () => Promise<RuntimeConfigResponse | null>,
-): Promise<string | null> {
+): Promise<ServerTrayConfig | null> {
   const config = await runtimeConfigFetcher();
-  return normalizeTrayWorkerBaseUrl(config?.trayWorkerBaseUrl ?? null);
+  if (!config) return null;
+
+  const joinConfig = parseTrayJoinUrlValue(config.trayJoinUrl ?? null);
+  const workerBaseUrl = normalizeTrayWorkerBaseUrl(config.trayWorkerBaseUrl ?? null);
+
+  return { workerBaseUrl, joinConfig };
 }
