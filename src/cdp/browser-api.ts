@@ -264,31 +264,34 @@ export class BrowserAPI {
       );
       let base64 = result['data'] as string;
 
-      // Post-capture resize: downscale if image exceeds maxWidth.
-      // Uses OffscreenCanvas (available in Chrome workers and pages).
-      if (options?.maxWidth && typeof OffscreenCanvas !== 'undefined') {
+      // Post-capture resize via ImageMagick WASM if image exceeds maxWidth.
+      // Same engine as image-processor.ts for consistency.
+      if (options?.maxWidth) {
         try {
-          const binary = atob(base64);
-          const bytes = new Uint8Array(binary.length);
-          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-          const blob = new Blob([bytes], { type: 'image/png' });
-          const bitmap = await createImageBitmap(blob);
+          const { getMagick } = await import(
+            '../shell/supplemental-commands/magick-wasm.js'
+          );
+          const magick = await getMagick();
 
-          if (bitmap.width > options.maxWidth) {
-            const ratio = options.maxWidth / bitmap.width;
-            const targetW = Math.round(bitmap.width * ratio);
-            const targetH = Math.round(bitmap.height * ratio);
-            const canvas = new OffscreenCanvas(targetW, targetH);
-            const ctx = canvas.getContext('2d')!;
-            ctx.drawImage(bitmap, 0, 0, targetW, targetH);
-            const outBlob = await canvas.convertToBlob({ type: 'image/png' });
-            const buffer = await outBlob.arrayBuffer();
-            const outBytes = new Uint8Array(buffer);
-            let outBinary = '';
-            for (let i = 0; i < outBytes.length; i++) outBinary += String.fromCharCode(outBytes[i]);
-            base64 = btoa(outBinary);
-          }
-          bitmap.close();
+          const binaryStr = atob(base64);
+          const bytes = new Uint8Array(binaryStr.length);
+          for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+
+          let resized = false;
+          await magick.ImageMagick.read(bytes, async (img) => {
+            if (img.width > options.maxWidth!) {
+              const scale = options.maxWidth! / img.width;
+              img.resize(Math.round(img.width * scale), Math.round(img.height * scale));
+              resized = true;
+            }
+            if (resized) {
+              img.write('PNG', (data: Uint8Array) => {
+                let bin = '';
+                for (let i = 0; i < data.length; i++) bin += String.fromCharCode(data[i]);
+                base64 = btoa(bin);
+              });
+            }
+          });
         } catch {
           // Best-effort — return original if resize fails
         }
