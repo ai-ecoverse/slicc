@@ -139,6 +139,88 @@ describe('findMatchingElectronAppPids', () => {
     ).toEqual([501]);
   });
 
+  it('excludes shell wrapper processes that have the app path in their arguments', () => {
+    expect(
+      findMatchingElectronAppPids(
+        [
+          {
+            pid: 600,
+            commandLine: 'zsh -c -l source /dev/stdin npm run dev:electron -- /Applications/Slack.app --kill',
+            executablePath: '/bin/zsh',
+          },
+          {
+            pid: 601,
+            commandLine: 'bash -c npm run dev:electron -- /Applications/Slack.app --kill',
+            executablePath: '/bin/bash',
+          },
+          {
+            pid: 602,
+            commandLine: 'timeout 30 npm run dev:electron -- /Applications/Slack.app --kill',
+            executablePath: '/usr/bin/timeout',
+          },
+          {
+            pid: 603,
+            commandLine: 'env npm run dev:electron -- /Applications/Slack.app --kill',
+            executablePath: '/usr/bin/env',
+          },
+          {
+            pid: 604,
+            commandLine: '/bin/sh -c npm run dev:electron -- /Applications/Slack.app',
+            executablePath: '/bin/sh',
+          },
+          {
+            pid: 605,
+            commandLine: 'sudo npm run dev:electron -- /Applications/Slack.app',
+            executablePath: '/usr/bin/sudo',
+          },
+          {
+            pid: 606,
+            commandLine: 'caffeinate -i npm run dev:electron -- /Applications/Slack.app',
+            executablePath: '/usr/bin/caffeinate',
+          },
+          {
+            pid: 700,
+            commandLine: '/Applications/Slack.app/Contents/MacOS/Slack --remote-debugging-port=9223',
+            executablePath: '/Applications/Slack.app/Contents/MacOS/Slack',
+          },
+        ],
+        ['/Applications/Slack.app', '/Applications/Slack.app/Contents/MacOS/Slack'],
+        999,
+      ),
+    ).toEqual([700]);
+  });
+
+  it('excludes full-path shell wrappers (e.g. /usr/local/bin/bash)', () => {
+    expect(
+      findMatchingElectronAppPids(
+        [
+          {
+            pid: 610,
+            commandLine: '/usr/local/bin/bash -c npm run dev:electron -- /Applications/Slack.app',
+            executablePath: '/usr/local/bin/bash',
+          },
+          {
+            pid: 611,
+            commandLine: '/usr/bin/env npm run dev:electron -- /Applications/Slack.app',
+            executablePath: '/usr/bin/env',
+          },
+          {
+            pid: 612,
+            commandLine: '/usr/bin/timeout 30 npm run dev:electron -- /Applications/Slack.app',
+            executablePath: '/usr/bin/timeout',
+          },
+          {
+            pid: 700,
+            commandLine: '/Applications/Slack.app/Contents/MacOS/Slack --remote-debugging-port=9223',
+            executablePath: '/Applications/Slack.app/Contents/MacOS/Slack',
+          },
+        ],
+        ['/Applications/Slack.app', '/Applications/Slack.app/Contents/MacOS/Slack'],
+        999,
+      ),
+    ).toEqual([700]);
+  });
+
   it('does not filter out non-Node processes that happen to have "node" in their path', () => {
     expect(
       findMatchingElectronAppPids(

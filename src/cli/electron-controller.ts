@@ -31,10 +31,13 @@ export function findMatchingElectronAppPids(
   currentPid = process.pid,
 ): number[] {
   const matches = runningProcesses.filter((processInfo) => {
-    // Skip Node.js tool-chain processes — they may have the app path as a CLI argument
-    // but are not the Electron app itself (e.g. npx tsx src/cli/index.ts --electron /Applications/Slack.app)
+    // Skip Node.js tool-chain processes and shell wrappers — they may have the app path
+    // as a CLI argument but are not the Electron app itself
+    // (e.g. npx tsx src/cli/index.ts --electron /Applications/Slack.app)
+    // Shell wrappers like `zsh -c ... /Applications/Slack.app --kill` or
+    // `timeout 30 npm run dev:electron -- /Applications/Slack.app` also match.
     const cmdTrimmed = processInfo.commandLine.trimStart();
-    if (/^(\/\S*\/)?(node|npx|tsx|npm|open)\b/i.test(cmdTrimmed)) return false;
+    if (/^(\/\S*\/)?(node|npx|tsx|npm|open|bash|zsh|sh|csh|fish|dash|timeout|env|sudo|caffeinate)\b/i.test(cmdTrimmed)) return false;
 
     return processMatchPatterns.some((pattern) => {
       return processInfo.commandLine.includes(pattern)
