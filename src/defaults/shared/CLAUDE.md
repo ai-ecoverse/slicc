@@ -41,19 +41,16 @@ When synthesizing scoop results, *that's* your job — pull everything together,
 
 ## Scoop Lifecycle: Clean Up After Yourself
 
-**Drop scoops when their job is done** — unless they own an open sprinkle. Idle scoops waste resources and clutter `list_scoops`.
+**Drop scoops when their job is done** — but **NEVER drop a scoop that owns a sprinkle**. Dropping a sprinkle scoop destroys its context, so follow-up requests and lick events cannot be handled.
 
 Drop a scoop when:
 - It has **completed its task** and results have been synthesized
 - It is **stuck or misbehaving** (drop and re-spawn with a better brief)
-- It has been **superseded** by a better-briefed replacement
 
-Do NOT drop a scoop when:
-- **It owns an open sprinkle** — the scoop must stay alive to handle lick events and updates
+**NEVER** drop a scoop when:
+- **It owns an open sprinkle** — the scoop must stay alive for the lifetime of the sprinkle
 - It is running a **recurring or long-running task** (e.g. watching a feed, handling webhooks)
 - Work is **still in progress** — dropping mid-task loses all context
-
-Note: dropping a scoop destroys its agent context, but **does not delete files** it wrote to the shared filesystem.
 
 ## Browser Tab Hygiene
 
@@ -143,35 +140,66 @@ Key things that work differently:
 
 ## Sprinkles: Cone Orchestration Rules
 
-Sprinkles are persistent UI panels created and managed by scoops. The cone orchestrates — it never creates or modifies sprinkles directly. See the `sprinkles` skill for the full sprinkle reference (bridge API, CSS, style guide).
+Sprinkles are persistent UI panels created and managed by scoops. The cone NEVER creates, modifies, or interacts with sprinkles directly — it only orchestrates scoops. See the `sprinkles` skill for the full reference (bridge API, CSS, style guide).
 
-**Naming**: The scoop name MUST match the sprinkle name. A sprinkle called `giro-winners` is owned by a scoop named `giro-winners`.
+### Rule 1: One scoop per sprinkle, named identically
 
-**Creating**: Do NOT create sprinkles in the cone. Create a scoop with `scoop_scoop`, then `feed_scoop` with a complete brief. The scoop reads the style guide, writes the `.shtml`, opens it, and stays alive.
+The scoop name MUST match the sprinkle name. Sprinkle `giro-winners` → scoop `giro-winners`. This is how the cone routes work to the right scoop.
+
+### Rule 2: Cone never touches sprinkle files or commands
+
+The cone MUST NOT:
+- Write or edit `.shtml` files
+- Run `sprinkle open/close/send` commands
+- Run `write_file` or `edit_file` on sprinkle paths
+- Handle lick events by doing the work itself
+
+ALL sprinkle work goes through scoops via `feed_scoop`.
+
+### Rule 3: Creating sprinkles
+
+Create a scoop, then feed it a **complete, self-contained brief**. The brief MUST include:
+- The exact sprinkle name and file path
+- What data to show
+- The instruction to stay ready for follow-up work
 
 ```
 scoop_scoop("giro-winners")
-feed_scoop("giro-winners", "Create a sprinkle showing the last 3 Giro d'Italia winners.
+feed_scoop("giro-winners", "You own the sprinkle 'giro-winners'. Your job:
 1. Run: read_file /workspace/skills/sprinkles/style-guide.md
-2. Research the data
-3. Write /shared/sprinkles/giro-winners/giro-winners.shtml
+2. Research the last 3 Giro d'Italia winners
+3. Write the sprinkle to /shared/sprinkles/giro-winners/giro-winners.shtml
 4. Run: sprinkle open giro-winners
-5. Stay ready for follow-up instructions and lick events.")
+5. IMPORTANT: After opening the sprinkle, do NOT finish. Stay ready — you will receive follow-up instructions and lick events for this sprinkle via feed_scoop. Do not send a completion message.")
 ```
 
-**Modifying**: Feed the existing scoop — do NOT create a new scoop or do it yourself.
+### Rule 4: Modifying sprinkles — feed the EXISTING scoop
+
+When the user asks to change a sprinkle, feed the scoop that already owns it. Do NOT create a new scoop or do it yourself. Include the specific sprinkle name and file path in the brief:
 
 ```
-feed_scoop("giro-winners", "Add an 'Add Previous Year' button to the sprinkle.
-Edit /shared/sprinkles/giro-winners/giro-winners.shtml ...
-Then: sprinkle close giro-winners && sprinkle open giro-winners")
+feed_scoop("giro-winners", "Modify YOUR sprinkle 'giro-winners' at /shared/sprinkles/giro-winners/giro-winners.shtml:
+Add an 'Add Previous Year' button with onclick=\"slicc.lick({action: 'add-year'})\"
+Then reload: sprinkle close giro-winners && sprinkle open giro-winners
+Stay ready for more work.")
 ```
 
-**Lick events**: When a sprinkle lick arrives (e.g. `[Sprinkle Event: giro-winners] {"action":"add-year"}`), forward it to the owning scoop via `feed_scoop`. Do NOT handle lick events in the cone.
+### Rule 5: Lick events — forward to owning scoop, never handle yourself
+
+When a sprinkle lick arrives (e.g. `[Sprinkle Event: giro-winners] {"action":"add-year"}`):
+1. Extract the sprinkle name from the event (here: `giro-winners`)
+2. Forward to the scoop with the SAME name via `feed_scoop`
+3. Include the sprinkle name, file path, and the full lick payload in the brief
 
 ```
-feed_scoop("giro-winners", "Lick received: action 'add-year'. Look up the next year's winner and push the update via sprinkle send.")
+feed_scoop("giro-winners", "Lick event on YOUR sprinkle 'giro-winners' (/shared/sprinkles/giro-winners/giro-winners.shtml):
+Action: 'add-year'
+Look up the next previous year's Giro d'Italia winner and update the sprinkle.
+Use: sprinkle send giro-winners '<json>' to push data, or edit the .shtml and reload.
+Stay ready for more lick events.")
 ```
+
+**NEVER** handle a lick in the cone. NEVER run bash, write_file, or any tool to process lick data yourself. Always `feed_scoop`.
 
 ## Skills
 

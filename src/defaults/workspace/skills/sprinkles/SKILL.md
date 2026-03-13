@@ -14,18 +14,18 @@ allowed-tools: bash
 1. `read_file /workspace/skills/sprinkles/style-guide.md` — **always read first** before writing any sprinkle
 2. `write_file` to `/shared/sprinkles/<name>/<name>.shtml` (follow the style guide templates)
 3. `bash` → `sprinkle open <name>`
-4. **Stay alive** — do NOT end your turn. You own this sprinkle and will receive follow-up instructions (modifications, lick events) via `feed_scoop`.
+4. **CRITICAL: Do NOT finish or send a completion message.** You own this sprinkle for its entire lifetime. The cone will send you follow-up instructions (modifications, lick events) via `feed_scoop`. If you finish, you lose your context and cannot handle future work on this sprinkle.
 
 **Updating a sprinkle** (when you receive follow-up instructions):
 1. Edit `/shared/sprinkles/<name>/<name>.shtml` with the requested changes
 2. Reload: `sprinkle close <name> && sprinkle open <name>`
-3. Stay alive for more instructions
+3. Do NOT finish — stay ready for more instructions
 
 **Handling lick events** (when the cone forwards a user interaction):
-The cone will send you a message describing the lick action (e.g. "Lick received: action 'add-year'"). Process the action and push updates:
+The cone will send you a message with the lick action and your sprinkle name. Only modify YOUR sprinkle — the one matching your scoop name. Process the action and push updates:
 - `bash` → `sprinkle send <name> '{"key":"value"}'` to push data to the sprinkle's `slicc.on('update', ...)` handler
 - Or edit the `.shtml` file and reload if the UI structure needs to change
-- Stay alive for more events
+- Do NOT finish — stay ready for more events
 
 **Managing sprinkles via bash**:
 - `sprinkle list` — see available sprinkles
