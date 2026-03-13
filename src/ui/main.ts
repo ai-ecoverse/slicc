@@ -573,6 +573,11 @@ async function main(): Promise<void> {
       },
       getBrowserAPI: () => browser,
       onToolStart: (scoopJid, toolName, toolInput) => {
+        // Switch to terminal tab when agent uses bash
+        if (toolName === 'bash') {
+          layout.openTerminal();
+        }
+
         // Hide infrastructure tools from the chat (their output is shown elsewhere)
         const hiddenTools = new Set(['send_message', 'list_scoops', 'list_tasks']);
         if (hiddenTools.has(toolName)) return;
@@ -837,7 +842,7 @@ async function main(): Promise<void> {
       sharedFs,
       routeLickToScoop,
       {
-        addPanel: (name, title, element) => layout.addPanel(name, title, element),
+        addPanel: (name, title, element, zone) => layout.addPanel(name, title, element, zone as 'primary' | 'drawer' | undefined),
         removePanel: (name) => layout.removePanel(name),
       },
     );
@@ -845,6 +850,27 @@ async function main(): Promise<void> {
     (window as unknown as Record<string, unknown>).__slicc_panelManager = panelManager;
     await panelManager.refresh();
     layout.onPanelClose = (name) => panelManager!.close(name);
+
+    // Wire [+] picker: available SHTML panels + open callback
+    layout.getAvailableShtmlPanels = () => {
+      const opened = new Set(panelManager!.opened());
+      return panelManager!.available()
+        .filter(p => !opened.has(p.name))
+        .map(p => ({ name: p.name, title: p.title }));
+    };
+    layout.onOpenShtmlPanel = (name, zone) => panelManager!.open(name, zone);
+    layout.updateAddButtons();
+
+    // Open welcome panel on first run
+    if (!localStorage.getItem('slicc-welcomed') && panelManager.available().some(p => p.name === 'welcome')) {
+      try {
+        await panelManager.open('welcome');
+        localStorage.setItem('slicc-welcomed', '1');
+      } catch (e) {
+        log.warn('Failed to open welcome panel', e);
+      }
+    }
+
     log.info('PanelManager initialized');
   }
 

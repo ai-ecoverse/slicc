@@ -38,6 +38,10 @@ import {
   getProviderConfig,
 } from './provider-settings.js';
 import { EXTENSION_TAB_SPECS, type ExtensionTabId } from './tabbed-ui.js';
+import { TabZone } from './tab-zone.js';
+import { PanelRegistry } from './panel-registry.js';
+import { showPanelPicker } from './panel-picker.js';
+import type { ZoneId } from './panel-types.js';
 import type { ChatMessage } from './types.js';
 import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
 
@@ -66,24 +70,17 @@ export class Layout {
   private iframeContainer!: HTMLElement;
 
   // Primary zone (top of right column — Terminal + SHTML panel tabs)
-  private primaryZone!: HTMLElement;
-  private primaryTabBar!: HTMLElement;
-  private primaryContentArea!: HTMLElement;
-  private primaryTabs = new Map<string, { btn: HTMLButtonElement; container: HTMLElement }>();
-  private activePrimaryTab = 'terminal';
+  private primaryZoneEl!: HTMLElement;
+  private primaryZone!: TabZone;
 
   // Drawer zone (bottom of right column — Files + Memory)
-  private drawerZone!: HTMLElement;
-  private drawerTabBar!: HTMLElement;
-  private drawerContentArea!: HTMLElement;
-  private drawerTabs = new Map<string, { btn: HTMLButtonElement; container: HTMLElement }>();
-  private activeDrawerTab = 'files';
+  private drawerZoneEl!: HTMLElement;
+  private drawerZone!: TabZone;
 
   private drawerHeightFraction = 0.35;
 
   // Tabbed-layout elements (extension only)
   private tabContainers = new Map<TabId, HTMLElement>();
-  private tabButtons = new Map<TabId, HTMLElement>();
   private activeTab: TabId = 'chat';
   private actionsEl!: HTMLElement;
 
@@ -102,11 +99,17 @@ export class Layout {
   private logoScoopCount = -1; // -1 = initial load, skip animation
 
   public panels!: LayoutPanels;
+  public readonly registry = new PanelRegistry();
   public onModelChange?: (model: string) => void;
   public onScoopSelect?: (scoop: RegisteredScoop) => void;
   public onClearChat?: () => Promise<void>;
   public onClearFilesystem?: () => Promise<void>;
   public onPanelClose?: (name: string) => void;
+
+  /** Callback to get available SHTML panels for the [+] picker. */
+  public getAvailableShtmlPanels?: () => Array<{ name: string; title: string }>;
+  /** Callback to open an SHTML panel by name. */
+  public onOpenShtmlPanel?: (name: string, zone?: ZoneId) => Promise<void>;
 
   private scoopsWidth = 0.15;
   private leftWidth = 0.45;
@@ -143,11 +146,22 @@ export class Layout {
 
   setActiveTab(id: TabId): void {
     if (!this.isExtension) return;
-    this.switchTab(id);
+    this.extensionZone?.activateTab(id);
   }
 
   getActiveTab(): TabId {
     return this.activeTab;
+  }
+
+  /** Check if the terminal panel is currently open in a zone. */
+  isTerminalOpen(): boolean {
+    return true; // always present in drawer
+  }
+
+  /** Activate the terminal tab in the drawer. */
+  openTerminal(): void {
+    if (this.isExtension) return;
+    this.drawerZone.activateTab('terminal');
   }
 
   // ── Shared: Header ──────────────────────────────────────────────────
@@ -613,10 +627,11 @@ export class Layout {
     });
     this.actionsEl.appendChild(this.copyChatBtn);
 
-    // Clear Terminal
+    // Terminal: clears terminal and switches to terminal tab
     this.clearTermBtn = this.iconBtn(this.svgIcon(icons.terminal), 'Clear Terminal');
     this.clearTermBtn.addEventListener('click', () => {
       this.panels.terminal.clearTerminal();
+      this.openTerminal();
     });
     this.actionsEl.appendChild(this.clearTermBtn);
 
@@ -678,6 +693,9 @@ export class Layout {
 
   // ── Extension: Tabbed Layout ────────────────────────────────────────
 
+  /** Extension-mode TabZone (single zone for all tabs). */
+  private extensionZone!: TabZone;
+
   private buildTabbedLayout(): void {
     while (this.root.firstChild) this.root.removeChild(this.root.firstChild);
 
@@ -686,36 +704,60 @@ export class Layout {
     // Tab bar
     const tabBar = document.createElement('div');
     tabBar.className = 'tab-bar';
-
-    const tabs = EXTENSION_TAB_SPECS;
-
-    for (const { id, label } of tabs) {
-      const btn = document.createElement('button');
-      btn.className = 'tab-bar__tab';
-      btn.textContent = label;
-      btn.dataset.tab = id;
-      if (id === this.activeTab) btn.classList.add('tab-bar__tab--active');
-      btn.addEventListener('click', () => this.switchTab(id));
-      tabBar.appendChild(btn);
-      this.tabButtons.set(id, btn);
-    }
-
     this.root.appendChild(tabBar);
 
     // Tab content area
     const content = document.createElement('div');
     content.className = 'tab-content';
+    this.root.appendChild(content);
 
-    for (const { id } of tabs) {
-      const container = document.createElement('div');
-      container.className = 'tab-content__panel';
-      container.dataset.tab = id;
-      if (id !== this.activeTab) container.style.display = 'none';
-      content.appendChild(container);
+    this.extensionZone = new TabZone(tabBar, content, 'primary', {
+      onTabActivate: (id) => {
+        this.activeTab = id;
+        this.updateButtonVisibility();
+        if (id === 'terminal') this.panels?.terminal?.refit?.();
+        if (id === 'memory') this.panels?.memory?.refresh();
+      },
+      onTabClose: (id) => {
+        const name = id.startsWith('shtml-') ? id.slice(6) : id;
+        this.onPanelClose?.(name);
+      },
+      onAddClick: () => this.showExtensionPicker(tabBar),
+    }, { classPrefix: 'tab-bar' });
+
+    // Create containers for built-in tabs
+    const chatContainer = document.createElement('div');
+    chatContainer.className = 'tab-content__panel';
+
+    const terminalContainer = document.createElement('div');
+    terminalContainer.className = 'tab-content__panel';
+
+    const filesContainer = document.createElement('div');
+    filesContainer.className = 'tab-content__panel';
+
+    const memoryContainer = document.createElement('div');
+    memoryContainer.className = 'tab-content__panel';
+
+    // Add built-in tabs
+    for (const { id, label } of EXTENSION_TAB_SPECS) {
+      const container = id === 'chat' ? chatContainer
+        : id === 'terminal' ? terminalContainer
+        : id === 'files' ? filesContainer
+        : memoryContainer;
+      this.extensionZone.addTab({
+        id,
+        label,
+        closable: false,
+        element: container,
+        onActivate: id === 'terminal' ? () => this.panels?.terminal?.refit?.()
+          : id === 'memory' ? () => this.panels?.memory?.refresh()
+          : undefined,
+      });
+      // Keep tabContainers in sync for backward compat
       this.tabContainers.set(id, container);
     }
 
-    this.root.appendChild(content);
+    this.extensionZone.enableAddButton();
 
     // Hidden container for scoop iframes
     this.iframeContainer = document.createElement('div');
@@ -730,15 +772,15 @@ export class Layout {
 
     // Create panels in their tab containers
     this.panels = {
-      chat: new ChatPanel(this.tabContainers.get('chat')!),
-      terminal: new TerminalPanel(this.tabContainers.get('terminal')!),
-      fileBrowser: new FileBrowserPanel(this.tabContainers.get('files')!, {
+      chat: new ChatPanel(chatContainer),
+      terminal: new TerminalPanel(terminalContainer),
+      fileBrowser: new FileBrowserPanel(filesContainer, {
         onRunCommand: async (command) => {
           await this.runFileBrowserCommand(command);
-          this.switchTab('terminal');
+          this.extensionZone.activateTab('terminal');
         },
       }),
-      memory: new MemoryPanel(this.tabContainers.get('memory')!),
+      memory: new MemoryPanel(memoryContainer),
       scoops: new ScoopsPanel(this.scoopsEl, {
         onScoopSelect: (scoop) => this.onScoopSelect?.(scoop),
         onSendMessage: () => {},
@@ -749,26 +791,30 @@ export class Layout {
     this.updateButtonVisibility();
   }
 
+  /** Show the [+] picker in extension mode. */
+  private showExtensionPicker(anchor: HTMLElement): void {
+    const shtmlPanels = (this.getAvailableShtmlPanels?.() ?? []);
+    // In extension mode, all panels are in one zone — filter already-open ones
+    const openIds = new Set(this.extensionZone.getTabIds());
+    const available = shtmlPanels.filter(p => !openIds.has(`shtml-${p.name}`));
+
+    if (available.length === 0) return;
+
+    showPanelPicker(anchor, 'primary', {
+      registry: this.registry,
+      callbacks: {
+        onSelectPanel: () => {},
+        onSelectShtml: (name) => {
+          this.onOpenShtmlPanel?.(name);
+        },
+      },
+      getAvailableShtml: () => available,
+    });
+  }
+
   private switchTab(id: TabId): void {
-    if (id === this.activeTab) return;
-    this.activeTab = id;
-
-    for (const [tabId, btn] of this.tabButtons) {
-      btn.classList.toggle('tab-bar__tab--active', tabId === id);
-    }
-
-    for (const [tabId, container] of this.tabContainers) {
-      container.style.display = tabId === id ? '' : 'none';
-    }
-
-    this.updateButtonVisibility();
-
-    if (id === 'terminal') {
-      this.panels.terminal.refit?.();
-    }
-
-    if (id === 'memory') {
-      this.panels.memory.refresh();
+    if (this.extensionZone) {
+      this.extensionZone.activateTab(id);
     }
   }
 
@@ -808,30 +854,30 @@ export class Layout {
     this.rightEl.className = 'layout__right';
 
     // ── Primary zone (Terminal + SHTML panel tabs) ──
-    this.primaryZone = document.createElement('div');
-    this.primaryZone.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: none;';
+    this.primaryZoneEl = document.createElement('div');
+    this.primaryZoneEl.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: none;';
 
-    this.primaryTabBar = document.createElement('div');
-    this.primaryTabBar.className = 'mini-tabs';
-    this.primaryZone.appendChild(this.primaryTabBar);
+    const primaryTabBar = document.createElement('div');
+    primaryTabBar.className = 'mini-tabs';
+    this.primaryZoneEl.appendChild(primaryTabBar);
 
-    this.primaryContentArea = document.createElement('div');
-    this.primaryContentArea.style.cssText = 'flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;';
-    this.primaryZone.appendChild(this.primaryContentArea);
+    const primaryContentArea = document.createElement('div');
+    primaryContentArea.style.cssText = 'flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;';
+    this.primaryZoneEl.appendChild(primaryContentArea);
 
-    // Terminal tab (always first, no close button)
-    this.terminalContainer = document.createElement('div');
-    this.terminalContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1;';
-    this.primaryContentArea.appendChild(this.terminalContainer);
+    this.primaryZone = new TabZone(primaryTabBar, primaryContentArea, 'primary', {
+      onTabActivate: (id) => {
+        if (id === 'terminal') this.panels?.terminal?.refit();
+      },
+      onTabClose: (id) => {
+        const name = id.startsWith('shtml-') ? id.slice(6) : id;
+        this.onPanelClose?.(name);
+      },
+      onAddClick: () => this.showPickerForZone('primary', primaryTabBar),
+    });
+    this.primaryZone.enableAddButton();
 
-    const terminalTabBtn = document.createElement('button');
-    terminalTabBtn.className = 'mini-tabs__tab mini-tabs__tab--active';
-    terminalTabBtn.textContent = 'Terminal';
-    terminalTabBtn.addEventListener('click', () => this.switchPrimaryTab('terminal'));
-    this.primaryTabBar.appendChild(terminalTabBtn);
-    this.primaryTabs.set('terminal', { btn: terminalTabBtn, container: this.terminalContainer });
-
-    this.rightEl.appendChild(this.primaryZone);
+    this.rightEl.appendChild(this.primaryZoneEl);
 
     // ── Horizontal divider ──
     this.horizontalDivider = document.createElement('div');
@@ -839,58 +885,82 @@ export class Layout {
     this.rightEl.appendChild(this.horizontalDivider);
 
     // ── Drawer zone (Files + Memory) ──
-    this.drawerZone = document.createElement('div');
-    this.drawerZone.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden;';
+    this.drawerZoneEl = document.createElement('div');
+    this.drawerZoneEl.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden;';
 
-    this.drawerTabBar = document.createElement('div');
-    this.drawerTabBar.className = 'mini-tabs';
-    this.drawerZone.appendChild(this.drawerTabBar);
+    const drawerTabBar = document.createElement('div');
+    drawerTabBar.className = 'mini-tabs';
+    this.drawerZoneEl.appendChild(drawerTabBar);
 
-    this.drawerContentArea = document.createElement('div');
-    this.drawerContentArea.style.cssText = 'flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;';
-    this.drawerZone.appendChild(this.drawerContentArea);
+    const drawerContentArea = document.createElement('div');
+    drawerContentArea.style.cssText = 'flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;';
+    this.drawerZoneEl.appendChild(drawerContentArea);
+
+    this.drawerZone = new TabZone(drawerTabBar, drawerContentArea, 'drawer', {
+      onTabActivate: (id) => {
+        if (id === 'terminal') this.panels?.terminal?.refit();
+        if (id === 'memory') this.panels?.memory?.refresh();
+        // Update URL param for drawer tab
+        const url = new URL(window.location.href);
+        url.searchParams.set('bottomTab', id);
+        history.replaceState(null, '', url.toString());
+      },
+      onTabClose: (id) => {
+        const name = id.startsWith('shtml-') ? id.slice(6) : id;
+        this.onPanelClose?.(name);
+      },
+      onAddClick: () => this.showPickerForZone('drawer', drawerTabBar),
+    });
+    this.drawerZone.enableAddButton();
+
+    // Terminal tab
+    this.terminalContainer = document.createElement('div');
+    this.terminalContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1;';
+    this.drawerZone.addTab({
+      id: 'terminal',
+      label: 'Terminal',
+      closable: false,
+      element: this.terminalContainer,
+      onActivate: () => this.panels?.terminal?.refit(),
+    });
 
     // Files tab
     const fileBrowserContainer = document.createElement('div');
     fileBrowserContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1;';
-    this.drawerContentArea.appendChild(fileBrowserContainer);
-
-    const filesTabBtn = document.createElement('button');
-    filesTabBtn.className = 'mini-tabs__tab mini-tabs__tab--active';
-    filesTabBtn.textContent = 'Files';
-    filesTabBtn.addEventListener('click', () => this.switchDrawerTab('files'));
-    this.drawerTabBar.appendChild(filesTabBtn);
-    this.drawerTabs.set('files', { btn: filesTabBtn, container: fileBrowserContainer });
+    this.drawerZone.addTab({
+      id: 'files',
+      label: 'Files',
+      closable: false,
+      element: fileBrowserContainer,
+    });
 
     // Memory tab
     const memoryContainer = document.createElement('div');
-    memoryContainer.style.cssText = 'display: none; flex-direction: column; min-height: 0; flex: 1;';
-    this.drawerContentArea.appendChild(memoryContainer);
-
-    const memoryTabBtn = document.createElement('button');
-    memoryTabBtn.className = 'mini-tabs__tab';
-    memoryTabBtn.textContent = 'Memory';
-    memoryTabBtn.addEventListener('click', () => this.switchDrawerTab('memory'));
-    this.drawerTabBar.appendChild(memoryTabBtn);
-    this.drawerTabs.set('memory', { btn: memoryTabBtn, container: memoryContainer });
+    memoryContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; flex: 1;';
+    this.drawerZone.addTab({
+      id: 'memory',
+      label: 'Memory',
+      closable: false,
+      element: memoryContainer,
+      onActivate: () => this.panels?.memory?.refresh(),
+    });
 
     // Restore persisted drawer height
     const savedDrawerHeight = localStorage.getItem('slicc-drawer-height');
     if (savedDrawerHeight) this.drawerHeightFraction = parseFloat(savedDrawerHeight) || 0.35;
 
     // Restore persisted primary tab
-    const savedPrimaryTab = localStorage.getItem('slicc-primary-tab');
-    if (savedPrimaryTab && savedPrimaryTab !== 'terminal') this.activePrimaryTab = savedPrimaryTab;
+    this.primaryZone.restoreActiveTab();
 
-    // Restore persisted drawer tab
-    const initialDrawerTab = localStorage.getItem('slicc-drawer-tab')
-      || new URL(window.location.href).searchParams.get('bottomTab');
-    if (initialDrawerTab === 'memory') {
-      this.activeDrawerTab = 'memory';
-      this.switchDrawerTab('memory');
+    // Restore persisted drawer tab (also check URL param)
+    const urlDrawerTab = new URL(window.location.href).searchParams.get('bottomTab');
+    if (urlDrawerTab && this.drawerZone.hasTab(urlDrawerTab)) {
+      this.drawerZone.activateTab(urlDrawerTab);
+    } else {
+      this.drawerZone.restoreActiveTab();
     }
 
-    this.rightEl.appendChild(this.drawerZone);
+    this.rightEl.appendChild(this.drawerZoneEl);
     layout.appendChild(this.rightEl);
 
     // Hidden container for scoop iframes
@@ -943,8 +1013,8 @@ export class Layout {
     const drawerH = Math.max(28, Math.round(rightH * this.drawerHeightFraction));
     const primaryH = Math.max(100, rightH - drawerH - hDividerH);
 
-    this.primaryZone.style.height = primaryH + 'px';
-    this.drawerZone.style.height = drawerH + 'px';
+    this.primaryZoneEl.style.height = primaryH + 'px';
+    this.drawerZoneEl.style.height = drawerH + 'px';
   }
 
   /** Get the iframe container for the orchestrator */
@@ -1062,72 +1132,124 @@ export class Layout {
     });
   }
 
+  // ── Panel Picker ───────────────────────────────────────────────────
+
+  /** Update [+] button enabled state based on available panels. */
+  updateAddButtons(): void {
+    const closedCount = this.registry.getClosed().length;
+    const availableShtml = this.getAvailableShtmlPanels?.() ?? [];
+    const openShtml = new Set<string>();
+    for (const id of this.registry.ids()) {
+      if (id.startsWith('shtml-') && this.registry.get(id)?.descriptor.zone !== null) {
+        openShtml.add(id.slice(6));
+      }
+    }
+    const unopenedShtml = availableShtml.filter(p => !openShtml.has(p.name)).length;
+    const hasAvailable = closedCount + unopenedShtml > 0;
+    this.primaryZone?.setAddButtonEnabled(hasAvailable);
+    this.drawerZone?.setAddButtonEnabled(hasAvailable);
+  }
+
+  /** Show the [+] panel picker for a zone. */
+  private showPickerForZone(zone: ZoneId, anchor: HTMLElement): void {
+    // Collect available SHTML panels that are not currently open
+    const openShtml = new Set<string>();
+    for (const id of this.registry.ids()) {
+      if (id.startsWith('shtml-') && this.registry.get(id)?.descriptor.zone !== null) {
+        openShtml.add(id.slice(6)); // strip 'shtml-' prefix
+      }
+    }
+    const shtmlPanels = (this.getAvailableShtmlPanels?.() ?? [])
+      .filter(p => !openShtml.has(p.name));
+
+    showPanelPicker(anchor, zone, {
+      registry: this.registry,
+      callbacks: {
+        onSelectPanel: (id, targetZone) => {
+          this.openPanelInZone(id, targetZone);
+        },
+        onSelectShtml: (name, targetZone) => {
+          this.onOpenShtmlPanel?.(name, targetZone);
+        },
+      },
+      getAvailableShtml: () => shtmlPanels,
+    });
+  }
+
+  /** Open a closed registry panel in a specific zone. */
+  private openPanelInZone(id: string, zone: ZoneId): void {
+    const entry = this.registry.get(id);
+    if (!entry) return;
+
+    const tabZone = zone === 'primary' ? this.primaryZone : this.drawerZone;
+    this.registry.setZone(id, zone);
+    tabZone.addTab({
+      id: entry.descriptor.id,
+      label: entry.descriptor.label,
+      closable: entry.descriptor.closable,
+      element: entry.descriptor.element,
+      onActivate: entry.descriptor.onActivate,
+    });
+    tabZone.activateTab(id);
+  }
+
   // ── Dynamic SHTML Panels ───────────────────────────────────────────
 
   /** Track dynamic panel sections in standalone mode. */
   private dynamicPanels = new Map<string, HTMLElement>();
 
   /** Add a dynamic .shtml panel to the layout. */
-  addPanel(name: string, title: string, element: HTMLElement): void {
+  addPanel(name: string, title: string, element: HTMLElement, targetZone?: ZoneId): void {
     if (this.isExtension) {
-      // Extension mode: add as a new tab
-      const tabBar = this.root.querySelector('.tab-bar');
-      if (!tabBar) return;
-
+      // Extension mode: add as a new tab via TabZone
       const tabId = `shtml-${name}`;
-
-      const btn = document.createElement('button');
-      btn.className = 'tab-bar__tab';
-      btn.textContent = title;
-      btn.dataset.tab = tabId;
-      btn.addEventListener('click', () => this.switchTab(tabId));
-      tabBar.appendChild(btn);
-      this.tabButtons.set(tabId, btn);
-
-      const content = this.root.querySelector('.tab-content');
-      if (!content) return;
 
       const container = document.createElement('div');
       container.className = 'tab-content__panel';
-      container.dataset.tab = tabId;
-      container.style.display = 'none';
       container.appendChild(element);
-      content.appendChild(container);
-      this.tabContainers.set(tabId, container);
 
+      this.extensionZone.addTab({
+        id: tabId,
+        label: title,
+        closable: true,
+        element: container,
+      });
+      this.tabContainers.set(tabId, container);
       this.dynamicPanels.set(name, container);
 
       // Auto-switch to the new tab
-      this.switchTab(tabId);
+      this.extensionZone.activateTab(tabId);
     } else {
-      // Standalone mode: add as a primary zone tab
+      // Standalone mode: add to the requested zone (default: primary)
+      const zone = targetZone ?? 'primary';
+      const tabZone = zone === 'primary' ? this.primaryZone : this.drawerZone;
       const tabId = `shtml-${name}`;
 
-      const btn = document.createElement('button');
-      btn.className = 'mini-tabs__tab';
-      btn.appendChild(document.createTextNode(title));
-      const closeSpan = document.createElement('span');
-      closeSpan.className = 'mini-tabs__tab-close';
-      closeSpan.title = 'Close panel';
-      closeSpan.textContent = '\u00D7';
-      btn.appendChild(closeSpan);
-      btn.addEventListener('click', () => this.switchPrimaryTab(tabId));
-      closeSpan.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.onPanelClose?.(name);
-      });
-      this.primaryTabBar.appendChild(btn);
-
       const container = document.createElement('div');
-      container.style.cssText = 'display: none; flex-direction: column; min-height: 0; overflow: auto; flex: 1;';
+      container.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: auto; flex: 1;';
       container.appendChild(element);
-      this.primaryContentArea.appendChild(container);
 
-      this.primaryTabs.set(tabId, { btn: btn as HTMLButtonElement, container });
+      // Register in the panel registry
+      this.registry.register({
+        id: tabId,
+        label: title,
+        zone,
+        closable: true,
+        element: container,
+        onClose: () => this.onPanelClose?.(name),
+      });
+
+      tabZone.addTab({
+        id: tabId,
+        label: title,
+        closable: true,
+        element: container,
+      });
       this.dynamicPanels.set(name, container);
 
       // Auto-switch to the new tab
-      this.switchPrimaryTab(tabId);
+      tabZone.activateTab(tabId);
+      this.updateAddButtons();
     }
   }
 
@@ -1135,64 +1257,22 @@ export class Layout {
   removePanel(name: string): void {
     if (this.isExtension) {
       const tabId = `shtml-${name}`;
-      const wasActive = this.activeTab === tabId;
-
-      this.tabButtons.get(tabId)?.remove();
-      this.tabButtons.delete(tabId);
-
-      this.tabContainers.get(tabId)?.remove();
+      this.extensionZone.removeTab(tabId);
       this.tabContainers.delete(tabId);
-
       this.dynamicPanels.delete(name);
-
-      if (wasActive) {
-        this.switchTab('chat');
-      }
     } else {
       const tabId = `shtml-${name}`;
-      const entry = this.primaryTabs.get(tabId);
-      if (entry) {
-        entry.btn.remove();
-        entry.container.remove();
-        this.primaryTabs.delete(tabId);
-        this.dynamicPanels.delete(name);
-        if (this.activePrimaryTab === tabId) {
-          this.switchPrimaryTab('terminal');
-        }
-      }
+      const entry = this.registry.get(tabId);
+      const zone = entry?.descriptor.zone;
+      const tabZone = zone === 'drawer' ? this.drawerZone : this.primaryZone;
+      tabZone.removeTab(tabId);
+      this.registry.unregister(tabId);
+      this.dynamicPanels.delete(name);
+      this.updateAddButtons();
     }
   }
 
-  /** Switch the active tab in the primary zone (standalone mode). */
-  private switchPrimaryTab(id: string): void {
-    this.activePrimaryTab = id;
-    for (const [tabId, { btn, container }] of this.primaryTabs) {
-      const active = tabId === id;
-      btn.classList.toggle('mini-tabs__tab--active', active);
-      container.style.display = active ? 'flex' : 'none';
-    }
-    localStorage.setItem('slicc-primary-tab', id);
-    if (id === 'terminal') {
-      this.panels?.terminal?.refit();
-    }
-  }
-
-  /** Switch the active tab in the drawer zone (standalone mode). */
-  private switchDrawerTab(id: string): void {
-    this.activeDrawerTab = id;
-    for (const [tabId, { btn, container }] of this.drawerTabs) {
-      const active = tabId === id;
-      btn.classList.toggle('mini-tabs__tab--active', active);
-      container.style.display = active ? 'flex' : 'none';
-    }
-    localStorage.setItem('slicc-drawer-tab', id);
-    const url = new URL(window.location.href);
-    url.searchParams.set('bottomTab', id);
-    history.replaceState(null, '', url.toString());
-    if (id === 'memory') {
-      this.panels?.memory?.refresh();
-    }
-  }
+  // switchPrimaryTab and switchDrawerTab are now handled by TabZone instances
 
   // ── Cleanup ─────────────────────────────────────────────────────────
 

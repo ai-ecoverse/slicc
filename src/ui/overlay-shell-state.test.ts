@@ -34,9 +34,19 @@ describe('overlay-shell-state', () => {
     expect(setElectronOverlayOpen(state, true)).toBe(state);
   });
 
-  it('normalizes unsupported tabs to the current tab', () => {
+  it('accepts dynamic panel ids as valid tabs', () => {
     const state = createElectronOverlayShellState({ activeTab: 'terminal' });
-    expect(setElectronOverlayTab(state, 'unknown')).toBe(state);
+    expect(setElectronOverlayTab(state, 'shtml-dash')).toEqual({
+      ...state,
+      activeTab: 'shtml-dash',
+    });
+  });
+
+  it('normalizes empty/null tabs to the current tab', () => {
+    const state = createElectronOverlayShellState({ activeTab: 'terminal' });
+    expect(setElectronOverlayTab(state, '')).toBe(state);
+    expect(setElectronOverlayTab(state, null)).toBe(state);
+    expect(setElectronOverlayTab(state, undefined)).toBe(state);
   });
 
   it('changes the active tab when a supported tab is selected', () => {

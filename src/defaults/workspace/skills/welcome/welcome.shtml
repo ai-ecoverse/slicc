@@ -1,0 +1,38 @@
+<div data-shtml-title="Welcome" class="shtml-stack" style="padding: 20px; max-width: 520px; margin: 0 auto;">
+
+  <div class="shtml-heading" style="font-size: 18px; text-align: center;">
+    Welcome to SLICC
+  </div>
+
+  <div class="shtml-body" style="text-align: center; margin-bottom: 8px;">
+    Your browser-native AI coding agent.
+  </div>
+
+  <div class="shtml-divider"></div>
+
+  <div class="shtml-card">
+    <div class="shtml-heading" style="font-size: 14px;">Quick start</div>
+    <div class="shtml-body">
+      Type a message in the chat to get started. SLICC can write code, run shell commands, automate browser tabs, and build interactive panels.
+    </div>
+  </div>
+
+  <div class="shtml-card">
+    <div class="shtml-heading" style="font-size: 14px;">Key commands</div>
+    <dl class="shtml-kv-list">
+      <dt><code>commands</code></dt>
+      <dd>List all shell commands</dd>
+      <dt><code>skill list</code></dt>
+      <dd>Show installed skills</dd>
+      <dt><code>panel open &lt;name&gt;</code></dt>
+      <dd>Open a dashboard panel</dd>
+      <dt><code>git clone &lt;url&gt;</code></dt>
+      <dd>Clone a repository</dd>
+    </dl>
+  </div>
+
+  <div class="shtml-detail" style="text-align: center;">
+    Close this tab anytime. Reopen it from the [+] menu.
+  </div>
+
+</div>

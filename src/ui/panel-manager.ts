@@ -14,7 +14,7 @@ const log = createLogger('panel-manager');
 
 export interface PanelManagerCallbacks {
   /** Called to add a panel to the layout (standalone: right column, extension: tab). */
-  addPanel(name: string, title: string, element: HTMLElement): void;
+  addPanel(name: string, title: string, element: HTMLElement, zone?: string): void;
   /** Called to remove a panel from the layout. */
   removePanel(name: string): void;
 }
@@ -45,8 +45,8 @@ export class PanelManager {
     log.info('Discovered SHTML panels', { count: this.availablePanels.size });
   }
 
-  /** Open a panel by name. */
-  async open(name: string): Promise<void> {
+  /** Open a panel by name, optionally in a specific zone. */
+  async open(name: string, zone?: string): Promise<void> {
     if (this.openPanels.has(name)) {
       log.info('Panel already open', { name });
       return;
@@ -72,7 +72,7 @@ export class PanelManager {
     await renderer.render(content, name);
 
     this.openPanels.set(name, { renderer, container });
-    this.callbacks.addPanel(name, panel.title, container);
+    this.callbacks.addPanel(name, panel.title, container, zone);
     log.info('Panel opened', { name, title: panel.title });
   }
 
