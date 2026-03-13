@@ -213,8 +213,6 @@ export class BrowserAPI {
     await this.ensureConnected();
     this.ensureAttached();
 
-    // DPR is already normalized to 1 via setDeviceMetricsOverride in
-    // attachToPage(). Screenshots produce CSS-pixel-sized output.
     try {
       const params: Record<string, unknown> = {
         format: options?.format ?? 'png',
