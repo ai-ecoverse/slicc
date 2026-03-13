@@ -72,14 +72,22 @@ function createMockFs(files: Record<string, string> = {}): IFileSystem {
   return fs;
 }
 
-function createMockCtx(files: Record<string, string> = {}, envVars: Record<string, string> = {}): CommandContext {
+function createMockCtx(
+  files: Record<string, string> = {},
+  envVars: Record<string, string> = {},
+  execFn?: (command: string, options: { cwd?: string }) => Promise<{ stdout: string; stderr: string; exitCode: number }>,
+): CommandContext {
   const env = new Map<string, string>(Object.entries(envVars));
-  return {
+  const ctx: CommandContext = {
     fs: createMockFs(files),
     cwd: '/workspace',
     env,
     stdin: '',
   };
+  if (execFn) {
+    ctx.exec = execFn as CommandContext['exec'];
+  }
+  return ctx;
 }
 
 describe('executeJshFile', () => {
@@ -281,5 +289,81 @@ describe('executeJsCode', () => {
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe('async content');
+  });
+});
+
+describe('exec bridge', () => {
+  it('runs a shell command and returns the result', async () => {
+    const mockExec = async (cmd: string) => ({
+      stdout: `ran: ${cmd}\n`,
+      stderr: '',
+      exitCode: 0,
+    });
+    const ctx = createMockCtx(
+      { '/workspace/run.jsh': 'const r = await exec("echo hello"); console.log(r.stdout.trim());' },
+      {},
+      mockExec,
+    );
+    const result = await executeJshFile('/workspace/run.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('ran: echo hello');
+  });
+
+  it('returns exitCode from the shell command', async () => {
+    const mockExec = async () => ({
+      stdout: '',
+      stderr: 'not found\n',
+      exitCode: 127,
+    });
+    const ctx = createMockCtx(
+      { '/workspace/check.jsh': 'const r = await exec("bad-cmd"); console.log(r.exitCode);' },
+      {},
+      mockExec,
+    );
+    const result = await executeJshFile('/workspace/check.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('127');
+  });
+
+  it('throws when exec is not available', async () => {
+    const ctx = createMockCtx({
+      '/workspace/noexec.jsh': 'try { await exec("ls"); } catch(e) { console.log(e.message); }',
+    });
+    const result = await executeJshFile('/workspace/noexec.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('not available');
+  });
+
+  it('works via executeJsCode with exec', async () => {
+    const mockExec = async (cmd: string) => ({
+      stdout: `output of ${cmd}\n`,
+      stderr: '',
+      exitCode: 0,
+    });
+    const ctx = createMockCtx({}, {}, mockExec);
+    const result = await executeJsCode(
+      'const r = await exec("oauth-token adobe"); process.stdout.write(r.stdout);',
+      ['node'],
+      ctx,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('output of oauth-token adobe\n');
+  });
+
+  it('captures stderr from failed shell commands', async () => {
+    const mockExec = async () => ({
+      stdout: '',
+      stderr: 'permission denied\n',
+      exitCode: 1,
+    });
+    const ctx = createMockCtx(
+      { '/workspace/fail.jsh': 'const r = await exec("restricted-cmd"); console.error(r.stderr.trim()); console.log(r.exitCode);' },
+      {},
+      mockExec,
+    );
+    const result = await executeJshFile('/workspace/fail.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr.trim()).toBe('permission denied');
+    expect(result.stdout.trim()).toBe('1');
   });
 });

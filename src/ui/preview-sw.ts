@@ -10,6 +10,10 @@
  *
  * Built as a separate entry point (not bundled with the main app).
  * Reads directly from LightningFS IndexedDB (same DB as VirtualFS).
+ *
+ * For mounted directories (File System Access API), the SW can't access
+ * the handles directly. On LFS miss (ENOENT), it falls back to asking
+ * the main page's VirtualFS via postMessage.
  */
 
 /// <reference lib="webworker" />
@@ -56,7 +60,55 @@ const TEXT_TYPES = new Set([
   'application/json', 'image/svg+xml', 'application/xml',
 ]);
 
+const sw = self as unknown as ServiceWorkerGlobalScope;
+
+/**
+ * Ask the main page to read a file from VirtualFS (which knows about mounts).
+ * Uses BroadcastChannel instead of client.postMessage because the main page
+ * at `/` is outside the SW's `/preview/` scope, so clients.matchAll() can't
+ * find it. BroadcastChannel works across all same-origin contexts.
+ */
+let vfsBroadcast: BroadcastChannel | null = null;
+
+function getVfsBroadcast(): BroadcastChannel {
+  if (!vfsBroadcast) vfsBroadcast = new BroadcastChannel('preview-vfs');
+  return vfsBroadcast;
+}
+
+async function readViaMainPage(
+  vfsPath: string,
+  asText: boolean,
+): Promise<string | Uint8Array | null> {
+  const bc = getVfsBroadcast();
+  const id = `pvfs-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+  return new Promise<string | Uint8Array | null>((resolve) => {
+    const timer = setTimeout(() => {
+      bc.removeEventListener('message', handler);
+      resolve(null);
+    }, 5000);
+
+    function handler(event: MessageEvent): void {
+      if (event.data?.type !== 'preview-vfs-response' || event.data.id !== id) return;
+      bc.removeEventListener('message', handler);
+      clearTimeout(timer);
+      if (event.data.error) {
+        resolve(null);
+        return;
+      }
+      resolve(event.data.content ?? null);
+    }
+
+    bc.addEventListener('message', handler);
+    bc.postMessage({ type: 'preview-vfs-read', id, path: vfsPath, asText });
+  });
+}
+
 async function handlePreviewRequest(vfsPath: string): Promise<Response> {
+  const mimeType = getMimeType(vfsPath);
+  const isText = TEXT_TYPES.has(mimeType);
+
+  // Try LightningFS first (fast path for non-mounted files)
   try {
     const fs = getLFS();
 
@@ -68,33 +120,35 @@ async function handlePreviewRequest(vfsPath: string): Promise<Response> {
       }
     } catch { /* stat failed — not a dir or doesn't exist yet, continue to readFile */ }
 
-    const mimeType = getMimeType(vfsPath);
-    const isText = TEXT_TYPES.has(mimeType);
-
-    // Read as text for text types, binary for everything else
     const raw = isText
       ? await fs.readFile(vfsPath, { encoding: 'utf8' }) as string
       : new Uint8Array(await fs.readFile(vfsPath) as Uint8Array);
 
     return new Response(raw, {
       status: 200,
-      headers: {
-        'Content-Type': mimeType,
-        'Cache-Control': 'no-cache',
-      },
+      headers: { 'Content-Type': mimeType, 'Cache-Control': 'no-cache' },
     });
   } catch (err: unknown) {
-    // Distinguish "not found" from filesystem/system errors
     const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes('ENOENT')) {
-      return new Response('Not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+    if (!msg.includes('ENOENT')) {
+      console.error('[preview-sw] Error serving', vfsPath, msg);
+      return new Response(`Preview error: ${msg}`, { status: 500, headers: { 'Content-Type': 'text/plain' } });
     }
-    console.error('[preview-sw] Error serving', vfsPath, msg);
-    return new Response(`Preview error: ${msg}`, { status: 500, headers: { 'Content-Type': 'text/plain' } });
+    // Fall through to main-page fallback for mounted files
   }
-}
 
-const sw = self as unknown as ServiceWorkerGlobalScope;
+  // Fallback: ask the main page's VirtualFS (handles mounted directories)
+  const content = await readViaMainPage(vfsPath, isText);
+  if (content !== null) {
+    const body = typeof content === 'string' ? content : new Uint8Array(content as Uint8Array);
+    return new Response(body, {
+      status: 200,
+      headers: { 'Content-Type': mimeType, 'Cache-Control': 'no-cache' },
+    });
+  }
+
+  return new Response('Not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
+}
 
 sw.addEventListener('install', () => { sw.skipWaiting(); });
 

@@ -17,6 +17,7 @@ import { createUnameCommand } from './uname-command.js';
 import { createUnzipCommand } from './unzip-command.js';
 import { createWebhookCommand } from './webhook-command.js';
 import { createCrontaskCommand } from './crontask-command.js';
+import { createOAuthTokenCommand } from './oauth-token-command.js';
 import { createWhichCommand } from './which-command.js';
 import { createZipCommand } from './zip-command.js';
 import type { BrowserAPI } from '../../cdp/index.js';
@@ -55,6 +56,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createConvertCommand('magick'),
     createWhichCommand(options.fs),
     createUnameCommand(),
+    createOAuthTokenCommand(),
   ];
 
   if (options.fs) {
