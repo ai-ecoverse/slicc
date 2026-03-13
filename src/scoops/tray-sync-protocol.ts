@@ -20,12 +20,33 @@ export type LeaderToFollowerMessage =
   | { type: 'agent_event'; event: AgentEvent; scoopJid: string }
   | { type: 'user_message_echo'; text: string; messageId: string; scoopJid: string }
   | { type: 'status'; scoopStatus: string }
-  | { type: 'error'; error: string };
+  | { type: 'error'; error: string }
+  | { type: 'targets.registry'; targets: TrayTargetEntry[] };
 
 export type FollowerToLeaderMessage =
   | { type: 'user_message'; text: string; messageId: string }
   | { type: 'abort' }
-  | { type: 'request_snapshot' };
+  | { type: 'request_snapshot' }
+  | { type: 'targets.advertise'; targets: RemoteTargetInfo[]; runtimeId: string };
+
+// ---------------------------------------------------------------------------
+// Target advertisement types
+// ---------------------------------------------------------------------------
+
+export interface RemoteTargetInfo {
+  targetId: string;
+  title: string;
+  url: string;
+}
+
+export interface TrayTargetEntry {
+  targetId: string;       // Unique within the tray: "{runtimeId}:{localTargetId}"
+  localTargetId: string;  // The original targetId on the owning runtime
+  runtimeId: string;      // Which runtime owns this target
+  title: string;
+  url: string;
+  isLocal: boolean;       // True if owned by the receiving runtime (set by consumer, not registry)
+}
 
 export type TraySyncMessage = LeaderToFollowerMessage | FollowerToLeaderMessage;
 
