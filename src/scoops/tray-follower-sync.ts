@@ -34,6 +34,7 @@ export class FollowerSyncManager implements AgentHandle {
   private readonly eventListeners = new Set<(event: AgentEvent) => void>();
   private readonly unsubscribe: () => void;
   private latestSnapshot: { messages: ChatMessage[]; scoopJid: string } | null = null;
+  private readonly sentMessageIds = new Set<string>();
 
   constructor(
     channel: TrayDataChannelLike,
@@ -60,6 +61,7 @@ export class FollowerSyncManager implements AgentHandle {
 
   sendMessage(text: string, messageId?: string): void {
     const id = messageId ?? `follower-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    this.sentMessageIds.add(id);
     this.sync.send({ type: 'user_message', text, messageId: id });
     log.info('Sent user message to leader', { messageId: id });
   }
@@ -113,6 +115,11 @@ export class FollowerSyncManager implements AgentHandle {
         break;
 
       case 'user_message_echo':
+        if (this.sentMessageIds.has(message.messageId)) {
+          this.sentMessageIds.delete(message.messageId);
+          log.debug('Skipping own message echo', { messageId: message.messageId });
+          break;
+        }
         log.info('User message echo received', { messageId: message.messageId, scoopJid: message.scoopJid });
         this.options.onUserMessage?.(message.text, message.messageId, message.scoopJid);
         break;

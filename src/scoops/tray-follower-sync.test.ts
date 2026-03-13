@@ -201,6 +201,71 @@ describe('FollowerSyncManager', () => {
         scoopJid: 'cone',
       });
     });
+
+    it('skips user_message_echo for own messages (dedup)', () => {
+      const channel = new FakeChannel();
+      const onUserMessage = vi.fn();
+      const follower = new FollowerSyncManager(channel, { onUserMessage });
+
+      // Follower sends a message (which tracks the ID)
+      follower.sendMessage('hello from follower', 'msg-123');
+
+      // Leader echoes it back
+      channel.simulateLeaderMessage({
+        type: 'user_message_echo',
+        text: 'hello from follower',
+        messageId: 'msg-123',
+        scoopJid: 'cone',
+      });
+
+      // Should NOT trigger onUserMessage since it is the follower's own echo
+      expect(onUserMessage).not.toHaveBeenCalled();
+    });
+
+    it('displays user_message_echo from other sources (not own)', () => {
+      const channel = new FakeChannel();
+      const onUserMessage = vi.fn();
+      const follower = new FollowerSyncManager(channel, { onUserMessage });
+
+      // Leader sends a user message echo from the leader or another follower
+      channel.simulateLeaderMessage({
+        type: 'user_message_echo',
+        text: 'hello from leader',
+        messageId: 'msg-456',
+        scoopJid: 'cone',
+      });
+
+      // Should trigger onUserMessage
+      expect(onUserMessage).toHaveBeenCalledWith('hello from leader', 'msg-456', 'cone');
+    });
+
+    it('only deduplicates each message ID once (single use)', () => {
+      const channel = new FakeChannel();
+      const onUserMessage = vi.fn();
+      const follower = new FollowerSyncManager(channel, { onUserMessage });
+
+      // Follower sends a message
+      follower.sendMessage('repeat test', 'msg-789');
+
+      // First echo: suppressed
+      channel.simulateLeaderMessage({
+        type: 'user_message_echo',
+        text: 'repeat test',
+        messageId: 'msg-789',
+        scoopJid: 'cone',
+      });
+      expect(onUserMessage).not.toHaveBeenCalled();
+
+      // Second echo with same ID (unlikely but defensive): not suppressed
+      channel.simulateLeaderMessage({
+        type: 'user_message_echo',
+        text: 'repeat test',
+        messageId: 'msg-789',
+        scoopJid: 'cone',
+      });
+      expect(onUserMessage).toHaveBeenCalledTimes(1);
+      expect(onUserMessage).toHaveBeenCalledWith('repeat test', 'msg-789', 'cone');
+    });
   });
 
   describe('status handling', () => {

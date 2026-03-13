@@ -1113,11 +1113,12 @@ async function main(): Promise<void> {
       let leaderTray!: LeaderTrayManager;
       const leaderSync = new LeaderSyncManager({
         getMessages: () => {
-          if (!selectedScoop) return [];
-          return scoopMessageBuffers.get(selectedScoop.jid) ?? [];
+          return layout.panels.chat.getMessages();
         },
         getScoopJid: () => selectedScoop?.jid ?? 'cone',
         onFollowerMessage: (text, messageId) => {
+          // Display the follower's message in the leader's chat panel
+          layout.panels.chat.addUserMessage(text);
           // Route follower messages through the same path as local user messages.
           // coneAgentHandle.sendMessage broadcasts user_message_echo to all followers.
           coneAgentHandle.sendMessage(text, messageId);
