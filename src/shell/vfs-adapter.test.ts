@@ -84,6 +84,50 @@ describe('VfsAdapter', () => {
     });
   });
 
+  describe('cp — recursive directory copy', () => {
+    it('copies a single file', async () => {
+      await adapter.writeFile('/src.txt', 'hello');
+      await adapter.cp('/src.txt', '/dest.txt');
+      const content = await adapter.readFile('/dest.txt');
+      expect(content).toBe('hello');
+    });
+
+    it('throws EISDIR for directory without recursive flag', async () => {
+      await vfs.mkdir('/mydir', { recursive: true });
+      await vfs.writeFile('/mydir/file.txt', 'data');
+      await expect(adapter.cp('/mydir', '/copy')).rejects.toMatchObject({ code: 'EISDIR' });
+    });
+
+    it('copies a directory recursively', async () => {
+      await vfs.mkdir('/src/sub', { recursive: true });
+      await vfs.writeFile('/src/a.txt', 'aaa');
+      await vfs.writeFile('/src/sub/b.txt', 'bbb');
+
+      await adapter.cp('/src', '/dest', { recursive: true });
+
+      expect(await adapter.readFile('/dest/a.txt')).toBe('aaa');
+      expect(await adapter.readFile('/dest/sub/b.txt')).toBe('bbb');
+    });
+
+    it('copies nested directory structure', async () => {
+      await vfs.mkdir('/root/d1/d2/d3', { recursive: true });
+      await vfs.writeFile('/root/d1/d2/d3/deep.txt', 'deep');
+      await vfs.writeFile('/root/top.txt', 'top');
+
+      await adapter.cp('/root', '/copy', { recursive: true });
+
+      expect(await adapter.readFile('/copy/top.txt')).toBe('top');
+      expect(await adapter.readFile('/copy/d1/d2/d3/deep.txt')).toBe('deep');
+    });
+
+    it('copies empty directory', async () => {
+      await vfs.mkdir('/empty', { recursive: true });
+      await adapter.cp('/empty', '/empty-copy', { recursive: true });
+      const entries = await adapter.readdir('/empty-copy');
+      expect(entries).toEqual([]);
+    });
+  });
+
   describe('virtual /usr/bin directory', () => {
     beforeEach(() => {
       adapter.setRegisteredCommandsFn(() => ['ls', 'cat', 'node', 'git']);

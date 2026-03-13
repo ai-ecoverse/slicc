@@ -115,6 +115,7 @@ import {
   getAvailableProviders,
   getProviderConfig,
   saveOAuthAccount,
+  getOAuthAccountInfo,
 } from './provider-settings.js';
 import type { ProviderDefault } from './provider-settings.js';
 
@@ -645,5 +646,67 @@ describe('OAuth account storage', () => {
     expect(accounts).toHaveLength(1);
     expect(accounts[0].accessToken).toBe('token-2');
     expect(accounts[0].userName).toBe('updated@example.com');
+  });
+});
+
+describe('getOAuthAccountInfo', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('returns null when no account exists', () => {
+    expect(getOAuthAccountInfo('nonexistent')).toBeNull();
+  });
+
+  it('returns null when account has no accessToken', () => {
+    addAccount('anthropic', 'sk-ant-123');
+    expect(getOAuthAccountInfo('anthropic')).toBeNull();
+  });
+
+  it('returns token info for OAuth account', () => {
+    const expiresAt = Date.now() + 3600000;
+    saveOAuthAccount({
+      providerId: 'test-oauth',
+      accessToken: 'tok-123',
+      tokenExpiresAt: expiresAt,
+      userName: 'karl@example.com',
+    });
+    const info = getOAuthAccountInfo('test-oauth');
+    expect(info).not.toBeNull();
+    expect(info!.token).toBe('tok-123');
+    expect(info!.expiresAt).toBe(expiresAt);
+    expect(info!.userName).toBe('karl@example.com');
+    expect(info!.expired).toBe(false);
+  });
+
+  it('marks token as expired when past expiry minus 60s buffer', () => {
+    saveOAuthAccount({
+      providerId: 'test-oauth',
+      accessToken: 'tok-expired',
+      tokenExpiresAt: Date.now() - 1000, // expired 1s ago
+    });
+    const info = getOAuthAccountInfo('test-oauth');
+    expect(info).not.toBeNull();
+    expect(info!.expired).toBe(true);
+  });
+
+  it('marks token as expired when within 60s buffer', () => {
+    saveOAuthAccount({
+      providerId: 'test-oauth',
+      accessToken: 'tok-almost',
+      tokenExpiresAt: Date.now() + 30000, // 30s from now (within 60s buffer)
+    });
+    const info = getOAuthAccountInfo('test-oauth');
+    expect(info!.expired).toBe(true);
+  });
+
+  it('returns expired false when no tokenExpiresAt', () => {
+    saveOAuthAccount({
+      providerId: 'test-oauth',
+      accessToken: 'tok-forever',
+    });
+    const info = getOAuthAccountInfo('test-oauth');
+    expect(info!.expired).toBe(false);
   });
 });
