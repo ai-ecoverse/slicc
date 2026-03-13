@@ -221,40 +221,41 @@ export class BrowserAPI {
       if (options?.quality !== undefined) params['quality'] = options.quality;
 
       if (options?.clip || options?.fullPage) {
-        // Detect DPR from layout metrics to normalize output to 1x.
-        // layoutViewport is in device pixels, cssLayoutViewport is in CSS pixels.
-        // Their ratio gives us the effective DPR.
+        // Get DPR and CSS dimensions via Runtime.evaluate — reliable in all
+        // contexts (CLI, extension, with or without Emulation overrides).
         // Output formula: image_px = clip_css_px × scale × DPR
         // For 1x output: scale = 1/DPR
-        const metrics = await this.client.send(
-          'Page.getLayoutMetrics',
-          {},
-          this.sessionId!,
-        );
-        const layoutVp = metrics['layoutViewport'] as { clientWidth: number };
-        const cssVp = metrics['cssLayoutViewport'] as { clientWidth: number } | undefined;
-        const dpr = cssVp ? layoutVp.clientWidth / cssVp.clientWidth : 1;
+        let dpr = 1;
+        let cssWidth = 0;
+        let cssScrollHeight = 0;
+        try {
+          await this.client.send('Runtime.enable', {}, this.sessionId!);
+          const evalResult = await this.client.send(
+            'Runtime.evaluate',
+            {
+              expression: 'JSON.stringify({ dpr: window.devicePixelRatio, w: window.innerWidth, h: document.documentElement.scrollHeight })',
+              returnByValue: true,
+            },
+            this.sessionId!,
+          );
+          const val = JSON.parse((evalResult['result'] as { value?: string })?.value ?? '{}');
+          dpr = val.dpr ?? 1;
+          cssWidth = val.w ?? 0;
+          cssScrollHeight = val.h ?? 0;
+        } catch {
+          // Best-effort — fall back to no DPR normalization
+        }
         const scale = dpr > 1 ? 1 / dpr : 1;
 
         if (options?.clip) {
           params['clip'] = { ...options.clip, scale: options.clip.scale ?? scale };
         } else {
-          // Full-page: use CSS viewport width + CSS content height.
-          const cssContent = metrics['cssContentSize'] as {
-            width: number;
-            height: number;
-          } | undefined;
-          const contentSize = metrics['contentSize'] as {
-            width: number;
-            height: number;
-          };
-          const clipWidth = cssVp?.clientWidth ?? layoutVp.clientWidth;
-          const clipHeight = cssContent?.height ?? contentSize.height;
+          // Full-page: CSS viewport width + CSS scroll height
           params['clip'] = {
             x: 0,
             y: 0,
-            width: clipWidth,
-            height: clipHeight,
+            width: cssWidth || 1280,
+            height: cssScrollHeight || 800,
             scale,
           };
         }

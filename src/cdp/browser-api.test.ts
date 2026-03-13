@@ -272,12 +272,8 @@ describe('BrowserAPI', () => {
 
     it('full page screenshot at DPR 1 uses CSS dimensions with scale 1', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({
-          contentSize: { width: 1280, height: 5000 },
-          layoutViewport: { clientWidth: 1280 },
-          cssLayoutViewport: { clientWidth: 1280 },
-          cssContentSize: { width: 1280, height: 5000 },
-        }) // getLayoutMetrics (DPR 1)
+        .mockResolvedValueOnce({}) // Runtime.enable
+        .mockResolvedValueOnce({ result: { value: '{"dpr":1,"w":1280,"h":5000}' } }) // Runtime.evaluate
         .mockResolvedValueOnce({ data: 'fullpage' }); // captureScreenshot
 
       const data = await api.screenshot({ fullPage: true });
@@ -295,12 +291,8 @@ describe('BrowserAPI', () => {
 
     it('full page screenshot at DPR 2 uses CSS dimensions with scale 0.5', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({
-          contentSize: { width: 2880, height: 6260 },
-          layoutViewport: { clientWidth: 2880 },
-          cssLayoutViewport: { clientWidth: 1440 },
-          cssContentSize: { width: 1440, height: 3130 },
-        }) // getLayoutMetrics (DPR 2)
+        .mockResolvedValueOnce({}) // Runtime.enable
+        .mockResolvedValueOnce({ result: { value: '{"dpr":2,"w":1440,"h":3130}' } }) // Runtime.evaluate
         .mockResolvedValueOnce({ data: 'hidpi' }); // captureScreenshot
 
       const data = await api.screenshot({ fullPage: true });
@@ -318,10 +310,8 @@ describe('BrowserAPI', () => {
 
     it('passes through provided clip with DPR-normalized scale', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({
-          layoutViewport: { clientWidth: 2560 },
-          cssLayoutViewport: { clientWidth: 1280 },
-        }) // getLayoutMetrics (DPR = 2560/1280 = 2)
+        .mockResolvedValueOnce({}) // Runtime.enable
+        .mockResolvedValueOnce({ result: { value: '{"dpr":2,"w":1280,"h":3000}' } }) // Runtime.evaluate
         .mockResolvedValueOnce({ data: 'clipped' }); // captureScreenshot
 
       const data = await api.screenshot({ clip: { x: 10, y: 20, width: 300, height: 400 } });
