@@ -382,9 +382,50 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   );
   (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
 
-  // Register handler so the offscreen proxy can relay sprinkle operations here
-  const { registerSprinkleOpsHandler } = await import('../extension/sprinkle-proxy.js');
-  registerSprinkleOpsHandler(sprinkleManager);
+  // Register handler so the offscreen proxy can relay sprinkle operations here.
+  // Routed through the OffscreenClient's existing onMessage listener to ensure delivery.
+  client.setSprinkleOpHandler((payload: any) => {
+    const { id, op, name, data } = payload;
+    (async () => {
+      try {
+        let result: unknown;
+        switch (op) {
+          case 'list':
+            await sprinkleManager.refresh();
+            result = sprinkleManager.available();
+            break;
+          case 'opened':
+            result = sprinkleManager.opened();
+            break;
+          case 'refresh':
+            await sprinkleManager.refresh();
+            result = sprinkleManager.available().length;
+            break;
+          case 'open':
+            await sprinkleManager.open(name);
+            result = true;
+            break;
+          case 'close':
+            sprinkleManager.close(name);
+            result = true;
+            break;
+          case 'send':
+            sprinkleManager.sendToSprinkle(name, data);
+            result = true;
+            break;
+        }
+        (chrome as any).runtime.sendMessage({
+          source: 'panel',
+          payload: { type: 'sprinkle-op-response', id, result },
+        }).catch(() => {});
+      } catch (err) {
+        (chrome as any).runtime.sendMessage({
+          source: 'panel',
+          payload: { type: 'sprinkle-op-response', id, error: err instanceof Error ? err.message : String(err) },
+        }).catch(() => {});
+      }
+    })();
+  });
 
   await sprinkleManager.refresh();
   layout.onSprinkleClose = (name) => sprinkleManager.close(name);
