@@ -2,11 +2,9 @@
  * Sprinkle Manager Proxy — lightweight proxy for the offscreen document.
  *
  * The real SprinkleManager runs in the side panel (it needs DOM access).
- * This proxy exposes the same interface but relays operations via
- * chrome.runtime messaging (broadcast pattern with ID matching, same
- * as the CDP proxy pattern used throughout the extension).
- *
- * Flow: offscreen → broadcast request → panel handles → broadcast response → offscreen
+ * This proxy exposes the same interface but relays operations via the
+ * extension's chrome.runtime messaging. Response handling uses a
+ * callback map instead of temporary onMessage listeners.
  */
 
 import type { SprinkleManager } from '../ui/sprinkle-manager.js';
@@ -19,6 +17,26 @@ interface Sprinkle {
 
 const TIMEOUT = 8000;
 
+/** Pending request callbacks, keyed by request ID. */
+const pendingRequests = new Map<string, {
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}>();
+
+/**
+ * Called by the offscreen bridge when it receives a sprinkle-op-response
+ * from the side panel. This must be wired in offscreen-bridge.ts.
+ */
+export function handleSprinkleOpResponse(payload: { id: string; result?: unknown; error?: string }): void {
+  const pending = pendingRequests.get(payload.id);
+  if (!pending) return;
+  pendingRequests.delete(payload.id);
+  clearTimeout(pending.timer);
+  if (payload.error) pending.reject(new Error(payload.error));
+  else pending.resolve(payload.result);
+}
+
 /**
  * Creates a proxy that implements the SprinkleManager interface.
  * Runs in the offscreen document.
@@ -29,31 +47,24 @@ export function createSprinkleManagerProxy(): SprinkleManager {
     const id = `sp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        (chrome as any).runtime.onMessage.removeListener(handler);
+        pendingRequests.delete(id);
         reject(new Error('sprinkle operation timed out'));
       }, TIMEOUT);
 
-      function handler(message: any): void {
-        if (message?.source !== 'panel') return;
-        if (message?.payload?.type !== 'sprinkle-op-response') return;
-        if (message?.payload?.id !== id) return;
-        (chrome as any).runtime.onMessage.removeListener(handler);
-        clearTimeout(timer);
-        if (message.payload.error) reject(new Error(message.payload.error));
-        else resolve(message.payload.result);
-      }
+      pendingRequests.set(id, { resolve, reject, timer });
 
-      (chrome as any).runtime.onMessage.addListener(handler);
-
-      // Broadcast the request — panel will pick it up
+      // Broadcast the request — panel will pick it up via OffscreenClient
       (chrome as any).runtime.sendMessage({
         source: 'offscreen',
         payload: { type: 'sprinkle-op', id, op, ...args },
-      }).catch(() => {});
+      }).catch(() => {
+        pendingRequests.delete(id);
+        clearTimeout(timer);
+        reject(new Error('failed to send sprinkle op'));
+      });
     });
   }
 
-  // Cached state from last refresh — enables synchronous available()/opened()
   let cachedAvailable: Sprinkle[] = [];
   let cachedOpened: string[] = [];
 
@@ -79,4 +90,3 @@ export function createSprinkleManagerProxy(): SprinkleManager {
     },
   } as unknown as SprinkleManager;
 }
-

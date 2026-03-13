@@ -317,6 +317,14 @@ export class OffscreenBridge {
         // Only handle messages from the panel (relayed by service worker)
         if (msg.source !== 'panel') return false;
 
+        // Route sprinkle-op-response to the proxy's pending request map
+        if ((msg.payload as any)?.type === 'sprinkle-op-response') {
+          import('./sprinkle-proxy.js').then(({ handleSprinkleOpResponse }) => {
+            handleSprinkleOpResponse(msg.payload as any);
+          });
+          return false;
+        }
+
         this.handlePanelMessage(msg.payload as PanelToOffscreenMessage).catch((err) => {
           console.error('[offscreen-bridge] handlePanelMessage error:', err);
           // Surface error to the panel so the user sees something instead of a silent hang
