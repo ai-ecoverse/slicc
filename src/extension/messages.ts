@@ -64,6 +64,10 @@ export interface RefreshModelMsg {
   type: 'refresh-model';
 }
 
+export interface RefreshTrayRuntimeMsg {
+  type: 'refresh-tray-runtime';
+}
+
 export interface PanelCdpCommandMsg {
   type: 'panel-cdp-command';
   id: number;
@@ -90,6 +94,7 @@ export type PanelToOffscreenMessage =
   | ClearChatMsg
   | ClearFilesystemMsg
   | RefreshModelMsg
+  | RefreshTrayRuntimeMsg
   | PanelCdpCommandMsg
   | OAuthRequestMsg;
 
@@ -217,13 +222,57 @@ export interface CdpEventMsg {
 
 export type CdpProxyMessage = CdpCommandMsg | CdpResponseMsg | CdpEventMsg;
 
+export interface TraySocketOpenMsg {
+  type: 'tray-socket-open';
+  id: number;
+  url: string;
+}
+
+export interface TraySocketSendMsg {
+  type: 'tray-socket-send';
+  id: number;
+  data: string;
+}
+
+export interface TraySocketCloseMsg {
+  type: 'tray-socket-close';
+  id: number;
+  code?: number;
+  reason?: string;
+}
+
+export interface TraySocketOpenedMsg {
+  type: 'tray-socket-opened';
+  id: number;
+}
+
+export interface TraySocketMessageMsg {
+  type: 'tray-socket-message';
+  id: number;
+  data: string;
+}
+
+export interface TraySocketErrorMsg {
+  type: 'tray-socket-error';
+  id: number;
+  error?: string;
+}
+
+export interface TraySocketClosedMsg {
+  type: 'tray-socket-closed';
+  id: number;
+}
+
+export type TraySocketCommandMessage = TraySocketOpenMsg | TraySocketSendMsg | TraySocketCloseMsg;
+export type TraySocketEventMessage = TraySocketOpenedMsg | TraySocketMessageMsg | TraySocketErrorMsg | TraySocketClosedMsg;
+
 // ---------------------------------------------------------------------------
 // Envelope — all messages are wrapped with a source tag for routing
 // ---------------------------------------------------------------------------
 
 export interface OffscreenEnvelope {
   source: 'offscreen';
-  payload: OffscreenToPanelMessage | CdpProxyMessage;
+  payload: OffscreenToPanelMessage | CdpProxyMessage | TraySocketCommandMessage;
 }
 
 export interface PanelEnvelope {
@@ -233,7 +282,7 @@ export interface PanelEnvelope {
 
 export interface ServiceWorkerEnvelope {
   source: 'service-worker';
-  payload: CdpProxyMessage | OAuthResultMsg;
+  payload: CdpProxyMessage | TraySocketEventMessage | OAuthResultMsg;
 }
 
 export type ExtensionMessage = OffscreenEnvelope | PanelEnvelope | ServiceWorkerEnvelope;

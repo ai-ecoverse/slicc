@@ -2,6 +2,7 @@ import type { Command } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import { createCommandsCommand } from './help-command.js';
 import { createConvertCommand } from './convert-command.js';
+import { createHostCommand } from './host-command.js';
 import {
   createImgcatCommand,
 } from './imgcat-command.js';
@@ -39,6 +40,7 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
   const commands: Command[] = [
     createCommandsCommand({ getJshCommands: options.getJshCommands }),
+    createHostCommand(),
     createServeCommand(),
     createOpenCommand(),
     createImgcatCommand(options),

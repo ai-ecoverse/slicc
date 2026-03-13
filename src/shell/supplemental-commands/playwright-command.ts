@@ -53,13 +53,13 @@ const sharedStateByBrowser = new WeakMap<BrowserAPI, WeakMap<VirtualFS, Playwrig
 
 /** Commands that invalidate ref snapshots because page state may have changed. */
 const SNAPSHOT_INVALIDATING_COMMANDS = new Set([
-  'click', 'dblclick', 'fill', 'type', 'press', 'goto', 'go-back', 'go-forward',
+  'click', 'dblclick', 'fill', 'type', 'press', 'goto', 'navigate', 'go-back', 'go-forward',
   'reload', 'select', 'check', 'uncheck', 'drag', 'dialog-accept', 'dialog-dismiss',
 ]);
 
 /** Commands that can safely auto-save a fresh accessibility snapshot after success. */
 const AUTO_SNAPSHOT_COMMANDS = new Set([
-  'click', 'dblclick', 'fill', 'type', 'press', 'goto',
+  'click', 'dblclick', 'fill', 'type', 'press', 'goto', 'navigate',
   'select', 'check', 'uncheck', 'drag', 'dialog-accept', 'dialog-dismiss',
 ]);
 
@@ -345,7 +345,11 @@ async function getActionablePages(
   state: PlaywrightState,
 ): Promise<PageInfo[]> {
   await resolveAppTabId(browser, state);
-  return (await browser.listPages()).filter((page) => isActionablePage(state, page));
+  // Use listAllTargets when available (includes remote tray targets)
+  const pages = typeof browser.listAllTargets === 'function'
+    ? await browser.listAllTargets()
+    : await browser.listPages();
+  return pages.filter((page) => isActionablePage(state, page));
 }
 
 /** Ensure we have a current target; auto-selects the active tab if needed. */
@@ -417,9 +421,10 @@ function formatHelp(commandName: string): string {
   return `Usage: ${commandName} <command> [args...]
 
 Commands:
-  open [url|/vfs/path] [--foreground|--fg]
+  open [url|/vfs/path] [--foreground|--fg] [--runtime=<id>]
                          Open a new tab (default: background). VFS paths are served via preview service worker.
-  goto <url>             Navigate current tab to URL
+                         Use --runtime to open the tab on a remote tray runtime (e.g. --runtime=follower-abc).
+  goto|navigate <url>    Navigate current tab to URL
   click <ref>            Click element by ref (e.g. e5)
   type <text>            Type text into focused element
   fill <ref> <text>      Fill an input by ref with text
@@ -440,8 +445,8 @@ Commands:
   go-forward             Navigate forward
   reload                 Reload current tab
   tab-list               List open tabs
-  tab-new [url] [--foreground|--fg]
-                         Open new tab (default: background)
+  tab-new [url] [--foreground|--fg] [--runtime=<id>]
+                         Open new tab (default: background). --runtime opens on a remote tray runtime.
   tab-select <index>     Switch to tab by index
   tab-close [index]      Close tab (default: current)
   close                  Close current tab
@@ -525,17 +530,25 @@ export function createPlaywrightCommand(
         case 'tab-new': {
           const url = positional[0] || 'about:blank';
           const foreground = flags['foreground'] === 'true' || flags['fg'] === 'true';
+          const runtimeFlag = flags['runtime'];
 
           const previousTarget = await ensureTarget(browser, state);
           await resolveAppTabId(browser, state);
-          const targetId = await browser.createPage(url);
+
+          let targetId: string;
+          if (runtimeFlag) {
+            // Open a tab on a remote runtime within the tray
+            targetId = await browser.createRemotePage(runtimeFlag, url);
+          } else {
+            targetId = await browser.createPage(url);
+          }
           if (foreground || !previousTarget) {
             state.currentTarget = targetId;
           }
           result = { stdout: `Opened tab (targetId: ${targetId}) at ${url}\n`, stderr: '', exitCode: 0 }; break;
         }
 
-        case 'goto': {
+        case 'goto': case 'navigate': {
           if (positional.length === 0) {
             result = { stdout: '', stderr: 'goto requires a URL\n', exitCode: 1 }; break;
           }
@@ -821,8 +834,10 @@ export function createPlaywrightCommand(
           const lines = pages.map((p, i) => {
             const isCurrent = p.targetId === state.currentTarget;
             const isActive = !!p.active;
+            const isRemote = p.targetId.includes(':');
             const marker = isCurrent ? '→ ' : isActive ? '* ' : '  ';
-            return `${marker}${i}: ${p.title} (${p.url})`;
+            const remoteSuffix = isRemote ? ` [remote:${p.targetId.substring(0, p.targetId.indexOf(':'))}]` : '';
+            return `${marker}${i}: ${p.title} (${p.url})${remoteSuffix}`;
           });
           result = { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 }; break;
         }

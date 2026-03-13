@@ -9,6 +9,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm run dev:full        # Full dev mode: Vite HMR + Chrome + CDP proxy (port 3000)
 npm run dev:electron -- /Applications/Slack.app  # Main CLI in Electron attach mode
 npm run dev             # Vite dev server only (no Chrome/CDP)
+npm run qa:setup        # Build dist/extension and scaffold dedicated leader/follower/extension Chrome QA profiles
+npm run qa:leader       # Launch CLI dev mode with the isolated leader Chrome profile, auto-connected to staging tray hub
+npm run qa:follower     # Launch CLI dev mode with the isolated follower Chrome profile
+npm run qa:extension    # Rebuild/load the unpacked extension in the isolated extension Chrome profile
 npm run build           # Production build (UI via Vite + CLI/Electron Node target via TSC)
 npm run build:ui        # Vite build only into dist/ui/
 npm run build:cli       # TSC build only into dist/cli/ (CLI server + Electron entrypoint)
@@ -21,6 +25,10 @@ npm run build:extension # Build extension into dist/extension/ (load in chrome:/
 # Shared
 npm run typecheck       # Typecheck browser + Node targets
 npm run test            # Vitest run (all tests)
+npx wrangler dev        # Run the Cloudflare Worker tray hub locally (requires Wrangler)
+npx wrangler deploy --env staging  # Deploy the staging tray hub (slicc-tray-hub-staging) from wrangler.jsonc
+npx wrangler deploy     # Deploy the Cloudflare Worker tray hub from wrangler.jsonc
+WORKER_BASE_URL=https://... npx vitest run src/worker/deployed.test.ts  # Smoke-test a deployed tray hub
 npm run test:watch      # Vitest watch mode
 npx vitest run src/fs/virtual-fs.test.ts  # Run a single test file
 ```
@@ -127,6 +135,9 @@ Key files:
 - **CLI/Electron Node target** (tsconfig.cli.json): Only src/cli/. Compiled by TSC to dist/cli/, module resolution: NodeNext. Runs in Node/Electron.
 - **Extension bundle** (vite.config.extension.ts): Same browser bundle with extension-specific entry points (service-worker.js, offscreen.html, sandbox.html, manifest.json) plus bundled Pyodide. Output: dist/extension/.
 
+Cloud tray hub scaffold:
+- **Cloudflare Worker / Durable Object** (`wrangler.jsonc` + `src/worker/`): separate Wrangler-managed runtime for `POST /tray`, controller attach, leader-only WebSocket control, deployed smoke tests, and webhook forwarding via `POST /webhook/:token/:webhookId` (reads the POST body, forwards a `webhook.event` control message to the leader over the existing WebSocket, returns 202 Accepted).
+
 ### Layer Stack (bottom-up)
 
 ```
@@ -142,6 +153,8 @@ Virtual Filesystem (src/fs/)
           -> CLI Server / Electron (src/cli/) | Extension (src/extension/)
 ```
 
+Cloud tray hub runtime lives alongside the main app in `src/worker/` and is deployed separately via Wrangler.
+
 ### The Cone and Scoops (src/scoops/)
 
 SLICC uses an ice cream theme for its multi-agent system. The **cone** is the main assistant (sliccy) that holds everything together. **Scoops** are isolated agent contexts stacked on top, each with their own tools, shell, and restricted filesystem.
@@ -153,6 +166,9 @@ SLICC uses an ice cream theme for its multi-agent system. The **cone** is the ma
 - **Delegation**: The cone feeds work to scoops via the `feed_scoop` tool, providing complete self-contained prompts (scoops have no access to the cone's conversation). When a scoop finishes, the orchestrator automatically routes its response back to the cone's message queue.
 - **Unified Filesystem**: One VirtualFS (`slicc-fs` IndexedDB). Cone gets unrestricted access. Each scoop gets a `RestrictedFS` limited to `/scoops/{name}/` + `/shared/`. Parent directory traversal is allowed for `stat`/`exists` (so `cd` works), but reads/writes outside the sandbox are blocked.
 - **DB** (`db.ts`): IndexedDB schema v3 with `scoops`, `messages`, `sessions`, `tasks`, `state`, `webhooks`, and `crontasks` stores. Migrates the old `groups` store to `scoops` and adds webhook/crontask persistence in v3.
+- **Tray sync protocol** (`tray-sync-protocol.ts`): Typed message protocol for leader↔follower communication over WebRTC data channels. Leader→follower messages: `snapshot`, `agent_event`, `user_message_echo`, `status`, `error`, `targets.registry`, `cdp.request`, `cdp.response`, `tab.open`, `tab.opened`, `tab.open.error`. Follower→leader messages: `user_message`, `abort`, `request_snapshot`, `targets.advertise`, `cdp.request`, `cdp.response`, `tab.open`, `tab.opened`, `tab.open.error`. Types `RemoteTargetInfo` and `TrayTargetEntry` define the target advertisement contract.
+- **TrayTargetRegistry** (`tray-target-registry.ts`): Pure-logic merged registry maintained by the leader. Each runtime advertises its local browser targets; the registry merges them into a unified `TrayTargetEntry[]` with composite `targetId` format `"{runtimeId}:{localTargetId}"`. The leader broadcasts the merged registry to all followers via `targets.registry`.
+- **Federated browser targets**: Runtimes in a tray advertise their local browser targets (via `targets.advertise`). The leader merges all targets into a global registry and broadcasts it (via `targets.registry`). Any runtime can then operate on remote targets — CDP commands are routed over the data channel (`cdp.request` → execute on owner → `cdp.response`). Remote tab opening uses `tab.open` → `tab.opened` / `tab.open.error` with the same leader-mediated routing pattern. The leader handles forwarding between followers. Leader sync (`tray-leader-sync.ts`) owns the `TrayTargetRegistry`, routes CDP between runtimes, and provides `openRemoteTab()`. Follower sync (`tray-follower-sync.ts`) provides `advertiseTargets()`, `getTargets()`, `createRemoteTransport()`, and `openRemoteTab()`. BrowserAPI exposes `createRemotePage(runtimeId, url)` via the `TrayTargetProvider`. The `playwright-cli open --runtime=<id>` flag triggers remote tab creation. The UI wires a 5-second periodic target refresh in `src/ui/main.ts`.
 
 ### Virtual Filesystem (src/fs/)
 POSIX-like async filesystem backed by LightningFS (IndexedDB). VirtualFS is the facade. FsError carries POSIX error codes (ENOENT, EISDIR, EACCES, etc.). All paths are absolute, forward-slash, normalized.
@@ -181,13 +197,14 @@ WasmShell wraps just-bash 2.11.7 (WASM Bash interpreter) and connects it to Virt
 - `node -e "code"` — Execute JavaScript
 - `python3 -c "code"` / `python -c "code"` — Execute Python via Pyodide
 - `open <path|url>` — Preview/serve VFS files or open URLs in a new browser tab. `--download` / `-d` forces file download. `--view` / `-v` returns image inline for agent vision (produces `<img:>` tag converted to `ImageContent` by tool adapter)
+- `host` — Report the current leader tray status and canonical launch URL
 - `zip/unzip` — Archive compression
-- `webhook` — Manage webhooks for event-driven automation
+- `webhook` — Manage webhooks for event-driven automation (URLs point to the tray worker when a tray is active, otherwise to the CLI server)
 - `crontask` — Schedule cron jobs that dispatch licks to scoops
 - `pdftk` / `pdf` — Inspect, extract, rotate, and merge PDFs
 - `mount` — Mount a local directory into the virtual filesystem via the File System Access API
 - `convert` / `magick` — ImageMagick-style image conversion (resize, rotate, crop, quality) via `@imagemagick/magick-wasm`
-- `playwright-cli` / `playwright` / `puppeteer` — Browser automation shell commands backed by `BrowserAPI`; aliases share the same tab/session state, snapshots, and session history
+- `playwright-cli` / `playwright` / `puppeteer` — Browser automation shell commands backed by `BrowserAPI`; aliases share the same tab/session state, snapshots, and session history. When connected to a tray, `tab-list` includes remote targets annotated with `[remote:runtimeId]`. Use `open --runtime=<id>` or `tab-new --runtime=<id>` to open a tab on a remote tray runtime.
 - `which <command>` — Resolve a command to its path (`/usr/bin/<name>` for built-ins, actual VFS path for `.jsh` files)
 - `uname` — Print the current browser user agent
 - `oauth-token` — Get an OAuth access token for a provider (auto-triggers login if needed)
@@ -223,6 +240,10 @@ CDPTransport interface (`transport.ts`) abstracts the underlying protocol. Two i
 - **DebuggerClient** (`debugger-client.ts`): Uses `chrome.debugger` API in extension mode. Intercepts `Target.*` commands and maps them to `chrome.tabs`/`chrome.debugger`. Manages tab attach/detach lifecycle with session-to-tab mapping.
 
 BrowserAPI: high-level Playwright-style API built on either transport (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree). Auto-selects transport based on extension detection. It underpins the `playwright-cli` / `playwright` / `puppeteer` shell-command path and the preview-serving commands built on top of browser tabs. TargetInfo and PageInfo types include `active` field (boolean, extension mode only) to identify the user's currently focused tab, enabling intelligent tool auto-dispatch. Screenshots normalize `devicePixelRatio` to 1 before capture (via `Emulation.setDeviceMetricsOverride`) and restore native metrics after, preventing 2x-oversized images on HiDPI displays. When DPR is already 1 (e.g. after an explicit `resize` command), normalization is skipped and the existing override is preserved. `captureBeyondViewport` is always enabled.
+
+**Federated Targets** (`TrayTargetProvider`, `listAllTargets()`): When connected to a tray, `BrowserAPI` can include remote targets (browser tabs owned by other SLICC instances). `setTrayTargetProvider(provider)` injects a `TrayTargetProvider` that supplies remote `TrayTargetEntry` objects. `listAllTargets()` returns local pages + remote tray targets; remote targets use `"{runtimeId}:{localTargetId}"` as their `targetId`. `attachToPage()` detects remote targets and swaps the underlying CDP transport to a `RemoteCDPTransport` for the duration of the session.
+
+**RemoteCDPTransport** (`remote-cdp-transport.ts`): A `CDPTransport` implementation that routes CDP commands over the tray WebRTC data channel to the remote runtime that owns the target browser tab. Uses a `RemoteCDPSender` interface (implemented by both `LeaderSyncManager` and `FollowerSyncManager`) to send `cdp.request` messages and receive `cdp.response` / CDP events back. Includes per-request timeout handling and clean disconnect semantics.
 
 **HarRecorder** (`har-recorder.ts`): Records network traffic from browser tabs as HAR 1.2 files. Supports user-provided JS filter functions (`(entry) => false | true | object`). Filter application is deferred to snapshot save time (batch, not per-entry) to support extension mode — in extensions, filter code is sent to the sandbox iframe (CSP-exempt) via `postMessage`; in CLI mode, compiled directly. Snapshots saved to `/recordings/{id}/` on navigation and recording stop. Graceful fallback: filter errors return unfiltered entries.
 
@@ -294,7 +315,7 @@ A Service Worker that intercepts `/preview/*` fetch requests and serves content 
 - MIME type mapping via inline `getMimeType()` (same logic as `src/core/mime-types.ts` but inlined since the SW is a separate bundle)
 
 ### CLI Server (src/cli/index.ts)
-Express server that launches Chrome with remote debugging, serves the UI (Vite middleware in dev, static files in prod), and runs a WebSocket proxy at /cdp. Provides `/api/fetch-proxy` endpoint for cross-origin fetch (replaces CORS proxy), and `/auth/callback` for OAuth redirect handling (reads query params + URL fragment, postMessages back to the opener popup). Single shared Chrome WebSocket connection with client message buffering. Console forwarder pipes in-page console output to CLI stdout. In Electron mode, this same server is reused in `--serve-only` mode instead of launching Chrome.
+Express server that launches Chrome with remote debugging, serves the UI (Vite middleware in dev, static files in prod), and runs a WebSocket proxy at /cdp. Provides `/api/fetch-proxy` endpoint for cross-origin fetch (replaces CORS proxy), and `/auth/callback` for OAuth redirect handling (reads query params + URL fragment, postMessages back to the opener popup). Single shared Chrome WebSocket connection with client message buffering. Console forwarder pipes in-page console output to CLI stdout. In Electron mode, this same server is reused in `--serve-only` mode instead of launching Chrome. QA/manual-verification flows use `src/cli/chrome-launch.ts` plus `--profile=<leader|follower|extension>` to select dedicated `.qa/chrome/*` user-data directories and auto-load `dist/extension` for the extension profile.
 
 ### Context Compaction (src/core/context-compaction.ts)
 LLM-summarized context compaction aligned with pi-mono's strategy. When context approaches the limit, an LLM call generates a structured summary of older messages, replacing them with a single user message. This preserves the conversation prefix (cache-friendly) and keeps recent messages intact.
@@ -370,6 +391,8 @@ npm run build:extension    # Extension build (Vite with extension config)
 Do not skip any. A typecheck pass does not guarantee the builds succeed (Vite bundling can fail independently). See `docs/development.md` for the full checklist.
 
 **CI**: These same four gates run automatically on every PR to `main` via GitHub Actions (`.github/workflows/ci.yml`).
+
+**Worker deploy CI**: the tray hub uses `.github/workflows/worker.yml` for both staging and production. It does not require separate GitHub environments: use the repo-level `CLOUDFLARE_API_TOKEN` secret plus `CLOUDFLARE_ACCOUNT_ID` variable, and let `cloudflare/wrangler-action` provide the deployed URL for `src/worker/deployed.test.ts`.
 
 ## Git Integration (src/git/)
 Git support via isomorphic-git with LightningFS as the backing store. GitCommands class provides CLI-like interface for git operations (init, clone, add, commit, status, log, branch, checkout, diff, remote, fetch, pull, push, config, rev-parse). Registered as a custom command in just-bash so it works in compound commands and via the bash tool.

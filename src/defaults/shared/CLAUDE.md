@@ -98,6 +98,9 @@ To close the current tab: `playwright-cli close`. To close a specific tab: `play
 - `*` = the user's active/focused tab in Chrome
 - These can differ! If the user switches tabs in Chrome, `*` moves but `→` stays. Use `tab-select` to follow the user's active tab when needed.
 
+**Remote targets (tray mode):**
+When connected to a tray, `playwright-cli tab-list` shows browser tabs from all connected SLICC instances. Remote targets appear with a `[remote:runtimeId]` annotation. Use `playwright-cli tab-select <index>` to target a remote tab, then use the usual commands (`snapshot`, `screenshot`, `click`, `fill`, etc.) — CDP commands are routed transparently over the tray data channel to the runtime that owns the tab. To open a new tab on a specific remote runtime, use `playwright-cli open <url> --runtime=<runtimeId>` or `playwright-cli tab-new <url> --runtime=<runtimeId>`.
+
 **Do NOT:**
 - Try to `read_file` on a PNG, `base64` encode it, or `convert` it to view images
 - Run `imgcat` or `cat` on screenshots expecting to see them yourself
@@ -125,7 +128,8 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **node -e / python3 -c** — Execute JavaScript or Python. JSH/node scripts have access to `exec(command)` to run shell commands: `const r = await exec('oauth-token adobe'); const token = r.stdout.trim();`
 - **serve <dir>** — Open a VFS app directory in a new browser tab. Defaults to `index.html`; use `--entry` to override the entry file.
 - **open <path|url>** — Open a URL or single VFS file in a new browser tab. Use `open --view` when you need to see an image inline. `.shtml` files are opened as sprinkles instead of browser tabs.
-- **playwright-cli** — Browser automation (built-in, no SKILL.md lookup needed). Key subcommands: `tab-list`, `tab-select <index>`, `snapshot`, `screenshot [--filename=<path>]`, `open <url>`, `click <ref>`, `fill <ref> "text"`, `close`. Run `playwright-cli --help` for full list.
+- **host** — Print the current leader tray status plus `launch_url` and `join_url`. When this runtime is leader, `launch_url` is the tray URL itself (`https://.../tray/<id>`).
+- **playwright-cli** — Browser automation (built-in, no SKILL.md lookup needed). Key subcommands: `tab-list`, `tab-select <index>`, `snapshot`, `screenshot [--filename=<path>]`, `open <url> [--runtime=<id>]`, `click <ref>`, `fill <ref> "text"`, `close`. Use `--runtime` with `open`/`tab-new` to open a tab on a remote tray runtime. Run `playwright-cli --help` for full list.
 
 ## Environment: This Is NOT a Regular Linux Box
 

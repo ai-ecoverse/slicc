@@ -5,6 +5,8 @@ dist/
 /workspace/
 coverage/
 .worktrees/
+.wrangler/
+.qa/
 providers.json
 /providers/
 !/providers/.gitkeep
