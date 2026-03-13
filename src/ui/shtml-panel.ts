@@ -35,6 +35,13 @@ export class ShtmlPanelRenderer {
     wrapper.innerHTML = content;
     this.container.appendChild(wrapper);
 
+    // Auto-set width on .fill elements from data-value attribute
+    // so agents can write <div class="fill" data-value="75"> instead of inline style
+    for (const fill of wrapper.querySelectorAll<HTMLElement>('.fill[data-value]')) {
+      const v = parseFloat(fill.dataset.value || '0');
+      if (v >= 0 && v <= 100) fill.style.width = `${v}%`;
+    }
+
     // Extract <script> tags and re-create them as live elements.
     // Scripts inserted via innerHTML don't execute, so we remove each dead
     // script and append a fresh <script> element to the wrapper.
@@ -48,10 +55,26 @@ export class ShtmlPanelRenderer {
       }
       // Inject bridge access preamble + original code.
       // Also set window.slicc so onclick attributes (which run in global scope) can use it.
+      // Functions called from onclick must be hoisted to window since the script
+      // runs inside an IIFE. We detect function names from onclick attributes and
+      // append window assignments after the user code.
       if (!dead.src) {
+        // Collect function names referenced by onclick attributes in the panel
+        const onclickFns = new Set<string>();
+        for (const el of wrapper.querySelectorAll('[onclick]')) {
+          const attr = el.getAttribute('onclick') || '';
+          // Match bare function calls like "doThing()" or "doThing(args)"
+          const match = attr.match(/^(\w+)\s*\(/);
+          if (match && match[1] !== 'slicc') onclickFns.add(match[1]);
+        }
+        const hoists = [...onclickFns]
+          .map(fn => `if (typeof ${fn} === 'function') window.${fn} = ${fn};`)
+          .join('\n');
+
         live.textContent =
           `(function() { var slicc = window.__slicc_panels[${JSON.stringify(panelName)}]; window.slicc = slicc;\n` +
           dead.textContent +
+          (hoists ? '\n' + hoists : '') +
           '\n})();';
       }
       wrapper.appendChild(live);

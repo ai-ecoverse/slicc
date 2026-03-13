@@ -97,6 +97,7 @@
         --s2-font-size-200:  16px;
         --s2-font-size-300:  18px;
         --s2-font-size-400:  20px;
+        --s2-font-size-500:  22px;
         --s2-font-size-600:  25px;
 
         /* Line heights */
@@ -1150,33 +1151,43 @@
       /* Panel content wrapper */
       .shtml-panel-content { padding: var(--s2-spacing-200); }
 
-      /* Cards */
+      /* ── Cards (S2 Cards — flex variant, 10px radius, shadow instead of border) ── */
       .shtml-card {
         background: var(--s2-bg-layer-2);
-        border: 1px solid var(--s2-border-subtle);
         border-radius: var(--s2-radius-l);
         padding: var(--s2-spacing-300);
         margin-bottom: var(--s2-spacing-200);
+        box-shadow: var(--s2-shadow-container);
+        transition: box-shadow 130ms ease;
+      }
+      .shtml-card:hover {
+        box-shadow: var(--s2-shadow-elevated);
       }
       .shtml-stat-card {
         background: var(--s2-bg-layer-2);
-        border: 1px solid var(--s2-border-subtle);
         border-radius: var(--s2-radius-l);
         padding: var(--s2-spacing-200) var(--s2-spacing-300);
         text-align: center;
+        box-shadow: var(--s2-shadow-container);
+        transition: box-shadow 130ms ease;
+      }
+      .shtml-stat-card:hover {
+        box-shadow: var(--s2-shadow-elevated);
       }
       .shtml-stat-card .value {
         font-size: var(--s2-font-size-500);
-        font-weight: 700;
+        font-weight: 800;
         color: var(--s2-content-default);
+        line-height: 1.2;
       }
       .shtml-stat-card .label {
         font-size: var(--s2-font-size-75);
+        font-weight: 500;
         color: var(--s2-content-secondary);
         margin-top: var(--s2-spacing-50);
       }
 
-      /* Tables */
+      /* ── Tables (S2 Table — no uppercase, no letter-spacing, proper hierarchy) ── */
       .shtml-table {
         width: 100%; border-collapse: collapse;
         font-size: var(--s2-font-size-75);
@@ -1186,8 +1197,8 @@
         padding: var(--s2-spacing-100) var(--s2-spacing-200);
         border-bottom: 2px solid var(--s2-border-default);
         color: var(--s2-content-secondary);
-        font-weight: 600; font-size: var(--s2-font-size-50);
-        text-transform: uppercase; letter-spacing: 0.5px;
+        font-weight: 700;
+        font-size: var(--s2-font-size-75);
       }
       .shtml-table td {
         padding: var(--s2-spacing-100) var(--s2-spacing-200);
@@ -1198,22 +1209,43 @@
         background: color-mix(in srgb, var(--s2-bg-elevated) 50%, transparent);
       }
 
-      /* Badges */
+      /* ── Badges (S2 Badge — bold style default, 8px radius, solid fill + white text) ── */
       .shtml-badge {
-        display: inline-block;
-        padding: 2px 8px; border-radius: var(--s2-radius-pill);
-        font-size: var(--s2-font-size-50); font-weight: 600;
-        background: var(--s2-bg-elevated);
+        display: inline-flex; align-items: center;
+        padding: 3px 8px; border-radius: var(--s2-radius-default);
+        font-size: var(--s2-font-size-50); font-weight: 500;
+        line-height: var(--s2-line-height-50);
+        /* neutral/gray — bold style default */
+        background: var(--s2-gray-400); color: #fff;
+      }
+      .shtml-badge--positive { background: var(--s2-positive); color: #fff; }
+      .shtml-badge--negative { background: var(--s2-negative); color: #fff; }
+      .shtml-badge--notice { background: var(--s2-notice); color: #fff; }
+      .shtml-badge--informative { background: var(--s2-informative); color: #fff; }
+      .shtml-badge--accent { background: var(--s2-accent); color: #fff; }
+      /* subtle style variant — tinted backgrounds with colored text */
+      .shtml-badge--subtle {
+        background: color-mix(in srgb, var(--s2-gray-400) 15%, transparent);
         color: var(--s2-content-secondary);
       }
-      .shtml-badge--positive { background: color-mix(in srgb, var(--s2-positive) 15%, transparent); color: var(--s2-positive); }
-      .shtml-badge--negative { background: color-mix(in srgb, var(--s2-negative) 15%, transparent); color: var(--s2-negative); }
-      .shtml-badge--notice { background: color-mix(in srgb, var(--s2-notice) 15%, transparent); color: var(--s2-notice); }
-      .shtml-badge--informative { background: color-mix(in srgb, var(--s2-informative) 15%, transparent); color: var(--s2-informative); }
+      .shtml-badge--subtle.shtml-badge--positive { background: color-mix(in srgb, var(--s2-positive) 15%, transparent); color: var(--s2-positive); }
+      .shtml-badge--subtle.shtml-badge--negative { background: color-mix(in srgb, var(--s2-negative) 15%, transparent); color: var(--s2-negative); }
+      .shtml-badge--subtle.shtml-badge--notice { background: color-mix(in srgb, var(--s2-notice) 15%, transparent); color: var(--s2-notice); }
+      .shtml-badge--subtle.shtml-badge--informative { background: color-mix(in srgb, var(--s2-informative) 15%, transparent); color: var(--s2-informative); }
+      .shtml-badge--subtle.shtml-badge--accent { background: color-mix(in srgb, var(--s2-accent) 15%, transparent); color: var(--s2-accent); }
+      /* outline style variant — stroke with no fill */
+      .shtml-badge--outline {
+        background: transparent; color: var(--s2-content-secondary);
+        box-shadow: inset 0 0 0 1px var(--s2-border-default);
+      }
+      .shtml-badge--outline.shtml-badge--positive { color: var(--s2-positive); box-shadow: inset 0 0 0 1px var(--s2-positive); }
+      .shtml-badge--outline.shtml-badge--negative { color: var(--s2-negative); box-shadow: inset 0 0 0 1px var(--s2-negative); }
+      .shtml-badge--outline.shtml-badge--notice { color: var(--s2-notice); box-shadow: inset 0 0 0 1px var(--s2-notice); }
+      .shtml-badge--outline.shtml-badge--informative { color: var(--s2-informative); box-shadow: inset 0 0 0 1px var(--s2-informative); }
 
-      /* Status lights */
+      /* ── Status Lights (S2 Status Light — dot + label) ── */
       .shtml-status-light {
-        display: inline-flex; align-items: center; gap: 6px;
+        display: inline-flex; align-items: center; gap: var(--s2-spacing-75);
         font-size: var(--s2-font-size-75);
         color: var(--s2-content-default);
       }
@@ -1225,30 +1257,119 @@
       .shtml-status-light--positive::before { background: var(--s2-positive); }
       .shtml-status-light--negative::before { background: var(--s2-negative); }
       .shtml-status-light--notice::before { background: var(--s2-notice); }
+      .shtml-status-light--informative::before { background: var(--s2-informative); }
 
-      /* Progress bar */
+      /* ── Progress Bar (S2 Progress Bar — label + value above, track + fill) ── */
       .shtml-progress-bar {
-        height: 6px; border-radius: var(--s2-radius-pill);
-        background: var(--s2-bg-sunken); overflow: hidden;
+        display: flex; flex-direction: column; gap: var(--s2-spacing-75);
+        --_bar-color: var(--s2-accent);
       }
-      .shtml-progress-bar .fill {
+      .shtml-progress-bar--positive { --_bar-color: var(--s2-positive); }
+      .shtml-progress-bar--negative { --_bar-color: var(--s2-negative); }
+      .shtml-progress-bar--notice   { --_bar-color: var(--s2-notice); }
+      .shtml-progress-bar--informative { --_bar-color: var(--s2-informative); }
+      .shtml-progress-bar__header {
+        display: flex; justify-content: space-between; align-items: baseline;
+        font-size: var(--s2-font-size-75); color: var(--s2-content-default);
+      }
+      .shtml-progress-bar__header .label { font-weight: 400; }
+      .shtml-progress-bar__header .value { font-weight: 400; color: var(--s2-content-secondary); }
+      .shtml-progress-bar__track {
+        height: 4px; border-radius: var(--s2-radius-pill);
+        background: var(--s2-gray-200); overflow: hidden;
+        position: relative;
+      }
+      .shtml-progress-bar__track .fill {
         height: 100%; border-radius: var(--s2-radius-pill);
-        background: var(--s2-accent);
+        background: var(--fill-color, var(--_bar-color, var(--s2-accent)));
         transition: width 300ms ease;
       }
+      /* Auto-fill via --progress custom property on parent */
+      .shtml-progress-bar__track::after {
+        content: ''; position: absolute; inset: 0; right: auto;
+        width: var(--progress, var(--value, 0%));
+        border-radius: var(--s2-radius-pill);
+        background: var(--fill-color, var(--_bar-color, var(--s2-accent)));
+        transition: width 300ms ease;
+      }
+      .shtml-progress-bar__track:has(> .fill)::after { display: none; }
+      /* Legacy / simple bar (no __track child) — also supports --progress custom prop */
+      .shtml-progress-bar:not(:has(.shtml-progress-bar__track)) {
+        height: 4px; width: 100%; border-radius: var(--s2-radius-pill);
+        background: var(--s2-gray-200); overflow: hidden;
+        flex-direction: row; position: relative;
+      }
+      .shtml-progress-bar:not(:has(.shtml-progress-bar__track)) > .fill {
+        height: 100%; border-radius: var(--s2-radius-pill);
+        background: var(--fill-color, var(--_bar-color, var(--s2-accent)));
+        transition: width 300ms ease;
+      }
+      /* Auto-fill via --progress custom property (agent writes style="--progress: 75%") */
+      .shtml-progress-bar:not(:has(.shtml-progress-bar__track))::after {
+        content: ''; position: absolute; inset: 0; right: auto;
+        width: var(--progress, var(--value, 0%));
+        border-radius: var(--s2-radius-pill);
+        background: var(--fill-color, var(--_bar-color, var(--s2-accent)));
+        transition: width 300ms ease;
+      }
+      /* Hide pseudo when a .fill child exists (it handles its own width) */
+      .shtml-progress-bar:not(:has(.shtml-progress-bar__track)):has(> .fill)::after {
+        display: none;
+      }
 
-      /* Meter */
+      /* ── Meter (S2 Meter — label + value above, track + fill, semantic variants) ── */
       .shtml-meter {
-        height: 8px; border-radius: var(--s2-radius-pill);
-        background: var(--s2-bg-sunken); overflow: hidden;
+        display: flex; flex-direction: column; gap: var(--s2-spacing-75);
+        --_meter-color: var(--s2-informative);
       }
-      .shtml-meter .fill {
+      .shtml-meter--positive { --_meter-color: var(--s2-positive); }
+      .shtml-meter--notice   { --_meter-color: var(--s2-notice); }
+      .shtml-meter--negative { --_meter-color: var(--s2-negative); }
+      .shtml-meter__header {
+        display: flex; justify-content: space-between; align-items: baseline;
+        font-size: var(--s2-font-size-75); color: var(--s2-content-default);
+      }
+      .shtml-meter__header .label { font-weight: 400; }
+      .shtml-meter__header .value { font-weight: 400; color: var(--s2-content-secondary); }
+      .shtml-meter__track {
+        height: 4px; border-radius: var(--s2-radius-pill);
+        background: var(--s2-gray-200); overflow: hidden;
+        position: relative;
+      }
+      .shtml-meter__track .fill {
         height: 100%; border-radius: var(--s2-radius-pill);
-        background: var(--s2-positive);
+        background: var(--fill-color, var(--_meter-color));
         transition: width 300ms ease;
       }
+      .shtml-meter__track::after {
+        content: ''; position: absolute; inset: 0; right: auto;
+        width: var(--progress, var(--value, 0%));
+        border-radius: var(--s2-radius-pill);
+        background: var(--fill-color, var(--_meter-color));
+        transition: width 300ms ease;
+      }
+      .shtml-meter__track:has(> .fill)::after { display: none; }
+      /* Legacy / simple meter (no __track child) */
+      .shtml-meter:not(:has(.shtml-meter__track)) {
+        height: 4px; width: 100%; border-radius: var(--s2-radius-pill);
+        background: var(--s2-gray-200); overflow: hidden;
+        flex-direction: row; position: relative;
+      }
+      .shtml-meter:not(:has(.shtml-meter__track)) > .fill {
+        height: 100%; border-radius: var(--s2-radius-pill);
+        background: var(--fill-color, var(--_meter-color));
+        transition: width 300ms ease;
+      }
+      .shtml-meter:not(:has(.shtml-meter__track))::after {
+        content: ''; position: absolute; inset: 0; right: auto;
+        width: var(--progress, var(--value, 0%));
+        border-radius: var(--s2-radius-pill);
+        background: var(--fill-color, var(--_meter-color));
+        transition: width 300ms ease;
+      }
+      .shtml-meter:not(:has(.shtml-meter__track)):has(> .fill)::after { display: none; }
 
-      /* Key-value list */
+      /* ── Key-Value List (supports <ul><li> with .key/.value, or <dl><dt><dd>) ── */
       .shtml-kv-list {
         list-style: none; padding: 0; margin: 0;
       }
@@ -1259,53 +1380,89 @@
         font-size: var(--s2-font-size-75);
       }
       .shtml-kv-list li:last-child { border-bottom: none; }
-      .shtml-kv-list .key { color: var(--s2-content-secondary); }
-      .shtml-kv-list .value { color: var(--s2-content-default); font-weight: 600; }
-
-      /* Buttons */
-      .shtml-btn {
-        display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-        padding: var(--s2-spacing-100) var(--s2-spacing-200);
-        border: 1px solid var(--s2-border-default);
-        border-radius: var(--s2-radius-default);
-        background: var(--s2-bg-layer-2);
-        color: var(--s2-content-default);
-        font-size: var(--s2-font-size-75);
-        font-family: var(--s2-font-family);
-        cursor: pointer;
-        transition: background var(--s2-transition-default), border-color var(--s2-transition-default);
+      .shtml-kv-list .key { color: var(--s2-content-secondary); font-weight: 400; }
+      .shtml-kv-list .value { color: var(--s2-content-default); font-weight: 700; }
+      /* <dl> variant */
+      dl.shtml-kv-list {
+        display: grid; grid-template-columns: auto 1fr;
+        gap: 0; font-size: var(--s2-font-size-75);
       }
-      .shtml-btn:hover { background: var(--s2-bg-elevated); }
+      dl.shtml-kv-list dt,
+      dl.shtml-kv-list dd {
+        padding: var(--s2-spacing-100) 0;
+        border-bottom: 1px solid var(--s2-border-subtle);
+        margin: 0;
+      }
+      dl.shtml-kv-list dt {
+        color: var(--s2-content-secondary); font-weight: 400;
+        padding-right: var(--s2-spacing-300);
+      }
+      dl.shtml-kv-list dd {
+        color: var(--s2-content-default); font-weight: 700;
+        text-align: right;
+      }
+      dl.shtml-kv-list dt:last-of-type,
+      dl.shtml-kv-list dd:last-of-type { border-bottom: none; }
+
+      /* ── Buttons (S2 Button — pill rounding, cursor: default, all states) ── */
+      .shtml-btn {
+        display: inline-flex; align-items: center; justify-content: center; gap: var(--s2-spacing-75);
+        height: 32px;
+        padding: 0 16px;
+        border: 2px solid var(--s2-border-default);
+        border-radius: var(--s2-radius-pill);
+        background: transparent;
+        color: var(--s2-content-default);
+        font-size: var(--s2-font-size-100); font-weight: 700;
+        font-family: var(--s2-font-family);
+        cursor: default;
+        transition: background 130ms ease, border-color 130ms ease, transform 130ms ease, box-shadow 130ms ease;
+      }
+      .shtml-btn:hover { background: color-mix(in srgb, var(--s2-content-default) 6%, transparent); }
       .shtml-btn:active { transform: scale(0.98); }
+      .shtml-btn:focus-visible {
+        outline: 2px solid var(--s2-border-focus);
+        outline-offset: 2px;
+      }
+      .shtml-btn:disabled, .shtml-btn[disabled] {
+        opacity: 0.4; pointer-events: none;
+      }
+      /* Accent (fill) — S2 default CTA */
       .shtml-btn--primary {
-        background: var(--s2-accent); color: #fff; border-color: var(--s2-accent);
+        background: var(--s2-accent); color: #fff; border-color: transparent;
       }
       .shtml-btn--primary:hover { background: var(--s2-accent-hover); }
+      .shtml-btn--primary:active { background: var(--s2-accent-down); transform: scale(0.98); }
+      /* Secondary (outline) — visible stroke, no fill */
       .shtml-btn--secondary {
         background: transparent; border-color: var(--s2-border-default);
         color: var(--s2-content-default);
       }
+      .shtml-btn--secondary:hover { background: color-mix(in srgb, var(--s2-content-default) 6%, transparent); }
+      /* Negative (fill) — destructive */
       .shtml-btn--negative {
-        background: var(--s2-negative); color: #fff; border-color: var(--s2-negative);
+        background: var(--s2-negative); color: #fff; border-color: transparent;
       }
+      .shtml-btn--negative:hover { background: color-mix(in srgb, var(--s2-negative) 85%, #000); }
 
-      /* Button groups */
+      /* ── Button Groups (S2 Button Group — gap-based, each button keeps its pill shape) ── */
       .shtml-btn-group {
-        display: inline-flex; gap: 0;
-      }
-      .shtml-btn-group .shtml-btn {
-        border-radius: 0;
-        margin-left: -1px;
-      }
-      .shtml-btn-group .shtml-btn:first-child {
-        border-radius: var(--s2-radius-default) 0 0 var(--s2-radius-default);
-        margin-left: 0;
-      }
-      .shtml-btn-group .shtml-btn:last-child {
-        border-radius: 0 var(--s2-radius-default) var(--s2-radius-default) 0;
+        display: inline-flex; gap: var(--s2-spacing-100);
       }
 
-      /* Layout utilities */
+      /* ── Text Field (S2 Text Field — single-line input) ── */
+      .shtml-text-field {
+        width: 100%; padding: 7px 12px;
+        font-size: var(--s2-font-size-75); font-family: var(--s2-font-family);
+        color: var(--s2-content-default); background: var(--s2-bg-layer-2);
+        border: 1px solid var(--s2-border-subtle); border-radius: var(--s2-radius-default);
+        outline: none; transition: border-color var(--s2-transition-default);
+      }
+      .shtml-text-field::placeholder { color: var(--s2-content-disabled); }
+      .shtml-text-field:hover { border-color: var(--s2-content-secondary); }
+      .shtml-text-field:focus { border-color: var(--s2-accent); box-shadow: 0 0 0 1px var(--s2-accent); }
+
+      /* ── Layout Utilities ── */
       .shtml-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -1320,31 +1477,46 @@
         gap: var(--s2-spacing-200);
       }
 
-      /* Typography */
+      /* ── Typography (S2 Type Roles) ── */
+      /* Heading — ExtraBold 800, never below 18px */
       .shtml-heading {
         font-size: var(--s2-font-size-300);
-        font-weight: 700;
+        font-weight: 800;
         color: var(--s2-content-default);
         margin: 0 0 var(--s2-spacing-100);
+        line-height: var(--s2-line-height-300);
+        letter-spacing: 0;
       }
+      /* Body — Regular 400, 1.5× line-height */
       .shtml-body {
         font-size: var(--s2-font-size-100);
+        font-weight: 400;
         color: var(--s2-content-default);
         line-height: 1.5;
+        letter-spacing: 0;
       }
+      /* Detail — Medium 500 */
       .shtml-detail {
         font-size: var(--s2-font-size-50);
+        font-weight: 500;
         color: var(--s2-content-secondary);
+        line-height: var(--s2-line-height-50);
+        letter-spacing: 0;
       }
 
-      /* Divider */
+      /* ── Divider (S2 Divider — small = 1px, medium = 2px, large = 4px) ── */
       .shtml-divider {
         border: none;
         border-top: 1px solid var(--s2-border-subtle);
         margin: var(--s2-spacing-200) 0;
       }
+      .shtml-divider--medium {
+        border-top-width: 2px;
+        border-top-color: var(--s2-border-default);
+        margin: var(--s2-spacing-300) 0;
+      }
 
-      /* Empty state */
+      /* ── Empty State ── */
       .shtml-empty-state {
         text-align: center;
         padding: var(--s2-spacing-500) var(--s2-spacing-300);
