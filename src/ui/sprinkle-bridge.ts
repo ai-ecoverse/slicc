@@ -15,6 +15,10 @@ export interface SprinkleBridgeAPI {
   off(event: 'update', callback: (data: unknown) => void): void;
   /** Read a file from VFS */
   readFile(path: string): Promise<string>;
+  /** Persist sprinkle state (survives side panel close/reopen). */
+  setState(data: unknown): void;
+  /** Read persisted sprinkle state (null if none saved). */
+  getState(): unknown;
   /** Close this sprinkle */
   close(): void;
   /** Sprinkle name */
@@ -66,6 +70,15 @@ export class SprinkleBridge {
         this.listeners.get(key)?.delete(callback);
       },
       readFile: async (path: string) => await this.fs.readFile(path, { encoding: 'utf-8' }) as string,
+      setState: (data: unknown) => {
+        try { localStorage.setItem(`slicc-sprinkle-state:${sprinkleName}`, JSON.stringify(data)); } catch { /* full */ }
+      },
+      getState: (): unknown => {
+        try {
+          const raw = localStorage.getItem(`slicc-sprinkle-state:${sprinkleName}`);
+          return raw ? JSON.parse(raw) : null;
+        } catch { return null; }
+      },
       close: () => this.closeHandler(sprinkleName),
     };
   }

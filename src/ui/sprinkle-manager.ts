@@ -19,6 +19,8 @@ export interface SprinkleManagerCallbacks {
   removeSprinkle(name: string): void;
 }
 
+const OPEN_SPRINKLES_KEY = 'slicc-open-sprinkles';
+
 export class SprinkleManager {
   private fs: VirtualFS;
   private bridge: SprinkleBridge;
@@ -37,6 +39,28 @@ export class SprinkleManager {
     this.fs = fs;
     this.bridge = new SprinkleBridge(fs, lickHandler, (name) => this.close(name));
     this.callbacks = callbacks;
+  }
+
+  /** Restore sprinkles that were open in the previous session. */
+  async restoreOpenSprinkles(): Promise<void> {
+    try {
+      const raw = localStorage.getItem(OPEN_SPRINKLES_KEY);
+      if (!raw) return;
+      const names: string[] = JSON.parse(raw);
+      for (const name of names) {
+        try {
+          await this.open(name);
+        } catch {
+          log.warn('Failed to restore sprinkle', { name });
+        }
+      }
+    } catch { /* corrupt localStorage, ignore */ }
+  }
+
+  private persistOpenSprinkles(): void {
+    try {
+      localStorage.setItem(OPEN_SPRINKLES_KEY, JSON.stringify([...this.openSprinkles.keys()]));
+    } catch { /* localStorage full, ignore */ }
   }
 
   /** Scan VFS and update available sprinkles. */
@@ -65,14 +89,21 @@ export class SprinkleManager {
     const content = await this.fs.readFile(sprinkle.path, { encoding: 'utf-8' }) as string;
     const container = document.createElement('div');
     container.className = 'sprinkle-panel';
+    container.style.cssText = 'width: 100%; height: 100%; display: flex; flex-direction: column; overflow: hidden;';
     container.dataset.sprinkle = name;
+
+    // Attach container to the layout BEFORE rendering so the sandbox iframe
+    // (extension mode) gets added to a live DOM subtree. Iframes in detached
+    // subtrees won't fire their load event.
+    this.openSprinkles.set(name, { renderer: null!, container });
+    this.callbacks.addSprinkle(name, sprinkle.title, container, zone);
 
     const api = this.bridge.createAPI(name);
     const renderer = new SprinkleRenderer(container, api);
     await renderer.render(content, name);
 
-    this.openSprinkles.set(name, { renderer, container });
-    this.callbacks.addSprinkle(name, sprinkle.title, container, zone);
+    this.openSprinkles.get(name)!.renderer = renderer;
+    this.persistOpenSprinkles();
     log.info('Sprinkle opened', { name, title: sprinkle.title });
   }
 
@@ -86,6 +117,7 @@ export class SprinkleManager {
     this.bridge.removeSprinkle(name);
     this.openSprinkles.delete(name);
     this.callbacks.removeSprinkle(name);
+    this.persistOpenSprinkles();
     log.info('Sprinkle closed', { name });
   }
 
@@ -101,10 +133,15 @@ export class SprinkleManager {
 
   /** Push data to an open sprinkle (agent → sprinkle). */
   sendToSprinkle(name: string, data: unknown): void {
-    if (!this.openSprinkles.has(name)) {
+    const entry = this.openSprinkles.get(name);
+    if (!entry) {
       log.warn('Cannot send to closed sprinkle', { name });
       return;
     }
+    // In CLI mode, bridge listeners are on the real bridge object.
     this.bridge.pushUpdate(name, data);
+    // In extension mode, listeners are inside the sandbox iframe.
+    // Forward via the renderer's postMessage channel.
+    entry.renderer.pushUpdate(data);
   }
 }

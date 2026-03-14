@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: auto; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+</style>
+<script>
+/**
+ * Sprinkle Sandbox — CSP-exempt page for rendering .shtml sprinkles
+ * in Chrome extension mode. Receives content via postMessage from the
+ * parent page (side panel), executes scripts freely, and relays
+ * bridge API calls back to the parent.
+ *
+ * All sandbox internals are wrapped in an IIFE to avoid collisions
+ * with sprinkle script declarations in the global scope.
+ */
+(function() {
+  var _updateListeners = new Set();
+  var _sprinkleName = '';
+  var _state = null;
+
+  // Bridge proxy exposed as globals for sprinkle scripts
+  window.slicc = {
+    get name() { return _sprinkleName; },
+    lick: function(event) {
+      var action = typeof event === 'string' ? event : event.action;
+      var data = typeof event === 'string' ? undefined : event.data;
+      parent.postMessage({ type: 'sprinkle-lick', action: action, data: data }, '*');
+    },
+    on: function(event, callback) {
+      if (event === 'update') _updateListeners.add(callback);
+    },
+    off: function(event, callback) {
+      if (event === 'update') _updateListeners.delete(callback);
+    },
+    readFile: function(path) {
+      return new Promise(function(resolve, reject) {
+        var id = 'rf-' + Math.random().toString(36).slice(2);
+        function handler(event) {
+          if (event.data && event.data.type === 'sprinkle-readfile-response' && event.data.id === id) {
+            removeEventListener('message', handler);
+            if (event.data.error) reject(new Error(event.data.error));
+            else resolve(event.data.content);
+          }
+        }
+        addEventListener('message', handler);
+        parent.postMessage({ type: 'sprinkle-readfile', id: id, path: path }, '*');
+      });
+    },
+    setState: function(data) {
+      _state = data;
+      parent.postMessage({ type: 'sprinkle-set-state', data: data }, '*');
+    },
+    getState: function() {
+      return _state;
+    },
+    close: function() {
+      parent.postMessage({ type: 'sprinkle-close' }, '*');
+    },
+  };
+  window.bridge = window.slicc;
+
+  addEventListener('message', function(e) {
+    var msg = e.data;
+    if (!msg || !msg.type) return;
+
+    if (msg.type === 'sprinkle-render') {
+      _sprinkleName = msg.name || '';
+      _state = msg.savedState || null;
+
+      // Inject parent page's CSS custom properties (theme tokens)
+      if (msg.themeCSS) {
+        var themeStyle = document.createElement('style');
+        themeStyle.textContent = msg.themeCSS;
+        document.head.appendChild(themeStyle);
+      }
+
+      // Render the SHTML content (trusted user-authored sprinkle, not external input)
+      document.body.innerHTML = msg.content;
+
+      // Auto-set width on .fill elements
+      var fills = document.querySelectorAll('.fill[data-value]');
+      for (var i = 0; i < fills.length; i++) {
+        var v = parseFloat(fills[i].getAttribute('data-value') || '0');
+        if (v >= 0 && v <= 100) fills[i].style.width = v + '%';
+      }
+
+      // Execute scripts (sandbox is CSP-exempt)
+      var deadScripts = Array.from(document.querySelectorAll('script'));
+      for (var j = 0; j < deadScripts.length; j++) {
+        var dead = deadScripts[j];
+        dead.remove();
+        var live = document.createElement('script');
+        for (var k = 0; k < dead.attributes.length; k++) {
+          live.setAttribute(dead.attributes[k].name, dead.attributes[k].value);
+        }
+        if (!dead.src) {
+          live.textContent = dead.textContent;
+        }
+        document.body.appendChild(live);
+      }
+
+      parent.postMessage({ type: 'sprinkle-rendered' }, '*');
+    }
+
+    if (msg.type === 'sprinkle-update') {
+      _updateListeners.forEach(function(cb) {
+        try { cb(msg.data); } catch(e) { /* ignore */ }
+      });
+    }
+  });
+})();
+</script>
+</head>
+<body></body>
+</html>
