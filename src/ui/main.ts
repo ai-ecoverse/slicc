@@ -366,33 +366,6 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     client.clearFilesystem();
   };
 
-  // ── Sprinkle Manager (SHTML sprinkle panels) ────────────────────────
-  const sprinkleManager = new SprinkleManager(
-    localFs,
-    (event: LickEvent) => {
-      // Route sprinkle licks to the offscreen orchestrator's cone
-      if (event.type === 'sprinkle') {
-        client.sendSprinkleLick(event.sprinkleName!, event.body);
-      }
-    },
-    {
-      addSprinkle: (name, title, element, zone) => layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined),
-      removeSprinkle: (name) => layout.removeSprinkle(name),
-    },
-  );
-  (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
-  await sprinkleManager.refresh();
-  layout.onSprinkleClose = (name) => sprinkleManager.close(name);
-  layout.getAvailableSprinkles = () => {
-    const opened = new Set(sprinkleManager.opened());
-    return sprinkleManager.available()
-      .filter(p => !opened.has(p.name))
-      .map(p => ({ name: p.name, title: p.title }));
-  };
-  layout.onOpenSprinkle = (name, zone) => sprinkleManager.open(name, zone);
-  layout.updateAddButtons();
-  log.info('SprinkleManager initialized (extension mode)');
-
   // Request state from offscreen — retries automatically until ready
   client.requestState();
 
