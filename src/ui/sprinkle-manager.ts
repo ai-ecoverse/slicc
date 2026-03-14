@@ -65,6 +65,7 @@ export class SprinkleManager {
     const content = await this.fs.readFile(sprinkle.path, { encoding: 'utf-8' }) as string;
     const container = document.createElement('div');
     container.className = 'sprinkle-panel';
+    container.style.cssText = 'width: 100%; height: 100%; display: flex; flex-direction: column; overflow: hidden;';
     container.dataset.sprinkle = name;
 
     // Attach container to the layout BEFORE rendering so the sandbox iframe

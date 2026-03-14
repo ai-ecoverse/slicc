@@ -59,6 +59,14 @@
 
     if (msg.type === 'sprinkle-render') {
       _sprinkleName = msg.name || '';
+
+      // Inject parent page's CSS custom properties (theme tokens)
+      if (msg.themeCSS) {
+        var themeStyle = document.createElement('style');
+        themeStyle.textContent = msg.themeCSS;
+        document.head.appendChild(themeStyle);
+      }
+
       // Render the SHTML content (trusted user-authored sprinkle, not external input)
       document.body.innerHTML = msg.content;
 

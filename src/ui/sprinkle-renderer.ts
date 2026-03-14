@@ -47,7 +47,7 @@ export class SprinkleRenderer {
   private async renderInSandbox(content: string, sprinkleName: string): Promise<void> {
     const iframe = document.createElement('iframe');
     iframe.src = chrome.runtime.getURL('sprinkle-sandbox.html');
-    iframe.style.cssText = 'width: 100%; height: 100%; border: none;';
+    iframe.style.cssText = 'width: 100%; flex: 1; border: none; min-height: 0;';
     this.iframe = iframe;
 
     // Wait for iframe to load
@@ -94,9 +94,29 @@ export class SprinkleRenderer {
     };
     window.addEventListener('message', this.messageHandler);
 
+    // Inject parent page's CSS custom properties so sprinkles can use theme tokens.
+    // Collect all --s2-* and --slicc-* variables from the root element.
+    const rootStyles = getComputedStyle(document.documentElement);
+    const cssVars: string[] = [];
+    for (const sheet of document.styleSheets) {
+      try {
+        for (const rule of sheet.cssRules) {
+          if (rule instanceof CSSStyleRule && rule.selectorText === ':root') {
+            for (let i = 0; i < rule.style.length; i++) {
+              const prop = rule.style[i];
+              if (prop.startsWith('--')) {
+                cssVars.push(`${prop}: ${rootStyles.getPropertyValue(prop)};`);
+              }
+            }
+          }
+        }
+      } catch { /* cross-origin sheet, skip */ }
+    }
+    const themeCSS = cssVars.length > 0 ? `:root { ${cssVars.join(' ')} }` : '';
+
     // Send content to the sandbox for rendering
     iframe.contentWindow!.postMessage(
-      { type: 'sprinkle-render', content, name: sprinkleName }, '*',
+      { type: 'sprinkle-render', content, name: sprinkleName, themeCSS }, '*',
     );
   }
 
