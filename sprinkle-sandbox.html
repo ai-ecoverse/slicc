@@ -18,6 +18,7 @@
 (function() {
   var _updateListeners = new Set();
   var _sprinkleName = '';
+  var _state = null;
 
   // Bridge proxy exposed as globals for sprinkle scripts
   window.slicc = {
@@ -47,6 +48,13 @@
         parent.postMessage({ type: 'sprinkle-readfile', id: id, path: path }, '*');
       });
     },
+    setState: function(data) {
+      _state = data;
+      parent.postMessage({ type: 'sprinkle-set-state', data: data }, '*');
+    },
+    getState: function() {
+      return _state;
+    },
     close: function() {
       parent.postMessage({ type: 'sprinkle-close' }, '*');
     },
@@ -59,6 +67,7 @@
 
     if (msg.type === 'sprinkle-render') {
       _sprinkleName = msg.name || '';
+      _state = msg.savedState || null;
 
       // Inject parent page's CSS custom properties (theme tokens)
       if (msg.themeCSS) {

@@ -79,6 +79,8 @@ export class SprinkleRenderer {
 
       if (msg.type === 'sprinkle-lick') {
         this.bridge.lick({ action: msg.action, data: msg.data });
+      } else if (msg.type === 'sprinkle-set-state') {
+        this.bridge.setState(msg.data);
       } else if (msg.type === 'sprinkle-close') {
         this.bridge.close();
       } else if (msg.type === 'sprinkle-readfile') {
@@ -123,9 +125,10 @@ export class SprinkleRenderer {
     const themeCSS = (cssVars.length > 0 ? `:root { ${cssVars.join(' ')} }\n` : '')
       + sprinkleRules.join('\n');
 
-    // Send content to the sandbox for rendering
+    // Send content to the sandbox for rendering, including saved state
+    const savedState = this.bridge.getState();
     iframe.contentWindow!.postMessage(
-      { type: 'sprinkle-render', content, name: sprinkleName, themeCSS }, '*',
+      { type: 'sprinkle-render', content, name: sprinkleName, themeCSS, savedState }, '*',
     );
   }
 
