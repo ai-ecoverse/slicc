@@ -94,25 +94,34 @@ export class SprinkleRenderer {
     };
     window.addEventListener('message', this.messageHandler);
 
-    // Inject parent page's CSS custom properties so sprinkles can use theme tokens.
-    // Collect all --s2-* and --slicc-* variables from the root element.
+    // Collect CSS from parent page to inject into the sandbox iframe:
+    // 1. CSS custom properties (theme tokens like --s2-*, --slicc-*)
+    // 2. Sprinkle component classes (.sprinkle-card, .sprinkle-stack, etc.)
     const rootStyles = getComputedStyle(document.documentElement);
     const cssVars: string[] = [];
+    const sprinkleRules: string[] = [];
     for (const sheet of document.styleSheets) {
       try {
         for (const rule of sheet.cssRules) {
-          if (rule instanceof CSSStyleRule && rule.selectorText === ':root') {
-            for (let i = 0; i < rule.style.length; i++) {
-              const prop = rule.style[i];
-              if (prop.startsWith('--')) {
-                cssVars.push(`${prop}: ${rootStyles.getPropertyValue(prop)};`);
+          if (rule instanceof CSSStyleRule) {
+            if (rule.selectorText === ':root') {
+              for (let i = 0; i < rule.style.length; i++) {
+                const prop = rule.style[i];
+                if (prop.startsWith('--')) {
+                  cssVars.push(`${prop}: ${rootStyles.getPropertyValue(prop)};`);
+                }
               }
+            }
+            // Collect all sprinkle component rules
+            if (rule.selectorText.includes('.sprinkle-') || rule.selectorText.includes('.fill')) {
+              sprinkleRules.push(rule.cssText);
             }
           }
         }
       } catch { /* cross-origin sheet, skip */ }
     }
-    const themeCSS = cssVars.length > 0 ? `:root { ${cssVars.join(' ')} }` : '';
+    const themeCSS = (cssVars.length > 0 ? `:root { ${cssVars.join(' ')} }\n` : '')
+      + sprinkleRules.join('\n');
 
     // Send content to the sandbox for rendering
     iframe.contentWindow!.postMessage(
