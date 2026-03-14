@@ -19,6 +19,8 @@ export interface SprinkleManagerCallbacks {
   removeSprinkle(name: string): void;
 }
 
+const OPEN_SPRINKLES_KEY = 'slicc-open-sprinkles';
+
 export class SprinkleManager {
   private fs: VirtualFS;
   private bridge: SprinkleBridge;
@@ -37,6 +39,28 @@ export class SprinkleManager {
     this.fs = fs;
     this.bridge = new SprinkleBridge(fs, lickHandler, (name) => this.close(name));
     this.callbacks = callbacks;
+  }
+
+  /** Restore sprinkles that were open in the previous session. */
+  async restoreOpenSprinkles(): Promise<void> {
+    try {
+      const raw = localStorage.getItem(OPEN_SPRINKLES_KEY);
+      if (!raw) return;
+      const names: string[] = JSON.parse(raw);
+      for (const name of names) {
+        try {
+          await this.open(name);
+        } catch {
+          log.warn('Failed to restore sprinkle', { name });
+        }
+      }
+    } catch { /* corrupt localStorage, ignore */ }
+  }
+
+  private persistOpenSprinkles(): void {
+    try {
+      localStorage.setItem(OPEN_SPRINKLES_KEY, JSON.stringify([...this.openSprinkles.keys()]));
+    } catch { /* localStorage full, ignore */ }
   }
 
   /** Scan VFS and update available sprinkles. */
@@ -79,6 +103,7 @@ export class SprinkleManager {
     await renderer.render(content, name);
 
     this.openSprinkles.get(name)!.renderer = renderer;
+    this.persistOpenSprinkles();
     log.info('Sprinkle opened', { name, title: sprinkle.title });
   }
 
@@ -92,6 +117,7 @@ export class SprinkleManager {
     this.bridge.removeSprinkle(name);
     this.openSprinkles.delete(name);
     this.callbacks.removeSprinkle(name);
+    this.persistOpenSprinkles();
     log.info('Sprinkle closed', { name });
   }
 

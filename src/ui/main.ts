@@ -386,6 +386,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   // Routed through the OffscreenClient's existing onMessage listener to ensure delivery.
   client.setSprinkleOpHandler((payload: any) => {
     const { id, op, name, data } = payload;
+    console.log('[main-ext] sprinkle-op handler called', { id, op, name });
     (async () => {
       try {
         let result: unknown;
@@ -414,6 +415,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
             result = true;
             break;
         }
+        console.log('[main-ext] sprinkle-op response sending', { id, op, result: typeof result });
         (chrome as any).runtime.sendMessage({
           source: 'panel',
           payload: { type: 'sprinkle-op-response', id, result },
@@ -437,6 +439,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   };
   layout.onOpenSprinkle = (name, zone) => sprinkleManager.open(name, zone);
   layout.updateAddButtons();
+  await sprinkleManager.restoreOpenSprinkles();
   log.info('SprinkleManager initialized (extension mode)');
 
   // Request state from offscreen — retries automatically until ready
@@ -988,6 +991,7 @@ async function main(): Promise<void> {
       }
     }
 
+    await sprinkleManager.restoreOpenSprinkles();
     log.info('SprinkleManager initialized');
   }
 
