@@ -51,8 +51,22 @@ export class SprinkleRenderer {
     this.iframe = iframe;
 
     // Wait for iframe to load
-    await new Promise<void>((resolve) => {
-      iframe.addEventListener('load', () => resolve(), { once: true });
+    console.log('[sprinkle-renderer] creating sandbox iframe', iframe.src);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        console.error('[sprinkle-renderer] iframe load timed out after 5s');
+        reject(new Error('sprinkle sandbox iframe load timed out'));
+      }, 5000);
+      iframe.addEventListener('load', () => {
+        clearTimeout(timer);
+        console.log('[sprinkle-renderer] iframe loaded, contentWindow:', !!iframe.contentWindow);
+        resolve();
+      }, { once: true });
+      iframe.addEventListener('error', (e) => {
+        clearTimeout(timer);
+        console.error('[sprinkle-renderer] iframe error:', e);
+        reject(new Error('sprinkle sandbox iframe failed to load'));
+      }, { once: true });
       this.container.appendChild(iframe);
     });
 

@@ -67,12 +67,17 @@ export class SprinkleManager {
     container.className = 'sprinkle-panel';
     container.dataset.sprinkle = name;
 
+    // Attach container to the layout BEFORE rendering so the sandbox iframe
+    // (extension mode) gets added to a live DOM subtree. Iframes in detached
+    // subtrees won't fire their load event.
+    this.openSprinkles.set(name, { renderer: null!, container });
+    this.callbacks.addSprinkle(name, sprinkle.title, container, zone);
+
     const api = this.bridge.createAPI(name);
     const renderer = new SprinkleRenderer(container, api);
     await renderer.render(content, name);
 
-    this.openSprinkles.set(name, { renderer, container });
-    this.callbacks.addSprinkle(name, sprinkle.title, container, zone);
+    this.openSprinkles.get(name)!.renderer = renderer;
     log.info('Sprinkle opened', { name, title: sprinkle.title });
   }
 
