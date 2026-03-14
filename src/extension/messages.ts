@@ -79,6 +79,13 @@ export interface OAuthRequestMsg {
   authorizeUrl: string;
 }
 
+/** Sprinkle lick event from side panel to offscreen agent. */
+export interface SprinkleLickMsg {
+  type: 'sprinkle-lick';
+  sprinkleName: string;
+  body: unknown;
+}
+
 export type PanelToOffscreenMessage =
   | UserMessageMsg
   | ScoopCreateMsg
@@ -91,7 +98,8 @@ export type PanelToOffscreenMessage =
   | ClearFilesystemMsg
   | RefreshModelMsg
   | PanelCdpCommandMsg
-  | OAuthRequestMsg;
+  | OAuthRequestMsg
+  | SprinkleLickMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen → Side Panel (via service worker relay)

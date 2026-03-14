@@ -31,27 +31,42 @@ chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
 const OFFSCREEN_URL = 'offscreen.html';
 
+// Serialize concurrent ensureOffscreen calls to prevent race conditions
+// where multiple callers pass hasDocument() before any creates the document.
+let offscreenLock: Promise<void> | null = null;
+
 async function ensureOffscreen(): Promise<void> {
-  try {
-    if (!chrome.offscreen) {
-      console.error('[slicc-sw] chrome.offscreen API not available — missing "offscreen" permission?');
-      return;
+  if (offscreenLock) return offscreenLock;
+  offscreenLock = (async () => {
+    try {
+      if (!chrome.offscreen) {
+        console.error('[slicc-sw] chrome.offscreen API not available — missing "offscreen" permission?');
+        return;
+      }
+      const exists = await chrome.offscreen.hasDocument();
+      if (exists) {
+        console.log('[slicc-sw] Offscreen document already exists');
+        return;
+      }
+      console.log('[slicc-sw] Creating offscreen document...');
+      await chrome.offscreen.createDocument({
+        url: OFFSCREEN_URL,
+        reasons: ['WORKERS'],
+        justification: 'Runs the SLICC agent engine so work survives side panel close.',
+      });
+      console.log('[slicc-sw] Offscreen document created');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // "Only a single offscreen document may be created" is benign — another
+      // call won the race. Only log unexpected errors.
+      if (!msg.includes('single offscreen')) {
+        console.error('[slicc-sw] Failed to create offscreen document:', err);
+      }
+    } finally {
+      offscreenLock = null;
     }
-    const exists = await chrome.offscreen.hasDocument();
-    if (exists) {
-      console.log('[slicc-sw] Offscreen document already exists');
-      return;
-    }
-    console.log('[slicc-sw] Creating offscreen document...');
-    await chrome.offscreen.createDocument({
-      url: OFFSCREEN_URL,
-      reasons: ['WORKERS'],
-      justification: 'Runs the SLICC agent engine so work survives side panel close.',
-    });
-    console.log('[slicc-sw] Offscreen document created');
-  } catch (err) {
-    console.error('[slicc-sw] Failed to create offscreen document:', err);
-  }
+  })();
+  return offscreenLock;
 }
 
 // Create offscreen doc on install/startup
