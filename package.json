@@ -15,7 +15,8 @@
     "dev:electron": "npx tsx src/cli/index.ts --dev --electron",
     "build:extension": "vite build --config vite.config.extension.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "slicc": "scripts/slicc-instance"
   },
   "dependencies": {
     "@cantoo/pdf-lib": "^2.6.1",

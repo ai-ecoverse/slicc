@@ -27,7 +27,7 @@ Build, run, test, and debug SLICC locally.
 | 3000 | UI server | CLI + Electron embedded app |
 | 9222 | Chrome CDP | CLI only |
 | 9223 | Electron CDP | Electron float only |
-| 24679 | Vite HMR WebSocket | CLI/Electron dev mode |
+| PORT+21679 | Vite HMR WebSocket (e.g. 24679 for default port) | CLI/Electron dev mode |
 
 ## Environment Variables
 
@@ -108,9 +108,9 @@ npm run dev:full
 ```
 
 This launches:
-- Express server on port 3000
-- Chrome with remote debugging on port 9222
-- Vite HMR WebSocket on port 24679
+- Express server on port 3000 (override: `PORT=3001`)
+- Chrome with remote debugging on port 9222 (override: `--cdp-port=9224`)
+- Vite HMR WebSocket on port PORT+21679 (e.g. 24679 for default port)
 
 ### Electron float debugging
 

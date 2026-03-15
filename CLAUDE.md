@@ -27,7 +27,14 @@ npx vitest run src/fs/virtual-fs.test.ts  # Run a single test file
 
 **Requires Node >= 22** (LTS). LightningFS uses `navigator` which is only available as a global from Node 21+. Tests will fail on Node 20 or earlier.
 
-Ports: 3000 (UI server for CLI + Electron), 9222 (Chrome CDP), 9223 (Electron CDP), 24679 (Vite HMR WebSocket)
+Ports: 3000 (UI server for CLI + Electron, override with `PORT` env var), 9222 (Chrome CDP, override with `--cdp-port=`), 9223 (Electron CDP), PORT+21679 (Vite HMR WebSocket, e.g. 24679 for default port 3000).
+
+## Instance Management
+
+Use `scripts/slicc-instance` to manage parallel standalone instances.
+Run `scripts/slicc-instance --help` for commands (start, list, stop, restart).
+Auto-allocates ports to avoid conflicts with running instances.
+State tracked in `/tmp/slicc-instances.json`.
 
 ## Philosophy
 

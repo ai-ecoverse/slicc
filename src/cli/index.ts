@@ -347,7 +347,7 @@ async function main() {
       `--remote-debugging-port=${CDP_PORT}`,
       '--no-first-run',
       '--no-default-browser-check',
-      `--user-data-dir=${join(process.env['TMPDIR'] ?? '/tmp', 'browser-coding-agent-chrome')}`,
+      `--user-data-dir=${join(process.env['TMPDIR'] ?? '/tmp', `browser-coding-agent-chrome-${SERVE_PORT}`)}`,
       `http://localhost:${SERVE_PORT}`,
     ];
 
@@ -666,13 +666,13 @@ async function main() {
       server: {
         middlewareMode: true,
         hmr: {
-          port: 24679, // Use a separate port for HMR WebSocket to avoid conflicting with /cdp
+          port: SERVE_PORT + 21679, // Derived from SERVE_PORT to avoid conflicts between parallel instances
         },
       },
       root: process.cwd(),
     });
     app.use(vite.middlewares);
-    console.log('Vite dev server middleware attached (HMR active on port 24679)');
+    console.log(`Vite dev server middleware attached (HMR active on port ${SERVE_PORT + 21679})`);
   } else {
     // Production mode: serve built static files
     const uiDir = resolve(__dirname, '..', 'ui');

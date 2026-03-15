@@ -108,7 +108,8 @@ export function detectMimeType(path: string): string {
 export function toPreviewUrl(vfsPath: string): string {
   const isExt = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   const previewPath = `/preview${vfsPath}`;
-  return isExt ? chrome.runtime.getURL(previewPath) : `http://localhost:3000${previewPath}`;
+  const origin = (typeof window !== 'undefined' && window.location?.origin) || 'http://localhost:3000';
+  return isExt ? chrome.runtime.getURL(previewPath) : `${origin}${previewPath}`;
 }
 
 export function isSafeServeEntry(entry: string): boolean {

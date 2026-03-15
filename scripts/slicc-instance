@@ -1,0 +1,423 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# slicc-instance — manage parallel standalone SLICC instances
+#
+# Usage:
+#   slicc-instance start [options]                Start a new instance
+#   slicc-instance list                           Show running instances
+#   slicc-instance stop <NAME|PORT>               Stop an instance
+#   slicc-instance restart <NAME|PORT> [--dev]    Restart an instance
+#   slicc-instance --help                         Show this help
+#
+# Instances auto-allocate ports:
+#   Port 3000/9222, 3001/9224, 3002/9226, ...
+#   HMR port is derived automatically (PORT + 21679).
+#
+# State tracked in /tmp/slicc-instances.json
+# ---------------------------------------------------------------------------
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+STATE_FILE="/tmp/slicc-instances.json"
+BASE_PORT=3000
+BASE_CDP=9222
+
+# -- helpers ----------------------------------------------------------------
+
+ensure_state_file() {
+  if [[ ! -f "$STATE_FILE" ]]; then
+    echo '[]' > "$STATE_FILE"
+  fi
+}
+
+pid_alive() {
+  kill -0 "$1" 2>/dev/null
+}
+
+# Remove entries where both server and Chrome PIDs are dead
+prune_dead() {
+  ensure_state_file
+  local keep_names=""
+  while IFS=$'\t' read -r entry_name spid cpid; do
+    [[ -z "$entry_name" ]] && continue
+    # Instance is alive if either the server or Chrome is still running
+    if pid_alive "$spid" || pid_alive "$cpid"; then
+      keep_names="${keep_names:+$keep_names,}\"$entry_name\""
+    fi
+  done < <(jq -r '.[] | [.name, (.serverPid // .pid | tostring), (.chromePid // 0 | tostring)] | @tsv' "$STATE_FILE" 2>/dev/null)
+
+  jq --argjson keep "[${keep_names}]" \
+    '[.[] | select(.name as $n | $keep | index($n) != null)]' \
+    "$STATE_FILE" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
+}
+
+# Check if a port is in use at the OS level
+port_in_use() {
+  lsof -iTCP:"$1" -sTCP:LISTEN -t >/dev/null 2>&1
+}
+
+# Find next free port pair (checks both state file and OS)
+next_port() {
+  prune_dead
+  local port=$BASE_PORT
+  while true; do
+    local cdp
+    cdp=$(cdp_port_for "$port")
+    # Skip if tracked in state file
+    if jq -e --argjson p "$port" '.[] | select(.port == $p)' "$STATE_FILE" >/dev/null 2>&1; then
+      port=$((port + 1)); continue
+    fi
+    # Skip if port or CDP port is in use at OS level
+    if port_in_use "$port" || port_in_use "$cdp"; then
+      port=$((port + 1)); continue
+    fi
+    break
+  done
+  echo "$port"
+}
+
+cdp_port_for() {
+  local port=$1
+  echo $((BASE_CDP + (port - BASE_PORT) * 2))
+}
+
+find_instance() {
+  local query=$1
+  prune_dead
+  # Match by name or port
+  local match
+  match=$(jq --arg q "$query" '[.[] | select(.name == $q or (.port | tostring) == $q)] | first // empty' "$STATE_FILE")
+  if [[ -z "$match" || "$match" == "null" ]]; then
+    return 1
+  fi
+  echo "$match"
+}
+
+auto_name() {
+  local port=$1
+  echo "slicc-${port}"
+}
+
+# Find Chrome/Chromium binary (mirrors src/cli/index.ts findChrome logic)
+find_chrome() {
+  local env_path="${CHROME_PATH:-}"
+  if [[ -n "$env_path" && -x "$env_path" ]]; then echo "$env_path"; return; fi
+
+  local candidates=()
+  case "$(uname -s)" in
+    Darwin)
+      candidates=(
+        "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary"
+        "/Applications/Chromium.app/Contents/MacOS/Chromium"
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+      ) ;;
+    Linux)
+      candidates=(
+        /usr/bin/chromium
+        /usr/bin/chromium-browser
+        /snap/bin/chromium
+        /usr/bin/google-chrome
+        /usr/bin/google-chrome-stable
+      ) ;;
+  esac
+
+  for c in "${candidates[@]}"; do
+    if [[ -x "$c" ]]; then echo "$c"; return; fi
+  done
+  return 1
+}
+
+# -- commands ---------------------------------------------------------------
+
+cmd_start() {
+  local name=""
+  local dev=false
+  local chrome_path=""
+
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --name) name="$2"; shift 2 ;;
+      --name=*) name="${1#*=}"; shift ;;
+      --dev) dev=true; shift ;;
+      --chrome) chrome_path="$2"; shift 2 ;;
+      --chrome=*) chrome_path="${1#*=}"; shift ;;
+      *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+  done
+
+  prune_dead
+
+  local port
+  port=$(next_port)
+  local cdp
+  cdp=$(cdp_port_for "$port")
+
+  if [[ -z "$name" ]]; then
+    name=$(auto_name "$port")
+  fi
+
+  # Check name uniqueness
+  if jq -e --arg n "$name" '.[] | select(.name == $n)' "$STATE_FILE" >/dev/null 2>&1; then
+    echo "Instance '$name' already exists. Use 'restart' or pick a different name." >&2
+    exit 1
+  fi
+
+  # Resolve Chrome binary
+  local chrome_bin=""
+  if [[ -n "$chrome_path" ]]; then
+    chrome_bin="$chrome_path"
+  else
+    chrome_bin=$(find_chrome) || true
+  fi
+  if [[ -z "$chrome_bin" || ! -x "$chrome_bin" ]]; then
+    echo "Could not find Chrome/Chromium. Use --chrome PATH or set CHROME_PATH." >&2
+    exit 1
+  fi
+
+  # Ensure log directory exists
+  local log_dir="/tmp/slicc-instances"
+  mkdir -p "$log_dir"
+  local server_log="${log_dir}/${name}-server.log"
+  local chrome_log="${log_dir}/${name}-chrome.log"
+  # Fresh Chrome profile for each start (avoids corruption from prior crashes)
+  local user_data_dir="/tmp/browser-coding-agent-chrome-${port}"
+  rm -rf "$user_data_dir"
+  mkdir -p "$user_data_dir"
+
+  echo "Starting instance '$name' on port $port (CDP $cdp)..."
+  echo "  Chrome: $chrome_bin"
+
+  # 1. Start SLICC server in serve-only mode (no Chrome launch)
+  local server_cmd=()
+  if $dev; then
+    server_cmd=(npx tsx src/cli/index.ts --dev --serve-only "--cdp-port=$cdp")
+  else
+    server_cmd=(node dist/cli/index.js --serve-only "--cdp-port=$cdp")
+  fi
+
+  cd "$PROJECT_ROOT"
+  nohup env "PORT=$port" "${server_cmd[@]}" > "$server_log" 2>&1 &
+  local server_pid=$!
+  disown "$server_pid" 2>/dev/null || true
+
+  # Wait for server to be ready
+  local ready=false
+  for _ in $(seq 1 20); do
+    if curl -s -o /dev/null "http://localhost:$port" 2>/dev/null; then
+      ready=true; break
+    fi
+    sleep 0.3
+  done
+  if ! $ready; then
+    echo "Server failed to start. Check logs: $server_log" >&2
+    kill "$server_pid" 2>/dev/null || true
+    exit 1
+  fi
+
+  # 2. Launch Chrome independently (not as server's child process)
+  nohup "$chrome_bin" \
+    "--remote-debugging-port=$cdp" \
+    --no-first-run \
+    --no-default-browser-check \
+    "--user-data-dir=$user_data_dir" \
+    "http://localhost:$port" \
+    > "$chrome_log" 2>&1 &
+  local chrome_pid=$!
+  disown "$chrome_pid" 2>/dev/null || true
+
+  sleep 1
+  if ! pid_alive "$chrome_pid"; then
+    echo "Chrome failed to start. Check logs: $chrome_log" >&2
+    kill "$server_pid" 2>/dev/null || true
+    exit 1
+  fi
+
+  # Record both PIDs in state file
+  local entry
+  entry=$(jq -n \
+    --arg name "$name" \
+    --argjson port "$port" \
+    --argjson cdp "$cdp" \
+    --argjson serverPid "$server_pid" \
+    --argjson chromePid "$chrome_pid" \
+    --argjson dev "$dev" \
+    --arg chrome "$chrome_bin" \
+    --arg started "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{name: $name, port: $port, cdpPort: $cdp, serverPid: $serverPid, chromePid: $chromePid, dev: $dev, chrome: $chrome, startedAt: $started}')
+  jq --argjson entry "$entry" '. + [$entry]' "$STATE_FILE" > "${STATE_FILE}.tmp" \
+    && mv "${STATE_FILE}.tmp" "$STATE_FILE"
+
+  echo ""
+  echo "  Name:    $name"
+  echo "  URL:     http://localhost:$port"
+  echo "  CDP:     $cdp"
+  echo "  Server:  PID $server_pid (log: $server_log)"
+  echo "  Chrome:  PID $chrome_pid (log: $chrome_log)"
+  if $dev; then
+    echo "  HMR:     $((port + 21679))"
+  fi
+  echo ""
+  echo "Stop with: slicc-instance stop $name"
+}
+
+cmd_list() {
+  prune_dead
+
+  local count
+  count=$(jq length "$STATE_FILE")
+
+  if [[ "$count" -eq 0 ]]; then
+    echo "No running instances."
+    return
+  fi
+
+  printf "%-16s %-6s %-6s %-10s %-10s %-5s %-20s %s\n" "NAME" "PORT" "CDP" "SERVER" "CHROME" "DEV" "BROWSER" "STARTED"
+  printf "%-16s %-6s %-6s %-10s %-10s %-5s %-20s %s\n" "----" "----" "---" "------" "------" "---" "-------" "-------"
+  jq -r '.[] | [
+    .name,
+    (.port|tostring),
+    (.cdpPort|tostring),
+    (.serverPid // .pid | tostring),
+    (.chromePid // 0 | tostring),
+    (if .dev then "yes" else "no" end),
+    (.chrome | split("/") | last),
+    .startedAt
+  ] | @tsv' "$STATE_FILE" | \
+    while IFS=$'\t' read -r n p c spid cpid d chrome s; do
+      printf "%-16s %-6s %-6s %-10s %-10s %-5s %-20s %s\n" "$n" "$p" "$c" "$spid" "$cpid" "$d" "$chrome" "$s"
+    done
+}
+
+kill_and_wait() {
+  local pid=$1
+  if ! pid_alive "$pid"; then return; fi
+  kill "$pid" 2>/dev/null || true
+  for _ in $(seq 1 50); do
+    if ! pid_alive "$pid"; then return; fi
+    sleep 0.1
+  done
+  echo "  Force killing PID $pid..."
+  kill -9 "$pid" 2>/dev/null || true
+}
+
+cmd_stop() {
+  if [[ $# -lt 1 ]]; then
+    echo "Usage: slicc-instance stop <NAME|PORT>" >&2
+    exit 1
+  fi
+
+  local query=$1
+  local instance
+  if ! instance=$(find_instance "$query"); then
+    echo "No running instance matching '$query'." >&2
+    exit 1
+  fi
+
+  local name server_pid chrome_pid port
+  name=$(echo "$instance" | jq -r '.name')
+  server_pid=$(echo "$instance" | jq -r '.serverPid // .pid')
+  chrome_pid=$(echo "$instance" | jq -r '.chromePid // 0')
+  port=$(echo "$instance" | jq -r '.port')
+
+  echo "Stopping '$name' (port $port)..."
+
+  # Kill Chrome first (graceful close), then the server
+  if [[ "$chrome_pid" != "0" ]]; then
+    kill_and_wait "$chrome_pid"
+  fi
+  kill_and_wait "$server_pid"
+
+  # Remove from state
+  jq --arg n "$name" '[.[] | select(.name != $n)]' "$STATE_FILE" > "${STATE_FILE}.tmp" \
+    && mv "${STATE_FILE}.tmp" "$STATE_FILE"
+
+  echo "Stopped."
+}
+
+cmd_restart() {
+  if [[ $# -lt 1 ]]; then
+    echo "Usage: slicc-instance restart <NAME|PORT> [--dev]" >&2
+    exit 1
+  fi
+
+  local query=$1; shift
+  local instance
+  if ! instance=$(find_instance "$query"); then
+    echo "No running instance matching '$query'." >&2
+    exit 1
+  fi
+
+  local name was_dev was_chrome
+  name=$(echo "$instance" | jq -r '.name')
+  was_dev=$(echo "$instance" | jq -r '.dev')
+  was_chrome=$(echo "$instance" | jq -r '.chrome // ""')
+
+  # Check if --dev/--chrome were explicitly passed; otherwise preserve originals
+  local extra_flags=()
+  local has_dev=false has_chrome=false
+  for arg in "$@"; do
+    if [[ "$arg" == "--dev" ]]; then has_dev=true; fi
+    if [[ "$arg" == "--chrome" || "$arg" == --chrome=* ]]; then has_chrome=true; fi
+  done
+  if ! $has_dev && [[ "$was_dev" == "true" ]]; then
+    extra_flags+=(--dev)
+  fi
+  if ! $has_chrome && [[ -n "$was_chrome" ]]; then
+    extra_flags+=(--chrome "$was_chrome")
+  fi
+
+  cmd_stop "$name"
+  sleep 0.5
+  cmd_start --name "$name" "${extra_flags[@]}" "$@"
+}
+
+cmd_help() {
+  cat <<'EOF'
+slicc-instance — manage parallel standalone SLICC instances
+
+Usage:
+  slicc-instance start [--name NAME] [--dev] [--chrome PATH]
+  slicc-instance list
+  slicc-instance stop <NAME|PORT>
+  slicc-instance restart <NAME|PORT> [--dev] [--chrome PATH]
+  slicc-instance --help
+
+Options:
+  --name NAME      Instance name (default: slicc-<port>)
+  --dev            Dev mode with Vite HMR
+  --chrome PATH    Chrome/Chromium binary path (overrides CHROME_PATH / auto-detection)
+
+Port allocation:
+  Serve ports start at 3000 and increment (3000, 3001, 3002, ...).
+  CDP ports start at 9222 and increment by 2 (9222, 9224, 9226, ...).
+  HMR ports (dev mode) are derived: SERVE_PORT + 21679.
+
+Examples:
+  slicc-instance start                           # auto-named, auto-ports
+  slicc-instance start --name demo               # named instance
+  slicc-instance start --name dev1 --dev         # dev mode with HMR
+  slicc-instance start --chrome "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+  slicc-instance list                            # show all running
+  slicc-instance stop demo                       # stop by name
+  slicc-instance stop 3001                       # stop by port
+  slicc-instance restart demo                    # restart, preserving mode + chrome
+
+State file: /tmp/slicc-instances.json
+Logs:       /tmp/slicc-instances/<name>.log
+EOF
+}
+
+# -- main -------------------------------------------------------------------
+
+ensure_state_file
+
+case "${1:-}" in
+  start)   shift; cmd_start "$@" ;;
+  list|ls) shift; cmd_list ;;
+  stop)    shift; cmd_stop "$@" ;;
+  restart) shift; cmd_restart "$@" ;;
+  --help|-h|help|"") cmd_help ;;
+  *) echo "Unknown command: $1 (try --help)" >&2; exit 1 ;;
+esac
