@@ -63,6 +63,31 @@ const TEXT_TYPES = new Set([
 const sw = self as unknown as ServiceWorkerGlobalScope;
 
 /**
+ * Playground bridge script — injected into every HTML response so preview
+ * pages get `window.slicc`. The code is embedded at build time via esbuild's
+ * `define` mechanism (see vite.config.ts and vite.config.extension.ts).
+ * This avoids a runtime fetch() which would require the SW to be updated
+ * before the bridge can be injected.
+ */
+declare const __PLAYGROUND_BRIDGE_CODE__: string;
+const BRIDGE_CODE: string | null = typeof __PLAYGROUND_BRIDGE_CODE__ !== 'undefined'
+  ? __PLAYGROUND_BRIDGE_CODE__ : null;
+
+/**
+ * Inject the playground bridge script into an HTML string.
+ * Inserts before </head> if present, otherwise appends to end.
+ */
+function injectBridge(html: string): string {
+  if (!BRIDGE_CODE) return html;
+  const tag = `<script>${BRIDGE_CODE}<\/script>`;
+  const headClose = html.indexOf('</head>');
+  if (headClose !== -1) {
+    return html.slice(0, headClose) + tag + html.slice(headClose);
+  }
+  return html + tag;
+}
+
+/**
  * Ask the main page to read a file from VirtualFS (which knows about mounts).
  * Uses BroadcastChannel instead of client.postMessage because the main page
  * at `/` is outside the SW's `/preview/` scope, so clients.matchAll() can't
@@ -107,6 +132,7 @@ async function readViaMainPage(
 async function handlePreviewRequest(vfsPath: string): Promise<Response> {
   const mimeType = getMimeType(vfsPath);
   const isText = TEXT_TYPES.has(mimeType);
+  const isHtml = mimeType === 'text/html';
 
   // Try LightningFS first (fast path for non-mounted files)
   try {
@@ -120,9 +146,14 @@ async function handlePreviewRequest(vfsPath: string): Promise<Response> {
       }
     } catch { /* stat failed — not a dir or doesn't exist yet, continue to readFile */ }
 
-    const raw = isText
+    let raw = isText
       ? await fs.readFile(vfsPath, { encoding: 'utf8' }) as string
       : new Uint8Array(await fs.readFile(vfsPath) as Uint8Array);
+
+    // Inject playground bridge into HTML responses
+    if (isHtml && typeof raw === 'string') {
+      raw = injectBridge(raw);
+    }
 
     return new Response(raw, {
       status: 200,
@@ -140,8 +171,15 @@ async function handlePreviewRequest(vfsPath: string): Promise<Response> {
   // Fallback: ask the main page's VirtualFS (handles mounted directories)
   const content = await readViaMainPage(vfsPath, isText);
   if (content !== null) {
-    const body = typeof content === 'string' ? content : new Uint8Array(content as Uint8Array);
-    return new Response(body, {
+    let bodyStr = typeof content === 'string' ? content : null;
+    const bodyBin = bodyStr === null ? new Uint8Array(content as Uint8Array) : null;
+
+    // Inject playground bridge into HTML responses (fallback path)
+    if (isHtml && bodyStr !== null) {
+      bodyStr = injectBridge(bodyStr);
+    }
+
+    return new Response(bodyStr ?? bodyBin!, {
       status: 200,
       headers: { 'Content-Type': mimeType, 'Cache-Control': 'no-cache' },
     });

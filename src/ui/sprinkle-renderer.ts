@@ -125,10 +125,13 @@ export class SprinkleRenderer {
     const themeCSS = (cssVars.length > 0 ? `:root { ${cssVars.join(' ')} }\n` : '')
       + sprinkleRules.join('\n');
 
+    // Extract custom <style> blocks from sprinkle content so the sandbox can inject them
+    const { html: cleanedContent, css: customCSS } = SprinkleRenderer.extractStyles(content);
+
     // Send content to the sandbox for rendering, including saved state
     const savedState = this.bridge.getState();
     iframe.contentWindow!.postMessage(
-      { type: 'sprinkle-render', content, name: sprinkleName, themeCSS, savedState }, '*',
+      { type: 'sprinkle-render', content: cleanedContent, name: sprinkleName, themeCSS, customCSS, savedState }, '*',
     );
   }
 
@@ -140,6 +143,40 @@ export class SprinkleRenderer {
   }
 
   /**
+   * Extract all function names declared in a script body.
+   * Matches `function foo(`, `var foo = function`, `var foo = (` (arrow), `let/const` variants.
+   */
+  private static extractDeclaredFunctions(scriptText: string): Set<string> {
+    const fns = new Set<string>();
+    // function declarations: function foo(
+    for (const m of scriptText.matchAll(/\bfunction\s+(\w+)\s*\(/g)) {
+      fns.add(m[1]);
+    }
+    // var/let/const assignments to functions or arrows: var foo = function / var foo = (
+    for (const m of scriptText.matchAll(/\b(?:var|let|const)\s+(\w+)\s*=\s*(?:function\b|\()/g)) {
+      fns.add(m[1]);
+    }
+    // Exclude common false positives
+    for (const name of ['if', 'for', 'while', 'switch', 'catch', 'return']) {
+      fns.delete(name);
+    }
+    return fns;
+  }
+
+  /**
+   * Extract `<style>` blocks from sprinkle HTML and return them separately.
+   * This allows scoped custom CSS to work in both CLI and extension modes.
+   */
+  private static extractStyles(content: string): { html: string; css: string } {
+    const styleBlocks: string[] = [];
+    const html = content.replace(/<style\b[^>]*>([\s\S]*?)<\/style>/gi, (_match, css) => {
+      styleBlocks.push(css);
+      return '';
+    });
+    return { html, css: styleBlocks.join('\n') };
+  }
+
+  /**
    * CLI mode: render directly in the page DOM (no CSP restrictions).
    */
   private renderInline(content: string, sprinkleName: string): void {
@@ -147,11 +184,20 @@ export class SprinkleRenderer {
     if (!window.__slicc_sprinkles) window.__slicc_sprinkles = {};
     window.__slicc_sprinkles[sprinkleName] = this.bridge;
 
+    // Extract custom <style> blocks and inject them scoped to this sprinkle
+    const { html: cleanedHtml, css: customCSS } = SprinkleRenderer.extractStyles(content);
+    if (customCSS) {
+      const style = document.createElement('style');
+      style.dataset.sprinkle = sprinkleName;
+      style.textContent = customCSS;
+      this.container.appendChild(style);
+    }
+
     // Parse HTML and set content (scripts won't execute via innerHTML).
     // Content is user/agent-authored .shtml — trusted, not external input.
     const wrapper = document.createElement('div');
     wrapper.className = 'sprinkle-content';
-    wrapper.innerHTML = content;
+    wrapper.innerHTML = cleanedHtml;
     this.container.appendChild(wrapper);
 
     // Auto-set width on .fill elements from data-value attribute
@@ -178,6 +224,7 @@ export class SprinkleRenderer {
         live.setAttribute(attr.name, attr.value);
       }
       if (!dead.src) {
+        // Collect functions from onclick attributes (for backward compatibility)
         const onclickFns = new Set<string>();
         for (const el of wrapper.querySelectorAll('[onclick]')) {
           const attr = el.getAttribute('onclick') || '';
@@ -186,7 +233,15 @@ export class SprinkleRenderer {
             if (!['slicc', 'bridge', 'lick', 'close'].includes(name)) onclickFns.add(name);
           }
         }
-        const hoists = [...onclickFns]
+
+        // Auto-hoist ALL declared functions from the script body
+        const declaredFns = SprinkleRenderer.extractDeclaredFunctions(dead.textContent || '');
+        const allFns = new Set([...onclickFns, ...declaredFns]);
+        // Never hoist internal/private names (underscore prefix)
+        for (const fn of allFns) {
+          if (fn.startsWith('_')) allFns.delete(fn);
+        }
+        const hoists = [...allFns]
           .map(fn => `if (typeof ${fn} === 'function') window.${fn} = ${fn};`)
           .join('\n');
 
@@ -215,6 +270,9 @@ export class SprinkleRenderer {
       script.remove();
     }
     this.scripts = [];
+    // Remove custom style blocks injected for this sprinkle
+    const customStyle = this.container.querySelector('style[data-sprinkle]');
+    if (customStyle) customStyle.remove();
     const wrapper = this.container.querySelector('.sprinkle-content');
     if (wrapper) wrapper.remove();
     if (window.__slicc_sprinkles) {

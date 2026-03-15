@@ -72,6 +72,22 @@ export default defineConfig(({ mode }) => ({
         // Build preview-sw as a self-contained IIFE via esbuild.
         // Rollup would code-split LightningFS into a shared chunk, which SWs can't import.
         const esbuild = await import('esbuild');
+        // Build bridge first — its output is embedded into the SW via define
+        const bridgeResult = await esbuild.build({
+          entryPoints: [resolve(__dirname, 'src/ui/playground-bridge-inject.ts')],
+          bundle: true,
+          write: false,
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
+        });
+        const bridgeCode = bridgeResult.outputFiles![0].text;
+
+        // Also write standalone bridge file
+        const { writeFileSync } = await import('fs');
+        writeFileSync(resolve(__dirname, 'dist/extension/playground-bridge.js'), bridgeCode);
+
         await esbuild.build({
           entryPoints: [resolve(__dirname, 'src/ui/preview-sw.ts')],
           bundle: true,
@@ -79,7 +95,11 @@ export default defineConfig(({ mode }) => ({
           format: 'iife',
           target: 'esnext',
           minify: true,
-          define: { __DEV__: 'false', global: 'globalThis' },
+          define: {
+            __DEV__: 'false',
+            global: 'globalThis',
+            __PLAYGROUND_BRIDGE_CODE__: JSON.stringify(bridgeCode),
+          },
         });
       },
     },

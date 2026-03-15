@@ -440,6 +440,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   layout.onOpenSprinkle = (name, zone) => sprinkleManager.open(name, zone);
   layout.updateAddButtons();
   await sprinkleManager.restoreOpenSprinkles();
+  sprinkleManager.startPlaygroundDiscovery();
   log.info('SprinkleManager initialized (extension mode)');
 
   // Request state from offscreen — retries automatically until ready
@@ -992,6 +993,7 @@ async function main(): Promise<void> {
     }
 
     await sprinkleManager.restoreOpenSprinkles();
+    sprinkleManager.startPlaygroundDiscovery();
     log.info('SprinkleManager initialized');
   }
 

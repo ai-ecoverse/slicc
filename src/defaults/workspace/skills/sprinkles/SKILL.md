@@ -43,3 +43,5 @@ The cone will send you a message with the lick action and your sprinkle name. On
 **onclick attributes**: Always use `slicc` — e.g. `onclick="slicc.lick({action: 'add-year'})"`. The `slicc` variable is automatically resolved per-sprinkle, so multiple sprinkles won't collide. Do NOT use `bridge` or any other variable name in onclick.
 
 **CSS components** — Do NOT write custom CSS. Use the built-in `.sprinkle-*` classes: cards, tables, badges, buttons, text fields, progress bars, meters, layout utilities, and more. For inputs use `class="sprinkle-text-field"`, never inline border/padding styles. Run `read_file /workspace/skills/sprinkles/style-guide.md` for the full component reference with markup examples.
+
+**Playground sprinkles** — For interactive playgrounds with rich controls (sliders, chips, toggles, color pickers, canvas) and bidirectional agent communication, see `read_file /workspace/skills/playground-sprinkles/SKILL.md`.

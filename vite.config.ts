@@ -19,21 +19,39 @@ export default defineConfig(({ mode }) => ({
         let cachedOverlayCode: string | null = null;
         let cachedOverlayMtime = 0;
         const overlayEntryPath = resolve(__dirname, 'src/ui/electron-overlay-entry.ts');
+        let cachedBridgeCode: string | null = null;
+        let cachedBridgeMtime = 0;
+        const bridgePath = resolve(__dirname, 'src/ui/playground-bridge-inject.ts');
 
         server.middlewares.use('/preview-sw.js', async (_req, res) => {
           try {
             const { statSync } = await import('fs');
-            const mtime = statSync(swPath).mtimeMs;
+            const mtime = Math.max(statSync(swPath).mtimeMs, statSync(bridgePath).mtimeMs);
 
             if (!cachedCode || mtime > cachedMtime) {
               const esbuild = await import('esbuild');
+              // Build bridge first to embed in SW
+              const bridgeResult = await esbuild.build({
+                entryPoints: [bridgePath],
+                bundle: true,
+                write: false,
+                format: 'iife',
+                target: 'esnext',
+                define: { __DEV__: 'true', global: 'globalThis' },
+              });
+              const bridgeCode = bridgeResult.outputFiles![0].text;
+
               const result = await esbuild.build({
                 entryPoints: [swPath],
                 bundle: true,
                 write: false,
                 format: 'iife',
                 target: 'esnext',
-                define: { __DEV__: 'true', global: 'globalThis' },
+                define: {
+                  __DEV__: 'true',
+                  global: 'globalThis',
+                  __PLAYGROUND_BRIDGE_CODE__: JSON.stringify(bridgeCode),
+                },
               });
               cachedCode = result.outputFiles![0].text;
               cachedMtime = mtime;
@@ -79,11 +97,58 @@ export default defineConfig(({ mode }) => ({
             res.end(`console.error('[electron-overlay] Build failed: ${msg.replace(/'/g, "\\'")}');`);
           }
         });
+
+        server.middlewares.use('/playground-bridge.js', async (_req, res) => {
+          try {
+            const { statSync } = await import('fs');
+            const mtime = statSync(bridgePath).mtimeMs;
+
+            if (!cachedBridgeCode || mtime > cachedBridgeMtime) {
+              const esbuild = await import('esbuild');
+              const result = await esbuild.build({
+                entryPoints: [bridgePath],
+                bundle: true,
+                write: false,
+                format: 'iife',
+                target: 'esnext',
+                define: { __DEV__: 'true', global: 'globalThis' },
+              });
+              cachedBridgeCode = result.outputFiles![0].text;
+              cachedBridgeMtime = mtime;
+            }
+
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(cachedBridgeCode);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error('[playground-bridge-builder] Failed to build:', msg);
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(`console.error('[playground-bridge] Build failed: ${msg.replace(/'/g, "\\'")}');`);
+          }
+        });
       },
       async closeBundle() {
         // Production: build the SW as a self-contained IIFE via esbuild.
         // Rollup would code-split LightningFS into a shared chunk, which SWs can't import.
         const esbuild = await import('esbuild');
+
+        // Build bridge first — its output is embedded into the SW via define
+        const bridgeResult = await esbuild.build({
+          entryPoints: [resolve(__dirname, 'src/ui/playground-bridge-inject.ts')],
+          bundle: true,
+          write: false,
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
+        });
+        const bridgeCode = bridgeResult.outputFiles![0].text;
+
+        // Also write standalone bridge file (for direct <script src> usage)
+        const { writeFileSync } = await import('fs');
+        writeFileSync(resolve(__dirname, 'dist/ui/playground-bridge.js'), bridgeCode);
+
         await esbuild.build({
           entryPoints: [resolve(__dirname, 'src/ui/preview-sw.ts')],
           bundle: true,
@@ -91,7 +156,11 @@ export default defineConfig(({ mode }) => ({
           format: 'iife',
           target: 'esnext',
           minify: true,
-          define: { __DEV__: 'false', global: 'globalThis' },
+          define: {
+            __DEV__: 'false',
+            global: 'globalThis',
+            __PLAYGROUND_BRIDGE_CODE__: JSON.stringify(bridgeCode),
+          },
         });
         await esbuild.build({
           entryPoints: [resolve(__dirname, 'src/ui/electron-overlay-entry.ts')],

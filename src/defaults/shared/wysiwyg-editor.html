@@ -1,0 +1,1007 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WYSIWYG Editor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root { --ui-bg: #111; --ui-surface: #1a1a1a; --ui-border: #2a2a2a; --ui-text: #e0e0e0; --ui-dim: #777; --ui-brand: #0D7377; }
+  body { background: var(--ui-bg); color: var(--ui-text); font-family: system-ui, sans-serif; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+
+  /* Editor chrome */
+  .editor-header { padding: 8px 16px; border-bottom: 1px solid var(--ui-border); display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+  .editor-header h1 { font-size: 13px; font-weight: 600; }
+  .editor-header .pill { background: var(--ui-brand); color: white; font-size: 9px; padding: 2px 8px; border-radius: 10px; }
+  .editor-header .spacer { flex: 1; }
+  .editor-header .url { font-size: 10px; color: var(--ui-dim); font-family: 'SF Mono', monospace; }
+
+  .editor-main { display: flex; flex: 1; overflow: hidden; }
+
+  /* Section panel */
+  .section-panel { width: 240px; border-right: 1px solid var(--ui-border); overflow-y: auto; flex-shrink: 0; display: flex; flex-direction: column; }
+  .section-panel h2 { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--ui-dim); padding: 12px 12px 6px; }
+  .section-list { list-style: none; flex: 1; overflow-y: auto; }
+  .section-list-item { padding: 8px 12px; border-bottom: 1px solid #222; cursor: pointer; display: flex; align-items: center; gap: 8px; font-size: 11px; transition: background 0.1s; }
+  .section-list-item:hover { background: #1e1e1e; }
+  .section-list-item.active { background: rgba(13,115,119,0.12); border-left: 2px solid var(--ui-brand); }
+  .section-list-item .grip { color: #444; cursor: grab; font-size: 12px; }
+  .section-list-item .s-info { flex: 1; min-width: 0; }
+  .section-list-item .s-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .section-list-item .s-block { font-size: 9px; color: var(--ui-dim); font-family: 'SF Mono', monospace; margin-top: 2px; }
+  .section-list-item .s-del { background: none; border: none; color: #555; font-size: 12px; cursor: pointer; padding: 2px; opacity: 0; transition: opacity 0.15s; }
+  .section-list-item:hover .s-del { opacity: 1; }
+  .section-list-item .s-del:hover { color: #ef4444; }
+
+  .add-section-area { padding: 8px 12px; border-top: 1px solid var(--ui-border); }
+  .add-sec-dropdown { width: 100%; background: var(--ui-surface); border: 1px solid var(--ui-border); color: var(--ui-text); padding: 6px 8px; border-radius: 4px; font-size: 11px; cursor: pointer; }
+
+  /* Inline toolbar */
+  .inline-toolbar { position: fixed; z-index: 1000; background: #222; border: 1px solid #444; border-radius: 6px; padding: 4px; display: none; gap: 2px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
+  .inline-toolbar.visible { display: flex; }
+  .tb-btn { background: none; border: none; color: #ccc; padding: 4px 8px; border-radius: 3px; cursor: pointer; font-size: 12px; font-weight: 500; }
+  .tb-btn:hover { background: #333; color: white; }
+  .tb-btn.active { background: var(--ui-brand); color: white; }
+  .tb-sep { width: 1px; background: #444; margin: 2px 4px; }
+
+  /* Preview area */
+  .preview-area { flex: 1; overflow-y: auto; background: white; }
+  .preview-inner { max-width: 100%; margin: 0 auto; }
+
+  /* ===== SITE STYLES (from EDS) ===== */
+  .site-preview {
+    font-family: 'Inter', sans-serif;
+    color: #131313;
+    font-size: 18px;
+    line-height: 1.6;
+  }
+  .site-preview a { color: #3b63fb; text-decoration: none; }
+  .site-preview img { max-width: 100%; height: auto; }
+  .site-preview h1, .site-preview h2, .site-preview h3, .site-preview h4 {
+    font-family: 'Playfair Display', 'Georgia', serif;
+    font-weight: 400; line-height: 1.25; margin-top: 0; margin-bottom: 0;
+  }
+  .site-preview h1 { font-size: 56px; line-height: 60px; }
+  .site-preview h2 { font-size: 46px; line-height: 50px; }
+
+  /* Section wrapper */
+  .eds-section { position: relative; transition: outline 0.15s; cursor: default; }
+  .eds-section:hover { outline: 2px dashed rgba(13,115,119,0.3); outline-offset: -2px; }
+  .eds-section.selected { outline: 2px solid var(--ui-brand); outline-offset: -2px; }
+  .eds-section.drag-over { outline: 2px dashed var(--ui-brand); outline-offset: -2px; background: rgba(13,115,119,0.03); }
+
+  .section-label { position: absolute; top: 0; left: 0; background: var(--ui-brand); color: white; font-family: system-ui, sans-serif; font-size: 9px; font-weight: 600; padding: 2px 8px; border-radius: 0 0 4px 0; z-index: 5; opacity: 0; transition: opacity 0.15s; text-transform: uppercase; letter-spacing: 0.5px; pointer-events: none; }
+  .eds-section:hover .section-label, .eds-section.selected .section-label { opacity: 1; }
+
+  /* Hero teaser */
+  .eds-hero-teaser { position: relative; min-height: 480px; background: #000; overflow: hidden; display: flex; flex-direction: column; justify-content: center; padding: 40px 32px; }
+  .eds-hero-teaser picture { position: absolute; inset: 0; z-index: 0; }
+  .eds-hero-teaser picture img { width: 100%; height: 100%; object-fit: cover; opacity: 0.75; }
+  .eds-hero-teaser .hero-content { position: relative; z-index: 1; max-width: 1180px; margin: 0 auto; width: 100%; display: flex; flex-direction: column; gap: 16px; }
+  .eds-hero-teaser h1 { color: white; font-size: 56px; line-height: 60px; }
+  .eds-hero-teaser p { color: white; font-size: 18px; line-height: 28px; max-width: 577px; margin: 0; }
+  .eds-hero-teaser .hero-cta { display: inline-flex; align-items: center; justify-content: center; background: #d0006f; color: white !important; border: 1px solid #d0006f; border-radius: 4px; padding: 8px 16px; font-size: 16px; font-weight: 600; min-height: 42px; text-decoration: none; cursor: pointer; width: fit-content; }
+  .eds-hero-teaser .hero-cta:hover { background: #a80059; }
+
+  /* Introduction */
+  .eds-introduction { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
+  .eds-introduction h2 { color: #830051; font-size: 46px; line-height: 50px; padding: 20px 0 0; }
+  .eds-introduction p { font-size: 16px; line-height: 24px; color: #363b3b; margin: 0; padding: 16px 0; }
+
+  /* Light section */
+  .eds-section.light { background: #f8f8f8; padding: 56px 0; }
+  .eds-section.highlight { background: #f8f8f8; padding: 56px 0; }
+
+  /* Cards teaser */
+  .eds-section.cards-teaser-section { background: #ebefee; padding: 40px 0; }
+  .eds-cards-teaser { max-width: 1180px; margin: 0 auto; padding: 0 24px; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px; }
+  .eds-card { background: white; border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; }
+  .eds-card img { width: 100%; aspect-ratio: 4/3; object-fit: cover; }
+  .eds-card-body { padding: 24px; display: flex; flex-direction: column; gap: 16px; flex: 1; }
+  .eds-card-body .card-title { font-family: 'Playfair Display', serif; font-size: 26px; font-weight: 400; line-height: 34px; color: #4f0031; margin: 0; }
+  .eds-card-body p { font-size: 18px; line-height: 28px; color: #363b3b; margin: 0; }
+  .eds-card-body .card-link { display: inline-flex; align-items: center; justify-content: center; background: #d0006f; color: white !important; border: 1px solid #d0006f; border-radius: 4px; padding: 8px 16px; font-size: 16px; font-weight: 600; min-height: 42px; text-decoration: none; width: fit-content; margin-top: auto; }
+
+  /* Columns teaser */
+  .eds-columns-teaser { max-width: 1180px; margin: 0 auto; padding: 40px 24px; display: flex; gap: 30px; align-items: center; }
+  .eds-columns-teaser .col-img { flex: 1; }
+  .eds-columns-teaser .col-img img { width: 100%; border-radius: 8px; display: block; }
+  .eds-columns-teaser .col-text { flex: 1; max-width: 577px; display: flex; flex-direction: column; gap: 16px; }
+  .eds-columns-teaser h2 { color: #830051; font-size: 26px; line-height: 34px; }
+  .eds-columns-teaser p { font-size: 18px; line-height: 28px; color: #363b3b; margin: 0; }
+  .eds-columns-teaser .col-cta { display: inline-flex; align-items: center; color: #d0006f !important; background: transparent; border: 2px solid #d0006f; border-radius: 4px; padding: 8px 16px; font-size: 16px; font-weight: 600; min-height: 42px; text-decoration: none; width: fit-content; }
+
+  /* Accordion */
+  .eds-accordion { max-width: 1180px; margin: 0 auto; padding: 24px 24px 0; }
+  .eds-acc-item { border: 1px solid #ebefee; }
+  .eds-acc-item + .eds-acc-item { border-top: none; }
+  .eds-acc-summary { display: flex; align-items: center; justify-content: space-between; padding: 24px 12px 20px; cursor: pointer; background: white; }
+  .eds-acc-summary:hover { background: #f8f8f8; }
+  .eds-acc-title { font-family: 'Playfair Display', serif; font-size: 36px; font-weight: 400; line-height: 40px; color: #830051; }
+  .eds-acc-chevron { width: 20px; height: 20px; border-right: 2px solid #363b3b; border-bottom: 2px solid #363b3b; transform: rotate(45deg); flex-shrink: 0; transition: transform 0.2s; }
+  .eds-acc-item.open .eds-acc-chevron { transform: rotate(-135deg); }
+  .eds-acc-body { padding: 20px 12px; border-top: 1px solid #ebefee; display: none; }
+  .eds-acc-item.open .eds-acc-body { display: block; }
+  .eds-acc-body p { font-size: 18px; line-height: 28px; color: #363b3b; margin: 0 0 0.8em; }
+  .eds-acc-body p:last-child { margin-bottom: 0; }
+  .eds-acc-body ol { font-size: 18px; line-height: 28px; color: #363b3b; padding-left: 24px; }
+  .eds-acc-body li { margin-bottom: 4px; }
+
+  /* Item controls (add/delete for cards & accordion) */
+  .item-controls { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; opacity: 0; transition: opacity 0.15s; z-index: 10; }
+  .eds-card, .eds-acc-item { position: relative; }
+  .eds-card:hover .item-controls, .eds-acc-item:hover .item-controls { opacity: 1; }
+  .item-ctrl-btn { width: 24px; height: 24px; border-radius: 50%; border: none; font-size: 14px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; font-family: system-ui, sans-serif; box-shadow: 0 1px 4px rgba(0,0,0,0.3); }
+  .item-ctrl-btn.del { background: #ef4444; color: white; }
+  .item-ctrl-btn.del:hover { background: #dc2626; }
+  .item-ctrl-btn.dup { background: #0D7377; color: white; }
+  .item-ctrl-btn.dup:hover { background: #0a9a9f; }
+
+  .add-item-btn { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; padding: 16px; border: 2px dashed #ccc; border-radius: 8px; background: rgba(255,255,255,0.6); color: #888; font-size: 14px; font-family: system-ui, sans-serif; cursor: pointer; transition: all 0.15s; grid-column: 1 / -1; }
+  .add-item-btn:hover { border-color: #0D7377; color: #0D7377; background: rgba(13,115,119,0.04); }
+
+  .add-acc-item-btn { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 12px; border: 2px dashed #ddd; background: white; color: #888; font-size: 13px; font-family: system-ui, sans-serif; cursor: pointer; transition: all 0.15s; }
+  .add-acc-item-btn:hover { border-color: #0D7377; color: #0D7377; }
+
+  /* Editable elements */
+  [contenteditable="true"] { outline: none; border-radius: 2px; transition: box-shadow 0.15s; }
+  [contenteditable="true"]:hover { box-shadow: inset 0 0 0 1px rgba(13,115,119,0.25); }
+  [contenteditable="true"]:focus { box-shadow: inset 0 0 0 2px rgba(13,115,119,0.5); }
+
+  /* Prompt */
+  .prompt-area { border-top: 1px solid var(--ui-border); flex-shrink: 0; background: var(--ui-bg); }
+  .prompt-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 16px; }
+  .prompt-header h2 { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--ui-dim); }
+  .prompt-btns { display: flex; gap: 6px; }
+  .copy-btn { background: var(--ui-brand); color: white; border: none; padding: 4px 14px; border-radius: 4px; font-size: 11px; font-weight: 600; cursor: pointer; }
+  .copy-btn.copied { background: #4ecdc4; }
+  .prompt-tabs { display: flex; gap: 4px; }
+  .prompt-tab { background: var(--ui-surface); border: 1px solid var(--ui-border); color: var(--ui-dim); padding: 3px 10px; border-radius: 3px; font-size: 10px; cursor: pointer; }
+  .prompt-tab.active { border-color: var(--ui-brand); color: var(--ui-brand); }
+  .prompt-text { padding: 0 16px 10px; font-family: 'SF Mono', monospace; font-size: 11px; line-height: 1.6; color: var(--ui-dim); max-height: 120px; overflow-y: auto; white-space: pre-wrap; }
+
+  /* Loading / URL entry screens */
+  .screen-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--ui-bg); z-index: 100; }
+  .screen-overlay.hidden { display: none; }
+  .url-entry { text-align: center; max-width: 480px; padding: 40px; }
+  .url-entry h2 { font-size: 20px; margin-bottom: 8px; }
+  .url-entry p { font-size: 13px; color: var(--ui-dim); margin-bottom: 24px; }
+  .url-input-row { display: flex; gap: 8px; }
+  .url-input-row input { flex: 1; background: var(--ui-surface); border: 1px solid var(--ui-border); color: var(--ui-text); padding: 10px 14px; border-radius: 6px; font-size: 14px; font-family: 'SF Mono', monospace; }
+  .url-input-row input:focus { outline: none; border-color: var(--ui-brand); }
+  .url-input-row button { background: var(--ui-brand); color: white; border: none; padding: 10px 20px; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .url-input-row button:hover { background: #0a9a9f; }
+
+  .loading-screen { text-align: center; }
+  .loading-screen .spinner { width: 40px; height: 40px; border: 3px solid var(--ui-border); border-top-color: var(--ui-brand); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 16px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-screen p { font-size: 13px; color: var(--ui-dim); }
+  .loading-screen .load-url { font-size: 11px; color: var(--ui-dim); font-family: 'SF Mono', monospace; margin-top: 8px; word-break: break-all; }
+
+  /* Send to agent button */
+  .send-btn { background: var(--ui-brand); color: white; border: none; padding: 4px 14px; border-radius: 4px; font-size: 11px; font-weight: 600; cursor: pointer; }
+  .send-btn:hover { background: #0a9a9f; }
+</style>
+</head>
+<body>
+
+<!-- URL entry screen -->
+<div class="screen-overlay" id="urlScreen">
+  <div class="url-entry">
+    <h2>EDS WYSIWYG Editor</h2>
+    <p>Enter the URL of an AEM Edge Delivery Services page to edit.</p>
+    <div class="url-input-row">
+      <input type="url" id="urlInput" placeholder="https://main--site--owner.aem.page/page/" autofocus>
+      <button id="urlGo">Open</button>
+    </div>
+  </div>
+</div>
+
+<!-- Loading screen -->
+<div class="screen-overlay hidden" id="loadingScreen">
+  <div class="loading-screen">
+    <div class="spinner"></div>
+    <p>Fetching and parsing page...</p>
+    <div class="load-url" id="loadingUrl"></div>
+  </div>
+</div>
+
+<div class="editor-header" id="editorHeader" style="display:none;">
+  <h1>WYSIWYG Editor</h1>
+  <span class="pill">Live Edit</span>
+  <span class="spacer"></span>
+  <span class="url" id="headerUrl"></span>
+</div>
+
+<div class="editor-main" id="editorMain" style="display:none;">
+  <!-- Section panel -->
+  <div class="section-panel">
+    <h2>Sections</h2>
+    <ul class="section-list" id="sectionList"></ul>
+    <div class="add-section-area">
+      <select class="add-sec-dropdown" id="addSectionSelect">
+        <option value="">+ Add section...</option>
+        <option value="hero-teaser">Hero Teaser</option>
+        <option value="introduction">Introduction</option>
+        <option value="cards-teaser">Cards Teaser</option>
+        <option value="columns-teaser">Columns Teaser</option>
+        <option value="accordion">Accordion</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- WYSIWYG preview -->
+  <div class="preview-area" id="previewArea">
+    <div class="preview-inner">
+      <div class="site-preview" id="sitePreview"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Inline toolbar -->
+<div class="inline-toolbar" id="inlineToolbar">
+  <button class="tb-btn" data-cmd="bold" title="Bold"><strong>B</strong></button>
+  <button class="tb-btn" data-cmd="italic" title="Italic"><em>I</em></button>
+  <button class="tb-btn" data-cmd="superscript" title="Superscript">X<sup>2</sup></button>
+  <div class="tb-sep"></div>
+  <button class="tb-btn" data-cmd="createLink" title="Link">&#128279;</button>
+  <button class="tb-btn" data-cmd="unlink" title="Remove link">&#10005;</button>
+</div>
+
+<!-- Prompt output -->
+<div class="prompt-area" id="promptArea" style="display:none;">
+  <div class="prompt-header">
+    <h2>Output</h2>
+    <div class="prompt-btns">
+      <div class="prompt-tabs">
+        <button class="prompt-tab active" data-mode="plain">plain.html</button>
+        <button class="prompt-tab" data-mode="prompt">Prompt</button>
+      </div>
+      <button class="send-btn" id="sendBtn" title="Send output to agent">Send to Agent</button>
+      <button class="copy-btn" id="copyBtn">Copy</button>
+    </div>
+  </div>
+  <div class="prompt-text" id="promptText"></div>
+</div>
+
+<script>
+var BASE = '';
+var pageUrl = '';
+var sections = [];
+var selectedId = null;
+var outputMode = 'plain';
+var uid = 100;
+
+// ===== URL handling =====
+var params = new URLSearchParams(location.search);
+var urlParam = params.get('url');
+
+if (urlParam) {
+  showLoading(urlParam);
+} else {
+  document.getElementById('urlScreen').classList.remove('hidden');
+}
+
+document.getElementById('urlGo').addEventListener('click', function() {
+  var url = document.getElementById('urlInput').value.trim();
+  if (!url) return;
+  showLoading(url);
+});
+
+document.getElementById('urlInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') {
+    var url = this.value.trim();
+    if (url) showLoading(url);
+  }
+});
+
+function showLoading(url) {
+  pageUrl = url;
+  BASE = url.endsWith('/') ? url : url + '/';
+  document.getElementById('urlScreen').classList.add('hidden');
+  document.getElementById('loadingScreen').classList.remove('hidden');
+  document.getElementById('loadingUrl').textContent = url;
+  requestPageParse(url);
+}
+
+function requestPageParse(url) {
+  // Always try direct fetch first (EDS pages serve plain.html with CORS).
+  // Only fall back to slicc.lick() if fetch fails (e.g. CORS blocked).
+  fetchAndParsePage(url);
+}
+
+// Fetch page — uses /api/fetch-proxy to bypass CORS (works in CLI + extension modes)
+function fetchAndParsePage(url) {
+  var plainUrl = url.replace(/\/$/, '') + '/index.plain.html';
+
+  // Use the SLICC fetch proxy to bypass CORS.
+  // In CLI mode: /api/fetch-proxy with X-Target-URL header.
+  // In extension mode: direct fetch works (host_permissions).
+  var isExtension = typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id;
+
+  var fetchPromise = isExtension
+    ? fetch(plainUrl)
+    : fetch('/api/fetch-proxy', { headers: { 'X-Target-URL': plainUrl } });
+
+  fetchPromise
+    .then(function(r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.text();
+    })
+    .then(function(html) {
+      var parsed = parsePlainHtml(html, url);
+      initEditor(parsed, url);
+    })
+    .catch(function(err) {
+      // Fetch failed — fall back to agent if available
+      if (typeof slicc !== 'undefined') {
+        document.getElementById('loadingScreen').querySelector('p').textContent = 'Fetching via agent...';
+        slicc.lick({ action: 'fetch-page', data: { url: url } });
+      } else {
+        alert('Failed to fetch page: ' + err.message);
+        document.getElementById('loadingScreen').classList.add('hidden');
+        document.getElementById('urlScreen').classList.remove('hidden');
+      }
+    });
+}
+
+// Parse EDS plain.html into sections array
+function parsePlainHtml(html, baseUrl) {
+  var parser = new DOMParser();
+  var doc = parser.parseFromString(html, 'text/html');
+  var sectionDivs = doc.body.querySelectorAll(':scope > div');
+  var result = [];
+  var counter = 1;
+
+  sectionDivs.forEach(function(sDiv) {
+    // Find the block div (first child div with a class)
+    var blockDiv = sDiv.querySelector(':scope > div[class]');
+    if (!blockDiv) {
+      // Check for default content (no block wrapper)
+      var ps = sDiv.querySelectorAll(':scope > p, :scope > h1, :scope > h2, :scope > h3, :scope > h4');
+      if (ps.length > 0) {
+        var heading = sDiv.querySelector('h1, h2, h3, h4');
+        var bodyPs = sDiv.querySelectorAll('p');
+        result.push({
+          id: 's' + counter++,
+          type: 'introduction',
+          style: getSectionStyle(sDiv),
+          label: heading ? heading.textContent.substring(0, 30) : 'Content',
+          data: {
+            heading: heading ? heading.innerHTML : '',
+            body: Array.from(bodyPs).map(function(p) { return p.innerHTML; }).join('\n')
+          }
+        });
+      }
+      return;
+    }
+
+    var blockType = blockDiv.className.split(' ')[0];
+    var style = getSectionStyle(sDiv);
+    var section = { id: 's' + counter++, type: blockType, style: style, label: '', data: {} };
+
+    switch (blockType) {
+      case 'hero-teaser': {
+        var img = blockDiv.querySelector('img');
+        var h1 = blockDiv.querySelector('h1');
+        var ps = blockDiv.querySelectorAll('p');
+        var cta = blockDiv.querySelector('a[href]');
+        section.label = h1 ? h1.textContent.substring(0, 20) : 'Hero';
+        section.data = {
+          imgSrc: img ? resolveUrl(img.getAttribute('src'), baseUrl) : '',
+          imgAlt: img ? (img.getAttribute('alt') || '') : '',
+          heading: h1 ? h1.innerHTML : 'Heading',
+          body: ps.length > 0 ? ps[0].innerHTML : '',
+          ctaText: cta ? cta.textContent : '',
+          ctaHref: cta ? cta.getAttribute('href') : ''
+        };
+        break;
+      }
+      case 'introduction': {
+        var h2 = blockDiv.querySelector('h2, h3');
+        var ps = blockDiv.querySelectorAll('p');
+        section.label = h2 ? h2.textContent.substring(0, 20) : 'Introduction';
+        section.data = {
+          heading: h2 ? h2.innerHTML : '',
+          body: Array.from(ps).map(function(p) { return p.innerHTML; }).join('\n')
+        };
+        break;
+      }
+      case 'cards-teaser': {
+        var rows = blockDiv.querySelectorAll(':scope > div');
+        var cards = [];
+        rows.forEach(function(row) {
+          var img = row.querySelector('img');
+          var strong = row.querySelector('strong');
+          var ps = row.querySelectorAll('p');
+          var link = row.querySelector('a[href]');
+          var bodyText = '';
+          ps.forEach(function(p) {
+            if (!p.querySelector('strong') && !p.querySelector('a')) bodyText += p.innerHTML;
+          });
+          cards.push({
+            imgSrc: img ? resolveUrl(img.getAttribute('src'), baseUrl) : '',
+            imgAlt: img ? (img.getAttribute('alt') || '') : '',
+            title: strong ? strong.innerHTML : (ps[0] ? ps[0].innerHTML : 'Card'),
+            body: bodyText,
+            linkText: link ? link.textContent : '',
+            linkHref: link ? link.getAttribute('href') : ''
+          });
+        });
+        section.label = 'Cards (' + cards.length + ')';
+        section.data = { cards: cards };
+        break;
+      }
+      case 'columns-teaser': {
+        var img = blockDiv.querySelector('img');
+        var h2 = blockDiv.querySelector('h2, h3');
+        var ps = blockDiv.querySelectorAll('p');
+        var cta = blockDiv.querySelector('a[href]');
+        var bodyText = '';
+        ps.forEach(function(p) {
+          if (!p.querySelector('a') || !p.querySelector('strong')) bodyText += p.innerHTML;
+        });
+        section.label = h2 ? h2.textContent.substring(0, 20) : 'Columns';
+        section.data = {
+          imgSrc: img ? resolveUrl(img.getAttribute('src'), baseUrl) : '',
+          imgAlt: img ? (img.getAttribute('alt') || '') : '',
+          heading: h2 ? h2.innerHTML : '',
+          body: bodyText,
+          ctaText: cta ? cta.textContent : '',
+          ctaHref: cta ? cta.getAttribute('href') : ''
+        };
+        break;
+      }
+      case 'accordion': {
+        var rows = blockDiv.querySelectorAll(':scope > div');
+        var items = [];
+        rows.forEach(function(row) {
+          var cells = row.querySelectorAll(':scope > div');
+          if (cells.length >= 2) {
+            items.push({
+              title: cells[0].textContent.trim(),
+              body: cells[1].innerHTML
+            });
+          }
+        });
+        section.label = 'Accordion (' + items.length + ')';
+        section.data = { items: items };
+        break;
+      }
+      default: {
+        // Generic block — store raw HTML
+        section.label = blockType;
+        section.data = { rawHtml: blockDiv.innerHTML };
+      }
+    }
+
+    result.push(section);
+  });
+
+  return result;
+}
+
+function getSectionStyle(sDiv) {
+  var metaDiv = sDiv.querySelector('.section-metadata');
+  if (!metaDiv) return '';
+  var rows = metaDiv.querySelectorAll(':scope > div');
+  for (var i = 0; i < rows.length; i++) {
+    var cells = rows[i].querySelectorAll(':scope > div');
+    if (cells.length >= 2 && cells[0].textContent.trim().toLowerCase() === 'style') {
+      return cells[1].textContent.trim();
+    }
+  }
+  return '';
+}
+
+function resolveUrl(src, baseUrl) {
+  if (!src) return '';
+  if (src.startsWith('http')) return src;
+  if (src.startsWith('./')) src = src.substring(2);
+  if (src.startsWith('/')) {
+    // Absolute path — resolve against origin
+    try {
+      var origin = new URL(baseUrl).origin;
+      return origin + src;
+    } catch(e) { return src; }
+  }
+  return baseUrl.replace(/\/$/, '') + '/' + src;
+}
+
+// ===== Initialize editor with parsed data =====
+function initEditor(parsedSections, url) {
+  sections = parsedSections;
+  pageUrl = url;
+  BASE = url.endsWith('/') ? url : url + '/';
+
+  document.getElementById('loadingScreen').classList.add('hidden');
+  document.getElementById('editorHeader').style.display = '';
+  document.getElementById('editorMain').style.display = '';
+  document.getElementById('promptArea').style.display = '';
+
+  try {
+    var urlObj = new URL(url);
+    document.getElementById('headerUrl').textContent = urlObj.host + urlObj.pathname;
+  } catch(e) {
+    document.getElementById('headerUrl').textContent = url;
+  }
+
+  renderAll();
+
+  // Persist state
+  if (typeof slicc !== 'undefined') {
+    slicc.setState({ url: url, sections: sections });
+  }
+}
+
+// ===== Bridge integration =====
+if (typeof slicc !== 'undefined') {
+  // Receive parsed sections from agent
+  slicc.on('update', function(data) {
+    if (data && data.action === 'replace' && data.sections) {
+      initEditor(data.sections, data.url || pageUrl);
+    }
+  });
+
+  // Restore state
+  (function() {
+    var p = slicc.getState();
+    if (p && typeof p.then === 'function') {
+      p.then(function(saved) {
+        if (saved && saved.sections && saved.sections.length > 0) {
+          initEditor(saved.sections, saved.url || urlParam || '');
+        }
+      });
+    } else if (p && p.sections && p.sections.length > 0) {
+      initEditor(p.sections, p.url || urlParam || '');
+    }
+  })();
+}
+
+// ===== Rendering =====
+function renderSectionList() {
+  var list = document.getElementById('sectionList');
+  list.innerHTML = sections.map(function(s, i) {
+    return '<li class="section-list-item ' + (s.id === selectedId ? 'active' : '') + '" data-id="' + s.id + '" draggable="true">' +
+      '<span class="grip">\u283F</span>' +
+      '<div class="s-info">' +
+        '<div class="s-name">' + escHtml(s.label) + '</div>' +
+        '<div class="s-block">' + s.type + (s.style ? ' \u00b7 ' + s.style : '') + '</div>' +
+      '</div>' +
+      '<button class="s-del" data-id="' + s.id + '" title="Delete section">&times;</button>' +
+    '</li>';
+  }).join('');
+
+  list.querySelectorAll('.section-list-item').forEach(function(item) {
+    item.addEventListener('click', function(e) {
+      if (e.target.closest('.s-del')) return;
+      selectedId = item.dataset.id;
+      renderSectionList();
+      highlightSection(selectedId);
+    });
+  });
+
+  list.querySelectorAll('.s-del').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var idx = sections.findIndex(function(s) { return s.id === btn.dataset.id; });
+      if (idx >= 0) { sections.splice(idx, 1); if (selectedId === btn.dataset.id) selectedId = null; renderAll(); }
+    });
+  });
+
+  // Drag reorder
+  var dragIdx = null;
+  list.querySelectorAll('.section-list-item').forEach(function(item, i) {
+    item.addEventListener('dragstart', function() { dragIdx = i; });
+    item.addEventListener('dragover', function(e) { e.preventDefault(); item.style.borderTop = '2px solid #0D7377'; });
+    item.addEventListener('dragleave', function() { item.style.borderTop = ''; });
+    item.addEventListener('drop', function(e) {
+      e.preventDefault(); item.style.borderTop = '';
+      var toIdx = Array.from(list.children).indexOf(item);
+      if (dragIdx !== null && dragIdx !== toIdx) {
+        var moved = sections.splice(dragIdx, 1)[0];
+        sections.splice(toIdx, 0, moved);
+        renderAll();
+      }
+      dragIdx = null;
+    });
+  });
+}
+
+function renderPreview() {
+  var container = document.getElementById('sitePreview');
+  container.innerHTML = sections.map(function(s) { return renderSection(s); }).join('');
+
+  container.querySelectorAll('.eds-section').forEach(function(el) {
+    el.addEventListener('click', function(e) {
+      if (e.target.closest('[contenteditable]')) return;
+      selectedId = el.dataset.id;
+      renderSectionList();
+      container.querySelectorAll('.eds-section').forEach(function(s) { s.classList.remove('selected'); });
+      el.classList.add('selected');
+    });
+  });
+
+  // Preview drag-drop
+  container.querySelectorAll('.eds-section').forEach(function(el) {
+    el.setAttribute('draggable', 'true');
+    el.addEventListener('dragstart', function(e) { e.dataTransfer.setData('text/plain', el.dataset.id); el.style.opacity = '0.5'; });
+    el.addEventListener('dragend', function() { el.style.opacity = '1'; });
+    el.addEventListener('dragover', function(e) { e.preventDefault(); el.classList.add('drag-over'); });
+    el.addEventListener('dragleave', function() { el.classList.remove('drag-over'); });
+    el.addEventListener('drop', function(e) {
+      e.preventDefault(); el.classList.remove('drag-over');
+      var fromId = e.dataTransfer.getData('text/plain');
+      var toId = el.dataset.id;
+      if (fromId === toId) return;
+      var fromIdx = sections.findIndex(function(s) { return s.id === fromId; });
+      var toIdx = sections.findIndex(function(s) { return s.id === toId; });
+      if (fromIdx < 0 || toIdx < 0) return;
+      var moved = sections.splice(fromIdx, 1)[0];
+      sections.splice(toIdx, 0, moved);
+      renderAll();
+    });
+  });
+
+  // Accordion toggles
+  container.querySelectorAll('.eds-acc-summary').forEach(function(s) {
+    s.addEventListener('click', function(e) {
+      if (e.target.closest('[contenteditable]')) return;
+      s.closest('.eds-acc-item').classList.toggle('open');
+    });
+  });
+
+  // Contenteditable syncing
+  container.querySelectorAll('[data-field]').forEach(function(el) {
+    el.addEventListener('input', function() { syncField(el); });
+    el.addEventListener('blur', function() { updateOutput(); persistState(); });
+  });
+
+  // Add/delete/duplicate for cards and accordion
+  container.querySelectorAll('[data-action]').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var action = btn.dataset.action;
+      var sectionId = btn.dataset.section;
+      var section = sections.find(function(s) { return s.id === sectionId; });
+      if (!section) return;
+      var idx = parseInt(btn.dataset.idx);
+
+      switch (action) {
+        case 'add-card':
+          section.data.cards.push({ imgSrc: '', imgAlt: 'New card image', title: 'New card title', body: 'Card description goes here.', linkText: 'Learn more', linkHref: '/' });
+          break;
+        case 'del-card':
+          if (section.data.cards.length > 1) section.data.cards.splice(idx, 1);
+          break;
+        case 'dup-card':
+          section.data.cards.splice(idx + 1, 0, JSON.parse(JSON.stringify(section.data.cards[idx])));
+          break;
+        case 'add-acc':
+          section.data.items.push({ title: 'New item', body: '<p>Content here.</p>' });
+          break;
+        case 'del-acc':
+          if (section.data.items.length > 1) section.data.items.splice(idx, 1);
+          break;
+        case 'dup-acc':
+          section.data.items.splice(idx + 1, 0, JSON.parse(JSON.stringify(section.data.items[idx])));
+          break;
+      }
+      renderAll();
+    });
+  });
+}
+
+function renderSection(s) {
+  var styleClass = s.style ? ' ' + s.style : '';
+  var extraClass = s.type === 'cards-teaser' ? ' cards-teaser-section' : '';
+  function wrapper(inner) {
+    return '<div class="eds-section' + styleClass + extraClass + '" data-id="' + s.id + '"><span class="section-label">' + s.type + '</span>' + inner + '</div>';
+  }
+
+  switch (s.type) {
+    case 'hero-teaser': return wrapper(
+      '<div class="eds-hero-teaser">' +
+        (s.data.imgSrc ? '<picture><img src="' + s.data.imgSrc + '" alt="' + escAttr(s.data.imgAlt) + '"></picture>' : '') +
+        '<div class="hero-content">' +
+          '<h1 contenteditable="true" data-field="heading" data-section="' + s.id + '">' + s.data.heading + '</h1>' +
+          '<p contenteditable="true" data-field="body" data-section="' + s.id + '">' + s.data.body + '</p>' +
+          (s.data.ctaText ? '<a class="hero-cta" href="' + escAttr(s.data.ctaHref) + '" contenteditable="true" data-field="ctaText" data-section="' + s.id + '" onclick="event.preventDefault()">' + s.data.ctaText + '</a>' : '') +
+        '</div>' +
+      '</div>'
+    );
+
+    case 'introduction': return wrapper(
+      '<div class="eds-introduction">' +
+        '<h2 contenteditable="true" data-field="heading" data-section="' + s.id + '">' + s.data.heading + '</h2>' +
+        '<p contenteditable="true" data-field="body" data-section="' + s.id + '">' + s.data.body + '</p>' +
+      '</div>'
+    );
+
+    case 'cards-teaser': return wrapper(
+      '<div class="eds-cards-teaser">' +
+        s.data.cards.map(function(c, i) {
+          return '<div class="eds-card">' +
+            '<div class="item-controls">' +
+              '<button class="item-ctrl-btn dup" data-action="dup-card" data-section="' + s.id + '" data-idx="' + i + '" title="Duplicate card">\u29C9</button>' +
+              (s.data.cards.length > 1 ? '<button class="item-ctrl-btn del" data-action="del-card" data-section="' + s.id + '" data-idx="' + i + '" title="Delete card">\u2715</button>' : '') +
+            '</div>' +
+            (c.imgSrc ? '<img src="' + c.imgSrc + '" alt="' + escAttr(c.imgAlt) + '">' : '<div style="aspect-ratio:4/3;background:#eee;display:flex;align-items:center;justify-content:center;color:#999;">No image</div>') +
+            '<div class="eds-card-body">' +
+              '<p class="card-title" contenteditable="true" data-field="cards.' + i + '.title" data-section="' + s.id + '">' + c.title + '</p>' +
+              '<p contenteditable="true" data-field="cards.' + i + '.body" data-section="' + s.id + '">' + c.body + '</p>' +
+              (c.linkText ? '<a class="card-link" href="' + escAttr(c.linkHref) + '" contenteditable="true" data-field="cards.' + i + '.linkText" data-section="' + s.id + '" onclick="event.preventDefault()">' + c.linkText + '</a>' : '') +
+            '</div>' +
+          '</div>';
+        }).join('') +
+        '<button class="add-item-btn" data-action="add-card" data-section="' + s.id + '">+ Add card</button>' +
+      '</div>'
+    );
+
+    case 'columns-teaser': return wrapper(
+      '<div class="eds-columns-teaser">' +
+        '<div class="col-img">' + (s.data.imgSrc ? '<img src="' + s.data.imgSrc + '" alt="' + escAttr(s.data.imgAlt) + '">' : '<div style="aspect-ratio:4/3;background:#eee;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#999;">No image</div>') + '</div>' +
+        '<div class="col-text">' +
+          '<h2 contenteditable="true" data-field="heading" data-section="' + s.id + '">' + s.data.heading + '</h2>' +
+          '<p contenteditable="true" data-field="body" data-section="' + s.id + '">' + s.data.body + '</p>' +
+          (s.data.ctaText ? '<a class="col-cta" href="' + escAttr(s.data.ctaHref) + '" contenteditable="true" data-field="ctaText" data-section="' + s.id + '" onclick="event.preventDefault()">' + s.data.ctaText + '</a>' : '') +
+        '</div>' +
+      '</div>'
+    );
+
+    case 'accordion': return wrapper(
+      '<div class="eds-accordion">' +
+        s.data.items.map(function(item, i) {
+          return '<div class="eds-acc-item">' +
+            '<div class="item-controls">' +
+              '<button class="item-ctrl-btn dup" data-action="dup-acc" data-section="' + s.id + '" data-idx="' + i + '" title="Duplicate item">\u29C9</button>' +
+              (s.data.items.length > 1 ? '<button class="item-ctrl-btn del" data-action="del-acc" data-section="' + s.id + '" data-idx="' + i + '" title="Delete item">\u2715</button>' : '') +
+            '</div>' +
+            '<div class="eds-acc-summary">' +
+              '<span class="eds-acc-title" contenteditable="true" data-field="items.' + i + '.title" data-section="' + s.id + '">' + item.title + '</span>' +
+              '<span class="eds-acc-chevron"></span>' +
+            '</div>' +
+            '<div class="eds-acc-body" contenteditable="true" data-field="items.' + i + '.body" data-section="' + s.id + '">' + item.body + '</div>' +
+          '</div>';
+        }).join('') +
+        '<button class="add-acc-item-btn" data-action="add-acc" data-section="' + s.id + '">+ Add accordion item</button>' +
+      '</div>'
+    );
+
+    default: return wrapper(
+      '<div style="padding:40px;text-align:center;color:#888;">Block: ' + s.type + (s.data.rawHtml ? '<div style="text-align:left;padding:20px;font-size:14px;">' + s.data.rawHtml + '</div>' : '') + '</div>'
+    );
+  }
+}
+
+// ===== Field syncing =====
+function syncField(el) {
+  var sectionId = el.dataset.section;
+  var field = el.dataset.field;
+  var section = sections.find(function(s) { return s.id === sectionId; });
+  if (!section) return;
+
+  var parts = field.split('.');
+  var obj = section.data;
+  for (var i = 0; i < parts.length - 1; i++) {
+    obj = obj[parts[i]];
+  }
+  obj[parts[parts.length - 1]] = el.innerHTML;
+}
+
+function highlightSection(id) {
+  document.querySelectorAll('.eds-section').forEach(function(s) { s.classList.remove('selected'); });
+  var el = document.querySelector('.eds-section[data-id="' + id + '"]');
+  if (el) {
+    el.classList.add('selected');
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}
+
+// ===== Inline toolbar =====
+var toolbar = document.getElementById('inlineToolbar');
+
+document.addEventListener('selectionchange', function() {
+  var sel = window.getSelection();
+  if (!sel.rangeCount || sel.isCollapsed) { toolbar.classList.remove('visible'); return; }
+  var range = sel.getRangeAt(0);
+  var container = range.commonAncestorContainer;
+  var editable = container.nodeType === 3 ? container.parentElement.closest('[contenteditable]') : (container.closest ? container.closest('[contenteditable]') : null);
+  if (!editable || !document.getElementById('sitePreview').contains(editable)) { toolbar.classList.remove('visible'); return; }
+
+  var rect = range.getBoundingClientRect();
+  toolbar.style.left = (rect.left + rect.width / 2 - 80) + 'px';
+  toolbar.style.top = (rect.top - 40) + 'px';
+  toolbar.classList.add('visible');
+});
+
+toolbar.querySelectorAll('.tb-btn').forEach(function(btn) {
+  btn.addEventListener('mousedown', function(e) {
+    e.preventDefault();
+    var cmd = btn.dataset.cmd;
+    if (cmd === 'createLink') {
+      var url = prompt('Enter URL:');
+      if (url) document.execCommand('createLink', false, url);
+    } else {
+      document.execCommand(cmd, false, null);
+    }
+    updateOutput();
+  });
+});
+
+// ===== Add section =====
+document.getElementById('addSectionSelect').addEventListener('change', function(e) {
+  var type = e.target.value;
+  if (!type) return;
+  var id = 's' + (uid++);
+  var newSection = createDefaultSection(id, type);
+  sections.push(newSection);
+  selectedId = id;
+  e.target.value = '';
+  renderAll();
+  highlightSection(id);
+});
+
+function createDefaultSection(id, type) {
+  switch (type) {
+    case 'hero-teaser': return { id: id, type: type, style: '', label: 'New Hero', data: { imgSrc: '', imgAlt: 'Hero image', heading: 'Heading', body: 'Description text goes here.', ctaText: 'Learn more', ctaHref: '/' } };
+    case 'introduction': return { id: id, type: type, style: '', label: 'New Introduction', data: { heading: 'Section heading', body: 'Body text goes here.' } };
+    case 'cards-teaser': return { id: id, type: type, style: '', label: 'New Cards', data: { cards: [{ imgSrc: '', imgAlt: 'Card', title: 'Card title', body: 'Card description.', linkText: 'Learn more', linkHref: '/' }] } };
+    case 'columns-teaser': return { id: id, type: type, style: '', label: 'New Columns', data: { imgSrc: '', imgAlt: 'Image', heading: 'Section heading', body: 'Body text.', ctaText: 'Learn more', ctaHref: '/' } };
+    case 'accordion': return { id: id, type: type, style: '', label: 'New Accordion', data: { items: [{ title: 'Accordion item', body: '<p>Content here.</p>' }] } };
+    default: return { id: id, type: type, style: '', label: 'Section', data: {} };
+  }
+}
+
+// ===== Output =====
+function generatePlainHtml() {
+  return sections.map(function(s) {
+    var inner = '';
+    switch (s.type) {
+      case 'hero-teaser':
+        inner = '  <div class="hero-teaser">\n    <div>\n      <div>\n' +
+          (s.data.imgSrc ? '        <picture>\n          <source type="image/webp" srcset="' + toRelative(s.data.imgSrc) + '" media="(min-width: 600px)">\n          <img loading="lazy" alt="' + escAttr(s.data.imgAlt) + '" src="' + toRelative(s.data.imgSrc) + '">\n        </picture>\n' : '') +
+          '      </div>\n    </div>\n    <div>\n      <div>\n        <h1 id="' + slugify(stripHtml(s.data.heading)) + '">' + s.data.heading + '</h1>\n        <p>' + s.data.body + '</p>\n' +
+          (s.data.ctaText ? '        <p><strong><a href="' + s.data.ctaHref + '">' + s.data.ctaText + '</a></strong></p>\n' : '') +
+          '      </div>\n    </div>\n  </div>';
+        break;
+      case 'introduction':
+        inner = '  <div class="introduction">\n    <div>\n      <div>\n        <h2 id="' + slugify(stripHtml(s.data.heading)) + '">' + s.data.heading + '</h2>\n        <p>' + s.data.body + '</p>\n      </div>\n    </div>\n  </div>';
+        break;
+      case 'cards-teaser':
+        var cardsInner = s.data.cards.map(function(c) {
+          return '    <div>\n      <div>\n' +
+            (c.imgSrc ? '        <picture>\n          <img loading="lazy" alt="' + escAttr(c.imgAlt) + '" src="' + toRelative(c.imgSrc) + '">\n        </picture>\n' : '') +
+            '      </div>\n      <div>\n        <p><strong>' + c.title + '</strong></p>\n        <p>' + c.body + '</p>\n' +
+            (c.linkText ? '        <p><a href="' + c.linkHref + '">' + c.linkText + '</a></p>\n' : '') +
+            '      </div>\n    </div>';
+        }).join('\n');
+        inner = '  <div class="cards-teaser">\n' + cardsInner + '\n  </div>';
+        break;
+      case 'columns-teaser':
+        inner = '  <div class="columns-teaser">\n    <div>\n      <div>\n' +
+          (s.data.imgSrc ? '        <picture>\n          <img loading="lazy" alt="' + escAttr(s.data.imgAlt) + '" src="' + toRelative(s.data.imgSrc) + '">\n        </picture>\n' : '') +
+          '      </div>\n      <div>\n        <h2 id="' + slugify(stripHtml(s.data.heading)) + '">' + s.data.heading + '</h2>\n        <p>' + s.data.body + '</p>\n' +
+          (s.data.ctaText ? '        <p><strong><a href="' + s.data.ctaHref + '">' + s.data.ctaText + '</a></strong></p>\n' : '') +
+          '      </div>\n    </div>\n  </div>';
+        break;
+      case 'accordion':
+        var accInner = s.data.items.map(function(item) {
+          return '    <div>\n      <div>' + item.title + '</div>\n      <div>\n        ' + item.body + '\n      </div>\n    </div>';
+        }).join('\n');
+        inner = '  <div class="accordion">\n' + accInner + '\n  </div>';
+        break;
+      default:
+        inner = '  <div class="' + s.type + '">\n    ' + (s.data.rawHtml || '') + '\n  </div>';
+    }
+
+    var sectionMeta = '';
+    if (s.style) {
+      sectionMeta = '\n  <div class="section-metadata">\n    <div>\n      <div>Style</div>\n      <div>' + s.style + '</div>\n    </div>\n  </div>';
+    }
+
+    return '<div>\n' + inner + sectionMeta + '\n</div>';
+  }).join('\n');
+}
+
+function generatePrompt() {
+  var lines = ['Update the page with the following structure:\n'];
+  lines.push('Page structure (' + sections.length + ' sections in this order):');
+  sections.forEach(function(s, i) {
+    lines.push('  ' + (i + 1) + '. ' + s.label + ' \u2014 block: ' + s.type + (s.style ? ', style: ' + s.style : ''));
+    if (s.type === 'hero-teaser' || s.type === 'introduction' || s.type === 'columns-teaser') {
+      lines.push('     Heading: "' + stripHtml(s.data.heading) + '"');
+    }
+  });
+  lines.push('\nReplace the full page content with the plain.html output below.');
+  return lines.join('\n');
+}
+
+function toRelative(url) {
+  if (!url || !BASE) return url;
+  return url.replace(BASE, './');
+}
+
+function escHtml(str) {
+  if (!str) return '';
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function escAttr(str) {
+  if (!str) return '';
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function stripHtml(html) {
+  if (!html) return '';
+  var tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  return tmp.textContent || '';
+}
+
+function slugify(text) {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+}
+
+function updateOutput() {
+  var prompt = document.getElementById('promptText');
+  if (outputMode === 'plain') {
+    prompt.textContent = generatePlainHtml();
+  } else {
+    prompt.textContent = generatePrompt() + '\n\n---\n\n' + generatePlainHtml();
+  }
+}
+
+function persistState() {
+  if (typeof slicc !== 'undefined') {
+    slicc.setState({ url: pageUrl, sections: sections });
+  }
+}
+
+// Output tabs
+document.querySelectorAll('.prompt-tab').forEach(function(tab) {
+  tab.addEventListener('click', function() {
+    document.querySelectorAll('.prompt-tab').forEach(function(t) { t.classList.remove('active'); });
+    tab.classList.add('active');
+    outputMode = tab.dataset.mode;
+    updateOutput();
+  });
+});
+
+// Copy
+document.getElementById('copyBtn').addEventListener('click', function() {
+  navigator.clipboard.writeText(document.getElementById('promptText').textContent).then(function() {
+    var btn = document.getElementById('copyBtn');
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(function() { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
+  });
+});
+
+// Send to agent (or copy if not in SLICC)
+document.getElementById('sendBtn').addEventListener('click', function() {
+  var output = document.getElementById('promptText').textContent;
+  var btn = document.getElementById('sendBtn');
+  if (typeof slicc !== 'undefined' && slicc.lick) {
+    slicc.lick({ action: 'send-output', data: { mode: outputMode, content: output, url: pageUrl } });
+    btn.textContent = 'Sent!';
+    setTimeout(function() { btn.textContent = 'Send to Agent'; }, 1500);
+  } else {
+    navigator.clipboard.writeText(output).then(function() {
+      btn.textContent = 'Copied!';
+      setTimeout(function() { btn.textContent = 'Send to Agent'; }, 1500);
+    });
+  }
+});
+
+// ===== Init =====
+function renderAll() {
+  renderSectionList();
+  renderPreview();
+  updateOutput();
+  persistState();
+}
+</script>
+</body>
+</html>

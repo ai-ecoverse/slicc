@@ -35,6 +35,7 @@ A browser-based coding agent that runs as a **Chrome extension**, with a thin **
 - :floppy_disk: **Session Persistence** — conversations and files survive page reloads via IndexedDB
 - :microphone: **Voice Input** — hands-free voice mode using the Web Speech API. Toggle on, speak, 2.5s silence auto-sends, agent responds, voice auto-restarts. Works in both CLI and extension mode (extension uses a one-time popup for mic permission grant)
 - :crescent_moon: **Dark Theme** — syntax-highlighted code with a dark-first design
+- :joystick: **Playground Sprinkles** — interactive sidebar panels with sliders, chips, toggles, color pickers, and canvas controls that send natural-language prompts to the agent in real-time. Design playgrounds, data explorers, concept maps, and more — all wired to the bidirectional `slicc` bridge API
 
 ## Why "slicc"?
 

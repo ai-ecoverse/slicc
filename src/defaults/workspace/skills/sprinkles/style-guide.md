@@ -1,6 +1,6 @@
 # Sprinkle Component Reference
 
-Use these CSS classes in `.shtml` sprinkles. Do NOT write custom CSS — these components cover all common UI patterns.
+Use these CSS classes in `.shtml` sprinkles. For patterns not covered by the built-in components, you can write custom `<style>` blocks directly in your `.shtml` file — they work in both CLI and extension modes.
 
 ## Cards
 `.sprinkle-card` — Card with shadow (hover elevates).
@@ -82,11 +82,170 @@ Accepts `--value` or `--progress` for fill width.
 `.sprinkle-detail` — Small secondary text.
 `.sprinkle-divider` — Subtle separator line. Add `--medium` for thicker.
 
+## Split Layout
+`.sprinkle-split` — Horizontal split panes with a draggable-style handle. Add `--vertical` for top/bottom split.
+```html
+<div class="sprinkle-split">
+  <div class="sprinkle-split__pane sprinkle-split__pane--sidebar">
+    <!-- sidebar content (220px default, 280px when expanded) -->
+  </div>
+  <div class="sprinkle-split__handle"></div>
+  <div class="sprinkle-split__pane">
+    <!-- main content -->
+  </div>
+</div>
+```
+Use `sprinkle-split__pane--sidebar` on the fixed-width pane. The other pane flexes to fill.
+
+## Tabs
+`.sprinkle-tabs` — Nested tab group within a sprinkle. Wire tab switching in script.
+```html
+<div class="sprinkle-tabs">
+  <div class="sprinkle-tabs__bar">
+    <button class="sprinkle-tabs__tab active" onclick="switchTab(this,'panel1')">Tab 1</button>
+    <button class="sprinkle-tabs__tab" onclick="switchTab(this,'panel2')">Tab 2</button>
+  </div>
+  <div class="sprinkle-tabs__panel active" id="panel1">Content 1</div>
+  <div class="sprinkle-tabs__panel" id="panel2">Content 2</div>
+</div>
+```
+```javascript
+function switchTab(btn, panelId) {
+  var tabs = btn.parentElement.parentElement;
+  var buttons = tabs.querySelectorAll('.sprinkle-tabs__tab');
+  var panels = tabs.querySelectorAll('.sprinkle-tabs__panel');
+  for (var i = 0; i < buttons.length; i++) buttons[i].classList.remove('active');
+  for (var i = 0; i < panels.length; i++) panels[i].classList.remove('active');
+  btn.classList.add('active');
+  document.getElementById(panelId).classList.add('active');
+  updateAll();
+}
+```
+
+## Sidebar Layout
+`.sprinkle-sidebar` — Fixed sidebar + flexible main area. Add `--right` for right-side sidebar.
+```html
+<div class="sprinkle-sidebar">
+  <div class="sprinkle-sidebar__aside">
+    <!-- controls, navigation -->
+  </div>
+  <div class="sprinkle-sidebar__main">
+    <!-- main content / preview -->
+  </div>
+</div>
+```
+
+## Custom CSS
+You can write `<style>` blocks in your `.shtml` file for custom classes. They are extracted and injected into the sandbox automatically — works in both CLI and extension modes.
+```html
+<style>
+  .my-node { fill: var(--s2-accent); stroke: var(--s2-border-default); }
+  .my-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+</style>
+<div class="my-grid">...</div>
+```
+Use `var(--s2-*)` tokens in custom CSS for theme consistency.
+
 ## Key-Value List
 `.sprinkle-kv-list` — Key-value pairs. Use `<dl>` with `<dt>`/`<dd>` (preferred) or `<ul>` with `<li>` containing `.key`/`.value` spans. The `<dl>` variant renders as a two-column grid with labels left, values right-aligned bold.
 
 ## Empty State
 `.sprinkle-empty-state` — Centered empty state messaging.
+
+## Range Slider
+`.sprinkle-range` — Range slider with header label and live value display.
+```html
+<div class="sprinkle-range">
+  <div class="sprinkle-range__header">
+    <span class="label">Spacing</span>
+    <span class="value" id="spacing-val">12px</span>
+  </div>
+  <input type="range" id="spacing" min="0" max="48" value="12" oninput="updateAll()">
+</div>
+```
+
+## Chip Selector
+`.sprinkle-chips` — Wrap container for pill-shaped chip buttons.
+`.sprinkle-chip` — Individual chip. Add `active` class or `sprinkle-chip--active` for selected state.
+```html
+<div class="sprinkle-chips">
+  <button class="sprinkle-chip active" onclick="selectChip(this,'a')">Option A</button>
+  <button class="sprinkle-chip" onclick="selectChip(this,'b')">Option B</button>
+</div>
+```
+
+## Toggle Switch
+`.sprinkle-toggle` — iOS-style toggle with label. Wrap a checkbox + label span.
+```html
+<label class="sprinkle-toggle">
+  <input type="checkbox" checked onchange="updateAll()">
+  <span class="label">Enable feature</span>
+</label>
+```
+
+## Select Dropdown
+`.sprinkle-select` — Styled dropdown wrapper. Put a `<select>` inside.
+```html
+<div class="sprinkle-select" style="width:100%">
+  <select style="width:100%" onchange="updateAll()">
+    <option value="a">Option A</option>
+    <option value="b">Option B</option>
+  </select>
+</div>
+```
+
+## Color Swatch
+`.sprinkle-color` — Color picker with label. Wrap `<input type="color">` + label span.
+```html
+<label class="sprinkle-color">
+  <input type="color" value="#6366f1" onchange="updateAll()">
+  <span class="label">Accent</span>
+</label>
+```
+
+## Canvas Container
+`.sprinkle-canvas` — Container for `<canvas>` or `<svg>` elements. Responsive width, optional toolbar.
+```html
+<div class="sprinkle-canvas">
+  <svg viewBox="0 0 300 200" style="width:100%;height:200px"></svg>
+  <div class="sprinkle-canvas__toolbar">
+    <button class="sprinkle-btn sprinkle-btn--secondary">Zoom</button>
+  </div>
+</div>
+```
+
+## Code Block
+`.sprinkle-code` — Monospace code display with horizontal scroll.
+```html
+<pre class="sprinkle-code">SELECT * FROM users LIMIT 10</pre>
+```
+
+## Preset Bar
+`.sprinkle-presets` — Horizontally scrolling row of small preset buttons. Add `active` class for selected.
+```html
+<div class="sprinkle-presets">
+  <button class="active" onclick="applyPreset('default')">Default</button>
+  <button onclick="applyPreset('compact')">Compact</button>
+  <button onclick="applyPreset('spacious')">Spacious</button>
+</div>
+```
+
+## Textarea
+`.sprinkle-textarea` — Multi-line text input. Use on `<textarea>`.
+```html
+<textarea class="sprinkle-textarea" placeholder="Describe your requirements..."></textarea>
+```
+
+## Collapsible
+`.sprinkle-collapsible` — Styled `<details>/<summary>` disclosure widget.
+```html
+<details class="sprinkle-collapsible">
+  <summary>Advanced Options</summary>
+  <div class="sprinkle-stack">
+    <!-- content here -->
+  </div>
+</details>
+```
 
 ---
 

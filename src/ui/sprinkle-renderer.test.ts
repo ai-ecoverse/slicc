@@ -82,6 +82,99 @@ describe('SprinkleRenderer', () => {
       const script = container.querySelector('script');
       expect(script?.textContent).toContain('window.runAudit = runAudit');
     });
+
+    it('auto-hoists all declared functions, not just onclick-referenced ones', async () => {
+      const bridge = makeBridge('test-sprinkle');
+      const renderer = new SprinkleRenderer(container, bridge);
+
+      const html = `
+        <input type="range" oninput="updateAll()">
+        <script>
+          function updateAll() { return 'updated'; }
+          function renderPreview() { return 'rendered'; }
+          function generatePrompt() { return 'prompt'; }
+        </script>
+      `;
+      await renderer.render(html, 'test-sprinkle');
+
+      const script = container.querySelector('script');
+      // All declared functions should be hoisted, even without onclick references
+      expect(script?.textContent).toContain('window.updateAll = updateAll');
+      expect(script?.textContent).toContain('window.renderPreview = renderPreview');
+      expect(script?.textContent).toContain('window.generatePrompt = generatePrompt');
+    });
+
+    it('does not hoist underscore-prefixed private functions', async () => {
+      const bridge = makeBridge('test-sprinkle');
+      const renderer = new SprinkleRenderer(container, bridge);
+
+      const html = `
+        <script>
+          var _debounceTimer;
+          function _privateHelper() {}
+          function publicFn() { _privateHelper(); }
+        </script>
+      `;
+      await renderer.render(html, 'test-sprinkle');
+
+      const script = container.querySelector('script');
+      expect(script?.textContent).toContain('window.publicFn = publicFn');
+      expect(script?.textContent).not.toContain('window._privateHelper');
+      expect(script?.textContent).not.toContain('window._debounceTimer');
+    });
+
+    it('hoists var-assigned function expressions', async () => {
+      const bridge = makeBridge('test-sprinkle');
+      const renderer = new SprinkleRenderer(container, bridge);
+
+      const html = `
+        <script>
+          var myHandler = function() { return 42; };
+        </script>
+      `;
+      await renderer.render(html, 'test-sprinkle');
+
+      const script = container.querySelector('script');
+      expect(script?.textContent).toContain('window.myHandler = myHandler');
+    });
+  });
+
+  describe('custom CSS extraction', () => {
+    it('extracts style blocks and injects them as separate elements', async () => {
+      const bridge = makeBridge('test-sprinkle');
+      const renderer = new SprinkleRenderer(container, bridge);
+
+      const html = `
+        <style>.my-custom { color: red; }</style>
+        <div class="my-custom">Hello</div>
+        <script>console.log('ok');</script>
+      `;
+      await renderer.render(html, 'test-sprinkle');
+
+      // Custom style should be injected as a separate element
+      const style = container.querySelector('style[data-sprinkle="test-sprinkle"]');
+      expect(style).toBeTruthy();
+      expect(style?.textContent).toContain('.my-custom { color: red; }');
+
+      // The wrapper content should NOT contain the <style> tag
+      const wrapper = container.querySelector('.sprinkle-content');
+      expect(wrapper?.querySelector('style')).toBeNull();
+    });
+
+    it('removes custom style on dispose', async () => {
+      const bridge = makeBridge('test-sprinkle');
+      const renderer = new SprinkleRenderer(container, bridge);
+
+      const html = `
+        <style>.custom { display: block; }</style>
+        <div>content</div>
+      `;
+      await renderer.render(html, 'test-sprinkle');
+      expect(container.querySelector('style[data-sprinkle]')).toBeTruthy();
+
+      renderer.dispose();
+      expect(container.querySelector('style[data-sprinkle]')).toBeNull();
+    });
   });
 
   describe('multi-sprinkle slicc bridge isolation', () => {

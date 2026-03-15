@@ -217,6 +217,8 @@ Two complementary skill systems:
 
 **Default skills** are bundled from `src/defaults/workspace/skills/` using Vite's `import.meta.glob`.
 
+**Playground sprinkles** (`src/defaults/workspace/skills/playground-sprinkles/`): Skill that teaches the agent to generate interactive playground-style sprinkles with rich controls (range sliders, chips, toggles, selects, color pickers, canvas containers) and bidirectional agent communication via the `slicc` bridge API. Templates follow a state/updateAll/debounce pattern with state persistence via `slicc.setState()`/`slicc.getState()`. CSS components are defined in `index.html` alongside the existing sprinkle CSS block.
+
 ### CDP (src/cdp/)
 CDPTransport interface (`transport.ts`) abstracts the underlying protocol. Two implementations:
 - **CDPClient**: WebSocket-based, used in CLI mode. Connects through ws://localhost:3000/cdp proxy.
@@ -292,6 +294,7 @@ A Service Worker that intercepts `/preview/*` fetch requests and serves content 
 - Uses `skipWaiting()` + `clients.claim()` for immediate activation
 - **Build strategy**: Built as a self-contained IIFE via esbuild (not rollup). Rollup would code-split LightningFS into a shared chunk that SWs can't import. In dev mode, a Vite plugin (`preview-sw-builder`) bundles and serves it on the fly at `/preview-sw.js`. In production, a `closeBundle` hook writes the bundle to the output directory.
 - MIME type mapping via inline `getMimeType()` (same logic as `src/core/mime-types.ts` but inlined since the SW is a separate bundle)
+- **Playground bridge injection**: Every HTML response served by the preview SW has a bridge script (`playground-bridge-inject.ts`) auto-injected. This provides `window.slicc` (lick, on/off, setState/getState, readFile, close) to preview tab pages via `BroadcastChannel('slicc-playground')`. The bridge code is compiled by esbuild and embedded into the SW at build time via `define: { __PLAYGROUND_BRIDGE_CODE__: JSON.stringify(bridgeCode) }` — no runtime fetch needed. `SprinkleManager.startPlaygroundDiscovery()` listens on the same channel and routes events through the existing lick handler.
 
 ### CLI Server (src/cli/index.ts)
 Express server that launches Chrome with remote debugging, serves the UI (Vite middleware in dev, static files in prod), and runs a WebSocket proxy at /cdp. Provides `/api/fetch-proxy` endpoint for cross-origin fetch (replaces CORS proxy), and `/auth/callback` for OAuth redirect handling (reads query params + URL fragment, postMessages back to the opener popup). Single shared Chrome WebSocket connection with client message buffering. Console forwarder pipes in-page console output to CLI stdout. In Electron mode, this same server is reused in `--serve-only` mode instead of launching Chrome.

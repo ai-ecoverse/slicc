@@ -76,6 +76,13 @@
         document.head.appendChild(themeStyle);
       }
 
+      // Inject sprinkle's custom <style> blocks (scoped CSS)
+      if (msg.customCSS) {
+        var customStyle = document.createElement('style');
+        customStyle.textContent = msg.customCSS;
+        document.head.appendChild(customStyle);
+      }
+
       // Render the SHTML content (trusted user-authored sprinkle, not external input)
       document.body.innerHTML = msg.content;
 

@@ -1172,7 +1172,52 @@
       }
 
       /* Sprinkle content wrapper */
-      .sprinkle-content { padding: var(--s2-spacing-200); }
+      .sprinkle-content { padding: var(--s2-spacing-200); flex: 1; overflow-y: auto; min-height: 0; }
+
+      /* ── Sprinkle expand/collapse ── */
+      .sprinkle-panel__expand-bar {
+        display: flex; justify-content: flex-end;
+        padding: 2px 4px 0; flex-shrink: 0;
+      }
+      .sprinkle-panel__expand-btn {
+        background: none; border: none; cursor: pointer;
+        color: var(--s2-content-tertiary);
+        font-size: 14px; line-height: 1;
+        padding: 2px 4px; border-radius: var(--s2-corner-sm);
+        transition: color var(--s2-transition-default), background var(--s2-transition-default);
+      }
+      .sprinkle-panel__expand-btn:hover {
+        color: var(--s2-content-primary);
+        background: var(--s2-bg-layer-2);
+      }
+      .sprinkle-panel--expanded {
+        position: fixed !important;
+        inset: 0 !important;
+        z-index: 9999 !important;
+        width: 100vw !important; height: 100vh !important;
+        max-width: none !important; max-height: none !important;
+        background: var(--s2-bg-base) !important;
+        border-radius: 0 !important;
+      }
+      .sprinkle-panel--expanded > .sprinkle-content {
+        max-width: 960px;
+        margin: 0 auto;
+        width: 100%;
+        padding: var(--s2-spacing-300) var(--s2-spacing-400);
+      }
+      .sprinkle-panel--expanded > iframe {
+        max-width: 960px;
+        margin: 0 auto;
+        width: 100%;
+      }
+      .sprinkle-panel--expanded .sprinkle-panel__expand-btn {
+        font-size: 18px; padding: 6px 10px;
+      }
+      /* In expanded mode, sidebar layouts get more breathing room */
+      .sprinkle-panel--expanded .sprinkle-sidebar__aside,
+      .sprinkle-panel--expanded .sprinkle-split__pane--sidebar {
+        width: 280px;
+      }
 
       /* ── Cards (S2 Cards — flex variant, 10px radius, shadow instead of border) ── */
       .sprinkle-card {
@@ -1500,6 +1545,93 @@
         gap: var(--s2-spacing-200);
       }
 
+      /* ── Split layout (horizontal panes with resizable handle) ── */
+      .sprinkle-split {
+        display: flex; gap: 0; min-height: 0; flex: 1;
+      }
+      .sprinkle-split--vertical {
+        flex-direction: column;
+      }
+      .sprinkle-split__pane {
+        flex: 1; min-width: 0; min-height: 0;
+        overflow: auto;
+      }
+      .sprinkle-split__pane--sidebar {
+        flex: 0 0 auto; width: 220px; max-width: 50%;
+        overflow-y: auto;
+      }
+      .sprinkle-split--vertical > .sprinkle-split__pane--sidebar {
+        width: auto; height: 180px; max-width: none; max-height: 50%;
+      }
+      .sprinkle-split__handle {
+        flex: 0 0 6px; cursor: col-resize;
+        background: var(--s2-border-subtle);
+        transition: background var(--s2-transition-default);
+        border-radius: 3px; margin: 4px 0;
+      }
+      .sprinkle-split__handle:hover,
+      .sprinkle-split__handle:active {
+        background: var(--s2-accent);
+      }
+      .sprinkle-split--vertical > .sprinkle-split__handle {
+        cursor: row-resize; margin: 0 4px;
+        flex: 0 0 6px; width: auto; height: 6px;
+      }
+
+      /* ── Tabs (nested tab group within sprinkle) ── */
+      .sprinkle-tabs {
+        display: flex; flex-direction: column; min-height: 0; flex: 1;
+      }
+      .sprinkle-tabs__bar {
+        display: flex; gap: 0; border-bottom: 1px solid var(--s2-border-subtle);
+        flex-shrink: 0; overflow-x: auto;
+      }
+      .sprinkle-tabs__tab {
+        padding: 6px 14px; border: none; background: none; cursor: pointer;
+        font-size: var(--s2-font-size-75); font-weight: 600;
+        color: var(--s2-content-secondary);
+        border-bottom: 2px solid transparent;
+        transition: color var(--s2-transition-default), border-color var(--s2-transition-default);
+        white-space: nowrap;
+      }
+      .sprinkle-tabs__tab:hover {
+        color: var(--s2-content-primary);
+      }
+      .sprinkle-tabs__tab.active,
+      .sprinkle-tabs__tab--active {
+        color: var(--s2-accent);
+        border-bottom-color: var(--s2-accent);
+      }
+      .sprinkle-tabs__panel {
+        display: none; flex: 1; min-height: 0;
+        overflow: auto; padding: var(--s2-spacing-150);
+      }
+      .sprinkle-tabs__panel.active,
+      .sprinkle-tabs__panel--active {
+        display: flex; flex-direction: column;
+      }
+
+      /* ── Sidebar layout (fixed sidebar + flexible main) ── */
+      .sprinkle-sidebar {
+        display: flex; gap: 0; flex: 1; min-height: 0;
+      }
+      .sprinkle-sidebar__aside {
+        flex: 0 0 auto; width: 200px; max-width: 50%;
+        overflow-y: auto; padding: var(--s2-spacing-150);
+        border-right: 1px solid var(--s2-border-subtle);
+      }
+      .sprinkle-sidebar__main {
+        flex: 1; min-width: 0; overflow: auto;
+        padding: var(--s2-spacing-150);
+      }
+      .sprinkle-sidebar--right > .sprinkle-sidebar__aside {
+        order: 2; border-right: none;
+        border-left: 1px solid var(--s2-border-subtle);
+      }
+      .sprinkle-sidebar--right > .sprinkle-sidebar__main {
+        order: 1;
+      }
+
       /* ── Typography (S2 Type Roles) ── */
       /* Heading — ExtraBold 800, never below 18px */
       .sprinkle-heading {
@@ -1545,6 +1677,273 @@
         padding: var(--s2-spacing-500) var(--s2-spacing-300);
         color: var(--s2-content-tertiary);
         font-size: var(--s2-font-size-100);
+      }
+
+      /* ================================================================== */
+      /* Playground sprinkle controls                                       */
+      /* ================================================================== */
+
+      /* ── Range Slider ── */
+      .sprinkle-range { display: flex; flex-direction: column; gap: var(--s2-spacing-50); }
+      .sprinkle-range__header {
+        display: flex; justify-content: space-between; align-items: center;
+      }
+      .sprinkle-range__header .label {
+        font-size: var(--s2-font-size-75);
+        font-weight: var(--s2-font-weight-medium);
+        color: var(--s2-content-secondary);
+      }
+      .sprinkle-range__header .value {
+        font-size: var(--s2-font-size-75);
+        font-weight: var(--s2-font-weight-bold);
+        color: var(--s2-content-primary);
+        font-variant-numeric: tabular-nums;
+      }
+      .sprinkle-range input[type="range"] {
+        -webkit-appearance: none; appearance: none;
+        width: 100%; height: 4px;
+        background: var(--s2-bg-layer-2);
+        border-radius: 2px; outline: none;
+        cursor: pointer;
+      }
+      .sprinkle-range input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none; appearance: none;
+        width: 16px; height: 16px;
+        background: var(--s2-accent-content);
+        border-radius: 50%; border: 2px solid var(--s2-bg-base);
+        box-shadow: 0 1px 3px rgba(0,0,0,.2);
+        cursor: pointer;
+      }
+      .sprinkle-range input[type="range"]::-moz-range-thumb {
+        width: 16px; height: 16px;
+        background: var(--s2-accent-content);
+        border-radius: 50%; border: 2px solid var(--s2-bg-base);
+        box-shadow: 0 1px 3px rgba(0,0,0,.2);
+        cursor: pointer;
+      }
+
+      /* ── Chip Selector ── */
+      .sprinkle-chips {
+        display: flex; flex-wrap: wrap; gap: var(--s2-spacing-75);
+      }
+      .sprinkle-chip {
+        display: inline-flex; align-items: center; justify-content: center;
+        padding: var(--s2-spacing-50) var(--s2-spacing-150);
+        font-size: var(--s2-font-size-75);
+        font-weight: var(--s2-font-weight-medium);
+        color: var(--s2-content-secondary);
+        background: var(--s2-bg-layer-1);
+        border: 1px solid var(--s2-border-subtle);
+        border-radius: 999px; cursor: pointer;
+        transition: all var(--s2-transition-default);
+        user-select: none;
+      }
+      .sprinkle-chip:hover {
+        background: var(--s2-bg-layer-2);
+        border-color: var(--s2-border-default);
+        color: var(--s2-content-primary);
+      }
+      .sprinkle-chip--active, .sprinkle-chip.active {
+        background: var(--s2-accent-bg);
+        border-color: var(--s2-accent-content);
+        color: var(--s2-accent-content);
+        font-weight: var(--s2-font-weight-bold);
+      }
+
+      /* ── Toggle Switch ── */
+      .sprinkle-toggle {
+        position: relative; display: inline-flex; align-items: center; gap: var(--s2-spacing-100);
+        cursor: pointer; user-select: none;
+      }
+      .sprinkle-toggle input[type="checkbox"] {
+        -webkit-appearance: none; appearance: none;
+        position: relative; width: 36px; height: 20px;
+        background: var(--s2-bg-layer-2);
+        border: 1px solid var(--s2-border-default);
+        border-radius: 10px; cursor: pointer;
+        transition: all var(--s2-transition-default);
+      }
+      .sprinkle-toggle input[type="checkbox"]::before {
+        content: '';
+        position: absolute; top: 2px; left: 2px;
+        width: 14px; height: 14px;
+        background: var(--s2-content-tertiary);
+        border-radius: 50%;
+        transition: all var(--s2-transition-default);
+      }
+      .sprinkle-toggle input[type="checkbox"]:checked {
+        background: var(--s2-accent-content);
+        border-color: var(--s2-accent-content);
+      }
+      .sprinkle-toggle input[type="checkbox"]:checked::before {
+        transform: translateX(16px);
+        background: var(--s2-bg-base);
+      }
+      .sprinkle-toggle .label {
+        font-size: var(--s2-font-size-75);
+        font-weight: var(--s2-font-weight-medium);
+        color: var(--s2-content-secondary);
+      }
+
+      /* ── Select Dropdown ── */
+      .sprinkle-select {
+        position: relative; display: inline-flex;
+      }
+      .sprinkle-select select {
+        -webkit-appearance: none; appearance: none;
+        width: 100%;
+        padding: var(--s2-spacing-75) var(--s2-spacing-300) var(--s2-spacing-75) var(--s2-spacing-100);
+        font-size: var(--s2-font-size-75);
+        font-family: inherit;
+        color: var(--s2-content-primary);
+        background: var(--s2-bg-layer-1);
+        border: 1px solid var(--s2-border-subtle);
+        border-radius: var(--s2-corner-sm);
+        cursor: pointer;
+        transition: border-color var(--s2-transition-default);
+      }
+      .sprinkle-select select:hover { border-color: var(--s2-border-default); }
+      .sprinkle-select select:focus {
+        outline: none; border-color: var(--s2-accent-content);
+        box-shadow: 0 0 0 1px var(--s2-accent-content);
+      }
+      .sprinkle-select::after {
+        content: '';
+        position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+        width: 0; height: 0;
+        border-left: 4px solid transparent;
+        border-right: 4px solid transparent;
+        border-top: 5px solid var(--s2-content-tertiary);
+        pointer-events: none;
+      }
+
+      /* ── Color Swatch ── */
+      .sprinkle-color {
+        display: inline-flex; align-items: center; gap: var(--s2-spacing-75);
+        cursor: pointer;
+      }
+      .sprinkle-color input[type="color"] {
+        -webkit-appearance: none; appearance: none;
+        width: 24px; height: 24px;
+        border: 1px solid var(--s2-border-subtle);
+        border-radius: 50%; padding: 0;
+        cursor: pointer; overflow: hidden;
+        background: none;
+      }
+      .sprinkle-color input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+      .sprinkle-color input[type="color"]::-webkit-color-swatch {
+        border: none; border-radius: 50%;
+      }
+      .sprinkle-color .label {
+        font-size: var(--s2-font-size-75);
+        font-weight: var(--s2-font-weight-medium);
+        color: var(--s2-content-secondary);
+      }
+
+      /* ── Canvas Container ── */
+      .sprinkle-canvas {
+        display: flex; flex-direction: column; gap: var(--s2-spacing-75);
+        border: 1px solid var(--s2-border-subtle);
+        border-radius: var(--s2-corner-sm);
+        overflow: hidden; background: var(--s2-bg-layer-1);
+      }
+      .sprinkle-canvas canvas,
+      .sprinkle-canvas svg {
+        display: block; width: 100%; height: auto;
+      }
+      .sprinkle-canvas__toolbar {
+        display: flex; gap: var(--s2-spacing-75);
+        padding: var(--s2-spacing-75);
+        border-top: 1px solid var(--s2-border-subtle);
+        background: var(--s2-bg-base);
+      }
+
+      /* ── Code Block ── */
+      .sprinkle-code {
+        font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+        font-size: var(--s2-font-size-75);
+        line-height: 1.5;
+        background: var(--s2-bg-layer-1);
+        border: 1px solid var(--s2-border-subtle);
+        border-radius: var(--s2-corner-sm);
+        padding: var(--s2-spacing-150);
+        overflow-x: auto; white-space: pre;
+        color: var(--s2-content-primary);
+      }
+
+      /* ── Preset Bar ── */
+      .sprinkle-presets {
+        display: flex; gap: var(--s2-spacing-50);
+        overflow-x: auto; padding-bottom: var(--s2-spacing-50);
+      }
+      .sprinkle-presets button {
+        flex-shrink: 0;
+        padding: var(--s2-spacing-25) var(--s2-spacing-100);
+        font-size: var(--s2-font-size-50);
+        font-weight: var(--s2-font-weight-medium);
+        color: var(--s2-content-secondary);
+        background: var(--s2-bg-layer-1);
+        border: 1px solid var(--s2-border-subtle);
+        border-radius: 999px; cursor: pointer;
+        white-space: nowrap;
+        transition: all var(--s2-transition-default);
+      }
+      .sprinkle-presets button:hover {
+        background: var(--s2-bg-layer-2);
+        border-color: var(--s2-border-default);
+        color: var(--s2-content-primary);
+      }
+      .sprinkle-presets button.active {
+        background: var(--s2-accent-bg);
+        border-color: var(--s2-accent-content);
+        color: var(--s2-accent-content);
+      }
+
+      /* ── Textarea ── */
+      .sprinkle-textarea {
+        width: 100%; min-height: 80px;
+        padding: var(--s2-spacing-100);
+        font-family: inherit;
+        font-size: var(--s2-font-size-75);
+        color: var(--s2-content-primary);
+        background: var(--s2-bg-layer-1);
+        border: 1px solid var(--s2-border-subtle);
+        border-radius: var(--s2-corner-sm);
+        resize: vertical;
+        transition: border-color var(--s2-transition-default);
+      }
+      .sprinkle-textarea:hover { border-color: var(--s2-border-default); }
+      .sprinkle-textarea:focus {
+        outline: none; border-color: var(--s2-accent-content);
+        box-shadow: 0 0 0 1px var(--s2-accent-content);
+      }
+      .sprinkle-textarea::placeholder { color: var(--s2-content-tertiary); }
+
+      /* ── Collapsible ── */
+      .sprinkle-collapsible { border: 1px solid var(--s2-border-subtle); border-radius: var(--s2-corner-sm); }
+      .sprinkle-collapsible summary {
+        padding: var(--s2-spacing-100) var(--s2-spacing-150);
+        font-size: var(--s2-font-size-75);
+        font-weight: var(--s2-font-weight-medium);
+        color: var(--s2-content-secondary);
+        cursor: pointer; list-style: none;
+        display: flex; align-items: center; gap: var(--s2-spacing-75);
+        transition: color var(--s2-transition-default);
+      }
+      .sprinkle-collapsible summary:hover { color: var(--s2-content-primary); }
+      .sprinkle-collapsible summary::before {
+        content: '';
+        width: 0; height: 0;
+        border-left: 5px solid var(--s2-content-tertiary);
+        border-top: 4px solid transparent;
+        border-bottom: 4px solid transparent;
+        transition: transform var(--s2-transition-default);
+        flex-shrink: 0;
+      }
+      .sprinkle-collapsible summary::-webkit-details-marker { display: none; }
+      .sprinkle-collapsible[open] summary::before { transform: rotate(90deg); }
+      .sprinkle-collapsible > :not(summary) {
+        padding: 0 var(--s2-spacing-150) var(--s2-spacing-150);
       }
 
       /* ================================================================== */
