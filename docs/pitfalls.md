@@ -377,6 +377,24 @@ if (isExtension) {
 
 Used throughout codebase to select code paths.
 
+## Service Worker Must Be Self-Contained
+
+**The Problem**
+
+The extension service worker (`src/extension/service-worker.ts`) is built by Rollup as an entry point. If it imports from modules that are shared with other entry points (index.html, offscreen.html), Rollup code-splits them into shared chunks with ES `import` statements. Chrome extension service workers are **not** ES modules — `import` statements cause `Uncaught SyntaxError: Cannot use import statement outside a module` at runtime.
+
+**The Rule**
+
+The service worker must only import **types** (erased at compile time) from other modules. All runtime code must be inlined. If you need to share logic between the service worker and other extension contexts (offscreen, side panel), maintain an inline copy in the service worker and the canonical version in a shared module.
+
+| Import type | Example | Allowed in SW? |
+|---|---|---|
+| Type-only | `import type { Foo } from './messages.js'` | Yes (erased) |
+| Runtime value | `import { bar } from './tab-group.js'` | **No** (causes code split) |
+| Core modules | `import { createLogger } from '../core/logger.js'` | **No** (pulls in dependency tree) |
+
+**Current example**: `addToSliccGroup` has an inline copy in `service-worker.ts` and a canonical version in `tab-group.ts` (imported by `debugger-client.ts` in the offscreen document, which IS an ES module).
+
 ## Dual-Mode Testing Checklist
 
 When adding a feature that touches:

@@ -29,7 +29,7 @@
 |---|---|
 | `browser-api.ts` | High-level Playwright-inspired API (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree); used by the `playwright-cli` shell command path and related browser automation commands |
 | `cdp-client.ts` | WebSocket-based CDP client (CLI mode, connects to `ws://localhost:3000/cdp`) |
-| `debugger-client.ts` | Chrome debugger API client (extension mode, uses `chrome.debugger`) |
+| `debugger-client.ts` | Chrome debugger API client (extension mode, uses `chrome.debugger`); adds agent-created tabs to "slicc" tab group |
 | `har-recorder.ts` | HAR 1.2 recorder for network traffic; saves snapshots to VFS on navigation |
 | `transport.ts` | CDPTransport interface (abstracts CDP/debugger implementations) |
 | `normalize-accessibility-text.ts` | Accessibility tree text normalization utilities |
@@ -66,12 +66,13 @@
 
 | File | Purpose |
 |---|---|
-| `service-worker.ts` | Manifest V3 service worker; message relay between panel and offscreen + CDP proxy via chrome.debugger |
+| `service-worker.ts` | Manifest V3 service worker; message relay between panel and offscreen + CDP proxy via chrome.debugger + tab grouping |
 | `offscreen.ts` | Agent engine bootstrap in offscreen document (Orchestrator, VFS, Shell, tools) |
 | `offscreen-bridge.ts` | Orchestrator ↔ chrome.runtime message bridge; persists chat to `browser-coding-agent` IndexedDB |
 | `lick-manager-proxy.ts` | BroadcastChannel proxy enabling side panel terminal to manage cron tasks via LickManager running in offscreen |
 | `messages.ts` | Typed message envelopes: PanelToOffscreen, OffscreenToPanel, CdpProxy |
-| `chrome.d.ts` | Typed declarations for chrome.debugger, chrome.tabs, chrome.sidePanel, chrome.offscreen, etc. |
+| `tab-group.ts` | Shared tab grouping helper; adds agent-created tabs to a persistent "slicc" Chrome tab group (used by service worker + debugger client) |
+| `chrome.d.ts` | Typed declarations for chrome.debugger, chrome.tabs, chrome.tabGroups, chrome.sidePanel, chrome.offscreen, etc. |
 | `sprinkle-proxy.ts` | Lightweight proxy relaying sprinkle operations from offscreen document to side panel UI via chrome.runtime messaging |
 
 ### src/fs/ — Virtual Filesystem

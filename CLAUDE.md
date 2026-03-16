@@ -109,7 +109,8 @@ Browser-based AI coding agent: a self-contained development environment where Cl
 
 Key files:
 - `src/extension/messages.ts` — Shared message types (Panel ↔ SW ↔ Offscreen)
-- `src/extension/service-worker.ts` — Message relay + CDP proxy
+- `src/extension/service-worker.ts` — Message relay + CDP proxy + tab grouping (inline copy — see below)
+- `src/extension/tab-group.ts` — Tab grouping helper (used by debugger client in offscreen doc)
 - `src/extension/offscreen.ts` — Agent engine bootstrap
 - `src/extension/offscreen-bridge.ts` — Orchestrator ↔ message bridge
 - `src/extension/lick-manager-proxy.ts` — BroadcastChannel proxy enabling side panel terminal to manage cron tasks via LickManager running in offscreen
@@ -121,6 +122,8 @@ Key files:
 **Chat Persistence (Single Source of Truth)**: The `browser-coding-agent` IndexedDB is the single source of truth for chat display messages. The offscreen bridge writes to it after every user message, response done, tool end, and incoming message via `SessionStore.saveMessages()`. The side panel reads from it via `switchToContext()` on reconnect — no buffer reconciliation needed. This is separate from `agent-sessions` DB (agent LLM history restored by `ScoopContext`) and `slicc-groups` DB (orchestrator routing messages).
 
 **Extension Entry Point**: In `src/ui/main.ts`, when extension mode is detected, `main()` delegates to `mainExtension()` which creates an `OffscreenClient` instead of a direct `Orchestrator`. The `OffscreenClient` provides an `AgentHandle` for the chat panel and an Orchestrator-compatible facade for scoops/memory/scoop-switcher panels.
+
+**Tab Grouping** (extension-mode only): Agent-created tabs (via `playwright-cli`, `serve`, `new-tab`) are automatically added to a persistent pink "slicc" Chrome tab group. The group is created lazily on first tab and reused for the session. If the user ungroups tabs, a new group is created on the next tab open. Implemented in both `service-worker.ts` (offscreen-originated tab creation via CDP proxy) and `debugger-client.ts` (direct side-panel tab creation). Requires the `tabGroups` manifest permission.
 
 ### Three Build Targets
 
