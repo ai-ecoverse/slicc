@@ -28,6 +28,31 @@ export function isSupportedImageFormat(mimeType: string): boolean {
   return SUPPORTED_MIMES.has(mimeType);
 }
 
+/** Read image dimensions from header bytes without WASM. Supports PNG and JPEG. */
+export function getImageDimensions(base64: string, mimeType: string): { width: number; height: number } | null {
+  try {
+    const raw = atob(base64.slice(0, 200));
+    const b = (i: number) => raw.charCodeAt(i);
+
+    if (mimeType === 'image/png' && raw.length >= 24) {
+      const w = (b(16) << 24) | (b(17) << 16) | (b(18) << 8) | b(19);
+      const h = (b(20) << 24) | (b(21) << 16) | (b(22) << 8) | b(23);
+      return { width: w, height: h };
+    }
+
+    if (mimeType === 'image/jpeg' && raw.length >= 24) {
+      for (let i = 2; i < raw.length - 8; i++) {
+        if (b(i) === 0xFF && (b(i + 1) >= 0xC0 && b(i + 1) <= 0xCF) && b(i + 1) !== 0xC4 && b(i + 1) !== 0xC8) {
+          const h = (b(i + 5) << 8) | b(i + 6);
+          const w = (b(i + 7) << 8) | b(i + 8);
+          return { width: w, height: h };
+        }
+      }
+    }
+  } catch { /* corrupt base64 */ }
+  return null;
+}
+
 /**
  * Process an ImageContent block: validate and resize if needed.
  *
@@ -46,13 +71,22 @@ export async function processImageContent(image: ImageContent): Promise<ImageCon
 
   const byteSize = getImageByteSize(image.data);
 
-  // If under the limit, pass through without touching ImageMagick
-  if (byteSize <= MAX_IMAGE_BYTES) {
+  // Check dimensions from image header (cheap, no WASM needed)
+  const dims = getImageDimensions(image.data, image.mimeType);
+  const needsDimensionResize = dims !== null && Math.max(dims.width, dims.height) > MAX_DIMENSION;
+
+  // If under size limit AND dimensions are OK, pass through
+  if (byteSize <= MAX_IMAGE_BYTES && !needsDimensionResize) {
     return image;
   }
 
-  // Over 5MB — attempt resize via ImageMagick WASM
-  log.info('Image exceeds 5MB, attempting resize', { byteSize, mimeType: image.mimeType });
+  // Needs resize — either over 5MB or dimensions exceed API limit
+  log.info('Image needs resize', {
+    byteSize,
+    mimeType: image.mimeType,
+    dimensions: dims,
+    reason: needsDimensionResize ? 'dimensions exceed 8000px' : 'exceeds 5MB',
+  });
 
   // Step 1: Load ImageMagick WASM
   let getMagick: typeof import('../shell/supplemental-commands/magick-wasm.js').getMagick;
