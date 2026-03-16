@@ -174,9 +174,9 @@ export const config: ProviderConfig = {
   name: 'Adobe',
   description: 'Claude via Adobe — login with your Adobe ID',
   requiresApiKey: false,
-  requiresBaseUrl: true,
+  requiresBaseUrl: !adobeConfig.proxyEndpoint,
   baseUrlPlaceholder: 'https://your-proxy.example.com',
-  baseUrlDescription: 'Anthropic-compatible proxy endpoint (leave empty to use default from config)',
+  baseUrlDescription: 'Anthropic-compatible proxy endpoint',
   isOAuth: true,
 
   getModelIds: () => {
