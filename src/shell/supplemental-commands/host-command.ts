@@ -11,6 +11,8 @@ import {
 
 export interface ConnectedFollowerInfo {
   runtimeId: string;
+  runtime?: string;
+  connectedAt?: string;
 }
 
 /**
@@ -46,6 +48,16 @@ Shows the current tray state (leader or follower) and, when available, the join 
   };
 }
 
+export function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  if (remainingMinutes === 0) return `${hours}h ago`;
+  return `${hours}h ${remainingMinutes}m ago`;
+}
+
 export function formatLeaderOutput(status: LeaderTrayRuntimeStatus, followers: ConnectedFollowerInfo[]): string {
   const lines = [`status: ${status.state}`];
 
@@ -62,7 +74,15 @@ export function formatLeaderOutput(status: LeaderTrayRuntimeStatus, followers: C
   if (followers.length > 0) {
     lines.push('followers:');
     for (const f of followers) {
-      lines.push(`  - ${f.runtimeId}`);
+      const parts = [f.runtimeId];
+      if (f.runtime) {
+        parts.push(`(${f.runtime})`);
+      }
+      if (f.connectedAt) {
+        const ago = Math.round((Date.now() - new Date(f.connectedAt).getTime()) / 1000);
+        parts.push(`connected ${formatDuration(ago)}`);
+      }
+      lines.push(`  - ${parts.join(' ')}`);
     }
   }
 
@@ -75,12 +95,27 @@ export function formatFollowerOutput(status: FollowerTrayRuntimeStatus): string 
   if (status.joinUrl) {
     lines.push(`join_url: ${status.joinUrl}`);
   }
+  if (status.state === 'connecting') {
+    if (status.connectingSince != null) {
+      const elapsedSec = Math.round((Date.now() - status.connectingSince) / 1000);
+      lines.push(`connecting_for: ${formatDuration(elapsedSec).replace(' ago', '')}`);
+    }
+    if (status.attachAttempts > 0) {
+      lines.push(`attach_attempts: ${status.attachAttempts}`);
+    }
+    if (status.lastAttachCode) {
+      lines.push(`last_code: ${status.lastAttachCode}`);
+    }
+  }
   if (status.state === 'connected' && status.lastPingTime != null) {
     const ago = Math.round((Date.now() - status.lastPingTime) / 1000);
     lines.push(`last_ping: ${ago}s ago`);
   }
   if (status.state === 'reconnecting' && status.reconnectAttempts > 0) {
     lines.push(`reconnect_attempts: ${status.reconnectAttempts}`);
+  }
+  if (status.lastError) {
+    lines.push(`last_error: ${status.lastError}`);
   }
   if (status.error) {
     lines.push(`error: ${status.error}`);

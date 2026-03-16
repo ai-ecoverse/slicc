@@ -247,44 +247,53 @@ export class SessionTrayDurableObject {
   }
 
   private async handleFollowerAttach(attach: ControllerAttachRequest): Promise<Response> {
-    const tray = this.requireTray();
-    const controllerId = attach.controllerId ?? crypto.randomUUID();
-    const nowIso = this.isoNow();
+    try {
+      const tray = this.requireTray();
+      const controllerId = attach.controllerId ?? crypto.randomUUID();
+      const nowIso = this.isoNow();
 
-    if (!tray.controllers[controllerId]) {
-      tray.controllers[controllerId] = {
-        controllerId,
-        firstSeenAt: nowIso,
-        lastSeenAt: nowIso,
-        runtime: attach.runtime,
-      };
-    } else {
-      tray.controllers[controllerId].lastSeenAt = nowIso;
-      if (attach.runtime) {
-        tray.controllers[controllerId].runtime = attach.runtime;
-      }
-    }
-
-    let iceServers: TurnIceServer[] | undefined;
-    const result: FollowerAttachResult = this.hasLiveLeader()
-      ? {
-          action: 'signal',
-          code: 'LEADER_CONNECTED',
-          bootstrap: this.buildBootstrapStatus(await this.ensureBootstrap(controllerId, attach.runtime)),
-        }
-      : {
-          action: 'wait',
-          code: tray.leader ? 'LEADER_NOT_CONNECTED' : 'LEADER_NOT_ELECTED',
-          retryAfterMs: FOLLOWER_ATTACH_RETRY_AFTER_MS,
+      if (!tray.controllers[controllerId]) {
+        tray.controllers[controllerId] = {
+          controllerId,
+          firstSeenAt: nowIso,
+          lastSeenAt: nowIso,
+          runtime: attach.runtime,
         };
+      } else {
+        tray.controllers[controllerId].lastSeenAt = nowIso;
+        if (attach.runtime) {
+          tray.controllers[controllerId].runtime = attach.runtime;
+        }
+      }
 
-    if (result.action === 'signal') {
-      iceServers = await this.getIceServers();
+      let iceServers: TurnIceServer[] | undefined;
+      const result: FollowerAttachResult = this.hasLiveLeader()
+        ? {
+            action: 'signal',
+            code: 'LEADER_CONNECTED',
+            bootstrap: this.buildBootstrapStatus(await this.ensureBootstrap(controllerId, attach.runtime)),
+          }
+        : {
+            action: 'wait',
+            code: tray.leader ? 'LEADER_NOT_CONNECTED' : 'LEADER_NOT_ELECTED',
+            retryAfterMs: FOLLOWER_ATTACH_RETRY_AFTER_MS,
+          };
+
+      if (result.action === 'signal') {
+        iceServers = await this.getIceServers();
+      }
+
+      await this.persistTray();
+
+      return this.buildFollowerAttachResponse(controllerId, result, 200, iceServers);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return jsonResponse({
+        error: 'Internal error during follower attach',
+        code: 'FOLLOWER_ATTACH_ERROR',
+        diagnostics: message,
+      }, 500);
     }
-
-    await this.persistTray();
-
-    return this.buildFollowerAttachResponse(controllerId, result, 200, iceServers);
   }
 
   private async handleBootstrapRequest(request: FollowerBootstrapRequest): Promise<Response> {

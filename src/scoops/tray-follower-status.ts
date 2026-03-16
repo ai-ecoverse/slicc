@@ -15,6 +15,14 @@ export interface FollowerTrayRuntimeStatus {
   lastPingTime: number | null;
   /** Number of reconnect attempts since last successful connection. 0 when connected. */
   reconnectAttempts: number;
+  /** Number of attach POST attempts during the connecting phase. */
+  attachAttempts: number;
+  /** Last action code received from the worker (e.g. 'LEADER_NOT_ELECTED', 'LEADER_CONNECTED'). */
+  lastAttachCode: string | null;
+  /** Timestamp (ms since epoch) when the connecting phase started, or null if not connecting. */
+  connectingSince: number | null;
+  /** Last error message encountered during attach/bootstrap (more specific than `error`). */
+  lastError: string | null;
 }
 
 let followerTrayRuntimeStatus: FollowerTrayRuntimeStatus = {
@@ -24,6 +32,10 @@ let followerTrayRuntimeStatus: FollowerTrayRuntimeStatus = {
   error: null,
   lastPingTime: null,
   reconnectAttempts: 0,
+  attachAttempts: 0,
+  lastAttachCode: null,
+  connectingSince: null,
+  lastError: null,
 };
 
 export function getFollowerTrayRuntimeStatus(): FollowerTrayRuntimeStatus {

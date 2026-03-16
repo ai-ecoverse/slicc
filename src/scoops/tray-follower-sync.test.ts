@@ -724,6 +724,10 @@ describe('FollowerSyncManager', () => {
         error: null,
         lastPingTime: null,
         reconnectAttempts: 0,
+        attachAttempts: 0,
+        lastAttachCode: null,
+        connectingSince: null,
+        lastError: null,
       });
     });
 
@@ -750,6 +754,10 @@ describe('FollowerSyncManager', () => {
         error: null,
         lastPingTime: null,
         reconnectAttempts: 0,
+        attachAttempts: 0,
+        lastAttachCode: null,
+        connectingSince: null,
+        lastError: null,
       });
     });
 

@@ -51,6 +51,7 @@ export interface LeaderTrayPeerState {
   attempt: number;
   state: 'connecting' | 'connected';
   connectedAt: string | null;
+  runtime?: string;
 }
 
 export interface LeaderTrayPeerManagerOptions {
@@ -149,6 +150,7 @@ export class LeaderTrayPeerManager {
       attempt: message.attempt,
       state: 'connecting',
       connectedAt: null,
+      runtime: message.runtime,
     };
     const channel = peer.createDataChannel(this.dataChannelLabel);
     this.peers.set(message.bootstrapId, { state, peer, channel });
@@ -274,6 +276,7 @@ export class FollowerTrayManager {
   async start(): Promise<FollowerTrayConnection> {
     this.stopped = false;
     const controllerId = this.controllerIdFactory();
+    const connectingSince = Date.now();
 
     setFollowerTrayRuntimeStatus({
       state: 'connecting',
@@ -282,6 +285,10 @@ export class FollowerTrayManager {
       error: null,
       lastPingTime: null,
       reconnectAttempts: 0,
+      attachAttempts: 0,
+      lastAttachCode: null,
+      connectingSince,
+      lastError: null,
     });
     log.info('Follower tray join starting', { joinUrl: this.options.joinUrl });
 
@@ -289,12 +296,31 @@ export class FollowerTrayManager {
     for (;;) {
       ensureNotStopped(this.stopped);
       attachAttempt++;
-      const attach = await attachTrayFollower({
-        joinUrl: this.options.joinUrl,
-        controllerId,
-        runtime: this.options.runtime,
-        fetchImpl: this.fetchImpl,
+      let attach;
+      try {
+        attach = await attachTrayFollower({
+          joinUrl: this.options.joinUrl,
+          controllerId,
+          runtime: this.options.runtime,
+          fetchImpl: this.fetchImpl,
+        });
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        setFollowerTrayRuntimeStatus({
+          ...getFollowerTrayRuntimeStatus(),
+          attachAttempts: attachAttempt,
+          lastError: errorMsg,
+        });
+        throw error;
+      }
+
+      // Update status with attach attempt progress
+      setFollowerTrayRuntimeStatus({
+        ...getFollowerTrayRuntimeStatus(),
+        attachAttempts: attachAttempt,
+        lastAttachCode: attach.code,
       });
+
       if (attach.action === 'wait') {
         const retryMs = attach.retryAfterMs ?? 1000;
         log.info('Follower tray attach waiting', { attempt: attachAttempt, code: attach.code, retryAfterMs: retryMs });
@@ -313,6 +339,10 @@ export class FollowerTrayManager {
           error: errorMsg,
           lastPingTime: null,
           reconnectAttempts: 0,
+          attachAttempts: attachAttempt,
+          lastAttachCode: attach.code,
+          connectingSince: null,
+          lastError: errorMsg,
         });
         log.warn('Follower tray attach failed', { error: errorMsg });
         throw new Error(errorMsg);
@@ -329,19 +359,28 @@ export class FollowerTrayManager {
           error: null,
           lastPingTime: null,
           reconnectAttempts: 0,
+          attachAttempts: attachAttempt,
+          lastAttachCode: attach.code,
+          connectingSince: null,
+          lastError: null,
         });
         log.info('Follower tray connected', { trayId: connection.trayId, controllerId });
         return connection;
       } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
         setFollowerTrayRuntimeStatus({
           state: 'error',
           joinUrl: this.options.joinUrl,
           trayId: attach.trayId,
-          error: error instanceof Error ? error.message : String(error),
+          error: errorMsg,
           lastPingTime: null,
           reconnectAttempts: 0,
+          attachAttempts: attachAttempt,
+          lastAttachCode: attach.code,
+          connectingSince: null,
+          lastError: errorMsg,
         });
-        log.warn('Follower tray bootstrap failed', { error: error instanceof Error ? error.message : String(error) });
+        log.warn('Follower tray bootstrap failed', { error: errorMsg });
         throw error;
       }
     }
@@ -359,6 +398,10 @@ export class FollowerTrayManager {
       error: null,
       lastPingTime: null,
       reconnectAttempts: 0,
+      attachAttempts: 0,
+      lastAttachCode: null,
+      connectingSince: null,
+      lastError: null,
     });
   }
 
@@ -605,12 +648,15 @@ export function startFollowerWithAutoReconnect(
         // Success — reset state and notify
         reconnecting = false;
         setFollowerTrayRuntimeStatus({
+          ...getFollowerTrayRuntimeStatus(),
           state: 'connected',
           joinUrl: managerOptions.joinUrl,
           trayId: connection.trayId,
           error: null,
           lastPingTime: null,
           reconnectAttempts: 0,
+          connectingSince: null,
+          lastError: null,
         });
         log.info('Reconnect successful', { attempt, trayId: connection.trayId });
         reconnectOptions.onConnected(connection);

@@ -692,6 +692,7 @@ describe('startFollowerWithAutoReconnect', () => {
   beforeEach(() => {
     setFollowerTrayRuntimeStatus({
       state: 'inactive', joinUrl: null, trayId: null, error: null, lastPingTime: null, reconnectAttempts: 0,
+      attachAttempts: 0, lastAttachCode: null, connectingSince: null, lastError: null,
     });
   });
 

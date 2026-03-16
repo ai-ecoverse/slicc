@@ -141,9 +141,18 @@ export function normalizeFollowerBootstrapResponse(response: FollowerBootstrapRe
 }
 
 async function readFollowerAttachResponse(response: Response): Promise<FollowerAttachResponse> {
-  const payload = await response.json().catch(() => null);
+  let rawText: string | null = null;
+  let payload: unknown = null;
+  try {
+    rawText = await response.text();
+    payload = JSON.parse(rawText);
+  } catch {
+    // payload stays null — validation below will throw
+  }
   if (!isFollowerAttachResponse(payload)) {
-    throw new Error(`Tray follower attach returned an invalid response (${response.status})`);
+    const preview = rawText ? rawText.slice(0, 200) : '(empty)';
+    log.warn('Tray follower attach returned an invalid response', { status: response.status, body: preview });
+    throw new Error(`Tray follower attach returned an invalid response (${response.status}): ${preview}`);
   }
   return payload;
 }
