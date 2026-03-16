@@ -69,7 +69,7 @@ vi.mock('../core/index.js', () => ({
 
 // Mock the providers/index.js module — return a minimal set of registered providers
 const { mockGetRegisteredProviderConfig, mockGetRegisteredProviderIds } = vi.hoisted(() => {
-  const providerConfigs = new Map([
+  const providerConfigs = new Map<string, Record<string, unknown>>([
     ['anthropic', { id: 'anthropic', name: 'Anthropic', description: 'Claude', requiresApiKey: true, requiresBaseUrl: false }],
     ['openai', { id: 'openai', name: 'OpenAI', description: 'GPT', requiresApiKey: true, requiresBaseUrl: false }],
     ['bedrock-camp', { id: 'bedrock-camp', name: 'AWS Bedrock (CAMP)', description: 'CAMP', requiresApiKey: true, requiresBaseUrl: true }],
@@ -114,6 +114,7 @@ import {
   exportProviders,
   getAvailableProviders,
   getProviderConfig,
+  getProviderModels,
   saveOAuthAccount,
   getOAuthAccountInfo,
 } from './provider-settings.js';
@@ -647,6 +648,29 @@ describe('OAuth account storage', () => {
     expect(accounts[0].accessToken).toBe('token-2');
     expect(accounts[0].userName).toBe('updated@example.com');
   });
+
+  it('saveOAuthAccount preserves existing baseUrl through re-login', () => {
+    // First login: set baseUrl via addAccount (as the UI does before login)
+    addAccount('test-oauth', '', 'https://proxy.example.com');
+    // OAuth login stores token, should preserve baseUrl
+    saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'token-1', userName: 'karl' });
+    const accounts = getAccounts();
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0].accessToken).toBe('token-1');
+    expect(accounts[0].baseUrl).toBe('https://proxy.example.com');
+  });
+
+  it('saveOAuthAccount allows explicit baseUrl override', () => {
+    addAccount('test-oauth', '', 'https://old-proxy.example.com');
+    saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'token-1', baseUrl: 'https://new-proxy.example.com' });
+    expect(getBaseUrlForProvider('test-oauth')).toBe('https://new-proxy.example.com');
+  });
+
+  it('saveOAuthAccount does not set baseUrl when none exists', () => {
+    saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'token-1' });
+    const accounts = getAccounts();
+    expect(accounts[0].baseUrl).toBeUndefined();
+  });
 });
 
 describe('getOAuthAccountInfo', () => {
@@ -708,5 +732,64 @@ describe('getOAuthAccountInfo', () => {
     });
     const info = getOAuthAccountInfo('test-oauth');
     expect(info!.expired).toBe(false);
+  });
+});
+
+describe('getProviderModels with getModelIds', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('uses getModelIds when provider defines it', () => {
+    // Register a provider with getModelIds
+    const providerConfigs = new Map(mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)]));
+    providerConfigs.set('custom-oauth', {
+      id: 'custom-oauth',
+      name: 'Custom OAuth',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [
+        { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4' },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('custom-oauth');
+    expect(models).toHaveLength(1);
+    expect(models[0].id).toBe('claude-sonnet-4-20250514');
+    expect(models[0].provider).toBe('custom-oauth');
+    expect(models[0].api).toBe('custom-oauth-anthropic');
+  });
+
+  it('falls back to all anthropic models for OAuth without getModelIds', () => {
+    const models = getProviderModels('test-oauth');
+    expect(models).toHaveLength(1); // mockGetModels returns 1 anthropic model
+    expect(models[0].id).toBe('claude-sonnet-4-20250514');
+    expect(models[0].api).toBe('test-oauth-anthropic');
+  });
+
+  it('creates fallback model for unknown model IDs from getModelIds', () => {
+    const providerConfigs = new Map(mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)]));
+    providerConfigs.set('custom-oauth', {
+      id: 'custom-oauth',
+      name: 'Custom OAuth',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [
+        { id: 'unknown-model-id', name: 'My Custom Model' },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('custom-oauth');
+    expect(models).toHaveLength(1);
+    expect(models[0].id).toBe('unknown-model-id');
+    expect(models[0].name).toBe('My Custom Model');
+    expect(models[0].provider).toBe('custom-oauth');
   });
 });

@@ -892,16 +892,22 @@ interface ProviderConfig {
   requiresApiKey: boolean;
   apiKeyPlaceholder?: string;
   apiKeyEnvVar?: string;
-  requiresBaseUrl: boolean;
+  requiresBaseUrl: boolean;      // shown for non-OAuth; also shown for OAuth providers when true
   baseUrlPlaceholder?: string;
   baseUrlDescription?: string;
   isOAuth?: boolean;
   onOAuthLogin?: (launcher: OAuthLauncher, onSuccess: () => void) => Promise<void>;
   onOAuthLogout?: () => Promise<void>;
+  /** Return the model IDs this provider supports (resolved against Anthropic registry). */
+  getModelIds?: () => Array<{ id: string; name?: string }>;
 }
 
 type OAuthLauncher = (authorizeUrl: string) => Promise<string | null>;
 ```
+
+**`requiresBaseUrl` for OAuth providers**: By default, the base URL field is hidden for OAuth providers. Set `requiresBaseUrl: true` to show it — useful for providers where the proxy endpoint is configurable at runtime. The base URL is saved to the account before `onOAuthLogin` is called, so the provider can read it via `getBaseUrlForProvider()`. The `saveOAuthAccount()` function preserves the existing `baseUrl` through re-logins.
+
+**`getModelIds`**: When present, `getProviderModels()` uses this instead of returning all Anthropic models. Each ID is resolved against the Anthropic model registry; unknown IDs get sensible defaults. Use this to restrict the model dropdown to models the proxy actually supports.
 
 **Test pattern**:
 
