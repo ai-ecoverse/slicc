@@ -8,3 +8,4 @@ coverage/
 providers.json
 /providers/
 !/providers/.gitkeep
+.superpowers/
