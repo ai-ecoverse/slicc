@@ -30,7 +30,7 @@ A browser-based coding agent that runs as a **Chrome extension**, with a thin **
 - :wrench: **JavaScript Tool** — sandboxed JS execution with VFS bridge and persistent context
 - :scroll: **JSH Scripts** — `.jsh` files anywhere on the VFS are auto-discovered as shell commands. Skills can ship executable scripts alongside `SKILL.md`. Scripts get Node-like globals (`process`, `console`, `fs`, `exec`) and work in both CLI and extension mode
 - :package: **Drag-and-Drop Skill Imports** — drop a `.skill` archive anywhere in the window to unpack it into `/workspace/skills/{name}` with a visual overlay, path-safety checks, and toast feedback
-- :key: **Multi-Provider Auth** — Anthropic (direct), Azure AI Foundry, AWS Bedrock, and custom OAuth providers (corporate proxies, SSO) with segmented control
+- :key: **Multi-Provider Auth** — Anthropic (direct), Azure AI Foundry, AWS Bedrock, Adobe (IMS OAuth), and custom OAuth providers (corporate proxies, SSO) with segmented control
 - :zap: **Real-Time Streaming** — responses stream token-by-token as Claude thinks
 - :floppy_disk: **Session Persistence** — conversations and files survive page reloads via IndexedDB
 - :microphone: **Voice Input** — hands-free voice mode using the Web Speech API. Toggle on, speak, 2.5s silence auto-sends, agent responds, voice auto-restarts. Works in both CLI and extension mode (extension uses a one-time popup for mic permission grant)
@@ -153,7 +153,7 @@ SLICC is a working prototype with these capabilities:
 - **Browser automation** via chrome.debugger API
 - **Virtual filesystem** backed by IndexedDB (LightningFS) with per-scoop sandboxing via RestrictedFS
 - **WebAssembly Bash shell** with Python (Pyodide) and Node.js support
-- **Multi-provider auth** (Anthropic, Azure AI Foundry, Azure OpenAI, AWS Bedrock, custom OAuth providers, and more)
+- **Multi-provider auth** (Anthropic, Azure AI Foundry, Azure OpenAI, AWS Bedrock, Adobe IMS, custom OAuth providers, and more)
 - **Voice input** with continuous conversation mode (Ctrl+Shift+V / Cmd+Shift+V)
 
 Current development is happening on feature branches using [yolo](https://github.com/ai-ecoverse/yolo) for worktree isolation, with Claude agents building the features autonomously.

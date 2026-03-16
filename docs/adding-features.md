@@ -737,7 +737,7 @@ describe('loadSkills', () => {
 Providers come from three sources:
 - **Pi-ai auto-discovery**: `getProviders()` returns all pi-ai providers automatically — no files needed. Filtered by `providers.build.json` (`include: ["*"]` = all, `exclude: ["*"]` = none).
 - **Built-in extensions**: `src/providers/built-in/*.ts` — only for providers needing custom `register()` functions (e.g., bedrock-camp). Also filtered by `providers.build.json`.
-- **External**: `providers/*.ts` (project root, gitignored) — always included, never filtered. For custom OAuth providers, corporate proxies, etc.
+- **External**: `providers/*.ts` (project root, mostly gitignored) — always included, never filtered. For custom OAuth providers, corporate proxies, etc. Some providers (e.g., `adobe.ts`) are explicitly un-gitignored and tracked in version control.
 
 Built-in and external modules export `config: ProviderConfig` and optionally `register(): void`.
 
@@ -749,7 +749,7 @@ Built-in and external modules export `config: ProviderConfig` and optionally `re
 
 **Only create a file in `src/providers/built-in/`** if the provider needs a custom `register()` function (e.g., custom stream functions). See `src/providers/built-in/bedrock-camp.ts` for an example.
 
-**For external providers** (gitignored, not in the open-source repo), create `providers/my-provider.ts`:
+**For external providers** (typically gitignored), create `providers/my-provider.ts`:
 
 ```typescript
 // providers/my-provider.ts
