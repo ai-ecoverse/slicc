@@ -536,6 +536,267 @@ describe('ScoopContext context overflow recovery', () => {
     expect(replacedMessages[1].content[0].text).toContain('Content removed');
   });
 
+  it('preserves ToolCall blocks in assistant messages during overflow recovery', () => {
+    const { replaceMessages, mockPrompt } = injectMockAgentWithReplace(ctx, async () => {});
+    mockPrompt.mockResolvedValue(undefined);
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const largeText = 'x'.repeat(50000); // oversized
+    const overflowMessage = {
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
+      errorMessage: 'prompt is too long: 250000 tokens > 200000 maximum',
+      usage: { input: 250000, output: 0 },
+      timestamp: Date.now(),
+    };
+
+    // Assistant message with BOTH large text AND a toolCall block
+    const assistantWithToolCall = {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: largeText },
+        { type: 'toolCall', id: 'toolu_abc123', name: 'bash', arguments: { command: 'ls' } },
+      ],
+      stopReason: 'tool_use',
+      usage: { input: 100, output: 100 },
+      timestamp: Date.now(),
+    };
+
+    const toolResult = {
+      role: 'toolResult',
+      toolCallId: 'toolu_abc123',
+      toolName: 'bash',
+      content: [{ type: 'text', text: 'file.txt' }],
+      isError: false,
+      timestamp: Date.now(),
+    };
+
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'list files' }] },
+      assistantWithToolCall,
+      toolResult,
+      overflowMessage,
+    ];
+
+    handler({ type: 'agent_end', messages });
+
+    const replacedMessages = replaceMessages.mock.calls[0][0];
+    // The assistant message should be replaced but MUST keep the toolCall block
+    const assistantMsg = replacedMessages[1];
+    const toolCallBlocks = assistantMsg.content.filter((b: any) => b.type === 'toolCall');
+    expect(toolCallBlocks).toHaveLength(1);
+    expect(toolCallBlocks[0].id).toBe('toolu_abc123');
+    // The large text should be replaced with a placeholder
+    const textBlocks = assistantMsg.content.filter((b: any) => b.type === 'text');
+    expect(textBlocks).toHaveLength(1);
+    expect(textBlocks[0].text).toContain('Content removed');
+  });
+
+  it('preserves multiple ToolCall blocks in a single assistant message', () => {
+    const { replaceMessages, mockPrompt } = injectMockAgentWithReplace(ctx, async () => {});
+    mockPrompt.mockResolvedValue(undefined);
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const largeText = 'x'.repeat(50000);
+    const overflowMessage = {
+      role: 'assistant', content: [], stopReason: 'error',
+      errorMessage: 'prompt is too long: 250000 tokens > 200000 maximum',
+      usage: { input: 250000, output: 0 }, timestamp: Date.now(),
+    };
+
+    const assistantWithMultipleToolCalls = {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: largeText },
+        { type: 'toolCall', id: 'toolu_1', name: 'read_file', arguments: { path: '/a.ts' } },
+        { type: 'toolCall', id: 'toolu_2', name: 'read_file', arguments: { path: '/b.ts' } },
+        { type: 'toolCall', id: 'toolu_3', name: 'bash', arguments: { command: 'ls' } },
+      ],
+      stopReason: 'tool_use',
+      usage: { input: 100, output: 100 }, timestamp: Date.now(),
+    };
+
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'do stuff' }] },
+      assistantWithMultipleToolCalls,
+      { role: 'toolResult', toolCallId: 'toolu_1', toolName: 'read_file', content: [{ type: 'text', text: 'a' }], isError: false, timestamp: Date.now() },
+      { role: 'toolResult', toolCallId: 'toolu_2', toolName: 'read_file', content: [{ type: 'text', text: 'b' }], isError: false, timestamp: Date.now() },
+      { role: 'toolResult', toolCallId: 'toolu_3', toolName: 'bash', content: [{ type: 'text', text: 'c' }], isError: false, timestamp: Date.now() },
+      overflowMessage,
+    ];
+
+    handler({ type: 'agent_end', messages });
+
+    const replacedMessages = replaceMessages.mock.calls[0][0];
+    const assistantMsg = replacedMessages[1];
+    const toolCallBlocks = assistantMsg.content.filter((b: any) => b.type === 'toolCall');
+    expect(toolCallBlocks).toHaveLength(3);
+    expect(toolCallBlocks.map((b: any) => b.id)).toEqual(['toolu_1', 'toolu_2', 'toolu_3']);
+  });
+
+  it('preserves ToolCalls when assistant has large image content', () => {
+    const { replaceMessages, mockPrompt } = injectMockAgentWithReplace(ctx, async () => {});
+    mockPrompt.mockResolvedValue(undefined);
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const overflowMessage = {
+      role: 'assistant', content: [], stopReason: 'error',
+      errorMessage: 'prompt is too long: 250000 tokens > 200000 maximum',
+      usage: { input: 250000, output: 0 }, timestamp: Date.now(),
+    };
+
+    // Assistant with large image + toolCall (image inflates msgSize over threshold)
+    const assistantMsg = {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'Here is the screenshot' },
+        { type: 'image', data: 'A'.repeat(50000), mimeType: 'image/png' },
+        { type: 'toolCall', id: 'toolu_img', name: 'bash', arguments: { command: 'screenshot' } },
+      ],
+      stopReason: 'tool_use',
+      usage: { input: 100, output: 100 }, timestamp: Date.now(),
+    };
+
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'take screenshot' }] },
+      assistantMsg,
+      { role: 'toolResult', toolCallId: 'toolu_img', toolName: 'bash', content: [{ type: 'text', text: 'done' }], isError: false, timestamp: Date.now() },
+      overflowMessage,
+    ];
+
+    handler({ type: 'agent_end', messages });
+
+    const replacedMessages = replaceMessages.mock.calls[0][0];
+    const replaced = replacedMessages[1];
+    // ToolCall preserved
+    const toolCalls = replaced.content.filter((b: any) => b.type === 'toolCall');
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0].id).toBe('toolu_img');
+    // Image and text replaced with single placeholder
+    const textBlocks = replaced.content.filter((b: any) => b.type === 'text');
+    expect(textBlocks).toHaveLength(1);
+    expect(textBlocks[0].text).toContain('Content removed');
+    // No image blocks remain
+    expect(replaced.content.filter((b: any) => b.type === 'image')).toHaveLength(0);
+  });
+
+  it('does not replace assistant messages that are only ToolCalls (not oversized)', () => {
+    const { replaceMessages, mockPrompt } = injectMockAgentWithReplace(ctx, async () => {});
+    mockPrompt.mockResolvedValue(undefined);
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const overflowMessage = {
+      role: 'assistant', content: [], stopReason: 'error',
+      errorMessage: 'prompt is too long: 250000 tokens > 200000 maximum',
+      usage: { input: 250000, output: 0 }, timestamp: Date.now(),
+    };
+
+    // Assistant with only a small text + toolCall — NOT oversized
+    const smallAssistant = {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'Let me check that.' },
+        { type: 'toolCall', id: 'toolu_small', name: 'bash', arguments: { command: 'ls' } },
+      ],
+      stopReason: 'tool_use',
+      usage: { input: 100, output: 50 }, timestamp: Date.now(),
+    };
+
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'check' }] },
+      smallAssistant,
+      { role: 'toolResult', toolCallId: 'toolu_small', toolName: 'bash', content: [{ type: 'text', text: 'file.txt' }], isError: false, timestamp: Date.now() },
+      overflowMessage,
+    ];
+
+    handler({ type: 'agent_end', messages });
+
+    const replacedMessages = replaceMessages.mock.calls[0][0];
+    // Small assistant should be unchanged (not oversized)
+    const assistantMsg = replacedMessages[1];
+    expect(assistantMsg.content).toHaveLength(2);
+    expect(assistantMsg.content[0].text).toBe('Let me check that.');
+    expect(assistantMsg.content[1].id).toBe('toolu_small');
+  });
+
+  it('fully replaces oversized assistant with no ToolCalls (just placeholder)', () => {
+    const { replaceMessages, mockPrompt } = injectMockAgentWithReplace(ctx, async () => {});
+    mockPrompt.mockResolvedValue(undefined);
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const overflowMessage = {
+      role: 'assistant', content: [], stopReason: 'error',
+      errorMessage: 'prompt is too long: 250000 tokens > 200000 maximum',
+      usage: { input: 250000, output: 0 }, timestamp: Date.now(),
+    };
+
+    // Oversized assistant with only text — no ToolCalls
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'explain' }] },
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'x'.repeat(50000) }],
+        stopReason: 'stop',
+        usage: { input: 100, output: 50000 }, timestamp: Date.now(),
+      },
+      overflowMessage,
+    ];
+
+    handler({ type: 'agent_end', messages });
+
+    const replacedMessages = replaceMessages.mock.calls[0][0];
+    const assistantMsg = replacedMessages[1];
+    // Should have exactly one placeholder text block, no empty toolCall array
+    expect(assistantMsg.content).toHaveLength(1);
+    expect(assistantMsg.content[0].type).toBe('text');
+    expect(assistantMsg.content[0].text).toContain('Content removed');
+  });
+
+  it('still fully replaces oversized toolResult messages (no ToolCalls to preserve)', () => {
+    const { replaceMessages, mockPrompt } = injectMockAgentWithReplace(ctx, async () => {});
+    mockPrompt.mockResolvedValue(undefined);
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const overflowMessage = {
+      role: 'assistant', content: [], stopReason: 'error',
+      errorMessage: 'prompt is too long: 250000 tokens > 200000 maximum',
+      usage: { input: 250000, output: 0 }, timestamp: Date.now(),
+    };
+
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'read big file' }] },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'toolCall', id: 'toolu_big', name: 'read_file', arguments: { path: '/big.ts' } },
+        ],
+        stopReason: 'tool_use',
+        usage: { input: 100, output: 50 }, timestamp: Date.now(),
+      },
+      {
+        role: 'toolResult', toolCallId: 'toolu_big', toolName: 'read_file',
+        content: [{ type: 'text', text: 'x'.repeat(50000) }],
+        isError: false, timestamp: Date.now(),
+      },
+      overflowMessage,
+    ];
+
+    handler({ type: 'agent_end', messages });
+
+    const replacedMessages = replaceMessages.mock.calls[0][0];
+    // toolResult should be fully replaced (single placeholder, no ToolCall blocks)
+    const toolResultMsg = replacedMessages[2];
+    expect(toolResultMsg.role).toBe('toolResult');
+    expect(toolResultMsg.content).toHaveLength(1);
+    expect(toolResultMsg.content[0].text).toContain('Content removed');
+    // But it must keep its toolCallId for pairing
+    expect(toolResultMsg.toolCallId).toBe('toolu_big');
+    // And the preceding assistant must still have its toolCall
+    const assistantMsg = replacedMessages[1];
+    expect(assistantMsg.content[0].id).toBe('toolu_big');
+  });
+
   it('limits recovery to one attempt (no infinite loop)', () => {
     const { replaceMessages, mockPrompt } = injectMockAgentWithReplace(ctx, async () => {});
     mockPrompt.mockResolvedValue(undefined);
@@ -788,6 +1049,45 @@ describe('ScoopContext image error recovery', () => {
     const toolResult = replacedMessages[1];
     expect(toolResult.content).toHaveLength(1);
     expect(toolResult.content[0].text).toContain('Image removed');
+  });
+
+  it('preserves ToolCall blocks in assistant messages during image recovery', () => {
+    const { replaceMessages, mockPrompt } = injectMockAgentWithReplace(ctx, async () => {});
+    mockPrompt.mockResolvedValue(undefined);
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const imageErrorMessage = {
+      role: 'assistant', content: [], stopReason: 'error',
+      errorMessage: 'image exceeds 5 MB maximum',
+      usage: { input: 100, output: 0 }, timestamp: Date.now(),
+    };
+
+    // Assistant message with text + image + toolCall
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'screenshot and check' }] },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'Here is the screenshot' },
+          { type: 'image', data: 'huge-image', mimeType: 'image/png' },
+          { type: 'toolCall', id: 'toolu_check', name: 'bash', arguments: { command: 'check' } },
+        ],
+        stopReason: 'tool_use',
+        usage: { input: 100, output: 100 }, timestamp: Date.now(),
+      },
+      { role: 'toolResult', toolCallId: 'toolu_check', toolName: 'bash', content: [{ type: 'text', text: 'ok' }], isError: false, timestamp: Date.now() },
+      imageErrorMessage,
+    ];
+
+    handler({ type: 'agent_end', messages });
+
+    const replacedMessages = replaceMessages.mock.calls[0][0];
+    const assistantMsg = replacedMessages[1];
+    // Image removed, but text and ToolCall preserved
+    expect(assistantMsg.content.filter((b: any) => b.type === 'image')).toHaveLength(0);
+    expect(assistantMsg.content.filter((b: any) => b.type === 'toolCall')).toHaveLength(1);
+    expect(assistantMsg.content.find((b: any) => b.type === 'toolCall').id).toBe('toolu_check');
+    expect(assistantMsg.content.filter((b: any) => b.type === 'text')).toHaveLength(1);
   });
 
   it('limits recovery to one attempt (prevents infinite loop)', () => {

@@ -57,7 +57,7 @@
 | `tool-adapter.ts` | Wraps legacy ToolDefinition as pi-compatible AgentTool |
 | `tool-registry.ts` | Registry of active tools with lookup by name |
 | `context-compaction.ts` | LLM-summarized context compaction (pi-mono aligned) with naive-drop fallback |
-| `image-processor.ts` | Image validation and preprocessing; resizes oversized/corrupt images via ImageMagick WASM before agent processing |
+| `image-processor.ts` | Image validation and preprocessing; checks base64 size (5MB), dimensions (8000px max, 1568px optimal), and format before agent processing. Parses PNG/GIF/JPEG headers for dimensions without full decode. Resizes via ImageMagick WASM |
 | `logger.ts` | createLogger factory with level filtering (DEBUG dev, ERROR prod) |
 | `session.ts` | IndexedDB session storage (`agent-sessions` DB) |
 | `mime-types.ts` | MIME type mappings (html, css, js, json, image, etc.) |
@@ -164,7 +164,7 @@
 | File | Purpose |
 |---|---|
 | `orchestrator.ts` | Manages scoop contexts, routes messages, handles responses, owns shared VirtualFS |
-| `scoop-context.ts` | Per-scoop agent instance (RestrictedFS, WasmShell, Agent, skills, NanoClaw tools); wires file tools + `bash` + `grep`/`find` + `javascript`, with browser automation via `playwright-cli` shell commands |
+| `scoop-context.ts` | Per-scoop agent instance (RestrictedFS, WasmShell, Agent, skills, NanoClaw tools); wires file tools + `bash` + `grep`/`find` + `javascript`, with browser automation via `playwright-cli` shell commands. Overflow recovery preserves ToolCall blocks in assistant messages to maintain API-required tool_use ↔ toolResult pairing |
 | `nanoclaw-tools.ts` | Scoop tools: `send_message`; cone-only tools: `list_scoops`, `scoop_scoop`, `feed_scoop`, `drop_scoop`, `update_global_memory` |
 | `db.ts` | IndexedDB (`slicc-groups` DB v3): scoops, messages, sessions, tasks, state, webhooks, crontasks stores |
 | `lick-manager.ts` | Browser-side lick management (webhooks + crontasks); all state in IndexedDB |
