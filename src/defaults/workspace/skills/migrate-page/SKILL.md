@@ -44,7 +44,8 @@ cone the only viable orchestrator.
 4. If the file is missing or `repo` is empty, ask the user in chat for
    the repo, then write the config:
    ```bash
-   write_file /shared/migrate-config.json { "repo": "owner/repo" }
+   write_file /shared/migrate-config.json
+   {"repo":"owner/repo-name","currentMigration":null}
    ```
 5. Start Phase 1 with the extracted URL and repo.
 

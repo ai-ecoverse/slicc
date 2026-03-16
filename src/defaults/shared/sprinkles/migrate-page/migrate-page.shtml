@@ -71,7 +71,7 @@
 
 <script>
 var PHASES = ['extraction', 'decomposition', 'blocks', 'assembly'];
-var PHASE_PROGRESS = { extraction: 25, decomposition: 50, blocks: 75, assembly: 100 };
+var PHASE_PROGRESS = { extraction: 25, decomposition: 50, blocks: 75, assembly: 90 };
 var currentPreviewUrl = null;
 
 function showView(id) {
@@ -216,12 +216,8 @@ function handleUpdate(data) {
   if (data.status === 'done') {
     var phaseIdx = PHASES.indexOf(data.phase);
     var nextPhase = phaseIdx < PHASES.length - 1
-      ? PHASES[phaseIdx + 1]
-      : data.phase;
-    updatePhases(
-      phaseIdx < PHASES.length - 1 ? nextPhase : data.phase,
-      data.detail || ''
-    );
+      ? PHASES[phaseIdx + 1] : data.phase;
+    updatePhases(nextPhase, '');
   } else {
     updatePhases(data.phase, data.detail || '');
   }
