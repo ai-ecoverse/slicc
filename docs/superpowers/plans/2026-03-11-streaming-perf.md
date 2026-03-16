@@ -214,7 +214,7 @@ Expected: PASS
 - [ ] **Step 5: Run tests**
 
 Run: `npm run test`
-Expected: 1054 tests passing
+Expected: All tests passing
 
 - [ ] **Step 6: Commit**
 
