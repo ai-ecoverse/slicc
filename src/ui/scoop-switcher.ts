@@ -102,6 +102,8 @@ export class ScoopSwitcher {
     }).length;
 
     if (activeCount > 0) {
+      trigger.classList.add('scoop-dd__trigger--scoops-active');
+
       const badge = document.createElement('span');
       badge.className = 'scoop-dd__badge';
       badge.textContent = String(activeCount);
@@ -243,6 +245,10 @@ export class ScoopSwitcher {
         border-color: var(--s2-notice);
       }
 
+      .scoop-dd__trigger--scoops-active {
+        border-color: #FF8BCB;
+      }
+
       .scoop-dd__trigger--error {
         border-color: var(--s2-negative);
       }
@@ -361,7 +367,7 @@ export class ScoopSwitcher {
         position: absolute;
         top: -6px;
         right: -8px;
-        background: #E8A0BF;
+        background: #FF8BCB;
         color: #fff;
         font-size: 9px;
         font-weight: 700;
