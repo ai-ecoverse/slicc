@@ -80,9 +80,8 @@
     document.getElementById('loading').style.display = 'block';
     document.getElementById('results').style.display = 'none';
 
-    BB.getQueryIndex().then(function(pages) {
-      var sitePath = BB.site.sitePath || '';
-      var filtered = sitePath ? pages.filter(function(p) { return p.path && p.path.startsWith(sitePath); }) : pages;
+    var sitePath = BB.site.sitePath || '';
+    BB.getPageList(sitePath).then(function(filtered) {
       var results = [];
       var chain = Promise.resolve();
 

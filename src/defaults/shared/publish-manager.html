@@ -69,9 +69,9 @@
     selected.clear();
     updateSelection();
 
-    BB.getQueryIndex().then(function(data) {
-      var filter = document.getElementById('filterPath').value.trim();
-      pages = filter ? data.filter(function(p) { return p.path && p.path.startsWith(filter); }) : data;
+    var filter = document.getElementById('filterPath').value.trim();
+    BB.getPageList(filter).then(function(data) {
+      pages = data;
       document.getElementById('loading').style.display = 'none';
       renderPages();
     }).catch(function(err) {

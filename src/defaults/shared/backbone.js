@@ -230,6 +230,77 @@ var BB = {
     });
   },
 
+  // ── Page List (query index with DA fallback) ──────────────────
+  // Returns [{path, title, description, image}] — tries query index first,
+  // falls back to DA listPages + AEM metadata enrichment.
+  _pageListCache: null,
+
+  getPageList: function(filterPath) {
+    var self = this;
+    if (self._pageListCache) {
+      return Promise.resolve(self._filterPages(self._pageListCache, filterPath));
+    }
+    return self.getQueryIndex().then(function(pages) {
+      if (pages && pages.length > 0) {
+        self._pageListCache = pages;
+        return self._filterPages(pages, filterPath);
+      }
+      // Fallback: build page list from DA listPages + AEM metadata
+      return self._buildPageListFromDA(filterPath);
+    });
+  },
+
+  _filterPages: function(pages, filterPath) {
+    if (!filterPath) return pages;
+    return pages.filter(function(p) { return p.path && p.path.startsWith(filterPath); });
+  },
+
+  _buildPageListFromDA: function(filterPath) {
+    var self = this;
+    var sitePath = filterPath || self.site.sitePath || '';
+    return self.listPages(sitePath).then(function(entries) {
+      // Only HTML files (skip folders and media)
+      var htmlFiles = entries.filter(function(e) { return e.ext === 'html'; });
+      // Convert DA paths to site-relative paths
+      var prefix = self.site.org + '/' + self.site.repo;
+      var pages = htmlFiles.map(function(e) {
+        // DA path: /org/repo/tavex/dosing.html → /tavex/dosing
+        var p = e.path || '';
+        if (p.startsWith('/' + prefix)) p = p.slice(('/' + prefix).length);
+        p = p.replace(/\.html$/, '');
+        return { path: p, title: '', description: '', name: e.name, _needsMeta: true };
+      });
+      // Enrich with metadata from AEM (title, description) in parallel batches
+      return self._enrichWithMetadata(pages);
+    }).then(function(pages) {
+      self._pageListCache = pages;
+      return pages;
+    });
+  },
+
+  _enrichWithMetadata: function(pages) {
+    var self = this;
+    // Fetch AEM page HTML for each page to extract title and description
+    var promises = pages.map(function(page) {
+      return self.getAEMPage(page.path).then(function(html) {
+        var parser = new DOMParser();
+        var doc = parser.parseFromString(html, 'text/html');
+        page.title = (doc.querySelector('title') || {}).textContent || page.name || '';
+        var metaDesc = doc.querySelector('meta[name="description"]');
+        page.description = metaDesc ? metaDesc.getAttribute('content') || '' : '';
+        var ogImg = doc.querySelector('meta[property="og:image"]');
+        page.image = ogImg ? ogImg.getAttribute('content') || '' : '';
+        delete page._needsMeta;
+        return page;
+      }).catch(function() {
+        page.title = page.name || '';
+        delete page._needsMeta;
+        return page;
+      });
+    });
+    return Promise.all(promises);
+  },
+
   // ── GitHub Code I/O ─────────────────────────────────────────────
   _ghHeaders: function() {
     return {

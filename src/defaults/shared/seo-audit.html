@@ -66,17 +66,12 @@
     document.getElementById('loading').style.display = 'block';
     document.getElementById('results').style.display = 'none';
 
-    BB.getQueryIndex().then(function(pages) {
-      // Filter to site path
-      var filtered = pages;
-      if (path) {
-        filtered = pages.filter(function(p) { return p.path && p.path.startsWith(path); });
-      }
+    BB.getPageList(path).then(function(filtered) {
       if (filtered.length === 0) {
         document.getElementById('loading').style.display = 'none';
         document.getElementById('results').style.display = 'block';
         document.getElementById('scores').innerHTML = '';
-        document.getElementById('issues').innerHTML = '<div class="loading">No pages found in the query index for this path.</div>';
+        document.getElementById('issues').innerHTML = '<div class="loading">No pages found for this path.</div>';
         return;
       }
       return analyzePages(filtered);

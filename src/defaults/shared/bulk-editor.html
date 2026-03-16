@@ -65,9 +65,8 @@
     changes = {};
     updateChangeCount();
 
-    BB.getQueryIndex().then(function(pages) {
-      var filter = document.getElementById('filterPath').value.trim();
-      var filtered = filter ? pages.filter(function(p) { return p.path && p.path.startsWith(filter); }) : pages;
+    var filter = document.getElementById('filterPath').value.trim();
+    BB.getPageList(filter).then(function(filtered) {
       originalData = filtered.slice(0, 50);
       renderTable(originalData);
     }).catch(function(err) {

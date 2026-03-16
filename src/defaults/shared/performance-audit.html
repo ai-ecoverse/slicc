@@ -61,9 +61,8 @@
     document.getElementById('loading').style.display = 'block';
     document.getElementById('results').style.display = 'none';
 
-    BB.getQueryIndex().then(function(pages) {
-      var path = document.getElementById('auditPath').value.trim();
-      var filtered = path ? pages.filter(function(p) { return p.path && p.path.startsWith(path); }) : pages;
+    var path = document.getElementById('auditPath').value.trim();
+    BB.getPageList(path).then(function(filtered) {
       if (filtered.length === 0) {
         document.getElementById('loading').style.display = 'none';
         document.getElementById('results').style.display = 'block';
