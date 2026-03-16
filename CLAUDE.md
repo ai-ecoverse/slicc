@@ -123,6 +123,8 @@ Key files:
 
 **Extension Entry Point**: In `src/ui/main.ts`, when extension mode is detected, `main()` delegates to `mainExtension()` which creates an `OffscreenClient` instead of a direct `Orchestrator`. The `OffscreenClient` provides an `AgentHandle` for the chat panel and an Orchestrator-compatible facade for scoops/memory/scoop-switcher panels.
 
+**Active Scoop Badge** (extension-mode only): The scoop dropdown trigger (`src/ui/scoop-switcher.ts`) shows a notification badge with the count of actively processing scoops (excludes the cone). Badge and dropdown border use Chrome's pink tab group color (`#FF8BCB`). Badge disappears when no scoops are processing. Subtle scale pulse animation on count change.
+
 **Tab Grouping** (extension-mode only): Agent-created tabs (via `playwright-cli`, `serve`, `new-tab`) are automatically added to a persistent pink "slicc" Chrome tab group. The group is created lazily on first tab and reused for the session. If the user ungroups tabs, a new group is created on the next tab open. Implemented in both `service-worker.ts` (offscreen-originated tab creation via CDP proxy) and `debugger-client.ts` (direct side-panel tab creation). Requires the `tabGroups` manifest permission.
 
 ### Three Build Targets
