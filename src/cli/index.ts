@@ -748,6 +748,11 @@ async function main() {
           headers[key] = value;
         }
       }
+      // Always request uncompressed responses from upstream — the proxy doesn't
+      // decompress, and the browser→proxy link is localhost (no benefit to compression).
+      // Without this, Cloudflare may Brotli-compress the response, the proxy strips
+      // Content-Encoding (line below), and the browser receives compressed garbage.
+      headers['accept-encoding'] = 'identity';
       if (Object.keys(headers).length > 0) fetchInit.headers = headers;
       if (rawBody.length > 0 && !['GET', 'HEAD'].includes(req.method)) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
