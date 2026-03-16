@@ -292,8 +292,8 @@ export class BrowserAPI {
               });
             }
           });
-        } catch {
-          // Best-effort — return original if resize fails
+        } catch (resizeErr) {
+          console.warn('[browser-api] Screenshot maxWidth resize failed, returning original', resizeErr);
         }
       }
 
