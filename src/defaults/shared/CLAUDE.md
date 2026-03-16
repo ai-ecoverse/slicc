@@ -182,15 +182,17 @@ Built-in sprinkles follow the same scoop delegation rules as custom sprinkles. T
 ```
 scoop_scoop("seo-dashboard")
 feed_scoop("seo-dashboard", "You own the built-in sprinkle 'seo-dashboard'.
-1. Run: sprinkle open seo-dashboard
-2. The sprinkle is already built at /shared/sprinkles/seo-dashboard/seo-dashboard.shtml — do NOT recreate it.
-3. Gather the data the user needs (e.g. fetch the page, run an SEO audit).
-4. Push results to the sprinkle: sprinkle send seo-dashboard '<json>'
-5. Stay ready — you will receive lick events when the user clicks buttons in the sprinkle. Handle them (e.g. fix-meta, fix-heading) and push updated data back.
+1. Run: read_file /workspace/skills/sprinkles/style-guide.md (for DA integration and component reference)
+2. Run: sprinkle open seo-dashboard
+3. The sprinkle is already built at /shared/sprinkles/seo-dashboard/seo-dashboard.shtml — do NOT recreate it.
+4. Gather the data the user needs (e.g. fetch the page, run an SEO audit).
+5. Push results to the sprinkle: sprinkle send seo-dashboard '<json>'
+6. Stay ready — you will receive lick events when the user clicks buttons in the sprinkle.
+7. When the user confirms a fix, apply it to AEM via DA (see style-guide.md 'DA Integration' section).
 Do not send a completion message.")
 ```
 
-The scoop opens the sprinkle, gathers real data, pushes it via `sprinkle send`, and handles lick events (button clicks) from the user. The cone only forwards lick events to the scoop via `feed_scoop`.
+The scoop opens the sprinkle, gathers real data, pushes it via `sprinkle send`, and handles lick events (button clicks) from the user. The cone only forwards lick events to the scoop via `feed_scoop`. Content-editing sprinkles must apply confirmed changes to AEM via DA — see the "DA Integration" section in `/workspace/skills/sprinkles/style-guide.md`.
 
 ## Sprinkles: Cone Orchestration Rules
 

@@ -134,6 +134,42 @@ body {
 
 .no-selection { padding: 48px 24px; text-align: center; color: var(--s2-gray-500); font-size: 13px; }
 
+/* ---- Suggestions Panel ---- */
+.suggestions-panel {
+  margin-top: 10px; padding: 12px; border-radius: var(--s2-radius-default);
+  background: color-mix(in srgb, var(--s2-accent) 4%, transparent);
+  border: 1px solid color-mix(in srgb, var(--s2-accent) 20%, transparent);
+  animation: slideIn 200ms ease;
+}
+.suggestions-label { font-size: 11px; font-weight: 600; color: var(--s2-accent); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px; }
+.suggestion-option {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  border-radius: var(--s2-radius-default); cursor: pointer;
+  transition: background 130ms ease; font-size: 13px; color: var(--s2-gray-800);
+}
+.suggestion-option:hover { background: color-mix(in srgb, var(--s2-accent) 8%, transparent); }
+.suggestion-option .pick-btn {
+  flex-shrink: 0; height: 22px; padding: 0 10px; border-radius: var(--s2-radius-pill);
+  border: 1px solid var(--s2-accent); background: transparent; color: var(--s2-accent);
+  font-size: 11px; font-weight: 600; cursor: pointer; transition: all 130ms ease;
+  font-family: var(--s2-font-family);
+}
+.suggestion-option .pick-btn:hover { background: var(--s2-accent); color: var(--s2-gray-25); }
+.suggestion-text { flex: 1; min-width: 0; }
+
+/* ---- Toast ---- */
+.toast {
+  position: fixed; bottom: 60px; left: 50%; transform: translateX(-50%);
+  padding: 10px 20px; border-radius: var(--s2-radius-pill);
+  font-size: 13px; font-weight: 600; z-index: 100;
+  box-shadow: var(--s2-shadow-elevated); animation: toastIn 200ms ease, toastOut 300ms ease 2.7s forwards;
+  white-space: nowrap;
+}
+.toast.success { background: var(--s2-positive); color: var(--s2-gray-25); }
+.toast.error { background: var(--s2-negative); color: var(--s2-gray-25); }
+@keyframes toastIn { from { opacity: 0; transform: translateX(-50%) translateY(10px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+@keyframes toastOut { from { opacity: 1; } to { opacity: 0; } }
+
 /* ---- Action Bar ---- */
 .action-bar { display: flex; gap: 8px; padding: 12px 24px; border-top: 1px solid var(--s2-gray-200); background: var(--s2-bg-layer-1); flex-shrink: 0; }
 .action-btn {
@@ -465,12 +501,15 @@ function renderDetail() {
       else action = 'fix-meta';
       fixBtn = '<button class="btn-autofix" data-category="' + iss.category + '" data-action="' + action + '">Auto-fix</button>';
     }
+    // Check for pending suggestions for this category
+    var suggestionsHtml = getSuggestionsHtml(selectedIdx, iss.category);
     return '<div class="issue-item ' + cls + '">' +
       '<span class="issue-icon ' + iconCls + '">' + icon + '</span>' +
       '<div class="issue-content">' +
         '<div class="issue-text">' + escHtml(iss.text) + '</div>' +
         (iss.suggestion ? '<div class="issue-suggestion">' + escHtml(iss.suggestion) + '</div>' : '') +
         fixBtn +
+        suggestionsHtml +
       '</div>' +
     '</div>';
   }).join('');
@@ -537,6 +576,14 @@ function renderDetail() {
         action: action,
         data: { pageIndex: selectedIdx, path: pages[selectedIdx].path, category: category }
       });
+    });
+  });
+
+  // Wire up suggestion pick buttons
+  document.querySelectorAll('.pick-btn[data-skey]').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      applySuggestion(btn.dataset.skey, parseInt(btn.dataset.sidx));
     });
   });
 }
@@ -612,6 +659,14 @@ function refresh() {
   saveState();
 }
 
+function showToast(msg, isError) {
+  var toast = document.createElement('div');
+  toast.className = 'toast ' + (isError ? 'error' : 'success');
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(function() { toast.remove(); }, 3000);
+}
+
 function escHtml(s) {
   var d = document.createElement('div');
   d.textContent = s || '';
@@ -663,6 +718,59 @@ function loadPreset(key) {
   refresh();
 }
 
+// ==================== SUGGESTIONS ====================
+var pendingSuggestions = {}; // keyed by "pageIndex:category"
+
+function renderSuggestions(pageIndex, category, suggestions) {
+  var key = pageIndex + ':' + category;
+  pendingSuggestions[key] = { pageIndex: pageIndex, category: category, suggestions: suggestions };
+  // Re-render detail if viewing this page
+  if (selectedIdx === pageIndex) {
+    renderDetail();
+  }
+}
+
+function getSuggestionsHtml(pageIndex, category) {
+  var key = pageIndex + ':' + category;
+  var entry = pendingSuggestions[key];
+  if (!entry || !entry.suggestions || entry.suggestions.length === 0) return '';
+
+  var html = '<div class="suggestions-panel" data-suggestion-key="' + escAttr(key) + '">' +
+    '<div class="suggestions-label">Suggested fixes (' + entry.suggestions.length + ')</div>';
+  entry.suggestions.forEach(function(s, i) {
+    html += '<div class="suggestion-option">' +
+      '<span class="suggestion-text">' + escHtml(s) + '</span>' +
+      '<button class="pick-btn" data-skey="' + escAttr(key) + '" data-sidx="' + i + '">Apply</button>' +
+    '</div>';
+  });
+  html += '</div>';
+  return html;
+}
+
+function applySuggestion(key, idx) {
+  var entry = pendingSuggestions[key];
+  if (!entry) return;
+  var p = pages[entry.pageIndex];
+  if (!p) return;
+  var value = entry.suggestions[idx];
+
+  if (entry.category === 'Title') {
+    p.title = value;
+  } else if (entry.category === 'Meta Description') {
+    p.meta = value;
+  }
+
+  delete pendingSuggestions[key];
+  selectedIdx = entry.pageIndex;
+  refresh();
+
+  // Notify scoop of the choice
+  slicc.lick({
+    action: 'suggestion-applied',
+    data: { pageIndex: entry.pageIndex, category: entry.category, chosen: value }
+  });
+}
+
 // ==================== BRIDGE ====================
 slicc.on('update', function(data) {
   if (data && data.action === 'apply-fix') {
@@ -671,6 +779,19 @@ slicc.on('update', function(data) {
       selectedIdx = data.pageIndex;
       applyAutoFix(data.category);
     }
+  }
+  if (data && data.action === 'fix-suggestions') {
+    // Scoop pushes suggested fixes for user to pick from
+    if (typeof data.pageIndex === 'number' && data.category && Array.isArray(data.suggestions)) {
+      renderSuggestions(data.pageIndex, data.category, data.suggestions);
+    }
+  }
+  if (data && data.action === 'da-applied') {
+    // DA write confirmed — show a brief toast notification
+    showToast('Applied to DA: ' + (data.path || 'page') + (data.previewUrl ? ' — preview ready' : ''));
+  }
+  if (data && data.action === 'da-error') {
+    showToast('DA error: ' + (data.message || 'could not apply'), true);
   }
   if (data && data.pages) {
     pages = data.pages;

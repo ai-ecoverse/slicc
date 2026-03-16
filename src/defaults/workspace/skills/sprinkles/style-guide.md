@@ -305,6 +305,75 @@ Panels should look like professional tools, not chatbot output. Follow these rul
 
 ---
 
+## DA Integration (Applying Changes to AEM)
+
+Content-editing sprinkles (page-editor, seo-dashboard, schema-editor, review-workflow) should apply user-confirmed changes to the actual AEM page via DA commands. This is the expected E2E flow — sprinkle edits are not just local UI state.
+
+### When to apply via DA
+
+Apply after the user **confirms** a change — not on every lick. Typical trigger: `suggestion-applied` lick (user picked a fix from suggestions), or `apply-fix` lick (user clicked "Apply").
+
+### DA apply workflow
+
+```bash
+# 1. Fetch current page HTML
+da get <page-path> --output /scoops/<scoop-name>/page.html
+
+# 2. Read and modify the HTML (e.g. update <title>, <meta>, headings)
+#    Use edit_file or read_file + write_file
+
+# 3. Write back to DA
+da put <page-path> /scoops/<scoop-name>/page.html
+
+# 4. Trigger AEM preview
+da preview <page-path>
+```
+
+### Confirming back to the sprinkle
+
+After DA write succeeds, push confirmation so the sprinkle can show a toast:
+
+```bash
+sprinkle send <sprinkle-name> '{"action":"da-applied","path":"<page-path>","previewUrl":"https://..."}'
+```
+
+If DA fails, push the error:
+
+```bash
+sprinkle send <sprinkle-name> '{"action":"da-error","message":"<error details>"}'
+```
+
+### If DA is not configured
+
+Run `da config` to check. If credentials are missing, **tell the user** what's needed:
+
+```
+da config org <value>
+da config repo <value>
+da config client-id <value>
+da config client-secret <value>
+da config service-token <value>
+```
+
+Do NOT silently skip DA. Always attempt it and report any errors.
+
+### Sprinkle-side handlers
+
+Sprinkles that support DA integration should handle these update actions:
+
+```javascript
+slicc.on('update', function(data) {
+  if (data.action === 'da-applied') {
+    showToast('Applied to DA: ' + data.path);
+  }
+  if (data.action === 'da-error') {
+    showToast('DA error: ' + data.message, true);
+  }
+});
+```
+
+---
+
 ## Spectrum 2 Token Reference
 
 Full-document sprinkles (`.shtml`) inherit S2 CSS custom properties from the parent page. Always use tokens — never hardcode hex values.

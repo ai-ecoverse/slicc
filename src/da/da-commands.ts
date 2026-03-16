@@ -105,7 +105,9 @@ export class DACommands {
   // ── Config ──────────────────────────────────────────────────────
 
   private async ensureConfigLoaded(): Promise<void> {
-    if (this.configLoaded) return;
+    // Always re-read if config is missing or incomplete (credentials may have been
+    // written by another scoop/cone after this instance was created).
+    if (this.configLoaded && this.config?.org && this.config?.serviceToken) return;
     this.configLoaded = true;
     try {
       const content = await this.fs.readTextFile(CONFIG_PATH);
