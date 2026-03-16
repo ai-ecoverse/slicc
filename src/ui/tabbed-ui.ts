@@ -7,14 +7,15 @@ const ALL_EXTENSION_TAB_SPECS = [
 ] as const;
 
 const HIDDEN_TABS_KEY = 'slicc-hidden-tabs';
+const DEFAULT_HIDDEN_TABS = ['terminal', 'memory'];
 
 /** Read hidden tab IDs from localStorage. */
 function getHiddenTabs(): Set<string> {
   try {
     const raw = localStorage.getItem(HIDDEN_TABS_KEY);
-    if (!raw) return new Set();
+    if (!raw) return new Set(DEFAULT_HIDDEN_TABS);
     return new Set(JSON.parse(raw) as string[]);
-  } catch { return new Set(); }
+  } catch { return new Set(DEFAULT_HIDDEN_TABS); }
 }
 
 /** Set hidden tab IDs in localStorage. Chat cannot be hidden. */

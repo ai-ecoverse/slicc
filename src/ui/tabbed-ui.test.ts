@@ -13,9 +13,7 @@ describe('tabbed-ui', () => {
   it('keeps the extension and overlay tab order in one shared place', () => {
     expect(EXTENSION_TAB_SPECS.map(tab => tab.id)).toEqual([
       'chat',
-      'terminal',
       'files',
-      'memory',
     ]);
   });
 
