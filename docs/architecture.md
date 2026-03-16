@@ -17,7 +17,7 @@
 | CLI / Electron Node Runtime | `src/cli/` | Express server, Chrome launcher, Electron float entrypoint | `index.ts` | `electron-runtime.test.ts` |
 | Extension | `src/extension/` | Chrome Manifest V3 entry point | `service-worker.ts` | N/A |
 | Providers | `src/providers/` | Provider types, OAuth service, auto-discovery, build-time filtering | `types.ts`, `oauth-service.ts`, `index.ts` | `index.test.ts`, `oauth-service.test.ts` |
-| Sprinkles | `src/ui/sprinkle-*.ts` | Composable `.shtml` panels: discovery, rendering, bridge API, picker UI | `sprinkle-manager.ts` | `sprinkle-discovery.test.ts` |
+| Sprinkles | `src/ui/sprinkle-*.ts` | Composable `.shtml` panels: discovery, rendering, bridge API, picker UI | `sprinkle-manager.ts` | `sprinkle-manager.test.ts` |
 | Defaults | `src/defaults/` | Bundled VFS content: agent instructions, skills, sprinkles | N/A | N/A |
 | Types | `src/types/` | Type declarations for external submodules | `pi-coding-agent-compaction.d.ts` | N/A |
 
