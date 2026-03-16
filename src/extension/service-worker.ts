@@ -227,6 +227,9 @@ async function handleCdpCommand(cmd: CdpCommandMsg): Promise<CdpResponseMsg> {
       case 'Target.createTarget':
         result = await cdpCreateTarget(params!);
         break;
+      case 'Target.closeTarget':
+        result = await cdpCloseTarget(params!);
+        break;
       default:
         result = await cdpSendCommand(method, params, sessionId);
         break;
@@ -305,6 +308,28 @@ async function cdpCreateTarget(
   const tab = await chrome.tabs.create({ url, active: false });
   await addToSliccGroup(tab.id);
   return { targetId: String(tab.id) };
+}
+
+async function cdpCloseTarget(
+  params: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const targetId = params['targetId'] as string;
+  const tabId = parseInt(targetId, 10);
+  if (!Number.isFinite(tabId) || tabId <= 0) {
+    throw new Error(`Invalid targetId: ${targetId}`);
+  }
+
+  // Clean up session/attach state for this tab
+  for (const [sid, tid] of sessionToTab) {
+    if (tid === tabId) sessionToTab.delete(sid);
+  }
+  if (attachedTabs.has(tabId)) {
+    attachedTabs.delete(tabId);
+    await chrome.debugger.detach({ tabId }).catch(() => {});
+  }
+
+  await chrome.tabs.remove(tabId);
+  return { success: true };
 }
 
 async function cdpSendCommand(
