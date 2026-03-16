@@ -10,7 +10,7 @@
 | Git | `src/git/` | isomorphic-git wrapper | `git-commands.ts` | N/A |
 | Skills | `src/skills/` | Skill package manager | `apply.ts` | N/A |
 | CDP | `src/cdp/` | Chrome DevTools Protocol | `browser-api.ts` | `browser-api.test.ts` |
-| Tools | `src/tools/` | Tool factories; active scoop surface is file + bash + grep/find + javascript | `bash-tool.ts` | `bash-tool.test.ts` |
+| Tools | `src/tools/` | Tool factories; active scoop surface is file + bash + javascript | `bash-tool.ts` | `bash-tool.test.ts` |
 | Core Agent | `src/core/` | pi-mono agent loop + streaming | `index.ts` | `agent.test.ts` |
 | Scoops Orchestrator | `src/scoops/` | Multi-agent system (cone + scoops) | `orchestrator.ts` | N/A |
 | UI | `src/ui/` | Chat, Terminal, Files, Memory panels | `main.ts` | `types.test.ts` |
