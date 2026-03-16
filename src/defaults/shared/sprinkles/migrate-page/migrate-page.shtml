@@ -134,7 +134,7 @@ function startMigration() {
 
 function previewResult() {
   if (currentPreviewUrl) {
-    window.open(currentPreviewUrl, '_blank');
+    slicc.open(currentPreviewUrl);
   }
 }
 
