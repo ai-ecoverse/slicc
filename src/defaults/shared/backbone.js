@@ -169,15 +169,22 @@ var BB = {
     return 'https://' + this.site.ref + '--' + this.site.repo + '--' + this.site.org + '.aem.page';
   },
 
+  // Normalize a page path for AEM URLs.
+  // AEM serves index pages at the directory URL (/tavex/) not /tavex/index.
+  // Regular pages like /tavex/dosing work as-is.
+  _aemPath: function(pagePath) {
+    var p = pagePath.replace(/^\//, '').replace(/\.html$/, '');
+    // /tavex/index → tavex/  (AEM serves at directory URL)
+    // /tavex/dosing → tavex/dosing  (direct path)
+    p = p.replace(/(^|\/)?index$/, '$1');
+    if (!p || p.endsWith('/')) return p;
+    return p;
+  },
+
   getAEMPage: function(pagePath) {
     var self = this;
-    var path = pagePath.replace(/^\//, '');
+    var path = self._aemPath(pagePath);
     return self._fetch(self._aemBase() + '/' + path).then(function(res) {
-      if (!res.ok && !path.endsWith('/')) {
-        return self._fetch(self._aemBase() + '/' + path + '/');
-      }
-      return res;
-    }).then(function(res) {
       if (!res.ok) throw new Error('AEM fetch failed: ' + res.status);
       return res.text();
     });
@@ -185,9 +192,12 @@ var BB = {
 
   getAEMPlainHTML: function(pagePath) {
     var self = this;
-    var path = pagePath.replace(/^\//, '').replace(/\/$/, '');
+    var path = pagePath.replace(/^\//, '').replace(/\/$/, '').replace(/\.html$/, '');
+    // For .plain.html, both /tavex/dosing.plain.html and /tavex/index.plain.html work.
+    // Try direct path first, fall back to index.plain.html for directory paths.
     return self._fetch(self._aemBase() + '/' + path + '.plain.html').then(function(res) {
       if (!res.ok && res.status === 404) {
+        // Try as directory with index: /tavex/ → /tavex/index.plain.html
         return self._fetch(self._aemBase() + '/' + path + '/index.plain.html');
       }
       return res;
@@ -343,12 +353,12 @@ var BB = {
 
   // ── Preview URLs ────────────────────────────────────────────────
   previewUrl: function(pagePath) {
-    var clean = pagePath ? '/' + pagePath.replace(/^\//, '').replace(/\.html$/, '') : '';
+    var clean = pagePath ? '/' + this._aemPath(pagePath) : '';
     return 'https://' + this.site.ref + '--' + this.site.repo + '--' + this.site.org + '.aem.page' + clean;
   },
 
   liveUrl: function(pagePath) {
-    var clean = pagePath ? '/' + pagePath.replace(/^\//, '').replace(/\.html$/, '') : '';
+    var clean = pagePath ? '/' + this._aemPath(pagePath) : '';
     return 'https://' + this.site.ref + '--' + this.site.repo + '--' + this.site.org + '.aem.live' + clean;
   },
 
