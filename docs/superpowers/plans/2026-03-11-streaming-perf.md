@@ -146,7 +146,7 @@ Expected: PASS
 - [ ] **Step 3: Run tests**
 
 Run: `npm run test`
-Expected: 1054 tests passing (ChatPanel is DOM-dependent, not covered by Node tests)
+Expected: All tests passing (ChatPanel is DOM-dependent, not covered by Node tests)
 
 - [ ] **Step 4: Commit**
 
@@ -235,7 +235,7 @@ Expected: PASS on both tsconfig targets
 - [ ] **Step 2: Tests**
 
 Run: `npm run test`
-Expected: 1054 tests, 0 failures
+Expected: All tests passing, 0 failures
 
 - [ ] **Step 3: Production build**
 

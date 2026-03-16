@@ -17,6 +17,9 @@
 | CLI / Electron Node Runtime | `src/cli/` | Express server, Chrome launcher, Electron float entrypoint | `index.ts` | `electron-runtime.test.ts` |
 | Extension | `src/extension/` | Chrome Manifest V3 entry point | `service-worker.ts` | N/A |
 | Providers | `src/providers/` | Provider types, OAuth service, auto-discovery, build-time filtering | `types.ts`, `oauth-service.ts`, `index.ts` | `index.test.ts`, `oauth-service.test.ts` |
+| Sprinkles | `src/ui/sprinkle-*.ts` | Composable `.shtml` panels: discovery, rendering, bridge API, picker UI | `sprinkle-manager.ts` | `sprinkle-discovery.test.ts` |
+| Defaults | `src/defaults/` | Bundled VFS content: agent instructions, skills, sprinkles | N/A | N/A |
+| Types | `src/types/` | Type declarations for external submodules | `pi-coding-agent-compaction.d.ts` | N/A |
 
 ## Source File Tree
 
@@ -29,6 +32,7 @@
 | `debugger-client.ts` | Chrome debugger API client (extension mode, uses `chrome.debugger`) |
 | `har-recorder.ts` | HAR 1.2 recorder for network traffic; saves snapshots to VFS on navigation |
 | `transport.ts` | CDPTransport interface (abstracts CDP/debugger implementations) |
+| `normalize-accessibility-text.ts` | Accessibility tree text normalization utilities |
 | `index.ts` | Re-exports + auto-selects transport based on extension detection |
 | `types.ts` | TargetInfo, PageInfo, EvaluateOptions, AccessibilityNode, etc. |
 | `offscreen-cdp-proxy.ts` | CDPTransport over chrome.runtime messages (offscreen → service worker → chrome.debugger) |
@@ -40,6 +44,7 @@
 |---|---|
 | `index.ts` | Main CLI entrypoint: launches Chrome by default, or in `--electron` mode launches/relaunches a target Electron app, serves UI, proxies WebSocket CDP traffic, and provides `/api/fetch-proxy` for CORS |
 | `runtime-flags.ts` | Shared CLI/runtime flag parsing for `--dev`, `--serve-only`, `--cdp-port`, `--electron`, `--electron-app`, and `--kill` |
+| `electron-main.ts` | Electron process entry point: spawns CLI server in `--serve-only` mode, creates BrowserWindow, injects overlay, strips host-page CSP |
 | `electron-runtime.ts` | Pure Electron helpers for target app path resolution, overlay URLs/bootstrap scripts, dist paths, and injectable-target filtering |
 | `electron-controller.ts` | Electron app lifecycle management: detect running app processes, enforce `--kill`, launch with remote debugging, and inject/reinject the overlay across navigations |
 
@@ -52,6 +57,7 @@
 | `tool-adapter.ts` | Wraps legacy ToolDefinition as pi-compatible AgentTool |
 | `tool-registry.ts` | Registry of active tools with lookup by name |
 | `context-compaction.ts` | LLM-summarized context compaction (pi-mono aligned) with naive-drop fallback |
+| `image-processor.ts` | Image validation and preprocessing; resizes oversized/corrupt images via ImageMagick WASM before agent processing |
 | `logger.ts` | createLogger factory with level filtering (DEBUG dev, ERROR prod) |
 | `session.ts` | IndexedDB session storage (`agent-sessions` DB) |
 | `mime-types.ts` | MIME type mappings (html, css, js, json, image, etc.) |
@@ -65,6 +71,7 @@
 | `offscreen-bridge.ts` | Orchestrator ↔ chrome.runtime message bridge; persists chat to `browser-coding-agent` IndexedDB |
 | `messages.ts` | Typed message envelopes: PanelToOffscreen, OffscreenToPanel, CdpProxy |
 | `chrome.d.ts` | Typed declarations for chrome.debugger, chrome.tabs, chrome.sidePanel, chrome.offscreen, etc. |
+| `sprinkle-proxy.ts` | Lightweight proxy relaying sprinkle operations from offscreen document to side panel UI via chrome.runtime messaging |
 
 ### src/fs/ — Virtual Filesystem
 
@@ -94,6 +101,7 @@
 | `index.ts` | Provider auto-discovery: pi-ai providers filtered by `providers.build.json`, built-in extensions via glob, external `/providers/*.ts` always included |
 | `oauth-service.ts` | Generic `OAuthLauncher` factory: CLI mode (popup → `/auth/callback` → postMessage) and extension mode (service worker → `chrome.identity.launchWebAuthFlow`) |
 | `built-in/bedrock-camp.ts` | AWS Bedrock CAMP provider — custom stream function via `register()` (only built-in that needs a file; pure-config providers use pi-ai auto-discovery) |
+| `built-in/azure-ai-foundry.ts` | Azure AI Foundry provider configuration (Claude on Azure) |
 
 ### src/shell/ — Shell & Terminal
 
@@ -129,6 +137,11 @@
 | `webhook-command.ts` | `webhook` — manage webhooks for event-driven automation |
 | `which-command.ts` | `which` — resolve command to path (built-ins: `/usr/bin/<name>`, `.jsh` scripts: actual VFS path) |
 | `zip-command.ts` | `zip` — create archives |
+| `serve-command.ts` | `serve` — open a VFS app directory in a browser tab via preview service worker with optional `--entry` override |
+| `oauth-token-command.ts` | `oauth-token` — retrieve OAuth access tokens for configured providers with auto-login |
+| `playwright-command.ts` | `playwright-cli` / `playwright` / `puppeteer` — browser automation shell commands (navigate, snapshot, click, screenshot, cookies, HAR recording) |
+| `sprinkle-command.ts` | `sprinkle` — list, open, close, and refresh `.shtml` sprinkle panels from the agent |
+| `magick-wasm.ts` | Shared ImageMagick WASM initialization module for dual-mode (CLI/browser CDN vs extension bundled) image processing |
 
 ### src/skills/ — Skill Package Manager
 
@@ -195,6 +208,15 @@
 | `api-key-dialog.ts` | Dialog for entering API keys |
 | `theme.ts` | Theme toggle (System/Light/Dark) |
 | `types.ts` | AgentHandle, AgentEvent, ChatMessage, ToolCall, UIMessage interfaces |
+| `panel-registry.ts` | Registry of all panels (built-in + SHTML sprinkles) with zone placement and lookup/management methods |
+| `panel-types.ts` | Shared type definitions: ZoneId, PanelDescriptor, PanelRegistryEntry for the panel system |
+| `runtime-mode.ts` | Runtime mode detection (standalone/extension/electron-overlay) and Electron overlay messaging utilities |
+| `tab-zone.ts` | Generic reusable tab bar + content area manager for a single zone |
+| `sprinkle-manager.ts` | Registry of available and open `.shtml` sprinkle panels with placement and lifecycle management |
+| `sprinkle-discovery.ts` | Scans VirtualFS for `.shtml` sprinkle files and builds a map of names to metadata (path, title) |
+| `sprinkle-renderer.ts` | Loads `.shtml` content from VFS and renders into DOM; uses sandbox iframe in extension mode for CSP compliance |
+| `sprinkle-bridge.ts` | API available to `.shtml` sprinkle scripts for communicating with the agent via lick events and state persistence |
+| `sprinkle-picker.ts` | Popup menu listing closed panels and unopened sprinkles for opening in a zone |
 | `index.ts` | Re-exports |
 
 ### src/shims/ — Node.js Polyfills
@@ -204,6 +226,22 @@
 | `empty.ts` | Stubs out node:zlib and node:module (just-bash references these) |
 | `buffer-polyfill.ts` | Polyfills Buffer for browser (isomorphic-git requirement) |
 | `http.ts`, `http2.ts`, `https.ts`, `stream.ts` | Node module stubs (imported by dependencies, no-op in browser) |
+
+### src/types/ — Type Declarations
+
+| File | Purpose |
+|---|---|
+| `pi-coding-agent-compaction.d.ts` | Type declarations for pi-coding-agent compaction submodule (estimateTokens, shouldCompact, generateSummary) |
+
+### src/defaults/ — Bundled VFS Content
+
+Default files bundled into the VFS at startup via `import.meta.glob`:
+
+| Path | VFS Target | Purpose |
+|---|---|---|
+| `shared/CLAUDE.md` | `/shared/CLAUDE.md` | Agent system-level instructions (loaded into sliccy's context) |
+| `workspace/skills/` | `/workspace/skills/` | Default skill packages (playwright-cli, sprinkles, etc.) |
+| `shared/sprinkles/` | `/shared/sprinkles/` | Default sprinkle panels (welcome) |
 
 ### src/ — Root
 
@@ -466,6 +504,19 @@ Scoop removal / app clear
 | Change skill uninstall logic | `src/skills/uninstall.ts` |
 | Change skill state persistence | `src/skills/state.ts` |
 | Change manifest parsing | `src/skills/manifest.ts` |
+
+### Sprinkles System
+
+| I need to... | Modify |
+|---|---|
+| Add/change sprinkle discovery | `src/ui/sprinkle-discovery.ts` |
+| Change sprinkle rendering or CSP handling | `src/ui/sprinkle-renderer.ts` |
+| Change the sprinkle↔agent bridge API | `src/ui/sprinkle-bridge.ts` |
+| Change sprinkle lifecycle/placement | `src/ui/sprinkle-manager.ts` |
+| Add sprinkle picker UI features | `src/ui/sprinkle-picker.ts` |
+| Change extension sprinkle message proxy | `src/extension/sprinkle-proxy.ts` |
+| Change `sprinkle` shell command | `src/shell/supplemental-commands/sprinkle-command.ts` |
+| Add a default sprinkle | `src/defaults/shared/sprinkles/` |
 
 ### Providers
 
