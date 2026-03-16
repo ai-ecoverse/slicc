@@ -94,8 +94,9 @@ export class ScoopSwitcher {
       this.render();
     });
 
-    // Active scoop count badge
+    // Active scoop count badge (excludes cone — only scoops)
     const activeCount = allScoops.filter(s => {
+      if (s.isCone) return false;
       const status = this.statuses.get(s.jid);
       return status === 'processing';
     }).length;
@@ -360,7 +361,7 @@ export class ScoopSwitcher {
         position: absolute;
         top: -6px;
         right: -8px;
-        background: var(--slicc-cone, #f000a0);
+        background: #E8A0BF;
         color: #fff;
         font-size: 9px;
         font-weight: 700;
