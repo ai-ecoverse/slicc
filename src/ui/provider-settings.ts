@@ -478,7 +478,7 @@ export function resolveCurrentModel(): Model<Api> {
 
   // Get default model if none selected
   const models = getProviderModels(providerId);
-  const effectiveModelId = modelId || models[0]?.id || 'claude-sonnet-4-20250514';
+  const effectiveModelId = modelId || models[0]?.id || 'claude-sonnet-4-0';
 
   try {
     const providerConfig = getProviderConfig(providerId);
@@ -510,7 +510,7 @@ export function resolveCurrentModel(): Model<Api> {
       return baseUrl ? { ...customModel, baseUrl } : customModel;
     }
     // Last resort fallback
-    return getModelDynamic('anthropic', 'claude-sonnet-4-20250514');
+    return getModelDynamic('anthropic', 'claude-sonnet-4-0');
   }
 }
 
@@ -875,7 +875,9 @@ export function showProviderSettings(): Promise<boolean> {
           await providerConfig.onOAuthLogin(launcher, renderAccountsList);
         } catch (err) {
           // Clean up pre-login baseUrl placeholder if no account existed before
-          if (!hadAccountBefore) removeAccount(pid);
+          if (!hadAccountBefore) {
+            try { removeAccount(pid); } catch { /* best-effort cleanup */ }
+          }
           log.error('OAuth login failed', { providerId: pid, error: err instanceof Error ? err.message : String(err) });
           oauthStatus.textContent = `Login failed: ${err instanceof Error ? err.message : String(err)}`;
         }

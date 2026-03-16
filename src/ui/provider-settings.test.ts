@@ -40,7 +40,7 @@ const { mockGetProviders, mockGetModels, mockGetModel, mockCreateLogger, mockLog
     ]),
     mockGetModels: vi.fn((providerId: string) => {
       if (providerId === 'anthropic') {
-        return [{ id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', reasoning: true }];
+        return [{ id: 'claude-sonnet-4-0', name: 'Claude Sonnet 4', reasoning: true }];
       }
       if (providerId === 'openai') {
         return [{ id: 'gpt-5', name: 'GPT-5', reasoning: true }];
@@ -210,9 +210,9 @@ describe('selected model encodes provider', () => {
   });
 
   it('setSelectedProvider updates the provider prefix in selected-model', () => {
-    storage.set('selected-model', 'anthropic:claude-sonnet-4-20250514');
+    storage.set('selected-model', 'anthropic:claude-sonnet-4-0');
     setSelectedProvider('openai');
-    expect(storage.get('selected-model')).toBe('openai:claude-sonnet-4-20250514');
+    expect(storage.get('selected-model')).toBe('openai:claude-sonnet-4-0');
   });
 });
 
@@ -236,27 +236,27 @@ describe('backward-compatible accessors', () => {
 
   it('clearApiKey removes account for current provider', () => {
     addAccount('anthropic', 'ant-key');
-    storage.set('selected-model', 'anthropic:claude-sonnet-4-20250514');
+    storage.set('selected-model', 'anthropic:claude-sonnet-4-0');
     clearApiKey();
     expect(getApiKeyForProvider('anthropic')).toBeNull();
   });
 
   it('getBaseUrl returns baseUrl for current provider', () => {
     addAccount('azure-ai-foundry', 'az-key', 'https://contoso.azure.com/anthropic');
-    storage.set('selected-model', 'azure-ai-foundry:claude-sonnet-4-20250514');
+    storage.set('selected-model', 'azure-ai-foundry:claude-sonnet-4-0');
     expect(getBaseUrl()).toBe('https://contoso.azure.com/anthropic');
   });
 
   it('setBaseUrl updates baseUrl for current provider', () => {
     addAccount('azure-ai-foundry', 'az-key');
-    storage.set('selected-model', 'azure-ai-foundry:claude-sonnet-4-20250514');
+    storage.set('selected-model', 'azure-ai-foundry:claude-sonnet-4-0');
     setBaseUrl('https://new-endpoint.azure.com/anthropic');
     expect(getBaseUrlForProvider('azure-ai-foundry')).toBe('https://new-endpoint.azure.com/anthropic');
   });
 
   it('clearBaseUrl removes baseUrl but keeps the account', () => {
     addAccount('azure-ai-foundry', 'az-key', 'https://contoso.azure.com/anthropic');
-    storage.set('selected-model', 'azure-ai-foundry:claude-sonnet-4-20250514');
+    storage.set('selected-model', 'azure-ai-foundry:claude-sonnet-4-0');
     clearBaseUrl();
     expect(getApiKeyForProvider('azure-ai-foundry')).toBe('az-key');
     expect(getBaseUrlForProvider('azure-ai-foundry')).toBeNull();
@@ -275,7 +275,7 @@ describe('clearAllSettings', () => {
 
   it('removes accounts, model key, and legacy keys', () => {
     addAccount('anthropic', 'ant-key');
-    storage.set('selected-model', 'anthropic:claude-sonnet-4-20250514');
+    storage.set('selected-model', 'anthropic:claude-sonnet-4-0');
     // Set some legacy keys manually
     storage.set('slicc_provider', 'anthropic');
     storage.set('anthropic_api_key', 'old');
@@ -328,8 +328,8 @@ describe('resolveCurrentModel', () => {
 
     const model = resolveCurrentModel();
 
-    expect(mockGetModel).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-20250514');
-    expect(model.id).toBe('claude-sonnet-4-20250514');
+    expect(mockGetModel).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-0');
+    expect(model.id).toBe('claude-sonnet-4-0');
   });
 
   it('does not apply baseUrl when account has none', () => {
@@ -359,7 +359,7 @@ describe('getAllAvailableModels', () => {
     expect(groups[0].providerId).toBe('anthropic');
     expect(groups[0].providerName).toBe('Anthropic');
     expect(groups[0].models).toHaveLength(1);
-    expect(groups[0].models[0].id).toBe('claude-sonnet-4-20250514');
+    expect(groups[0].models[0].id).toBe('claude-sonnet-4-0');
   });
 
   it('returns models grouped by provider for multiple accounts', () => {
@@ -433,11 +433,11 @@ describe('applyProviderDefaults', () => {
 
   it('sets selected model from first entry', () => {
     const defaults: ProviderDefault[] = [
-      { providerId: 'anthropic', apiKey: 'ant-key', model: 'claude-sonnet-4-20250514' },
+      { providerId: 'anthropic', apiKey: 'ant-key', model: 'claude-sonnet-4-0' },
       { providerId: 'openai', apiKey: 'oai-key', model: 'gpt-5' },
     ];
     applyProviderDefaults(defaults);
-    expect(getSelectedModelId()).toBe('claude-sonnet-4-20250514');
+    expect(getSelectedModelId()).toBe('claude-sonnet-4-0');
     expect(getSelectedProvider()).toBe('anthropic');
   });
 
@@ -481,7 +481,7 @@ describe('applyProviderDefaults', () => {
 
   it('makes getApiKey() return non-null (skips settings dialog)', () => {
     const defaults: ProviderDefault[] = [
-      { providerId: 'anthropic', apiKey: 'ant-key', model: 'claude-sonnet-4-20250514' },
+      { providerId: 'anthropic', apiKey: 'ant-key', model: 'claude-sonnet-4-0' },
     ];
     applyProviderDefaults(defaults);
     expect(getApiKey()).toBe('ant-key');
@@ -501,7 +501,7 @@ describe('applyProviderDefaults', () => {
   it('does not override existing selected model', () => {
     storage.set('selected-model', 'openai:gpt-5');
     const defaults: ProviderDefault[] = [
-      { providerId: 'anthropic', apiKey: 'ant-key', model: 'claude-sonnet-4-20250514' },
+      { providerId: 'anthropic', apiKey: 'ant-key', model: 'claude-sonnet-4-0' },
     ];
     applyProviderDefaults(defaults);
     expect(storage.get('selected-model')).toBe('openai:gpt-5');
@@ -553,7 +553,7 @@ describe('exportProviders', () => {
   it('round-trips with applyProviderDefaults', () => {
     addAccount('anthropic', 'ant-key');
     addAccount('openai', 'oai-key', 'https://proxy.example.com');
-    storage.set('selected-model', 'anthropic:claude-sonnet-4-20250514');
+    storage.set('selected-model', 'anthropic:claude-sonnet-4-0');
 
     const exported = exportProviders();
 
@@ -565,7 +565,7 @@ describe('exportProviders', () => {
     expect(getApiKeyForProvider('anthropic')).toBe('ant-key');
     expect(getApiKeyForProvider('openai')).toBe('oai-key');
     expect(getBaseUrlForProvider('openai')).toBe('https://proxy.example.com');
-    expect(getSelectedModelId()).toBe('claude-sonnet-4-20250514');
+    expect(getSelectedModelId()).toBe('claude-sonnet-4-0');
     expect(getSelectedProvider()).toBe('anthropic');
   });
 });
@@ -901,14 +901,14 @@ describe('getProviderModels with getModelIds', () => {
       requiresBaseUrl: false,
       isOAuth: true,
       getModelIds: () => [
-        { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4' },
+        { id: 'claude-sonnet-4-0', name: 'Claude Sonnet 4' },
       ],
     });
     mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
 
     const models = getProviderModels('custom-oauth');
     expect(models).toHaveLength(1);
-    expect(models[0].id).toBe('claude-sonnet-4-20250514');
+    expect(models[0].id).toBe('claude-sonnet-4-0');
     expect(models[0].provider).toBe('custom-oauth');
     expect(models[0].api).toBe('custom-oauth-anthropic');
   });
@@ -916,7 +916,7 @@ describe('getProviderModels with getModelIds', () => {
   it('falls back to all anthropic models for OAuth without getModelIds', () => {
     const models = getProviderModels('test-oauth');
     expect(models).toHaveLength(1); // mockGetModels returns 1 anthropic model
-    expect(models[0].id).toBe('claude-sonnet-4-20250514');
+    expect(models[0].id).toBe('claude-sonnet-4-0');
     expect(models[0].api).toBe('test-oauth-anthropic');
   });
 
