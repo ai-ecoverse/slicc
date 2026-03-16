@@ -118,10 +118,9 @@ describe('processImageContent', () => {
     expect((result as any).text).toContain('unsupported format');
   });
 
-  it('attempts resize for images over 5MB', async () => {
-    // Create a base64 string that decodes to > 5MB
-    const overFiveMB = Math.ceil((MAX_IMAGE_BYTES + 1024) / 3) * 4;
-    const largeData = 'A'.repeat(overFiveMB);
+  it('attempts resize for images over 5MB base64', async () => {
+    // Create a base64 string that is > 5MB (the API limit is on base64 length)
+    const largeData = 'A'.repeat(MAX_IMAGE_BYTES + 1024);
     const image: ImageContent = {
       type: 'image',
       data: largeData,
@@ -135,35 +134,44 @@ describe('processImageContent', () => {
     expect((result as any).text).toContain('Image removed');
   });
 
-  it('passes through image at exactly 5MB', async () => {
-    // Create base64 for exactly MAX_IMAGE_BYTES
-    const exactFiveMB = Math.ceil(MAX_IMAGE_BYTES / 3) * 4;
-    const data = 'A'.repeat(exactFiveMB);
+  it('passes through image at exactly 5MB base64', async () => {
+    // Create base64 string of exactly MAX_IMAGE_BYTES length
+    const data = 'A'.repeat(MAX_IMAGE_BYTES);
     const image: ImageContent = {
       type: 'image',
       data,
       mimeType: 'image/jpeg',
     };
 
-    // getImageByteSize may be slightly over due to rounding, so check behavior
-    const byteSize = getImageByteSize(data);
-    if (byteSize <= MAX_IMAGE_BYTES) {
-      const result = await processImageContent(image);
-      expect(result).toEqual(image);
-    } else {
-      // Slightly over due to rounding — will attempt resize
-      const result = await processImageContent(image);
-      expect(result.type).toBe('text'); // fails in test env without WASM
-    }
+    const result = await processImageContent(image);
+    // Should pass through — base64 string is exactly at the limit
+    expect(result).toEqual(image);
+  });
+
+  it('triggers resize for image with raw bytes under 5MB but base64 over 5MB', async () => {
+    // Regression test: ~4.9MB raw → ~6.5MB base64 → should NOT pass through
+    // Create base64 that decodes to ~4.9MB but is ~6.5MB as a string
+    const rawBytes = 4.9 * 1024 * 1024;
+    const base64Len = Math.ceil(rawBytes / 3) * 4; // ~6.5MB
+    expect(base64Len).toBeGreaterThan(MAX_IMAGE_BYTES); // confirm base64 > 5MB
+    expect(getImageByteSize('A'.repeat(base64Len))).toBeLessThan(MAX_IMAGE_BYTES); // confirm raw < 5MB
+
+    const image: ImageContent = {
+      type: 'image',
+      data: 'A'.repeat(base64Len),
+      mimeType: 'image/png',
+    };
+
+    // Should attempt resize (WASM unavailable in test → text placeholder)
+    const result = await processImageContent(image);
+    expect(result.type).toBe('text');
+    expect((result as any).text).toContain('Image removed');
   });
 
   it('handles corrupt base64 data gracefully when resize is attempted', async () => {
-    // Not actually valid base64 that decodes to >5MB, but the size check
-    // uses the formula, not actual decode, so we need valid base64 chars
-    const overFiveMB = Math.ceil((MAX_IMAGE_BYTES + 1024) / 3) * 4;
     const image: ImageContent = {
       type: 'image',
-      data: 'X'.repeat(overFiveMB), // valid base64 chars but not a real image
+      data: 'X'.repeat(MAX_IMAGE_BYTES + 1024),
       mimeType: 'image/jpeg',
     };
 

@@ -11,7 +11,9 @@ import { createLogger } from './logger.js';
 
 const log = createLogger('image-processor');
 
-export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;    // 5MB API limit
+export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;    // 5MB API limit (on base64 string)
+/** Max raw bytes that fit within the base64 limit (base64 inflates by 4/3). */
+const MAX_RAW_BYTES = Math.floor(MAX_IMAGE_BYTES * 3 / 4);
 export const OPTIMAL_LONG_EDGE = 1568;              // px — avoids server-side resize
 export const MAX_DIMENSION = 8000;                  // px — hard reject by API
 export const SUPPORTED_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
@@ -44,15 +46,17 @@ export async function processImageContent(image: ImageContent): Promise<ImageCon
     };
   }
 
-  const byteSize = getImageByteSize(image.data);
+  // The API enforces the 5MB limit on the base64 string, not decoded bytes.
+  // base64 inflates size by ~33%, so we must check image.data.length directly.
+  const base64Size = image.data.length;
 
   // If under the limit, pass through without touching ImageMagick
-  if (byteSize <= MAX_IMAGE_BYTES) {
+  if (base64Size <= MAX_IMAGE_BYTES) {
     return image;
   }
 
-  // Over 5MB — attempt resize via ImageMagick WASM
-  log.info('Image exceeds 5MB, attempting resize', { byteSize, mimeType: image.mimeType });
+  // Over 5MB base64 — attempt resize via ImageMagick WASM
+  log.info('Image exceeds 5MB base64 limit, attempting resize', { base64Size, mimeType: image.mimeType });
 
   // Step 1: Load ImageMagick WASM
   let getMagick: typeof import('../shell/supplemental-commands/magick-wasm.js').getMagick;
@@ -111,14 +115,14 @@ export async function processImageContent(image: ImageContent): Promise<ImageCon
       });
 
       // If still over 5MB, try JPEG at quality 80
-      if (output.data && output.data.length > MAX_IMAGE_BYTES && format !== 'JPEG') {
+      if (output.data && output.data.length > MAX_RAW_BYTES && format !== 'JPEG') {
         log.info('Still over 5MB, compressing to JPEG q80');
         img.quality = 80;
         img.write('JPEG', (data: Uint8Array) => {
           output.data = new Uint8Array(data);
         });
         output.mime = 'image/jpeg';
-      } else if (output.data && output.data.length > MAX_IMAGE_BYTES) {
+      } else if (output.data && output.data.length > MAX_RAW_BYTES) {
         // Already JPEG, try lower quality
         log.info('Still over 5MB as JPEG, reducing quality to 60');
         img.quality = 60;
@@ -137,7 +141,7 @@ export async function processImageContent(image: ImageContent): Promise<ImageCon
     }
 
     // Final size check
-    if (output.data.length > MAX_IMAGE_BYTES) {
+    if (output.data.length > MAX_RAW_BYTES) {
       log.warn('Image still over 5MB after resize+compress', { size: output.data.length });
       return {
         type: 'text',
@@ -153,8 +157,8 @@ export async function processImageContent(image: ImageContent): Promise<ImageCon
     const newBase64 = btoa(binary);
 
     log.info('Image processed successfully', {
-      originalBytes: byteSize,
-      newBytes: output.data.length,
+      originalBase64: base64Size,
+      newBase64: newBase64.length,
       mimeType: output.mime,
     });
 
@@ -166,7 +170,7 @@ export async function processImageContent(image: ImageContent): Promise<ImageCon
   } catch (err) {
     log.error('Image data processing failed (corrupt or unreadable)', {
       mimeType: image.mimeType,
-      estimatedBytes: byteSize,
+      estimatedBytes: base64Size,
       error: err instanceof Error ? err.message : String(err),
     });
     return {
