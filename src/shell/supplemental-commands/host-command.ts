@@ -29,19 +29,37 @@ export function getConnectedFollowers(): ConnectedFollowerInfo[] {
   return connectedFollowersGetter?.() ?? [];
 }
 
+/**
+ * Module-level callback for resetting the tray session.
+ * Set by main.ts once the LeaderTrayManager is created.
+ */
+let trayResetter: (() => Promise<LeaderTrayRuntimeStatus>) | null = null;
+
+export function setTrayResetter(resetter: (() => Promise<LeaderTrayRuntimeStatus>) | null): void {
+  trayResetter = resetter;
+}
+
+export function getTrayResetter(): (() => Promise<LeaderTrayRuntimeStatus>) | undefined {
+  return trayResetter ?? undefined;
+}
+
 export interface HostCommandOptions {
   getStatus?: () => LeaderTrayRuntimeStatus;
   getFollowerStatus?: () => FollowerTrayRuntimeStatus;
   getFollowers?: () => ConnectedFollowerInfo[];
+  resetTray?: () => Promise<LeaderTrayRuntimeStatus>;
 }
 
 function hostHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
-    stdout: `host - display the current tray host status
+    stdout: `host - display or manage the current tray host status
 
-Usage: host
+Usage: host [reset]
 
 Shows the current tray state (leader or follower) and, when available, the join URL and connected followers.
+
+Subcommands:
+  reset   Disconnect all followers and create a fresh tray session with a new join URL
 `,
     stderr: '',
     exitCode: 0,
@@ -134,6 +152,10 @@ export function createHostCommand(options: HostCommandOptions = {}): Command {
       return hostHelp();
     }
 
+    if (args[0] === 'reset') {
+      return handleReset(getFollowerSt, getStatus, options.resetTray ?? getTrayResetter());
+    }
+
     if (args.length > 0) {
       return {
         stdout: '',
@@ -158,4 +180,49 @@ export function createHostCommand(options: HostCommandOptions = {}): Command {
       exitCode: 0,
     };
   });
+}
+
+async function handleReset(
+  getFollowerStatus: () => FollowerTrayRuntimeStatus,
+  getLeaderStatus: () => LeaderTrayRuntimeStatus,
+  resetTray: (() => Promise<LeaderTrayRuntimeStatus>) | undefined,
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  // Only leaders can reset
+  const followerStatus = getFollowerStatus();
+  if (followerStatus.state !== 'inactive') {
+    return {
+      stdout: '',
+      stderr: 'host reset: only the leader can reset the tray session\n',
+      exitCode: 1,
+    };
+  }
+
+  const leaderStatus = getLeaderStatus();
+  if (leaderStatus.state !== 'leader' && leaderStatus.state !== 'error') {
+    return {
+      stdout: '',
+      stderr: 'host reset: no active tray session to reset\n',
+      exitCode: 1,
+    };
+  }
+
+  if (!resetTray) {
+    return {
+      stdout: '',
+      stderr: 'host reset: tray reset is not available in this environment\n',
+      exitCode: 1,
+    };
+  }
+
+  try {
+    const newStatus = await resetTray();
+    const output = 'Tray session reset. All followers disconnected.\n' + formatLeaderOutput(newStatus, []);
+    return { stdout: output, stderr: '', exitCode: 0 };
+  } catch (error) {
+    return {
+      stdout: '',
+      stderr: `host reset: ${error instanceof Error ? error.message : String(error)}\n`,
+      exitCode: 1,
+    };
+  }
 }

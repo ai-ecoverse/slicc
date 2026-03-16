@@ -26,7 +26,7 @@ describe('host command', () => {
   it('shows help with --help', async () => {
     const result = await createHostCommand().execute(['--help'], {} as never);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('display the current tray host status');
+    expect(result.stdout).toContain('display or manage the current tray host status');
   });
 
   it('prints the leader status and join URL', async () => {
@@ -101,10 +101,92 @@ describe('host command', () => {
     expect(result.stdout).toBe('status: error\njoin_url: unavailable\nerror: boom\n');
   });
 
-  it('rejects unsupported arguments', async () => {
+  it('still rejects unknown arguments', async () => {
     const result = await createHostCommand().execute(['nope'], {} as never);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe('host: unsupported arguments\n');
+  });
+
+  it('host reset calls resetTray and prints new status', async () => {
+    const newSession = {
+      workerBaseUrl: 'https://tray.example.com/base',
+      trayId: 'tray-new-456',
+      createdAt: '2026-03-16T00:00:00.000Z',
+      controllerId: 'controller-2',
+      controllerUrl: 'https://tray.example.com/controller/controller-2',
+      joinUrl: 'https://tray.example.com/join/new-token',
+      webhookUrl: 'https://tray.example.com/webhooks/tray-new-456',
+      leaderKey: 'new-leader-key',
+      leaderWebSocketUrl: 'wss://tray.example.com/ws-new',
+      runtime: 'slicc-standalone',
+    };
+    let resetCalled = false;
+    const cmd = createHostCommand({
+      getStatus: () => ({ state: 'leader', session: newSession, error: null }),
+      getFollowerStatus: () => followerStatus({ state: 'inactive' }),
+      getFollowers: () => [],
+      resetTray: async () => {
+        resetCalled = true;
+        return { state: 'leader', session: newSession, error: null };
+      },
+    });
+
+    const result = await cmd.execute(['reset'], {} as never);
+    expect(resetCalled).toBe(true);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Tray session reset. All followers disconnected.');
+    expect(result.stdout).toContain('join_url: https://tray.example.com/join/new-token');
+    expect(result.stdout).toContain('status: leader');
+  });
+
+  it('host reset errors when follower is active', async () => {
+    const cmd = createHostCommand({
+      getFollowerStatus: () => followerStatus({
+        state: 'connected',
+        joinUrl: 'https://tray.example.com/join/token',
+      }),
+      resetTray: async () => ({ state: 'leader', session: null, error: null }),
+    });
+
+    const result = await cmd.execute(['reset'], {} as never);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('only the leader can reset');
+  });
+
+  it('host reset errors when no active tray session', async () => {
+    const cmd = createHostCommand({
+      getStatus: () => ({ state: 'inactive', session: null, error: null }),
+      getFollowerStatus: () => followerStatus({ state: 'inactive' }),
+      resetTray: async () => ({ state: 'leader', session: null, error: null }),
+    });
+
+    const result = await cmd.execute(['reset'], {} as never);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('no active tray session to reset');
+  });
+
+  it('host reset errors when resetTray is not wired', async () => {
+    const cmd = createHostCommand({
+      getStatus: () => ({ state: 'leader', session: null, error: null }),
+      getFollowerStatus: () => followerStatus({ state: 'inactive' }),
+      // resetTray not provided
+    });
+
+    const result = await cmd.execute(['reset'], {} as never);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('not available in this environment');
+  });
+
+  it('host reset handles errors from resetTray gracefully', async () => {
+    const cmd = createHostCommand({
+      getStatus: () => ({ state: 'leader', session: null, error: null }),
+      getFollowerStatus: () => followerStatus({ state: 'inactive' }),
+      resetTray: async () => { throw new Error('POST /tray failed'); },
+    });
+
+    const result = await cmd.execute(['reset'], {} as never);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('POST /tray failed');
   });
 
   it('shows follower status when follower is connected', async () => {

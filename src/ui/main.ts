@@ -41,7 +41,7 @@ import {
   isElectronOverlaySetTabMessage,
   resolveUiRuntimeMode,
 } from './runtime-mode.js';
-import { setConnectedFollowersGetter } from '../shell/supplemental-commands/host-command.js';
+import { setConnectedFollowersGetter, setTrayResetter } from '../shell/supplemental-commands/host-command.js';
 import { setRsyncSendFsRequest } from '../shell/supplemental-commands/rsync-command.js';
 import { SprinkleManager } from './sprinkle-manager.js';
 
@@ -1345,6 +1345,19 @@ async function main(): Promise<void> {
           });
         },
       });
+      // Wire the tray reset callback for `host reset` command
+      setTrayResetter(async () => {
+        leaderSync.stop();
+        trayPeers.stop();
+        leaderTray.stop();
+        const session = await leaderTray.start();
+        const trayUrl = buildTrayLaunchUrl(window.location.href, session.workerBaseUrl, session.trayId);
+        if (trayUrl !== window.location.href) {
+          window.history.replaceState(window.history.state, '', trayUrl);
+        }
+        return getLeaderTrayRuntimeStatus();
+      });
+
       void leaderTray.start()
         .then((session) => {
           const trayUrl = buildTrayLaunchUrl(window.location.href, session.workerBaseUrl, session.trayId);
