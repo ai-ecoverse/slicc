@@ -13,6 +13,7 @@ interface Sprinkle {
   name: string;
   title: string;
   path: string;
+  autoOpen: boolean;
 }
 
 const TIMEOUT = 8000;

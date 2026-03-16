@@ -41,11 +41,24 @@ export class SprinkleManager {
     this.callbacks = callbacks;
   }
 
-  /** Restore sprinkles that were open in the previous session. */
+  /** Restore sprinkles that were open in the previous session.
+   *  On first run (no localStorage entry), auto-open sprinkles marked with data-sprinkle-autoopen. */
   async restoreOpenSprinkles(): Promise<void> {
     try {
       const raw = localStorage.getItem(OPEN_SPRINKLES_KEY);
-      if (!raw) return;
+      if (!raw) {
+        // First run — open sprinkles with autoOpen flag
+        for (const sprinkle of this.availableSprinkles.values()) {
+          if (sprinkle.autoOpen) {
+            try {
+              await this.open(sprinkle.name);
+            } catch {
+              log.warn('Failed to auto-open sprinkle', { name: sprinkle.name });
+            }
+          }
+        }
+        return;
+      }
       const names: string[] = JSON.parse(raw);
       for (const name of names) {
         try {

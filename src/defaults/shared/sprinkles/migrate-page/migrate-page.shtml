@@ -1,4 +1,4 @@
-<div data-sprinkle-title="Migrate Page" class="sprinkle-stack" style="padding: 20px; max-width: 520px; margin: 0 auto;">
+<div data-sprinkle-title="Migrate Page" data-sprinkle-autoopen class="sprinkle-stack" style="padding: 20px; max-width: 520px; margin: 0 auto;">
 
   <div id="mp-ready">
     <div class="sprinkle-heading" style="font-size: 18px;">Migrate Page</div>
