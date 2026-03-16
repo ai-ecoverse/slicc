@@ -377,6 +377,32 @@ if (isExtension) {
 
 Used throughout codebase to select code paths.
 
+## ToolCall ↔ ToolResult Pairing Must Be Preserved
+
+**The Problem**
+
+The Anthropic API requires every `tool_result` content block to reference a `tool_use` block (via `tool_use_id`) in the **immediately preceding** assistant message. If any code path mutates the message array and breaks this pairing, the API returns: `unexpected tool_use_id found in tool_result blocks`.
+
+**The Rule**
+
+Any code that modifies `AgentMessage[]` must preserve ToolCall blocks in assistant messages. Three code paths mutate messages:
+
+| Path | File | How it handles pairing |
+|---|---|---|
+| **Context compaction** | `context-compaction.ts` | While loop walks cut point backward past `toolResult` messages to include their assistant |
+| **Overflow recovery** | `scoop-context.ts` `recoverFromOverflow()` | When replacing oversized assistant content, preserves `type: 'toolCall'` blocks (only replaces text/image/thinking) |
+| **Image error recovery** | `scoop-context.ts` `recoverFromImageError()` | Filters `type !== 'image'` which naturally preserves ToolCall blocks |
+
+**When adding new message mutation code:**
+- Never replace an assistant message's entire `content` array — filter out large blocks but keep `toolCall` blocks
+- Never remove an assistant message without also removing its subsequent `toolResult` messages
+- Never insert messages between an assistant (with ToolCalls) and its `toolResult` responses
+
+**Key files:**
+- `scoop-context.ts` lines 462-487 (overflow recovery with ToolCall preservation)
+- `context-compaction.ts` lines 85-89 (compaction pair protection)
+- `scoop-context.test.ts` "overflow recovery" tests (7 tests covering ToolCall preservation)
+
 ## Service Worker Must Be Self-Contained
 
 **The Problem**
