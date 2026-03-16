@@ -771,6 +771,27 @@ describe('getProviderModels with getModelIds', () => {
     expect(models[0].api).toBe('test-oauth-anthropic');
   });
 
+  it('returns empty array and logs error when getModelIds throws', () => {
+    const providerConfigs = new Map(mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)]));
+    providerConfigs.set('broken-oauth', {
+      id: 'broken-oauth',
+      name: 'Broken OAuth',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => { throw new Error('config fetch failed'); },
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('broken-oauth');
+    expect(models).toEqual([]);
+    expect(mockLog.error).toHaveBeenCalledWith(
+      'Provider getModelIds callback failed',
+      expect.objectContaining({ providerId: 'broken-oauth' }),
+    );
+  });
+
   it('creates fallback model for unknown model IDs from getModelIds', () => {
     const providerConfigs = new Map(mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)]));
     providerConfigs.set('custom-oauth', {

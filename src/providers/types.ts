@@ -32,7 +32,10 @@ export interface ProviderConfig {
   /**
    * Optional: return the model IDs this provider supports.
    * When present, getProviderModels uses this instead of returning all Anthropic models.
-   * Models are resolved against the Anthropic registry by ID.
+   * Models are resolved against the Anthropic registry by ID; unknown IDs create fallback models.
+   *
+   * Must be synchronous, side-effect-free, and return a stable list for the session.
+   * If dynamic model fetching is needed, pre-fetch during onOAuthLogin and cache the result.
    */
   getModelIds?: () => Array<{ id: string; name?: string }>;
 }

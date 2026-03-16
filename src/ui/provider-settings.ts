@@ -108,10 +108,17 @@ export function getProviderModels(providerId: string): Model<Api>[] {
     const providerConfig = getProviderConfig(providerId);
     if (providerConfig.getModelIds) {
       // Provider specifies its own model list — resolve against Anthropic registry
+      let modelIds: Array<{ id: string; name?: string }>;
+      try {
+        modelIds = providerConfig.getModelIds();
+      } catch (err) {
+        log.error('Provider getModelIds callback failed', { providerId, error: err instanceof Error ? err.message : String(err) });
+        return [];
+      }
       const anthropicModels = getModelsDynamic('anthropic');
       const modelMap = new Map(anthropicModels.map(m => [m.id, m]));
       const customApi = `${providerId}-anthropic` as Api;
-      return providerConfig.getModelIds().map(pm => {
+      return modelIds.map(pm => {
         const base = modelMap.get(pm.id);
         if (base) return { ...base, api: customApi, provider: providerId };
         return {
@@ -839,6 +846,7 @@ export function showProviderSettings(): Promise<boolean> {
         const providerConfig = getProviderConfig(pid);
         if (!providerConfig.onOAuthLogin) return;
         // Save baseUrl before login so the provider's onOAuthLogin can read it
+        const hadAccountBefore = getAccounts().some(a => a.providerId === pid);
         if (providerConfig.requiresBaseUrl && baseUrlInput.value.trim()) {
           addAccount(pid, '', baseUrlInput.value.trim());
         }
@@ -848,6 +856,8 @@ export function showProviderSettings(): Promise<boolean> {
           const launcher = createOAuthLauncher();
           await providerConfig.onOAuthLogin(launcher, renderAccountsList);
         } catch (err) {
+          // Clean up pre-login baseUrl placeholder if no account existed before
+          if (!hadAccountBefore) removeAccount(pid);
           log.error('OAuth login failed', { providerId: pid, error: err instanceof Error ? err.message : String(err) });
           oauthStatus.textContent = `Login failed: ${err instanceof Error ? err.message : String(err)}`;
         }
