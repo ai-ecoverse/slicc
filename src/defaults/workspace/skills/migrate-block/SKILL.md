@@ -538,14 +538,14 @@ Write to `{projectPath}/.migration/reports/{blockName}-report.json`:
 **ALL reports MUST use this exact schema.** Do not add extra top-level keys
 or rename fields.
 
-Then use `send_message` to notify the cone with: block name, status,
-iteration count, report path, any blocking issues.
-
-**Close the preview tab** to avoid tab clutter:
+**Close the preview tab** before notifying the cone (while still attached):
 
 ```bash
 playwright-cli tab-close
 ```
+
+Then use `send_message` to notify the cone with: block name, status,
+iteration count, report path, any blocking issues.
 
 ---
 

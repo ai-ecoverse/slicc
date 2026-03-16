@@ -562,11 +562,11 @@ Write to `{projectPath}/.migration/reports/header-report.json`:
 
 **Status thresholds:** success (>85%), partial (50-85%), failed (<50%)
 
-Then `send_message` to the cone with: status, header type, iteration count,
-report path, any issues.
-
-**Close the preview tab** to avoid tab clutter:
+**Close the preview tab** before notifying the cone (while still attached):
 
 ```bash
 playwright-cli tab-close
 ```
+
+Then `send_message` to the cone with: status, header type, iteration count,
+report path, any issues.
