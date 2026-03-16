@@ -205,6 +205,7 @@ WasmShell wraps just-bash 2.11.7 (WASM Bash interpreter) and connects it to Virt
 - `mount` — Mount a local directory into the virtual filesystem via the File System Access API
 - `convert` / `magick` — ImageMagick-style image conversion (resize, rotate, crop, quality) via `@imagemagick/magick-wasm`
 - `playwright-cli` / `playwright` / `puppeteer` — Browser automation shell commands backed by `BrowserAPI`; aliases share the same tab/session state, snapshots, and session history. When connected to a tray, `tab-list` includes remote targets annotated with `[remote:runtimeId]`. Use `open --runtime=<id>` or `tab-new --runtime=<id>` to open a tab on a remote tray runtime.
+- `rsync` — Sync files between local VFS and a remote tray runtime. Push: `rsync /local runtime-id:/remote`. Pull: `rsync runtime-id:/remote /local`. Flags: `--dry-run`, `--delete`, `--verbose`.
 - `which <command>` — Resolve a command to its path (`/usr/bin/<name>` for built-ins, actual VFS path for `.jsh` files)
 - `uname` — Print the current browser user agent
 - `oauth-token` — Get an OAuth access token for a provider (auto-triggers login if needed)

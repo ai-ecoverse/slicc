@@ -130,6 +130,7 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **open <path|url>** — Open a URL or single VFS file in a new browser tab. Use `open --view` when you need to see an image inline. `.shtml` files are opened as sprinkles instead of browser tabs.
 - **host** — Print the current leader tray status plus `launch_url` and `join_url`. When this runtime is leader, `launch_url` is the tray URL itself (`https://.../tray/<id>`).
 - **playwright-cli** — Browser automation (built-in, no SKILL.md lookup needed). Key subcommands: `tab-list`, `tab-select <index>`, `snapshot`, `screenshot [--filename=<path>]`, `open <url> [--runtime=<id>]`, `click <ref>`, `fill <ref> "text"`, `close`. Use `--runtime` with `open`/`tab-new` to open a tab on a remote tray runtime. Run `playwright-cli --help` for full list.
+- **rsync** — Sync files between local VFS and a remote tray runtime. Push: `rsync /local runtime-id:/remote`. Pull: `rsync runtime-id:/remote /local`. Flags: `--dry-run` (preview), `--delete` (remove dest files not in source), `--verbose` (per-file detail). Requires an active tray connection.
 
 ## Environment: This Is NOT a Regular Linux Box
 

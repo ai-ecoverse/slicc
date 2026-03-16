@@ -42,6 +42,7 @@ import {
   resolveUiRuntimeMode,
 } from './runtime-mode.js';
 import { setConnectedFollowersGetter } from '../shell/supplemental-commands/host-command.js';
+import { setRsyncSendFsRequest } from '../shell/supplemental-commands/rsync-command.js';
 import { SprinkleManager } from './sprinkle-manager.js';
 
 const log = createLogger('main');
@@ -1185,6 +1186,13 @@ async function main(): Promise<void> {
     let activeReconnectHandle: FollowerAutoReconnectHandle | null = null;
     let followerTargetRefreshInterval: ReturnType<typeof setInterval> | null = null;
 
+    // Wire rsync sendFsRequest — picks whichever sync manager is active (leader or follower)
+    setRsyncSendFsRequest(() => {
+      if (leaderSyncRef) return (rid, req) => leaderSyncRef!.sendFsRequest(rid, req);
+      if (activeFollowerSync) return (rid, req) => activeFollowerSync!.sendFsRequest(rid, req);
+      return null;
+    });
+
     const wireFollowerSync = (connection: import('../scoops/tray-webrtc.js').FollowerTrayConnection) => {
       // Clean up previous sync if any
       if (followerTargetRefreshInterval) {
@@ -1313,8 +1321,12 @@ async function main(): Promise<void> {
             controllerId: peer.controllerId,
             bootstrapId: peer.bootstrapId,
             attempt: peer.attempt,
+            runtime: peer.runtime,
           });
-          leaderSync.addFollower(peer.bootstrapId, channel);
+          leaderSync.addFollower(peer.bootstrapId, channel, {
+            runtime: peer.runtime,
+            connectedAt: peer.connectedAt ?? undefined,
+          });
         },
       });
       leaderTray = new LeaderTrayManager({

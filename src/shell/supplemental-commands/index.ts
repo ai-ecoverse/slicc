@@ -20,6 +20,7 @@ import { createWebhookCommand } from './webhook-command.js';
 import { createCrontaskCommand } from './crontask-command.js';
 import { createSprinkleCommand } from './sprinkle-command.js';
 import { createOAuthTokenCommand } from './oauth-token-command.js';
+import { createRsyncCommand } from './rsync-command.js';
 import { createWhichCommand } from './which-command.js';
 import { createZipCommand } from './zip-command.js';
 import type { BrowserAPI } from '../../cdp/index.js';
@@ -61,6 +62,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createWhichCommand(options.fs),
     createUnameCommand(),
     createOAuthTokenCommand(),
+    createRsyncCommand({ fs: options.fs }),
   ];
 
   if (options.fs) {
