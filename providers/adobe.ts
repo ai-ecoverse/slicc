@@ -13,8 +13,9 @@
  * Reuses pi-ai's Anthropic stream functions — the IMS access token is passed
  * as the API key (JWT >200 chars triggers Bearer auth in the Anthropic SDK).
  *
- * This file lives in /providers/ (gitignored) and is auto-discovered
- * by the build-time provider system. It is NOT part of the open-source repo.
+ * This file lives in /providers/ and is auto-discovered by the build-time
+ * provider system via import.meta.glob. It is safe to commit — no secrets
+ * are hardcoded; the proxy endpoint (base URL) must be configured at runtime.
  */
 
 import type { ProviderConfig, OAuthLauncher } from '../src/providers/types.js';
