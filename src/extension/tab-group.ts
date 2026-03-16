@@ -3,14 +3,18 @@
  *
  * Extension-mode only. Creates the group lazily on first tab creation and reuses
  * it for the session. If the user ungroups tabs, a new group is created on the
- * next tab open. Best-effort: failures are silently ignored.
+ * next tab open. Best-effort: failures are logged but never block tab creation.
  */
+
+import { createLogger } from '../core/logger.js';
+
+const log = createLogger('extension:tab-group');
 
 let sliccGroupId: number | null = null;
 
 /**
  * Add a tab to the "slicc" tab group. Creates the group on first call.
- * Best-effort — silently ignores failures (tab closed, API unavailable, etc.).
+ * Best-effort — failures are logged but never propagated.
  */
 export async function addToSliccGroup(tabId: number): Promise<void> {
   try {
@@ -18,8 +22,12 @@ export async function addToSliccGroup(tabId: number): Promise<void> {
       try {
         await chrome.tabs.group({ tabIds: tabId, groupId: sliccGroupId });
         return;
-      } catch {
-        // Group was removed by user, create a new one
+      } catch (err) {
+        log.info('Tab group removed by user, recreating', {
+          tabId,
+          previousGroupId: sliccGroupId,
+          error: err instanceof Error ? err.message : String(err),
+        });
         sliccGroupId = null;
       }
     }
@@ -29,8 +37,11 @@ export async function addToSliccGroup(tabId: number): Promise<void> {
       color: 'pink',
       collapsed: false,
     });
-  } catch {
-    // Best-effort — tab may have been closed or API unavailable
+  } catch (err) {
+    log.warn('Tab grouping failed (best-effort, continuing without group)', {
+      tabId,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 

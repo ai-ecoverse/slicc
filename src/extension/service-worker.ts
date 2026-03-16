@@ -298,7 +298,9 @@ async function cdpCloseTarget(
   }
   if (attachedTabs.has(tabId)) {
     attachedTabs.delete(tabId);
-    await chrome.debugger.detach({ tabId }).catch(() => {});
+    await chrome.debugger.detach({ tabId }).catch(() => {
+      // Tab may already be closed
+    });
   }
 
   await chrome.tabs.remove(tabId);
