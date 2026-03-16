@@ -83,7 +83,7 @@ export class SprinkleBridge {
         } catch { return null; }
       },
       open: (path: string) => {
-        const url = toPreviewUrl(path);
+        const url = /^https?:|^chrome-extension:/.test(path) ? path : toPreviewUrl(path);
         window.open(url, '_blank');
       },
       close: () => this.closeHandler(sprinkleName),
