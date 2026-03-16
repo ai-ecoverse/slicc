@@ -112,6 +112,7 @@ Key files:
 - `src/extension/service-worker.ts` — Message relay + CDP proxy
 - `src/extension/offscreen.ts` — Agent engine bootstrap
 - `src/extension/offscreen-bridge.ts` — Orchestrator ↔ message bridge
+- `src/extension/lick-manager-proxy.ts` — BroadcastChannel proxy enabling side panel terminal to manage cron tasks via LickManager running in offscreen
 - `src/cdp/offscreen-cdp-proxy.ts` — CDPTransport via chrome.runtime messages (offscreen → service worker)
 - `src/cdp/panel-cdp-proxy.ts` — CDPTransport for side panel terminal (panel → offscreen → service worker)
 - `src/ui/offscreen-client.ts` — Side panel's interface to offscreen engine
@@ -183,7 +184,7 @@ WasmShell wraps just-bash 2.11.7 (WASM Bash interpreter) and connects it to Virt
 - `open <path|url>` — Preview/serve VFS files or open URLs in a new browser tab. `--download` / `-d` forces file download. `--view` / `-v` returns image inline for agent vision (produces `<img:>` tag converted to `ImageContent` by tool adapter)
 - `zip/unzip` — Archive compression
 - `webhook` — Manage webhooks for event-driven automation
-- `crontask` — Schedule cron jobs that dispatch licks to scoops
+- `crontask` — Schedule cron jobs that dispatch licks to scoops (works in both CLI and extension modes)
 - `pdftk` / `pdf` — Inspect, extract, rotate, and merge PDFs
 - `mount` — Mount a local directory into the virtual filesystem via the File System Access API
 - `convert` / `magick` — ImageMagick-style image conversion (resize, rotate, crop, quality) via `@imagemagick/magick-wasm`
@@ -272,15 +273,15 @@ Extension assets: `voice-popup.html` + `voice-popup.js` (project root, copied to
 Chrome Manifest V3 extension with three-layer architecture for background agent execution:
 
 - **Service worker** (`service-worker.ts`): Creates offscreen document on install/startup, relays messages between side panel and offscreen, proxies `chrome.debugger` CDP commands (offscreen docs can't use `chrome.debugger` directly), forwards CDP events back to offscreen.
-- **Offscreen document** (`offscreen.ts`, `offscreen-bridge.ts`): Long-lived extension page that runs the agent engine (Orchestrator, VFS, Shell, tools). Survives side panel close. `OffscreenBridge` translates between Orchestrator callbacks and chrome.runtime messages.
+- **Offscreen document** (`offscreen.ts`, `offscreen-bridge.ts`): Long-lived extension page that runs the agent engine (Orchestrator, VFS, Shell, tools, LickManager for cron task dispatching). Survives side panel close. `OffscreenBridge` translates between Orchestrator callbacks and chrome.runtime messages.
 - **Message types** (`messages.ts`): Typed envelopes (`PanelEnvelope`, `OffscreenEnvelope`, `ServiceWorkerEnvelope`) with `source` + `payload` for routing.
 - **CDP proxy** (`src/cdp/offscreen-cdp-proxy.ts`): `CDPTransport` implementation that routes commands through chrome.runtime messages to the service worker's `chrome.debugger`. Used by the offscreen agent engine.
 - **Panel CDP proxy** (`src/cdp/panel-cdp-proxy.ts`): `CDPTransport` for the side panel terminal. Routes commands through the offscreen bridge (which forwards to its own CDP transport). Receives CDP events directly from the service worker broadcast. This gives the side panel terminal a working `BrowserAPI` for `playwright-cli` and browser automation commands.
 - `chrome.d.ts` provides typed declarations for Chrome APIs (debugger, tabs, sidePanel, runtime, offscreen, windows, messaging).
-- `sandbox.html` (project root) provides isolated execution for JavaScript tool and `node -e` — exempt from extension CSP. Both the side panel and offscreen document can host sandbox iframes.
+- `sandbox.html` (project root) provides isolated execution for JavaScript tool and `node -e` — exempt from extension CSP. Both the side panel and offscreen document can host sandbox iframes. Includes localStorage polyfill for in-sandbox state persistence.
 - Pyodide (~13MB) bundled at `dist/extension/pyodide/` for Python support (loaded from `'self'` origin).
 
-**Extension Persistence Model**: The `browser-coding-agent` IndexedDB is the single source of truth for chat display messages. The offscreen bridge writes to it after every user message, response completion, tool call end, and incoming message event. The side panel reads from it via `switchToContext()` — no message buffer reconciliation needed. This separates concerns: the `agent-sessions` DB stores agent LLM history (for multi-turn context), while `slicc-groups` DB stores orchestrator routing data (scoops, tasks, webhooks, crontasks).
+**Extension Persistence Model**: The `browser-coding-agent` IndexedDB is the single source of truth for chat display messages. The offscreen bridge writes to it after every user message, response completion, tool call end, and incoming message event. The side panel reads from it via `switchToContext()` — no message buffer reconciliation needed. This separates concerns: the `agent-sessions` DB stores agent LLM history (for multi-turn context), while `slicc-groups` DB stores orchestrator routing data (scoops, tasks, webhooks, crontasks). In extension mode, LickManager is initialized in the offscreen document and reads crontask/webhook data from IndexedDB.
 
 ### Preview Service Worker (src/ui/preview-sw.ts)
 A Service Worker that intercepts `/preview/*` fetch requests and serves content from VFS (IndexedDB via LightningFS). Enables the agent to create HTML/CSS/JS apps in the virtual filesystem and preview them in real browser tabs.

@@ -901,15 +901,15 @@ async function main(): Promise<void> {
     log.debug('Lick event', { type: event.type, name: eventName, targetScoop: event.targetScoop });
 
     // Determine the target:
-    // - Sprinkle licks always go to the cone (cone decides which scoop handles it)
+    // - Sprinkle licks and untargeted events default to cone
     // - Webhook/cron licks use explicit targetScoop if set
     const scoops = orchestrator.getScoops();
     let resolvedTarget: RegisteredScoop | undefined;
 
-    if (isSprinkle) {
-      // Sprinkle licks always route to cone — cone picks or creates a scoop
+    if (isSprinkle || !event.targetScoop) {
+      // Sprinkle licks + untargeted cron/webhook events → cone
       resolvedTarget = scoops.find(s => s.isCone);
-    } else if (event.targetScoop) {
+    } else {
       resolvedTarget = scoops.find(s =>
         s.name === event.targetScoop ||
         s.folder === event.targetScoop ||

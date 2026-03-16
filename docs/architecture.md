@@ -69,6 +69,7 @@
 | `service-worker.ts` | Manifest V3 service worker; message relay between panel and offscreen + CDP proxy via chrome.debugger |
 | `offscreen.ts` | Agent engine bootstrap in offscreen document (Orchestrator, VFS, Shell, tools) |
 | `offscreen-bridge.ts` | Orchestrator ↔ chrome.runtime message bridge; persists chat to `browser-coding-agent` IndexedDB |
+| `lick-manager-proxy.ts` | BroadcastChannel proxy enabling side panel terminal to manage cron tasks via LickManager running in offscreen |
 | `messages.ts` | Typed message envelopes: PanelToOffscreen, OffscreenToPanel, CdpProxy |
 | `chrome.d.ts` | Typed declarations for chrome.debugger, chrome.tabs, chrome.sidePanel, chrome.offscreen, etc. |
 | `sprinkle-proxy.ts` | Lightweight proxy relaying sprinkle operations from offscreen document to side panel UI via chrome.runtime messaging |

@@ -83,6 +83,24 @@ export class SprinkleRenderer {
         this.bridge.setState(msg.data);
       } else if (msg.type === 'sprinkle-close') {
         this.bridge.close();
+      } else if (msg.type === 'sprinkle-storage-set') {
+        try {
+          localStorage.setItem(`slicc-sprinkle-ls:${sprinkleName}:${msg.key}`, msg.value);
+        } catch (e) {
+          console.warn('[sprinkle-renderer] localStorage setItem failed:', msg.key, e);
+        }
+      } else if (msg.type === 'sprinkle-storage-remove') {
+        try {
+          localStorage.removeItem(`slicc-sprinkle-ls:${sprinkleName}:${msg.key}`);
+        } catch (e) {
+          console.warn('[sprinkle-renderer] localStorage removeItem failed:', msg.key, e);
+        }
+      } else if (msg.type === 'sprinkle-storage-clear') {
+        const prefix = `slicc-sprinkle-ls:${sprinkleName}:`;
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k?.startsWith(prefix)) localStorage.removeItem(k);
+        }
       } else if (msg.type === 'sprinkle-readfile') {
         this.bridge.readFile(msg.path).then(
           (fileContent) => iframe.contentWindow?.postMessage(
@@ -125,10 +143,20 @@ export class SprinkleRenderer {
     const themeCSS = (cssVars.length > 0 ? `:root { ${cssVars.join(' ')} }\n` : '')
       + sprinkleRules.join('\n');
 
-    // Send content to the sandbox for rendering, including saved state
+    // Collect persisted localStorage entries for this sprinkle
+    const savedStorage: Record<string, string> = {};
+    const lsPrefix = `slicc-sprinkle-ls:${sprinkleName}:`;
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k?.startsWith(lsPrefix)) {
+        savedStorage[k.slice(lsPrefix.length)] = localStorage.getItem(k) ?? '';
+      }
+    }
+
+    // Send content to the sandbox for rendering, including saved state + localStorage
     const savedState = this.bridge.getState();
     iframe.contentWindow!.postMessage(
-      { type: 'sprinkle-render', content, name: sprinkleName, themeCSS, savedState }, '*',
+      { type: 'sprinkle-render', content, name: sprinkleName, themeCSS, savedState, savedStorage }, '*',
     );
   }
 
