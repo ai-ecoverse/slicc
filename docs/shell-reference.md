@@ -36,6 +36,7 @@ Custom commands implemented in TypeScript and registered in just-bash.
 | **convert / magick** | `convert-command.ts` | Image conversion (ImageMagick style) | `convert -resize 800x600 input.jpg output.jpg` |
 | **playwright-cli / playwright / puppeteer** | `playwright-command.ts` | Browser automation shell CLI | `snapshot`, `click <ref>`, `cookie-set`, `tab-list` |
 | **upskill** | `upskill-command.ts` | Install skills from GitHub/ClawHub | `upskill owner/repo`, `upskill clawhub:name`, `upskill search "query"` |
+| **sprinkle** | `sprinkle-command.ts` | Manage `.shtml` sprinkle panels | `sprinkle list`, `sprinkle open <name>`, `sprinkle close <name>` |
 | **git** | (isomorphic-git) | Full git support | `git clone`, `git commit`, `git push`, etc. |
 
 **Example usage**:
