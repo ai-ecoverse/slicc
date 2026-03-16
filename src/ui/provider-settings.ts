@@ -499,7 +499,12 @@ export function resolveCurrentModel(): Model<Api> {
 
     return model;
   } catch {
-    // Fallback to anthropic
+    // Model not in pi-ai registry — try provider's custom model list first
+    const customModel = models.find(m => m.id === effectiveModelId);
+    if (customModel) {
+      return baseUrl ? { ...customModel, baseUrl } : customModel;
+    }
+    // Last resort fallback
     return getModelDynamic('anthropic', 'claude-sonnet-4-20250514');
   }
 }

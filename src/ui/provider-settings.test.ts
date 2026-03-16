@@ -305,7 +305,7 @@ describe('resolveCurrentModel', () => {
     expect((model as unknown as Record<string, unknown>).baseUrl).toBe('https://proxy.example.com');
   });
 
-  it('falls back to anthropic default model when model lookup fails', () => {
+  it('falls back to provider custom model when registry lookup fails', () => {
     mockGetModel.mockImplementationOnce(() => {
       throw new Error('boom');
     });
@@ -314,8 +314,20 @@ describe('resolveCurrentModel', () => {
 
     const model = resolveCurrentModel();
 
-    expect(mockGetModel).toHaveBeenNthCalledWith(2, 'anthropic', 'claude-sonnet-4-20250514');
-    expect((model as unknown as Record<string, unknown>).provider).toBe('anthropic');
+    // Should fall back to provider's own model from getProviderModels, not hardcoded anthropic
+    expect(model.id).toBe('gpt-5');
+  });
+
+  it('falls back to anthropic when provider has no matching model either', () => {
+    mockGetModel.mockImplementationOnce(() => {
+      throw new Error('boom');
+    });
+    addAccount('openai', 'oai-key');
+    storage.set('selected-model', 'openai:nonexistent-model');
+
+    const model = resolveCurrentModel();
+
+    expect(mockGetModel).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-20250514');
     expect(model.id).toBe('claude-sonnet-4-20250514');
   });
 
@@ -732,6 +744,46 @@ describe('getOAuthAccountInfo', () => {
     });
     const info = getOAuthAccountInfo('test-oauth');
     expect(info!.expired).toBe(false);
+  });
+});
+
+describe('resolveCurrentModel with getModelIds', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('falls back to provider custom model when model ID not in pi-ai registry', () => {
+    // Register a provider with getModelIds that returns a model not in the Anthropic registry
+    const providerConfigs = new Map(mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)]));
+    providerConfigs.set('custom-oauth', {
+      id: 'custom-oauth',
+      name: 'Custom OAuth',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [
+        { id: 'custom-model-not-in-registry', name: 'Custom Model' },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+    mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
+
+    // Make getModelDynamic throw for unknown model (simulates pi-ai registry miss)
+    mockGetModel.mockImplementation((provider: string, modelId: string) => {
+      if (modelId === 'custom-model-not-in-registry') throw new Error('Unknown model');
+      return { id: modelId, name: modelId, provider, api: 'mock-api', baseUrl: 'https://default.example.com' };
+    });
+
+    addAccount('custom-oauth', '');
+    storage.set('selected-model', 'custom-oauth:custom-model-not-in-registry');
+
+    const model = resolveCurrentModel();
+    // Should use the custom model from getModelIds, NOT fall back to raw anthropic
+    expect(model.id).toBe('custom-model-not-in-registry');
+    expect(model.provider).toBe('custom-oauth');
+    expect(model.api).toBe('custom-oauth-anthropic');
   });
 });
 
