@@ -31,6 +31,52 @@ export function isSupportedImageFormat(mimeType: string): boolean {
 }
 
 /**
+ * Extract image dimensions from base64 data by parsing format headers.
+ * Returns null if dimensions can't be determined (unknown format, corrupt header).
+ */
+export function getImageDimensions(base64: string, mimeType: string): { width: number; height: number } | null {
+  try {
+    if (mimeType === 'image/png') {
+      // PNG IHDR: width @ bytes 16-19, height @ bytes 20-23 (big-endian uint32)
+      // Need first 24 raw bytes = 32 base64 chars
+      if (base64.length < 32) return null;
+      const raw = atob(base64.slice(0, 32));
+      const w = (raw.charCodeAt(16) << 24) | (raw.charCodeAt(17) << 16) | (raw.charCodeAt(18) << 8) | raw.charCodeAt(19);
+      const h = (raw.charCodeAt(20) << 24) | (raw.charCodeAt(21) << 16) | (raw.charCodeAt(22) << 8) | raw.charCodeAt(23);
+      return (w > 0 && h > 0) ? { width: w, height: h } : null;
+    }
+
+    if (mimeType === 'image/gif') {
+      // GIF: width @ bytes 6-7, height @ bytes 8-9 (little-endian uint16)
+      if (base64.length < 16) return null;
+      const raw = atob(base64.slice(0, 16));
+      const w = raw.charCodeAt(6) | (raw.charCodeAt(7) << 8);
+      const h = raw.charCodeAt(8) | (raw.charCodeAt(9) << 8);
+      return (w > 0 && h > 0) ? { width: w, height: h } : null;
+    }
+
+    if (mimeType === 'image/jpeg') {
+      // JPEG: scan for SOF0 (0xFFC0) or SOF2 (0xFFC2) marker in first 64KB
+      const scanBytes = Math.min(Math.ceil(65536 / 3) * 4, base64.length);
+      const raw = atob(base64.slice(0, scanBytes));
+      for (let i = 0; i < raw.length - 8; i++) {
+        if (raw.charCodeAt(i) === 0xFF) {
+          const marker = raw.charCodeAt(i + 1);
+          if (marker === 0xC0 || marker === 0xC2) {
+            const h = (raw.charCodeAt(i + 5) << 8) | raw.charCodeAt(i + 6);
+            const w = (raw.charCodeAt(i + 7) << 8) | raw.charCodeAt(i + 8);
+            return (w > 0 && h > 0) ? { width: w, height: h } : null;
+          }
+        }
+      }
+    }
+  } catch {
+    // Corrupt header — can't determine dimensions
+  }
+  return null;
+}
+
+/**
  * Process an ImageContent block: validate and resize if needed.
  *
  * Returns the original or resized ImageContent, or a TextContent placeholder
@@ -50,13 +96,22 @@ export async function processImageContent(image: ImageContent): Promise<ImageCon
   // base64 inflates size by ~33%, so we must check image.data.length directly.
   const base64Size = image.data.length;
 
-  // If under the limit, pass through without touching ImageMagick
-  if (base64Size <= MAX_IMAGE_BYTES) {
+  // Check dimensions — API rejects images > 8000px on any side.
+  // Parse from header bytes (no full decode needed).
+  const dims = getImageDimensions(image.data, image.mimeType);
+  const needsResize = base64Size > MAX_IMAGE_BYTES
+    || (dims !== null && (dims.width > MAX_DIMENSION || dims.height > MAX_DIMENSION))
+    || (dims !== null && Math.max(dims.width, dims.height) > OPTIMAL_LONG_EDGE);
+
+  if (!needsResize) {
     return image;
   }
 
-  // Over 5MB base64 — attempt resize via ImageMagick WASM
-  log.info('Image exceeds 5MB base64 limit, attempting resize', { base64Size, mimeType: image.mimeType });
+  log.info('Image needs processing', {
+    base64Size,
+    dimensions: dims ? `${dims.width}x${dims.height}` : 'unknown',
+    reason: base64Size > MAX_IMAGE_BYTES ? 'size' : 'dimensions',
+  });
 
   // Step 1: Load ImageMagick WASM
   let getMagick: typeof import('../shell/supplemental-commands/magick-wasm.js').getMagick;
