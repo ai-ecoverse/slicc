@@ -358,14 +358,23 @@ export class Orchestrator {
     queue.push(message);
     this.messageQueues.set(message.chatJid, queue);
 
-    // Process immediately if tab is ready
-    const tab = this.tabs.get(message.chatJid);
+    // Process immediately if tab is ready; retry init if in error state
+    let tab = this.tabs.get(message.chatJid);
     log.debug('routeToScoop: queued', {
       chatJid: message.chatJid,
       scoopName: scoop.name,
       tabStatus: tab?.status ?? 'no-tab',
       queueLength: queue.length,
     });
+    if (tab?.status === 'error') {
+      log.info('routeToScoop: tab in error state, retrying init', { chatJid: message.chatJid });
+      try {
+        await this.createScoopTab(message.chatJid);
+        tab = this.tabs.get(message.chatJid);
+      } catch {
+        log.warn('routeToScoop: retry init failed', { chatJid: message.chatJid });
+      }
+    }
     if (tab?.status === 'ready') {
       await this.processScoopQueue(message.chatJid);
     }
@@ -517,6 +526,14 @@ export class Orchestrator {
 
     // Initialize the context
     await context.init();
+
+    // Mark tab as ready so queued messages (lick events, etc.) get processed
+    const initTab = this.tabs.get(jid);
+    if (initTab && initTab.status === 'initializing') {
+      initTab.status = 'ready';
+      this.tabs.set(jid, initTab);
+      this.callbacks.onStatusChange(jid, 'ready');
+    }
 
     log.info('Scoop context created', { jid, contextId });
   }
