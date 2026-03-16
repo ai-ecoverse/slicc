@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Performance Audit</title>
+<script src="backbone.js"></script>
+</head>
+<body>
+<script>BB.injectHeader('Performance Audit');</script>
+<style>
+  .audit-container { max-width: 960px; margin: 0 auto; padding: var(--s2-spacing-400); }
+  .audit-controls { display: flex; gap: 8px; margin-bottom: var(--s2-spacing-400); }
+  .audit-controls input { flex: 1; }
+  .score-bar { display: flex; gap: 16px; margin-bottom: var(--s2-spacing-400); }
+  .score-card { flex: 1; padding: 16px; border-radius: var(--s2-radius-m); text-align: center; }
+  .score-card .value { font-size: 28px; font-weight: 700; }
+  .score-card .label { font-size: 11px; color: var(--s2-gray-500); margin-top: 4px; }
+  .score-good { background: #E0F5EC; } .score-good .value { color: var(--s2-green-600); }
+  .score-warn { background: #FFF3E0; } .score-warn .value { color: #B86E00; }
+  .score-bad { background: #FFE5E6; } .score-bad .value { color: var(--s2-red-600); }
+  .page-results { display: grid; gap: 12px; }
+  .page-result { padding: 16px; background: white; border: 1px solid var(--s2-gray-100); border-radius: var(--s2-radius-m); }
+  .page-result .path { font-size: 12px; color: var(--s2-blue-600); font-family: var(--s2-font-mono); margin-bottom: 8px; }
+  .metrics-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+  .metric { padding: 8px; background: var(--s2-gray-50); border-radius: var(--s2-radius-s); text-align: center; }
+  .metric .val { font-size: 16px; font-weight: 600; }
+  .metric .lbl { font-size: 10px; color: var(--s2-gray-500); }
+  .recommendations { margin-top: 12px; }
+  .rec { font-size: 12px; padding: 4px 0; color: var(--s2-gray-600); }
+  .rec::before { content: '\2022 '; color: var(--s2-orange-400); }
+  .section-title { font-size: 14px; font-weight: 600; margin: 24px 0 12px; color: var(--s2-gray-700); }
+  .loading { text-align: center; padding: 40px; color: var(--s2-gray-400); }
+  #results { display: none; }
+</style>
+
+<div class="audit-container">
+  <div class="audit-controls">
+    <input class="s2-input" id="auditPath" placeholder="Site path to audit" value="">
+    <button class="s2-btn s2-btn-primary" id="runAudit">Run Performance Audit</button>
+  </div>
+  <div id="loading" class="loading" style="display:none;"><span id="loadingText">Analyzing pages...</span></div>
+  <div id="results">
+    <div class="score-bar" id="scores"></div>
+    <div class="section-title">Page Results</div>
+    <div class="page-results" id="pageResults"></div>
+  </div>
+</div>
+
+<script>
+(function() {
+  var STORAGE_KEY = 'slicc-eds-config';
+  var config = null;
+  try { config = JSON.parse(localStorage.getItem(STORAGE_KEY)); } catch(e) {}
+  if (config) BB.init(config);
+  document.getElementById('auditPath').value = BB.site.sitePath || '';
+
+  document.getElementById('runAudit').onclick = runAudit;
+
+  function runAudit() {
+    document.getElementById('loading').style.display = 'block';
+    document.getElementById('results').style.display = 'none';
+
+    BB.getQueryIndex().then(function(pages) {
+      var path = document.getElementById('auditPath').value.trim();
+      var filtered = path ? pages.filter(function(p) { return p.path && p.path.startsWith(path); }) : pages;
+      if (filtered.length === 0) {
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('results').style.display = 'block';
+        document.getElementById('pageResults').innerHTML = '<div class="loading">No pages found.</div>';
+        return;
+      }
+      return analyzePages(filtered.slice(0, 15));
+    }).catch(function(err) {
+      document.getElementById('loading').style.display = 'none';
+      alert('Error: ' + err.message);
+    });
+  }
+
+  function analyzePages(pages) {
+    var results = [];
+    var chain = Promise.resolve();
+
+    pages.forEach(function(page, idx) {
+      chain = chain.then(function() {
+        document.getElementById('loadingText').textContent = 'Analyzing ' + (idx + 1) + '/' + pages.length;
+        return BB.getAEMPage(page.path).then(function(html) {
+          results.push(analyzePage(html, page));
+        }).catch(function() {
+          results.push({ path: page.path, error: true, metrics: {} });
+        });
+      });
+    });
+
+    chain.then(function() { displayResults(results); });
+  }
+
+  function analyzePage(html, page) {
+    var parser = new DOMParser();
+    var doc = parser.parseFromString(html, 'text/html');
+    var metrics = {};
+    var recs = [];
+
+    // Document size
+    metrics.docSize = Math.round(html.length / 1024);
+    if (metrics.docSize > 100) recs.push('HTML document is ' + metrics.docSize + 'KB — consider reducing inline content');
+
+    // Image count and lazy loading
+    var imgs = doc.querySelectorAll('img');
+    metrics.images = imgs.length;
+    var notLazy = 0;
+    imgs.forEach(function(img) {
+      if (!img.getAttribute('loading') || img.getAttribute('loading') !== 'lazy') notLazy++;
+    });
+    if (notLazy > 3) recs.push(notLazy + ' images without lazy loading');
+
+    // Script count
+    var scripts = doc.querySelectorAll('script[src]');
+    metrics.scripts = scripts.length;
+    if (scripts.length > 5) recs.push(scripts.length + ' external scripts — consider reducing');
+
+    // CSS files
+    var stylesheets = doc.querySelectorAll('link[rel="stylesheet"]');
+    metrics.stylesheets = stylesheets.length;
+
+    // Render-blocking resources
+    var blocking = doc.querySelectorAll('link[rel="stylesheet"]:not([media]), script:not([defer]):not([async]):not([type="module"])');
+    metrics.blocking = blocking.length;
+    if (blocking.length > 2) recs.push(blocking.length + ' render-blocking resources');
+
+    // Third-party domains
+    var domains = new Set();
+    doc.querySelectorAll('[src], [href]').forEach(function(el) {
+      var url = el.getAttribute('src') || el.getAttribute('href') || '';
+      try {
+        var u = new URL(url, 'https://example.com');
+        if (u.hostname !== 'example.com') domains.add(u.hostname);
+      } catch(e) {}
+    });
+    metrics.thirdParty = domains.size;
+    if (domains.size > 5) recs.push(domains.size + ' third-party domains — check for unnecessary dependencies');
+
+    return { path: page.path, metrics: metrics, recommendations: recs };
+  }
+
+  function displayResults(results) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('results').style.display = 'block';
+
+    var avgSize = 0; var totalRecs = 0;
+    results.forEach(function(r) {
+      avgSize += (r.metrics.docSize || 0);
+      totalRecs += (r.recommendations || []).length;
+    });
+    avgSize = results.length > 0 ? Math.round(avgSize / results.length) : 0;
+
+    function sc(v, good, bad) { return v <= good ? 'score-good' : v <= bad ? 'score-warn' : 'score-bad'; }
+
+    document.getElementById('scores').innerHTML =
+      '<div class="score-card ' + sc(avgSize, 50, 150) + '"><div class="value">' + avgSize + 'KB</div><div class="label">Avg Doc Size</div></div>' +
+      '<div class="score-card ' + (totalRecs === 0 ? 'score-good' : totalRecs < 5 ? 'score-warn' : 'score-bad') + '"><div class="value">' + totalRecs + '</div><div class="label">Recommendations</div></div>' +
+      '<div class="score-card score-good"><div class="value">' + results.length + '</div><div class="label">Pages Analyzed</div></div>';
+
+    var html = '';
+    results.forEach(function(r) {
+      if (r.error) {
+        html += '<div class="page-result"><div class="path">' + BB.escapeHtml(r.path) + '</div><div>Could not fetch page</div></div>';
+        return;
+      }
+      var m = r.metrics;
+      html += '<div class="page-result"><div class="path">' + BB.escapeHtml(r.path) + '</div>' +
+        '<div class="metrics-grid">' +
+          '<div class="metric"><div class="val">' + (m.docSize || 0) + 'KB</div><div class="lbl">Doc Size</div></div>' +
+          '<div class="metric"><div class="val">' + (m.images || 0) + '</div><div class="lbl">Images</div></div>' +
+          '<div class="metric"><div class="val">' + (m.scripts || 0) + '</div><div class="lbl">Scripts</div></div>' +
+          '<div class="metric"><div class="val">' + (m.stylesheets || 0) + '</div><div class="lbl">Stylesheets</div></div>' +
+          '<div class="metric"><div class="val">' + (m.blocking || 0) + '</div><div class="lbl">Blocking</div></div>' +
+          '<div class="metric"><div class="val">' + (m.thirdParty || 0) + '</div><div class="lbl">3rd Party</div></div>' +
+        '</div>';
+      if (r.recommendations && r.recommendations.length > 0) {
+        html += '<div class="recommendations">';
+        r.recommendations.forEach(function(rec) { html += '<div class="rec">' + BB.escapeHtml(rec) + '</div>'; });
+        html += '</div>';
+      }
+      html += '</div>';
+    });
+    document.getElementById('pageResults').innerHTML = html;
+
+    if (typeof slicc !== 'undefined') slicc.setState({ results: results });
+  }
+
+  if (typeof slicc !== 'undefined') {
+    slicc.on('update', function(data) { if (data && data.action === 'run-audit') runAudit(); });
+  }
+  var params = new URLSearchParams(window.location.search);
+  if (params.get('path')) { document.getElementById('auditPath').value = params.get('path'); runAudit(); }
+})();
+</script>
+</body>
+</html>

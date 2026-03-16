@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SLICC Hub</title>
+<script src="backbone.js"></script>
+</head>
+<body>
+<script>BB.injectHeader('Hub');</script>
+<style>
+  .hub-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: var(--s2-spacing-400); padding: var(--s2-spacing-400); max-width: 1200px; margin: 0 auto;
+  }
+  .hub-card {
+    background: white; border-radius: var(--s2-radius-l); border: 1px solid var(--s2-gray-100);
+    box-shadow: var(--s2-shadow-100); padding: var(--s2-spacing-400);
+    text-decoration: none; color: inherit; transition: box-shadow 0.15s, transform 0.15s;
+    display: block;
+  }
+  .hub-card:hover { box-shadow: var(--s2-shadow-200); transform: translateY(-2px); }
+  .hub-card h3 { margin: 0 0 8px; font-size: 15px; color: var(--s2-gray-800); }
+  .hub-card p { margin: 0; font-size: 13px; color: var(--s2-gray-500); line-height: 1.5; }
+  .hub-card .icon { font-size: 28px; margin-bottom: 12px; display: block; }
+  .hub-setup { max-width: 600px; margin: 40px auto; padding: 0 var(--s2-spacing-400); }
+  .hub-setup h2 { font-size: 16px; margin: 0 0 16px; }
+  .hub-setup .field { margin-bottom: 12px; }
+  .hub-setup label { display: block; font-size: 12px; color: var(--s2-gray-500); margin-bottom: 4px; font-weight: 600; }
+  .hub-setup input { width: 100%; }
+  .hub-setup .actions { margin-top: 16px; display: flex; gap: 8px; }
+  #configPanel { display: none; }
+  #mainContent { display: none; }
+</style>
+
+<div id="configPanel" class="hub-setup s2-card" style="padding: 24px;">
+  <h2>Site Configuration</h2>
+  <p style="font-size: 13px; color: var(--s2-gray-500); margin: 0 0 16px;">Enter your EDS site details and credentials to get started.</p>
+  <div class="field">
+    <label>Organization</label>
+    <input class="s2-input" id="cfgOrg" placeholder="e.g. paolomoz">
+  </div>
+  <div class="field">
+    <label>Repository</label>
+    <input class="s2-input" id="cfgRepo" placeholder="e.g. az-sitebuilder">
+  </div>
+  <div class="field">
+    <label>Branch</label>
+    <input class="s2-input" id="cfgRef" value="main">
+  </div>
+  <div class="field">
+    <label>Site Path</label>
+    <input class="s2-input" id="cfgSitePath" placeholder="e.g. /tavex">
+  </div>
+  <hr style="border: none; border-top: 1px solid var(--s2-gray-100); margin: 16px 0;">
+  <div class="field">
+    <label>DA Client ID</label>
+    <input class="s2-input" id="cfgClientId" type="password">
+  </div>
+  <div class="field">
+    <label>DA Client Secret</label>
+    <input class="s2-input" id="cfgClientSecret" type="password">
+  </div>
+  <div class="field">
+    <label>DA Service Token</label>
+    <input class="s2-input" id="cfgServiceToken" type="password">
+  </div>
+  <div class="field">
+    <label>GitHub Token</label>
+    <input class="s2-input" id="cfgGithubToken" type="password">
+  </div>
+  <div class="actions">
+    <button class="s2-btn s2-btn-primary" onclick="saveConfig()">Save &amp; Continue</button>
+    <button class="s2-btn s2-btn-ghost" onclick="skipConfig()">Skip (use defaults)</button>
+  </div>
+</div>
+
+<div id="mainContent">
+  <div class="hub-grid">
+    <a class="hub-card" href="/preview/shared/page-browser.html">
+      <span class="icon">&#128193;</span>
+      <h3>Page Browser</h3>
+      <p>Browse and navigate DA content pages with tree navigation.</p>
+    </a>
+    <a class="hub-card" href="/preview/shared/wysiwyg-editor.html">
+      <span class="icon">&#9997;</span>
+      <h3>WYSIWYG Editor</h3>
+      <p>Visual editor for EDS pages with block-aware editing.</p>
+    </a>
+    <a class="hub-card" href="/preview/shared/seo-audit.html">
+      <span class="icon">&#128269;</span>
+      <h3>SEO Audit</h3>
+      <p>Analyze titles, descriptions, headings, and image alt text.</p>
+    </a>
+    <a class="hub-card" href="/preview/shared/accessibility-audit.html">
+      <span class="icon">&#9855;</span>
+      <h3>Accessibility Audit</h3>
+      <p>Check ARIA, alt text, contrast, heading structure.</p>
+    </a>
+    <a class="hub-card" href="/preview/shared/content-audit.html">
+      <span class="icon">&#128196;</span>
+      <h3>Content Audit</h3>
+      <p>Readability, broken links, content quality analysis.</p>
+    </a>
+    <a class="hub-card" href="/preview/shared/performance-audit.html">
+      <span class="icon">&#9889;</span>
+      <h3>Performance Audit</h3>
+      <p>Page speed metrics and optimization recommendations.</p>
+    </a>
+    <a class="hub-card" href="/preview/shared/bulk-editor.html">
+      <span class="icon">&#128221;</span>
+      <h3>Bulk Editor</h3>
+      <p>Batch edit metadata and content across multiple pages.</p>
+    </a>
+    <a class="hub-card" href="/preview/shared/media-manager.html">
+      <span class="icon">&#127912;</span>
+      <h3>Media Manager</h3>
+      <p>Upload, browse, and manage images and media files.</p>
+    </a>
+    <a class="hub-card" href="/preview/shared/code-editor.html">
+      <span class="icon">&#128187;</span>
+      <h3>Code Editor</h3>
+      <p>Edit blocks, scripts, and styles on GitHub.</p>
+    </a>
+    <a class="hub-card" href="/preview/shared/publish-manager.html">
+      <span class="icon">&#128640;</span>
+      <h3>Publish Manager</h3>
+      <p>Preview and publish pages to AEM Edge Delivery.</p>
+    </a>
+  </div>
+</div>
+
+<script>
+(function() {
+  var STORAGE_KEY = 'slicc-eds-config';
+
+  function loadSavedConfig() {
+    try {
+      var saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch(e) {}
+    return null;
+  }
+
+  function showMain() {
+    document.getElementById('configPanel').style.display = 'none';
+    document.getElementById('mainContent').style.display = 'block';
+  }
+
+  function showConfig() {
+    document.getElementById('configPanel').style.display = 'block';
+    document.getElementById('mainContent').style.display = 'none';
+    var saved = loadSavedConfig();
+    if (saved) {
+      document.getElementById('cfgOrg').value = saved.org || '';
+      document.getElementById('cfgRepo').value = saved.repo || '';
+      document.getElementById('cfgRef').value = saved.ref || 'main';
+      document.getElementById('cfgSitePath').value = saved.sitePath || '';
+      document.getElementById('cfgClientId').value = saved.daClientId || '';
+      document.getElementById('cfgClientSecret').value = saved.daClientSecret || '';
+      document.getElementById('cfgServiceToken').value = saved.daServiceToken || '';
+      document.getElementById('cfgGithubToken').value = saved.githubToken || '';
+    }
+  }
+
+  window.saveConfig = function() {
+    var config = {
+      org: document.getElementById('cfgOrg').value.trim(),
+      repo: document.getElementById('cfgRepo').value.trim(),
+      ref: document.getElementById('cfgRef').value.trim() || 'main',
+      sitePath: document.getElementById('cfgSitePath').value.trim(),
+      daClientId: document.getElementById('cfgClientId').value.trim(),
+      daClientSecret: document.getElementById('cfgClientSecret').value.trim(),
+      daServiceToken: document.getElementById('cfgServiceToken').value.trim(),
+      githubToken: document.getElementById('cfgGithubToken').value.trim()
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+    BB.init(config);
+    showMain();
+  };
+
+  window.skipConfig = function() {
+    showMain();
+  };
+
+  // Check for saved config or bridge state
+  var saved = loadSavedConfig();
+  if (saved && saved.org) {
+    BB.init(saved);
+    showMain();
+  } else if (typeof slicc !== 'undefined') {
+    var p = slicc.getState();
+    if (p && typeof p.then === 'function') {
+      p.then(function(state) {
+        if (state && state.org) {
+          BB.init(state);
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+          showMain();
+        } else {
+          showConfig();
+        }
+      });
+    } else {
+      showConfig();
+    }
+  } else {
+    showConfig();
+  }
+
+  // Listen for config updates from agent
+  if (typeof slicc !== 'undefined') {
+    slicc.on('update', function(data) {
+      if (data && data.action === 'configure') {
+        BB.init(data.config);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data.config));
+        showMain();
+      }
+    });
+  }
+})();
+</script>
+</body>
+</html>

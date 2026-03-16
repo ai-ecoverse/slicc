@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Media Manager</title>
+<script src="backbone.js"></script>
+</head>
+<body>
+<script>BB.injectHeader('Media Manager');</script>
+<style>
+  .media-container { max-width: 1100px; margin: 0 auto; padding: var(--s2-spacing-400); }
+  .controls { display: flex; gap: 8px; margin-bottom: var(--s2-spacing-300); }
+  .controls input { flex: 1; }
+  .media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+  .media-card { background: white; border: 1px solid var(--s2-gray-100); border-radius: var(--s2-radius-m); overflow: hidden; cursor: pointer; transition: border-color 0.15s; }
+  .media-card:hover { border-color: var(--s2-blue-400); }
+  .media-thumb { width: 100%; height: 140px; background: var(--s2-gray-50); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  .media-thumb img { width: 100%; height: 100%; object-fit: cover; }
+  .media-thumb .placeholder { font-size: 32px; color: var(--s2-gray-300); }
+  .media-info { padding: 8px 10px; }
+  .media-info .name { font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .media-info .meta { font-size: 10px; color: var(--s2-gray-400); margin-top: 2px; }
+  .upload-zone { border: 2px dashed var(--s2-gray-200); border-radius: var(--s2-radius-m); padding: 32px; text-align: center; color: var(--s2-gray-400); margin-bottom: var(--s2-spacing-300); cursor: pointer; transition: border-color 0.15s; }
+  .upload-zone:hover, .upload-zone.dragover { border-color: var(--s2-blue-400); background: #F0F7FF; }
+  .upload-zone input { display: none; }
+  .loading { text-align: center; padding: 40px; color: var(--s2-gray-400); }
+  .section-title { font-size: 14px; font-weight: 600; margin: 24px 0 12px; color: var(--s2-gray-700); }
+  .status-msg { font-size: 12px; color: var(--s2-gray-500); margin-top: 8px; }
+</style>
+
+<div class="media-container">
+  <div class="controls">
+    <input class="s2-input" id="browsePath" placeholder="DA path to browse (e.g. /tavex)" value="">
+    <button class="s2-btn s2-btn-primary" id="loadMedia">Browse</button>
+  </div>
+
+  <div class="upload-zone" id="uploadZone">
+    <div style="font-size: 24px; margin-bottom: 8px;">&#128228;</div>
+    <div>Drop files here or click to upload</div>
+    <div style="font-size: 11px; margin-top: 4px;">Images, PDFs, and other media</div>
+    <input type="file" id="fileInput" multiple accept="image/*,.pdf,.svg">
+  </div>
+  <div class="status-msg" id="uploadStatus"></div>
+
+  <div id="loading" class="loading" style="display:none;">Loading media...</div>
+  <div class="section-title" id="mediaTitle" style="display:none;">Media Files</div>
+  <div class="media-grid" id="mediaGrid"></div>
+</div>
+
+<script>
+(function() {
+  var STORAGE_KEY = 'slicc-eds-config';
+  var config = null;
+  try { config = JSON.parse(localStorage.getItem(STORAGE_KEY)); } catch(e) {}
+  if (config) BB.init(config);
+  document.getElementById('browsePath').value = BB.site.sitePath || '';
+
+  document.getElementById('loadMedia').onclick = loadMedia;
+
+  // Upload zone
+  var zone = document.getElementById('uploadZone');
+  var fileInput = document.getElementById('fileInput');
+  zone.onclick = function() { fileInput.click(); };
+  fileInput.onchange = function() { uploadFiles(fileInput.files); };
+  zone.ondragover = function(e) { e.preventDefault(); zone.classList.add('dragover'); };
+  zone.ondragleave = function() { zone.classList.remove('dragover'); };
+  zone.ondrop = function(e) { e.preventDefault(); zone.classList.remove('dragover'); uploadFiles(e.dataTransfer.files); };
+
+  function uploadFiles(files) {
+    if (!files.length) return;
+    var basePath = document.getElementById('browsePath').value.trim().replace(/^\//, '').replace(/\/$/, '');
+    var status = document.getElementById('uploadStatus');
+    var chain = Promise.resolve();
+    var uploaded = 0;
+
+    Array.from(files).forEach(function(file) {
+      chain = chain.then(function() {
+        status.textContent = 'Uploading ' + file.name + '...';
+        var path = basePath + '/' + file.name;
+        return BB.uploadMedia(path, file).then(function() {
+          uploaded++;
+          status.textContent = 'Uploaded ' + uploaded + '/' + files.length;
+        });
+      });
+    });
+
+    chain.then(function() {
+      status.textContent = 'All files uploaded!';
+      setTimeout(function() { status.textContent = ''; }, 3000);
+      loadMedia();
+    }).catch(function(err) {
+      status.textContent = 'Upload error: ' + err.message;
+    });
+  }
+
+  function loadMedia() {
+    document.getElementById('loading').style.display = 'block';
+    document.getElementById('mediaGrid').innerHTML = '';
+    document.getElementById('mediaTitle').style.display = 'none';
+
+    var path = document.getElementById('browsePath').value.trim();
+    BB.listPages(path).then(function(entries) {
+      document.getElementById('loading').style.display = 'none';
+      var media = entries.filter(function(e) {
+        if (!e.ext) return false;
+        return /\.(jpg|jpeg|png|gif|svg|webp|pdf|mp4)$/i.test(e.name || ('.' + e.ext));
+      });
+      if (media.length === 0) {
+        // Show all entries if no specific media found
+        renderMedia(entries.filter(function(e) { return !!e.ext; }), path);
+      } else {
+        renderMedia(media, path);
+      }
+    }).catch(function(err) {
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('mediaGrid').innerHTML = '<div class="loading">Error: ' + BB.escapeHtml(err.message) + '</div>';
+    });
+  }
+
+  function renderMedia(entries, basePath) {
+    document.getElementById('mediaTitle').style.display = 'block';
+    var html = '';
+    entries.forEach(function(entry) {
+      var name = entry.name || 'unknown';
+      var ext = (entry.ext || name.split('.').pop() || '').toLowerCase();
+      var isImage = /^(jpg|jpeg|png|gif|svg|webp)$/.test(ext);
+      var fullPath = basePath.replace(/^\//, '') + '/' + name;
+
+      html += '<div class="media-card" onclick="selectMedia(\'' + fullPath.replace(/'/g, "\\'") + '\')">' +
+        '<div class="media-thumb">';
+      if (isImage) {
+        html += '<img src="' + BB.previewUrl(fullPath) + '" alt="' + BB.escapeHtml(name) + '" loading="lazy">';
+      } else {
+        html += '<span class="placeholder">&#128196;</span>';
+      }
+      html += '</div><div class="media-info">' +
+        '<div class="name" title="' + BB.escapeHtml(name) + '">' + BB.escapeHtml(name) + '</div>' +
+        '<div class="meta">' + ext.toUpperCase() + '</div>' +
+      '</div></div>';
+    });
+    document.getElementById('mediaGrid').innerHTML = html || '<div class="loading">No media files found.</div>';
+  }
+
+  window.selectMedia = function(path) {
+    if (typeof slicc !== 'undefined') {
+      slicc.lick({ action: 'media-selected', data: { path: path, url: BB.previewUrl(path) } });
+    }
+  };
+
+  if (typeof slicc !== 'undefined') {
+    slicc.on('update', function(data) {
+      if (data && data.action === 'browse') {
+        document.getElementById('browsePath').value = data.path || '';
+        loadMedia();
+      }
+    });
+  }
+
+  var params = new URLSearchParams(window.location.search);
+  if (params.get('path')) { document.getElementById('browsePath').value = params.get('path'); loadMedia(); }
+})();
+</script>
+</body>
+</html>

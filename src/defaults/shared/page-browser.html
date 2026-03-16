@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Page Browser</title>
+<script src="backbone.js"></script>
+</head>
+<body>
+<script>BB.injectHeader('Page Browser');</script>
+<style>
+  .browser-layout { display: flex; height: calc(100vh - 48px); }
+  .tree-panel { width: 280px; border-right: 1px solid var(--s2-gray-100); background: white; overflow-y: auto; padding: var(--s2-spacing-200); }
+  .content-panel { flex: 1; overflow-y: auto; padding: var(--s2-spacing-400); }
+  .tree-item { padding: 6px 8px; border-radius: var(--s2-radius-s); cursor: pointer; font-size: 13px; display: flex; align-items: center; gap: 6px; }
+  .tree-item:hover { background: var(--s2-gray-50); }
+  .tree-item.active { background: #E5F0FF; color: var(--s2-blue-700); }
+  .tree-item .icon { font-size: 14px; width: 18px; text-align: center; }
+  .tree-item.folder { font-weight: 500; }
+  .tree-children { padding-left: 16px; }
+  .breadcrumb { font-size: 12px; color: var(--s2-gray-500); margin-bottom: 16px; }
+  .breadcrumb a { color: var(--s2-blue-600); text-decoration: none; }
+  .breadcrumb a:hover { text-decoration: underline; }
+  .page-list { display: grid; gap: 8px; }
+  .page-entry { padding: 12px 16px; background: white; border: 1px solid var(--s2-gray-100); border-radius: var(--s2-radius-m); display: flex; align-items: center; justify-content: space-between; cursor: pointer; transition: border-color 0.15s; }
+  .page-entry:hover { border-color: var(--s2-blue-400); }
+  .page-entry .name { font-size: 13px; font-weight: 500; }
+  .page-entry .meta { font-size: 11px; color: var(--s2-gray-400); }
+  .page-entry .actions { display: flex; gap: 4px; }
+  .empty-state { text-align: center; padding: 60px 20px; color: var(--s2-gray-400); }
+  .empty-state h3 { margin: 0 0 8px; font-size: 15px; color: var(--s2-gray-600); }
+  .loading { text-align: center; padding: 40px; color: var(--s2-gray-400); font-size: 13px; }
+</style>
+
+<div class="browser-layout">
+  <div class="tree-panel" id="treePanel">
+    <div class="loading" id="treeLoading">Loading pages...</div>
+  </div>
+  <div class="content-panel" id="contentPanel">
+    <div class="empty-state">
+      <h3>Select a folder</h3>
+      <p>Browse the content tree on the left to view pages.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  var STORAGE_KEY = 'slicc-eds-config';
+  var config = null;
+  try { config = JSON.parse(localStorage.getItem(STORAGE_KEY)); } catch(e) {}
+  if (config) BB.init(config);
+
+  var currentPath = BB.site.sitePath || '';
+
+  function renderTree(entries, container, basePath) {
+    container.innerHTML = '';
+    var folders = entries.filter(function(e) { return !e.ext; });
+    var files = entries.filter(function(e) { return !!e.ext; });
+
+    folders.forEach(function(f) {
+      var item = document.createElement('div');
+      item.className = 'tree-item folder';
+      item.innerHTML = '<span class="icon">&#128193;</span>' + f.name;
+      item.onclick = function() { navigateTo(basePath + '/' + f.name); };
+      container.appendChild(item);
+    });
+
+    files.forEach(function(f) {
+      var item = document.createElement('div');
+      item.className = 'tree-item';
+      item.innerHTML = '<span class="icon">&#128196;</span>' + f.name;
+      item.onclick = function() { selectPage(basePath + '/' + f.name.replace(/\.html$/, '')); };
+      container.appendChild(item);
+    });
+  }
+
+  function navigateTo(path) {
+    currentPath = path;
+    document.getElementById('treeLoading').style.display = 'block';
+    BB.listPages(path).then(function(entries) {
+      document.getElementById('treeLoading').style.display = 'none';
+      renderTree(entries, document.getElementById('treePanel'), path);
+      renderContent(entries, path);
+    }).catch(function(err) {
+      document.getElementById('treeLoading').style.display = 'none';
+      document.getElementById('treePanel').innerHTML = '<div class="empty-state"><p>Error: ' + BB.escapeHtml(err.message) + '</p></div>';
+    });
+  }
+
+  function renderContent(entries, path) {
+    var panel = document.getElementById('contentPanel');
+    var parts = path.replace(/^\//, '').split('/');
+    var breadcrumb = '<div class="breadcrumb"><a href="#" onclick="navigateRoot()">root</a>';
+    var acc = '';
+    parts.forEach(function(p) {
+      acc += '/' + p;
+      breadcrumb += ' / <a href="#" data-path="' + acc + '">' + p + '</a>';
+    });
+    breadcrumb += '</div>';
+
+    var files = entries.filter(function(e) { return !!e.ext; });
+    if (files.length === 0) {
+      panel.innerHTML = breadcrumb + '<div class="empty-state"><h3>No pages</h3><p>This folder contains only subfolders.</p></div>';
+      return;
+    }
+
+    var html = breadcrumb + '<div class="page-list">';
+    files.forEach(function(f) {
+      var pagePath = path + '/' + f.name.replace(/\.html$/, '');
+      html += '<div class="page-entry" onclick="selectPage(\'' + pagePath.replace(/'/g, "\\'") + '\')">' +
+        '<div><div class="name">' + BB.escapeHtml(f.name) + '</div>' +
+        '<div class="meta">' + (f.lastModified || '') + '</div></div>' +
+        '<div class="actions">' +
+          '<button class="s2-btn s2-btn-sm s2-btn-secondary" onclick="event.stopPropagation(); editPage(\'' + pagePath.replace(/'/g, "\\'") + '\')">Edit</button>' +
+          '<button class="s2-btn s2-btn-sm s2-btn-ghost" onclick="event.stopPropagation(); previewPage(\'' + pagePath.replace(/'/g, "\\'") + '\')">Preview</button>' +
+        '</div>' +
+      '</div>';
+    });
+    html += '</div>';
+    panel.innerHTML = html;
+  }
+
+  window.navigateRoot = function() { navigateTo(BB.site.sitePath || ''); };
+
+  window.selectPage = function(path) {
+    window.location.href = '/preview/shared/wysiwyg-editor.html?url=' + encodeURIComponent(BB.previewUrl(path));
+  };
+
+  window.editPage = function(path) {
+    window.location.href = '/preview/shared/wysiwyg-editor.html?url=' + encodeURIComponent(BB.previewUrl(path));
+  };
+
+  window.previewPage = function(path) {
+    window.open(BB.previewUrl(path), '_blank');
+  };
+
+  // Initial load
+  navigateTo(currentPath);
+})();
+</script>
+</body>
+</html>

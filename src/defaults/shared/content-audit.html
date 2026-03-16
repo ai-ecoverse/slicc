@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Content Audit</title>
+<script src="backbone.js"></script>
+</head>
+<body>
+<script>BB.injectHeader('Content Audit');</script>
+<style>
+  .audit-container { max-width: 960px; margin: 0 auto; padding: var(--s2-spacing-400); }
+  .audit-controls { display: flex; gap: 8px; margin-bottom: var(--s2-spacing-400); }
+  .audit-controls input { flex: 1; }
+  .score-bar { display: flex; gap: 16px; margin-bottom: var(--s2-spacing-400); }
+  .score-card { flex: 1; padding: 16px; border-radius: var(--s2-radius-m); text-align: center; }
+  .score-card .value { font-size: 28px; font-weight: 700; }
+  .score-card .label { font-size: 11px; color: var(--s2-gray-500); margin-top: 4px; }
+  .score-good { background: #E0F5EC; } .score-good .value { color: var(--s2-green-600); }
+  .score-warn { background: #FFF3E0; } .score-warn .value { color: #B86E00; }
+  .score-bad { background: #FFE5E6; } .score-bad .value { color: var(--s2-red-600); }
+  .issue-list { display: grid; gap: 8px; }
+  .issue-item { padding: 12px 16px; background: white; border: 1px solid var(--s2-gray-100); border-radius: var(--s2-radius-m); }
+  .issue-item .path { font-size: 12px; color: var(--s2-blue-600); font-family: var(--s2-font-mono); }
+  .issue-item .desc { font-size: 13px; margin-top: 4px; }
+  .severity { font-size: 11px; font-weight: 600; }
+  .sev-error { color: var(--s2-red-600); } .sev-warning { color: #B86E00; } .sev-info { color: var(--s2-blue-600); }
+  .section-title { font-size: 14px; font-weight: 600; margin: 24px 0 12px; color: var(--s2-gray-700); }
+  .loading { text-align: center; padding: 40px; color: var(--s2-gray-400); }
+  #results { display: none; }
+</style>
+
+<div class="audit-container">
+  <div class="audit-controls">
+    <input class="s2-input" id="auditPath" placeholder="Site path to audit" value="">
+    <button class="s2-btn s2-btn-primary" id="runAudit">Run Content Audit</button>
+  </div>
+  <div id="loading" class="loading" style="display:none;"><span id="loadingText">Scanning pages...</span></div>
+  <div id="results">
+    <div class="score-bar" id="scores"></div>
+    <div class="section-title">Issues</div>
+    <div class="issue-list" id="issues"></div>
+  </div>
+</div>
+
+<script>
+(function() {
+  var STORAGE_KEY = 'slicc-eds-config';
+  var config = null;
+  try { config = JSON.parse(localStorage.getItem(STORAGE_KEY)); } catch(e) {}
+  if (config) BB.init(config);
+  document.getElementById('auditPath').value = BB.site.sitePath || '';
+
+  document.getElementById('runAudit').onclick = runAudit;
+
+  function runAudit() {
+    document.getElementById('loading').style.display = 'block';
+    document.getElementById('results').style.display = 'none';
+
+    BB.getQueryIndex().then(function(pages) {
+      var path = document.getElementById('auditPath').value.trim();
+      var filtered = path ? pages.filter(function(p) { return p.path && p.path.startsWith(path); }) : pages;
+      if (filtered.length === 0) {
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('results').style.display = 'block';
+        document.getElementById('issues').innerHTML = '<div class="loading">No pages found.</div>';
+        return;
+      }
+      return analyzeContent(filtered);
+    }).catch(function(err) {
+      document.getElementById('loading').style.display = 'none';
+      alert('Error: ' + err.message);
+    });
+  }
+
+  function analyzeContent(pages) {
+    var issues = [];
+    var results = [];
+    var chain = Promise.resolve();
+
+    pages.slice(0, 20).forEach(function(page, idx) {
+      chain = chain.then(function() {
+        document.getElementById('loadingText').textContent = 'Analyzing page ' + (idx + 1) + '/' + Math.min(pages.length, 20);
+        return BB.getAEMPlainHTML(page.path).then(function(html) {
+          var pageIssues = checkContent(html, page);
+          issues = issues.concat(pageIssues);
+          results.push({ path: page.path, issues: pageIssues });
+        }).catch(function() {
+          issues.push({ path: page.path, desc: 'Could not fetch page', severity: 'warning' });
+        });
+      });
+    });
+
+    chain.then(function() { displayResults(results, issues, pages.length); });
+  }
+
+  function checkContent(html, page) {
+    var issues = [];
+    var parser = new DOMParser();
+    var doc = parser.parseFromString(html, 'text/html');
+    var text = doc.body ? doc.body.textContent || '' : '';
+    var words = text.trim().split(/\s+/).filter(function(w) { return w.length > 0; });
+    var path = page.path || '';
+
+    // Word count
+    if (words.length < 100) {
+      issues.push({ path: path, desc: 'Thin content: only ' + words.length + ' words (recommend 300+)', severity: 'warning' });
+    } else if (words.length < 50) {
+      issues.push({ path: path, desc: 'Very thin content: ' + words.length + ' words', severity: 'error' });
+    }
+
+    // Check for broken image references
+    var imgs = doc.querySelectorAll('img');
+    imgs.forEach(function(img) {
+      var src = img.getAttribute('src') || '';
+      if (!src || src === '#') {
+        issues.push({ path: path, desc: 'Broken image: empty src attribute', severity: 'error' });
+      }
+    });
+
+    // Check for empty links
+    var links = doc.querySelectorAll('a[href]');
+    var brokenLinks = [];
+    links.forEach(function(a) {
+      var href = a.getAttribute('href') || '';
+      if (href === '#' || href === '') {
+        brokenLinks.push(href || '(empty)');
+      }
+    });
+    if (brokenLinks.length > 0) {
+      issues.push({ path: path, desc: brokenLinks.length + ' empty/placeholder link(s)', severity: 'warning' });
+    }
+
+    // Readability (simple sentence length check)
+    var sentences = text.split(/[.!?]+/).filter(function(s) { return s.trim().length > 0; });
+    var longSentences = sentences.filter(function(s) { return s.trim().split(/\s+/).length > 35; });
+    if (longSentences.length > 0) {
+      issues.push({ path: path, desc: longSentences.length + ' overly long sentence(s) (35+ words)', severity: 'info' });
+    }
+
+    // Check for duplicate content in title
+    if (page.title && page.description && page.title === page.description) {
+      issues.push({ path: path, desc: 'Title and description are identical', severity: 'warning' });
+    }
+
+    return issues;
+  }
+
+  function displayResults(results, issues, totalPages) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('results').style.display = 'block';
+
+    var errors = issues.filter(function(i) { return i.severity === 'error'; }).length;
+    var warnings = issues.filter(function(i) { return i.severity === 'warning'; }).length;
+    var clean = results.filter(function(r) { return r.issues.length === 0; }).length;
+    var cleanPct = results.length > 0 ? Math.round(clean / results.length * 100) : 100;
+    function sc(p) { return p >= 80 ? 'score-good' : p >= 50 ? 'score-warn' : 'score-bad'; }
+
+    document.getElementById('scores').innerHTML =
+      '<div class="score-card ' + sc(cleanPct) + '"><div class="value">' + cleanPct + '%</div><div class="label">Pages Clean</div></div>' +
+      '<div class="score-card ' + (errors === 0 ? 'score-good' : 'score-bad') + '"><div class="value">' + errors + '</div><div class="label">Errors</div></div>' +
+      '<div class="score-card ' + (warnings === 0 ? 'score-good' : 'score-warn') + '"><div class="value">' + warnings + '</div><div class="label">Warnings</div></div>' +
+      '<div class="score-card score-good"><div class="value">' + results.length + '</div><div class="label">Scanned</div></div>';
+
+    var html = '';
+    issues.forEach(function(i) {
+      html += '<div class="issue-item"><div class="path">' + BB.escapeHtml(i.path) + '</div>' +
+        '<div class="desc">' + BB.escapeHtml(i.desc) + ' <span class="severity sev-' + i.severity + '">' + i.severity.toUpperCase() + '</span></div></div>';
+    });
+    document.getElementById('issues').innerHTML = html || '<div class="loading">No content issues found!</div>';
+
+    if (typeof slicc !== 'undefined') slicc.setState({ issues: issues, results: results });
+  }
+
+  if (typeof slicc !== 'undefined') {
+    slicc.on('update', function(data) {
+      if (data && data.action === 'run-audit') { runAudit(); }
+    });
+  }
+
+  var params = new URLSearchParams(window.location.search);
+  if (params.get('path')) { document.getElementById('auditPath').value = params.get('path'); runAudit(); }
+})();
+</script>
+</body>
+</html>

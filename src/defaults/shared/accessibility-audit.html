@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Accessibility Audit</title>
+<script src="backbone.js"></script>
+</head>
+<body>
+<script>BB.injectHeader('Accessibility Audit');</script>
+<style>
+  .audit-container { max-width: 960px; margin: 0 auto; padding: var(--s2-spacing-400); }
+  .audit-controls { display: flex; gap: 8px; margin-bottom: var(--s2-spacing-400); }
+  .audit-controls input { flex: 1; }
+  .score-bar { display: flex; gap: 16px; margin-bottom: var(--s2-spacing-400); }
+  .score-card { flex: 1; padding: 16px; border-radius: var(--s2-radius-m); text-align: center; }
+  .score-card .value { font-size: 28px; font-weight: 700; }
+  .score-card .label { font-size: 11px; color: var(--s2-gray-500); margin-top: 4px; }
+  .score-good { background: #E0F5EC; } .score-good .value { color: var(--s2-green-600); }
+  .score-warn { background: #FFF3E0; } .score-warn .value { color: #B86E00; }
+  .score-bad { background: #FFE5E6; } .score-bad .value { color: var(--s2-red-600); }
+  .issue-list { display: grid; gap: 8px; }
+  .issue-item { padding: 12px 16px; background: white; border: 1px solid var(--s2-gray-100); border-radius: var(--s2-radius-m); }
+  .issue-item .path { font-size: 12px; color: var(--s2-blue-600); font-family: var(--s2-font-mono); }
+  .issue-item .desc { font-size: 13px; margin-top: 4px; }
+  .issue-item .wcag { font-size: 11px; background: var(--s2-gray-75); padding: 2px 6px; border-radius: var(--s2-radius-s); }
+  .severity { font-size: 11px; font-weight: 600; }
+  .sev-error { color: var(--s2-red-600); } .sev-warning { color: #B86E00; } .sev-info { color: var(--s2-blue-600); }
+  .section-title { font-size: 14px; font-weight: 600; margin: 24px 0 12px; color: var(--s2-gray-700); }
+  .loading { text-align: center; padding: 40px; color: var(--s2-gray-400); }
+  .page-progress { font-size: 12px; color: var(--s2-gray-500); margin-bottom: 8px; }
+  #results { display: none; }
+</style>
+
+<div class="audit-container">
+  <div class="audit-controls">
+    <input class="s2-input" id="auditUrl" placeholder="Page URL to audit (e.g. https://main--az-sitebuilder--paolomoz.aem.page/tavex/)">
+    <button class="s2-btn s2-btn-primary" id="runAudit">Audit Page</button>
+    <button class="s2-btn s2-btn-secondary" id="auditAll">Audit All Pages</button>
+  </div>
+  <div id="loading" class="loading" style="display:none;"><span id="loadingText">Analyzing...</span></div>
+  <div id="results">
+    <div class="score-bar" id="scores"></div>
+    <div class="section-title">Issues</div>
+    <div class="issue-list" id="issues"></div>
+  </div>
+</div>
+
+<script>
+(function() {
+  var STORAGE_KEY = 'slicc-eds-config';
+  var config = null;
+  try { config = JSON.parse(localStorage.getItem(STORAGE_KEY)); } catch(e) {}
+  if (config) BB.init(config);
+
+  var urlInput = document.getElementById('auditUrl');
+  if (BB.site.org) {
+    urlInput.value = BB.previewUrl(BB.site.sitePath || '');
+  }
+
+  document.getElementById('runAudit').onclick = function() { auditSinglePage(urlInput.value.trim()); };
+  document.getElementById('auditAll').onclick = function() { auditAllPages(); };
+
+  function auditSinglePage(url) {
+    if (!url) return;
+    document.getElementById('loading').style.display = 'block';
+    document.getElementById('loadingText').textContent = 'Fetching page...';
+    document.getElementById('results').style.display = 'none';
+
+    BB.getAEMPlainHTML(extractPath(url)).then(function(html) {
+      var issues = analyzeHTML(html, url);
+      displayResults([{ url: url, issues: issues }]);
+    }).catch(function(err) {
+      document.getElementById('loading').style.display = 'none';
+      alert('Error: ' + err.message);
+    });
+  }
+
+  function auditAllPages() {
+    document.getElementById('loading').style.display = 'block';
+    document.getElementById('results').style.display = 'none';
+
+    BB.getQueryIndex().then(function(pages) {
+      var sitePath = BB.site.sitePath || '';
+      var filtered = sitePath ? pages.filter(function(p) { return p.path && p.path.startsWith(sitePath); }) : pages;
+      var results = [];
+      var chain = Promise.resolve();
+
+      filtered.slice(0, 20).forEach(function(page, idx) {
+        chain = chain.then(function() {
+          document.getElementById('loadingText').textContent = 'Scanning page ' + (idx + 1) + ' of ' + Math.min(filtered.length, 20) + '...';
+          return BB.getAEMPlainHTML(page.path).then(function(html) {
+            results.push({ url: page.path, issues: analyzeHTML(html, page.path) });
+          }).catch(function() {
+            results.push({ url: page.path, issues: [{ desc: 'Could not fetch page', severity: 'warning', wcag: '' }] });
+          });
+        });
+      });
+
+      chain.then(function() { displayResults(results); });
+    }).catch(function(err) {
+      document.getElementById('loading').style.display = 'none';
+      alert('Error: ' + err.message);
+    });
+  }
+
+  function extractPath(url) {
+    try {
+      var u = new URL(url);
+      return u.pathname;
+    } catch(e) {
+      return url;
+    }
+  }
+
+  function analyzeHTML(html, pagePath) {
+    var issues = [];
+    var parser = new DOMParser();
+    var doc = parser.parseFromString(html, 'text/html');
+
+    // Check images for alt text
+    var imgs = doc.querySelectorAll('img');
+    imgs.forEach(function(img) {
+      if (!img.getAttribute('alt')) {
+        issues.push({ desc: 'Image missing alt text: ' + (img.src || '').substring(0, 60), severity: 'error', wcag: '1.1.1' });
+      } else if (img.alt.length < 5) {
+        issues.push({ desc: 'Image alt text too short: "' + img.alt + '"', severity: 'warning', wcag: '1.1.1' });
+      }
+    });
+
+    // Check heading structure
+    var headings = doc.querySelectorAll('h1, h2, h3, h4, h5, h6');
+    var lastLevel = 0;
+    var h1Count = 0;
+    headings.forEach(function(h) {
+      var level = parseInt(h.tagName.charAt(1));
+      if (level === 1) h1Count++;
+      if (lastLevel > 0 && level > lastLevel + 1) {
+        issues.push({ desc: 'Heading level skipped: h' + lastLevel + ' to h' + level, severity: 'warning', wcag: '1.3.1' });
+      }
+      if (!h.textContent.trim()) {
+        issues.push({ desc: 'Empty heading: ' + h.tagName, severity: 'error', wcag: '1.3.1' });
+      }
+      lastLevel = level;
+    });
+    if (h1Count === 0) {
+      issues.push({ desc: 'No h1 heading found', severity: 'error', wcag: '1.3.1' });
+    } else if (h1Count > 1) {
+      issues.push({ desc: 'Multiple h1 headings (' + h1Count + ')', severity: 'warning', wcag: '1.3.1' });
+    }
+
+    // Check links
+    var links = doc.querySelectorAll('a');
+    links.forEach(function(a) {
+      var text = a.textContent.trim().toLowerCase();
+      if (text === 'click here' || text === 'here' || text === 'read more' || text === 'link') {
+        issues.push({ desc: 'Non-descriptive link text: "' + a.textContent.trim() + '"', severity: 'warning', wcag: '2.4.4' });
+      }
+      if (!a.textContent.trim() && !a.querySelector('img') && !a.getAttribute('aria-label')) {
+        issues.push({ desc: 'Empty link with no accessible name', severity: 'error', wcag: '2.4.4' });
+      }
+    });
+
+    // Check for lang attribute (on the plain HTML doc)
+    if (!doc.documentElement.getAttribute('lang')) {
+      issues.push({ desc: 'Missing lang attribute on html element', severity: 'warning', wcag: '3.1.1' });
+    }
+
+    return issues;
+  }
+
+  function displayResults(results) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('results').style.display = 'block';
+
+    var totalIssues = 0;
+    var errors = 0;
+    var warnings = 0;
+    results.forEach(function(r) {
+      r.issues.forEach(function(i) {
+        totalIssues++;
+        if (i.severity === 'error') errors++;
+        if (i.severity === 'warning') warnings++;
+      });
+    });
+
+    var pagesClean = results.filter(function(r) { return r.issues.length === 0; }).length;
+    var cleanPct = results.length > 0 ? Math.round(pagesClean / results.length * 100) : 100;
+
+    function sc(pct) { return pct >= 80 ? 'score-good' : pct >= 50 ? 'score-warn' : 'score-bad'; }
+
+    document.getElementById('scores').innerHTML =
+      '<div class="score-card ' + sc(cleanPct) + '"><div class="value">' + cleanPct + '%</div><div class="label">Pages Clean</div></div>' +
+      '<div class="score-card ' + (errors === 0 ? 'score-good' : 'score-bad') + '"><div class="value">' + errors + '</div><div class="label">Errors</div></div>' +
+      '<div class="score-card ' + (warnings === 0 ? 'score-good' : 'score-warn') + '"><div class="value">' + warnings + '</div><div class="label">Warnings</div></div>' +
+      '<div class="score-card score-good"><div class="value">' + results.length + '</div><div class="label">Pages</div></div>';
+
+    var html = '';
+    results.forEach(function(r) {
+      r.issues.forEach(function(i) {
+        html += '<div class="issue-item">' +
+          '<div class="path">' + BB.escapeHtml(r.url) + '</div>' +
+          '<div class="desc">' + BB.escapeHtml(i.desc) +
+            ' <span class="severity sev-' + i.severity + '">' + i.severity.toUpperCase() + '</span>' +
+            (i.wcag ? ' <span class="wcag">WCAG ' + i.wcag + '</span>' : '') +
+          '</div></div>';
+      });
+    });
+    document.getElementById('issues').innerHTML = html || '<div class="loading">No accessibility issues found!</div>';
+
+    if (typeof slicc !== 'undefined') {
+      slicc.setState({ results: results, errors: errors, warnings: warnings });
+    }
+  }
+
+  // Bridge
+  if (typeof slicc !== 'undefined') {
+    slicc.on('update', function(data) {
+      if (data && data.action === 'audit-page' && data.url) {
+        urlInput.value = data.url;
+        auditSinglePage(data.url);
+      } else if (data && data.action === 'audit-all') {
+        auditAllPages();
+      }
+    });
+  }
+
+  var params = new URLSearchParams(window.location.search);
+  if (params.get('url')) { urlInput.value = params.get('url'); auditSinglePage(params.get('url')); }
+})();
+</script>
+</body>
+</html>

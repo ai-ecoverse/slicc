@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Publish Manager</title>
+<script src="backbone.js"></script>
+</head>
+<body>
+<script>BB.injectHeader('Publish Manager');</script>
+<style>
+  .publish-container { max-width: 960px; margin: 0 auto; padding: var(--s2-spacing-400); }
+  .controls { display: flex; gap: 8px; margin-bottom: var(--s2-spacing-300); }
+  .controls input { flex: 1; }
+  .page-list { display: grid; gap: 8px; }
+  .page-row { padding: 12px 16px; background: white; border: 1px solid var(--s2-gray-100); border-radius: var(--s2-radius-m); display: flex; align-items: center; gap: 12px; }
+  .page-row .check { width: 18px; height: 18px; cursor: pointer; }
+  .page-row .info { flex: 1; }
+  .page-row .path { font-size: 12px; font-family: var(--s2-font-mono); color: var(--s2-gray-700); }
+  .page-row .title { font-size: 13px; font-weight: 500; margin-top: 2px; }
+  .page-row .links { display: flex; gap: 8px; }
+  .page-row .links a { font-size: 11px; color: var(--s2-blue-600); text-decoration: none; }
+  .page-row .links a:hover { text-decoration: underline; }
+  .page-row .status { font-size: 11px; }
+  .batch-bar { padding: 12px 0; display: flex; gap: 8px; align-items: center; margin-bottom: var(--s2-spacing-200); }
+  .batch-bar .count { font-size: 12px; color: var(--s2-gray-500); margin-left: 8px; }
+  .loading { text-align: center; padding: 40px; color: var(--s2-gray-400); }
+  .section-title { font-size: 14px; font-weight: 600; margin: 16px 0 12px; color: var(--s2-gray-700); }
+  .log-panel { margin-top: 16px; padding: 12px; background: var(--s2-gray-900); border-radius: var(--s2-radius-m); color: #CCC; font: 12px/1.6 var(--s2-font-mono); max-height: 200px; overflow-y: auto; display: none; }
+</style>
+
+<div class="publish-container">
+  <div class="controls">
+    <input class="s2-input" id="filterPath" placeholder="Filter by path..." value="">
+    <button class="s2-btn s2-btn-primary" id="loadPages">Load Pages</button>
+  </div>
+
+  <div class="batch-bar">
+    <button class="s2-btn s2-btn-sm s2-btn-secondary" id="selectAll">Select All</button>
+    <button class="s2-btn s2-btn-sm s2-btn-primary" id="previewSelected" disabled>Preview Selected</button>
+    <button class="s2-btn s2-btn-sm s2-btn-success" id="publishSelected" disabled>Publish Selected</button>
+    <span class="count" id="selectedCount">0 selected</span>
+  </div>
+
+  <div id="loading" class="loading" style="display:none;">Loading pages...</div>
+  <div class="page-list" id="pageList"></div>
+  <div class="log-panel" id="logPanel"></div>
+</div>
+
+<script>
+(function() {
+  var STORAGE_KEY = 'slicc-eds-config';
+  var config = null;
+  try { config = JSON.parse(localStorage.getItem(STORAGE_KEY)); } catch(e) {}
+  if (config) BB.init(config);
+  document.getElementById('filterPath').value = BB.site.sitePath || '';
+
+  var pages = [];
+  var selected = new Set();
+
+  document.getElementById('loadPages').onclick = loadPages;
+  document.getElementById('selectAll').onclick = toggleSelectAll;
+  document.getElementById('previewSelected').onclick = function() { batchAction('preview'); };
+  document.getElementById('publishSelected').onclick = function() { batchAction('publish'); };
+
+  function loadPages() {
+    document.getElementById('loading').style.display = 'block';
+    document.getElementById('pageList').innerHTML = '';
+    selected.clear();
+    updateSelection();
+
+    BB.getQueryIndex().then(function(data) {
+      var filter = document.getElementById('filterPath').value.trim();
+      pages = filter ? data.filter(function(p) { return p.path && p.path.startsWith(filter); }) : data;
+      document.getElementById('loading').style.display = 'none';
+      renderPages();
+    }).catch(function(err) {
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('pageList').innerHTML = '<div class="loading">Error: ' + BB.escapeHtml(err.message) + '</div>';
+    });
+  }
+
+  function renderPages() {
+    var html = '';
+    pages.forEach(function(p, idx) {
+      var checked = selected.has(idx) ? 'checked' : '';
+      html += '<div class="page-row">' +
+        '<input type="checkbox" class="check" data-idx="' + idx + '" ' + checked + '>' +
+        '<div class="info">' +
+          '<div class="path">' + BB.escapeHtml(p.path || '') + '</div>' +
+          '<div class="title">' + BB.escapeHtml(p.title || '(untitled)') + '</div>' +
+        '</div>' +
+        '<div class="links">' +
+          '<a href="' + BB.previewUrl(p.path) + '" target="_blank">Preview</a>' +
+          '<a href="' + BB.liveUrl(p.path) + '" target="_blank">Live</a>' +
+        '</div>' +
+        '<span class="status" id="status-' + idx + '"></span>' +
+      '</div>';
+    });
+    document.getElementById('pageList').innerHTML = html || '<div class="loading">No pages found.</div>';
+
+    // Checkbox events
+    document.querySelectorAll('.page-row .check').forEach(function(cb) {
+      cb.onchange = function() {
+        var idx = parseInt(this.dataset.idx);
+        if (this.checked) selected.add(idx); else selected.delete(idx);
+        updateSelection();
+      };
+    });
+  }
+
+  function updateSelection() {
+    var count = selected.size;
+    document.getElementById('selectedCount').textContent = count + ' selected';
+    document.getElementById('previewSelected').disabled = count === 0;
+    document.getElementById('publishSelected').disabled = count === 0;
+  }
+
+  function toggleSelectAll() {
+    if (selected.size === pages.length) {
+      selected.clear();
+    } else {
+      pages.forEach(function(_, idx) { selected.add(idx); });
+    }
+    renderPages();
+    updateSelection();
+  }
+
+  function batchAction(action) {
+    var indices = Array.from(selected);
+    if (indices.length === 0) return;
+
+    var logPanel = document.getElementById('logPanel');
+    logPanel.style.display = 'block';
+    logPanel.innerHTML = '';
+
+    function log(msg) { logPanel.innerHTML += msg + '\n'; logPanel.scrollTop = logPanel.scrollHeight; }
+
+    var chain = Promise.resolve();
+    indices.forEach(function(idx) {
+      chain = chain.then(function() {
+        var page = pages[idx];
+        var statusEl = document.getElementById('status-' + idx);
+        statusEl.textContent = action === 'preview' ? 'Previewing...' : 'Publishing...';
+        statusEl.style.color = 'var(--s2-blue-600)';
+        log((action === 'preview' ? 'Previewing' : 'Publishing') + ': ' + page.path);
+
+        var fn = action === 'preview' ? BB.previewPage.bind(BB) : BB.publishPage.bind(BB);
+        return fn(page.path).then(function() {
+          statusEl.textContent = action === 'preview' ? 'Previewed' : 'Published';
+          statusEl.style.color = 'var(--s2-green-600)';
+          log('  OK');
+        }).catch(function(err) {
+          statusEl.textContent = 'Failed';
+          statusEl.style.color = 'var(--s2-red-600)';
+          log('  FAILED: ' + err.message);
+        });
+      });
+    });
+
+    chain.then(function() {
+      log('\nDone! ' + indices.length + ' pages processed.');
+      if (typeof slicc !== 'undefined') slicc.lick({ action: action + '-complete', data: { count: indices.length } });
+    });
+  }
+
+  if (typeof slicc !== 'undefined') {
+    slicc.on('update', function(data) {
+      if (data && data.action === 'preview-all') { toggleSelectAll(); batchAction('preview'); }
+      if (data && data.action === 'publish-all') { toggleSelectAll(); batchAction('publish'); }
+    });
+  }
+
+  var params = new URLSearchParams(window.location.search);
+  if (params.get('path')) document.getElementById('filterPath').value = params.get('path');
+  loadPages();
+})();
+</script>
+</body>
+</html>

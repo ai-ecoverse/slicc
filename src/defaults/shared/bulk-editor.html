@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bulk Editor</title>
+<script src="backbone.js"></script>
+</head>
+<body>
+<script>BB.injectHeader('Bulk Editor');</script>
+<style>
+  .editor-container { max-width: 1100px; margin: 0 auto; padding: var(--s2-spacing-400); }
+  .controls { display: flex; gap: 8px; margin-bottom: var(--s2-spacing-300); flex-wrap: wrap; }
+  .controls input { flex: 1; min-width: 200px; }
+  table { width: 100%; border-collapse: collapse; background: white; border-radius: var(--s2-radius-m); overflow: hidden; border: 1px solid var(--s2-gray-100); }
+  th { background: var(--s2-gray-50); padding: 8px 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--s2-gray-500); text-align: left; border-bottom: 1px solid var(--s2-gray-100); }
+  td { padding: 6px 12px; font-size: 13px; border-bottom: 1px solid var(--s2-gray-50); }
+  td input { width: 100%; border: 1px solid transparent; background: transparent; font: 13px var(--s2-font-sans); padding: 4px; border-radius: var(--s2-radius-s); }
+  td input:focus { border-color: var(--s2-blue-500); background: white; outline: none; }
+  td input.modified { background: #FFFDE7; border-color: var(--s2-yellow-400); }
+  .path-cell { font-size: 11px; color: var(--s2-blue-600); font-family: var(--s2-font-mono); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bulk-actions { margin-top: var(--s2-spacing-300); display: flex; gap: 8px; align-items: center; }
+  .change-count { font-size: 12px; color: var(--s2-gray-500); }
+  .loading { text-align: center; padding: 40px; color: var(--s2-gray-400); }
+  #tableContainer { display: none; }
+</style>
+
+<div class="editor-container">
+  <div class="controls">
+    <input class="s2-input" id="filterPath" placeholder="Filter by path..." value="">
+    <button class="s2-btn s2-btn-primary" id="loadPages">Load Pages</button>
+  </div>
+  <div id="loading" class="loading" style="display:none;">Loading pages from query index...</div>
+  <div id="tableContainer">
+    <table>
+      <thead><tr><th>Path</th><th>Title</th><th>Description</th><th>Image</th></tr></thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+    <div class="bulk-actions">
+      <button class="s2-btn s2-btn-primary" id="saveChanges" disabled>Save Changes</button>
+      <button class="s2-btn s2-btn-secondary" id="previewAll" disabled>Preview All Changed</button>
+      <span class="change-count" id="changeCount">No changes</span>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  var STORAGE_KEY = 'slicc-eds-config';
+  var config = null;
+  try { config = JSON.parse(localStorage.getItem(STORAGE_KEY)); } catch(e) {}
+  if (config) BB.init(config);
+  document.getElementById('filterPath').value = BB.site.sitePath || '';
+
+  var originalData = [];
+  var changes = {};
+
+  document.getElementById('loadPages').onclick = loadPages;
+  document.getElementById('saveChanges').onclick = saveChanges;
+  document.getElementById('previewAll').onclick = previewAll;
+
+  function loadPages() {
+    document.getElementById('loading').style.display = 'block';
+    document.getElementById('tableContainer').style.display = 'none';
+    changes = {};
+    updateChangeCount();
+
+    BB.getQueryIndex().then(function(pages) {
+      var filter = document.getElementById('filterPath').value.trim();
+      var filtered = filter ? pages.filter(function(p) { return p.path && p.path.startsWith(filter); }) : pages;
+      originalData = filtered.slice(0, 50);
+      renderTable(originalData);
+    }).catch(function(err) {
+      document.getElementById('loading').style.display = 'none';
+      alert('Error: ' + err.message);
+    });
+  }
+
+  function renderTable(pages) {
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('tableContainer').style.display = 'block';
+
+    var html = '';
+    pages.forEach(function(p, idx) {
+      html += '<tr>' +
+        '<td class="path-cell" title="' + BB.escapeHtml(p.path || '') + '">' + BB.escapeHtml(p.path || '') + '</td>' +
+        '<td><input data-idx="' + idx + '" data-field="title" value="' + BB.escapeHtml(p.title || '') + '"></td>' +
+        '<td><input data-idx="' + idx + '" data-field="description" value="' + BB.escapeHtml(p.description || '') + '"></td>' +
+        '<td><input data-idx="' + idx + '" data-field="image" value="' + BB.escapeHtml(p.image || '') + '"></td>' +
+      '</tr>';
+    });
+    document.getElementById('tableBody').innerHTML = html;
+
+    // Track changes
+    document.getElementById('tableBody').addEventListener('input', function(e) {
+      var input = e.target;
+      if (!input.dataset.idx) return;
+      var idx = parseInt(input.dataset.idx);
+      var field = input.dataset.field;
+      var original = originalData[idx][field] || '';
+      if (input.value !== original) {
+        input.classList.add('modified');
+        if (!changes[idx]) changes[idx] = {};
+        changes[idx][field] = input.value;
+      } else {
+        input.classList.remove('modified');
+        if (changes[idx]) {
+          delete changes[idx][field];
+          if (Object.keys(changes[idx]).length === 0) delete changes[idx];
+        }
+      }
+      updateChangeCount();
+    });
+  }
+
+  function updateChangeCount() {
+    var count = Object.keys(changes).length;
+    document.getElementById('changeCount').textContent = count === 0 ? 'No changes' : count + ' page(s) modified';
+    document.getElementById('saveChanges').disabled = count === 0;
+    document.getElementById('previewAll').disabled = count === 0;
+  }
+
+  function saveChanges() {
+    var btn = document.getElementById('saveChanges');
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+    var indices = Object.keys(changes).map(Number);
+    var chain = Promise.resolve();
+    var saved = 0;
+
+    indices.forEach(function(idx) {
+      chain = chain.then(function() {
+        var page = originalData[idx];
+        return BB.getPage(page.path).then(function(html) {
+          // Update metadata in DA HTML (simple replacement approach)
+          var modified = html;
+          if (changes[idx].title) {
+            modified = modified.replace(/<title>[^<]*<\/title>/, '<title>' + BB.escapeHtml(changes[idx].title) + '</title>');
+          }
+          return BB.putPage(page.path, modified);
+        }).then(function() {
+          saved++;
+          btn.textContent = 'Saving... (' + saved + '/' + indices.length + ')';
+        });
+      });
+    });
+
+    chain.then(function() {
+      btn.textContent = 'Saved!';
+      changes = {};
+      updateChangeCount();
+      setTimeout(function() { btn.textContent = 'Save Changes'; btn.disabled = true; }, 2000);
+    }).catch(function(err) {
+      btn.textContent = 'Error';
+      alert('Save failed: ' + err.message);
+      setTimeout(function() { btn.textContent = 'Save Changes'; btn.disabled = false; }, 2000);
+    });
+  }
+
+  function previewAll() {
+    var indices = Object.keys(changes).map(Number);
+    indices.forEach(function(idx) {
+      var page = originalData[idx];
+      BB.previewPage(page.path).catch(function() {});
+    });
+    document.getElementById('previewAll').textContent = 'Previewing...';
+    setTimeout(function() { document.getElementById('previewAll').textContent = 'Preview All Changed'; }, 2000);
+  }
+
+  if (typeof slicc !== 'undefined') {
+    slicc.on('update', function(data) { if (data && data.action === 'load') loadPages(); });
+  }
+  var params = new URLSearchParams(window.location.search);
+  if (params.get('path')) { document.getElementById('filterPath').value = params.get('path'); }
+})();
+</script>
+</body>
+</html>

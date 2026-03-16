@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Code Editor</title>
+<script src="backbone.js"></script>
+</head>
+<body>
+<script>BB.injectHeader('Code Editor');</script>
+<style>
+  .editor-layout { display: flex; height: calc(100vh - 48px); }
+  .file-panel { width: 260px; border-right: 1px solid var(--s2-gray-100); background: white; overflow-y: auto; }
+  .file-panel-header { padding: 12px; border-bottom: 1px solid var(--s2-gray-100); font-size: 12px; font-weight: 600; color: var(--s2-gray-600); display: flex; justify-content: space-between; align-items: center; }
+  .file-item { padding: 6px 12px; font-size: 12px; font-family: var(--s2-font-mono); cursor: pointer; display: flex; align-items: center; gap: 6px; }
+  .file-item:hover { background: var(--s2-gray-50); }
+  .file-item.active { background: #E5F0FF; color: var(--s2-blue-700); }
+  .file-item .icon { width: 14px; text-align: center; }
+  .code-panel { flex: 1; display: flex; flex-direction: column; }
+  .code-header { padding: 8px 16px; border-bottom: 1px solid var(--s2-gray-100); background: white; display: flex; justify-content: space-between; align-items: center; }
+  .code-header .filename { font-size: 13px; font-family: var(--s2-font-mono); font-weight: 500; }
+  .code-header .actions { display: flex; gap: 6px; }
+  .code-editor { flex: 1; position: relative; }
+  .code-editor textarea { width: 100%; height: 100%; border: none; resize: none; padding: 16px; font: 13px/1.6 var(--s2-font-mono); background: var(--s2-gray-900); color: #E0E0E0; outline: none; tab-size: 2; }
+  .loading { text-align: center; padding: 40px; color: var(--s2-gray-400); }
+  .empty-state { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--s2-gray-400); font-size: 13px; }
+  .commit-bar { padding: 8px 16px; border-top: 1px solid var(--s2-gray-100); background: white; display: flex; gap: 8px; align-items: center; }
+  .commit-bar input { flex: 1; }
+  .filter-input { width: 100%; padding: 6px 12px; border: none; border-bottom: 1px solid var(--s2-gray-100); font-size: 12px; outline: none; }
+  .filter-input:focus { background: #FFFDE7; }
+</style>
+
+<div class="editor-layout">
+  <div class="file-panel">
+    <div class="file-panel-header">
+      <span>Files</span>
+      <button class="s2-btn s2-btn-sm s2-btn-ghost" id="refreshTree">&#8635;</button>
+    </div>
+    <input class="filter-input" id="filterInput" placeholder="Filter files...">
+    <div id="fileList"><div class="loading">Loading tree...</div></div>
+  </div>
+  <div class="code-panel">
+    <div class="code-header">
+      <span class="filename" id="currentFile">No file selected</span>
+      <div class="actions">
+        <button class="s2-btn s2-btn-sm s2-btn-secondary" id="revertBtn" disabled>Revert</button>
+        <button class="s2-btn s2-btn-sm s2-btn-primary" id="saveBtn" disabled>Save</button>
+      </div>
+    </div>
+    <div class="code-editor">
+      <textarea id="editor" placeholder="Select a file to edit..." disabled></textarea>
+    </div>
+    <div class="commit-bar">
+      <input class="s2-input" id="commitMsg" placeholder="Commit message...">
+      <button class="s2-btn s2-btn-sm s2-btn-primary" id="commitBtn" disabled>Commit</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  var STORAGE_KEY = 'slicc-eds-config';
+  var config = null;
+  try { config = JSON.parse(localStorage.getItem(STORAGE_KEY)); } catch(e) {}
+  if (config) BB.init(config);
+
+  var tree = [];
+  var currentPath = '';
+  var originalContent = '';
+  var modifiedFiles = {};
+
+  document.getElementById('refreshTree').onclick = loadTree;
+  document.getElementById('saveBtn').onclick = saveFile;
+  document.getElementById('revertBtn').onclick = revertFile;
+  document.getElementById('commitBtn').onclick = commitChanges;
+  document.getElementById('filterInput').oninput = renderFileList;
+
+  function loadTree() {
+    document.getElementById('fileList').innerHTML = '<div class="loading">Loading...</div>';
+    BB.getTree().then(function(files) {
+      tree = files;
+      renderFileList();
+    }).catch(function(err) {
+      document.getElementById('fileList').innerHTML = '<div class="loading">Error: ' + BB.escapeHtml(err.message) + '</div>';
+    });
+  }
+
+  function renderFileList() {
+    var filter = document.getElementById('filterInput').value.toLowerCase();
+    var filtered = tree.filter(function(f) { return !filter || f.path.toLowerCase().includes(filter); });
+    var html = '';
+    filtered.slice(0, 100).forEach(function(f) {
+      var ext = f.path.split('.').pop();
+      var icon = /^(js|ts|jsx|tsx)$/.test(ext) ? '&#128312;' : /^(css|scss)$/.test(ext) ? '&#128309;' : /^(html|htm)$/.test(ext) ? '&#128311;' : '&#128196;';
+      var isActive = f.path === currentPath ? ' active' : '';
+      var isModified = modifiedFiles[f.path] ? ' style="font-weight:600;"' : '';
+      html += '<div class="file-item' + isActive + '"' + isModified + ' onclick="openFile(\'' + f.path.replace(/'/g, "\\'") + '\')">' +
+        '<span class="icon">' + icon + '</span>' + f.path + '</div>';
+    });
+    if (filtered.length > 100) html += '<div class="file-item" style="color:var(--s2-gray-400);">... ' + (filtered.length - 100) + ' more files</div>';
+    document.getElementById('fileList').innerHTML = html || '<div class="loading">No files match filter.</div>';
+  }
+
+  window.openFile = function(path) {
+    currentPath = path;
+    document.getElementById('currentFile').textContent = path;
+    document.getElementById('editor').disabled = true;
+    document.getElementById('editor').value = 'Loading...';
+
+    BB.getFile(path).then(function(content) {
+      originalContent = content;
+      document.getElementById('editor').value = modifiedFiles[path] || content;
+      document.getElementById('editor').disabled = false;
+      document.getElementById('saveBtn').disabled = false;
+      document.getElementById('revertBtn').disabled = false;
+      renderFileList();
+    }).catch(function(err) {
+      document.getElementById('editor').value = 'Error loading file: ' + err.message;
+    });
+  };
+
+  document.getElementById('editor').oninput = function() {
+    if (!currentPath) return;
+    var content = document.getElementById('editor').value;
+    if (content !== originalContent) {
+      modifiedFiles[currentPath] = content;
+    } else {
+      delete modifiedFiles[currentPath];
+    }
+    document.getElementById('commitBtn').disabled = Object.keys(modifiedFiles).length === 0;
+    renderFileList();
+  };
+
+  function saveFile() {
+    if (!currentPath) return;
+    modifiedFiles[currentPath] = document.getElementById('editor').value;
+    document.getElementById('commitBtn').disabled = Object.keys(modifiedFiles).length === 0;
+    var btn = document.getElementById('saveBtn');
+    btn.textContent = 'Saved';
+    setTimeout(function() { btn.textContent = 'Save'; }, 1000);
+  }
+
+  function revertFile() {
+    if (!currentPath) return;
+    document.getElementById('editor').value = originalContent;
+    delete modifiedFiles[currentPath];
+    document.getElementById('commitBtn').disabled = Object.keys(modifiedFiles).length === 0;
+    renderFileList();
+  }
+
+  function commitChanges() {
+    var msg = document.getElementById('commitMsg').value.trim();
+    if (!msg) { alert('Please enter a commit message.'); return; }
+    var files = Object.keys(modifiedFiles).map(function(path) {
+      return { path: path, content: modifiedFiles[path] };
+    });
+    if (files.length === 0) return;
+
+    var btn = document.getElementById('commitBtn');
+    btn.disabled = true;
+    btn.textContent = 'Committing...';
+
+    BB.commitFiles(files, msg).then(function(result) {
+      btn.textContent = 'Committed!';
+      modifiedFiles = {};
+      document.getElementById('commitMsg').value = '';
+      document.getElementById('commitBtn').disabled = true;
+      renderFileList();
+      setTimeout(function() { btn.textContent = 'Commit'; }, 2000);
+      if (typeof slicc !== 'undefined') slicc.lick({ action: 'committed', data: result });
+    }).catch(function(err) {
+      btn.textContent = 'Failed';
+      alert('Commit error: ' + err.message);
+      setTimeout(function() { btn.textContent = 'Commit'; btn.disabled = false; }, 2000);
+    });
+  }
+
+  if (typeof slicc !== 'undefined') {
+    slicc.on('update', function(data) {
+      if (data && data.action === 'open-file' && data.path) openFile(data.path);
+    });
+  }
+
+  var params = new URLSearchParams(window.location.search);
+  if (params.get('file')) {
+    loadTree();
+    setTimeout(function() { openFile(params.get('file')); }, 1000);
+  } else {
+    loadTree();
+  }
+})();
+</script>
+</body>
+</html>
