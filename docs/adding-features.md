@@ -346,7 +346,7 @@ describe('my_tool', () => {
 - Put pure helper coverage in `shared.test.ts`.
 - Prefer focused command-level assertions over large integration fixtures.
 
-**Reference files**: `src/shell/supplemental-commands/playwright-command.ts`, `src/shell/supplemental-commands/serve-command.ts`
+**Reference files**: `src/shell/supplemental-commands/playwright-command.ts`, `src/shell/supplemental-commands/serve-command.ts`, `src/shell/supplemental-commands/sprinkle-command.ts`
 
 ---
 

@@ -34,6 +34,7 @@ For architecture philosophy and principles, see the project's `CLAUDE.md` file.
 | UI                  | `src/ui/`        | `main.ts`           | Vanilla TS layout: Chat + Terminal + Browser Preview   |
 | CLI Server          | `src/cli/`       | `index.ts`          | Express + CDP WebSocket proxy, Chrome launcher         |
 | Extension           | `src/extension/` | `service-worker.ts` | Chrome Manifest V3 extension (side panel)              |
+| Sprinkles           | `src/ui/sprinkle-*.ts` | `sprinkle-manager.ts` | Composable `.shtml` panels with agent bridge API  |
 
 
 ## Active Scoop Tool Surface
