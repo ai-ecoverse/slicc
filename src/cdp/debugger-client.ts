@@ -13,6 +13,30 @@ const log = createLogger('cdp:debugger');
 
 // Chrome extension API types provided by src/extension/chrome.d.ts
 
+/** Cached tab group ID for the "slicc" group (offscreen-local state). */
+let sliccGroupId: number | null = null;
+
+async function addToSliccGroup(tabId: number): Promise<void> {
+  try {
+    if (sliccGroupId !== null) {
+      try {
+        await chrome.tabs.group({ tabIds: tabId, groupId: sliccGroupId });
+        return;
+      } catch {
+        sliccGroupId = null;
+      }
+    }
+    sliccGroupId = await chrome.tabs.group({ tabIds: tabId });
+    await chrome.tabGroups.update(sliccGroupId, {
+      title: 'slicc',
+      color: 'pink',
+      collapsed: false,
+    });
+  } catch {
+    // Best-effort — chrome.tabGroups may not be available in offscreen context
+  }
+}
+
 export class DebuggerClient implements CDPTransport {
   private _state: ConnectionState = 'disconnected';
   private listeners = new Map<string, Set<CDPEventListener>>();
@@ -241,6 +265,7 @@ export class DebuggerClient implements CDPTransport {
   ): Promise<Record<string, unknown>> {
     const url = (params['url'] as string) ?? 'about:blank';
     const tab = await chrome.tabs.create({ url, active: false });
+    await addToSliccGroup(tab.id);
     return { targetId: String(tab.id) };
   }
 

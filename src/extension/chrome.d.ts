@@ -117,6 +117,17 @@ interface ChromeAPI {
     query(queryInfo: Record<string, unknown>): Promise<ChromeTab[]>;
     create(properties: { url?: string; active?: boolean }): Promise<{ id: number }>;
     remove(tabId: number): Promise<void>;
+    group(options: { tabIds: number | number[]; groupId?: number }): Promise<number>;
+  };
+  tabGroups: {
+    update(
+      groupId: number,
+      properties: {
+        title?: string;
+        color?: 'grey' | 'blue' | 'red' | 'yellow' | 'green' | 'pink' | 'purple' | 'cyan' | 'orange';
+        collapsed?: boolean;
+      },
+    ): Promise<void>;
   };
 }
 

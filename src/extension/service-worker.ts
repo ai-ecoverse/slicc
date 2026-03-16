@@ -74,6 +74,34 @@ chrome.runtime.onInstalled?.addListener?.(() => { ensureOffscreen(); });
 ensureOffscreen();
 
 // ---------------------------------------------------------------------------
+// Tab group — all agent-created tabs go into a "slicc" group
+// ---------------------------------------------------------------------------
+
+let sliccGroupId: number | null = null;
+
+async function addToSliccGroup(tabId: number): Promise<void> {
+  try {
+    if (sliccGroupId !== null) {
+      try {
+        await chrome.tabs.group({ tabIds: tabId, groupId: sliccGroupId });
+        return;
+      } catch {
+        // Group was removed by user, create a new one
+        sliccGroupId = null;
+      }
+    }
+    sliccGroupId = await chrome.tabs.group({ tabIds: tabId });
+    await chrome.tabGroups.update(sliccGroupId, {
+      title: 'slicc',
+      color: 'pink',
+      collapsed: false,
+    });
+  } catch {
+    // Best-effort — tab may have been closed already
+  }
+}
+
+// ---------------------------------------------------------------------------
 // CDP state for proxying chrome.debugger calls
 // ---------------------------------------------------------------------------
 
@@ -275,6 +303,7 @@ async function cdpCreateTarget(
 ): Promise<Record<string, unknown>> {
   const url = (params['url'] as string) ?? 'about:blank';
   const tab = await chrome.tabs.create({ url, active: false });
+  await addToSliccGroup(tab.id);
   return { targetId: String(tab.id) };
 }
 
