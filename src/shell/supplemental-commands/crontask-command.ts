@@ -75,10 +75,6 @@ async function apiCall(
   path: string,
   body?: unknown,
 ): Promise<{ ok: boolean; status: number; data: unknown }> {
-  if (isExtension) {
-    throw new Error('Cron tasks are only available in CLI mode (npm run dev:full)');
-  }
-
   const init: RequestInit = {
     method,
     headers: { 'Content-Type': 'application/json' },

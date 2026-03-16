@@ -66,12 +66,15 @@ try {
     configurable: true,
   });
 } catch(e) {
+  console.warn('[sprinkle-sandbox] defineProperty on window failed:', e);
   try {
     Object.defineProperty(Window.prototype, 'localStorage', {
       get: function() { return window.__slicc_storage; },
       configurable: true,
     });
-  } catch(e2) { /* fallback below */ }
+  } catch(e2) {
+    console.warn('[sprinkle-sandbox] defineProperty on prototype failed:', e2);
+  }
 }
 
 // ── Bridge proxy (globals for sprinkle scripts) ────────────────────

@@ -84,9 +84,17 @@ export class SprinkleRenderer {
       } else if (msg.type === 'sprinkle-close') {
         this.bridge.close();
       } else if (msg.type === 'sprinkle-storage-set') {
-        try { localStorage.setItem(`slicc-sprinkle-ls:${sprinkleName}:${msg.key}`, msg.value); } catch { /* quota */ }
+        try {
+          localStorage.setItem(`slicc-sprinkle-ls:${sprinkleName}:${msg.key}`, msg.value);
+        } catch (e) {
+          console.warn('[sprinkle-renderer] localStorage setItem failed:', msg.key, e);
+        }
       } else if (msg.type === 'sprinkle-storage-remove') {
-        try { localStorage.removeItem(`slicc-sprinkle-ls:${sprinkleName}:${msg.key}`); } catch { /* noop */ }
+        try {
+          localStorage.removeItem(`slicc-sprinkle-ls:${sprinkleName}:${msg.key}`);
+        } catch (e) {
+          console.warn('[sprinkle-renderer] localStorage removeItem failed:', msg.key, e);
+        }
       } else if (msg.type === 'sprinkle-storage-clear') {
         const prefix = `slicc-sprinkle-ls:${sprinkleName}:`;
         for (let i = localStorage.length - 1; i >= 0; i--) {
