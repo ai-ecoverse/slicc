@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 import { LeaderSyncManager, type LeaderSyncManagerOptions } from './tray-leader-sync.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
@@ -804,6 +804,59 @@ describe('LeaderSyncManager', () => {
       const { manager } = createManager();
 
       await expect(manager.openRemoteTab('unknown', 'https://example.com')).rejects.toThrow('not connected');
+    });
+  });
+
+  describe('keepalive dead → follower removal', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('removes follower when keepalive declares dead', () => {
+      const onFollowerDead = vi.fn();
+      const { manager } = createManager({ onFollowerDead });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+
+      expect(manager.hasFollowers).toBe(true);
+
+      // Default keepalive: 10s interval, 3 missed
+      vi.advanceTimersByTime(10_000); // tick 1: ping sent
+      vi.advanceTimersByTime(10_000); // tick 2: missed=1
+      vi.advanceTimersByTime(10_000); // tick 3: missed=2
+      vi.advanceTimersByTime(10_000); // tick 4: missed=3 → dead
+
+      expect(manager.hasFollowers).toBe(false);
+      expect(channel.readyState).toBe('closed');
+      expect(onFollowerDead).toHaveBeenCalledWith('b1');
+    });
+
+    it('does not remove follower if pongs arrive in time', () => {
+      const onFollowerDead = vi.fn();
+      const { manager } = createManager({ onFollowerDead });
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+
+      // Advance and simulate pong response each time
+      vi.advanceTimersByTime(10_000); // tick 1: ping sent
+      // Simulate follower responding with pong
+      channel.simulateMessage({ type: 'pong' } as any);
+
+      vi.advanceTimersByTime(10_000); // tick 2: ping sent
+      channel.simulateMessage({ type: 'pong' } as any);
+
+      vi.advanceTimersByTime(10_000); // tick 3: ping sent
+      channel.simulateMessage({ type: 'pong' } as any);
+
+      vi.advanceTimersByTime(10_000); // tick 4: ping sent
+      channel.simulateMessage({ type: 'pong' } as any);
+
+      expect(manager.hasFollowers).toBe(true);
+      expect(onFollowerDead).not.toHaveBeenCalled();
     });
   });
 });

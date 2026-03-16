@@ -15,6 +15,8 @@ import {
 } from './tray-sync-protocol.js';
 import type { CDPTransport } from '../cdp/transport.js';
 import { RemoteCDPTransport, type RemoteCDPSender } from '../cdp/remote-cdp-transport.js';
+import { DataChannelKeepalive } from './data-channel-keepalive.js';
+import { setFollowerTrayRuntimeStatus, getFollowerTrayRuntimeStatus, setFollowerLastPingTime } from './tray-follower-status.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('tray-follower-sync');
@@ -30,6 +32,10 @@ export interface FollowerSyncManagerOptions {
   onTargetsUpdated?: (targets: TrayTargetEntry[]) => void;
   /** Optional CDP transport for executing local CDP commands (follower's browser). */
   browserTransport?: CDPTransport;
+  /** Called when the leader data channel is considered dead (missed keepalive pongs). */
+  onDead?: () => void;
+  /** Called after the connection has been cleaned up due to keepalive death or channel failure. Higher-level code can use this to trigger reconnection. */
+  onDisconnect?: (reason: string) => void;
 }
 
 /**
@@ -41,6 +47,7 @@ export class FollowerSyncManager implements AgentHandle {
   private readonly sync: TraySyncChannel<FollowerToLeaderMessage, LeaderToFollowerMessage>;
   private readonly eventListeners = new Set<(event: AgentEvent) => void>();
   private readonly unsubscribe: () => void;
+  private readonly keepalive: DataChannelKeepalive;
   private latestSnapshot: { messages: ChatMessage[]; scoopJid: string } | null = null;
   private readonly sentMessageIds = new Set<string>();
   private targetEntries: TrayTargetEntry[] = [];
@@ -57,14 +64,23 @@ export class FollowerSyncManager implements AgentHandle {
     this.unsubscribe = this.sync.onMessage((message: LeaderToFollowerMessage) => {
       this.handleLeaderMessage(message);
     });
+    this.keepalive = new DataChannelKeepalive({
+      sendPing: () => this.sync.send({ type: 'ping' }),
+      onDead: () => {
+        log.warn('Leader keepalive dead, cleaning up');
+        this.handleDisconnect('Keepalive timeout — leader not responding');
+        this.options.onDead?.();
+      },
+    });
+    this.keepalive.start();
     // Emit an error event when the underlying channel drops
     channel.addEventListener('close', () => {
       log.warn('Data channel closed');
-      this.emitEvent({ type: 'error', error: 'Connection to leader lost' });
+      this.handleDisconnect('Data channel closed');
     });
     channel.addEventListener('error', () => {
       log.warn('Data channel error');
-      this.emitEvent({ type: 'error', error: 'Connection to leader failed' });
+      this.handleDisconnect('Data channel error');
     });
   }
 
@@ -105,6 +121,7 @@ export class FollowerSyncManager implements AgentHandle {
 
   /** Close the sync channel and clean up. */
   close(): void {
+    this.keepalive.stop();
     this.unsubscribe();
     this.sync.close();
     this.eventListeners.clear();
@@ -124,6 +141,36 @@ export class FollowerSyncManager implements AgentHandle {
   // ---------------------------------------------------------------------------
   // Internal
   // ---------------------------------------------------------------------------
+
+  private disconnected = false;
+
+  /**
+   * Handle a detected disconnect (keepalive dead, channel close/error).
+   * Updates follower status, emits an error event, cleans up, and notifies via onDisconnect.
+   */
+  private handleDisconnect(reason: string): void {
+    if (this.disconnected) return; // prevent duplicate cleanup
+    this.disconnected = true;
+
+    // Update follower runtime status to error
+    const current = getFollowerTrayRuntimeStatus();
+    setFollowerTrayRuntimeStatus({
+      ...current,
+      state: 'error',
+      error: reason,
+    });
+
+    // Emit error to UI listeners
+    this.emitEvent({ type: 'error', error: `Connection to leader lost: ${reason}` });
+
+    // Clean up keepalive and sync channel
+    this.keepalive.stop();
+    this.unsubscribe();
+    this.sync.close();
+
+    // Notify higher-level code for potential reconnection
+    this.options.onDisconnect?.(reason);
+  }
 
   private handleLeaderMessage(message: LeaderToFollowerMessage): void {
     switch (message.type) {
@@ -190,6 +237,18 @@ export class FollowerSyncManager implements AgentHandle {
           this.tabOpenResolvers.delete(message.requestId);
           resolver.reject(new Error(message.error));
         }
+        break;
+      }
+      case 'ping': {
+        // Leader is pinging us — respond with pong and treat as liveness signal
+        this.keepalive.receivePing();
+        this.sync.send({ type: 'pong' });
+        break;
+      }
+      case 'pong': {
+        // Leader responded to our ping
+        this.keepalive.receivePong();
+        setFollowerLastPingTime(Date.now());
         break;
       }
     }

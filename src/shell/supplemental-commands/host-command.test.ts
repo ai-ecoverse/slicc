@@ -97,6 +97,8 @@ describe('host command', () => {
         joinUrl: 'https://tray.example.com/join/token',
         trayId: 'tray-456',
         error: null,
+        lastPingTime: null,
+        reconnectAttempts: 0,
       }),
     }).execute([], {} as never);
 
@@ -113,6 +115,8 @@ describe('host command', () => {
         joinUrl: 'https://tray.example.com/join/token',
         trayId: null,
         error: null,
+        lastPingTime: null,
+        reconnectAttempts: 0,
       }),
     }).execute([], {} as never);
 
@@ -129,6 +133,8 @@ describe('host command', () => {
         joinUrl: 'https://tray.example.com/join/token',
         trayId: null,
         error: 'WebRTC failed',
+        lastPingTime: null,
+        reconnectAttempts: 0,
       }),
     }).execute([], {} as never);
 
@@ -144,6 +150,8 @@ describe('host command', () => {
         joinUrl: null,
         trayId: null,
         error: null,
+        lastPingTime: null,
+        reconnectAttempts: 0,
       }),
       getStatus: () => ({ state: 'inactive', session: null, error: null }),
       getFollowers: () => [],
@@ -152,6 +160,41 @@ describe('host command', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('status: inactive');
     expect(result.stdout).not.toContain('follower');
+  });
+
+  it('shows last_ping when follower is connected with lastPingTime', async () => {
+    const now = Date.now();
+    const result = await createHostCommand({
+      getFollowerStatus: () => ({
+        state: 'connected',
+        joinUrl: 'https://tray.example.com/join/token',
+        trayId: 'tray-456',
+        error: null,
+        lastPingTime: now - 5000,
+        reconnectAttempts: 0,
+      }),
+    }).execute([], {} as never);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('last_ping:');
+    expect(result.stdout).toContain('s ago');
+  });
+
+  it('shows reconnect_attempts when follower is reconnecting', async () => {
+    const result = await createHostCommand({
+      getFollowerStatus: () => ({
+        state: 'reconnecting',
+        joinUrl: 'https://tray.example.com/join/token',
+        trayId: 'tray-456',
+        error: null,
+        lastPingTime: Date.now() - 30000,
+        reconnectAttempts: 3,
+      }),
+    }).execute([], {} as never);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('status: follower (reconnecting)');
+    expect(result.stdout).toContain('reconnect_attempts: 3');
   });
 });
 
@@ -219,6 +262,8 @@ describe('formatFollowerOutput', () => {
       joinUrl: 'https://tray.example.com/join/token',
       trayId: 'tray-789',
       error: null,
+      lastPingTime: null,
+      reconnectAttempts: 0,
     });
     expect(output).toBe('status: follower (connected)\njoin_url: https://tray.example.com/join/token\n');
     expect(output).not.toContain('tray_id');
@@ -230,6 +275,8 @@ describe('formatFollowerOutput', () => {
       joinUrl: null,
       trayId: null,
       error: null,
+      lastPingTime: null,
+      reconnectAttempts: 0,
     });
     expect(output).toBe('status: follower (connecting)\n');
   });
@@ -240,7 +287,60 @@ describe('formatFollowerOutput', () => {
       joinUrl: null,
       trayId: null,
       error: 'something broke',
+      lastPingTime: null,
+      reconnectAttempts: 0,
     });
     expect(output).toContain('error: something broke');
+  });
+
+  it('shows last_ping for connected follower with lastPingTime', () => {
+    const now = Date.now();
+    const output = formatFollowerOutput({
+      state: 'connected',
+      joinUrl: 'https://tray.example.com/join/token',
+      trayId: 'tray-789',
+      error: null,
+      lastPingTime: now - 10000,
+      reconnectAttempts: 0,
+    });
+    expect(output).toContain('last_ping: 10s ago');
+  });
+
+  it('omits last_ping when lastPingTime is null', () => {
+    const output = formatFollowerOutput({
+      state: 'connected',
+      joinUrl: 'https://tray.example.com/join/token',
+      trayId: 'tray-789',
+      error: null,
+      lastPingTime: null,
+      reconnectAttempts: 0,
+    });
+    expect(output).not.toContain('last_ping');
+  });
+
+  it('shows reconnect_attempts for reconnecting follower', () => {
+    const output = formatFollowerOutput({
+      state: 'reconnecting',
+      joinUrl: 'https://tray.example.com/join/token',
+      trayId: 'tray-789',
+      error: null,
+      lastPingTime: Date.now() - 30000,
+      reconnectAttempts: 5,
+    });
+    expect(output).toContain('status: follower (reconnecting)');
+    expect(output).toContain('reconnect_attempts: 5');
+    expect(output).not.toContain('last_ping');
+  });
+
+  it('omits reconnect_attempts when 0', () => {
+    const output = formatFollowerOutput({
+      state: 'reconnecting',
+      joinUrl: 'https://tray.example.com/join/token',
+      trayId: null,
+      error: null,
+      lastPingTime: null,
+      reconnectAttempts: 0,
+    });
+    expect(output).not.toContain('reconnect_attempts');
   });
 });

@@ -30,7 +30,7 @@ import {
   resolveTrayRuntimeConfig,
   TRAY_JOIN_STORAGE_KEY,
 } from '../scoops/tray-runtime-config.js';
-import { FollowerTrayManager, LeaderTrayPeerManager } from '../scoops/tray-webrtc.js';
+import { FollowerTrayManager, LeaderTrayPeerManager, startFollowerWithAutoReconnect, type FollowerAutoReconnectHandle } from '../scoops/tray-webrtc.js';
 import { LeaderSyncManager } from '../scoops/tray-leader-sync.js';
 import { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
 import {
@@ -1181,64 +1181,77 @@ async function main(): Promise<void> {
 
     // Start follower join from a joinUrl. Reusable — called at startup
     // and when the user pastes a join URL in the settings dialog.
-    let activeFollower: FollowerTrayManager | null = null;
     let activeFollowerSync: FollowerSyncManager | null = null;
+    let activeReconnectHandle: FollowerAutoReconnectHandle | null = null;
     let followerTargetRefreshInterval: ReturnType<typeof setInterval> | null = null;
+
+    const wireFollowerSync = (connection: import('../scoops/tray-webrtc.js').FollowerTrayConnection) => {
+      // Clean up previous sync if any
+      if (followerTargetRefreshInterval) {
+        clearInterval(followerTargetRefreshInterval);
+        followerTargetRefreshInterval = null;
+      }
+      activeFollowerSync?.close();
+
+      const followerSync = new FollowerSyncManager(connection.channel, {
+        browserTransport: browser.getTransport(),
+        onSnapshot: (messages) => {
+          layout.panels.chat.loadMessages(messages);
+        },
+        onUserMessage: (text) => {
+          layout.panels.chat.addUserMessage(text);
+        },
+        onStatus: (status) => {
+          layout.panels.chat.setProcessing(status === 'processing');
+        },
+      });
+      activeFollowerSync = followerSync;
+      browser.setTrayTargetProvider(followerSync);
+      layout.panels.chat.setAgent(followerSync);
+      followerSync.requestSnapshot();
+
+      const runtimeId = `follower-${connection.bootstrapId}`;
+      const refreshFollowerTargets = async () => {
+        try {
+          const pages = await browser.listPages();
+          followerSync.advertiseTargets(
+            pages.map(p => ({ targetId: p.targetId, title: p.title, url: p.url })),
+            runtimeId,
+          );
+        } catch { /* ignore errors */ }
+      };
+      followerTargetRefreshInterval = setInterval(refreshFollowerTargets, 5000);
+      void refreshFollowerTargets();
+
+      log.info('Follower sync wired to chat panel', { trayId: connection.trayId });
+    };
+
     const startFollowerJoin = (joinUrl: string) => {
+      // Cancel any existing reconnect loop / follower
+      activeReconnectHandle?.cancel();
       if (followerTargetRefreshInterval) {
         clearInterval(followerTargetRefreshInterval);
         followerTargetRefreshInterval = null;
       }
       activeFollowerSync?.close();
       activeFollowerSync = null;
-      activeFollower?.stop();
-      const trayFollower = new FollowerTrayManager({
-        joinUrl,
-        runtime: 'slicc-standalone',
-        fetchImpl: createTrayFetch(),
-      });
-      activeFollower = trayFollower;
-      void trayFollower.start().then((connection) => {
-        const followerSync = new FollowerSyncManager(connection.channel, {
-          browserTransport: browser.getTransport(),
-          onSnapshot: (messages) => {
-            // Replace chat panel messages with the leader's snapshot
-            layout.panels.chat.loadMessages(messages);
-          },
-          onUserMessage: (text) => {
-            // Display user message bubble from the leader's echo
-            layout.panels.chat.addUserMessage(text);
-          },
-          onStatus: (status) => {
-            layout.panels.chat.setProcessing(status === 'processing');
-          },
-        });
-        activeFollowerSync = followerSync;
-        // Wire the follower as a TrayTargetProvider so BrowserAPI can list remote targets
-        browser.setTrayTargetProvider(followerSync);
-        // Replace the local agent handle with the follower sync (remote leader)
-        layout.panels.chat.setAgent(followerSync);
-        // Request initial snapshot
-        followerSync.requestSnapshot();
 
-        // Periodically advertise local browser targets to the leader
-        const runtimeId = `follower-${connection.bootstrapId}`;
-        const refreshFollowerTargets = async () => {
-          try {
-            const pages = await browser.listPages();
-            followerSync.advertiseTargets(
-              pages.map(p => ({ targetId: p.targetId, title: p.title, url: p.url })),
-              runtimeId,
-            );
-          } catch { /* ignore errors */ }
-        };
-        followerTargetRefreshInterval = setInterval(refreshFollowerTargets, 5000);
-        void refreshFollowerTargets();
-
-        log.info('Follower sync wired to chat panel', { trayId: connection.trayId });
-      }).catch((error) => {
-        log.warn('Follower tray join failed', { error: error instanceof Error ? error.message : String(error) });
-      });
+      activeReconnectHandle = startFollowerWithAutoReconnect(
+        {
+          joinUrl,
+          runtime: 'slicc-standalone',
+          fetchImpl: createTrayFetch(),
+        },
+        {
+          onConnected: (connection) => wireFollowerSync(connection),
+          onReconnecting: (attempt) => {
+            log.info('Follower reconnecting', { attempt });
+          },
+          onGaveUp: (lastError) => {
+            log.warn('Follower reconnect gave up', { lastError });
+          },
+        },
+      );
     };
 
     // Listen for join events from the settings dialog
@@ -1250,7 +1263,7 @@ async function main(): Promise<void> {
     window.addEventListener('beforeunload', () => {
       if (followerTargetRefreshInterval) clearInterval(followerTargetRefreshInterval);
       activeFollowerSync?.close();
-      activeFollower?.stop();
+      activeReconnectHandle?.cancel();
     }, { once: true });
 
     if (trayRuntimeConfig?.joinUrl) {

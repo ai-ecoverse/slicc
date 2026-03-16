@@ -26,7 +26,9 @@ export type LeaderToFollowerMessage =
   | { type: 'cdp.response'; requestId: string; result?: Record<string, unknown>; error?: string }
   | { type: 'tab.open'; requestId: string; url: string }
   | { type: 'tab.opened'; requestId: string; targetId: string }
-  | { type: 'tab.open.error'; requestId: string; error: string };
+  | { type: 'tab.open.error'; requestId: string; error: string }
+  | { type: 'ping' }
+  | { type: 'pong' };
 
 export type FollowerToLeaderMessage =
   | { type: 'user_message'; text: string; messageId: string }
@@ -37,7 +39,9 @@ export type FollowerToLeaderMessage =
   | { type: 'cdp.response'; requestId: string; result?: Record<string, unknown>; error?: string }
   | { type: 'tab.open'; requestId: string; targetRuntimeId: string; url: string }
   | { type: 'tab.opened'; requestId: string; targetId: string }
-  | { type: 'tab.open.error'; requestId: string; error: string };
+  | { type: 'tab.open.error'; requestId: string; error: string }
+  | { type: 'ping' }
+  | { type: 'pong' };
 
 // ---------------------------------------------------------------------------
 // Target advertisement types

@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import { FollowerSyncManager } from './tray-follower-sync.js';
+import { setFollowerTrayRuntimeStatus, getFollowerTrayRuntimeStatus } from './tray-follower-status.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
 import type { AgentEvent, ChatMessage } from '../ui/types.js';
 import type { LeaderToFollowerMessage, FollowerToLeaderMessage, TrayTargetEntry } from './tray-sync-protocol.js';
@@ -714,27 +715,118 @@ describe('FollowerSyncManager', () => {
     });
   });
 
-  describe('channel disconnect handling', () => {
-    it('emits error event when channel closes', () => {
+  describe('pong updates lastPingTime', () => {
+    beforeEach(() => {
+      setFollowerTrayRuntimeStatus({
+        state: 'connected',
+        joinUrl: 'https://tray.example.com/join/token',
+        trayId: 'tray-1',
+        error: null,
+        lastPingTime: null,
+        reconnectAttempts: 0,
+      });
+    });
+
+    it('sets lastPingTime when a pong is received from the leader', () => {
       const channel = new FakeChannel();
       const follower = new FollowerSyncManager(channel);
+
+      const before = Date.now();
+      channel.simulateLeaderMessage({ type: 'pong' } as any);
+      const after = Date.now();
+
+      const status = getFollowerTrayRuntimeStatus();
+      expect(status.lastPingTime).toBeGreaterThanOrEqual(before);
+      expect(status.lastPingTime).toBeLessThanOrEqual(after);
+    });
+  });
+
+  describe('channel disconnect handling', () => {
+    beforeEach(() => {
+      setFollowerTrayRuntimeStatus({
+        state: 'connected',
+        joinUrl: 'https://tray.example.com/join/token',
+        trayId: 'tray-1',
+        error: null,
+        lastPingTime: null,
+        reconnectAttempts: 0,
+      });
+    });
+
+    it('emits error event and updates status when channel closes', () => {
+      const channel = new FakeChannel();
+      const onDisconnect = vi.fn();
+      const follower = new FollowerSyncManager(channel, { onDisconnect });
       const events: AgentEvent[] = [];
       follower.onEvent(e => events.push(e));
 
       channel.simulateClose();
 
-      expect(events).toEqual([{ type: 'error', error: 'Connection to leader lost' }]);
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe('error');
+      const status = getFollowerTrayRuntimeStatus();
+      expect(status.state).toBe('error');
+      expect(status.error).toBe('Data channel closed');
+      expect(onDisconnect).toHaveBeenCalledWith('Data channel closed');
     });
 
-    it('emits error event when channel errors', () => {
+    it('emits error event and updates status when channel errors', () => {
       const channel = new FakeChannel();
-      const follower = new FollowerSyncManager(channel);
+      const onDisconnect = vi.fn();
+      const follower = new FollowerSyncManager(channel, { onDisconnect });
       const events: AgentEvent[] = [];
       follower.onEvent(e => events.push(e));
 
       channel.simulateError();
 
-      expect(events).toEqual([{ type: 'error', error: 'Connection to leader failed' }]);
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe('error');
+      const status = getFollowerTrayRuntimeStatus();
+      expect(status.state).toBe('error');
+      expect(status.error).toBe('Data channel error');
+      expect(onDisconnect).toHaveBeenCalledWith('Data channel error');
+    });
+
+    it('handles disconnect only once (dedup)', () => {
+      const channel = new FakeChannel();
+      const onDisconnect = vi.fn();
+      const follower = new FollowerSyncManager(channel, { onDisconnect });
+      const events: AgentEvent[] = [];
+      follower.onEvent(e => events.push(e));
+
+      // Trigger two disconnects — only first should fire
+      channel.simulateClose();
+      channel.simulateError();
+
+      expect(events).toHaveLength(1);
+      expect(onDisconnect).toHaveBeenCalledTimes(1);
+    });
+
+    it('calls onDisconnect when keepalive declares dead', () => {
+      vi.useFakeTimers();
+      try {
+        const channel = new FakeChannel();
+        const onDead = vi.fn();
+        const onDisconnect = vi.fn();
+        const follower = new FollowerSyncManager(channel, { onDead, onDisconnect });
+
+        // Let keepalive tick enough times to declare dead (default: 10s interval, 3 missed)
+        // 4 ticks: first sends ping, then 3 misses
+        vi.advanceTimersByTime(10_000); // tick 1: ping sent
+        vi.advanceTimersByTime(10_000); // tick 2: missed=1
+        vi.advanceTimersByTime(10_000); // tick 3: missed=2
+        vi.advanceTimersByTime(10_000); // tick 4: missed=3 → dead
+
+        expect(onDead).toHaveBeenCalledTimes(1);
+        expect(onDisconnect).toHaveBeenCalledTimes(1);
+        expect(onDisconnect).toHaveBeenCalledWith('Keepalive timeout — leader not responding');
+
+        const status = getFollowerTrayRuntimeStatus();
+        expect(status.state).toBe('error');
+        expect(status.error).toBe('Keepalive timeout — leader not responding');
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

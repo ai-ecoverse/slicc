@@ -8,7 +8,7 @@ import {
   sendTrayFollowerAnswer,
   sendTrayFollowerIceCandidate,
 } from './tray-follower.js';
-import { setFollowerTrayRuntimeStatus } from './tray-follower-status.js';
+import { setFollowerTrayRuntimeStatus, getFollowerTrayRuntimeStatus } from './tray-follower-status.js';
 
 const log = createLogger('tray-webrtc');
 const DEFAULT_DATA_CHANNEL_LABEL = 'tray-control';
@@ -58,6 +58,8 @@ export interface LeaderTrayPeerManagerOptions {
   peerConnectionFactory?: TrayPeerConnectionFactory;
   dataChannelLabel?: string;
   onPeerConnected?: (peer: LeaderTrayPeerState, channel: TrayDataChannelLike) => void;
+  /** Called when an established peer connection transitions to 'disconnected' or 'failed'. */
+  onPeerDisconnected?: (bootstrapId: string, reason: string) => void;
   iceServers?: TrayIceServerConfig[];
 }
 
@@ -77,6 +79,8 @@ export interface FollowerTrayManagerOptions {
   sleep?: (ms: number) => Promise<void>;
   pollIntervalMs?: number;
   iceServers?: TrayIceServerConfig[];
+  /** Called when an established peer connection transitions to 'disconnected' or 'failed'. */
+  onDisconnected?: (reason: string) => void;
 }
 
 interface ActiveLeaderPeer {
@@ -160,8 +164,19 @@ export class LeaderTrayPeerManager {
       });
     });
     peer.addEventListener('connectionstatechange', () => {
-      if (peer.connectionState === 'failed') {
-        this.failPeer(message, 'Leader peer connection failed before the data channel opened');
+      const active = this.peers.get(message.bootstrapId);
+      if (!active) return;
+      if (active.state.state !== 'connected') {
+        // Pre-connection failure
+        if (peer.connectionState === 'failed') {
+          this.failPeer(message, 'Leader peer connection failed before the data channel opened');
+        }
+      } else {
+        // Post-connection: detect disconnected/failed ICE states
+        if (peer.connectionState === 'disconnected' || peer.connectionState === 'failed') {
+          log.warn('Leader peer connection state changed post-connect', { bootstrapId: message.bootstrapId, state: peer.connectionState });
+          this.options.onPeerDisconnected?.(message.bootstrapId, `Peer connection ${peer.connectionState}`);
+        }
       }
     });
 
@@ -173,13 +188,23 @@ export class LeaderTrayPeerManager {
       this.options.onPeerConnected?.({ ...active.state }, active.channel);
     });
     channel.addEventListener('close', () => {
-      if (this.peers.get(message.bootstrapId)?.state.state !== 'connected') {
+      const active = this.peers.get(message.bootstrapId);
+      if (!active) return;
+      if (active.state.state !== 'connected') {
         this.failPeer(message, 'Leader data channel closed before opening');
+      } else {
+        log.warn('Leader data channel closed post-connect', { bootstrapId: message.bootstrapId });
+        this.options.onPeerDisconnected?.(message.bootstrapId, 'Data channel closed');
       }
     });
     channel.addEventListener('error', () => {
-      if (this.peers.get(message.bootstrapId)?.state.state !== 'connected') {
+      const active = this.peers.get(message.bootstrapId);
+      if (!active) return;
+      if (active.state.state !== 'connected') {
         this.failPeer(message, 'Leader data channel failed before opening');
+      } else {
+        log.warn('Leader data channel error post-connect', { bootstrapId: message.bootstrapId });
+        this.options.onPeerDisconnected?.(message.bootstrapId, 'Data channel error');
       }
     });
 
@@ -255,6 +280,8 @@ export class FollowerTrayManager {
       joinUrl: this.options.joinUrl,
       trayId: null,
       error: null,
+      lastPingTime: null,
+      reconnectAttempts: 0,
     });
     log.info('Follower tray join starting', { joinUrl: this.options.joinUrl });
 
@@ -284,6 +311,8 @@ export class FollowerTrayManager {
           joinUrl: this.options.joinUrl,
           trayId: null,
           error: errorMsg,
+          lastPingTime: null,
+          reconnectAttempts: 0,
         });
         log.warn('Follower tray attach failed', { error: errorMsg });
         throw new Error(errorMsg);
@@ -298,6 +327,8 @@ export class FollowerTrayManager {
           joinUrl: this.options.joinUrl,
           trayId: connection.trayId,
           error: null,
+          lastPingTime: null,
+          reconnectAttempts: 0,
         });
         log.info('Follower tray connected', { trayId: connection.trayId, controllerId });
         return connection;
@@ -307,6 +338,8 @@ export class FollowerTrayManager {
           joinUrl: this.options.joinUrl,
           trayId: attach.trayId,
           error: error instanceof Error ? error.message : String(error),
+          lastPingTime: null,
+          reconnectAttempts: 0,
         });
         log.warn('Follower tray bootstrap failed', { error: error instanceof Error ? error.message : String(error) });
         throw error;
@@ -324,6 +357,8 @@ export class FollowerTrayManager {
       joinUrl: null,
       trayId: null,
       error: null,
+      lastPingTime: null,
+      reconnectAttempts: 0,
     });
   }
 
@@ -401,16 +436,36 @@ export class FollowerTrayManager {
   private createFollowerPeer(controllerId: string, bootstrapId: string): ActiveFollowerPeer {
     const peer = this.peerConnectionFactory();
     const active: ActiveFollowerPeer = { peer, channel: null, open: false, openError: null };
+    peer.addEventListener('connectionstatechange', () => {
+      if (!active.open) {
+        // Pre-connection: handled by openError in completeBootstrap
+        return;
+      }
+      if (peer.connectionState === 'disconnected' || peer.connectionState === 'failed') {
+        log.warn('Follower peer connection state changed post-connect', { bootstrapId, state: peer.connectionState });
+        this.options.onDisconnected?.(`Peer connection ${peer.connectionState}`);
+      }
+    });
     peer.addEventListener('datachannel', ({ channel }) => {
       active.channel = channel;
       channel.addEventListener('open', () => {
         active.open = true;
       });
       channel.addEventListener('close', () => {
-        if (!active.open) active.openError = 'Follower data channel closed before opening';
+        if (!active.open) {
+          active.openError = 'Follower data channel closed before opening';
+        } else {
+          log.warn('Follower data channel closed post-connect', { bootstrapId });
+          this.options.onDisconnected?.('Data channel closed');
+        }
       });
       channel.addEventListener('error', () => {
-        if (!active.open) active.openError = 'Follower data channel failed before opening';
+        if (!active.open) {
+          active.openError = 'Follower data channel failed before opening';
+        } else {
+          log.warn('Follower data channel error post-connect', { bootstrapId });
+          this.options.onDisconnected?.('Data channel error');
+        }
       });
     });
     peer.addEventListener('icecandidate', ({ candidate }) => {
@@ -428,6 +483,177 @@ export class FollowerTrayManager {
     });
     return active;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Auto-reconnect wrapper for FollowerTrayManager
+// ---------------------------------------------------------------------------
+
+export interface FollowerAutoReconnectOptions {
+  /** Base delay in ms before the first reconnect attempt. Default: 1000. */
+  baseDelayMs?: number;
+  /** Multiplier applied to the delay after each failed attempt. Default: 2. */
+  backoffMultiplier?: number;
+  /** Maximum delay between reconnect attempts in ms. Default: 30000. */
+  maxDelayMs?: number;
+  /** Maximum number of reconnect attempts before giving up. Default: 10. */
+  maxAttempts?: number;
+  /** Called when a new connection is established (initial or reconnect). */
+  onConnected: (connection: FollowerTrayConnection) => void;
+  /** Called when reconnection starts or progresses. */
+  onReconnecting?: (attempt: number) => void;
+  /** Called when reconnection fails permanently (max attempts exhausted). */
+  onGaveUp?: (lastError: string) => void;
+  /** Sleep implementation for testing. Default: setTimeout-based. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+export interface FollowerAutoReconnectHandle {
+  /** Cancel any in-progress reconnection and stop the follower. */
+  cancel(): void;
+  /** Whether reconnection is currently in progress. */
+  readonly reconnecting: boolean;
+}
+
+/**
+ * Start a FollowerTrayManager with automatic reconnection on disconnect.
+ *
+ * Returns a handle to cancel the reconnect loop (e.g. when user manually
+ * re-joins a different tray). The `onConnected` callback fires for each
+ * successful connection — including the initial one and every reconnect.
+ *
+ * The `onDisconnected` option on FollowerTrayManagerOptions is consumed
+ * internally to trigger reconnection — do not set it yourself.
+ */
+export function startFollowerWithAutoReconnect(
+  managerOptions: FollowerTrayManagerOptions,
+  reconnectOptions: FollowerAutoReconnectOptions,
+): FollowerAutoReconnectHandle {
+  const baseDelay = reconnectOptions.baseDelayMs ?? 1000;
+  const multiplier = reconnectOptions.backoffMultiplier ?? 2;
+  const maxDelay = reconnectOptions.maxDelayMs ?? 30_000;
+  const maxAttempts = reconnectOptions.maxAttempts ?? 10;
+  const sleepFn = reconnectOptions.sleep ?? managerOptions.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+
+  let cancelled = false;
+  let reconnecting = false;
+  let activeManager: FollowerTrayManager | null = null;
+
+  const handle: FollowerAutoReconnectHandle = {
+    cancel() {
+      cancelled = true;
+      reconnecting = false;
+      activeManager?.stop();
+      activeManager = null;
+    },
+    get reconnecting() {
+      return reconnecting;
+    },
+  };
+
+  const connectOnce = (): { manager: FollowerTrayManager; connectionPromise: Promise<FollowerTrayConnection> } => {
+    const manager = new FollowerTrayManager({
+      ...managerOptions,
+      sleep: sleepFn,
+      onDisconnected: (reason: string) => {
+        if (cancelled) return;
+        log.warn('Follower disconnected, starting reconnect loop', { reason });
+        void reconnectLoop(reason);
+      },
+    });
+    activeManager = manager;
+    return { manager, connectionPromise: manager.start() };
+  };
+
+  const reconnectLoop = async (initialReason?: string): Promise<void> => {
+    if (cancelled || reconnecting) return;
+    reconnecting = true;
+
+    // Tear down old manager
+    activeManager?.stop();
+    activeManager = null;
+
+    let attempt = 0;
+    let delay = baseDelay;
+    let lastError = initialReason ?? 'Unknown disconnect';
+
+    while (!cancelled && attempt < maxAttempts) {
+      attempt++;
+      reconnectOptions.onReconnecting?.(attempt);
+      setFollowerTrayRuntimeStatus({
+        ...getFollowerTrayRuntimeStatus(),
+        state: 'reconnecting',
+        error: null,
+        reconnectAttempts: attempt,
+      });
+
+      log.info('Reconnect attempt', { attempt, delay });
+      await sleepFn(delay);
+      if (cancelled) break;
+
+      let manager: FollowerTrayManager | null = null;
+      try {
+        const result = connectOnce();
+        manager = result.manager;
+        const connection = await result.connectionPromise;
+
+        if (cancelled) {
+          manager.stop();
+          break;
+        }
+
+        // Success — reset state and notify
+        reconnecting = false;
+        setFollowerTrayRuntimeStatus({
+          state: 'connected',
+          joinUrl: managerOptions.joinUrl,
+          trayId: connection.trayId,
+          error: null,
+          lastPingTime: null,
+          reconnectAttempts: 0,
+        });
+        log.info('Reconnect successful', { attempt, trayId: connection.trayId });
+        reconnectOptions.onConnected(connection);
+        return;
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+        log.warn('Reconnect attempt failed', { attempt, error: lastError });
+        // Tear down the failed manager
+        manager?.stop();
+        activeManager = null;
+      }
+
+      // Exponential backoff
+      delay = Math.min(delay * multiplier, maxDelay);
+    }
+
+    // Gave up or cancelled
+    if (!cancelled) {
+      reconnecting = false;
+      setFollowerTrayRuntimeStatus({
+        ...getFollowerTrayRuntimeStatus(),
+        state: 'error',
+        error: `Reconnect failed after ${attempt} attempts: ${lastError}`,
+        reconnectAttempts: attempt,
+      });
+      log.warn('Reconnect gave up', { attempts: attempt, lastError });
+      reconnectOptions.onGaveUp?.(lastError);
+    }
+  };
+
+  // Initial connection
+  const { connectionPromise } = connectOnce();
+  void connectionPromise
+    .then((connection) => {
+      if (cancelled) return;
+      reconnectOptions.onConnected(connection);
+    })
+    .catch((error) => {
+      if (cancelled) return;
+      log.warn('Initial follower connection failed', { error: error instanceof Error ? error.message : String(error) });
+    });
+
+  return handle;
 }
 
 function createBrowserPeerConnection(iceServers?: TrayIceServerConfig[]): TrayPeerConnectionLike {

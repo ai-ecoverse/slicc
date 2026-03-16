@@ -75,6 +75,13 @@ export function formatFollowerOutput(status: FollowerTrayRuntimeStatus): string 
   if (status.joinUrl) {
     lines.push(`join_url: ${status.joinUrl}`);
   }
+  if (status.state === 'connected' && status.lastPingTime != null) {
+    const ago = Math.round((Date.now() - status.lastPingTime) / 1000);
+    lines.push(`last_ping: ${ago}s ago`);
+  }
+  if (status.state === 'reconnecting' && status.reconnectAttempts > 0) {
+    lines.push(`reconnect_attempts: ${status.reconnectAttempts}`);
+  }
   if (status.error) {
     lines.push(`error: ${status.error}`);
   }

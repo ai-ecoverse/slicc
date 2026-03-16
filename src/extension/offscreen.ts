@@ -11,7 +11,7 @@ import { BrowserAPI, OffscreenCdpProxy } from '../cdp/index.js';
 import { Orchestrator } from '../scoops/index.js';
 import { LeaderTrayManager } from '../scoops/tray-leader.js';
 import { hasStoredTrayJoinUrl, resolveTrayRuntimeConfig } from '../scoops/tray-runtime-config.js';
-import { FollowerTrayManager, LeaderTrayPeerManager } from '../scoops/tray-webrtc.js';
+import { FollowerTrayManager, LeaderTrayPeerManager, startFollowerWithAutoReconnect } from '../scoops/tray-webrtc.js';
 import { OffscreenBridge } from './offscreen-bridge.js';
 import { ServiceWorkerLeaderTraySocket } from './tray-socket-proxy.js';
 import { createLogger } from '../core/index.js';
@@ -101,14 +101,21 @@ async function init(): Promise<void> {
     activeTrayRuntimeKey = nextTrayRuntimeKey;
 
     if (trayRuntimeConfig?.joinUrl) {
-      const trayFollower = new FollowerTrayManager({
-        joinUrl: trayRuntimeConfig.joinUrl,
-        runtime: 'slicc-extension-offscreen',
-      });
-      void trayFollower.start().catch((error) => {
-        log.warn('Follower tray join failed', { error: error instanceof Error ? error.message : String(error) });
-      });
-      stopTrayRuntime = () => trayFollower.stop();
+      const reconnectHandle = startFollowerWithAutoReconnect(
+        {
+          joinUrl: trayRuntimeConfig.joinUrl,
+          runtime: 'slicc-extension-offscreen',
+        },
+        {
+          onConnected: (connection) => {
+            log.info('Extension follower connected', { trayId: connection.trayId });
+          },
+          onGaveUp: (lastError) => {
+            log.warn('Extension follower reconnect gave up', { lastError });
+          },
+        },
+      );
+      stopTrayRuntime = () => reconnectHandle.cancel();
       return;
     }
 

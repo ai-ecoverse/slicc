@@ -16,6 +16,7 @@ import {
 import { TrayTargetRegistry } from './tray-target-registry.js';
 import type { CDPTransport } from '../cdp/transport.js';
 import { RemoteCDPTransport, type RemoteCDPSender } from '../cdp/remote-cdp-transport.js';
+import { DataChannelKeepalive } from './data-channel-keepalive.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('tray-leader-sync');
@@ -31,12 +32,15 @@ export interface LeaderSyncManagerOptions {
   onFollowerAbort: () => void;
   /** Optional CDP transport for executing local CDP commands (leader's browser). */
   browserTransport?: CDPTransport;
+  /** Called when a follower's data channel is considered dead (missed keepalive pongs). */
+  onFollowerDead?: (bootstrapId: string) => void;
 }
 
 interface ConnectedFollower {
   bootstrapId: string;
   sync: TraySyncChannel<LeaderToFollowerMessage, FollowerToLeaderMessage>;
   unsubscribe: () => void;
+  keepalive: DataChannelKeepalive;
 }
 
 /** Tracks a CDP request being routed through the leader. */
@@ -85,7 +89,17 @@ export class LeaderSyncManager {
       this.handleFollowerMessage(bootstrapId, message);
     });
 
-    this.followers.set(bootstrapId, { bootstrapId, sync, unsubscribe });
+    const keepalive = new DataChannelKeepalive({
+      sendPing: () => sync.send({ type: 'ping' }),
+      onDead: () => {
+        log.warn('Follower keepalive dead, removing follower', { bootstrapId });
+        this.removeFollower(bootstrapId);
+        this.options.onFollowerDead?.(bootstrapId);
+      },
+    });
+    keepalive.start();
+
+    this.followers.set(bootstrapId, { bootstrapId, sync, unsubscribe, keepalive });
     log.info('Follower added to sync', { bootstrapId, followerCount: this.followers.size });
 
     // Send initial snapshot
@@ -104,6 +118,7 @@ export class LeaderSyncManager {
   removeFollower(bootstrapId: string): void {
     const follower = this.followers.get(bootstrapId);
     if (!follower) return;
+    follower.keepalive.stop();
     follower.unsubscribe();
     follower.sync.close();
     this.followers.delete(bootstrapId);
@@ -224,6 +239,23 @@ export class LeaderSyncManager {
       }
       case 'tab.open.error': {
         this.handleTabOpenError(message.requestId, message.error);
+        break;
+      }
+      case 'ping': {
+        // Follower is pinging us — respond with pong and treat as liveness signal
+        const follower = this.followers.get(bootstrapId);
+        if (follower) {
+          follower.keepalive.receivePing();
+          follower.sync.send({ type: 'pong' });
+        }
+        break;
+      }
+      case 'pong': {
+        // Follower responded to our ping
+        const follower = this.followers.get(bootstrapId);
+        if (follower) {
+          follower.keepalive.receivePong();
+        }
         break;
       }
     }
