@@ -109,8 +109,8 @@ Browser-based AI coding agent: a self-contained development environment where Cl
 
 Key files:
 - `src/extension/messages.ts` — Shared message types (Panel ↔ SW ↔ Offscreen)
-- `src/extension/service-worker.ts` — Message relay + CDP proxy + tab grouping
-- `src/extension/tab-group.ts` — Shared tab grouping helper (used by service worker + debugger client)
+- `src/extension/service-worker.ts` — Message relay + CDP proxy + tab grouping (inline copy — see below)
+- `src/extension/tab-group.ts` — Tab grouping helper (used by debugger client in offscreen doc)
 - `src/extension/offscreen.ts` — Agent engine bootstrap
 - `src/extension/offscreen-bridge.ts` — Orchestrator ↔ message bridge
 - `src/extension/lick-manager-proxy.ts` — BroadcastChannel proxy enabling side panel terminal to manage cron tasks via LickManager running in offscreen

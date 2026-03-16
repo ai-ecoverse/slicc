@@ -4,11 +4,13 @@
  * Extension-mode only. Creates the group lazily on first tab creation and reuses
  * it for the session. If the user ungroups tabs, a new group is created on the
  * next tab open. Best-effort: failures are logged but never block tab creation.
+ *
+ * Uses console.* instead of createLogger to avoid pulling core/ dependencies
+ * into the service worker bundle (SW is not an ES module — imports cause
+ * "Cannot use import statement outside a module" at runtime).
  */
 
-import { createLogger } from '../core/logger.js';
-
-const log = createLogger('extension:tab-group');
+const TAG = '[slicc-tab-group]';
 
 let sliccGroupId: number | null = null;
 
@@ -23,7 +25,7 @@ export async function addToSliccGroup(tabId: number): Promise<void> {
         await chrome.tabs.group({ tabIds: tabId, groupId: sliccGroupId });
         return;
       } catch (err) {
-        log.info('Tab group removed by user, recreating', {
+        console.info(TAG, 'Tab group removed by user, recreating', {
           tabId,
           previousGroupId: sliccGroupId,
           error: err instanceof Error ? err.message : String(err),
@@ -38,7 +40,7 @@ export async function addToSliccGroup(tabId: number): Promise<void> {
       collapsed: false,
     });
   } catch (err) {
-    log.warn('Tab grouping failed (best-effort, continuing without group)', {
+    console.warn(TAG, 'Tab grouping failed (best-effort, continuing without group)', {
       tabId,
       error: err instanceof Error ? err.message : String(err),
     });
