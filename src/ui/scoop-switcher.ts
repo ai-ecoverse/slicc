@@ -19,6 +19,7 @@ export class ScoopSwitcher {
   private selectedJid: string | null = null;
   private statuses: Map<string, ScoopTabState['status']> = new Map();
   private dropdownOpen = false;
+  private lastBadgeCount = 0;
 
   constructor(container: HTMLElement, callbacks: ScoopSwitcherCallbacks) {
     this.container = container;
@@ -92,6 +93,25 @@ export class ScoopSwitcher {
       this.dropdownOpen = !this.dropdownOpen;
       this.render();
     });
+
+    // Active scoop count badge
+    const activeCount = allScoops.filter(s => {
+      const status = this.statuses.get(s.jid);
+      return status === 'processing';
+    }).length;
+
+    if (activeCount > 0) {
+      const badge = document.createElement('span');
+      badge.className = 'scoop-dd__badge';
+      badge.textContent = String(activeCount);
+
+      if (activeCount !== this.lastBadgeCount) {
+        badge.classList.add('scoop-dd__badge--pulse');
+      }
+
+      trigger.appendChild(badge);
+    }
+    this.lastBadgeCount = activeCount;
 
     this.container.appendChild(trigger);
 
@@ -198,6 +218,7 @@ export class ScoopSwitcher {
       }
 
       .scoop-dd__trigger {
+        position: relative;
         display: flex;
         align-items: center;
         gap: 6px;
@@ -333,6 +354,36 @@ export class ScoopSwitcher {
 
       .scoop-dd__delete:hover {
         color: var(--s2-negative);
+      }
+
+      .scoop-dd__badge {
+        position: absolute;
+        top: -6px;
+        right: -8px;
+        background: var(--slicc-cone, #f000a0);
+        color: #fff;
+        font-size: 9px;
+        font-weight: 700;
+        min-width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0 4px;
+        border: 2px solid var(--s2-bg-layer-1, #1a1a2e);
+        pointer-events: none;
+        line-height: 1;
+      }
+
+      .scoop-dd__badge--pulse {
+        animation: scoop-badge-pulse 0.3s ease-out;
+      }
+
+      @keyframes scoop-badge-pulse {
+        0% { transform: scale(1); }
+        50% { transform: scale(1.3); }
+        100% { transform: scale(1); }
       }
     `;
     document.head.appendChild(style);
