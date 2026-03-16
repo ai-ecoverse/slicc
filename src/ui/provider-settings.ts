@@ -855,8 +855,16 @@ export function showProviderSettings(): Promise<boolean> {
         if (!pid) return;
         const providerConfig = getProviderConfig(pid);
         if (!providerConfig.onOAuthLogin) return;
-        // Save baseUrl before login so the provider's onOAuthLogin can read it
+        // Validate base URL if required
         const hadAccountBefore = getAccounts().some(a => a.providerId === pid);
+        const existingBaseUrl = getBaseUrlForProvider(pid);
+        if (providerConfig.requiresBaseUrl && !baseUrlInput.value.trim() && !existingBaseUrl) {
+          oauthStatus.textContent = 'Base URL is required.';
+          oauthStatus.style.color = 'var(--slicc-cone)';
+          baseUrlInput.focus();
+          return;
+        }
+        // Save baseUrl before login so the provider's onOAuthLogin can read it
         if (providerConfig.requiresBaseUrl && baseUrlInput.value.trim()) {
           addAccount(pid, '', baseUrlInput.value.trim());
         }
