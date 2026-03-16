@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import {
   DEFAULT_EXTENSION_TAB_ID,
@@ -6,6 +6,7 @@ import {
   isBuiltinExtensionTabId,
   isExtensionTabId,
   normalizeExtensionTabId,
+  setHiddenTabs,
 } from './tabbed-ui.js';
 
 describe('tabbed-ui', () => {
@@ -40,5 +41,34 @@ describe('tabbed-ui', () => {
     expect(normalizeExtensionTabId('sprinkle-dash')).toBe('sprinkle-dash');
     expect(normalizeExtensionTabId('files')).toBe('files');
     expect(normalizeExtensionTabId(null, 'files')).toBe('files');
+  });
+});
+
+describe('setHiddenTabs', () => {
+  beforeAll(() => {
+    if (typeof globalThis.localStorage === 'undefined') {
+      const store = new Map<string, string>();
+      (globalThis as Record<string, unknown>).localStorage = {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => store.set(k, v),
+        removeItem: (k: string) => store.delete(k),
+      };
+    }
+  });
+
+  it('stores hidden tab IDs in localStorage', () => {
+    setHiddenTabs(['terminal', 'files', 'memory']);
+    expect(JSON.parse(localStorage.getItem('slicc-hidden-tabs')!)).toEqual([
+      'terminal', 'files', 'memory',
+    ]);
+  });
+
+  it('prevents hiding chat', () => {
+    setHiddenTabs(['chat', 'terminal']);
+    expect(JSON.parse(localStorage.getItem('slicc-hidden-tabs')!)).toEqual(['terminal']);
+  });
+
+  afterEach(() => {
+    localStorage.removeItem('slicc-hidden-tabs');
   });
 });
