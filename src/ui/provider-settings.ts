@@ -106,6 +106,22 @@ export function getProviderModels(providerId: string): Model<Api>[] {
     }
     // Providers that use Anthropic's model registry with custom API
     const providerConfig = getProviderConfig(providerId);
+    if (providerConfig.getModelIds) {
+      // Provider specifies its own model list — resolve against Anthropic registry
+      const anthropicModels = getModelsDynamic('anthropic');
+      const modelMap = new Map(anthropicModels.map(m => [m.id, m]));
+      const customApi = `${providerId}-anthropic` as Api;
+      return providerConfig.getModelIds().map(pm => {
+        const base = modelMap.get(pm.id);
+        if (base) return { ...base, api: customApi, provider: providerId };
+        return {
+          id: pm.id, name: pm.name ?? pm.id, provider: providerId,
+          api: customApi, contextWindow: 200000, maxTokens: 16384, input: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          inputCost: 0, outputCost: 0, cacheReadCost: 0, cacheWriteCost: 0, reasoning: true,
+        } as unknown as Model<Api>;
+      });
+    }
     if (providerConfig.isOAuth) {
       // OAuth providers use Anthropic models with custom API routing
       const anthropicModels = getModelsDynamic('anthropic');
@@ -256,7 +272,9 @@ export function saveOAuthAccount(opts: {
   refreshToken?: string;
   tokenExpiresAt?: number;
   userName?: string;
+  baseUrl?: string;
 }): void {
+  const existing = getAccounts().find(a => a.providerId === opts.providerId);
   const accounts = getAccounts().filter(a => a.providerId !== opts.providerId);
   accounts.push({
     providerId: opts.providerId,
@@ -265,6 +283,7 @@ export function saveOAuthAccount(opts: {
     refreshToken: opts.refreshToken,
     tokenExpiresAt: opts.tokenExpiresAt,
     userName: opts.userName,
+    baseUrl: opts.baseUrl ?? existing?.baseUrl,
   });
   saveAccounts(accounts);
 }
@@ -819,6 +838,10 @@ export function showProviderSettings(): Promise<boolean> {
         if (!pid) return;
         const providerConfig = getProviderConfig(pid);
         if (!providerConfig.onOAuthLogin) return;
+        // Save baseUrl before login so the provider's onOAuthLogin can read it
+        if (providerConfig.requiresBaseUrl && baseUrlInput.value.trim()) {
+          addAccount(pid, '', baseUrlInput.value.trim());
+        }
         oauthStatus.textContent = 'Opening login window...';
         try {
           const { createOAuthLauncher } = await import('../providers/oauth-service.js');
@@ -899,7 +922,11 @@ export function showProviderSettings(): Promise<boolean> {
         if (providerConfig.isOAuth) {
           oauthSection.style.display = '';
           apiKeySection.style.display = 'none';
-          baseUrlSection.style.display = 'none';
+          baseUrlSection.style.display = providerConfig.requiresBaseUrl ? '' : 'none';
+          if (providerConfig.requiresBaseUrl) {
+            baseUrlInput.placeholder = providerConfig.baseUrlPlaceholder || 'https://...';
+            baseUrlDesc.textContent = providerConfig.baseUrlDescription || '';
+          }
           oauthLoginBtn.textContent = `Login with ${providerConfig.name}`;
           saveBtn.style.display = 'none';
         } else {

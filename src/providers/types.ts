@@ -29,4 +29,10 @@ export interface ProviderConfig {
   onOAuthLogin?: (launcher: OAuthLauncher, onSuccess: () => void) => Promise<void>;
   /** Called when the user clicks logout for this OAuth provider. */
   onOAuthLogout?: () => Promise<void>;
+  /**
+   * Optional: return the model IDs this provider supports.
+   * When present, getProviderModels uses this instead of returning all Anthropic models.
+   * Models are resolved against the Anthropic registry by ID.
+   */
+  getModelIds?: () => Array<{ id: string; name?: string }>;
 }
