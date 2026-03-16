@@ -121,6 +121,7 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **webhook/crontask** — Set up licks (external event triggers)
 - **sprinkle** — Manage sprinkles: `sprinkle list`, `sprinkle open <name>`, `sprinkle close <name>`, `sprinkle send <name> '<json>'` (push data to a sprinkle)
 - **oauth-token** — Get an OAuth access token for a provider (`oauth-token adobe`); auto-triggers login if no valid token exists. Use in shell: `curl -H "Authorization: Bearer $(oauth-token adobe)" https://api.example.com`
+- **da** — Document Authoring (Adobe DA) content I/O: `da config`, `da list`, `da get`, `da put`, `da preview`, `da publish`, `da upload`. Config stored in `/shared/.da-config.json`. Run `da help` for details.
 - **git** — Full git support (clone, commit, push, pull)
 - **node -e / python3 -c** — Execute JavaScript or Python. JSH/node scripts have access to `exec(command)` to run shell commands: `const r = await exec('oauth-token adobe'); const token = r.stdout.trim();`
 - **serve <dir>** — Open a VFS app directory in a new browser tab. Defaults to `index.html`; use `--entry` to override the entry file.

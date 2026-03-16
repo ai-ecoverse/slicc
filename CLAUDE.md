@@ -175,6 +175,7 @@ WasmShell wraps just-bash 2.11.7 (WASM Bash interpreter) and connects it to Virt
   - `upskill owner/repo --skill name` — Install specific skill from repo
   - `upskill clawhub:skill-name` — Install from ClawHub by name
   - `upskill search "query"` — Search ClawHub for skills
+- `da` — Document Authoring (Adobe DA) content I/O: config, list, get, put, preview, publish, upload. Config in `/shared/.da-config.json`. IMS service token exchange for auth.
 - `git` — Full git support via isomorphic-git
 - `imgcat` — Preview image and video files in the preview tab
 - `sqlite3` / `sqllite` — SQLite database operations

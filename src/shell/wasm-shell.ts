@@ -14,6 +14,7 @@ import type { BashExecResult, SecureFetch, Command } from 'just-bash';
 import { VfsAdapter } from './vfs-adapter.js';
 import { cacheBinaryBody, cacheBinaryByUrl } from './binary-cache.js';
 import { GitCommands } from '../git/git-commands.js';
+import { DACommands } from '../da/da-commands.js';
 import { createSupplementalCommands } from './supplemental-commands.js';
 import type { MediaPreviewItem } from './supplemental-commands.js';
 import type { BrowserAPI } from '../cdp/index.js';
@@ -146,6 +147,7 @@ export class WasmShell {
   private bash: Bash;
   private vfsAdapter: VfsAdapter;
   private gitCommands: GitCommands;
+  private daCommands: DACommands;
   private mountCommands: MountCommands;
   private terminal: Terminal | null = null;
   private fitAddon: FitAddon | null = null;
@@ -187,6 +189,9 @@ export class WasmShell {
       authorEmail: initialEnv.GIT_AUTHOR_EMAIL ?? 'user@example.com',
     });
 
+    // Initialize DA commands with VirtualFS
+    this.daCommands = new DACommands({ fs: options.fs });
+
     // Initialize mount commands with VirtualFS
     this.mountCommands = new MountCommands({ fs: options.fs });
 
@@ -201,8 +206,11 @@ export class WasmShell {
     const mountCommand = this.createMountCustomCommand();
     const fetchFn = createProxiedFetch();
 
+    const daCommand = this.createDACustomCommand();
+
     const customCommands = [
       gitCommand,
+      daCommand,
       mountCommand,
       createSkillCommand(options.fs),
       createUpskillCommand(options.fs, fetchFn),
@@ -238,6 +246,20 @@ export class WasmShell {
     return defineCommand('git', async (args, ctx) => {
       const cwd = ctx.cwd;
       const result = await gitCommands.execute(args, cwd);
+      return {
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+      };
+    });
+  }
+
+  /** Create a custom da command for just-bash. */
+  private createDACustomCommand(): Command {
+    const daCommands = this.daCommands;
+    return defineCommand('da', async (args, ctx) => {
+      const cwd = ctx.cwd;
+      const result = await daCommands.execute(args, cwd);
       return {
         stdout: result.stdout,
         stderr: result.stderr,
