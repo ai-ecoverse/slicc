@@ -453,17 +453,19 @@ export function resolveModelById(modelId?: string): Model<Api> {
       : providerId === 'azure-ai-foundry' ? 'anthropic'
       : providerId === 'bedrock-camp' ? 'amazon-bedrock'
       : providerId;
-    let model = getModelDynamic(effectiveProvider, modelId);
+    const model = getModelDynamic(effectiveProvider, modelId);
+    if (!model?.id) throw new Error(`Model ${modelId} not found`);
+    let resolved: Model<Api> = model;
 
     if (providerConfig.isOAuth) {
-      model = { ...model, api: `${providerId}-anthropic` as Api, provider: providerId };
+      resolved = { ...resolved, api: `${providerId}-anthropic` as Api, provider: providerId };
     } else if (providerId === 'bedrock-camp') {
-      model = { ...model, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
+      resolved = { ...resolved, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
     }
     if (baseUrl) {
-      model = { ...model, baseUrl };
+      resolved = { ...resolved, baseUrl };
     }
-    return model;
+    return resolved;
   } catch {
     return resolveCurrentModel();
   }
@@ -484,21 +486,23 @@ export function resolveCurrentModel(): Model<Api> {
       : providerId === 'azure-ai-foundry' ? 'anthropic'
       : providerId === 'bedrock-camp' ? 'amazon-bedrock'
       : providerId;
-    let model = getModelDynamic(effectiveProvider, effectiveModelId);
+    const model = getModelDynamic(effectiveProvider, effectiveModelId);
+    if (!model?.id) throw new Error(`Model ${effectiveModelId} not found in ${effectiveProvider} registry`);
+    let resolved: Model<Api> = model;
 
     // Override api and provider for custom routing
     if (providerConfig.isOAuth) {
-      model = { ...model, api: `${providerId}-anthropic` as Api, provider: providerId };
+      resolved = { ...resolved, api: `${providerId}-anthropic` as Api, provider: providerId };
     } else if (providerId === 'bedrock-camp') {
-      model = { ...model, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
+      resolved = { ...resolved, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
     }
 
     // Override baseUrl if custom one is set
     if (baseUrl) {
-      model = { ...model, baseUrl };
+      resolved = { ...resolved, baseUrl };
     }
 
-    return model;
+    return resolved;
   } catch {
     // Model not in pi-ai registry — try provider's custom model list first
     const customModel = models.find(m => m.id === effectiveModelId);
