@@ -12,7 +12,11 @@ import {
   type TraySyncChannel,
   type RemoteTargetInfo,
   type TrayTargetEntry,
+  type TrayFsRequest,
+  type TrayFsResponse,
 } from './tray-sync-protocol.js';
+import { handleFsRequest } from './tray-fs-handler.js';
+import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { CDPTransport } from '../cdp/transport.js';
 import { RemoteCDPTransport, type RemoteCDPSender } from '../cdp/remote-cdp-transport.js';
 import { DataChannelKeepalive } from './data-channel-keepalive.js';
@@ -36,6 +40,8 @@ export interface FollowerSyncManagerOptions {
   onDead?: () => void;
   /** Called after the connection has been cleaned up due to keepalive death or channel failure. Higher-level code can use this to trigger reconnection. */
   onDisconnect?: (reason: string) => void;
+  /** VirtualFS instance for handling remote fs requests targeting this follower. */
+  vfs?: VirtualFS;
 }
 
 /**
@@ -55,6 +61,8 @@ export class FollowerSyncManager implements AgentHandle {
   private readonly remoteTransports = new Map<string, RemoteCDPTransport>();
   /** Resolvers for outgoing tab.open requests. */
   private readonly tabOpenResolvers = new Map<string, { resolve: (targetId: string) => void; reject: (err: Error) => void }>();
+  /** Resolvers for outgoing fs requests. */
+  private readonly fsResolvers = new Map<string, { resolve: (responses: TrayFsResponse[]) => void; reject: (err: Error) => void; responses: TrayFsResponse[] }>();
 
   constructor(
     channel: TrayDataChannelLike,
@@ -239,6 +247,14 @@ export class FollowerSyncManager implements AgentHandle {
         }
         break;
       }
+      case 'fs.request': {
+        this.executeLocalFs(message.requestId, message.request);
+        break;
+      }
+      case 'fs.response': {
+        this.routeFsResponse(message.requestId, message.response);
+        break;
+      }
       case 'ping': {
         // Leader is pinging us — respond with pong and treat as liveness signal
         this.keepalive.receivePing();
@@ -368,5 +384,56 @@ export class FollowerSyncManager implements AgentHandle {
     for (const transport of this.remoteTransports.values()) {
       transport.handleResponse(requestId, result, error);
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // FS routing
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Execute an fs request on the follower's local VFS.
+   * Sends the response(s) back to the leader.
+   */
+  private async executeLocalFs(requestId: string, request: TrayFsRequest): Promise<void> {
+    const vfs = this.options.vfs;
+    if (!vfs) {
+      this.sync.send({ type: 'fs.response', requestId, response: { ok: false, error: 'Follower has no VFS' } });
+      return;
+    }
+
+    const responses = await handleFsRequest(vfs, request);
+    for (const response of responses) {
+      this.sync.send({ type: 'fs.response', requestId, response });
+    }
+  }
+
+  /**
+   * Route an fs response from the leader to the appropriate pending resolver.
+   * Handles chunked responses by accumulating until all chunks arrive.
+   */
+  private routeFsResponse(requestId: string, response: TrayFsResponse): void {
+    const resolver = this.fsResolvers.get(requestId);
+    if (!resolver) return;
+
+    resolver.responses.push(response);
+    const totalChunks = (response.ok && response.totalChunks) || 1;
+    if (resolver.responses.length >= totalChunks) {
+      this.fsResolvers.delete(requestId);
+      resolver.resolve(resolver.responses);
+    }
+  }
+
+  /**
+   * Send an fs request to a remote runtime via the leader.
+   * Returns a promise that resolves with the response(s).
+   *
+   * This is the public API that the rsync shell command will call.
+   */
+  sendFsRequest(targetRuntimeId: string, request: TrayFsRequest): Promise<TrayFsResponse[]> {
+    const requestId = `fs-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return new Promise<TrayFsResponse[]>((resolve, reject) => {
+      this.fsResolvers.set(requestId, { resolve, reject, responses: [] });
+      this.sync.send({ type: 'fs.request', requestId, targetRuntimeId, request });
+    });
   }
 }

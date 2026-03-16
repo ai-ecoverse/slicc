@@ -12,7 +12,11 @@ import {
   type TraySyncChannel,
   type RemoteTargetInfo,
   type TrayTargetEntry,
+  type TrayFsRequest,
+  type TrayFsResponse,
 } from './tray-sync-protocol.js';
+import { handleFsRequest } from './tray-fs-handler.js';
+import type { VirtualFS } from '../fs/virtual-fs.js';
 import { TrayTargetRegistry } from './tray-target-registry.js';
 import type { CDPTransport } from '../cdp/transport.js';
 import { RemoteCDPTransport, type RemoteCDPSender } from '../cdp/remote-cdp-transport.js';
@@ -34,6 +38,8 @@ export interface LeaderSyncManagerOptions {
   browserTransport?: CDPTransport;
   /** Called when a follower's data channel is considered dead (missed keepalive pongs). */
   onFollowerDead?: (bootstrapId: string) => void;
+  /** VirtualFS instance for handling remote fs requests targeting the leader. */
+  vfs?: VirtualFS;
 }
 
 interface ConnectedFollower {
@@ -41,6 +47,8 @@ interface ConnectedFollower {
   sync: TraySyncChannel<LeaderToFollowerMessage, FollowerToLeaderMessage>;
   unsubscribe: () => void;
   keepalive: DataChannelKeepalive;
+  runtime?: string;
+  connectedAt?: string;
 }
 
 /** Tracks a CDP request being routed through the leader. */
@@ -59,6 +67,18 @@ interface PendingTabOpenRoute {
   requestId: string;
 }
 
+/** Tracks an fs request being routed through the leader. */
+interface PendingFsRoute {
+  /** bootstrapId of the follower that originated the request (or '__leader__') */
+  requesterBootstrapId: string;
+  /** The original requestId from the requester */
+  requestId: string;
+  /** Accumulated chunked responses (for multi-chunk file reads). */
+  chunks: TrayFsResponse[];
+  /** Expected total chunks (set from first response). */
+  totalChunks: number;
+}
+
 export class LeaderSyncManager {
   private readonly followers = new Map<string, ConnectedFollower>();
   private readonly registry = new TrayTargetRegistry();
@@ -72,6 +92,10 @@ export class LeaderSyncManager {
   private readonly pendingTabOpenRoutes = new Map<string, PendingTabOpenRoute>();
   /** Resolvers for leader-originated tab.open requests. */
   private readonly tabOpenResolvers = new Map<string, { resolve: (targetId: string) => void; reject: (err: Error) => void }>();
+  /** Maps requestId → routing info for fs requests in flight through the leader. */
+  private readonly pendingFsRoutes = new Map<string, PendingFsRoute>();
+  /** Resolvers for leader-originated fs requests. */
+  private readonly fsResolvers = new Map<string, { resolve: (responses: TrayFsResponse[]) => void; reject: (err: Error) => void; responses: TrayFsResponse[] }>();
 
   constructor(private readonly options: LeaderSyncManagerOptions) {}
 
@@ -79,7 +103,7 @@ export class LeaderSyncManager {
    * Add a connected follower's data channel.
    * Sends an initial snapshot and subscribes to follower messages.
    */
-  addFollower(bootstrapId: string, channel: TrayDataChannelLike): void {
+  addFollower(bootstrapId: string, channel: TrayDataChannelLike, meta?: { runtime?: string; connectedAt?: string }): void {
     // Clean up existing connection for same bootstrap
     this.removeFollower(bootstrapId);
 
@@ -99,7 +123,7 @@ export class LeaderSyncManager {
     });
     keepalive.start();
 
-    this.followers.set(bootstrapId, { bootstrapId, sync, unsubscribe, keepalive });
+    this.followers.set(bootstrapId, { bootstrapId, sync, unsubscribe, keepalive, runtime: meta?.runtime, connectedAt: meta?.connectedAt });
     log.info('Follower added to sync', { bootstrapId, followerCount: this.followers.size });
 
     // Send initial snapshot
@@ -241,6 +265,19 @@ export class LeaderSyncManager {
         this.handleTabOpenError(message.requestId, message.error);
         break;
       }
+      case 'fs.request': {
+        const { requestId, targetRuntimeId, request } = message;
+        if (targetRuntimeId === 'leader') {
+          this.executeLocalFs(requestId, request, bootstrapId);
+        } else {
+          this.forwardFsRequest(requestId, targetRuntimeId, request, bootstrapId);
+        }
+        break;
+      }
+      case 'fs.response': {
+        this.handleFsResponse(message.requestId, message.response);
+        break;
+      }
       case 'ping': {
         // Follower is pinging us — respond with pong and treat as liveness signal
         const follower = this.followers.get(bootstrapId);
@@ -330,10 +367,13 @@ export class LeaderSyncManager {
   }
 
   /**
-   * Return the list of connected follower runtimeIds.
+   * Return the list of connected follower runtimeIds with metadata.
    */
-  getConnectedFollowers(): { runtimeId: string }[] {
-    return [...this.runtimeToBootstrap.keys()].map(runtimeId => ({ runtimeId }));
+  getConnectedFollowers(): { runtimeId: string; runtime?: string; connectedAt?: string }[] {
+    return [...this.runtimeToBootstrap.entries()].map(([runtimeId, bootstrapId]) => {
+      const follower = this.followers.get(bootstrapId);
+      return { runtimeId, runtime: follower?.runtime, connectedAt: follower?.connectedAt };
+    });
   }
 
   /**
@@ -546,5 +586,139 @@ export class LeaderSyncManager {
     if (requester) {
       requester.sync.send({ type: 'tab.open.error', requestId, error });
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // FS routing
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Execute an fs request on the leader's own VFS.
+   * Sends the response(s) back to the requesting follower.
+   */
+  private async executeLocalFs(
+    requestId: string,
+    request: TrayFsRequest,
+    requesterBootstrapId: string,
+  ): Promise<void> {
+    const follower = this.followers.get(requesterBootstrapId);
+    if (!follower) return;
+
+    const vfs = this.options.vfs;
+    if (!vfs) {
+      follower.sync.send({ type: 'fs.response', requestId, response: { ok: false, error: 'Leader has no VFS' } });
+      return;
+    }
+
+    const responses = await handleFsRequest(vfs, request);
+    for (const response of responses) {
+      follower.sync.send({ type: 'fs.response', requestId, response });
+    }
+  }
+
+  /**
+   * Forward an fs request from one follower to another follower that owns the target runtime.
+   */
+  private forwardFsRequest(
+    requestId: string,
+    targetRuntimeId: string,
+    request: TrayFsRequest,
+    requesterBootstrapId: string,
+  ): void {
+    const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
+    const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
+    const requester = this.followers.get(requesterBootstrapId);
+
+    if (!targetFollower) {
+      if (requester) {
+        requester.sync.send({
+          type: 'fs.response',
+          requestId,
+          response: { ok: false, error: `Target runtime "${targetRuntimeId}" not connected` },
+        });
+      }
+      return;
+    }
+
+    // Track the pending route so we can return the response to the requester
+    this.pendingFsRoutes.set(requestId, { requesterBootstrapId, requestId, chunks: [], totalChunks: 1 });
+
+    // Forward to the target follower
+    targetFollower.sync.send({ type: 'fs.request', requestId, request });
+  }
+
+  /**
+   * Handle an fs response from a follower (forwarding back to the original requester).
+   * Supports chunked responses — accumulates chunks and forwards each one.
+   */
+  private handleFsResponse(requestId: string, response: TrayFsResponse): void {
+    const route = this.pendingFsRoutes.get(requestId);
+    if (!route) {
+      // Check if this is for a leader-originated request
+      const resolver = this.fsResolvers.get(requestId);
+      if (resolver) {
+        resolver.responses.push(response);
+        const totalChunks = (response.ok && response.totalChunks) || 1;
+        if (resolver.responses.length >= totalChunks) {
+          this.fsResolvers.delete(requestId);
+          resolver.resolve(resolver.responses);
+        }
+      }
+      return;
+    }
+
+    // Route to the leader's own fsResolvers if the requester is the leader itself
+    if (route.requesterBootstrapId === '__leader__') {
+      const resolver = this.fsResolvers.get(requestId);
+      if (resolver) {
+        resolver.responses.push(response);
+        const totalChunks = (response.ok && response.totalChunks) || 1;
+        if (resolver.responses.length >= totalChunks) {
+          this.fsResolvers.delete(requestId);
+          this.pendingFsRoutes.delete(requestId);
+          resolver.resolve(resolver.responses);
+        }
+      }
+      return;
+    }
+
+    const requester = this.followers.get(route.requesterBootstrapId);
+    if (requester) {
+      requester.sync.send({ type: 'fs.response', requestId, response });
+    }
+
+    // Track chunks and clean up route when all chunks received
+    route.chunks.push(response);
+    const totalChunks = (response.ok && response.totalChunks) || 1;
+    route.totalChunks = totalChunks;
+    if (route.chunks.length >= route.totalChunks) {
+      this.pendingFsRoutes.delete(requestId);
+    }
+  }
+
+  /**
+   * Send an fs request to a remote runtime from the leader's own code.
+   * Returns a promise that resolves with the response(s).
+   */
+  sendFsRequest(targetRuntimeId: string, request: TrayFsRequest): Promise<TrayFsResponse[]> {
+    if (targetRuntimeId === 'leader') {
+      const vfs = this.options.vfs;
+      if (!vfs) return Promise.resolve([{ ok: false, error: 'Leader has no VFS' }]);
+      return handleFsRequest(vfs, request);
+    }
+
+    const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
+    const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
+
+    if (!targetFollower) {
+      return Promise.resolve([{ ok: false, error: `Target runtime "${targetRuntimeId}" not connected` }]);
+    }
+
+    const requestId = `fs-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return new Promise<TrayFsResponse[]>((resolve, reject) => {
+      this.fsResolvers.set(requestId, { resolve, reject, responses: [] });
+      this.pendingFsRoutes.set(requestId, { requesterBootstrapId: '__leader__', requestId, chunks: [], totalChunks: 1 });
+      targetFollower.sync.send({ type: 'fs.request', requestId, request });
+    });
   }
 }

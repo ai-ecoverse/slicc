@@ -1,9 +1,11 @@
+import 'fake-indexeddb/auto';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 import { LeaderSyncManager, type LeaderSyncManagerOptions } from './tray-leader-sync.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
 import type { AgentEvent, ChatMessage } from '../ui/types.js';
 import type { LeaderToFollowerMessage, FollowerToLeaderMessage, TrayTargetEntry } from './tray-sync-protocol.js';
+import { VirtualFS } from '../fs/virtual-fs.js';
 
 // ---------------------------------------------------------------------------
 // Fake data channel
@@ -201,7 +203,9 @@ describe('LeaderSyncManager', () => {
       runtimeId: 'follower-b1',
     });
 
-    expect(manager.getConnectedFollowers()).toEqual([{ runtimeId: 'follower-b1' }]);
+    const followers1 = manager.getConnectedFollowers();
+    expect(followers1).toHaveLength(1);
+    expect(followers1[0].runtimeId).toBe('follower-b1');
 
     // Follower b2 advertises
     ch2.simulateMessage({
@@ -210,13 +214,38 @@ describe('LeaderSyncManager', () => {
       runtimeId: 'follower-b2',
     });
 
-    expect(manager.getConnectedFollowers()).toHaveLength(2);
-    expect(manager.getConnectedFollowers()).toContainEqual({ runtimeId: 'follower-b1' });
-    expect(manager.getConnectedFollowers()).toContainEqual({ runtimeId: 'follower-b2' });
+    const followers2 = manager.getConnectedFollowers();
+    expect(followers2).toHaveLength(2);
+    expect(followers2.map(f => f.runtimeId)).toContain('follower-b1');
+    expect(followers2.map(f => f.runtimeId)).toContain('follower-b2');
 
     // Remove follower b1
     manager.removeFollower('b1');
-    expect(manager.getConnectedFollowers()).toEqual([{ runtimeId: 'follower-b2' }]);
+    const followers3 = manager.getConnectedFollowers();
+    expect(followers3).toHaveLength(1);
+    expect(followers3[0].runtimeId).toBe('follower-b2');
+  });
+
+  it('getConnectedFollowers includes runtime and connectedAt metadata', () => {
+    const { manager } = createManager();
+    const ch1 = new FakeChannel();
+    const connectedAt = '2026-03-16T10:00:00.000Z';
+    manager.addFollower('b1', ch1, { runtime: 'slicc-electron', connectedAt });
+
+    // Advertise to register runtimeId
+    ch1.simulateMessage({
+      type: 'targets.advertise',
+      targets: [{ targetId: 'tab1', title: 'Tab', url: 'https://example.com' }],
+      runtimeId: 'follower-b1',
+    });
+
+    const followers = manager.getConnectedFollowers();
+    expect(followers).toHaveLength(1);
+    expect(followers[0]).toEqual({
+      runtimeId: 'follower-b1',
+      runtime: 'slicc-electron',
+      connectedAt,
+    });
   });
 
   it('stop removes all followers', () => {
@@ -857,6 +886,233 @@ describe('LeaderSyncManager', () => {
 
       expect(manager.hasFollowers).toBe(true);
       expect(onFollowerDead).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('fs routing', () => {
+    let vfs: VirtualFS;
+    let dbCounter = 0;
+
+    beforeEach(async () => {
+      vfs = await VirtualFS.create({ dbName: `test-leader-fs-${dbCounter++}`, wipe: true });
+    });
+
+    it('handles fs.request for leader — executes locally and returns response', async () => {
+      const { manager } = createManager({ vfs });
+      await vfs.writeFile('/hello.txt', 'world');
+
+      const ch1 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+      ch1.sent.length = 0;
+
+      ch1.simulateMessage({
+        type: 'fs.request',
+        requestId: 'fs-1',
+        targetRuntimeId: 'leader',
+        request: { op: 'readFile', path: '/hello.txt' },
+      } as any);
+
+      await vi.waitFor(() => {
+        expect(ch1.parseSent().length).toBeGreaterThan(0);
+      });
+
+      const sent = ch1.parseSent();
+      const response = sent.find(m => m.type === 'fs.response');
+      expect(response).toBeDefined();
+      if (response && response.type === 'fs.response') {
+        expect(response.requestId).toBe('fs-1');
+        expect(response.response.ok).toBe(true);
+        if (response.response.ok) {
+          expect(response.response.data).toEqual({
+            type: 'file',
+            content: 'world',
+            encoding: 'utf-8',
+          });
+        }
+      }
+    });
+
+    it('handles fs.request for leader — returns error if no VFS', async () => {
+      const { manager } = createManager();
+
+      const ch1 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+      ch1.sent.length = 0;
+
+      ch1.simulateMessage({
+        type: 'fs.request',
+        requestId: 'fs-2',
+        targetRuntimeId: 'leader',
+        request: { op: 'readFile', path: '/nope.txt' },
+      } as any);
+
+      await vi.waitFor(() => {
+        expect(ch1.parseSent().length).toBeGreaterThan(0);
+      });
+
+      const sent = ch1.parseSent();
+      const response = sent.find(m => m.type === 'fs.response');
+      expect(response).toBeDefined();
+      if (response && response.type === 'fs.response') {
+        expect(response.response.ok).toBe(false);
+        if (!response.response.ok) {
+          expect(response.response.error).toBe('Leader has no VFS');
+        }
+      }
+    });
+
+    it('forwards fs.request to target follower', () => {
+      const { manager } = createManager({ vfs });
+      const ch1 = new FakeChannel();
+      const ch2 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+      manager.addFollower('b2', ch2);
+
+      // Follower b2 advertises so leader knows its runtime mapping
+      ch2.simulateMessage({
+        type: 'targets.advertise',
+        targets: [{ targetId: 'tab1', title: 'Tab 1', url: 'https://example.com' }],
+        runtimeId: 'follower-b2',
+      });
+
+      ch1.sent.length = 0;
+      ch2.sent.length = 0;
+
+      ch1.simulateMessage({
+        type: 'fs.request',
+        requestId: 'fs-3',
+        targetRuntimeId: 'follower-b2',
+        request: { op: 'readFile', path: '/remote.txt' },
+      } as any);
+
+      const sent2 = ch2.parseSent();
+      expect(sent2).toHaveLength(1);
+      expect(sent2[0].type).toBe('fs.request');
+      if (sent2[0].type === 'fs.request') {
+        expect(sent2[0].requestId).toBe('fs-3');
+        expect(sent2[0].request.op).toBe('readFile');
+      }
+    });
+
+    it('forwards fs.response back to original requester', () => {
+      const { manager } = createManager({ vfs });
+      const ch1 = new FakeChannel();
+      const ch2 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+      manager.addFollower('b2', ch2);
+
+      ch2.simulateMessage({
+        type: 'targets.advertise',
+        targets: [{ targetId: 'tab1', title: 'Tab 1', url: 'https://example.com' }],
+        runtimeId: 'follower-b2',
+      });
+
+      ch1.sent.length = 0;
+      ch2.sent.length = 0;
+
+      // Follower b1 sends fs request targeting follower-b2
+      ch1.simulateMessage({
+        type: 'fs.request',
+        requestId: 'fs-4',
+        targetRuntimeId: 'follower-b2',
+        request: { op: 'readFile', path: '/remote.txt' },
+      } as any);
+
+      // Follower b2 responds
+      ch2.simulateMessage({
+        type: 'fs.response',
+        requestId: 'fs-4',
+        response: { ok: true, data: { type: 'file', content: 'remote content', encoding: 'utf-8' } },
+      } as any);
+
+      const sent1 = ch1.parseSent();
+      const response = sent1.find(m => m.type === 'fs.response');
+      expect(response).toBeDefined();
+      if (response && response.type === 'fs.response') {
+        expect(response.requestId).toBe('fs-4');
+        expect(response.response.ok).toBe(true);
+      }
+    });
+
+    it('returns error when target runtime is not connected', () => {
+      const { manager } = createManager({ vfs });
+      const ch1 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+      ch1.sent.length = 0;
+
+      ch1.simulateMessage({
+        type: 'fs.request',
+        requestId: 'fs-5',
+        targetRuntimeId: 'unknown-runtime',
+        request: { op: 'stat', path: '/whatever' },
+      } as any);
+
+      const sent = ch1.parseSent();
+      expect(sent).toHaveLength(1);
+      expect(sent[0].type).toBe('fs.response');
+      if (sent[0].type === 'fs.response') {
+        expect(sent[0].response.ok).toBe(false);
+        if (!sent[0].response.ok) {
+          expect(sent[0].response.error).toContain('not connected');
+        }
+      }
+    });
+
+    it('sendFsRequest from leader sends to target follower and resolves', async () => {
+      const { manager } = createManager({ vfs });
+      const ch1 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+
+      ch1.simulateMessage({
+        type: 'targets.advertise',
+        targets: [{ targetId: 'tab1', title: 'Tab 1', url: 'https://example.com' }],
+        runtimeId: 'follower-b1',
+      });
+
+      ch1.sent.length = 0;
+
+      const promise = manager.sendFsRequest('follower-b1', { op: 'exists', path: '/test' });
+
+      // Find the sent fs.request
+      const sent = ch1.parseSent();
+      const fsReq = sent.find(m => m.type === 'fs.request');
+      expect(fsReq).toBeDefined();
+      if (fsReq && fsReq.type === 'fs.request') {
+        // Simulate follower responding
+        ch1.simulateMessage({
+          type: 'fs.response',
+          requestId: fsReq.requestId,
+          response: { ok: true, data: { type: 'exists', exists: true } },
+        } as any);
+      }
+
+      const responses = await promise;
+      expect(responses).toHaveLength(1);
+      expect(responses[0].ok).toBe(true);
+    });
+
+    it('sendFsRequest targeting leader executes locally', async () => {
+      const { manager } = createManager({ vfs });
+      await vfs.writeFile('/local.txt', 'local content');
+
+      const responses = await manager.sendFsRequest('leader', { op: 'readFile', path: '/local.txt' });
+      expect(responses).toHaveLength(1);
+      expect(responses[0].ok).toBe(true);
+      if (responses[0].ok) {
+        expect(responses[0].data).toEqual({
+          type: 'file',
+          content: 'local content',
+          encoding: 'utf-8',
+        });
+      }
+    });
+
+    it('sendFsRequest returns error when target not connected', async () => {
+      const { manager } = createManager({ vfs });
+
+      const responses = await manager.sendFsRequest('unknown', { op: 'exists', path: '/' });
+      expect(responses).toHaveLength(1);
+      expect(responses[0].ok).toBe(false);
     });
   });
 });

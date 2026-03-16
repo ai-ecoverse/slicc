@@ -27,6 +27,8 @@ export type LeaderToFollowerMessage =
   | { type: 'tab.open'; requestId: string; url: string }
   | { type: 'tab.opened'; requestId: string; targetId: string }
   | { type: 'tab.open.error'; requestId: string; error: string }
+  | { type: 'fs.request'; requestId: string; request: TrayFsRequest }
+  | { type: 'fs.response'; requestId: string; response: TrayFsResponse }
   | { type: 'ping' }
   | { type: 'pong' };
 
@@ -40,6 +42,8 @@ export type FollowerToLeaderMessage =
   | { type: 'tab.open'; requestId: string; targetRuntimeId: string; url: string }
   | { type: 'tab.opened'; requestId: string; targetId: string }
   | { type: 'tab.open.error'; requestId: string; error: string }
+  | { type: 'fs.request'; requestId: string; targetRuntimeId: string; request: TrayFsRequest }
+  | { type: 'fs.response'; requestId: string; response: TrayFsResponse }
   | { type: 'ping' }
   | { type: 'pong' };
 
@@ -61,6 +65,35 @@ export interface TrayTargetEntry {
   url: string;
   isLocal: boolean;       // True if owned by the receiving runtime (set by consumer, not registry)
 }
+
+// ---------------------------------------------------------------------------
+// VFS sync protocol types
+// ---------------------------------------------------------------------------
+
+/** A single FS operation request sent over the data channel. */
+export type TrayFsRequest =
+  | { op: 'readFile'; path: string; encoding?: 'utf-8' | 'binary' }
+  | { op: 'writeFile'; path: string; content: string; encoding: 'utf-8' | 'base64' }
+  | { op: 'stat'; path: string }
+  | { op: 'readDir'; path: string }
+  | { op: 'mkdir'; path: string; recursive?: boolean }
+  | { op: 'rm'; path: string; recursive?: boolean }
+  | { op: 'exists'; path: string }
+  | { op: 'walk'; path: string };
+
+/** A single FS operation response. Chunked responses use chunkIndex/totalChunks for large file content. */
+export type TrayFsResponse =
+  | { ok: true; data: TrayFsResponseData; chunkIndex?: number; totalChunks?: number }
+  | { ok: false; error: string; code?: string };
+
+/** Possible data payloads for successful FS responses. */
+export type TrayFsResponseData =
+  | { type: 'file'; content: string; encoding: 'utf-8' | 'base64' }
+  | { type: 'stat'; stat: { type: 'file' | 'directory'; size: number; mtime: number; ctime: number } }
+  | { type: 'dirEntries'; entries: Array<{ name: string; type: 'file' | 'directory' }> }
+  | { type: 'exists'; exists: boolean }
+  | { type: 'paths'; paths: string[] }
+  | { type: 'void' };
 
 export type TraySyncMessage = LeaderToFollowerMessage | FollowerToLeaderMessage;
 
