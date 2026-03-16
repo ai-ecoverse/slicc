@@ -86,23 +86,30 @@ interface ProxyConfig {
   models?: Array<{ id: string; name?: string }>;
 }
 
-let cachedProxyConfig: ProxyConfig | null = null;
+const proxyConfigCache = new Map<string, ProxyConfig>();
 
 /**
  * Fetch client config from the proxy's /v1/config endpoint (unauthenticated).
- * Caches the result for the session lifetime. Falls back to adobeConfig values on failure.
+ * Caches per endpoint so switching proxy URLs fetches fresh config.
+ * Falls back to build-time adobeConfig values on failure.
  */
 async function fetchProxyConfig(proxyEndpoint: string): Promise<ProxyConfig> {
-  if (cachedProxyConfig) return cachedProxyConfig;
+  const cached = proxyConfigCache.get(proxyEndpoint);
+  if (cached) return cached;
   try {
     const res = await fetch(`${proxyEndpoint}/v1/config`);
     if (res.ok) {
-      cachedProxyConfig = await res.json() as ProxyConfig;
-      return cachedProxyConfig;
+      const config = await res.json() as ProxyConfig;
+      proxyConfigCache.set(proxyEndpoint, config);
+      return config;
     }
-  } catch { /* best-effort — fall back to build-time config */ }
-  cachedProxyConfig = {};
-  return cachedProxyConfig;
+    console.warn(`[adobe] Proxy /v1/config returned ${res.status}, falling back to build-time config`);
+  } catch (err) {
+    console.warn('[adobe] Failed to fetch proxy config:', err instanceof Error ? err.message : String(err));
+  }
+  const empty: ProxyConfig = {};
+  proxyConfigCache.set(proxyEndpoint, empty);
+  return empty;
 }
 
 /** Resolve the IMS client ID. Fetched config takes precedence over build-time config. */
@@ -152,7 +159,10 @@ async function fetchUserProfile(accessToken: string, imsEnv?: string): Promise<s
       const profile = await res.json() as { name?: string; email?: string; displayName?: string };
       return profile.displayName || profile.name || profile.email;
     }
-  } catch { /* best-effort */ }
+    console.warn(`[adobe] User profile fetch returned ${res.status}, account will have no display name`);
+  } catch (err) {
+    console.warn('[adobe] Failed to fetch user profile:', err instanceof Error ? err.message : String(err));
+  }
   return undefined;
 }
 
@@ -180,8 +190,9 @@ export const config: ProviderConfig = {
   isOAuth: true,
 
   getModelIds: () => {
-    if (cachedProxyConfig?.models?.length) {
-      return cachedProxyConfig.models;
+    // Return models from the most recently fetched proxy config
+    for (const config of proxyConfigCache.values()) {
+      if (config.models?.length) return config.models;
     }
     // Default before proxy config is fetched — use alias without date suffix
     // so pi-ai resolves it from its registry with full model metadata
@@ -235,11 +246,11 @@ export const config: ProviderConfig = {
     const account = getAdobeAccount();
     if (account?.accessToken) {
       try {
-        const proxyConfig = cachedProxyConfig ?? {};
-        const clientId = proxyConfig.clientId || adobeConfig.clientId;
-        const imsEnv = resolveImsEnvironment(proxyConfig);
+        const lastConfig = proxyConfigCache.values().next().value ?? {};
+        const clientId = lastConfig.clientId || adobeConfig.clientId;
+        const imsEnv = resolveImsEnvironment(lastConfig);
         if (clientId) {
-          await fetch(`${imsHost(imsEnv)}/ims/revoke`, {
+          const revRes = await fetch(`${imsHost(imsEnv)}/ims/revoke`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body: new URLSearchParams({
@@ -248,8 +259,13 @@ export const config: ProviderConfig = {
               client_id: clientId,
             }),
           });
+          if (!revRes.ok) {
+            console.warn(`[adobe] Token revocation returned ${revRes.status}, token may still be valid server-side`);
+          }
         }
-      } catch { /* best-effort */ }
+      } catch (err) {
+        console.warn('[adobe] Failed to revoke token:', err instanceof Error ? err.message : String(err));
+      }
     }
     saveOAuthAccount({ providerId: 'adobe', accessToken: '' });
   },
@@ -308,6 +324,7 @@ const streamAdobe = (
       for await (const event of inner) stream.push(event as any);
       stream.end();
     } catch (error) {
+      console.error('[adobe] Stream error:', error instanceof Error ? error.message : String(error));
       stream.push(makeErrorOutput(model, error) as any);
       stream.end();
     }
@@ -329,6 +346,7 @@ const streamSimpleAdobe = (
       for await (const event of inner) stream.push(event as any);
       stream.end();
     } catch (error) {
+      console.error('[adobe] Stream error:', error instanceof Error ? error.message : String(error));
       stream.push(makeErrorOutput(model, error) as any);
       stream.end();
     }
@@ -341,7 +359,8 @@ const streamSimpleAdobe = (
 async function fetchProxyModels(): Promise<Model<Api>[]> {
   try {
     const accessToken = await getValidAccessToken();
-    const res = await fetch(`${getProxyEndpoint()}/v1/models`, {
+    const endpoint = getProxyEndpoint();
+    const res = await fetch(`${endpoint}/v1/models`, {
       headers: { 'Authorization': `Bearer ${accessToken}` },
     });
     if (res.ok) {
@@ -354,26 +373,33 @@ async function fetchProxyModels(): Promise<Model<Api>[]> {
           if (base) return { ...base, provider: 'adobe', api: 'adobe-anthropic' as Api };
           return {
             id: pm.id, name: pm.name ?? pm.id, provider: 'adobe',
-            api: 'adobe-anthropic' as Api, baseUrl: getProxyEndpoint(),
+            api: 'adobe-anthropic' as Api, baseUrl: endpoint,
             contextWindow: 200000, maxTokens: 16384, input: 0,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             inputCost: 0, outputCost: 0, cacheReadCost: 0, cacheWriteCost: 0, reasoning: true,
           } as unknown as Model<Api>;
         });
       }
+    } else {
+      console.warn(`[adobe] Proxy /v1/models returned ${res.status}, falling back to Anthropic models`);
     }
-  } catch { /* best-effort */ }
+  } catch (err) {
+    console.warn('[adobe] Failed to fetch proxy models:', err instanceof Error ? err.message : String(err));
+  }
 
   const anthropicModels = getModels('anthropic' as any) as Model<Api>[];
   return anthropicModels.map(m => ({ ...m, provider: 'adobe', api: 'adobe-anthropic' as Api }));
 }
 
-let cachedModels: Model<Api>[] | null = null;
+const modelsCache = new Map<string, Model<Api>[]>();
 
 export async function getAdobeModels(): Promise<Model<Api>[]> {
-  if (cachedModels) return cachedModels;
-  cachedModels = await fetchProxyModels();
-  return cachedModels;
+  const endpoint = getProxyEndpoint();
+  const cached = modelsCache.get(endpoint);
+  if (cached) return cached;
+  const models = await fetchProxyModels();
+  modelsCache.set(endpoint, models);
+  return models;
 }
 
 // ── Registration ────────────────────────────────────────────────────
