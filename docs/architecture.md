@@ -98,7 +98,7 @@
 
 | File | Purpose |
 |---|---|
-| `types.ts` | `ProviderConfig` interface (id, name, isOAuth, onOAuthLogin, onOAuthLogout), `OAuthLauncher` type |
+| `types.ts` | `ProviderConfig` interface (id, name, isOAuth, onOAuthLogin, onOAuthLogout, getModelIds), `OAuthLauncher` type |
 | `index.ts` | Provider auto-discovery: pi-ai providers filtered by `providers.build.json`, built-in extensions via glob, external `/providers/*.ts` always included |
 | `oauth-service.ts` | Generic `OAuthLauncher` factory: CLI mode (popup → `/auth/callback` → postMessage) and extension mode (service worker → `chrome.identity.launchWebAuthFlow`) |
 | `built-in/bedrock-camp.ts` | AWS Bedrock CAMP provider — custom stream function via `register()` (only built-in that needs a file; pure-config providers use pi-ai auto-discovery) |
