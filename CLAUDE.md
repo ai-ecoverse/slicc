@@ -185,6 +185,7 @@ WasmShell wraps just-bash 2.11.7 (WASM Bash interpreter) and connects it to Virt
 - `webhook` — Manage webhooks for event-driven automation
 - `crontask` — Schedule cron jobs that dispatch licks to scoops
 - `pdftk` / `pdf` — Inspect, extract, rotate, and merge PDFs
+- `da` — Adobe Document Authoring commands (config, list, get, put, preview, publish, upload). Uses `/api/fetch-proxy` in CLI mode, direct fetch in extension mode.
 - `mount` — Mount a local directory into the virtual filesystem via the File System Access API
 - `convert` / `magick` — ImageMagick-style image conversion (resize, rotate, crop, quality) via `@imagemagick/magick-wasm`
 - `playwright-cli` / `playwright` / `puppeteer` — Browser automation shell commands backed by `BrowserAPI`; aliases share the same tab/session state, snapshots, and session history
@@ -281,6 +282,16 @@ Chrome Manifest V3 extension with three-layer architecture for background agent 
 - Pyodide (~13MB) bundled at `dist/extension/pyodide/` for Python support (loaded from `'self'` origin).
 
 **Extension Persistence Model**: The `browser-coding-agent` IndexedDB is the single source of truth for chat display messages. The offscreen bridge writes to it after every user message, response completion, tool call end, and incoming message event. The side panel reads from it via `switchToContext()` — no message buffer reconciliation needed. This separates concerns: the `agent-sessions` DB stores agent LLM history (for multi-turn context), while `slicc-groups` DB stores orchestrator routing data (scoops, tasks, webhooks, crontasks).
+
+### Sprinkle Rendering (src/ui/sprinkle-renderer.ts)
+Renders `.shtml` files as interactive UI panels. Two rendering modes:
+
+- **Fragment mode**: HTML fragments injected as `innerHTML` into a `.sprinkle-content` div. CLI mode uses inline rendering with script IIFE wrapping and onclick rewriting. Extension mode renders inside `sprinkle-sandbox.html` (CSP-exempt iframe).
+- **Full-document mode**: Complete HTML documents (detected by `<!doctype` or `<html>` prefix via `isFullDocument()`) render in `srcdoc` iframes with `sandbox="allow-scripts"` in BOTH CLI and extension mode. A bridge script (`window.slicc`/`window.bridge`) and parent theme CSS (S2 tokens + `.sprinkle-*` rules) are auto-injected into `<head>`. Communication uses `postMessage` (same protocol as sandbox path).
+
+Layout CSS classes available in both modes: `.sprinkle-sidebar`, `.sprinkle-split`, `.sprinkle-toolbar`, `.sprinkle-tabs`, `.sprinkle-dialog`, `.sprinkle-collapsible`, `.sprinkle-canvas` (plus existing card/table/badge/button components). Container queries via `.sprinkle-panel` provide responsive breakpoints at 400px/600px.
+
+Key files: `sprinkle-renderer.ts`, `sprinkle-bridge.ts`, `sprinkle-manager.ts`, `sprinkle-discovery.ts`, `sprinkle-sandbox.html`.
 
 ### Preview Service Worker (src/ui/preview-sw.ts)
 A Service Worker that intercepts `/preview/*` fetch requests and serves content from VFS (IndexedDB via LightningFS). Enables the agent to create HTML/CSS/JS apps in the virtual filesystem and preview them in real browser tabs.

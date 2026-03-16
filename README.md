@@ -34,6 +34,8 @@ A browser-based coding agent that runs as a **Chrome extension**, with a thin **
 - :zap: **Real-Time Streaming** — responses stream token-by-token as Claude thinks
 - :floppy_disk: **Session Persistence** — conversations and files survive page reloads via IndexedDB
 - :microphone: **Voice Input** — hands-free voice mode using the Web Speech API. Toggle on, speak, 2.5s silence auto-sends, agent responds, voice auto-restarts. Works in both CLI and extension mode (extension uses a one-time popup for mic permission grant)
+- :sparkles: **Interactive Sprinkles** — rich UI panels (`.shtml`) that support full HTML documents with custom layouts (sidebars, split panes, tabs, modals, canvas), multi-action lick events, and responsive container queries. 10 built-in example sprinkles for content management workflows
+- :page_facing_up: **DA Commands** — Adobe Document Authoring shell commands (`da config`, `da list`, `da get`, `da put`, `da preview`, `da publish`) with token management and dual-mode fetch
 - :crescent_moon: **Dark Theme** — syntax-highlighted code with a dark-first design
 
 ## Why "slicc"?

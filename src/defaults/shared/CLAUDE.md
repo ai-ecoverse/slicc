@@ -121,6 +121,7 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **webhook/crontask** — Set up licks (external event triggers)
 - **sprinkle** — Manage sprinkles: `sprinkle list`, `sprinkle open <name>`, `sprinkle close <name>`, `sprinkle send <name> '<json>'` (push data to a sprinkle)
 - **oauth-token** — Get an OAuth access token for a provider (`oauth-token adobe`); auto-triggers login if no valid token exists. Use in shell: `curl -H "Authorization: Bearer $(oauth-token adobe)" https://api.example.com`
+- **da** — Adobe Document Authoring: `da config` (set org/repo/credentials), `da list [path]`, `da get <path>`, `da put <path> <file>`, `da preview <path>`, `da publish <path>`, `da upload <file> <path>`. Run `da help` for details.
 - **git** — Full git support (clone, commit, push, pull)
 - **node -e / python3 -c** — Execute JavaScript or Python. JSH/node scripts have access to `exec(command)` to run shell commands: `const r = await exec('oauth-token adobe'); const token = r.stdout.trim();`
 - **serve <dir>** — Open a VFS app directory in a new browser tab. Defaults to `index.html`; use `--entry` to override the entry file.
@@ -138,6 +139,58 @@ Key things that work differently:
 - **Serving + screenshotting**: `serve` and `open` already open the tab. Do NOT use `playwright-cli open` with the same URL — that opens a duplicate tab. Instead, use `playwright-cli tab-list` to find the tab they created (match by URL from the output), then `playwright-cli tab-select <index>` to target it for screenshots/snapshots. **Never manually construct preview URLs** — always use the URL from the command output.
 - **No long-running servers**: You can't start background daemons. The `serve` and `open` commands handle previewing.
 - **No package managers**: No `apt`, `npm install`, `pip install`. Use what's already available or write `.jsh` scripts.
+
+## Built-in Sprinkles
+
+These sprinkles ship with SLICC at `/shared/sprinkles/`. They are full-document HTML apps rendered in sandboxed iframes.
+
+| Sprinkle name | Open with | Use when the user asks for... |
+|---------------|-----------|-------------------------------|
+| `page-editor` | `sprinkle open page-editor` | WYSIWYG editor, page editor, edit sections, visual editing |
+| `content-tree` | `sprinkle open content-tree` | content tree, page tree, site structure, page browser, navigate pages |
+| `review-workflow` | `sprinkle open review-workflow` | review, approval workflow, annotations, comments on content |
+| `seo-dashboard` | `sprinkle open seo-dashboard` | SEO audit, meta tags, SERP preview, SEO issues |
+| `schema-editor` | `sprinkle open schema-editor` | schema, structured data, JSON-LD, rich results |
+| `readability` | `sprinkle open readability` | readability, reading level, text analysis, simplify text |
+| `brand-compliance` | `sprinkle open brand-compliance` | brand check, brand compliance, style guide violations |
+| `tone-voice` | `sprinkle open tone-voice` | tone, voice, writing style, formality, tone analysis |
+| `performance` | `sprinkle open performance` | performance, Core Web Vitals, page speed, lighthouse |
+| `funnels` | `sprinkle open funnels` | funnels, conversion, A/B test, analytics |
+
+### When a user request matches a built-in sprinkle
+
+When the user's request matches a built-in sprinkle (see table above), **ask the user which approach they prefer** before proceeding:
+
+> I can help with that. Would you like me to:
+> 1. **Open the built-in [sprinkle name]** — ready to use immediately, I'll populate it with your data
+> 2. **Build a custom one from scratch** — tailored exactly to your needs, but takes a moment to create
+>
+> Which do you prefer?
+
+**If the user says "open" / "use the built-in" / picks option 1** — use the built-in sprinkle (see "How to use built-in sprinkles" below).
+
+**If the user says "build" / "create" / "custom" / picks option 2** — create a new sprinkle from scratch following the normal "Creating sprinkles" flow in Rule 3 below.
+
+**If the user explicitly says "open the page editor"** (or any built-in name directly) — skip the question and use the built-in immediately.
+
+**If the request is clearly novel** (no matching built-in) — create from scratch without asking.
+
+### How to use built-in sprinkles
+
+Built-in sprinkles follow the same scoop delegation rules as custom sprinkles. The cone creates a scoop, feeds it instructions to open the sprinkle and manage it:
+
+```
+scoop_scoop("seo-dashboard")
+feed_scoop("seo-dashboard", "You own the built-in sprinkle 'seo-dashboard'.
+1. Run: sprinkle open seo-dashboard
+2. The sprinkle is already built at /shared/sprinkles/seo-dashboard/seo-dashboard.shtml — do NOT recreate it.
+3. Gather the data the user needs (e.g. fetch the page, run an SEO audit).
+4. Push results to the sprinkle: sprinkle send seo-dashboard '<json>'
+5. Stay ready — you will receive lick events when the user clicks buttons in the sprinkle. Handle them (e.g. fix-meta, fix-heading) and push updated data back.
+Do not send a completion message.")
+```
+
+The scoop opens the sprinkle, gathers real data, pushes it via `sprinkle send`, and handles lick events (button clicks) from the user. The cone only forwards lick events to the scoop via `feed_scoop`.
 
 ## Sprinkles: Cone Orchestration Rules
 

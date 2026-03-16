@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Content Tree</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body { font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5; color: var(--s2-gray-900); background: var(--s2-bg-base); display: flex; flex-direction: column; height: 100vh; -webkit-font-smoothing: antialiased; }
+
+/* ---- Content ---- */
+.content-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.content-toolbar { height: 48px; border-bottom: 1px solid var(--s2-gray-200); display: flex; align-items: center; justify-content: space-between; padding: 0 24px; flex-shrink: 0; gap: 16px; }
+.page-title { font-size: 16px; font-weight: 700; white-space: nowrap; }
+.preset-group { display: flex; gap: 4px; overflow-x: auto; }
+.preset { height: 28px; padding: 0 12px; border-radius: var(--s2-radius-pill); border: 1px solid var(--s2-gray-300); background: var(--s2-bg-elevated); color: var(--s2-gray-700); font-size: 12px; font-weight: 500; cursor: pointer; transition: all 130ms ease; font-family: var(--s2-font-family); white-space: nowrap; }
+.preset:hover { border-color: var(--s2-gray-500); color: var(--s2-gray-900); }
+.preset.active { background: var(--s2-gray-900); border-color: var(--s2-gray-900); color: var(--s2-gray-25); }
+.content-main { flex: 1; overflow: hidden; display: flex; }
+
+/* ---- Action Bar ---- */
+.action-bar { height: 0; overflow: hidden; background: var(--s2-gray-50); border-bottom: 1px solid var(--s2-gray-200); display: flex; align-items: center; gap: 8px; padding: 0 24px; flex-shrink: 0; transition: height 130ms ease; }
+.action-bar.visible { height: 44px; }
+.action-bar .ab-count { font-size: 12px; font-weight: 600; color: var(--s2-gray-600); margin-right: 8px; white-space: nowrap; }
+.ab-btn { height: 28px; padding: 0 14px; border-radius: var(--s2-radius-pill); font-size: 12px; font-weight: 600; cursor: pointer; transition: all 130ms ease; font-family: var(--s2-font-family); border: none; white-space: nowrap; }
+.ab-btn.accent { background: var(--s2-accent); color: var(--s2-gray-25); }
+.ab-btn.accent:hover { background: var(--s2-accent-hover); }
+.ab-btn.secondary { background: var(--s2-gray-100); color: var(--s2-gray-800); border: 1px solid var(--s2-gray-300); }
+.ab-btn.secondary:hover { background: var(--s2-gray-200); }
+.ab-btn.negative { background: transparent; color: var(--s2-negative); border: 1px solid var(--s2-negative); }
+.ab-btn.negative:hover { background: color-mix(in srgb, var(--s2-negative) 6%, transparent); }
+
+/* ---- Tree + Detail Split ---- */
+.tree-panel { flex: 1; overflow-y: auto; padding: 0; display: flex; flex-direction: column; }
+.detail-panel { width: 320px; flex-shrink: 0; background: var(--s2-gray-50); border-left: 1px solid var(--s2-gray-200); overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+.detail-panel.empty { align-items: center; justify-content: center; }
+.detail-empty { text-align: center; color: var(--s2-gray-500); font-size: 13px; }
+.detail-empty svg { margin-bottom: 8px; color: var(--s2-gray-400); }
+
+/* ---- Tree Rows ---- */
+.tree-list { flex: 1; padding: 8px 0; }
+.tree-row { height: 32px; display: flex; align-items: center; padding: 0 16px; cursor: pointer; user-select: none; transition: background 130ms ease; border-left: 2px solid transparent; position: relative; }
+.tree-row:hover { background: rgba(0,0,0,0.03); border-radius: 0 var(--s2-radius-default) var(--s2-radius-default) 0; }
+.tree-row.selected { background: color-mix(in srgb, var(--s2-accent) 8%, transparent); border-left-color: var(--s2-accent); }
+.tree-row.selected:hover { background: color-mix(in srgb, var(--s2-accent) 12%, transparent); }
+.tree-row.drag-over { background: color-mix(in srgb, var(--s2-accent) 12%, transparent); box-shadow: inset 0 -2px 0 var(--s2-accent); }
+.tree-row .checkbox { width: 16px; height: 16px; border: 1.5px solid var(--s2-gray-400); border-radius: 3px; flex-shrink: 0; margin-right: 8px; display: flex; align-items: center; justify-content: center; transition: all 130ms ease; cursor: pointer; background: var(--s2-bg-elevated); }
+.tree-row .checkbox.checked { background: var(--s2-accent); border-color: var(--s2-accent); }
+.tree-row .checkbox.checked svg { opacity: 1; }
+.tree-row .checkbox svg { opacity: 0; }
+.tree-expand { width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border-radius: var(--s2-radius-s); transition: all 130ms ease; color: var(--s2-gray-500); }
+.tree-expand:hover { background: var(--s2-gray-100); color: var(--s2-gray-800); }
+.tree-expand svg { width: 12px; height: 12px; transition: transform 130ms ease; }
+.tree-expand.expanded svg { transform: rotate(90deg); }
+.tree-expand.leaf { visibility: hidden; }
+.tree-name { font-size: 13px; font-weight: 500; color: var(--s2-gray-800); margin-left: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tree-row.selected .tree-name { color: var(--s2-gray-900); font-weight: 600; }
+.status-dot { width: 8px; height: 8px; border-radius: var(--s2-radius-pill); flex-shrink: 0; margin-left: auto; }
+.status-dot.published { background: var(--s2-positive); }
+.status-dot.draft { background: var(--s2-notice); }
+.status-dot.unpublished { background: var(--s2-negative); }
+
+/* ---- Add Page Button ---- */
+.add-page-btn { display: flex; align-items: center; gap: 6px; padding: 7px 16px; margin: 4px 16px 12px; border-radius: var(--s2-radius-pill); border: 1px dashed var(--s2-gray-300); background: transparent; color: var(--s2-gray-500); font-size: 12px; font-weight: 500; font-family: var(--s2-font-family); cursor: pointer; transition: all 130ms ease; }
+.add-page-btn:hover { border-color: var(--s2-accent); color: var(--s2-accent); background: color-mix(in srgb, var(--s2-accent) 3%, transparent); }
+.add-page-btn svg { width: 14px; height: 14px; }
+
+/* ---- Detail Panel Content ---- */
+.detail-section { display: flex; flex-direction: column; gap: 4px; }
+.detail-label { font-size: 11px; font-weight: 600; color: var(--s2-gray-500); text-transform: uppercase; letter-spacing: 0.04em; }
+.detail-value { font-size: 13px; color: var(--s2-gray-800); }
+.detail-path { font-family: var(--s2-font-family-mono); font-size: 12px; color: var(--s2-gray-600); background: var(--s2-gray-75); padding: 4px 8px; border-radius: var(--s2-radius-s); }
+.detail-input { width: 100%; font-size: 13px; font-family: var(--s2-font-family); color: var(--s2-gray-800); border: 1px solid var(--s2-gray-300); border-radius: var(--s2-radius-default); padding: 6px 10px; background: var(--s2-bg-elevated); transition: border-color 130ms ease; resize: none; }
+.detail-input:focus { outline: none; border-color: var(--s2-accent); box-shadow: 0 0 0 1px var(--s2-accent); }
+.detail-textarea { min-height: 72px; line-height: 1.5; }
+.detail-status-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: var(--s2-radius-pill); font-size: 12px; font-weight: 600; width: fit-content; }
+.detail-status-badge.published { background: color-mix(in srgb, var(--s2-positive) 8%, transparent); color: var(--s2-positive); }
+.detail-status-badge.draft { background: color-mix(in srgb, var(--s2-notice) 8%, transparent); color: var(--s2-notice); }
+.detail-status-badge.unpublished { background: color-mix(in srgb, var(--s2-negative) 8%, transparent); color: var(--s2-negative); }
+.detail-status-badge .dot { width: 6px; height: 6px; border-radius: var(--s2-radius-pill); }
+.detail-status-badge.published .dot { background: var(--s2-positive); }
+.detail-status-badge.draft .dot { background: var(--s2-notice); }
+.detail-status-badge.unpublished .dot { background: var(--s2-negative); }
+.detail-actions { display: flex; gap: 8px; margin-top: 4px; }
+.detail-btn { height: 32px; padding: 0 16px; border-radius: var(--s2-radius-pill); font-size: 12px; font-weight: 600; cursor: pointer; transition: all 130ms ease; font-family: var(--s2-font-family); border: none; }
+.detail-btn.primary { background: var(--s2-accent); color: var(--s2-gray-25); }
+.detail-btn.primary:hover { background: var(--s2-accent-hover); }
+.detail-btn.ghost { background: transparent; color: var(--s2-gray-700); border: 1px solid var(--s2-gray-300); }
+.detail-btn.ghost:hover { background: var(--s2-gray-100); border-color: var(--s2-gray-400); }
+.detail-divider { height: 1px; background: var(--s2-gray-200); margin: 4px 0; }
+.detail-title-header { font-size: 16px; font-weight: 700; color: var(--s2-gray-900); line-height: 1.3; }
+
+/* ---- Add Page Modal ---- */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 100; display: none; align-items: center; justify-content: center; }
+.modal-overlay.open { display: flex; }
+.modal { background: var(--s2-bg-elevated); border-radius: var(--s2-radius-xl); box-shadow: var(--s2-shadow-elevated); width: 400px; max-width: 90vw; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+.modal h3 { font-size: 16px; font-weight: 700; }
+.modal-field { display: flex; flex-direction: column; gap: 4px; }
+.modal-field label { font-size: 12px; font-weight: 600; color: var(--s2-gray-600); }
+.modal-field input, .modal-field select { height: 34px; font-size: 13px; font-family: var(--s2-font-family); color: var(--s2-gray-800); border: 1px solid var(--s2-gray-300); border-radius: var(--s2-radius-default); padding: 0 10px; background: var(--s2-bg-elevated); transition: border-color 130ms ease; }
+.modal-field input:focus, .modal-field select:focus { outline: none; border-color: var(--s2-accent); box-shadow: 0 0 0 1px var(--s2-accent); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<div class="content-area">
+  <div class="content-toolbar">
+    <h1 class="page-title">Content Tree</h1>
+    <div class="preset-group">
+      <button class="preset active" data-preset="full">TAVEX Full Site</button>
+      <button class="preset" data-preset="minimal">Minimal</button>
+      <button class="preset" data-preset="campaign">Campaign</button>
+      <button class="preset" data-preset="docs">Docs Hub</button>
+    </div>
+  </div>
+
+  <div class="action-bar" id="actionBar">
+    <span class="ab-count" id="selCount">0 selected</span>
+    <button class="ab-btn accent" id="abPublish" onclick="slicc.lick({action: 'publish-selected', data: {ids: Array.from(selected)}})">Publish</button>
+    <button class="ab-btn secondary" id="abUnpublish" onclick="slicc.lick({action: 'unpublish-selected', data: {ids: Array.from(selected)}})">Unpublish</button>
+    <button class="ab-btn negative" id="abDelete" onclick="slicc.lick({action: 'delete-page', data: {ids: Array.from(selected)}})">Delete</button>
+  </div>
+
+  <div class="content-main">
+    <div class="tree-panel" id="treePanel">
+      <div class="tree-list" id="treeList"></div>
+      <button class="add-page-btn" id="addPageBtn" onclick="slicc.lick({action: 'create-page', data: {parent: focused}})">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+        Add page
+      </button>
+    </div>
+    <div class="detail-panel empty" id="detailPanel">
+      <div class="detail-empty" id="detailEmpty">
+        <svg width="32" height="32" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="10" height="15" rx="1.5"/><path d="M7.5 6.5h5M7.5 9.5h3"/></svg>
+        <p>Select a page to view details</p>
+      </div>
+      <div id="detailContent" style="display:none;"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Add Page Modal -->
+<div class="modal-overlay" id="addModal">
+  <div class="modal">
+    <h3>Add Page</h3>
+    <div class="modal-field">
+      <label>Page Name</label>
+      <input type="text" id="newPageName" placeholder="e.g. Patient Stories" />
+    </div>
+    <div class="modal-field">
+      <label>Parent</label>
+      <select id="newPageParent"></select>
+    </div>
+    <div class="modal-field">
+      <label>Template</label>
+      <select id="newPageTemplate">
+        <option>Default</option>
+        <option>Homepage</option>
+        <option>Data Page</option>
+        <option>Guide</option>
+        <option>Science Page</option>
+        <option>Legal</option>
+        <option>Landing</option>
+        <option>Library</option>
+        <option>Events</option>
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button class="detail-btn ghost" id="modalCancel">Cancel</button>
+      <button class="detail-btn primary" id="modalAdd">Add</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ========== Data ========== */
+var PRESETS = {
+  full: [
+    { id: 'home', name: 'Home', path: '/tavex/', status: 'published', template: 'Homepage', modified: '2h ago', parent: null, desc: 'TAVEX brand homepage with hero, navigation cards, and MoA teaser.' },
+    { id: 'efficacy', name: 'Efficacy', path: '/tavex/efficacy', status: 'published', template: 'Data Page', modified: '1d ago', parent: 'home', desc: 'Clinical efficacy data from RESOLVE-1 and RESOLVE-2 trials.' },
+    { id: 'safety', name: 'Safety', path: '/tavex/safety', status: 'draft', template: 'Data Page', modified: '3h ago', parent: 'home', desc: 'Safety profile and adverse event data across the RESOLVE programme.' },
+    { id: 'dosing', name: 'Dosing', path: '/tavex/dosing', status: 'unpublished', template: 'Guide', modified: '5d ago', parent: 'home', desc: 'Dosing information: 200mg once daily, renal adjustment, CYP3A4 interactions.' },
+    { id: 'moa', name: 'Mechanism of Action', path: '/tavex/mechanism-of-action', status: 'published', template: 'Science Page', modified: '2d ago', parent: 'home', desc: 'JAK1 selective inhibition pathway and cytokine signalling.' },
+    { id: 'pi', name: 'Prescribing Information', path: '/tavex/prescribing-information', status: 'draft', template: 'Legal', modified: '12h ago', parent: 'home', desc: 'Full SmPC, contraindications, and adverse event reporting.' },
+    { id: 'hcp', name: 'For Healthcare Professionals', path: '/tavex/hcp', status: 'published', template: 'Landing', modified: '4d ago', parent: 'home', desc: 'HCP portal with clinical resources and trial data.' },
+    { id: 'resources', name: 'Resources', path: '/tavex/hcp/resources', status: 'published', template: 'Library', modified: '1w ago', parent: 'hcp', desc: 'Downloadable clinical materials and slide decks.' },
+    { id: 'webinars', name: 'Webinars', path: '/tavex/hcp/webinars', status: 'draft', template: 'Events', modified: '6d ago', parent: 'hcp', desc: 'Upcoming and recorded expert webinars on RA treatment.' },
+  ],
+  minimal: [
+    { id: 'home', name: 'Home', path: '/tavex/', status: 'published', template: 'Homepage', modified: '2h ago', parent: null, desc: 'TAVEX brand homepage with hero, navigation cards, and MoA teaser.' },
+    { id: 'efficacy', name: 'Efficacy', path: '/tavex/efficacy', status: 'published', template: 'Data Page', modified: '1d ago', parent: 'home', desc: 'Clinical efficacy data from RESOLVE-1 and RESOLVE-2 trials.' },
+    { id: 'safety', name: 'Safety', path: '/tavex/safety', status: 'draft', template: 'Data Page', modified: '3h ago', parent: 'home', desc: 'Safety profile and adverse event data across the RESOLVE programme.' },
+  ],
+  campaign: [
+    { id: 'home', name: 'Home', path: '/tavex/', status: 'published', template: 'Homepage', modified: '1h ago', parent: null, desc: 'Campaign landing page for TAVEX launch.' },
+    { id: 'lp1', name: 'HCP Landing', path: '/tavex/hcp-landing', status: 'draft', template: 'Landing', modified: '30m ago', parent: 'home', desc: 'Targeted HCP campaign landing page.' },
+    { id: 'lp2', name: 'Patient Landing', path: '/tavex/patient-landing', status: 'draft', template: 'Landing', modified: '45m ago', parent: 'home', desc: 'Patient awareness campaign landing page.' },
+  ],
+  docs: [
+    { id: 'home', name: 'Docs Hub', path: '/tavex/', status: 'published', template: 'Homepage', modified: '1d ago', parent: null, desc: 'TAVEX documentation hub.' },
+    { id: 'doc1', name: 'Getting Started', path: '/tavex/getting-started', status: 'draft', template: 'Default', modified: '2h ago', parent: 'home', desc: 'Onboarding guide for new prescribers.' },
+    { id: 'doc2', name: 'Clinical Data', path: '/tavex/clinical-data', status: 'draft', template: 'Default', modified: '3h ago', parent: 'home', desc: 'Summary of clinical trial data.' },
+    { id: 'doc3', name: 'Dosing Guide', path: '/tavex/dosing-guide', status: 'draft', template: 'Default', modified: '4h ago', parent: 'home', desc: 'Comprehensive dosing recommendations.' },
+    { id: 'doc4', name: 'Safety Profile', path: '/tavex/safety-profile', status: 'draft', template: 'Default', modified: '5h ago', parent: 'home', desc: 'Detailed safety and tolerability data.' },
+    { id: 'doc5', name: 'FAQ', path: '/tavex/faq', status: 'draft', template: 'Default', modified: '6h ago', parent: 'home', desc: 'Frequently asked questions.' },
+    { id: 'doc6', name: 'References', path: '/tavex/references', status: 'draft', template: 'Default', modified: '1d ago', parent: 'home', desc: 'Full bibliography and reference list.' },
+  ],
+};
+
+var pages = [];
+var expanded = new Set();
+var selected = new Set();
+var focused = null;
+var dragSrc = null;
+
+/* ========== Init ========== */
+function init() {
+  var saved = slicc.getState();
+  if (saved && saved.pages) {
+    pages = saved.pages;
+    expanded = new Set(saved.expanded || []);
+    selected = new Set(saved.selected || []);
+    focused = saved.focused || null;
+    render();
+    renderDetail();
+    updateActionBar();
+  } else {
+    loadPreset('full');
+  }
+  wirePresets();
+  wireAddPage();
+
+  slicc.on('update', function(data) {
+    if (data && data.pages) {
+      pages = data.pages;
+      expanded = new Set(data.expanded || []);
+      selected = new Set(data.selected || []);
+      focused = data.focused || null;
+      render();
+      renderDetail();
+      updateActionBar();
+    }
+  });
+}
+
+function saveState() {
+  slicc.setState({
+    pages: pages,
+    expanded: Array.from(expanded),
+    selected: Array.from(selected),
+    focused: focused
+  });
+}
+
+/* ========== Presets ========== */
+function loadPreset(key) {
+  pages = JSON.parse(JSON.stringify(PRESETS[key]));
+  expanded = new Set();
+  selected = new Set();
+  focused = null;
+  pages.forEach(function(p) {
+    if (pages.some(function(c) { return c.parent === p.id; })) expanded.add(p.id);
+  });
+  render();
+  renderDetail();
+  updateActionBar();
+  saveState();
+}
+
+function wirePresets() {
+  document.querySelectorAll('.preset').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('.preset').forEach(function(b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      loadPreset(btn.dataset.preset);
+    });
+  });
+}
+
+/* ========== Tree Rendering ========== */
+function hasChildren(id) {
+  return pages.some(function(p) { return p.parent === id; });
+}
+
+function flattenTree(parentId, depth) {
+  var result = [];
+  var children = parentId === null
+    ? pages.filter(function(p) { return p.parent === null; })
+    : pages.filter(function(p) { return p.parent === parentId; });
+  for (var i = 0; i < children.length; i++) {
+    var p = children[i];
+    result.push({ page: p, depth: depth });
+    if (hasChildren(p.id) && expanded.has(p.id)) {
+      result = result.concat(flattenTree(p.id, depth + 1));
+    }
+  }
+  return result;
+}
+
+function render() {
+  var list = document.getElementById('treeList');
+  var flat = flattenTree(null, 0);
+  list.innerHTML = flat.map(function(item) {
+    var page = item.page;
+    var depth = item.depth;
+    var isFolder = hasChildren(page.id);
+    var isExpanded = expanded.has(page.id);
+    var isSelected = page.id === focused;
+    var isChecked = selected.has(page.id);
+    var indent = depth * 24;
+    return '<div class="tree-row' + (isSelected ? ' selected' : '') + '" data-id="' + page.id + '" draggable="true" style="padding-left:' + (16 + indent) + 'px">' +
+      '<div class="checkbox' + (isChecked ? ' checked' : '') + '" data-check="' + page.id + '">' +
+        '<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5l2.5 2.5L8 3"/></svg>' +
+      '</div>' +
+      '<div class="tree-expand' + (isFolder ? (isExpanded ? ' expanded' : '') : ' leaf') + '" data-toggle="' + page.id + '">' +
+        '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 2.5l4 3.5-4 3.5"/></svg>' +
+      '</div>' +
+      '<span class="tree-name">' + page.name + '</span>' +
+      '<span class="status-dot ' + page.status + '" title="' + page.status + '"></span>' +
+    '</div>';
+  }).join('');
+
+  // Wire events
+  list.querySelectorAll('.tree-row').forEach(function(row) {
+    var id = row.dataset.id;
+
+    row.addEventListener('click', function(e) {
+      if (e.target.closest('.checkbox') || e.target.closest('.tree-expand')) return;
+      if (e.shiftKey) {
+        toggleCheck(id);
+      } else {
+        focused = focused === id ? null : id;
+        render();
+        renderDetail();
+        saveState();
+      }
+    });
+
+    var cb = row.querySelector('.checkbox');
+    cb.addEventListener('click', function(e) {
+      e.stopPropagation();
+      toggleCheck(id);
+    });
+
+    var tog = row.querySelector('.tree-expand');
+    if (!tog.classList.contains('leaf')) {
+      tog.addEventListener('click', function(e) {
+        e.stopPropagation();
+        if (expanded.has(id)) expanded.delete(id); else expanded.add(id);
+        render();
+        renderDetail();
+        saveState();
+      });
+    }
+
+    // Drag and drop for reorder
+    row.addEventListener('dragstart', function(e) {
+      dragSrc = id;
+      e.dataTransfer.effectAllowed = 'move';
+      row.style.opacity = '0.4';
+    });
+    row.addEventListener('dragend', function() {
+      dragSrc = null;
+      row.style.opacity = '';
+      list.querySelectorAll('.tree-row').forEach(function(r) { r.classList.remove('drag-over'); });
+    });
+    row.addEventListener('dragover', function(e) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      row.classList.add('drag-over');
+    });
+    row.addEventListener('dragleave', function() {
+      row.classList.remove('drag-over');
+    });
+    row.addEventListener('drop', function(e) {
+      e.preventDefault();
+      row.classList.remove('drag-over');
+      if (!dragSrc || dragSrc === id) return;
+      var src = pages.find(function(p) { return p.id === dragSrc; });
+      var tgt = pages.find(function(p) { return p.id === id; });
+      if (!src || !tgt) return;
+      if (isDescendant(tgt.id, src.id)) return;
+      src.parent = tgt.id;
+      src.path = tgt.path.replace(/\/$/, '') + '/' + src.id;
+      expanded.add(tgt.id);
+      slicc.lick({action: 'reorder-pages', data: {movedId: src.id, newParentId: tgt.id}});
+      render();
+      renderDetail();
+      saveState();
+    });
+  });
+}
+
+function isDescendant(id, ancestorId) {
+  var cur = pages.find(function(p) { return p.id === id; });
+  while (cur) {
+    if (cur.id === ancestorId) return true;
+    cur = pages.find(function(p) { return p.id === cur.parent; });
+  }
+  return false;
+}
+
+function toggleCheck(id) {
+  if (selected.has(id)) selected.delete(id); else selected.add(id);
+  render();
+  updateActionBar();
+  saveState();
+}
+
+/* ========== Action Bar ========== */
+function updateActionBar() {
+  var bar = document.getElementById('actionBar');
+  var count = selected.size;
+  document.getElementById('selCount').textContent = count + ' selected';
+  if (count > 0) bar.classList.add('visible'); else bar.classList.remove('visible');
+}
+
+/* ========== Detail Panel ========== */
+function renderDetail() {
+  var panel = document.getElementById('detailPanel');
+  var empty = document.getElementById('detailEmpty');
+  var content = document.getElementById('detailContent');
+
+  if (!focused) {
+    panel.classList.add('empty');
+    empty.style.display = '';
+    content.style.display = 'none';
+    return;
+  }
+
+  var page = pages.find(function(p) { return p.id === focused; });
+  if (!page) { focused = null; renderDetail(); return; }
+
+  panel.classList.remove('empty');
+  empty.style.display = 'none';
+  content.style.display = 'flex';
+  content.style.flexDirection = 'column';
+  content.style.gap = '20px';
+  content.style.width = '100%';
+
+  var statusLabel = { published: 'Published', draft: 'Draft', unpublished: 'Unpublished' };
+  var toggleAction = page.status === 'published' ? 'Unpublish' : 'Publish';
+
+  content.innerHTML =
+    '<div class="detail-title-header">' + page.name + '</div>' +
+    '<div class="detail-section">' +
+      '<div class="detail-label">Path</div>' +
+      '<div class="detail-path">' + page.path + '</div>' +
+    '</div>' +
+    '<div class="detail-section">' +
+      '<div class="detail-label">Status</div>' +
+      '<div class="detail-status-badge ' + page.status + '"><span class="dot"></span>' + statusLabel[page.status] + '</div>' +
+    '</div>' +
+    '<div class="detail-section">' +
+      '<div class="detail-label">Last Modified</div>' +
+      '<div class="detail-value">' + page.modified + '</div>' +
+    '</div>' +
+    '<div class="detail-section">' +
+      '<div class="detail-label">Template</div>' +
+      '<div class="detail-value">' + page.template + '</div>' +
+    '</div>' +
+    '<div class="detail-divider"></div>' +
+    '<div class="detail-section">' +
+      '<div class="detail-label">Title</div>' +
+      '<input class="detail-input" id="detailTitle" value="' + escHtml(page.name) + '" />' +
+    '</div>' +
+    '<div class="detail-section">' +
+      '<div class="detail-label">Description</div>' +
+      '<textarea class="detail-input detail-textarea" id="detailDesc">' + escHtml(page.desc || '') + '</textarea>' +
+    '</div>' +
+    '<div class="detail-actions">' +
+      '<button class="detail-btn primary" id="detailToggle">' + toggleAction + '</button>' +
+      '<button class="detail-btn ghost" id="detailEdit">Edit</button>' +
+      '<button class="detail-btn ghost" id="detailPreview">Preview</button>' +
+    '</div>';
+
+  document.getElementById('detailTitle').addEventListener('change', function(e) {
+    page.name = e.target.value;
+    render();
+    content.querySelector('.detail-title-header').textContent = page.name;
+    saveState();
+  });
+  document.getElementById('detailDesc').addEventListener('change', function(e) {
+    page.desc = e.target.value;
+    saveState();
+  });
+  document.getElementById('detailToggle').addEventListener('click', function() {
+    page.status = page.status === 'published' ? 'unpublished' : 'published';
+    render();
+    renderDetail();
+    saveState();
+  });
+  document.getElementById('detailEdit').addEventListener('click', function() {
+    slicc.lick({action: 'create-page', data: {pageId: page.id, path: page.path, template: page.template}});
+  });
+  document.getElementById('detailPreview').addEventListener('click', function() {
+    slicc.lick({action: 'create-page', data: {pageId: page.id, path: page.path, template: page.template, preview: true}});
+  });
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* ========== Add Page ========== */
+function wireAddPage() {
+  var modal = document.getElementById('addModal');
+  document.getElementById('addPageBtn').addEventListener('click', function() {
+    var sel = document.getElementById('newPageParent');
+    sel.innerHTML = '<option value="">(Root)</option>' + pages.map(function(p) {
+      return '<option value="' + p.id + '">' + p.name + ' (' + p.path + ')</option>';
+    }).join('');
+    if (focused) sel.value = focused;
+    document.getElementById('newPageName').value = '';
+    document.getElementById('newPageTemplate').value = 'Default';
+    modal.classList.add('open');
+    setTimeout(function() { document.getElementById('newPageName').focus(); }, 50);
+  });
+  document.getElementById('modalCancel').addEventListener('click', function() { modal.classList.remove('open'); });
+  modal.addEventListener('click', function(e) { if (e.target === modal) modal.classList.remove('open'); });
+  document.getElementById('modalAdd').addEventListener('click', addNewPage);
+  document.getElementById('newPageName').addEventListener('keydown', function(e) { if (e.key === 'Enter') addNewPage(); });
+}
+
+function addNewPage() {
+  var name = document.getElementById('newPageName').value.trim();
+  if (!name) return;
+  var parentId = document.getElementById('newPageParent').value || null;
+  var template = document.getElementById('newPageTemplate').value;
+  var slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+  var parent = parentId ? pages.find(function(p) { return p.id === parentId; }) : null;
+  var basePath = parent ? parent.path.replace(/\/$/, '') : '/tavex';
+  var newPage = {
+    id: slug + '-' + Date.now(),
+    name: name,
+    path: basePath + '/' + slug,
+    status: 'draft',
+    template: template,
+    modified: 'just now',
+    parent: parentId,
+    desc: '',
+  };
+  pages.push(newPage);
+  if (parentId) expanded.add(parentId);
+  focused = newPage.id;
+  document.getElementById('addModal').classList.remove('open');
+  slicc.lick({action: 'create-page', data: {id: newPage.id, name: name, path: newPage.path, template: template, parent: parentId}});
+  render();
+  renderDetail();
+  updateActionBar();
+  saveState();
+}
+
+/* ========== Boot ========== */
+init();
+</script>
+</body>
+</html>

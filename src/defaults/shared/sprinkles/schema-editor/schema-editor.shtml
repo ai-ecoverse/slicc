@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Schema Editor</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body { font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5; color: var(--s2-gray-900); background: var(--s2-bg-base); display: flex; flex-direction: column; height: 100vh; -webkit-font-smoothing: antialiased; }
+
+/* ---- Content ---- */
+.content-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.content-toolbar { height: 48px; border-bottom: 1px solid var(--s2-gray-200); display: flex; align-items: center; justify-content: space-between; padding: 0 24px; flex-shrink: 0; gap: 16px; }
+.page-title { font-size: 16px; font-weight: 700; white-space: nowrap; }
+.preset-group { display: flex; gap: 4px; overflow-x: auto; }
+.preset { height: 28px; padding: 0 12px; border-radius: var(--s2-radius-pill); border: 1px solid var(--s2-gray-300); background: var(--s2-bg-elevated); color: var(--s2-gray-700); font-size: 12px; font-weight: 500; cursor: pointer; transition: all 130ms ease; font-family: var(--s2-font-family); white-space: nowrap; }
+.preset:hover { border-color: var(--s2-gray-500); color: var(--s2-gray-900); }
+.preset.active { background: var(--s2-gray-900); border-color: var(--s2-gray-900); color: var(--s2-gray-25); }
+.content-main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+
+/* =============== SCHEMA EDITOR =============== */
+
+/* Schema type tabs */
+.schema-tabs { display: flex; border-bottom: 1px solid var(--s2-gray-200); padding: 0 24px; flex-shrink: 0; gap: 0; background: var(--s2-bg-elevated); }
+.schema-tab { padding: 10px 18px; font-size: 13px; font-weight: 500; color: var(--s2-gray-600); background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; transition: all 130ms ease; font-family: var(--s2-font-family); position: relative; }
+.schema-tab:hover { color: var(--s2-gray-900); }
+.schema-tab.active { color: var(--s2-accent); border-bottom-color: var(--s2-accent); font-weight: 600; }
+
+/* Editor layout */
+.editor-layout { display: flex; flex: 1; overflow: hidden; }
+.field-editor { flex: 1; overflow-y: auto; padding: 24px; }
+.preview-panel { width: 400px; flex-shrink: 0; border-left: 1px solid var(--s2-gray-200); overflow-y: auto; padding: 24px; background: var(--s2-bg-layer-1); }
+
+/* Form fields */
+.field-group { margin-bottom: 16px; }
+.field-label { display: block; font-size: 12px; font-weight: 600; color: var(--s2-gray-700); margin-bottom: 5px; }
+.field-input { width: 100%; height: 40px; padding: 0 12px; border-radius: var(--s2-radius-default); border: 1px solid var(--s2-gray-300); background: var(--s2-bg-elevated); font-size: 14px; color: var(--s2-gray-900); font-family: var(--s2-font-family); transition: border-color 130ms ease, box-shadow 130ms ease; outline: none; }
+.field-input:hover { border-color: var(--s2-gray-500); }
+.field-input:focus { border-color: var(--s2-accent); box-shadow: 0 0 0 1px var(--s2-accent); }
+.field-input::placeholder { color: var(--s2-gray-400); }
+textarea.field-input { height: auto; min-height: 80px; padding: 10px 12px; resize: vertical; line-height: 1.5; }
+
+/* Schema type badge */
+.schema-type-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: var(--s2-radius-pill); background: color-mix(in srgb, var(--s2-accent) 8%, transparent); color: var(--s2-accent); font-size: 12px; font-weight: 600; margin-bottom: 20px; font-family: var(--s2-font-family-mono); }
+.schema-type-badge::before { content: '@'; font-weight: 400; opacity: 0.6; }
+
+/* Array item cards */
+.array-card { background: var(--s2-bg-elevated); border: 1px solid var(--s2-gray-200); border-radius: var(--s2-radius-default); padding: 16px; margin-bottom: 12px; position: relative; transition: border-color 130ms ease; }
+.array-card:hover { border-color: var(--s2-gray-300); }
+.array-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.array-card-label { font-size: 12px; font-weight: 600; color: var(--s2-gray-500); }
+.btn-delete { width: 28px; height: 28px; border-radius: var(--s2-radius-default); border: none; background: transparent; color: var(--s2-gray-500); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px; transition: all 130ms ease; }
+.btn-delete:hover { background: color-mix(in srgb, var(--s2-negative) 8%, transparent); color: var(--s2-negative); }
+.array-card .field-group:last-child { margin-bottom: 0; }
+
+/* Add button */
+.btn-add { width: 100%; height: 44px; border: 2px dashed var(--s2-gray-300); border-radius: var(--s2-radius-pill); background: transparent; color: var(--s2-gray-500); font-size: 13px; font-weight: 500; cursor: pointer; transition: all 130ms ease; font-family: var(--s2-font-family); display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 4px; }
+.btn-add:hover { border-color: var(--s2-accent); color: var(--s2-accent); background: color-mix(in srgb, var(--s2-accent) 3%, transparent); }
+
+/* Section divider */
+.form-section { margin-bottom: 24px; }
+.form-section-title { font-size: 13px; font-weight: 700; color: var(--s2-gray-800); margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--s2-gray-100); }
+
+/* ---- Preview Panel ---- */
+.preview-section { margin-bottom: 24px; }
+.preview-section-title { font-size: 11px; font-weight: 600; color: var(--s2-gray-500); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 12px; }
+
+/* Rich Result card */
+.rich-result { background: var(--s2-bg-elevated); border-radius: var(--s2-radius-l); box-shadow: var(--s2-shadow-container); border: 1px solid var(--s2-gray-200); overflow: hidden; }
+.rr-header { padding: 16px 16px 12px; }
+.rr-breadcrumb { font-size: 12px; color: var(--s2-gray-500); margin-bottom: 2px; display: flex; align-items: center; gap: 4px; }
+.rr-breadcrumb .rr-domain { color: #1a7a42; }
+.rr-title { font-size: 18px; font-weight: 400; color: #1a0dab; line-height: 1.3; margin-bottom: 4px; cursor: pointer; }
+.rr-title:hover { text-decoration: underline; }
+.rr-description { font-size: 13px; color: var(--s2-gray-600); line-height: 1.5; }
+.rr-date { color: var(--s2-gray-500); }
+.rr-divider { height: 1px; background: var(--s2-gray-100); margin: 0 16px; }
+
+/* FAQ Rich Result */
+.rr-faq-item { padding: 12px 16px; border-top: 1px solid var(--s2-gray-100); cursor: pointer; transition: background 130ms ease; }
+.rr-faq-item:first-child { border-top: none; }
+.rr-faq-item:hover { background: var(--s2-gray-50); }
+.rr-faq-q { display: flex; align-items: center; justify-content: space-between; font-size: 14px; font-weight: 500; color: var(--s2-gray-900); }
+.rr-faq-arrow { font-size: 18px; color: var(--s2-gray-400); transition: transform 130ms ease; font-weight: 300; }
+.rr-faq-item.open .rr-faq-arrow { transform: rotate(180deg); }
+.rr-faq-a { font-size: 13px; color: var(--s2-gray-600); line-height: 1.6; padding-top: 8px; display: none; }
+.rr-faq-item.open .rr-faq-a { display: block; }
+
+/* Article Rich Result */
+.rr-article-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--s2-gray-500); padding: 0 16px 12px; }
+.rr-article-thumb { width: 100%; height: 160px; background: var(--s2-gray-75); display: flex; align-items: center; justify-content: center; color: var(--s2-gray-400); font-size: 12px; overflow: hidden; }
+.rr-article-thumb img { width: 100%; height: 100%; object-fit: cover; }
+
+/* HowTo Rich Result */
+.rr-step { padding: 12px 16px; border-top: 1px solid var(--s2-gray-100); display: flex; gap: 12px; }
+.rr-step:first-child { border-top: none; }
+.rr-step-num { width: 24px; height: 24px; border-radius: var(--s2-radius-pill); background: var(--s2-accent); color: var(--s2-gray-25); font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
+.rr-step-content { flex: 1; }
+.rr-step-name { font-size: 14px; font-weight: 600; color: var(--s2-gray-900); margin-bottom: 2px; }
+.rr-step-text { font-size: 13px; color: var(--s2-gray-600); line-height: 1.5; }
+
+/* Product Rich Result */
+.rr-product-info { padding: 16px; }
+.rr-product-name { font-size: 16px; font-weight: 600; color: var(--s2-gray-900); margin-bottom: 4px; }
+.rr-product-brand { font-size: 12px; color: var(--s2-gray-500); margin-bottom: 8px; }
+.rr-stars { display: flex; align-items: center; gap: 2px; margin-bottom: 8px; }
+.rr-star { color: #fbbc04; font-size: 14px; }
+.rr-star.empty { color: var(--s2-gray-300); }
+.rr-product-price { font-size: 20px; font-weight: 700; color: var(--s2-gray-900); margin-bottom: 4px; }
+.rr-product-avail { display: inline-flex; padding: 2px 8px; border-radius: var(--s2-radius-s); font-size: 11px; font-weight: 600; }
+.rr-product-avail.in-stock { background: color-mix(in srgb, var(--s2-positive) 10%, transparent); color: var(--s2-positive); }
+.rr-product-avail.out-of-stock { background: color-mix(in srgb, var(--s2-negative) 10%, transparent); color: var(--s2-negative); }
+
+/* Medical Rich Result */
+.rr-medical-badge { display: inline-flex; padding: 3px 10px; border-radius: var(--s2-radius-pill); font-size: 11px; font-weight: 600; background: rgba(75,117,255,0.1); color: var(--s2-informative); margin-bottom: 8px; }
+.rr-medical-meta { font-size: 12px; color: var(--s2-gray-500); line-height: 1.6; }
+
+/* JSON-LD preview */
+.json-preview { background: var(--s2-gray-50); border-radius: var(--s2-radius-default); border: 1px solid var(--s2-gray-200); padding: 16px; font-family: var(--s2-font-family-mono); font-size: 12px; line-height: 1.7; overflow-x: auto; white-space: pre; max-height: 300px; overflow-y: auto; color: var(--s2-gray-700); }
+.json-key { color: var(--s2-accent); }
+.json-string { color: #078a52; }
+.json-number { color: #b35900; }
+.json-punct { color: var(--s2-gray-400); }
+.json-bool { color: #8b44c7; }
+
+/* Validation */
+.validation-bar { display: flex; align-items: center; gap: 8px; padding: 10px 0 0; font-size: 13px; }
+.validation-dot { width: 8px; height: 8px; border-radius: var(--s2-radius-pill); flex-shrink: 0; }
+.validation-dot.valid { background: var(--s2-positive); }
+.validation-dot.invalid { background: var(--s2-negative); }
+.validation-text.valid { color: var(--s2-positive); font-weight: 500; }
+.validation-text.invalid { color: var(--s2-negative); font-weight: 500; }
+.validation-errors { margin-top: 6px; padding: 0; list-style: none; }
+.validation-errors li { font-size: 12px; color: var(--s2-negative); padding: 2px 0 2px 16px; position: relative; }
+.validation-errors li::before { content: '\00d7'; position: absolute; left: 0; font-weight: 700; }
+</style>
+</head>
+<body>
+
+<div class="content-area">
+  <div class="content-toolbar">
+    <h1 class="page-title">Schema Editor</h1>
+    <div class="preset-group">
+      <button class="preset active" data-preset="faq">TAVEX FAQ</button>
+      <button class="preset" data-preset="product">Product Page</button>
+      <button class="preset" data-preset="article">Medical Article</button>
+      <button class="preset" data-preset="howto">HowTo</button>
+    </div>
+  </div>
+
+  <div class="content-main">
+    <!-- Schema type tabs -->
+    <div class="schema-tabs">
+      <button class="schema-tab active" data-type="FAQ">FAQ</button>
+      <button class="schema-tab" data-type="Article">Article</button>
+      <button class="schema-tab" data-type="MedicalWebPage">MedicalWebPage</button>
+      <button class="schema-tab" data-type="HowTo">HowTo</button>
+      <button class="schema-tab" data-type="Product">Product</button>
+    </div>
+
+    <!-- Editor + Preview -->
+    <div class="editor-layout">
+      <div class="field-editor" id="fieldEditor"></div>
+      <div class="preview-panel" id="previewPanel"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ============ DATA ============
+  const DATA = {
+    FAQ: {
+      name: 'TAVEX (tavexirel) \u2014 Frequently Asked Questions',
+      description: 'Common questions about TAVEX for the treatment of rheumatoid arthritis.',
+      questions: [
+        { question: 'What is TAVEX (tavexirel)?', answer: 'TAVEX is a selective oral JAK1 inhibitor for the treatment of moderately to severely active rheumatoid arthritis in adults with inadequate response to DMARDs.' },
+        { question: 'How is TAVEX taken?', answer: 'TAVEX is taken as a 200 mg oral tablet once daily, with or without food. A reduced dose of 100 mg is recommended for moderate renal impairment or co-administration with strong CYP3A4 inhibitors.' },
+        { question: 'What are the common side effects?', answer: 'Common side effects include upper respiratory tract infections, nausea, headache, and elevated liver enzymes. The safety profile was consistent across the RESOLVE clinical programme.' },
+      ]
+    },
+    Article: {
+      headline: 'TAVEX Demonstrates Sustained Efficacy in RESOLVE-2 Trial',
+      author: 'AstraZeneca Medical Affairs',
+      datePublished: '2025-09-15',
+      dateModified: '2026-01-20',
+      image: 'https://main--az-sitebuilder--paolomoz.aem.page/tavex/media_11bb838471c7c4a70965984e91e3f21369e42abd6.jpg',
+      description: 'Long-term results from the RESOLVE-2 trial demonstrate sustained ACR20 response rates with TAVEX through 52 weeks of treatment.'
+    },
+    MedicalWebPage: {
+      name: 'TAVEX (tavexirel) for Rheumatoid Arthritis',
+      about: 'Rheumatoid Arthritis',
+      specialty: 'Rheumatology',
+      lastReviewed: '2026-02-01',
+      description: 'Comprehensive medical information about TAVEX, a selective JAK1 inhibitor for RA treatment.'
+    },
+    HowTo: {
+      name: 'How to Start TAVEX Treatment',
+      description: 'Step-by-step guide for healthcare professionals initiating TAVEX therapy.',
+      steps: [
+        { name: 'Confirm indication', text: 'Verify patient has moderately to severely active RA with inadequate response to one or more DMARDs.' },
+        { name: 'Baseline assessments', text: 'Obtain CBC, liver function tests, lipid panel, and screen for latent TB and viral hepatitis.' },
+        { name: 'Evaluate renal function', text: 'Check eGFR. Use 100 mg dose for moderate renal impairment (eGFR 30-60).' },
+        { name: 'Prescribe TAVEX', text: 'Standard dose: 200 mg once daily. May be taken with or without food.' },
+      ]
+    },
+    Product: {
+      name: 'TAVEX 200 mg Film-Coated Tablets',
+      description: 'TAVEX (tavexirel) 200 mg film-coated tablets for oral administration.',
+      brand: 'AstraZeneca',
+      price: '1250.00',
+      currency: 'GBP',
+      availability: 'InStock'
+    }
+  };
+
+  // Deep clone helper
+  const clone = o => JSON.parse(JSON.stringify(o));
+
+  // State
+  let activeType = 'FAQ';
+  let state = clone(DATA);
+
+  // DOM refs
+  const fieldEditor = document.getElementById('fieldEditor');
+  const previewPanel = document.getElementById('previewPanel');
+
+  // ============ BRIDGE: RESTORE STATE ============
+
+  function restoreFromBridge() {
+    const saved = slicc.getState();
+    if (saved && saved.activeType && saved.state) {
+      activeType = saved.activeType;
+      state = saved.state;
+    }
+  }
+
+  function saveState() {
+    slicc.setState({ activeType, state });
+  }
+
+  slicc.on('update', function(data) {
+    if (data && data.activeType) activeType = data.activeType;
+    if (data && data.state) state = data.state;
+    renderFieldEditor();
+    renderPreview();
+  });
+
+  // ============ FORM RENDERING ============
+
+  function renderFieldEditor() {
+    const d = state[activeType];
+    let html = '<div class="schema-type-badge">' + getSchemaType() + '</div>';
+
+    switch (activeType) {
+      case 'FAQ':
+        html += fieldGroup('name', 'Name', d.name);
+        html += textareaGroup('description', 'Description', d.description);
+        html += '<div class="form-section"><div class="form-section-title">Questions</div>';
+        d.questions.forEach((q, i) => {
+          html += '<div class="array-card">'
+            + '<div class="array-card-header"><span class="array-card-label">Question ' + (i + 1) + '</span><button class="btn-delete" data-action="delete-question" data-index="' + i + '">\u00d7</button></div>'
+            + fieldGroup('q-' + i + '-question', 'Question', q.question)
+            + textareaGroup('q-' + i + '-answer', 'Answer', q.answer)
+            + '</div>';
+        });
+        html += '<button class="btn-add" data-action="add-question">+ Add question</button></div>';
+        break;
+
+      case 'Article':
+        html += fieldGroup('headline', 'Headline', d.headline);
+        html += fieldGroup('author', 'Author', d.author);
+        html += fieldGroup('datePublished', 'Date Published', d.datePublished, 'date');
+        html += fieldGroup('dateModified', 'Date Modified', d.dateModified, 'date');
+        html += fieldGroup('image', 'Image URL', d.image, 'url');
+        html += textareaGroup('description', 'Description', d.description);
+        break;
+
+      case 'MedicalWebPage':
+        html += fieldGroup('name', 'Name', d.name);
+        html += fieldGroup('about', 'About', d.about);
+        html += fieldGroup('specialty', 'Medical Specialty', d.specialty);
+        html += fieldGroup('lastReviewed', 'Last Reviewed', d.lastReviewed, 'date');
+        html += textareaGroup('description', 'Description', d.description);
+        break;
+
+      case 'HowTo':
+        html += fieldGroup('name', 'Name', d.name);
+        html += textareaGroup('description', 'Description', d.description);
+        html += '<div class="form-section"><div class="form-section-title">Steps</div>';
+        d.steps.forEach((s, i) => {
+          html += '<div class="array-card">'
+            + '<div class="array-card-header"><span class="array-card-label">Step ' + (i + 1) + '</span><button class="btn-delete" data-action="delete-step" data-index="' + i + '">\u00d7</button></div>'
+            + fieldGroup('s-' + i + '-name', 'Step Name', s.name)
+            + textareaGroup('s-' + i + '-text', 'Instructions', s.text)
+            + '</div>';
+        });
+        html += '<button class="btn-add" data-action="add-step">+ Add step</button></div>';
+        break;
+
+      case 'Product':
+        html += fieldGroup('name', 'Product Name', d.name);
+        html += textareaGroup('description', 'Description', d.description);
+        html += fieldGroup('brand', 'Brand', d.brand);
+        html += '<div class="form-section"><div class="form-section-title">Offer Details</div>';
+        html += fieldGroup('price', 'Price', d.price, 'text');
+        html += fieldGroup('currency', 'Currency', d.currency);
+        html += fieldGroup('availability', 'Availability', d.availability);
+        html += '</div>';
+        break;
+    }
+
+    fieldEditor.innerHTML = html;
+    bindFieldEvents();
+  }
+
+  function fieldGroup(id, label, value, type) {
+    if (!type) type = 'text';
+    return '<div class="field-group"><label class="field-label" for="f-' + id + '">' + esc(label) + '</label><input class="field-input" type="' + type + '" id="f-' + id + '" data-field="' + id + '" value="' + esc(value || '') + '"></div>';
+  }
+
+  function textareaGroup(id, label, value) {
+    return '<div class="field-group"><label class="field-label" for="f-' + id + '">' + esc(label) + '</label><textarea class="field-input" id="f-' + id + '" data-field="' + id + '">' + esc(value || '') + '</textarea></div>';
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function bindFieldEvents() {
+    // Input changes
+    fieldEditor.querySelectorAll('.field-input').forEach(el => {
+      el.addEventListener('input', () => {
+        const f = el.dataset.field;
+        const v = el.value;
+        const d = state[activeType];
+
+        // Array fields
+        const qMatch = f.match(/^q-(\d+)-(question|answer)$/);
+        const sMatch = f.match(/^s-(\d+)-(name|text)$/);
+
+        if (qMatch) {
+          d.questions[parseInt(qMatch[1])][qMatch[2]] = v;
+        } else if (sMatch) {
+          d.steps[parseInt(sMatch[1])][sMatch[2]] = v;
+        } else {
+          d[f] = v;
+        }
+
+        renderPreview();
+        saveState();
+      });
+    });
+
+    // Delete buttons
+    fieldEditor.querySelectorAll('[data-action="delete-question"]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        state.FAQ.questions.splice(parseInt(btn.dataset.index), 1);
+        renderFieldEditor();
+        renderPreview();
+        saveState();
+        slicc.lick({ action: 'edit-schema', data: { type: activeType, state: state[activeType] } });
+      });
+    });
+    fieldEditor.querySelectorAll('[data-action="delete-step"]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        state.HowTo.steps.splice(parseInt(btn.dataset.index), 1);
+        renderFieldEditor();
+        renderPreview();
+        saveState();
+        slicc.lick({ action: 'edit-schema', data: { type: activeType, state: state[activeType] } });
+      });
+    });
+
+    // Add buttons
+    const addQ = fieldEditor.querySelector('[data-action="add-question"]');
+    if (addQ) addQ.addEventListener('click', () => {
+      state.FAQ.questions.push({ question: '', answer: '' });
+      renderFieldEditor();
+      renderPreview();
+      saveState();
+      slicc.lick({ action: 'add-schema', data: { type: 'FAQ', item: 'question', index: state.FAQ.questions.length - 1 } });
+      setTimeout(() => {
+        const cards = fieldEditor.querySelectorAll('.array-card');
+        if (cards.length) cards[cards.length - 1].scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 50);
+    });
+
+    const addS = fieldEditor.querySelector('[data-action="add-step"]');
+    if (addS) addS.addEventListener('click', () => {
+      state.HowTo.steps.push({ name: '', text: '' });
+      renderFieldEditor();
+      renderPreview();
+      saveState();
+      slicc.lick({ action: 'add-schema', data: { type: 'HowTo', item: 'step', index: state.HowTo.steps.length - 1 } });
+      setTimeout(() => {
+        const cards = fieldEditor.querySelectorAll('.array-card');
+        if (cards.length) cards[cards.length - 1].scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 50);
+    });
+  }
+
+  // ============ JSON-LD GENERATION ============
+
+  function getSchemaType() {
+    switch (activeType) {
+      case 'FAQ': return 'FAQPage';
+      case 'Article': return 'Article';
+      case 'MedicalWebPage': return 'MedicalWebPage';
+      case 'HowTo': return 'HowTo';
+      case 'Product': return 'Product';
+    }
+  }
+
+  function buildJsonLd() {
+    const d = state[activeType];
+    const base = { '@context': 'https://schema.org', '@type': getSchemaType() };
+
+    switch (activeType) {
+      case 'FAQ':
+        base.name = d.name;
+        base.description = d.description;
+        base.mainEntity = d.questions.map(q => ({
+          '@type': 'Question',
+          name: q.question,
+          acceptedAnswer: { '@type': 'Answer', text: q.answer }
+        }));
+        break;
+      case 'Article':
+        base.headline = d.headline;
+        base.author = { '@type': 'Organization', name: d.author };
+        base.datePublished = d.datePublished;
+        base.dateModified = d.dateModified;
+        if (d.image) base.image = d.image;
+        base.description = d.description;
+        break;
+      case 'MedicalWebPage':
+        base.name = d.name;
+        base.about = { '@type': 'MedicalCondition', name: d.about };
+        base.specialty = { '@type': 'MedicalSpecialty', name: d.specialty };
+        base.lastReviewed = d.lastReviewed;
+        base.description = d.description;
+        break;
+      case 'HowTo':
+        base.name = d.name;
+        base.description = d.description;
+        base.step = d.steps.map((s, i) => ({
+          '@type': 'HowToStep',
+          position: i + 1,
+          name: s.name,
+          text: s.text
+        }));
+        break;
+      case 'Product':
+        base.name = d.name;
+        base.description = d.description;
+        base.brand = { '@type': 'Brand', name: d.brand };
+        base.offers = {
+          '@type': 'Offer',
+          price: d.price,
+          priceCurrency: d.currency,
+          availability: 'https://schema.org/' + d.availability
+        };
+        break;
+    }
+    return base;
+  }
+
+  // ============ VALIDATION ============
+
+  function validate() {
+    const d = state[activeType];
+    const errors = [];
+
+    switch (activeType) {
+      case 'FAQ':
+        if (!d.name.trim()) errors.push('Name is required');
+        if (!d.questions.length) errors.push('At least one question is required');
+        d.questions.forEach((q, i) => {
+          if (!q.question.trim()) errors.push('Question ' + (i + 1) + ': question text is empty');
+          if (!q.answer.trim()) errors.push('Question ' + (i + 1) + ': answer text is empty');
+        });
+        break;
+      case 'Article':
+        if (!d.headline.trim()) errors.push('Headline is required');
+        if (!d.author.trim()) errors.push('Author is required');
+        if (!d.datePublished) errors.push('Date published is required');
+        if (d.image && !isValidUrl(d.image)) errors.push('Image URL is not valid');
+        break;
+      case 'MedicalWebPage':
+        if (!d.name.trim()) errors.push('Name is required');
+        if (!d.about.trim()) errors.push('About is required');
+        if (!d.specialty.trim()) errors.push('Specialty is required');
+        break;
+      case 'HowTo':
+        if (!d.name.trim()) errors.push('Name is required');
+        if (!d.steps.length) errors.push('At least one step is required');
+        d.steps.forEach((s, i) => {
+          if (!s.name.trim()) errors.push('Step ' + (i + 1) + ': name is empty');
+          if (!s.text.trim()) errors.push('Step ' + (i + 1) + ': instructions are empty');
+        });
+        break;
+      case 'Product':
+        if (!d.name.trim()) errors.push('Product name is required');
+        if (!d.brand.trim()) errors.push('Brand is required');
+        if (!d.price || isNaN(parseFloat(d.price))) errors.push('Valid price is required');
+        if (!d.currency.trim()) errors.push('Currency is required');
+        break;
+    }
+    return errors;
+  }
+
+  function isValidUrl(s) {
+    try { new URL(s); return true; } catch { return false; }
+  }
+
+  // ============ PREVIEW RENDERING ============
+
+  function renderPreview() {
+    const d = state[activeType];
+    const jsonLd = buildJsonLd();
+    const errors = validate();
+
+    let html = '';
+
+    // Rich Result preview
+    html += '<div class="preview-section"><div class="preview-section-title">Rich Result Preview</div><div class="rich-result">';
+    html += renderRichResult(d);
+    html += '</div></div>';
+
+    // JSON-LD
+    html += '<div class="preview-section"><div class="preview-section-title">JSON-LD</div>';
+    html += '<div class="json-preview">' + syntaxHighlight(JSON.stringify(jsonLd, null, 2)) + '</div>';
+
+    // Validation
+    if (errors.length === 0) {
+      let countLabel = '';
+      if (activeType === 'FAQ') countLabel = ' (' + d.questions.length + ' questions)';
+      else if (activeType === 'HowTo') countLabel = ' (' + d.steps.length + ' steps)';
+      html += '<div class="validation-bar"><span class="validation-dot valid"></span><span class="validation-text valid">Valid' + countLabel + '</span></div>';
+    } else {
+      html += '<div class="validation-bar"><span class="validation-dot invalid"></span><span class="validation-text invalid">' + errors.length + ' issue' + (errors.length > 1 ? 's' : '') + ' found</span></div>';
+      html += '<ul class="validation-errors">' + errors.map(e => '<li>' + esc(e) + '</li>').join('') + '</ul>';
+    }
+    html += '</div>';
+
+    previewPanel.innerHTML = html;
+
+    // Bind FAQ expand/collapse
+    previewPanel.querySelectorAll('.rr-faq-item').forEach(item => {
+      item.addEventListener('click', () => item.classList.toggle('open'));
+    });
+  }
+
+  function renderRichResult(d) {
+    switch (activeType) {
+      case 'FAQ':
+        return '<div class="rr-header">'
+          + '<div class="rr-breadcrumb"><span class="rr-domain">tavex.example.com</span> <span>\u203a FAQ</span></div>'
+          + '<div class="rr-title">' + esc(d.name || 'Untitled FAQ') + '</div>'
+          + '<div class="rr-description">' + esc(d.description || '') + '</div>'
+          + '</div>'
+          + d.questions.map(q => '<div class="rr-faq-item">'
+            + '<div class="rr-faq-q"><span>' + esc(q.question || 'Untitled question') + '</span><span class="rr-faq-arrow">\u25BE</span></div>'
+            + '<div class="rr-faq-a">' + esc(q.answer || '') + '</div>'
+            + '</div>').join('');
+
+      case 'Article':
+        return '<div class="rr-article-thumb">' + (d.image ? '<img src="' + esc(d.image) + '" alt="" onerror="this.parentElement.textContent=\'Image failed to load\'">' : 'No image') + '</div>'
+          + '<div class="rr-header">'
+          + '<div class="rr-breadcrumb"><span class="rr-domain">tavex.example.com</span> <span>\u203a Article</span></div>'
+          + '<div class="rr-title">' + esc(d.headline || 'Untitled Article') + '</div>'
+          + '<div class="rr-description"><span class="rr-date">' + (d.datePublished || '') + '</span>' + (d.datePublished && d.description ? ' \u2014 ' : '') + esc(d.description || '') + '</div>'
+          + '</div>'
+          + '<div class="rr-article-meta"><span>' + esc(d.author || '') + '</span></div>';
+
+      case 'MedicalWebPage':
+        return '<div class="rr-header">'
+          + '<div class="rr-breadcrumb"><span class="rr-domain">tavex.example.com</span> <span>\u203a Medical</span></div>'
+          + '<div class="rr-title">' + esc(d.name || 'Untitled Page') + '</div>'
+          + '<div class="rr-medical-badge">' + esc(d.specialty || 'Medical') + '</div>'
+          + '<div class="rr-description">' + esc(d.description || '') + '</div>'
+          + '<div class="rr-medical-meta">' + (d.lastReviewed ? 'Reviewed: ' + d.lastReviewed : '') + (d.about ? ' \u00b7 About: ' + esc(d.about) : '') + '</div>'
+          + '</div>';
+
+      case 'HowTo':
+        return '<div class="rr-header">'
+          + '<div class="rr-breadcrumb"><span class="rr-domain">tavex.example.com</span> <span>\u203a How-to</span></div>'
+          + '<div class="rr-title">' + esc(d.name || 'Untitled HowTo') + '</div>'
+          + '<div class="rr-description">' + esc(d.description || '') + '</div>'
+          + '</div>'
+          + d.steps.map((s, i) => '<div class="rr-step">'
+            + '<div class="rr-step-num">' + (i + 1) + '</div>'
+            + '<div class="rr-step-content"><div class="rr-step-name">' + esc(s.name || 'Untitled step') + '</div><div class="rr-step-text">' + esc(s.text || '') + '</div></div>'
+            + '</div>').join('');
+
+      case 'Product': {
+        const avail = d.availability === 'InStock';
+        return '<div class="rr-product-info">'
+          + '<div class="rr-product-brand">' + esc(d.brand || '') + '</div>'
+          + '<div class="rr-product-name">' + esc(d.name || 'Untitled Product') + '</div>'
+          + '<div class="rr-stars">' + '\u2605\u2605\u2605\u2605'.split('').map(s => '<span class="rr-star">' + s + '</span>').join('') + '<span class="rr-star empty">\u2605</span></div>'
+          + '<div class="rr-product-price">' + currencySymbol(d.currency) + esc(d.price || '0.00') + '</div>'
+          + '<span class="rr-product-avail ' + (avail ? 'in-stock' : 'out-of-stock') + '">' + (avail ? 'In Stock' : 'Out of Stock') + '</span>'
+          + '<div class="rr-description" style="margin-top:12px;font-size:13px;color:var(--s2-gray-600);">' + esc(d.description || '') + '</div>'
+          + '</div>';
+      }
+    }
+  }
+
+  function currencySymbol(code) {
+    const map = { GBP: '\u00a3', USD: '$', EUR: '\u20ac', JPY: '\u00a5' };
+    return map[code] || code + ' ';
+  }
+
+  function syntaxHighlight(json) {
+    return json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"(\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?/g, (match) => {
+        let cls = 'json-string';
+        if (match.endsWith(':')) {
+          cls = 'json-key';
+          return '<span class="' + cls + '">' + match.slice(0, -1) + '</span>:';
+        }
+        return '<span class="' + cls + '">' + match + '</span>';
+      })
+      .replace(/\b(\d+\.?\d*)\b/g, '<span class="json-number">$1</span>')
+      .replace(/\b(true|false|null)\b/g, '<span class="json-bool">$1</span>')
+      .replace(/([{}[\],])/g, '<span class="json-punct">$1</span>');
+  }
+
+  // ============ TAB / PRESET WIRING ============
+
+  // Schema type tabs
+  document.querySelectorAll('.schema-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.schema-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      activeType = tab.dataset.type;
+      renderFieldEditor();
+      renderPreview();
+      saveState();
+    });
+  });
+
+  // Presets
+  const presetMap = {
+    faq: 'FAQ',
+    product: 'Product',
+    article: 'Article',
+    howto: 'HowTo'
+  };
+
+  document.querySelectorAll('.preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.preset').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+
+      const type = presetMap[btn.dataset.preset];
+      state[type] = clone(DATA[type]);
+      activeType = type;
+
+      document.querySelectorAll('.schema-tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.type === type);
+      });
+
+      renderFieldEditor();
+      renderPreview();
+      saveState();
+    });
+  });
+
+  // ============ LICK ACTIONS ============
+
+  // Validate button: fires validate lick with current errors
+  function doValidate() {
+    const errors = validate();
+    const jsonLd = buildJsonLd();
+    slicc.lick({ action: 'validate', data: { type: activeType, schemaType: getSchemaType(), errors: errors, jsonLd: jsonLd } });
+  }
+
+  // Apply to page: fires apply-to-page lick with current JSON-LD
+  function doApplyToPage() {
+    const jsonLd = buildJsonLd();
+    const errors = validate();
+    slicc.lick({ action: 'apply-to-page', data: { type: activeType, schemaType: getSchemaType(), jsonLd: jsonLd, errors: errors } });
+  }
+
+  // Expose for potential external calls
+  window.doValidate = doValidate;
+  window.doApplyToPage = doApplyToPage;
+
+  // ============ INIT ============
+  restoreFromBridge();
+  renderFieldEditor();
+  renderPreview();
+})();
+</script>
+</body>
+</html>

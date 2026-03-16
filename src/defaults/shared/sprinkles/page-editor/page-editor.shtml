@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Page Editor</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body { font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5; color: var(--s2-gray-900); background: var(--s2-bg-base); display: flex; flex-direction: column; -webkit-font-smoothing: antialiased; }
+
+/* ---- Content ---- */
+.content-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+.content-toolbar { height: 48px; border-bottom: 1px solid var(--s2-gray-200); display: flex; align-items: center; justify-content: space-between; padding: 0 24px; flex-shrink: 0; gap: 16px; }
+.page-title { font-size: 16px; font-weight: 700; white-space: nowrap; }
+.toolbar-actions { display: flex; gap: 6px; align-items: center; }
+.toolbar-btn { height: 30px; padding: 0 14px; border-radius: var(--s2-radius-pill); border: 1px solid var(--s2-gray-300); background: var(--s2-bg-elevated); color: var(--s2-gray-700); font-size: 12px; font-weight: 500; cursor: pointer; transition: all var(--t, 130ms ease); font-family: var(--s2-font-family); white-space: nowrap; }
+.toolbar-btn:hover { border-color: var(--s2-gray-500); color: var(--s2-gray-900); }
+.toolbar-btn.primary { background: var(--s2-accent); border-color: var(--s2-accent); color: var(--s2-gray-25); }
+.toolbar-btn.primary:hover { background: var(--s2-accent-hover); border-color: var(--s2-accent-hover); }
+.preset-group { display: flex; gap: 4px; overflow-x: auto; }
+.preset { height: 28px; padding: 0 12px; border-radius: var(--s2-radius-pill); border: 1px solid var(--s2-gray-300); background: var(--s2-bg-elevated); color: var(--s2-gray-700); font-size: 12px; font-weight: 500; cursor: pointer; transition: all var(--t, 130ms ease); font-family: var(--s2-font-family); white-space: nowrap; }
+.preset:hover { border-color: var(--s2-gray-500); color: var(--s2-gray-900); }
+.preset.active { background: var(--s2-gray-900); border-color: var(--s2-gray-900); color: var(--s2-gray-25); }
+.content-main { flex: 1; overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+
+/* ---- Block Palette ---- */
+.block-palette { display: flex; align-items: center; gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--s2-gray-200); background: var(--s2-bg-elevated); flex-shrink: 0; flex-wrap: wrap; }
+.block-palette-label { font-size: 11px; font-weight: 600; color: var(--s2-gray-500); text-transform: uppercase; letter-spacing: 0.05em; margin-right: 4px; white-space: nowrap; }
+.block-palette-btn { height: 30px; padding: 0 14px; border-radius: var(--s2-radius-pill); border: 1px solid var(--s2-gray-300); background: var(--s2-bg-elevated); color: var(--s2-gray-700); font-size: 12px; font-weight: 500; cursor: pointer; transition: all var(--t, 130ms ease); font-family: var(--s2-font-family); display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.block-palette-btn:hover { border-color: var(--s2-accent); color: var(--s2-accent); background: color-mix(in srgb, var(--s2-accent) 4%, transparent); }
+.block-palette-btn:active { transform: scale(0.97); }
+.block-palette-btn svg { width: 14px; height: 14px; opacity: 0.5; }
+
+/* ---- Editor Layout ---- */
+.editor-body { flex: 1; display: flex; overflow: hidden; min-width: 0; }
+
+/* ---- Section List (left panel) ---- */
+.section-list { width: 200px; flex-shrink: 0; border-right: 1px solid var(--s2-gray-200); background: var(--s2-bg-layer-1); overflow-y: auto; padding: 8px; }
+.section-list-header { font-size: 11px; font-weight: 600; color: var(--s2-gray-500); text-transform: uppercase; letter-spacing: 0.05em; padding: 6px 8px 8px; }
+.section-item { display: flex; align-items: center; gap: 6px; padding: 8px 8px; border-radius: var(--s2-radius-default); cursor: pointer; transition: all var(--t, 130ms ease); position: relative; user-select: none; }
+.section-item:hover { background: rgba(0,0,0,0.04); }
+.section-item.selected { background: color-mix(in srgb, var(--s2-accent) 8%, transparent); }
+.section-item.drag-over { border-top: 2px solid var(--s2-accent); }
+.section-item .grip { color: var(--s2-gray-400); cursor: grab; display: flex; align-items: center; flex-shrink: 0; }
+.section-item .grip:active { cursor: grabbing; }
+.section-item .grip svg { width: 14px; height: 14px; }
+.section-item .section-info { flex: 1; min-width: 0; }
+.section-item .section-name { font-size: 13px; font-weight: 500; color: var(--s2-gray-800); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.section-item .section-type { font-size: 10px; font-weight: 500; color: var(--s2-gray-500); text-transform: uppercase; letter-spacing: 0.04em; }
+.section-item .section-delete { width: 22px; height: 22px; border-radius: var(--s2-radius-s); border: none; background: transparent; color: var(--s2-gray-400); cursor: pointer; display: flex; align-items: center; justify-content: center; opacity: 0; transition: all var(--t, 130ms ease); flex-shrink: 0; }
+.section-item:hover .section-delete { opacity: 1; }
+.section-item .section-delete:hover { background: color-mix(in srgb, var(--s2-negative) 8%, transparent); color: var(--s2-negative); }
+.section-item .section-delete svg { width: 12px; height: 12px; }
+.section-item.dragging { opacity: 0.4; }
+
+/* ---- Preview Canvas ---- */
+.preview-canvas { flex: 1; overflow-y: auto; background: var(--s2-gray-75); padding: 24px; min-width: 0; }
+.preview-frame { max-width: 1200px; margin: 0 auto; background: var(--s2-bg-elevated); border-radius: var(--s2-radius-l); box-shadow: var(--s2-shadow-container); overflow: hidden; }
+
+/* ---- Preview Section Wrapper ---- */
+.preview-section { position: relative; transition: outline 130ms ease, outline-offset 130ms ease; outline: 2px solid transparent; outline-offset: -2px; }
+.preview-section:hover { outline: 2px dashed var(--s2-gray-300); }
+.preview-section.selected { outline: 2px solid var(--s2-accent); outline-offset: -2px; }
+.preview-section.selected:hover { outline: 2px solid var(--s2-accent); }
+
+/* Section label badge */
+.preview-section .section-badge { position: absolute; top: 8px; left: 8px; z-index: 5; padding: 2px 8px; border-radius: var(--s2-radius-s); font-size: 10px; font-weight: 600; font-family: var(--s2-font-family); text-transform: uppercase; letter-spacing: 0.04em; color: var(--s2-gray-25); background: var(--s2-accent); opacity: 0; transition: opacity 130ms ease; pointer-events: none; }
+.preview-section:hover .section-badge,
+.preview-section.selected .section-badge { opacity: 1; }
+
+/* ---- Inline Toolbar ---- */
+.inline-toolbar { position: fixed; z-index: 100; display: none; align-items: center; gap: 2px; padding: 4px; background: var(--s2-bg-elevated); border: 1px solid var(--s2-gray-200); border-radius: var(--s2-radius-default); box-shadow: var(--s2-shadow-elevated); }
+.inline-toolbar.visible { display: flex; }
+.inline-toolbar button { width: 30px; height: 28px; border: none; border-radius: var(--s2-radius-s); background: transparent; color: var(--s2-gray-700); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all var(--t, 130ms ease); font-size: 13px; font-weight: 600; font-family: var(--s2-font-family); }
+.inline-toolbar button:hover { background: var(--s2-gray-100); color: var(--s2-gray-900); }
+.inline-toolbar button.active { background: color-mix(in srgb, var(--s2-accent) 10%, transparent); color: var(--s2-accent); }
+.inline-toolbar .tb-sep { width: 1px; height: 18px; background: var(--s2-gray-200); margin: 0 2px; }
+
+/* ---- Site Preview Styles (pharma theme) ---- */
+.site-hero { position: relative; background: #1a0a1e; padding: 80px 48px; min-height: 340px; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden; }
+.site-hero .hero-bg { position: absolute; inset: 0; object-fit: cover; width: 100%; height: 100%; opacity: 0.45; }
+.site-hero .hero-content { position: relative; z-index: 2; max-width: 600px; }
+.site-hero h2 { font-family: Georgia, serif; font-size: 48px; font-weight: 700; color: var(--s2-gray-25); line-height: 1.1; margin-bottom: 16px; }
+.site-hero h2:focus { outline: 2px dashed rgba(255,255,255,0.5); outline-offset: 4px; border-radius: 2px; }
+.site-hero p { font-size: 17px; color: rgba(255,255,255,0.88); line-height: 1.6; margin-bottom: 24px; }
+.site-hero p:focus { outline: 2px dashed rgba(255,255,255,0.5); outline-offset: 4px; border-radius: 2px; }
+.site-hero .cta-btn { display: inline-block; padding: 12px 28px; background: #d0006f; color: var(--s2-gray-25); border-radius: var(--s2-radius-pill); font-size: 15px; font-weight: 600; text-decoration: none; transition: background var(--t, 130ms ease); cursor: pointer; border: none; font-family: var(--s2-font-family); }
+.site-hero .cta-btn:hover { background: #b5005f; }
+.site-hero .cta-btn:focus { outline: 2px dashed var(--s2-gray-25); outline-offset: 4px; }
+
+.site-intro { padding: 56px 48px; max-width: 1100px; margin: 0 auto; text-align: center; }
+.site-intro h2 { font-family: Georgia, serif; font-size: 32px; font-weight: 700; color: #830051; line-height: 1.25; margin-bottom: 16px; }
+.site-intro p { font-size: 17px; color: var(--s2-gray-700); line-height: 1.7; max-width: 720px; margin: 0 auto; }
+[contenteditable]:focus { outline: 2px dashed var(--s2-accent); outline-offset: 3px; border-radius: 2px; }
+[contenteditable] { cursor: text; }
+
+.site-cards { padding: 48px; }
+.site-cards .cards-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+.site-card { background: var(--s2-bg-elevated); border-radius: var(--s2-radius-l); border: 1px solid var(--s2-gray-200); overflow: hidden; transition: box-shadow var(--t, 130ms ease); position: relative; }
+.site-card:hover { box-shadow: var(--s2-shadow-elevated); }
+.site-card img { width: 100%; height: 180px; object-fit: cover; display: block; }
+.site-card .card-body { padding: 20px; }
+.site-card h3 { font-family: Georgia, serif; font-size: 18px; font-weight: 700; color: #830051; margin-bottom: 8px; line-height: 1.3; }
+.site-card p { font-size: 14px; color: var(--s2-gray-700); line-height: 1.6; margin-bottom: 16px; }
+.site-card .card-cta { display: inline-block; padding: 8px 20px; background: #d0006f; color: var(--s2-gray-25); border-radius: var(--s2-radius-pill); font-size: 13px; font-weight: 600; text-decoration: none; transition: background var(--t, 130ms ease); }
+.site-card .card-cta:hover { background: #b5005f; }
+/* Card overlay controls */
+.site-card .card-controls { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; opacity: 0; transition: opacity var(--t, 130ms ease); z-index: 5; }
+.site-card:hover .card-controls { opacity: 1; }
+.card-ctrl-btn { width: 26px; height: 26px; border-radius: var(--s2-radius-s); border: none; background: rgba(0,0,0,0.6); color: var(--s2-gray-25); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background var(--t, 130ms ease); }
+.card-ctrl-btn:hover { background: rgba(0,0,0,0.85); }
+.card-ctrl-btn svg { width: 13px; height: 13px; }
+.cards-add-btn { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 14px; border: 2px dashed var(--s2-gray-300); border-radius: var(--s2-radius-l); background: transparent; color: var(--s2-gray-500); font-size: 13px; font-weight: 500; cursor: pointer; transition: all var(--t, 130ms ease); font-family: var(--s2-font-family); min-height: 120px; }
+.cards-add-btn:hover { border-color: var(--s2-accent); color: var(--s2-accent); background: color-mix(in srgb, var(--s2-accent) 3%, transparent); }
+
+.site-columns { padding: 48px; }
+.site-columns .columns-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: center; }
+.site-columns img { width: 100%; border-radius: var(--s2-radius-default); display: block; }
+.site-columns .col-text h2 { font-family: Georgia, serif; font-size: 28px; font-weight: 700; color: #830051; line-height: 1.25; margin-bottom: 12px; }
+.site-columns .col-text p { font-size: 16px; color: var(--s2-gray-700); line-height: 1.7; margin-bottom: 20px; }
+.site-columns .cta-outline { display: inline-block; padding: 10px 24px; border: 2px solid #d0006f; color: #d0006f; border-radius: var(--s2-radius-pill); font-size: 14px; font-weight: 600; text-decoration: none; transition: all var(--t, 130ms ease); cursor: pointer; background: transparent; font-family: var(--s2-font-family); }
+.site-columns .cta-outline:hover { background: #d0006f; color: var(--s2-gray-25); }
+
+.site-accordion { padding: 48px; max-width: 900px; margin: 0 auto; }
+.accordion-item { border-bottom: 1px solid var(--s2-gray-200); position: relative; }
+.accordion-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 0; cursor: pointer; width: 100%; border: none; background: transparent; text-align: left; font-family: var(--s2-font-family); }
+.accordion-header h3 { font-family: Georgia, serif; font-size: 18px; font-weight: 600; color: #830051; flex: 1; }
+.accordion-header h3:focus { outline: 2px dashed var(--s2-accent); outline-offset: 3px; }
+.accordion-chevron { width: 24px; height: 24px; color: var(--s2-gray-500); transition: transform 200ms ease; flex-shrink: 0; margin-left: 12px; }
+.accordion-item.open .accordion-chevron { transform: rotate(180deg); }
+.accordion-body { max-height: 0; overflow: hidden; transition: max-height 250ms ease; }
+.accordion-item.open .accordion-body { max-height: 500px; }
+.accordion-body-inner { padding: 0 0 18px; font-size: 15px; color: var(--s2-gray-700); line-height: 1.7; }
+.accordion-body-inner ol, .accordion-body-inner ul { padding-left: 20px; }
+.accordion-body-inner li { margin-bottom: 4px; }
+/* Accordion item overlay controls */
+.accordion-item .acc-controls { position: absolute; top: 14px; right: -2px; display: flex; gap: 3px; opacity: 0; transition: opacity var(--t, 130ms ease); }
+.accordion-item:hover .acc-controls { opacity: 1; }
+.acc-ctrl-btn { width: 24px; height: 24px; border-radius: var(--s2-radius-s); border: 1px solid var(--s2-gray-200); background: var(--s2-bg-elevated); color: var(--s2-gray-500); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all var(--t, 130ms ease); }
+.acc-ctrl-btn:hover { border-color: var(--s2-accent); color: var(--s2-accent); }
+.acc-ctrl-btn svg { width: 12px; height: 12px; }
+.acc-add-btn { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 12px; border: 2px dashed var(--s2-gray-300); border-radius: var(--s2-radius-pill); background: transparent; color: var(--s2-gray-500); font-size: 13px; font-weight: 500; cursor: pointer; transition: all var(--t, 130ms ease); font-family: var(--s2-font-family); margin: 12px 0; }
+.acc-add-btn:hover { border-color: var(--s2-accent); color: var(--s2-accent); }
+
+/* ---- Empty state ---- */
+.empty-canvas { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 12px; color: var(--s2-gray-500); }
+.empty-canvas svg { width: 48px; height: 48px; opacity: 0.3; }
+.empty-canvas p { font-size: 14px; }
+
+/* ---- Responsive ---- */
+@media (max-width: 800px) {
+  .editor-body { flex-direction: column; }
+  .section-list { width: 100%; max-height: 150px; border-right: none; border-bottom: 1px solid var(--s2-gray-200); }
+  .site-cards .cards-grid { grid-template-columns: 1fr; }
+  .site-columns .columns-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<div class="content-area">
+  <div class="content-toolbar">
+    <h1 class="page-title">Page Editor</h1>
+    <div class="toolbar-actions">
+      <button class="toolbar-btn" onclick="slicc.lick({action: 'preview-page', data: {sections: state.sections}})">Preview</button>
+      <button class="toolbar-btn primary" onclick="slicc.lick({action: 'publish-page', data: {sections: state.sections}})">Publish</button>
+    </div>
+  </div>
+
+  <div class="content-main">
+    <!-- Block palette -->
+    <div class="block-palette">
+      <span class="block-palette-label">Add block</span>
+      <button class="block-palette-btn" data-block="hero-teaser"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1" y="1" width="12" height="8" rx="1"/><path d="M4 11h6"/></svg>Hero Teaser</button>
+      <button class="block-palette-btn" data-block="introduction"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 4h8M3 7h6M3 10h7"/></svg>Introduction</button>
+      <button class="block-palette-btn" data-block="cards-teaser"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1" y="2" width="3.5" height="10" rx="0.5"/><rect x="5.25" y="2" width="3.5" height="10" rx="0.5"/><rect x="9.5" y="2" width="3.5" height="10" rx="0.5"/></svg>Cards Teaser</button>
+      <button class="block-palette-btn" data-block="columns-teaser"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1" y="2" width="5.5" height="10" rx="0.5"/><rect x="7.5" y="2" width="5.5" height="10" rx="0.5"/></svg>Columns Teaser</button>
+      <button class="block-palette-btn" data-block="accordion"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 3h10M2 7h10M2 11h10"/><path d="M11 3l-1.5 1.5L11 6"/></svg>Accordion</button>
+    </div>
+
+    <!-- Editor body: section list + preview -->
+    <div class="editor-body">
+      <div class="section-list" id="sectionList">
+        <div class="section-list-header">Sections</div>
+      </div>
+      <div class="preview-canvas" id="previewCanvas"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Inline Toolbar -->
+<div class="inline-toolbar" id="inlineToolbar">
+  <button data-cmd="bold" title="Bold"><strong>B</strong></button>
+  <button data-cmd="italic" title="Italic"><em>I</em></button>
+  <button data-cmd="superscript" title="Superscript" style="font-size:11px;">X<sup>2</sup></button>
+  <span class="tb-sep"></span>
+  <button data-cmd="createLink" title="Link"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M6 8.5a3 3 0 004-4L8.5 3a3 3 0 00-4 4z"/><path d="M8 5.5a3 3 0 00-4 4L5.5 11a3 3 0 004-4z"/></svg></button>
+  <button data-cmd="unlink" title="Unlink"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M6 8.5a3 3 0 004-4L8.5 3a3 3 0 00-4 4z"/><path d="M8 5.5a3 3 0 00-4 4L5.5 11a3 3 0 004-4z"/><path d="M2 12L12 2" stroke-dasharray="1.5 2"/></svg></button>
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  /* ================================================================
+     DATA MODEL
+     ================================================================ */
+  var idCounter = 10;
+  function uid() { return 's' + (++idCounter); }
+
+  var DEFAULTS = {
+    'hero-teaser': function() { return {
+      imgSrc: 'https://main--az-sitebuilder--paolomoz.aem.page/tavex/media_11bb838471c7c4a70965984e91e3f21369e42abd6.jpg?width=2000&format=jpg&optimize=medium',
+      imgAlt: 'Hero image', heading: 'New Hero Section', body: 'Add your hero copy here.', ctaText: 'Learn more', ctaHref: '#'
+    }; },
+    'introduction': function() { return {
+      heading: 'New Introduction', body: 'Write your introduction copy here.'
+    }; },
+    'cards-teaser': function() { return {
+      cards: [
+        { imgSrc: 'https://main--az-sitebuilder--paolomoz.aem.page/tavex/media_103a9a470f5165ac8cbfeb3f20eea458de6e92ae7.jpg?width=2000&format=jpg&optimize=medium', imgAlt: 'Card image', title: 'Card title', body: 'Card description.', linkText: 'Read more', linkHref: '#' }
+      ]
+    }; },
+    'columns-teaser': function() { return {
+      imgSrc: 'https://main--az-sitebuilder--paolomoz.aem.page/tavex/media_1730e448a168ae6a8d3c3ef5d11b7412ab76e506c.jpg?width=2000&format=jpg&optimize=medium',
+      imgAlt: 'Column image', heading: 'New Columns Section', body: 'Add supporting copy here.', ctaText: 'Explore', ctaHref: '#'
+    }; },
+    'accordion': function() { return {
+      items: [{ title: 'New item', body: '<p>Content here.</p>' }]
+    }; }
+  };
+
+  var TAVEX_SECTIONS = [
+    { id: 's1', type: 'hero-teaser', label: 'Hero',
+      data: { imgSrc: 'https://main--az-sitebuilder--paolomoz.aem.page/tavex/media_11bb838471c7c4a70965984e91e3f21369e42abd6.jpg?width=2000&format=jpg&optimize=medium',
+        imgAlt: 'TAVEX — selective oral JAK1 inhibitor',
+        heading: 'TAVEX (tavexirel)',
+        body: 'Selective oral JAK1 inhibitor for the treatment of moderately to severely active rheumatoid arthritis in adults.<sup>1</sup>',
+        ctaText: 'Explore efficacy data', ctaHref: '/tavex/efficacy' }},
+    { id: 's2', type: 'introduction', label: 'Disease Burden',
+      data: { heading: 'Rheumatoid arthritis: unmet need persists',
+        body: 'Despite biologic DMARDs, approximately 40% of patients fail to achieve low disease activity.<sup>1 2</sup> There remains a need for effective oral therapies.' }},
+    { id: 's3', type: 'cards-teaser', label: 'Navigation Cards',
+      data: { cards: [
+        { imgSrc: 'https://main--az-sitebuilder--paolomoz.aem.page/tavex/media_103a9a470f5165ac8cbfeb3f20eea458de6e92ae7.jpg?width=2000&format=jpg&optimize=medium',
+          imgAlt: 'Efficacy data', title: 'Rapid and sustained disease control',
+          body: '71% achieved ACR20 at Week 12.<sup>1</sup>', linkText: 'View efficacy data', linkHref: '/tavex/efficacy' },
+        { imgSrc: 'https://main--az-sitebuilder--paolomoz.aem.page/tavex/media_16cf8cf29322fd5b72ca14402e86cb8798496e447.jpg?width=2000&format=jpg&optimize=medium',
+          imgAlt: 'Safety monitoring', title: 'Well-characterised safety profile',
+          body: 'Consistent across the RESOLVE programme.<sup>1</sup>', linkText: 'Review safety', linkHref: '/tavex/safety' },
+        { imgSrc: 'https://main--az-sitebuilder--paolomoz.aem.page/tavex/media_1b464fbf0b33d0bd9a8a2b262912bb3e1c22499b9.jpg?width=2000&format=jpg&optimize=medium',
+          imgAlt: 'Oral dosing', title: 'Simple once-daily oral dosing',
+          body: '200 mg once daily, with or without food.<sup>1</sup>', linkText: 'See dosing guide', linkHref: '/tavex/dosing' }
+      ]}},
+    { id: 's4', type: 'columns-teaser', label: 'MoA Teaser',
+      data: { imgSrc: 'https://main--az-sitebuilder--paolomoz.aem.page/tavex/media_1730e448a168ae6a8d3c3ef5d11b7412ab76e506c.jpg?width=2000&format=jpg&optimize=medium',
+        imgAlt: 'JAK1 pathway', heading: 'Selective JAK1 inhibition',
+        body: 'TAVEX preferentially inhibits JAK1, blocking key pro-inflammatory cytokine signalling.<sup>1</sup>',
+        ctaText: 'Explore mechanism of action', ctaHref: '/tavex/mechanism-of-action' }},
+    { id: 's5', type: 'accordion', label: 'Prescribing Info',
+      data: { items: [
+        { title: 'Prescribing Information', body: '<p>TAVEX 100 mg and 200 mg tablets. Indication: moderately to severely active RA in adults.</p>' },
+        { title: 'Adverse Event Reporting', body: '<p>Report at www.mhra.gov.uk/yellowcard or call 0800 783 0033.</p>' },
+        { title: 'References', body: '<ol><li>TAVEX SmPC. AstraZeneca UK Ltd.</li><li>Smolen JS, et al. Lancet. 2023.</li></ol>' }
+      ]}}
+  ];
+
+  var TYPE_LABELS = {
+    'hero-teaser': 'Hero Teaser',
+    'introduction': 'Introduction',
+    'cards-teaser': 'Cards Teaser',
+    'columns-teaser': 'Columns Teaser',
+    'accordion': 'Accordion'
+  };
+
+  /* ================================================================
+     STATE
+     ================================================================ */
+  // Expose state globally for toolbar button onclick access
+  window.state = {
+    sections: JSON.parse(JSON.stringify(TAVEX_SECTIONS)),
+    selectedId: null
+  };
+  var state = window.state;
+
+  /* ================================================================
+     DOM REFS
+     ================================================================ */
+  var $sectionList = document.getElementById('sectionList');
+  var $previewCanvas = document.getElementById('previewCanvas');
+  var $inlineToolbar = document.getElementById('inlineToolbar');
+
+  /* ================================================================
+     RENDER ALL
+     ================================================================ */
+  function renderAll() {
+    renderSectionList();
+    renderPreview();
+    saveState();
+  }
+
+  /* ================================================================
+     SECTION LIST
+     ================================================================ */
+  function renderSectionList() {
+    var header = '<div class="section-list-header">Sections</div>';
+    if (state.sections.length === 0) {
+      $sectionList.innerHTML = header + '<div style="padding:16px 8px;color:var(--s2-gray-500);font-size:12px;text-align:center;">No sections yet. Add blocks from the palette above.</div>';
+      return;
+    }
+    $sectionList.innerHTML = header + state.sections.map(function(s) {
+      return '<div class="section-item' + (s.id === state.selectedId ? ' selected' : '') + '" data-id="' + s.id + '" draggable="true">' +
+        '<span class="grip"><svg viewBox="0 0 14 14" fill="currentColor"><circle cx="5" cy="3" r="1.2"/><circle cx="9" cy="3" r="1.2"/><circle cx="5" cy="7" r="1.2"/><circle cx="9" cy="7" r="1.2"/><circle cx="5" cy="11" r="1.2"/><circle cx="9" cy="11" r="1.2"/></svg></span>' +
+        '<div class="section-info">' +
+          '<div class="section-name">' + esc(s.label) + '</div>' +
+          '<div class="section-type">' + (TYPE_LABELS[s.type] || s.type) + '</div>' +
+        '</div>' +
+        '<button class="section-delete" data-delete="' + s.id + '" title="Delete section">' +
+          '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg>' +
+        '</button>' +
+      '</div>';
+    }).join('');
+
+    // Events
+    $sectionList.querySelectorAll('.section-item').forEach(function(el) {
+      el.addEventListener('click', function(e) {
+        if (e.target.closest('.section-delete')) return;
+        state.selectedId = el.dataset.id;
+        renderAll();
+        scrollPreviewTo(el.dataset.id);
+      });
+    });
+
+    $sectionList.querySelectorAll('.section-delete').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var id = btn.dataset.delete;
+        var section = state.sections.find(function(s) { return s.id === id; });
+        state.sections = state.sections.filter(function(s) { return s.id !== id; });
+        if (state.selectedId === id) state.selectedId = null;
+        slicc.lick({action: 'delete-section', data: {sectionId: id, label: section ? section.label : '', type: section ? section.type : ''}});
+        renderAll();
+      });
+    });
+
+    // Drag and drop
+    var dragId = null;
+    $sectionList.querySelectorAll('.section-item[draggable]').forEach(function(el) {
+      el.addEventListener('dragstart', function(e) {
+        dragId = el.dataset.id;
+        el.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+      });
+      el.addEventListener('dragend', function() {
+        el.classList.remove('dragging');
+        $sectionList.querySelectorAll('.drag-over').forEach(function(x) { x.classList.remove('drag-over'); });
+        dragId = null;
+      });
+      el.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        $sectionList.querySelectorAll('.drag-over').forEach(function(x) { x.classList.remove('drag-over'); });
+        if (el.dataset.id !== dragId) el.classList.add('drag-over');
+      });
+      el.addEventListener('dragleave', function() { el.classList.remove('drag-over'); });
+      el.addEventListener('drop', function(e) {
+        e.preventDefault();
+        el.classList.remove('drag-over');
+        if (!dragId || dragId === el.dataset.id) return;
+        var fromIdx = state.sections.findIndex(function(s) { return s.id === dragId; });
+        var toIdx = state.sections.findIndex(function(s) { return s.id === el.dataset.id; });
+        if (fromIdx < 0 || toIdx < 0) return;
+        var moved = state.sections.splice(fromIdx, 1)[0];
+        state.sections.splice(toIdx, 0, moved);
+        slicc.lick({action: 'reorder-sections', data: {order: state.sections.map(function(s) { return {id: s.id, label: s.label, type: s.type}; })}});
+        renderAll();
+      });
+    });
+  }
+
+  /* ================================================================
+     PREVIEW
+     ================================================================ */
+  function renderPreview() {
+    if (state.sections.length === 0) {
+      $previewCanvas.innerHTML = '<div class="empty-canvas"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><rect x="5" y="2" width="10" height="15" rx="1.5"/><path d="M7.5 6.5h5M7.5 9.5h3"/></svg><p>Empty page. Add sections from the block palette.</p></div>';
+      return;
+    }
+    $previewCanvas.innerHTML = '<div class="preview-frame">' + state.sections.map(function(s) { return renderSection(s); }).join('') + '</div>';
+
+    // Wire up preview section click-to-select
+    $previewCanvas.querySelectorAll('.preview-section').forEach(function(el) {
+      el.addEventListener('click', function(e) {
+        if (e.target.closest('[contenteditable]') || e.target.closest('button') || e.target.closest('a')) return;
+        state.selectedId = el.dataset.id;
+        renderAll();
+      });
+    });
+
+    wireContentEditable();
+    wireCardControls();
+    wireAccordionControls();
+  }
+
+  function renderSection(s) {
+    var sel = s.id === state.selectedId ? ' selected' : '';
+    var badge = '<div class="section-badge">' + esc(s.label) + '</div>';
+    var inner = '';
+
+    switch (s.type) {
+      case 'hero-teaser':
+        inner = '<div class="site-hero">' +
+          '<img class="hero-bg" src="' + esc(s.data.imgSrc) + '" alt="' + esc(s.data.imgAlt) + '">' +
+          '<div class="hero-content">' +
+            '<h2 contenteditable="true" data-field="heading" data-sid="' + s.id + '">' + s.data.heading + '</h2>' +
+            '<p contenteditable="true" data-field="body" data-sid="' + s.id + '">' + s.data.body + '</p>' +
+            '<button class="cta-btn" contenteditable="true" data-field="ctaText" data-sid="' + s.id + '">' + esc(s.data.ctaText) + '</button>' +
+          '</div></div>';
+        break;
+
+      case 'introduction':
+        inner = '<div class="site-intro">' +
+          '<h2 contenteditable="true" data-field="heading" data-sid="' + s.id + '">' + s.data.heading + '</h2>' +
+          '<p contenteditable="true" data-field="body" data-sid="' + s.id + '">' + s.data.body + '</p>' +
+        '</div>';
+        break;
+
+      case 'cards-teaser':
+        inner = '<div class="site-cards"><div class="cards-grid">' +
+          s.data.cards.map(function(c, i) {
+            return '<div class="site-card" data-sid="' + s.id + '" data-card-idx="' + i + '">' +
+              '<div class="card-controls">' +
+                '<button class="card-ctrl-btn" data-action="duplicate-card" data-sid="' + s.id + '" data-idx="' + i + '" title="Duplicate">' +
+                  '<svg viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><rect x="3" y="3" width="8" height="8" rx="1"/><path d="M2 9V2.5A.5.5 0 012.5 2H9"/></svg>' +
+                '</button>' +
+                '<button class="card-ctrl-btn" data-action="delete-card" data-sid="' + s.id + '" data-idx="' + i + '" title="Delete">' +
+                  '<svg viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M3 3l7 7M10 3l-7 7"/></svg>' +
+                '</button>' +
+              '</div>' +
+              '<img src="' + esc(c.imgSrc) + '" alt="' + esc(c.imgAlt) + '">' +
+              '<div class="card-body">' +
+                '<h3 contenteditable="true" data-field="cards.' + i + '.title" data-sid="' + s.id + '">' + c.title + '</h3>' +
+                '<p contenteditable="true" data-field="cards.' + i + '.body" data-sid="' + s.id + '">' + c.body + '</p>' +
+                '<a class="card-cta" contenteditable="true" data-field="cards.' + i + '.linkText" data-sid="' + s.id + '">' + esc(c.linkText) + '</a>' +
+              '</div>' +
+            '</div>';
+          }).join('') +
+          '<button class="cards-add-btn" data-action="add-card" data-sid="' + s.id + '">' +
+            '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>' +
+            'Add card' +
+          '</button>' +
+        '</div></div>';
+        break;
+
+      case 'columns-teaser':
+        inner = '<div class="site-columns"><div class="columns-grid">' +
+          '<img src="' + esc(s.data.imgSrc) + '" alt="' + esc(s.data.imgAlt) + '">' +
+          '<div class="col-text">' +
+            '<h2 contenteditable="true" data-field="heading" data-sid="' + s.id + '">' + s.data.heading + '</h2>' +
+            '<p contenteditable="true" data-field="body" data-sid="' + s.id + '">' + s.data.body + '</p>' +
+            '<button class="cta-outline" contenteditable="true" data-field="ctaText" data-sid="' + s.id + '">' + esc(s.data.ctaText) + '</button>' +
+          '</div>' +
+        '</div></div>';
+        break;
+
+      case 'accordion':
+        inner = '<div class="site-accordion">' +
+          s.data.items.map(function(item, i) {
+            return '<div class="accordion-item' + (i === 0 ? ' open' : '') + '" data-sid="' + s.id + '" data-acc-idx="' + i + '">' +
+              '<div class="acc-controls">' +
+                '<button class="acc-ctrl-btn" data-action="duplicate-acc" data-sid="' + s.id + '" data-idx="' + i + '" title="Duplicate">' +
+                  '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><path d="M2 8V2.5A.5.5 0 012.5 2H8"/></svg>' +
+                '</button>' +
+                '<button class="acc-ctrl-btn" data-action="delete-acc" data-sid="' + s.id + '" data-idx="' + i + '" title="Delete">' +
+                  '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg>' +
+                '</button>' +
+              '</div>' +
+              '<button class="accordion-header" data-toggle-acc="' + s.id + '-' + i + '">' +
+                '<h3 contenteditable="true" data-field="items.' + i + '.title" data-sid="' + s.id + '" onclick="event.stopPropagation()">' + esc(item.title) + '</h3>' +
+                '<svg class="accordion-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>' +
+              '</button>' +
+              '<div class="accordion-body"><div class="accordion-body-inner" contenteditable="true" data-field="items.' + i + '.body" data-sid="' + s.id + '">' + item.body + '</div></div>' +
+            '</div>';
+          }).join('') +
+          '<button class="acc-add-btn" data-action="add-acc" data-sid="' + s.id + '">' +
+            '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M7 2v10M2 7h10"/></svg>' +
+            'Add item' +
+          '</button>' +
+        '</div>';
+        break;
+    }
+
+    return '<div class="preview-section' + sel + '" data-id="' + s.id + '">' + badge + inner + '</div>';
+  }
+
+  /* ================================================================
+     CONTENTEDITABLE WIRING
+     ================================================================ */
+  function wireContentEditable() {
+    $previewCanvas.querySelectorAll('[contenteditable]').forEach(function(el) {
+      el.addEventListener('input', function() {
+        var sid = el.dataset.sid;
+        var field = el.dataset.field;
+        var sec = state.sections.find(function(s) { return s.id === sid; });
+        if (!sec) return;
+        setNestedField(sec.data, field, el.innerHTML);
+        if (field === 'heading' || field === 'label') renderSectionList();
+      });
+
+      el.addEventListener('focus', function() {
+        state.selectedId = el.dataset.sid;
+        $previewCanvas.querySelectorAll('.preview-section').forEach(function(ps) {
+          ps.classList.toggle('selected', ps.dataset.id === state.selectedId);
+        });
+        $sectionList.querySelectorAll('.section-item').forEach(function(si) {
+          si.classList.toggle('selected', si.dataset.id === state.selectedId);
+        });
+      });
+
+      el.addEventListener('blur', function() {
+        var sid = el.dataset.sid;
+        var field = el.dataset.field;
+        var sec = state.sections.find(function(s) { return s.id === sid; });
+        if (sec) {
+          slicc.lick({action: 'save-section', data: {sectionId: sid, label: sec.label, type: sec.type, field: field, value: el.innerHTML}});
+          saveState();
+        }
+      });
+    });
+  }
+
+  function setNestedField(obj, path, value) {
+    var parts = path.split('.');
+    var target = obj;
+    for (var i = 0; i < parts.length - 1; i++) {
+      var key = isNaN(parts[i]) ? parts[i] : parseInt(parts[i]);
+      target = target[key];
+    }
+    var lastKey = isNaN(parts[parts.length - 1]) ? parts[parts.length - 1] : parseInt(parts[parts.length - 1]);
+    target[lastKey] = value;
+  }
+
+  /* ================================================================
+     CARD CONTROLS
+     ================================================================ */
+  function wireCardControls() {
+    $previewCanvas.querySelectorAll('[data-action="add-card"]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var sec = state.sections.find(function(s) { return s.id === btn.dataset.sid; });
+        if (!sec) return;
+        sec.data.cards.push({
+          imgSrc: 'https://main--az-sitebuilder--paolomoz.aem.page/tavex/media_103a9a470f5165ac8cbfeb3f20eea458de6e92ae7.jpg?width=2000&format=jpg&optimize=medium',
+          imgAlt: 'New card', title: 'New card title', body: 'Card description.', linkText: 'Read more', linkHref: '#'
+        });
+        slicc.lick({action: 'add-section', data: {parentSectionId: btn.dataset.sid, type: 'card', label: 'New card'}});
+        renderAll();
+      });
+    });
+
+    $previewCanvas.querySelectorAll('[data-action="delete-card"]').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var sec = state.sections.find(function(s) { return s.id === btn.dataset.sid; });
+        if (!sec || sec.data.cards.length <= 1) return;
+        var idx = parseInt(btn.dataset.idx);
+        var card = sec.data.cards[idx];
+        sec.data.cards.splice(idx, 1);
+        slicc.lick({action: 'delete-section', data: {parentSectionId: btn.dataset.sid, type: 'card', index: idx, title: card ? card.title : ''}});
+        renderAll();
+      });
+    });
+
+    $previewCanvas.querySelectorAll('[data-action="duplicate-card"]').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var sec = state.sections.find(function(s) { return s.id === btn.dataset.sid; });
+        if (!sec) return;
+        var idx = parseInt(btn.dataset.idx);
+        var clone = JSON.parse(JSON.stringify(sec.data.cards[idx]));
+        sec.data.cards.splice(idx + 1, 0, clone);
+        renderAll();
+      });
+    });
+  }
+
+  /* ================================================================
+     ACCORDION CONTROLS
+     ================================================================ */
+  function wireAccordionControls() {
+    $previewCanvas.querySelectorAll('[data-toggle-acc]').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        if (e.target.closest('[contenteditable]')) return;
+        btn.closest('.accordion-item').classList.toggle('open');
+      });
+    });
+
+    $previewCanvas.querySelectorAll('[data-action="add-acc"]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var sec = state.sections.find(function(s) { return s.id === btn.dataset.sid; });
+        if (!sec) return;
+        sec.data.items.push({ title: 'New item', body: '<p>Content here.</p>' });
+        slicc.lick({action: 'add-section', data: {parentSectionId: btn.dataset.sid, type: 'accordion-item', label: 'New item'}});
+        renderAll();
+      });
+    });
+
+    $previewCanvas.querySelectorAll('[data-action="delete-acc"]').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var sec = state.sections.find(function(s) { return s.id === btn.dataset.sid; });
+        if (!sec || sec.data.items.length <= 1) return;
+        var idx = parseInt(btn.dataset.idx);
+        var item = sec.data.items[idx];
+        sec.data.items.splice(idx, 1);
+        slicc.lick({action: 'delete-section', data: {parentSectionId: btn.dataset.sid, type: 'accordion-item', index: idx, title: item ? item.title : ''}});
+        renderAll();
+      });
+    });
+
+    $previewCanvas.querySelectorAll('[data-action="duplicate-acc"]').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var sec = state.sections.find(function(s) { return s.id === btn.dataset.sid; });
+        if (!sec) return;
+        var idx = parseInt(btn.dataset.idx);
+        var clone = JSON.parse(JSON.stringify(sec.data.items[idx]));
+        sec.data.items.splice(idx + 1, 0, clone);
+        renderAll();
+      });
+    });
+  }
+
+  /* ================================================================
+     INLINE TOOLBAR
+     ================================================================ */
+  function updateToolbar() {
+    var sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) {
+      $inlineToolbar.classList.remove('visible');
+      return;
+    }
+    var anchor = sel.anchorNode;
+    if (!anchor) { $inlineToolbar.classList.remove('visible'); return; }
+    var editable = anchor.nodeType === 3 ? anchor.parentElement.closest('[contenteditable]') : anchor.closest('[contenteditable]');
+    if (!editable || !$previewCanvas.contains(editable)) {
+      $inlineToolbar.classList.remove('visible');
+      return;
+    }
+    var range = sel.getRangeAt(0);
+    var rect = range.getBoundingClientRect();
+    $inlineToolbar.classList.add('visible');
+    var tbRect = $inlineToolbar.getBoundingClientRect();
+    var left = rect.left + rect.width / 2 - tbRect.width / 2;
+    var top = rect.top - tbRect.height - 8;
+    if (left < 8) left = 8;
+    if (top < 8) top = rect.bottom + 8;
+    $inlineToolbar.style.left = left + 'px';
+    $inlineToolbar.style.top = top + 'px';
+
+    $inlineToolbar.querySelectorAll('button[data-cmd]').forEach(function(btn) {
+      var cmd = btn.dataset.cmd;
+      if (cmd === 'createLink' || cmd === 'unlink') return;
+      btn.classList.toggle('active', document.queryCommandState(cmd));
+    });
+  }
+
+  document.addEventListener('selectionchange', updateToolbar);
+
+  $inlineToolbar.querySelectorAll('button[data-cmd]').forEach(function(btn) {
+    btn.addEventListener('mousedown', function(e) { e.preventDefault(); });
+    btn.addEventListener('click', function() {
+      var cmd = btn.dataset.cmd;
+      if (cmd === 'createLink') {
+        var url = prompt('Enter URL:', 'https://');
+        if (url) document.execCommand('createLink', false, url);
+      } else if (cmd === 'unlink') {
+        document.execCommand('unlink');
+      } else {
+        document.execCommand(cmd);
+      }
+      updateToolbar();
+      syncEditableToState();
+    });
+  });
+
+  function syncEditableToState() {
+    var focused = document.activeElement;
+    if (focused && focused.hasAttribute('contenteditable') && focused.dataset.sid && focused.dataset.field) {
+      var sec = state.sections.find(function(s) { return s.id === focused.dataset.sid; });
+      if (sec) {
+        setNestedField(sec.data, focused.dataset.field, focused.innerHTML);
+      }
+    }
+  }
+
+  /* ================================================================
+     SCROLL PREVIEW TO SECTION
+     ================================================================ */
+  function scrollPreviewTo(id) {
+    var el = $previewCanvas.querySelector('.preview-section[data-id="' + id + '"]');
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  /* ================================================================
+     BLOCK PALETTE
+     ================================================================ */
+  document.querySelectorAll('.block-palette-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var type = btn.dataset.block;
+      var newSection = {
+        id: uid(),
+        type: type,
+        label: TYPE_LABELS[type] || type,
+        data: DEFAULTS[type]()
+      };
+      state.sections.push(newSection);
+      state.selectedId = newSection.id;
+      slicc.lick({action: 'add-section', data: {sectionId: newSection.id, type: type, label: newSection.label}});
+      renderAll();
+      setTimeout(function() { scrollPreviewTo(newSection.id); }, 50);
+    });
+  });
+
+  /* ================================================================
+     STATE PERSISTENCE
+     ================================================================ */
+  function saveState() {
+    slicc.setState({sections: state.sections, selectedId: state.selectedId});
+  }
+
+  /* ================================================================
+     UTILITY
+     ================================================================ */
+  function esc(str) {
+    if (!str) return '';
+    var div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  /* ================================================================
+     BRIDGE INTEGRATION
+     ================================================================ */
+  // Handle updates from the agent
+  slicc.on('update', function(data) {
+    if (data.type === 'sections') {
+      state.sections = data.sections;
+      state.selectedId = data.selectedId || null;
+      renderAll();
+    }
+    if (data.type === 'select-section') {
+      state.selectedId = data.sectionId;
+      renderAll();
+      scrollPreviewTo(data.sectionId);
+    }
+  });
+
+  // Restore state on reopen
+  var saved = slicc.getState();
+  if (saved && saved.sections) {
+    state.sections = saved.sections;
+    state.selectedId = saved.selectedId || (state.sections.length > 0 ? state.sections[0].id : null);
+  } else {
+    state.selectedId = state.sections.length > 0 ? state.sections[0].id : null;
+  }
+
+  /* ================================================================
+     INIT
+     ================================================================ */
+  renderAll();
+
+})();
+</script>
+</body>
+</html>

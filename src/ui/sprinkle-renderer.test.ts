@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
-import { SprinkleRenderer } from './sprinkle-renderer.js';
+import { SprinkleRenderer, isFullDocument } from './sprinkle-renderer.js';
 import type { SprinkleBridgeAPI } from './sprinkle-bridge.js';
 
 function makeBridge(name: string): SprinkleBridgeAPI {
@@ -184,5 +184,73 @@ describe('SprinkleRenderer', () => {
       expect(btnA?.getAttribute('onclick')).toContain('__slicc_sprinkles["sprinkle-a"]');
       expect(btnB?.getAttribute('onclick')).toContain('__slicc_sprinkles["sprinkle-b"]');
     });
+  });
+});
+
+describe('isFullDocument detection', () => {
+  it('detects DOCTYPE', () => {
+    expect(isFullDocument('<!DOCTYPE html><html><body>hi</body></html>')).toBe(true);
+  });
+  it('detects <html> tag', () => {
+    expect(isFullDocument('<html><body>hi</body></html>')).toBe(true);
+  });
+  it('rejects fragment div', () => {
+    expect(isFullDocument('<div class="sprinkle-card">hello</div>')).toBe(false);
+  });
+  it('handles whitespace-prefixed doctype', () => {
+    expect(isFullDocument('  \n  <!doctype html><html></html>')).toBe(true);
+  });
+  it('is case-insensitive', () => {
+    expect(isFullDocument('<!DOCTYPE HTML><HTML></HTML>')).toBe(true);
+  });
+});
+
+describe('full document rendering', () => {
+  let dom: JSDOM;
+  let container: HTMLElement;
+
+  beforeEach(() => {
+    dom = new JSDOM('<!DOCTYPE html><html><body><div id="root"></div></body></html>', {
+      runScripts: 'dangerously',
+    });
+    container = dom.window.document.getElementById('root')!;
+    (globalThis as any).window = dom.window;
+    (globalThis as any).document = dom.window.document;
+    dom.window.__slicc_sprinkles = undefined as any;
+  });
+
+  it('creates an iframe for full HTML documents', async () => {
+    const bridge = makeBridge('full-doc');
+    const renderer = new SprinkleRenderer(container, bridge);
+    const html = '<!DOCTYPE html><html><head><title>Test</title></head><body><p>Hello</p></body></html>';
+    await renderer.render(html, 'full-doc');
+
+    const iframe = container.querySelector('iframe');
+    expect(iframe).toBeTruthy();
+    expect(iframe?.getAttribute('sandbox')).toBe('allow-scripts');
+    // Should NOT have a .sprinkle-content wrapper
+    expect(container.querySelector('.sprinkle-content')).toBeNull();
+  });
+
+  it('injects bridge script into srcdoc', async () => {
+    const bridge = makeBridge('full-doc');
+    const renderer = new SprinkleRenderer(container, bridge);
+    const html = '<!DOCTYPE html><html><head><title>Test</title></head><body><p>Hello</p></body></html>';
+    await renderer.render(html, 'full-doc');
+
+    const iframe = container.querySelector('iframe');
+    const srcdoc = iframe?.getAttribute('srcdoc') || '';
+    expect(srcdoc).toContain('window.slicc');
+    expect(srcdoc).toContain('sprinkle-lick');
+  });
+
+  it('dispose removes full-doc iframe', async () => {
+    const bridge = makeBridge('full-doc');
+    const renderer = new SprinkleRenderer(container, bridge);
+    const html = '<!DOCTYPE html><html><head></head><body>Hi</body></html>';
+    await renderer.render(html, 'full-doc');
+    expect(container.querySelector('iframe')).toBeTruthy();
+    renderer.dispose();
+    expect(container.querySelector('iframe')).toBeNull();
   });
 });

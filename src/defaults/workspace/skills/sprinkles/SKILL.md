@@ -8,7 +8,11 @@ allowed-tools: bash
 
 `.shtml` files in `/shared/sprinkles/` become interactive UI panels. Use them to create dashboards, forms, and visualizations alongside the chat.
 
-**IMPORTANT**: Sprinkles are NOT iframes. They are plain divs injected into the sidebar. Do NOT use `<!DOCTYPE html>`, `<html>`, `<head>`, `<body>`, or custom CSS — use the built-in `.sprinkle-*` classes. Scripts get a `slicc` bridge object automatically — do NOT use `window.parent.postMessage` or `window.addEventListener('message')`.
+**Two sprinkle modes**:
+- **Fragment mode** (default): Plain HTML fragments injected into the sidebar. Do NOT use `<!DOCTYPE html>`, `<html>`, `<head>`, `<body>`, or custom CSS — use the built-in `.sprinkle-*` classes. Scripts get a `slicc` bridge object automatically.
+- **Full-document mode**: Complete HTML documents (starting with `<!DOCTYPE html>` or `<html>`) render inside sandboxed iframes. Use this for complex layouts with custom CSS, sidebars, split panes, modals, or canvas/SVG visualizations. The bridge script is auto-injected — `window.slicc` and `window.bridge` are available in your scripts. Use `parent.postMessage` is handled internally.
+
+**When to use full-document mode**: Use it when you need custom CSS beyond `.sprinkle-*` classes, complex layouts (sidebar + main, split panes, tabs), or interactive canvas/SVG. The parent page's S2 theme tokens are injected automatically.
 
 **Creating a sprinkle**:
 1. `read_file /workspace/skills/sprinkles/style-guide.md` — **always read first** before writing any sprinkle
