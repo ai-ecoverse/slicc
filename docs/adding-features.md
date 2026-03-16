@@ -907,7 +907,11 @@ type OAuthLauncher = (authorizeUrl: string) => Promise<string | null>;
 
 **`requiresBaseUrl` for OAuth providers**: By default, the base URL field is hidden for OAuth providers. Set `requiresBaseUrl: true` to show it — useful for providers where the proxy endpoint is configurable at runtime. The base URL is saved to the account before `onOAuthLogin` is called, so the provider can read it via `getBaseUrlForProvider()`. The `saveOAuthAccount()` function preserves the existing `baseUrl` through re-logins.
 
-**`getModelIds`**: When present, `getProviderModels()` uses this instead of returning all Anthropic models. Each ID is resolved against the Anthropic model registry; unknown IDs get sensible defaults. Use this to restrict the model dropdown to models the proxy actually supports.
+**`getModelIds`**: When present, `getProviderModels()` uses this instead of returning all Anthropic models. Each ID is resolved against the Anthropic model registry; unknown IDs get fallback model objects with sensible defaults (`input: ['text', 'image']`, `baseUrl: ''`, etc.). Use this to restrict the model dropdown to models the proxy actually supports.
+
+**Model ID pitfall**: Use pi-ai alias IDs (e.g., `claude-opus-4-6`) not dated IDs (e.g., `claude-opus-4-6-20250626`). In the browser bundle, `getModel()` returns `undefined` for unknown IDs instead of throwing, and `{ ...undefined }` silently produces `{}`. The alias resolves to a full model from the registry with all required fields.
+
+**Base URL validation**: When `requiresBaseUrl: true` is set on an OAuth provider and no build-time default exists (empty `proxyEndpoint` in config), the login button validates that a URL was entered. Users cannot proceed without providing a proxy endpoint.
 
 **Test pattern**:
 

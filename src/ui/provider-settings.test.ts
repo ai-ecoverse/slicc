@@ -115,6 +115,7 @@ import {
   getAvailableProviders,
   getProviderConfig,
   getProviderModels,
+  resolveModelById,
   saveOAuthAccount,
   getOAuthAccountInfo,
 } from './provider-settings.js';
@@ -784,6 +785,102 @@ describe('resolveCurrentModel with getModelIds', () => {
     expect(model.id).toBe('custom-model-not-in-registry');
     expect(model.provider).toBe('custom-oauth');
     expect(model.api).toBe('custom-oauth-anthropic');
+  });
+});
+
+describe('resolveCurrentModel with getModelDynamic returning undefined', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('falls back to custom model when getModelDynamic returns undefined instead of throwing', () => {
+    const providerConfigs = new Map(mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)]));
+    providerConfigs.set('custom-oauth', {
+      id: 'custom-oauth',
+      name: 'Custom OAuth',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [{ id: 'ghost-model', name: 'Ghost' }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+    mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
+
+    // Simulate browser behavior: getModelDynamic returns undefined (not throws)
+    mockGetModel.mockImplementation(((provider: string, modelId: string) => {
+      if (modelId === 'ghost-model') return undefined;
+      return { id: modelId, name: modelId, provider, api: 'mock-api', baseUrl: 'https://default.example.com' };
+    }) as any);
+
+    addAccount('custom-oauth', '');
+    storage.set('selected-model', 'custom-oauth:ghost-model');
+
+    const model = resolveCurrentModel();
+    expect(model.id).toBe('ghost-model');
+    expect(model.provider).toBe('custom-oauth');
+    expect(model.api).toBe('custom-oauth-anthropic');
+  });
+
+  it('resolveModelById falls back when getModelDynamic returns undefined', () => {
+    const providerConfigs = new Map(mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)]));
+    providerConfigs.set('custom-oauth', {
+      id: 'custom-oauth',
+      name: 'Custom OAuth',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [{ id: 'ghost-model', name: 'Ghost' }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+    mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
+
+    mockGetModel.mockImplementation(((provider: string, modelId: string) => {
+      if (modelId === 'ghost-model') return undefined;
+      return { id: modelId, name: modelId, provider, api: 'mock-api', baseUrl: 'https://default.example.com' };
+    }) as any);
+
+    addAccount('custom-oauth', '');
+    storage.set('selected-model', 'custom-oauth:ghost-model');
+
+    // resolveModelById falls through to resolveCurrentModel which finds the custom model
+    const model = resolveModelById('ghost-model');
+    expect(model.id).toBe('ghost-model');
+    expect(model.provider).toBe('custom-oauth');
+  });
+});
+
+describe('fallback model fields', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('fallback model from getModelIds has required pi-ai fields', () => {
+    const providerConfigs = new Map(mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)]));
+    providerConfigs.set('custom-oauth', {
+      id: 'custom-oauth',
+      name: 'Custom OAuth',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [{ id: 'unknown-model', name: 'Unknown' }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('custom-oauth');
+    const model = models[0] as any;
+
+    // These fields are required by pi-ai's streamAnthropic
+    expect(model.baseUrl).toBe('');
+    expect(model.input).toEqual(['text', 'image']);
+    expect(model.contextWindow).toBe(200000);
+    expect(model.maxTokens).toBe(16384);
+    expect(model.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    expect(model.reasoning).toBe(true);
   });
 });
 
