@@ -18,6 +18,7 @@ import type {
   OAuthRequestMsg,
   OAuthResultMsg,
 } from './messages.js';
+import { addToSliccGroup } from './tab-group.js';
 
 // ---------------------------------------------------------------------------
 // Side panel behavior
@@ -72,34 +73,6 @@ async function ensureOffscreen(): Promise<void> {
 // Create offscreen doc on install/startup
 chrome.runtime.onInstalled?.addListener?.(() => { ensureOffscreen(); });
 ensureOffscreen();
-
-// ---------------------------------------------------------------------------
-// Tab group — all agent-created tabs go into a "slicc" group
-// ---------------------------------------------------------------------------
-
-let sliccGroupId: number | null = null;
-
-async function addToSliccGroup(tabId: number): Promise<void> {
-  try {
-    if (sliccGroupId !== null) {
-      try {
-        await chrome.tabs.group({ tabIds: tabId, groupId: sliccGroupId });
-        return;
-      } catch {
-        // Group was removed by user, create a new one
-        sliccGroupId = null;
-      }
-    }
-    sliccGroupId = await chrome.tabs.group({ tabIds: tabId });
-    await chrome.tabGroups.update(sliccGroupId, {
-      title: 'slicc',
-      color: 'pink',
-      collapsed: false,
-    });
-  } catch {
-    // Best-effort — tab may have been closed already
-  }
-}
 
 // ---------------------------------------------------------------------------
 // CDP state for proxying chrome.debugger calls

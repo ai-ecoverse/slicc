@@ -71,6 +71,7 @@
 | `offscreen-bridge.ts` | Orchestrator ↔ chrome.runtime message bridge; persists chat to `browser-coding-agent` IndexedDB |
 | `lick-manager-proxy.ts` | BroadcastChannel proxy enabling side panel terminal to manage cron tasks via LickManager running in offscreen |
 | `messages.ts` | Typed message envelopes: PanelToOffscreen, OffscreenToPanel, CdpProxy |
+| `tab-group.ts` | Shared tab grouping helper; adds agent-created tabs to a persistent "slicc" Chrome tab group (used by service worker + debugger client) |
 | `chrome.d.ts` | Typed declarations for chrome.debugger, chrome.tabs, chrome.tabGroups, chrome.sidePanel, chrome.offscreen, etc. |
 | `sprinkle-proxy.ts` | Lightweight proxy relaying sprinkle operations from offscreen document to side panel UI via chrome.runtime messaging |
 
