@@ -737,7 +737,7 @@ describe('loadSkills', () => {
 Providers come from three sources:
 - **Pi-ai auto-discovery**: `getProviders()` returns all pi-ai providers automatically — no files needed. Filtered by `providers.build.json` (`include: ["*"]` = all, `exclude: ["*"]` = none).
 - **Built-in extensions**: `src/providers/built-in/*.ts` — only for providers needing custom `register()` functions (e.g., bedrock-camp). Also filtered by `providers.build.json`.
-- **External**: `providers/*.ts` (project root, gitignored) — always included, never filtered. For custom OAuth providers, corporate proxies, etc.
+- **External**: `providers/*.ts` (project root, mostly gitignored) — always included, never filtered. For custom OAuth providers, corporate proxies, etc. Some providers (e.g., `adobe.ts`) are explicitly un-gitignored and tracked in version control.
 
 Built-in and external modules export `config: ProviderConfig` and optionally `register(): void`.
 
@@ -749,7 +749,7 @@ Built-in and external modules export `config: ProviderConfig` and optionally `re
 
 **Only create a file in `src/providers/built-in/`** if the provider needs a custom `register()` function (e.g., custom stream functions). See `src/providers/built-in/bedrock-camp.ts` for an example.
 
-**For external providers** (gitignored, not in the open-source repo), create `providers/my-provider.ts`:
+**For external providers** (typically gitignored), create `providers/my-provider.ts`:
 
 ```typescript
 // providers/my-provider.ts
@@ -892,16 +892,26 @@ interface ProviderConfig {
   requiresApiKey: boolean;
   apiKeyPlaceholder?: string;
   apiKeyEnvVar?: string;
-  requiresBaseUrl: boolean;
+  requiresBaseUrl: boolean;      // shown for non-OAuth; also shown for OAuth providers when true
   baseUrlPlaceholder?: string;
   baseUrlDescription?: string;
   isOAuth?: boolean;
   onOAuthLogin?: (launcher: OAuthLauncher, onSuccess: () => void) => Promise<void>;
   onOAuthLogout?: () => Promise<void>;
+  /** Return the model IDs this provider supports (resolved against Anthropic registry). */
+  getModelIds?: () => Array<{ id: string; name?: string }>;
 }
 
 type OAuthLauncher = (authorizeUrl: string) => Promise<string | null>;
 ```
+
+**`requiresBaseUrl` for OAuth providers**: By default, the base URL field is hidden for OAuth providers. Set `requiresBaseUrl: true` to show it — useful for providers where the proxy endpoint is configurable at runtime. The base URL is saved to the account before `onOAuthLogin` is called, so the provider can read it via `getBaseUrlForProvider()`. The `saveOAuthAccount()` function preserves the existing `baseUrl` through re-logins.
+
+**`getModelIds`**: When present, `getProviderModels()` uses this instead of returning all Anthropic models. Each ID is resolved against the Anthropic model registry; unknown IDs get fallback model objects with sensible defaults (`input: ['text', 'image']`, `baseUrl: ''`, etc.). Use this to restrict the model dropdown to models the proxy actually supports.
+
+**Model ID pitfall**: Use pi-ai alias IDs (e.g., `claude-opus-4-6`) not dated IDs (e.g., `claude-opus-4-6-20250626`). In the browser bundle, `getModel()` returns `undefined` for unknown IDs instead of throwing, and `{ ...undefined }` silently produces `{}`. The alias resolves to a full model from the registry with all required fields.
+
+**Base URL validation**: When `requiresBaseUrl: true` is set on an OAuth provider and no build-time default exists (empty `proxyEndpoint` in config), the login button validates that a URL was entered. Users cannot proceed without providing a proxy endpoint.
 
 **Test pattern**:
 
