@@ -14,6 +14,7 @@ import {
   type TrayTargetEntry,
   type TrayFsRequest,
   type TrayFsResponse,
+  type CookieTeleportCookie,
 } from './tray-sync-protocol.js';
 import { handleFsRequest } from './tray-fs-handler.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
@@ -63,6 +64,8 @@ export class FollowerSyncManager implements AgentHandle {
   private readonly tabOpenResolvers = new Map<string, { resolve: (targetId: string) => void; reject: (err: Error) => void }>();
   /** Resolvers for outgoing fs requests. */
   private readonly fsResolvers = new Map<string, { resolve: (responses: TrayFsResponse[]) => void; reject: (err: Error) => void; responses: TrayFsResponse[] }>();
+  /** Resolvers for outgoing cookie teleport requests. */
+  private readonly cookieTeleportResolvers = new Map<string, { resolve: (cookies: CookieTeleportCookie[]) => void; reject: (err: Error) => void }>();
 
   constructor(
     channel: TrayDataChannelLike,
@@ -255,6 +258,14 @@ export class FollowerSyncManager implements AgentHandle {
         this.routeFsResponse(message.requestId, message.response);
         break;
       }
+      case 'cookie.teleport.request': {
+        this.executeLocalCookieTeleport(message.requestId);
+        break;
+      }
+      case 'cookie.teleport.response': {
+        this.routeCookieTeleportResponse(message.requestId, message.cookies, message.error);
+        break;
+      }
       case 'ping': {
         // Leader is pinging us — respond with pong and treat as liveness signal
         this.keepalive.receivePing();
@@ -434,6 +445,56 @@ export class FollowerSyncManager implements AgentHandle {
     return new Promise<TrayFsResponse[]>((resolve, reject) => {
       this.fsResolvers.set(requestId, { resolve, reject, responses: [] });
       this.sync.send({ type: 'fs.request', requestId, targetRuntimeId, request });
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Cookie teleport
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Execute a cookie teleport on the follower's local browser transport.
+   * Captures all cookies and sends them back to the leader.
+   */
+  private async executeLocalCookieTeleport(requestId: string): Promise<void> {
+    const transport = this.options.browserTransport;
+    if (!transport) {
+      this.sync.send({ type: 'cookie.teleport.response', requestId, error: 'Follower has no browser transport' });
+      return;
+    }
+
+    try {
+      const result = await transport.send('Network.getCookies', {});
+      const cookies = (result['cookies'] as CookieTeleportCookie[]) ?? [];
+      this.sync.send({ type: 'cookie.teleport.response', requestId, cookies });
+    } catch (err) {
+      this.sync.send({ type: 'cookie.teleport.response', requestId, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  /**
+   * Route a cookie teleport response from the leader to the appropriate pending resolver.
+   */
+  private routeCookieTeleportResponse(requestId: string, cookies?: CookieTeleportCookie[], error?: string): void {
+    const resolver = this.cookieTeleportResolvers.get(requestId);
+    if (!resolver) return;
+    this.cookieTeleportResolvers.delete(requestId);
+    if (error) {
+      resolver.reject(new Error(error));
+    } else {
+      resolver.resolve(cookies ?? []);
+    }
+  }
+
+  /**
+   * Send a cookie teleport request to a remote runtime via the leader.
+   * Returns a promise that resolves with the cookies from the target runtime.
+   */
+  sendCookieTeleportRequest(targetRuntimeId: string): Promise<CookieTeleportCookie[]> {
+    const requestId = `cookie-teleport-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return new Promise<CookieTeleportCookie[]>((resolve, reject) => {
+      this.cookieTeleportResolvers.set(requestId, { resolve, reject });
+      this.sync.send({ type: 'cookie.teleport.request', requestId, targetRuntimeId });
     });
   }
 }

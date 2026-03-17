@@ -29,6 +29,8 @@ export type LeaderToFollowerMessage =
   | { type: 'tab.open.error'; requestId: string; error: string }
   | { type: 'fs.request'; requestId: string; request: TrayFsRequest }
   | { type: 'fs.response'; requestId: string; response: TrayFsResponse }
+  | { type: 'cookie.teleport.request'; requestId: string }
+  | { type: 'cookie.teleport.response'; requestId: string; cookies?: CookieTeleportCookie[]; error?: string }
   | { type: 'ping' }
   | { type: 'pong' };
 
@@ -44,6 +46,8 @@ export type FollowerToLeaderMessage =
   | { type: 'tab.open.error'; requestId: string; error: string }
   | { type: 'fs.request'; requestId: string; targetRuntimeId: string; request: TrayFsRequest }
   | { type: 'fs.response'; requestId: string; response: TrayFsResponse }
+  | { type: 'cookie.teleport.request'; requestId: string; targetRuntimeId: string }
+  | { type: 'cookie.teleport.response'; requestId: string; cookies?: CookieTeleportCookie[]; error?: string }
   | { type: 'ping' }
   | { type: 'pong' };
 
@@ -64,6 +68,29 @@ export interface TrayTargetEntry {
   title: string;
   url: string;
   isLocal: boolean;       // True if owned by the receiving runtime (set by consumer, not registry)
+}
+
+// ---------------------------------------------------------------------------
+// Cookie teleport types
+// ---------------------------------------------------------------------------
+
+/** Chrome CDP Network.Cookie shape used for teleporting cookies between runtimes. */
+export interface CookieTeleportCookie {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  expires: number;
+  size: number;
+  httpOnly: boolean;
+  secure: boolean;
+  session: boolean;
+  sameSite?: 'Strict' | 'Lax' | 'None';
+  priority?: 'Low' | 'Medium' | 'High';
+  sameParty?: boolean;
+  sourceScheme?: 'Unset' | 'NonSecure' | 'Secure';
+  sourcePort?: number;
+  partitionKey?: string;
 }
 
 // ---------------------------------------------------------------------------

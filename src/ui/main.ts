@@ -43,6 +43,12 @@ import {
 } from './runtime-mode.js';
 import { setConnectedFollowersGetter, setTrayResetter } from '../shell/supplemental-commands/host-command.js';
 import { setRsyncSendFsRequest } from '../shell/supplemental-commands/rsync-command.js';
+import {
+  setTeleportSendRequest,
+  setTeleportBestFollower,
+  setTeleportConnectedFollowers,
+  setTeleportBrowserAPI,
+} from '../shell/supplemental-commands/teleport-command.js';
 import { SprinkleManager } from './sprinkle-manager.js';
 
 const log = createLogger('main');
@@ -1192,6 +1198,22 @@ async function main(): Promise<void> {
       if (activeFollowerSync) return (rid, req) => activeFollowerSync!.sendFsRequest(rid, req);
       return null;
     });
+
+    // Wire teleport command callbacks
+    setTeleportSendRequest(() => {
+      if (leaderSyncRef) return (rid) => leaderSyncRef!.sendCookieTeleportRequest(rid);
+      if (activeFollowerSync) return (rid) => activeFollowerSync!.sendCookieTeleportRequest(rid);
+      return null;
+    });
+    setTeleportBestFollower(() => {
+      if (leaderSyncRef) return () => leaderSyncRef!.getBestFollowerForTeleport();
+      return null;
+    });
+    setTeleportConnectedFollowers(() => {
+      if (leaderSyncRef) return () => leaderSyncRef!.getConnectedFollowers();
+      return null;
+    });
+    setTeleportBrowserAPI(() => browser);
 
     const wireFollowerSync = (connection: import('../scoops/tray-webrtc.js').FollowerTrayConnection) => {
       // Clean up previous sync if any

@@ -21,6 +21,7 @@ import { createCrontaskCommand } from './crontask-command.js';
 import { createSprinkleCommand } from './sprinkle-command.js';
 import { createOAuthTokenCommand } from './oauth-token-command.js';
 import { createRsyncCommand } from './rsync-command.js';
+import { createTeleportCommand } from './teleport-command.js';
 import { createWhichCommand } from './which-command.js';
 import { createZipCommand } from './zip-command.js';
 import type { BrowserAPI } from '../../cdp/index.js';
@@ -63,6 +64,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createUnameCommand(),
     createOAuthTokenCommand(),
     createRsyncCommand({ fs: options.fs }),
+    createTeleportCommand(),
   ];
 
   if (options.fs) {

@@ -131,6 +131,7 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **host** — Print the current leader tray status plus `join_url`. When this runtime is leader, shows the join URL and connected followers. Use `host reset` to disconnect all followers and create a fresh tray session with a new join URL (leader only).
 - **playwright-cli** — Browser automation (built-in, no SKILL.md lookup needed). Key subcommands: `tab-list`, `tab-select <index>`, `snapshot`, `screenshot [--filename=<path>]`, `open <url> [--runtime=<id>]`, `click <ref>`, `fill <ref> "text"`, `close`. Use `--runtime` with `open`/`tab-new` to open a tab on a remote tray runtime. Run `playwright-cli --help` for full list.
 - **rsync** — Sync files between local VFS and a remote tray runtime. Push: `rsync /local runtime-id:/remote`. Pull: `rsync runtime-id:/remote /local`. Flags: `--dry-run` (preview), `--delete` (remove dest files not in source), `--verbose` (per-file detail). Requires an active tray connection.
+- **teleport** — Teleport browser cookies from a remote tray runtime to the local browser. Enables seamless authentication transfer between SLICC instances in a tray. Usage: `teleport` (auto-select best follower), `teleport <runtime-id>` (target specific runtime), `teleport --list` (show available runtimes). Page reloads by default after applying cookies; use `--no-reload` to skip.
 
 ## Environment: This Is NOT a Regular Linux Box
 

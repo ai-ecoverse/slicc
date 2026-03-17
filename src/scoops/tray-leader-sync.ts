@@ -14,6 +14,7 @@ import {
   type TrayTargetEntry,
   type TrayFsRequest,
   type TrayFsResponse,
+  type CookieTeleportCookie,
 } from './tray-sync-protocol.js';
 import { handleFsRequest } from './tray-fs-handler.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
@@ -42,6 +43,18 @@ export interface LeaderSyncManagerOptions {
   vfs?: VirtualFS;
 }
 
+/** Derived float type from the runtime string (e.g. 'slicc-standalone' → 'standalone'). */
+export type FloatType = 'standalone' | 'extension' | 'electron' | 'unknown';
+
+/** Derive a FloatType from the follower's runtime string. */
+function deriveFloatType(runtime?: string): FloatType {
+  if (!runtime) return 'unknown';
+  if (runtime.includes('standalone')) return 'standalone';
+  if (runtime.includes('extension')) return 'extension';
+  if (runtime.includes('electron')) return 'electron';
+  return 'unknown';
+}
+
 interface ConnectedFollower {
   bootstrapId: string;
   sync: TraySyncChannel<LeaderToFollowerMessage, FollowerToLeaderMessage>;
@@ -49,6 +62,8 @@ interface ConnectedFollower {
   keepalive: DataChannelKeepalive;
   runtime?: string;
   connectedAt?: string;
+  lastActivity: number;
+  floatType: FloatType;
 }
 
 /** Tracks a CDP request being routed through the leader. */
@@ -79,6 +94,12 @@ interface PendingFsRoute {
   totalChunks: number;
 }
 
+/** Tracks a cookie teleport request being routed through the leader. */
+interface PendingCookieTeleportRoute {
+  requesterBootstrapId: string;
+  requestId: string;
+}
+
 export class LeaderSyncManager {
   private readonly followers = new Map<string, ConnectedFollower>();
   private readonly registry = new TrayTargetRegistry();
@@ -96,6 +117,10 @@ export class LeaderSyncManager {
   private readonly pendingFsRoutes = new Map<string, PendingFsRoute>();
   /** Resolvers for leader-originated fs requests. */
   private readonly fsResolvers = new Map<string, { resolve: (responses: TrayFsResponse[]) => void; reject: (err: Error) => void; responses: TrayFsResponse[] }>();
+  /** Maps requestId → routing info for cookie teleport requests in flight through the leader. */
+  private readonly pendingCookieTeleportRoutes = new Map<string, PendingCookieTeleportRoute>();
+  /** Resolvers for leader-originated cookie teleport requests. */
+  private readonly cookieTeleportResolvers = new Map<string, { resolve: (cookies: CookieTeleportCookie[]) => void; reject: (err: Error) => void }>();
 
   constructor(private readonly options: LeaderSyncManagerOptions) {}
 
@@ -123,7 +148,11 @@ export class LeaderSyncManager {
     });
     keepalive.start();
 
-    this.followers.set(bootstrapId, { bootstrapId, sync, unsubscribe, keepalive, runtime: meta?.runtime, connectedAt: meta?.connectedAt });
+    this.followers.set(bootstrapId, {
+      bootstrapId, sync, unsubscribe, keepalive,
+      runtime: meta?.runtime, connectedAt: meta?.connectedAt,
+      lastActivity: Date.now(), floatType: deriveFloatType(meta?.runtime),
+    });
     log.info('Follower added to sync', { bootstrapId, followerCount: this.followers.size });
 
     // Send initial snapshot
@@ -278,11 +307,26 @@ export class LeaderSyncManager {
         this.handleFsResponse(message.requestId, message.response);
         break;
       }
+      case 'cookie.teleport.request': {
+        const { requestId, targetRuntimeId } = message;
+        if (targetRuntimeId === 'leader') {
+          // Leader executes locally: capture cookies from the leader's own browser
+          this.executeLocalCookieTeleport(requestId, bootstrapId);
+        } else {
+          this.forwardCookieTeleportRequest(requestId, targetRuntimeId, bootstrapId);
+        }
+        break;
+      }
+      case 'cookie.teleport.response': {
+        this.handleCookieTeleportResponse(message.requestId, message.cookies, message.error);
+        break;
+      }
       case 'ping': {
         // Follower is pinging us — respond with pong and treat as liveness signal
         const follower = this.followers.get(bootstrapId);
         if (follower) {
           follower.keepalive.receivePing();
+          follower.lastActivity = Date.now();
           follower.sync.send({ type: 'pong' });
         }
         break;
@@ -292,6 +336,7 @@ export class LeaderSyncManager {
         const follower = this.followers.get(bootstrapId);
         if (follower) {
           follower.keepalive.receivePong();
+          follower.lastActivity = Date.now();
         }
         break;
       }
@@ -369,11 +414,36 @@ export class LeaderSyncManager {
   /**
    * Return the list of connected follower runtimeIds with metadata.
    */
-  getConnectedFollowers(): { runtimeId: string; runtime?: string; connectedAt?: string }[] {
+  getConnectedFollowers(): { runtimeId: string; runtime?: string; connectedAt?: string; lastActivity?: number; floatType?: FloatType }[] {
     return [...this.runtimeToBootstrap.entries()].map(([runtimeId, bootstrapId]) => {
       const follower = this.followers.get(bootstrapId);
-      return { runtimeId, runtime: follower?.runtime, connectedAt: follower?.connectedAt };
+      return {
+        runtimeId, runtime: follower?.runtime, connectedAt: follower?.connectedAt,
+        lastActivity: follower?.lastActivity, floatType: follower?.floatType,
+      };
     });
+  }
+
+  /**
+   * Find the best follower for a cookie teleport.
+   * Prefers standalone floats, then sorts by most recent activity.
+   * Returns null if no alive followers exist.
+   */
+  getBestFollowerForTeleport(): { runtimeId: string; bootstrapId: string; floatType: FloatType } | null {
+    const candidates: { runtimeId: string; bootstrapId: string; floatType: FloatType; lastActivity: number }[] = [];
+    for (const [runtimeId, bootstrapId] of this.runtimeToBootstrap) {
+      const follower = this.followers.get(bootstrapId);
+      if (!follower) continue;
+      candidates.push({
+        runtimeId, bootstrapId, floatType: follower.floatType, lastActivity: follower.lastActivity,
+      });
+    }
+    if (candidates.length === 0) return null;
+    // Prefer standalone, then sort by most recent activity
+    const standalone = candidates.filter(c => c.floatType === 'standalone');
+    const pool = standalone.length > 0 ? standalone : candidates;
+    pool.sort((a, b) => b.lastActivity - a.lastActivity);
+    return pool[0];
   }
 
   /**
@@ -719,6 +789,112 @@ export class LeaderSyncManager {
       this.fsResolvers.set(requestId, { resolve, reject, responses: [] });
       this.pendingFsRoutes.set(requestId, { requesterBootstrapId: '__leader__', requestId, chunks: [], totalChunks: 1 });
       targetFollower.sync.send({ type: 'fs.request', requestId, request });
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Cookie teleport routing
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Execute a cookie teleport on the leader's own browser transport.
+   * Captures all cookies and sends them back to the requesting follower.
+   */
+  private async executeLocalCookieTeleport(requestId: string, requesterBootstrapId: string): Promise<void> {
+    const follower = this.followers.get(requesterBootstrapId);
+    if (!follower) return;
+
+    const transport = this.options.browserTransport;
+    if (!transport) {
+      follower.sync.send({ type: 'cookie.teleport.response', requestId, error: 'Leader has no browser transport' });
+      return;
+    }
+
+    try {
+      const result = await transport.send('Network.getCookies', {});
+      const cookies = (result['cookies'] as CookieTeleportCookie[]) ?? [];
+      follower.sync.send({ type: 'cookie.teleport.response', requestId, cookies });
+    } catch (err) {
+      follower.sync.send({ type: 'cookie.teleport.response', requestId, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  /**
+   * Forward a cookie teleport request from one follower to another.
+   */
+  private forwardCookieTeleportRequest(requestId: string, targetRuntimeId: string, requesterBootstrapId: string): void {
+    const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
+    const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
+    const requester = this.followers.get(requesterBootstrapId);
+
+    if (!targetFollower) {
+      if (requester) {
+        requester.sync.send({ type: 'cookie.teleport.response', requestId, error: `Target runtime "${targetRuntimeId}" not connected` });
+      }
+      return;
+    }
+
+    this.pendingCookieTeleportRoutes.set(requestId, { requesterBootstrapId, requestId });
+    targetFollower.sync.send({ type: 'cookie.teleport.request', requestId });
+  }
+
+  /**
+   * Handle a cookie teleport response from a follower (forwarding back to the original requester).
+   */
+  private handleCookieTeleportResponse(requestId: string, cookies?: CookieTeleportCookie[], error?: string): void {
+    const route = this.pendingCookieTeleportRoutes.get(requestId);
+    if (!route) {
+      // Check if this is for a leader-originated request
+      const resolver = this.cookieTeleportResolvers.get(requestId);
+      if (resolver) {
+        this.cookieTeleportResolvers.delete(requestId);
+        if (error) {
+          resolver.reject(new Error(error));
+        } else {
+          resolver.resolve(cookies ?? []);
+        }
+      }
+      return;
+    }
+
+    this.pendingCookieTeleportRoutes.delete(requestId);
+
+    if (route.requesterBootstrapId === '__leader__') {
+      const resolver = this.cookieTeleportResolvers.get(requestId);
+      if (resolver) {
+        this.cookieTeleportResolvers.delete(requestId);
+        if (error) {
+          resolver.reject(new Error(error));
+        } else {
+          resolver.resolve(cookies ?? []);
+        }
+      }
+      return;
+    }
+
+    const requester = this.followers.get(route.requesterBootstrapId);
+    if (requester) {
+      requester.sync.send({ type: 'cookie.teleport.response', requestId, cookies, error });
+    }
+  }
+
+  /**
+   * Send a cookie teleport request to a remote runtime from the leader's own code.
+   * Returns a promise that resolves with the cookies from the target runtime.
+   */
+  sendCookieTeleportRequest(targetRuntimeId: string): Promise<CookieTeleportCookie[]> {
+    const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
+    const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
+
+    if (!targetFollower) {
+      return Promise.reject(new Error(`Target runtime "${targetRuntimeId}" not connected`));
+    }
+
+    const requestId = `cookie-teleport-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return new Promise<CookieTeleportCookie[]>((resolve, reject) => {
+      this.cookieTeleportResolvers.set(requestId, { resolve, reject });
+      this.pendingCookieTeleportRoutes.set(requestId, { requesterBootstrapId: '__leader__', requestId });
+      targetFollower.sync.send({ type: 'cookie.teleport.request', requestId });
     });
   }
 }

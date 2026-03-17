@@ -241,11 +241,13 @@ describe('LeaderSyncManager', () => {
 
     const followers = manager.getConnectedFollowers();
     expect(followers).toHaveLength(1);
-    expect(followers[0]).toEqual({
+    expect(followers[0]).toMatchObject({
       runtimeId: 'follower-b1',
       runtime: 'slicc-electron',
       connectedAt,
+      floatType: 'electron',
     });
+    expect(followers[0].lastActivity).toBeGreaterThan(0);
   });
 
   it('stop removes all followers', () => {
@@ -1113,6 +1115,295 @@ describe('LeaderSyncManager', () => {
       const responses = await manager.sendFsRequest('unknown', { op: 'exists', path: '/' });
       expect(responses).toHaveLength(1);
       expect(responses[0].ok).toBe(false);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Follower activity tracking
+  // ---------------------------------------------------------------------------
+
+  describe('follower activity tracking', () => {
+    it('sets lastActivity and floatType on addFollower', () => {
+      const { manager } = createManager();
+      const ch = new FakeChannel();
+      manager.addFollower('b1', ch, { runtime: 'slicc-standalone', connectedAt: new Date().toISOString() });
+
+      const followers = manager.getConnectedFollowers();
+      // No runtimeId mapping yet because targets.advertise hasn't been sent
+      // But we can verify via the internal state by advertising targets
+      ch.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'follower-b1' });
+      const updated = manager.getConnectedFollowers();
+      expect(updated).toHaveLength(1);
+      expect(updated[0].floatType).toBe('standalone');
+      expect(updated[0].lastActivity).toBeGreaterThan(0);
+    });
+
+    it('derives floatType from runtime string', () => {
+      const { manager } = createManager();
+
+      // standalone
+      const ch1 = new FakeChannel();
+      manager.addFollower('b1', ch1, { runtime: 'slicc-standalone' });
+      ch1.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'f1' });
+
+      // extension
+      const ch2 = new FakeChannel();
+      manager.addFollower('b2', ch2, { runtime: 'slicc-extension' });
+      ch2.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'f2' });
+
+      // electron
+      const ch3 = new FakeChannel();
+      manager.addFollower('b3', ch3, { runtime: 'slicc-electron' });
+      ch3.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'f3' });
+
+      // unknown
+      const ch4 = new FakeChannel();
+      manager.addFollower('b4', ch4, { runtime: 'something-else' });
+      ch4.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'f4' });
+
+      const followers = manager.getConnectedFollowers();
+      expect(followers.find(f => f.runtimeId === 'f1')?.floatType).toBe('standalone');
+      expect(followers.find(f => f.runtimeId === 'f2')?.floatType).toBe('extension');
+      expect(followers.find(f => f.runtimeId === 'f3')?.floatType).toBe('electron');
+      expect(followers.find(f => f.runtimeId === 'f4')?.floatType).toBe('unknown');
+    });
+
+    it('updates lastActivity on pong', () => {
+      vi.useFakeTimers();
+      try {
+        const { manager } = createManager();
+        const ch = new FakeChannel();
+        manager.addFollower('b1', ch, { runtime: 'slicc-standalone' });
+        ch.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'f1' });
+
+        const before = manager.getConnectedFollowers()[0].lastActivity!;
+        vi.advanceTimersByTime(5000);
+        ch.simulateMessage({ type: 'pong' });
+        const after = manager.getConnectedFollowers()[0].lastActivity!;
+        expect(after).toBeGreaterThan(before);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // getBestFollowerForTeleport
+  // ---------------------------------------------------------------------------
+
+  describe('getBestFollowerForTeleport', () => {
+    it('returns null when no followers connected', () => {
+      const { manager } = createManager();
+      expect(manager.getBestFollowerForTeleport()).toBeNull();
+    });
+
+    it('returns the only connected follower', () => {
+      const { manager } = createManager();
+      const ch = new FakeChannel();
+      manager.addFollower('b1', ch, { runtime: 'slicc-extension' });
+      ch.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'f1' });
+
+      const best = manager.getBestFollowerForTeleport();
+      expect(best).not.toBeNull();
+      expect(best!.runtimeId).toBe('f1');
+      expect(best!.floatType).toBe('extension');
+    });
+
+    it('prefers standalone over extension', () => {
+      const { manager } = createManager();
+
+      const ch1 = new FakeChannel();
+      manager.addFollower('b1', ch1, { runtime: 'slicc-extension' });
+      ch1.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'f-ext' });
+
+      const ch2 = new FakeChannel();
+      manager.addFollower('b2', ch2, { runtime: 'slicc-standalone' });
+      ch2.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'f-std' });
+
+      const best = manager.getBestFollowerForTeleport();
+      expect(best!.runtimeId).toBe('f-std');
+      expect(best!.floatType).toBe('standalone');
+    });
+
+    it('falls back to non-standalone when no standalone available', () => {
+      const { manager } = createManager();
+
+      const ch1 = new FakeChannel();
+      manager.addFollower('b1', ch1, { runtime: 'slicc-extension' });
+      ch1.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'f-ext' });
+
+      const best = manager.getBestFollowerForTeleport();
+      expect(best!.floatType).toBe('extension');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Cookie teleport routing
+  // ---------------------------------------------------------------------------
+
+  describe('cookie teleport routing', () => {
+    it('forwards cookie teleport request from follower to target follower', () => {
+      const { manager } = createManager();
+
+      // Set up two followers
+      const chRequester = new FakeChannel();
+      manager.addFollower('b-requester', chRequester, { runtime: 'slicc-extension' });
+      chRequester.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'f-requester' });
+
+      const chTarget = new FakeChannel();
+      manager.addFollower('b-target', chTarget, { runtime: 'slicc-standalone' });
+      chTarget.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'f-target' });
+
+      // Clear sent messages from setup
+      chTarget.sent.length = 0;
+      chRequester.sent.length = 0;
+
+      // Requester sends a cookie teleport request targeting f-target
+      chRequester.simulateMessage({
+        type: 'cookie.teleport.request',
+        requestId: 'ct-1',
+        targetRuntimeId: 'f-target',
+      });
+
+      // Target should have received the forwarded request
+      const targetSent = chTarget.parseSent();
+      const teleportReq = targetSent.find(m => m.type === 'cookie.teleport.request');
+      expect(teleportReq).toBeDefined();
+      expect(teleportReq!.type).toBe('cookie.teleport.request');
+      if (teleportReq!.type === 'cookie.teleport.request') {
+        expect(teleportReq!.requestId).toBe('ct-1');
+      }
+    });
+
+    it('routes cookie teleport response back to requester', () => {
+      const { manager } = createManager();
+
+      const chRequester = new FakeChannel();
+      manager.addFollower('b-requester', chRequester, { runtime: 'slicc-extension' });
+      chRequester.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'f-requester' });
+
+      const chTarget = new FakeChannel();
+      manager.addFollower('b-target', chTarget, { runtime: 'slicc-standalone' });
+      chTarget.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'f-target' });
+
+      // Requester sends request
+      chRequester.simulateMessage({
+        type: 'cookie.teleport.request',
+        requestId: 'ct-2',
+        targetRuntimeId: 'f-target',
+      });
+
+      // Clear requester's sent so we can check only the response
+      chRequester.sent.length = 0;
+
+      // Target responds
+      const fakeCookies = [{ name: 'sid', value: '123', domain: '.example.com', path: '/', expires: -1, size: 10, httpOnly: true, secure: true, session: true }];
+      chTarget.simulateMessage({
+        type: 'cookie.teleport.response',
+        requestId: 'ct-2',
+        cookies: fakeCookies as never,
+      });
+
+      const requesterSent = chRequester.parseSent();
+      const response = requesterSent.find(m => m.type === 'cookie.teleport.response');
+      expect(response).toBeDefined();
+      if (response?.type === 'cookie.teleport.response') {
+        expect(response.cookies).toEqual(fakeCookies);
+      }
+    });
+
+    it('returns error when target runtime not connected', () => {
+      const { manager } = createManager();
+
+      const chRequester = new FakeChannel();
+      manager.addFollower('b-requester', chRequester, { runtime: 'slicc-standalone' });
+      chRequester.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'f-requester' });
+
+      chRequester.sent.length = 0;
+
+      chRequester.simulateMessage({
+        type: 'cookie.teleport.request',
+        requestId: 'ct-3',
+        targetRuntimeId: 'nonexistent',
+      });
+
+      const sent = chRequester.parseSent();
+      const response = sent.find(m => m.type === 'cookie.teleport.response');
+      expect(response).toBeDefined();
+      if (response?.type === 'cookie.teleport.response') {
+        expect(response.error).toContain('not connected');
+      }
+    });
+
+    it('leader-originated sendCookieTeleportRequest resolves with cookies', async () => {
+      const { manager } = createManager();
+
+      const chTarget = new FakeChannel();
+      manager.addFollower('b-target', chTarget, { runtime: 'slicc-standalone' });
+      chTarget.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'f-target' });
+
+      chTarget.sent.length = 0;
+
+      const promise = manager.sendCookieTeleportRequest('f-target');
+
+      // Find the request that was sent to the target
+      const sent = chTarget.parseSent();
+      const req = sent.find(m => m.type === 'cookie.teleport.request');
+      expect(req).toBeDefined();
+
+      // Simulate target responding with cookies
+      const fakeCookies = [{ name: 'token', value: 'abc', domain: '.app.com', path: '/', expires: -1, size: 20, httpOnly: false, secure: true, session: true }];
+      if (req?.type === 'cookie.teleport.request') {
+        chTarget.simulateMessage({
+          type: 'cookie.teleport.response',
+          requestId: req.requestId,
+          cookies: fakeCookies as never,
+        });
+      }
+
+      const cookies = await promise;
+      expect(cookies).toEqual(fakeCookies);
+    });
+
+    it('leader-originated sendCookieTeleportRequest rejects when target not connected', async () => {
+      const { manager } = createManager();
+
+      await expect(manager.sendCookieTeleportRequest('nonexistent')).rejects.toThrow('not connected');
+    });
+
+    it('executes local cookie teleport when targetRuntimeId is leader', async () => {
+      const mockTransport = {
+        send: vi.fn().mockResolvedValue({ cookies: [{ name: 'x', value: 'y' }] }),
+        onEvent: vi.fn(),
+        disconnect: vi.fn(),
+      };
+      const { manager } = createManager({ browserTransport: mockTransport as never });
+
+      const chFollower = new FakeChannel();
+      manager.addFollower('b-follower', chFollower, { runtime: 'slicc-standalone' });
+      chFollower.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'f-follower' });
+
+      chFollower.sent.length = 0;
+
+      chFollower.simulateMessage({
+        type: 'cookie.teleport.request',
+        requestId: 'ct-local',
+        targetRuntimeId: 'leader',
+      });
+
+      // Wait for async handler
+      await vi.waitFor(() => {
+        const sent = chFollower.parseSent();
+        return sent.some(m => m.type === 'cookie.teleport.response');
+      });
+
+      const sent = chFollower.parseSent();
+      const response = sent.find(m => m.type === 'cookie.teleport.response');
+      expect(response).toBeDefined();
+      if (response?.type === 'cookie.teleport.response') {
+        expect(response.cookies).toEqual([{ name: 'x', value: 'y' }]);
+      }
+      expect(mockTransport.send).toHaveBeenCalledWith('Network.getCookies', {});
     });
   });
 });
