@@ -1,5 +1,5 @@
 {
   "proxyEndpoint": "",
-  "redirectUri": "http://localhost:3000/auth/callback",
+  "redirectUri": "http://localhost:5710/auth/callback",
   "extensionRedirectUri": "https://dcebfdclgcnjkpnmhfgoelnkgedglhpo.chromiumapp.org/adobe"
 }

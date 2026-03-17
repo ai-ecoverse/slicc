@@ -28,7 +28,7 @@
 | File | Purpose |
 |---|---|
 | `browser-api.ts` | High-level Playwright-inspired API (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree); used by the `playwright-cli` shell command path and related browser automation commands |
-| `cdp-client.ts` | WebSocket-based CDP client (CLI mode, connects to `ws://localhost:3000/cdp`) |
+| `cdp-client.ts` | WebSocket-based CDP client (CLI mode, connects to `ws://localhost:5710/cdp`) |
 | `debugger-client.ts` | Chrome debugger API client (extension mode, uses `chrome.debugger`); adds agent-created tabs to "slicc" tab group |
 | `har-recorder.ts` | HAR 1.2 recorder for network traffic; saves snapshots to VFS on navigation |
 | `transport.ts` | CDPTransport interface (abstracts CDP/debugger implementations) |

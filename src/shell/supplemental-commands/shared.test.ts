@@ -13,7 +13,7 @@ import {
 describe('toPreviewUrl', () => {
   it('returns localhost preview URL in non-extension environment', () => {
     const url = toPreviewUrl('/workspace/app/index.html');
-    expect(url).toBe('http://localhost:3000/preview/workspace/app/index.html');
+    expect(url).toBe('http://localhost:5710/preview/workspace/app/index.html');
   });
 
   it('preserves full VFS path in the URL', () => {
@@ -23,7 +23,7 @@ describe('toPreviewUrl', () => {
 
   it('handles root path', () => {
     const url = toPreviewUrl('/');
-    expect(url).toBe('http://localhost:3000/preview/');
+    expect(url).toBe('http://localhost:5710/preview/');
   });
 
   it('uses chrome.runtime.getURL in extension mode', () => {

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Standalone CLI mode
-npm run dev:full        # Full dev mode: Vite HMR + Chrome + CDP proxy (port 3000)
+npm run dev:full        # Full dev mode: Vite HMR + Chrome + CDP proxy (port 5710)
 npm run dev:electron -- /Applications/Slack.app  # Main CLI in Electron attach mode
 npm run dev             # Vite dev server only (no Chrome/CDP)
 npm run build           # Production build (UI via Vite + CLI/Electron Node target via TSC)
@@ -27,7 +27,7 @@ npx vitest run src/fs/virtual-fs.test.ts  # Run a single test file
 
 **Requires Node >= 22** (LTS). LightningFS uses `navigator` which is only available as a global from Node 21+. Tests will fail on Node 20 or earlier.
 
-Ports: 3000 (UI server for CLI + Electron), 9222 (Chrome CDP), 9223 (Electron CDP), 24679 (Vite HMR WebSocket)
+Ports: 5710 (UI server for CLI + Electron), 9222 (Chrome CDP), 9223 (Electron CDP), 24679 (Vite HMR WebSocket)
 
 ## Philosophy
 
@@ -225,7 +225,7 @@ Two complementary skill systems:
 
 ### CDP (src/cdp/)
 CDPTransport interface (`transport.ts`) abstracts the underlying protocol. Two implementations:
-- **CDPClient**: WebSocket-based, used in CLI mode. Connects through ws://localhost:3000/cdp proxy.
+- **CDPClient**: WebSocket-based, used in CLI mode. Connects through ws://localhost:5710/cdp proxy.
 - **DebuggerClient** (`debugger-client.ts`): Uses `chrome.debugger` API in extension mode. Intercepts `Target.*` commands and maps them to `chrome.tabs`/`chrome.debugger`. Manages tab attach/detach lifecycle with session-to-tab mapping.
 
 BrowserAPI: high-level Playwright-style API built on either transport (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree). Auto-selects transport based on extension detection. It underpins the `playwright-cli` / `playwright` / `puppeteer` shell-command path and the preview-serving commands built on top of browser tabs. TargetInfo and PageInfo types include `active` field (boolean, extension mode only) to identify the user's currently focused tab, enabling intelligent tool auto-dispatch. Screenshots normalize `devicePixelRatio` to 1 before capture (via `Emulation.setDeviceMetricsOverride`) and restore native metrics after, preventing 2x-oversized images on HiDPI displays. When DPR is already 1 (e.g. after an explicit `resize` command), normalization is skipped and the existing override is preserved. `captureBeyondViewport` is always enabled.
@@ -345,7 +345,7 @@ Delegation:
 - **Extension `window.open()` returns `null`**: In extension contexts (offscreen document, side panel), `window.open()` returns `null` even when the tab opens successfully. Never treat a `null` return as a failure — fire-and-forget the call. This applies to all code paths that open tabs from extension pages.
 - **Two CLAUDE.md files**: The project root `CLAUDE.md` is for Claude Code (developer guidance). The file at `src/defaults/shared/CLAUDE.md` is the agent's system-level instructions — it gets bundled into the VFS at `/shared/CLAUDE.md` and is loaded into sliccy's context. When changing agent behavior or documenting agent-facing capabilities (like shell commands the agent uses), update `src/defaults/shared/CLAUDE.md`. When changing developer conventions or architecture docs, update the project root `CLAUDE.md`.
 - **Default VFS content**: `src/defaults/` contains files bundled into the VFS at startup via `import.meta.glob`. Structure: `src/defaults/shared/CLAUDE.md` → `/shared/CLAUDE.md`, `src/defaults/workspace/skills/` → `/workspace/skills/`. When adding default skills or agent config, add files here.
-- **Preview URL helper**: `toPreviewUrl(vfsPath)` in `src/shell/supplemental-commands/shared.ts` constructs the correct preview service worker URL for both CLI (`http://localhost:3000/preview/...`) and extension (`chrome-extension://.../preview/...`) modes. Use this instead of inlining the dual-mode URL logic.
+- **Preview URL helper**: `toPreviewUrl(vfsPath)` in `src/shell/supplemental-commands/shared.ts` constructs the correct preview service worker URL for both CLI (`http://localhost:5710/preview/...`) and extension (`chrome-extension://.../preview/...`) modes. Use this instead of inlining the dual-mode URL logic.
 - **Custom API providers require dual registration**: Provider auto-discovery runs via `src/providers/index.ts`, imported in **both** `src/ui/main.ts` (CLI entry point) and `src/extension/offscreen.ts` (extension agent engine). The extension agent runs in the offscreen document — `main.ts` only runs in the side panel UI. External providers in `/providers/*.ts` are automatically included.
 
 ## Change Requirements

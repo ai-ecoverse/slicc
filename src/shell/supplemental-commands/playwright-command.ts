@@ -313,7 +313,7 @@ async function resolveAppTabId(
   if (state.appTabId) return;
   const pages = await browser.listPages();
   const appOrigin =
-    typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
+    typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5710';
   const appTab = pages.find(
     (p) => p.url.startsWith(appOrigin) && !p.url.includes('/preview/'),
   );

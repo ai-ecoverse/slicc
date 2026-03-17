@@ -154,7 +154,7 @@ export default defineConfig(({ mode }) => ({
     // preview-sw is built separately via esbuild (SWs need self-contained bundles)
   },
   server: {
-    port: 3000,
+    port: 5710,
   },
   test: {
     globals: true,
