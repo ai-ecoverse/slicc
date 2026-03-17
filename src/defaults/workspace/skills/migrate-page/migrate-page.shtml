@@ -146,7 +146,7 @@ function newMigration() {
 }
 
 function loadConfig() {
-  slicc.readFile('/shared/migrate-config.json').then(function(raw) {
+  slicc.readFile('/workspace/skills/migrate-page/migrate-config.json').then(function(raw) {
     var config;
     try { config = JSON.parse(raw); } catch (e) {
       var el = document.getElementById('mp-repo');

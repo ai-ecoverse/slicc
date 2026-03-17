@@ -39,12 +39,12 @@ cone the only viable orchestrator.
    ```bash
    sprinkle send migrate-page '{"phase":"error","message":"No page to migrate — navigate to a webpage first"}'
    ```
-3. Read workspace config: `read_file /shared/migrate-config.json` and
-   parse the `repo` field.
+3. Read workspace config: `read_file /workspace/skills/migrate-page/migrate-config.json`
+   and parse the `repo` field.
 4. If the file is missing or `repo` is empty, ask the user in chat for
    the repo, then write the config:
    ```bash
-   write_file /shared/migrate-config.json
+   write_file /workspace/skills/migrate-page/migrate-config.json
    {"repo":"owner/repo-name","currentMigration":null}
    ```
 5. Start Phase 1 with the extracted URL and repo.
@@ -54,8 +54,8 @@ cone the only viable orchestrator.
 At each phase transition, run BOTH:
 
 - `sprinkle send migrate-page '<json>'` — updates the live sprinkle UI
-- `write_file /shared/migrate-config.json` with updated
-  `currentMigration` — persists state for recovery
+- `write_file /workspace/skills/migrate-page/migrate-config.json` with
+  updated `currentMigration` — persists state for recovery
 
 Phase transition points:
 
