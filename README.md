@@ -377,6 +377,31 @@ npm test
 npm run test:watch
 ```
 
+## Persistent Log Files
+
+Every CLI run writes a persistent log file to `~/.slicc/logs/`. Log files are named `<timestamp>_<pid>.log` (e.g. `2026-03-13T14-30-00_12345.log`) and are automatically cleaned up after 7 days.
+
+In dev mode (`--dev`), all `console.*` output is teed to the log file with ANSI escape sequences stripped. In production mode, the server writes structured log events (startup, errors, etc.) without monkey-patching console.
+
+### CLI Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--log-level=<level>` | `info` | Minimum log level: `debug`, `info`, `warn`, `error` |
+| `--log-dir=<path>` | `~/.slicc/logs/` | Override the log directory |
+
+### Example
+
+```bash
+# Run with debug-level logging
+npm run dev:full -- --log-level=debug
+
+# Write logs to a custom directory
+npm run dev:full -- --log-dir=/tmp/slicc-logs
+```
+
+The log file path is printed to stdout on startup.
+
 ## Git Commands
 
 slicc includes Git support via [isomorphic-git](https://isomorphic-git.org/), enabling version control operations directly in the browser without touching the host filesystem.
