@@ -77,7 +77,8 @@ To close the current tab: `playwright-cli close`. To close a specific tab: `play
 
 **What you CAN see:**
 - **`open --view <path>`** (or `-v`) — reads an image from VFS and returns it so you can see it. Works with PNG, JPEG, GIF, WebP, SVG.
-- **`playwright-cli screenshot`** + **`open --view <path>`** — take a screenshot to file, then view it. Example: `playwright-cli screenshot --filename=/tmp/shot.png && open --view /tmp/shot.png`
+- **`playwright-cli screenshot`** + **`open --view <path>`** — take a screenshot of the current browser tab to file, then view it. Example: `playwright-cli screenshot --filename=/tmp/shot.png && open --view /tmp/shot.png`
+- **`screencapture`** — capture the user's actual screen (desktop, window, or tab) via browser screen sharing API. Use `screencapture --view screenshot.png` to capture and see what's on their screen. The user will be prompted to select what to share.
 - **`playwright-cli snapshot`** — returns an accessibility tree (text). Use this to verify page content without vision, or as a required step before `screenshot`.
 
 **What only the human sees:**

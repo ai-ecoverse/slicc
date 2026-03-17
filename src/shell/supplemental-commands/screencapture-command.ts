@@ -51,18 +51,11 @@ function getMimeTypeForExtension(filename: string): string {
 
 async function captureScreen(mimeType: string, quality: number): Promise<Blob> {
   const stream = await navigator.mediaDevices.getDisplayMedia({
-    video: {
-      displaySurface: 'monitor',
-    },
+    video: true,
     audio: false,
   });
 
   try {
-    const track = stream.getVideoTracks()[0];
-    const settings = track.getSettings();
-    const width = settings.width ?? 1920;
-    const height = settings.height ?? 1080;
-
     const video = document.createElement('video');
     video.srcObject = stream;
     video.muted = true;
@@ -77,6 +70,10 @@ async function captureScreen(mimeType: string, quality: number): Promise<Blob> {
 
     // Wait a frame to ensure video is rendered
     await new Promise((resolve) => requestAnimationFrame(resolve));
+
+    // Use actual video dimensions from the loaded stream
+    const width = video.videoWidth;
+    const height = video.videoHeight;
 
     const canvas = document.createElement('canvas');
     canvas.width = width;
@@ -112,7 +109,7 @@ export function createScreencaptureCommand(): Command {
       return screencaptureHelp();
     }
 
-    if (typeof window === 'undefined' || typeof navigator === 'undefined') {
+    if (typeof window === 'undefined' || typeof navigator === 'undefined' || typeof document === 'undefined') {
       return {
         stdout: '',
         stderr: 'screencapture: browser APIs are unavailable in this environment\n',
@@ -130,7 +127,11 @@ export function createScreencaptureCommand(): Command {
 
     const toClipboard = args.includes('--clipboard') || args.includes('-c');
     const view = args.includes('--view') || args.includes('-v');
-    const filteredArgs = args.filter((a) => !a.startsWith('-'));
+    const knownFlags = ['--clipboard', '-c', '--view', '-v', '--help', '-h'];
+    const dashDashIndex = args.indexOf('--');
+    const filteredArgs = dashDashIndex >= 0
+      ? args.slice(dashDashIndex + 1)
+      : args.filter((a) => !knownFlags.includes(a));
     const outputFile = filteredArgs[0];
 
     if (!toClipboard && !outputFile) {
@@ -169,39 +170,43 @@ export function createScreencaptureCommand(): Command {
 
     if (toClipboard) {
       try {
-        const pngBlob = mimeType === 'image/png'
-          ? blob
-          : await (async () => {
-              // Clipboard API requires PNG, convert if necessary
-              const img = new Image();
-              const url = URL.createObjectURL(blob);
-              await new Promise<void>((resolve, reject) => {
-                img.onload = () => resolve();
-                img.onerror = () => reject(new Error('Failed to load image for conversion'));
-                img.src = url;
-              });
-              URL.revokeObjectURL(url);
+        let pngBlob: Blob;
+        if (mimeType === 'image/png') {
+          pngBlob = blob;
+        } else {
+          // Clipboard API requires PNG, convert if necessary
+          const img = new Image();
+          const url = URL.createObjectURL(blob);
+          try {
+            await new Promise<void>((resolve, reject) => {
+              img.onload = () => resolve();
+              img.onerror = () => reject(new Error('Failed to load image for conversion'));
+              img.src = url;
+            });
+          } finally {
+            URL.revokeObjectURL(url);
+          }
 
-              const canvas = document.createElement('canvas');
-              canvas.width = img.width;
-              canvas.height = img.height;
-              const ctx = canvas.getContext('2d');
-              if (!ctx) throw new Error('Failed to get canvas context');
-              ctx.drawImage(img, 0, 0);
+          const canvas = document.createElement('canvas');
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) throw new Error('Failed to get canvas context');
+          ctx.drawImage(img, 0, 0);
 
-              return new Promise<Blob>((resolve, reject) => {
-                canvas.toBlob((b) => {
-                  if (b) resolve(b);
-                  else reject(new Error('Failed to create PNG blob'));
-                }, 'image/png');
-              });
-            })();
+          pngBlob = await new Promise<Blob>((resolve, reject) => {
+            canvas.toBlob((b) => {
+              if (b) resolve(b);
+              else reject(new Error('Failed to create PNG blob'));
+            }, 'image/png');
+          });
+        }
 
         await navigator.clipboard.write([
           new ClipboardItem({ 'image/png': pngBlob }),
         ]);
 
-        const sizeKB = Math.round(bytes.length / 1024);
+        const sizeKB = Math.round(pngBlob.size / 1024);
         return {
           stdout: `captured ${sizeKB} KB to clipboard\n`,
           stderr: '',
