@@ -56,7 +56,7 @@ describe('createOAuthLauncher', () => {
 
     fireMessage({
       type: 'oauth-callback',
-      redirectUrl: 'http://localhost:3000/auth/callback#access_token=abc123',
+      redirectUrl: 'http://localhost:5710/auth/callback#access_token=abc123',
     });
 
     const result = await promise;
@@ -65,7 +65,7 @@ describe('createOAuthLauncher', () => {
       '_blank',
       'width=500,height=700,popup=yes',
     );
-    expect(result).toBe('http://localhost:3000/auth/callback#access_token=abc123');
+    expect(result).toBe('http://localhost:5710/auth/callback#access_token=abc123');
   });
 
   it('returns null when callback reports an error', async () => {
@@ -93,11 +93,11 @@ describe('createOAuthLauncher', () => {
     // Now fire the real callback
     fireMessage({
       type: 'oauth-callback',
-      redirectUrl: 'http://localhost:3000/auth/callback#token=xyz',
+      redirectUrl: 'http://localhost:5710/auth/callback#token=xyz',
     });
 
     const result = await promise;
-    expect(result).toBe('http://localhost:3000/auth/callback#token=xyz');
+    expect(result).toBe('http://localhost:5710/auth/callback#token=xyz');
   });
 
   it('returns null on timeout and closes popup', async () => {
@@ -118,7 +118,7 @@ describe('createOAuthLauncher', () => {
 
     fireMessage({
       type: 'oauth-callback',
-      redirectUrl: 'http://localhost:3000/auth/callback#token=abc',
+      redirectUrl: 'http://localhost:5710/auth/callback#token=abc',
     });
 
     await promise;
@@ -157,16 +157,16 @@ describe('createOAuthLauncher', () => {
 
     fireMessage({
       type: 'oauth-callback',
-      redirectUrl: 'http://localhost:3000/auth/callback#token=first',
+      redirectUrl: 'http://localhost:5710/auth/callback#token=first',
     });
 
     // Second callback after listener is removed — should be ignored
     fireMessage({
       type: 'oauth-callback',
-      redirectUrl: 'http://localhost:3000/auth/callback#token=second',
+      redirectUrl: 'http://localhost:5710/auth/callback#token=second',
     });
 
     const result = await promise;
-    expect(result).toBe('http://localhost:3000/auth/callback#token=first');
+    expect(result).toBe('http://localhost:5710/auth/callback#token=first');
   });
 });

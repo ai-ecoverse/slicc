@@ -6,7 +6,7 @@ Build, run, test, and debug SLICC locally.
 
 | Command | What It Does | When to Use |
 |---------|-------------|-----------|
-| `npm run dev:full` | Full dev mode: Vite HMR + Chrome + CDP proxy (port 3000) | Interactive development; live reload; test browser features |
+| `npm run dev:full` | Full dev mode: Vite HMR + Chrome + CDP proxy (port 5710) | Interactive development; live reload; test browser features |
 | `npm run dev:electron -- /Applications/Slack.app` | Launch the main CLI in Electron attach mode against an Electron app | Electron overlay/runtime work |
 | `npm run dev` | Vite dev server only (no Chrome/CDP) | Quick UI iteration without launching browser |
 | `npm run build` | Production build: Vite UI + TSC CLI/Electron Node target | Pre-deployment validation; final bundle check |
@@ -24,14 +24,14 @@ Build, run, test, and debug SLICC locally.
 
 | Port | Service | Mode |
 |------|---------|------|
-| 3000 | UI server | CLI + Electron embedded app |
+| 5710 | UI server | CLI + Electron embedded app |
 | 9222 | Chrome CDP | CLI only |
 | 9223 | Electron CDP | Electron float only |
 | 24679 | Vite HMR WebSocket | CLI/Electron dev mode |
 
 ## Environment Variables
 
-- `PORT` — Express server port (default: 3000)
+- `PORT` — Express server port (default: 5710)
 - `CHROME_PATH` — Path to Chrome executable (auto-detected if omitted)
 
 ## Development Cycle
@@ -55,7 +55,7 @@ Manual verification in the relevant runtimes:
 
 - [ ] Feature works in CLI mode (`npm run dev:full`)
   - Launch Chrome automatically
-  - Navigate to http://localhost:3000
+  - Navigate to http://localhost:5710
   - Interact with UI; check functionality
 - [ ] Feature works in extension mode (load `dist/extension/` unpacked in `chrome://extensions`)
   - Load `dist/extension/` as unpacked extension
@@ -108,7 +108,7 @@ npm run dev:full
 ```
 
 This launches:
-- Express server on port 3000
+- Express server on port 5710
 - Chrome with remote debugging on port 9222
 - Vite HMR WebSocket on port 24679
 
@@ -125,7 +125,7 @@ npm run dev:electron -- /Applications/Slack.app
 This launches:
 - The main CLI entrypoint in `--electron` mode
 - The target Electron app with remote debugging on port 9223
-- The same local UI server on port 3000 plus persistent overlay injection from `electron-overlay-entry.js`
+- The same local UI server on port 5710 plus persistent overlay injection from `electron-overlay-entry.js`
 
 ### Viewing console output
 

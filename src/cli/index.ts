@@ -282,7 +282,7 @@ async function attachConsoleForwarder(
 // ---------------------------------------------------------------------------
 
 const CDP_PORT = RUNTIME_FLAGS.cdpPort;
-const SERVE_PORT = parseInt(process.env['PORT'] ?? '3000', 10);
+const SERVE_PORT = parseInt(process.env['PORT'] ?? '5710', 10);
 
 async function main() {
   if (DEV_MODE) {

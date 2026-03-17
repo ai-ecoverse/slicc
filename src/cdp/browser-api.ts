@@ -19,7 +19,7 @@ import type {
 import { normalizeAccessibilityText } from './normalize-accessibility-text.js';
 import { createLogger } from '../core/logger.js';
 
-const FALLBACK_CDP_URL = 'ws://localhost:3000/cdp';
+const FALLBACK_CDP_URL = 'ws://localhost:5710/cdp';
 const log = createLogger('browser-api');
 
 export function getDefaultCdpUrl(

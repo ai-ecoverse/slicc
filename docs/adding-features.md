@@ -863,7 +863,7 @@ export function register(): void {
 2. `provider-settings.ts` calls `config.onOAuthLogin(launcher, onSuccess)`
 3. The provider builds its authorize URL and calls `launcher(authorizeUrl)`
 4. The generic `OAuthLauncher` (from `src/providers/oauth-service.ts`) handles transport:
-   - **CLI**: Opens popup → IDP login → redirects to `http://localhost:3000/auth/callback` → callback page postMessages the redirect URL back → popup closes
+   - **CLI**: Opens popup → IDP login → redirects to `http://localhost:5710/auth/callback` → callback page postMessages the redirect URL back → popup closes
    - **Extension**: Sends `oauth-request` to service worker → `chrome.identity.launchWebAuthFlow` → returns redirect URL with token in fragment
 5. The provider extracts the token from the redirect URL and calls `saveOAuthAccount()`
 6. `onSuccess()` re-renders the accounts list showing the logged-in state
@@ -879,7 +879,7 @@ export function register(): void {
 
 | Mode | Redirect URI | Registration |
 |------|-------------|-------------|
-| CLI | `http://localhost:3000/auth/callback` | Register with your OAuth provider/IdP |
+| CLI | `http://localhost:5710/auth/callback` | Register with your OAuth provider/IdP |
 | Extension | `https://<extension-id>.chromiumapp.org/` | Register with your OAuth provider/IdP |
 
 **Type**:
