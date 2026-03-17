@@ -232,7 +232,7 @@ export class SprinkleRenderer {
     }
 
     const iframe = document.createElement('iframe');
-    iframe.setAttribute('sandbox', 'allow-scripts');
+    iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
     iframe.style.cssText = 'width: 100%; flex: 1; border: none; min-height: 0;';
     iframe.srcdoc = modified;
     this.iframe = iframe;

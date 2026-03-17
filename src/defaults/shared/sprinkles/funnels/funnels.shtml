@@ -251,7 +251,7 @@ body {
     </div>
     <div class="modal-field">
       <label>Page filter (optional)</label>
-      <input type="text" id="modalPage" placeholder="e.g. /tavex/efficacy">
+      <input type="text" id="modalPage" placeholder="e.g. /products/overview">
     </div>
     <div class="modal-actions">
       <button class="modal-btn" id="modalCancel">Cancel</button>

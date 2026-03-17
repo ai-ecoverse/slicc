@@ -649,7 +649,7 @@ textarea.field-input { height: auto; min-height: 80px; padding: 10px 12px; resiz
     switch (activeType) {
       case 'FAQ':
         return '<div class="rr-header">'
-          + '<div class="rr-breadcrumb"><span class="rr-domain">tavex.example.com</span> <span>\u203a FAQ</span></div>'
+          + '<div class="rr-breadcrumb"><span class="rr-domain">example.com</span> <span>\u203a FAQ</span></div>'
           + '<div class="rr-title">' + esc(d.name || 'Untitled FAQ') + '</div>'
           + '<div class="rr-description">' + esc(d.description || '') + '</div>'
           + '</div>'
@@ -661,7 +661,7 @@ textarea.field-input { height: auto; min-height: 80px; padding: 10px 12px; resiz
       case 'Article':
         return '<div class="rr-article-thumb">' + (d.image ? '<img src="' + esc(d.image) + '" alt="" onerror="this.parentElement.textContent=\'Image failed to load\'">' : 'No image') + '</div>'
           + '<div class="rr-header">'
-          + '<div class="rr-breadcrumb"><span class="rr-domain">tavex.example.com</span> <span>\u203a Article</span></div>'
+          + '<div class="rr-breadcrumb"><span class="rr-domain">example.com</span> <span>\u203a Article</span></div>'
           + '<div class="rr-title">' + esc(d.headline || 'Untitled Article') + '</div>'
           + '<div class="rr-description"><span class="rr-date">' + (d.datePublished || '') + '</span>' + (d.datePublished && d.description ? ' \u2014 ' : '') + esc(d.description || '') + '</div>'
           + '</div>'
@@ -669,7 +669,7 @@ textarea.field-input { height: auto; min-height: 80px; padding: 10px 12px; resiz
 
       case 'MedicalWebPage':
         return '<div class="rr-header">'
-          + '<div class="rr-breadcrumb"><span class="rr-domain">tavex.example.com</span> <span>\u203a Medical</span></div>'
+          + '<div class="rr-breadcrumb"><span class="rr-domain">example.com</span> <span>\u203a Medical</span></div>'
           + '<div class="rr-title">' + esc(d.name || 'Untitled Page') + '</div>'
           + '<div class="rr-medical-badge">' + esc(d.specialty || 'Medical') + '</div>'
           + '<div class="rr-description">' + esc(d.description || '') + '</div>'
@@ -678,7 +678,7 @@ textarea.field-input { height: auto; min-height: 80px; padding: 10px 12px; resiz
 
       case 'HowTo':
         return '<div class="rr-header">'
-          + '<div class="rr-breadcrumb"><span class="rr-domain">tavex.example.com</span> <span>\u203a How-to</span></div>'
+          + '<div class="rr-breadcrumb"><span class="rr-domain">example.com</span> <span>\u203a How-to</span></div>'
           + '<div class="rr-title">' + esc(d.name || 'Untitled HowTo') + '</div>'
           + '<div class="rr-description">' + esc(d.description || '') + '</div>'
           + '</div>'

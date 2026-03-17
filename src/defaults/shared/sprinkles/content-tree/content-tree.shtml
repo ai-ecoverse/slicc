@@ -616,7 +616,7 @@ function addNewPage() {
   var template = document.getElementById('newPageTemplate').value;
   var slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
   var parent = parentId ? pages.find(function(p) { return p.id === parentId; }) : null;
-  var basePath = parent ? parent.path.replace(/\/$/, '') : '/tavex';
+  var basePath = parent ? parent.path.replace(/\/$/, '') : '';
   var newPage = {
     id: slug + '-' + Date.now(),
     name: name,

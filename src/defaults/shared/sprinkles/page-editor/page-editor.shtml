@@ -562,7 +562,7 @@ body { font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5; co
         var sec = state.sections.find(function(s) { return s.id === btn.dataset.sid; });
         if (!sec) return;
         sec.data.cards.push({
-          imgSrc: 'https://main--az-sitebuilder--paolomoz.aem.page/tavex/media_103a9a470f5165ac8cbfeb3f20eea458de6e92ae7.jpg?width=2000&format=jpg&optimize=medium',
+          imgSrc: '',
           imgAlt: 'New card', title: 'New card title', body: 'Card description.', linkText: 'Read more', linkHref: '#'
         });
         slicc.lick({action: 'add-section', data: {parentSectionId: btn.dataset.sid, type: 'card', label: 'New card'}});

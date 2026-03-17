@@ -178,7 +178,7 @@ body { display: flex; flex-direction: column; height: 100vh; background: var(--s
     <div class="content-toolbar">
       <h1 class="page-title">Performance</h1>
       <div class="preset-group">
-        <button class="preset active" data-preset="tavex">TAVEX (current)</button>
+        <button class="preset active" data-preset="current">Current site</button>
         <button class="preset" data-preset="allgreen">All green</button>
         <button class="preset" data-preset="mobile">Mobile regression</button>
         <button class="preset" data-preset="hightraffic">High traffic</button>
@@ -206,7 +206,7 @@ var presetOverrides = {};
    STATE
    ================================================================ */
 var state = {
-  preset: 'tavex',
+  preset: 'current',
   range: '7d',
   device: 'all',
   selectedRow: null,
@@ -250,7 +250,7 @@ function hasData() {
 }
 
 function getData() {
-  if (state.preset === 'tavex') return siteData[state.range];
+  if (state.preset === 'current') return siteData[state.range];
   if (presetOverrides[state.preset] && presetOverrides[state.preset][state.range]) {
     return presetOverrides[state.preset][state.range];
   }

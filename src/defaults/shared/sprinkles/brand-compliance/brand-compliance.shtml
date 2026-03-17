@@ -270,7 +270,7 @@ body { font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5; co
   <div class="content-toolbar">
     <h1 class="page-title">Brand Compliance</h1>
     <div class="preset-group">
-      <button class="preset active" data-preset="tavex">TAVEX (5 issues)</button>
+      <button class="preset active" data-preset="sample">Sample (5 issues)</button>
       <button class="preset" data-preset="compliant">All compliant</button>
       <button class="preset" data-preset="offbrand">Off-brand</button>
       <button class="preset" data-preset="newbrand">New brand</button>
@@ -308,7 +308,7 @@ body { font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5; co
           <!-- Hero section -->
           <div class="preview-section prev-hero" id="section-hero">
             <span class="section-label" style="color:rgba(255,255,255,0.35);">Hero</span>
-            <div class="prev-heading" style="font-family:'Playfair Display',Georgia,serif;">Welcome to TAVEX</div>
+            <div class="prev-heading" style="font-family:'Playfair Display',Georgia,serif;">Welcome to Our Site</div>
             <div class="prev-body">Premium gold and silver trading since 1991. Trusted by thousands across Europe.</div>
             <div class="prev-cta" id="el-hero-cta" style="background:#ff69b4;border-radius:4px;">Get Started</div>
             <div class="brand-overlay" id="overlay-hero">
@@ -319,7 +319,7 @@ body { font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5; co
           <!-- Introduction section -->
           <div class="preview-section prev-intro" id="section-intro">
             <span class="section-label">Introduction</span>
-            <div class="prev-heading" id="el-intro-heading" style="font-family:Arial,sans-serif;color:#830051;">Why Choose TAVEX?</div>
+            <div class="prev-heading" id="el-intro-heading" style="font-family:Arial,sans-serif;color:#830051;">Why Choose Us?</div>
             <div class="prev-body">We offer competitive rates, secure transactions, and decades of expertise in precious metals. Our team is dedicated to helping you make smart investment decisions.</div>
             <div class="brand-overlay" id="overlay-intro">
               <div class="overlay-hint" style="top:28px;left:32px;">Expected: Playfair Display</div>
@@ -876,9 +876,9 @@ for (var p = 0; p < presetButtons.length; p++) {
     for (var k = 0; k < overlays.length; k++) overlays[k].classList.remove('visible');
 
     switch (preset) {
-      case 'tavex':
+      case 'sample':
         resetPreview();
-        violations = JSON.parse(JSON.stringify(presetData.tavex));
+        violations = JSON.parse(JSON.stringify(presetData.sample));
         break;
       case 'compliant':
         setCompliantPreview();

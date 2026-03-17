@@ -254,9 +254,19 @@ body {
  * DATA CONTRACT — push via: sprinkle send seo-dashboard '<json>'
  * 1. Signal analysis started: {"status":"analyzing","url":"https://example.com"}
  * 2. Push SEO data:           {"pages":[{"url":"...","title":"...","meta":"...","h1s":["..."],"imgs":[...],"internalLinks":5},...]}}
- * 3. Push fix suggestions:    {"action":"fix-suggestions","suggestions":[...]}
- * 4. DA confirmation:         {"action":"da-applied","path":"...","previewUrl":"..."} or {"action":"da-error","message":"..."}
- * 5. No page specified:       {"status":"empty"}
+ * 3. Push fix suggestions:    {"action":"fix-suggestions","pageIndex":0,"category":"Title","suggestions":["...","..."]}
+ * 4. Fix applied:             {"action":"fix-applied","pageIndex":0,"category":"Title","value":"new title","path":"/page","previewUrl":"..."}
+ * 5. Fix error:               {"action":"fix-error","message":"Cannot apply — no write access to this site's backend"}
+ * 6. No page specified:       {"status":"empty"}
+ *
+ * LICK EVENTS (sprinkle → scoop):
+ * - run-audit:            {url:"..."} — user requests an SEO audit
+ * - fix-meta/fix-heading/fix-image-alt: {pageIndex, path, category} — user clicks Auto-fix
+ * - suggestion-applied:   {pageIndex, category, chosen, path} — user picks a suggestion
+ * - export-report:        {} — user requests report export
+ *
+ * The sprinkle does NOT apply fixes locally. It waits for the scoop to confirm
+ * via fix-applied (with the new value to display) or fix-error.
  */
 
 // ==================== DATA ====================
@@ -526,7 +536,7 @@ function renderDetail() {
           '<div class="serp-label">SERP Preview</div>' +
           '<div class="serp-preview">' +
             '<div class="serp-title" id="serpTitle">' + escHtml(serpTitle) + '</div>' +
-            '<div class="serp-url">https://www.astrazeneca.com' + p.path + '</div>' +
+            '<div class="serp-url">' + escHtml(p.url || p.path) + '</div>' +
             '<div class="serp-desc" id="serpDesc">' + escHtml(serpDesc) + '</div>' +
           '</div>' +
           '<div class="serp-char-count">' +
@@ -589,67 +599,14 @@ function renderDetail() {
   });
 }
 
-function applyAutoFix(category) {
-  if (selectedIdx < 0) return;
-  var p = pages[selectedIdx];
-
-  switch (category) {
-    case 'Title': {
-      var len = (p.title || '').length;
-      if (!p.title || p.title.trim() === '') {
-        p.title = p.name + ' \u2014 TAVEX (tavexirel) | AstraZeneca';
-      } else if (len > 60) {
-        var shortened = p.name ? p.name + ' \u2014 TAVEX | AstraZeneca' : p.title.substring(0, 57) + '...';
-        if (shortened.length > 60) shortened = shortened.substring(0, 57) + '...';
-        p.title = shortened;
-      } else if (len < 50) {
-        p.title = p.title + ' \u2014 TAVEX (tavexirel) | AstraZeneca';
-        if (p.title.length > 60) p.title = p.title.substring(0, 60);
-      }
-      break;
-    }
-    case 'Meta Description': {
-      if (!p.meta || p.meta.trim() === '') {
-        var suggestions = {
-          '/tavex/': 'Discover TAVEX (tavexirel), a selective JAK1 inhibitor for the treatment of moderate-to-severe rheumatoid arthritis in adults.',
-          '/tavex/efficacy': 'Review clinical efficacy data from RESOLVE-1 and RESOLVE-2 trials for TAVEX in rheumatoid arthritis treatment.',
-          '/tavex/safety': 'Explore the safety profile of TAVEX including adverse event data and monitoring recommendations for healthcare professionals.',
-          '/tavex/dosing': 'Complete dosing information for TAVEX 200mg tablets including administration, dose adjustments, and special populations.',
-          '/tavex/mechanism-of-action': 'Learn how TAVEX selectively inhibits JAK1 to reduce inflammation in rheumatoid arthritis through targeted cytokine modulation.',
-          '/tavex/prescribing-information': 'Access full prescribing information for TAVEX including indications, dosage, contraindications, and adverse event data.',
-        };
-        p.meta = suggestions[p.path] || 'Learn about ' + p.name + ' for TAVEX (tavexirel), a treatment for rheumatoid arthritis. View clinical data and prescribing details.';
-      } else if (p.meta.length < 120) {
-        var pad = ' View complete clinical data and prescribing information for healthcare professionals.';
-        p.meta = p.meta.replace(/\.$/, '') + '.' + pad;
-        if (p.meta.length > 160) p.meta = p.meta.substring(0, 157) + '...';
-      } else if (p.meta.length > 160) {
-        p.meta = p.meta.substring(0, 157) + '...';
-      }
-      break;
-    }
-    case 'H1 Headings': {
-      if (p.h1s.length === 0) {
-        p.h1s = [p.name];
-      } else if (p.h1s.length > 1) {
-        p.h1s = [p.h1s[0]];
-      }
-      break;
-    }
-    case 'Alt Text': {
-      p.imgs.forEach(function(img, i) {
-        if (!img.alt || img.alt.trim() === '') {
-          img.alt = p.name + ' image ' + (i + 1);
-        }
-      });
-      break;
-    }
-    case 'Internal Links': {
-      p.internalLinks = Math.max(p.internalLinks, 3);
-      break;
-    }
-  }
-
+function applyFixToLocal(pageIndex, category, value) {
+  var p = pages[pageIndex];
+  if (!p) return;
+  if (category === 'Title') p.title = value;
+  else if (category === 'Meta Description') p.meta = value;
+  else if (category === 'H1 Headings' && Array.isArray(value)) p.h1s = value;
+  else if (category === 'Alt Text' && Array.isArray(value)) p.imgs = value;
+  else if (category === 'Internal Links' && typeof value === 'number') p.internalLinks = value;
   refresh();
 }
 
@@ -757,21 +714,15 @@ function applySuggestion(key, idx) {
   if (!p) return;
   var value = entry.suggestions[idx];
 
-  if (entry.category === 'Title') {
-    p.title = value;
-  } else if (entry.category === 'Meta Description') {
-    p.meta = value;
-  }
-
-  delete pendingSuggestions[key];
-  selectedIdx = entry.pageIndex;
-  refresh();
-
-  // Notify scoop of the choice
+  // Don't apply locally — send to scoop and wait for fix-applied/fix-error
   slicc.lick({
     action: 'suggestion-applied',
-    data: { pageIndex: entry.pageIndex, category: entry.category, chosen: value }
+    data: { pageIndex: entry.pageIndex, category: entry.category, chosen: value, path: p.path }
   });
+
+  // Remove suggestions panel after picking
+  delete pendingSuggestions[key];
+  renderDetail();
 }
 
 // ==================== BRIDGE ====================
@@ -797,26 +748,22 @@ slicc.on('update', function(data) {
     return;
   }
 
-  // --- Action handlers (existing) ---
-  if (data.action === 'apply-fix') {
-    // Cone/scoop can push fixes via sprinkle send
-    if (typeof data.pageIndex === 'number' && data.category) {
-      selectedIdx = data.pageIndex;
-      applyAutoFix(data.category);
-    }
-  }
+  // --- Action handlers ---
   if (data.action === 'fix-suggestions') {
     // Scoop pushes suggested fixes for user to pick from
     if (typeof data.pageIndex === 'number' && data.category && Array.isArray(data.suggestions)) {
       renderSuggestions(data.pageIndex, data.category, data.suggestions);
     }
   }
-  if (data.action === 'da-applied') {
-    // DA write confirmed — show a brief toast notification
-    showToast('Applied to DA: ' + (data.path || 'page') + (data.previewUrl ? ' — preview ready' : ''));
+  if (data.action === 'fix-applied') {
+    // Scoop confirmed the fix was applied — update local data and UI
+    if (typeof data.pageIndex === 'number' && data.category && data.value !== undefined) {
+      applyFixToLocal(data.pageIndex, data.category, data.value);
+    }
+    showToast('Applied: ' + (data.path || 'page') + (data.previewUrl ? ' — preview ready' : ''));
   }
-  if (data.action === 'da-error') {
-    showToast('DA error: ' + (data.message || 'could not apply'), true);
+  if (data.action === 'fix-error') {
+    showToast('Error: ' + (data.message || 'could not apply fix'), true);
   }
 });
 

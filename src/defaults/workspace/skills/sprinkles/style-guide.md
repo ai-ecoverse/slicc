@@ -340,7 +340,7 @@ feed_scoop("seo-dashboard", "You own the built-in sprinkle 'seo-dashboard'.
 5. Gather the data the user needs (e.g. fetch the page, run an SEO audit).
 6. Push results to the sprinkle in the format specified by the DATA CONTRACT.
 7. Stay ready — you will receive lick events when the user clicks buttons in the sprinkle.
-8. When the user confirms a fix, apply it to AEM via DA (see 'DA Integration' section below).
+8. When the user confirms a fix, attempt to apply it to the site (see 'Applying Changes' section below).
 Do not send a completion message.")
 ```
 
@@ -348,69 +348,66 @@ The scoop opens the sprinkle, pushes analyzing status, gathers real data, pushes
 
 ---
 
-## DA Integration (Applying Changes to AEM)
+## Applying Changes
 
-Content-editing sprinkles (page-editor, seo-dashboard, schema-editor, review-workflow) should apply user-confirmed changes to the actual AEM page via DA commands. This is the expected E2E flow — sprinkle edits are not just local UI state.
+Content-editing sprinkles (page-editor, seo-dashboard, schema-editor, review-workflow) should attempt to apply user-confirmed changes to the actual site. Sprinkle edits are not just local UI state — the scoop must try to write them back.
 
-### When to apply via DA
+### When to apply
 
 Apply after the user **confirms** a change — not on every lick. Typical trigger: `suggestion-applied` lick (user picked a fix from suggestions), or `apply-fix` lick (user clicked "Apply").
 
-### DA apply workflow
+### Determining write access
+
+The cone sets backend context in the scoop brief (option B). The scoop knows whether it has write access based on its instructions:
+
+- **EDS site** (URL matches `*--*--*.aem.page|live`): use `eds get`, `eds put`, `eds preview` commands
+- **No write access** (external site, unknown CMS): push `fix-error` explaining why
+
+### EDS apply workflow (example)
 
 ```bash
 # 1. Fetch current page HTML
-da get <page-path> --output /scoops/<scoop-name>/page.html
+eds get <eds-url> --output /scoops/<scoop-name>/page.html
 
 # 2. Read and modify the HTML (e.g. update <title>, <meta>, headings)
 #    Use edit_file or read_file + write_file
 
-# 3. Write back to DA
-da put <page-path> /scoops/<scoop-name>/page.html
+# 3. Write back
+eds put <eds-url> /scoops/<scoop-name>/page.html
 
-# 4. Trigger AEM preview
-da preview <page-path>
+# 4. Trigger preview
+eds preview <eds-url>
 ```
 
 ### Confirming back to the sprinkle
 
-After DA write succeeds, push confirmation so the sprinkle can show a toast:
+After the write succeeds, push confirmation so the sprinkle updates its UI:
 
 ```bash
-sprinkle send <sprinkle-name> '{"action":"da-applied","path":"<page-path>","previewUrl":"https://..."}'
+sprinkle send <sprinkle-name> '{"action":"fix-applied","pageIndex":0,"category":"Title","value":"new title","path":"/page","previewUrl":"https://..."}'
 ```
 
-If DA fails, push the error:
+The sprinkle only updates local state (score, checkmarks) after receiving `fix-applied` with the confirmed value.
+
+If the write fails or write access is unavailable, push the error:
 
 ```bash
-sprinkle send <sprinkle-name> '{"action":"da-error","message":"<error details>"}'
+sprinkle send <sprinkle-name> '{"action":"fix-error","message":"Cannot apply — no write access to nationwide.co.uk"}'
 ```
-
-### If DA is not configured
-
-Run `da config` to check. If credentials are missing, **tell the user** what's needed:
-
-```
-da config org <value>
-da config repo <value>
-da config client-id <value>
-da config client-secret <value>
-da config service-token <value>
-```
-
-Do NOT silently skip DA. Always attempt it and report any errors.
 
 ### Sprinkle-side handlers
 
-Sprinkles that support DA integration should handle these update actions:
+Sprinkles handle these update actions:
 
 ```javascript
 slicc.on('update', function(data) {
-  if (data.action === 'da-applied') {
-    showToast('Applied to DA: ' + data.path);
+  if (data.action === 'fix-applied') {
+    // Update local data with confirmed value, then show toast
+    applyFixToLocal(data.pageIndex, data.category, data.value);
+    showToast('Applied: ' + data.path);
   }
-  if (data.action === 'da-error') {
-    showToast('DA error: ' + data.message, true);
+  if (data.action === 'fix-error') {
+    showToast('Error: ' + data.message, true);
   }
 });
 ```
