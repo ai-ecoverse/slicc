@@ -24,7 +24,7 @@ import type { FloatType } from '../../scoops/tray-leader-sync.js';
 // Types
 // ---------------------------------------------------------------------------
 
-export type SendCookieTeleportRequestFn = (targetRuntimeId: string) => Promise<CookieTeleportCookie[]>;
+export type SendCookieTeleportRequestFn = (targetRuntimeId: string, url?: string) => Promise<CookieTeleportCookie[]>;
 
 export type GetBestFollowerForTeleportFn = () => { runtimeId: string; bootstrapId: string; floatType: FloatType } | null;
 
@@ -74,10 +74,12 @@ function teleportHelp(): { stdout: string; stderr: string; exitCode: number } {
 Usage:
   teleport                      Auto-select best follower, teleport cookies
   teleport <runtime-id>         Teleport cookies from a specific runtime
+  teleport --url <url>          Open URL for interactive auth before capturing
   teleport --list               List available runtimes for teleport
 
 Flags:
   --list, -l       List available runtimes for teleport
+  --url <url>      Open a browser tab on the follower for interactive auth
   --reload, -r     Reload the active tab after applying cookies (default)
   --no-reload      Don't reload the active tab after applying cookies
   --help, -h       Show this help
@@ -85,6 +87,10 @@ Flags:
 The teleport command captures all browser cookies from a remote runtime
 in the tray and applies them to the local browser, enabling seamless
 authentication transfer between SLICC instances.
+
+When --url is provided, the follower opens a browser tab for the human
+to complete login. Cookies are captured after auth (hostname redirect)
+or after a 2-minute timeout.
 `,
     stderr: '',
     exitCode: 0,
@@ -97,6 +103,7 @@ authentication transfer between SLICC instances.
 
 export interface ParsedTeleportArgs {
   targetRuntimeId?: string;
+  url?: string;
   list: boolean;
   reload: boolean;
 }
@@ -104,13 +111,22 @@ export interface ParsedTeleportArgs {
 export function parseTeleportArgs(args: string[]): ParsedTeleportArgs | { error: string } {
   let list = false;
   let reload = true;
+  let url: string | undefined;
   const positional: string[] = [];
 
-  for (const arg of args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     if (arg === '--help' || arg === '-h') return { error: '__help__' };
     if (arg === '--list' || arg === '-l') { list = true; continue; }
     if (arg === '--reload' || arg === '-r') { reload = true; continue; }
     if (arg === '--no-reload') { reload = false; continue; }
+    if (arg === '--url') {
+      const next = args[i + 1];
+      if (!next || next.startsWith('-')) return { error: '--url requires a URL argument' };
+      url = next;
+      i++; // skip the URL value
+      continue;
+    }
     if (arg.startsWith('-')) return { error: `Unknown flag: ${arg}` };
     positional.push(arg);
   }
@@ -119,7 +135,7 @@ export function parseTeleportArgs(args: string[]): ParsedTeleportArgs | { error:
     return { error: 'Expected at most 1 argument: <runtime-id>' };
   }
 
-  return { targetRuntimeId: positional[0], list, reload };
+  return { targetRuntimeId: positional[0], url, list, reload };
 }
 
 // ---------------------------------------------------------------------------
@@ -196,7 +212,7 @@ export function createTeleportCommand(): Command {
 
     try {
       // 1. Request cookies from the remote runtime
-      const cookies = await sendRequest(targetRuntimeId);
+      const cookies = await sendRequest(targetRuntimeId, parsed.url);
       if (cookies.length === 0) {
         return { stdout: `No cookies on runtime ${targetRuntimeId}\n`, stderr: '', exitCode: 0 };
       }

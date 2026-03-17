@@ -464,6 +464,20 @@ export class WasmShell {
     };
   }
 
+  /**
+   * Execute a .jsh/.bsh script file by VFS path.
+   * Uses the same execution engine as JSH commands (JavaScript, not bash).
+   */
+  async executeScriptFile(scriptPath: string, args: string[] = []): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    return executeJshFile(scriptPath, args, {
+      fs: this.vfsAdapter,
+      cwd: this.cwd,
+      env: new Map(Object.entries(this.lastEnv)),
+      stdin: '',
+      exec: (cmd, opts) => this.bash.exec(cmd, { env: this.lastEnv, cwd: opts?.cwd ?? this.cwd }),
+    });
+  }
+
   /** Re-fit the terminal to its host container. */
   refit(): void {
     this.fitAddon?.fit();

@@ -715,6 +715,136 @@ describe('FollowerSyncManager', () => {
     });
   });
 
+  describe('cookie teleport handling', () => {
+    it('handles cookie.teleport.request without url — immediate capture', async () => {
+      const channel = new FakeChannel();
+      const fakeBrowserTransport = {
+        send: vi.fn().mockResolvedValue({
+          cookies: [{ name: 'sess', value: 'v1', domain: '.example.com', path: '/' }],
+        }),
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        on: vi.fn(),
+        off: vi.fn(),
+        once: vi.fn(),
+        state: 'connected' as const,
+      };
+      const follower = new FollowerSyncManager(channel, { browserTransport: fakeBrowserTransport });
+
+      channel.simulateLeaderMessage({
+        type: 'cookie.teleport.request',
+        requestId: 'ct-1',
+      } as any);
+
+      await vi.waitFor(() => {
+        const sent = channel.parseSent();
+        return sent.some(m => m.type === 'cookie.teleport.response');
+      });
+
+      const sent = channel.parseSent();
+      const response = sent.find(m => m.type === 'cookie.teleport.response');
+      expect(response).toBeDefined();
+      if (response && response.type === 'cookie.teleport.response') {
+        expect(response.requestId).toBe('ct-1');
+        expect(response.cookies).toHaveLength(1);
+      }
+      expect(fakeBrowserTransport.send).toHaveBeenCalledWith('Network.getCookies', {});
+    });
+
+    it('handles cookie.teleport.request without browser transport', async () => {
+      const channel = new FakeChannel();
+      const follower = new FollowerSyncManager(channel);
+
+      channel.simulateLeaderMessage({
+        type: 'cookie.teleport.request',
+        requestId: 'ct-2',
+      } as any);
+
+      await vi.waitFor(() => {
+        const sent = channel.parseSent();
+        return sent.some(m => m.type === 'cookie.teleport.response');
+      });
+
+      const sent = channel.parseSent();
+      const response = sent.find(m => m.type === 'cookie.teleport.response');
+      expect(response).toBeDefined();
+      if (response && response.type === 'cookie.teleport.response') {
+        expect(response.requestId).toBe('ct-2');
+        expect(response.error).toBe('Follower has no browser transport');
+      }
+    });
+
+    it('handles cookie.teleport.request with url — calls executeTeleportAuth', async () => {
+      const channel = new FakeChannel();
+      // The transport needs to support on/off for the auth flow,
+      // plus the send calls for createTarget, attachToTarget, Page.enable, Network.getCookies, closeTarget
+      const listeners = new Map<string, Set<Function>>();
+      const fakeBrowserTransport = {
+        send: vi.fn().mockImplementation((method: string) => {
+          if (method === 'Target.createTarget') return Promise.resolve({ targetId: 'auth-tab' });
+          if (method === 'Target.attachToTarget') return Promise.resolve({ sessionId: 'sess-auth' });
+          if (method === 'Page.enable') return Promise.resolve({});
+          if (method === 'Network.getCookies') return Promise.resolve({
+            cookies: [{ name: 'auth_tok', value: 'abc', domain: '.site.com', path: '/' }],
+          });
+          if (method === 'Target.closeTarget') return Promise.resolve({});
+          return Promise.resolve({});
+        }),
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        on: vi.fn((event: string, listener: Function) => {
+          if (!listeners.has(event)) listeners.set(event, new Set());
+          listeners.get(event)!.add(listener);
+        }),
+        off: vi.fn((event: string, listener: Function) => {
+          listeners.get(event)?.delete(listener);
+        }),
+        once: vi.fn(),
+        state: 'connected' as const,
+      };
+
+      const onNotification = vi.fn();
+      const follower = new FollowerSyncManager(channel, {
+        browserTransport: fakeBrowserTransport,
+        onNotification,
+      });
+
+      channel.simulateLeaderMessage({
+        type: 'cookie.teleport.request',
+        requestId: 'ct-3',
+        url: 'https://login.site.com/auth',
+      } as any);
+
+      // Flush multiple microtask rounds so the chained awaits inside
+      // executeTeleportAuth (createTarget → attachToTarget → Page.enable)
+      // all resolve and the Page.frameNavigated listener is registered.
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+
+      // Simulate auth redirect
+      for (const listener of listeners.get('Page.frameNavigated') ?? []) {
+        (listener as (params: Record<string, unknown>) => void)({
+          sessionId: 'sess-auth',
+          frame: { url: 'https://app.site.com/callback', id: 'main' },
+        });
+      }
+
+      // Flush again for post-redirect awaits (getCookies, closeTarget, send response)
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+
+      const sent = channel.parseSent();
+      expect(sent.some(m => m.type === 'cookie.teleport.response')).toBe(true);
+      const response = sent.find(m => m.type === 'cookie.teleport.response');
+      expect(response).toBeDefined();
+      if (response && response.type === 'cookie.teleport.response') {
+        expect(response.requestId).toBe('ct-3');
+        expect(response.cookies).toHaveLength(1);
+        expect(response.error).toBeUndefined();
+      }
+      expect(onNotification).toHaveBeenCalledWith(expect.stringContaining('Authentication requested'));
+      expect(fakeBrowserTransport.send).toHaveBeenCalledWith('Target.createTarget', { url: 'https://login.site.com/auth', background: false });
+    });
+  });
+
   describe('pong updates lastPingTime', () => {
     beforeEach(() => {
       setFollowerTrayRuntimeStatus({

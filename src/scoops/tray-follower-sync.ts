@@ -22,6 +22,7 @@ import type { CDPTransport } from '../cdp/transport.js';
 import { RemoteCDPTransport, type RemoteCDPSender } from '../cdp/remote-cdp-transport.js';
 import { DataChannelKeepalive } from './data-channel-keepalive.js';
 import { setFollowerTrayRuntimeStatus, getFollowerTrayRuntimeStatus, setFollowerLastPingTime } from './tray-follower-status.js';
+import { executeTeleportAuth } from './teleport-auth.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('tray-follower-sync');
@@ -43,6 +44,8 @@ export interface FollowerSyncManagerOptions {
   onDisconnect?: (reason: string) => void;
   /** VirtualFS instance for handling remote fs requests targeting this follower. */
   vfs?: VirtualFS;
+  /** Called when the follower wants to show a notification to the human (e.g. teleport auth progress). */
+  onNotification?: (message: string) => void;
 }
 
 /**
@@ -259,7 +262,7 @@ export class FollowerSyncManager implements AgentHandle {
         break;
       }
       case 'cookie.teleport.request': {
-        this.executeLocalCookieTeleport(message.requestId);
+        this.executeLocalCookieTeleport(message.requestId, message.url);
         break;
       }
       case 'cookie.teleport.response': {
@@ -454,9 +457,12 @@ export class FollowerSyncManager implements AgentHandle {
 
   /**
    * Execute a cookie teleport on the follower's local browser transport.
-   * Captures all cookies and sends them back to the leader.
+   *
+   * When `url` is provided, opens a browser tab for interactive authentication:
+   * the human logs in, a hostname redirect is detected, cookies are captured,
+   * and the tab is closed. Falls back to immediate capture if no url.
    */
-  private async executeLocalCookieTeleport(requestId: string): Promise<void> {
+  private async executeLocalCookieTeleport(requestId: string, url?: string): Promise<void> {
     const transport = this.options.browserTransport;
     if (!transport) {
       this.sync.send({ type: 'cookie.teleport.response', requestId, error: 'Follower has no browser transport' });
@@ -464,9 +470,20 @@ export class FollowerSyncManager implements AgentHandle {
     }
 
     try {
-      const result = await transport.send('Network.getCookies', {});
-      const cookies = (result['cookies'] as CookieTeleportCookie[]) ?? [];
-      this.sync.send({ type: 'cookie.teleport.response', requestId, cookies });
+      if (url) {
+        // Interactive auth flow: open tab → wait for human auth → capture cookies
+        const { cookies } = await executeTeleportAuth({
+          transport,
+          url,
+          onNotification: (msg) => this.options.onNotification?.(msg),
+        });
+        this.sync.send({ type: 'cookie.teleport.response', requestId, cookies });
+      } else {
+        // Immediate capture (backward-compatible: no url means just grab current cookies)
+        const result = await transport.send('Network.getCookies', {});
+        const cookies = (result['cookies'] as CookieTeleportCookie[]) ?? [];
+        this.sync.send({ type: 'cookie.teleport.response', requestId, cookies });
+      }
     } catch (err) {
       this.sync.send({ type: 'cookie.teleport.response', requestId, error: err instanceof Error ? err.message : String(err) });
     }
@@ -489,12 +506,13 @@ export class FollowerSyncManager implements AgentHandle {
   /**
    * Send a cookie teleport request to a remote runtime via the leader.
    * Returns a promise that resolves with the cookies from the target runtime.
+   * If `url` is provided, the target opens a tab for the human to authenticate before capturing cookies.
    */
-  sendCookieTeleportRequest(targetRuntimeId: string): Promise<CookieTeleportCookie[]> {
+  sendCookieTeleportRequest(targetRuntimeId: string, url?: string): Promise<CookieTeleportCookie[]> {
     const requestId = `cookie-teleport-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     return new Promise<CookieTeleportCookie[]>((resolve, reject) => {
       this.cookieTeleportResolvers.set(requestId, { resolve, reject });
-      this.sync.send({ type: 'cookie.teleport.request', requestId, targetRuntimeId });
+      this.sync.send({ type: 'cookie.teleport.request', requestId, targetRuntimeId, url });
     });
   }
 }

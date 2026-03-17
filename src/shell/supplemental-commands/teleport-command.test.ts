@@ -22,37 +22,37 @@ describe('parseTeleportArgs', () => {
 
   it('parses no args (auto-select mode)', () => {
     const result = parseTeleportArgs([]);
-    expect(result).toEqual({ targetRuntimeId: undefined, list: false, reload: true });
+    expect(result).toEqual({ targetRuntimeId: undefined, url: undefined, list: false, reload: true });
   });
 
   it('parses a specific runtime-id', () => {
     const result = parseTeleportArgs(['follower-abc']);
-    expect(result).toEqual({ targetRuntimeId: 'follower-abc', list: false, reload: true });
+    expect(result).toEqual({ targetRuntimeId: 'follower-abc', url: undefined, list: false, reload: true });
   });
 
   it('parses --list flag', () => {
     const result = parseTeleportArgs(['--list']);
-    expect(result).toEqual({ targetRuntimeId: undefined, list: true, reload: true });
+    expect(result).toEqual({ targetRuntimeId: undefined, url: undefined, list: true, reload: true });
   });
 
   it('parses -l shorthand', () => {
     const result = parseTeleportArgs(['-l']);
-    expect(result).toEqual({ targetRuntimeId: undefined, list: true, reload: true });
+    expect(result).toEqual({ targetRuntimeId: undefined, url: undefined, list: true, reload: true });
   });
 
   it('parses --no-reload flag', () => {
     const result = parseTeleportArgs(['--no-reload']);
-    expect(result).toEqual({ targetRuntimeId: undefined, list: false, reload: false });
+    expect(result).toEqual({ targetRuntimeId: undefined, url: undefined, list: false, reload: false });
   });
 
   it('parses --reload explicitly', () => {
     const result = parseTeleportArgs(['--no-reload', '--reload']);
-    expect(result).toEqual({ targetRuntimeId: undefined, list: false, reload: true });
+    expect(result).toEqual({ targetRuntimeId: undefined, url: undefined, list: false, reload: true });
   });
 
   it('parses -r shorthand', () => {
     const result = parseTeleportArgs(['-r']);
-    expect(result).toEqual({ targetRuntimeId: undefined, list: false, reload: true });
+    expect(result).toEqual({ targetRuntimeId: undefined, url: undefined, list: false, reload: true });
   });
 
   it('errors on unknown flags', () => {
@@ -67,7 +67,27 @@ describe('parseTeleportArgs', () => {
 
   it('combines runtime-id with flags', () => {
     const result = parseTeleportArgs(['follower-abc', '--no-reload']);
-    expect(result).toEqual({ targetRuntimeId: 'follower-abc', list: false, reload: false });
+    expect(result).toEqual({ targetRuntimeId: 'follower-abc', url: undefined, list: false, reload: false });
+  });
+
+  it('parses --url flag', () => {
+    const result = parseTeleportArgs(['--url', 'https://login.example.com']);
+    expect(result).toEqual({ targetRuntimeId: undefined, url: 'https://login.example.com', list: false, reload: true });
+  });
+
+  it('combines --url with runtime-id', () => {
+    const result = parseTeleportArgs(['follower-abc', '--url', 'https://auth.site.com']);
+    expect(result).toEqual({ targetRuntimeId: 'follower-abc', url: 'https://auth.site.com', list: false, reload: true });
+  });
+
+  it('errors when --url has no value', () => {
+    const result = parseTeleportArgs(['--url']);
+    expect(result).toEqual({ error: '--url requires a URL argument' });
+  });
+
+  it('errors when --url is followed by a flag', () => {
+    const result = parseTeleportArgs(['--url', '--no-reload']);
+    expect(result).toEqual({ error: '--url requires a URL argument' });
   });
 });
 
@@ -179,7 +199,7 @@ describe('createTeleportCommand', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Teleported 1 cookie(s) from follower-best');
     expect(result.stdout).toContain('page reloaded');
-    expect(sendRequest).toHaveBeenCalledWith('follower-best');
+    expect(sendRequest).toHaveBeenCalledWith('follower-best', undefined);
     expect(sendCDP).toHaveBeenCalledWith('Network.setCookies', { cookies: fakeCookies });
     expect(sendCDP).toHaveBeenCalledWith('Page.reload', {});
   });
@@ -205,7 +225,7 @@ describe('createTeleportCommand', () => {
 
     const result = await createTeleportCommand().execute(['follower-xyz'], {} as never);
     expect(result.exitCode).toBe(0);
-    expect(sendRequest).toHaveBeenCalledWith('follower-xyz');
+    expect(sendRequest).toHaveBeenCalledWith('follower-xyz', undefined);
     expect(sendCDP).toHaveBeenCalledWith('Network.setCookies', { cookies: fakeCookies });
   });
 
@@ -264,6 +284,31 @@ describe('createTeleportCommand', () => {
     const result = await createTeleportCommand().execute([], {} as never);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('Runtime not connected');
+  });
+
+  it('passes --url to sendCookieTeleportRequest', async () => {
+    const fakeCookies: CookieTeleportCookie[] = [
+      {
+        name: 'auth', value: 'tok', domain: '.example.com', path: '/',
+        expires: -1, size: 20, httpOnly: true, secure: true, session: true,
+      },
+    ];
+
+    const sendRequest = vi.fn().mockResolvedValue(fakeCookies);
+    const sendCDP = vi.fn().mockResolvedValue({});
+
+    setTeleportSendRequest(() => sendRequest);
+    setTeleportBestFollower(() => () => ({ runtimeId: 'f1', bootstrapId: 'b1', floatType: 'standalone' as const }));
+    setTeleportBrowserAPI(() => ({
+      listPages: vi.fn().mockResolvedValue([{ targetId: 't1', title: 'T', url: 'https://x.com', active: true }]),
+      attachToPage: vi.fn(),
+      sendCDP,
+      getTransport: vi.fn(),
+    }) as unknown as BrowserAPI);
+
+    const result = await createTeleportCommand().execute(['--url', 'https://login.example.com'], {} as never);
+    expect(result.exitCode).toBe(0);
+    expect(sendRequest).toHaveBeenCalledWith('f1', 'https://login.example.com');
   });
 
   it('errors when no local tabs available', async () => {

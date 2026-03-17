@@ -741,6 +741,21 @@ async function main(): Promise<void> {
       const shell = new WasmShell({ fs: sharedFs, browserAPI: browser });
       await layout.panels.terminal.mountShell(shell);
       log.info('Terminal mounted with shared VFS');
+
+      // Start BSH navigation watchdog — auto-executes .bsh scripts on matching navigations
+      try {
+        const { BshWatchdog } = await import('../shell/bsh-watchdog.js');
+        const bshWatchdog = new BshWatchdog({
+          transport: browser.getTransport(),
+          fs: sharedFs,
+          execute: (scriptPath) => shell.executeScriptFile(scriptPath),
+        });
+        void bshWatchdog.start();
+        window.addEventListener('beforeunload', () => bshWatchdog.stop(), { once: true });
+        log.info('BSH navigation watchdog started');
+      } catch (e) {
+        log.warn('Failed to start BSH watchdog', e);
+      }
     } catch (e) {
       log.warn('Failed to mount shell to terminal', e);
     }

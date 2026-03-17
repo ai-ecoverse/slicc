@@ -308,12 +308,12 @@ export class LeaderSyncManager {
         break;
       }
       case 'cookie.teleport.request': {
-        const { requestId, targetRuntimeId } = message;
+        const { requestId, targetRuntimeId, url } = message;
         if (targetRuntimeId === 'leader') {
           // Leader executes locally: capture cookies from the leader's own browser
           this.executeLocalCookieTeleport(requestId, bootstrapId);
         } else {
-          this.forwardCookieTeleportRequest(requestId, targetRuntimeId, bootstrapId);
+          this.forwardCookieTeleportRequest(requestId, targetRuntimeId, bootstrapId, url);
         }
         break;
       }
@@ -822,7 +822,7 @@ export class LeaderSyncManager {
   /**
    * Forward a cookie teleport request from one follower to another.
    */
-  private forwardCookieTeleportRequest(requestId: string, targetRuntimeId: string, requesterBootstrapId: string): void {
+  private forwardCookieTeleportRequest(requestId: string, targetRuntimeId: string, requesterBootstrapId: string, url?: string): void {
     const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
     const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
     const requester = this.followers.get(requesterBootstrapId);
@@ -835,7 +835,7 @@ export class LeaderSyncManager {
     }
 
     this.pendingCookieTeleportRoutes.set(requestId, { requesterBootstrapId, requestId });
-    targetFollower.sync.send({ type: 'cookie.teleport.request', requestId });
+    targetFollower.sync.send({ type: 'cookie.teleport.request', requestId, url });
   }
 
   /**
@@ -881,8 +881,9 @@ export class LeaderSyncManager {
   /**
    * Send a cookie teleport request to a remote runtime from the leader's own code.
    * Returns a promise that resolves with the cookies from the target runtime.
+   * If `url` is provided, the follower opens a tab for the human to authenticate before capturing cookies.
    */
-  sendCookieTeleportRequest(targetRuntimeId: string): Promise<CookieTeleportCookie[]> {
+  sendCookieTeleportRequest(targetRuntimeId: string, url?: string): Promise<CookieTeleportCookie[]> {
     const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
     const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
 
@@ -894,7 +895,7 @@ export class LeaderSyncManager {
     return new Promise<CookieTeleportCookie[]>((resolve, reject) => {
       this.cookieTeleportResolvers.set(requestId, { resolve, reject });
       this.pendingCookieTeleportRoutes.set(requestId, { requesterBootstrapId: '__leader__', requestId });
-      targetFollower.sync.send({ type: 'cookie.teleport.request', requestId });
+      targetFollower.sync.send({ type: 'cookie.teleport.request', requestId, url });
     });
   }
 }
