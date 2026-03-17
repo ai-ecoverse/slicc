@@ -19,7 +19,6 @@ import type { MediaPreviewItem } from './supplemental-commands.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import { createSkillCommand, createUpskillCommand } from './supplemental-commands/upskill-command.js';
 import { MountCommands } from '../fs/mount-commands.js';
-import { DACommands } from '../da/da-commands.js';
 import { discoverJshCommands } from './jsh-discovery.js';
 import { executeJshFile } from './jsh-executor.js';
 import { parseShellArgs } from './parse-shell-args.js';
@@ -148,7 +147,6 @@ export class WasmShell {
   private vfsAdapter: VfsAdapter;
   private gitCommands: GitCommands;
   private mountCommands: MountCommands;
-  private daCommands: DACommands;
   private terminal: Terminal | null = null;
   private fitAddon: FitAddon | null = null;
   private terminalHost: HTMLElement | null = null;
@@ -192,9 +190,6 @@ export class WasmShell {
     // Initialize mount commands with VirtualFS
     this.mountCommands = new MountCommands({ fs: options.fs });
 
-    // Initialize DA commands with VirtualFS
-    this.daCommands = new DACommands({ fs: options.fs });
-
     // Create custom commands for just-bash
     const gitCommand = this.createGitCustomCommand();
     const supplementalCommands = createSupplementalCommands({
@@ -204,13 +199,11 @@ export class WasmShell {
       browserAPI: options.browserAPI,
     });
     const mountCommand = this.createMountCustomCommand();
-    const daCommand = this.createDACustomCommand();
     const fetchFn = createProxiedFetch();
 
     const customCommands = [
       gitCommand,
       mountCommand,
-      daCommand,
       createSkillCommand(options.fs),
       createUpskillCommand(options.fs, fetchFn),
       ...supplementalCommands,
@@ -259,20 +252,6 @@ export class WasmShell {
     return defineCommand('mount', async (args, ctx) => {
       const cwd = ctx.cwd;
       const result = await mountCommands.execute(args, cwd);
-      return {
-        stdout: result.stdout,
-        stderr: result.stderr,
-        exitCode: result.exitCode,
-      };
-    });
-  }
-
-  /** Create a custom da command for just-bash. */
-  private createDACustomCommand(): Command {
-    const daCommands = this.daCommands;
-    return defineCommand('da', async (args, ctx) => {
-      const cwd = ctx.cwd;
-      const result = await daCommands.execute(args, cwd);
       return {
         stdout: result.stdout,
         stderr: result.stderr,

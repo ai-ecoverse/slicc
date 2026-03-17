@@ -26,13 +26,6 @@ import { createDefaultSharedFiles } from './skills.js';
 import { buildActiveLicksError, type LickManager } from './lick-manager.js';
 import { SessionStore } from '../core/session.js';
 
-// Auto-load DA config from project root (gitignored, same pattern as providers.json)
-const daConfigFiles = import.meta.glob('/.da-config.json', {
-  eager: true,
-  query: '?raw',
-  import: 'default',
-}) as Record<string, string>;
-
 const log = createLogger('orchestrator');
 
 export interface OrchestratorCallbacks {
@@ -163,25 +156,6 @@ export class Orchestrator {
 
     // Create default shared files (including /shared/CLAUDE.md) from bundled defaults
     await createDefaultSharedFiles(this.sharedFs);
-
-    // Bootstrap DA config from project-root .da-config.json (gitignored) if no config exists yet
-    const DA_CONFIG_VFS = '/shared/.da-config.json';
-    try {
-      await this.sharedFs.stat(DA_CONFIG_VFS);
-      // Config already exists in VFS, don't overwrite
-    } catch {
-      // No config in VFS — check for bundled config from project root
-      const bundled = Object.values(daConfigFiles)[0];
-      if (bundled) {
-        try {
-          JSON.parse(bundled); // validate it's valid JSON
-          await this.sharedFs.writeFile(DA_CONFIG_VFS, bundled);
-          log.info('Bootstrapped DA config from project-root .da-config.json');
-        } catch {
-          log.warn('Invalid .da-config.json at project root, skipping');
-        }
-      }
-    }
 
     try {
       const content = await this.sharedFs.readFile('/shared/CLAUDE.md', { encoding: 'utf-8' });
