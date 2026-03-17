@@ -81,6 +81,22 @@ async function readResponseBody(resp: Response, url?: string): Promise<string> {
  * Binary responses (images, archives, etc.) are encoded as latin1 strings
  * to preserve byte fidelity through just-bash's string-typed FetchResult.
  */
+/**
+ * If the request body is a multipart form (built by just-bash's curl from
+ * latin1-encoded file content), convert the string to raw bytes so fetch()
+ * doesn't re-encode it as UTF-8 and corrupt binary data.
+ */
+function prepareRequestBody(body: string | undefined, headers?: Record<string, string>): BodyInit | undefined {
+  if (!body) return undefined;
+  const ct = headers?.['Content-Type'] ?? headers?.['content-type'] ?? '';
+  if (ct.includes('multipart/form-data')) {
+    const bytes = new Uint8Array(body.length);
+    for (let i = 0; i < body.length; i++) bytes[i] = body.charCodeAt(i);
+    return bytes;
+  }
+  return body;
+}
+
 function createProxiedFetch(): SecureFetch {
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
@@ -90,7 +106,7 @@ function createProxiedFetch(): SecureFetch {
       const resp = await fetch(url, {
         method: options?.method ?? 'GET',
         headers: options?.headers,
-        body: options?.body,
+        body: prepareRequestBody(options?.body, options?.headers),
       });
       const body = await readResponseBody(resp, url);
       const respHeaders: Record<string, string> = {};
@@ -109,7 +125,7 @@ function createProxiedFetch(): SecureFetch {
 
     const init: RequestInit = { method, headers, cache: 'no-store' };
     if (options?.body && !['GET', 'HEAD'].includes(method)) {
-      init.body = options.body;
+      init.body = prepareRequestBody(options.body, headers);
     }
 
     const resp = await fetch('/api/fetch-proxy', init);

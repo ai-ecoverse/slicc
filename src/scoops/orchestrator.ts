@@ -22,7 +22,7 @@ import { TaskScheduler } from './scheduler.js';
 import { VirtualFS } from '../fs/index.js';
 import { RestrictedFS } from '../fs/restricted-fs.js';
 import type { BrowserAPI } from '../cdp/index.js';
-import { createDefaultSharedFiles } from './skills.js';
+import { createDefaultSharedFiles, createDefaultSkills } from './skills.js';
 import { buildActiveLicksError, type LickManager } from './lick-manager.js';
 import { SessionStore } from '../core/session.js';
 
@@ -258,6 +258,7 @@ export class Orchestrator {
     this.sharedFs = await VirtualFS.create({ dbName: 'slicc-fs', wipe: true });
     await this.ensureRootStructure();
     await this.ensureGlobalMemory();
+    await createDefaultSkills(this.sharedFs);
     log.info('Filesystem reset and defaults re-seeded');
   }
 

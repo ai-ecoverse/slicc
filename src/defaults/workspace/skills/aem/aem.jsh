@@ -1,4 +1,4 @@
-// eds.jsh — Adobe Edge Delivery Services CLI
+// aem.jsh — AEM Edge Delivery Services CLI
 // Accepts full EDS URLs: https://main--repo--org.aem.page/path
 // Auth via oauth-token adobe (user OAuth, no manual config needed)
 
@@ -7,8 +7,8 @@ const AEM_ADMIN_BASE = 'https://admin.hlx.page';
 
 // ── URL Parsing ────────────────────────────────────────────────
 
-function parseEdsUrl(url) {
-  const m = url.match(/^https?:\/\/([^-]+)--([^-]+)--([^.]+)\.(aem|hlx)\.(page|live)\/?(.*)$/);
+function parseAemUrl(url) {
+  const m = url.match(/^https?:\/\/(.+?)--(.+?)--([^.]+)\.(aem|hlx)\.(page|live)\/?(.*)$/);
   if (!m) return null;
   return { ref: m[1], repo: m[2], org: m[3], path: m[6] || '' };
 }
@@ -31,7 +31,7 @@ function resolveTarget(args) {
   if (!urlOrPath) return null;
 
   // Try parsing as EDS URL
-  const eds = parseEdsUrl(urlOrPath);
+  const eds = parseAemUrl(urlOrPath);
   if (eds) {
     return { org: eds.org, repo: eds.repo, ref: eds.ref, path: eds.path };
   }
@@ -57,7 +57,7 @@ async function getToken() {
   const r = await exec('oauth-token adobe');
   const token = r.stdout.trim();
   if (!token || r.exitCode !== 0) {
-    process.stderr.write('eds: not authenticated. Run: oauth-token adobe\n');
+    process.stderr.write('aem: not authenticated. Run: oauth-token adobe\n');
     process.exit(1);
   }
   return token;
@@ -65,30 +65,39 @@ async function getToken() {
 
 // ── HTTP ───────────────────────────────────────────────────────
 
-async function edsFetch(method, url, token, extraArgs) {
+function shellQuote(a) {
+  if (/[^a-zA-Z0-9_.\/:\-=]/.test(a)) {
+    return "'" + a.replace(/'/g, "'\\''") + "'";
+  }
+  return a;
+}
+
+async function aemFetch(method, url, token, extraArgs) {
   const args = [
     'curl', '-sS', '-X', method,
     '-H', `Authorization: Bearer ${token}`,
   ];
   if (extraArgs) args.push(...extraArgs);
   args.push(url);
-  // Build command string with proper quoting
-  const cmd = args.map(a => {
-    if (a.includes(' ') || a.includes('"') || a.includes("'") || a.includes('(') || a.includes(')')) {
-      return "'" + a.replace(/'/g, "'\\''") + "'";
-    }
-    return a;
-  }).join(' ');
+  const cmd = args.map(shellQuote).join(' ');
   const r = await exec(cmd);
   if (r.exitCode !== 0) {
-    throw new Error(r.stderr || `HTTP ${method} failed`);
+    throw new Error(r.stderr || r.stdout || `HTTP ${method} failed`);
   }
-  return r.stdout;
+  // Detect auth errors from response body (curl returns 0 even on 401)
+  const body = r.stdout;
+  if (!body || body.includes('"status":401') || body.includes('"status":403') || body.includes('401 Unauthorized')) {
+    if (body.includes('401') || body.includes('403') || body.includes('Unauthorized') || body.includes('Forbidden')) {
+      process.stderr.write('aem: authentication failed (token may be expired). Run: oauth-token adobe\n');
+      process.exit(1);
+    }
+  }
+  return body;
 }
 
 // ── Path normalization ─────────────────────────────────────────
 
-function normalizeEdsPath(pagePath) {
+function normalizeAemPath(pagePath) {
   let p = pagePath.replace(/^\//, '').replace(/\.html$/, '');
   if (p.endsWith('/')) p += 'index';
   return p + '.html';
@@ -99,13 +108,13 @@ function normalizeEdsPath(pagePath) {
 async function cmdList(args) {
   const target = resolveTarget(args);
   if (!target) {
-    process.stderr.write('Usage: eds list <eds-url-or-path> [--org <org> --repo <repo>]\n');
+    process.stderr.write('Usage: aem list <eds-url-or-path> [--org <org> --repo <repo>]\n');
     process.exit(1);
   }
   const token = await getToken();
   const dirPath = target.path.replace(/\/$/, '');
   const url = `${DA_ADMIN_BASE}/list/${target.org}/${target.repo}/${dirPath}`;
-  const body = await edsFetch('GET', url, token);
+  const body = await aemFetch('GET', url, token);
 
   let entries;
   try { entries = JSON.parse(body); } catch { entries = []; }
@@ -122,13 +131,13 @@ async function cmdList(args) {
 async function cmdGet(args) {
   const target = resolveTarget(args);
   if (!target) {
-    process.stderr.write('Usage: eds get <eds-url-or-path> [--output <vfs-path>]\n');
+    process.stderr.write('Usage: aem get <eds-url-or-path> [--output <vfs-path>]\n');
     process.exit(1);
   }
   const token = await getToken();
-  const path = normalizeEdsPath(target.path);
+  const path = normalizeAemPath(target.path);
   const url = `${DA_ADMIN_BASE}/source/${target.org}/${target.repo}/${path}`;
-  const html = await edsFetch('GET', url, token);
+  const html = await aemFetch('GET', url, token);
 
   const outputPath = getFlag(args, '--output') || getFlag(args, '-o');
   if (outputPath) {
@@ -146,35 +155,35 @@ async function cmdPut(args) {
   const vfsFile = positional[1] || null;
 
   if (!target || !vfsFile) {
-    process.stderr.write('Usage: eds put <eds-url-or-path> <vfs-file>\n');
+    process.stderr.write('Usage: aem put <eds-url-or-path> <vfs-file>\n');
     process.exit(1);
   }
 
   const filePath = vfsFile.startsWith('/') ? vfsFile : process.cwd() + '/' + vfsFile;
   const html = await fs.readFile(filePath);
   const token = await getToken();
-  const edsPath = normalizeEdsPath(target.path);
-  const url = `${DA_ADMIN_BASE}/source/${target.org}/${target.repo}/${edsPath}`;
+  const aemPath = normalizeAemPath(target.path);
+  const url = `${DA_ADMIN_BASE}/source/${target.org}/${target.repo}/${aemPath}`;
 
   // Write HTML to a temp file, then use curl -F to upload
-  const tmpPath = '/tmp/_eds_put_' + Date.now() + '.html';
+  const tmpPath = '/tmp/_aem_put_' + Date.now() + '.html';
   await fs.writeFile(tmpPath, html);
-  await edsFetch('PUT', url, token, ['-F', `data=@${tmpPath};type=text/html`]);
+  await aemFetch('PUT', url, token, ['-F', `data=@${tmpPath};type=text/html`]);
   await fs.rm(tmpPath);
 
-  process.stdout.write(`Saved: ${edsPath}\n`);
+  process.stdout.write(`Saved: ${aemPath}\n`);
 }
 
 async function cmdPreview(args) {
   const target = resolveTarget(args);
   if (!target) {
-    process.stderr.write('Usage: eds preview <eds-url-or-path>\n');
+    process.stderr.write('Usage: aem preview <eds-url-or-path>\n');
     process.exit(1);
   }
   const token = await getToken();
   const path = target.path.replace(/^\//, '').replace(/\.html$/, '');
   const url = `${AEM_ADMIN_BASE}/preview/${target.org}/${target.repo}/${target.ref}/${path}`;
-  const body = await edsFetch('POST', url, token);
+  const body = await aemFetch('POST', url, token);
 
   let data;
   try { data = JSON.parse(body); } catch { data = {}; }
@@ -186,13 +195,13 @@ async function cmdPreview(args) {
 async function cmdPublish(args) {
   const target = resolveTarget(args);
   if (!target) {
-    process.stderr.write('Usage: eds publish <eds-url-or-path>\n');
+    process.stderr.write('Usage: aem publish <eds-url-or-path>\n');
     process.exit(1);
   }
   const token = await getToken();
   const path = target.path.replace(/^\//, '').replace(/\.html$/, '');
   const url = `${AEM_ADMIN_BASE}/live/${target.org}/${target.repo}/${target.ref}/${path}`;
-  const body = await edsFetch('POST', url, token);
+  const body = await aemFetch('POST', url, token);
 
   let data;
   try { data = JSON.parse(body); } catch { data = {}; }
@@ -208,7 +217,7 @@ async function cmdUpload(args) {
   const targetArgs = positional.slice(1);
 
   if (!vfsFile || targetArgs.length === 0) {
-    process.stderr.write('Usage: eds upload <vfs-file> <eds-url-or-path>\n');
+    process.stderr.write('Usage: aem upload <vfs-file> <eds-url-or-path>\n');
     process.exit(1);
   }
 
@@ -216,13 +225,13 @@ async function cmdUpload(args) {
     args.filter(a => a.startsWith('--'))
   ));
   if (!target) {
-    process.stderr.write('Usage: eds upload <vfs-file> <eds-url-or-path> [--org <org> --repo <repo>]\n');
+    process.stderr.write('Usage: aem upload <vfs-file> <eds-url-or-path> [--org <org> --repo <repo>]\n');
     process.exit(1);
   }
 
   const filePath = vfsFile.startsWith('/') ? vfsFile : process.cwd() + '/' + vfsFile;
   const token = await getToken();
-  const edsPath = target.path.replace(/^\//, '');
+  const aemPath = target.path.replace(/^\//, '');
 
   // Guess MIME type from extension
   const ext = filePath.split('.').pop().toLowerCase();
@@ -233,16 +242,16 @@ async function cmdUpload(args) {
   };
   const mime = mimeMap[ext] || 'application/octet-stream';
 
-  const url = `${DA_ADMIN_BASE}/source/${target.org}/${target.repo}/${edsPath}`;
-  await edsFetch('PUT', url, token, ['-F', `data=@${filePath};type=${mime}`]);
+  const url = `${DA_ADMIN_BASE}/source/${target.org}/${target.repo}/${aemPath}`;
+  await aemFetch('PUT', url, token, ['-F', `data=@${filePath};type=${mime}`]);
 
-  process.stdout.write(`Uploaded: ${filePath} -> ${edsPath}\n`);
+  process.stdout.write(`Uploaded: ${filePath} -> ${aemPath}\n`);
 }
 
 function cmdHelp() {
-  process.stdout.write(`eds -- Edge Delivery Services CLI
+  process.stdout.write(`aem -- AEM Edge Delivery Services CLI
 
-Usage: eds <command> <eds-url-or-path> [options]
+Usage: aem <command> <eds-url-or-path> [options]
 
 All commands accept full EDS URLs:
   https://main--repo--org.aem.page/path
@@ -262,22 +271,22 @@ Authentication:
   No manual configuration required.
 
 Examples:
-  eds list https://main--myrepo--myorg.aem.page/
-  eds get https://main--myrepo--myorg.aem.page/products/overview
-  eds get https://main--myrepo--myorg.aem.page/page --output /workspace/page.html
-  eds put https://main--myrepo--myorg.aem.page/page /workspace/page.html
-  eds preview https://main--myrepo--myorg.aem.page/page
-  eds publish https://main--myrepo--myorg.aem.page/page
-  eds upload /workspace/image.png https://main--myrepo--myorg.aem.page/media_123.png
+  aem list https://main--myrepo--myorg.aem.page/
+  aem get https://main--myrepo--myorg.aem.page/products/overview
+  aem get https://main--myrepo--myorg.aem.page/page --output /workspace/page.html
+  aem put https://main--myrepo--myorg.aem.page/page /workspace/page.html
+  aem preview https://main--myrepo--myorg.aem.page/page
+  aem publish https://main--myrepo--myorg.aem.page/page
+  aem upload /workspace/image.png https://main--myrepo--myorg.aem.page/media_123.png
 
   # Or with flags:
-  eds list /products --org myorg --repo myrepo
+  aem list /products --org myorg --repo myrepo
 `);
 }
 
 // ── Main ───────────────────────────────────────────────────────
 
-const args = process.argv.slice(1); // argv[0] is script name in jsh
+const args = process.argv.slice(2); // argv[0] is interpreter, argv[1] is script path
 const command = args[0] || 'help';
 const subArgs = args.slice(1);
 
@@ -307,6 +316,6 @@ switch (command) {
     cmdHelp();
     break;
   default:
-    process.stderr.write(`eds: '${command}' is not an eds command. See 'eds help'.\n`);
+    process.stderr.write(`aem: '${command}' is not an aem command. See 'aem help'.\n`);
     process.exit(1);
 }
