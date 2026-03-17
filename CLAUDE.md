@@ -191,7 +191,7 @@ WasmShell wraps just-bash 2.11.7 (WASM Bash interpreter) and connects it to Virt
 - `webhook` — Manage webhooks for event-driven automation
 - `crontask` — Schedule cron jobs that dispatch licks to scoops (works in both CLI and extension modes)
 - `pdftk` / `pdf` — Inspect, extract, rotate, and merge PDFs
-- `da` — Adobe Document Authoring (`.jsh` skill). Accepts EDS URLs (`https://main--repo--org.aem.page/path`). Auth via `oauth-token adobe`. Commands: list, get, put, preview, publish, upload.
+- `eds` — Adobe Edge Delivery Services (`.jsh` skill). Accepts EDS URLs (`https://main--repo--org.aem.page/path`). Auth via `oauth-token adobe`. Commands: list, get, put, preview, publish, upload.
 - `mount` — Mount a local directory into the virtual filesystem via the File System Access API
 - `convert` / `magick` — ImageMagick-style image conversion (resize, rotate, crop, quality) via `@imagemagick/magick-wasm`
 - `playwright-cli` / `playwright` / `puppeteer` — Browser automation shell commands backed by `BrowserAPI`; aliases share the same tab/session state, snapshots, and session history

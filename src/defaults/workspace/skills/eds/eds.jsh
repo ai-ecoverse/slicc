@@ -1,4 +1,4 @@
-// da.jsh — Adobe Document Authoring CLI
+// eds.jsh — Adobe Edge Delivery Services CLI
 // Accepts full EDS URLs: https://main--repo--org.aem.page/path
 // Auth via oauth-token adobe (user OAuth, no manual config needed)
 
@@ -57,7 +57,7 @@ async function getToken() {
   const r = await exec('oauth-token adobe');
   const token = r.stdout.trim();
   if (!token || r.exitCode !== 0) {
-    process.stderr.write('da: not authenticated. Run: oauth-token adobe\n');
+    process.stderr.write('eds: not authenticated. Run: oauth-token adobe\n');
     process.exit(1);
   }
   return token;
@@ -65,7 +65,7 @@ async function getToken() {
 
 // ── HTTP ───────────────────────────────────────────────────────
 
-async function daFetch(method, url, token, extraArgs) {
+async function edsFetch(method, url, token, extraArgs) {
   const args = [
     'curl', '-sS', '-X', method,
     '-H', `Authorization: Bearer ${token}`,
@@ -88,7 +88,7 @@ async function daFetch(method, url, token, extraArgs) {
 
 // ── Path normalization ─────────────────────────────────────────
 
-function normalizeDaPath(pagePath) {
+function normalizeEdsPath(pagePath) {
   let p = pagePath.replace(/^\//, '').replace(/\.html$/, '');
   if (p.endsWith('/')) p += 'index';
   return p + '.html';
@@ -99,13 +99,13 @@ function normalizeDaPath(pagePath) {
 async function cmdList(args) {
   const target = resolveTarget(args);
   if (!target) {
-    process.stderr.write('Usage: da list <eds-url-or-path> [--org <org> --repo <repo>]\n');
+    process.stderr.write('Usage: eds list <eds-url-or-path> [--org <org> --repo <repo>]\n');
     process.exit(1);
   }
   const token = await getToken();
   const dirPath = target.path.replace(/\/$/, '');
   const url = `${DA_ADMIN_BASE}/list/${target.org}/${target.repo}/${dirPath}`;
-  const body = await daFetch('GET', url, token);
+  const body = await edsFetch('GET', url, token);
 
   let entries;
   try { entries = JSON.parse(body); } catch { entries = []; }
@@ -122,13 +122,13 @@ async function cmdList(args) {
 async function cmdGet(args) {
   const target = resolveTarget(args);
   if (!target) {
-    process.stderr.write('Usage: da get <eds-url-or-path> [--output <vfs-path>]\n');
+    process.stderr.write('Usage: eds get <eds-url-or-path> [--output <vfs-path>]\n');
     process.exit(1);
   }
   const token = await getToken();
-  const path = normalizeDaPath(target.path);
+  const path = normalizeEdsPath(target.path);
   const url = `${DA_ADMIN_BASE}/source/${target.org}/${target.repo}/${path}`;
-  const html = await daFetch('GET', url, token);
+  const html = await edsFetch('GET', url, token);
 
   const outputPath = getFlag(args, '--output') || getFlag(args, '-o');
   if (outputPath) {
@@ -146,35 +146,35 @@ async function cmdPut(args) {
   const vfsFile = positional[1] || null;
 
   if (!target || !vfsFile) {
-    process.stderr.write('Usage: da put <eds-url-or-path> <vfs-file>\n');
+    process.stderr.write('Usage: eds put <eds-url-or-path> <vfs-file>\n');
     process.exit(1);
   }
 
   const filePath = vfsFile.startsWith('/') ? vfsFile : process.cwd() + '/' + vfsFile;
   const html = await fs.readFile(filePath);
   const token = await getToken();
-  const daPath = normalizeDaPath(target.path);
-  const url = `${DA_ADMIN_BASE}/source/${target.org}/${target.repo}/${daPath}`;
+  const edsPath = normalizeEdsPath(target.path);
+  const url = `${DA_ADMIN_BASE}/source/${target.org}/${target.repo}/${edsPath}`;
 
   // Write HTML to a temp file, then use curl -F to upload
-  const tmpPath = '/tmp/_da_put_' + Date.now() + '.html';
+  const tmpPath = '/tmp/_eds_put_' + Date.now() + '.html';
   await fs.writeFile(tmpPath, html);
-  await daFetch('PUT', url, token, ['-F', `data=@${tmpPath};type=text/html`]);
+  await edsFetch('PUT', url, token, ['-F', `data=@${tmpPath};type=text/html`]);
   await fs.rm(tmpPath);
 
-  process.stdout.write(`Saved: ${daPath}\n`);
+  process.stdout.write(`Saved: ${edsPath}\n`);
 }
 
 async function cmdPreview(args) {
   const target = resolveTarget(args);
   if (!target) {
-    process.stderr.write('Usage: da preview <eds-url-or-path>\n');
+    process.stderr.write('Usage: eds preview <eds-url-or-path>\n');
     process.exit(1);
   }
   const token = await getToken();
   const path = target.path.replace(/^\//, '').replace(/\.html$/, '');
   const url = `${AEM_ADMIN_BASE}/preview/${target.org}/${target.repo}/${target.ref}/${path}`;
-  const body = await daFetch('POST', url, token);
+  const body = await edsFetch('POST', url, token);
 
   let data;
   try { data = JSON.parse(body); } catch { data = {}; }
@@ -186,13 +186,13 @@ async function cmdPreview(args) {
 async function cmdPublish(args) {
   const target = resolveTarget(args);
   if (!target) {
-    process.stderr.write('Usage: da publish <eds-url-or-path>\n');
+    process.stderr.write('Usage: eds publish <eds-url-or-path>\n');
     process.exit(1);
   }
   const token = await getToken();
   const path = target.path.replace(/^\//, '').replace(/\.html$/, '');
   const url = `${AEM_ADMIN_BASE}/live/${target.org}/${target.repo}/${target.ref}/${path}`;
-  const body = await daFetch('POST', url, token);
+  const body = await edsFetch('POST', url, token);
 
   let data;
   try { data = JSON.parse(body); } catch { data = {}; }
@@ -204,11 +204,11 @@ async function cmdPublish(args) {
 async function cmdUpload(args) {
   const positional = args.filter(a => !a.startsWith('--'));
   const vfsFile = positional[0] || null;
-  // The second positional is the EDS URL or DA path
+  // The second positional is the EDS URL or path
   const targetArgs = positional.slice(1);
 
   if (!vfsFile || targetArgs.length === 0) {
-    process.stderr.write('Usage: da upload <vfs-file> <eds-url-or-path>\n');
+    process.stderr.write('Usage: eds upload <vfs-file> <eds-url-or-path>\n');
     process.exit(1);
   }
 
@@ -216,13 +216,13 @@ async function cmdUpload(args) {
     args.filter(a => a.startsWith('--'))
   ));
   if (!target) {
-    process.stderr.write('Usage: da upload <vfs-file> <eds-url-or-path> [--org <org> --repo <repo>]\n');
+    process.stderr.write('Usage: eds upload <vfs-file> <eds-url-or-path> [--org <org> --repo <repo>]\n');
     process.exit(1);
   }
 
   const filePath = vfsFile.startsWith('/') ? vfsFile : process.cwd() + '/' + vfsFile;
   const token = await getToken();
-  const daPath = target.path.replace(/^\//, '');
+  const edsPath = target.path.replace(/^\//, '');
 
   // Guess MIME type from extension
   const ext = filePath.split('.').pop().toLowerCase();
@@ -233,28 +233,28 @@ async function cmdUpload(args) {
   };
   const mime = mimeMap[ext] || 'application/octet-stream';
 
-  const url = `${DA_ADMIN_BASE}/source/${target.org}/${target.repo}/${daPath}`;
-  await daFetch('PUT', url, token, ['-F', `data=@${filePath};type=${mime}`]);
+  const url = `${DA_ADMIN_BASE}/source/${target.org}/${target.repo}/${edsPath}`;
+  await edsFetch('PUT', url, token, ['-F', `data=@${filePath};type=${mime}`]);
 
-  process.stdout.write(`Uploaded: ${filePath} -> ${daPath}\n`);
+  process.stdout.write(`Uploaded: ${filePath} -> ${edsPath}\n`);
 }
 
 function cmdHelp() {
-  process.stdout.write(`da -- Document Authoring CLI
+  process.stdout.write(`eds -- Edge Delivery Services CLI
 
-Usage: da <command> <eds-url-or-path> [options]
+Usage: eds <command> <eds-url-or-path> [options]
 
 All commands accept full EDS URLs:
   https://main--repo--org.aem.page/path
 Or use --org/--repo flags with a plain path.
 
 Commands:
-  list <url>                  List pages in a DA directory
-  get <url> [--output <path>] Get page HTML from DA
-  put <url> <vfs-file>        Write HTML to DA (from VFS file)
+  list <url>                  List pages in a directory
+  get <url> [--output <path>] Get page HTML
+  put <url> <vfs-file>        Write HTML (from VFS file)
   preview <url>               Trigger AEM preview
   publish <url>               Trigger AEM publish
-  upload <vfs-file> <url>     Upload a VFS file to DA (media)
+  upload <vfs-file> <url>     Upload a VFS file (media)
   help                        Show this help
 
 Authentication:
@@ -262,16 +262,16 @@ Authentication:
   No manual configuration required.
 
 Examples:
-  da list https://main--myrepo--myorg.aem.page/
-  da get https://main--myrepo--myorg.aem.page/products/overview
-  da get https://main--myrepo--myorg.aem.page/page --output /workspace/page.html
-  da put https://main--myrepo--myorg.aem.page/page /workspace/page.html
-  da preview https://main--myrepo--myorg.aem.page/page
-  da publish https://main--myrepo--myorg.aem.page/page
-  da upload /workspace/image.png https://main--myrepo--myorg.aem.page/media_123.png
+  eds list https://main--myrepo--myorg.aem.page/
+  eds get https://main--myrepo--myorg.aem.page/products/overview
+  eds get https://main--myrepo--myorg.aem.page/page --output /workspace/page.html
+  eds put https://main--myrepo--myorg.aem.page/page /workspace/page.html
+  eds preview https://main--myrepo--myorg.aem.page/page
+  eds publish https://main--myrepo--myorg.aem.page/page
+  eds upload /workspace/image.png https://main--myrepo--myorg.aem.page/media_123.png
 
   # Or with flags:
-  da list /products --org myorg --repo myrepo
+  eds list /products --org myorg --repo myrepo
 `);
 }
 
@@ -307,6 +307,6 @@ switch (command) {
     cmdHelp();
     break;
   default:
-    process.stderr.write(`da: '${command}' is not a da command. See 'da help'.\n`);
+    process.stderr.write(`eds: '${command}' is not an eds command. See 'eds help'.\n`);
     process.exit(1);
 }
