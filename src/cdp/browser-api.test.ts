@@ -64,7 +64,7 @@ describe('BrowserAPI', () => {
     it('connects with default URL', async () => {
       await api.connect();
       expect(mockClient.connect).toHaveBeenCalledWith({
-        url: 'ws://localhost:3000/cdp',
+        url: 'ws://localhost:5710/cdp',
         timeout: undefined,
       });
     });
@@ -93,7 +93,7 @@ describe('BrowserAPI', () => {
 
       // connect() should have been called
       expect(mockClient.connect).toHaveBeenCalledWith({
-        url: 'ws://localhost:3000/cdp',
+        url: 'ws://localhost:5710/cdp',
         timeout: undefined,
       });
     });

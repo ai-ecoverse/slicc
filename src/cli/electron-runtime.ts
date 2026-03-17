@@ -26,7 +26,7 @@ export interface ElectronInspectableTarget {
   webSocketDebuggerUrl?: string;
 }
 
-export const DEFAULT_ELECTRON_SERVE_PORT = 3000;
+export const DEFAULT_ELECTRON_SERVE_PORT = 5710;
 export const DEFAULT_ELECTRON_SERVE_HOST = 'localhost';
 export const DEFAULT_ELECTRON_CDP_PORT = 9223;
 export const DEFAULT_ELECTRON_TARGET_URL = 'about:blank';

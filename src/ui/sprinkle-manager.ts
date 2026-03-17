@@ -9,6 +9,7 @@ import { SprinkleBridge } from './sprinkle-bridge.js';
 import { SprinkleRenderer } from './sprinkle-renderer.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import { createLogger } from '../core/logger.js';
+import { trackSprinkleView } from './telemetry.js';
 
 const log = createLogger('sprinkle-manager');
 
@@ -132,6 +133,7 @@ export class SprinkleManager {
 
     this.openSprinkles.get(name)!.renderer = renderer;
     this.persistOpenSprinkles();
+    trackSprinkleView(name);
     log.info('Sprinkle opened', { name, title: sprinkle.title });
   }
 

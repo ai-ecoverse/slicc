@@ -45,6 +45,19 @@ In this case: an AI coding agent that was *built by* AI coding agents, creating 
 
 The ultimate recursive dev tool.
 
+### Why Port 5710?
+
+SLICC's default port is **5710** because it spells out the name:
+
+![5710 = SLICC](docs/port-5710-slicc.png)
+
+| Digit | Letter | How |
+|-------|--------|-----|
+| **5** | **S** | The 5 looks like an S |
+| **7** | **L** | Flip a 7 upside down — it's an L |
+| **1** | **I** | The 1 is a natural I |
+| **0** | **CC** | Two C's facing each other form a 0 |
+
 ## Philosophy
 
 Three ideas shape how SLICC is built.
@@ -136,7 +149,7 @@ These screenshots capture a historic moment: **SLICC using browser automation to
 
 Here's what happened:
 
-1. SLICC (running in localhost:3000) used its browser automation commands to navigate to a Claude.ai conversation
+1. SLICC (running in localhost:5710) used its browser automation commands to navigate to a Claude.ai conversation
 2. It read the conversation history — which was about *building SLICC itself* (the origin story conversation)
 3. When asked "what would be even more meta?", SLICC suggested typing a message into that very Claude.ai tab
 4. It then used CDP (Chrome DevTools Protocol) to click on the ProseMirror editor, compose a message, and hit send
@@ -315,7 +328,7 @@ npm run dev:electron -- /Applications/Slack.app
 # npm run start:electron -- /Applications/Slack.app
 ```
 
-Pass the Electron app bundle/executable path to the main CLI's `--electron` mode. If the app is already running, SLICC exits with a clear message unless you also pass `--kill`, in which case it stops the running app, relaunches it with remote debugging enabled, starts the local server, and keeps the injected launcher/overlay alive across navigations. The overlay iframe is still loaded from the same local SLICC origin that the CLI server serves (default `http://localhost:3000`).
+Pass the Electron app bundle/executable path to the main CLI's `--electron` mode. If the app is already running, SLICC exits with a clear message unless you also pass `--kill`, in which case it stops the running app, relaunches it with remote debugging enabled, starts the local server, and keeps the injected launcher/overlay alive across navigations. The overlay iframe is still loaded from the same local SLICC origin that the CLI server serves (default `http://localhost:5710`).
 
 ## Tech Stack
 
