@@ -9,6 +9,7 @@ import { SprinkleBridge } from './sprinkle-bridge.js';
 import { SprinkleRenderer } from './sprinkle-renderer.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import { createLogger } from '../core/logger.js';
+import { trackSprinkleView } from './telemetry.js';
 
 const log = createLogger('sprinkle-manager');
 
@@ -41,11 +42,24 @@ export class SprinkleManager {
     this.callbacks = callbacks;
   }
 
-  /** Restore sprinkles that were open in the previous session. */
+  /** Restore sprinkles that were open in the previous session.
+   *  On first run (no localStorage entry), auto-open sprinkles marked with data-sprinkle-autoopen. */
   async restoreOpenSprinkles(): Promise<void> {
     try {
       const raw = localStorage.getItem(OPEN_SPRINKLES_KEY);
-      if (!raw) return;
+      if (!raw) {
+        // First run — open sprinkles with autoOpen flag
+        for (const sprinkle of this.availableSprinkles.values()) {
+          if (sprinkle.autoOpen) {
+            try {
+              await this.open(sprinkle.name);
+            } catch {
+              log.warn('Failed to auto-open sprinkle', { name: sprinkle.name });
+            }
+          }
+        }
+        return;
+      }
       const names: string[] = JSON.parse(raw);
       for (const name of names) {
         try {
@@ -61,6 +75,21 @@ export class SprinkleManager {
     try {
       localStorage.setItem(OPEN_SPRINKLES_KEY, JSON.stringify([...this.openSprinkles.keys()]));
     } catch { /* localStorage full, ignore */ }
+  }
+
+  /** Refresh and auto-open any new sprinkles with autoOpen that aren't already open. */
+  async openNewAutoOpenSprinkles(): Promise<void> {
+    await this.refresh();
+    for (const sprinkle of this.availableSprinkles.values()) {
+      if (sprinkle.autoOpen && !this.openSprinkles.has(sprinkle.name)) {
+        try {
+          await this.open(sprinkle.name);
+          log.info('Auto-opened new sprinkle after install', { name: sprinkle.name });
+        } catch {
+          log.warn('Failed to auto-open new sprinkle', { name: sprinkle.name });
+        }
+      }
+    }
   }
 
   /** Scan VFS and update available sprinkles. */
@@ -104,6 +133,7 @@ export class SprinkleManager {
 
     this.openSprinkles.get(name)!.renderer = renderer;
     this.persistOpenSprinkles();
+    trackSprinkleView(name);
     log.info('Sprinkle opened', { name, title: sprinkle.title });
   }
 

@@ -8,3 +8,6 @@ coverage/
 providers.json
 /providers/
 !/providers/.gitkeep
+!/providers/adobe.ts
+!/providers/adobe-config.json
+.superpowers/

@@ -74,6 +74,43 @@ chrome.runtime.onInstalled?.addListener?.(() => { ensureOffscreen(); });
 ensureOffscreen();
 
 // ---------------------------------------------------------------------------
+// Tab grouping — inline copy for service worker (SW can't import shared chunks)
+// See src/extension/tab-group.ts for the canonical implementation used by
+// debugger-client.ts in the offscreen document.
+// ---------------------------------------------------------------------------
+
+let sliccGroupId: number | null = null;
+
+async function addToSliccGroup(tabId: number): Promise<void> {
+  try {
+    if (sliccGroupId !== null) {
+      try {
+        await chrome.tabs.group({ tabIds: tabId, groupId: sliccGroupId });
+        return;
+      } catch (err) {
+        console.info('[slicc-tab-group] Tab group removed by user, recreating', {
+          tabId,
+          previousGroupId: sliccGroupId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        sliccGroupId = null;
+      }
+    }
+    sliccGroupId = await chrome.tabs.group({ tabIds: tabId });
+    await chrome.tabGroups.update(sliccGroupId, {
+      title: 'slicc',
+      color: 'pink',
+      collapsed: false,
+    });
+  } catch (err) {
+    console.warn('[slicc-tab-group] Tab grouping failed (best-effort, continuing without group)', {
+      tabId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // CDP state for proxying chrome.debugger calls
 // ---------------------------------------------------------------------------
 
@@ -199,6 +236,9 @@ async function handleCdpCommand(cmd: CdpCommandMsg): Promise<CdpResponseMsg> {
       case 'Target.createTarget':
         result = await cdpCreateTarget(params!);
         break;
+      case 'Target.closeTarget':
+        result = await cdpCloseTarget(params!);
+        break;
       default:
         result = await cdpSendCommand(method, params, sessionId);
         break;
@@ -275,7 +315,32 @@ async function cdpCreateTarget(
 ): Promise<Record<string, unknown>> {
   const url = (params['url'] as string) ?? 'about:blank';
   const tab = await chrome.tabs.create({ url, active: false });
+  await addToSliccGroup(tab.id);
   return { targetId: String(tab.id) };
+}
+
+async function cdpCloseTarget(
+  params: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const targetId = params['targetId'] as string;
+  const tabId = parseInt(targetId, 10);
+  if (!Number.isFinite(tabId) || tabId <= 0) {
+    throw new Error(`Invalid targetId: ${targetId}`);
+  }
+
+  // Clean up session/attach state for this tab
+  for (const [sid, tid] of sessionToTab) {
+    if (tid === tabId) sessionToTab.delete(sid);
+  }
+  if (attachedTabs.has(tabId)) {
+    attachedTabs.delete(tabId);
+    await chrome.debugger.detach({ tabId }).catch(() => {
+      // Tab may already be closed
+    });
+  }
+
+  await chrome.tabs.remove(tabId);
+  return { success: true };
 }
 
 async function cdpSendCommand(

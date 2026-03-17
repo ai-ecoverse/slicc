@@ -103,7 +103,7 @@ describe('open command', () => {
     expect(result.exitCode).toBe(0);
     // In Node test env (no chrome.runtime), falls back to localhost preview URL
     expect(openSpy).toHaveBeenCalledWith(
-      'http://localhost:3000/preview/workspace/app/index.html',
+      'http://localhost:5710/preview/workspace/app/index.html',
       '_blank',
       'noopener,noreferrer',
     );
@@ -118,7 +118,7 @@ describe('open command', () => {
 
     expect(result.exitCode).toBe(0);
     expect(openSpy).toHaveBeenCalledWith(
-      'http://localhost:3000/preview/workspace/app',
+      'http://localhost:5710/preview/workspace/app',
       '_blank',
       'noopener,noreferrer',
     );
@@ -131,7 +131,7 @@ describe('open command', () => {
 
     expect(result.exitCode).toBe(0);
     expect(openSpy).toHaveBeenCalledWith(
-      'http://localhost:3000/preview/workspace/project/index.html',
+      'http://localhost:5710/preview/workspace/project/index.html',
       '_blank',
       'noopener,noreferrer',
     );

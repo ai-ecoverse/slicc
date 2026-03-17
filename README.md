@@ -30,7 +30,8 @@ A browser-based coding agent that runs as a **Chrome extension**, with a thin **
 - :wrench: **JavaScript Tool** — sandboxed JS execution with VFS bridge and persistent context
 - :scroll: **JSH Scripts** — `.jsh` files anywhere on the VFS are auto-discovered as shell commands. Skills can ship executable scripts alongside `SKILL.md`. Scripts get Node-like globals (`process`, `console`, `fs`, `exec`) and work in both CLI and extension mode
 - :package: **Drag-and-Drop Skill Imports** — drop a `.skill` archive anywhere in the window to unpack it into `/workspace/skills/{name}` with a visual overlay, path-safety checks, and toast feedback
-- :key: **Multi-Provider Auth** — Anthropic (direct), Azure AI Foundry, AWS Bedrock, and custom OAuth providers (corporate proxies, SSO) with segmented control
+- :page_facing_up: **AEM Commands** — AEM Edge Delivery Services via `.jsh` skill (`aem list`, `aem get`, `aem put`, `aem preview`, `aem publish`, `aem upload`). Accepts EDS URLs, auth via `oauth-token adobe`
+- :key: **Multi-Provider Auth** — Anthropic (direct), Azure AI Foundry, AWS Bedrock, Adobe (IMS OAuth), and custom OAuth providers (corporate proxies, SSO) with segmented control
 - :zap: **Real-Time Streaming** — responses stream token-by-token as Claude thinks
 - :floppy_disk: **Session Persistence** — conversations and files survive page reloads via IndexedDB
 - :microphone: **Voice Input** — hands-free voice mode using the Web Speech API. Toggle on, speak, 2.5s silence auto-sends, agent responds, voice auto-restarts. Works in both CLI and extension mode (extension uses a one-time popup for mic permission grant)
@@ -45,6 +46,19 @@ A browser-based coding agent that runs as a **Chrome extension**, with a thin **
 In this case: an AI coding agent that was *built by* AI coding agents, creating tools *for* AI coding agents. 62% of the commits in this repo were authored by Claude. The tool that builds itself, so you don't have to.
 
 The ultimate recursive dev tool.
+
+### Why Port 5710?
+
+SLICC's default port is **5710** because it spells out the name:
+
+![5710 = SLICC](docs/port-5710-slicc.png)
+
+| Digit | Letter | How |
+|-------|--------|-----|
+| **5** | **S** | The 5 looks like an S |
+| **7** | **L** | Flip a 7 upside down — it's an L |
+| **1** | **I** | The 1 is a natural I |
+| **0** | **CC** | Two C's facing each other form a 0 |
 
 ## Philosophy
 
@@ -137,7 +151,7 @@ These screenshots capture a historic moment: **SLICC using browser automation to
 
 Here's what happened:
 
-1. SLICC (running in localhost:3000) used its browser automation commands to navigate to a Claude.ai conversation
+1. SLICC (running in localhost:5710) used its browser automation commands to navigate to a Claude.ai conversation
 2. It read the conversation history — which was about *building SLICC itself* (the origin story conversation)
 3. When asked "what would be even more meta?", SLICC suggested typing a message into that very Claude.ai tab
 4. It then used CDP (Chrome DevTools Protocol) to click on the ProseMirror editor, compose a message, and hit send
@@ -155,7 +169,7 @@ SLICC is a working prototype with these capabilities:
 - **Browser automation** via chrome.debugger API
 - **Virtual filesystem** backed by IndexedDB (LightningFS) with per-scoop sandboxing via RestrictedFS
 - **WebAssembly Bash shell** with Python (Pyodide) and Node.js support
-- **Multi-provider auth** (Anthropic, Azure AI Foundry, Azure OpenAI, AWS Bedrock, custom OAuth providers, and more)
+- **Multi-provider auth** (Anthropic, Azure AI Foundry, Azure OpenAI, AWS Bedrock, Adobe IMS, custom OAuth providers, and more)
 - **Voice input** with continuous conversation mode (Ctrl+Shift+V / Cmd+Shift+V)
 
 Current development is happening on feature branches using [yolo](https://github.com/ai-ecoverse/yolo) for worktree isolation, with Claude agents building the features autonomously.
@@ -235,7 +249,7 @@ Source layout:
 | `src/core/` | Agent types, tool registry, context compaction, session management |
 | `src/tools/` | Tool implementations (file ops, search, browser, javascript) |
 | `src/fs/` | Virtual filesystem (IndexedDB/LightningFS) + RestrictedFS |
-| `src/shell/` | WebAssembly Bash shell + supplemental commands (node, python, sqlite, convert, skill, mount, webhook, oauth-token, which, uname) + `.jsh` script discovery and execution |
+| `src/shell/` | WebAssembly Bash shell + supplemental commands (node, python, sqlite, convert, skill, mount, webhook, oauth-token, which, uname, pbcopy, pbpaste, xclip, xsel) + `.jsh` script discovery and execution |
 | `src/git/` | Git via isomorphic-git (clone, commit, push, pull, etc.) |
 | `src/cdp/` | Chrome DevTools Protocol client (WebSocket + chrome.debugger), HAR recorder |
 | `src/cli/` | Main CLI entrypoint + Electron attach mode — Chrome launch, Electron app lifecycle management, CDP proxy, overlay reinjection |
@@ -316,7 +330,7 @@ npm run dev:electron -- /Applications/Slack.app
 # npm run start:electron -- /Applications/Slack.app
 ```
 
-Pass the Electron app bundle/executable path to the main CLI's `--electron` mode. If the app is already running, SLICC exits with a clear message unless you also pass `--kill`, in which case it stops the running app, relaunches it with remote debugging enabled, starts the local server, and keeps the injected launcher/overlay alive across navigations. The overlay iframe is still loaded from the same local SLICC origin that the CLI server serves (default `http://localhost:3000`).
+Pass the Electron app bundle/executable path to the main CLI's `--electron` mode. If the app is already running, SLICC exits with a clear message unless you also pass `--kill`, in which case it stops the running app, relaunches it with remote debugging enabled, starts the local server, and keeps the injected launcher/overlay alive across navigations. The overlay iframe is still loaded from the same local SLICC origin that the CLI server serves (default `http://localhost:5710`).
 
 ## Tech Stack
 

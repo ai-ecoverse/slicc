@@ -30,6 +30,7 @@ import {
   resolveUiRuntimeMode,
 } from './runtime-mode.js';
 import { SprinkleManager } from './sprinkle-manager.js';
+import { initTelemetry } from './telemetry.js';
 
 const log = createLogger('main');
 
@@ -414,6 +415,10 @@ async function mainExtension(app: HTMLElement): Promise<void> {
             sprinkleManager.sendToSprinkle(name, data);
             result = true;
             break;
+          case 'openNewAutoOpen':
+            await sprinkleManager.openNewAutoOpenSprinkles();
+            result = true;
+            break;
         }
         console.log('[main-ext] sprinkle-op response sending', { id, op, result: typeof result });
         (chrome as any).runtime.sendMessage({
@@ -446,6 +451,9 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   client.requestState();
 
   log.info('Extension UI connected to offscreen agent engine');
+
+  // Initialize operational telemetry (fire-and-forget)
+  initTelemetry().catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -901,15 +909,15 @@ async function main(): Promise<void> {
     log.debug('Lick event', { type: event.type, name: eventName, targetScoop: event.targetScoop });
 
     // Determine the target:
-    // - Sprinkle licks always go to the cone (cone decides which scoop handles it)
+    // - Sprinkle licks and untargeted events default to cone
     // - Webhook/cron licks use explicit targetScoop if set
     const scoops = orchestrator.getScoops();
     let resolvedTarget: RegisteredScoop | undefined;
 
-    if (isSprinkle) {
-      // Sprinkle licks always route to cone — cone picks or creates a scoop
+    if (isSprinkle || !event.targetScoop) {
+      // Sprinkle licks + untargeted cron/webhook events → cone
       resolvedTarget = scoops.find(s => s.isCone);
-    } else if (event.targetScoop) {
+    } else {
       resolvedTarget = scoops.find(s =>
         s.name === event.targetScoop ||
         s.folder === event.targetScoop ||
@@ -1197,6 +1205,9 @@ async function main(): Promise<void> {
   }
 
   log.info('Orchestrator initialized — cone+scoops ready', { scoopCount: orchestrator.getScoops().length });
+
+  // Initialize operational telemetry (fire-and-forget)
+  initTelemetry().catch(() => {});
 }
 
 main().catch((err) => {

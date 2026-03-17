@@ -10,7 +10,7 @@ describe('sprinkle command', () => {
     mockMgr = {
       refresh: vi.fn().mockResolvedValue(undefined),
       available: vi.fn().mockReturnValue([
-        { name: 'dash', path: '/shared/sprinkles/dash/dash.shtml', title: 'Dashboard' },
+        { name: 'dash', path: '/shared/sprinkles/dash/dash.shtml', title: 'Dashboard', autoOpen: false },
       ]),
       opened: vi.fn().mockReturnValue([]),
       open: vi.fn().mockResolvedValue(undefined),

@@ -312,8 +312,9 @@ async function resolveAppTabId(
 ): Promise<void> {
   if (state.appTabId) return;
   const pages = await browser.listPages();
+  // Use current origin when in browser, fall back to default port for tests/Node
   const appOrigin =
-    typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
+    typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5710';
   const appTab = pages.find(
     (p) => p.url.startsWith(appOrigin) && !p.url.includes('/preview/'),
   );
