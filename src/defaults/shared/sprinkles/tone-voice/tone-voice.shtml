@@ -588,6 +588,101 @@ body { font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5; co
 }
 .lick-btn:hover { background: var(--s2-accent); color: var(--s2-gray-25); }
 
+/* ---- View states ---- */
+.view-state { display: none; flex-direction: column; height: 100%; }
+.view-state.active { display: flex; }
+
+/* Empty state */
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 32px;
+  text-align: center;
+  gap: 16px;
+}
+.empty-state h2 {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--s2-gray-900);
+}
+.empty-state p {
+  font-size: 13px;
+  color: var(--s2-gray-600);
+  max-width: 360px;
+  line-height: 1.5;
+}
+.url-input-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  max-width: 420px;
+  margin-top: 8px;
+}
+.url-input-row input {
+  flex: 1;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--s2-gray-300);
+  border-radius: var(--s2-radius-default);
+  font-size: 13px;
+  font-family: var(--s2-font-family);
+  color: var(--s2-gray-900);
+  background: var(--s2-bg-elevated);
+  outline: none;
+  transition: border-color 130ms ease;
+}
+.url-input-row input:focus { border-color: var(--s2-accent); }
+.url-input-row input::placeholder { color: var(--s2-gray-400); }
+.url-input-row button {
+  height: 36px;
+  padding: 0 20px;
+  border: none;
+  border-radius: var(--s2-radius-pill);
+  background: var(--s2-accent);
+  color: var(--s2-gray-25);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--s2-font-family);
+  cursor: pointer;
+  transition: background 130ms ease;
+  white-space: nowrap;
+}
+.url-input-row button:hover { background: var(--s2-accent-hover); }
+
+/* Loading state */
+.loading-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 32px;
+  text-align: center;
+  gap: 12px;
+}
+.loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--s2-gray-200);
+  border-top-color: var(--s2-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-state p {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--s2-gray-800);
+}
+.loading-state .loading-detail {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--s2-gray-500);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
 }
@@ -596,17 +691,35 @@ body { font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5; co
 <body>
 
 <div class="content-area">
-  <div class="content-toolbar">
-    <h1 class="page-title">Tone &amp; Voice</h1>
-    <div class="preset-group">
-      <button class="preset active" data-preset="pharma-hcp">Pharma HCP</button>
-      <button class="preset" data-preset="patient-facing">Patient-facing</button>
-      <button class="preset" data-preset="casual-marketing">Casual marketing</button>
-      <button class="preset" data-preset="regulatory">Regulatory</button>
+  <!-- Empty state: no page specified (default) -->
+  <div id="emptyView" class="view-state active">
+    <div class="empty-state">
+      <h2>Tone &amp; Voice Analyzer</h2>
+      <p>Analyze the tone, voice, and writing style of any page. Enter a URL below.</p>
+      <div class="url-input-row">
+        <input type="text" id="urlInput" placeholder="https://example.com/page" />
+        <button id="analyzeBtn">Analyze</button>
+      </div>
     </div>
   </div>
 
-  <div class="content-main">
+  <!-- Loading state: analysis in progress -->
+  <div id="loadingView" class="view-state">
+    <div class="loading-state">
+      <div class="loading-spinner"></div>
+      <p id="loadingMsg">Analyzing...</p>
+      <p class="loading-detail">Crawling pages and evaluating tone &amp; voice patterns</p>
+    </div>
+  </div>
+
+  <!-- Main analysis view -->
+  <div id="mainView" class="view-state">
+    <div class="content-toolbar">
+      <h1 class="page-title">Tone &amp; Voice</h1>
+      <div class="preset-group" id="presetGroup"></div>
+    </div>
+
+    <div class="content-main">
     <!-- Voice Summary Bar -->
     <div class="voice-summary">
       <div class="summary-item">
@@ -642,8 +755,8 @@ body { font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5; co
           <div class="rule-content">
             <div class="formality-slider-wrap">
               <div class="formality-label-row">
-                <span class="formality-current" id="formalityLabel">Professional</span>
-                <span class="formality-level" id="formalityLevel">5 / 7</span>
+                <span class="formality-current" id="formalityLabel">Neutral</span>
+                <span class="formality-level" id="formalityLevel">4 / 7</span>
               </div>
               <input type="range" class="formality-slider" id="formalitySlider" min="1" max="7" value="5" step="1">
               <div class="formality-scale">
@@ -734,6 +847,7 @@ body { font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5; co
       </div>
     </div>
   </div>
+  </div>
 </div>
 
 <!-- Tooltip -->
@@ -754,98 +868,38 @@ body { font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5; co
 <script>
 /* ============================================================
    Tone & Voice Linter — Full Implementation
+   ============================================================
+
+   DATA CONTRACT — push via: sprinkle send tone-voice '<json>'
+
+   1. Immediately after opening, signal analysis started:
+      {"status":"analyzing","url":"https://example.com"}
+
+   2. When analysis is complete, push content + rules + presets:
+      {
+        "content": "Full text content to analyze...",
+        "rules": {
+          "formality": 3,
+          "bannedTerms": [{"term":"cure","suggestion":"treatment"}, ...],
+          "requiredTerms": ["See full Prescribing Information", ...],
+          "readingTarget": {"min":6,"max":9}
+        },
+        "presets": {
+          "casual-marketing": {"label":"Casual marketing","formality":2,"bannedTerms":[...],"requiredTerms":[...],"readingTarget":{"min":5,"max":7}},
+          "professional":     {"label":"Professional","formality":5,...}
+        },
+        "preset": "casual-marketing"
+      }
+
+   3. If no page was specified (user should enter URL):
+      {"status":"empty"}
+
    ============================================================ */
 (() => {
   'use strict';
 
-  // ---- Default content ----
-  const defaultContent = `TAVEX (tavexirel) is a cure for moderately to severely active rheumatoid arthritis in adults with inadequate response to DMARDs.
-
-Rheumatoid arthritis: unmet need persists
-
-Despite the availability of biologic DMARDs, approximately 40% of patients with RA fail to achieve low disease activity with current therapies, and many experience loss of response over time. There remains a significant need for effective, convenient oral therapies that provide rapid and sustained disease control.
-
-Rapid and sustained disease control
-
-71% of patients achieved ACR20 at Week 12 in the RESOLVE-1 trial, with sustained improvements through Week 52. These results are guaranteed to change clinical practice.
-
-Well-characterised safety profile
-
-The safety profile of TAVEX was consistent across the RESOLVE clinical programme, with a low rate of treatment discontinuation due to adverse events.
-
-Simple once-daily oral dosing
-
-TAVEX 200 mg once daily \u2014 a convenient oral tablet taken with or without food, with no injection or infusion required. It\u2019s the best option for patients who hate needles!
-
-Selective JAK1 inhibition
-
-TAVEX preferentially inhibits JAK1, blocking key pro-inflammatory cytokine signalling while preserving immune and haematopoietic homeostasis through minimal JAK2/JAK3 interference.
-
-Consult your healthcare professional before starting treatment. See full Prescribing Information.`;
-
-  // ---- Presets ----
-  const presets = {
-    'pharma-hcp': {
-      formality: 5,
-      bannedTerms: [
-        { term: 'cure', suggestion: 'treatment' },
-        { term: 'miracle', suggestion: null },
-        { term: 'guaranteed', suggestion: 'demonstrated' },
-        { term: 'best option', suggestion: 'an effective option' },
-        { term: 'revolutionary', suggestion: 'novel' },
-      ],
-      requiredTerms: [
-        'consult your healthcare professional',
-        'See full Prescribing Information',
-        'adverse events should be reported',
-      ],
-      readingTarget: { min: 8, max: 10 },
-    },
-    'patient-facing': {
-      formality: 3,
-      bannedTerms: [
-        { term: 'cure', suggestion: 'treatment' },
-        { term: 'guaranteed', suggestion: 'shown to help' },
-        { term: 'miracle', suggestion: null },
-      ],
-      requiredTerms: [
-        'talk to your doctor',
-        'See full Prescribing Information',
-      ],
-      readingTarget: { min: 6, max: 8 },
-    },
-    'casual-marketing': {
-      formality: 2,
-      bannedTerms: [
-        { term: 'cure', suggestion: 'helps with' },
-        { term: 'guaranteed', suggestion: null },
-      ],
-      requiredTerms: [
-        'See full Prescribing Information',
-      ],
-      readingTarget: { min: 5, max: 7 },
-    },
-    'regulatory': {
-      formality: 7,
-      bannedTerms: [
-        { term: 'cure', suggestion: 'indicated for the treatment of' },
-        { term: 'miracle', suggestion: null },
-        { term: 'guaranteed', suggestion: null },
-        { term: 'best option', suggestion: null },
-        { term: 'revolutionary', suggestion: null },
-        { term: 'breakthrough', suggestion: null },
-        { term: 'safe', suggestion: 'well-characterised safety profile' },
-        { term: 'effective', suggestion: 'demonstrated efficacy' },
-      ],
-      requiredTerms: [
-        'consult your healthcare professional',
-        'See full Prescribing Information',
-        'adverse events should be reported',
-        'This medicinal product is subject to additional monitoring',
-      ],
-      readingTarget: { min: 8, max: 10 },
-    },
-  };
+  // ---- Presets (pushed by scoop, not hardcoded) ----
+  let presets = {};
 
   const formalityLabels = [
     '',
@@ -858,22 +912,58 @@ Consult your healthcare professional before starting treatment. See full Prescri
     'Very Formal',
   ];
 
-  // ---- State ----
-  let rules = JSON.parse(JSON.stringify(presets['pharma-hcp']));
+  // ---- Default rules (empty, waiting for scoop) ----
+  let rules = {
+    formality: 4,
+    bannedTerms: [],
+    requiredTerms: [],
+    readingTarget: { min: 6, max: 10 },
+  };
   let debounceTimer = null;
+  let currentView = 'empty'; // 'empty' | 'loading' | 'ready'
+
+  // ---- View state management ----
+  function switchView(view) {
+    currentView = view;
+    document.getElementById('emptyView').classList.toggle('active', view === 'empty');
+    document.getElementById('loadingView').classList.toggle('active', view === 'loading');
+    document.getElementById('mainView').classList.toggle('active', view === 'ready');
+  }
+
+  // ---- Render preset buttons ----
+  function renderPresets(activePreset) {
+    const group = document.getElementById('presetGroup');
+    group.innerHTML = '';
+    Object.keys(presets).forEach(function(key) {
+      const btn = document.createElement('button');
+      btn.className = 'preset' + (key === activePreset ? ' active' : '');
+      btn.dataset.preset = key;
+      btn.textContent = presets[key].label || key.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      btn.addEventListener('click', function() {
+        group.querySelectorAll('.preset').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        if (presets[key]) {
+          rules = JSON.parse(JSON.stringify(presets[key]));
+          delete rules.label;
+          updateSliderFill();
+          runAnalysis();
+        }
+      });
+      group.appendChild(btn);
+    });
+  }
 
   // ---- Restore state from bridge ----
   function restoreState() {
     if (typeof slicc !== 'undefined' && slicc.getState) {
       const saved = slicc.getState();
-      if (saved) {
+      if (saved && saved.content) {
         if (saved.rules) rules = saved.rules;
-        if (saved.content) editor.textContent = saved.content;
-        if (saved.activePreset) {
-          document.querySelectorAll('.preset').forEach(function(b) {
-            b.classList.toggle('active', b.dataset.preset === saved.activePreset);
-          });
+        if (saved.presets) {
+          presets = saved.presets;
+          renderPresets(saved.activePreset);
         }
+        editor.textContent = saved.content;
         return true;
       }
     }
@@ -887,6 +977,7 @@ Consult your healthcare professional before starting treatment. See full Prescri
       if (activeBtn) activePreset = activeBtn.dataset.preset;
       slicc.setState({
         rules: rules,
+        presets: presets,
         content: editor.innerText || '',
         activePreset: activePreset
       });
@@ -1307,10 +1398,11 @@ Consult your healthcare professional before starting treatment. See full Prescri
 
   // ---- Initialize editor ----
   function initEditor() {
-    if (!restoreState()) {
-      editor.textContent = defaultContent;
+    if (restoreState()) {
+      switchView('ready');
+      runAnalysis();
     }
-    runAnalysis();
+    // Otherwise stay on loading (default) — scoop will push data or switch to empty
   }
 
   // ---- Event: editor input ----
@@ -1449,18 +1541,18 @@ Consult your healthcare professional before starting treatment. See full Prescri
     tooltip.classList.remove('visible');
   });
 
-  // ---- Presets ----
-  document.querySelectorAll('.preset').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.preset').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      const presetKey = btn.dataset.preset;
-      if (presets[presetKey]) {
-        rules = JSON.parse(JSON.stringify(presets[presetKey]));
-        updateSliderFill();
-        runAnalysis();
-      }
-    });
+  // ---- URL input: fire analyze lick ----
+  document.getElementById('analyzeBtn').addEventListener('click', function() {
+    const url = document.getElementById('urlInput').value.trim();
+    if (!url) return;
+    if (typeof slicc !== 'undefined' && slicc.lick) {
+      slicc.lick({ action: 'analyze-url', data: { url: url } });
+    }
+    document.getElementById('loadingMsg').textContent = 'Analyzing ' + url + '...';
+    switchView('loading');
+  });
+  document.getElementById('urlInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') document.getElementById('analyzeBtn').click();
   });
 
   // ---- Edit Rules modal ----
@@ -1497,25 +1589,53 @@ Consult your healthcare professional before starting treatment. See full Prescri
   if (typeof slicc !== 'undefined' && slicc.on) {
     slicc.on('update', function(data) {
       if (!data) return;
+
+      // Status transitions
+      if (data.status === 'analyzing') {
+        var msg = data.url ? 'Analyzing ' + data.url + '...' : 'Analyzing...';
+        document.getElementById('loadingMsg').textContent = msg;
+        switchView('loading');
+        return;
+      }
+      if (data.status === 'empty') {
+        switchView('empty');
+        return;
+      }
+
+      // Presets pushed by scoop
+      if (data.presets) {
+        presets = data.presets;
+        renderPresets(data.preset || '');
+      }
+
+      // Content update
       if (data.content) {
         editor.textContent = data.content;
       }
+
+      // Rules update
       if (data.rules) {
         if (data.rules.formality !== undefined) rules.formality = data.rules.formality;
         if (data.rules.bannedTerms) rules.bannedTerms = data.rules.bannedTerms;
         if (data.rules.requiredTerms) rules.requiredTerms = data.rules.requiredTerms;
         if (data.rules.readingTarget) rules.readingTarget = data.rules.readingTarget;
       }
-      if (data.preset) {
+
+      // Activate a preset
+      if (data.preset && presets[data.preset]) {
         document.querySelectorAll('.preset').forEach(function(b) {
           b.classList.toggle('active', b.dataset.preset === data.preset);
         });
-        if (presets[data.preset]) {
-          rules = JSON.parse(JSON.stringify(presets[data.preset]));
-        }
+        rules = JSON.parse(JSON.stringify(presets[data.preset]));
+        if (rules.label) delete rules.label;
       }
-      updateSliderFill();
-      runAnalysis();
+
+      // Switch to main view and run analysis
+      if (data.content || data.rules) {
+        switchView('ready');
+        updateSliderFill();
+        runAnalysis();
+      }
     });
   }
 

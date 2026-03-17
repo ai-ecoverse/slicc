@@ -148,6 +148,24 @@ body { font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5; co
 .empty-canvas svg { width: 48px; height: 48px; opacity: 0.3; }
 .empty-canvas p { font-size: 14px; }
 
+/* ---- View States ---- */
+.view-state { display: none; flex-direction: column; height: 100%; }
+.view-state.active { display: flex; }
+.empty-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px 32px; text-align:center; gap:16px; }
+.empty-state h2 { font-size:18px; font-weight:800; color:var(--s2-gray-900); }
+.empty-state p { font-size:13px; color:var(--s2-gray-600); max-width:360px; line-height:1.5; }
+.url-input-row { display:flex; gap:8px; width:100%; max-width:420px; margin-top:8px; }
+.url-input-row input { flex:1; height:36px; padding:0 12px; border:1px solid var(--s2-gray-300); border-radius:var(--s2-radius-default); font-size:13px; font-family:var(--s2-font-family); color:var(--s2-gray-900); background:var(--s2-bg-elevated); outline:none; transition:border-color 130ms ease; }
+.url-input-row input:focus { border-color:var(--s2-accent); }
+.url-input-row input::placeholder { color:var(--s2-gray-400); }
+.url-input-row button { height:36px; padding:0 20px; border:none; border-radius:var(--s2-radius-pill); background:var(--s2-accent); color:var(--s2-gray-25); font-size:13px; font-weight:600; font-family:var(--s2-font-family); cursor:pointer; transition:background 130ms ease; white-space:nowrap; }
+.url-input-row button:hover { background:var(--s2-accent-hover); }
+.loading-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px 32px; text-align:center; gap:12px; }
+.loading-spinner { width:32px; height:32px; border:3px solid var(--s2-gray-200); border-top-color:var(--s2-accent); border-radius:50%; animation:spin 0.8s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.loading-state p { font-size:14px; font-weight:600; color:var(--s2-gray-800); }
+.loading-state .loading-detail { font-size:12px; font-weight:400; color:var(--s2-gray-500); }
+
 /* ---- Responsive ---- */
 @media (max-width: 800px) {
   .editor-body { flex-direction: column; }
@@ -159,32 +177,56 @@ body { font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5; co
 </head>
 <body>
 
-<div class="content-area">
-  <div class="content-toolbar">
-    <h1 class="page-title">Page Editor</h1>
-    <div class="toolbar-actions">
-      <button class="toolbar-btn" onclick="slicc.lick({action: 'preview-page', data: {sections: state.sections}})">Preview</button>
-      <button class="toolbar-btn primary" onclick="slicc.lick({action: 'publish-page', data: {sections: state.sections}})">Publish</button>
+<!-- ---- Empty View ---- -->
+<div class="view-state active" id="emptyView">
+  <div class="empty-state">
+    <h2>Page Editor</h2>
+    <p>Edit page sections with a visual block editor. Enter a page URL below.</p>
+    <div class="url-input-row">
+      <input type="text" id="urlInput" placeholder="https://example.com/my-page" />
+      <button id="loadPageBtn">Load Page</button>
     </div>
   </div>
+</div>
 
-  <div class="content-main">
-    <!-- Block palette -->
-    <div class="block-palette">
-      <span class="block-palette-label">Add block</span>
-      <button class="block-palette-btn" data-block="hero-teaser"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1" y="1" width="12" height="8" rx="1"/><path d="M4 11h6"/></svg>Hero Teaser</button>
-      <button class="block-palette-btn" data-block="introduction"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 4h8M3 7h6M3 10h7"/></svg>Introduction</button>
-      <button class="block-palette-btn" data-block="cards-teaser"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1" y="2" width="3.5" height="10" rx="0.5"/><rect x="5.25" y="2" width="3.5" height="10" rx="0.5"/><rect x="9.5" y="2" width="3.5" height="10" rx="0.5"/></svg>Cards Teaser</button>
-      <button class="block-palette-btn" data-block="columns-teaser"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1" y="2" width="5.5" height="10" rx="0.5"/><rect x="7.5" y="2" width="5.5" height="10" rx="0.5"/></svg>Columns Teaser</button>
-      <button class="block-palette-btn" data-block="accordion"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 3h10M2 7h10M2 11h10"/><path d="M11 3l-1.5 1.5L11 6"/></svg>Accordion</button>
+<!-- ---- Loading View ---- -->
+<div class="view-state" id="loadingView">
+  <div class="loading-state">
+    <div class="loading-spinner"></div>
+    <p>Loading page...</p>
+    <span class="loading-detail">Fetching page structure and section content</span>
+  </div>
+</div>
+
+<!-- ---- Main View (editor) ---- -->
+<div class="view-state" id="mainView">
+  <div class="content-area">
+    <div class="content-toolbar">
+      <h1 class="page-title">Page Editor</h1>
+      <div class="toolbar-actions">
+        <button class="toolbar-btn" onclick="slicc.lick({action: 'preview-page', data: {sections: state.sections}})">Preview</button>
+        <button class="toolbar-btn primary" onclick="slicc.lick({action: 'publish-page', data: {sections: state.sections}})">Publish</button>
+      </div>
     </div>
 
-    <!-- Editor body: section list + preview -->
-    <div class="editor-body">
-      <div class="section-list" id="sectionList">
-        <div class="section-list-header">Sections</div>
+    <div class="content-main">
+      <!-- Block palette -->
+      <div class="block-palette">
+        <span class="block-palette-label">Add block</span>
+        <button class="block-palette-btn" data-block="hero-teaser"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1" y="1" width="12" height="8" rx="1"/><path d="M4 11h6"/></svg>Hero Teaser</button>
+        <button class="block-palette-btn" data-block="introduction"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M3 4h8M3 7h6M3 10h7"/></svg>Introduction</button>
+        <button class="block-palette-btn" data-block="cards-teaser"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1" y="2" width="3.5" height="10" rx="0.5"/><rect x="5.25" y="2" width="3.5" height="10" rx="0.5"/><rect x="9.5" y="2" width="3.5" height="10" rx="0.5"/></svg>Cards Teaser</button>
+        <button class="block-palette-btn" data-block="columns-teaser"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1" y="2" width="5.5" height="10" rx="0.5"/><rect x="7.5" y="2" width="5.5" height="10" rx="0.5"/></svg>Columns Teaser</button>
+        <button class="block-palette-btn" data-block="accordion"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2 3h10M2 7h10M2 11h10"/><path d="M11 3l-1.5 1.5L11 6"/></svg>Accordion</button>
       </div>
-      <div class="preview-canvas" id="previewCanvas"></div>
+
+      <!-- Editor body: section list + preview -->
+      <div class="editor-body">
+        <div class="section-list" id="sectionList">
+          <div class="section-list-header">Sections</div>
+        </div>
+        <div class="preview-canvas" id="previewCanvas"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -209,62 +251,32 @@ body { font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5; co
   var idCounter = 10;
   function uid() { return 's' + (++idCounter); }
 
+  /*
+   * DATA CONTRACT — push via: sprinkle send page-editor '<json>'
+   * 1. Signal analysis started: {"status":"analyzing","url":"https://example.com"}
+   * 2. Push page data:          {"sections":[{"id":"s1","type":"hero-teaser","label":"Hero","fields":{"heading":"...","body":"...","image":"...","cta":"..."}},...],"blockTypes":["hero-teaser","columns","cards",...]}
+   * 3. No page specified:        {"status":"empty"}
+   */
+
   var DEFAULTS = {
     'hero-teaser': function() { return {
-      imgSrc: 'https://main--az-sitebuilder--paolomoz.aem.page/tavex/media_11bb838471c7c4a70965984e91e3f21369e42abd6.jpg?width=2000&format=jpg&optimize=medium',
-      imgAlt: 'Hero image', heading: 'New Hero Section', body: 'Add your hero copy here.', ctaText: 'Learn more', ctaHref: '#'
+      imgSrc: '', imgAlt: 'Hero image', heading: 'New Hero Section', body: 'Add your hero copy here.', ctaText: 'Learn more', ctaHref: '#'
     }; },
     'introduction': function() { return {
       heading: 'New Introduction', body: 'Write your introduction copy here.'
     }; },
     'cards-teaser': function() { return {
       cards: [
-        { imgSrc: 'https://main--az-sitebuilder--paolomoz.aem.page/tavex/media_103a9a470f5165ac8cbfeb3f20eea458de6e92ae7.jpg?width=2000&format=jpg&optimize=medium', imgAlt: 'Card image', title: 'Card title', body: 'Card description.', linkText: 'Read more', linkHref: '#' }
+        { imgSrc: '', imgAlt: 'Card image', title: 'Card title', body: 'Card description.', linkText: 'Read more', linkHref: '#' }
       ]
     }; },
     'columns-teaser': function() { return {
-      imgSrc: 'https://main--az-sitebuilder--paolomoz.aem.page/tavex/media_1730e448a168ae6a8d3c3ef5d11b7412ab76e506c.jpg?width=2000&format=jpg&optimize=medium',
-      imgAlt: 'Column image', heading: 'New Columns Section', body: 'Add supporting copy here.', ctaText: 'Explore', ctaHref: '#'
+      imgSrc: '', imgAlt: 'Column image', heading: 'New Columns Section', body: 'Add supporting copy here.', ctaText: 'Explore', ctaHref: '#'
     }; },
     'accordion': function() { return {
       items: [{ title: 'New item', body: '<p>Content here.</p>' }]
     }; }
   };
-
-  var TAVEX_SECTIONS = [
-    { id: 's1', type: 'hero-teaser', label: 'Hero',
-      data: { imgSrc: 'https://main--az-sitebuilder--paolomoz.aem.page/tavex/media_11bb838471c7c4a70965984e91e3f21369e42abd6.jpg?width=2000&format=jpg&optimize=medium',
-        imgAlt: 'TAVEX — selective oral JAK1 inhibitor',
-        heading: 'TAVEX (tavexirel)',
-        body: 'Selective oral JAK1 inhibitor for the treatment of moderately to severely active rheumatoid arthritis in adults.<sup>1</sup>',
-        ctaText: 'Explore efficacy data', ctaHref: '/tavex/efficacy' }},
-    { id: 's2', type: 'introduction', label: 'Disease Burden',
-      data: { heading: 'Rheumatoid arthritis: unmet need persists',
-        body: 'Despite biologic DMARDs, approximately 40% of patients fail to achieve low disease activity.<sup>1 2</sup> There remains a need for effective oral therapies.' }},
-    { id: 's3', type: 'cards-teaser', label: 'Navigation Cards',
-      data: { cards: [
-        { imgSrc: 'https://main--az-sitebuilder--paolomoz.aem.page/tavex/media_103a9a470f5165ac8cbfeb3f20eea458de6e92ae7.jpg?width=2000&format=jpg&optimize=medium',
-          imgAlt: 'Efficacy data', title: 'Rapid and sustained disease control',
-          body: '71% achieved ACR20 at Week 12.<sup>1</sup>', linkText: 'View efficacy data', linkHref: '/tavex/efficacy' },
-        { imgSrc: 'https://main--az-sitebuilder--paolomoz.aem.page/tavex/media_16cf8cf29322fd5b72ca14402e86cb8798496e447.jpg?width=2000&format=jpg&optimize=medium',
-          imgAlt: 'Safety monitoring', title: 'Well-characterised safety profile',
-          body: 'Consistent across the RESOLVE programme.<sup>1</sup>', linkText: 'Review safety', linkHref: '/tavex/safety' },
-        { imgSrc: 'https://main--az-sitebuilder--paolomoz.aem.page/tavex/media_1b464fbf0b33d0bd9a8a2b262912bb3e1c22499b9.jpg?width=2000&format=jpg&optimize=medium',
-          imgAlt: 'Oral dosing', title: 'Simple once-daily oral dosing',
-          body: '200 mg once daily, with or without food.<sup>1</sup>', linkText: 'See dosing guide', linkHref: '/tavex/dosing' }
-      ]}},
-    { id: 's4', type: 'columns-teaser', label: 'MoA Teaser',
-      data: { imgSrc: 'https://main--az-sitebuilder--paolomoz.aem.page/tavex/media_1730e448a168ae6a8d3c3ef5d11b7412ab76e506c.jpg?width=2000&format=jpg&optimize=medium',
-        imgAlt: 'JAK1 pathway', heading: 'Selective JAK1 inhibition',
-        body: 'TAVEX preferentially inhibits JAK1, blocking key pro-inflammatory cytokine signalling.<sup>1</sup>',
-        ctaText: 'Explore mechanism of action', ctaHref: '/tavex/mechanism-of-action' }},
-    { id: 's5', type: 'accordion', label: 'Prescribing Info',
-      data: { items: [
-        { title: 'Prescribing Information', body: '<p>TAVEX 100 mg and 200 mg tablets. Indication: moderately to severely active RA in adults.</p>' },
-        { title: 'Adverse Event Reporting', body: '<p>Report at www.mhra.gov.uk/yellowcard or call 0800 783 0033.</p>' },
-        { title: 'References', body: '<ol><li>TAVEX SmPC. AstraZeneca UK Ltd.</li><li>Smolen JS, et al. Lancet. 2023.</li></ol>' }
-      ]}}
-  ];
 
   var TYPE_LABELS = {
     'hero-teaser': 'Hero Teaser',
@@ -279,7 +291,7 @@ body { font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5; co
      ================================================================ */
   // Expose state globally for toolbar button onclick access
   window.state = {
-    sections: JSON.parse(JSON.stringify(TAVEX_SECTIONS)),
+    sections: [],
     selectedId: null
   };
   var state = window.state;
@@ -740,13 +752,62 @@ body { font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5; co
   }
 
   /* ================================================================
+     VIEW STATE MANAGEMENT
+     ================================================================ */
+  function switchView(view) {
+    document.querySelectorAll('.view-state').forEach(function(el) { el.classList.remove('active'); });
+    var target = document.getElementById(view + 'View');
+    if (target) target.classList.add('active');
+  }
+
+  /* ================================================================
+     URL INPUT HANDLER
+     ================================================================ */
+  document.getElementById('loadPageBtn').addEventListener('click', function() {
+    var input = document.getElementById('urlInput');
+    var url = (input.value || '').trim();
+    if (!url) return;
+    slicc.lick({action: 'load-page', data: {url: url}});
+    switchView('loading');
+  });
+  document.getElementById('urlInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') document.getElementById('loadPageBtn').click();
+  });
+
+  /* ================================================================
      BRIDGE INTEGRATION
      ================================================================ */
   // Handle updates from the agent
   slicc.on('update', function(data) {
+    // Status transitions
+    if (data.status === 'analyzing') {
+      switchView('loading');
+      return;
+    }
+    if (data.status === 'empty') {
+      state.sections = [];
+      state.selectedId = null;
+      switchView('empty');
+      return;
+    }
+
+    // Section data push — switch to ready
+    if (data.sections) {
+      state.sections = data.sections;
+      state.selectedId = data.selectedId || (state.sections.length > 0 ? state.sections[0].id : null);
+      if (data.blockTypes && data.blockTypes.length) {
+        // Update block palette visibility based on available types (future use)
+      }
+      switchView('main');
+      renderAll();
+      return;
+    }
+
+    // Legacy: type-based updates
     if (data.type === 'sections') {
       state.sections = data.sections;
       state.selectedId = data.selectedId || null;
+      switchView('main');
       renderAll();
     }
     if (data.type === 'select-section') {
@@ -758,11 +819,12 @@ body { font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5; co
 
   // Restore state on reopen
   var saved = slicc.getState();
-  if (saved && saved.sections) {
+  if (saved && saved.sections && saved.sections.length > 0) {
     state.sections = saved.sections;
-    state.selectedId = saved.selectedId || (state.sections.length > 0 ? state.sections[0].id : null);
+    state.selectedId = saved.selectedId || state.sections[0].id;
+    switchView('main');
   } else {
-    state.selectedId = state.sections.length > 0 ? state.sections[0].id : null;
+    switchView('empty');
   }
 
   /* ================================================================

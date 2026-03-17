@@ -305,6 +305,49 @@ Panels should look like professional tools, not chatbot output. Follow these rul
 
 ---
 
+## Using Built-in Sprinkles
+
+Built-in sprinkles ship at `/shared/sprinkles/`. They are full-document HTML apps with a **DATA CONTRACT** — a comment block at the top of the `<script>` section documenting the exact JSON format the sprinkle expects.
+
+### Three-state protocol
+
+Every built-in sprinkle has three view states: **empty** (URL input form), **loading** (spinner), and **ready** (full UI). The scoop controls transitions via `sprinkle send`:
+
+1. **Immediately after opening**, push analyzing status so the user sees progress:
+   ```bash
+   sprinkle send <name> '{"status":"analyzing","url":"https://example.com"}'
+   ```
+
+2. **When analysis is complete**, push data in the format specified by the DATA CONTRACT:
+   ```bash
+   sprinkle send <name> '{"content":"...","rules":{...}}'
+   ```
+
+3. **If no page was specified** (scoop should ask the user for a URL):
+   ```bash
+   sprinkle send <name> '{"status":"empty"}'
+   ```
+
+### Scoop brief template
+
+```
+scoop_scoop("seo-dashboard")
+feed_scoop("seo-dashboard", "You own the built-in sprinkle 'seo-dashboard'.
+1. Run: read_file /workspace/skills/sprinkles/style-guide.md
+2. Run: sprinkle open seo-dashboard
+3. Read the DATA CONTRACT at the top of the <script> in /shared/sprinkles/seo-dashboard/seo-dashboard.shtml to learn the expected JSON format.
+4. IMMEDIATELY push status: sprinkle send seo-dashboard '{\"status\":\"analyzing\",\"url\":\"<the-url>\"}'
+5. Gather the data the user needs (e.g. fetch the page, run an SEO audit).
+6. Push results to the sprinkle in the format specified by the DATA CONTRACT.
+7. Stay ready — you will receive lick events when the user clicks buttons in the sprinkle.
+8. When the user confirms a fix, apply it to AEM via DA (see 'DA Integration' section below).
+Do not send a completion message.")
+```
+
+The scoop opens the sprinkle, pushes analyzing status, gathers real data, pushes results via `sprinkle send`, and handles lick events from the user.
+
+---
+
 ## DA Integration (Applying Changes to AEM)
 
 Content-editing sprinkles (page-editor, seo-dashboard, schema-editor, review-workflow) should apply user-confirmed changes to the actual AEM page via DA commands. This is the expected E2E flow — sprinkle edits are not just local UI state.

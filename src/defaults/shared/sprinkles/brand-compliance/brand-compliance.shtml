@@ -213,18 +213,60 @@ body { font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5; co
   flex-shrink: 0; cursor: pointer;
 }
 
-/* ===== EMPTY STATE ===== */
-.empty-state {
+/* ===== EMPTY STATE (in-list) ===== */
+.vio-empty-state {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   height: 100%; gap: 12px; text-align: center; padding: 32px 24px; color: var(--s2-gray-500);
 }
-.empty-state svg { width: 40px; height: 40px; color: var(--s2-gray-300); }
-.empty-state p { font-size: 13px; max-width: 240px; }
+.vio-empty-state svg { width: 40px; height: 40px; color: var(--s2-gray-300); }
+.vio-empty-state p { font-size: 13px; max-width: 240px; }
+
+/* ===== THREE-STATE VIEWS ===== */
+.view-state { display: none; flex-direction: column; height: 100%; }
+.view-state.active { display: flex; }
+.empty-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px 32px; text-align:center; gap:16px; }
+.empty-state h2 { font-size:18px; font-weight:800; color:var(--s2-gray-900); }
+.empty-state p { font-size:13px; color:var(--s2-gray-600); max-width:360px; line-height:1.5; }
+.url-input-row { display:flex; gap:8px; width:100%; max-width:420px; margin-top:8px; }
+.url-input-row input { flex:1; height:36px; padding:0 12px; border:1px solid var(--s2-gray-300); border-radius:var(--s2-radius-default); font-size:13px; font-family:var(--s2-font-family); color:var(--s2-gray-900); background:var(--s2-bg-elevated); outline:none; transition:border-color 130ms ease; }
+.url-input-row input:focus { border-color:var(--s2-accent); }
+.url-input-row input::placeholder { color:var(--s2-gray-400); }
+.url-input-row button { height:36px; padding:0 20px; border:none; border-radius:var(--s2-radius-pill); background:var(--s2-accent); color:var(--s2-gray-25); font-size:13px; font-weight:600; font-family:var(--s2-font-family); cursor:pointer; transition:background 130ms ease; white-space:nowrap; }
+.url-input-row button:hover { background:var(--s2-accent-hover); }
+.loading-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px 32px; text-align:center; gap:12px; }
+.loading-spinner { width:32px; height:32px; border:3px solid var(--s2-gray-200); border-top-color:var(--s2-accent); border-radius:50%; animation:spin 0.8s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.loading-state p { font-size:14px; font-weight:600; color:var(--s2-gray-800); }
+.loading-state .loading-detail { font-size:12px; font-weight:400; color:var(--s2-gray-500); }
 </style>
 </head>
 <body>
 
 <div class="content-area">
+
+  <!-- ===== EMPTY VIEW ===== -->
+  <div class="view-state active" id="emptyView">
+    <div class="empty-state">
+      <h2>Brand Compliance</h2>
+      <p>Check pages against your brand guidelines for color, typography, and spacing violations. Enter a URL below.</p>
+      <div class="url-input-row">
+        <input type="text" id="urlInput" placeholder="https://example.com" />
+        <button id="urlCheckBtn">Check Compliance</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== LOADING VIEW ===== -->
+  <div class="view-state" id="loadingView">
+    <div class="loading-state">
+      <div class="loading-spinner"></div>
+      <p>Checking brand compliance...</p>
+      <span class="loading-detail">Scanning page styles against brand guidelines</span>
+    </div>
+  </div>
+
+  <!-- ===== MAIN VIEW ===== -->
+  <div class="view-state" id="mainView">
   <div class="content-toolbar">
     <h1 class="page-title">Brand Compliance</h1>
     <div class="preset-group">
@@ -365,6 +407,7 @@ body { font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5; co
       </div>
     </div>
   </div>
+  </div><!-- /mainView -->
 </div>
 
 <script>
@@ -396,71 +439,41 @@ var brandRules = {
 
 var currentRules = JSON.parse(JSON.stringify(brandRules));
 
-var presetData = {
-  tavex: [
-    { id: 1, severity: 'critical', element: 'Hero CTA button', section: 'hero',
-      category: 'color', property: 'background-color',
-      found: '#ff69b4', expected: '#d0006f',
-      desc: 'CTA button uses hot pink instead of brand primary.',
-      fixed: false },
-    { id: 2, severity: 'critical', element: 'Introduction heading', section: 'intro',
-      category: 'typography', property: 'font-family',
-      found: 'Arial, sans-serif', expected: 'Playfair Display, Georgia, serif',
-      desc: 'Section heading uses Arial instead of brand serif font.',
-      fixed: false },
-    { id: 3, severity: 'warning', element: 'Card body text', section: 'cards',
-      category: 'typography', property: 'font-size',
-      found: '14px', expected: '18px',
-      desc: 'Card descriptions use 14px instead of brand body size 18px.',
-      fixed: false },
-    { id: 4, severity: 'warning', element: 'Columns CTA button', section: 'columns',
-      category: 'components', property: 'border-radius',
-      found: '24px', expected: '4px',
-      desc: 'CTA uses pill-shaped radius instead of brand 4px radius.',
-      fixed: false },
-    { id: 5, severity: 'critical', element: 'Card link buttons', section: 'cards',
-      category: 'color', property: 'background-color',
-      found: '#e91e63', expected: '#d0006f',
-      desc: 'Card CTA buttons use Material Pink instead of brand primary.',
-      fixed: false },
-  ],
-  compliant: [],
-  offbrand: [
-    { id: 1, severity: 'critical', element: 'Hero CTA button', section: 'hero',
-      category: 'color', property: 'background-color',
-      found: '#ff69b4', expected: '#d0006f',
-      desc: 'CTA button uses hot pink instead of brand primary.', fixed: false },
-    { id: 2, severity: 'critical', element: 'Introduction heading', section: 'intro',
-      category: 'typography', property: 'font-family',
-      found: 'Arial, sans-serif', expected: 'Playfair Display, Georgia, serif',
-      desc: 'Section heading uses Arial instead of brand serif font.', fixed: false },
-    { id: 3, severity: 'warning', element: 'Card body text', section: 'cards',
-      category: 'typography', property: 'font-size',
-      found: '14px', expected: '18px',
-      desc: 'Card descriptions use 14px instead of brand body size.', fixed: false },
-    { id: 4, severity: 'warning', element: 'Columns CTA button', section: 'columns',
-      category: 'components', property: 'border-radius',
-      found: '24px', expected: '4px',
-      desc: 'CTA uses pill-shaped radius instead of brand 4px radius.', fixed: false },
-    { id: 5, severity: 'critical', element: 'Card link buttons', section: 'cards',
-      category: 'color', property: 'background-color',
-      found: '#e91e63', expected: '#d0006f',
-      desc: 'Card CTA buttons use Material Pink instead of brand primary.', fixed: false },
-    { id: 6, severity: 'warning', element: 'Hero section spacing', section: 'hero',
-      category: 'components', property: 'padding',
-      found: '24px 16px', expected: '48px 32px',
-      desc: 'Hero padding is too tight, violating brand spacing rules.', fixed: false },
-    { id: 7, severity: 'critical', element: 'Accordion heading color', section: 'accordion',
-      category: 'color', property: 'color',
-      found: '#333333', expected: '#830051',
-      desc: 'Accordion titles use generic dark instead of brand secondary.', fixed: false },
-  ],
-  newbrand: [],
-};
+/*
+ * DATA CONTRACT — push via: sprinkle send brand-compliance '<json>'
+ * 1. Signal analysis started: {"status":"analyzing","url":"https://example.com"}
+ * 2. Push compliance data:    {"violations":[{"id":"v1","category":"color","severity":"critical","element":"h1","found":"#FF0000","expected":"#333333","suggestion":"..."},...], "rules":{"colors":[...],"fonts":[...],"spacing":[...]}}
+ * 3. No page specified:       {"status":"empty"}
+ */
+
+var presetData = {};
 
 var violations = [];
 var activeFilter = 'all';
 var selectedVioId = null;
+
+// ===== VIEW SWITCHING =====
+function switchView(view) {
+  var ids = ['emptyView', 'loadingView', 'mainView'];
+  for (var i = 0; i < ids.length; i++) {
+    var el = document.getElementById(ids[i]);
+    if (el) el.classList.toggle('active', ids[i] === view);
+  }
+}
+
+// ===== URL INPUT HANDLER =====
+document.getElementById('urlCheckBtn').addEventListener('click', function() {
+  var input = document.getElementById('urlInput');
+  var url = (input.value || '').trim();
+  if (!url) return;
+  switchView('loadingView');
+  if (typeof slicc !== 'undefined' && slicc.lick) {
+    slicc.lick({ action: 'check-brand', data: { url: url } });
+  }
+});
+document.getElementById('urlInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') document.getElementById('urlCheckBtn').click();
+});
 
 // ===== PIN POSITIONS =====
 var pinPositions = {
@@ -521,7 +534,7 @@ function renderViolations() {
   if (filtered.length === 0) {
     var msg = activeFilter === 'fixed' ? 'No fixes applied yet' :
               violations.length === 0 ? 'No violations detected' : 'No violations in this category';
-    list.innerHTML = '<div class="empty-state"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7.5 10l1.5 2 3.5-4"/><circle cx="10" cy="10" r="7.5"/></svg><p>' + msg + '</p></div>';
+    list.innerHTML = '<div class="vio-empty-state"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7.5 10l1.5 2 3.5-4"/><circle cx="10" cy="10" r="7.5"/></svg><p>' + msg + '</p></div>';
     return;
   }
 
@@ -963,11 +976,23 @@ function handleLickAction(action, data) {
 if (typeof slicc !== 'undefined' && slicc.on) {
   slicc.on('update', function(data) {
     if (!data) return;
+
+    // Status transitions
+    if (data.status === 'empty') {
+      switchView('emptyView');
+      return;
+    }
+    if (data.status === 'analyzing') {
+      switchView('loadingView');
+      return;
+    }
+
     if (data.action) {
       handleLickAction(data.action, data.data || data);
     }
     if (data.violations) {
       violations = data.violations;
+      switchView('mainView');
       renderScore();
       renderViolations();
       renderPins();
@@ -984,13 +1009,16 @@ if (typeof slicc !== 'undefined' && slicc.on) {
 }
 
 // ===== INIT =====
-if (!restoreState()) {
-  violations = JSON.parse(JSON.stringify(presetData.tavex));
+var hasState = restoreState();
+if (hasState && violations && violations.length > 0) {
+  switchView('mainView');
+  renderScore();
+  renderViolations();
+  renderPins();
+  renderRules();
+} else {
+  switchView('emptyView');
 }
-renderScore();
-renderViolations();
-renderPins();
-renderRules();
 </script>
 </body>
 </html>

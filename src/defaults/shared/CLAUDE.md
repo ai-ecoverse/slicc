@@ -140,63 +140,11 @@ Key things that work differently:
 - **No long-running servers**: You can't start background daemons. The `serve` and `open` commands handle previewing.
 - **No package managers**: No `apt`, `npm install`, `pip install`. Use what's already available or write `.jsh` scripts.
 
-## Built-in Sprinkles
-
-These sprinkles ship with SLICC at `/shared/sprinkles/`. They are full-document HTML apps rendered in sandboxed iframes.
-
-| Sprinkle name | Open with | Use when the user asks for... |
-|---------------|-----------|-------------------------------|
-| `page-editor` | `sprinkle open page-editor` | WYSIWYG editor, page editor, edit sections, visual editing |
-| `content-tree` | `sprinkle open content-tree` | content tree, page tree, site structure, page browser, navigate pages |
-| `review-workflow` | `sprinkle open review-workflow` | review, approval workflow, annotations, comments on content |
-| `seo-dashboard` | `sprinkle open seo-dashboard` | SEO audit, meta tags, SERP preview, SEO issues |
-| `schema-editor` | `sprinkle open schema-editor` | schema, structured data, JSON-LD, rich results |
-| `readability` | `sprinkle open readability` | readability, reading level, text analysis, simplify text |
-| `brand-compliance` | `sprinkle open brand-compliance` | brand check, brand compliance, style guide violations |
-| `tone-voice` | `sprinkle open tone-voice` | tone, voice, writing style, formality, tone analysis |
-| `performance` | `sprinkle open performance` | performance, Core Web Vitals, page speed, lighthouse |
-| `funnels` | `sprinkle open funnels` | funnels, conversion, A/B test, analytics |
-
-### When a user request matches a built-in sprinkle
-
-When the user's request matches a built-in sprinkle (see table above), **ask the user which approach they prefer** before proceeding:
-
-> I can help with that. Would you like me to:
-> 1. **Open the built-in [sprinkle name]** — ready to use immediately, I'll populate it with your data
-> 2. **Build a custom one from scratch** — tailored exactly to your needs, but takes a moment to create
->
-> Which do you prefer?
-
-**If the user says "open" / "use the built-in" / picks option 1** — use the built-in sprinkle (see "How to use built-in sprinkles" below).
-
-**If the user says "build" / "create" / "custom" / picks option 2** — create a new sprinkle from scratch following the normal "Creating sprinkles" flow in Rule 3 below.
-
-**If the user explicitly says "open the page editor"** (or any built-in name directly) — skip the question and use the built-in immediately.
-
-**If the request is clearly novel** (no matching built-in) — create from scratch without asking.
-
-### How to use built-in sprinkles
-
-Built-in sprinkles follow the same scoop delegation rules as custom sprinkles. The cone creates a scoop, feeds it instructions to open the sprinkle and manage it:
-
-```
-scoop_scoop("seo-dashboard")
-feed_scoop("seo-dashboard", "You own the built-in sprinkle 'seo-dashboard'.
-1. Run: read_file /workspace/skills/sprinkles/style-guide.md (for DA integration and component reference)
-2. Run: sprinkle open seo-dashboard
-3. The sprinkle is already built at /shared/sprinkles/seo-dashboard/seo-dashboard.shtml — do NOT recreate it.
-4. Gather the data the user needs (e.g. fetch the page, run an SEO audit).
-5. Push results to the sprinkle: sprinkle send seo-dashboard '<json>'
-6. Stay ready — you will receive lick events when the user clicks buttons in the sprinkle.
-7. When the user confirms a fix, apply it to AEM via DA (see style-guide.md 'DA Integration' section).
-Do not send a completion message.")
-```
-
-The scoop opens the sprinkle, gathers real data, pushes it via `sprinkle send`, and handles lick events (button clicks) from the user. The cone only forwards lick events to the scoop via `feed_scoop`. Content-editing sprinkles must apply confirmed changes to AEM via DA — see the "DA Integration" section in `/workspace/skills/sprinkles/style-guide.md`.
-
 ## Sprinkles: Cone Orchestration Rules
 
-Sprinkles are persistent UI panels created and managed by scoops. The cone NEVER creates, modifies, or interacts with sprinkles directly — it only orchestrates scoops. See the `sprinkles` skill for the full reference (bridge API, CSS, style guide).
+Sprinkles are persistent UI panels created and managed by scoops. The cone orchestrates — scoops do the work.
+
+**When the user asks for a dashboard, audit, editor, analysis, or visualization** — read the sprinkles skill first (`read_file /workspace/skills/sprinkles/SKILL.md`) to check if a built-in sprinkle matches, and to get the brief templates for creating/modifying sprinkles and handling lick events.
 
 ### Rule 1: One scoop per sprinkle, named identically
 
@@ -210,50 +158,7 @@ The cone MUST NOT:
 - Run `write_file` or `edit_file` on sprinkle paths
 - Handle lick events by doing the work itself
 
-ALL sprinkle work goes through scoops via `feed_scoop`.
-
-### Rule 3: Creating sprinkles
-
-Create a scoop, then feed it a **complete, self-contained brief**. The brief MUST include:
-- The exact sprinkle name and file path
-- What data to show
-- The instruction to stay ready for follow-up work
-
-```
-scoop_scoop("giro-winners")
-feed_scoop("giro-winners", "You own the sprinkle 'giro-winners'. Your job:
-1. Run: read_file /workspace/skills/sprinkles/style-guide.md
-2. Research the last 3 Giro d'Italia winners
-3. Write the sprinkle to /shared/sprinkles/giro-winners/giro-winners.shtml
-4. Run: sprinkle open giro-winners
-5. IMPORTANT: After opening the sprinkle, do NOT finish. Stay ready — you will receive follow-up instructions and lick events for this sprinkle via feed_scoop. Do not send a completion message.")
-```
-
-### Rule 4: Modifying sprinkles — feed the EXISTING scoop
-
-When the user asks to change a sprinkle, feed the scoop that already owns it. Do NOT create a new scoop or do it yourself. Include the specific sprinkle name and file path in the brief:
-
-```
-feed_scoop("giro-winners", "Modify YOUR sprinkle 'giro-winners' at /shared/sprinkles/giro-winners/giro-winners.shtml:
-Add an 'Add Previous Year' button with onclick=\"slicc.lick({action: 'add-year'})\"
-Then reload: sprinkle close giro-winners && sprinkle open giro-winners
-Stay ready for more work.")
-```
-
-### Rule 5: Lick events — forward to owning scoop, never handle yourself
-
-When a sprinkle lick arrives (e.g. `[Sprinkle Event: giro-winners] {"action":"add-year"}`):
-1. Extract the sprinkle name from the event (here: `giro-winners`)
-2. Forward to the scoop with the SAME name via `feed_scoop`
-3. Include the sprinkle name, file path, and the full lick payload in the brief
-
-```
-feed_scoop("giro-winners", "Lick event on YOUR sprinkle 'giro-winners' (/shared/sprinkles/giro-winners/giro-winners.shtml):
-Action: 'add-year'
-Look up the next previous year's Giro d'Italia winner and update the sprinkle.
-Use: sprinkle send giro-winners '<json>' to push data, or edit the .shtml and reload.
-Stay ready for more lick events.")
-```
+ALL sprinkle work goes through scoops via `feed_scoop`. See Rules 3-5 in the `sprinkles` skill for creating, modifying, and handling lick events.
 
 **NEVER** handle a lick in the cone. NEVER run bash, write_file, or any tool to process lick data yourself. Always `feed_scoop`.
 

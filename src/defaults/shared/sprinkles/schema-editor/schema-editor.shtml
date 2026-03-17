@@ -134,117 +134,209 @@ textarea.field-input { height: auto; min-height: 80px; padding: 10px 12px; resiz
 .validation-errors { margin-top: 6px; padding: 0; list-style: none; }
 .validation-errors li { font-size: 12px; color: var(--s2-negative); padding: 2px 0 2px 16px; position: relative; }
 .validation-errors li::before { content: '\00d7'; position: absolute; left: 0; font-weight: 700; }
+
+.view-state { display: none; flex-direction: column; height: 100%; }
+.view-state.active { display: flex; }
+.empty-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px 32px; text-align:center; gap:16px; }
+.empty-state h2 { font-size:18px; font-weight:800; color:var(--s2-gray-900); }
+.empty-state p { font-size:13px; color:var(--s2-gray-600); max-width:360px; line-height:1.5; }
+.url-input-row { display:flex; gap:8px; width:100%; max-width:420px; margin-top:8px; }
+.url-input-row input { flex:1; height:36px; padding:0 12px; border:1px solid var(--s2-gray-300); border-radius:var(--s2-radius-default); font-size:13px; font-family:var(--s2-font-family); color:var(--s2-gray-900); background:var(--s2-bg-elevated); outline:none; transition:border-color 130ms ease; }
+.url-input-row input:focus { border-color:var(--s2-accent); }
+.url-input-row input::placeholder { color:var(--s2-gray-400); }
+.url-input-row button { height:36px; padding:0 20px; border:none; border-radius:var(--s2-radius-pill); background:var(--s2-accent); color:var(--s2-gray-25); font-size:13px; font-weight:600; font-family:var(--s2-font-family); cursor:pointer; transition:background 130ms ease; white-space:nowrap; }
+.url-input-row button:hover { background:var(--s2-accent-hover); }
+.loading-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px 32px; text-align:center; gap:12px; }
+.loading-spinner { width:32px; height:32px; border:3px solid var(--s2-gray-200); border-top-color:var(--s2-accent); border-radius:50%; animation:spin 0.8s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.loading-state p { font-size:14px; font-weight:600; color:var(--s2-gray-800); }
+.loading-state .loading-detail { font-size:12px; font-weight:400; color:var(--s2-gray-500); }
 </style>
 </head>
 <body>
 
 <div class="content-area">
-  <div class="content-toolbar">
-    <h1 class="page-title">Schema Editor</h1>
-    <div class="preset-group">
-      <button class="preset active" data-preset="faq">TAVEX FAQ</button>
-      <button class="preset" data-preset="product">Product Page</button>
-      <button class="preset" data-preset="article">Medical Article</button>
-      <button class="preset" data-preset="howto">HowTo</button>
+
+  <!-- ===== EMPTY STATE ===== -->
+  <div id="emptyView" class="view-state active">
+    <div class="empty-state">
+      <h2>Schema Editor</h2>
+      <p>Edit and validate structured data (JSON-LD) for any page. Enter a URL below.</p>
+      <div class="url-input-row">
+        <input id="urlInput" type="url" placeholder="https://example.com/page">
+        <button id="analyzeBtn">Analyze</button>
+      </div>
     </div>
   </div>
 
-  <div class="content-main">
-    <!-- Schema type tabs -->
-    <div class="schema-tabs">
-      <button class="schema-tab active" data-type="FAQ">FAQ</button>
-      <button class="schema-tab" data-type="Article">Article</button>
-      <button class="schema-tab" data-type="MedicalWebPage">MedicalWebPage</button>
-      <button class="schema-tab" data-type="HowTo">HowTo</button>
-      <button class="schema-tab" data-type="Product">Product</button>
-    </div>
-
-    <!-- Editor + Preview -->
-    <div class="editor-layout">
-      <div class="field-editor" id="fieldEditor"></div>
-      <div class="preview-panel" id="previewPanel"></div>
+  <!-- ===== LOADING STATE ===== -->
+  <div id="loadingView" class="view-state">
+    <div class="loading-state">
+      <div class="loading-spinner"></div>
+      <p id="loadingMsg">Analyzing schemas...</p>
+      <span class="loading-detail">Detecting structured data and validating JSON-LD markup</span>
     </div>
   </div>
+
+  <!-- ===== READY STATE (main editor) ===== -->
+  <div id="mainView" class="view-state">
+    <div class="content-toolbar">
+      <h1 class="page-title">Schema Editor</h1>
+      <div class="preset-group" id="presetGroup"></div>
+    </div>
+
+    <div class="content-main">
+      <!-- Schema type tabs (dynamic) -->
+      <div class="schema-tabs" id="schemaTabs"></div>
+
+      <!-- Editor + Preview -->
+      <div class="editor-layout">
+        <div class="field-editor" id="fieldEditor"></div>
+        <div class="preview-panel" id="previewPanel"></div>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <script>
 (() => {
+  /*
+   * DATA CONTRACT — push via: sprinkle send schema-editor '<json>'
+   * 1. Signal analysis started: {"status":"analyzing","url":"https://example.com"}
+   * 2. Push schema data:        {"schemas":{"FAQ":{"items":[...]},"Article":{...},...},"activeType":"FAQ"}
+   * 3. No page specified:       {"status":"empty"}
+   */
+
   // ============ DATA ============
-  const DATA = {
-    FAQ: {
-      name: 'TAVEX (tavexirel) \u2014 Frequently Asked Questions',
-      description: 'Common questions about TAVEX for the treatment of rheumatoid arthritis.',
-      questions: [
-        { question: 'What is TAVEX (tavexirel)?', answer: 'TAVEX is a selective oral JAK1 inhibitor for the treatment of moderately to severely active rheumatoid arthritis in adults with inadequate response to DMARDs.' },
-        { question: 'How is TAVEX taken?', answer: 'TAVEX is taken as a 200 mg oral tablet once daily, with or without food. A reduced dose of 100 mg is recommended for moderate renal impairment or co-administration with strong CYP3A4 inhibitors.' },
-        { question: 'What are the common side effects?', answer: 'Common side effects include upper respiratory tract infections, nausea, headache, and elevated liver enzymes. The safety profile was consistent across the RESOLVE clinical programme.' },
-      ]
-    },
-    Article: {
-      headline: 'TAVEX Demonstrates Sustained Efficacy in RESOLVE-2 Trial',
-      author: 'AstraZeneca Medical Affairs',
-      datePublished: '2025-09-15',
-      dateModified: '2026-01-20',
-      image: 'https://main--az-sitebuilder--paolomoz.aem.page/tavex/media_11bb838471c7c4a70965984e91e3f21369e42abd6.jpg',
-      description: 'Long-term results from the RESOLVE-2 trial demonstrate sustained ACR20 response rates with TAVEX through 52 weeks of treatment.'
-    },
-    MedicalWebPage: {
-      name: 'TAVEX (tavexirel) for Rheumatoid Arthritis',
-      about: 'Rheumatoid Arthritis',
-      specialty: 'Rheumatology',
-      lastReviewed: '2026-02-01',
-      description: 'Comprehensive medical information about TAVEX, a selective JAK1 inhibitor for RA treatment.'
-    },
-    HowTo: {
-      name: 'How to Start TAVEX Treatment',
-      description: 'Step-by-step guide for healthcare professionals initiating TAVEX therapy.',
-      steps: [
-        { name: 'Confirm indication', text: 'Verify patient has moderately to severely active RA with inadequate response to one or more DMARDs.' },
-        { name: 'Baseline assessments', text: 'Obtain CBC, liver function tests, lipid panel, and screen for latent TB and viral hepatitis.' },
-        { name: 'Evaluate renal function', text: 'Check eGFR. Use 100 mg dose for moderate renal impairment (eGFR 30-60).' },
-        { name: 'Prescribe TAVEX', text: 'Standard dose: 200 mg once daily. May be taken with or without food.' },
-      ]
-    },
-    Product: {
-      name: 'TAVEX 200 mg Film-Coated Tablets',
-      description: 'TAVEX (tavexirel) 200 mg film-coated tablets for oral administration.',
-      brand: 'AstraZeneca',
-      price: '1250.00',
-      currency: 'GBP',
-      availability: 'InStock'
-    }
-  };
+  var DATA = {};
 
   // Deep clone helper
   const clone = o => JSON.parse(JSON.stringify(o));
 
   // State
-  let activeType = 'FAQ';
-  let state = clone(DATA);
+  let activeType = '';
+  let state = {};
+  let currentView = 'empty'; // 'empty' | 'loading' | 'ready'
 
   // DOM refs
   const fieldEditor = document.getElementById('fieldEditor');
   const previewPanel = document.getElementById('previewPanel');
+  const emptyView = document.getElementById('emptyView');
+  const loadingView = document.getElementById('loadingView');
+  const mainView = document.getElementById('mainView');
+  const loadingMsg = document.getElementById('loadingMsg');
+  const urlInput = document.getElementById('urlInput');
+  const analyzeBtn = document.getElementById('analyzeBtn');
+  const schemaTabs = document.getElementById('schemaTabs');
+
+  // ============ VIEW SWITCHING ============
+
+  function switchView(view) {
+    currentView = view;
+    emptyView.classList.toggle('active', view === 'empty');
+    loadingView.classList.toggle('active', view === 'loading');
+    mainView.classList.toggle('active', view === 'ready');
+  }
+
+  // ============ URL INPUT HANDLER ============
+
+  function handleAnalyze() {
+    var url = urlInput.value.trim();
+    if (!url) return;
+    loadingMsg.textContent = 'Analyzing schemas...';
+    switchView('loading');
+    slicc.lick({ action: 'analyze-schema', data: { url: url } });
+  }
+
+  analyzeBtn.addEventListener('click', handleAnalyze);
+  urlInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') handleAnalyze();
+  });
+
+  // ============ DYNAMIC TABS ============
+
+  function renderSchemaTabs() {
+    var types = Object.keys(state);
+    schemaTabs.innerHTML = types.map(function(t) {
+      var cls = t === activeType ? 'schema-tab active' : 'schema-tab';
+      return '<button class="' + cls + '" data-type="' + esc(t) + '">' + esc(t) + '</button>';
+    }).join('');
+    bindTabEvents();
+  }
+
+  function bindTabEvents() {
+    schemaTabs.querySelectorAll('.schema-tab').forEach(function(tab) {
+      tab.addEventListener('click', function() {
+        schemaTabs.querySelectorAll('.schema-tab').forEach(function(t) { t.classList.remove('active'); });
+        tab.classList.add('active');
+        activeType = tab.dataset.type;
+        renderFieldEditor();
+        renderPreview();
+        saveState();
+      });
+    });
+  }
 
   // ============ BRIDGE: RESTORE STATE ============
 
   function restoreFromBridge() {
-    const saved = slicc.getState();
-    if (saved && saved.activeType && saved.state) {
-      activeType = saved.activeType;
+    var saved = slicc.getState();
+    if (saved && saved.state && Object.keys(saved.state).length > 0) {
+      activeType = saved.activeType || Object.keys(saved.state)[0];
       state = saved.state;
+      DATA = clone(state);
+      renderSchemaTabs();
+      switchView('ready');
+    } else {
+      switchView('empty');
     }
   }
 
   function saveState() {
-    slicc.setState({ activeType, state });
+    slicc.setState({ activeType: activeType, state: state });
   }
 
   slicc.on('update', function(data) {
-    if (data && data.activeType) activeType = data.activeType;
-    if (data && data.state) state = data.state;
+    if (!data) return;
+
+    // Status: analyzing
+    if (data.status === 'analyzing') {
+      if (data.url) loadingMsg.textContent = 'Analyzing ' + data.url + '...';
+      switchView('loading');
+      return;
+    }
+
+    // Status: empty
+    if (data.status === 'empty') {
+      switchView('empty');
+      return;
+    }
+
+    // Schema data push
+    if (data.schemas) {
+      DATA = clone(data.schemas);
+      state = clone(data.schemas);
+      activeType = data.activeType || Object.keys(state)[0] || '';
+      renderSchemaTabs();
+      renderFieldEditor();
+      renderPreview();
+      saveState();
+      switchView('ready');
+      return;
+    }
+
+    // Legacy direct state push
+    if (data.activeType) activeType = data.activeType;
+    if (data.state) {
+      state = data.state;
+      DATA = clone(state);
+      renderSchemaTabs();
+    }
     renderFieldEditor();
     renderPreview();
+    saveState();
+    switchView('ready');
   });
 
   // ============ FORM RENDERING ============
@@ -631,44 +723,8 @@ textarea.field-input { height: auto; min-height: 80px; padding: 10px 12px; resiz
 
   // ============ TAB / PRESET WIRING ============
 
-  // Schema type tabs
-  document.querySelectorAll('.schema-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('.schema-tab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      activeType = tab.dataset.type;
-      renderFieldEditor();
-      renderPreview();
-      saveState();
-    });
-  });
-
-  // Presets
-  const presetMap = {
-    faq: 'FAQ',
-    product: 'Product',
-    article: 'Article',
-    howto: 'HowTo'
-  };
-
-  document.querySelectorAll('.preset').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.preset').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-
-      const type = presetMap[btn.dataset.preset];
-      state[type] = clone(DATA[type]);
-      activeType = type;
-
-      document.querySelectorAll('.schema-tab').forEach(t => {
-        t.classList.toggle('active', t.dataset.type === type);
-      });
-
-      renderFieldEditor();
-      renderPreview();
-      saveState();
-    });
-  });
+  // Schema type tabs are now rendered dynamically via renderSchemaTabs()
+  // and bound via bindTabEvents() — no static wiring needed here.
 
   // ============ LICK ACTIONS ============
 
@@ -692,8 +748,10 @@ textarea.field-input { height: auto; min-height: 80px; padding: 10px 12px; resiz
 
   // ============ INIT ============
   restoreFromBridge();
-  renderFieldEditor();
-  renderPreview();
+  if (currentView === 'ready') {
+    renderFieldEditor();
+    renderPreview();
+  }
 })();
 </script>
 </body>

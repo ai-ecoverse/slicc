@@ -181,94 +181,95 @@ body {
 .action-btn:hover { border-color: var(--s2-accent); color: var(--s2-accent); }
 .action-btn.primary { background: var(--s2-accent); border-color: var(--s2-accent); color: var(--s2-gray-25); }
 .action-btn.primary:hover { background: var(--s2-accent-hover); border-color: var(--s2-accent-hover); }
+
+.view-state { display: none; flex-direction: column; height: 100%; }
+.view-state.active { display: flex; }
+.empty-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px 32px; text-align:center; gap:16px; }
+.empty-state h2 { font-size:18px; font-weight:800; color:var(--s2-gray-900); }
+.empty-state p { font-size:13px; color:var(--s2-gray-600); max-width:360px; line-height:1.5; }
+.url-input-row { display:flex; gap:8px; width:100%; max-width:420px; margin-top:8px; }
+.url-input-row input { flex:1; height:36px; padding:0 12px; border:1px solid var(--s2-gray-300); border-radius:var(--s2-radius-default); font-size:13px; font-family:var(--s2-font-family); color:var(--s2-gray-900); background:var(--s2-bg-elevated); outline:none; transition:border-color 130ms ease; }
+.url-input-row input:focus { border-color:var(--s2-accent); }
+.url-input-row input::placeholder { color:var(--s2-gray-400); }
+.url-input-row button { height:36px; padding:0 20px; border:none; border-radius:var(--s2-radius-pill); background:var(--s2-accent); color:var(--s2-gray-25); font-size:13px; font-weight:600; font-family:var(--s2-font-family); cursor:pointer; transition:background 130ms ease; white-space:nowrap; }
+.url-input-row button:hover { background:var(--s2-accent-hover); }
+.loading-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px 32px; text-align:center; gap:12px; }
+.loading-spinner { width:32px; height:32px; border:3px solid var(--s2-gray-200); border-top-color:var(--s2-accent); border-radius:50%; animation:spin 0.8s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.loading-state p { font-size:14px; font-weight:600; color:var(--s2-gray-800); }
+.loading-state .loading-detail { font-size:12px; font-weight:400; color:var(--s2-gray-500); }
 </style>
 </head>
 <body>
 
-<div class="content-area">
-  <div class="content-toolbar">
-    <h1 class="page-title">SEO Health</h1>
-    <div class="preset-group">
-      <button class="preset active" data-preset="current">TAVEX (current)</button>
-      <button class="preset" data-preset="fixed">All fixed</button>
-      <button class="preset" data-preset="critical">Critical only</button>
-      <button class="preset" data-preset="newsite">New site</button>
+<!-- ====== EMPTY VIEW ====== -->
+<div id="emptyView" class="view-state active">
+  <div class="empty-state">
+    <h2>SEO Dashboard</h2>
+    <p>Audit meta tags, headings, images, and links across your site. Enter a URL below.</p>
+    <div class="url-input-row">
+      <input type="text" id="auditUrlInput" placeholder="https://example.com" />
+      <button id="runAuditBtn">Run Audit</button>
     </div>
   </div>
+</div>
 
-  <div class="content-main">
-    <div class="summary-bar" id="summaryBar"></div>
-    <div class="audit-table-wrap">
-      <table class="audit-table">
-        <thead id="auditHead"></thead>
-        <tbody id="auditBody"></tbody>
-      </table>
-    </div>
-    <div id="detailPanel"></div>
+<!-- ====== LOADING VIEW ====== -->
+<div id="loadingView" class="view-state">
+  <div class="loading-state">
+    <div class="loading-spinner"></div>
+    <p>Running SEO audit...</p>
+    <div class="loading-detail">Crawling pages and analyzing meta tags, headings, and links</div>
   </div>
+</div>
 
-  <div class="action-bar">
-    <button class="action-btn" onclick="slicc.lick({action:'run-audit'})">Run Audit</button>
-    <button class="action-btn primary" onclick="slicc.lick({action:'export-report'})">Export Report</button>
+<!-- ====== MAIN VIEW ====== -->
+<div id="mainView" class="view-state">
+  <div class="content-area">
+    <div class="content-toolbar">
+      <h1 class="page-title">SEO Health</h1>
+      <div class="preset-group" id="presetGroup"></div>
+    </div>
+
+    <div class="content-main">
+      <div class="summary-bar" id="summaryBar"></div>
+      <div class="audit-table-wrap">
+        <table class="audit-table">
+          <thead id="auditHead"></thead>
+          <tbody id="auditBody"></tbody>
+        </table>
+      </div>
+      <div id="detailPanel"></div>
+    </div>
+
+    <div class="action-bar">
+      <button class="action-btn" onclick="slicc.lick({action:'run-audit'})">Run Audit</button>
+      <button class="action-btn primary" onclick="slicc.lick({action:'export-report'})">Export Report</button>
+    </div>
   </div>
 </div>
 
 <script>
+/*
+ * DATA CONTRACT — push via: sprinkle send seo-dashboard '<json>'
+ * 1. Signal analysis started: {"status":"analyzing","url":"https://example.com"}
+ * 2. Push SEO data:           {"pages":[{"url":"...","title":"...","meta":"...","h1s":["..."],"imgs":[...],"internalLinks":5},...]}}
+ * 3. Push fix suggestions:    {"action":"fix-suggestions","suggestions":[...]}
+ * 4. DA confirmation:         {"action":"da-applied","path":"...","previewUrl":"..."} or {"action":"da-error","message":"..."}
+ * 5. No page specified:       {"status":"empty"}
+ */
+
 // ==================== DATA ====================
-var PRESETS = {
-  current: [
-    { path: '/tavex/', name: 'Home', title: 'TAVEX (tavexirel) | AstraZeneca',
-      meta: '', h1s: ['TAVEX (tavexirel)'],
-      imgs: [{alt: 'TAVEX hero'}, {alt: 'Efficacy chart'}, {alt: ''}],
-      internalLinks: 4, traffic: 42 },
-    { path: '/tavex/efficacy', name: 'Efficacy', title: 'Efficacy Data \u2014 TAVEX (tavexirel) Clinical Trials RESOLVE-1 and RESOLVE-2 Results',
-      meta: 'Clinical efficacy data for TAVEX in rheumatoid arthritis.',
-      h1s: ['Efficacy Data', 'Clinical Results'],
-      imgs: [{alt: 'ACR20 chart'}, {alt: 'Response rates'}], internalLinks: 3, traffic: 23 },
-    { path: '/tavex/safety', name: 'Safety', title: 'Safety',
-      meta: 'Safety profile of TAVEX across the RESOLVE clinical programme with adverse event data and monitoring recommendations for healthcare professionals.',
-      h1s: ['Safety Profile'], imgs: [{alt: 'Safety data table'}], internalLinks: 2, traffic: 15 },
-    { path: '/tavex/dosing', name: 'Dosing', title: 'TAVEX Dosing Guide',
-      meta: 'TAVEX 200mg once daily dosing information.',
-      h1s: ['Dosing Guide'], imgs: [{alt: 'Tablet photo'}, {alt: 'Dosing table'}], internalLinks: 1, traffic: 10 },
-    { path: '/tavex/mechanism-of-action', name: 'Mechanism of Action', title: 'Mechanism of Action \u2014 TAVEX',
-      meta: 'How TAVEX selectively inhibits JAK1 to block pro-inflammatory cytokine signalling in rheumatoid arthritis.',
-      h1s: ['Mechanism of Action'], imgs: [{alt: 'JAK pathway diagram'}], internalLinks: 3, traffic: 7 },
-    { path: '/tavex/prescribing-information', name: 'Prescribing Info', title: 'Prescribing Information',
-      meta: 'Full prescribing information for TAVEX including indications, dosage, contraindications, and adverse event reporting.',
-      h1s: [], imgs: [], internalLinks: 0, traffic: 3 },
-  ],
-  fixed: [
-    { path: '/tavex/', name: 'Home', title: 'TAVEX (tavexirel) for Rheumatoid Arthritis | AstraZeneca',
-      meta: 'Discover TAVEX (tavexirel), a selective JAK1 inhibitor for the treatment of moderate-to-severe rheumatoid arthritis in adults.',
-      h1s: ['TAVEX (tavexirel)'], imgs: [{alt: 'TAVEX hero banner'}, {alt: 'Efficacy summary chart'}, {alt: 'Patient testimonial'}],
-      internalLinks: 6, traffic: 42 },
-    { path: '/tavex/efficacy', name: 'Efficacy', title: 'TAVEX Efficacy Data \u2014 RESOLVE Clinical Trials',
-      meta: 'Review clinical efficacy data from RESOLVE-1 and RESOLVE-2 trials for TAVEX in rheumatoid arthritis treatment.',
-      h1s: ['Efficacy Data'], imgs: [{alt: 'ACR20 response chart'}, {alt: 'Response rates comparison'}], internalLinks: 4, traffic: 23 },
-    { path: '/tavex/safety', name: 'Safety', title: 'TAVEX Safety Profile \u2014 Adverse Events & Monitoring',
-      meta: 'Safety profile of TAVEX including adverse event data and monitoring recommendations from the RESOLVE clinical programme.',
-      h1s: ['Safety Profile'], imgs: [{alt: 'Safety data summary table'}], internalLinks: 3, traffic: 15 },
-    { path: '/tavex/dosing', name: 'Dosing', title: 'TAVEX Dosing Guide \u2014 200mg Once Daily',
-      meta: 'Complete dosing information for TAVEX 200mg tablets including administration guidance, dose adjustments, and special populations.',
-      h1s: ['Dosing Guide'], imgs: [{alt: 'TAVEX 200mg tablet photo'}, {alt: 'Dosing schedule table'}], internalLinks: 3, traffic: 10 },
-    { path: '/tavex/mechanism-of-action', name: 'Mechanism of Action', title: 'How TAVEX Works \u2014 Mechanism of Action',
-      meta: 'Learn how TAVEX selectively inhibits JAK1 to block pro-inflammatory cytokine signalling in rheumatoid arthritis.',
-      h1s: ['Mechanism of Action'], imgs: [{alt: 'JAK1 pathway diagram'}], internalLinks: 4, traffic: 7 },
-    { path: '/tavex/prescribing-information', name: 'Prescribing Info', title: 'TAVEX Full Prescribing Information',
-      meta: 'Full prescribing information for TAVEX including indications, dosage, contraindications, and adverse event reporting.',
-      h1s: ['Prescribing Information'], imgs: [{alt: 'Prescribing information document'}], internalLinks: 3, traffic: 3 },
-  ],
-  critical: null,
-  newsite: [
-    { path: '/tavex/', name: 'Home', title: '', meta: '', h1s: [], imgs: [{alt: ''}, {alt: ''}], internalLinks: 0, traffic: 42 },
-    { path: '/tavex/efficacy', name: 'Efficacy', title: 'Efficacy', meta: '', h1s: [], imgs: [{alt: ''}, {alt: ''}], internalLinks: 0, traffic: 23 },
-    { path: '/tavex/safety', name: 'Safety', title: '', meta: '', h1s: ['Safety', 'Safety Info'], imgs: [], internalLinks: 0, traffic: 15 },
-    { path: '/tavex/dosing', name: 'Dosing', title: 'Dosing', meta: '', h1s: [], imgs: [{alt: ''}], internalLinks: 0, traffic: 10 },
-    { path: '/tavex/mechanism-of-action', name: 'Mechanism of Action', title: '', meta: '', h1s: [], imgs: [], internalLinks: 0, traffic: 7 },
-    { path: '/tavex/prescribing-information', name: 'Prescribing Info', title: '', meta: '', h1s: [], imgs: [], internalLinks: 0, traffic: 3 },
-  ],
-};
+var PRESETS = {};
+
+// ==================== VIEW STATE ====================
+function switchView(view) {
+  document.getElementById('emptyView').classList.remove('active');
+  document.getElementById('loadingView').classList.remove('active');
+  document.getElementById('mainView').classList.remove('active');
+  var el = document.getElementById(view + 'View');
+  if (el) el.classList.add('active');
+}
 
 // ==================== STATE ====================
 var pages = [];
@@ -702,7 +703,9 @@ function restoreState(state) {
 // ==================== PRESETS ====================
 function loadPreset(key) {
   selectedIdx = -1;
+  if (!PRESETS[key] && key !== 'critical') return;
   if (key === 'critical') {
+    if (!PRESETS.current) return;
     pages = JSON.parse(JSON.stringify(PRESETS.current));
     pages = pages.filter(function(p) { return computePageScore(p).total < 50; });
     if (pages.length === 0) {
@@ -773,41 +776,69 @@ function applySuggestion(key, idx) {
 
 // ==================== BRIDGE ====================
 slicc.on('update', function(data) {
-  if (data && data.action === 'apply-fix') {
+  if (!data) return;
+
+  // --- Status transitions ---
+  if (data.status === 'analyzing') {
+    switchView('loading');
+    return;
+  }
+  if (data.status === 'empty') {
+    switchView('empty');
+    return;
+  }
+
+  // --- Data push with pages -> ready ---
+  if (data.pages) {
+    pages = data.pages;
+    selectedIdx = typeof data.selectedIdx === 'number' ? data.selectedIdx : -1;
+    switchView('main');
+    refresh();
+    return;
+  }
+
+  // --- Action handlers (existing) ---
+  if (data.action === 'apply-fix') {
     // Cone/scoop can push fixes via sprinkle send
     if (typeof data.pageIndex === 'number' && data.category) {
       selectedIdx = data.pageIndex;
       applyAutoFix(data.category);
     }
   }
-  if (data && data.action === 'fix-suggestions') {
+  if (data.action === 'fix-suggestions') {
     // Scoop pushes suggested fixes for user to pick from
     if (typeof data.pageIndex === 'number' && data.category && Array.isArray(data.suggestions)) {
       renderSuggestions(data.pageIndex, data.category, data.suggestions);
     }
   }
-  if (data && data.action === 'da-applied') {
+  if (data.action === 'da-applied') {
     // DA write confirmed — show a brief toast notification
     showToast('Applied to DA: ' + (data.path || 'page') + (data.previewUrl ? ' — preview ready' : ''));
   }
-  if (data && data.action === 'da-error') {
+  if (data.action === 'da-error') {
     showToast('DA error: ' + (data.message || 'could not apply'), true);
-  }
-  if (data && data.pages) {
-    pages = data.pages;
-    selectedIdx = typeof data.selectedIdx === 'number' ? data.selectedIdx : selectedIdx;
-    refresh();
   }
 });
 
 // ==================== INIT ====================
 function init() {
-  var saved = slicc.getState();
-  if (!restoreState(saved)) {
-    loadPreset('current');
+  // URL input handler
+  var urlInput = document.getElementById('auditUrlInput');
+  var runBtn = document.getElementById('runAuditBtn');
+
+  function submitAudit() {
+    var url = (urlInput.value || '').trim();
+    if (!url) return;
+    switchView('loading');
+    slicc.lick({ action: 'run-audit', data: { url: url } });
   }
 
-  // Preset buttons
+  runBtn.addEventListener('click', submitAudit);
+  urlInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') submitAudit();
+  });
+
+  // Preset buttons (inside mainView)
   document.querySelectorAll('.preset').forEach(function(btn) {
     btn.addEventListener('click', function() {
       document.querySelectorAll('.preset').forEach(function(b) { b.classList.remove('active'); });
@@ -815,6 +846,15 @@ function init() {
       loadPreset(btn.dataset.preset);
     });
   });
+
+  // Restore saved state or show empty
+  var saved = slicc.getState();
+  if (saved && saved.pages && saved.pages.length > 0) {
+    restoreState(saved);
+    switchView('main');
+  } else {
+    switchView('empty');
+  }
 }
 
 init();

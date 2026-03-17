@@ -152,6 +152,24 @@ body {
 .modal-btn.primary { background: var(--s2-accent); border-color: var(--s2-accent); color: var(--s2-gray-25); }
 .modal-btn.primary:hover { background: var(--s2-accent-hover); }
 
+/* View states */
+.view-state { display: none; flex-direction: column; height: 100%; }
+.view-state.active { display: flex; }
+.empty-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px 32px; text-align:center; gap:16px; }
+.empty-state h2 { font-size:18px; font-weight:800; color:var(--s2-gray-900); }
+.empty-state p { font-size:13px; color:var(--s2-gray-600); max-width:360px; line-height:1.5; }
+.url-input-row { display:flex; gap:8px; width:100%; max-width:420px; margin-top:8px; }
+.url-input-row input { flex:1; height:36px; padding:0 12px; border:1px solid var(--s2-gray-300); border-radius:var(--s2-radius-default); font-size:13px; font-family:var(--s2-font-family); color:var(--s2-gray-900); background:var(--s2-bg-elevated); outline:none; transition:border-color 130ms ease; }
+.url-input-row input:focus { border-color:var(--s2-accent); }
+.url-input-row input::placeholder { color:var(--s2-gray-400); }
+.url-input-row button { height:36px; padding:0 20px; border:none; border-radius:var(--s2-radius-pill); background:var(--s2-accent); color:var(--s2-gray-25); font-size:13px; font-weight:600; font-family:var(--s2-font-family); cursor:pointer; transition:background 130ms ease; white-space:nowrap; }
+.url-input-row button:hover { background:var(--s2-accent-hover); }
+.loading-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px 32px; text-align:center; gap:12px; }
+.loading-spinner { width:32px; height:32px; border:3px solid var(--s2-gray-200); border-top-color:var(--s2-accent); border-radius:50%; animation:spin 0.8s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.loading-state p { font-size:14px; font-weight:600; color:var(--s2-gray-800); }
+.loading-state .loading-detail { font-size:12px; font-weight:400; color:var(--s2-gray-500); }
+
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
@@ -160,48 +178,57 @@ body {
 </head>
 <body>
 
-<div class="content-area">
-  <div class="content-toolbar">
-    <h1 class="page-title">Conversion Funnels</h1>
-    <div class="preset-group">
-      <button class="preset active" data-funnel="hcp-engagement">HCP Engagement</button>
-      <button class="preset" data-funnel="content-depth">Content Depth</button>
-      <button class="preset" data-funnel="download-funnel">Downloads</button>
-      <button class="preset" data-funnel="multi-page">Multi-page</button>
+<div id="emptyView" class="view-state active">
+  <div class="empty-state">
+    <h2>Conversion Funnels</h2>
+    <p>Analyze conversion funnels and user flow drop-offs. Enter a site URL below.</p>
+    <div class="url-input-row">
+      <input type="text" id="urlInput" placeholder="https://example.com" />
+      <button id="analyzeBtn">Analyze</button>
     </div>
   </div>
+</div>
+<div id="loadingView" class="view-state">
+  <div class="loading-state">
+    <div class="loading-spinner"></div>
+    <p id="loadingMsg">Analyzing funnels...</p>
+    <p class="loading-detail">Collecting analytics data and mapping conversion paths</p>
+  </div>
+</div>
+<div id="mainView" class="view-state">
+  <div class="content-area">
+    <div class="content-toolbar">
+      <h1 class="page-title">Conversion Funnels</h1>
+      <div class="preset-group" id="presetGroup"></div>
+    </div>
 
-  <div class="content-main">
-    <div class="funnel-page" id="funnelPage">
-      <!-- Controls -->
-      <div class="funnel-controls">
-        <div class="funnel-selector">
-          <select id="funnelSelect">
-            <option value="hcp-engagement">HCP Engagement</option>
-            <option value="content-depth">Content Depth</option>
-            <option value="download-funnel">Downloads</option>
-            <option value="multi-page">Multi-page Journey</option>
-          </select>
+    <div class="content-main">
+      <div class="funnel-page" id="funnelPage">
+        <!-- Controls -->
+        <div class="funnel-controls">
+          <div class="funnel-selector">
+            <select id="funnelSelect"></select>
+          </div>
+          <div class="time-range">
+            <button class="time-btn active" data-range="7">7d</button>
+            <button class="time-btn" data-range="30">30d</button>
+            <button class="time-btn" data-range="90">90d</button>
+          </div>
+          <div class="funnel-total">Total entries: <strong id="totalCount">0</strong></div>
         </div>
-        <div class="time-range">
-          <button class="time-btn active" data-range="7">7d</button>
-          <button class="time-btn" data-range="30">30d</button>
-          <button class="time-btn" data-range="90">90d</button>
+
+        <!-- SVG funnel -->
+        <div class="funnel-svg-wrap" id="funnelWrap">
+          <svg id="funnelSvg" xmlns="http://www.w3.org/2000/svg"></svg>
+          <div class="funnel-tooltip" id="funnelTooltip"></div>
         </div>
-        <div class="funnel-total">Total entries: <strong id="totalCount">12,000</strong></div>
+
+        <!-- Drop-off analysis -->
+        <div id="analysisSection"></div>
+
+        <!-- A/B test candidates -->
+        <div id="abSection"></div>
       </div>
-
-      <!-- SVG funnel -->
-      <div class="funnel-svg-wrap" id="funnelWrap">
-        <svg id="funnelSvg" xmlns="http://www.w3.org/2000/svg"></svg>
-        <div class="funnel-tooltip" id="funnelTooltip"></div>
-      </div>
-
-      <!-- Drop-off analysis -->
-      <div id="analysisSection"></div>
-
-      <!-- A/B test candidates -->
-      <div id="abSection"></div>
     </div>
   </div>
 </div>
@@ -234,159 +261,153 @@ body {
 </div>
 
 <script>
+/*
+ * DATA CONTRACT — push via: sprinkle send funnels '<json>'
+ * 1. Signal analysis started: {"status":"analyzing","url":"https://example.com"}
+ * 2. Push funnel data: {"funnels":{"funnel-name":{"label":"...","stages":[...],"analysis":"..."},...},"currentFunnel":"funnel-name","currentRange":"30d"}
+ * 3. No page specified: {"status":"empty"}
+ */
+
+// ===== DATA =====
+var funnels = {};
+var presetOverrides = {};
+
+// ===== STATE =====
+var currentFunnel = '';
+var currentRange = 7;
+var selectedStageIndex = -1;
+
+// ===== VIEW STATE MANAGEMENT =====
+function switchView(view) {
+  document.getElementById('emptyView').classList.toggle('active', view === 'empty');
+  document.getElementById('loadingView').classList.toggle('active', view === 'loading');
+  document.getElementById('mainView').classList.toggle('active', view === 'ready');
+}
+
 // ===== SLICC BRIDGE =====
-// Restore state from slicc.getState() on load
 (function initBridge() {
   var saved = typeof slicc !== 'undefined' && slicc.getState ? slicc.getState() : null;
   if (saved) {
-    if (saved.currentFunnel) currentFunnel = saved.currentFunnel;
-    if (saved.currentRange) currentRange = saved.currentRange;
+    if (saved.funnels && Object.keys(saved.funnels).length > 0) {
+      funnels = saved.funnels;
+      if (saved.currentFunnel) currentFunnel = saved.currentFunnel;
+      if (saved.currentRange) currentRange = saved.currentRange;
+      buildSelectors();
+      switchView('ready');
+      renderAll();
+    } else if (saved.status === 'analyzing') {
+      if (saved.url) document.getElementById('loadingMsg').textContent = 'Analyzing ' + saved.url + '...';
+      switchView('loading');
+    }
+    // otherwise stays on empty (the default)
   }
 
   if (typeof slicc !== 'undefined' && slicc.on) {
     slicc.on('update', function(data) {
       if (!data) return;
-      if (data.currentFunnel) {
+
+      // Status transitions
+      if (data.status === 'empty') {
+        switchView('empty');
+        return;
+      }
+      if (data.status === 'analyzing') {
+        if (data.url) document.getElementById('loadingMsg').textContent = 'Analyzing ' + data.url + '...';
+        switchView('loading');
+        saveState();
+        return;
+      }
+
+      // Funnel data push
+      if (data.funnels) {
+        funnels = data.funnels;
+        if (data.currentFunnel) currentFunnel = data.currentFunnel;
+        else if (!currentFunnel || !funnels[currentFunnel]) currentFunnel = Object.keys(funnels)[0] || '';
+        if (data.currentRange) currentRange = parseInt(data.currentRange) || 7;
+        buildSelectors();
+        switchView('ready');
+        renderAll();
+        return;
+      }
+
+      // Incremental updates on ready view
+      if (data.currentFunnel && funnels[data.currentFunnel]) {
         currentFunnel = data.currentFunnel;
         document.getElementById('funnelSelect').value = currentFunnel;
         syncPresets();
       }
       if (data.currentRange) {
-        currentRange = data.currentRange;
+        currentRange = parseInt(data.currentRange) || currentRange;
         document.querySelectorAll('.time-btn').forEach(function(b) {
           b.classList.toggle('active', parseInt(b.dataset.range) === currentRange);
         });
       }
       if (data.funnelData) {
-        // Allow external data injection
         Object.keys(data.funnelData).forEach(function(key) {
           if (funnels[key]) Object.assign(funnels[key], data.funnelData[key]);
         });
       }
-      renderAll();
+      if (Object.keys(funnels).length > 0) {
+        switchView('ready');
+        renderAll();
+      }
     });
   }
 })();
 
 function saveState() {
   if (typeof slicc !== 'undefined' && slicc.setState) {
-    slicc.setState({ currentFunnel: currentFunnel, currentRange: currentRange });
+    slicc.setState({ funnels: funnels, currentFunnel: currentFunnel, currentRange: currentRange });
   }
 }
 
-// ===== DATA =====
-var funnels = {
-  'hcp-engagement': {
-    name: 'HCP Engagement',
-    stages: [
-      { name: 'Page view', checkpoint: 'viewmedia', count: 12000, pct: 100 },
-      { name: 'Scroll 50%', checkpoint: 'scroll-50', count: 8160, pct: 68 },
-      { name: 'CTA click', checkpoint: 'click', selector: '.hero-cta, .card-link', count: 2760, pct: 23 },
-      { name: 'Form start', checkpoint: 'formstart', count: 1440, pct: 12 },
-      { name: 'Form submit', checkpoint: 'formsubmit', count: 960, pct: 8 },
-    ],
-    dropoffs: [
-      { from: 0, to: 1, drop: 32, severity: 'amber' },
-      { from: 1, to: 2, drop: 45, severity: 'red', biggest: true },
-      { from: 2, to: 3, drop: 48, severity: 'red' },
-      { from: 3, to: 4, drop: 33, severity: 'amber' },
-    ],
-    analysis: {
-      biggestDrop: 'Scroll 50% \u2192 CTA click',
-      page: '/tavex/',
-      hypothesis: 'Primary CTA is below the fold. Users who scroll past 50% are engaged but miss the call-to-action.',
-      suggestedTest: 'Move primary CTA into the hero section above the fold.'
-    },
-    abTests: [
-      { name: 'Hero CTA position', desc: 'Move CTA from below fold to hero section', impact: '+12% CTR', stage: 'CTA click', priority: 1 },
-      { name: 'Card layout 2-col vs 3-col', desc: 'Test whether fewer, larger cards increase click-through', impact: '+8% CTR', stage: 'CTA click', priority: 2 },
-      { name: 'Accordion default-open first item', desc: 'Auto-expand prescribing information to increase engagement', impact: '+5% engagement', stage: 'Scroll 50%', priority: 3 },
-    ]
-  },
-  'content-depth': {
-    name: 'Content Depth',
-    stages: [
-      { name: 'Page view', checkpoint: 'viewmedia', count: 12000, pct: 100 },
-      { name: 'Scroll 25%', checkpoint: 'scroll-25', count: 9600, pct: 80 },
-      { name: 'Scroll 50%', checkpoint: 'scroll-50', count: 7200, pct: 60 },
-      { name: 'Scroll 75%', checkpoint: 'scroll-75', count: 4800, pct: 40 },
-      { name: 'Scroll 100%', checkpoint: 'scroll-100', count: 2400, pct: 20 },
-    ],
-    dropoffs: [
-      { from: 0, to: 1, drop: 20, severity: 'green' },
-      { from: 1, to: 2, drop: 20, severity: 'green' },
-      { from: 2, to: 3, drop: 20, severity: 'amber' },
-      { from: 3, to: 4, drop: 20, severity: 'amber' },
-    ],
-    analysis: {
-      biggestDrop: 'Scroll 50% \u2192 Scroll 75%',
-      page: '/tavex/',
-      hypothesis: 'Content in the lower half of the page (accordion, references) is not compelling enough to keep users scrolling.',
-      suggestedTest: 'Add a secondary CTA or visual break before the accordion section.'
-    },
-    abTests: [
-      { name: 'Mid-page CTA insertion', desc: 'Add efficacy summary CTA between columns and accordion', impact: '+15% scroll depth', stage: 'Scroll 75%', priority: 1 },
-      { name: 'Lazy-load accordion content', desc: 'Show teaser text for accordion items to encourage expansion', impact: '+10% engagement', stage: 'Scroll 75%', priority: 2 },
-    ]
-  },
-  'download-funnel': {
-    name: 'Downloads',
-    stages: [
-      { name: 'Resource page view', checkpoint: 'viewmedia', count: 4500, pct: 100 },
-      { name: 'Browse resources', checkpoint: 'scroll-25', count: 3600, pct: 80 },
-      { name: 'Click resource', checkpoint: 'click', selector: '.resource-link', count: 1800, pct: 40 },
-      { name: 'Download start', checkpoint: 'download', count: 1350, pct: 30 },
-      { name: 'Download complete', checkpoint: 'download-complete', count: 1200, pct: 27 },
-    ],
-    dropoffs: [
-      { from: 0, to: 1, drop: 20, severity: 'green' },
-      { from: 1, to: 2, drop: 40, severity: 'red', biggest: true },
-      { from: 2, to: 3, drop: 10, severity: 'green' },
-      { from: 3, to: 4, drop: 3, severity: 'green' },
-    ],
-    analysis: {
-      biggestDrop: 'Browse \u2192 Click resource',
-      page: '/tavex/hcp/resources',
-      hypothesis: 'Resource titles and descriptions are not descriptive enough. Users browse but cannot identify what they need.',
-      suggestedTest: 'Add preview thumbnails and file-type badges to resource listings.'
-    },
-    abTests: [
-      { name: 'Resource card previews', desc: 'Add PDF thumbnail previews to resource cards', impact: '+18% click-through', stage: 'Click resource', priority: 1 },
-      { name: 'Category filters', desc: 'Add filter chips for resource types', impact: '+12% click-through', stage: 'Click resource', priority: 2 },
-    ]
-  },
-  'multi-page': {
-    name: 'Multi-page Journey',
-    stages: [
-      { name: 'Homepage', checkpoint: 'viewmedia', count: 12000, pct: 100 },
-      { name: 'Efficacy page', checkpoint: 'navigate', selector: '/tavex/efficacy', count: 5400, pct: 45 },
-      { name: 'Safety page', checkpoint: 'navigate', selector: '/tavex/safety', count: 2700, pct: 22.5 },
-      { name: 'Dosing page', checkpoint: 'navigate', selector: '/tavex/dosing', count: 1620, pct: 13.5 },
-      { name: 'PI download', checkpoint: 'download', count: 810, pct: 6.75 },
-    ],
-    dropoffs: [
-      { from: 0, to: 1, drop: 55, severity: 'red', biggest: true },
-      { from: 1, to: 2, drop: 22.5, severity: 'amber' },
-      { from: 2, to: 3, drop: 9, severity: 'green' },
-      { from: 3, to: 4, drop: 6.75, severity: 'green' },
-    ],
-    analysis: {
-      biggestDrop: 'Homepage \u2192 Efficacy page',
-      page: '/tavex/',
-      hypothesis: 'Navigation cards on homepage compete for attention. Users do not clearly understand the intended journey path.',
-      suggestedTest: 'Add a prominent "Start here: Efficacy data" banner or guided flow from the hero section.'
-    },
-    abTests: [
-      { name: 'Guided journey CTA', desc: 'Replace hero CTA with "Start with efficacy data" journey prompt', impact: '+20% navigation', stage: 'Efficacy page', priority: 1 },
-      { name: 'Sequential page indicators', desc: 'Add "Next: Safety" links at bottom of each page', impact: '+15% continuation', stage: 'Safety page', priority: 2 },
-    ]
+// ===== URL INPUT HANDLER =====
+document.getElementById('analyzeBtn').addEventListener('click', function() {
+  var url = document.getElementById('urlInput').value.trim();
+  if (!url) return;
+  document.getElementById('loadingMsg').textContent = 'Analyzing ' + url + '...';
+  switchView('loading');
+  if (typeof slicc !== 'undefined' && slicc.lick) {
+    slicc.lick({ action: 'analyze-funnels', data: { url: url } });
   }
-};
+});
+document.getElementById('urlInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') document.getElementById('analyzeBtn').click();
+});
 
-// ===== STATE =====
-var currentFunnel = 'hcp-engagement';
-var currentRange = 7;
-var selectedStageIndex = -1;
+// ===== DYNAMIC SELECTORS =====
+function buildSelectors() {
+  var keys = Object.keys(funnels);
+  if (!currentFunnel || !funnels[currentFunnel]) currentFunnel = keys[0] || '';
+
+  // Build preset buttons
+  var presetGroup = document.getElementById('presetGroup');
+  presetGroup.innerHTML = '';
+  keys.forEach(function(key) {
+    var btn = document.createElement('button');
+    btn.className = 'preset' + (key === currentFunnel ? ' active' : '');
+    btn.dataset.funnel = key;
+    btn.textContent = funnels[key].name || funnels[key].label || key;
+    btn.addEventListener('click', function() {
+      currentFunnel = key;
+      document.getElementById('funnelSelect').value = key;
+      syncPresets();
+      renderAll();
+    });
+    presetGroup.appendChild(btn);
+  });
+
+  // Build select options
+  var sel = document.getElementById('funnelSelect');
+  sel.innerHTML = '';
+  keys.forEach(function(key) {
+    var opt = document.createElement('option');
+    opt.value = key;
+    opt.textContent = funnels[key].name || funnels[key].label || key;
+    sel.appendChild(opt);
+  });
+  sel.value = currentFunnel;
+}
 
 // ===== HELPERS =====
 var COLORS = { green: '#079355', amber: '#e68619', red: '#d73220' };
@@ -404,6 +425,7 @@ function getSeverityForDrop(drop) { return drop > 40 ? 'red' : drop > 20 ? 'ambe
 
 function getScaledData() {
   var f = funnels[currentFunnel];
+  if (!f) return null;
   var mult = rangeMultiplier(currentRange);
   return {
     name: f.name, analysis: f.analysis, abTests: f.abTests,
@@ -412,7 +434,7 @@ function getScaledData() {
       var baseCount = Math.round(f.stages[0].count * mult * pct / 100);
       return Object.assign({}, s, { pct: pct, count: i === 0 ? f.stages[0].count * mult : baseCount });
     }),
-    dropoffs: f.dropoffs.map(function(d) {
+    dropoffs: (f.dropoffs || []).map(function(d) {
       if (currentRange === 7) return d;
       var jittered = +(d.drop + ((d.drop * currentRange) % 5 - 2) * 0.5).toFixed(1);
       return Object.assign({}, d, { drop: Math.max(1, jittered), severity: getSeverityForDrop(jittered) });
@@ -423,6 +445,7 @@ function getScaledData() {
 // ===== RENDER: SVG FUNNEL =====
 function renderFunnel() {
   var data = getScaledData();
+  if (!data) return;
   var stages = data.stages;
   var dropoffs = data.dropoffs;
   var svg = document.getElementById('funnelSvg');
@@ -587,6 +610,7 @@ function renderFunnel() {
 // ===== RENDER: ANALYSIS =====
 function renderAnalysis() {
   var data = getScaledData();
+  if (!data) return;
   var a = data.analysis;
   var el = document.getElementById('analysisSection');
   el.innerHTML =
@@ -619,7 +643,8 @@ function renderAnalysis() {
 // ===== RENDER: A/B TESTS =====
 function renderAbTests() {
   var data = getScaledData();
-  var tests = data.abTests;
+  if (!data) return;
+  var tests = data.abTests || [];
   var el = document.getElementById('abSection');
   var html = '<div class="ab-section-title">A/B Test Candidates</div><div class="ab-cards">';
   tests.forEach(function(t) {
@@ -638,12 +663,23 @@ function renderAbTests() {
   });
   html += '</div>';
   el.innerHTML = html;
+
+  // Wire A/B card clicks dynamically
+  el.querySelectorAll('.ab-card').forEach(function(card) {
+    card.addEventListener('click', function() {
+      var name = card.querySelector('.ab-name');
+      if (name && typeof slicc !== 'undefined') {
+        slicc.lick({ action: 'run-ab-test', data: { testName: name.textContent, funnel: currentFunnel } });
+      }
+    });
+  });
 }
 
 // ===== STAGE EDITOR MODAL =====
 function openStageEditor(index) {
   selectedStageIndex = index;
   var data = getScaledData();
+  if (!data) return;
   var stage = data.stages[index];
   document.getElementById('modalStageName').value = stage.name;
   document.getElementById('modalCheckpoint').value = stage.checkpoint;
@@ -688,19 +724,7 @@ document.getElementById('funnelSelect').addEventListener('change', function(e) {
   renderAll();
 });
 
-// Preset buttons
-document.querySelectorAll('.preset').forEach(function(btn) {
-  btn.addEventListener('click', function() {
-    var fId = btn.dataset.funnel;
-    if (fId) {
-      currentFunnel = fId;
-      document.getElementById('funnelSelect').value = fId;
-      syncPresets();
-      renderAll();
-    }
-  });
-});
-
+// Preset sync (buttons are wired dynamically in buildSelectors)
 function syncPresets() {
   document.querySelectorAll('.preset').forEach(function(b) {
     b.classList.toggle('active', b.dataset.funnel === currentFunnel);
@@ -723,20 +747,13 @@ document.addEventListener('keydown', function(e) {
 });
 
 // ===== SLICC LICK ACTIONS =====
-// Wire interactive elements to slicc.lick() for agent interactivity
-document.querySelectorAll('.ab-card').forEach(function(card) {
-  card.addEventListener('click', function() {
-    var name = card.querySelector('.ab-name');
-    if (name && typeof slicc !== 'undefined') {
-      slicc.lick({ action: 'run-ab-test', data: { testName: name.textContent, funnel: currentFunnel } });
-    }
-  });
-});
+// A/B card clicks are wired dynamically after render (cards are rebuilt each time)
 
 // Expose lick actions for stage analysis and data export
 function lickAnalyzeStep(stageIndex) {
   if (typeof slicc !== 'undefined') {
     var data = getScaledData();
+    if (!data) return;
     var stage = data.stages[stageIndex];
     slicc.lick({ action: 'analyze-step', data: { stage: stage.name, checkpoint: stage.checkpoint, funnel: currentFunnel, pct: stage.pct, count: stage.count } });
   }
@@ -745,6 +762,7 @@ function lickAnalyzeStep(stageIndex) {
 function lickCreateVariant() {
   if (typeof slicc !== 'undefined') {
     var data = getScaledData();
+    if (!data) return;
     slicc.lick({ action: 'create-variant', data: { funnel: currentFunnel, name: data.name, analysis: data.analysis } });
   }
 }
@@ -752,12 +770,13 @@ function lickCreateVariant() {
 function lickExportData() {
   if (typeof slicc !== 'undefined') {
     var data = getScaledData();
+    if (!data) return;
     slicc.lick({ action: 'export-data', data: { funnel: currentFunnel, name: data.name, stages: data.stages, dropoffs: data.dropoffs, range: currentRange } });
   }
 }
 
 // ===== INIT =====
-renderAll();
+// View state is set by initBridge() above — empty by default, ready if saved state has data
 </script>
 </body>
 </html>

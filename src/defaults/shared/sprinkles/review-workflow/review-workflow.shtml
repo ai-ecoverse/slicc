@@ -156,6 +156,24 @@ body {
 /* ---- Empty state ---- */
 .review-empty { padding: 32px 16px; text-align: center; color: var(--s2-gray-400); font-size: 13px; }
 
+/* ---- View states ---- */
+.view-state { display: none; flex-direction: column; height: 100%; }
+.view-state.active { display: flex; }
+.empty-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px 32px; text-align:center; gap:16px; }
+.empty-state h2 { font-size:18px; font-weight:800; color:var(--s2-gray-900); }
+.empty-state p { font-size:13px; color:var(--s2-gray-600); max-width:360px; line-height:1.5; }
+.url-input-row { display:flex; gap:8px; width:100%; max-width:420px; margin-top:8px; }
+.url-input-row input { flex:1; height:36px; padding:0 12px; border:1px solid var(--s2-gray-300); border-radius:var(--s2-radius-default); font-size:13px; font-family:var(--s2-font-family); color:var(--s2-gray-900); background:var(--s2-bg-elevated); outline:none; transition:border-color 130ms ease; }
+.url-input-row input:focus { border-color:var(--s2-accent); }
+.url-input-row input::placeholder { color:var(--s2-gray-400); }
+.url-input-row button { height:36px; padding:0 20px; border:none; border-radius:var(--s2-radius-pill); background:var(--s2-accent); color:var(--s2-gray-25); font-size:13px; font-weight:600; font-family:var(--s2-font-family); cursor:pointer; transition:background 130ms ease; white-space:nowrap; }
+.url-input-row button:hover { background:var(--s2-accent-hover); }
+.loading-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px 32px; text-align:center; gap:12px; }
+.loading-spinner { width:32px; height:32px; border:3px solid var(--s2-gray-200); border-top-color:var(--s2-accent); border-radius:50%; animation:spin 0.8s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.loading-state p { font-size:14px; font-weight:600; color:var(--s2-gray-800); }
+.loading-state .loading-detail { font-size:12px; font-weight:400; color:var(--s2-gray-500); }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
 }
@@ -163,39 +181,57 @@ body {
 </head>
 <body>
 
-<div class="content-area">
-  <div class="content-toolbar">
-    <h1 class="page-title">Review & Approval</h1>
-    <div class="preset-group">
-      <button class="preset" data-preset="fresh">Fresh submission</button>
-      <button class="preset active" data-preset="medical-approved">Medical approved</button>
-      <button class="preset" data-preset="legal-flagged">Legal flagged</button>
-      <button class="preset" data-preset="all-approved">All approved</button>
+<!-- ======== EMPTY VIEW ======== -->
+<div class="view-state active" id="emptyView">
+  <div class="empty-state">
+    <h2>Review Workflow</h2>
+    <p>Review and approve content with annotations and comments. Enter a page URL below.</p>
+    <div class="url-input-row">
+      <input type="text" id="urlInput" placeholder="https://example.com/page" />
+      <button id="btnStartReview">Start Review</button>
     </div>
   </div>
+</div>
 
-  <div class="content-main">
-    <!-- Pipeline bar -->
-    <div class="pipeline-bar" id="pipelineBar"></div>
+<!-- ======== LOADING VIEW ======== -->
+<div class="view-state" id="loadingView">
+  <div class="loading-state">
+    <div class="loading-spinner"></div>
+    <p>Loading review...</p>
+    <span class="loading-detail">Fetching page content and review annotations</span>
+  </div>
+</div>
 
-    <!-- Main review layout -->
-    <div class="review-layout">
-      <div class="doc-panel" id="docPanel"></div>
-      <div class="review-panel">
-        <div class="review-header">
-          <div class="review-title" id="reviewTitle">Comments</div>
-          <div class="filter-tabs" id="filterTabs"></div>
-        </div>
-        <div class="review-list" id="reviewList"></div>
-        <div class="audit-section" id="auditSection">
-          <button class="audit-toggle" id="auditToggle">
-            <span>Audit Trail</span>
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
-          </button>
-          <div class="audit-list" id="auditList"></div>
-        </div>
-        <div class="review-footer">
-          <button class="btn-approve-stage" id="btnApproveStage">Approve Stage</button>
+<!-- ======== MAIN VIEW ======== -->
+<div class="view-state" id="mainView">
+  <div class="content-area">
+    <div class="content-toolbar">
+      <h1 class="page-title">Review & Approval</h1>
+    </div>
+
+    <div class="content-main">
+      <!-- Pipeline bar -->
+      <div class="pipeline-bar" id="pipelineBar"></div>
+
+      <!-- Main review layout -->
+      <div class="review-layout">
+        <div class="doc-panel" id="docPanel"></div>
+        <div class="review-panel">
+          <div class="review-header">
+            <div class="review-title" id="reviewTitle">Comments</div>
+            <div class="filter-tabs" id="filterTabs"></div>
+          </div>
+          <div class="review-list" id="reviewList"></div>
+          <div class="audit-section" id="auditSection">
+            <button class="audit-toggle" id="auditToggle">
+              <span>Audit Trail</span>
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+            </button>
+            <div class="audit-list" id="auditList"></div>
+          </div>
+          <div class="review-footer">
+            <button class="btn-approve-stage" id="btnApproveStage">Approve Stage</button>
+          </div>
         </div>
       </div>
     </div>
@@ -204,100 +240,18 @@ body {
 
 <script>
 // ============================================================
+// DATA CONTRACT — push via: sprinkle send review-workflow '<json>'
+// 1. Signal analysis started: {"status":"analyzing","url":"https://example.com"}
+// 2. Push review data:        {"documentContent":"...","stages":[{"label":"Medical","status":"approved",...}],"comments":[{"id":1,"line":3,"text":"...","role":"medical",...}]}
+// 3. No page specified:       {"status":"empty"}
+// ============================================================
+
+// ============================================================
 // DATA
 // ============================================================
-var documentContent = "TAVEX (tavexirel)\n\nSelective oral JAK1 inhibitor for the treatment of moderately to severely active rheumatoid arthritis in adults with inadequate response to DMARDs.\n\nRheumatoid arthritis: unmet need persists\n\nDespite the availability of biologic DMARDs, approximately 40% of patients with RA fail to achieve low disease activity with current therapies, and many experience loss of response over time. There remains a significant need for effective, convenient oral therapies that provide rapid and sustained disease control.\n\nRapid and sustained disease control\n\n71% of patients achieved ACR20 at Week 12 in the RESOLVE-1 trial, with sustained improvements through Week 52.\n\nWell-characterised safety profile\n\nThe safety profile of TAVEX was consistent across the RESOLVE clinical programme, with a low rate of treatment discontinuation due to adverse events.\n\nSimple once-daily oral dosing\n\nTAVEX 200 mg once daily \u2014 a convenient oral tablet taken with or without food, with no injection or infusion required.\n\nSelective JAK1 inhibition\n\nTAVEX preferentially inhibits JAK1, blocking key pro-inflammatory cytokine signalling while preserving immune and haematopoietic homeostasis through minimal JAK2/JAK3 interference.";
-
-var docLines = documentContent.split('\n');
-
-function makeComments() {
-  return [
-    { id: 1, line: 1, role: 'medical', text: 'Brand name must include INN (tavexirel) on first mention \u2014 confirmed correct.', status: 'approved' },
-    { id: 2, line: 3, role: 'medical', text: 'Claim "moderately to severely active" must match SmPC indication wording exactly. Please verify against latest approved PI.', status: 'pending' },
-    { id: 3, line: 5, role: 'medical', text: '"unmet need" framing is acceptable for HCP audience but would need revision for patient-facing materials.', status: 'approved' },
-    { id: 4, line: 7, role: 'medical', text: '"40% of patients fail" \u2014 please add specific reference citation for this statistic.', status: 'pending' },
-    { id: 5, line: 10, role: 'legal', text: 'Efficacy claim "71% ACR20 at Week 12" requires trial identifier (RESOLVE-1) and reference number.', status: 'pending' },
-    { id: 6, line: 13, role: 'legal', text: '"low rate of treatment discontinuation" is a comparative claim \u2014 needs qualifier or specific data.', status: 'rejected', rejectReason: 'Claim is non-comparative (absolute), no qualifier needed per internal guidance.' },
-    { id: 7, line: 16, role: 'medical', text: '"no injection or infusion required" \u2014 acceptable differentiator for oral JAK inhibitor class.', status: 'approved' },
-    { id: 8, line: 19, role: 'legal', text: '"preserving immune and haematopoietic homeostasis" \u2014 this is a mechanistic claim. Ensure it is supported by nonclinical data reference.', status: 'pending' },
-  ];
-}
-
-function makeStages() {
-  return [
-    { id: 'author', label: 'Author', status: 'complete' },
-    { id: 'medical', label: 'Medical Review', status: 'current' },
-    { id: 'legal', label: 'Legal Review', status: 'upcoming' },
-    { id: 'final', label: 'Approved', status: 'upcoming' },
-  ];
-}
-
-// ============================================================
-// PRESETS
-// ============================================================
-var presets = {
-  'fresh': function() {
-    state.stages = [
-      { id: 'author', label: 'Author', status: 'current' },
-      { id: 'medical', label: 'Medical Review', status: 'upcoming' },
-      { id: 'legal', label: 'Legal Review', status: 'upcoming' },
-      { id: 'final', label: 'Approved', status: 'upcoming' },
-    ];
-    state.comments = makeComments().map(function(c) { return Object.assign({}, c, { status: 'pending' }); });
-    state.activeRole = 'author';
-    state.auditLog = [
-      { action: 'Author submitted document for review', type: 'submitted', time: '5m ago' }
-    ];
-  },
-  'medical-approved': function() {
-    state.stages = makeStages();
-    state.comments = makeComments();
-    state.activeRole = 'medical';
-    state.auditLog = [
-      { action: 'Author submitted document for review', type: 'submitted', time: '3d ago' },
-      { action: 'Medical approved Comment #1 (Line 1)', type: 'approved', time: '2h ago' },
-      { action: 'Medical approved Comment #3 (Line 5)', type: 'approved', time: '2h ago' },
-      { action: 'Medical approved Comment #7 (Line 16)', type: 'approved', time: '1h ago' },
-      { action: 'Legal rejected Comment #6 (Line 13)', type: 'rejected', time: '45m ago' },
-    ];
-  },
-  'legal-flagged': function() {
-    state.stages = [
-      { id: 'author', label: 'Author', status: 'complete' },
-      { id: 'medical', label: 'Medical Review', status: 'complete' },
-      { id: 'legal', label: 'Legal Review', status: 'current' },
-      { id: 'final', label: 'Approved', status: 'upcoming' },
-    ];
-    state.comments = makeComments().map(function(c) {
-      if (c.role === 'medical') return Object.assign({}, c, { status: 'approved' });
-      return c;
-    });
-    state.activeRole = 'legal';
-    state.auditLog = [
-      { action: 'Author submitted document for review', type: 'submitted', time: '5d ago' },
-      { action: 'Medical approved all comments', type: 'approved', time: '3d ago' },
-      { action: 'Medical stage approved \u2014 advanced to Legal', type: 'approved', time: '3d ago' },
-      { action: 'Legal rejected Comment #6 (Line 13)', type: 'rejected', time: '1d ago' },
-      { action: 'Legal flagged Comment #8 (Line 19) for revision', type: 'pending', time: '6h ago' },
-    ];
-  },
-  'all-approved': function() {
-    state.stages = [
-      { id: 'author', label: 'Author', status: 'complete' },
-      { id: 'medical', label: 'Medical Review', status: 'complete' },
-      { id: 'legal', label: 'Legal Review', status: 'complete' },
-      { id: 'final', label: 'Approved', status: 'current' },
-    ];
-    state.comments = makeComments().map(function(c) { return Object.assign({}, c, { status: 'approved' }); });
-    state.activeRole = 'final';
-    state.auditLog = [
-      { action: 'Author submitted document for review', type: 'submitted', time: '7d ago' },
-      { action: 'Medical approved all comments', type: 'approved', time: '5d ago' },
-      { action: 'Legal approved all comments', type: 'approved', time: '2d ago' },
-      { action: 'Document approved \u2014 ready for publication', type: 'approved', time: '1h ago' },
-    ];
-  },
-};
+var documentContent = '';
+var docLines = [];
+var presets = {};
 
 // ============================================================
 // STATE
@@ -312,9 +266,37 @@ var state = {
   auditOpen: false,
 };
 
-// Restore from slicc bridge state or use default preset
+// ============================================================
+// VIEW SWITCHING
+// ============================================================
+function switchView(view) {
+  ['emptyView', 'loadingView', 'mainView'].forEach(function(id) {
+    document.getElementById(id).classList.remove('active');
+  });
+  document.getElementById(view + 'View').classList.add('active');
+}
+
+// ============================================================
+// URL INPUT HANDLER
+// ============================================================
+document.getElementById('btnStartReview').addEventListener('click', function() {
+  var input = document.getElementById('urlInput');
+  var url = input.value.trim();
+  if (!url) return;
+  switchView('loading');
+  slicc.lick({ action: 'start-review', data: { url: url } });
+});
+document.getElementById('urlInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') document.getElementById('btnStartReview').click();
+});
+
+// ============================================================
+// RESTORE STATE OR SHOW EMPTY
+// ============================================================
 var saved = (typeof slicc !== 'undefined' && slicc.getState) ? slicc.getState() : null;
-if (saved) {
+if (saved && saved.documentContent) {
+  documentContent = saved.documentContent;
+  docLines = documentContent.split('\n');
   state.stages = saved.stages || [];
   state.comments = saved.comments || [];
   state.activeRole = saved.activeRole || 'medical';
@@ -322,8 +304,11 @@ if (saved) {
   state.selectedCommentId = saved.selectedCommentId || null;
   state.auditLog = saved.auditLog || [];
   state.auditOpen = saved.auditOpen || false;
+  switchView('main');
+} else if (saved && saved.view === 'loading') {
+  switchView('loading');
 } else {
-  presets['medical-approved']();
+  switchView('empty');
 }
 
 // ============================================================
@@ -331,29 +316,54 @@ if (saved) {
 // ============================================================
 if (typeof slicc !== 'undefined' && slicc.on) {
   slicc.on('update', function(data) {
-    if (data.preset && presets[data.preset]) {
-      presets[data.preset]();
-      state.activeFilter = 'all';
-      state.selectedCommentId = null;
-      render();
+    // Status transitions
+    if (data.status === 'analyzing') {
+      switchView('loading');
       saveState();
+      return;
+    }
+    if (data.status === 'empty') {
+      switchView('empty');
+      saveState();
+      return;
+    }
+
+    // Full data push — switch to ready
+    if (data.documentContent) {
+      documentContent = data.documentContent;
+      docLines = documentContent.split('\n');
     }
     if (data.comments) {
       state.comments = data.comments;
-      render();
-      saveState();
     }
     if (data.stages) {
       state.stages = data.stages;
-      render();
-      saveState();
     }
+    if (data.activeRole) {
+      state.activeRole = data.activeRole;
+    }
+    if (data.auditLog) {
+      state.auditLog = data.auditLog;
+    }
+
+    // If we have enough data, switch to main view
+    if (documentContent && state.stages.length && state.comments.length) {
+      state.activeFilter = 'all';
+      state.selectedCommentId = null;
+      switchView('main');
+      render();
+    }
+    saveState();
   });
 }
 
 function saveState() {
   if (typeof slicc !== 'undefined' && slicc.setState) {
+    var currentView = document.getElementById('mainView').classList.contains('active') ? 'main'
+      : document.getElementById('loadingView').classList.contains('active') ? 'loading' : 'empty';
     slicc.setState({
+      documentContent: documentContent,
+      view: currentView,
       stages: state.stages,
       comments: state.comments,
       activeRole: state.activeRole,
@@ -718,22 +728,6 @@ function render() {
 // EVENT HANDLERS
 // ============================================================
 
-// Presets
-document.querySelectorAll('.preset').forEach(function(btn) {
-  btn.addEventListener('click', function() {
-    document.querySelectorAll('.preset').forEach(function(b) { b.classList.remove('active'); });
-    btn.classList.add('active');
-    var key = btn.dataset.preset;
-    if (presets[key]) {
-      presets[key]();
-      state.activeFilter = 'all';
-      state.selectedCommentId = null;
-      render();
-      saveState();
-    }
-  });
-});
-
 // Approve Stage
 document.getElementById('btnApproveStage').addEventListener('click', function() {
   var currentStage = state.stages.find(function(s) { return s.status === 'current'; });
@@ -783,7 +777,9 @@ function capitalize(str) {
 // ============================================================
 // INIT
 // ============================================================
-render();
+if (document.getElementById('mainView').classList.contains('active')) {
+  render();
+}
 </script>
 </body>
 </html>

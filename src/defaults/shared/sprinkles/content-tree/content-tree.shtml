@@ -101,42 +101,76 @@ body { font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5; co
 .modal-field input, .modal-field select { height: 34px; font-size: 13px; font-family: var(--s2-font-family); color: var(--s2-gray-800); border: 1px solid var(--s2-gray-300); border-radius: var(--s2-radius-default); padding: 0 10px; background: var(--s2-bg-elevated); transition: border-color 130ms ease; }
 .modal-field input:focus, .modal-field select:focus { outline: none; border-color: var(--s2-accent); box-shadow: 0 0 0 1px var(--s2-accent); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+/* ---- View states ---- */
+.view-state { display: none; flex-direction: column; height: 100%; }
+.view-state.active { display: flex; }
+.empty-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px 32px; text-align:center; gap:16px; }
+.empty-state h2 { font-size:18px; font-weight:800; color:var(--s2-gray-900); }
+.empty-state p { font-size:13px; color:var(--s2-gray-600); max-width:360px; line-height:1.5; }
+.url-input-row { display:flex; gap:8px; width:100%; max-width:420px; margin-top:8px; }
+.url-input-row input { flex:1; height:36px; padding:0 12px; border:1px solid var(--s2-gray-300); border-radius:var(--s2-radius-default); font-size:13px; font-family:var(--s2-font-family); color:var(--s2-gray-900); background:var(--s2-bg-elevated); outline:none; transition:border-color 130ms ease; }
+.url-input-row input:focus { border-color:var(--s2-accent); }
+.url-input-row input::placeholder { color:var(--s2-gray-400); }
+.url-input-row button { height:36px; padding:0 20px; border:none; border-radius:var(--s2-radius-pill); background:var(--s2-accent); color:var(--s2-gray-25); font-size:13px; font-weight:600; font-family:var(--s2-font-family); cursor:pointer; transition:background 130ms ease; white-space:nowrap; }
+.url-input-row button:hover { background:var(--s2-accent-hover); }
+.loading-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px 32px; text-align:center; gap:12px; }
+.loading-spinner { width:32px; height:32px; border:3px solid var(--s2-gray-200); border-top-color:var(--s2-accent); border-radius:50%; animation:spin 0.8s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.loading-state p { font-size:14px; font-weight:600; color:var(--s2-gray-800); }
+.loading-state .loading-detail { font-size:12px; font-weight:400; color:var(--s2-gray-500); }
 </style>
 </head>
 <body>
 
 <div class="content-area">
-  <div class="content-toolbar">
-    <h1 class="page-title">Content Tree</h1>
-    <div class="preset-group">
-      <button class="preset active" data-preset="full">TAVEX Full Site</button>
-      <button class="preset" data-preset="minimal">Minimal</button>
-      <button class="preset" data-preset="campaign">Campaign</button>
-      <button class="preset" data-preset="docs">Docs Hub</button>
-    </div>
-  </div>
-
-  <div class="action-bar" id="actionBar">
-    <span class="ab-count" id="selCount">0 selected</span>
-    <button class="ab-btn accent" id="abPublish" onclick="slicc.lick({action: 'publish-selected', data: {ids: Array.from(selected)}})">Publish</button>
-    <button class="ab-btn secondary" id="abUnpublish" onclick="slicc.lick({action: 'unpublish-selected', data: {ids: Array.from(selected)}})">Unpublish</button>
-    <button class="ab-btn negative" id="abDelete" onclick="slicc.lick({action: 'delete-page', data: {ids: Array.from(selected)}})">Delete</button>
-  </div>
-
-  <div class="content-main">
-    <div class="tree-panel" id="treePanel">
-      <div class="tree-list" id="treeList"></div>
-      <button class="add-page-btn" id="addPageBtn" onclick="slicc.lick({action: 'create-page', data: {parent: focused}})">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
-        Add page
-      </button>
-    </div>
-    <div class="detail-panel empty" id="detailPanel">
-      <div class="detail-empty" id="detailEmpty">
-        <svg width="32" height="32" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="10" height="15" rx="1.5"/><path d="M7.5 6.5h5M7.5 9.5h3"/></svg>
-        <p>Select a page to view details</p>
+  <div id="emptyView" class="view-state active">
+    <div class="empty-state">
+      <h2>Content Tree</h2>
+      <p>Browse and manage your site's content structure. Enter a site URL below.</p>
+      <div class="url-input-row">
+        <input type="text" id="urlInput" placeholder="https://example.com" />
+        <button id="analyzeBtn">Load</button>
       </div>
-      <div id="detailContent" style="display:none;"></div>
+    </div>
+  </div>
+
+  <div id="loadingView" class="view-state">
+    <div class="loading-state">
+      <div class="loading-spinner"></div>
+      <p id="loadingMsg">Loading content tree...</p>
+      <p class="loading-detail">Crawling site structure and building page hierarchy</p>
+    </div>
+  </div>
+
+  <div id="mainView" class="view-state">
+    <div class="content-toolbar">
+      <h1 class="page-title">Content Tree</h1>
+      <div class="preset-group" id="presetGroup"></div>
+    </div>
+
+    <div class="action-bar" id="actionBar">
+      <span class="ab-count" id="selCount">0 selected</span>
+      <button class="ab-btn accent" id="abPublish" onclick="slicc.lick({action: 'publish-selected', data: {ids: Array.from(selected)}})">Publish</button>
+      <button class="ab-btn secondary" id="abUnpublish" onclick="slicc.lick({action: 'unpublish-selected', data: {ids: Array.from(selected)}})">Unpublish</button>
+      <button class="ab-btn negative" id="abDelete" onclick="slicc.lick({action: 'delete-page', data: {ids: Array.from(selected)}})">Delete</button>
+    </div>
+
+    <div class="content-main">
+      <div class="tree-panel" id="treePanel">
+        <div class="tree-list" id="treeList"></div>
+        <button class="add-page-btn" id="addPageBtn" onclick="slicc.lick({action: 'create-page', data: {parent: focused}})">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+          Add page
+        </button>
+      </div>
+      <div class="detail-panel empty" id="detailPanel">
+        <div class="detail-empty" id="detailEmpty">
+          <svg width="32" height="32" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="10" height="15" rx="1.5"/><path d="M7.5 6.5h5M7.5 9.5h3"/></svg>
+          <p>Select a page to view details</p>
+        </div>
+        <div id="detailContent" style="display:none;"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -175,74 +209,99 @@ body { font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5; co
 </div>
 
 <script>
+/*
+  DATA CONTRACT — push via: sprinkle send content-tree '<json>'
+  1. Signal analysis started: {"status":"analyzing","url":"https://example.com"}
+  2. Push content tree data: {"pages":[{"path":"/","title":"Home","children":[...]},...],"presets":{...}}
+  3. No page specified: {"status":"empty"}
+*/
+
 /* ========== Data ========== */
-var PRESETS = {
-  full: [
-    { id: 'home', name: 'Home', path: '/tavex/', status: 'published', template: 'Homepage', modified: '2h ago', parent: null, desc: 'TAVEX brand homepage with hero, navigation cards, and MoA teaser.' },
-    { id: 'efficacy', name: 'Efficacy', path: '/tavex/efficacy', status: 'published', template: 'Data Page', modified: '1d ago', parent: 'home', desc: 'Clinical efficacy data from RESOLVE-1 and RESOLVE-2 trials.' },
-    { id: 'safety', name: 'Safety', path: '/tavex/safety', status: 'draft', template: 'Data Page', modified: '3h ago', parent: 'home', desc: 'Safety profile and adverse event data across the RESOLVE programme.' },
-    { id: 'dosing', name: 'Dosing', path: '/tavex/dosing', status: 'unpublished', template: 'Guide', modified: '5d ago', parent: 'home', desc: 'Dosing information: 200mg once daily, renal adjustment, CYP3A4 interactions.' },
-    { id: 'moa', name: 'Mechanism of Action', path: '/tavex/mechanism-of-action', status: 'published', template: 'Science Page', modified: '2d ago', parent: 'home', desc: 'JAK1 selective inhibition pathway and cytokine signalling.' },
-    { id: 'pi', name: 'Prescribing Information', path: '/tavex/prescribing-information', status: 'draft', template: 'Legal', modified: '12h ago', parent: 'home', desc: 'Full SmPC, contraindications, and adverse event reporting.' },
-    { id: 'hcp', name: 'For Healthcare Professionals', path: '/tavex/hcp', status: 'published', template: 'Landing', modified: '4d ago', parent: 'home', desc: 'HCP portal with clinical resources and trial data.' },
-    { id: 'resources', name: 'Resources', path: '/tavex/hcp/resources', status: 'published', template: 'Library', modified: '1w ago', parent: 'hcp', desc: 'Downloadable clinical materials and slide decks.' },
-    { id: 'webinars', name: 'Webinars', path: '/tavex/hcp/webinars', status: 'draft', template: 'Events', modified: '6d ago', parent: 'hcp', desc: 'Upcoming and recorded expert webinars on RA treatment.' },
-  ],
-  minimal: [
-    { id: 'home', name: 'Home', path: '/tavex/', status: 'published', template: 'Homepage', modified: '2h ago', parent: null, desc: 'TAVEX brand homepage with hero, navigation cards, and MoA teaser.' },
-    { id: 'efficacy', name: 'Efficacy', path: '/tavex/efficacy', status: 'published', template: 'Data Page', modified: '1d ago', parent: 'home', desc: 'Clinical efficacy data from RESOLVE-1 and RESOLVE-2 trials.' },
-    { id: 'safety', name: 'Safety', path: '/tavex/safety', status: 'draft', template: 'Data Page', modified: '3h ago', parent: 'home', desc: 'Safety profile and adverse event data across the RESOLVE programme.' },
-  ],
-  campaign: [
-    { id: 'home', name: 'Home', path: '/tavex/', status: 'published', template: 'Homepage', modified: '1h ago', parent: null, desc: 'Campaign landing page for TAVEX launch.' },
-    { id: 'lp1', name: 'HCP Landing', path: '/tavex/hcp-landing', status: 'draft', template: 'Landing', modified: '30m ago', parent: 'home', desc: 'Targeted HCP campaign landing page.' },
-    { id: 'lp2', name: 'Patient Landing', path: '/tavex/patient-landing', status: 'draft', template: 'Landing', modified: '45m ago', parent: 'home', desc: 'Patient awareness campaign landing page.' },
-  ],
-  docs: [
-    { id: 'home', name: 'Docs Hub', path: '/tavex/', status: 'published', template: 'Homepage', modified: '1d ago', parent: null, desc: 'TAVEX documentation hub.' },
-    { id: 'doc1', name: 'Getting Started', path: '/tavex/getting-started', status: 'draft', template: 'Default', modified: '2h ago', parent: 'home', desc: 'Onboarding guide for new prescribers.' },
-    { id: 'doc2', name: 'Clinical Data', path: '/tavex/clinical-data', status: 'draft', template: 'Default', modified: '3h ago', parent: 'home', desc: 'Summary of clinical trial data.' },
-    { id: 'doc3', name: 'Dosing Guide', path: '/tavex/dosing-guide', status: 'draft', template: 'Default', modified: '4h ago', parent: 'home', desc: 'Comprehensive dosing recommendations.' },
-    { id: 'doc4', name: 'Safety Profile', path: '/tavex/safety-profile', status: 'draft', template: 'Default', modified: '5h ago', parent: 'home', desc: 'Detailed safety and tolerability data.' },
-    { id: 'doc5', name: 'FAQ', path: '/tavex/faq', status: 'draft', template: 'Default', modified: '6h ago', parent: 'home', desc: 'Frequently asked questions.' },
-    { id: 'doc6', name: 'References', path: '/tavex/references', status: 'draft', template: 'Default', modified: '1d ago', parent: 'home', desc: 'Full bibliography and reference list.' },
-  ],
-};
+var presets = {};
 
 var pages = [];
 var expanded = new Set();
 var selected = new Set();
 var focused = null;
 var dragSrc = null;
+var currentView = 'empty'; // 'empty' | 'loading' | 'ready'
+
+/* ========== View State Management ========== */
+function switchView(view) {
+  currentView = view;
+  document.getElementById('emptyView').classList.toggle('active', view === 'empty');
+  document.getElementById('loadingView').classList.toggle('active', view === 'loading');
+  document.getElementById('mainView').classList.toggle('active', view === 'ready');
+}
 
 /* ========== Init ========== */
 function init() {
-  var saved = slicc.getState();
-  if (saved && saved.pages) {
-    pages = saved.pages;
-    expanded = new Set(saved.expanded || []);
-    selected = new Set(saved.selected || []);
-    focused = saved.focused || null;
-    render();
-    renderDetail();
-    updateActionBar();
-  } else {
-    loadPreset('full');
+  var saved = restoreState();
+  if (saved) {
+    switchView('ready');
   }
-  wirePresets();
+  // Otherwise stay on empty (default)
+
   wireAddPage();
+  wireUrlInput();
 
   slicc.on('update', function(data) {
-    if (data && data.pages) {
+    if (!data) return;
+
+    // Status transitions
+    if (data.status === 'analyzing') {
+      var msg = data.url ? 'Loading ' + data.url + '...' : 'Loading content tree...';
+      document.getElementById('loadingMsg').textContent = msg;
+      switchView('loading');
+      return;
+    }
+    if (data.status === 'empty') {
+      switchView('empty');
+      return;
+    }
+
+    // Presets pushed by scoop
+    if (data.presets) {
+      presets = data.presets;
+      renderPresets(data.preset || '');
+    }
+
+    // Pages data update
+    if (data.pages) {
       pages = data.pages;
       expanded = new Set(data.expanded || []);
       selected = new Set(data.selected || []);
       focused = data.focused || null;
+      // Auto-expand parents
+      pages.forEach(function(p) {
+        if (pages.some(function(c) { return c.parent === p.id; })) expanded.add(p.id);
+      });
       render();
       renderDetail();
       updateActionBar();
+      switchView('ready');
+      saveState();
     }
   });
+}
+
+function restoreState() {
+  var saved = slicc.getState();
+  if (saved && saved.pages && saved.pages.length > 0) {
+    pages = saved.pages;
+    expanded = new Set(saved.expanded || []);
+    selected = new Set(saved.selected || []);
+    focused = saved.focused || null;
+    if (saved.presets) {
+      presets = saved.presets;
+      renderPresets('');
+    }
+    render();
+    renderDetail();
+    updateActionBar();
+    return true;
+  }
+  return false;
 }
 
 function saveState() {
@@ -250,13 +309,31 @@ function saveState() {
     pages: pages,
     expanded: Array.from(expanded),
     selected: Array.from(selected),
-    focused: focused
+    focused: focused,
+    presets: presets
+  });
+}
+
+/* ========== URL Input ========== */
+function wireUrlInput() {
+  document.getElementById('analyzeBtn').addEventListener('click', function() {
+    var url = document.getElementById('urlInput').value.trim();
+    if (!url) return;
+    if (typeof slicc !== 'undefined' && slicc.lick) {
+      slicc.lick({ action: 'load-site', data: { url: url } });
+    }
+    document.getElementById('loadingMsg').textContent = 'Loading ' + url + '...';
+    switchView('loading');
+  });
+  document.getElementById('urlInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') document.getElementById('analyzeBtn').click();
   });
 }
 
 /* ========== Presets ========== */
 function loadPreset(key) {
-  pages = JSON.parse(JSON.stringify(PRESETS[key]));
+  if (!presets[key] || !presets[key].pages) return;
+  pages = JSON.parse(JSON.stringify(presets[key].pages));
   expanded = new Set();
   selected = new Set();
   focused = null;
@@ -269,13 +346,21 @@ function loadPreset(key) {
   saveState();
 }
 
-function wirePresets() {
-  document.querySelectorAll('.preset').forEach(function(btn) {
+function renderPresets(activePreset) {
+  var group = document.getElementById('presetGroup');
+  group.innerHTML = '';
+  Object.keys(presets).forEach(function(key) {
+    var preset = presets[key];
+    var btn = document.createElement('button');
+    btn.className = 'preset' + (key === activePreset ? ' active' : '');
+    btn.dataset.preset = key;
+    btn.textContent = preset.label || key.replace(/-/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
     btn.addEventListener('click', function() {
-      document.querySelectorAll('.preset').forEach(function(b) { b.classList.remove('active'); });
+      group.querySelectorAll('.preset').forEach(function(b) { b.classList.remove('active'); });
       btn.classList.add('active');
-      loadPreset(btn.dataset.preset);
+      loadPreset(key);
     });
+    group.appendChild(btn);
   });
 }
 

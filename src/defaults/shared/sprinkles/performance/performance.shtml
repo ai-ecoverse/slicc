@@ -124,6 +124,24 @@ body { display: flex; flex-direction: column; height: 100vh; background: var(--s
 .action-btn.primary { background: var(--s2-accent); border-color: var(--s2-accent); color: var(--s2-gray-25); }
 .action-btn.primary:hover { background: var(--s2-accent-hover); }
 
+/* View states */
+.view-state { display: none; flex-direction: column; height: 100%; }
+.view-state.active { display: flex; }
+.empty-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px 32px; text-align:center; gap:16px; }
+.empty-state h2 { font-size:18px; font-weight:800; color:var(--s2-gray-900); }
+.empty-state p { font-size:13px; color:var(--s2-gray-600); max-width:360px; line-height:1.5; }
+.url-input-row { display:flex; gap:8px; width:100%; max-width:420px; margin-top:8px; }
+.url-input-row input { flex:1; height:36px; padding:0 12px; border:1px solid var(--s2-gray-300); border-radius:var(--s2-radius-default); font-size:13px; font-family:var(--s2-font-family); color:var(--s2-gray-900); background:var(--s2-bg-elevated); outline:none; transition:border-color 130ms ease; }
+.url-input-row input:focus { border-color:var(--s2-accent); }
+.url-input-row input::placeholder { color:var(--s2-gray-400); }
+.url-input-row button { height:36px; padding:0 20px; border:none; border-radius:var(--s2-radius-pill); background:var(--s2-accent); color:var(--s2-gray-25); font-size:13px; font-weight:600; font-family:var(--s2-font-family); cursor:pointer; transition:background 130ms ease; white-space:nowrap; }
+.url-input-row button:hover { background:var(--s2-accent-hover); }
+.loading-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px 32px; text-align:center; gap:12px; }
+.loading-spinner { width:32px; height:32px; border:3px solid var(--s2-gray-200); border-top-color:var(--s2-accent); border-radius:50%; animation:spin 0.8s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.loading-state p { font-size:14px; font-weight:600; color:var(--s2-gray-800); }
+.loading-state .loading-detail { font-size:12px; font-weight:400; color:var(--s2-gray-500); }
+
 /* Responsive */
 @media (max-width: 900px) {
   .cwv-cards { grid-template-columns: 1fr; }
@@ -133,148 +151,56 @@ body { display: flex; flex-direction: column; height: 100vh; background: var(--s
 <body>
 
 <div class="content-area">
-  <div class="content-toolbar">
-    <h1 class="page-title">Performance</h1>
-    <div class="preset-group">
-      <button class="preset active" data-preset="tavex">TAVEX (current)</button>
-      <button class="preset" data-preset="allgreen">All green</button>
-      <button class="preset" data-preset="mobile">Mobile regression</button>
-      <button class="preset" data-preset="hightraffic">High traffic</button>
+
+  <!-- EMPTY STATE -->
+  <div id="emptyView" class="view-state active">
+    <div class="empty-state">
+      <h2>Performance Dashboard</h2>
+      <p>Monitor Core Web Vitals and page performance. Enter a site URL below.</p>
+      <div class="url-input-row">
+        <input id="urlInput" type="url" placeholder="https://example.com" />
+        <button id="analyzeBtn">Analyze</button>
+      </div>
     </div>
   </div>
 
-  <div class="content-main">
-    <div class="dashboard" id="dashboard"></div>
+  <!-- LOADING STATE -->
+  <div id="loadingView" class="view-state">
+    <div class="loading-state">
+      <div class="loading-spinner"></div>
+      <p>Analyzing performance...</p>
+      <span class="loading-detail">Running Lighthouse audits and collecting Core Web Vitals</span>
+    </div>
   </div>
+
+  <!-- READY STATE -->
+  <div id="mainView" class="view-state">
+    <div class="content-toolbar">
+      <h1 class="page-title">Performance</h1>
+      <div class="preset-group">
+        <button class="preset active" data-preset="tavex">TAVEX (current)</button>
+        <button class="preset" data-preset="allgreen">All green</button>
+        <button class="preset" data-preset="mobile">Mobile regression</button>
+        <button class="preset" data-preset="hightraffic">High traffic</button>
+      </div>
+    </div>
+
+    <div class="content-main">
+      <div class="dashboard" id="dashboard"></div>
+    </div>
+  </div>
+
 </div>
 
 <script>
 /* ================================================================
-   DATA
+   DATA CONTRACT — push via: sprinkle send performance '<json>'
+   1. Signal analysis started: {"status":"analyzing","url":"https://example.com"}
+   2. Push performance data:  {"siteData":{"7d":{"summary":{...},"pages":[{"path":"...","name":"...","lcp":1.2,"inp":50,"cls":0.04,"traffic":42,"attribution":null|{...},"regression":null|{...}},...]}, "30d":{...}, "90d":{...}}}
+   3. No page specified:      {"status":"empty"}
    ================================================================ */
-var siteData = {
-  '7d': {
-    summary: { lcp: 2.1, inp: 145, cls: 0.08 },
-    pages: [
-      { path: '/tavex/', name: 'Home', lcp: 2.4, inp: 120, cls: 0.05, traffic: 42,
-        attribution: { metric: 'lcp', block: 'hero-teaser', element: 'Hero background image (2.1MB JPEG)', fix: 'Convert to WebP, add width/height attributes, preload with <link rel="preload">', improvement: '-0.6s' }},
-      { path: '/tavex/efficacy', name: 'Efficacy', lcp: 1.8, inp: 180, cls: 0.12, traffic: 23,
-        attribution: { metric: 'cls', block: 'cards-teaser', element: 'Card images loading without dimensions', fix: 'Add explicit width and height to all card images, use aspect-ratio CSS', improvement: '-0.09' },
-        regression: { metric: 'LCP', delta: '+0.8s', since: 'Mar 9 deploy', detail: 'New analytics script added 800ms to page load' }},
-      { path: '/tavex/safety', name: 'Safety', lcp: 3.1, inp: 95, cls: 0.03, traffic: 15,
-        attribution: { metric: 'lcp', block: 'hero-teaser', element: 'Unoptimized hero image (3.5MB, no preload)', fix: 'Compress image to <200KB WebP, add preload hint, set fetchpriority="high"', improvement: '-1.2s' }},
-      { path: '/tavex/dosing', name: 'Dosing', lcp: 1.6, inp: 110, cls: 0.04, traffic: 10,
-        attribution: null },
-      { path: '/tavex/mechanism-of-action', name: 'MoA', lcp: 2.8, inp: 220, cls: 0.06, traffic: 7,
-        attribution: { metric: 'inp', block: 'accordion', element: 'Accordion expand/collapse causing layout recalculation', fix: 'Use CSS containment on accordion items, avoid forced reflow on toggle', improvement: '-80ms' }},
-      { path: '/tavex/prescribing-information', name: 'Prescribing Info', lcp: 1.4, inp: 85, cls: 0.02, traffic: 3,
-        attribution: null },
-    ]
-  },
-  '30d': {
-    summary: { lcp: 2.3, inp: 155, cls: 0.09 },
-    pages: [
-      { path: '/tavex/', name: 'Home', lcp: 2.6, inp: 130, cls: 0.06, traffic: 40, attribution: { metric: 'lcp', block: 'hero-teaser', element: 'Hero background image', fix: 'Convert to WebP, preload', improvement: '-0.5s' }},
-      { path: '/tavex/efficacy', name: 'Efficacy', lcp: 2.2, inp: 190, cls: 0.14, traffic: 22, attribution: { metric: 'cls', block: 'cards-teaser', element: 'Card images without dimensions', fix: 'Add width/height attributes', improvement: '-0.10' }},
-      { path: '/tavex/safety', name: 'Safety', lcp: 3.3, inp: 100, cls: 0.04, traffic: 16, attribution: { metric: 'lcp', block: 'hero-teaser', element: 'Large hero image', fix: 'Compress and preload', improvement: '-1.0s' }},
-      { path: '/tavex/dosing', name: 'Dosing', lcp: 1.7, inp: 115, cls: 0.05, traffic: 11, attribution: null },
-      { path: '/tavex/mechanism-of-action', name: 'MoA', lcp: 2.9, inp: 230, cls: 0.07, traffic: 8, attribution: { metric: 'inp', block: 'accordion', element: 'Accordion reflow', fix: 'CSS containment', improvement: '-70ms' }},
-      { path: '/tavex/prescribing-information', name: 'Prescribing Info', lcp: 1.5, inp: 90, cls: 0.03, traffic: 3, attribution: null },
-    ]
-  },
-  '90d': {
-    summary: { lcp: 2.5, inp: 160, cls: 0.10 },
-    pages: [
-      { path: '/tavex/', name: 'Home', lcp: 2.8, inp: 140, cls: 0.07, traffic: 38, attribution: { metric: 'lcp', block: 'hero-teaser', element: 'Hero image', fix: 'Optimize and preload', improvement: '-0.4s' }},
-      { path: '/tavex/efficacy', name: 'Efficacy', lcp: 2.4, inp: 200, cls: 0.15, traffic: 24, attribution: { metric: 'cls', block: 'cards-teaser', element: 'Image layout shift', fix: 'Explicit dimensions', improvement: '-0.08' }},
-      { path: '/tavex/safety', name: 'Safety', lcp: 3.5, inp: 105, cls: 0.05, traffic: 17, attribution: { metric: 'lcp', block: 'hero-teaser', element: 'Hero image', fix: 'Full optimization pipeline', improvement: '-1.5s' }},
-      { path: '/tavex/dosing', name: 'Dosing', lcp: 1.8, inp: 120, cls: 0.06, traffic: 10, attribution: null },
-      { path: '/tavex/mechanism-of-action', name: 'MoA', lcp: 3.0, inp: 240, cls: 0.08, traffic: 7, attribution: { metric: 'inp', block: 'accordion', element: 'Accordion scripting', fix: 'CSS containment + debounce', improvement: '-90ms' }},
-      { path: '/tavex/prescribing-information', name: 'Prescribing Info', lcp: 1.6, inp: 95, cls: 0.04, traffic: 4, attribution: null },
-    ]
-  }
-};
-
-/* Preset overrides */
-var presetOverrides = {
-  allgreen: {
-    '7d': {
-      summary: { lcp: 1.4, inp: 95, cls: 0.03 },
-      pages: [
-        { path: '/tavex/', name: 'Home', lcp: 1.6, inp: 90, cls: 0.04, traffic: 42, attribution: null },
-        { path: '/tavex/efficacy', name: 'Efficacy', lcp: 1.3, inp: 85, cls: 0.02, traffic: 23, attribution: null },
-        { path: '/tavex/safety', name: 'Safety', lcp: 1.8, inp: 75, cls: 0.03, traffic: 15, attribution: null },
-        { path: '/tavex/dosing', name: 'Dosing', lcp: 1.2, inp: 70, cls: 0.01, traffic: 10, attribution: null },
-        { path: '/tavex/mechanism-of-action', name: 'MoA', lcp: 1.5, inp: 110, cls: 0.04, traffic: 7, attribution: null },
-        { path: '/tavex/prescribing-information', name: 'Prescribing Info', lcp: 1.1, inp: 65, cls: 0.02, traffic: 3, attribution: null },
-      ]
-    },
-    '30d': {
-      summary: { lcp: 1.5, inp: 100, cls: 0.04 },
-      pages: [
-        { path: '/tavex/', name: 'Home', lcp: 1.7, inp: 95, cls: 0.05, traffic: 40, attribution: null },
-        { path: '/tavex/efficacy', name: 'Efficacy', lcp: 1.4, inp: 90, cls: 0.03, traffic: 22, attribution: null },
-        { path: '/tavex/safety', name: 'Safety', lcp: 1.9, inp: 80, cls: 0.04, traffic: 16, attribution: null },
-        { path: '/tavex/dosing', name: 'Dosing', lcp: 1.3, inp: 75, cls: 0.02, traffic: 11, attribution: null },
-        { path: '/tavex/mechanism-of-action', name: 'MoA', lcp: 1.6, inp: 115, cls: 0.05, traffic: 8, attribution: null },
-        { path: '/tavex/prescribing-information', name: 'Prescribing Info', lcp: 1.2, inp: 70, cls: 0.03, traffic: 3, attribution: null },
-      ]
-    },
-    '90d': {
-      summary: { lcp: 1.6, inp: 105, cls: 0.04 },
-      pages: [
-        { path: '/tavex/', name: 'Home', lcp: 1.8, inp: 100, cls: 0.05, traffic: 38, attribution: null },
-        { path: '/tavex/efficacy', name: 'Efficacy', lcp: 1.5, inp: 95, cls: 0.04, traffic: 24, attribution: null },
-        { path: '/tavex/safety', name: 'Safety', lcp: 2.0, inp: 85, cls: 0.04, traffic: 17, attribution: null },
-        { path: '/tavex/dosing', name: 'Dosing', lcp: 1.4, inp: 80, cls: 0.03, traffic: 10, attribution: null },
-        { path: '/tavex/mechanism-of-action', name: 'MoA', lcp: 1.7, inp: 120, cls: 0.05, traffic: 7, attribution: null },
-        { path: '/tavex/prescribing-information', name: 'Prescribing Info', lcp: 1.3, inp: 75, cls: 0.03, traffic: 4, attribution: null },
-      ]
-    }
-  },
-  mobile: {
-    '7d': {
-      summary: { lcp: 3.8, inp: 320, cls: 0.18 },
-      pages: [
-        { path: '/tavex/', name: 'Home', lcp: 4.2, inp: 280, cls: 0.15, traffic: 42,
-          attribution: { metric: 'lcp', block: 'hero-teaser', element: 'Hero image not responsive (3.5MB on mobile)', fix: 'Serve mobile-optimized image via <picture> srcset, max 150KB', improvement: '-2.0s' },
-          regression: { metric: 'LCP', delta: '+1.4s', since: 'Mar 12 deploy', detail: 'Uncompressed hero added without mobile breakpoint' }},
-        { path: '/tavex/efficacy', name: 'Efficacy', lcp: 3.2, inp: 380, cls: 0.22, traffic: 23,
-          attribution: { metric: 'inp', block: 'tabs', element: 'Tab switch triggers full DOM re-render on mobile', fix: 'Use display:none toggle instead of DOM removal, add will-change:transform', improvement: '-150ms' },
-          regression: { metric: 'INP', delta: '+160ms', since: 'Mar 10 deploy', detail: 'Tab component re-render added without requestAnimationFrame' }},
-        { path: '/tavex/safety', name: 'Safety', lcp: 4.5, inp: 190, cls: 0.08, traffic: 15,
-          attribution: { metric: 'lcp', block: 'hero-teaser', element: 'Full-width hero (4.2MB) with no lazy-load fallback', fix: 'Add srcset with mobile sizes, preload critical image, use WebP', improvement: '-2.4s' }},
-        { path: '/tavex/dosing', name: 'Dosing', lcp: 2.9, inp: 350, cls: 0.20, traffic: 10,
-          attribution: { metric: 'cls', block: 'table', element: 'Dosing table overflows viewport causing horizontal scroll shift', fix: 'Use responsive table with horizontal scroll container, add contain:layout', improvement: '-0.14' }},
-        { path: '/tavex/mechanism-of-action', name: 'MoA', lcp: 3.6, inp: 420, cls: 0.12, traffic: 7,
-          attribution: { metric: 'inp', block: 'accordion', element: 'Accordion animation blocking main thread 400ms+', fix: 'Replace JS animation with CSS transition, use content-visibility:auto', improvement: '-200ms' }},
-        { path: '/tavex/prescribing-information', name: 'Prescribing Info', lcp: 2.4, inp: 160, cls: 0.06, traffic: 3, attribution: null },
-      ]
-    },
-    '30d': {
-      summary: { lcp: 3.5, inp: 300, cls: 0.16 },
-      pages: [
-        { path: '/tavex/', name: 'Home', lcp: 3.9, inp: 260, cls: 0.14, traffic: 40, attribution: { metric: 'lcp', block: 'hero-teaser', element: 'Hero image on mobile', fix: 'Mobile srcset', improvement: '-1.8s' }},
-        { path: '/tavex/efficacy', name: 'Efficacy', lcp: 3.0, inp: 350, cls: 0.20, traffic: 22, attribution: { metric: 'inp', block: 'tabs', element: 'Tab DOM re-render', fix: 'Display toggle', improvement: '-130ms' }},
-        { path: '/tavex/safety', name: 'Safety', lcp: 4.2, inp: 180, cls: 0.07, traffic: 16, attribution: { metric: 'lcp', block: 'hero-teaser', element: 'Large hero', fix: 'WebP + preload', improvement: '-2.0s' }},
-        { path: '/tavex/dosing', name: 'Dosing', lcp: 2.7, inp: 330, cls: 0.18, traffic: 11, attribution: { metric: 'cls', block: 'table', element: 'Table overflow', fix: 'Responsive container', improvement: '-0.12' }},
-        { path: '/tavex/mechanism-of-action', name: 'MoA', lcp: 3.4, inp: 400, cls: 0.11, traffic: 8, attribution: { metric: 'inp', block: 'accordion', element: 'Accordion blocking', fix: 'CSS transitions', improvement: '-180ms' }},
-        { path: '/tavex/prescribing-information', name: 'Prescribing Info', lcp: 2.2, inp: 150, cls: 0.05, traffic: 3, attribution: null },
-      ]
-    },
-    '90d': {
-      summary: { lcp: 3.2, inp: 280, cls: 0.14 },
-      pages: [
-        { path: '/tavex/', name: 'Home', lcp: 3.6, inp: 240, cls: 0.12, traffic: 38, attribution: { metric: 'lcp', block: 'hero-teaser', element: 'Hero image', fix: 'Full mobile pipeline', improvement: '-1.5s' }},
-        { path: '/tavex/efficacy', name: 'Efficacy', lcp: 2.8, inp: 320, cls: 0.18, traffic: 24, attribution: { metric: 'inp', block: 'tabs', element: 'Tab re-render', fix: 'Display toggle', improvement: '-120ms' }},
-        { path: '/tavex/safety', name: 'Safety', lcp: 3.9, inp: 170, cls: 0.06, traffic: 17, attribution: { metric: 'lcp', block: 'hero-teaser', element: 'Hero image', fix: 'Optimize pipeline', improvement: '-1.8s' }},
-        { path: '/tavex/dosing', name: 'Dosing', lcp: 2.5, inp: 310, cls: 0.16, traffic: 10, attribution: { metric: 'cls', block: 'table', element: 'Table overflow', fix: 'Responsive table', improvement: '-0.10' }},
-        { path: '/tavex/mechanism-of-action', name: 'MoA', lcp: 3.2, inp: 380, cls: 0.10, traffic: 7, attribution: { metric: 'inp', block: 'accordion', element: 'Accordion', fix: 'CSS transitions + debounce', improvement: '-160ms' }},
-        { path: '/tavex/prescribing-information', name: 'Prescribing Info', lcp: 2.0, inp: 140, cls: 0.04, traffic: 4, attribution: null },
-      ]
-    }
-  }
-};
+var siteData = {};
+var presetOverrides = {};
 
 /* ================================================================
    STATE
@@ -308,6 +234,20 @@ function inpMeterPct(v) { return Math.min(100, (v / 600) * 100); }
 function clsMeterPct(v) { return Math.min(100, (v / 0.3) * 100); }
 
 function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+/* ================================================================
+   VIEW SWITCHING
+   ================================================================ */
+function switchView(view) {
+  document.getElementById('emptyView').classList.remove('active');
+  document.getElementById('loadingView').classList.remove('active');
+  document.getElementById('mainView').classList.remove('active');
+  document.getElementById(view + 'View').classList.add('active');
+}
+
+function hasData() {
+  return Object.keys(siteData).length > 0;
+}
 
 function getData() {
   if (state.preset === 'tavex') return siteData[state.range];
@@ -552,19 +492,37 @@ function restoreState() {
    BRIDGE: INCOMING UPDATES
    ================================================================ */
 slicc.on('update', function(data) {
-  if (data && data.siteData) {
-    // Allow the agent to push new site data
+  if (!data) return;
+
+  // Status: analyzing → loading view
+  if (data.status === 'analyzing') {
+    switchView('loading');
+    return;
+  }
+
+  // Status: empty → empty view
+  if (data.status === 'empty') {
+    siteData = {};
+    switchView('empty');
+    return;
+  }
+
+  // Push performance data → ready view
+  if (data.siteData) {
     Object.keys(data.siteData).forEach(function(key) {
       siteData[key] = data.siteData[key];
     });
   }
-  if (data && data.state) {
+  if (data.state) {
     state.preset = data.state.preset || state.preset;
     state.range = data.state.range || state.range;
     state.device = data.state.device || state.device;
     state.selectedRow = null;
   }
-  render();
+  if (hasData()) {
+    switchView('main');
+    render();
+  }
 });
 
 /* ================================================================
@@ -581,10 +539,29 @@ document.querySelectorAll('.preset').forEach(function(btn) {
 });
 
 /* ================================================================
+   URL INPUT HANDLER
+   ================================================================ */
+document.getElementById('analyzeBtn').addEventListener('click', function() {
+  var input = document.getElementById('urlInput');
+  var url = (input.value || '').trim();
+  if (!url) return;
+  switchView('loading');
+  slicc.lick({ action: 'analyze-performance', data: { url: url } });
+});
+document.getElementById('urlInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') document.getElementById('analyzeBtn').click();
+});
+
+/* ================================================================
    INIT
    ================================================================ */
 restoreState();
-render();
+if (hasData()) {
+  switchView('main');
+  render();
+} else {
+  switchView('empty');
+}
 </script>
 </body>
 </html>

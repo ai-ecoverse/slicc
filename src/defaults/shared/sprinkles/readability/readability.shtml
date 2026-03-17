@@ -166,347 +166,152 @@ body {
 .content-panel::-webkit-scrollbar-track, .analysis-panel::-webkit-scrollbar-track { background: transparent; }
 .content-panel::-webkit-scrollbar-thumb, .analysis-panel::-webkit-scrollbar-thumb { background: var(--s2-gray-300); border-radius: 3px; }
 .content-panel::-webkit-scrollbar-thumb:hover, .analysis-panel::-webkit-scrollbar-thumb:hover { background: var(--s2-gray-500); }
+
+/* ---- View States ---- */
+.view-state { display: none; flex-direction: column; height: 100%; }
+.view-state.active { display: flex; }
+.empty-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px 32px; text-align:center; gap:16px; }
+.empty-state h2 { font-size:18px; font-weight:800; color:var(--s2-gray-900); }
+.empty-state p { font-size:13px; color:var(--s2-gray-600); max-width:360px; line-height:1.5; }
+.url-input-row { display:flex; gap:8px; width:100%; max-width:420px; margin-top:8px; }
+.url-input-row input { flex:1; height:36px; padding:0 12px; border:1px solid var(--s2-gray-300); border-radius:var(--s2-radius-default); font-size:13px; font-family:var(--s2-font-family); color:var(--s2-gray-900); background:var(--s2-bg-elevated); outline:none; transition:border-color 130ms ease; }
+.url-input-row input:focus { border-color:var(--s2-accent); }
+.url-input-row input::placeholder { color:var(--s2-gray-400); }
+.url-input-row button { height:36px; padding:0 20px; border:none; border-radius:var(--s2-radius-pill); background:var(--s2-accent); color:var(--s2-gray-25); font-size:13px; font-weight:600; font-family:var(--s2-font-family); cursor:pointer; transition:background 130ms ease; white-space:nowrap; }
+.url-input-row button:hover { background:var(--s2-accent-hover); }
+.loading-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px 32px; text-align:center; gap:12px; }
+.loading-spinner { width:32px; height:32px; border:3px solid var(--s2-gray-200); border-top-color:var(--s2-accent); border-radius:50%; animation:spin 0.8s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.loading-state p { font-size:14px; font-weight:600; color:var(--s2-gray-800); }
+.loading-state .loading-detail { font-size:12px; font-weight:400; color:var(--s2-gray-500); }
 </style>
 </head>
 <body>
 
 <div class="content-area">
-  <div class="content-toolbar">
-    <h1 class="page-title">AI Readability</h1>
-    <div class="preset-group">
-      <button class="preset active" data-preset="current">TAVEX (current)</button>
-      <button class="preset" data-preset="optimized">Optimized</button>
-      <button class="preset" data-preset="image-heavy">Image-heavy</button>
-      <button class="preset" data-preset="faq">FAQ-structured</button>
+  <!-- Empty State -->
+  <div id="emptyView" class="view-state active">
+    <div class="empty-state">
+      <h2>Readability Analyzer</h2>
+      <p>Analyze reading level, sentence complexity, and text clarity. Enter a page URL below.</p>
+      <div class="url-input-row">
+        <input type="url" id="urlInput" placeholder="https://example.com/page" aria-label="Page URL">
+        <button id="analyzeBtn">Analyze</button>
+      </div>
     </div>
   </div>
 
-  <div class="content-main" id="contentMain">
-    <!-- Score Bar -->
-    <div class="score-bar" id="scoreBar">
-      <div class="score-meter-group">
-        <span class="score-label">LLM Readability</span>
-        <span class="score-value" id="scoreValue">68/100</span>
-        <div class="score-track">
-          <div class="score-fill" id="scoreFill" style="width:68%"></div>
-        </div>
-      </div>
-      <div class="criteria-summary" id="criteriaSummary"></div>
-      <div class="score-bar-right">
-        <span class="llm-toggle-label">View as LLM</span>
-        <label class="llm-toggle">
-          <input type="checkbox" id="llmToggle">
-          <span class="llm-toggle-track"></span>
-        </label>
-      </div>
+  <!-- Loading State -->
+  <div id="loadingView" class="view-state">
+    <div class="loading-state">
+      <div class="loading-spinner"></div>
+      <p>Analyzing readability...</p>
+      <span class="loading-detail">Evaluating reading grade, sentence structure, and vocabulary</span>
+    </div>
+  </div>
+
+  <!-- Main / Ready State -->
+  <div id="mainView" class="view-state">
+    <div class="content-toolbar">
+      <h1 class="page-title">AI Readability</h1>
+      <div class="preset-group" id="presetGroup"></div>
     </div>
 
-    <!-- Two-column panels -->
-    <div class="panels">
-      <div class="content-panel" id="contentPanel"></div>
-      <div class="analysis-panel" id="analysisPanel"></div>
+    <div class="content-main" id="contentMain">
+      <!-- Score Bar -->
+      <div class="score-bar" id="scoreBar">
+        <div class="score-meter-group">
+          <span class="score-label">LLM Readability</span>
+          <span class="score-value" id="scoreValue">0/100</span>
+          <div class="score-track">
+            <div class="score-fill" id="scoreFill" style="width:0%"></div>
+          </div>
+        </div>
+        <div class="criteria-summary" id="criteriaSummary"></div>
+        <div class="score-bar-right">
+          <span class="llm-toggle-label">View as LLM</span>
+          <label class="llm-toggle">
+            <input type="checkbox" id="llmToggle">
+            <span class="llm-toggle-track"></span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Two-column panels -->
+      <div class="panels">
+        <div class="content-panel" id="contentPanel"></div>
+        <div class="analysis-panel" id="analysisPanel"></div>
+      </div>
     </div>
   </div>
 </div>
 
 <script>
+/*
+ * DATA CONTRACT — push via: sprinkle send readability '<json>'
+ * 1. Signal analysis started: {"status":"analyzing","url":"https://example.com"}
+ * 2. Push readability data:   {"content":"Full text...","sections":[{"title":"...","text":"...","grade":8.2,...}],"rules":{...}}
+ * 3. No page specified:       {"status":"empty"}
+ */
+
 // ===== DATA =====
-var presets = {
-  current: {
-    score: 68,
-    pageContent: [
-      {
-        type: 'hero-teaser', label: 'Hero',
-        heading: 'TAVEX (tavexirel)',
-        text: 'Selective oral JAK1 inhibitor for the treatment of moderately to severely active rheumatoid arthritis in adults with inadequate response to DMARDs.',
-        hasImage: true, imageContainsText: false,
-        signal: 'high', score: 88,
-        reason: 'Clear heading with drug name and INN. First paragraph contains key indication and drug class.'
-      },
-      {
-        type: 'introduction', label: 'Disease Burden',
-        heading: 'Rheumatoid arthritis: unmet need persists',
-        text: 'Despite the availability of biologic DMARDs, approximately 40% of patients with RA fail to achieve low disease activity with current therapies, and many experience loss of response over time. There remains a significant need for effective, convenient oral therapies that provide rapid and sustained disease control.',
-        signal: 'high', score: 82,
-        reason: 'Good entity density (RA, DMARDs, disease activity). Clear statistics. Self-contained paragraph.'
-      },
-      {
-        type: 'cards-teaser', label: 'Navigation Cards',
-        heading: null,
-        cards: [
-          { title: 'Rapid and sustained disease control', text: '71% of patients achieved ACR20 at Week 12 in the RESOLVE-1 trial, with sustained improvements through Week 52.' },
-          { title: 'Well-characterised safety profile', text: 'The safety profile of TAVEX was consistent across the RESOLVE clinical programme, with a low rate of treatment discontinuation due to adverse events.' },
-          { title: 'Simple once-daily oral dosing', text: 'TAVEX 200 mg once daily \u2014 a convenient oral tablet taken with or without food, with no injection or infusion required.' }
-        ],
-        signal: 'medium', score: 61,
-        reason: 'Key efficacy data (71% ACR20) is extractable but scattered across cards without a unifying heading. Missing explicit section heading reduces discoverability.'
-      },
-      {
-        type: 'columns-teaser', label: 'MoA Teaser',
-        heading: 'Selective JAK1 inhibition',
-        text: 'TAVEX preferentially inhibits JAK1, blocking key pro-inflammatory cytokine signalling while preserving immune and haematopoietic homeostasis through minimal JAK2/JAK3 interference.',
-        hasImage: true, imageContainsText: true,
-        signal: 'medium', score: 55,
-        reason: 'Mechanism description is clear but the pathway diagram image contains key information (binding affinity data, IC50 values) not duplicated in text.'
-      },
-      {
-        type: 'accordion', label: 'Prescribing Info',
-        heading: null,
-        items: [
-          { title: 'Prescribing Information', text: 'TAVEX 100 mg and 200 mg film-coated tablets. Indication: moderately to severely active RA. Posology: 200 mg once daily. 100 mg for renal impairment. Contraindicated in pregnancy.' },
-          { title: 'Adverse Event Reporting', text: 'Report via MHRA Yellow Card or call 0800 783 0033.' },
-          { title: 'References', text: '1. TAVEX SmPC. 2. Smolen JS, et al. Lancet. 2023. 3. RESOLVE-1 Study Group. NEJM. 2025.' }
-        ],
-        signal: 'low', score: 28,
-        reason: 'Critical prescribing info (dosing, contraindications) hidden behind accordion interaction. LLMs cannot expand accordions. No explicit section heading.'
-      }
-    ],
-    criteria: [
-      { id: 'headings', name: 'Heading hierarchy', status: 'pass',
-        detail: '3 of 5 sections have descriptive headings. Hero H1 contains drug name + INN.',
-        affectedSections: [0, 1, 3] },
-      { id: 'qa', name: 'Q&A structure', status: 'fail',
-        detail: 'No content uses explicit question-answer format. FAQ schema not present. LLMs prefer Q&A for featured snippets.',
-        affectedSections: [] },
-      { id: 'entities', name: 'Entity density', status: 'warn',
-        detail: '"Rheumatoid arthritis" appears 2x, "JAK1" 2x, "TAVEX" 5x. Missing explicit mentions of drug class ("JAK inhibitor") in first paragraph.',
-        affectedSections: [0, 1] },
-      { id: 'citations', name: 'Citation format', status: 'pass',
-        detail: 'References use standard format (Author, Journal, Year). Superscript reference numbers present.',
-        affectedSections: [4] },
-      { id: 'passages', name: 'Passage clarity', status: 'pass',
-        detail: 'Most paragraphs are self-contained and extractable without surrounding context.',
-        affectedSections: [0, 1, 3] },
-      { id: 'facts-accessible', name: 'Key facts in text', status: 'fail',
-        detail: 'Dosing information (200mg QD) and contraindications are only in the accordion, invisible to LLMs. MoA pathway data is in an image.',
-        affectedSections: [3, 4] },
-      { id: 'first-para', name: 'First-paragraph summary', status: 'pass',
-        detail: 'Hero paragraph summarizes drug name, class, and indication effectively.',
-        affectedSections: [0] }
-    ],
-    aiSummary: "TAVEX (tavexirel) is a selective oral JAK1 inhibitor developed for the treatment of moderately to severely active rheumatoid arthritis in adults who have had an inadequate response to DMARDs. In the RESOLVE-1 trial, 71% of patients achieved ACR20 at Week 12, with sustained improvements through Week 52. The drug is taken as a once-daily oral tablet (200 mg) with or without food. TAVEX works by preferentially inhibiting JAK1, blocking pro-inflammatory cytokine signalling.",
-    missingFacts: [
-      { fact: 'Reduced dose (100 mg) for renal impairment', reason: 'Hidden in accordion \u2014 LLMs cannot expand interactive elements' },
-      { fact: 'CYP3A4 interaction requiring dose adjustment', reason: 'Hidden in accordion \u2014 LLMs cannot expand interactive elements' },
-      { fact: 'Contraindication in pregnancy', reason: 'Hidden in accordion \u2014 LLMs cannot expand interactive elements' },
-      { fact: 'JAK1 binding affinity and IC50 values', reason: 'Data only present in MoA pathway diagram image, not in body text' },
-      { fact: 'Adverse event reporting contacts', reason: 'Hidden in accordion \u2014 not extractable' }
-    ]
-  },
-  optimized: {
-    score: 94,
-    pageContent: [
-      {
-        type: 'hero-teaser', label: 'Hero',
-        heading: 'TAVEX (tavexirel) \u2014 Oral JAK1 Inhibitor for Rheumatoid Arthritis',
-        text: 'TAVEX (tavexirel) is a selective oral JAK1 inhibitor (Janus kinase inhibitor) approved for the treatment of moderately to severely active rheumatoid arthritis (RA) in adults with inadequate response to disease-modifying antirheumatic drugs (DMARDs). Taken as a 200 mg once-daily tablet.',
-        hasImage: true, imageContainsText: false,
-        signal: 'high', score: 96,
-        reason: 'Heading includes drug name, INN, class, and indication. First paragraph is a complete extractable summary with key entities.'
-      },
-      {
-        type: 'introduction', label: 'Disease Burden',
-        heading: 'Why new RA treatments are needed',
-        text: 'Despite the availability of biologic DMARDs, approximately 40% of patients with rheumatoid arthritis fail to achieve low disease activity with current therapies. Many experience loss of response over time. There remains a significant need for effective, convenient oral therapies that provide rapid and sustained disease control.',
-        signal: 'high', score: 90,
-        reason: 'Clear entity density. Statistics present. Self-contained and extractable.'
-      },
-      {
-        type: 'section', label: 'Efficacy Summary',
-        heading: 'TAVEX clinical efficacy: RESOLVE-1 trial results',
-        text: '71% of patients achieved ACR20 at Week 12 in the RESOLVE-1 trial, with sustained improvements through Week 52. The safety profile of TAVEX was consistent across the clinical programme with low discontinuation rates. TAVEX 200 mg is taken once daily as an oral tablet with or without food.',
-        signal: 'high', score: 92,
-        reason: 'Key efficacy data consolidated under a descriptive heading. All claims in a single extractable passage.'
-      },
-      {
-        type: 'columns-teaser', label: 'Mechanism of Action',
-        heading: 'How TAVEX works: selective JAK1 inhibition',
-        text: 'TAVEX preferentially inhibits JAK1 (IC50 = 2.1 nM) with >50-fold selectivity over JAK2 and JAK3, blocking key pro-inflammatory cytokine signalling (IL-6, IL-15, IFN-\u03b3) while preserving immune and haematopoietic homeostasis.',
-        hasImage: true, imageContainsText: true,
-        signal: 'high', score: 94,
-        reason: 'IC50 data now in body text. Image supplements rather than replaces textual information.'
-      },
-      {
-        type: 'section', label: 'Dosing & Safety',
-        heading: 'TAVEX dosing, contraindications, and safety',
-        text: 'Recommended dose: 200 mg once daily. Reduced dose of 100 mg once daily for patients with renal impairment. Contraindicated in pregnancy. Dose adjustment required with strong CYP3A4 inhibitors. Report adverse events via MHRA Yellow Card or call 0800 783 0033.',
-        signal: 'high', score: 90,
-        reason: 'All prescribing information in visible, extractable text. No accordion or interactive element required.'
-      },
-      {
-        type: 'faq', label: 'Frequently Asked Questions',
-        heading: 'Frequently asked questions about TAVEX',
-        items: [
-          { title: 'What is TAVEX?', text: 'TAVEX (tavexirel) is a selective oral JAK1 inhibitor approved for moderately to severely active rheumatoid arthritis in adults.' },
-          { title: 'How is TAVEX taken?', text: 'TAVEX is taken as a single 200 mg tablet once daily, with or without food. No injection or infusion is required.' },
-          { title: 'What are the main side effects?', text: 'The most common adverse reactions include upper respiratory tract infections, headache, and nausea. The safety profile was consistent across clinical trials.' }
-        ],
-        signal: 'high', score: 96,
-        reason: 'Explicit Q&A format ideal for featured snippet extraction. Each answer is self-contained.'
-      }
-    ],
-    criteria: [
-      { id: 'headings', name: 'Heading hierarchy', status: 'pass', detail: 'All 6 sections have descriptive headings. Hero H1 includes drug name, INN, class, and indication.', affectedSections: [0,1,2,3,4,5] },
-      { id: 'qa', name: 'Q&A structure', status: 'pass', detail: 'Dedicated FAQ section with 3 common questions. Ideal for featured snippet extraction.', affectedSections: [5] },
-      { id: 'entities', name: 'Entity density', status: 'pass', detail: '"Rheumatoid arthritis" 4x, "JAK1" 3x, "TAVEX" 8x, "JAK inhibitor" in first paragraph.', affectedSections: [0,1,2] },
-      { id: 'citations', name: 'Citation format', status: 'pass', detail: 'References inline and in standard format.', affectedSections: [] },
-      { id: 'passages', name: 'Passage clarity', status: 'pass', detail: 'All paragraphs self-contained and extractable without context.', affectedSections: [0,1,2,3,4] },
-      { id: 'facts-accessible', name: 'Key facts in text', status: 'pass', detail: 'Dosing, contraindications, IC50 data, and safety info all in visible body text.', affectedSections: [3,4] },
-      { id: 'first-para', name: 'First-paragraph summary', status: 'pass', detail: 'Hero paragraph is a complete summary with drug name, class, indication, and dosing.', affectedSections: [0] }
-    ],
-    aiSummary: "TAVEX (tavexirel) is a selective oral JAK1 inhibitor (Janus kinase inhibitor) approved for the treatment of moderately to severely active rheumatoid arthritis in adults with inadequate response to DMARDs. It is taken as a 200 mg once-daily tablet with or without food (100 mg for renal impairment). In the RESOLVE-1 trial, 71% achieved ACR20 at Week 12 with sustained improvement through Week 52. TAVEX selectively inhibits JAK1 (IC50 = 2.1 nM, >50-fold selectivity over JAK2/JAK3). It is contraindicated in pregnancy and requires dose adjustment with CYP3A4 inhibitors.",
-    missingFacts: [
-      { fact: 'Full adverse event frequency data', reason: 'Summarised but not tabulated in visible text' }
-    ]
-  },
-  'image-heavy': {
-    score: 35,
-    pageContent: [
-      {
-        type: 'hero-teaser', label: 'Hero',
-        heading: 'TAVEX',
-        text: '',
-        hasImage: true, imageContainsText: true,
-        signal: 'low', score: 15,
-        reason: 'Heading is drug name only \u2014 no INN, class, or indication. Hero content is entirely in a background image with text overlay.'
-      },
-      {
-        type: 'image-section', label: 'Key Data (Infographic)',
-        heading: null,
-        text: 'See below for clinical trial results.',
-        hasImage: true, imageContainsText: true,
-        signal: 'low', score: 12,
-        reason: 'Efficacy data (ACR20, safety profile) presented only as an infographic image. No alt-text describing numerical results.'
-      },
-      {
-        type: 'image-section', label: 'MoA Diagram',
-        heading: 'Mechanism of Action',
-        text: '',
-        hasImage: true, imageContainsText: true,
-        signal: 'low', score: 18,
-        reason: 'Entire mechanism explanation is a pathway diagram. Heading exists but body is empty.'
-      },
-      {
-        type: 'columns-teaser', label: 'Key Benefits',
-        heading: null,
-        cards: [
-          { title: '', text: '' },
-          { title: '', text: '' },
-          { title: '', text: '' }
-        ],
-        hasImage: true, imageContainsText: true,
-        signal: 'low', score: 8,
-        reason: 'Three benefit cards use icon images with embedded text. No visible HTML text content.'
-      },
-      {
-        type: 'accordion', label: 'Prescribing Info',
-        heading: null,
-        items: [
-          { title: 'Prescribing Information', text: 'See attached PDF.' },
-          { title: 'References', text: 'See attached PDF.' }
-        ],
-        signal: 'low', score: 10,
-        reason: 'Prescribing info links to a PDF. Accordion content is not indexable. References also in PDF only.'
-      }
-    ],
-    criteria: [
-      { id: 'headings', name: 'Heading hierarchy', status: 'fail', detail: 'Only 2 of 5 sections have headings. Hero heading is drug name only. No INN or indication.', affectedSections: [0, 2] },
-      { id: 'qa', name: 'Q&A structure', status: 'fail', detail: 'No Q&A content present.', affectedSections: [] },
-      { id: 'entities', name: 'Entity density', status: 'fail', detail: '"TAVEX" appears once. No mention of rheumatoid arthritis, JAK1, or DMARDs in extractable text.', affectedSections: [0] },
-      { id: 'citations', name: 'Citation format', status: 'fail', detail: 'References are in a PDF attachment, not in page text.', affectedSections: [4] },
-      { id: 'passages', name: 'Passage clarity', status: 'fail', detail: 'Almost no extractable text passages exist. Body text is empty or placeholder.', affectedSections: [] },
-      { id: 'facts-accessible', name: 'Key facts in text', status: 'fail', detail: 'All key data (efficacy, dosing, MoA, safety) is in images or PDFs. Nothing extractable.', affectedSections: [0,1,2,3,4] },
-      { id: 'first-para', name: 'First-paragraph summary', status: 'fail', detail: 'No first paragraph exists. Hero content is image-only.', affectedSections: [0] }
-    ],
-    aiSummary: "TAVEX is a medication. No further information could be extracted from this page.",
-    missingFacts: [
-      { fact: 'Drug class (JAK1 inhibitor)', reason: 'Not mentioned in any extractable text' },
-      { fact: 'Indication (rheumatoid arthritis)', reason: 'Only present in hero background image' },
-      { fact: 'Efficacy data (71% ACR20)', reason: 'Only in infographic image without alt-text' },
-      { fact: 'Mechanism of action details', reason: 'Only in pathway diagram image' },
-      { fact: 'Dosing information', reason: 'In accordion linking to PDF' },
-      { fact: 'Contraindications', reason: 'In accordion linking to PDF' },
-      { fact: 'All references and citations', reason: 'In PDF attachment only' }
-    ]
-  },
-  faq: {
-    score: 91,
-    pageContent: [
-      {
-        type: 'hero-teaser', label: 'Hero',
-        heading: 'TAVEX (tavexirel) \u2014 Your Questions Answered',
-        text: 'TAVEX (tavexirel) is a selective oral JAK1 inhibitor for the treatment of moderately to severely active rheumatoid arthritis. Find answers to the most common questions about TAVEX below.',
-        signal: 'high', score: 92,
-        reason: 'Clear heading with drug name. Intro paragraph provides context and indicates Q&A format follows.'
-      },
-      {
-        type: 'faq', label: 'About TAVEX',
-        heading: 'About TAVEX',
-        items: [
-          { title: 'What is TAVEX (tavexirel)?', text: 'TAVEX is a selective oral JAK1 inhibitor (Janus kinase inhibitor) approved for adults with moderately to severely active rheumatoid arthritis who have had an inadequate response to DMARDs.' },
-          { title: 'How does TAVEX work?', text: 'TAVEX preferentially inhibits JAK1 (IC50 = 2.1 nM), blocking pro-inflammatory cytokine signalling (IL-6, IL-15, IFN-\u03b3) while minimally affecting JAK2/JAK3 pathways.' },
-          { title: 'What is the evidence for TAVEX?', text: 'In the RESOLVE-1 trial, 71% of patients achieved ACR20 at Week 12, with sustained improvements through Week 52. The safety profile was consistent across the clinical programme.' }
-        ],
-        signal: 'high', score: 95,
-        reason: 'Explicit Q&A format with descriptive questions. Each answer is self-contained and entity-rich. Ideal for featured snippets.'
-      },
-      {
-        type: 'faq', label: 'Taking TAVEX',
-        heading: 'Taking TAVEX',
-        items: [
-          { title: 'How is TAVEX taken?', text: 'TAVEX 200 mg is taken once daily as an oral tablet, with or without food. No injection or infusion required.' },
-          { title: 'What is the dose for patients with renal impairment?', text: 'Patients with renal impairment should take TAVEX 100 mg once daily.' },
-          { title: 'Are there any drug interactions?', text: 'Dose adjustment is required when co-administered with strong CYP3A4 inhibitors. Consult prescribing information for full details.' }
-        ],
-        signal: 'high', score: 94,
-        reason: 'Dosing information in visible Q&A format. Renal dose and drug interactions explicitly addressed.'
-      },
-      {
-        type: 'faq', label: 'Safety',
-        heading: 'Safety and contraindications',
-        items: [
-          { title: 'Who should not take TAVEX?', text: 'TAVEX is contraindicated in pregnancy. It should not be used in patients with active serious infections.' },
-          { title: 'What are the most common side effects?', text: 'The most common adverse reactions include upper respiratory tract infections, headache, and nausea. Most were mild to moderate.' },
-          { title: 'How do I report adverse events?', text: 'Report via MHRA Yellow Card scheme or call 0800 783 0033.' }
-        ],
-        signal: 'high', score: 90,
-        reason: 'Safety information in clear Q&A format. Contraindications explicit and extractable.'
-      },
-      {
-        type: 'section', label: 'References',
-        heading: 'References',
-        text: '1. TAVEX SmPC. 2. Smolen JS, et al. Lancet. 2023;402:1234-1245. 3. RESOLVE-1 Study Group. NEJM. 2025;392:567-578.',
-        signal: 'high', score: 85,
-        reason: 'References in standard format with full citations. Visible and extractable.'
-      }
-    ],
-    criteria: [
-      { id: 'headings', name: 'Heading hierarchy', status: 'pass', detail: 'All 5 sections have descriptive headings. Logical hierarchy from hero to references.', affectedSections: [0,1,2,3,4] },
-      { id: 'qa', name: 'Q&A structure', status: 'pass', detail: '9 explicit Q&A pairs across 3 sections. Ideal for featured snippet extraction and voice search.', affectedSections: [1,2,3] },
-      { id: 'entities', name: 'Entity density', status: 'pass', detail: '"TAVEX" 12x, "JAK1" 2x, "rheumatoid arthritis" 2x, "JAK inhibitor" present. Strong entity coverage.', affectedSections: [0,1] },
-      { id: 'citations', name: 'Citation format', status: 'pass', detail: 'Full citations with journal, year, and page numbers in visible text.', affectedSections: [4] },
-      { id: 'passages', name: 'Passage clarity', status: 'pass', detail: 'Each Q&A answer is a complete, self-contained extractable passage.', affectedSections: [1,2,3] },
-      { id: 'facts-accessible', name: 'Key facts in text', status: 'warn', detail: 'Most facts in visible text. IC50 data and selectivity ratio could be expanded further.', affectedSections: [1] },
-      { id: 'first-para', name: 'First-paragraph summary', status: 'pass', detail: 'Hero paragraph summarizes drug, class, indication, and signals Q&A content follows.', affectedSections: [0] }
-    ],
-    aiSummary: "TAVEX (tavexirel) is a selective oral JAK1 inhibitor approved for adults with moderately to severely active rheumatoid arthritis who have had an inadequate response to DMARDs. It works by preferentially inhibiting JAK1 (IC50 = 2.1 nM), blocking pro-inflammatory cytokine signalling. In the RESOLVE-1 trial, 71% of patients achieved ACR20 at Week 12. TAVEX 200 mg is taken once daily as an oral tablet (100 mg for renal impairment). It is contraindicated in pregnancy. Common side effects include upper respiratory infections, headache, and nausea. Dose adjustment required with strong CYP3A4 inhibitors.",
-    missingFacts: [
-      { fact: 'Detailed IC50 selectivity ratios vs JAK2/JAK3', reason: 'Summary mentions selectivity but exact ratios could be more prominent' }
-    ]
-  }
-};
+var presets = {};
+var readabilityData = null;
 
 // ===== STATE =====
-var activePreset = 'current';
+var activePreset = null;
 var activeCriteriaId = null;
 var activeSectionIdx = null;
 var llmMode = false;
+var currentView = 'empty'; // 'empty' | 'loading' | 'ready'
+
+// ===== VIEW STATE =====
+function switchView(view) {
+  currentView = view;
+  document.getElementById('emptyView').classList.toggle('active', view === 'empty');
+  document.getElementById('loadingView').classList.toggle('active', view === 'loading');
+  document.getElementById('mainView').classList.toggle('active', view === 'ready');
+}
+
+// ===== URL INPUT HANDLER =====
+function handleAnalyze() {
+  var input = document.getElementById('urlInput');
+  var url = (input.value || '').trim();
+  if (!url) { input.focus(); return; }
+  switchView('loading');
+  slicc.lick({ action: 'analyze-readability', data: { url: url } });
+}
+document.getElementById('analyzeBtn').addEventListener('click', handleAnalyze);
+document.getElementById('urlInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') handleAnalyze();
+});
 
 // ===== RENDERING =====
 function getScoreClass(score) {
   if (score >= 75) return 'high';
   if (score >= 50) return 'medium';
   return 'low';
+}
+
+function renderPresetButtons() {
+  var group = document.getElementById('presetGroup');
+  group.innerHTML = '';
+  var keys = Object.keys(presets);
+  if (keys.length === 0) return;
+  keys.forEach(function(key) {
+    var btn = document.createElement('button');
+    btn.className = 'preset' + (key === activePreset ? ' active' : '');
+    btn.dataset.preset = key;
+    btn.textContent = presets[key]._label || key;
+    btn.addEventListener('click', function() {
+      group.querySelectorAll('.preset').forEach(function(b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      activePreset = key;
+      render();
+      saveState();
+    });
+    group.appendChild(btn);
+  });
 }
 
 function renderScoreBar(data) {
@@ -520,7 +325,7 @@ function renderScoreBar(data) {
 
   var summary = document.getElementById('criteriaSummary');
   var counts = { pass: 0, warn: 0, fail: 0 };
-  data.criteria.forEach(function(c) { counts[c.status]++; });
+  (data.criteria || []).forEach(function(c) { counts[c.status]++; });
   summary.innerHTML = '';
   if (counts.pass) summary.innerHTML += '<span class="criteria-count pass">\u2713' + counts.pass + '</span>';
   if (counts.warn) summary.innerHTML += '<span class="criteria-count warn">\u26A0' + counts.warn + '</span>';
@@ -580,7 +385,7 @@ function renderSectionContent(section) {
 function renderContentPanel(data) {
   var panel = document.getElementById('contentPanel');
   panel.innerHTML = '';
-  data.pageContent.forEach(function(section, idx) {
+  (data.pageContent || []).forEach(function(section, idx) {
     section._idx = idx;
     var card = document.createElement('div');
     card.className = 'section-card signal-' + section.signal;
@@ -623,7 +428,7 @@ function renderAnalysisPanel(data) {
   html += '<div class="analysis-card">';
   html += '<div class="analysis-card-header"><span class="analysis-card-title">Criteria</span></div>';
   html += '<div class="criteria-list">';
-  data.criteria.forEach(function(c) {
+  (data.criteria || []).forEach(function(c) {
     var statusLabel = c.status === 'pass' ? '\u2713' : c.status === 'warn' ? '\u26A0' : '\u2717';
     html += '<div class="criteria-row" data-criteria-id="' + c.id + '">';
     html += '<span class="criteria-dot ' + c.status + '"></span>';
@@ -634,7 +439,7 @@ function renderAnalysisPanel(data) {
   html += '</div></div>';
 
   // Missing Facts
-  if (data.missingFacts.length > 0) {
+  if ((data.missingFacts || []).length > 0) {
     html += '<div class="analysis-card missing-card">';
     html += '<div class="analysis-card-header">';
     html += '<svg class="missing-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2L2 18h16L10 2z"/><path d="M10 8v4"/><circle cx="10" cy="14.5" r=".5" fill="currentColor" stroke="none"/></svg>';
@@ -713,6 +518,7 @@ function esc(str) {
 
 function render() {
   var data = presets[activePreset];
+  if (!data) return;
   renderScoreBar(data);
   renderContentPanel(data);
   renderAnalysisPanel(data);
@@ -729,16 +535,6 @@ function render() {
 
 // ===== EVENT HANDLERS =====
 
-// Presets
-document.querySelectorAll('.preset').forEach(function(btn) {
-  btn.addEventListener('click', function() {
-    document.querySelectorAll('.preset').forEach(function(b) { b.classList.remove('active'); });
-    btn.classList.add('active');
-    activePreset = btn.dataset.preset;
-    render();
-  });
-});
-
 // LLM toggle
 document.getElementById('llmToggle').addEventListener('change', function(e) {
   llmMode = e.target.checked;
@@ -748,32 +544,72 @@ document.getElementById('llmToggle').addEventListener('change', function(e) {
   } else {
     panel.classList.remove('llm-mode');
   }
+  saveState();
 });
 
 // ===== BRIDGE: slicc.on('update', ...) =====
 slicc.on('update', function(data) {
   if (!data) return;
 
-  // Handle state updates pushed from the scoop
-  if (data.preset && presets[data.preset]) {
-    // Replace preset data with updated version from scoop
-    presets[data.preset] = data.presetData || presets[data.preset];
-    activePreset = data.preset;
-    document.querySelectorAll('.preset').forEach(function(b) {
-      b.classList.toggle('active', b.dataset.preset === activePreset);
-    });
-    render();
+  // Status transitions
+  if (data.status === 'empty') {
+    switchView('empty');
+    return;
+  }
+  if (data.status === 'analyzing') {
+    if (data.url) {
+      document.getElementById('urlInput').value = data.url;
+    }
+    switchView('loading');
+    return;
   }
 
-  if (data.score !== undefined) {
-    // Partial score update
+  // Full readability data push — switch to ready
+  if (data.content || data.sections || data.pageContent) {
+    readabilityData = data;
+
+    // Build preset from pushed data if it includes pageContent structure
+    if (data.preset && data.presetData) {
+      presets[data.preset] = data.presetData;
+      presets[data.preset]._label = data.presetLabel || data.preset;
+      activePreset = data.preset;
+    } else if (data.pageContent) {
+      // Direct pageContent push — use as 'analysis' preset
+      var key = data.presetKey || 'analysis';
+      presets[key] = data;
+      presets[key]._label = data.presetLabel || data.title || key;
+      activePreset = key;
+    }
+
+    renderPresetButtons();
+    switchView('ready');
+    render();
+    saveState();
+    return;
+  }
+
+  // Handle preset switch from scoop
+  if (data.preset && presets[data.preset]) {
+    if (data.presetData) {
+      presets[data.preset] = data.presetData;
+      presets[data.preset]._label = data.presetLabel || data.preset;
+    }
+    activePreset = data.preset;
+    renderPresetButtons();
+    render();
+    saveState();
+    return;
+  }
+
+  // Partial score update
+  if (data.score !== undefined && activePreset && presets[activePreset]) {
     var current = presets[activePreset];
     current.score = data.score;
     renderScoreBar(current);
   }
 
+  // Inline suggestion
   if (data.suggestion) {
-    // Show an inline suggestion on a specific section
     var idx = data.suggestion.sectionIdx;
     var card = document.querySelector('.section-card[data-idx="' + idx + '"]');
     if (card) {
@@ -792,28 +628,40 @@ slicc.on('update', function(data) {
 (function() {
   var saved = slicc.getState();
   if (saved) {
+    if (saved.presets) {
+      presets = saved.presets;
+    }
     if (saved.activePreset && presets[saved.activePreset]) {
       activePreset = saved.activePreset;
-      document.querySelectorAll('.preset').forEach(function(b) {
-        b.classList.toggle('active', b.dataset.preset === activePreset);
-      });
     }
     if (saved.llmMode) {
       llmMode = true;
       document.getElementById('llmToggle').checked = true;
     }
+    if (saved.readabilityData) {
+      readabilityData = saved.readabilityData;
+    }
   }
-  render();
+
+  // Determine initial view
+  if (activePreset && presets[activePreset]) {
+    renderPresetButtons();
+    switchView('ready');
+    render();
+  } else {
+    switchView('empty');
+  }
 })();
 
 // Save state on interaction
 function saveState() {
-  slicc.setState({ activePreset: activePreset, llmMode: llmMode });
+  slicc.setState({
+    activePreset: activePreset,
+    llmMode: llmMode,
+    presets: presets,
+    readabilityData: readabilityData
+  });
 }
-document.querySelectorAll('.preset').forEach(function(btn) {
-  btn.addEventListener('click', saveState);
-});
-document.getElementById('llmToggle').addEventListener('change', saveState);
 </script>
 </body>
 </html>
