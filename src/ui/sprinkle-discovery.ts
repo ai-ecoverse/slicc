@@ -17,6 +17,8 @@ export interface Sprinkle {
   path: string;
   /** Display title (from <title> tag, data-sprinkle-title, or name) */
   title: string;
+  /** Whether this sprinkle should auto-open on first run */
+  autoOpen: boolean;
 }
 
 /**
@@ -62,6 +64,7 @@ async function scanDir(
         name,
         path: filePath,
         title: extractTitle(content, name),
+        autoOpen: extractAutoOpen(content),
       });
     }
   }
@@ -84,4 +87,9 @@ export function extractTitle(content: string, fallback: string): string {
   if (titleMatch) return titleMatch[1].trim();
 
   return fallback;
+}
+
+/** Check if content has data-sprinkle-autoopen attribute. */
+export function extractAutoOpen(content: string): boolean {
+  return /data-sprinkle-autoopen\b/.test(content);
 }

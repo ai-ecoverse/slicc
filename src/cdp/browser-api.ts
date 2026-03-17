@@ -277,10 +277,13 @@ export class BrowserAPI {
           const bytes = new Uint8Array(binaryStr.length);
           for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
 
+          const MAX_DIM = 8000;
           let resized = false;
           await magick.ImageMagick.read(bytes, async (img) => {
-            if (img.width > options.maxWidth!) {
-              const scale = options.maxWidth! / img.width;
+            const targetWidth = Math.min(options.maxWidth!, MAX_DIM);
+            const longEdge = Math.max(img.width, img.height);
+            if (img.width > targetWidth || longEdge > MAX_DIM) {
+              const scale = Math.min(targetWidth / img.width, MAX_DIM / longEdge);
               img.resize(Math.round(img.width * scale), Math.round(img.height * scale));
               resized = true;
             }
@@ -292,8 +295,8 @@ export class BrowserAPI {
               });
             }
           });
-        } catch {
-          // Best-effort — return original if resize fails
+        } catch (resizeErr) {
+          console.warn('[browser-api] Screenshot maxWidth resize failed, returning original', resizeErr);
         }
       }
 

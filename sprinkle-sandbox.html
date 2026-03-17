@@ -112,6 +112,9 @@ window.slicc = {
   getState: function() {
     return window.__slicc_state;
   },
+  open: function(path, opts) {
+    parent.postMessage({ type: 'sprinkle-open', path: path, projectRoot: opts && opts.projectRoot || null }, '*');
+  },
   close: function() {
     parent.postMessage({ type: 'sprinkle-close' }, '*');
   },
