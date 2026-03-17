@@ -25,6 +25,7 @@ import type { BrowserAPI } from '../cdp/index.js';
 import { createDefaultSharedFiles } from './skills.js';
 import { buildActiveLicksError, type LickManager } from './lick-manager.js';
 import { SessionStore } from '../core/session.js';
+import { trackChatSend } from '../ui/telemetry.js';
 
 const log = createLogger('orchestrator');
 
@@ -209,6 +210,8 @@ export class Orchestrator {
     this.messageQueues.set(scoop.jid, []);
     log.info('Scoop registered', { jid: scoop.jid, name: scoop.name });
 
+
+
     // Fire-and-forget: init runs in background. sendPrompt waits if needed.
     this.createScoopTab(scoop.jid).catch((err) => {
       const msg = err instanceof Error ? err.message : String(err);
@@ -290,6 +293,11 @@ export class Orchestrator {
       contentPreview: message.content.slice(0, 80),
     });
 
+    // Telemetry: track chat sends
+    const scoop = this.scoops.get(message.chatJid);
+    const scoopName = scoop?.isCone ? 'cone' : (scoop?.name ?? 'unknown');
+    trackChatSend(scoopName, localStorage.getItem('selected-model') ?? 'unknown');
+
     // Store the message
     await db.saveMessage(message);
 
@@ -321,6 +329,7 @@ export class Orchestrator {
     this.callbacks.onIncomingMessage?.(scoopJid, msg);
 
     log.info('Delegating to scoop', { scoopJid, scoopName: scoop.name, promptLength: prompt.length });
+
     // Fire-and-forget: don't await the scoop's agent loop.
     // The cone's tool call returns immediately so the cone can finish its turn.
     // The scoop processes in the background; completion notification routes back to cone.

@@ -118,22 +118,19 @@ No special permissions needed. Electron's default CSP allows `sendBeacon` to ext
 
 ## Checkpoints
 
-### SLICC-specific checkpoints
+SLICC uses helix-rum-js's supported checkpoint types with SLICC-specific semantics. Custom checkpoint names are not supported by the RUM backend, so we map SLICC events to existing checkpoint types.
 
-| Checkpoint | Source | Target | Trigger location |
-|---|---|---|---|
-| `chat:send` | Scoop name (e.g. `cone`, `researcher`) | Model ID (e.g. `claude-sonnet-4`) | `orchestrator.ts` — `handleMessage()` |
-| `chat:response` | Scoop name | Model ID | `scoop-context.ts` — `agent_end` event |
-| `tool:execute` | Tool name (e.g. `bash`, `write_file`) | Scoop name | `tool-registry.ts` — `executeTool()` |
-| `scoop:create` | `cone` | Scoop name | `orchestrator.ts` — `createScoop()` |
-| `scoop:delegate` | `cone` | Scoop name | `orchestrator.ts` — `delegateToScoop()` |
-| `shell:command` | Command name (e.g. `git`, `playwright-cli`) | (omitted) | `wasm-shell.ts` — command dispatch |
-| `voice:input` | (omitted) | (omitted) | `voice-input.ts` — recognition result |
-| `provider:switch` | Previous provider:model | New provider:model | `provider-settings.ts` — on save |
-| `file:operation` | Operation (`create`, `edit`, `delete`) | Sanitized path depth (e.g. `/workspace/.../*`) | File tools — `execute()` |
-| `skill:install` | Skill name | Source (`github`, `clawhub`, `drop`) | `apply.ts` or `install-from-drop.ts` |
-| `error:agent` | Error type (e.g. `api_error`, `tool_error`) | Scoop name | `scoop-context.ts` — error handler |
-| `error:overflow` | Scoop name | (omitted) | `scoop-context.ts` — overflow recovery |
+### Checkpoint mapping
+
+| RUM Checkpoint | SLICC Meaning | Source | Target | Location |
+|---|---|---|---|---|
+| `navigate` | Page load | referrer | `cli`/`extension`/`electron` | `main.ts` — init |
+| `formsubmit` | User chat message | Scoop name | Model ID | `orchestrator.ts` — `handleMessage()` |
+| `fill` | Shell command | Command name | (omitted) | `wasm-shell.ts` — `runCommand()` |
+| `viewblock` | Sprinkle displayed | Sprinkle name | (omitted) | `sprinkle-manager.ts` — `open()` |
+| `viewmedia` | Image viewed | Context (`chat`/`preview`) | (omitted) | Image display code |
+| `error` | Error occurred | Error type (`js`/`llm`/`tool`) | Details | Error handlers |
+| `signup` | Settings opened | Trigger (`button`/`shortcut`) | (omitted) | `provider-settings.ts` |
 
 ### Auto-instrumented (from enhancer)
 
@@ -141,14 +138,6 @@ These work out of the box with no custom code:
 
 - **CWV** (LCP, CLS, INP) -- measures UI responsiveness
 - **click** -- tracks user interactions with UI elements
-- **viewblock** -- tracks which sections of the UI are visible
-- **navigate** -- page loads (we emit this manually with mode info)
-
-### Checkpoint naming convention
-
-All SLICC-specific checkpoints use `category:action` format. The category groups related events; the action describes what happened. This makes it easy to filter and aggregate in the RUM dashboard.
-
-**Backend recognition**: Custom checkpoint names need to be registered with the RUM backend for proper aggregation. Coordinate with the Adobe RUM team or use the self-hosted collection endpoint to accept arbitrary checkpoint names.
 
 ## Sampling Strategy
 

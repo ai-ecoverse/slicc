@@ -30,6 +30,7 @@ import {
   resolveUiRuntimeMode,
 } from './runtime-mode.js';
 import { SprinkleManager } from './sprinkle-manager.js';
+import { initTelemetry } from './telemetry.js';
 
 const log = createLogger('main');
 
@@ -446,6 +447,9 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   client.requestState();
 
   log.info('Extension UI connected to offscreen agent engine');
+
+  // Initialize operational telemetry (fire-and-forget)
+  initTelemetry().catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -1195,6 +1199,9 @@ async function main(): Promise<void> {
   }
 
   log.info('Orchestrator initialized — cone+scoops ready', { scoopCount: orchestrator.getScoops().length });
+
+  // Initialize operational telemetry (fire-and-forget)
+  initTelemetry().catch(() => {});
 }
 
 main().catch((err) => {

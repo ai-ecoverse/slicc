@@ -22,6 +22,7 @@ import { MountCommands } from '../fs/mount-commands.js';
 import { discoverJshCommands } from './jsh-discovery.js';
 import { executeJshFile } from './jsh-executor.js';
 import { parseShellArgs } from './parse-shell-args.js';
+import { trackShellCommand } from '../ui/telemetry.js';
 
 function basename(path: string): string {
   const trimmed = path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
@@ -328,6 +329,10 @@ export class WasmShell {
 
   /** Run a command through just-bash, carrying forward env/cwd state. */
   private async runCommand(command: string): Promise<BashExecResult> {
+    // Track shell command for telemetry (extract first word as command name)
+    const commandName = command.trim().split(/\s+/)[0] || 'unknown';
+    trackShellCommand(commandName);
+
     const result = await this.bash.exec(command, {
       env: this.lastEnv,
       cwd: this.cwd,
