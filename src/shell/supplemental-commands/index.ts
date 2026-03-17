@@ -21,6 +21,7 @@ import { createSprinkleCommand } from './sprinkle-command.js';
 import { createOAuthTokenCommand } from './oauth-token-command.js';
 import { createWhichCommand } from './which-command.js';
 import { createZipCommand } from './zip-command.js';
+import { createScreencaptureCommand } from './screencapture-command.js';
 import { createPbcopyCommand, createPbpasteCommand, createClipboardAutoCommand } from './clipboard-commands.js';
 import type { BrowserAPI } from '../../cdp/index.js';
 export type {
@@ -60,6 +61,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createWhichCommand(options.fs),
     createUnameCommand(),
     createOAuthTokenCommand(),
+    createScreencaptureCommand(),
     createPbcopyCommand(),
     createPbpasteCommand(),
     createClipboardAutoCommand('xclip'),
