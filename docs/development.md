@@ -257,13 +257,21 @@ src/
   cli/             Express server + Chrome launcher
   extension/       Chrome Manifest V3 extension files
   shims/           Node module shims for browser bundle
-  defaults/        Bundled default skills and workspace
+  defaults/        Bundled default skills, sprinkles, and workspace
   skills/          Skill installation engine
+  types/           Type declarations for external submodules
+  providers/       Provider types, OAuth service, auto-discovery
 
 docs/
   development.md   This file
   testing.md       Test patterns and conventions
   architecture.md  Detailed architecture breakdown
+  tools-reference.md  Agent tool surface reference
+  shell-reference.md  Shell commands and .jsh scripts
+  adding-features.md  How to extend SLICC
+  pitfalls.md      Dual-mode gotchas and solutions
+  urls.md          URL scheme reference
+  electron.md      Electron float guide
 
 dist/
   ui/              Production browser bundle (Vite output)

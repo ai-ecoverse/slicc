@@ -95,6 +95,8 @@ export class FileBrowserPanel {
   private expandedDirs = new Set<string>(['/']);
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
   private onRunCommand: ((command: string) => Promise<void> | void) | null;
+  private selectedPath: string | null = null;
+  private keydownHandler: ((e: KeyboardEvent) => void) | null = null;
 
   constructor(container: HTMLElement, options: FileBrowserPanelOptions = {}) {
     this.container = container;
@@ -119,10 +121,19 @@ export class FileBrowserPanel {
       console.warn('[FileBrowser] Refresh failed:', err instanceof Error ? err.message : String(err));
       return;
     }
-    // Only touch the DOM if the tree actually changed
-    if (tmp.innerHTML === this.bodyEl.innerHTML) return;
+    // Compare BEFORE applying selection (selection attrs would defeat the check)
+    if (tmp.innerHTML === this.bodyEl.innerHTML) {
+      this.applySelection();
+      return;
+    }
+    const hadFocus = this.container.contains(document.activeElement);
     while (this.bodyEl.firstChild) this.bodyEl.removeChild(this.bodyEl.firstChild);
     while (tmp.firstChild) this.bodyEl.appendChild(tmp.firstChild);
+    this.applySelection();
+    if (hadFocus && this.selectedPath) {
+      const row = this.bodyEl.querySelector('.file-browser__item--selected') as HTMLElement | null;
+      row?.focus();
+    }
   }
 
   private render(): void {
@@ -133,6 +144,7 @@ export class FileBrowserPanel {
     this.bodyEl = document.createElement('div');
     this.bodyEl.className = 'file-browser__body';
     this.container.appendChild(this.bodyEl);
+    this.setupKeydown();
   }
 
   private async renderDir(path: string, parentEl: HTMLElement, depth: number): Promise<void> {
@@ -155,6 +167,9 @@ export class FileBrowserPanel {
       const row = document.createElement('div');
       row.className = 'file-browser__item';
       row.style.paddingLeft = (12 + depth * 16) + 'px';
+      row.dataset.path = entry.type === 'directory' && !fullPath.endsWith('/')
+        ? fullPath + '/'
+        : fullPath;
 
       if (entry.type === 'directory') {
         const isExpanded = this.expandedDirs.has(fullPath);
@@ -187,6 +202,7 @@ export class FileBrowserPanel {
 
         row.style.cursor = 'pointer';
         row.addEventListener('click', () => {
+          this.selectPath(fullPath, 'directory');
           if (this.expandedDirs.has(fullPath)) {
             this.expandedDirs.delete(fullPath);
           } else {
@@ -242,6 +258,10 @@ export class FileBrowserPanel {
         });
         row.appendChild(catBtn);
 
+        row.addEventListener('click', () => {
+          this.selectPath(fullPath, 'file');
+        });
+
         parentEl.appendChild(row);
       }
     }
@@ -293,8 +313,63 @@ export class FileBrowserPanel {
     });
   }
 
+  private selectPath(fullPath: string, type: 'file' | 'directory'): void {
+    this.selectedPath = type === 'directory' && !fullPath.endsWith('/')
+      ? fullPath + '/'
+      : fullPath;
+    this.applySelection();
+    const row = this.bodyEl.querySelector('.file-browser__item--selected') as HTMLElement | null;
+    row?.focus();
+  }
+
+  private applySelection(): void {
+    const prev = this.bodyEl.querySelector('.file-browser__item--selected');
+    if (prev) {
+      prev.classList.remove('file-browser__item--selected');
+      prev.removeAttribute('tabindex');
+    }
+    if (!this.selectedPath) return;
+    const rows = this.bodyEl.querySelectorAll<HTMLElement>('.file-browser__item');
+    for (const row of rows) {
+      if (row.dataset.path === this.selectedPath) {
+        row.classList.add('file-browser__item--selected');
+        row.tabIndex = 0;
+        break;
+      }
+    }
+  }
+
+  private setupKeydown(): void {
+    this.keydownHandler = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key !== 'c') return;
+      if (!this.selectedPath) return;
+      const collapsed = window.getSelection()?.isCollapsed !== false;
+      if (!collapsed) return;
+      e.preventDefault();
+      navigator.clipboard.writeText(this.selectedPath).then(() => {
+        this.flashCopyFeedback();
+      }).catch((err) => {
+        console.warn('[FileBrowser] Clipboard write failed:', err instanceof Error ? err.message : String(err));
+      });
+    };
+    this.container.addEventListener('keydown', this.keydownHandler);
+  }
+
+  private flashCopyFeedback(): void {
+    const row = this.bodyEl.querySelector('.file-browser__item--selected');
+    if (!row) return;
+    row.classList.add('file-browser__item--copy-flash');
+    setTimeout(() => {
+      row.classList.remove('file-browser__item--copy-flash');
+    }, 300);
+  }
+
   /** Dispose the panel and stop auto-refresh. */
   dispose(): void {
+    if (this.keydownHandler) {
+      this.container.removeEventListener('keydown', this.keydownHandler);
+      this.keydownHandler = null;
+    }
     if (this.refreshTimer) {
       clearInterval(this.refreshTimer);
       this.refreshTimer = null;

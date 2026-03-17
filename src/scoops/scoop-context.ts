@@ -460,17 +460,29 @@ export class ScoopContext {
         }
 
         if (msgSize > CHAR_THRESHOLD) {
-          // Replace content with a placeholder
           const role = msg.role === 'toolResult' ? 'tool result' : msg.role;
-          trimmed[i] = {
-            ...msg,
-            content: [{
-              type: 'text' as const,
-              text: `[Content removed: ${role} was too large for context window (${Math.round(msgSize / 1000)}K chars). The operation completed but output could not be retained.]`,
-            }],
+          const placeholder = {
+            type: 'text' as const,
+            text: `[Content removed: ${role} was too large for context window (${Math.round(msgSize / 1000)}K chars). The operation completed but output could not be retained.]`,
           };
+
+          // For assistant messages, preserve ToolCall blocks — they're small and
+          // must stay paired with subsequent toolResult messages. Only replace
+          // text/image/thinking content blocks.
+          if (msg.role === 'assistant') {
+            const toolCalls = msg.content.filter((block: any) => block.type === 'toolCall');
+            trimmed[i] = {
+              ...msg,
+              content: [placeholder, ...toolCalls],
+            };
+          } else {
+            trimmed[i] = {
+              ...msg,
+              content: [placeholder],
+            };
+          }
           replaced++;
-          log.info('Replaced oversized message', { index: i, role: msg.role, size: msgSize });
+          log.info('Replaced oversized message', { index: i, role: msg.role, size: msgSize, preservedToolCalls: msg.role === 'assistant' ? msg.content.filter((b: any) => b.type === 'toolCall').length : 0 });
         }
       }
 

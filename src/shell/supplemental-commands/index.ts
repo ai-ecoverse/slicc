@@ -40,7 +40,7 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
   const commands: Command[] = [
     createCommandsCommand({ getJshCommands: options.getJshCommands }),
-    createServeCommand(),
+    createServeCommand(options.browserAPI, options.fs),
     createOpenCommand(),
     createImgcatCommand(options),
     createZipCommand(),
