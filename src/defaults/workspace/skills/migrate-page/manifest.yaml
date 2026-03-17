@@ -1,8 +1,0 @@
-skill: migrate-page
-version: 1.0.0
-description: Migrate a web page to AEM Edge Delivery Services
-author: aemcoder
-depends:
-  - migrate-block
-  - migrate-header
-  - dismiss-overlays

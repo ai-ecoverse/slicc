@@ -1,4 +1,0 @@
-skill: migrate-block
-version: 1.0.0
-description: Migrate a single block to EDS (used by scoops)
-author: aemcoder
