@@ -101,6 +101,8 @@ export class SprinkleRenderer {
           const k = localStorage.key(i);
           if (k?.startsWith(prefix)) localStorage.removeItem(k);
         }
+      } else if (msg.type === 'sprinkle-open') {
+        this.bridge.open(msg.path, msg.projectRoot ? { projectRoot: msg.projectRoot } : undefined);
       } else if (msg.type === 'sprinkle-readfile') {
         this.bridge.readFile(msg.path).then(
           (fileContent) => iframe.contentWindow?.postMessage(

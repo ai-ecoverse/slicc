@@ -12,6 +12,7 @@ function makeBridge(name: string): SprinkleBridgeAPI {
     readFile: vi.fn(),
     setState: vi.fn(),
     getState: vi.fn(() => null),
+    open: vi.fn(),
     close: vi.fn(),
   };
 }

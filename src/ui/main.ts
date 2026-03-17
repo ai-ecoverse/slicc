@@ -415,6 +415,10 @@ async function mainExtension(app: HTMLElement): Promise<void> {
             sprinkleManager.sendToSprinkle(name, data);
             result = true;
             break;
+          case 'openNewAutoOpen':
+            await sprinkleManager.openNewAutoOpenSprinkles();
+            result = true;
+            break;
         }
         console.log('[main-ext] sprinkle-op response sending', { id, op, result: typeof result });
         (chrome as any).runtime.sendMessage({
