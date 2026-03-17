@@ -89,5 +89,11 @@ export function createSprinkleManagerProxy(): SprinkleManager {
     sendToSprinkle(name: string, data: unknown): void {
       request('send', { name, data }).catch(() => {});
     },
+    async openNewAutoOpenSprinkles(): Promise<void> {
+      await request('openNewAutoOpen');
+    },
+    async restoreOpenSprinkles(): Promise<void> {
+      // No-op in proxy — side panel handles restore directly
+    },
   } as unknown as SprinkleManager;
 }
