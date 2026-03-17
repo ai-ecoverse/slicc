@@ -30,6 +30,7 @@ A browser-based coding agent that runs as a **Chrome extension**, with a thin **
 - :wrench: **JavaScript Tool** — sandboxed JS execution with VFS bridge and persistent context
 - :scroll: **JSH Scripts** — `.jsh` files anywhere on the VFS are auto-discovered as shell commands. Skills can ship executable scripts alongside `SKILL.md`. Scripts get Node-like globals (`process`, `console`, `fs`, `exec`) and work in both CLI and extension mode
 - :package: **Drag-and-Drop Skill Imports** — drop a `.skill` archive anywhere in the window to unpack it into `/workspace/skills/{name}` with a visual overlay, path-safety checks, and toast feedback
+- :page_facing_up: **AEM Commands** — AEM Edge Delivery Services via `.jsh` skill (`aem list`, `aem get`, `aem put`, `aem preview`, `aem publish`, `aem upload`). Accepts EDS URLs, auth via `oauth-token adobe`
 - :key: **Multi-Provider Auth** — Anthropic (direct), Azure AI Foundry, AWS Bedrock, Adobe (IMS OAuth), and custom OAuth providers (corporate proxies, SSO) with segmented control
 - :zap: **Real-Time Streaming** — responses stream token-by-token as Claude thinks
 - :floppy_disk: **Session Persistence** — conversations and files survive page reloads via IndexedDB
@@ -233,7 +234,7 @@ Source layout:
 | `src/core/` | Agent types, tool registry, context compaction, session management |
 | `src/tools/` | Tool implementations (file ops, search, browser, javascript) |
 | `src/fs/` | Virtual filesystem (IndexedDB/LightningFS) + RestrictedFS |
-| `src/shell/` | WebAssembly Bash shell + supplemental commands (node, python, sqlite, convert, skill, mount, webhook, oauth-token, which, uname) + `.jsh` script discovery and execution |
+| `src/shell/` | WebAssembly Bash shell + supplemental commands (node, python, sqlite, convert, skill, mount, webhook, oauth-token, which, uname, pbcopy, pbpaste, xclip, xsel) + `.jsh` script discovery and execution |
 | `src/git/` | Git via isomorphic-git (clone, commit, push, pull, etc.) |
 | `src/cdp/` | Chrome DevTools Protocol client (WebSocket + chrome.debugger), HAR recorder |
 | `src/cli/` | Main CLI entrypoint + Electron attach mode — Chrome launch, Electron app lifecycle management, CDP proxy, overlay reinjection |
