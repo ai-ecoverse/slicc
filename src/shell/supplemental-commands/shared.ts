@@ -108,7 +108,10 @@ export function detectMimeType(path: string): string {
 export function toPreviewUrl(vfsPath: string): string {
   const isExt = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   const previewPath = `/preview${vfsPath}`;
-  return isExt ? chrome.runtime.getURL(previewPath) : `http://localhost:5710${previewPath}`;
+  if (isExt) return chrome.runtime.getURL(previewPath);
+  // Use current origin when in browser, fall back to default port for tests/Node
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5710';
+  return `${origin}${previewPath}`;
 }
 
 export function isSafeServeEntry(entry: string): boolean {

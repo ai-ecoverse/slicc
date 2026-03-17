@@ -198,7 +198,7 @@ helix-rum-js is privacy-safe by design (no cookies, no PII, ephemeral pageview I
 function sanitizePath(path: string): string {
   const parts = path.split('/').filter(Boolean);
   if (parts.length <= 2) return '/' + parts.join('/');
-  return '/' + parts.slice(0, 2).join('/') + '/' + '*'.repeat(parts.length - 2);
+  return '/' + parts.slice(0, 2).join('/') + '/' + Array(parts.length - 2).fill('*').join('/');
 }
 ```
 
@@ -258,7 +258,7 @@ const enhancerSrc = require.resolve('@adobe/helix-rum-enhancer');
 fs.copyFileSync(enhancerSrc, path.join(extensionDir, 'rum-enhancer.js'));
 ```
 
-No `manifest.json` CSP change needed if self-hosting. The `host_permissions: ["<all_urls>"]` already covers beacon sends to `rum.hlx.page`.
+No `manifest.json` CSP change needed if self-hosting. The `host_permissions: ["<all_urls>"]` allows extension code to make requests to `rum.hlx.page`. Note: `host_permissions` controls fetch/XHR access from extension pages, not the `connect-src` CSP directive. The current manifest only sets `script-src` and `object-src` (no `connect-src`), so outbound requests are permitted. If a `connect-src` directive is added in the future, it must explicitly allow `https://rum.hlx.page`.
 
 ### Step 6: Settings UI toggle
 
