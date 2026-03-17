@@ -35,6 +35,7 @@ Custom commands implemented in TypeScript and registered in just-bash.
 | **pdftk / pdf** | `pdftk-command.ts` | PDF manipulation | `pdf burst input.pdf`, `pdf cat input.pdf output output.pdf` |
 | **convert / magick** | `convert-command.ts` | Image conversion (ImageMagick style) | `convert -resize 800x600 input.jpg output.jpg` |
 | **playwright-cli / playwright / puppeteer** | `playwright-command.ts` | Browser automation shell CLI | `snapshot`, `click <ref>`, `cookie-set`, `tab-list` |
+| **screencapture** | `screencapture-command.ts` | Capture user's screen via browser screen sharing API | `<output.png>`, `-c` (clipboard), `-v` / `--view` (agent vision) |
 | **upskill** | `upskill-command.ts` | Install skills from GitHub/ClawHub | `upskill owner/repo`, `upskill clawhub:name`, `upskill search "query"` |
 | **sprinkle** | `sprinkle-command.ts` | Manage `.shtml` sprinkle panels | `sprinkle list`, `sprinkle open <name>`, `sprinkle close <name>` |
 | **git** | (isomorphic-git) | Full git support | `git clone`, `git commit`, `git push`, etc. |
@@ -85,6 +86,11 @@ sqlite3 -c "SELECT COUNT(*) FROM users" database.db
 # Browse with playwright-cli
 playwright-cli open https://example.com
 playwright-cli snapshot
+
+# Capture user's screen (prompts user to select screen/window/tab)
+screencapture desktop.png
+screencapture --view screen.png   # Capture and return for agent vision
+screencapture -c                   # Capture to clipboard
 
 # Display image
 imgcat screenshot.png
