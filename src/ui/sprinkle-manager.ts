@@ -76,6 +76,21 @@ export class SprinkleManager {
     } catch { /* localStorage full, ignore */ }
   }
 
+  /** Refresh and auto-open any new sprinkles with autoOpen that aren't already open. */
+  async openNewAutoOpenSprinkles(): Promise<void> {
+    await this.refresh();
+    for (const sprinkle of this.availableSprinkles.values()) {
+      if (sprinkle.autoOpen && !this.openSprinkles.has(sprinkle.name)) {
+        try {
+          await this.open(sprinkle.name);
+          log.info('Auto-opened new sprinkle after install', { name: sprinkle.name });
+        } catch {
+          log.warn('Failed to auto-open new sprinkle', { name: sprinkle.name });
+        }
+      }
+    }
+  }
+
   /** Scan VFS and update available sprinkles. */
   async refresh(): Promise<void> {
     this.availableSprinkles = await discoverSprinkles(this.fs);
