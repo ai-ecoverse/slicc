@@ -258,7 +258,9 @@ export class Orchestrator {
     this.sharedFs = await VirtualFS.create({ dbName: 'slicc-fs', wipe: true });
     await this.ensureRootStructure();
     await this.ensureGlobalMemory();
-    await createDefaultSkills(this.sharedFs);
+    await createDefaultSkills(this.sharedFs).catch((err) => {
+      log.warn('Failed to re-seed default skills', { error: err instanceof Error ? err.message : String(err) });
+    });
     log.info('Filesystem reset and defaults re-seeded');
   }
 

@@ -81,16 +81,15 @@ async function aemFetch(method, url, token, extraArgs) {
   args.push(url);
   const cmd = args.map(shellQuote).join(' ');
   const r = await exec(cmd);
-  if (r.exitCode !== 0) {
-    throw new Error(r.stderr || r.stdout || `HTTP ${method} failed`);
-  }
-  // Detect auth errors from response body (curl returns 0 even on 401)
   const body = r.stdout;
-  if (!body || body.includes('"status":401') || body.includes('"status":403') || body.includes('401 Unauthorized')) {
-    if (body.includes('401') || body.includes('403') || body.includes('Unauthorized') || body.includes('Forbidden')) {
-      process.stderr.write('aem: authentication failed (token may be expired). Run: oauth-token adobe\n');
-      process.exit(1);
-    }
+  // Check auth errors BEFORE exit code — curl returns 0 on HTTP 401
+  if (body && (body.includes('"status":401') || body.includes('"status":403') ||
+      body.includes('401 Unauthorized') || body.includes('Forbidden'))) {
+    process.stderr.write('aem: authentication failed (token may be expired). Run: oauth-token adobe\n');
+    process.exit(1);
+  }
+  if (r.exitCode !== 0) {
+    throw new Error(r.stderr || body || `HTTP ${method} failed`);
   }
   return body;
 }
@@ -117,7 +116,10 @@ async function cmdList(args) {
   const body = await aemFetch('GET', url, token);
 
   let entries;
-  try { entries = JSON.parse(body); } catch { entries = []; }
+  try { entries = JSON.parse(body); } catch {
+    process.stderr.write(`aem: unexpected response from API: ${body.slice(0, 200)}\n`);
+    process.exit(1);
+  }
   if (!Array.isArray(entries) || entries.length === 0) {
     process.stdout.write('(empty)\n');
     return;
@@ -186,7 +188,10 @@ async function cmdPreview(args) {
   const body = await aemFetch('POST', url, token);
 
   let data;
-  try { data = JSON.parse(body); } catch { data = {}; }
+  try { data = JSON.parse(body); } catch {
+    process.stderr.write(`aem: unexpected response from preview API: ${body.slice(0, 200)}\n`);
+    process.exit(1);
+  }
   const previewUrl = (data.preview && data.preview.url) ||
     `https://${target.ref}--${target.repo}--${target.org}.aem.page/${path}`;
   process.stdout.write(`Preview: ${previewUrl}\n`);
@@ -204,7 +209,10 @@ async function cmdPublish(args) {
   const body = await aemFetch('POST', url, token);
 
   let data;
-  try { data = JSON.parse(body); } catch { data = {}; }
+  try { data = JSON.parse(body); } catch {
+    process.stderr.write(`aem: unexpected response from publish API: ${body.slice(0, 200)}\n`);
+    process.exit(1);
+  }
   const liveUrl = (data.live && data.live.url) ||
     `https://${target.ref}--${target.repo}--${target.org}.aem.live/${path}`;
   process.stdout.write(`Published: ${liveUrl}\n`);

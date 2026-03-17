@@ -81,11 +81,8 @@ async function readResponseBody(resp: Response, url?: string): Promise<string> {
  * Binary responses (images, archives, etc.) are encoded as latin1 strings
  * to preserve byte fidelity through just-bash's string-typed FetchResult.
  */
-/**
- * If the request body is a multipart form (built by just-bash's curl from
- * latin1-encoded file content), convert the string to raw bytes so fetch()
- * doesn't re-encode it as UTF-8 and corrupt binary data.
- */
+// Multipart form bodies contain latin1-encoded binary file content from curl —
+// convert to raw bytes so fetch() doesn't re-encode as UTF-8.
 function prepareRequestBody(body: string | undefined, headers?: Record<string, string>): BodyInit | undefined {
   if (!body) return undefined;
   const ct = headers?.['Content-Type'] ?? headers?.['content-type'] ?? '';
