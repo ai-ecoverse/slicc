@@ -1,6 +1,6 @@
 import {
   DEFAULT_EXTENSION_TAB_ID,
-  normalizeExtensionTabId,
+  isBuiltinExtensionTabId,
   type ExtensionTabId,
 } from './tabbed-ui.js';
 
@@ -31,7 +31,8 @@ export function resolveUiRuntimeMode(locationHref: string, isExtension: boolean)
 export function getElectronOverlayInitialTab(locationHref: string): ExtensionTabId {
   try {
     const url = new URL(locationHref);
-    return normalizeExtensionTabId(url.searchParams.get('tab'), DEFAULT_EXTENSION_TAB_ID);
+    const tab = url.searchParams.get('tab');
+    return tab && isBuiltinExtensionTabId(tab) ? tab : DEFAULT_EXTENSION_TAB_ID;
   } catch {
     return DEFAULT_EXTENSION_TAB_ID;
   }

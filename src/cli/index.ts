@@ -29,7 +29,9 @@ const fileLogger = new FileLogger({
   logLevel: RUNTIME_FLAGS.logLevel,
   devMode: DEV_MODE,
 });
-console.log(`Log file: ${fileLogger.logFile}`);
+if (fileLogger.logFile) {
+  console.log(`Log file: ${fileLogger.logFile}`);
+}
 
 // ---------------------------------------------------------------------------
 // Request logging middleware
@@ -293,7 +295,7 @@ async function attachConsoleForwarder(
 // ---------------------------------------------------------------------------
 
 const CDP_PORT = RUNTIME_FLAGS.cdpPort;
-const SERVE_PORT = parseInt(process.env['PORT'] ?? '3000', 10);
+const SERVE_PORT = parseInt(process.env['PORT'] ?? '5710', 10);
 
 async function main() {
   if (DEV_MODE) {
@@ -636,7 +638,7 @@ async function main() {
       }
       if (Object.keys(headers).length > 0) fetchInit.headers = headers;
       if (rawBody.length > 0 && !['GET', 'HEAD'].includes(req.method)) {
-        fetchInit.body = rawBody;
+        fetchInit.body = rawBody as unknown as BodyInit;
       }
 
       const upstream = await fetch(targetUrl, fetchInit);
@@ -645,10 +647,12 @@ async function main() {
       res.status(upstream.status);
       res.setHeader('Cache-Control', 'no-store, no-cache');
 
-      // Forward response headers
+      // Forward response headers (strip www-authenticate to prevent
+      // the browser from showing a native Basic Auth dialog — isomorphic-git
+      // handles 401s through its own onAuth callback)
       upstream.headers.forEach((v, k) => {
         const lower = k.toLowerCase();
-        if (lower !== 'transfer-encoding' && lower !== 'content-encoding') {
+        if (lower !== 'transfer-encoding' && lower !== 'content-encoding' && lower !== 'www-authenticate') {
           res.setHeader(k, v);
         }
       });
@@ -954,7 +958,10 @@ async function main() {
 
 main().catch((err) => {
   console.error('Fatal error:', err);
-  fileLogger.log('error', 'Fatal error', { error: String(err) });
+  const errorData = err instanceof Error
+    ? { name: err.name, message: err.message, stack: err.stack }
+    : { value: String(err) };
+  fileLogger.log('error', 'Fatal error', errorData);
   fileLogger.close();
   process.exit(1);
 });

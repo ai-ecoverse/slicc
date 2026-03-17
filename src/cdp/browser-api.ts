@@ -19,7 +19,7 @@ import type {
 import { normalizeAccessibilityText } from './normalize-accessibility-text.js';
 import { createLogger } from '../core/logger.js';
 
-const FALLBACK_CDP_URL = 'ws://localhost:3000/cdp';
+const FALLBACK_CDP_URL = 'ws://localhost:5710/cdp';
 const log = createLogger('browser-api');
 
 export function getDefaultCdpUrl(
@@ -209,47 +209,10 @@ export class BrowserAPI {
     quality?: number;
     fullPage?: boolean;
     clip?: { x: number; y: number; width: number; height: number; scale?: number };
+    maxWidth?: number;
   }): Promise<string> {
     await this.ensureConnected();
     this.ensureAttached();
-
-    // Normalize DPR to 1 to prevent oversized screenshots on HiDPI displays.
-    // When DPR is already 1 (e.g. after an explicit resize), normalization is
-    // skipped and existing overrides are preserved.
-    let didOverrideMetrics = false;
-    try {
-      await this.client.send('Runtime.enable', {}, this.sessionId!);
-      const dprResult = await this.client.send(
-        'Runtime.evaluate',
-        { expression: 'window.devicePixelRatio', returnByValue: true },
-        this.sessionId!,
-      );
-      const currentDpr = (dprResult['result'] as { value?: number })?.value ?? 1;
-      if (currentDpr > 1) {
-        const metrics = await this.client.send(
-          'Page.getLayoutMetrics',
-          {},
-          this.sessionId!,
-        );
-        const viewport = metrics['layoutViewport'] as {
-          clientWidth: number;
-          clientHeight: number;
-        };
-        await this.client.send(
-          'Emulation.setDeviceMetricsOverride',
-          {
-            width: viewport.clientWidth,
-            height: viewport.clientHeight,
-            deviceScaleFactor: 1,
-            mobile: false,
-          },
-          this.sessionId!,
-        );
-        didOverrideMetrics = true;
-      }
-    } catch {
-      // Best-effort: proceed with native DPR if normalization fails
-    }
 
     try {
       const params: Record<string, unknown> = {
@@ -257,46 +220,88 @@ export class BrowserAPI {
         captureBeyondViewport: true,
       };
       if (options?.quality !== undefined) params['quality'] = options.quality;
-      if (options?.clip) {
-        params['clip'] = { ...options.clip, scale: options.clip.scale ?? 1 };
-      } else if (options?.fullPage) {
-        // Get full page metrics for a full-page screenshot
-        const metrics = await this.client.send(
-          'Page.getLayoutMetrics',
-          {},
-          this.sessionId!,
-        );
-        const contentSize = metrics['contentSize'] as {
-          width: number;
-          height: number;
-        };
-        params['clip'] = {
-          x: 0,
-          y: 0,
-          width: contentSize.width,
-          height: contentSize.height,
-          scale: 1,
-        };
+
+      if (options?.clip || options?.fullPage) {
+        // Get CSS dimensions for full-page clip
+        let cssWidth = 0;
+        let cssScrollHeight = 0;
+        try {
+          await this.client.send('Runtime.enable', {}, this.sessionId!);
+          const evalResult = await this.client.send(
+            'Runtime.evaluate',
+            {
+              expression: 'JSON.stringify({ w: window.innerWidth, h: document.documentElement.scrollHeight })',
+              returnByValue: true,
+            },
+            this.sessionId!,
+          );
+          const val = JSON.parse((evalResult['result'] as { value?: string })?.value ?? '{}');
+          cssWidth = val.w ?? 0;
+          cssScrollHeight = val.h ?? 0;
+        } catch {
+          // Best-effort
+        }
+
+        if (options?.clip) {
+          params['clip'] = { ...options.clip, scale: options.clip.scale ?? 1 };
+        } else {
+          // Full-page: CSS viewport width + CSS scroll height
+          params['clip'] = {
+            x: 0,
+            y: 0,
+            width: cssWidth || 1280,
+            height: cssScrollHeight || 800,
+            scale: 1,
+          };
+        }
       }
+      // No clip/fullPage = viewport screenshot (Chrome's default behavior)
 
       const result = await this.client.send(
         'Page.captureScreenshot',
         params,
         this.sessionId!,
       );
-      return result['data'] as string;
-    } finally {
-      if (didOverrideMetrics) {
+      let base64 = result['data'] as string;
+
+      // Post-capture resize via ImageMagick WASM if image exceeds maxWidth.
+      // Same engine as image-processor.ts for consistency.
+      if (options?.maxWidth) {
         try {
-          await this.client.send(
-            'Emulation.clearDeviceMetricsOverride',
-            {},
-            this.sessionId!,
+          const { getMagick } = await import(
+            '../shell/supplemental-commands/magick-wasm.js'
           );
-        } catch {
-          // Best-effort cleanup
+          const magick = await getMagick();
+
+          const binaryStr = atob(base64);
+          const bytes = new Uint8Array(binaryStr.length);
+          for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+
+          const MAX_DIM = 8000;
+          let resized = false;
+          await magick.ImageMagick.read(bytes, async (img) => {
+            const targetWidth = Math.min(options.maxWidth!, MAX_DIM);
+            const longEdge = Math.max(img.width, img.height);
+            if (img.width > targetWidth || longEdge > MAX_DIM) {
+              const scale = Math.min(targetWidth / img.width, MAX_DIM / longEdge);
+              img.resize(Math.round(img.width * scale), Math.round(img.height * scale));
+              resized = true;
+            }
+            if (resized) {
+              img.write('PNG', (data: Uint8Array) => {
+                let bin = '';
+                for (let i = 0; i < data.length; i++) bin += String.fromCharCode(data[i]);
+                base64 = btoa(bin);
+              });
+            }
+          });
+        } catch (resizeErr) {
+          console.warn('[browser-api] Screenshot maxWidth resize failed, returning original', resizeErr);
         }
       }
+
+      return base64;
+    } finally {
     }
   }
 

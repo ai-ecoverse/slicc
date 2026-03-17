@@ -38,6 +38,19 @@ function timestamp(): string {
   return new Date().toISOString();
 }
 
+/** Safely stringify a value, handling circular refs, BigInt, and errors. */
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value, (_, v) => {
+      if (typeof v === 'bigint') return v.toString() + 'n';
+      if (v instanceof Error) return { name: v.name, message: v.message, stack: v.stack };
+      return v;
+    });
+  } catch {
+    return String(value);
+  }
+}
+
 /** Generates a filename-safe ISO timestamp + PID string. */
 export function generateLogFilename(): string {
   const ts = new Date().toISOString().replace(/:/g, '-').replace(/\.\d{3}Z$/, '');
@@ -95,7 +108,7 @@ export interface FileLoggerOptions {
 export class FileLogger {
   readonly logDir: string;
   readonly logFile: string;
-  private fd: number | null;
+  private fd: number | null = null;
   private logLevel: LogLevel;
   private devMode: boolean;
   private origConsole: {
@@ -110,30 +123,38 @@ export class FileLogger {
     this.logDir = options.logDir ?? join(homedir(), '.slicc', 'logs');
     this.logLevel = options.logLevel ?? 'info';
     this.devMode = options.devMode ?? false;
+    this.logFile = '';
 
-    // Ensure log directory exists
-    mkdirSync(this.logDir, { recursive: true });
+    try {
+      // Ensure log directory exists with restrictive permissions (0o700)
+      mkdirSync(this.logDir, { recursive: true, mode: 0o700 });
 
-    // Run cleanup before creating the new log file
-    if (options.cleanup !== false) {
-      cleanupOldLogs(this.logDir);
+      // Run cleanup before creating the new log file
+      if (options.cleanup !== false) {
+        cleanupOldLogs(this.logDir);
+      }
+
+      // Open log file synchronously with restrictive permissions (0o600)
+      const filename = generateLogFilename();
+      this.logFile = join(this.logDir, filename);
+      this.fd = openSync(this.logFile, 'a', 0o600);
+
+      // Write header
+      this.writeLine(`--- SLICC CLI log started at ${timestamp()} (PID ${process.pid}) ---`);
+
+      // In dev mode, monkey-patch console to tee all output
+      if (this.devMode) {
+        this.installConsoleTee();
+      }
+
+      // Register shutdown handlers
+      this.registerShutdownHandlers();
+    } catch (err) {
+      // Logging is auxiliary — don't crash the CLI if file logging fails
+      console.error('[file-logger] Failed to initialize file logging:', err instanceof Error ? err.message : String(err));
+      console.error('[file-logger] File logging disabled for this session.');
+      this.fd = null;
     }
-
-    // Open log file synchronously
-    const filename = generateLogFilename();
-    this.logFile = join(this.logDir, filename);
-    this.fd = openSync(this.logFile, 'a');
-
-    // Write header
-    this.writeLine(`--- SLICC CLI log started at ${timestamp()} (PID ${process.pid}) ---`);
-
-    // In dev mode, monkey-patch console to tee all output
-    if (this.devMode) {
-      this.installConsoleTee();
-    }
-
-    // Register shutdown handlers
-    this.registerShutdownHandlers();
   }
 
   // -------------------------------------------------------------------------
@@ -144,7 +165,7 @@ export class FileLogger {
   log(level: LogLevel, message: string, data?: Record<string, unknown>): void {
     if (!shouldLog(level, this.logLevel)) return;
     const entry = data
-      ? `${timestamp()} [${level.toUpperCase()}] ${message} ${JSON.stringify(data)}`
+      ? `${timestamp()} [${level.toUpperCase()}] ${message} ${safeStringify(data)}`
       : `${timestamp()} [${level.toUpperCase()}] ${message}`;
     this.writeLine(entry);
   }
@@ -183,8 +204,9 @@ export class FileLogger {
         original.apply(console, args);
         // Tee to file if level passes
         if (shouldLog(level as LogLevel, self.logLevel)) {
-          const text = args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
-          self.writeLine(`${timestamp()} [${level.toUpperCase()}] ${stripAnsi(text)}`);
+          const text = args.map((a) => (typeof a === 'string' ? a : safeStringify(a))).join(' ');
+          // writeLine already strips ANSI, so no need to call stripAnsi here
+          self.writeLine(`${timestamp()} [${level.toUpperCase()}] ${text}`);
         }
       };
     }

@@ -38,6 +38,10 @@ import {
   getProviderConfig,
 } from './provider-settings.js';
 import { EXTENSION_TAB_SPECS, type ExtensionTabId } from './tabbed-ui.js';
+import { TabZone } from './tab-zone.js';
+import { PanelRegistry } from './panel-registry.js';
+import { showSprinklePicker } from './sprinkle-picker.js';
+import type { ZoneId } from './panel-types.js';
 import type { ChatMessage } from './types.js';
 import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
 
@@ -49,7 +53,7 @@ export interface LayoutPanels {
   scoops: ScoopsPanel;
 }
 
-type TabId = ExtensionTabId;
+type TabId = ExtensionTabId | string;
 
 export class Layout {
   private root: HTMLElement;
@@ -62,14 +66,21 @@ export class Layout {
   private scoopsDivider!: HTMLElement;
   private verticalDivider!: HTMLElement;
   private horizontalDivider!: HTMLElement;
-  private bottomSection!: HTMLElement;
   private terminalContainer!: HTMLElement;
-  private fileBrowserContainer!: HTMLElement;
   private iframeContainer!: HTMLElement;
+
+  // Primary zone (top of right column — Terminal + sprinkle tabs)
+  private primaryZoneEl!: HTMLElement;
+  private primaryZone!: TabZone;
+
+  // Drawer zone (bottom of right column — Files + Memory)
+  private drawerZoneEl!: HTMLElement;
+  private drawerZone!: TabZone;
+
+  private drawerHeightFraction = 0.35;
 
   // Tabbed-layout elements (extension only)
   private tabContainers = new Map<TabId, HTMLElement>();
-  private tabButtons = new Map<TabId, HTMLElement>();
   private activeTab: TabId = 'chat';
   private actionsEl!: HTMLElement;
 
@@ -88,14 +99,22 @@ export class Layout {
   private logoScoopCount = -1; // -1 = initial load, skip animation
 
   public panels!: LayoutPanels;
+  public readonly registry = new PanelRegistry();
   public onModelChange?: (model: string) => void;
+  /** Re-populate the model dropdown (call after provider login/logout). */
+  public refreshModels?: () => void;
   public onScoopSelect?: (scoop: RegisteredScoop) => void;
   public onClearChat?: () => Promise<void>;
   public onClearFilesystem?: () => Promise<void>;
+  public onSprinkleClose?: (name: string) => void;
+
+  /** Callback to get available sprinkles for the [+] picker. */
+  public getAvailableSprinkles?: () => Array<{ name: string; title: string }>;
+  /** Callback to open a sprinkle by name. */
+  public onOpenSprinkle?: (name: string, zone?: ZoneId) => Promise<void>;
 
   private scoopsWidth = 0.15;
   private leftWidth = 0.45;
-  private topHeight = 0.65;
 
   constructor(root: HTMLElement, isExtension = false) {
     this.root = root;
@@ -129,11 +148,22 @@ export class Layout {
 
   setActiveTab(id: TabId): void {
     if (!this.isExtension) return;
-    this.switchTab(id);
+    this.extensionZone?.activateTab(id);
   }
 
   getActiveTab(): TabId {
     return this.activeTab;
+  }
+
+  /** Check if the terminal panel is currently open in a zone. */
+  isTerminalOpen(): boolean {
+    return true; // always present in drawer
+  }
+
+  /** Activate the terminal tab in the drawer. */
+  openTerminal(): void {
+    if (this.isExtension) return;
+    this.drawerZone.activateTab('terminal');
   }
 
   // ── Shared: Header ──────────────────────────────────────────────────
@@ -209,12 +239,14 @@ export class Layout {
         }
       }
 
-      if (modelSelect.selectedIndex === -1 && modelSelect.options.length > 0) {
+      // Auto-select first model if nothing is explicitly selected in localStorage
+      if (!currentModelId && modelSelect.options.length > 0) {
         modelSelect.selectedIndex = 0;
         if (modelSelect.value) setSelectedModelId(modelSelect.value);
       }
     };
     populateModels();
+    this.refreshModels = populateModels;
     modelSelect.addEventListener('change', () => {
       setSelectedModelId(modelSelect.value);
       // Update provider indicator
@@ -599,10 +631,11 @@ export class Layout {
     });
     this.actionsEl.appendChild(this.copyChatBtn);
 
-    // Clear Terminal
+    // Terminal: clears terminal and switches to terminal tab
     this.clearTermBtn = this.iconBtn(this.svgIcon(icons.terminal), 'Clear Terminal');
     this.clearTermBtn.addEventListener('click', () => {
       this.panels.terminal.clearTerminal();
+      this.openTerminal();
     });
     this.actionsEl.appendChild(this.clearTermBtn);
 
@@ -659,6 +692,9 @@ export class Layout {
 
   // ── Extension: Tabbed Layout ────────────────────────────────────────
 
+  /** Extension-mode TabZone (single zone for all tabs). */
+  private extensionZone!: TabZone;
+
   private buildTabbedLayout(): void {
     while (this.root.firstChild) this.root.removeChild(this.root.firstChild);
 
@@ -667,36 +703,60 @@ export class Layout {
     // Tab bar
     const tabBar = document.createElement('div');
     tabBar.className = 'tab-bar';
-
-    const tabs = EXTENSION_TAB_SPECS;
-
-    for (const { id, label } of tabs) {
-      const btn = document.createElement('button');
-      btn.className = 'tab-bar__tab';
-      btn.textContent = label;
-      btn.dataset.tab = id;
-      if (id === this.activeTab) btn.classList.add('tab-bar__tab--active');
-      btn.addEventListener('click', () => this.switchTab(id));
-      tabBar.appendChild(btn);
-      this.tabButtons.set(id, btn);
-    }
-
     this.root.appendChild(tabBar);
 
     // Tab content area
     const content = document.createElement('div');
     content.className = 'tab-content';
+    this.root.appendChild(content);
 
-    for (const { id } of tabs) {
-      const container = document.createElement('div');
-      container.className = 'tab-content__panel';
-      container.dataset.tab = id;
-      if (id !== this.activeTab) container.style.display = 'none';
-      content.appendChild(container);
+    this.extensionZone = new TabZone(tabBar, content, 'primary', {
+      onTabActivate: (id) => {
+        this.activeTab = id;
+        this.updateButtonVisibility();
+        if (id === 'terminal') this.panels?.terminal?.refit?.();
+        if (id === 'memory') this.panels?.memory?.refresh();
+      },
+      onTabClose: (id) => {
+        const name = id.startsWith('sprinkle-') ? id.slice(9) : id;
+        this.onSprinkleClose?.(name);
+      },
+      onAddClick: () => this.showExtensionPicker(tabBar),
+    }, { classPrefix: 'tab-bar' });
+
+    // Create containers for built-in tabs
+    const chatContainer = document.createElement('div');
+    chatContainer.className = 'tab-content__panel';
+
+    const terminalContainer = document.createElement('div');
+    terminalContainer.className = 'tab-content__panel';
+
+    const filesContainer = document.createElement('div');
+    filesContainer.className = 'tab-content__panel';
+
+    const memoryContainer = document.createElement('div');
+    memoryContainer.className = 'tab-content__panel';
+
+    // Add built-in tabs
+    for (const { id, label } of EXTENSION_TAB_SPECS) {
+      const container = id === 'chat' ? chatContainer
+        : id === 'terminal' ? terminalContainer
+        : id === 'files' ? filesContainer
+        : memoryContainer;
+      this.extensionZone.addTab({
+        id,
+        label,
+        closable: false,
+        element: container,
+        onActivate: id === 'terminal' ? () => this.panels?.terminal?.refit?.()
+          : id === 'memory' ? () => this.panels?.memory?.refresh()
+          : undefined,
+      });
+      // Keep tabContainers in sync for backward compat
       this.tabContainers.set(id, container);
     }
 
-    this.root.appendChild(content);
+    this.extensionZone.enableAddButton();
 
     // Hidden container for scoop iframes
     this.iframeContainer = document.createElement('div');
@@ -711,15 +771,15 @@ export class Layout {
 
     // Create panels in their tab containers
     this.panels = {
-      chat: new ChatPanel(this.tabContainers.get('chat')!),
-      terminal: new TerminalPanel(this.tabContainers.get('terminal')!),
-      fileBrowser: new FileBrowserPanel(this.tabContainers.get('files')!, {
+      chat: new ChatPanel(chatContainer),
+      terminal: new TerminalPanel(terminalContainer),
+      fileBrowser: new FileBrowserPanel(filesContainer, {
         onRunCommand: async (command) => {
           await this.runFileBrowserCommand(command);
-          this.switchTab('terminal');
+          this.extensionZone.activateTab('terminal');
         },
       }),
-      memory: new MemoryPanel(this.tabContainers.get('memory')!),
+      memory: new MemoryPanel(memoryContainer),
       scoops: new ScoopsPanel(this.scoopsEl, {
         onScoopSelect: (scoop) => this.onScoopSelect?.(scoop),
         onSendMessage: () => {},
@@ -730,26 +790,30 @@ export class Layout {
     this.updateButtonVisibility();
   }
 
+  /** Show the [+] picker in extension mode. */
+  private showExtensionPicker(anchor: HTMLElement): void {
+    const availableSprinkles = (this.getAvailableSprinkles?.() ?? []);
+    // In extension mode, all panels are in one zone — filter already-open ones
+    const openIds = new Set(this.extensionZone.getTabIds());
+    const available = availableSprinkles.filter(p => !openIds.has(`sprinkle-${p.name}`));
+
+    if (available.length === 0) return;
+
+    showSprinklePicker(anchor, 'primary', {
+      registry: this.registry,
+      callbacks: {
+        onSelectPanel: () => {},
+        onSelectSprinkle: (name) => {
+          this.onOpenSprinkle?.(name);
+        },
+      },
+      getAvailableSprinkles: () => available,
+    });
+  }
+
   private switchTab(id: TabId): void {
-    if (id === this.activeTab) return;
-    this.activeTab = id;
-
-    for (const [tabId, btn] of this.tabButtons) {
-      btn.classList.toggle('tab-bar__tab--active', tabId === id);
-    }
-
-    for (const [tabId, container] of this.tabContainers) {
-      container.style.display = tabId === id ? '' : 'none';
-    }
-
-    this.updateButtonVisibility();
-
-    if (id === 'terminal') {
-      this.panels.terminal.refit?.();
-    }
-
-    if (id === 'memory') {
-      this.panels.memory.refresh();
+    if (this.extensionZone) {
+      this.extensionZone.activateTab(id);
     }
   }
 
@@ -788,70 +852,104 @@ export class Layout {
     this.rightEl = document.createElement('div');
     this.rightEl.className = 'layout__right';
 
-    this.terminalContainer = document.createElement('div');
-    this.terminalContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: none;';
-    this.rightEl.appendChild(this.terminalContainer);
+    // ── Primary zone (Terminal + sprinkle tabs) ──
+    this.primaryZoneEl = document.createElement('div');
+    this.primaryZoneEl.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: none;';
 
+    const primaryTabBar = document.createElement('div');
+    primaryTabBar.className = 'mini-tabs';
+    this.primaryZoneEl.appendChild(primaryTabBar);
+
+    const primaryContentArea = document.createElement('div');
+    primaryContentArea.style.cssText = 'flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;';
+    this.primaryZoneEl.appendChild(primaryContentArea);
+
+    this.primaryZone = new TabZone(primaryTabBar, primaryContentArea, 'primary', {
+      onTabActivate: (id) => {
+        if (id === 'terminal') this.panels?.terminal?.refit();
+      },
+      onTabClose: (id) => {
+        const name = id.startsWith('sprinkle-') ? id.slice(9) : id;
+        this.onSprinkleClose?.(name);
+      },
+      onAddClick: () => this.showPickerForZone('primary', primaryTabBar),
+    });
+    this.primaryZone.enableAddButton();
+
+    this.rightEl.appendChild(this.primaryZoneEl);
+
+    // ── Horizontal divider ──
     this.horizontalDivider = document.createElement('div');
     this.horizontalDivider.className = 'layout__right-divider';
     this.rightEl.appendChild(this.horizontalDivider);
 
-    // Bottom section with tabs for Files/Memory
-    this.bottomSection = document.createElement('div');
-    this.bottomSection.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden;';
+    // ── Drawer zone (Files + Memory) ──
+    this.drawerZoneEl = document.createElement('div');
+    this.drawerZoneEl.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden;';
 
-    const miniTabs = document.createElement('div');
-    miniTabs.className = 'mini-tabs';
+    const drawerTabBar = document.createElement('div');
+    drawerTabBar.className = 'mini-tabs';
+    this.drawerZoneEl.appendChild(drawerTabBar);
 
-    const filesTab = document.createElement('button');
-    filesTab.className = 'mini-tabs__tab mini-tabs__tab--active';
-    filesTab.textContent = 'Files';
-    filesTab.dataset.tab = 'files';
-    miniTabs.appendChild(filesTab);
+    const drawerContentArea = document.createElement('div');
+    drawerContentArea.style.cssText = 'flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;';
+    this.drawerZoneEl.appendChild(drawerContentArea);
 
-    const memoryTab = document.createElement('button');
-    memoryTab.className = 'mini-tabs__tab';
-    memoryTab.textContent = 'Memory';
-    memoryTab.dataset.tab = 'memory';
-    miniTabs.appendChild(memoryTab);
+    this.drawerZone = new TabZone(drawerTabBar, drawerContentArea, 'drawer', {
+      onTabActivate: (id) => {
+        if (id === 'terminal') this.panels?.terminal?.refit();
+        if (id === 'memory') this.panels?.memory?.refresh();
+      },
+      onTabClose: (id) => {
+        const name = id.startsWith('sprinkle-') ? id.slice(9) : id;
+        this.onSprinkleClose?.(name);
+      },
+      onAddClick: () => this.showPickerForZone('drawer', drawerTabBar),
+    });
+    this.drawerZone.enableAddButton();
 
-    this.bottomSection.appendChild(miniTabs);
+    // Terminal tab
+    this.terminalContainer = document.createElement('div');
+    this.terminalContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1;';
+    this.drawerZone.addTab({
+      id: 'terminal',
+      label: 'Terminal',
+      closable: false,
+      element: this.terminalContainer,
+      onActivate: () => this.panels?.terminal?.refit(),
+    });
 
-    this.fileBrowserContainer = document.createElement('div');
-    this.fileBrowserContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1;';
-    this.bottomSection.appendChild(this.fileBrowserContainer);
+    // Files tab
+    const fileBrowserContainer = document.createElement('div');
+    fileBrowserContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1;';
+    this.drawerZone.addTab({
+      id: 'files',
+      label: 'Files',
+      closable: false,
+      element: fileBrowserContainer,
+    });
 
+    // Memory tab
     const memoryContainer = document.createElement('div');
-    memoryContainer.style.cssText = 'display: none; flex-direction: column; min-height: 0; flex: 1;';
-    this.bottomSection.appendChild(memoryContainer);
+    memoryContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; flex: 1;';
+    this.drawerZone.addTab({
+      id: 'memory',
+      label: 'Memory',
+      closable: false,
+      element: memoryContainer,
+      onActivate: () => this.panels?.memory?.refresh(),
+    });
 
-    const setBottomTab = (tab: 'files' | 'memory') => {
-      if (tab === 'memory') {
-        memoryTab.classList.add('mini-tabs__tab--active');
-        filesTab.classList.remove('mini-tabs__tab--active');
-        memoryContainer.style.display = 'flex';
-        this.fileBrowserContainer.style.display = 'none';
-        this.panels?.memory?.refresh();
-      } else {
-        filesTab.classList.add('mini-tabs__tab--active');
-        memoryTab.classList.remove('mini-tabs__tab--active');
-        this.fileBrowserContainer.style.display = 'flex';
-        memoryContainer.style.display = 'none';
-      }
-      const url = new URL(window.location.href);
-      url.searchParams.set('bottomTab', tab);
-      history.replaceState(null, '', url.toString());
-    };
+    // Restore persisted drawer height
+    const savedDrawerHeight = localStorage.getItem('slicc-drawer-height');
+    if (savedDrawerHeight) this.drawerHeightFraction = parseFloat(savedDrawerHeight) || 0.35;
 
-    filesTab.addEventListener('click', () => setBottomTab('files'));
-    memoryTab.addEventListener('click', () => setBottomTab('memory'));
+    // Restore persisted primary tab
+    this.primaryZone.restoreActiveTab();
 
-    const initialTab = new URL(window.location.href).searchParams.get('bottomTab');
-    if (initialTab === 'memory') {
-      setBottomTab('memory');
-    }
+    this.drawerZone.restoreActiveTab();
 
-    this.rightEl.appendChild(this.bottomSection);
+    this.rightEl.appendChild(this.drawerZoneEl);
     layout.appendChild(this.rightEl);
 
     // Hidden container for scoop iframes
@@ -866,7 +964,7 @@ export class Layout {
     this.panels = {
       chat: new ChatPanel(this.leftEl),
       terminal: new TerminalPanel(this.terminalContainer),
-      fileBrowser: new FileBrowserPanel(this.fileBrowserContainer, {
+      fileBrowser: new FileBrowserPanel(fileBrowserContainer, {
         onRunCommand: (command) => {
           void this.runFileBrowserCommand(command);
         },
@@ -901,13 +999,11 @@ export class Layout {
 
     const rightH = this.rightEl.clientHeight;
     const hDividerH = 4;
-    const topH = Math.round(rightH * this.topHeight);
-    const bottomH = rightH - topH - hDividerH;
+    const drawerH = Math.max(28, Math.round(rightH * this.drawerHeightFraction));
+    const primaryH = Math.max(100, rightH - drawerH - hDividerH);
 
-    this.terminalContainer.style.height = topH + 'px';
-    if (this.bottomSection) {
-      this.bottomSection.style.height = bottomH + 'px';
-    }
+    this.primaryZoneEl.style.height = primaryH + 'px';
+    this.drawerZoneEl.style.height = drawerH + 'px';
   }
 
   /** Get the iframe container for the orchestrator */
@@ -995,8 +1091,11 @@ export class Layout {
     const onMouseMove = (e: MouseEvent) => {
       if (!dragging) return;
       const rect = this.rightEl.getBoundingClientRect();
+      const rightH = rect.height;
       const y = e.clientY - rect.top;
-      this.topHeight = Math.max(0.2, Math.min(0.8, y / rect.height));
+      // drawerHeightFraction = fraction from bottom
+      const primaryFraction = y / rightH;
+      this.drawerHeightFraction = Math.max(28 / rightH, Math.min(1 - 100 / rightH, 1 - primaryFraction));
       this.applySizes();
     };
 
@@ -1007,6 +1106,8 @@ export class Layout {
       document.body.style.userSelect = '';
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
+      localStorage.setItem('slicc-drawer-height', String(this.drawerHeightFraction));
+      this.panels?.terminal?.refit();
     };
 
     this.horizontalDivider.addEventListener('mousedown', (e) => {
@@ -1019,6 +1120,148 @@ export class Layout {
       window.addEventListener('mouseup', onMouseUp);
     });
   }
+
+  // ── Panel Picker ───────────────────────────────────────────────────
+
+  /** Update [+] button enabled state based on available panels. */
+  updateAddButtons(): void {
+    const closedCount = this.registry.getClosed().length;
+    const availableSprinkles = this.getAvailableSprinkles?.() ?? [];
+    const openSprinkles = new Set<string>();
+    for (const id of this.registry.ids()) {
+      if (id.startsWith('sprinkle-') && this.registry.get(id)?.descriptor.zone !== null) {
+        openSprinkles.add(id.slice(9));
+      }
+    }
+    const unopenedSprinkles = availableSprinkles.filter(p => !openSprinkles.has(p.name)).length;
+    const hasAvailable = closedCount + unopenedSprinkles > 0;
+    this.primaryZone?.setAddButtonEnabled(hasAvailable);
+    this.drawerZone?.setAddButtonEnabled(hasAvailable);
+  }
+
+  /** Show the [+] panel picker for a zone. */
+  private showPickerForZone(zone: ZoneId, anchor: HTMLElement): void {
+    // Collect available sprinkles that are not currently open
+    const openSprinkles = new Set<string>();
+    for (const id of this.registry.ids()) {
+      if (id.startsWith('sprinkle-') && this.registry.get(id)?.descriptor.zone !== null) {
+        openSprinkles.add(id.slice(9)); // strip 'sprinkle-' prefix
+      }
+    }
+    const availableSprinkles = (this.getAvailableSprinkles?.() ?? [])
+      .filter(p => !openSprinkles.has(p.name));
+
+    showSprinklePicker(anchor, zone, {
+      registry: this.registry,
+      callbacks: {
+        onSelectPanel: (id, targetZone) => {
+          this.openPanelInZone(id, targetZone);
+        },
+        onSelectSprinkle: (name, targetZone) => {
+          this.onOpenSprinkle?.(name, targetZone);
+        },
+      },
+      getAvailableSprinkles: () => availableSprinkles,
+    });
+  }
+
+  /** Open a closed registry panel in a specific zone. */
+  private openPanelInZone(id: string, zone: ZoneId): void {
+    const entry = this.registry.get(id);
+    if (!entry) return;
+
+    const tabZone = zone === 'primary' ? this.primaryZone : this.drawerZone;
+    this.registry.setZone(id, zone);
+    tabZone.addTab({
+      id: entry.descriptor.id,
+      label: entry.descriptor.label,
+      closable: entry.descriptor.closable,
+      element: entry.descriptor.element,
+      onActivate: entry.descriptor.onActivate,
+    });
+    tabZone.activateTab(id);
+  }
+
+  // ── Dynamic Sprinkles ────────────────────────────────────────────
+
+  /** Track dynamic sprinkle sections in standalone mode. */
+  private dynamicSprinkles = new Map<string, HTMLElement>();
+
+  /** Add a dynamic .shtml sprinkle to the layout. */
+  addSprinkle(name: string, title: string, element: HTMLElement, targetZone?: ZoneId): void {
+    if (this.isExtension) {
+      // Extension mode: add as a new tab via TabZone
+      const tabId = `sprinkle-${name}`;
+
+      const container = document.createElement('div');
+      container.className = 'tab-content__panel';
+      container.appendChild(element);
+
+      this.extensionZone.addTab({
+        id: tabId,
+        label: title,
+        closable: true,
+        element: container,
+      });
+      this.tabContainers.set(tabId, container);
+      this.dynamicSprinkles.set(name, container);
+
+      // Auto-switch to the new tab
+      this.extensionZone.activateTab(tabId);
+    } else {
+      // Standalone mode: add to the requested zone (default: primary)
+      const zone = targetZone ?? 'primary';
+      const tabZone = zone === 'primary' ? this.primaryZone : this.drawerZone;
+      const tabId = `sprinkle-${name}`;
+
+      const container = document.createElement('div');
+      container.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: auto; flex: 1;';
+      container.appendChild(element);
+
+      // Register in the panel registry
+      this.registry.register({
+        id: tabId,
+        label: title,
+        zone,
+        closable: true,
+        element: container,
+        onClose: () => this.onSprinkleClose?.(name),
+      });
+
+      tabZone.addTab({
+        id: tabId,
+        label: title,
+        closable: true,
+        element: container,
+      });
+      this.dynamicSprinkles.set(name, container);
+
+      // Auto-switch to the new tab
+      tabZone.activateTab(tabId);
+      this.updateAddButtons();
+    }
+  }
+
+  /** Remove a dynamic .shtml sprinkle from the layout. */
+  removeSprinkle(name: string): void {
+    if (this.isExtension) {
+      const tabId = `sprinkle-${name}`;
+      this.extensionZone.removeTab(tabId);
+      this.tabContainers.delete(tabId);
+      this.dynamicSprinkles.delete(name);
+    } else {
+      const tabId = `sprinkle-${name}`;
+      const entry = this.registry.get(tabId);
+      const zone = entry?.descriptor.zone;
+      const tabZone = zone === 'drawer' ? this.drawerZone : this.primaryZone;
+      tabZone.removeTab(tabId);
+      this.registry.unregister(tabId);
+      this.dynamicSprinkles.delete(name);
+      this.updateAddButtons();
+    }
+  }
+
+  // switchPrimaryTab and switchDrawerTab are now handled by TabZone instances
 
   // ── Cleanup ─────────────────────────────────────────────────────────
 

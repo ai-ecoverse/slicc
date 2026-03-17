@@ -84,7 +84,7 @@ Only `src/ui/chat-panel.ts` (~30-50 lines modified/added).
 ## Verification
 
 - `npm run typecheck` -- both tsconfig targets
-- `npm run test` -- all 1054 tests pass
+- `npm run test` -- all tests pass
 - `npm run build` -- production build
 - `npm run build:extension` -- extension build
 - Manual testing: build extension, load in Chrome, verify smooth streaming with live markdown, tool calls render correctly, content_done produces clean final render.

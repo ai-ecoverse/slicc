@@ -14,7 +14,7 @@ export interface CliRuntimeFlags {
 export const DEFAULT_CLI_CDP_PORT = 9222;
 export const DEFAULT_ELECTRON_ATTACH_CDP_PORT = 9223;
 
-const VALID_LOG_LEVELS = new Set<string>(['debug', 'info', 'warn', 'error']);
+const VALID_LOG_LEVELS: Set<LogLevel> = new Set(['debug', 'info', 'warn', 'error']);
 
 export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
   let dev = false;
@@ -47,9 +47,9 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
       continue;
     }
     if (arg.startsWith('--log-level=')) {
-      const value = arg.slice('--log-level='.length);
+      const value = arg.slice('--log-level='.length) as LogLevel;
       if (VALID_LOG_LEVELS.has(value)) {
-        logLevel = value as LogLevel;
+        logLevel = value;
       }
       continue;
     }

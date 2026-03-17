@@ -17,9 +17,12 @@ import { createUnameCommand } from './uname-command.js';
 import { createUnzipCommand } from './unzip-command.js';
 import { createWebhookCommand } from './webhook-command.js';
 import { createCrontaskCommand } from './crontask-command.js';
+import { createSprinkleCommand } from './sprinkle-command.js';
 import { createOAuthTokenCommand } from './oauth-token-command.js';
 import { createWhichCommand } from './which-command.js';
 import { createZipCommand } from './zip-command.js';
+import { createScreencaptureCommand } from './screencapture-command.js';
+import { createPbcopyCommand, createPbpasteCommand, createClipboardAutoCommand } from './clipboard-commands.js';
 import type { BrowserAPI } from '../../cdp/index.js';
 export type {
   ImgcatCommandOptions as SupplementalCommandOptions,
@@ -38,7 +41,7 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
   const commands: Command[] = [
     createCommandsCommand({ getJshCommands: options.getJshCommands }),
-    createServeCommand(),
+    createServeCommand(options.browserAPI, options.fs),
     createOpenCommand(),
     createImgcatCommand(options),
     createZipCommand(),
@@ -50,6 +53,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createPython3LikeCommand('python'),
     createWebhookCommand(),
     createCrontaskCommand(),
+    createSprinkleCommand(),
     createPdftkCommand('pdftk'),
     createPdftkCommand('pdf'),
     createConvertCommand('convert'),
@@ -57,6 +61,11 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createWhichCommand(options.fs),
     createUnameCommand(),
     createOAuthTokenCommand(),
+    createScreencaptureCommand(),
+    createPbcopyCommand(),
+    createPbpasteCommand(),
+    createClipboardAutoCommand('xclip'),
+    createClipboardAutoCommand('xsel'),
   ];
 
   if (options.fs) {

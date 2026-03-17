@@ -92,7 +92,7 @@ describe('serve command', () => {
 
     expect(result.exitCode).toBe(0);
     expect(openSpy).toHaveBeenCalledWith(
-      'http://localhost:3000/preview/workspace/app/index.html',
+      'http://localhost:5710/preview/workspace/app/index.html',
       '_blank',
       'noopener,noreferrer',
     );
@@ -111,7 +111,7 @@ describe('serve command', () => {
 
     expect(result.exitCode).toBe(0);
     expect(openSpy).toHaveBeenCalledWith(
-      'http://localhost:3000/preview/workspace/project/site/index.html',
+      'http://localhost:5710/preview/workspace/project/site/index.html',
       '_blank',
       'noopener,noreferrer',
     );
@@ -128,7 +128,7 @@ describe('serve command', () => {
 
     expect(result.exitCode).toBe(0);
     expect(openSpy).toHaveBeenCalledWith(
-      'http://localhost:3000/preview/workspace/app/pages/home.html',
+      'http://localhost:5710/preview/workspace/app/pages/home.html',
       '_blank',
       'noopener,noreferrer',
     );
@@ -145,7 +145,7 @@ describe('serve command', () => {
 
     expect(result.exitCode).toBe(0);
     expect(openSpy).toHaveBeenCalledWith(
-      'http://localhost:3000/preview/workspace/app/index.html',
+      'http://localhost:5710/preview/workspace/app/index.html',
       '_blank',
       'noopener,noreferrer',
     );
@@ -162,7 +162,7 @@ describe('serve command', () => {
 
     expect(result.exitCode).toBe(0);
     expect(openSpy).toHaveBeenCalledWith(
-      'http://localhost:3000/preview/workspace/app/pages/home.html',
+      'http://localhost:5710/preview/workspace/app/pages/home.html',
       '_blank',
       'noopener,noreferrer',
     );

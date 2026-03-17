@@ -29,6 +29,8 @@ import {
   isElectronOverlaySetTabMessage,
   resolveUiRuntimeMode,
 } from './runtime-mode.js';
+import { SprinkleManager } from './sprinkle-manager.js';
+import { initTelemetry } from './telemetry.js';
 
 const log = createLogger('main');
 
@@ -365,10 +367,93 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     client.clearFilesystem();
   };
 
+  // ── Sprinkle Manager (SHTML sprinkle panels) ────────────────────────
+  const sprinkleManager = new SprinkleManager(
+    localFs,
+    (event: LickEvent) => {
+      // Route sprinkle licks to the offscreen orchestrator's cone
+      if (event.type === 'sprinkle') {
+        client.sendSprinkleLick(event.sprinkleName!, event.body);
+      }
+    },
+    {
+      addSprinkle: (name, title, element, zone) => layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined),
+      removeSprinkle: (name) => layout.removeSprinkle(name),
+    },
+  );
+  (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
+
+  // Register handler so the offscreen proxy can relay sprinkle operations here.
+  // Routed through the OffscreenClient's existing onMessage listener to ensure delivery.
+  client.setSprinkleOpHandler((payload: any) => {
+    const { id, op, name, data } = payload;
+    console.log('[main-ext] sprinkle-op handler called', { id, op, name });
+    (async () => {
+      try {
+        let result: unknown;
+        switch (op) {
+          case 'list':
+            await sprinkleManager.refresh();
+            result = sprinkleManager.available();
+            break;
+          case 'opened':
+            result = sprinkleManager.opened();
+            break;
+          case 'refresh':
+            await sprinkleManager.refresh();
+            result = sprinkleManager.available().length;
+            break;
+          case 'open':
+            await sprinkleManager.open(name);
+            result = true;
+            break;
+          case 'close':
+            sprinkleManager.close(name);
+            result = true;
+            break;
+          case 'send':
+            sprinkleManager.sendToSprinkle(name, data);
+            result = true;
+            break;
+          case 'openNewAutoOpen':
+            await sprinkleManager.openNewAutoOpenSprinkles();
+            result = true;
+            break;
+        }
+        console.log('[main-ext] sprinkle-op response sending', { id, op, result: typeof result });
+        (chrome as any).runtime.sendMessage({
+          source: 'panel',
+          payload: { type: 'sprinkle-op-response', id, result },
+        }).catch(() => {});
+      } catch (err) {
+        (chrome as any).runtime.sendMessage({
+          source: 'panel',
+          payload: { type: 'sprinkle-op-response', id, error: err instanceof Error ? err.message : String(err) },
+        }).catch(() => {});
+      }
+    })();
+  });
+
+  await sprinkleManager.refresh();
+  layout.onSprinkleClose = (name) => sprinkleManager.close(name);
+  layout.getAvailableSprinkles = () => {
+    const opened = new Set(sprinkleManager.opened());
+    return sprinkleManager.available()
+      .filter(p => !opened.has(p.name))
+      .map(p => ({ name: p.name, title: p.title }));
+  };
+  layout.onOpenSprinkle = (name, zone) => sprinkleManager.open(name, zone);
+  layout.updateAddButtons();
+  await sprinkleManager.restoreOpenSprinkles();
+  log.info('SprinkleManager initialized (extension mode)');
+
   // Request state from offscreen — retries automatically until ready
   client.requestState();
 
   log.info('Extension UI connected to offscreen agent engine');
+
+  // Initialize operational telemetry (fire-and-forget)
+  initTelemetry().catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -593,6 +678,11 @@ async function main(): Promise<void> {
       },
       getBrowserAPI: () => browser,
       onToolStart: (scoopJid, toolName, toolInput) => {
+        // Switch to terminal tab when agent uses bash
+        if (toolName === 'bash') {
+          layout.openTerminal();
+        }
+
         // Hide infrastructure tools from the chat (their output is shown elsewhere)
         const hiddenTools = new Set(['send_message', 'list_scoops', 'list_tasks']);
         if (hiddenTools.has(toolName)) return;
@@ -811,58 +901,107 @@ async function main(): Promise<void> {
   // Route lick events to scoops
   const routeLickToScoop = (event: LickEvent) => {
     const isWebhook = event.type === 'webhook';
-    const eventName = isWebhook ? event.webhookName : event.cronName;
-    const eventId = isWebhook ? event.webhookId : event.cronId;
+    const isSprinkle = event.type === 'sprinkle';
+    const eventName = isWebhook ? event.webhookName : isSprinkle ? event.sprinkleName : event.cronName;
+    const eventId = isWebhook ? event.webhookId : isSprinkle ? event.sprinkleName : event.cronId;
     const channel = event.type;
 
     log.debug('Lick event', { type: event.type, name: eventName, targetScoop: event.targetScoop });
 
-    if (event.targetScoop) {
-      const scoops = orchestrator.getScoops();
-      const targetScoop = scoops.find(s =>
+    // Determine the target:
+    // - Sprinkle licks and untargeted events default to cone
+    // - Webhook/cron licks use explicit targetScoop if set
+    const scoops = orchestrator.getScoops();
+    let resolvedTarget: RegisteredScoop | undefined;
+
+    if (isSprinkle || !event.targetScoop) {
+      // Sprinkle licks + untargeted cron/webhook events → cone
+      resolvedTarget = scoops.find(s => s.isCone);
+    } else {
+      resolvedTarget = scoops.find(s =>
         s.name === event.targetScoop ||
         s.folder === event.targetScoop ||
         s.folder === `${event.targetScoop}-scoop`
       );
+    }
 
-      if (targetScoop) {
-        const msgId = `${channel}-${eventId}-${Date.now()}`;
-        const eventLabel = isWebhook ? 'Webhook Event' : 'Cron Event';
-        const content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
+    if (resolvedTarget) {
+      const msgId = `${channel}-${eventId}-${Date.now()}`;
+      const eventLabel = isWebhook ? 'Webhook Event' : isSprinkle ? 'Sprinkle Event' : 'Cron Event';
+      const content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
 
-        const msg: ChannelMessage = {
-          id: msgId,
-          chatJid: targetScoop.jid,
-          senderId: channel,
-          senderName: `${channel}:${eventName}`,
-          content,
-          timestamp: event.timestamp,
-          fromAssistant: false,
-          channel,
-        };
+      const msg: ChannelMessage = {
+        id: msgId,
+        chatJid: resolvedTarget.jid,
+        senderId: channel,
+        senderName: `${channel}:${eventName}`,
+        content,
+        timestamp: event.timestamp,
+        fromAssistant: false,
+        channel,
+      };
 
-        getBuffer(targetScoop.jid).push({
-          id: msgId,
-          role: 'user',
-          content,
-          timestamp: Date.now(),
-          source: 'lick',
-          channel,
-        });
+      getBuffer(resolvedTarget.jid).push({
+        id: msgId,
+        role: 'user',
+        content,
+        timestamp: Date.now(),
+        source: 'lick',
+        channel,
+      });
 
-        if (selectedScoop?.jid === targetScoop.jid) {
-          layout.panels.chat.addLickMessage(msgId, content, channel as 'webhook' | 'cron');
-        }
-
-        log.info('Routing lick to scoop', { type: channel, name: eventName, scoopJid: targetScoop.jid });
-        orchestrator.handleMessage(msg);
-      } else {
-        log.warn('Lick target scoop not found', { targetScoop: event.targetScoop });
+      if (selectedScoop?.jid === resolvedTarget.jid) {
+        layout.panels.chat.addLickMessage(msgId, content, channel as 'webhook' | 'cron' | 'sprinkle');
       }
+
+      log.info('Routing lick to scoop', { type: channel, name: eventName, scoopJid: resolvedTarget.jid });
+      orchestrator.handleMessage(msg);
+    } else {
+      log.warn('Lick target scoop not found', { targetScoop: event.targetScoop });
     }
   };
 
   lickManager.setEventHandler(routeLickToScoop);
+
+  // ── Sprinkle Manager (SHTML sprinkle panels) ────────────────────────
+  let sprinkleManager: SprinkleManager | null = null;
+  if (sharedFs) {
+    sprinkleManager = new SprinkleManager(
+      sharedFs,
+      routeLickToScoop,
+      {
+        addSprinkle: (name, title, element, zone) => layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined),
+        removeSprinkle: (name) => layout.removeSprinkle(name),
+      },
+    );
+    // Expose for open command and sprinkle shell command
+    (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
+    await sprinkleManager.refresh();
+    layout.onSprinkleClose = (name) => sprinkleManager!.close(name);
+
+    // Wire [+] picker: available sprinkles + open callback
+    layout.getAvailableSprinkles = () => {
+      const opened = new Set(sprinkleManager!.opened());
+      return sprinkleManager!.available()
+        .filter(p => !opened.has(p.name))
+        .map(p => ({ name: p.name, title: p.title }));
+    };
+    layout.onOpenSprinkle = (name, zone) => sprinkleManager!.open(name, zone);
+    layout.updateAddButtons();
+
+    // Open welcome sprinkle on first run
+    if (!localStorage.getItem('slicc-welcomed') && sprinkleManager.available().some(p => p.name === 'welcome')) {
+      try {
+        await sprinkleManager.open('welcome');
+        localStorage.setItem('slicc-welcomed', '1');
+      } catch (e) {
+        log.warn('Failed to open welcome sprinkle', e);
+      }
+    }
+
+    await sprinkleManager.restoreOpenSprinkles();
+    log.info('SprinkleManager initialized');
+  }
 
   // Connect WebSocket for server communication
   const connectLickWs = () => {
@@ -1064,6 +1203,9 @@ async function main(): Promise<void> {
   }
 
   log.info('Orchestrator initialized — cone+scoops ready', { scoopCount: orchestrator.getScoops().length });
+
+  // Initialize operational telemetry (fire-and-forget)
+  initTelemetry().catch(() => {});
 }
 
 main().catch((err) => {
@@ -1080,6 +1222,28 @@ main().catch((err) => {
     p.textContent = err.message;
     errorDiv.appendChild(h1);
     errorDiv.appendChild(p);
+
+    const resetBtn = document.createElement('button');
+    resetBtn.textContent = 'Reset all data & reload';
+    resetBtn.style.cssText =
+      'margin-top: 1rem; padding: 0.5rem 1.5rem; background: #e94560; color: #fff; ' +
+      'border: none; border-radius: 6px; cursor: pointer; font-size: 14px;';
+    resetBtn.addEventListener('click', async () => {
+      resetBtn.disabled = true;
+      resetBtn.textContent = 'Resetting…';
+      const dbs = await indexedDB.databases();
+      await Promise.all(
+        dbs.map(db => db.name ? new Promise<void>((res) => {
+          const req = indexedDB.deleteDatabase(db.name!);
+          req.onsuccess = () => res();
+          req.onerror = () => res();
+          req.onblocked = () => res();
+        }) : Promise.resolve())
+      );
+      location.reload();
+    });
+    errorDiv.appendChild(resetBtn);
+
     while (app.firstChild) app.removeChild(app.firstChild);
     app.appendChild(errorDiv);
   }
