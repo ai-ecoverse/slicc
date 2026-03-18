@@ -86,6 +86,8 @@ Virtual Filesystem (src/fs/) → RestrictedFS → Shell (src/shell/) + Git (src/
 
 **Preview SW** (`src/ui/preview-sw.ts`): Intercepts `/preview/*` requests, serves VFS content. Built as IIFE via esbuild (not rollup — avoids code-splitting issues in SWs).
 
+**Sprinkle Rendering** (`src/ui/sprinkle-renderer.ts`): Renders `.shtml` files as interactive UI panels in sandbox iframes. See the sprinkles skill (`src/defaults/workspace/skills/sprinkles/`) for rendering modes, bridge API, and style guide.
+
 **Skills** (`src/skills/`, `src/scoops/skills.ts`): SKILL.md files in `/workspace/skills/` auto-load into system prompt. Installation engine supports manifest-based packages with dependency/conflict checking.
 
 ### Data Flow
