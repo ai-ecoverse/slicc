@@ -510,8 +510,8 @@ async function main(): Promise<void> {
   let apiKey = getApiKey();
   const hasTrayJoin = hasStoredTrayJoinUrl(window.localStorage);
   if (!apiKey && !hasTrayJoin) {
-    // Default to tray-join form when not on the default dev port (3000)
-    const isDefaultPort = window.location.port === '3000' || window.location.port === '';
+    // Default to tray-join form when not on the default port (5710 prod, 3000 legacy dev)
+    const isDefaultPort = window.location.port === '5710' || window.location.port === '3000' || window.location.port === '';
     await showProviderSettings({ preferTrayJoin: !isDefaultPort });
     apiKey = getApiKey();
   }
