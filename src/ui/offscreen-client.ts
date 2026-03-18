@@ -231,8 +231,11 @@ export class OffscreenClient {
 
         if (msg.source === 'offscreen') {
           const payload = msg.payload as any;
-          // Route sprinkle-op to the registered handler
-          if (payload?.type === 'sprinkle-op' && this.sprinkleOpHandler) {
+          // Route debug-tabs toggle to the panel's Layout
+          if (payload?.type === 'debug-tabs') {
+            const toggle = (window as any).__slicc_debug_tabs as ((show: boolean) => void) | undefined;
+            toggle?.(!!payload.show);
+          } else if (payload?.type === 'sprinkle-op' && this.sprinkleOpHandler) {
             this.sprinkleOpHandler(payload);
           } else {
             this.handleOffscreenMessage(msg.payload as OffscreenToPanelMessage | StateSnapshotMsg);

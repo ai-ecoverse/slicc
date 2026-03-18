@@ -25,6 +25,7 @@ import { createScreencaptureCommand } from './screencapture-command.js';
 import { createPbcopyCommand, createPbpasteCommand, createClipboardAutoCommand } from './clipboard-commands.js';
 import { createSayCommand } from './say-command.js';
 import { createAfplayCommand, createChimeCommand } from './afplay-command.js';
+import { createDebugCommand } from './debug-command.js';
 import type { BrowserAPI } from '../../cdp/index.js';
 export type {
   ImgcatCommandOptions as SupplementalCommandOptions,
@@ -72,6 +73,12 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createAfplayCommand(),
     createChimeCommand(),
   ];
+
+  // Extension-only commands
+  const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
+  if (isExtension) {
+    commands.push(createDebugCommand());
+  }
 
   if (options.fs) {
     commands.push(
