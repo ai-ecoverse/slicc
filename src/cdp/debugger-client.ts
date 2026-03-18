@@ -13,6 +13,8 @@ const log = createLogger('cdp:debugger');
 
 // Chrome extension API types provided by src/extension/chrome.d.ts
 
+import { addToSliccGroup } from '../extension/tab-group.js';
+
 export class DebuggerClient implements CDPTransport {
   private _state: ConnectionState = 'disconnected';
   private listeners = new Map<string, Set<CDPEventListener>>();
@@ -241,6 +243,7 @@ export class DebuggerClient implements CDPTransport {
   ): Promise<Record<string, unknown>> {
     const url = (params['url'] as string) ?? 'about:blank';
     const tab = await chrome.tabs.create({ url, active: false });
+    await addToSliccGroup(tab.id);
     return { targetId: String(tab.id) };
   }
 

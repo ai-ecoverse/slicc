@@ -392,6 +392,50 @@ if (isExtension) {
 
 Used throughout codebase to select code paths.
 
+## ToolCall ↔ ToolResult Pairing Must Be Preserved
+
+**The Problem**
+
+The Anthropic API requires every `tool_result` content block to reference a `tool_use` block (via `tool_use_id`) in the **immediately preceding** assistant message. If any code path mutates the message array and breaks this pairing, the API returns: `unexpected tool_use_id found in tool_result blocks`.
+
+**The Rule**
+
+Any code that modifies `AgentMessage[]` must preserve ToolCall blocks in assistant messages. Three code paths mutate messages:
+
+| Path | File | How it handles pairing |
+|---|---|---|
+| **Context compaction** | `context-compaction.ts` | While loop walks cut point backward past `toolResult` messages to include their assistant |
+| **Overflow recovery** | `scoop-context.ts` `recoverFromOverflow()` | When replacing oversized assistant content, preserves `type: 'toolCall'` blocks (only replaces text/image/thinking) |
+| **Image error recovery** | `scoop-context.ts` `recoverFromImageError()` | Filters `type !== 'image'` which naturally preserves ToolCall blocks |
+
+**When adding new message mutation code:**
+- Never replace an assistant message's entire `content` array — filter out large blocks but keep `toolCall` blocks
+- Never remove an assistant message without also removing its subsequent `toolResult` messages
+- Never insert messages between an assistant (with ToolCalls) and its `toolResult` responses
+
+**Key files:**
+- `scoop-context.ts` lines 462-487 (overflow recovery with ToolCall preservation)
+- `context-compaction.ts` lines 85-89 (compaction pair protection)
+- `scoop-context.test.ts` "overflow recovery" tests (7 tests covering ToolCall preservation)
+
+## Service Worker Must Be Self-Contained
+
+**The Problem**
+
+The extension service worker (`src/extension/service-worker.ts`) is built by Rollup as an entry point. If it imports from modules that are shared with other entry points (index.html, offscreen.html), Rollup code-splits them into shared chunks with ES `import` statements. Chrome extension service workers are **not** ES modules — `import` statements cause `Uncaught SyntaxError: Cannot use import statement outside a module` at runtime.
+
+**The Rule**
+
+The service worker must only import **types** (erased at compile time) from other modules. All runtime code must be inlined. If you need to share logic between the service worker and other extension contexts (offscreen, side panel), maintain an inline copy in the service worker and the canonical version in a shared module.
+
+| Import type | Example | Allowed in SW? |
+|---|---|---|
+| Type-only | `import type { Foo } from './messages.js'` | Yes (erased) |
+| Runtime value | `import { bar } from './tab-group.js'` | **No** (causes code split) |
+| Core modules | `import { createLogger } from '../core/logger.js'` | **No** (pulls in dependency tree) |
+
+**Current example**: `addToSliccGroup` has an inline copy in `service-worker.ts` and a canonical version in `tab-group.ts` (imported by `debugger-client.ts` in the offscreen document, which IS an ES module).
+
 ## Dual-Mode Testing Checklist
 
 When adding a feature that touches:

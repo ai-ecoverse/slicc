@@ -12,24 +12,24 @@ import {
 
 describe('runtime-mode', () => {
   it('prefers extension mode when chrome runtime is present', () => {
-    expect(resolveUiRuntimeMode('http://localhost:3000/electron', true)).toBe('extension');
+    expect(resolveUiRuntimeMode('http://localhost:5710/electron', true)).toBe('extension');
   });
 
   it('detects electron overlay mode from the path and legacy query param', () => {
-    expect(resolveUiRuntimeMode('http://localhost:3000/electron', false)).toBe('electron-overlay');
-    expect(resolveUiRuntimeMode('http://localhost:3000/electron/', false)).toBe('electron-overlay');
-    expect(resolveUiRuntimeMode('http://localhost:3000/?runtime=electron-overlay', false)).toBe('electron-overlay');
-    expect(resolveUiRuntimeMode('http://localhost:3000/', false)).toBe('standalone');
+    expect(resolveUiRuntimeMode('http://localhost:5710/electron', false)).toBe('electron-overlay');
+    expect(resolveUiRuntimeMode('http://localhost:5710/electron/', false)).toBe('electron-overlay');
+    expect(resolveUiRuntimeMode('http://localhost:5710/?runtime=electron-overlay', false)).toBe('electron-overlay');
+    expect(resolveUiRuntimeMode('http://localhost:5710/', false)).toBe('standalone');
   });
 
   it('normalizes the initial overlay tab from the URL', () => {
-    expect(getElectronOverlayInitialTab('http://localhost:3000/electron?tab=memory')).toBe('memory');
-    expect(getElectronOverlayInitialTab('http://localhost:3000/electron')).toBe('chat');
-    expect(getElectronOverlayInitialTab('http://localhost:3000/electron?tab=nope')).toBe('chat');
+    expect(getElectronOverlayInitialTab('http://localhost:5710/electron?tab=memory')).toBe('memory');
+    expect(getElectronOverlayInitialTab('http://localhost:5710/electron')).toBe('chat');
+    expect(getElectronOverlayInitialTab('http://localhost:5710/electron?tab=nope')).toBe('chat');
   });
 
   it('builds lick websocket and webhook urls from the current origin', () => {
-    expect(getLickWebSocketUrl('http://localhost:3000/app')).toBe('ws://localhost:3000/licks-ws');
+    expect(getLickWebSocketUrl('http://localhost:5710/app')).toBe('ws://localhost:5710/licks-ws');
     expect(getLickWebSocketUrl('https://example.com/app')).toBe('wss://example.com/licks-ws');
     expect(getWebhookUrl('https://example.com/app?x=1', 'wh-123')).toBe('https://example.com/webhooks/wh-123');
   });

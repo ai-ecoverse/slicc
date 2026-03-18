@@ -237,6 +237,7 @@ async function installFromClawHub(
       fileCount++;
     }
 
+    await refreshSprinklesAfterInstall();
     return {
       stdout: `Installed skill "${slug}" from ClawHub (${fileCount} files)\n`,
       stderr: '',
@@ -380,6 +381,7 @@ async function installFromGitHub(
 
     await downloadDir(contents, destDir);
 
+    await refreshSprinklesAfterInstall();
     return {
       stdout: `Installed skill "${skillName}" from ${owner}/${repo}\n`,
       stderr: '',
@@ -431,6 +433,17 @@ function parseGitHubRef(ref: string): { owner: string; repo: string } | null {
     return { owner: match[1], repo: match[2] };
   }
   return null;
+}
+
+/** After a successful install, refresh sprinkle manager and auto-open new sprinkles. */
+async function refreshSprinklesAfterInstall(): Promise<void> {
+  try {
+    if (typeof window === 'undefined') return;
+    const mgr = (window as unknown as Record<string, unknown>).__slicc_sprinkleManager;
+    if (mgr && typeof (mgr as Record<string, unknown>).openNewAutoOpenSprinkles === 'function') {
+      await (mgr as { openNewAutoOpenSprinkles: () => Promise<void> }).openNewAutoOpenSprinkles();
+    }
+  } catch { /* best-effort */ }
 }
 
 /**
@@ -641,6 +654,7 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
 
       if (successCount > 0) {
         output += `\nInstalled ${successCount} skill(s)\n`;
+        await refreshSprinklesAfterInstall();
       }
 
       return {
@@ -761,6 +775,7 @@ Examples:
 
           const result = await skills.applySkill(fs, name);
           if (result.success) {
+            await refreshSprinklesAfterInstall();
             return { stdout: `Installed skill "${result.skill}" v${result.version}\n`, stderr: '', exitCode: 0 };
           }
           return { stdout: '', stderr: `skill: ${result.error}\n`, exitCode: 1 };

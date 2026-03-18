@@ -40,7 +40,7 @@ const { mockGetProviders, mockGetModels, mockGetModel, mockCreateLogger, mockLog
     ]),
     mockGetModels: vi.fn((providerId: string) => {
       if (providerId === 'anthropic') {
-        return [{ id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', reasoning: true }];
+        return [{ id: 'claude-sonnet-4-0', name: 'Claude Sonnet 4', reasoning: true }];
       }
       if (providerId === 'openai') {
         return [{ id: 'gpt-5', name: 'GPT-5', reasoning: true }];
@@ -69,7 +69,7 @@ vi.mock('../core/index.js', () => ({
 
 // Mock the providers/index.js module — return a minimal set of registered providers
 const { mockGetRegisteredProviderConfig, mockGetRegisteredProviderIds } = vi.hoisted(() => {
-  const providerConfigs = new Map([
+  const providerConfigs = new Map<string, Record<string, unknown>>([
     ['anthropic', { id: 'anthropic', name: 'Anthropic', description: 'Claude', requiresApiKey: true, requiresBaseUrl: false }],
     ['openai', { id: 'openai', name: 'OpenAI', description: 'GPT', requiresApiKey: true, requiresBaseUrl: false }],
     ['bedrock-camp', { id: 'bedrock-camp', name: 'AWS Bedrock (CAMP)', description: 'CAMP', requiresApiKey: true, requiresBaseUrl: true }],
@@ -114,6 +114,8 @@ import {
   exportProviders,
   getAvailableProviders,
   getProviderConfig,
+  getProviderModels,
+  resolveModelById,
   saveOAuthAccount,
   getOAuthAccountInfo,
 } from './provider-settings.js';
@@ -208,9 +210,9 @@ describe('selected model encodes provider', () => {
   });
 
   it('setSelectedProvider updates the provider prefix in selected-model', () => {
-    storage.set('selected-model', 'anthropic:claude-sonnet-4-20250514');
+    storage.set('selected-model', 'anthropic:claude-sonnet-4-0');
     setSelectedProvider('openai');
-    expect(storage.get('selected-model')).toBe('openai:claude-sonnet-4-20250514');
+    expect(storage.get('selected-model')).toBe('openai:claude-sonnet-4-0');
   });
 });
 
@@ -234,27 +236,27 @@ describe('backward-compatible accessors', () => {
 
   it('clearApiKey removes account for current provider', () => {
     addAccount('anthropic', 'ant-key');
-    storage.set('selected-model', 'anthropic:claude-sonnet-4-20250514');
+    storage.set('selected-model', 'anthropic:claude-sonnet-4-0');
     clearApiKey();
     expect(getApiKeyForProvider('anthropic')).toBeNull();
   });
 
   it('getBaseUrl returns baseUrl for current provider', () => {
     addAccount('azure-ai-foundry', 'az-key', 'https://contoso.azure.com/anthropic');
-    storage.set('selected-model', 'azure-ai-foundry:claude-sonnet-4-20250514');
+    storage.set('selected-model', 'azure-ai-foundry:claude-sonnet-4-0');
     expect(getBaseUrl()).toBe('https://contoso.azure.com/anthropic');
   });
 
   it('setBaseUrl updates baseUrl for current provider', () => {
     addAccount('azure-ai-foundry', 'az-key');
-    storage.set('selected-model', 'azure-ai-foundry:claude-sonnet-4-20250514');
+    storage.set('selected-model', 'azure-ai-foundry:claude-sonnet-4-0');
     setBaseUrl('https://new-endpoint.azure.com/anthropic');
     expect(getBaseUrlForProvider('azure-ai-foundry')).toBe('https://new-endpoint.azure.com/anthropic');
   });
 
   it('clearBaseUrl removes baseUrl but keeps the account', () => {
     addAccount('azure-ai-foundry', 'az-key', 'https://contoso.azure.com/anthropic');
-    storage.set('selected-model', 'azure-ai-foundry:claude-sonnet-4-20250514');
+    storage.set('selected-model', 'azure-ai-foundry:claude-sonnet-4-0');
     clearBaseUrl();
     expect(getApiKeyForProvider('azure-ai-foundry')).toBe('az-key');
     expect(getBaseUrlForProvider('azure-ai-foundry')).toBeNull();
@@ -273,7 +275,7 @@ describe('clearAllSettings', () => {
 
   it('removes accounts, model key, and legacy keys', () => {
     addAccount('anthropic', 'ant-key');
-    storage.set('selected-model', 'anthropic:claude-sonnet-4-20250514');
+    storage.set('selected-model', 'anthropic:claude-sonnet-4-0');
     // Set some legacy keys manually
     storage.set('slicc_provider', 'anthropic');
     storage.set('anthropic_api_key', 'old');
@@ -304,7 +306,7 @@ describe('resolveCurrentModel', () => {
     expect((model as unknown as Record<string, unknown>).baseUrl).toBe('https://proxy.example.com');
   });
 
-  it('falls back to anthropic default model when model lookup fails', () => {
+  it('falls back to provider custom model when registry lookup fails', () => {
     mockGetModel.mockImplementationOnce(() => {
       throw new Error('boom');
     });
@@ -313,9 +315,21 @@ describe('resolveCurrentModel', () => {
 
     const model = resolveCurrentModel();
 
-    expect(mockGetModel).toHaveBeenNthCalledWith(2, 'anthropic', 'claude-sonnet-4-20250514');
-    expect((model as unknown as Record<string, unknown>).provider).toBe('anthropic');
-    expect(model.id).toBe('claude-sonnet-4-20250514');
+    // Should fall back to provider's own model from getProviderModels, not hardcoded anthropic
+    expect(model.id).toBe('gpt-5');
+  });
+
+  it('falls back to anthropic when provider has no matching model either', () => {
+    mockGetModel.mockImplementationOnce(() => {
+      throw new Error('boom');
+    });
+    addAccount('openai', 'oai-key');
+    storage.set('selected-model', 'openai:nonexistent-model');
+
+    const model = resolveCurrentModel();
+
+    expect(mockGetModel).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-0');
+    expect(model.id).toBe('claude-sonnet-4-0');
   });
 
   it('does not apply baseUrl when account has none', () => {
@@ -345,7 +359,7 @@ describe('getAllAvailableModels', () => {
     expect(groups[0].providerId).toBe('anthropic');
     expect(groups[0].providerName).toBe('Anthropic');
     expect(groups[0].models).toHaveLength(1);
-    expect(groups[0].models[0].id).toBe('claude-sonnet-4-20250514');
+    expect(groups[0].models[0].id).toBe('claude-sonnet-4-0');
   });
 
   it('returns models grouped by provider for multiple accounts', () => {
@@ -419,11 +433,11 @@ describe('applyProviderDefaults', () => {
 
   it('sets selected model from first entry', () => {
     const defaults: ProviderDefault[] = [
-      { providerId: 'anthropic', apiKey: 'ant-key', model: 'claude-sonnet-4-20250514' },
+      { providerId: 'anthropic', apiKey: 'ant-key', model: 'claude-sonnet-4-0' },
       { providerId: 'openai', apiKey: 'oai-key', model: 'gpt-5' },
     ];
     applyProviderDefaults(defaults);
-    expect(getSelectedModelId()).toBe('claude-sonnet-4-20250514');
+    expect(getSelectedModelId()).toBe('claude-sonnet-4-0');
     expect(getSelectedProvider()).toBe('anthropic');
   });
 
@@ -467,7 +481,7 @@ describe('applyProviderDefaults', () => {
 
   it('makes getApiKey() return non-null (skips settings dialog)', () => {
     const defaults: ProviderDefault[] = [
-      { providerId: 'anthropic', apiKey: 'ant-key', model: 'claude-sonnet-4-20250514' },
+      { providerId: 'anthropic', apiKey: 'ant-key', model: 'claude-sonnet-4-0' },
     ];
     applyProviderDefaults(defaults);
     expect(getApiKey()).toBe('ant-key');
@@ -487,7 +501,7 @@ describe('applyProviderDefaults', () => {
   it('does not override existing selected model', () => {
     storage.set('selected-model', 'openai:gpt-5');
     const defaults: ProviderDefault[] = [
-      { providerId: 'anthropic', apiKey: 'ant-key', model: 'claude-sonnet-4-20250514' },
+      { providerId: 'anthropic', apiKey: 'ant-key', model: 'claude-sonnet-4-0' },
     ];
     applyProviderDefaults(defaults);
     expect(storage.get('selected-model')).toBe('openai:gpt-5');
@@ -539,7 +553,7 @@ describe('exportProviders', () => {
   it('round-trips with applyProviderDefaults', () => {
     addAccount('anthropic', 'ant-key');
     addAccount('openai', 'oai-key', 'https://proxy.example.com');
-    storage.set('selected-model', 'anthropic:claude-sonnet-4-20250514');
+    storage.set('selected-model', 'anthropic:claude-sonnet-4-0');
 
     const exported = exportProviders();
 
@@ -551,7 +565,7 @@ describe('exportProviders', () => {
     expect(getApiKeyForProvider('anthropic')).toBe('ant-key');
     expect(getApiKeyForProvider('openai')).toBe('oai-key');
     expect(getBaseUrlForProvider('openai')).toBe('https://proxy.example.com');
-    expect(getSelectedModelId()).toBe('claude-sonnet-4-20250514');
+    expect(getSelectedModelId()).toBe('claude-sonnet-4-0');
     expect(getSelectedProvider()).toBe('anthropic');
   });
 });
@@ -647,6 +661,29 @@ describe('OAuth account storage', () => {
     expect(accounts[0].accessToken).toBe('token-2');
     expect(accounts[0].userName).toBe('updated@example.com');
   });
+
+  it('saveOAuthAccount preserves existing baseUrl through re-login', () => {
+    // First login: set baseUrl via addAccount (as the UI does before login)
+    addAccount('test-oauth', '', 'https://proxy.example.com');
+    // OAuth login stores token, should preserve baseUrl
+    saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'token-1', userName: 'karl' });
+    const accounts = getAccounts();
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0].accessToken).toBe('token-1');
+    expect(accounts[0].baseUrl).toBe('https://proxy.example.com');
+  });
+
+  it('saveOAuthAccount allows explicit baseUrl override', () => {
+    addAccount('test-oauth', '', 'https://old-proxy.example.com');
+    saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'token-1', baseUrl: 'https://new-proxy.example.com' });
+    expect(getBaseUrlForProvider('test-oauth')).toBe('https://new-proxy.example.com');
+  });
+
+  it('saveOAuthAccount does not set baseUrl when none exists', () => {
+    saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'token-1' });
+    const accounts = getAccounts();
+    expect(accounts[0].baseUrl).toBeUndefined();
+  });
 });
 
 describe('getOAuthAccountInfo', () => {
@@ -708,5 +745,221 @@ describe('getOAuthAccountInfo', () => {
     });
     const info = getOAuthAccountInfo('test-oauth');
     expect(info!.expired).toBe(false);
+  });
+});
+
+describe('resolveCurrentModel with getModelIds', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('falls back to provider custom model when model ID not in pi-ai registry', () => {
+    // Register a provider with getModelIds that returns a model not in the Anthropic registry
+    const providerConfigs = new Map(mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)]));
+    providerConfigs.set('custom-oauth', {
+      id: 'custom-oauth',
+      name: 'Custom OAuth',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [
+        { id: 'custom-model-not-in-registry', name: 'Custom Model' },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+    mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
+
+    // Make getModelDynamic throw for unknown model (simulates pi-ai registry miss)
+    mockGetModel.mockImplementation((provider: string, modelId: string) => {
+      if (modelId === 'custom-model-not-in-registry') throw new Error('Unknown model');
+      return { id: modelId, name: modelId, provider, api: 'mock-api', baseUrl: 'https://default.example.com' };
+    });
+
+    addAccount('custom-oauth', '');
+    storage.set('selected-model', 'custom-oauth:custom-model-not-in-registry');
+
+    const model = resolveCurrentModel();
+    // Should use the custom model from getModelIds, NOT fall back to raw anthropic
+    expect(model.id).toBe('custom-model-not-in-registry');
+    expect(model.provider).toBe('custom-oauth');
+    expect(model.api).toBe('custom-oauth-anthropic');
+  });
+});
+
+describe('resolveCurrentModel with getModelDynamic returning undefined', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('falls back to custom model when getModelDynamic returns undefined instead of throwing', () => {
+    const providerConfigs = new Map(mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)]));
+    providerConfigs.set('custom-oauth', {
+      id: 'custom-oauth',
+      name: 'Custom OAuth',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [{ id: 'ghost-model', name: 'Ghost' }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+    mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
+
+    // Simulate browser behavior: getModelDynamic returns undefined (not throws)
+    mockGetModel.mockImplementation(((provider: string, modelId: string) => {
+      if (modelId === 'ghost-model') return undefined;
+      return { id: modelId, name: modelId, provider, api: 'mock-api', baseUrl: 'https://default.example.com' };
+    }) as any);
+
+    addAccount('custom-oauth', '');
+    storage.set('selected-model', 'custom-oauth:ghost-model');
+
+    const model = resolveCurrentModel();
+    expect(model.id).toBe('ghost-model');
+    expect(model.provider).toBe('custom-oauth');
+    expect(model.api).toBe('custom-oauth-anthropic');
+  });
+
+  it('resolveModelById falls back when getModelDynamic returns undefined', () => {
+    const providerConfigs = new Map(mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)]));
+    providerConfigs.set('custom-oauth', {
+      id: 'custom-oauth',
+      name: 'Custom OAuth',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [{ id: 'ghost-model', name: 'Ghost' }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+    mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
+
+    mockGetModel.mockImplementation(((provider: string, modelId: string) => {
+      if (modelId === 'ghost-model') return undefined;
+      return { id: modelId, name: modelId, provider, api: 'mock-api', baseUrl: 'https://default.example.com' };
+    }) as any);
+
+    addAccount('custom-oauth', '');
+    storage.set('selected-model', 'custom-oauth:ghost-model');
+
+    // resolveModelById falls through to resolveCurrentModel which finds the custom model
+    const model = resolveModelById('ghost-model');
+    expect(model.id).toBe('ghost-model');
+    expect(model.provider).toBe('custom-oauth');
+  });
+});
+
+describe('fallback model fields', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('fallback model from getModelIds has required pi-ai fields', () => {
+    const providerConfigs = new Map(mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)]));
+    providerConfigs.set('custom-oauth', {
+      id: 'custom-oauth',
+      name: 'Custom OAuth',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [{ id: 'unknown-model', name: 'Unknown' }],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('custom-oauth');
+    const model = models[0] as any;
+
+    // These fields are required by pi-ai's streamAnthropic
+    expect(model.baseUrl).toBe('');
+    expect(model.input).toEqual(['text', 'image']);
+    expect(model.contextWindow).toBe(200000);
+    expect(model.maxTokens).toBe(16384);
+    expect(model.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    expect(model.reasoning).toBe(true);
+  });
+});
+
+describe('getProviderModels with getModelIds', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  it('uses getModelIds when provider defines it', () => {
+    // Register a provider with getModelIds
+    const providerConfigs = new Map(mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)]));
+    providerConfigs.set('custom-oauth', {
+      id: 'custom-oauth',
+      name: 'Custom OAuth',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [
+        { id: 'claude-sonnet-4-0', name: 'Claude Sonnet 4' },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('custom-oauth');
+    expect(models).toHaveLength(1);
+    expect(models[0].id).toBe('claude-sonnet-4-0');
+    expect(models[0].provider).toBe('custom-oauth');
+    expect(models[0].api).toBe('custom-oauth-anthropic');
+  });
+
+  it('falls back to all anthropic models for OAuth without getModelIds', () => {
+    const models = getProviderModels('test-oauth');
+    expect(models).toHaveLength(1); // mockGetModels returns 1 anthropic model
+    expect(models[0].id).toBe('claude-sonnet-4-0');
+    expect(models[0].api).toBe('test-oauth-anthropic');
+  });
+
+  it('returns empty array and logs error when getModelIds throws', () => {
+    const providerConfigs = new Map(mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)]));
+    providerConfigs.set('broken-oauth', {
+      id: 'broken-oauth',
+      name: 'Broken OAuth',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => { throw new Error('config fetch failed'); },
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('broken-oauth');
+    expect(models).toEqual([]);
+    expect(mockLog.error).toHaveBeenCalledWith(
+      'Provider getModelIds callback failed',
+      expect.objectContaining({ providerId: 'broken-oauth' }),
+    );
+  });
+
+  it('creates fallback model for unknown model IDs from getModelIds', () => {
+    const providerConfigs = new Map(mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)]));
+    providerConfigs.set('custom-oauth', {
+      id: 'custom-oauth',
+      name: 'Custom OAuth',
+      description: 'Test',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [
+        { id: 'unknown-model-id', name: 'My Custom Model' },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('custom-oauth');
+    expect(models).toHaveLength(1);
+    expect(models[0].id).toBe('unknown-model-id');
+    expect(models[0].name).toBe('My Custom Model');
+    expect(models[0].provider).toBe('custom-oauth');
   });
 });

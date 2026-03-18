@@ -73,7 +73,7 @@ function parseNonNegativeInteger(value: string): number | null {
   return Number(value);
 }
 
-function getSharedState(browser: BrowserAPI, fs: VirtualFS): PlaywrightState {
+export function getSharedState(browser: BrowserAPI, fs: VirtualFS): PlaywrightState {
   let statesByFs = sharedStateByBrowser.get(browser);
   if (!statesByFs) {
     statesByFs = new WeakMap();
@@ -312,8 +312,9 @@ async function resolveAppTabId(
 ): Promise<void> {
   if (state.appTabId) return;
   const pages = await browser.listPages();
+  // Use current origin when in browser, fall back to default port for tests/Node
   const appOrigin =
-    typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
+    typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5710';
   const appTab = pages.find(
     (p) => p.url.startsWith(appOrigin) && !p.url.includes('/preview/'),
   );
@@ -429,7 +430,9 @@ Commands:
   type <text>            Type text into focused element
   fill <ref> <text>      Fill an input by ref with text
   snapshot               Print accessibility tree with refs
-  screenshot [--filename=path]  Take screenshot
+  screenshot [--filename=path] [--max-width=N] [--fullPage=true]
+                         Take screenshot. --max-width downscales the image
+                         if wider than N pixels (e.g. --max-width=1024).
   eval <expression>      Evaluate JavaScript in tab
   dblclick <ref> [btn]   Double-click element by ref
   hover <ref>            Hover over element by ref
@@ -437,6 +440,10 @@ Commands:
   check <ref>            Check a checkbox/radio
   uncheck <ref>          Uncheck a checkbox/radio
   drag <start> <end>     Drag from one element to another
+  eval-file <path> [--output=<path>]
+                         Evaluate a JS file in the page. Reads the file from
+                         VFS, evaluates in browser context. With --output,
+                         saves the result to file instead of printing to stdout.
   press <key>            Press a keyboard key (e.g. Enter, Tab)
   resize <w> <h>         Resize viewport to width x height
   dialog-accept [text]   Accept a JavaScript dialog
@@ -635,9 +642,11 @@ export function createPlaywrightCommand(
           }
 
           await browser.attachToPage(targetId);
+          const maxWidth = flags['max-width'] ? parseInt(flags['max-width'], 10) : undefined;
           const base64 = await browser.screenshot({
             fullPage: flags['fullPage'] === 'true',
             ...(clip ? { clip } : {}),
+            ...(maxWidth ? { maxWidth } : {}),
           });
           const savePath = flags['filename'] || `/tmp/screenshot-${Date.now()}.png`;
           const bytes = base64ToBytes(base64);
@@ -774,6 +783,40 @@ export function createPlaywrightCommand(
           const evalResult = await browser.evaluate(expression);
           const output = typeof evalResult === 'string' ? evalResult : JSON.stringify(evalResult, null, 2);
           result = { stdout: (output ?? 'undefined') + '\n', stderr: '', exitCode: 0 }; break;
+        }
+
+        case 'eval-file': {
+          if (positional.length === 0) {
+            result = { stdout: '', stderr: 'eval-file requires a file path\n', exitCode: 1 }; break;
+          }
+          const targetId = await ensureTarget(browser, state);
+          if (!targetId) {
+            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 }; break;
+          }
+          const scriptPath = positional[0];
+          const outputPath = flags['output'];
+
+          let scriptContent: string;
+          try {
+            scriptContent = await fs.readTextFile(scriptPath);
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            result = { stdout: '', stderr: `eval-file: cannot read ${scriptPath}: ${msg}\n`, exitCode: 1 }; break;
+          }
+
+          await browser.attachToPage(targetId);
+          const fileEvalResult = await browser.evaluate(scriptContent);
+          const fileOutput = typeof fileEvalResult === 'string' ? fileEvalResult : JSON.stringify(fileEvalResult, null, 2);
+
+          if (outputPath) {
+            const outputContent = fileOutput ?? 'null';
+            await fs.writeFile(outputPath, outputContent);
+            const sizeKB = Math.round(new TextEncoder().encode(outputContent).length / 1024);
+            result = { stdout: `Result saved to ${outputPath} (${sizeKB} KB)\n`, stderr: '', exitCode: 0 };
+          } else {
+            result = { stdout: (fileOutput ?? 'undefined') + '\n', stderr: '', exitCode: 0 };
+          }
+          break;
         }
 
         case 'press': {

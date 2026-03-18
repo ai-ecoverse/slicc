@@ -113,6 +113,30 @@ export function getProviderModels(providerId: string): Model<Api>[] {
     }
     // Providers that use Anthropic's model registry with custom API
     const providerConfig = getProviderConfig(providerId);
+    if (providerConfig.getModelIds) {
+      // Provider specifies its own model list — resolve against Anthropic registry
+      let modelIds: Array<{ id: string; name?: string }>;
+      try {
+        modelIds = providerConfig.getModelIds();
+      } catch (err) {
+        log.error('Provider getModelIds callback failed', { providerId, error: err instanceof Error ? err.message : String(err) });
+        return [];
+      }
+      const anthropicModels = getModelsDynamic('anthropic');
+      const modelMap = new Map(anthropicModels.map(m => [m.id, m]));
+      const customApi = `${providerId}-anthropic` as Api;
+      return modelIds.map(pm => {
+        const base = modelMap.get(pm.id);
+        if (base) return { ...base, api: customApi, provider: providerId };
+        return {
+          id: pm.id, name: pm.name ?? pm.id, provider: providerId,
+          api: customApi, baseUrl: '', contextWindow: 200000, maxTokens: 16384,
+          input: ['text', 'image'],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          inputCost: 0, outputCost: 0, cacheReadCost: 0, cacheWriteCost: 0, reasoning: true,
+        } as unknown as Model<Api>;
+      });
+    }
     if (providerConfig.isOAuth) {
       // OAuth providers use Anthropic models with custom API routing
       const anthropicModels = getModelsDynamic('anthropic');
@@ -263,7 +287,9 @@ export function saveOAuthAccount(opts: {
   refreshToken?: string;
   tokenExpiresAt?: number;
   userName?: string;
+  baseUrl?: string;
 }): void {
+  const existing = getAccounts().find(a => a.providerId === opts.providerId);
   const accounts = getAccounts().filter(a => a.providerId !== opts.providerId);
   accounts.push({
     providerId: opts.providerId,
@@ -272,6 +298,7 @@ export function saveOAuthAccount(opts: {
     refreshToken: opts.refreshToken,
     tokenExpiresAt: opts.tokenExpiresAt,
     userName: opts.userName,
+    baseUrl: opts.baseUrl ?? existing?.baseUrl,
   });
   saveAccounts(accounts);
 }
@@ -433,17 +460,19 @@ export function resolveModelById(modelId?: string): Model<Api> {
       : providerId === 'azure-ai-foundry' ? 'anthropic'
       : providerId === 'bedrock-camp' ? 'amazon-bedrock'
       : providerId;
-    let model = getModelDynamic(effectiveProvider, modelId);
+    const model = getModelDynamic(effectiveProvider, modelId);
+    if (!model?.id) throw new Error(`Model ${modelId} not found`);
+    let resolved: Model<Api> = model;
 
     if (providerConfig.isOAuth) {
-      model = { ...model, api: `${providerId}-anthropic` as Api, provider: providerId };
+      resolved = { ...resolved, api: `${providerId}-anthropic` as Api, provider: providerId };
     } else if (providerId === 'bedrock-camp') {
-      model = { ...model, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
+      resolved = { ...resolved, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
     }
     if (baseUrl) {
-      model = { ...model, baseUrl };
+      resolved = { ...resolved, baseUrl };
     }
-    return model;
+    return resolved;
   } catch {
     return resolveCurrentModel();
   }
@@ -456,7 +485,7 @@ export function resolveCurrentModel(): Model<Api> {
 
   // Get default model if none selected
   const models = getProviderModels(providerId);
-  const effectiveModelId = modelId || models[0]?.id || 'claude-sonnet-4-20250514';
+  const effectiveModelId = modelId || models[0]?.id || 'claude-sonnet-4-0';
 
   try {
     const providerConfig = getProviderConfig(providerId);
@@ -464,24 +493,31 @@ export function resolveCurrentModel(): Model<Api> {
       : providerId === 'azure-ai-foundry' ? 'anthropic'
       : providerId === 'bedrock-camp' ? 'amazon-bedrock'
       : providerId;
-    let model = getModelDynamic(effectiveProvider, effectiveModelId);
+    const model = getModelDynamic(effectiveProvider, effectiveModelId);
+    if (!model?.id) throw new Error(`Model ${effectiveModelId} not found in ${effectiveProvider} registry`);
+    let resolved: Model<Api> = model;
 
     // Override api and provider for custom routing
     if (providerConfig.isOAuth) {
-      model = { ...model, api: `${providerId}-anthropic` as Api, provider: providerId };
+      resolved = { ...resolved, api: `${providerId}-anthropic` as Api, provider: providerId };
     } else if (providerId === 'bedrock-camp') {
-      model = { ...model, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
+      resolved = { ...resolved, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
     }
 
     // Override baseUrl if custom one is set
     if (baseUrl) {
-      model = { ...model, baseUrl };
+      resolved = { ...resolved, baseUrl };
     }
 
-    return model;
+    return resolved;
   } catch {
-    // Fallback to anthropic
-    return getModelDynamic('anthropic', 'claude-sonnet-4-20250514');
+    // Model not in pi-ai registry — try provider's custom model list first
+    const customModel = models.find(m => m.id === effectiveModelId);
+    if (customModel) {
+      return baseUrl ? { ...customModel, baseUrl } : customModel;
+    }
+    // Last resort fallback
+    return getModelDynamic('anthropic', 'claude-sonnet-4-0');
   }
 }
 
@@ -868,12 +904,29 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
         if (!pid) return;
         const providerConfig = getProviderConfig(pid);
         if (!providerConfig.onOAuthLogin) return;
+        // Validate base URL if required
+        const hadAccountBefore = getAccounts().some(a => a.providerId === pid);
+        const existingBaseUrl = getBaseUrlForProvider(pid);
+        if (providerConfig.requiresBaseUrl && !baseUrlInput.value.trim() && !existingBaseUrl) {
+          oauthStatus.textContent = 'Base URL is required.';
+          oauthStatus.style.color = 'var(--slicc-cone)';
+          baseUrlInput.focus();
+          return;
+        }
+        // Save baseUrl before login so the provider's onOAuthLogin can read it
+        if (providerConfig.requiresBaseUrl && baseUrlInput.value.trim()) {
+          addAccount(pid, '', baseUrlInput.value.trim());
+        }
         oauthStatus.textContent = 'Opening login window...';
         try {
           const { createOAuthLauncher } = await import('../providers/oauth-service.js');
           const launcher = createOAuthLauncher();
           await providerConfig.onOAuthLogin(launcher, renderAccountsList);
         } catch (err) {
+          // Clean up pre-login baseUrl placeholder if no account existed before
+          if (!hadAccountBefore) {
+            try { removeAccount(pid); } catch { /* best-effort cleanup */ }
+          }
           log.error('OAuth login failed', { providerId: pid, error: err instanceof Error ? err.message : String(err) });
           oauthStatus.textContent = `Login failed: ${err instanceof Error ? err.message : String(err)}`;
         }
@@ -948,7 +1001,11 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
         if (providerConfig.isOAuth) {
           oauthSection.style.display = '';
           apiKeySection.style.display = 'none';
-          baseUrlSection.style.display = 'none';
+          baseUrlSection.style.display = providerConfig.requiresBaseUrl ? '' : 'none';
+          if (providerConfig.requiresBaseUrl) {
+            baseUrlInput.placeholder = providerConfig.baseUrlPlaceholder || 'https://...';
+            baseUrlDesc.textContent = providerConfig.baseUrlDescription || '';
+          }
           oauthLoginBtn.textContent = `Login with ${providerConfig.name}`;
           saveBtn.style.display = 'none';
         } else {

@@ -169,10 +169,10 @@ describe('electron-runtime', () => {
     expect(
       buildElectronOverlayBootstrapScript({
         bundleSource: 'window.__overlayLoaded = true;',
-        appUrl: 'http://localhost:3000/electron',
+        appUrl: 'http://localhost:5710/electron',
       }),
     ).toBe(
-      'window.__overlayLoaded = true;\nwindow.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://localhost:3000/electron"});',
+      'window.__overlayLoaded = true;\nwindow.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://localhost:5710/electron"});',
     );
   });
 

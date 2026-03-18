@@ -109,9 +109,10 @@ export function toPreviewUrl(vfsPath: string): string {
   const isExt = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
   const previewPath = `/preview${vfsPath}`;
   if (isExt) return chrome.runtime.getURL(previewPath);
+  // Use current origin when in browser, fall back to default port for tests/Node
   const origin = typeof window !== 'undefined' && window.location?.origin
     ? window.location.origin
-    : 'http://localhost:3000';
+    : 'http://localhost:5710';
   return `${origin}${previewPath}`;
 }
 

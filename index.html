@@ -937,6 +937,16 @@
         transition: background var(--s2-transition-default);
       }
       .file-browser__item:hover { background: var(--s2-bg-elevated); }
+      .file-browser__item--selected {
+        background: var(--s2-bg-elevated);
+        box-shadow: inset 2px 0 0 var(--s2-accent);
+      }
+      .file-browser__item--selected:hover {
+        background: var(--s2-bg-elevated);
+      }
+      .file-browser__item--selected.file-browser__item--copy-flash {
+        background: color-mix(in srgb, var(--s2-positive) 20%, transparent);
+      }
       .file-browser__arrow {
         width: 12px; display: flex; align-items: center; justify-content: center;
         flex-shrink: 0; color: var(--s2-content-tertiary);
@@ -1057,6 +1067,19 @@
         letter-spacing: 0.02em;
       }
       .tab-bar__tab:hover { color: var(--s2-content-default); }
+      .tab-bar__tab-close {
+        display: inline-flex; align-items: center; justify-content: center;
+        margin-left: 6px; width: 16px; height: 16px;
+        border-radius: var(--s2-radius-s);
+        font-size: 11px; line-height: 1;
+        color: var(--s2-content-tertiary);
+        opacity: 0.6;
+      }
+      .tab-bar__tab-close:hover {
+        opacity: 1;
+        color: var(--s2-negative);
+        background: color-mix(in srgb, var(--s2-negative) 10%, transparent);
+      }
       .tab-bar__tab--active {
         color: var(--s2-content-default);
         border-bottom-color: var(--s2-accent);

@@ -1,6 +1,6 @@
 ## URL scheme
 
-SLICC serves a small set of stable routes from its local origin (`http://localhost:3000` by default).
+SLICC serves a small set of stable routes from its local origin (`http://localhost:5710` by default).
 
 | URL | Purpose |
 | --- | --- |
@@ -13,8 +13,8 @@ SLICC serves a small set of stable routes from its local origin (`http://localho
 
 ## Electron overlay URL
 
-- Use `http://localhost:3000/electron` for the default Electron overlay tab (`chat`).
-- Use `http://localhost:3000/electron?tab=memory` to open a specific initial tab.
+- Use `http://localhost:5710/electron` for the default Electron overlay tab (`chat`).
+- Use `http://localhost:5710/electron?tab=memory` to open a specific initial tab.
 - Supported tabs are the standard tabbed UI ids (`chat`, `terminal`, `files`, `memory`).
 
 ## Tray launch URLs

@@ -1,3 +1,5 @@
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+
 export interface CliRuntimeFlags {
   dev: boolean;
   serveOnly: boolean;
@@ -10,6 +12,8 @@ export interface CliRuntimeFlags {
   profile: string | null;
   join: boolean;
   joinUrl: string | null;
+  logLevel: LogLevel;
+  logDir: string | null;
 }
 
 export const DEFAULT_CLI_CDP_PORT = 9222;
@@ -18,6 +22,8 @@ export const DEFAULT_ELECTRON_ATTACH_CDP_PORT = 9223;
 function looksLikeUrl(value: string): boolean {
   return /^[a-z][a-z0-9+.-]*:\/\//i.test(value.trim());
 }
+
+const VALID_LOG_LEVELS: Set<LogLevel> = new Set(['debug', 'info', 'warn', 'error']);
 
 export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
   let dev = false;
@@ -32,6 +38,8 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
   let profile: string | null = null;
   let join = false;
   let joinUrl: string | null = null;
+  let logLevel: LogLevel = 'info';
+  let logDir: string | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
@@ -50,6 +58,17 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
         cdpPort = value;
         explicitCdpPort = true;
       }
+      continue;
+    }
+    if (arg.startsWith('--log-level=')) {
+      const value = arg.slice('--log-level='.length) as LogLevel;
+      if (VALID_LOG_LEVELS.has(value)) {
+        logLevel = value;
+      }
+      continue;
+    }
+    if (arg.startsWith('--log-dir=')) {
+      logDir = arg.slice('--log-dir='.length) || null;
       continue;
     }
     if (arg === '--electron') {
@@ -140,5 +159,7 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
     profile,
     join,
     joinUrl,
+    logLevel,
+    logDir,
   };
 }

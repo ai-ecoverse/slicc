@@ -64,7 +64,7 @@ describe('BrowserAPI', () => {
     it('connects with default URL', async () => {
       await api.connect();
       expect(mockClient.connect).toHaveBeenCalledWith({
-        url: 'ws://localhost:3000/cdp',
+        url: 'ws://localhost:5710/cdp',
         timeout: undefined,
       });
     });
@@ -93,7 +93,7 @@ describe('BrowserAPI', () => {
 
       // connect() should have been called
       expect(mockClient.connect).toHaveBeenCalledWith({
-        url: 'ws://localhost:3000/cdp',
+        url: 'ws://localhost:5710/cdp',
         timeout: undefined,
       });
     });
@@ -257,17 +257,12 @@ describe('BrowserAPI', () => {
       await api.attachToPage('target-1');
     });
 
-    it('captures a screenshot', async () => {
+    it('captures a viewport screenshot (no clip, Chrome default)', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({}) // Runtime.enable
-        .mockResolvedValueOnce({ result: { value: 1 } }) // Runtime.evaluate (DPR=1)
-        .mockResolvedValueOnce({
-          data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8/x8AAwAB/aurH8kAAAAASUVORK5CYII=',
-        }); // Page.captureScreenshot
+        .mockResolvedValueOnce({ data: 'viewport-shot' }); // Page.captureScreenshot
 
       const data = await api.screenshot();
-      expect(typeof data).toBe('string');
-      expect(data.length).toBeGreaterThan(0);
+      expect(data).toBe('viewport-shot');
       expect(mockClient.send).toHaveBeenCalledWith(
         'Page.captureScreenshot',
         { format: 'png', captureBeyondViewport: true },
@@ -275,80 +270,61 @@ describe('BrowserAPI', () => {
       );
     });
 
-    it('captures full page screenshot', async () => {
+    it('full page screenshot at DPR 1 uses CSS dimensions with scale 1', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({}) // Runtime.enable
-        .mockResolvedValueOnce({ result: { value: 1 } }) // Runtime.evaluate (DPR=1)
-        .mockResolvedValueOnce({
-          contentSize: { width: 1024, height: 5000 },
-        }) // getLayoutMetrics
-        .mockResolvedValueOnce({ data: 'base64data' }); // captureScreenshot
+        .mockResolvedValueOnce({ result: { value: '{"dpr":1,"w":1280,"h":5000}' } }) // Runtime.evaluate
+        .mockResolvedValueOnce({ data: 'fullpage' }); // captureScreenshot
 
       const data = await api.screenshot({ fullPage: true });
-      expect(data).toBe('base64data');
-    });
-
-    it('normalizes DPR to 1 on HiDPI displays', async () => {
-      (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({}) // Runtime.enable
-        .mockResolvedValueOnce({ result: { value: 2 } }) // Runtime.evaluate (DPR=2)
-        .mockResolvedValueOnce({
-          layoutViewport: { clientWidth: 1920, clientHeight: 1080 },
-        }) // Page.getLayoutMetrics
-        .mockResolvedValueOnce({}) // Emulation.setDeviceMetricsOverride
-        .mockResolvedValueOnce({ data: 'normalized' }) // Page.captureScreenshot
-        .mockResolvedValueOnce({}); // Emulation.clearDeviceMetricsOverride
-
-      const data = await api.screenshot();
-      expect(data).toBe('normalized');
+      expect(data).toBe('fullpage');
       expect(mockClient.send).toHaveBeenCalledWith(
-        'Emulation.setDeviceMetricsOverride',
-        { width: 1920, height: 1080, deviceScaleFactor: 1, mobile: false },
-        'sess-1',
-      );
-      expect(mockClient.send).toHaveBeenCalledWith(
-        'Emulation.clearDeviceMetricsOverride',
-        {},
+        'Page.captureScreenshot',
+        {
+          format: 'png',
+          captureBeyondViewport: true,
+          clip: { x: 0, y: 0, width: 1280, height: 5000, scale: 1 },
+        },
         'sess-1',
       );
     });
 
-    it('skips DPR normalization when DPR is already 1', async () => {
+    it('full page screenshot uses CSS dimensions with scale 1', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({}) // Runtime.enable
-        .mockResolvedValueOnce({ result: { value: 1 } }) // Runtime.evaluate (DPR=1)
-        .mockResolvedValueOnce({ data: 'noop' }); // Page.captureScreenshot
+        .mockResolvedValueOnce({ result: { value: '{"w":1440,"h":3130}' } }) // Runtime.evaluate
+        .mockResolvedValueOnce({ data: 'hidpi' }); // captureScreenshot
 
-      await api.screenshot();
-      expect(mockClient.send).not.toHaveBeenCalledWith(
-        'Emulation.setDeviceMetricsOverride',
-        expect.anything(),
-        expect.anything(),
+      const data = await api.screenshot({ fullPage: true });
+      expect(data).toBe('hidpi');
+      expect(mockClient.send).toHaveBeenCalledWith(
+        'Page.captureScreenshot',
+        {
+          format: 'png',
+          captureBeyondViewport: true,
+          clip: { x: 0, y: 0, width: 1440, height: 3130, scale: 1 },
+        },
+        'sess-1',
       );
     });
 
-    it('falls back to native DPR when normalization fails', async () => {
-      (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockRejectedValueOnce(new Error('Runtime.enable failed')) // Runtime.enable throws
-        .mockResolvedValueOnce({ data: 'fallback' }); // Page.captureScreenshot
-
-      const data = await api.screenshot();
-      expect(data).toBe('fallback');
-    });
-
-    it('returns screenshot even when cleanup fails', async () => {
+    it('passes through provided clip with scale 1', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({}) // Runtime.enable
-        .mockResolvedValueOnce({ result: { value: 2 } }) // Runtime.evaluate (DPR=2)
-        .mockResolvedValueOnce({
-          layoutViewport: { clientWidth: 1920, clientHeight: 1080 },
-        }) // Page.getLayoutMetrics
-        .mockResolvedValueOnce({}) // Emulation.setDeviceMetricsOverride
-        .mockResolvedValueOnce({ data: 'ok' }) // Page.captureScreenshot
-        .mockRejectedValueOnce(new Error('cleanup failed')); // Emulation.clearDeviceMetricsOverride
+        .mockResolvedValueOnce({ result: { value: '{"w":1280,"h":3000}' } }) // Runtime.evaluate
+        .mockResolvedValueOnce({ data: 'clipped' }); // captureScreenshot
 
-      const data = await api.screenshot();
-      expect(data).toBe('ok');
+      const data = await api.screenshot({ clip: { x: 10, y: 20, width: 300, height: 400 } });
+      expect(data).toBe('clipped');
+      expect(mockClient.send).toHaveBeenCalledWith(
+        'Page.captureScreenshot',
+        {
+          format: 'png',
+          captureBeyondViewport: true,
+          clip: { x: 10, y: 20, width: 300, height: 400, scale: 1 },
+        },
+        'sess-1',
+      );
     });
   });
 

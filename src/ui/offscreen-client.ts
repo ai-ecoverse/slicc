@@ -211,6 +211,18 @@ export class OffscreenClient {
   // Internal
   // -------------------------------------------------------------------------
 
+  private sprinkleOpHandler: ((payload: any) => void) | null = null;
+
+  /** Send a sprinkle lick event to the offscreen orchestrator. */
+  sendSprinkleLick(sprinkleName: string, body: unknown): void {
+    this.send({ type: 'sprinkle-lick', sprinkleName, body } as any);
+  }
+
+  /** Register a handler for sprinkle-op messages from the offscreen proxy. */
+  setSprinkleOpHandler(handler: (payload: any) => void): void {
+    this.sprinkleOpHandler = handler;
+  }
+
   private setupMessageListener(): void {
     chrome.runtime.onMessage.addListener(
       (message: unknown, _sender: ChromeMessageSender, _sendResponse: (response?: unknown) => void) => {
@@ -218,7 +230,13 @@ export class OffscreenClient {
         const msg = message as ExtensionMessage;
 
         if (msg.source === 'offscreen') {
-          this.handleOffscreenMessage(msg.payload as OffscreenToPanelMessage | StateSnapshotMsg);
+          const payload = msg.payload as any;
+          // Route sprinkle-op to the registered handler
+          if (payload?.type === 'sprinkle-op' && this.sprinkleOpHandler) {
+            this.sprinkleOpHandler(payload);
+          } else {
+            this.handleOffscreenMessage(msg.payload as OffscreenToPanelMessage | StateSnapshotMsg);
+          }
         }
 
         return false;

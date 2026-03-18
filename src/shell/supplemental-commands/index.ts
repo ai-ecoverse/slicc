@@ -24,6 +24,8 @@ import { createRsyncCommand } from './rsync-command.js';
 import { createTeleportCommand } from './teleport-command.js';
 import { createWhichCommand } from './which-command.js';
 import { createZipCommand } from './zip-command.js';
+import { createScreencaptureCommand } from './screencapture-command.js';
+import { createPbcopyCommand, createPbpasteCommand, createClipboardAutoCommand } from './clipboard-commands.js';
 import type { BrowserAPI } from '../../cdp/index.js';
 export type {
   ImgcatCommandOptions as SupplementalCommandOptions,
@@ -43,7 +45,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
   const commands: Command[] = [
     createCommandsCommand({ getJshCommands: options.getJshCommands }),
     createHostCommand(),
-    createServeCommand(),
+    createServeCommand(options.browserAPI, options.fs),
     createOpenCommand(),
     createImgcatCommand(options),
     createZipCommand(),
@@ -65,6 +67,11 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createOAuthTokenCommand(),
     createRsyncCommand({ fs: options.fs }),
     createTeleportCommand(),
+    createScreencaptureCommand(),
+    createPbcopyCommand(),
+    createPbpasteCommand(),
+    createClipboardAutoCommand('xclip'),
+    createClipboardAutoCommand('xsel'),
   ];
 
   if (options.fs) {

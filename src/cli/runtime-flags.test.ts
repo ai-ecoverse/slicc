@@ -20,6 +20,8 @@ describe('parseCliRuntimeFlags', () => {
       profile: null,
       join: false,
       joinUrl: null,
+      logLevel: 'info',
+      logDir: null,
     });
   });
 
@@ -36,6 +38,8 @@ describe('parseCliRuntimeFlags', () => {
       profile: null,
       join: false,
       joinUrl: null,
+      logLevel: 'info',
+      logDir: null,
     });
   });
 
@@ -60,6 +64,8 @@ describe('parseCliRuntimeFlags', () => {
       profile: null,
       join: false,
       joinUrl: null,
+      logLevel: 'info',
+      logDir: null,
     });
   });
 
@@ -76,6 +82,8 @@ describe('parseCliRuntimeFlags', () => {
       profile: null,
       join: false,
       joinUrl: null,
+      logLevel: 'info',
+      logDir: null,
     });
   });
 
@@ -92,6 +100,8 @@ describe('parseCliRuntimeFlags', () => {
       profile: null,
       join: false,
       joinUrl: null,
+      logLevel: 'info',
+      logDir: null,
     });
   });
 
@@ -108,6 +118,8 @@ describe('parseCliRuntimeFlags', () => {
       profile: null,
       join: false,
       joinUrl: null,
+      logLevel: 'info',
+      logDir: null,
     });
   });
 
@@ -124,6 +136,8 @@ describe('parseCliRuntimeFlags', () => {
       profile: null,
       join: false,
       joinUrl: null,
+      logLevel: 'info',
+      logDir: null,
     });
   });
 
@@ -140,6 +154,8 @@ describe('parseCliRuntimeFlags', () => {
       profile: null,
       join: false,
       joinUrl: null,
+      logLevel: 'info',
+      logDir: null,
     });
   });
 
@@ -179,6 +195,8 @@ describe('parseCliRuntimeFlags', () => {
       profile: null,
       join: true,
       joinUrl: 'https://tray.example.com/base/join/tray-123.secret',
+      logLevel: 'info',
+      logDir: null,
     });
   });
 
@@ -195,6 +213,8 @@ describe('parseCliRuntimeFlags', () => {
       profile: null,
       join: true,
       joinUrl: null,
+      logLevel: 'info',
+      logDir: null,
     });
   });
 
@@ -203,5 +223,23 @@ describe('parseCliRuntimeFlags', () => {
       join: true,
       joinUrl: 'https://tray.example.com/base/join/tray-123.secret',
     });
+  });
+
+  it('parses --log-level flag', () => {
+    expect(parseCliRuntimeFlags(['--log-level=debug']).logLevel).toBe('debug');
+    expect(parseCliRuntimeFlags(['--log-level=error']).logLevel).toBe('error');
+    expect(parseCliRuntimeFlags(['--log-level=warn']).logLevel).toBe('warn');
+  });
+
+  it('ignores invalid log levels', () => {
+    expect(parseCliRuntimeFlags(['--log-level=verbose']).logLevel).toBe('info');
+  });
+
+  it('parses --log-dir flag', () => {
+    expect(parseCliRuntimeFlags(['--log-dir=/tmp/my-logs']).logDir).toBe('/tmp/my-logs');
+  });
+
+  it('sets logDir to null for empty --log-dir', () => {
+    expect(parseCliRuntimeFlags(['--log-dir=']).logDir).toBe(null);
   });
 });

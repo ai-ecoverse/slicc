@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { VirtualFS } from '../fs/virtual-fs.js';
-import { discoverSprinkles, extractTitle } from './sprinkle-discovery.js';
+import { discoverSprinkles, extractTitle, extractAutoOpen } from './sprinkle-discovery.js';
 
 describe('discoverSprinkles', () => {
   let vfs: VirtualFS;
@@ -109,5 +109,47 @@ describe('extractTitle', () => {
 
   it('handles empty content', () => {
     expect(extractTitle('', 'fallback')).toBe('fallback');
+  });
+});
+
+describe('extractAutoOpen', () => {
+  it('returns true when data-sprinkle-autoopen is present', () => {
+    expect(extractAutoOpen('<div data-sprinkle-autoopen>hello</div>')).toBe(true);
+  });
+
+  it('returns true when attribute has a value', () => {
+    expect(extractAutoOpen('<div data-sprinkle-autoopen="true">hello</div>')).toBe(true);
+  });
+
+  it('returns false when attribute is absent', () => {
+    expect(extractAutoOpen('<div data-sprinkle-title="Test">hello</div>')).toBe(false);
+  });
+
+  it('returns false for empty content', () => {
+    expect(extractAutoOpen('')).toBe(false);
+  });
+});
+
+describe('discoverSprinkles autoOpen', () => {
+  let vfs: VirtualFS;
+  let dbCounter = 100;
+
+  beforeEach(async () => {
+    vfs = await VirtualFS.create({
+      dbName: `test-sprinkle-autoopen-${dbCounter++}`,
+      wipe: true,
+    });
+  });
+
+  it('sets autoOpen true when data-sprinkle-autoopen is present', async () => {
+    await vfs.writeFile('/shared/sprinkles/panel/panel.shtml', '<div data-sprinkle-autoopen>hi</div>');
+    const result = await discoverSprinkles(vfs);
+    expect(result.get('panel')!.autoOpen).toBe(true);
+  });
+
+  it('sets autoOpen false when attribute is absent', async () => {
+    await vfs.writeFile('/shared/sprinkles/panel/panel.shtml', '<div>hi</div>');
+    const result = await discoverSprinkles(vfs);
+    expect(result.get('panel')!.autoOpen).toBe(false);
   });
 });

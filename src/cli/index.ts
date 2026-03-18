@@ -20,6 +20,7 @@ import {
 } from './chrome-launch.js';
 import { resolveCliBrowserLaunchUrl } from './launch-url.js';
 import { parseCliRuntimeFlags } from './runtime-flags.js';
+import { FileLogger } from './file-logger.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..', '..');
@@ -29,6 +30,18 @@ const SERVE_ONLY = RUNTIME_FLAGS.serveOnly;
 const ELECTRON_MODE = RUNTIME_FLAGS.electron;
 const ELECTRON_APP = RUNTIME_FLAGS.electronApp;
 const KILL_EXISTING_ELECTRON_APP = RUNTIME_FLAGS.kill;
+
+// ---------------------------------------------------------------------------
+// File logger — persistent log file in ~/.slicc/logs/
+// ---------------------------------------------------------------------------
+const fileLogger = new FileLogger({
+  logDir: RUNTIME_FLAGS.logDir ?? undefined,
+  logLevel: RUNTIME_FLAGS.logLevel,
+  devMode: DEV_MODE,
+});
+if (fileLogger.logFile) {
+  console.log(`Log file: ${fileLogger.logFile}`);
+}
 
 // ---------------------------------------------------------------------------
 // Request logging middleware
@@ -282,7 +295,7 @@ async function attachConsoleForwarder(
 // Main
 // ---------------------------------------------------------------------------
 
-const PREFERRED_SERVE_PORT = parseInt(process.env['PORT'] ?? '3000', 10);
+const PREFERRED_SERVE_PORT = parseInt(process.env['PORT'] ?? '5710', 10);
 const PREFERRED_CDP_PORT = RUNTIME_FLAGS.cdpPort;
 const PREFERRED_HMR_PORT = 24679;
 
@@ -765,10 +778,12 @@ async function main() {
       res.status(upstream.status);
       res.setHeader('Cache-Control', 'no-store, no-cache');
 
-      // Forward response headers
+      // Forward response headers (strip www-authenticate to prevent
+      // the browser from showing a native Basic Auth dialog — isomorphic-git
+      // handles 401s through its own onAuth callback)
       upstream.headers.forEach((v, k) => {
         const lower = k.toLowerCase();
-        if (lower !== 'transfer-encoding' && lower !== 'content-encoding') {
+        if (lower !== 'transfer-encoding' && lower !== 'content-encoding' && lower !== 'www-authenticate') {
           res.setHeader(k, v);
         }
       });
@@ -846,6 +861,7 @@ async function main() {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log('\nShutting down...');
+    fileLogger.close();
 
     overlayInjector?.stop();
     overlayInjector = null;
@@ -1028,6 +1044,7 @@ async function main() {
   server.listen(SERVE_PORT, '127.0.0.1', () => {
     console.log(`Serving UI at ${SERVE_ORIGIN}`);
     console.log(`CDP proxy at ws://localhost:${SERVE_PORT}/cdp`);
+    fileLogger.log('info', 'CLI server started', { port: SERVE_PORT, cdpPort: CDP_PORT, devMode: DEV_MODE, electronMode: ELECTRON_MODE });
 
     // Pre-connect to Chrome's CDP so the proxy is warm when the first client connects.
     // Without this, the first browser automation command has to wait for CDP discovery + WS handshake.
@@ -1072,5 +1089,10 @@ async function main() {
 
 main().catch((err) => {
   console.error('Fatal error:', err);
+  const errorData = err instanceof Error
+    ? { name: err.name, message: err.message, stack: err.stack }
+    : { value: String(err) };
+  fileLogger.log('error', 'Fatal error', errorData);
+  fileLogger.close();
   process.exit(1);
 });
