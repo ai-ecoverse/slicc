@@ -717,18 +717,19 @@ async function main(): Promise<void> {
       },
       onToolUI: (scoopJid, toolName, requestId, html) => {
         // Emit tool UI request to chat panel
+        // Always emit regardless of selection - the chat panel handles missing messages with retries
+        // and this prevents tool UI from hanging when a scoop is not selected
         const msgId = scoopCurrentMessageId.get(scoopJid);
-        log.info('onToolUI callback', { scoopJid, toolName, requestId, msgId, selectedJid: selectedScoop?.jid });
-        if (selectedScoop?.jid === scoopJid && msgId) {
-          log.info('Emitting tool_ui event to UI', { messageId: msgId, requestId });
+        if (msgId) {
           emitToUI({ type: 'tool_ui', messageId: msgId, toolName, requestId, html });
         } else {
-          log.warn('Not emitting tool_ui - scoop not selected or no msgId', { scoopJid, selectedJid: selectedScoop?.jid, msgId });
+          log.warn('Cannot emit tool_ui - no message ID for scoop', { scoopJid, requestId });
         }
       },
       onToolUIDone: (scoopJid, requestId) => {
+        // Always emit to ensure renderers are disposed, regardless of selection
         const msgId = scoopCurrentMessageId.get(scoopJid);
-        if (selectedScoop?.jid === scoopJid && msgId) {
+        if (msgId) {
           emitToUI({ type: 'tool_ui_done', messageId: msgId, requestId });
         }
       },
