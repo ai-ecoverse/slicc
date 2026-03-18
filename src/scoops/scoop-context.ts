@@ -270,8 +270,8 @@ export class ScoopContext {
 
   /** Stop the current agent operation and clear any queued prompts */
   stop(): void {
-    this.agent?.clearAllQueues();
-    this.agent?.abort();
+    this.agent?.clearAllQueues?.();
+    this.agent?.abort?.();
     this.isProcessing = false;
     this.setStatus('ready');
   }
