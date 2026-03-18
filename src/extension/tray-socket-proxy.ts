@@ -15,12 +15,13 @@ export class ServiceWorkerLeaderTraySocket implements LeaderTrayWebSocket {
     if (envelope.source !== 'service-worker') return;
     this.handleServiceWorkerEvent(envelope.payload as TraySocketEventMessage);
   };
-  private closed = false;
+  private closeRequested = false;
+  private cleanedUp = false;
 
   constructor(private readonly url: string) {
     chrome.runtime.onMessage.addListener(this.messageHandler as never);
     queueMicrotask(() => {
-      if (this.closed) return;
+      if (this.closeRequested) return;
       void this.post({ type: 'tray-socket-open', id: this.id, url: this.url }).catch((error) => {
         this.dispatch('error', { data: error instanceof Error ? error.message : String(error) });
         this.cleanup();
@@ -38,7 +39,7 @@ export class ServiceWorkerLeaderTraySocket implements LeaderTrayWebSocket {
   }
 
   send(data: string): void {
-    if (this.closed) {
+    if (this.closeRequested) {
       throw new Error('Tray leader WebSocket proxy is closed');
     }
     void this.post({ type: 'tray-socket-send', id: this.id, data }).catch((error) => {
@@ -48,11 +49,12 @@ export class ServiceWorkerLeaderTraySocket implements LeaderTrayWebSocket {
   }
 
   close(code?: number, reason?: string): void {
-    if (this.closed) return;
+    if (this.closeRequested) return;
+    this.closeRequested = true;
     void this.post({ type: 'tray-socket-close', id: this.id, code, reason }).catch(() => {
-      // Ignore best-effort close failures.
+      this.dispatch('close', {});
+      this.cleanup();
     });
-    this.cleanup();
   }
 
   private handleServiceWorkerEvent(event: TraySocketEventMessage): void {
@@ -83,8 +85,8 @@ export class ServiceWorkerLeaderTraySocket implements LeaderTrayWebSocket {
   }
 
   private cleanup(): void {
-    if (this.closed) return;
-    this.closed = true;
+    if (this.cleanedUp) return;
+    this.cleanedUp = true;
     chrome.runtime.onMessage.removeListener(this.messageHandler as never);
   }
 

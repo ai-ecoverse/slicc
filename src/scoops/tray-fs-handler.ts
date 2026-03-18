@@ -9,8 +9,13 @@
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { TrayFsRequest, TrayFsResponse, TrayFsResponseData } from './tray-sync-protocol.js';
 
-/** Chunk size threshold in bytes — files larger than this are chunked. */
-const CHUNK_THRESHOLD = 64 * 1024; // 64 KB
+/**
+ * Chunk size threshold in serialized characters.
+ *
+ * This handler chunks the string payload that goes over the tray sync channel:
+ * UTF-8 reads chunk decoded text, and binary reads chunk base64 text.
+ */
+const CHUNK_THRESHOLD_CHARS = 64 * 1024;
 
 /**
  * Execute a single TrayFsRequest against a VirtualFS instance.
@@ -119,19 +124,19 @@ async function handleWalk(vfs: VirtualFS, path: string): Promise<TrayFsResponse>
 // ---------------------------------------------------------------------------
 
 /**
- * Split file content into chunks if it exceeds CHUNK_THRESHOLD.
+ * Split serialized file content into chunks if it exceeds CHUNK_THRESHOLD_CHARS.
  * Each chunk is a separate TrayFsResponse with chunkIndex/totalChunks.
  */
 function chunkContent(content: string, encoding: 'utf-8' | 'base64'): TrayFsResponse[] {
-  if (content.length <= CHUNK_THRESHOLD) {
+  if (content.length <= CHUNK_THRESHOLD_CHARS) {
     return [{ ok: true, data: { type: 'file', content, encoding } }];
   }
 
-  const totalChunks = Math.ceil(content.length / CHUNK_THRESHOLD);
+  const totalChunks = Math.ceil(content.length / CHUNK_THRESHOLD_CHARS);
   const responses: TrayFsResponse[] = [];
   for (let i = 0; i < totalChunks; i++) {
-    const start = i * CHUNK_THRESHOLD;
-    const chunk = content.slice(start, start + CHUNK_THRESHOLD);
+    const start = i * CHUNK_THRESHOLD_CHARS;
+    const chunk = content.slice(start, start + CHUNK_THRESHOLD_CHARS);
     responses.push({
       ok: true,
       data: { type: 'file', content: chunk, encoding },

@@ -47,7 +47,8 @@ interface DedupEntry {
   fingerprint: string;
   count: number;
   firstSeen: number;
-  level: string;
+  level: LogLevel;
+  consoleFn: (...args: unknown[]) => void;
   prefix: string;
   message: string;
 }
@@ -89,7 +90,7 @@ class DedupBuffer {
   log(
     consoleFn: (...args: unknown[]) => void,
     prefix: string,
-    level: string,
+    level: LogLevel,
     message: string,
     data: unknown[],
   ): boolean {
@@ -110,32 +111,30 @@ class DedupBuffer {
     if (this.entries.length >= DEDUP_BUFFER_SIZE) {
       // Evict oldest, flushing its count
       const evicted = this.entries.shift()!;
-      this.flushEntry(consoleFn, evicted);
+      this.flushEntry(evicted);
     }
-    this.entries.push({ fingerprint: fp, count: 0, firstSeen: now, level, prefix, message });
+    this.entries.push({ fingerprint: fp, count: 0, firstSeen: now, level, consoleFn, prefix, message });
     return true; // allow
   }
 
   /** Flush all pending suppression counts (e.g., on shutdown). */
-  flush(consoleFn: (...args: unknown[]) => void): void {
+  flush(): void {
     for (const entry of this.entries) {
-      this.flushEntry(consoleFn, entry);
+      this.flushEntry(entry);
     }
     this.entries = [];
   }
 
   private evict(now: number): void {
-    // We don't have a per-entry consoleFn, so we use console.debug for eviction summaries.
-    // This is fine because suppressed-count messages are meta/debug info.
     while (this.entries.length > 0 && now - this.entries[0].firstSeen > DEDUP_WINDOW_MS) {
       const evicted = this.entries.shift()!;
-      this.flushEntry(console.debug.bind(console), evicted);
+      this.flushEntry(evicted);
     }
   }
 
-  private flushEntry(consoleFn: (...args: unknown[]) => void, entry: DedupEntry): void {
-    if (entry.count > 0) {
-      consoleFn(entry.prefix, `(suppressed ${entry.count} similar: "${entry.message}")`);
+  private flushEntry(entry: DedupEntry): void {
+    if (entry.count > 0 && currentLevel <= entry.level) {
+      entry.consoleFn(entry.prefix, `(suppressed ${entry.count} similar: "${entry.message}")`);
     }
   }
 }
@@ -148,7 +147,7 @@ export function createLogger(namespace: string): Logger {
   const prefix = `[${namespace}]`;
   const dedup = new DedupBuffer();
 
-  function makeMethod(level: LogLevel, levelName: string) {
+  function makeMethod(level: LogLevel) {
     return (message: string, ...data: unknown[]) => {
       if (currentLevel > level) return;
       const consoleFn =
@@ -157,16 +156,16 @@ export function createLogger(namespace: string): Logger {
         level === LogLevel.WARN ? console.warn :
         console.error;
 
-      if (dedup.log(consoleFn, prefix, levelName, message, data)) {
+      if (dedup.log(consoleFn, prefix, level, message, data)) {
         consoleFn(prefix, message, ...data);
       }
     };
   }
 
   return {
-    debug: makeMethod(LogLevel.DEBUG, 'debug'),
-    info: makeMethod(LogLevel.INFO, 'info'),
-    warn: makeMethod(LogLevel.WARN, 'warn'),
-    error: makeMethod(LogLevel.ERROR, 'error'),
+    debug: makeMethod(LogLevel.DEBUG),
+    info: makeMethod(LogLevel.INFO),
+    warn: makeMethod(LogLevel.WARN),
+    error: makeMethod(LogLevel.ERROR),
   };
 }

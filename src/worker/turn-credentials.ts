@@ -4,7 +4,8 @@ interface CloudflareTurnResponse {
   iceServers: TurnIceServer;
 }
 
-const TURN_CREDENTIAL_TTL = 86400; // 24 hours
+export const TURN_CREDENTIAL_TTL_SECONDS = 86_400;
+export const TURN_CREDENTIAL_TTL_MS = TURN_CREDENTIAL_TTL_SECONDS * 1000;
 
 export async function fetchTURNCredentials(
   keyId: string,
@@ -18,7 +19,7 @@ export async function fetchTURNCredentials(
       'Authorization': `Bearer ${apiToken}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ ttl: TURN_CREDENTIAL_TTL }),
+    body: JSON.stringify({ ttl: TURN_CREDENTIAL_TTL_SECONDS }),
   });
 
   if (!response.ok) {

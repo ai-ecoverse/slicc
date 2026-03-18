@@ -59,7 +59,9 @@ export function getWebhookUrl(locationHref: string, webhookId: string): string {
 
 /** Construct a per-webhook URL under a tray webhook capability URL. */
 export function getTrayWebhookUrl(trayWebhookUrl: string, webhookId: string): string {
-  return `${trayWebhookUrl}/${webhookId}`;
+  const normalizedBase = trayWebhookUrl.replace(/\/+$/, '');
+  const normalizedWebhookId = webhookId.replace(/^\/+/, '');
+  return `${normalizedBase}/${normalizedWebhookId}`;
 }
 
 export function isElectronOverlaySetTabMessage(

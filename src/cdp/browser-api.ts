@@ -84,7 +84,7 @@ export class BrowserAPI {
   constructor(client?: CDPTransport) {
     this.client = client ?? new CDPClient();
     this.localClient = this.client;
-    this.client.on('Page.javascriptDialogOpening', this.handleJavaScriptDialogOpening);
+    this.addDialogListener(this.client);
   }
 
   /**
@@ -121,7 +121,7 @@ export class BrowserAPI {
   /**
    * List all pages — local + remote tray targets.
    * Remote targets have targetId format "{runtimeId}:{localTargetId}".
-   * Deduplicates by excluding registry entries whose localTargetId matches a local page.
+   * Deduplicates by excluding registry entries whose tray-wide targetId matches a local page.
    */
   async listAllTargets(): Promise<PageInfo[]> {
     const local = await this.listPages();
@@ -130,7 +130,7 @@ export class BrowserAPI {
     const localIds = new Set(local.map(p => p.targetId));
     const remoteEntries = this.trayTargetProvider.getTargets();
     const remote: PageInfo[] = remoteEntries
-      .filter(t => !localIds.has(t.localTargetId))
+      .filter(t => !localIds.has(t.targetId))
       .map(t => ({
         targetId: t.targetId,
         title: t.title,
@@ -204,7 +204,7 @@ export class BrowserAPI {
         // If we were attached to the target being closed, clean up
         if (this.attachedTargetId === targetId) {
           if (this.remoteTargetInfo) {
-            this.client = this.localClient;
+            this.setClient(this.localClient);
             this.remoteTargetInfo = null;
           }
           this.sessionId = null;
@@ -274,7 +274,7 @@ export class BrowserAPI {
       // created via createRemotePage() and not yet advertised.
       {
         const remoteTransport = this.trayTargetProvider.createRemoteTransport(runtimeId, localTargetId);
-        this.client = remoteTransport;
+        this.setClient(remoteTransport);
         this.remoteTargetInfo = { runtimeId, localTargetId };
 
         // Send attachToTarget via the remote transport
@@ -321,7 +321,7 @@ export class BrowserAPI {
           this.remoteTargetInfo.runtimeId,
           this.remoteTargetInfo.localTargetId,
         );
-        this.client = this.localClient;
+        this.setClient(this.localClient);
         this.remoteTargetInfo = null;
       }
 
@@ -915,7 +915,7 @@ export class BrowserAPI {
           this.remoteTargetInfo.runtimeId,
           this.remoteTargetInfo.localTargetId,
         );
-        this.client = this.localClient;
+        this.setClient(this.localClient);
         this.remoteTargetInfo = null;
       }
       // Previous session/target are no longer valid after reconnect
@@ -933,6 +933,24 @@ export class BrowserAPI {
         'Not attached to a page. Call attachToPage(targetId) first.',
       );
     }
+  }
+
+  private addDialogListener(client: CDPTransport): void {
+    client.on('Page.javascriptDialogOpening', this.handleJavaScriptDialogOpening);
+  }
+
+  private removeDialogListener(client: CDPTransport): void {
+    client.off('Page.javascriptDialogOpening', this.handleJavaScriptDialogOpening);
+  }
+
+  private setClient(client: CDPTransport): void {
+    if (this.client === client) {
+      return;
+    }
+
+    this.removeDialogListener(this.client);
+    this.client = client;
+    this.addDialogListener(this.client);
   }
 
   /**
