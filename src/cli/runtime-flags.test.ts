@@ -144,6 +144,7 @@ describe('parseCliRuntimeFlags', () => {
       joinUrl: null,
       logLevel: 'info',
       logDir: null,
+      prompt: null,
     });
   });
 
@@ -162,6 +163,7 @@ describe('parseCliRuntimeFlags', () => {
       joinUrl: null,
       logLevel: 'info',
       logDir: null,
+      prompt: null,
     });
   });
 
@@ -203,6 +205,7 @@ describe('parseCliRuntimeFlags', () => {
       joinUrl: 'https://tray.example.com/base/join/tray-123.secret',
       logLevel: 'info',
       logDir: null,
+      prompt: null,
     });
   });
 
@@ -221,6 +224,7 @@ describe('parseCliRuntimeFlags', () => {
       joinUrl: null,
       logLevel: 'info',
       logDir: null,
+      prompt: null,
     });
   });
 
