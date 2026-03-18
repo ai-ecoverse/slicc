@@ -356,12 +356,18 @@ async function main() {
     }
     console.log(`Found Chrome: ${chromePath}`);
 
+    // Build URL with optional prompt parameter
+    let pageUrl = `http://localhost:${SERVE_PORT}`;
+    if (RUNTIME_FLAGS.prompt) {
+      pageUrl += `?prompt=${encodeURIComponent(RUNTIME_FLAGS.prompt)}`;
+    }
+
     const chromeArgs = [
       `--remote-debugging-port=${CDP_PORT}`,
       '--no-first-run',
       '--no-default-browser-check',
       `--user-data-dir=${join(process.env['TMPDIR'] ?? '/tmp', 'browser-coding-agent-chrome')}`,
-      `http://localhost:${SERVE_PORT}`,
+      pageUrl,
     ];
 
     launchedBrowserProcess = spawn(chromePath, chromeArgs, {
@@ -946,7 +952,7 @@ async function main() {
       })();
     }
 
-    if (!ELECTRON_MODE && launchedBrowserProcess) {
+    if (!ELECTRON_MODE) {
       setTimeout(() => {
         attachConsoleForwarder(CDP_PORT, String(SERVE_PORT)).catch((err) => {
           console.error('[page] Console forwarder error:', err);

@@ -120,7 +120,7 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **skill list/install/uninstall** — Manage skills from /workspace/skills/
 - **upskill** — Install skills from GitHub (`upskill owner/repo`) or ClawHub (`upskill clawhub:name`)
 - **webhook/crontask** — Set up licks (external event triggers)
-- **sprinkle** — Manage sprinkles: `sprinkle list`, `sprinkle open <name>`, `sprinkle close <name>`, `sprinkle send <name> '<json>'` (push data to a sprinkle)
+- **sprinkle** — Manage sprinkles: `sprinkle list`, `sprinkle open <name>`, `sprinkle close <name>`, `sprinkle send <name> '<json>'` (push data), `sprinkle chat '<html>'` (inline chat UI)
 - **oauth-token** — Get an OAuth access token for a provider (`oauth-token adobe`); auto-triggers login if no valid token exists. Use in shell: `curl -H "Authorization: Bearer $(oauth-token adobe)" https://api.example.com`
 - **aem** — AEM Edge Delivery Services: `aem list`, `aem get`, `aem put`, `aem preview`, `aem publish`, `aem upload`. Accepts EDS URLs (`https://main--repo--org.aem.page/path`). Auth via `oauth-token adobe`. Run `aem help` for details.
 - **git** — Full git support (clone, commit, push, pull)
@@ -145,6 +145,30 @@ Key things that work differently:
 - **Serving + screenshotting**: `serve` and `open` already open the tab. Do NOT use `playwright-cli open` with the same URL — that opens a duplicate tab. Instead, use `playwright-cli tab-list` to find the tab they created (match by URL from the output), then `playwright-cli tab-select <index>` to target it for screenshots/snapshots. **Never manually construct preview URLs** — always use the URL from the command output.
 - **No long-running servers**: You can't start background daemons. The `serve` and `open` commands handle previewing.
 - **No package managers**: No `apt`, `npm install`, `pip install`. Use what's already available or write `.jsh` scripts.
+
+## Tool UI: Interactive Approvals and Custom UI
+
+You can show interactive HTML UI in the chat using `sprinkle chat`. This is useful for:
+- Asking the user to confirm an action
+- Presenting choices with buttons
+- Showing forms for user input
+
+```bash
+# Simple confirmation dialog
+sprinkle chat '<div class="tool-ui">
+  <p>Deploy to production?</p>
+  <div class="tool-ui__actions">
+    <button class="tool-ui__btn tool-ui__btn--primary" data-action="yes">Deploy</button>
+    <button class="tool-ui__btn tool-ui__btn--secondary" data-action="no">Cancel</button>
+  </div>
+</div>'
+
+# Returns JSON with the user's action: {"action":"yes","data":null}
+```
+
+Use `data-action="name"` on buttons to define the action name returned. The command blocks until the user clicks a button, then returns JSON with `{action, data}`.
+
+Some built-in commands (like `mount`) also use this system automatically when they need user approval.
 
 ## Sprinkles: Cone Orchestration Rules
 

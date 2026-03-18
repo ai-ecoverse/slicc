@@ -17,6 +17,7 @@ describe('parseCliRuntimeFlags', () => {
       kill: false,
       logLevel: 'info',
       logDir: null,
+      prompt: null,
     });
   });
 
@@ -30,6 +31,7 @@ describe('parseCliRuntimeFlags', () => {
       kill: false,
       logLevel: 'info',
       logDir: null,
+      prompt: null,
     });
   });
 
@@ -51,6 +53,7 @@ describe('parseCliRuntimeFlags', () => {
       kill: false,
       logLevel: 'info',
       logDir: null,
+      prompt: null,
     });
   });
 
@@ -64,6 +67,7 @@ describe('parseCliRuntimeFlags', () => {
       kill: false,
       logLevel: 'info',
       logDir: null,
+      prompt: null,
     });
   });
 
@@ -77,6 +81,7 @@ describe('parseCliRuntimeFlags', () => {
       kill: true,
       logLevel: 'info',
       logDir: null,
+      prompt: null,
     });
   });
 
@@ -90,6 +95,7 @@ describe('parseCliRuntimeFlags', () => {
       kill: true,
       logLevel: 'info',
       logDir: null,
+      prompt: null,
     });
   });
 

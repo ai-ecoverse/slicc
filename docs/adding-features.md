@@ -970,6 +970,107 @@ npm run build:extension
 
 ---
 
+## 14. Add Interactive Tool UI (Approval Dialogs, Forms)
+
+**When**: A shell command or tool needs user interaction before proceeding (e.g., permission approval, file picker, form input). Tool UI solves the "user gesture" problem — browser APIs like `showDirectoryPicker()` require a user click, but agent-driven tool calls have no gesture context.
+
+**Files to modify**:
+- Your command file (e.g., `src/fs/mount-commands.ts`)
+- Import from: `src/tools/tool-ui.ts`
+
+**How it works**:
+
+1. Tool execution sets up a context with `onUpdate` callback (handled automatically by `tool-adapter.ts`)
+2. Shell commands call `showToolUIFromContext()` to render interactive HTML in the chat
+3. User clicks a button → callback runs with user gesture context → can call restricted APIs
+4. Promise resolves with user's action/data
+
+**Implementation** (from mount command):
+
+```typescript
+import { getToolExecutionContext, showToolUIFromContext } from '../tools/tool-ui.js';
+
+async function execute(args: string[]): Promise<ShellResult> {
+  // Check if running in agent context (no user gesture)
+  const toolContext = getToolExecutionContext();
+  
+  if (toolContext) {
+    // Agent-driven: show approval UI
+    const result = await showToolUIFromContext({
+      html: `
+        <div class="tool-ui">
+          <p>The agent wants to access <code>${targetPath}</code></p>
+          <div class="tool-ui__actions">
+            <button class="tool-ui__btn tool-ui__btn--primary" data-action="approve">
+              Approve
+            </button>
+            <button class="tool-ui__btn tool-ui__btn--secondary" data-action="deny">
+              Deny
+            </button>
+          </div>
+        </div>
+      `,
+      onAction: async (action) => {
+        if (action === 'approve') {
+          // Runs with user gesture! Can call showDirectoryPicker(), etc.
+          const handle = await window.showDirectoryPicker();
+          return { approved: true, handle };
+        }
+        return { approved: false };
+      },
+    });
+    
+    if (!result?.approved) {
+      return { stdout: '', stderr: 'User denied', exitCode: 1 };
+    }
+    // Use result.handle...
+  } else {
+    // Terminal/user-driven: has gesture, call API directly
+    const handle = await window.showDirectoryPicker();
+  }
+}
+```
+
+**HTML conventions**:
+
+- Wrap content in `<div class="tool-ui">`
+- Use `data-action="actionName"` on buttons for click handling
+- Use `data-action-data='{"key":"value"}'` for additional data (JSON)
+- Available button classes: `.tool-ui__btn--primary`, `.tool-ui__btn--secondary`
+- Forms: add `data-action="submit"` to form, fields become action data
+
+**Key functions** (`src/tools/tool-ui.ts`):
+
+```typescript
+// Get current tool execution context (null if not in a tool)
+getToolExecutionContext(): ToolExecutionContext | null
+
+// Show UI and wait for user action (returns null if no context)
+showToolUIFromContext(request: {
+  html: string;
+  onAction?: (action: string, data?: unknown) => Promise<unknown> | unknown;
+}): Promise<unknown | null>
+
+// Lower-level: show UI with explicit onUpdate callback
+showToolUI(request: ToolUIRequest, onUpdate: OnUpdateCallback): Promise<unknown>
+```
+
+**Lifecycle**:
+
+1. Tool calls `showToolUIFromContext()` → UI appears in chat (tool call auto-expands)
+2. User clicks button with `data-action` → `onAction` callback fires with gesture context
+3. Callback return value resolves the `showToolUIFromContext()` promise
+4. UI is automatically cleaned up when tool execution ends
+
+**Extension vs CLI mode**:
+
+- CLI mode: HTML rendered directly in DOM with click handlers
+- Extension mode: HTML rendered in CSP-exempt sandbox iframe, actions posted via `postMessage`
+
+Both modes handle `data-action` clicks and form submissions identically.
+
+---
+
 ## Common Patterns
 
 **Error handling**: Wrap async operations in try/catch. Return `{ content: errorMsg, isError: true }` for tools.
