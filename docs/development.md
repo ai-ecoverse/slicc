@@ -199,7 +199,7 @@ New features MUST work in the relevant runtimes:
 - **Extension mode** (`npm run build:extension`)
   - Runs in Chrome side panel
   - CSP blocks dynamic eval and CDN fetches
-  - Must use sandbox iframe for dynamic code (`sandbox.html`)
+  - Must use sandbox iframe for dynamic code (`sandbox.html`) and sprinkles/inline widgets (`sprinkle-sandbox.html`)
   - Must use `chrome.runtime.getURL()` for bundled assets
   - Must detect runtime via `typeof chrome !== 'undefined' && !!chrome?.runtime?.id`
 
