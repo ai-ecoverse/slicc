@@ -381,6 +381,185 @@ describe('executeTeleportAuth', () => {
     expect(transport.off).toHaveBeenCalledWith('Page.frameNavigated', expect.any(Function));
   });
 
+  // -----------------------------------------------------------------------
+  // --catch mode tests
+  // -----------------------------------------------------------------------
+
+  it('--catch: completes when URL matches the catch regex', async () => {
+    const { transport, emit } = createFakeTransport();
+
+    (transport.send as ReturnType<typeof vi.fn>)
+      .mockImplementation((method: string) => {
+        if (method === 'Target.createTarget') return Promise.resolve({ targetId: 'tab-catch' });
+        if (method === 'Target.attachToTarget') return Promise.resolve({ sessionId: 'sess-catch' });
+        if (method === 'Page.enable') return Promise.resolve({});
+        if (method === 'Network.getCookies') return Promise.resolve({
+          cookies: [{ name: 'auth', value: '123', domain: '.example.com', path: '/', expires: -1, size: 10, httpOnly: true, secure: true, session: true }],
+        });
+        if (method === 'Target.closeTarget') return Promise.resolve({});
+        return Promise.resolve({});
+      });
+
+    const promise = executeTeleportAuth({
+      transport,
+      url: 'https://httpbin.org/redirect-to?url=https://httpbin.org/cookies',
+      timeoutMs: 5000,
+      catchPattern: 'httpbin\\.org/cookies$',
+    });
+
+    await flushMicrotasks();
+
+    // Navigation to a non-matching URL — should NOT complete
+    emit('Page.frameNavigated', {
+      sessionId: 'sess-catch',
+      frame: { url: 'https://httpbin.org/redirect-to?url=foo', id: 'main' },
+    });
+    await flushMicrotasks();
+
+    // Navigation to a matching URL — should complete
+    emit('Page.frameNavigated', {
+      sessionId: 'sess-catch',
+      frame: { url: 'https://httpbin.org/cookies', id: 'main' },
+    });
+
+    const result = await promise;
+    expect(result.timedOut).toBe(false);
+    expect(result.cookies).toHaveLength(1);
+    expect(result.cookies[0].name).toBe('auth');
+  });
+
+  it('--catch: times out when URL never matches the catch regex', async () => {
+    const { transport, emit } = createFakeTransport();
+
+    (transport.send as ReturnType<typeof vi.fn>)
+      .mockImplementation((method: string) => {
+        if (method === 'Target.createTarget') return Promise.resolve({ targetId: 'tab-1' });
+        if (method === 'Target.attachToTarget') return Promise.resolve({ sessionId: 'sess-no-match' });
+        if (method === 'Page.enable') return Promise.resolve({});
+        if (method === 'Network.getCookies') return Promise.resolve({ cookies: [] });
+        if (method === 'Target.closeTarget') return Promise.resolve({});
+        return Promise.resolve({});
+      });
+
+    const promise = executeTeleportAuth({
+      transport,
+      url: 'https://example.com/login',
+      timeoutMs: 1000,
+      catchPattern: 'example\\.com/dashboard',
+    });
+
+    await flushMicrotasks();
+
+    // Navigate to a non-matching URL
+    emit('Page.frameNavigated', {
+      sessionId: 'sess-no-match',
+      frame: { url: 'https://example.com/login/step2', id: 'main' },
+    });
+    await flushMicrotasks();
+
+    vi.advanceTimersByTime(1000);
+    await flushMicrotasks();
+
+    const result = await promise;
+    expect(result.timedOut).toBe(true);
+  });
+
+  // -----------------------------------------------------------------------
+  // --catch-not mode tests
+  // -----------------------------------------------------------------------
+
+  it('--catch-not: completes when URL stops matching the catch-not regex', async () => {
+    const { transport, emit } = createFakeTransport();
+
+    (transport.send as ReturnType<typeof vi.fn>)
+      .mockImplementation((method: string) => {
+        if (method === 'Target.createTarget') return Promise.resolve({ targetId: 'tab-cn' });
+        if (method === 'Target.attachToTarget') return Promise.resolve({ sessionId: 'sess-cn' });
+        if (method === 'Page.enable') return Promise.resolve({});
+        if (method === 'Network.getCookies') return Promise.resolve({
+          cookies: [{ name: 'session', value: 'abc', domain: '.app.com', path: '/', expires: -1, size: 20, httpOnly: true, secure: true, session: true }],
+        });
+        if (method === 'Target.closeTarget') return Promise.resolve({});
+        return Promise.resolve({});
+      });
+
+    const promise = executeTeleportAuth({
+      transport,
+      url: 'https://app.navan.com/login',
+      timeoutMs: 5000,
+      catchNotPattern: 'login|okta|saml',
+    });
+
+    await flushMicrotasks();
+
+    // First navigation (skipped by catch-not to avoid false positive on initial load)
+    emit('Page.frameNavigated', {
+      sessionId: 'sess-cn',
+      frame: { url: 'https://login.okta.com/authorize', id: 'main' },
+    });
+    await flushMicrotasks();
+
+    // Second navigation still matches the pattern — should NOT complete
+    emit('Page.frameNavigated', {
+      sessionId: 'sess-cn',
+      frame: { url: 'https://login.okta.com/callback', id: 'main' },
+    });
+    await flushMicrotasks();
+
+    // Third navigation no longer matches the pattern — should complete
+    emit('Page.frameNavigated', {
+      sessionId: 'sess-cn',
+      frame: { url: 'https://app.navan.com/dashboard', id: 'main' },
+    });
+
+    const result = await promise;
+    expect(result.timedOut).toBe(false);
+    expect(result.cookies).toHaveLength(1);
+  });
+
+  it('--catch-not: skips the first navigation event', async () => {
+    const { transport, emit } = createFakeTransport();
+
+    (transport.send as ReturnType<typeof vi.fn>)
+      .mockImplementation((method: string) => {
+        if (method === 'Target.createTarget') return Promise.resolve({ targetId: 'tab-cn2' });
+        if (method === 'Target.attachToTarget') return Promise.resolve({ sessionId: 'sess-cn2' });
+        if (method === 'Page.enable') return Promise.resolve({});
+        if (method === 'Network.getCookies') return Promise.resolve({ cookies: [] });
+        if (method === 'Target.closeTarget') return Promise.resolve({});
+        return Promise.resolve({});
+      });
+
+    const promise = executeTeleportAuth({
+      transport,
+      url: 'https://example.com',
+      timeoutMs: 1000,
+      catchNotPattern: 'login',
+    });
+
+    await flushMicrotasks();
+
+    // First navigation: URL does NOT match the pattern, but should be skipped
+    emit('Page.frameNavigated', {
+      sessionId: 'sess-cn2',
+      frame: { url: 'https://example.com/dashboard', id: 'main' },
+    });
+    await flushMicrotasks();
+
+    // Should NOT have completed yet (first nav was skipped) — let it time out
+    vi.advanceTimersByTime(1000);
+    await flushMicrotasks();
+
+    const result = await promise;
+    expect(result.timedOut).toBe(true);
+  });
+
+  // -----------------------------------------------------------------------
+  // Backward compat: no pattern falls back to hostname heuristic
+  // -----------------------------------------------------------------------
+
+  // (Existing tests already cover the default hostname-return heuristic)
+
   it('handles tab close failure gracefully', async () => {
     const { transport, emit } = createFakeTransport();
 

@@ -271,7 +271,7 @@ export class FollowerSyncManager implements AgentHandle {
         break;
       }
       case 'cookie.teleport.request': {
-        this.executeLocalCookieTeleport(message.requestId, message.url);
+        this.executeLocalCookieTeleport(message.requestId, message.url, message.catchPattern, message.catchNotPattern);
         break;
       }
       case 'cookie.teleport.response': {
@@ -476,7 +476,7 @@ export class FollowerSyncManager implements AgentHandle {
    * the human logs in, a hostname redirect is detected, cookies are captured,
    * and the tab is closed. Falls back to immediate capture if no url.
    */
-  private async executeLocalCookieTeleport(requestId: string, url?: string): Promise<void> {
+  private async executeLocalCookieTeleport(requestId: string, url?: string, catchPattern?: string, catchNotPattern?: string): Promise<void> {
     const transport = this.options.browserTransport;
     const browserAPI = this.options.browserAPI;
     if (!transport && !browserAPI) {
@@ -495,6 +495,8 @@ export class FollowerSyncManager implements AgentHandle {
         const { cookies } = await executeTeleportAuth({
           transport,
           url,
+          catchPattern,
+          catchNotPattern,
           onNotification: (msg) => this.options.onNotification?.(msg),
         });
         this.sync.send({ type: 'cookie.teleport.response', requestId, cookies });
@@ -544,11 +546,11 @@ export class FollowerSyncManager implements AgentHandle {
    * Returns a promise that resolves with the cookies from the target runtime.
    * If `url` is provided, the target opens a tab for the human to authenticate before capturing cookies.
    */
-  sendCookieTeleportRequest(targetRuntimeId: string, url?: string): Promise<CookieTeleportCookie[]> {
+  sendCookieTeleportRequest(targetRuntimeId: string, url?: string, catchPattern?: string, catchNotPattern?: string): Promise<CookieTeleportCookie[]> {
     const requestId = `cookie-teleport-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     return new Promise<CookieTeleportCookie[]>((resolve, reject) => {
       this.cookieTeleportResolvers.set(requestId, { resolve, reject });
-      this.sync.send({ type: 'cookie.teleport.request', requestId, targetRuntimeId, url });
+      this.sync.send({ type: 'cookie.teleport.request', requestId, targetRuntimeId, url, catchPattern, catchNotPattern });
     });
   }
 }

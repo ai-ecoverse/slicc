@@ -52,6 +52,10 @@ export interface TeleportAuthOptions {
   timeoutMs?: number;
   /** Callback to notify the UI about auth progress. */
   onNotification?: (message: string) => void;
+  /** When set, auth completes when the URL MATCHES this regex. */
+  catchPattern?: string;
+  /** When set, auth completes when the URL NO LONGER MATCHES this regex (skips first navigation). */
+  catchNotPattern?: string;
 }
 
 export interface TeleportAuthResult {
@@ -67,7 +71,7 @@ export interface TeleportAuthResult {
  * 4. Close the auth tab
  */
 export async function executeTeleportAuth(options: TeleportAuthOptions): Promise<TeleportAuthResult> {
-  const { transport, url, timeoutMs = 120_000, onNotification } = options;
+  const { transport, url, timeoutMs = 120_000, onNotification, catchPattern, catchNotPattern } = options;
 
   let hostname: string;
   try {
@@ -91,7 +95,7 @@ export async function executeTeleportAuth(options: TeleportAuthOptions): Promise
   // 3. Wait for auth completion or timeout
   let timedOut = false;
   try {
-    await waitForAuthCompletion(transport, url, sessionId, timeoutMs);
+    await waitForAuthCompletion(transport, url, sessionId, timeoutMs, catchPattern, catchNotPattern);
   } catch (err) {
     if (err instanceof Error && err.message === 'Teleport auth timeout') {
       timedOut = true;
@@ -124,14 +128,18 @@ export async function executeTeleportAuth(options: TeleportAuthOptions): Promise
 /**
  * Wait for auth completion by monitoring Page.frameNavigated events.
  *
- * The flow tracks two phases:
- * 1. The page navigates AWAY from the initial hostname (SSO redirect) —
- *    sets `hasLeftInitialHostname = true`.
- * 2. The page navigates BACK to the initial hostname (callback redirect) —
- *    resolves the promise (auth complete).
+ * Three completion modes:
  *
- * Same-host path changes before the page has left are ignored (e.g. the
- * initial URL redirecting to a login path on the same host).
+ * **Mode A (catchPattern)**: Completes when a navigated URL matches the
+ * provided regex pattern.
+ *
+ * **Mode B (catchNotPattern)**: Completes when a navigated URL *no longer*
+ * matches the provided regex pattern. The first navigation event is skipped
+ * to avoid false positives from the initial page load.
+ *
+ * **Mode C (default)**: The hostname-return heuristic. Tracks two phases:
+ * 1. The page navigates AWAY from the initial hostname (SSO redirect).
+ * 2. The page navigates BACK to the initial hostname (callback redirect).
  *
  * Rejects with a timeout error if the deadline is exceeded.
  */
@@ -140,10 +148,16 @@ function waitForAuthCompletion(
   initialUrl: string,
   sessionId: string,
   timeoutMs: number,
+  catchPattern?: string,
+  catchNotPattern?: string,
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     let settled = false;
     let hasLeftInitialHostname = false;
+    let hasNavigated = false; // For catch-not: skip the first navigation
+
+    const catchRegex = catchPattern ? new RegExp(catchPattern) : undefined;
+    const catchNotRegex = catchNotPattern ? new RegExp(catchNotPattern) : undefined;
 
     const cleanup = () => {
       settled = true;
@@ -159,6 +173,32 @@ function waitForAuthCompletion(
       const frame = params['frame'] as { url?: string; parentId?: string } | undefined;
       if (!frame?.url || frame.parentId) return; // Only top-level frames
 
+      // Mode A: --catch — complete when URL matches the regex
+      if (catchRegex) {
+        if (catchRegex.test(frame.url)) {
+          log.info('Catch pattern matched', { pattern: catchPattern, url: frame.url });
+          cleanup();
+          resolve();
+        }
+        return;
+      }
+
+      // Mode B: --catch-not — complete when URL no longer matches the regex
+      if (catchNotRegex) {
+        if (!hasNavigated) {
+          hasNavigated = true;
+          log.info('Catch-not: skipping first navigation', { url: frame.url });
+          return; // Skip the first navigation event (initial page load)
+        }
+        if (!catchNotRegex.test(frame.url)) {
+          log.info('Catch-not pattern no longer matches', { pattern: catchNotPattern, url: frame.url });
+          cleanup();
+          resolve();
+        }
+        return;
+      }
+
+      // Mode C: default hostname-return heuristic
       const backOnInitialHost = isAuthRedirect(initialUrl, frame.url);
 
       if (!backOnInitialHost && !hasLeftInitialHostname) {

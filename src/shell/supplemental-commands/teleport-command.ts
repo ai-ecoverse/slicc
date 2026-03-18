@@ -8,10 +8,12 @@
  *   teleport --list              # List available runtimes for teleport
  *
  * Flags:
- *   --list, -l     List available runtimes for teleport
- *   --reload, -r   Reload the active tab after applying cookies (default: true)
- *   --no-reload    Don't reload the active tab after applying cookies
- *   --help, -h     Show usage
+ *   --list, -l             List available runtimes for teleport
+ *   --reload, -r           Reload the active tab after applying cookies (default: true)
+ *   --no-reload            Don't reload the active tab after applying cookies
+ *   --catch <regex>        Capture cookies when the URL MATCHES the regex
+ *   --catch-not <regex>    Capture cookies when the URL NO LONGER MATCHES the regex
+ *   --help, -h             Show usage
  */
 
 import { defineCommand } from 'just-bash';
@@ -24,7 +26,7 @@ import type { FloatType } from '../../scoops/tray-leader-sync.js';
 // Types
 // ---------------------------------------------------------------------------
 
-export type SendCookieTeleportRequestFn = (targetRuntimeId: string, url?: string) => Promise<CookieTeleportCookie[]>;
+export type SendCookieTeleportRequestFn = (targetRuntimeId: string, url?: string, catchPattern?: string, catchNotPattern?: string) => Promise<CookieTeleportCookie[]>;
 
 export type GetBestFollowerForTeleportFn = () => { runtimeId: string; bootstrapId: string; floatType: FloatType } | null;
 
@@ -78,19 +80,26 @@ Usage:
   teleport --list               List available runtimes for teleport
 
 Flags:
-  --list, -l       List available runtimes for teleport
-  --url <url>      Open a browser tab on the follower for interactive auth
-  --reload, -r     Reload the active tab after applying cookies (default)
-  --no-reload      Don't reload the active tab after applying cookies
-  --help, -h       Show this help
+  --list, -l              List available runtimes for teleport
+  --url <url>             Open a browser tab on the follower for interactive auth
+  --catch <regex>         Capture cookies when the URL MATCHES the regex
+  --catch-not <regex>     Capture cookies when the URL NO LONGER MATCHES the regex
+  --reload, -r            Reload the active tab after applying cookies (default)
+  --no-reload             Don't reload the active tab after applying cookies
+  --help, -h              Show this help
 
 The teleport command captures all browser cookies from a remote runtime
 in the tray and applies them to the local browser, enabling seamless
 authentication transfer between SLICC instances.
 
 When --url is provided, the follower opens a browser tab for the human
-to complete login. Cookies are captured after auth (hostname redirect)
-or after a 2-minute timeout.
+to complete login. By default, cookies are captured when the browser
+returns to the initial hostname (SSO redirect heuristic).
+
+Use --catch or --catch-not (mutually exclusive) to override the default:
+  --catch <regex>       Complete when URL matches the pattern
+  --catch-not <regex>   Complete when URL stops matching the pattern
+                        (skips the first navigation to avoid false positives)
 `,
     stderr: '',
     exitCode: 0,
@@ -104,6 +113,8 @@ or after a 2-minute timeout.
 export interface ParsedTeleportArgs {
   targetRuntimeId?: string;
   url?: string;
+  catchPattern?: string;
+  catchNotPattern?: string;
   list: boolean;
   reload: boolean;
 }
@@ -112,6 +123,8 @@ export function parseTeleportArgs(args: string[]): ParsedTeleportArgs | { error:
   let list = false;
   let reload = true;
   let url: string | undefined;
+  let catchPattern: string | undefined;
+  let catchNotPattern: string | undefined;
   const positional: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
@@ -124,7 +137,23 @@ export function parseTeleportArgs(args: string[]): ParsedTeleportArgs | { error:
       const next = args[i + 1];
       if (!next || next.startsWith('-')) return { error: '--url requires a URL argument' };
       url = next;
-      i++; // skip the URL value
+      i++;
+      continue;
+    }
+    if (arg === '--catch') {
+      const next = args[i + 1];
+      if (!next || next.startsWith('-')) return { error: '--catch requires a regex argument' };
+      try { new RegExp(next); } catch { return { error: `Invalid regex for --catch: ${next}` }; }
+      catchPattern = next;
+      i++;
+      continue;
+    }
+    if (arg === '--catch-not') {
+      const next = args[i + 1];
+      if (!next || next.startsWith('-')) return { error: '--catch-not requires a regex argument' };
+      try { new RegExp(next); } catch { return { error: `Invalid regex for --catch-not: ${next}` }; }
+      catchNotPattern = next;
+      i++;
       continue;
     }
     if (arg.startsWith('-')) return { error: `Unknown flag: ${arg}` };
@@ -135,7 +164,11 @@ export function parseTeleportArgs(args: string[]): ParsedTeleportArgs | { error:
     return { error: 'Expected at most 1 argument: <runtime-id>' };
   }
 
-  return { targetRuntimeId: positional[0], url, list, reload };
+  if (catchPattern && catchNotPattern) {
+    return { error: '--catch and --catch-not are mutually exclusive' };
+  }
+
+  return { targetRuntimeId: positional[0], url, catchPattern, catchNotPattern, list, reload };
 }
 
 // ---------------------------------------------------------------------------
@@ -212,7 +245,7 @@ export function createTeleportCommand(): Command {
 
     try {
       // 1. Request cookies from the remote runtime
-      const cookies = await sendRequest(targetRuntimeId, parsed.url);
+      const cookies = await sendRequest(targetRuntimeId, parsed.url, parsed.catchPattern, parsed.catchNotPattern);
       if (cookies.length === 0) {
         return { stdout: `No cookies on runtime ${targetRuntimeId}\n`, stderr: '', exitCode: 0 };
       }

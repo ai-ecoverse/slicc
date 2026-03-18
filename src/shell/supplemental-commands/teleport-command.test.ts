@@ -22,37 +22,37 @@ describe('parseTeleportArgs', () => {
 
   it('parses no args (auto-select mode)', () => {
     const result = parseTeleportArgs([]);
-    expect(result).toEqual({ targetRuntimeId: undefined, url: undefined, list: false, reload: true });
+    expect(result).toEqual({ targetRuntimeId: undefined, url: undefined, catchPattern: undefined, catchNotPattern: undefined, list: false, reload: true });
   });
 
   it('parses a specific runtime-id', () => {
     const result = parseTeleportArgs(['follower-abc']);
-    expect(result).toEqual({ targetRuntimeId: 'follower-abc', url: undefined, list: false, reload: true });
+    expect(result).toEqual({ targetRuntimeId: 'follower-abc', url: undefined, catchPattern: undefined, catchNotPattern: undefined, list: false, reload: true });
   });
 
   it('parses --list flag', () => {
     const result = parseTeleportArgs(['--list']);
-    expect(result).toEqual({ targetRuntimeId: undefined, url: undefined, list: true, reload: true });
+    expect(result).toEqual({ targetRuntimeId: undefined, url: undefined, catchPattern: undefined, catchNotPattern: undefined, list: true, reload: true });
   });
 
   it('parses -l shorthand', () => {
     const result = parseTeleportArgs(['-l']);
-    expect(result).toEqual({ targetRuntimeId: undefined, url: undefined, list: true, reload: true });
+    expect(result).toEqual({ targetRuntimeId: undefined, url: undefined, catchPattern: undefined, catchNotPattern: undefined, list: true, reload: true });
   });
 
   it('parses --no-reload flag', () => {
     const result = parseTeleportArgs(['--no-reload']);
-    expect(result).toEqual({ targetRuntimeId: undefined, url: undefined, list: false, reload: false });
+    expect(result).toEqual({ targetRuntimeId: undefined, url: undefined, catchPattern: undefined, catchNotPattern: undefined, list: false, reload: false });
   });
 
   it('parses --reload explicitly', () => {
     const result = parseTeleportArgs(['--no-reload', '--reload']);
-    expect(result).toEqual({ targetRuntimeId: undefined, url: undefined, list: false, reload: true });
+    expect(result).toEqual({ targetRuntimeId: undefined, url: undefined, catchPattern: undefined, catchNotPattern: undefined, list: false, reload: true });
   });
 
   it('parses -r shorthand', () => {
     const result = parseTeleportArgs(['-r']);
-    expect(result).toEqual({ targetRuntimeId: undefined, url: undefined, list: false, reload: true });
+    expect(result).toEqual({ targetRuntimeId: undefined, url: undefined, catchPattern: undefined, catchNotPattern: undefined, list: false, reload: true });
   });
 
   it('errors on unknown flags', () => {
@@ -67,17 +67,55 @@ describe('parseTeleportArgs', () => {
 
   it('combines runtime-id with flags', () => {
     const result = parseTeleportArgs(['follower-abc', '--no-reload']);
-    expect(result).toEqual({ targetRuntimeId: 'follower-abc', url: undefined, list: false, reload: false });
+    expect(result).toEqual({ targetRuntimeId: 'follower-abc', url: undefined, catchPattern: undefined, catchNotPattern: undefined, list: false, reload: false });
   });
 
   it('parses --url flag', () => {
     const result = parseTeleportArgs(['--url', 'https://login.example.com']);
-    expect(result).toEqual({ targetRuntimeId: undefined, url: 'https://login.example.com', list: false, reload: true });
+    expect(result).toEqual({ targetRuntimeId: undefined, url: 'https://login.example.com', catchPattern: undefined, catchNotPattern: undefined, list: false, reload: true });
   });
 
   it('combines --url with runtime-id', () => {
     const result = parseTeleportArgs(['follower-abc', '--url', 'https://auth.site.com']);
-    expect(result).toEqual({ targetRuntimeId: 'follower-abc', url: 'https://auth.site.com', list: false, reload: true });
+    expect(result).toEqual({ targetRuntimeId: 'follower-abc', url: 'https://auth.site.com', catchPattern: undefined, catchNotPattern: undefined, list: false, reload: true });
+  });
+
+  // --catch / --catch-not parsing tests
+  it('parses --catch flag', () => {
+    const result = parseTeleportArgs(['--url', 'https://example.com', '--catch', 'dashboard']);
+    expect(result).toEqual({ targetRuntimeId: undefined, url: 'https://example.com', catchPattern: 'dashboard', catchNotPattern: undefined, list: false, reload: true });
+  });
+
+  it('parses --catch-not flag', () => {
+    const result = parseTeleportArgs(['--url', 'https://example.com', '--catch-not', 'login|okta']);
+    expect(result).toEqual({ targetRuntimeId: undefined, url: 'https://example.com', catchPattern: undefined, catchNotPattern: 'login|okta', list: false, reload: true });
+  });
+
+  it('errors when --catch and --catch-not are both provided', () => {
+    const result = parseTeleportArgs(['--catch', 'foo', '--catch-not', 'bar']);
+    expect(result).toEqual({ error: '--catch and --catch-not are mutually exclusive' });
+  });
+
+  it('errors on invalid regex for --catch', () => {
+    const result = parseTeleportArgs(['--catch', '[invalid']);
+    expect(result).toHaveProperty('error');
+    expect((result as { error: string }).error).toContain('Invalid regex');
+  });
+
+  it('errors on invalid regex for --catch-not', () => {
+    const result = parseTeleportArgs(['--catch-not', '[invalid']);
+    expect(result).toHaveProperty('error');
+    expect((result as { error: string }).error).toContain('Invalid regex');
+  });
+
+  it('errors when --catch has no value', () => {
+    const result = parseTeleportArgs(['--catch']);
+    expect(result).toEqual({ error: '--catch requires a regex argument' });
+  });
+
+  it('errors when --catch-not has no value', () => {
+    const result = parseTeleportArgs(['--catch-not']);
+    expect(result).toEqual({ error: '--catch-not requires a regex argument' });
   });
 
   it('errors when --url has no value', () => {
@@ -199,7 +237,7 @@ describe('createTeleportCommand', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Teleported 1 cookie(s) from follower-best');
     expect(result.stdout).toContain('page reloaded');
-    expect(sendRequest).toHaveBeenCalledWith('follower-best', undefined);
+    expect(sendRequest).toHaveBeenCalledWith('follower-best', undefined, undefined, undefined);
     expect(sendCDP).toHaveBeenCalledWith('Network.setCookies', { cookies: fakeCookies });
     expect(sendCDP).toHaveBeenCalledWith('Page.reload', {});
   });
@@ -225,7 +263,7 @@ describe('createTeleportCommand', () => {
 
     const result = await createTeleportCommand().execute(['follower-xyz'], {} as never);
     expect(result.exitCode).toBe(0);
-    expect(sendRequest).toHaveBeenCalledWith('follower-xyz', undefined);
+    expect(sendRequest).toHaveBeenCalledWith('follower-xyz', undefined, undefined, undefined);
     expect(sendCDP).toHaveBeenCalledWith('Network.setCookies', { cookies: fakeCookies });
   });
 
@@ -308,7 +346,7 @@ describe('createTeleportCommand', () => {
 
     const result = await createTeleportCommand().execute(['--url', 'https://login.example.com'], {} as never);
     expect(result.exitCode).toBe(0);
-    expect(sendRequest).toHaveBeenCalledWith('f1', 'https://login.example.com');
+    expect(sendRequest).toHaveBeenCalledWith('f1', 'https://login.example.com', undefined, undefined);
   });
 
   it('errors when no local tabs available', async () => {
