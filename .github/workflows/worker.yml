@@ -48,14 +48,73 @@ jobs:
       - name: Verify worker unit tests before deploy
         run: npx vitest run src/worker/index.test.ts
 
-      - name: Deploy staging worker
-        id: deploy
+      - name: Deploy staging worker (attempt 1)
+        id: deploy_attempt_1
+        continue-on-error: true
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: 3.91.0
           command: deploy --env staging
+
+      - name: Wait before staging deploy retry 2
+        if: steps.deploy_attempt_1.outcome == 'failure'
+        run: sleep 20
+
+      - name: Deploy staging worker (attempt 2)
+        id: deploy_attempt_2
+        if: steps.deploy_attempt_1.outcome == 'failure'
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: 3.91.0
+          command: deploy --env staging
+
+      - name: Wait before staging deploy retry 3
+        if: steps.deploy_attempt_1.outcome == 'failure' && steps.deploy_attempt_2.outcome == 'failure'
+        run: sleep 40
+
+      - name: Deploy staging worker (attempt 3)
+        id: deploy_attempt_3
+        if: steps.deploy_attempt_1.outcome == 'failure' && steps.deploy_attempt_2.outcome == 'failure'
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: 3.91.0
+          command: deploy --env staging
+
+      - name: Finalize staging deploy metadata
+        id: deploy
+        env:
+          DEPLOYMENT_URL_1: ${{ steps.deploy_attempt_1.outputs.deployment-url }}
+          DEPLOYMENT_URL_2: ${{ steps.deploy_attempt_2.outputs.deployment-url }}
+          DEPLOYMENT_URL_3: ${{ steps.deploy_attempt_3.outputs.deployment-url }}
+          DEPLOY_OUTCOME_1: ${{ steps.deploy_attempt_1.outcome }}
+          DEPLOY_OUTCOME_2: ${{ steps.deploy_attempt_2.outcome }}
+          DEPLOY_OUTCOME_3: ${{ steps.deploy_attempt_3.outcome }}
+        run: |
+          DEPLOYMENT_URL="${DEPLOYMENT_URL_1:-}"
+          SUCCESSFUL_ATTEMPT=1
+          if [ -z "$DEPLOYMENT_URL" ]; then
+            DEPLOYMENT_URL="${DEPLOYMENT_URL_2:-}"
+            SUCCESSFUL_ATTEMPT=2
+          fi
+          if [ -z "$DEPLOYMENT_URL" ]; then
+            DEPLOYMENT_URL="${DEPLOYMENT_URL_3:-}"
+            SUCCESSFUL_ATTEMPT=3
+          fi
+          if [ -z "$DEPLOYMENT_URL" ]; then
+            echo "Cloudflare staging deploy failed after 3 attempts"
+            echo "Attempt outcomes: 1=${DEPLOY_OUTCOME_1:-not-run}, 2=${DEPLOY_OUTCOME_2:-not-run}, 3=${DEPLOY_OUTCOME_3:-not-run}"
+            exit 1
+          fi
+          echo "Cloudflare staging deploy succeeded on attempt ${SUCCESSFUL_ATTEMPT}: ${DEPLOYMENT_URL}"
+          echo "deployment-url=${DEPLOYMENT_URL}" >> "$GITHUB_OUTPUT"
 
       - name: Run deployed smoke test against staging
         env:
@@ -97,14 +156,73 @@ jobs:
       - name: Verify worker unit tests before deploy
         run: npx vitest run src/worker/index.test.ts
 
-      - name: Deploy production worker
-        id: deploy
+      - name: Deploy production worker (attempt 1)
+        id: deploy_attempt_1
+        continue-on-error: true
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: 3.91.0
           command: deploy
+
+      - name: Wait before production deploy retry 2
+        if: steps.deploy_attempt_1.outcome == 'failure'
+        run: sleep 20
+
+      - name: Deploy production worker (attempt 2)
+        id: deploy_attempt_2
+        if: steps.deploy_attempt_1.outcome == 'failure'
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: 3.91.0
+          command: deploy
+
+      - name: Wait before production deploy retry 3
+        if: steps.deploy_attempt_1.outcome == 'failure' && steps.deploy_attempt_2.outcome == 'failure'
+        run: sleep 40
+
+      - name: Deploy production worker (attempt 3)
+        id: deploy_attempt_3
+        if: steps.deploy_attempt_1.outcome == 'failure' && steps.deploy_attempt_2.outcome == 'failure'
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: 3.91.0
+          command: deploy
+
+      - name: Finalize production deploy metadata
+        id: deploy
+        env:
+          DEPLOYMENT_URL_1: ${{ steps.deploy_attempt_1.outputs.deployment-url }}
+          DEPLOYMENT_URL_2: ${{ steps.deploy_attempt_2.outputs.deployment-url }}
+          DEPLOYMENT_URL_3: ${{ steps.deploy_attempt_3.outputs.deployment-url }}
+          DEPLOY_OUTCOME_1: ${{ steps.deploy_attempt_1.outcome }}
+          DEPLOY_OUTCOME_2: ${{ steps.deploy_attempt_2.outcome }}
+          DEPLOY_OUTCOME_3: ${{ steps.deploy_attempt_3.outcome }}
+        run: |
+          DEPLOYMENT_URL="${DEPLOYMENT_URL_1:-}"
+          SUCCESSFUL_ATTEMPT=1
+          if [ -z "$DEPLOYMENT_URL" ]; then
+            DEPLOYMENT_URL="${DEPLOYMENT_URL_2:-}"
+            SUCCESSFUL_ATTEMPT=2
+          fi
+          if [ -z "$DEPLOYMENT_URL" ]; then
+            DEPLOYMENT_URL="${DEPLOYMENT_URL_3:-}"
+            SUCCESSFUL_ATTEMPT=3
+          fi
+          if [ -z "$DEPLOYMENT_URL" ]; then
+            echo "Cloudflare production deploy failed after 3 attempts"
+            echo "Attempt outcomes: 1=${DEPLOY_OUTCOME_1:-not-run}, 2=${DEPLOY_OUTCOME_2:-not-run}, 3=${DEPLOY_OUTCOME_3:-not-run}"
+            exit 1
+          fi
+          echo "Cloudflare production deploy succeeded on attempt ${SUCCESSFUL_ATTEMPT}: ${DEPLOYMENT_URL}"
+          echo "deployment-url=${DEPLOYMENT_URL}" >> "$GITHUB_OUTPUT"
 
       - name: Run deployed smoke test against production
         env:
