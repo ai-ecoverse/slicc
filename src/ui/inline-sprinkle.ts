@@ -49,7 +49,28 @@ function mountInlineSprinkle(
 body{font-family:var(--s2-font-family, sans-serif);font-size:13px;color:var(--s2-content-default)}</style>
 <style>.sprinkle-inline{padding:var(--s2-spacing-200)}
 .sprinkle-inline .sprinkle-btn{padding:4px 12px;font-size:12px;height:28px}
-.sprinkle-inline .sprinkle-card{box-shadow:none;margin:0}</style>
+.sprinkle-inline .sprinkle-card{box-shadow:none;margin:0}
+/* Pre-styled form elements for inline widgets */
+input[type="range"]{width:100%;height:4px;-webkit-appearance:none;appearance:none;background:var(--s2-gray-300);border-radius:2px;outline:none;cursor:default}
+input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:var(--s2-accent);cursor:default;border:2px solid var(--s2-bg-base)}
+input[type="range"]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--s2-accent);cursor:default;border:2px solid var(--s2-bg-base)}
+input[type="text"],input[type="number"],textarea{width:100%;padding:7px 12px;font-size:13px;font-family:var(--s2-font-family,sans-serif);color:var(--s2-content-default);background:var(--s2-bg-layer-2);border:1px solid var(--s2-border-subtle,var(--s2-gray-300));border-radius:8px;outline:none;box-sizing:border-box}
+input[type="text"]:focus,input[type="number"]:focus,textarea:focus{border-color:var(--s2-accent);box-shadow:0 0 0 1px var(--s2-accent)}
+input[type="text"]::placeholder,textarea::placeholder{color:var(--s2-content-disabled,var(--s2-gray-400))}
+select{padding:6px 12px;font-size:13px;font-family:var(--s2-font-family,sans-serif);color:var(--s2-content-default);background:var(--s2-bg-layer-2);border:1px solid var(--s2-border-subtle,var(--s2-gray-300));border-radius:8px;outline:none;cursor:default}
+select:focus{border-color:var(--s2-accent);box-shadow:0 0 0 1px var(--s2-accent)}
+button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:28px;padding:4px 12px;border:1px solid var(--s2-border-default,var(--s2-gray-300));border-radius:9999px;background:transparent;color:var(--s2-content-default);font-size:12px;font-weight:700;font-family:var(--s2-font-family,sans-serif);cursor:default;transition:background 130ms ease}
+button:hover{background:color-mix(in srgb,var(--s2-content-default) 6%,transparent)}
+button:disabled{opacity:0.4;pointer-events:none}
+canvas{display:block;width:100%;border-radius:8px}
+mark{background:color-mix(in srgb,var(--s2-accent) 25%,transparent);color:inherit;border-radius:2px;padding:0 2px}
+/* Categorical color palette for charts/diagrams */
+.c-purple{background:#3C3489;color:#EEEDFE}.c-teal{background:#085041;color:#E1F5EE}
+.c-coral{background:#712B13;color:#FAECE7}.c-pink{background:#72243E;color:#FBEAF0}
+.c-gray{background:#444441;color:#F1EFE8}.c-blue{background:#0C447C;color:#E6F1FB}
+.c-amber{background:#633806;color:#FAEEDA}.c-red{background:#791F1F;color:#FCEBEB}
+.c-green{background:#27500A;color:#EAF3DE}
+</style>
 <script>${BRIDGE_SCRIPT}</script>
 </head>
 <body class="sprinkle-inline">${content}</body></html>`;
