@@ -39,10 +39,16 @@ function createMockCallbacks(): ScoopContextCallbacks {
  * without running the full init() (which needs VFS, shell, API key, etc.).
  */
 function injectMockAgent(ctx: ScoopContext, mockPrompt: (text: string) => Promise<void>): void {
+  const followUpQueue: any[] = [];
   const agent = {
     prompt: mockPrompt,
     abort: vi.fn(),
     subscribe: vi.fn(() => () => {}),
+    followUp: vi.fn((msg: any) => { followUpQueue.push(msg); }),
+    clearAllQueues: vi.fn(() => { followUpQueue.length = 0; }),
+    state: { isStreaming: false },
+    // Expose queue for test inspection
+    _followUpQueue: followUpQueue,
   };
   // Inject via private field
   (ctx as any).agent = agent;
@@ -231,7 +237,7 @@ describe('ScoopContext prompt queueing', () => {
     expect(statusCalls[statusCalls.length - 1][0]).toBe('ready');
   });
 
-  it('queues prompts when already processing', async () => {
+  it('queues prompts via followUp when already processing', async () => {
     const prompts: string[] = [];
     let resolveFirst: () => void;
     const firstPromptDone = new Promise<void>((r) => { resolveFirst = r; });
@@ -246,44 +252,17 @@ describe('ScoopContext prompt queueing', () => {
     // Start first prompt (will block until we resolve)
     const promptPromise = ctx.prompt('first');
 
-    // While first is processing, queue more prompts
+    // While first is processing, queue more prompts via followUp
     await ctx.prompt('second');
     await ctx.prompt('third');
 
-    // Verify they were queued, not processed yet
+    // Verify first was sent to agent.prompt, others queued via followUp
     expect(prompts).toEqual(['first']);
-
-    // Release first prompt — queued ones should be processed sequentially
-    resolveFirst!();
-    await promptPromise;
-
-    expect(prompts).toEqual(['first', 'second', 'third']);
-  });
-
-  it('continues processing queue when a queued prompt fails', async () => {
-    const prompts: string[] = [];
-    let resolveFirst: () => void;
-    const firstPromptDone = new Promise<void>((r) => { resolveFirst = r; });
-
-    injectMockAgent(ctx, async (text) => {
-      prompts.push(text);
-      if (text === 'first') {
-        await firstPromptDone;
-      }
-      if (text === 'second') {
-        throw new Error('second failed');
-      }
-    });
-
-    const promptPromise = ctx.prompt('first');
-    await ctx.prompt('second'); // will fail
-    await ctx.prompt('third'); // should still run
+    expect((ctx as any).agent.followUp).toHaveBeenCalledTimes(2);
+    expect((ctx as any).agent._followUpQueue).toHaveLength(2);
 
     resolveFirst!();
     await promptPromise;
-
-    expect(prompts).toEqual(['first', 'second', 'third']);
-    expect(callbacks.onError).toHaveBeenCalledWith('second failed');
   });
 
   it('stop() clears the queue and aborts', async () => {
@@ -305,10 +284,10 @@ describe('ScoopContext prompt queueing', () => {
     // Stop should clear the queue
     ctx.stop();
 
-    expect((ctx as any).pendingPrompts).toEqual([]);
+    expect((ctx as any).agent.clearAllQueues).toHaveBeenCalled();
     expect((ctx as any).agent.abort).toHaveBeenCalled();
 
-    // Release first prompt — no more should be processed
+    // Release first prompt
     resolveFirst!();
     await promptPromise;
 
@@ -316,25 +295,15 @@ describe('ScoopContext prompt queueing', () => {
     expect(prompts).toEqual(['first']);
   });
 
-  it('returns to ready status after processing all queued prompts', async () => {
+  it('returns to ready status after prompt completes', async () => {
     const prompts: string[] = [];
-    let resolveFirst: () => void;
-    const firstPromptDone = new Promise<void>((r) => { resolveFirst = r; });
-
     injectMockAgent(ctx, async (text) => {
       prompts.push(text);
-      if (text === 'first') {
-        await firstPromptDone;
-      }
     });
 
-    const promptPromise = ctx.prompt('first');
-    await ctx.prompt('second');
+    await ctx.prompt('first');
 
-    resolveFirst!();
-    await promptPromise;
-
-    expect(prompts).toEqual(['first', 'second']);
+    expect(prompts).toEqual(['first']);
     const statusCalls = (callbacks.onStatusChange as any).mock.calls;
     expect(statusCalls[statusCalls.length - 1][0]).toBe('ready');
   });
@@ -352,40 +321,22 @@ describe('ScoopContext prompt queueing', () => {
 
     // Both should immediately error
     expect(callbacks.onError).toHaveBeenCalledTimes(2);
-    expect((ctx as any).pendingPrompts).toEqual([]);
   });
 
-  it('handles first prompt failure and still drains queue', async () => {
+  it('handles prompt failure gracefully', async () => {
     const prompts: string[] = [];
     injectMockAgent(ctx, async (text) => {
       prompts.push(text);
-      if (text === 'first') {
-        throw new Error('first failed');
-      }
+      throw new Error('prompt failed');
     });
 
-    // Queue second before first finishes (but first will fail synchronously-ish)
-    // We need to make first block to actually queue second
-    let resolveFirst: () => void;
-    const firstBlock = new Promise<void>((r) => { resolveFirst = r; });
+    await ctx.prompt('first');
 
-    injectMockAgent(ctx, async (text) => {
-      prompts.length = 0; // reset from previous mock
-      prompts.push(text);
-      if (text === 'first') {
-        await firstBlock;
-        throw new Error('first failed');
-      }
-    });
-
-    const promptPromise = ctx.prompt('first');
-    await ctx.prompt('second');
-
-    resolveFirst!();
-    await promptPromise;
-
-    expect(prompts).toContain('second');
-    expect(callbacks.onError).toHaveBeenCalledWith('first failed');
+    expect(prompts).toEqual(['first']);
+    expect(callbacks.onError).toHaveBeenCalledWith('prompt failed');
+    // Should return to ready status after error
+    const statusCalls = (callbacks.onStatusChange as any).mock.calls;
+    expect(statusCalls[statusCalls.length - 1][0]).toBe('ready');
   });
 });
 

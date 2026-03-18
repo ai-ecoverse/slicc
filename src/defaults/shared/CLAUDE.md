@@ -120,7 +120,7 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **skill list/install/uninstall** — Manage skills from /workspace/skills/
 - **upskill** — Install skills from GitHub (`upskill owner/repo`) or ClawHub (`upskill clawhub:name`)
 - **webhook/crontask** — Set up licks (external event triggers)
-- **sprinkle** — Manage sprinkles: `sprinkle list`, `sprinkle open <name>`, `sprinkle close <name>`, `sprinkle send <name> '<json>'` (push data to a sprinkle)
+- **sprinkle** — Manage sprinkles: `sprinkle list`, `sprinkle open <name>`, `sprinkle close <name>`, `sprinkle send <name> '<json>'` (push data), `sprinkle chat '<html>'` (inline chat UI)
 - **oauth-token** — Get an OAuth access token for a provider (`oauth-token adobe`); auto-triggers login if no valid token exists. Use in shell: `curl -H "Authorization: Bearer $(oauth-token adobe)" https://api.example.com`
 - **aem** — AEM Edge Delivery Services: `aem list`, `aem get`, `aem put`, `aem preview`, `aem publish`, `aem upload`. Accepts EDS URLs (`https://main--repo--org.aem.page/path`). Auth via `oauth-token adobe`. Run `aem help` for details.
 - **git** — Full git support (clone, commit, push, pull)
@@ -129,6 +129,9 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **open <path|url>** — Open a URL or single VFS file in a new browser tab. Use `open --view` when you need to see an image inline. `.shtml` files are opened as sprinkles instead of browser tabs.
 - **pbcopy / pbpaste** — Clipboard commands. `echo hello | pbcopy` copies stdin to clipboard, `pbpaste` outputs clipboard contents. Uses `navigator.clipboard` API.
 - **xclip / xsel** — Clipboard commands that auto-detect direction: `echo hello | xclip` copies (stdin present), `xclip` alone pastes (no stdin).
+- **say** — Text-to-speech using Web Speech API. `say hello world`, `say -v Samantha hello` (voice selection), `say -r 1.5 fast speech` (rate 0.1-10), `say --list` (list voices).
+- **afplay** — Play audio files using Web Audio API. `afplay /path/to/audio.mp3`, `afplay -v 0.5 file.wav` (volume 0-1), `afplay -r 1.5 file.mp3` (rate 0.25-4).
+- **chime** — Play a notification chime sound. Alias for `afplay /shared/sounds/chime.mp3`.
 - **playwright-cli** — Browser automation (built-in, no SKILL.md lookup needed). Key subcommands: `tab-list`, `tab-select <index>`, `snapshot`, `screenshot [--filename=<path>]`, `open <url>`, `click <ref>`, `fill <ref> "text"`, `close`. Run `playwright-cli --help` for full list.
 
 ## Inline Cards
@@ -170,6 +173,25 @@ Key things that work differently:
 - **Serving + screenshotting**: `serve` and `open` already open the tab. Do NOT use `playwright-cli open` with the same URL — that opens a duplicate tab. Instead, use `playwright-cli tab-list` to find the tab they created (match by URL from the output), then `playwright-cli tab-select <index>` to target it for screenshots/snapshots. **Never manually construct preview URLs** — always use the URL from the command output.
 - **No long-running servers**: You can't start background daemons. The `serve` and `open` commands handle previewing.
 - **No package managers**: No `apt`, `npm install`, `pip install`. Use what's already available or write `.jsh` scripts.
+
+## Sprinkle Chat: Blocking Inline Cards
+
+`sprinkle chat` shows an inline card in the chat and **blocks until the user clicks a button**, returning the result as JSON. Use it when a tool needs user input mid-execution.
+
+```bash
+sprinkle chat '<div class="sprinkle-action-card">
+  <div class="sprinkle-action-card__header">Deploy to production?</div>
+  <div class="sprinkle-action-card__actions">
+    <button class="sprinkle-btn sprinkle-btn--secondary" onclick="slicc.lick({action:\"cancel\"})">Cancel</button>
+    <button class="sprinkle-btn sprinkle-btn--primary" onclick="slicc.lick({action:\"deploy\",env:\"prod\"})">Deploy</button>
+  </div>
+</div>'
+# Returns: {"action":"deploy","data":{"action":"deploy","env":"prod"}}
+```
+
+Uses the same `.sprinkle-*` components and `slicc.lick()` bridge as inline cards. The difference: `sprinkle chat` blocks the tool and returns the lick result, while ` ```shtml ` cards are fire-and-forget (lick events arrive as messages).
+
+Some built-in commands (like `mount`) also use this system for approval dialogs.
 
 ## Sprinkles: Cone Orchestration Rules
 

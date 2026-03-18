@@ -14,13 +14,57 @@ import type { VirtualFS } from '../fs/index.js';
 
 const log = createLogger('skills');
 
-// Load default skill files at build time using import.meta.glob
-// The 'as: raw' option imports file contents as strings
-const defaultSkillFiles = import.meta.glob('/src/defaults/**/*', { 
+// Load default text files at build time using import.meta.glob
+// The '?raw' query imports file contents as strings
+const defaultTextFiles = import.meta.glob('/src/defaults/**/*.{md,jsh,shtml,json,txt,css,js,ts,html}', { 
   query: '?raw',
   import: 'default',
   eager: true 
 }) as Record<string, string>;
+
+// Load default binary files (audio, images, etc.) as base64
+// The '?inline' query gives us a data URL we can decode
+const defaultBinaryFiles = import.meta.glob('/src/defaults/**/*.{mp3,wav,ogg,png,jpg,jpeg,gif,webp,ico,pdf}', { 
+  query: '?inline',
+  import: 'default',
+  eager: true 
+}) as Record<string, string>;
+
+// Binary file extensions that need special handling
+const BINARY_EXTENSIONS = new Set(['.mp3', '.wav', '.ogg', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.pdf']);
+
+function isBinaryFile(path: string): boolean {
+  const ext = path.slice(path.lastIndexOf('.')).toLowerCase();
+  return BINARY_EXTENSIONS.has(ext);
+}
+
+function decodeDataUrl(dataUrl: string): Uint8Array {
+  // data:audio/mpeg;base64,AAAA...
+  const base64 = dataUrl.split(',')[1];
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+// Combined view of all default files
+function getDefaultFiles(): Record<string, string | Uint8Array> {
+  const result: Record<string, string | Uint8Array> = {};
+  
+  // Add text files as-is
+  for (const [path, content] of Object.entries(defaultTextFiles)) {
+    result[path] = content;
+  }
+  
+  // Add binary files decoded from data URLs
+  for (const [path, dataUrl] of Object.entries(defaultBinaryFiles)) {
+    result[path] = decodeDataUrl(dataUrl);
+  }
+  
+  return result;
+}
 
 export interface SkillMetadata {
   name: string;
@@ -170,8 +214,9 @@ ${sections.join('\n')}
  */
 export async function createDefaultSkills(fs: VirtualFS, skillsDir: string = '/workspace/skills'): Promise<void> {
   const prefix = '/src/defaults';
+  const defaultFiles = getDefaultFiles();
   
-  for (const [importPath, content] of Object.entries(defaultSkillFiles)) {
+  for (const [importPath, content] of Object.entries(defaultFiles)) {
     // Convert import path like '/src/defaults/workspace/skills/browser/SKILL.md'
     // to VFS path like '/workspace/skills/browser/SKILL.md'
     const vfsPath = importPath.slice(prefix.length);
@@ -215,8 +260,9 @@ export async function createDefaultSkills(fs: VirtualFS, skillsDir: string = '/w
  */
 export async function createDefaultSharedFiles(fs: VirtualFS): Promise<void> {
   const prefix = '/src/defaults';
+  const defaultFiles = getDefaultFiles();
   
-  for (const [importPath, content] of Object.entries(defaultSkillFiles)) {
+  for (const [importPath, content] of Object.entries(defaultFiles)) {
     const vfsPath = importPath.slice(prefix.length);
     
     // Only copy files that belong under /shared/

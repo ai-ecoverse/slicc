@@ -428,7 +428,7 @@
       .msg-group--continuation .msg--user { padding-left: 0; }
       .msg--assistant {
         background: transparent;
-        align-self: flex-start;
+        align-self: stretch;
       }
       .msg--assistant .msg__content {
         white-space: normal;
@@ -1193,20 +1193,25 @@
       .sprinkle-action-card {
         display: flex;
         flex-direction: column;
+        background: var(--s2-bg-layer-2);
+        border: 1px solid var(--s2-border-subtle);
+        border-radius: var(--s2-radius-l);
+        overflow: hidden;
       }
       .sprinkle-action-card__header {
         display: flex;
         align-items: center;
         gap: var(--s2-spacing-100);
-        padding: var(--s2-spacing-200) var(--s2-spacing-300) 0;
+        padding: var(--s2-spacing-200) var(--s2-spacing-200) var(--s2-spacing-75);
         font-weight: 700;
+        font-size: var(--s2-font-size-100);
         color: var(--s2-content-default);
       }
       .sprinkle-action-card__header .sprinkle-badge {
         margin-left: auto;
       }
       .sprinkle-action-card__body {
-        padding: var(--s2-spacing-100) var(--s2-spacing-300) var(--s2-spacing-200);
+        padding: 0 var(--s2-spacing-200) var(--s2-spacing-100);
         font-size: var(--s2-font-size-75);
         color: var(--s2-content-secondary);
         line-height: 1.5;
@@ -1215,7 +1220,7 @@
         display: flex;
         gap: var(--s2-spacing-100);
         justify-content: flex-end;
-        padding: var(--s2-spacing-100) var(--s2-spacing-300) var(--s2-spacing-200);
+        padding: var(--s2-spacing-100) var(--s2-spacing-200);
         border-top: 1px solid var(--s2-border-subtle);
       }
 

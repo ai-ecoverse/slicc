@@ -41,6 +41,41 @@ Use these classes on chart elements, diagram nodes, or badges:
 
 Use 2–3 colors per visualization, not 6+. Assign by meaning, not by sequence.
 
+## Card structure
+
+Always wrap interactive content in `.sprinkle-action-card` for visual containment. Don't output bare HTML — cards need a visible boundary.
+
+```shtml
+<div class="sprinkle-action-card">
+  <div class="sprinkle-action-card__header">Title <span class="sprinkle-badge sprinkle-badge--notice">Status</span></div>
+  <div class="sprinkle-action-card__body">Description text</div>
+  <div class="sprinkle-action-card__actions">
+    <button class="sprinkle-btn sprinkle-btn--secondary" onclick="slicc.lick('cancel')">Cancel</button>
+    <button class="sprinkle-btn sprinkle-btn--primary" onclick="slicc.lick('confirm')">Confirm</button>
+  </div>
+</div>
+```
+
+### Use existing components inside cards
+
+- **Progress**: Use `.sprinkle-progress-bar` with `--progress` CSS variable, not raw colored divs
+- **Status indicators**: Use `.sprinkle-status-light` with `--positive`/`--negative`/`--notice` variants, not raw colored dots
+- **Stats**: Use `.sprinkle-stat-card` grid, not raw styled divs
+- **Tables**: Use `.sprinkle-table` with `.sprinkle-badge` for severity, not raw tables
+- **Badges**: Use `.sprinkle-badge` variants (`--positive`, `--negative`, `--notice`, `--informative`), not raw colored spans
+
+### Multiple cards in one message
+
+When showing multiple cards, each should be a separate `.sprinkle-action-card`. The iframe padding provides spacing between them. Don't wrap multiple cards in a single container.
+
+### Don't
+
+- Don't hardcode hex colors — use S2 CSS variables
+- Don't build custom progress bars — use `.sprinkle-progress-bar`
+- Don't build custom status dots — use `.sprinkle-status-light`
+- Don't use numbered headings (1. File Operations) inside cards — the `__header` IS the heading
+- Don't put prose/markdown headings between cards — let cards stand alone
+
 ## Design rules
 
 - Use S2 CSS variables for all colors (`var(--s2-content-default)`, `var(--s2-bg-layer-2)`, etc.)

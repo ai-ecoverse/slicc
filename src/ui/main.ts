@@ -720,6 +720,24 @@ async function main(): Promise<void> {
           emitToUI({ type: 'tool_result', messageId: msgId, toolName, result, isError });
         }
       },
+      onToolUI: (scoopJid, toolName, requestId, html) => {
+        // Emit tool UI request to chat panel
+        // Always emit regardless of selection - the chat panel handles missing messages with retries
+        // and this prevents tool UI from hanging when a scoop is not selected
+        const msgId = scoopCurrentMessageId.get(scoopJid);
+        if (msgId) {
+          emitToUI({ type: 'tool_ui', messageId: msgId, toolName, requestId, html });
+        } else {
+          log.warn('Cannot emit tool_ui - no message ID for scoop', { scoopJid, requestId });
+        }
+      },
+      onToolUIDone: (scoopJid, requestId) => {
+        // Always emit to ensure renderers are disposed, regardless of selection
+        const msgId = scoopCurrentMessageId.get(scoopJid);
+        if (msgId) {
+          emitToUI({ type: 'tool_ui_done', messageId: msgId, requestId });
+        }
+      },
       onIncomingMessage: (scoopJid, message) => {
         // Buffer incoming messages (delegations, etc.) for display
         const chatMsg: ChatMessage = {
@@ -1222,6 +1240,32 @@ async function main(): Promise<void> {
   }
 
   log.info('Orchestrator initialized — cone+scoops ready', { scoopCount: orchestrator.getScoops().length });
+
+  // Check for auto-prompt from URL parameter (for debugging, dev mode only)
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    const urlParams = new URLSearchParams(window.location.search);
+    const autoPrompt = urlParams.get('prompt');
+    if (autoPrompt && selectedScoop) {
+      log.info('Auto-submitting prompt from URL', { prompt: autoPrompt });
+      // Clear previous state first - both the chat panel UI and the orchestrator data
+      await layout.panels.chat.clearSession();
+      await layout.onClearChat?.();
+      await layout.onClearFilesystem?.();
+      // Small delay to ensure UI is ready after clearing
+      setTimeout(() => {
+        orchestrator.handleMessage({
+          id: `auto-${Date.now().toString(36)}`,
+          senderId: 'user',
+          senderName: 'User',
+          channel: 'web',
+          timestamp: new Date().toISOString(),
+          content: autoPrompt,
+          chatJid: selectedScoop!.jid,
+          fromAssistant: false,
+        });
+      }, 500);
+    }
+  }
 
   // Initialize operational telemetry (fire-and-forget)
   initTelemetry().catch(() => {});

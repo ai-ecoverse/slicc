@@ -7,11 +7,36 @@ Use these CSS classes in `.shtml` sprinkles. Do NOT write custom CSS — these c
 `.sprinkle-stat-card` — Stat card with `.value` + `.label` children.
 
 ## Action Card (Inline)
-`.sprinkle-action-card` — Compact card for inline chat interactions (` ```shtml ` blocks). Children:
-- `__header` — Title row. Put a `.sprinkle-badge` inside for status (auto right-aligned).
-- `__body` — Description text.
-- `__actions` — Right-aligned button row with top border.
+`.sprinkle-action-card` — Compact card with background and border for inline chat interactions (` ```shtml ` blocks). Children:
+- `__header` — Bold title row. Put a `.sprinkle-badge` inside for status (auto right-aligned).
+- `__body` — Secondary-color description text.
+- `__actions` — Right-aligned button row with top border separator.
 
+All three children are optional. Minimal card (just actions):
+```html
+<div class="sprinkle-action-card">
+  <div class="sprinkle-action-card__actions">
+    <button class="sprinkle-btn sprinkle-btn--primary" onclick="slicc.lick('go')">Go</button>
+  </div>
+</div>
+```
+
+Use existing `.sprinkle-*` components inside the body:
+```html
+<div class="sprinkle-action-card">
+  <div class="sprinkle-action-card__header">Build status</div>
+  <div class="sprinkle-action-card__body">
+    <div class="sprinkle-progress-bar" style="--progress:67%">
+      <div class="sprinkle-progress-bar__header">
+        <span class="label">Tests</span><span class="value">67%</span>
+      </div>
+      <div class="sprinkle-progress-bar__track"><div class="fill" style="width:67%"></div></div>
+    </div>
+  </div>
+</div>
+```
+
+Full card with all sections:
 ```html
 <div class="sprinkle-action-card">
   <div class="sprinkle-action-card__header">

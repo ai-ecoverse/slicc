@@ -13,7 +13,7 @@ const BRIDGE_SCRIPT = `(function() {
   window.slicc = window.bridge = {
     lick: function(event) {
       var action = typeof event === 'string' ? event : event.action;
-      var data = typeof event === 'string' ? undefined : event.data;
+      var data = typeof event === 'string' ? undefined : ('data' in event ? event.data : event);
       parent.postMessage({ type: 'inline-sprinkle-lick', action: action, data: data }, '*');
     }
   };
@@ -33,8 +33,9 @@ export interface InlineSprinkleInstance {
 
 /**
  * Mount an inline sprinkle iframe in the given container element.
+ * Exported for reuse by tool-ui-renderer (sprinkle chat).
  */
-function mountInlineSprinkle(
+export function mountInlineSprinkle(
   container: HTMLElement,
   content: string,
   onLick: (action: string, data: unknown) => void,
@@ -45,11 +46,15 @@ function mountInlineSprinkle(
 <html><head>
 <meta charset="utf-8">
 <style>${themeCSS}</style>
-<style>html,body{margin:0;padding:0;overflow:hidden;background:transparent}
+<style>html,body{margin:0;padding:0;overflow:hidden;background:transparent;box-sizing:border-box}
+*,*::before,*::after{box-sizing:inherit}
 body{font-family:var(--s2-font-family, sans-serif);font-size:13px;color:var(--s2-content-default)}</style>
-<style>.sprinkle-inline{padding:var(--s2-spacing-200)}
+<style>.sprinkle-inline{padding:var(--s2-spacing-100)}
 .sprinkle-inline .sprinkle-btn{padding:4px 12px;font-size:12px;height:28px}
 .sprinkle-inline .sprinkle-card{box-shadow:none;margin:0}
+.sprinkle-inline .sprinkle-action-card{margin:0;width:100%}
+.sprinkle-inline .sprinkle-action-card .sprinkle-table{width:100%}
+.sprinkle-inline .sprinkle-grid{width:100%}
 /* Pre-styled form elements for inline widgets */
 input[type="range"]{width:100%;height:4px;-webkit-appearance:none;appearance:none;background:var(--s2-gray-300);border-radius:2px;outline:none;cursor:default}
 input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:var(--s2-accent);cursor:default;border:2px solid var(--s2-bg-base)}

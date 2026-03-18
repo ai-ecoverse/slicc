@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: auto; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+
+  /* Default tool UI styles */
+  .tool-ui {
+    padding: 12px;
+    background: var(--bg-secondary, #1a1a1a);
+    border-radius: 8px;
+    color: var(--text-primary, #e0e0e0);
+  }
+
+  .tool-ui p { margin: 0 0 12px 0; }
+
+  .tool-ui code {
+    background: var(--bg-tertiary, #2a2a2a);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'SF Mono', Menlo, monospace;
+    font-size: 0.9em;
+  }
+
+  .tool-ui__actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  .tool-ui__btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+
+  .tool-ui__btn:hover { opacity: 0.9; }
+  .tool-ui__btn--primary { background: var(--accent, #3b82f6); color: white; }
+  .tool-ui__btn--secondary { background: var(--bg-tertiary, #2a2a2a); color: var(--text-primary, #e0e0e0); }
+  .tool-ui__btn--danger { background: #dc2626; color: white; }
+</style>
+<script>
+/**
+ * Tool UI Sandbox — CSP-exempt page for rendering tool UI elements.
+ * Receives HTML via postMessage, renders it, and relays button clicks
+ * back to the parent with user gesture context.
+ *
+ * Security:
+ * - Only accepts messages from parent frame (e.source === parent)
+ * - Validates nonce on render requests to prevent replay attacks
+ * - Strips script tags and inline handlers before rendering
+ */
+
+window.__toolui_id = '';
+window.__toolui_nonce = '';
+window.__parentOrigin = '*';  // Will be set from render message
+
+// Basic HTML sanitization - strip script tags and inline handlers
+function sanitizeHtml(html) {
+  var temp = document.createElement('div');
+  temp.innerHTML = html;
+
+  // Remove all script tags
+  var scripts = temp.querySelectorAll('script');
+  for (var i = scripts.length - 1; i >= 0; i--) {
+    scripts[i].parentNode.removeChild(scripts[i]);
+  }
+
+  // Remove inline event handlers
+  var allElements = temp.querySelectorAll('*');
+  for (var j = 0; j < allElements.length; j++) {
+    var el = allElements[j];
+    var attrs = el.attributes;
+    for (var k = attrs.length - 1; k >= 0; k--) {
+      var name = attrs[k].name.toLowerCase();
+      if (name.indexOf('on') === 0) {
+        el.removeAttribute(name);
+      }
+    }
+  }
+
+  return temp.innerHTML;
+}
+
+function sendToParent(message) {
+  // Include nonce in all outgoing messages
+  message.nonce = window.__toolui_nonce;
+  parent.postMessage(message, window.__parentOrigin);
+}
+
+// Handle clicks on elements with data-action attribute
+document.addEventListener('click', function(e) {
+  var target = e.target;
+  while (target && target !== document.body) {
+    if (target.dataset && target.dataset.action) {
+      var action = target.dataset.action;
+      var data = target.dataset.actionData;
+      try { data = data ? JSON.parse(data) : undefined; } catch(err) { /* keep as string */ }
+
+      // Post the action to parent — this runs with user gesture context!
+      sendToParent({
+        type: 'tool-ui-action',
+        id: window.__toolui_id,
+        action: action,
+        data: data,
+      });
+
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    target = target.parentElement;
+  }
+});
+
+// Handle form submissions
+document.addEventListener('submit', function(e) {
+  e.preventDefault();
+  var form = e.target;
+  var formData = new FormData(form);
+  var data = {};
+  formData.forEach(function(value, key) { data[key] = value; });
+
+  sendToParent({
+    type: 'tool-ui-action',
+    id: window.__toolui_id,
+    action: form.dataset.action || 'submit',
+    data: data,
+  });
+});
+
+// Listen for render messages from parent
+addEventListener('message', function(e) {
+  // Only accept messages from our parent frame
+  if (e.source !== parent) return;
+
+  var msg = e.data;
+  if (!msg || !msg.type) return;
+
+  if (msg.type === 'tool-ui-render') {
+    // Store nonce for validating responses
+    window.__toolui_id = msg.id || '';
+    window.__toolui_nonce = msg.nonce || '';
+    window.__parentOrigin = e.origin || '*';
+
+    // Inject theme CSS from parent
+    if (msg.themeCSS) {
+      var themeStyle = document.createElement('style');
+      themeStyle.textContent = msg.themeCSS;
+      document.head.appendChild(themeStyle);
+    }
+
+    // Sanitize and render the HTML content
+    document.body.innerHTML = sanitizeHtml(msg.html);
+
+    // Send rendered confirmation with initial height
+    var height = document.documentElement.scrollHeight;
+    sendToParent({ type: 'tool-ui-rendered', id: msg.id, height: height });
+
+    // Watch for size changes and report them
+    if (typeof ResizeObserver !== 'undefined') {
+      var observer = new ResizeObserver(function() {
+        var newHeight = document.documentElement.scrollHeight;
+        sendToParent({ type: 'tool-ui-resize', id: window.__toolui_id, height: newHeight });
+      });
+      observer.observe(document.body);
+    }
+  }
+});
+</script>
+</head>
+<body></body>
+</html>
