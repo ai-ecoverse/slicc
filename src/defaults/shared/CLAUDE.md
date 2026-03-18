@@ -129,6 +129,9 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **open <path|url>** — Open a URL or single VFS file in a new browser tab. Use `open --view` when you need to see an image inline. `.shtml` files are opened as sprinkles instead of browser tabs.
 - **pbcopy / pbpaste** — Clipboard commands. `echo hello | pbcopy` copies stdin to clipboard, `pbpaste` outputs clipboard contents. Uses `navigator.clipboard` API.
 - **xclip / xsel** — Clipboard commands that auto-detect direction: `echo hello | xclip` copies (stdin present), `xclip` alone pastes (no stdin).
+- **say** — Text-to-speech using Web Speech API. `say hello world`, `say -v Samantha hello` (voice selection), `say -r 1.5 fast speech` (rate 0.1-10), `say --list` (list voices).
+- **afplay** — Play audio files using Web Audio API. `afplay /path/to/audio.mp3`, `afplay -v 0.5 file.wav` (volume 0-1), `afplay -r 1.5 file.mp3` (rate 0.25-4).
+- **chime** — Play a notification chime sound. Alias for `afplay /shared/sounds/chime.mp3`.
 - **playwright-cli** — Browser automation (built-in, no SKILL.md lookup needed). Key subcommands: `tab-list`, `tab-select <index>`, `snapshot`, `screenshot [--filename=<path>]`, `open <url>`, `click <ref>`, `fill <ref> "text"`, `close`. Run `playwright-cli --help` for full list.
 
 ## Environment: This Is NOT a Regular Linux Box
