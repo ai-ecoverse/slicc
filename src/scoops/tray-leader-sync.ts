@@ -300,6 +300,10 @@ export class LeaderSyncManager {
         this.handleCDPResponse(message);
         break;
       }
+      case 'cdp.event': {
+        this.handleCDPEvent(bootstrapId, message.method, message.params, message.sessionId);
+        break;
+      }
       case 'tab.open': {
         const { requestId, targetRuntimeId, url } = message;
         if (targetRuntimeId === 'leader') {
@@ -592,6 +596,30 @@ export class LeaderSyncManager {
     const requester = this.followers.get(route.requesterBootstrapId);
     if (requester) {
       sendCDPResponse(requester.sync, requestId, assembled.result, assembled.error);
+    }
+  }
+
+  /**
+   * Handle a CDP event from a follower. Routes the event to the leader's
+   * RemoteCDPTransport for that follower so that `remoteTransport.on(event, handler)` fires.
+   */
+  private handleCDPEvent(bootstrapId: string, method: string, params: Record<string, unknown>, sessionId?: string): void {
+    // Find the runtimeId for this follower
+    let followerRuntimeId: string | undefined;
+    for (const [runtimeId, bId] of this.runtimeToBootstrap) {
+      if (bId === bootstrapId) {
+        followerRuntimeId = runtimeId;
+        break;
+      }
+    }
+    if (!followerRuntimeId) return;
+
+    // Deliver the event to all RemoteCDPTransports for this follower's runtime
+    const prefix = `${followerRuntimeId}:`;
+    for (const [key, transport] of this.remoteTransports) {
+      if (key.startsWith(prefix)) {
+        transport.handleEvent(method, params);
+      }
     }
   }
 

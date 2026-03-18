@@ -263,6 +263,13 @@ export class FollowerSyncManager implements AgentHandle {
         this.routeCDPResponse(message);
         break;
       }
+      case 'cdp.event': {
+        // Route CDP events from the leader to the appropriate RemoteCDPTransport
+        for (const transport of this.remoteTransports.values()) {
+          transport.handleEvent(message.method, message.params);
+        }
+        break;
+      }
       case 'tab.open': {
         this.executeLocalTabOpen(message.requestId, message.url);
         break;

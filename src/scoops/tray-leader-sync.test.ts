@@ -1563,4 +1563,121 @@ describe('LeaderSyncManager', () => {
       expect(transport2.state).toBe('disconnected');
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // CDP event forwarding
+  // ---------------------------------------------------------------------------
+
+  describe('CDP event forwarding', () => {
+    it('routes cdp.event from follower to leader RemoteCDPTransport', () => {
+      const { manager } = createManager();
+      const ch1 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+
+      // Follower advertises targets so leader knows its runtime mapping
+      ch1.simulateMessage({
+        type: 'targets.advertise',
+        targets: [{ targetId: 'tab1', title: 'Tab 1', url: 'https://example.com' }],
+        runtimeId: 'follower-b1',
+      });
+
+      // Leader creates a remote transport for the follower
+      const transport = manager.createRemoteTransport('follower-b1', 'tab1');
+      const events: Record<string, unknown>[] = [];
+      transport.on('Page.frameNavigated', (params) => events.push(params));
+
+      // Follower sends a cdp.event
+      ch1.simulateMessage({
+        type: 'cdp.event',
+        method: 'Page.frameNavigated',
+        params: { frame: { url: 'https://navigated.com', id: 'main' } },
+        sessionId: 'sess-1',
+      } as any);
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toEqual({ frame: { url: 'https://navigated.com', id: 'main' } });
+    });
+
+    it('does not deliver cdp.event for unknown follower bootstrapId', () => {
+      const { manager } = createManager();
+      const ch1 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+
+      // Do NOT advertise targets — no runtimeId mapping exists
+
+      // Create a transport for some runtime (just to have one)
+      const transport = manager.createRemoteTransport('some-runtime', 'tab1');
+      const events: Record<string, unknown>[] = [];
+      transport.on('Page.frameNavigated', (params) => events.push(params));
+
+      // Follower sends a cdp.event — but bootstrap has no runtimeId mapping
+      ch1.simulateMessage({
+        type: 'cdp.event',
+        method: 'Page.frameNavigated',
+        params: { frame: { url: 'https://navigated.com', id: 'main' } },
+      } as any);
+
+      // Should not be delivered since follower has no runtimeId mapping
+      expect(events).toHaveLength(0);
+    });
+
+    it('delivers cdp.event to all remote transports for the same follower runtime', () => {
+      const { manager } = createManager();
+      const ch1 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+
+      ch1.simulateMessage({
+        type: 'targets.advertise',
+        targets: [
+          { targetId: 'tab1', title: 'Tab 1', url: 'https://example.com' },
+          { targetId: 'tab2', title: 'Tab 2', url: 'https://example2.com' },
+        ],
+        runtimeId: 'follower-b1',
+      });
+
+      const transport1 = manager.createRemoteTransport('follower-b1', 'tab1');
+      const transport2 = manager.createRemoteTransport('follower-b1', 'tab2');
+      const events1: Record<string, unknown>[] = [];
+      const events2: Record<string, unknown>[] = [];
+      transport1.on('Page.loadEventFired', (params) => events1.push(params));
+      transport2.on('Page.loadEventFired', (params) => events2.push(params));
+
+      ch1.simulateMessage({
+        type: 'cdp.event',
+        method: 'Page.loadEventFired',
+        params: { timestamp: 123 },
+      } as any);
+
+      expect(events1).toHaveLength(1);
+      expect(events2).toHaveLength(1);
+    });
+
+    it('stops delivering events after follower disconnect', () => {
+      const { manager } = createManager();
+      const ch1 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+
+      ch1.simulateMessage({
+        type: 'targets.advertise',
+        targets: [{ targetId: 'tab1', title: 'Tab 1', url: 'https://example.com' }],
+        runtimeId: 'follower-b1',
+      });
+
+      const transport = manager.createRemoteTransport('follower-b1', 'tab1');
+      const events: Record<string, unknown>[] = [];
+      transport.on('Page.frameNavigated', (params) => events.push(params));
+
+      // First event — should be delivered
+      ch1.simulateMessage({
+        type: 'cdp.event',
+        method: 'Page.frameNavigated',
+        params: { frame: { url: 'https://first.com', id: 'main' } },
+      } as any);
+      expect(events).toHaveLength(1);
+
+      // Remove follower — transport gets disconnected, runtime mapping removed
+      manager.removeFollower('b1');
+      expect(transport.state).toBe('disconnected');
+    });
+  });
 });
