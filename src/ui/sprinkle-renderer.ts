@@ -28,7 +28,6 @@ export class SprinkleRenderer {
   private bridge: SprinkleBridgeAPI;
   private scripts: HTMLScriptElement[] = [];
   private iframe: HTMLIFrameElement | null = null;
-  private isIframeMode = false;
   private messageHandler: ((event: MessageEvent) => void) | null = null;
 
   constructor(container: HTMLElement, bridge: SprinkleBridgeAPI) {
@@ -262,11 +261,10 @@ export class SprinkleRenderer {
     }
 
     const iframe = document.createElement('iframe');
-    iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+    iframe.setAttribute('sandbox', 'allow-scripts');
     iframe.style.cssText = 'width: 100%; flex: 1; border: none; min-height: 0;';
     iframe.srcdoc = modified;
     this.iframe = iframe;
-    this.isIframeMode = true;
 
     // Wait for iframe to load
     await new Promise<void>((resolve, reject) => {
@@ -387,7 +385,6 @@ export class SprinkleRenderer {
       this.iframe.remove();
       this.iframe = null;
     }
-    this.isIframeMode = false;
     for (const script of this.scripts) {
       script.remove();
     }

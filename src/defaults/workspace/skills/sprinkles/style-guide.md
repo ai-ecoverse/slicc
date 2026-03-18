@@ -360,23 +360,23 @@ Apply after the user **confirms** a change — not on every lick. Typical trigge
 
 The cone sets backend context in the scoop brief (option B). The scoop knows whether it has write access based on its instructions:
 
-- **EDS site** (URL matches `*--*--*.aem.page|live`): use `eds get`, `eds put`, `eds preview` commands
+- **EDS site** (URL matches `*--*--*.aem.page|live`): use `aem get`, `aem put`, `aem preview` commands
 - **No write access** (external site, unknown CMS): push `fix-error` explaining why
 
 ### EDS apply workflow (example)
 
 ```bash
 # 1. Fetch current page HTML
-eds get <eds-url> --output /scoops/<scoop-name>/page.html
+aem get <eds-url> --output /scoops/<scoop-name>/page.html
 
 # 2. Read and modify the HTML (e.g. update <title>, <meta>, headings)
 #    Use edit_file or read_file + write_file
 
 # 3. Write back
-eds put <eds-url> /scoops/<scoop-name>/page.html
+aem put <eds-url> /scoops/<scoop-name>/page.html
 
 # 4. Trigger preview
-eds preview <eds-url>
+aem preview <eds-url>
 ```
 
 ### Confirming back to the sprinkle

@@ -878,7 +878,7 @@ for (var p = 0; p < presetButtons.length; p++) {
     switch (preset) {
       case 'sample':
         resetPreview();
-        violations = JSON.parse(JSON.stringify(presetData.sample));
+        violations = presetData.sample ? JSON.parse(JSON.stringify(presetData.sample)) : [];
         break;
       case 'compliant':
         setCompliantPreview();
@@ -886,7 +886,7 @@ for (var p = 0; p < presetButtons.length; p++) {
         break;
       case 'offbrand':
         setOffbrandPreview();
-        violations = JSON.parse(JSON.stringify(presetData.offbrand));
+        violations = presetData.offbrand ? JSON.parse(JSON.stringify(presetData.offbrand)) : [];
         break;
       case 'newbrand':
         resetPreview();
