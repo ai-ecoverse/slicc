@@ -117,6 +117,7 @@ Browser automation is also exposed as shell commands: `playwright-cli`, `playwri
 - **Default targeting**: `open` / `tab-new` open in the background by default, but if there is no current browser target yet, the first opened tab becomes current so `snapshot` works immediately.
 - **Fresh refs required**: `click`, `fill`, `goto`, `go-back`, `go-forward`, `reload`, and similar state-changing commands invalidate prior snapshot refs. After history navigation or reload, run `snapshot` again before using refs.
 - **Cookie convenience forms**: `cookie-set <name> <value>` and `cookie-delete <name>` use the current page URL when `--domain` and `--path` are omitted.
+- **Teleport restores auth state**: `playwright teleport --start=<regex> --return=<regex>` transfers both cookies and page storage (`localStorage` + `sessionStorage`) back to the leader so SPA-style auth handoffs can resume without a manual storage workaround.
 - **Unexpected dialogs**: attached pages auto-dismiss unexpected JavaScript dialogs so a stray `alert()` or similar modal does not stall automation indefinitely.
 
 ### Common flow

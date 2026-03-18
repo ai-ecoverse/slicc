@@ -87,6 +87,16 @@ playwright-cli go-forward  # history.forward()
 playwright-cli reload      # Reload page
 ```
 
+### Teleport
+
+```bash
+playwright-cli teleport --start=<regex> --return=<regex> [--timeout=<s>] [--runtime=<id>]
+playwright-cli open <url> --teleport-start=<regex> --teleport-return=<regex>
+playwright-cli goto <url> --teleport-start=<regex> --teleport-return=<regex>
+```
+
+Teleport is for leader/follower tray auth handoffs. When `--start` matches on the leader, the current auth URL is opened on a follower for the human to finish login. When `--return` matches on the follower, teleport restores both cookies and page storage (`localStorage` + `sessionStorage`) back into the leader so SPA-style app state comes back too.
+
 ### Screenshots
 
 ```bash

@@ -2025,7 +2025,7 @@ describe('playwright-cli teleport trigger and capture', () => {
     }
   });
 
-  it('captures cookies when follower return pattern matches', async () => {
+  it('captures cookies + storage when follower return pattern matches', async () => {
     // Phase 1: leader poll triggers (matching start pattern immediately)
     // Phase 2: follower starts on the intercepted auth URL, then returns to the app
     let leaderCallCount = 0;
@@ -2100,7 +2100,7 @@ describe('playwright-cli teleport trigger and capture', () => {
     });
 
     // Verify leader navigated to originalLeaderUrl (not the follower's callback URL)
-    expect(browser.sendCDP).toHaveBeenCalledWith('Page.navigate', { url: 'https://app.example.com/dashboard' });
+    expect(browser.navigate).toHaveBeenCalledWith('https://app.example.com/dashboard');
     expect(browser.sendCDP).toHaveBeenCalledWith(
       'Page.addScriptToEvaluateOnNewDocument',
       expect.objectContaining({
@@ -2116,6 +2116,78 @@ describe('playwright-cli teleport trigger and capture', () => {
 
     // Verify follower tab was closed (raw targetId gets prefixed by triggerTeleport)
     expect(browser.closePage).toHaveBeenCalledWith('f-runtime:remote-tab-1');
+  });
+
+  it('keeps leader storage replay installed until leader navigation resolves', async () => {
+    let leaderCallCount = 0;
+    let followerCallCount = 0;
+    let storageCaptureCount = 0;
+    let resolveNavigate: (() => void) | undefined;
+    (browser.navigate as ReturnType<typeof vi.fn>).mockImplementation(() => new Promise<void>((resolve) => {
+      resolveNavigate = resolve;
+    }));
+
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
+      if (expr === 'window.location.href') {
+        const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+        if (!state.teleportWatcher || state.teleportWatcher.phase === 'armed') {
+          leaderCallCount++;
+          return leaderCallCount <= 1
+            ? 'https://app.example.com/dashboard'
+            : 'https://login.example.com/sso';
+        }
+        followerCallCount++;
+        if (followerCallCount <= 1) return 'https://login.example.com/sso';
+        return 'https://app.example.com/callback';
+      }
+      if (expr.includes('window.localStorage')) {
+        storageCaptureCount++;
+        return storageCaptureCount === 1
+          ? JSON.stringify({
+              origin: 'https://login.example.com',
+              localStorage: { leaderEmail: 'person@example.com' },
+              sessionStorage: { leaderStep: 'email-entered' },
+            })
+          : JSON.stringify({
+              origin: 'https://app.example.com',
+              localStorage: { followerToken: 'transferred-token' },
+              sessionStorage: { followerStep: 'authenticated' },
+            });
+      }
+      return JSON.stringify({
+        url: 'https://app.example.com/callback',
+        title: 'Authenticated',
+        bodySnippet: 'Auth completed',
+      });
+    });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(['teleport', '--start=login\\.example\\.com', '--return=app\\.example\\.com'], {} as any);
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(state.teleportWatcher!.phase).toBe('capturing');
+    expect(browser.navigate).toHaveBeenCalledWith('https://app.example.com/dashboard');
+
+    const removeCallsBeforeNavigate = (browser.sendCDP as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([method]) => method === 'Page.removeScriptToEvaluateOnNewDocument',
+    );
+    expect(removeCallsBeforeNavigate).toHaveLength(1);
+
+    const completion = state.teleportWatcher!.completionPromise!;
+    resolveNavigate?.();
+    await completion;
+
+    const removeCallsAfterNavigate = (browser.sendCDP as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([method]) => method === 'Page.removeScriptToEvaluateOnNewDocument',
+    );
+    expect(removeCallsAfterNavigate).toHaveLength(2);
+    expect(state.teleportWatcher!.phase).toBe('done');
   });
 
   it('keeps follower storage replay installed until capture and scopes it to the snapshot origin', async () => {

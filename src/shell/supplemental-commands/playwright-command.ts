@@ -37,7 +37,7 @@ export function setPlaywrightTeleportConnectedFollowers(getter: (() => GetConnec
 /** Teleport watcher state machine phases. */
 export type TeleportPhase = 'armed' | 'teleporting' | 'waitingForAuth' | 'waitingForReturn' | 'capturing' | 'done' | 'timedOut';
 
-/** Teleport watcher that monitors leader tab navigation and triggers cookie teleport. */
+/** Teleport watcher that monitors leader tab navigation and triggers auth-state teleport. */
 export interface TeleportWatcher {
   startPattern: RegExp;
   returnPattern: RegExp;
@@ -50,7 +50,7 @@ export interface TeleportWatcher {
   leaderTargetId?: string;
   /** The composite targetId of the follower tab (runtimeId:localTargetId). */
   followerTargetId?: string;
-  /** The leader tab's URL before the SSO redirect, for navigation after cookie injection. */
+  /** The leader tab's URL before the SSO redirect, for navigation after auth-state injection. */
   originalLeaderUrl?: string;
   /** Promise that resolves/rejects when the teleport cycle completes. */
   completionPromise?: Promise<string>;
@@ -943,7 +943,7 @@ async function triggerTeleport(
 }
 
 /**
- * Capture cookies from the follower, inject into the leader, navigate leader to the final URL.
+ * Capture cookies + app state from the follower, inject into the leader, navigate leader to the final URL.
  */
 async function captureCookiesAndComplete(
   browser: BrowserAPI,
@@ -953,7 +953,7 @@ async function captureCookiesAndComplete(
 ): Promise<void> {
   if (watcher.phase !== 'teleporting' && watcher.phase !== 'waitingForReturn') return;
   watcher.phase = 'capturing';
-  log.info('Capturing cookies from follower', { followerTargetId: watcher.followerTargetId, runtimeId });
+  log.info('Capturing auth state from follower', { followerTargetId: watcher.followerTargetId, runtimeId });
 
   // Stop polling and timeout
   if (watcher.pollInterval) { clearInterval(watcher.pollInterval); watcher.pollInterval = undefined; }
@@ -999,6 +999,7 @@ async function captureCookiesAndComplete(
     } catch (err) {
       log.warn('Could not capture follower storage', { error: String(err) });
     }
+    const followerStorageEntries = countTeleportStorageEntries(followerStorage);
 
     await logFollowerTeleportDiagnosticsOnce(browser, watcher, 'capture');
     await removeFollowerTeleportStorageScript(watcher, 'capture');
@@ -1011,7 +1012,7 @@ async function captureCookiesAndComplete(
       log.warn('Failed to close follower tab', { error: String(err) });
     }
 
-    // 4. Switch back to the leader tab and inject cookies
+    // 4. Switch back to the leader tab and inject cookies + app state
     const leaderTargetId = state.currentTarget;
     const navigateUrl = watcher.originalLeaderUrl ?? finalUrl;
     if (leaderTargetId) {
@@ -1026,29 +1027,39 @@ async function captureCookiesAndComplete(
         leaderTargetId,
         'leader',
       );
-      // Navigate leader to the original URL (before SSO redirect), falling back to finalUrl
+      // Navigate leader to the original URL (before SSO redirect), falling back to finalUrl.
+      // Keep the replay script installed through the actual navigation/load so auth-state
+      // restoration is not a best-effort race against Page.navigate returning.
       try {
         if (navigateUrl) {
-          log.info('Navigating leader after cookie injection', { navigateUrl, originalLeaderUrl: watcher.originalLeaderUrl, finalUrl, leaderTargetId });
-          await browser.sendCDP('Page.navigate', { url: navigateUrl });
+          log.info('Navigating leader after auth-state injection', {
+            navigateUrl,
+            originalLeaderUrl: watcher.originalLeaderUrl,
+            finalUrl,
+            leaderTargetId,
+            storageOrigin: followerStorage.origin || '(unknown)',
+            storageEntries: followerStorageEntries,
+          });
+          await browser.navigate(navigateUrl);
         }
       } finally {
         await removeLeaderStorageScript?.();
       }
     } else {
-      log.warn('No leader tab available for cookie injection');
+      log.warn('No leader tab available for auth-state injection');
     }
 
     // 5. Complete
     watcher.phase = 'done';
     cleanupTeleportWatcher(watcher);
     const domainNote = cookies.length > 0 ? ` (${formatCookieDomainSummary(cookies as Array<{ domain?: string }>)})` : '';
+    const storageNote = followerStorageEntries > 0 ? ` + ${followerStorageEntries} storage entr${followerStorageEntries === 1 ? 'y' : 'ies'}` : '';
     const landedNote = navigateUrl ? ` (navigated to ${navigateUrl})` : '';
-    const resultMsg = `Teleported ${cookies.length} cookie(s)${domainNote} from ${runtimeId}${landedNote}`;
+    const resultMsg = `Teleported ${cookies.length} cookie(s)${domainNote}${storageNote} from ${runtimeId}${landedNote}`;
     log.info('Teleport completed successfully', { result: resultMsg });
     watcher.resolveBlock?.(resultMsg);
   } catch (err) {
-    log.error('Cookie capture failed', { error: String(err) });
+    log.error('Teleport auth-state capture failed', { error: String(err) });
     await removeFollowerTeleportStorageScript(watcher, 'capture-error');
     watcher.phase = 'done';
     cleanupTeleportWatcher(watcher);
@@ -1094,13 +1105,14 @@ Commands:
        [--teleport-start=<regex>] [--teleport-return=<regex>] [--timeout=<s>]
                          Open a new tab (default: background). VFS paths are served via preview service worker.
                          Use --runtime to open the tab on a remote tray runtime (e.g. --runtime=follower-abc).
-                         Use --teleport-start/--teleport-return to arm cookie teleport.
+                         Use --teleport-start/--teleport-return to arm auth-state teleport.
   goto|navigate <url> [--teleport-start=<regex>] [--teleport-return=<regex>]
                          Navigate current tab to URL. Supports teleport flags.
   teleport --start <regex> --return <regex> [--timeout=<s>] [--runtime=<id>]
                          Arm a teleport watcher on the current tab. Triggers when the
                          leader tab URL matches --start, opens the URL on a follower
-                         for human auth. Captures cookies when follower URL matches --return.
+                         for human auth, then restores cookies + page storage when the
+                         follower URL matches --return.
   teleport --off         Disarm the active teleport watcher.
   teleport --list        List available follower runtimes for teleport.
   click <ref>            Click element by ref (e.g. e5)
