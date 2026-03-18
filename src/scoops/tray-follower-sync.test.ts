@@ -857,6 +857,7 @@ describe('FollowerSyncManager', () => {
     });
 
     it('handles cookie.teleport.request with url — calls executeTeleportAuth', async () => {
+      vi.useFakeTimers();
       const channel = new FakeChannel();
       // The transport needs to support on/off for the auth flow,
       // plus the send calls for createTarget, attachToTarget, Page.enable, Network.getCookies, closeTarget
@@ -920,7 +921,11 @@ describe('FollowerSyncManager', () => {
         });
       }
 
-      // Flush again for post-redirect awaits (getCookies, closeTarget, send response)
+      // Flush again for post-redirect awaits
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+
+      // Advance past the 2s settling delay before cookie capture
+      vi.advanceTimersByTime(2000);
       for (let i = 0; i < 10; i++) await Promise.resolve();
 
       const sent = channel.parseSent();
@@ -934,6 +939,7 @@ describe('FollowerSyncManager', () => {
       }
       expect(onNotification).toHaveBeenCalledWith(expect.stringContaining('Authentication requested'));
       expect(fakeBrowserTransport.send).toHaveBeenCalledWith('Target.createTarget', { url: 'https://app.site.com', background: false });
+      vi.useRealTimers();
     });
   });
 

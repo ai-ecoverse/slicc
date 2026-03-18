@@ -103,6 +103,28 @@ function isAlreadyExistsError(err: unknown): boolean {
   return err instanceof Error && err.message.includes('EEXIST');
 }
 
+/** Fallback for React-controlled inputs: uses native value setter + dispatches input/change events. */
+const REACT_FILL_FALLBACK_FUNCTION = `function(text) {
+  const el = this;
+  const tag = el.tagName;
+  const proto = tag === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+  const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+  if (nativeSetter) {
+    nativeSetter.call(el, text);
+  } else {
+    el.value = text;
+  }
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+}`;
+
+/** Read back the current value of an input/textarea/contenteditable. */
+const READ_INPUT_VALUE_FUNCTION = `function() {
+  const el = this;
+  if (el.isContentEditable) return el.textContent || '';
+  return el.value ?? '';
+}`;
+
 const CLEAR_FOCUSABLE_ELEMENT_FUNCTION = `function() {
   const el = this;
   if (!(el instanceof HTMLElement)) return false;
@@ -746,6 +768,23 @@ export function createPlaywrightCommand(
               }, sessionId!);
             }
             await browser.type(fillText);
+            // Verify value and use native setter fallback for React-controlled inputs
+            if (obj?.objectId) {
+              const readResult = await transport.send('Runtime.callFunctionOn', {
+                objectId: obj.objectId,
+                functionDeclaration: READ_INPUT_VALUE_FUNCTION,
+                returnByValue: true,
+              }, sessionId!);
+              const currentValue = (readResult['result'] as { value?: string })?.value ?? '';
+              if (currentValue !== fillText) {
+                await transport.send('Runtime.callFunctionOn', {
+                  objectId: obj.objectId,
+                  functionDeclaration: REACT_FILL_FALLBACK_FUNCTION,
+                  arguments: [{ value: fillText }],
+                  returnByValue: true,
+                }, sessionId!);
+              }
+            }
             state.snapshots.delete(targetId);
             result = { stdout: `Filled ${ref} with: ${fillText}\n`, stderr: '', exitCode: 0 }; break;
           }
@@ -766,6 +805,25 @@ export function createPlaywrightCommand(
             })()`,
           );
           await browser.type(fillText);
+          // Verify value and use native setter fallback for React-controlled inputs
+          {
+            const currentValue = await browser.evaluate(
+              `(function() {
+                const el = document.querySelector(${JSON.stringify(selector.split(',')[0].trim())});
+                if (!el) return '';
+                return (${READ_INPUT_VALUE_FUNCTION}).call(el);
+              })()`,
+            ) as string;
+            if (currentValue !== fillText) {
+              await browser.evaluate(
+                `(function() {
+                  const el = document.querySelector(${JSON.stringify(selector.split(',')[0].trim())});
+                  if (!el) return;
+                  (${REACT_FILL_FALLBACK_FUNCTION}).call(el, ${JSON.stringify(fillText)});
+                })()`,
+              );
+            }
+          }
           state.snapshots.delete(targetId);
           result = { stdout: `Filled ${ref} with: ${fillText}\n`, stderr: '', exitCode: 0 }; break;
         }

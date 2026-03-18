@@ -274,11 +274,71 @@ describe('createTeleportCommand', () => {
 
     const result = await createTeleportCommand().execute([], {} as never);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Teleported 1 cookie(s) from follower-best');
+    expect(result.stdout).toContain('Teleported 1 cookie(s) from follower-best (1 .example.com)');
     expect(result.stdout).toContain('page reloaded');
     expect(sendRequest).toHaveBeenCalledWith('follower-best', undefined, undefined, undefined, undefined);
     expect(sendCDP).toHaveBeenCalledWith('Network.setCookies', { cookies: fakeCookies });
     expect(sendCDP).toHaveBeenCalledWith('Page.reload', {});
+  });
+
+  it('navigates to finalUrl when present (instead of Page.reload)', async () => {
+    const fakeCookies: CookieTeleportCookie[] = [
+      {
+        name: 'session', value: 'abc123', domain: '.example.com', path: '/',
+        expires: -1, size: 50, httpOnly: true, secure: true, session: true,
+      },
+    ];
+
+    const sendRequest = vi.fn().mockResolvedValue({ cookies: fakeCookies, timedOut: false, finalUrl: 'https://app.navan.com/dashboard' });
+    const sendCDP = vi.fn().mockResolvedValue({});
+
+    setTeleportSendRequest(() => sendRequest);
+    setTeleportBestFollower(() => () => ({ runtimeId: 'follower-best', bootstrapId: 'b1', floatType: 'standalone' as const }));
+    setTeleportBrowserAPI(() => ({
+      listPages: vi.fn().mockResolvedValue([{ targetId: 'tab-1', title: 'Page', url: 'https://example.com', active: true }]),
+      attachToPage: vi.fn(),
+      sendCDP,
+      getTransport: vi.fn(),
+    }) as unknown as BrowserAPI);
+
+    const result = await createTeleportCommand().execute([], {} as never);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('(1 .example.com)');
+    expect(result.stdout).toContain('(navigated to https://app.navan.com/dashboard)');
+    expect(result.stdout).not.toContain('page reloaded');
+    expect(result.stdout).not.toContain('landed on');
+    expect(sendCDP).toHaveBeenCalledWith('Page.navigate', { url: 'https://app.navan.com/dashboard' });
+    expect(sendCDP).not.toHaveBeenCalledWith('Page.reload', {});
+  });
+
+  it('includes per-domain cookie breakdown sorted by count descending', async () => {
+    const fakeCookies: CookieTeleportCookie[] = [
+      { name: 'a', value: '1', domain: 'login.navan.com', path: '/', expires: -1, size: 10, httpOnly: true, secure: true, session: true },
+      { name: 'b', value: '2', domain: '.navan.com', path: '/', expires: -1, size: 10, httpOnly: true, secure: true, session: true },
+      { name: 'c', value: '3', domain: 'login.navan.com', path: '/', expires: -1, size: 10, httpOnly: true, secure: true, session: true },
+      { name: 'd', value: '4', domain: 'adobe.okta.com', path: '/', expires: -1, size: 10, httpOnly: true, secure: true, session: true },
+      { name: 'e', value: '5', domain: 'login.navan.com', path: '/', expires: -1, size: 10, httpOnly: true, secure: true, session: true },
+      { name: 'f', value: '6', domain: '.navan.com', path: '/', expires: -1, size: 10, httpOnly: true, secure: true, session: true },
+      { name: 'g', value: '7', domain: 'adobe.okta.com', path: '/', expires: -1, size: 10, httpOnly: true, secure: true, session: true },
+    ];
+
+    const sendRequest = vi.fn().mockResolvedValue({ cookies: fakeCookies, timedOut: false, finalUrl: 'https://app.navan.com/app/user2/' });
+    const sendCDP = vi.fn().mockResolvedValue({});
+
+    setTeleportSendRequest(() => sendRequest);
+    setTeleportBestFollower(() => () => ({ runtimeId: 'follower-abc123', bootstrapId: 'b1', floatType: 'standalone' as const }));
+    setTeleportBrowserAPI(() => ({
+      listPages: vi.fn().mockResolvedValue([{ targetId: 'tab-1', title: 'Page', url: 'https://example.com', active: true }]),
+      attachToPage: vi.fn(),
+      sendCDP,
+      getTransport: vi.fn(),
+    }) as unknown as BrowserAPI);
+
+    const result = await createTeleportCommand().execute([], {} as never);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(
+      'Teleported 7 cookie(s) from follower-abc123 (3 login.navan.com, 2 .navan.com, 2 adobe.okta.com) (navigated to https://app.navan.com/app/user2/)\n',
+    );
   });
 
   it('teleports cookies from specific runtime-id', async () => {

@@ -21,6 +21,7 @@ import {
 import { resolveCliBrowserLaunchUrl } from './launch-url.js';
 import { parseCliRuntimeFlags } from './runtime-flags.js';
 import { FileLogger } from './file-logger.js';
+import { CliLogDedup } from './cli-log-dedup.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..', '..');
@@ -208,6 +209,7 @@ async function attachConsoleForwarder(
   cdpPort: number,
   pageUrl: string,
 ): Promise<void> {
+  const pageDedup = new CliLogDedup('[page]');
   const connect = async () => {
     // Poll for the page target
     let target: { webSocketDebuggerUrl: string } | null = null;
@@ -243,7 +245,10 @@ async function attachConsoleForwarder(
           const type = params.type;
           const color = colorForType(type);
           const argsStr = params.args.map(formatRemoteObject).join(' ');
-          console.log(`${color}[page:${type}]${ANSI_RESET} ${argsStr}`);
+          const line = `[page:${type}] ${argsStr}`;
+          if (pageDedup.shouldLog(line)) {
+            console.log(`${color}[page:${type}]${ANSI_RESET} ${argsStr}`);
+          }
         }
 
         if (msg.method === 'Runtime.exceptionThrown') {
@@ -855,6 +860,7 @@ async function main() {
   let chromeWs: WebSocket | null = null;
   let activeClientWs: WebSocket | null = null;
   let messageBuffer: unknown[] | null = null;
+  const cdpDedup = new CliLogDedup();
 
   // Ensure everything is cleaned up when CLI exits
   const gracefulShutdown = async () => {
@@ -962,7 +968,8 @@ async function main() {
 
       chromeWs.on('message', (data) => {
         const preview = String(data).slice(0, 200);
-        console.log(`[cdp-proxy] Chrome→Client: ${preview}`);
+        const msg = `[cdp-proxy] Chrome→Client: ${preview}`;
+        if (cdpDedup.shouldLog(msg)) console.debug(msg);
         if (activeClientWs && activeClientWs.readyState === WebSocket.OPEN) {
           activeClientWs.send(String(data));
         }
@@ -1002,11 +1009,13 @@ async function main() {
       clientWs.on('message', (data) => {
         const preview = String(data).slice(0, 200);
         if (chromeWs && chromeWs.readyState === WebSocket.OPEN && messageBuffer === null) {
-          console.log(`[cdp-proxy] Client→Chrome: ${preview}`);
+          const msg = `[cdp-proxy] Client→Chrome: ${preview}`;
+          if (cdpDedup.shouldLog(msg)) console.debug(msg);
           chromeWs.send(String(data));
         } else if (messageBuffer !== null) {
           messageBuffer.push(data);
-          console.log(`[cdp-proxy] Client→Chrome (buffered): ${preview}`);
+          const msg = `[cdp-proxy] Client→Chrome (buffered): ${preview}`;
+          if (cdpDedup.shouldLog(msg)) console.debug(msg);
         } else {
           // Chrome not connected and no buffer — this shouldn't happen but log it
           console.log(`[cdp-proxy] Client→Chrome (DROPPED — no connection): ${preview}`);

@@ -26,7 +26,7 @@ import type { FloatType } from '../../scoops/tray-leader-sync.js';
 // Types
 // ---------------------------------------------------------------------------
 
-export type SendCookieTeleportRequestFn = (targetRuntimeId: string, url?: string, catchPattern?: string, catchNotPattern?: string, timeoutMs?: number) => Promise<{ cookies: CookieTeleportCookie[]; timedOut?: boolean }>;
+export type SendCookieTeleportRequestFn = (targetRuntimeId: string, url?: string, catchPattern?: string, catchNotPattern?: string, timeoutMs?: number) => Promise<{ cookies: CookieTeleportCookie[]; timedOut?: boolean; finalUrl?: string }>;
 
 export type GetBestFollowerForTeleportFn = () => { runtimeId: string; bootstrapId: string; floatType: FloatType } | null;
 
@@ -206,6 +206,20 @@ function formatRuntimeList(followers: ConnectedFollowerForTeleport[]): string {
 }
 
 // ---------------------------------------------------------------------------
+// Domain summary helper
+// ---------------------------------------------------------------------------
+
+function formatDomainSummary(cookies: CookieTeleportCookie[]): string {
+  const counts = new Map<string, number>();
+  for (const c of cookies) {
+    const d = c.domain ?? 'unknown';
+    counts.set(d, (counts.get(d) ?? 0) + 1);
+  }
+  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  return sorted.map(([domain, count]) => `${count} ${domain}`).join(', ');
+}
+
+// ---------------------------------------------------------------------------
 // Command factory
 // ---------------------------------------------------------------------------
 
@@ -266,7 +280,7 @@ export function createTeleportCommand(): Command {
       console.log('[teleport-debug] sending request', { targetRuntimeId, url: parsed.url, catchPattern: parsed.catchPattern, catchNotPattern: parsed.catchNotPattern, timeoutMs, callerTimeoutMs });
 
       const requestPromise = sendRequest(targetRuntimeId, parsed.url, parsed.catchPattern, parsed.catchNotPattern, timeoutMs);
-      const { cookies, timedOut } = callerTimeoutMs
+      const { cookies, timedOut, finalUrl } = callerTimeoutMs
         ? await Promise.race([
             requestPromise,
             new Promise<never>((_, reject) =>
@@ -277,7 +291,7 @@ export function createTeleportCommand(): Command {
             ),
           ])
         : await requestPromise;
-      console.log('[teleport-debug] request resolved', { cookieCount: cookies.length, timedOut });
+      console.log('[teleport-debug] request resolved', { cookieCount: cookies.length, timedOut, finalUrl });
       if (cookies.length === 0) {
         if (timedOut) {
           return { stdout: `Teleport timed out \u2014 no cookies captured from ${targetRuntimeId}\n`, stderr: '', exitCode: 1 };
@@ -298,14 +312,23 @@ export function createTeleportCommand(): Command {
 
       await browser.sendCDP('Network.setCookies', { cookies });
 
-      // 3. Optionally reload
+      // 3. Optionally reload or navigate to finalUrl
+      let reloadNote = '';
       if (parsed.reload) {
-        await browser.sendCDP('Page.reload', {});
+        if (finalUrl) {
+          await browser.sendCDP('Page.navigate', { url: finalUrl });
+          reloadNote = ` (navigated to ${finalUrl})`;
+        } else {
+          await browser.sendCDP('Page.reload', {});
+          reloadNote = ' (page reloaded)';
+        }
       }
 
       const timeoutNote = timedOut ? ' (timed out, partial capture)' : '';
+      const landedNote = !parsed.reload && finalUrl ? ` (landed on ${finalUrl})` : '';
+      const domainNote = cookies.length > 0 ? ` (${formatDomainSummary(cookies)})` : '';
       return {
-        stdout: `Teleported ${cookies.length} cookie(s) from ${targetRuntimeId}${parsed.reload ? ' (page reloaded)' : ''}${timeoutNote}\n`,
+        stdout: `Teleported ${cookies.length} cookie(s) from ${targetRuntimeId}${domainNote}${landedNote}${reloadNote}${timeoutNote}\n`,
         stderr: '',
         exitCode: 0,
       };

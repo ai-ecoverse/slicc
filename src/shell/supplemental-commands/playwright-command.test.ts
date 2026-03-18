@@ -452,11 +452,20 @@ describe('playwright-cli type and fill', () => {
   });
 
   it('fills input by ref using backendNodeId', async () => {
-    // Mock transport for DOM operations
+    // Mock transport for DOM operations — value matches after type (normal HTML input)
+    let callCount = 0;
     const mockTransport = {
-      send: vi.fn().mockImplementation((method: string) => {
+      send: vi.fn().mockImplementation((method: string, params: Record<string, unknown>) => {
         if (method === 'DOM.resolveNode') return { object: { objectId: 'obj-1' } };
-        if (method === 'Runtime.callFunctionOn') return { result: { value: undefined } };
+        if (method === 'Runtime.callFunctionOn') {
+          callCount++;
+          const fn = params['functionDeclaration'] as string;
+          // The read-back value check — return the typed text to indicate value matches
+          if (fn.includes('isContentEditable') && fn.includes('el.value')) {
+            return { result: { value: 'search term' } };
+          }
+          return { result: { value: undefined } };
+        }
         return {};
       }),
     };
@@ -472,6 +481,78 @@ describe('playwright-cli type and fill', () => {
     expect(result.stdout).toContain('Filled e3 with: search term');
     expect(browser.clickByBackendNodeId).toHaveBeenCalledWith(44);
     expect(browser.type).toHaveBeenCalledWith('search term');
+  });
+
+  it('uses native setter fallback when value does not match after typing (React-controlled input)', async () => {
+    // Mock transport: value read-back returns empty string (React didn't register the keystrokes)
+    const transportCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const mockTransport = {
+      send: vi.fn().mockImplementation((method: string, params: Record<string, unknown>) => {
+        transportCalls.push({ method, params });
+        if (method === 'DOM.resolveNode') return { object: { objectId: 'obj-1' } };
+        if (method === 'Runtime.callFunctionOn') {
+          const fn = params['functionDeclaration'] as string;
+          // Read-back: return empty string to simulate React-controlled input mismatch
+          if (fn.includes('isContentEditable') && fn.includes('el.value') && !fn.includes('nativeSetter')) {
+            return { result: { value: '' } };
+          }
+          return { result: { value: undefined } };
+        }
+        return {};
+      }),
+    };
+    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    await cmd.execute(['snapshot'], {} as any);
+
+    const result = await cmd.execute(['fill', 'e3', 'test@example.com'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Filled e3 with: test@example.com');
+
+    // Verify the fallback was called — look for a callFunctionOn with nativeSetter in the function
+    const fallbackCall = transportCalls.find(
+      c => c.method === 'Runtime.callFunctionOn' &&
+           (c.params['functionDeclaration'] as string).includes('nativeSetter'),
+    );
+    expect(fallbackCall).toBeDefined();
+    expect(fallbackCall!.params['arguments']).toEqual([{ value: 'test@example.com' }]);
+  });
+
+  it('does NOT trigger native setter fallback when value matches after typing', async () => {
+    // Mock transport: value read-back returns the typed text (normal HTML input)
+    const transportCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const mockTransport = {
+      send: vi.fn().mockImplementation((method: string, params: Record<string, unknown>) => {
+        transportCalls.push({ method, params });
+        if (method === 'DOM.resolveNode') return { object: { objectId: 'obj-1' } };
+        if (method === 'Runtime.callFunctionOn') {
+          const fn = params['functionDeclaration'] as string;
+          // Read-back: return the fill text to simulate normal input behavior
+          if (fn.includes('isContentEditable') && fn.includes('el.value') && !fn.includes('nativeSetter')) {
+            return { result: { value: 'hello world' } };
+          }
+          return { result: { value: undefined } };
+        }
+        return {};
+      }),
+    };
+    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    await cmd.execute(['snapshot'], {} as any);
+
+    const result = await cmd.execute(['fill', 'e3', 'hello', 'world'], {} as any);
+    expect(result.exitCode).toBe(0);
+
+    // Verify the fallback was NOT called — no callFunctionOn with nativeSetter
+    const fallbackCall = transportCalls.find(
+      c => c.method === 'Runtime.callFunctionOn' &&
+           (c.params['functionDeclaration'] as string).includes('nativeSetter'),
+    );
+    expect(fallbackCall).toBeUndefined();
   });
 
   it('clears contenteditable elements in the selector fallback path', async () => {
@@ -490,7 +571,9 @@ describe('playwright-cli type and fill', () => {
     });
     (browser.evaluate as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce(JSON.stringify({ url: 'https://example.com', title: 'Test Page' }))
-      .mockResolvedValueOnce(undefined);
+      .mockResolvedValueOnce(undefined) // clear call
+      .mockResolvedValueOnce('hello') // value read-back (matches, so no fallback)
+      ;
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
@@ -499,7 +582,7 @@ describe('playwright-cli type and fill', () => {
     const clickedSelector = (browser.click as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
     const clearScript = (browser.evaluate as ReturnType<typeof vi.fn>).mock.calls
       .map((call) => call[0])
-      .find((script) => typeof script === 'string' && script.includes('isContentEditable')) as string | undefined;
+      .find((script) => typeof script === 'string' && script.includes('isContentEditable') && script.includes('textContent')) as string | undefined;
 
     expect(result.exitCode).toBe(0);
     expect(browser.click).toHaveBeenCalled();

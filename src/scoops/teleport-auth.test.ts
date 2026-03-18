@@ -128,6 +128,11 @@ describe('executeTeleportAuth', () => {
       frame: { url: 'https://app.example.com/callback', id: 'main' },
     });
 
+    // Advance past the 2s settling delay before cookie capture
+    await flushMicrotasks();
+    vi.advanceTimersByTime(2000);
+    await flushMicrotasks();
+
     const result = await promise;
 
     expect(result.cookies).toHaveLength(1);
@@ -168,6 +173,9 @@ describe('executeTeleportAuth', () => {
 
     // Should time out because we never left the initial hostname
     vi.advanceTimersByTime(1000);
+    await flushMicrotasks();
+    // Advance past the 2s settling delay after timeout
+    vi.advanceTimersByTime(2000);
     await flushMicrotasks();
 
     const result = await promise;
@@ -224,6 +232,11 @@ describe('executeTeleportAuth', () => {
       frame: { url: 'https://app.navan.com/dashboard', id: 'main' },
     });
 
+    // Advance past the 2s settling delay before cookie capture
+    await flushMicrotasks();
+    vi.advanceTimersByTime(2000);
+    await flushMicrotasks();
+
     const result = await promise;
 
     expect(result.timedOut).toBe(false);
@@ -261,6 +274,10 @@ describe('executeTeleportAuth', () => {
     vi.advanceTimersByTime(3000);
 
     // Flush microtasks again for post-timeout awaits
+    await flushMicrotasks();
+
+    // Advance past the 2s settling delay after timeout
+    vi.advanceTimersByTime(2000);
     await flushMicrotasks();
 
     const result = await promise;
@@ -302,6 +319,9 @@ describe('executeTeleportAuth', () => {
     // Let it time out
     vi.advanceTimersByTime(1000);
     await flushMicrotasks();
+    // Advance past the 2s settling delay after timeout
+    vi.advanceTimersByTime(2000);
+    await flushMicrotasks();
 
     const result = await promise;
     expect(result.timedOut).toBe(true);
@@ -335,6 +355,9 @@ describe('executeTeleportAuth', () => {
     });
 
     vi.advanceTimersByTime(1000);
+    await flushMicrotasks();
+    // Advance past the 2s settling delay after timeout
+    vi.advanceTimersByTime(2000);
     await flushMicrotasks();
 
     const result = await promise;
@@ -374,6 +397,11 @@ describe('executeTeleportAuth', () => {
       sessionId: 'sess-4',
       frame: { url: 'https://app.example.com/home', id: 'main' },
     });
+
+    // Advance past the 2s settling delay before cookie capture
+    await flushMicrotasks();
+    vi.advanceTimersByTime(2000);
+    await flushMicrotasks();
 
     await promise;
 
@@ -422,6 +450,11 @@ describe('executeTeleportAuth', () => {
       frame: { url: 'https://httpbin.org/cookies', id: 'main' },
     });
 
+    // Advance past the 2s settling delay before cookie capture
+    await flushMicrotasks();
+    vi.advanceTimersByTime(2000);
+    await flushMicrotasks();
+
     const result = await promise;
     expect(result.timedOut).toBe(false);
     expect(result.cookies).toHaveLength(1);
@@ -458,6 +491,9 @@ describe('executeTeleportAuth', () => {
     await flushMicrotasks();
 
     vi.advanceTimersByTime(1000);
+    await flushMicrotasks();
+    // Advance past the 2s settling delay after timeout
+    vi.advanceTimersByTime(2000);
     await flushMicrotasks();
 
     const result = await promise;
@@ -512,6 +548,11 @@ describe('executeTeleportAuth', () => {
       frame: { url: 'https://app.navan.com/dashboard', id: 'main' },
     });
 
+    // Advance past the 2s settling delay before cookie capture
+    await flushMicrotasks();
+    vi.advanceTimersByTime(2000);
+    await flushMicrotasks();
+
     const result = await promise;
     expect(result.timedOut).toBe(false);
     expect(result.cookies).toHaveLength(1);
@@ -549,6 +590,9 @@ describe('executeTeleportAuth', () => {
     // Should NOT have completed yet (first nav was skipped) — let it time out
     vi.advanceTimersByTime(1000);
     await flushMicrotasks();
+    // Advance past the 2s settling delay after timeout
+    vi.advanceTimersByTime(2000);
+    await flushMicrotasks();
 
     const result = await promise;
     expect(result.timedOut).toBe(true);
@@ -574,19 +618,26 @@ describe('executeTeleportAuth', () => {
         return Promise.resolve({});
       });
 
-    const result = await executeTeleportAuth({
+    const promise = executeTeleportAuth({
       transport,
       url: 'https://httpbin.org/redirect-to?url=https://httpbin.org/cookies',
       timeoutMs: 5000,
       catchPattern: 'httpbin\\.org/cookies$',
     });
 
+    // Advance past the 2s settling delay before cookie capture
+    await flushMicrotasks();
+    vi.advanceTimersByTime(2000);
+    await flushMicrotasks();
+
+    const result = await promise;
+
     expect(result.timedOut).toBe(false);
     expect(result.cookies).toHaveLength(1);
     expect(result.cookies[0].name).toBe('early');
   });
 
-  it('--catch-not: resolves immediately when current URL already does not match (early match)', async () => {
+  it('--catch-not: does NOT resolve immediately when current URL does not match (prevents false-positive from instant redirects)', async () => {
     const { transport } = createFakeTransport();
 
     (transport.send as ReturnType<typeof vi.fn>)
@@ -602,16 +653,30 @@ describe('executeTeleportAuth', () => {
         return Promise.resolve({});
       });
 
-    const result = await executeTeleportAuth({
+    const promise = executeTeleportAuth({
       transport,
       url: 'https://app.navan.com/login',
-      timeoutMs: 5000,
+      timeoutMs: 2000,
       catchNotPattern: 'login|okta|saml',
     });
 
-    expect(result.timedOut).toBe(false);
-    expect(result.cookies).toHaveLength(1);
-    expect(result.cookies[0].name).toBe('early-cn');
+    await flushMicrotasks();
+
+    // Should NOT have resolved immediately — catch-not skips early detection
+    // to prevent false positives from instant redirects. Let it time out.
+    vi.advanceTimersByTime(2000);
+    await flushMicrotasks();
+    // Advance past the 2s settling delay after timeout
+    vi.advanceTimersByTime(2000);
+    await flushMicrotasks();
+
+    const result = await promise;
+    // It should time out because there were no navigation events and
+    // catch-not early detection is intentionally disabled.
+    // However the polling fallback (at ~3 polls) may resolve it.
+    // With 2s timeout and 1s polls, we get 1 poll. The poll sees non-matching URL
+    // but pollCount < 3 and catchNotSeenMatch is false, so it doesn't resolve.
+    expect(result.timedOut).toBe(true);
   });
 
   // -----------------------------------------------------------------------
@@ -650,6 +715,9 @@ describe('executeTeleportAuth', () => {
     expect(enableIdx).toBeGreaterThan(-1);
 
     vi.advanceTimersByTime(1000);
+    await flushMicrotasks();
+    // Advance past the 2s settling delay after timeout
+    vi.advanceTimersByTime(2000);
     await flushMicrotasks();
 
     const result = await promise;
@@ -701,6 +769,10 @@ describe('executeTeleportAuth', () => {
     vi.advanceTimersByTime(1000);
     await flushMicrotasks();
 
+    // Advance past the 2s settling delay before cookie capture
+    vi.advanceTimersByTime(2000);
+    await flushMicrotasks();
+
     const result = await promise;
     expect(result.timedOut).toBe(false);
     expect(result.cookies).toHaveLength(1);
@@ -748,6 +820,10 @@ describe('executeTeleportAuth', () => {
     vi.advanceTimersByTime(1000);
     await flushMicrotasks();
 
+    // Advance past the 2s settling delay before cookie capture
+    vi.advanceTimersByTime(2000);
+    await flushMicrotasks();
+
     const result = await promise;
     expect(result.timedOut).toBe(false);
     expect(result.cookies).toHaveLength(1);
@@ -780,9 +856,60 @@ describe('executeTeleportAuth', () => {
     // Advance past timeout — polling should not prevent timeout
     vi.advanceTimersByTime(3000);
     await flushMicrotasks();
+    // Advance past the 2s settling delay after timeout
+    vi.advanceTimersByTime(2000);
+    await flushMicrotasks();
 
     const result = await promise;
     expect(result.timedOut).toBe(true);
+  });
+
+  it('returns finalUrl from the browser at the time cookies are captured', async () => {
+    const { transport, emit } = createFakeTransport();
+
+    (transport.send as ReturnType<typeof vi.fn>)
+      .mockImplementation((method: string) => {
+        if (method === 'Target.createTarget') return Promise.resolve({ targetId: 'tab-final' });
+        if (method === 'Target.attachToTarget') return Promise.resolve({ sessionId: 'sess-final' });
+        if (method === 'Page.enable') return Promise.resolve({});
+        if (method === 'Runtime.evaluate') return Promise.resolve({ result: { value: 'https://app.example.com/dashboard' } });
+        if (method === 'Network.getCookies') return Promise.resolve({
+          cookies: [{ name: 'tok', value: 'abc', domain: '.example.com', path: '/', expires: -1, size: 10, httpOnly: true, secure: true, session: true }],
+        });
+        if (method === 'Target.closeTarget') return Promise.resolve({});
+        return Promise.resolve({});
+      });
+
+    const promise = executeTeleportAuth({
+      transport,
+      url: 'https://app.example.com',
+      timeoutMs: 5000,
+    });
+
+    await flushMicrotasks();
+
+    // SSO redirect away
+    emit('Page.frameNavigated', {
+      sessionId: 'sess-final',
+      frame: { url: 'https://login.example.com/auth', id: 'main' },
+    });
+    await flushMicrotasks();
+
+    // Callback redirect back
+    emit('Page.frameNavigated', {
+      sessionId: 'sess-final',
+      frame: { url: 'https://app.example.com/dashboard', id: 'main' },
+    });
+
+    // Advance past the 2s settling delay before cookie capture
+    await flushMicrotasks();
+    vi.advanceTimersByTime(2000);
+    await flushMicrotasks();
+
+    const result = await promise;
+    expect(result.finalUrl).toBe('https://app.example.com/dashboard');
+    expect(result.cookies).toHaveLength(1);
+    expect(result.timedOut).toBe(false);
   });
 
   it('handles tab close failure gracefully', async () => {
@@ -818,6 +945,11 @@ describe('executeTeleportAuth', () => {
       sessionId: 'sess-5',
       frame: { url: 'https://app.example.com/callback', id: 'main' },
     });
+
+    // Advance past the 2s settling delay before cookie capture
+    await flushMicrotasks();
+    vi.advanceTimersByTime(2000);
+    await flushMicrotasks();
 
     // Should not throw even though closeTarget fails
     const result = await promise;

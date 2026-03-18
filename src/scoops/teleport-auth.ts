@@ -61,6 +61,8 @@ export interface TeleportAuthOptions {
 export interface TeleportAuthResult {
   cookies: CookieTeleportCookie[];
   timedOut: boolean;
+  /** The URL the browser was on when cookies were captured. */
+  finalUrl?: string;
 }
 
 /**
@@ -113,16 +115,13 @@ export async function executeTeleportAuth(options: TeleportAuthOptions): Promise
           log.info('[teleport-debug] catch pattern early match!', { pattern: catchPattern, url: currentUrl.value });
           cancel();
           earlyMatchResolved = true;
-        } else if (catchNotPattern) {
-          // For catch-not, URL already NOT matching the pattern means auth is done
-          const matches = new RegExp(catchNotPattern).test(currentUrl.value);
-          log.info('[teleport-debug] catch-not pattern check', { pattern: catchNotPattern, url: currentUrl.value, matches });
-          if (!matches) {
-            log.info('[teleport-debug] catch-not pattern early match (URL does not match)');
-            cancel();
-            earlyMatchResolved = true;
-          }
         }
+        // Note: catch-not intentionally skips early detection. When the follower
+        // already has an active session (e.g. Okta), the redirect completes
+        // instantly, so Runtime.evaluate sees the final URL which no longer
+        // matches the pattern — causing an immediate false-positive resolve
+        // before any cookies are captured. The polling/listener path has proper
+        // "skip first navigation" guards that handle this correctly.
       }
     } catch (err) {
       log.info('[teleport-debug] Runtime.evaluate failed', { error: String(err) });
@@ -191,11 +190,24 @@ export async function executeTeleportAuth(options: TeleportAuthOptions): Promise
     }
   }
 
-  // 7. Capture cookies (even on timeout — partial auth may have set some)
+  // 7. Wait for redirect chain to settle before capturing cookies
+  await new Promise(resolve => setTimeout(resolve, 2000));
+
+  // 8. Capture the final URL after settling (URL may change during the delay)
+  let finalUrl: string | undefined;
+  try {
+    const urlResult = await transport.send('Runtime.evaluate', { expression: 'window.location.href' }, sessionId);
+    finalUrl = ((urlResult as Record<string, unknown>)?.['result'] as { value?: string } | undefined)?.value;
+    log.info('[teleport-debug] finalUrl captured', { finalUrl });
+  } catch {
+    // Page may be mid-navigation — ignore
+  }
+
+  // 9. Capture cookies (even on timeout — partial auth may have set some)
   const cookieResult = await transport.send('Network.getCookies', {}, sessionId);
   const cookies = (cookieResult['cookies'] as CookieTeleportCookie[]) ?? [];
 
-  // 8. Close the auth tab
+  // 10. Close the auth tab
   try {
     await transport.send('Target.closeTarget', { targetId });
   } catch {
@@ -208,7 +220,7 @@ export async function executeTeleportAuth(options: TeleportAuthOptions): Promise
   onNotification?.(status);
   log.info('[teleport-debug] Teleport auth complete', { url, cookieCount: cookies.length, timedOut });
 
-  return { cookies, timedOut };
+  return { cookies, timedOut, finalUrl };
 }
 
 /**

@@ -6,6 +6,8 @@ import {
   TraySyncChannel,
   sendCDPResponse,
   reassembleCDPResponse,
+  sendSnapshot,
+  reassembleSnapshot,
   CDP_CHUNK_THRESHOLD,
   type LeaderToFollowerMessage,
   type FollowerToLeaderMessage,
@@ -400,6 +402,195 @@ describe('tray-sync-protocol', () => {
         chunkData: serialized.slice(mid), chunkIndex: 1, totalChunks: 2,
       });
       expect(result).toEqual({ result: original });
+    });
+  });
+
+  describe('sendSnapshot', () => {
+    it('sends small snapshots as a single message', () => {
+      const sent: LeaderToFollowerMessage[] = [];
+      const channel = { send: (msg: LeaderToFollowerMessage) => { sent.push(msg); return true; } };
+
+      const messages = [{ id: '1', role: 'user', content: 'hi', timestamp: 1 }] as ChatMessage[];
+      sendSnapshot(channel, messages, 'cone');
+
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toEqual({ type: 'snapshot', messages, scoopJid: 'cone' });
+    });
+
+    it('chunks large snapshots into snapshot_chunk messages', () => {
+      const sent: LeaderToFollowerMessage[] = [];
+      const channel = { send: (msg: LeaderToFollowerMessage) => { sent.push(msg); return true; } };
+
+      // Create messages large enough to exceed the 64KB threshold
+      const bigContent = 'x'.repeat(2000);
+      const messages: ChatMessage[] = [];
+      for (let i = 0; i < 50; i++) {
+        messages.push({ id: `m${i}`, role: i % 2 === 0 ? 'user' : 'assistant', content: bigContent, timestamp: i } as ChatMessage);
+      }
+
+      const ok = sendSnapshot(channel, messages, 'cone');
+      expect(ok).toBe(true);
+      expect(sent.length).toBeGreaterThan(1);
+
+      // All messages should be snapshot_chunk type
+      for (let i = 0; i < sent.length; i++) {
+        const msg = sent[i] as Extract<LeaderToFollowerMessage, { type: 'snapshot_chunk' }>;
+        expect(msg.type).toBe('snapshot_chunk');
+        expect(msg.chunkIndex).toBe(i);
+        expect(msg.totalChunks).toBe(sent.length);
+        expect(msg.scoopJid).toBe('cone');
+        expect(typeof msg.chunkData).toBe('string');
+      }
+
+      // Reassembling should produce the original data
+      const serialized = JSON.stringify({ messages, scoopJid: 'cone' });
+      const reassembled = sent.map(m => (m as Extract<LeaderToFollowerMessage, { type: 'snapshot_chunk' }>).chunkData).join('');
+      expect(reassembled).toBe(serialized);
+    });
+
+    it('returns false and stops when a chunk send fails', () => {
+      const sent: LeaderToFollowerMessage[] = [];
+      let sendCount = 0;
+      const channel = {
+        send: (msg: LeaderToFollowerMessage) => {
+          sent.push(msg);
+          sendCount++;
+          return sendCount !== 2; // Fail on second chunk
+        },
+      };
+
+      const bigContent = 'y'.repeat(2000);
+      const messages: ChatMessage[] = [];
+      for (let i = 0; i < 50; i++) {
+        messages.push({ id: `m${i}`, role: 'user', content: bigContent, timestamp: i } as ChatMessage);
+      }
+
+      const ok = sendSnapshot(channel, messages, 'cone');
+      expect(ok).toBe(false);
+      // Should stop after the failed chunk (2 sent: first success, second failure)
+      expect(sent).toHaveLength(2);
+    });
+  });
+
+  describe('reassembleSnapshot', () => {
+    it('reassembles chunks in order', () => {
+      const original = { messages: [{ id: '1', role: 'user', content: 'hello', timestamp: 1 }] as ChatMessage[], scoopJid: 'cone' };
+      const serialized = JSON.stringify(original);
+      const mid = Math.ceil(serialized.length / 2);
+
+      // First chunk — returns null (still waiting)
+      const r1 = reassembleSnapshot(null, {
+        type: 'snapshot_chunk', chunkData: serialized.slice(0, mid),
+        chunkIndex: 0, totalChunks: 2, scoopJid: 'cone',
+      });
+      expect(r1.result).toBeNull();
+      expect(r1.buffer).not.toBeNull();
+
+      // Second chunk — returns result
+      const r2 = reassembleSnapshot(r1.buffer, {
+        type: 'snapshot_chunk', chunkData: serialized.slice(mid),
+        chunkIndex: 1, totalChunks: 2, scoopJid: 'cone',
+      });
+      expect(r2.result).toEqual(original);
+      expect(r2.buffer).toBeNull();
+    });
+
+    it('handles out-of-order chunk delivery', () => {
+      const original = { messages: [{ id: '1', role: 'user', content: 'test', timestamp: 1 }] as ChatMessage[], scoopJid: 'cone' };
+      const serialized = JSON.stringify(original);
+      const third = Math.ceil(serialized.length / 3);
+
+      // Send chunk 2, then 0, then 1
+      const r1 = reassembleSnapshot(null, {
+        type: 'snapshot_chunk', chunkData: serialized.slice(2 * third),
+        chunkIndex: 2, totalChunks: 3, scoopJid: 'cone',
+      });
+      expect(r1.result).toBeNull();
+
+      const r2 = reassembleSnapshot(r1.buffer, {
+        type: 'snapshot_chunk', chunkData: serialized.slice(0, third),
+        chunkIndex: 0, totalChunks: 3, scoopJid: 'cone',
+      });
+      expect(r2.result).toBeNull();
+
+      const r3 = reassembleSnapshot(r2.buffer, {
+        type: 'snapshot_chunk', chunkData: serialized.slice(third, 2 * third),
+        chunkIndex: 1, totalChunks: 3, scoopJid: 'cone',
+      });
+      expect(r3.result).toEqual(original);
+      expect(r3.buffer).toBeNull();
+    });
+
+    it('ignores duplicate chunk deliveries', () => {
+      const original = { messages: [] as ChatMessage[], scoopJid: 'cone' };
+      const serialized = JSON.stringify(original);
+      const mid = Math.ceil(serialized.length / 2);
+
+      const r1 = reassembleSnapshot(null, {
+        type: 'snapshot_chunk', chunkData: serialized.slice(0, mid),
+        chunkIndex: 0, totalChunks: 2, scoopJid: 'cone',
+      });
+
+      // Duplicate of chunk 0
+      const r1dup = reassembleSnapshot(r1.buffer, {
+        type: 'snapshot_chunk', chunkData: serialized.slice(0, mid),
+        chunkIndex: 0, totalChunks: 2, scoopJid: 'cone',
+      });
+      expect(r1dup.result).toBeNull(); // Still waiting for chunk 1
+
+      // Complete with chunk 1
+      const r2 = reassembleSnapshot(r1dup.buffer, {
+        type: 'snapshot_chunk', chunkData: serialized.slice(mid),
+        chunkIndex: 1, totalChunks: 2, scoopJid: 'cone',
+      });
+      expect(r2.result).toEqual(original);
+    });
+
+    it('returns empty messages on corrupt JSON', () => {
+      // Simulate two chunks that when joined produce invalid JSON
+      const r1 = reassembleSnapshot(null, {
+        type: 'snapshot_chunk', chunkData: '{"messages":',
+        chunkIndex: 0, totalChunks: 2, scoopJid: 'cone',
+      });
+      const r2 = reassembleSnapshot(r1.buffer, {
+        type: 'snapshot_chunk', chunkData: 'INVALID}}}',
+        chunkIndex: 1, totalChunks: 2, scoopJid: 'cone',
+      });
+      // Should return fallback with empty messages
+      expect(r2.result).toEqual({ messages: [], scoopJid: 'cone' });
+      expect(r2.buffer).toBeNull();
+    });
+
+    it('round-trips with sendSnapshot for large payloads', () => {
+      const sent: LeaderToFollowerMessage[] = [];
+      const channel = { send: (msg: LeaderToFollowerMessage) => { sent.push(msg); return true; } };
+
+      const bigContent = 'z'.repeat(3000);
+      const messages: ChatMessage[] = [];
+      for (let i = 0; i < 40; i++) {
+        messages.push({ id: `m${i}`, role: 'user', content: bigContent, timestamp: i } as ChatMessage);
+      }
+
+      sendSnapshot(channel, messages, 'test-scoop');
+
+      // All sent messages should be snapshot_chunk
+      expect(sent.every(m => m.type === 'snapshot_chunk')).toBe(true);
+
+      // Reassemble them
+      let buffer: { chunks: string[]; received: number; totalChunks: number } | null = null;
+      let result: { messages: ChatMessage[]; scoopJid: string } | null = null;
+      for (const msg of sent) {
+        const chunk = msg as Extract<LeaderToFollowerMessage, { type: 'snapshot_chunk' }>;
+        const assembled = reassembleSnapshot(buffer, chunk);
+        buffer = assembled.buffer;
+        if (assembled.result) {
+          result = assembled.result;
+        }
+      }
+
+      expect(result).not.toBeNull();
+      expect(result!.messages).toEqual(messages);
+      expect(result!.scoopJid).toBe('test-scoop');
     });
   });
 });

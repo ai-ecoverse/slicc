@@ -17,6 +17,7 @@ const log = createLogger('tray-sync');
 
 export type LeaderToFollowerMessage =
   | { type: 'snapshot'; messages: ChatMessage[]; scoopJid: string }
+  | { type: 'snapshot_chunk'; chunkData: string; chunkIndex: number; totalChunks: number; scoopJid: string }
   | { type: 'agent_event'; event: AgentEvent; scoopJid: string }
   | { type: 'user_message_echo'; text: string; messageId: string; scoopJid: string }
   | { type: 'status'; scoopStatus: string }
@@ -24,13 +25,14 @@ export type LeaderToFollowerMessage =
   | { type: 'targets.registry'; targets: TrayTargetEntry[] }
   | { type: 'cdp.request'; requestId: string; localTargetId: string; method: string; params?: Record<string, unknown>; sessionId?: string }
   | { type: 'cdp.response'; requestId: string; result?: Record<string, unknown>; error?: string; chunkData?: string; chunkIndex?: number; totalChunks?: number }
+  | { type: 'cdp.event'; method: string; params: Record<string, unknown>; sessionId?: string }
   | { type: 'tab.open'; requestId: string; url: string }
   | { type: 'tab.opened'; requestId: string; targetId: string }
   | { type: 'tab.open.error'; requestId: string; error: string }
   | { type: 'fs.request'; requestId: string; request: TrayFsRequest }
   | { type: 'fs.response'; requestId: string; response: TrayFsResponse }
   | { type: 'cookie.teleport.request'; requestId: string; url?: string; catchPattern?: string; catchNotPattern?: string; timeoutMs?: number }
-  | { type: 'cookie.teleport.response'; requestId: string; cookies?: CookieTeleportCookie[]; timedOut?: boolean; error?: string }
+  | { type: 'cookie.teleport.response'; requestId: string; cookies?: CookieTeleportCookie[]; timedOut?: boolean; finalUrl?: string; error?: string }
   | { type: 'ping' }
   | { type: 'pong' };
 
@@ -41,13 +43,14 @@ export type FollowerToLeaderMessage =
   | { type: 'targets.advertise'; targets: RemoteTargetInfo[]; runtimeId: string }
   | { type: 'cdp.request'; requestId: string; targetRuntimeId: string; localTargetId: string; method: string; params?: Record<string, unknown>; sessionId?: string }
   | { type: 'cdp.response'; requestId: string; result?: Record<string, unknown>; error?: string; chunkData?: string; chunkIndex?: number; totalChunks?: number }
+  | { type: 'cdp.event'; method: string; params: Record<string, unknown>; sessionId?: string }
   | { type: 'tab.open'; requestId: string; targetRuntimeId: string; url: string }
   | { type: 'tab.opened'; requestId: string; targetId: string }
   | { type: 'tab.open.error'; requestId: string; error: string }
   | { type: 'fs.request'; requestId: string; targetRuntimeId: string; request: TrayFsRequest }
   | { type: 'fs.response'; requestId: string; response: TrayFsResponse }
   | { type: 'cookie.teleport.request'; requestId: string; targetRuntimeId: string; url?: string; catchPattern?: string; catchNotPattern?: string; timeoutMs?: number }
-  | { type: 'cookie.teleport.response'; requestId: string; cookies?: CookieTeleportCookie[]; timedOut?: boolean; error?: string }
+  | { type: 'cookie.teleport.response'; requestId: string; cookies?: CookieTeleportCookie[]; timedOut?: boolean; finalUrl?: string; error?: string }
   | { type: 'ping' }
   | { type: 'pong' };
 
@@ -232,6 +235,81 @@ export function reassembleCDPResponse(
   }
 
   return null; // Still waiting for more chunks
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot chunking helpers
+// ---------------------------------------------------------------------------
+
+/** Chunk size for snapshot messages — same as CDP chunk size. */
+const SNAPSHOT_CHUNK_SIZE = 32 * 1024; // 32 KB
+
+/**
+ * Send a snapshot, automatically chunking if the serialized payload exceeds the chunk threshold.
+ * Returns true if all chunks were sent successfully, false if any send failed.
+ */
+export function sendSnapshot(
+  channel: { send(message: LeaderToFollowerMessage): boolean },
+  messages: ChatMessage[],
+  scoopJid: string,
+): boolean {
+  const serialized = JSON.stringify({ messages, scoopJid });
+  if (serialized.length <= CDP_CHUNK_THRESHOLD) {
+    // Small enough — send as a single message
+    return channel.send({ type: 'snapshot', messages, scoopJid });
+  }
+
+  // Split the serialized payload into chunks
+  const totalChunks = Math.ceil(serialized.length / SNAPSHOT_CHUNK_SIZE);
+  let allSent = true;
+  for (let i = 0; i < totalChunks; i++) {
+    const chunkData = serialized.slice(i * SNAPSHOT_CHUNK_SIZE, (i + 1) * SNAPSHOT_CHUNK_SIZE);
+    const ok = channel.send({
+      type: 'snapshot_chunk',
+      chunkData,
+      chunkIndex: i,
+      totalChunks,
+      scoopJid,
+    });
+    if (!ok) {
+      allSent = false;
+      log.error('Failed to send snapshot chunk', { chunkIndex: i, totalChunks, totalSize: serialized.length });
+      break;
+    }
+  }
+  log.debug('Snapshot sent in chunks', { totalChunks, totalSize: serialized.length });
+  return allSent;
+}
+
+/**
+ * Reassemble chunked snapshot data. Returns the parsed messages and scoopJid when all chunks
+ * have arrived, or null if still waiting for more chunks.
+ */
+export function reassembleSnapshot(
+  buffer: { chunks: string[]; received: number; totalChunks: number } | null,
+  message: Extract<LeaderToFollowerMessage, { type: 'snapshot_chunk' }>,
+): { result: { messages: ChatMessage[]; scoopJid: string }; buffer: null } | { result: null; buffer: { chunks: string[]; received: number; totalChunks: number } } {
+  if (!buffer) {
+    buffer = { chunks: new Array(message.totalChunks), received: 0, totalChunks: message.totalChunks };
+  }
+
+  // Store the chunk (supports out-of-order delivery)
+  if (!buffer.chunks[message.chunkIndex]) {
+    buffer.chunks[message.chunkIndex] = message.chunkData;
+    buffer.received++;
+  }
+
+  if (buffer.received >= buffer.totalChunks) {
+    try {
+      const parsed = JSON.parse(buffer.chunks.join('')) as { messages: ChatMessage[]; scoopJid: string };
+      return { result: parsed, buffer: null };
+    } catch (err) {
+      log.error('Failed to reassemble snapshot', { error: err instanceof Error ? err.message : String(err) });
+      return { result: { messages: [], scoopJid: message.scoopJid }, buffer: null };
+    }
+  }
+
+  return { result: null, buffer }; // Still waiting for more chunks
 }
 
 // ---------------------------------------------------------------------------

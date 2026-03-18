@@ -87,6 +87,44 @@ describe('LeaderSyncManager', () => {
     }
   });
 
+  it('sends a large snapshot as chunks on addFollower', () => {
+    // Create messages large enough to exceed the 64KB chunk threshold
+    const largeMessages: ChatMessage[] = [];
+    for (let i = 0; i < 50; i++) {
+      largeMessages.push(makeChatMessage(`m${i}`, i % 2 === 0 ? 'user' : 'assistant', 'x'.repeat(2000)));
+    }
+    const { manager } = createManager({ getMessages: () => [...largeMessages] });
+    const channel = new FakeChannel();
+    manager.addFollower('b1', channel);
+
+    const sent = channel.parseSent();
+    // Should have multiple snapshot_chunk messages instead of a single snapshot
+    expect(sent.length).toBeGreaterThan(1);
+    expect(sent[0].type).toBe('snapshot_chunk');
+    if (sent[0].type === 'snapshot_chunk') {
+      expect(sent[0].chunkIndex).toBe(0);
+      expect(sent[0].totalChunks).toBeGreaterThan(1);
+      expect(sent[0].scoopJid).toBe('cone');
+    }
+
+    // All chunks should have sequential indices
+    const chunks = sent.filter(m => m.type === 'snapshot_chunk');
+    expect(chunks).toHaveLength(sent.length);
+    for (let i = 0; i < chunks.length; i++) {
+      if (chunks[i].type === 'snapshot_chunk') {
+        expect(chunks[i].chunkIndex).toBe(i);
+      }
+    }
+
+    // Reassembling all chunks should recover the original data
+    const reassembled = chunks
+      .map(c => (c.type === 'snapshot_chunk' ? c.chunkData : ''))
+      .join('');
+    const parsed = JSON.parse(reassembled) as { messages: ChatMessage[]; scoopJid: string };
+    expect(parsed.messages).toHaveLength(50);
+    expect(parsed.scoopJid).toBe('cone');
+  });
+
   it('broadcasts agent events to all followers', () => {
     const { manager } = createManager();
     const ch1 = new FakeChannel();
@@ -1275,7 +1313,7 @@ describe('LeaderSyncManager', () => {
       }
     });
 
-    it('routes cookie teleport response back to requester', () => {
+    it('routes cookie teleport response back to requester (including finalUrl)', () => {
       const { manager } = createManager();
 
       const chRequester = new FakeChannel();
@@ -1296,12 +1334,13 @@ describe('LeaderSyncManager', () => {
       // Clear requester's sent so we can check only the response
       chRequester.sent.length = 0;
 
-      // Target responds
+      // Target responds with cookies and finalUrl
       const fakeCookies = [{ name: 'sid', value: '123', domain: '.example.com', path: '/', expires: -1, size: 10, httpOnly: true, secure: true, session: true }];
       chTarget.simulateMessage({
         type: 'cookie.teleport.response',
         requestId: 'ct-2',
         cookies: fakeCookies as never,
+        finalUrl: 'https://example.com/home',
       });
 
       const requesterSent = chRequester.parseSent();
@@ -1309,6 +1348,7 @@ describe('LeaderSyncManager', () => {
       expect(response).toBeDefined();
       if (response?.type === 'cookie.teleport.response') {
         expect(response.cookies).toEqual(fakeCookies);
+        expect(response.finalUrl).toBe('https://example.com/home');
       }
     });
 
@@ -1335,7 +1375,7 @@ describe('LeaderSyncManager', () => {
       }
     });
 
-    it('leader-originated sendCookieTeleportRequest resolves with cookies', async () => {
+    it('leader-originated sendCookieTeleportRequest resolves with cookies and finalUrl', async () => {
       const { manager } = createManager();
 
       const chTarget = new FakeChannel();
@@ -1351,18 +1391,20 @@ describe('LeaderSyncManager', () => {
       const req = sent.find(m => m.type === 'cookie.teleport.request');
       expect(req).toBeDefined();
 
-      // Simulate target responding with cookies
+      // Simulate target responding with cookies and finalUrl
       const fakeCookies = [{ name: 'token', value: 'abc', domain: '.app.com', path: '/', expires: -1, size: 20, httpOnly: false, secure: true, session: true }];
       if (req?.type === 'cookie.teleport.request') {
         chTarget.simulateMessage({
           type: 'cookie.teleport.response',
           requestId: req.requestId,
           cookies: fakeCookies as never,
+          finalUrl: 'https://app.com/dashboard',
         });
       }
 
       const result = await promise;
       expect(result.cookies).toEqual(fakeCookies);
+      expect(result.finalUrl).toBe('https://app.com/dashboard');
     });
 
     it('leader-originated sendCookieTeleportRequest rejects when target not connected', async () => {

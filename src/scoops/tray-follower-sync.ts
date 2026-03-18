@@ -9,6 +9,7 @@ import {
   createFollowerSyncChannel,
   sendCDPResponse,
   reassembleCDPResponse,
+  reassembleSnapshot,
   type LeaderToFollowerMessage,
   type FollowerToLeaderMessage,
   type TraySyncChannel,
@@ -72,12 +73,18 @@ export class FollowerSyncManager implements AgentHandle {
   private readonly remoteTransports = new Map<string, RemoteCDPTransport>();
   /** Chunk buffers for reassembling chunked CDP responses from the leader. */
   private readonly cdpChunkBuffers = new Map<string, { chunks: string[]; received: number; totalChunks: number }>();
+  /** Buffer for reassembling chunked snapshots from the leader. */
+  private snapshotChunkBuffer: { chunks: string[]; received: number; totalChunks: number } | null = null;
+  /** CDP sessions initiated by remote requests (leader attached to follower tabs). Events for these sessions are forwarded. */
+  private readonly remoteCDPSessions = new Set<string>();
+  /** Cleanup functions for CDP event listeners registered on the local transport. */
+  private readonly cdpEventCleanups: Array<() => void> = [];
   /** Resolvers for outgoing tab.open requests. */
   private readonly tabOpenResolvers = new Map<string, { resolve: (targetId: string) => void; reject: (err: Error) => void }>();
   /** Resolvers for outgoing fs requests. */
   private readonly fsResolvers = new Map<string, { resolve: (responses: TrayFsResponse[]) => void; reject: (err: Error) => void; responses: TrayFsResponse[] }>();
   /** Resolvers for outgoing cookie teleport requests. */
-  private readonly cookieTeleportResolvers = new Map<string, { resolve: (result: { cookies: CookieTeleportCookie[]; timedOut?: boolean }) => void; reject: (err: Error) => void }>();
+  private readonly cookieTeleportResolvers = new Map<string, { resolve: (result: { cookies: CookieTeleportCookie[]; timedOut?: boolean; finalUrl?: string }) => void; reject: (err: Error) => void }>();
 
   constructor(
     channel: TrayDataChannelLike,
@@ -148,6 +155,7 @@ export class FollowerSyncManager implements AgentHandle {
     this.unsubscribe();
     this.sync.close();
     this.eventListeners.clear();
+    this.cleanupCDPEventForwarding();
     log.info('Follower sync closed');
   }
 
@@ -186,8 +194,9 @@ export class FollowerSyncManager implements AgentHandle {
     // Emit error to UI listeners
     this.emitEvent({ type: 'error', error: `Connection to leader lost: ${reason}` });
 
-    // Clean up keepalive and sync channel
+    // Clean up keepalive, CDP event forwarding, and sync channel
     this.keepalive.stop();
+    this.cleanupCDPEventForwarding();
     this.unsubscribe();
     this.sync.close();
 
@@ -199,9 +208,21 @@ export class FollowerSyncManager implements AgentHandle {
     switch (message.type) {
       case 'snapshot':
         log.info('Snapshot received from leader', { messageCount: message.messages.length, scoopJid: message.scoopJid });
+        this.snapshotChunkBuffer = null; // Clear any in-progress chunked snapshot
         this.latestSnapshot = { messages: message.messages, scoopJid: message.scoopJid };
         this.options.onSnapshot?.(message.messages, message.scoopJid);
         break;
+
+      case 'snapshot_chunk': {
+        const assembled = reassembleSnapshot(this.snapshotChunkBuffer, message);
+        this.snapshotChunkBuffer = assembled.buffer;
+        if (assembled.result) {
+          log.info('Chunked snapshot reassembled from leader', { messageCount: assembled.result.messages.length, scoopJid: assembled.result.scoopJid });
+          this.latestSnapshot = assembled.result;
+          this.options.onSnapshot?.(assembled.result.messages, assembled.result.scoopJid);
+        }
+        break;
+      }
 
       case 'agent_event':
         this.emitEvent(message.event);
@@ -275,7 +296,7 @@ export class FollowerSyncManager implements AgentHandle {
         break;
       }
       case 'cookie.teleport.response': {
-        this.routeCookieTeleportResponse(message.requestId, message.cookies, message.error, message.timedOut);
+        this.routeCookieTeleportResponse(message.requestId, message.cookies, message.error, message.timedOut, message.finalUrl);
         break;
       }
       case 'ping': {
@@ -378,6 +399,10 @@ export class FollowerSyncManager implements AgentHandle {
   /**
    * Execute a CDP command on the follower's local browser transport.
    * Sends the response back to the leader, chunking if necessary.
+   *
+   * When a `Target.attachToTarget` command succeeds, the resulting sessionId
+   * is tracked as a remote-initiated session so that CDP events for that
+   * session are forwarded to the leader.
    */
   private async executeLocalCDP(
     requestId: string,
@@ -394,10 +419,61 @@ export class FollowerSyncManager implements AgentHandle {
 
     try {
       const result = await transport.send(method, params, sessionId);
+
+      // Track sessions created by remote CDP requests so we can forward events
+      if (method === 'Target.attachToTarget' && result['sessionId']) {
+        const remoteSessionId = result['sessionId'] as string;
+        this.remoteCDPSessions.add(remoteSessionId);
+        this.setupCDPEventForwarding(transport, remoteSessionId);
+        log.debug('Tracking remote CDP session', { remoteSessionId });
+      }
+
+      // Clean up session tracking when detached
+      if (method === 'Target.detachFromTarget' && sessionId && this.remoteCDPSessions.has(sessionId)) {
+        this.remoteCDPSessions.delete(sessionId);
+        log.debug('Removed remote CDP session on detach', { sessionId });
+      }
+
       sendCDPResponse(this.sync, requestId, result);
     } catch (err) {
       this.sync.send({ type: 'cdp.response', requestId, error: err instanceof Error ? err.message : String(err) });
     }
+  }
+
+  /**
+   * Register CDP event listeners on the local transport for a remote-initiated session.
+   * Events matching the sessionId are forwarded to the leader via `cdp.event`.
+   */
+  private setupCDPEventForwarding(transport: CDPTransport, remoteSessionId: string): void {
+    // Events we care about forwarding to the leader
+    const events = [
+      'Page.frameNavigated',
+      'Page.loadEventFired',
+      'Page.domContentEventFired',
+      'Network.responseReceived',
+      'Network.loadingFinished',
+      'Network.requestWillBeSent',
+    ];
+
+    for (const eventName of events) {
+      const listener = (params: Record<string, unknown>) => {
+        // Only forward events that belong to our remote session
+        if (params['sessionId'] !== remoteSessionId) return;
+        if (!this.remoteCDPSessions.has(remoteSessionId)) return;
+        // Strip sessionId from forwarded params — the leader routes by sessionId at the message level
+        const { sessionId: _sid, ...forwardedParams } = params;
+        this.sync.send({ type: 'cdp.event', method: eventName, params: forwardedParams, sessionId: remoteSessionId });
+      };
+      transport.on(eventName, listener);
+      this.cdpEventCleanups.push(() => transport.off(eventName, listener));
+    }
+  }
+
+  /** Remove all CDP event listeners and clear session tracking. */
+  private cleanupCDPEventForwarding(): void {
+    for (const cleanup of this.cdpEventCleanups) cleanup();
+    this.cdpEventCleanups.length = 0;
+    this.remoteCDPSessions.clear();
   }
 
   /**
@@ -495,7 +571,7 @@ export class FollowerSyncManager implements AgentHandle {
           return;
         }
         log.info('[teleport-debug] calling executeTeleportAuth', { url, timeoutMs, catchPattern, catchNotPattern });
-        const { cookies, timedOut } = await executeTeleportAuth({
+        const { cookies, timedOut, finalUrl } = await executeTeleportAuth({
           transport,
           url,
           timeoutMs,
@@ -503,8 +579,8 @@ export class FollowerSyncManager implements AgentHandle {
           catchNotPattern,
           onNotification: (msg) => this.options.onNotification?.(msg),
         });
-        log.info('[teleport-debug] executeTeleportAuth returned', { cookieCount: cookies.length });
-        this.sync.send({ type: 'cookie.teleport.response', requestId, cookies, timedOut });
+        log.info('[teleport-debug] executeTeleportAuth returned', { cookieCount: cookies.length, finalUrl });
+        this.sync.send({ type: 'cookie.teleport.response', requestId, cookies, timedOut, finalUrl });
       } else {
         // Immediate capture — use BrowserAPI to get a proper session for Network.getCookies
         if (browserAPI) {
@@ -535,14 +611,14 @@ export class FollowerSyncManager implements AgentHandle {
   /**
    * Route a cookie teleport response from the leader to the appropriate pending resolver.
    */
-  private routeCookieTeleportResponse(requestId: string, cookies?: CookieTeleportCookie[], error?: string, timedOut?: boolean): void {
+  private routeCookieTeleportResponse(requestId: string, cookies?: CookieTeleportCookie[], error?: string, timedOut?: boolean, finalUrl?: string): void {
     const resolver = this.cookieTeleportResolvers.get(requestId);
     if (!resolver) return;
     this.cookieTeleportResolvers.delete(requestId);
     if (error) {
       resolver.reject(new Error(error));
     } else {
-      resolver.resolve({ cookies: cookies ?? [], timedOut });
+      resolver.resolve({ cookies: cookies ?? [], timedOut, finalUrl });
     }
   }
 
@@ -551,9 +627,9 @@ export class FollowerSyncManager implements AgentHandle {
    * Returns a promise that resolves with the cookies from the target runtime.
    * If `url` is provided, the target opens a tab for the human to authenticate before capturing cookies.
    */
-  sendCookieTeleportRequest(targetRuntimeId: string, url?: string, catchPattern?: string, catchNotPattern?: string, timeoutMs?: number): Promise<{ cookies: CookieTeleportCookie[]; timedOut?: boolean }> {
+  sendCookieTeleportRequest(targetRuntimeId: string, url?: string, catchPattern?: string, catchNotPattern?: string, timeoutMs?: number): Promise<{ cookies: CookieTeleportCookie[]; timedOut?: boolean; finalUrl?: string }> {
     const requestId = `cookie-teleport-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    return new Promise<{ cookies: CookieTeleportCookie[]; timedOut?: boolean }>((resolve, reject) => {
+    return new Promise<{ cookies: CookieTeleportCookie[]; timedOut?: boolean; finalUrl?: string }>((resolve, reject) => {
       this.cookieTeleportResolvers.set(requestId, { resolve, reject });
       this.sync.send({ type: 'cookie.teleport.request', requestId, targetRuntimeId, url, catchPattern, catchNotPattern, timeoutMs });
     });
