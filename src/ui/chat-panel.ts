@@ -15,6 +15,11 @@ import {
 import { SessionStore } from './session-store.js';
 import { createLogger } from '../core/logger.js';
 import { VoiceInput, getVoiceAutoSend, getVoiceLang } from './voice-input.js';
+import {
+  hydrateInlineSprinkles,
+  disposeInlineSprinkles,
+  type InlineSprinkleInstance,
+} from './inline-sprinkle.js';
 
 const log = createLogger('chat-panel');
 
@@ -78,6 +83,8 @@ export class ChatPanel {
   private onDeleteQueuedMessage: ((messageId: string) => void) | null = null;
   private pendingDeltaText = '';
   private streamingRafId: number | null = null;
+  private inlineSprinkles = new Map<string, InlineSprinkleInstance[]>();
+  public onInlineSprinkleLick?: (action: string, data: unknown) => void;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -691,6 +698,7 @@ export class ChatPanel {
   // -- DOM rendering --
 
   private renderMessages(): void {
+    this.disposeAllInlineSprinkles();
     this.messagesEl.innerHTML = '';
     let prevRole: string | null = null;
     let prevTimestamp = 0;
@@ -731,6 +739,7 @@ export class ChatPanel {
     if (!msg) return;
     const existing = this.messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
     if (existing) {
+      this.disposeInlineSprinklesForMessage(messageId);
       // Determine showLabel based on previous message in the list
       const idx = this.messages.indexOf(msg);
       const prev = idx > 0 ? this.messages[idx - 1] : null;
@@ -833,6 +842,7 @@ export class ChatPanel {
       const contentEl = document.createElement('div');
       contentEl.className = 'msg__content';
       contentEl.innerHTML = renderChatMessageContent(msg);
+      if (!msg.isStreaming) this.hydrateInlineSprinklesInEl(contentEl, msg.id);
       details.appendChild(contentEl);
 
       el.appendChild(details);
@@ -845,6 +855,8 @@ export class ChatPanel {
         const cursor = document.createElement('span');
         cursor.className = 'streaming-cursor';
         contentEl.appendChild(cursor);
+      } else {
+        this.hydrateInlineSprinklesInEl(contentEl, msg.id);
       }
       el.appendChild(contentEl);
     }
@@ -1015,9 +1027,31 @@ export class ChatPanel {
     });
   }
 
+  private disposeInlineSprinklesForMessage(messageId: string): void {
+    const instances = this.inlineSprinkles.get(messageId);
+    if (instances) {
+      disposeInlineSprinkles(instances);
+      this.inlineSprinkles.delete(messageId);
+    }
+  }
+
+  private disposeAllInlineSprinkles(): void {
+    for (const [, instances] of this.inlineSprinkles) {
+      disposeInlineSprinkles(instances);
+    }
+    this.inlineSprinkles.clear();
+  }
+
+  private hydrateInlineSprinklesInEl(contentEl: HTMLElement, msgId: string): void {
+    const instances = hydrateInlineSprinkles(contentEl,
+      (action, data) => this.onInlineSprinkleLick?.(action, data));
+    if (instances.length) this.inlineSprinkles.set(msgId, instances);
+  }
+
   /** Dispose the panel. */
   dispose(): void {
     this.cancelPendingDelta();
+    this.disposeAllInlineSprinkles();
     this.unsubscribe?.();
     this.voiceInput?.destroy();
     if (this.keydownListener) {

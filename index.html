@@ -475,6 +475,21 @@
         font-size: inherit;
       }
 
+      /* Inline sprinkle container — shtml code blocks hydrated into iframes */
+      .msg__inline-sprinkle {
+        margin: 0.6em 0;
+        border-radius: var(--s2-radius-default);
+        overflow: hidden;
+        min-height: 32px;
+      }
+      .msg__inline-sprinkle iframe {
+        display: block;
+        width: 100%;
+        border: none;
+        overflow: hidden;
+        background: transparent;
+      }
+
       /* Continuation messages (same sender, no label) — indent message content only */
       .msg-group--continuation .msg { padding-left: 26px; }
 
@@ -1173,6 +1188,36 @@
 
       /* Sprinkle content wrapper */
       .sprinkle-content { padding: var(--s2-spacing-200); }
+
+      /* ── Action Card (inline sprinkle chat cards) ── */
+      .sprinkle-action-card {
+        display: flex;
+        flex-direction: column;
+      }
+      .sprinkle-action-card__header {
+        display: flex;
+        align-items: center;
+        gap: var(--s2-spacing-100);
+        padding: var(--s2-spacing-200) var(--s2-spacing-300) 0;
+        font-weight: 700;
+        color: var(--s2-content-default);
+      }
+      .sprinkle-action-card__header .sprinkle-badge {
+        margin-left: auto;
+      }
+      .sprinkle-action-card__body {
+        padding: var(--s2-spacing-100) var(--s2-spacing-300) var(--s2-spacing-200);
+        font-size: var(--s2-font-size-75);
+        color: var(--s2-content-secondary);
+        line-height: 1.5;
+      }
+      .sprinkle-action-card__actions {
+        display: flex;
+        gap: var(--s2-spacing-100);
+        justify-content: flex-end;
+        padding: var(--s2-spacing-100) var(--s2-spacing-300) var(--s2-spacing-200);
+        border-top: 1px solid var(--s2-border-subtle);
+      }
 
       /* ── Cards (S2 Cards — flex variant, 10px radius, shadow instead of border) ── */
       .sprinkle-card {

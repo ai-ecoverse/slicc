@@ -6,6 +6,26 @@ Use these CSS classes in `.shtml` sprinkles. Do NOT write custom CSS — these c
 `.sprinkle-card` — Card with shadow (hover elevates).
 `.sprinkle-stat-card` — Stat card with `.value` + `.label` children.
 
+## Action Card (Inline)
+`.sprinkle-action-card` — Compact card for inline chat interactions (` ```shtml ` blocks). Children:
+- `__header` — Title row. Put a `.sprinkle-badge` inside for status (auto right-aligned).
+- `__body` — Description text.
+- `__actions` — Right-aligned button row with top border.
+
+```html
+<div class="sprinkle-action-card">
+  <div class="sprinkle-action-card__header">
+    Title
+    <span class="sprinkle-badge sprinkle-badge--notice">status</span>
+  </div>
+  <div class="sprinkle-action-card__body">Description</div>
+  <div class="sprinkle-action-card__actions">
+    <button class="sprinkle-btn sprinkle-btn--secondary" onclick="slicc.lick('cancel')">Cancel</button>
+    <button class="sprinkle-btn sprinkle-btn--primary" onclick="slicc.lick({action:'confirm',data:{id:1}})">Confirm</button>
+  </div>
+</div>
+```
+
 ## Table
 `.sprinkle-table` — Table with bold headers (no uppercase!), row hover, row dividers.
 

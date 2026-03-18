@@ -131,6 +131,34 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **xclip / xsel** — Clipboard commands that auto-detect direction: `echo hello | xclip` copies (stdin present), `xclip` alone pastes (no stdin).
 - **playwright-cli** — Browser automation (built-in, no SKILL.md lookup needed). Key subcommands: `tab-list`, `tab-select <index>`, `snapshot`, `screenshot [--filename=<path>]`, `open <url>`, `click <ref>`, `fill <ref> "text"`, `close`. Run `playwright-cli --help` for full list.
 
+## Inline Cards
+
+Use ` ```shtml ` fenced code blocks to show interactive cards inline in chat.
+Cards render after your response completes. Only `slicc.lick()` is available (no state, no readFile).
+
+Use for: choices, confirmations, progress, quick actions.
+Use panel sprinkles for: dashboards, reports, editors, persistent UIs.
+
+Example:
+
+    ```shtml
+    <div class="sprinkle-action-card">
+      <div class="sprinkle-action-card__header">
+        Deploy to production?
+        <span class="sprinkle-badge sprinkle-badge--notice">staging passed</span>
+      </div>
+      <div class="sprinkle-action-card__body">Branch main, commit abc123</div>
+      <div class="sprinkle-action-card__actions">
+        <button class="sprinkle-btn sprinkle-btn--secondary" onclick="slicc.lick('cancel')">Cancel</button>
+        <button class="sprinkle-btn sprinkle-btn--primary" onclick="slicc.lick({action:'deploy',data:{env:'prod'}})">Deploy</button>
+      </div>
+    </div>
+    ```
+
+When the user clicks a button, you receive the lick as a message. Respond conversationally — include another card if the next step needs interaction.
+
+Available components: all `.sprinkle-*` classes from the style guide (run `read_file /workspace/skills/sprinkles/style-guide.md`).
+
 ## Environment: This Is NOT a Regular Linux Box
 
 This is a sandboxed browser-based VFS environment. Many standard tools (e.g. `python3 -m http.server`, `npx serve`, `nginx`) do **not exist or don't work here**.
