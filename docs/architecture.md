@@ -216,7 +216,8 @@
 | `tab-zone.ts` | Generic reusable tab bar + content area manager for a single zone |
 | `sprinkle-manager.ts` | Registry of available and open `.shtml` sprinkle panels with placement and lifecycle management |
 | `sprinkle-discovery.ts` | Scans VirtualFS for `.shtml` sprinkle files and builds a map of names to metadata (path, title) |
-| `sprinkle-renderer.ts` | Loads `.shtml` content from VFS and renders into DOM; uses sandbox iframe in extension mode for CSP compliance |
+| `sprinkle-renderer.ts` | Loads `.shtml` content from VFS and renders into DOM. CLI: direct DOM injection (fragments) or srcdoc iframe (full docs). Extension: ALL content routes through `sprinkle-sandbox.html` (CSP-exempt) |
+| `inline-sprinkle.ts` | Hydrates ` ```shtml ` code blocks in chat into sandboxed iframes. CLI: direct srcdoc. Extension: routes through `sprinkle-sandbox.html` |
 | `sprinkle-bridge.ts` | API available to `.shtml` sprinkle scripts for communicating with the agent via lick events and state persistence |
 | `sprinkle-picker.ts` | Popup menu listing closed panels and unopened sprinkles for opening in a zone |
 | `index.ts` | Re-exports |
@@ -512,7 +513,7 @@ Scoop removal / app clear
 | I need to... | Modify |
 |---|---|
 | Add/change sprinkle discovery | `src/ui/sprinkle-discovery.ts` |
-| Change sprinkle rendering or CSP handling | `src/ui/sprinkle-renderer.ts` |
+| Change sprinkle rendering or CSP handling | `src/ui/sprinkle-renderer.ts`, `src/ui/inline-sprinkle.ts`, `sprinkle-sandbox.html` |
 | Change the sprinkle↔agent bridge API | `src/ui/sprinkle-bridge.ts` |
 | Change sprinkle lifecycle/placement | `src/ui/sprinkle-manager.ts` |
 | Add sprinkle picker UI features | `src/ui/sprinkle-picker.ts` |

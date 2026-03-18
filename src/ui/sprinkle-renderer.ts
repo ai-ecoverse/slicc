@@ -39,10 +39,12 @@ export class SprinkleRenderer {
   async render(content: string, sprinkleName: string): Promise<void> {
     this.dispose();
 
-    if (isFullDocument(content)) {
+    if (isExtension) {
+      // Extension mode: always route through manifest sandbox (CSP-exempt).
+      // Full documents need the fullDoc flag so the sandbox creates a nested iframe.
+      await this.renderInSandbox(content, sprinkleName, isFullDocument(content));
+    } else if (isFullDocument(content)) {
       await this.renderFullDoc(content, sprinkleName);
-    } else if (isExtension) {
-      await this.renderInSandbox(content, sprinkleName);
     } else {
       this.renderInline(content, sprinkleName);
     }
@@ -52,7 +54,7 @@ export class SprinkleRenderer {
    * Extension mode: render inside a sandbox iframe (CSP-exempt).
    * Bridge communication happens via postMessage.
    */
-  private async renderInSandbox(content: string, sprinkleName: string): Promise<void> {
+  private async renderInSandbox(content: string, sprinkleName: string, fullDoc = false): Promise<void> {
     const iframe = document.createElement('iframe');
     iframe.src = chrome.runtime.getURL('sprinkle-sandbox.html');
     iframe.style.cssText = 'width: 100%; flex: 1; border: none; min-height: 0;';
@@ -139,7 +141,7 @@ export class SprinkleRenderer {
     // Send content to the sandbox for rendering, including saved state + localStorage
     const savedState = this.bridge.getState();
     iframe.contentWindow!.postMessage(
-      { type: 'sprinkle-render', content, name: sprinkleName, themeCSS, savedState, savedStorage }, '*',
+      { type: 'sprinkle-render', content, name: sprinkleName, themeCSS, savedState, savedStorage, fullDoc }, '*',
     );
   }
 
