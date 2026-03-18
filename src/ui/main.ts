@@ -1223,28 +1223,30 @@ async function main(): Promise<void> {
 
   log.info('Orchestrator initialized — cone+scoops ready', { scoopCount: orchestrator.getScoops().length });
 
-  // Check for auto-prompt from URL parameter (for debugging)
-  const urlParams = new URLSearchParams(window.location.search);
-  const autoPrompt = urlParams.get('prompt');
-  if (autoPrompt && selectedScoop) {
-    log.info('Auto-submitting prompt from URL', { prompt: autoPrompt });
-    // Clear previous state first - both the chat panel UI and the orchestrator data
-    await layout.panels.chat.clearSession();
-    await layout.onClearChat?.();
-    await layout.onClearFilesystem?.();
-    // Small delay to ensure UI is ready after clearing
-    setTimeout(() => {
-      orchestrator.handleMessage({
-        id: `auto-${Date.now().toString(36)}`,
-        senderId: 'user',
-        senderName: 'User',
-        channel: 'web',
-        timestamp: new Date().toISOString(),
-        content: autoPrompt,
-        chatJid: selectedScoop!.jid,
-        fromAssistant: false,
-      });
-    }, 500);
+  // Check for auto-prompt from URL parameter (for debugging, dev mode only)
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    const urlParams = new URLSearchParams(window.location.search);
+    const autoPrompt = urlParams.get('prompt');
+    if (autoPrompt && selectedScoop) {
+      log.info('Auto-submitting prompt from URL', { prompt: autoPrompt });
+      // Clear previous state first - both the chat panel UI and the orchestrator data
+      await layout.panels.chat.clearSession();
+      await layout.onClearChat?.();
+      await layout.onClearFilesystem?.();
+      // Small delay to ensure UI is ready after clearing
+      setTimeout(() => {
+        orchestrator.handleMessage({
+          id: `auto-${Date.now().toString(36)}`,
+          senderId: 'user',
+          senderName: 'User',
+          channel: 'web',
+          timestamp: new Date().toISOString(),
+          content: autoPrompt,
+          chatJid: selectedScoop!.jid,
+          fromAssistant: false,
+        });
+      }, 500);
+    }
   }
 
   // Initialize operational telemetry (fire-and-forget)
