@@ -5,6 +5,7 @@
 
 import type { CDPTransport } from './transport.js';
 import type { CDPEventListener, ConnectionState } from './types.js';
+import { reassembleCDPResponse } from '../scoops/tray-sync-protocol.js';
 
 /**
  * Interface for sending CDP requests over the data channel.
@@ -17,6 +18,7 @@ export interface RemoteCDPSender {
 export class RemoteCDPTransport implements CDPTransport {
   private readonly pending = new Map<string, { resolve: (r: Record<string, unknown>) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   private readonly eventListeners = new Map<string, Set<CDPEventListener>>();
+  private readonly chunkBuffers = new Map<string, { chunks: string[]; received: number; totalChunks: number }>();
   private _state: ConnectionState = 'connected';
   private requestCounter = 0;
 
@@ -81,13 +83,27 @@ export class RemoteCDPTransport implements CDPTransport {
   }
 
   /** Called by the sync manager when a cdp.response arrives for this transport. */
-  handleResponse(requestId: string, result?: Record<string, unknown>, error?: string): void {
+  handleResponse(requestId: string, result?: Record<string, unknown>, error?: string, chunkData?: string, chunkIndex?: number, totalChunks?: number): void {
     const entry = this.pending.get(requestId);
     if (!entry) return;
+
+    // Use reassembleCDPResponse for both chunked and non-chunked messages
+    const assembled = reassembleCDPResponse(this.chunkBuffers, {
+      type: 'cdp.response',
+      requestId,
+      result,
+      error,
+      chunkData,
+      chunkIndex,
+      totalChunks,
+    });
+
+    if (!assembled) return; // Still waiting for more chunks
+
     this.pending.delete(requestId);
     clearTimeout(entry.timer);
-    if (error) entry.reject(new Error(error));
-    else entry.resolve(result ?? {});
+    if (assembled.error) entry.reject(new Error(assembled.error));
+    else entry.resolve(assembled.result ?? {});
   }
 
   /** Called by the sync manager when a CDP event arrives for this transport. */

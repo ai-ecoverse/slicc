@@ -7,6 +7,8 @@ import type { AgentEvent, AgentHandle, ChatMessage } from '../ui/types.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
 import {
   createFollowerSyncChannel,
+  sendCDPResponse,
+  reassembleCDPResponse,
   type LeaderToFollowerMessage,
   type FollowerToLeaderMessage,
   type TraySyncChannel,
@@ -49,6 +51,8 @@ export interface FollowerSyncManagerOptions {
   vfs?: VirtualFS;
   /** Called when the follower wants to show a notification to the human (e.g. teleport auth progress). */
   onNotification?: (message: string) => void;
+  /** Called when local browser targets may have changed (e.g. after a tab is opened or closed). */
+  onTargetsChanged?: () => void;
 }
 
 /**
@@ -66,6 +70,8 @@ export class FollowerSyncManager implements AgentHandle {
   private targetEntries: TrayTargetEntry[] = [];
   /** Active RemoteCDPTransport instances keyed by requestId prefix for response routing. */
   private readonly remoteTransports = new Map<string, RemoteCDPTransport>();
+  /** Chunk buffers for reassembling chunked CDP responses from the leader. */
+  private readonly cdpChunkBuffers = new Map<string, { chunks: string[]; received: number; totalChunks: number }>();
   /** Resolvers for outgoing tab.open requests. */
   private readonly tabOpenResolvers = new Map<string, { resolve: (targetId: string) => void; reject: (err: Error) => void }>();
   /** Resolvers for outgoing fs requests. */
@@ -233,7 +239,7 @@ export class FollowerSyncManager implements AgentHandle {
       }
 
       case 'cdp.response': {
-        this.routeCDPResponse(message.requestId, message.result, message.error);
+        this.routeCDPResponse(message);
         break;
       }
       case 'tab.open': {
@@ -363,6 +369,7 @@ export class FollowerSyncManager implements AgentHandle {
       const result = await transport.send('Target.createTarget', { url, background: true });
       const targetId = result['targetId'] as string;
       this.sync.send({ type: 'tab.opened', requestId, targetId });
+      this.options.onTargetsChanged?.();
     } catch (err) {
       this.sync.send({ type: 'tab.open.error', requestId, error: err instanceof Error ? err.message : String(err) });
     }
@@ -370,7 +377,7 @@ export class FollowerSyncManager implements AgentHandle {
 
   /**
    * Execute a CDP command on the follower's local browser transport.
-   * Sends the response back to the leader.
+   * Sends the response back to the leader, chunking if necessary.
    */
   private async executeLocalCDP(
     requestId: string,
@@ -387,7 +394,7 @@ export class FollowerSyncManager implements AgentHandle {
 
     try {
       const result = await transport.send(method, params, sessionId);
-      this.sync.send({ type: 'cdp.response', requestId, result });
+      sendCDPResponse(this.sync, requestId, result);
     } catch (err) {
       this.sync.send({ type: 'cdp.response', requestId, error: err instanceof Error ? err.message : String(err) });
     }
@@ -395,11 +402,15 @@ export class FollowerSyncManager implements AgentHandle {
 
   /**
    * Route a CDP response from the leader to the appropriate RemoteCDPTransport.
+   * Handles chunked responses by reassembling before delivery.
    */
-  private routeCDPResponse(requestId: string, result?: Record<string, unknown>, error?: string): void {
+  private routeCDPResponse(message: LeaderToFollowerMessage & { type: 'cdp.response' }): void {
+    const assembled = reassembleCDPResponse(this.cdpChunkBuffers, message);
+    if (!assembled) return; // Still waiting for more chunks
+
     // Find the transport that has this pending request by checking all transports
     for (const transport of this.remoteTransports.values()) {
-      transport.handleResponse(requestId, result, error);
+      transport.handleResponse(message.requestId, assembled.result, assembled.error);
     }
   }
 

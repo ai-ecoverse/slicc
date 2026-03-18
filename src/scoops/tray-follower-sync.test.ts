@@ -672,6 +672,66 @@ describe('FollowerSyncManager', () => {
       }
     });
 
+    it('calls onTargetsChanged after successfully creating a local tab', async () => {
+      const channel = new FakeChannel();
+      const onTargetsChanged = vi.fn();
+      const fakeBrowserTransport = {
+        send: vi.fn().mockResolvedValue({ targetId: 'new-tab-id' }),
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        on: vi.fn(),
+        off: vi.fn(),
+        once: vi.fn(),
+        state: 'connected' as const,
+      };
+      const follower = new FollowerSyncManager(channel, {
+        browserTransport: fakeBrowserTransport,
+        onTargetsChanged,
+      });
+
+      channel.simulateLeaderMessage({
+        type: 'tab.open',
+        requestId: 'tabopen-cb',
+        url: 'https://example.com',
+      } as any);
+
+      await vi.waitFor(() => {
+        expect(channel.parseSent().some(m => m.type === 'tab.opened')).toBe(true);
+      });
+
+      expect(onTargetsChanged).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not call onTargetsChanged when tab creation fails', async () => {
+      const channel = new FakeChannel();
+      const onTargetsChanged = vi.fn();
+      const fakeBrowserTransport = {
+        send: vi.fn().mockRejectedValue(new Error('Creation failed')),
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        on: vi.fn(),
+        off: vi.fn(),
+        once: vi.fn(),
+        state: 'connected' as const,
+      };
+      const follower = new FollowerSyncManager(channel, {
+        browserTransport: fakeBrowserTransport,
+        onTargetsChanged,
+      });
+
+      channel.simulateLeaderMessage({
+        type: 'tab.open',
+        requestId: 'tabopen-fail',
+        url: 'https://example.com',
+      } as any);
+
+      await vi.waitFor(() => {
+        expect(channel.parseSent().some(m => m.type === 'tab.open.error')).toBe(true);
+      });
+
+      expect(onTargetsChanged).not.toHaveBeenCalled();
+    });
+
     it('openRemoteTab sends request and resolves on tab.opened', async () => {
       const channel = new FakeChannel();
       const follower = new FollowerSyncManager(channel);

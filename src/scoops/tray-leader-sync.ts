@@ -7,6 +7,8 @@ import type { AgentEvent, ChatMessage } from '../ui/types.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
 import {
   createLeaderSyncChannel,
+  sendCDPResponse,
+  reassembleCDPResponse,
   type LeaderToFollowerMessage,
   type FollowerToLeaderMessage,
   type TraySyncChannel,
@@ -110,6 +112,8 @@ export class LeaderSyncManager {
   private readonly runtimeToBootstrap = new Map<string, string>();
   /** Maps requestId → routing info for CDP requests in flight through the leader. */
   private readonly pendingCDPRoutes = new Map<string, PendingCDPRoute>();
+  /** Chunk buffers for reassembling chunked CDP responses from followers. */
+  private readonly cdpChunkBuffers = new Map<string, { chunks: string[]; received: number; totalChunks: number }>();
   /** Active RemoteCDPTransport instances for the leader's own BrowserAPI (keyed by runtimeId:localTargetId). */
   private readonly remoteTransports = new Map<string, RemoteCDPTransport>();
   /** Maps requestId → routing info for tab.open requests in flight through the leader. */
@@ -291,7 +295,7 @@ export class LeaderSyncManager {
         break;
       }
       case 'cdp.response': {
-        this.handleCDPResponse(message.requestId, message.result, message.error);
+        this.handleCDPResponse(message);
         break;
       }
       case 'tab.open': {
@@ -501,7 +505,7 @@ export class LeaderSyncManager {
 
   /**
    * Execute a CDP command on the leader's own browser transport.
-   * Sends the response back to the requesting follower.
+   * Sends the response back to the requesting follower, chunking if necessary.
    */
   private async executeLocalCDP(
     requestId: string,
@@ -522,7 +526,7 @@ export class LeaderSyncManager {
 
     try {
       const result = await transport.send(method, params, sessionId);
-      follower.sync.send({ type: 'cdp.response', requestId, result });
+      sendCDPResponse(follower.sync, requestId, result);
     } catch (err) {
       follower.sync.send({ type: 'cdp.response', requestId, error: err instanceof Error ? err.message : String(err) });
     }
@@ -560,23 +564,32 @@ export class LeaderSyncManager {
 
   /**
    * Handle a CDP response from a follower (forwarding back to the original requester).
+   * Supports chunked responses: reassembles chunks before forwarding, then re-chunks
+   * for the outbound channel.
    */
-  private handleCDPResponse(requestId: string, result?: Record<string, unknown>, error?: string): void {
+  private handleCDPResponse(message: FollowerToLeaderMessage & { type: 'cdp.response' }): void {
+    const { requestId, result, error, chunkData, chunkIndex, totalChunks } = message;
     const route = this.pendingCDPRoutes.get(requestId);
     if (!route) return;
+
+    // Reassemble chunked response from the follower
+    const assembled = reassembleCDPResponse(this.cdpChunkBuffers, message);
+    if (!assembled) return; // Still waiting for more chunks
+
     this.pendingCDPRoutes.delete(requestId);
 
     // Route to the leader's own RemoteCDPTransport if the requester is the leader itself
     if (route.requesterBootstrapId === '__leader__') {
       for (const transport of this.remoteTransports.values()) {
-        transport.handleResponse(requestId, result, error);
+        transport.handleResponse(requestId, assembled.result, assembled.error);
       }
       return;
     }
 
+    // Forward to the requesting follower, re-chunking if necessary
     const requester = this.followers.get(route.requesterBootstrapId);
     if (requester) {
-      requester.sync.send({ type: 'cdp.response', requestId, result, error });
+      sendCDPResponse(requester.sync, requestId, assembled.result, assembled.error);
     }
   }
 

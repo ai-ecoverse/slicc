@@ -1323,6 +1323,7 @@ async function main(): Promise<void> {
       }
       activeFollowerSync?.close();
 
+      const runtimeId = `follower-${connection.bootstrapId}`;
       const followerSync = new FollowerSyncManager(connection.channel, {
         browserTransport: browser.getTransport(),
         browserAPI: browser,
@@ -1335,13 +1336,13 @@ async function main(): Promise<void> {
         onStatus: (status) => {
           layout.panels.chat.setProcessing(status === 'processing');
         },
+        onTargetsChanged: () => void refreshFollowerTargets(),
       });
       activeFollowerSync = followerSync;
       browser.setTrayTargetProvider(followerSync);
       layout.panels.chat.setAgent(followerSync);
       followerSync.requestSnapshot();
 
-      const runtimeId = `follower-${connection.bootstrapId}`;
       const refreshFollowerTargets = async () => {
         try {
           const pages = await browser.listPages();
@@ -1401,57 +1402,70 @@ async function main(): Promise<void> {
       startFollowerJoin(trayRuntimeConfig.joinUrl);
     } else if (trayRuntimeConfig?.workerBaseUrl) {
       let leaderTray!: LeaderTrayManager;
-      const leaderSync = new LeaderSyncManager({
-        browserTransport: browser.getTransport(),
-        browserAPI: browser,
-        getMessages: () => {
-          return layout.panels.chat.getMessages();
-        },
-        getScoopJid: () => selectedScoop?.jid ?? 'cone',
-        onFollowerMessage: (text, messageId) => {
-          // Display the follower's message in the leader's chat panel
-          layout.panels.chat.addUserMessage(text);
-          // Route follower messages through the same path as local user messages.
-          // coneAgentHandle.sendMessage broadcasts user_message_echo to all followers.
-          coneAgentHandle.sendMessage(text, messageId);
-        },
-        onFollowerAbort: () => {
-          coneAgentHandle.stop();
-        },
-      });
-      leaderSyncRef = leaderSync;
-      setConnectedFollowersGetter(() => leaderSync.getConnectedFollowers());
-      // Wire the leader as a TrayTargetProvider so BrowserAPI can list all tray targets
-      browser.setTrayTargetProvider(leaderSync);
+      // Helper: create and wire a LeaderSyncManager + LeaderTrayPeerManager pair.
+      // Called on initial startup and again after `host reset`.
+      let leaderSync!: LeaderSyncManager;
+      let trayPeers!: LeaderTrayPeerManager;
+      let leaderTargetRefreshInterval: ReturnType<typeof setInterval>;
 
-      // Periodically refresh leader's own browser targets into the registry
-      const refreshLeaderTargets = async () => {
-        try {
-          const pages = await browser.listPages();
-          leaderSync.setLocalTargets(pages.map(p => ({ targetId: p.targetId, title: p.title, url: p.url })));
-        } catch { /* ignore errors */ }
+      const createAndWireLeaderSync = () => {
+        leaderSync = new LeaderSyncManager({
+          browserTransport: browser.getTransport(),
+          browserAPI: browser,
+          getMessages: () => {
+            return layout.panels.chat.getMessages();
+          },
+          getScoopJid: () => selectedScoop?.jid ?? 'cone',
+          onFollowerMessage: (text, messageId) => {
+            // Display the follower's message in the leader's chat panel
+            layout.panels.chat.addUserMessage(text);
+            // Route follower messages through the same path as local user messages.
+            // coneAgentHandle.sendMessage broadcasts user_message_echo to all followers.
+            coneAgentHandle.sendMessage(text, messageId);
+          },
+          onFollowerAbort: () => {
+            coneAgentHandle.stop();
+          },
+        });
+        leaderSyncRef = leaderSync;
+        setConnectedFollowersGetter(() => leaderSync.getConnectedFollowers());
+        // Wire the leader as a TrayTargetProvider so BrowserAPI can list all tray targets
+        browser.setTrayTargetProvider(leaderSync);
+
+        // Periodically refresh leader's own browser targets into the registry
+        if (leaderTargetRefreshInterval) clearInterval(leaderTargetRefreshInterval);
+        const refreshLeaderTargets = async () => {
+          try {
+            const pages = await browser.listPages();
+            leaderSync.setLocalTargets(pages.map(p => ({ targetId: p.targetId, title: p.title, url: p.url })));
+          } catch { /* ignore errors */ }
+        };
+        leaderTargetRefreshInterval = setInterval(refreshLeaderTargets, 5000);
+        void refreshLeaderTargets();
+
+        trayPeers = new LeaderTrayPeerManager({
+          sendControlMessage: message => leaderTray.sendControlMessage(message),
+          onPeerConnected: (peer, channel) => {
+            log.info('Tray follower data channel opened', {
+              controllerId: peer.controllerId,
+              bootstrapId: peer.bootstrapId,
+              attempt: peer.attempt,
+              runtime: peer.runtime,
+            });
+            leaderSync.addFollower(peer.bootstrapId, channel, {
+              runtime: peer.runtime,
+              connectedAt: peer.connectedAt ?? undefined,
+            });
+          },
+        });
       };
-      const leaderTargetRefreshInterval = setInterval(refreshLeaderTargets, 5000);
-      void refreshLeaderTargets();
+
+      createAndWireLeaderSync();
 
       // Tap into the event system to broadcast to followers
+      // Uses `leaderSync` variable (reassigned on reset) so it always targets the current instance.
       eventListeners.add((event: UIAgentEvent) => {
         leaderSync.broadcastEvent(event);
-      });
-      const trayPeers = new LeaderTrayPeerManager({
-        sendControlMessage: message => leaderTray.sendControlMessage(message),
-        onPeerConnected: (peer, channel) => {
-          log.info('Tray follower data channel opened', {
-            controllerId: peer.controllerId,
-            bootstrapId: peer.bootstrapId,
-            attempt: peer.attempt,
-            runtime: peer.runtime,
-          });
-          leaderSync.addFollower(peer.bootstrapId, channel, {
-            runtime: peer.runtime,
-            connectedAt: peer.connectedAt ?? undefined,
-          });
-        },
       });
       leaderTray = new LeaderTrayManager({
         workerBaseUrl: trayRuntimeConfig.workerBaseUrl,
@@ -1480,6 +1494,8 @@ async function main(): Promise<void> {
         if (trayUrl !== window.location.href) {
           window.history.replaceState(window.history.state, '', trayUrl);
         }
+        // Re-create LeaderSyncManager + TrayPeerManager so new followers can connect
+        createAndWireLeaderSync();
         return getLeaderTrayRuntimeStatus();
       });
 

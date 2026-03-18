@@ -233,4 +233,77 @@ describe('RemoteCDPTransport', () => {
       expect(transport.state).toBe('disconnected');
     });
   });
+
+  describe('chunked responses', () => {
+    it('reassembles chunked response into full result', async () => {
+      const { sender, calls } = createFakeSender();
+      const transport = new RemoteCDPTransport(sender);
+
+      const promise = transport.send('Accessibility.getFullAXTree');
+      const requestId = calls[0].requestId;
+
+      const original = { nodes: [{ id: 1 }, { id: 2 }] };
+      const serialized = JSON.stringify(original);
+      const mid = Math.ceil(serialized.length / 2);
+
+      // Send chunk 0
+      transport.handleResponse(requestId, undefined, undefined, serialized.slice(0, mid), 0, 2);
+
+      // Send chunk 1
+      transport.handleResponse(requestId, undefined, undefined, serialized.slice(mid), 1, 2);
+
+      const result = await promise;
+      expect(result).toEqual(original);
+    });
+
+    it('handles out-of-order chunked delivery', async () => {
+      const { sender, calls } = createFakeSender();
+      const transport = new RemoteCDPTransport(sender);
+
+      const promise = transport.send('Accessibility.getFullAXTree');
+      const requestId = calls[0].requestId;
+
+      const original = { big: 'data' };
+      const serialized = JSON.stringify(original);
+      const third = Math.ceil(serialized.length / 3);
+
+      // Send chunks out of order: 2, 0, 1
+      transport.handleResponse(requestId, undefined, undefined, serialized.slice(2 * third), 2, 3);
+      transport.handleResponse(requestId, undefined, undefined, serialized.slice(0, third), 0, 3);
+      transport.handleResponse(requestId, undefined, undefined, serialized.slice(third, 2 * third), 1, 3);
+
+      const result = await promise;
+      expect(result).toEqual(original);
+    });
+
+    it('rejects promise when chunked transfer reports error', async () => {
+      const { sender, calls } = createFakeSender();
+      const transport = new RemoteCDPTransport(sender);
+
+      const promise = transport.send('Accessibility.getFullAXTree');
+      const requestId = calls[0].requestId;
+
+      // Send first chunk
+      transport.handleResponse(requestId, undefined, undefined, '{"partial":', 0, 2);
+
+      // Then an error for the second chunk
+      transport.handleResponse(requestId, undefined, 'Failed to send chunk 1', undefined, 1, 2);
+
+      await expect(promise).rejects.toThrow('Failed to send chunk 1');
+    });
+
+    it('non-chunked responses still work (backward compat)', async () => {
+      const { sender, calls } = createFakeSender();
+      const transport = new RemoteCDPTransport(sender);
+
+      const promise = transport.send('Page.navigate', { url: 'https://example.com' });
+      const requestId = calls[0].requestId;
+
+      // Non-chunked response (no chunkIndex/totalChunks)
+      transport.handleResponse(requestId, { frameId: 'f1' });
+
+      const result = await promise;
+      expect(result).toEqual({ frameId: 'f1' });
+    });
+  });
 });
