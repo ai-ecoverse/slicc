@@ -120,7 +120,7 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **skill list/install/uninstall** — Manage skills from /workspace/skills/
 - **upskill** — Install skills from GitHub (`upskill owner/repo`) or ClawHub (`upskill clawhub:name`)
 - **webhook/crontask** — Set up licks (external event triggers)
-- **sprinkle** — Manage sprinkles: `sprinkle list`, `sprinkle open <name>`, `sprinkle close <name>`, `sprinkle send <name> '<json>'` (push data to a sprinkle)
+- **sprinkle** — Manage sprinkles: `sprinkle list`, `sprinkle open <name>`, `sprinkle close <name>`, `sprinkle send <name> '<json>'` (push data), `sprinkle chat '<html>'` (inline chat UI)
 - **oauth-token** — Get an OAuth access token for a provider (`oauth-token adobe`); auto-triggers login if no valid token exists. Use in shell: `curl -H "Authorization: Bearer $(oauth-token adobe)" https://api.example.com`
 - **aem** — AEM Edge Delivery Services: `aem list`, `aem get`, `aem put`, `aem preview`, `aem publish`, `aem upload`. Accepts EDS URLs (`https://main--repo--org.aem.page/path`). Auth via `oauth-token adobe`. Run `aem help` for details.
 - **git** — Full git support (clone, commit, push, pull)

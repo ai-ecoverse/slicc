@@ -36,6 +36,7 @@ The cone will send you a message with the lick action and your sprinkle name. On
 - `sprinkle open <name>` — show a sprinkle in the sidebar
 - `sprinkle close <name>` — remove it
 - `sprinkle send <name> '<json>'` — push data (single-quote the JSON!)
+- `sprinkle chat '<html>'` — show inline HTML in the chat (for quick confirmations/choices)
 - `open /path/to/file.shtml` — also opens as a sprinkle
 
 **Bridge API** (available as `slicc` in `<script>` tags and `onclick` attributes):
