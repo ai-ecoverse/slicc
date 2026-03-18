@@ -45,6 +45,10 @@ export interface ScoopContextCallbacks {
   onToolStart?: (toolName: string, toolInput: unknown) => void;
   /** Called when a tool finishes executing */
   onToolEnd?: (toolName: string, result: string, isError: boolean) => void;
+  /** Called when a tool requests UI interaction */
+  onToolUI?: (toolName: string, requestId: string, html: string) => void;
+  /** Called when tool UI interaction is complete */
+  onToolUIDone?: (requestId: string) => void;
   /** Called when agent uses send_message tool */
   onSendMessage: (text: string, sender?: string) => void;
   /** Get all scoops (for cone) */
@@ -322,6 +326,17 @@ export class ScoopContext {
 
       case 'tool_execution_start': {
         this.callbacks.onToolStart?.(event.toolName, event.args);
+        break;
+      }
+
+      case 'tool_execution_update': {
+        // Handle tool UI requests from onUpdate
+        const partialResult = event.partialResult as { content?: Array<{ type: string; requestId?: string; html?: string }> };
+        for (const c of partialResult?.content ?? []) {
+          if (c.type === 'tool_ui' && c.requestId && c.html) {
+            this.callbacks.onToolUI?.(event.toolName, c.requestId, c.html);
+          }
+        }
         break;
       }
 

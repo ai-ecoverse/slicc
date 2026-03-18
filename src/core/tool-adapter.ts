@@ -11,6 +11,7 @@ import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { ToolDefinition, ImageContent, TextContent } from './types.js';
 import { processImageContent } from './image-processor.js';
 import { createLogger } from './logger.js';
+import { setToolExecutionContext } from '../tools/tool-ui.js';
 
 const log = createLogger('tool-adapter');
 
@@ -82,23 +83,33 @@ export function adaptTool(tool: ToolDefinition): AgentTool<any> {
       _toolCallId: string,
       params: Record<string, any>,
       _signal?: AbortSignal,
-      _onUpdate?: (partialResult: AgentToolResult<any>) => void,
+      onUpdate?: (partialResult: AgentToolResult<any>) => void,
     ): Promise<AgentToolResult<any>> {
-      const result = await tool.execute(params);
-      let content: (TextContent | ImageContent)[];
-      try {
-        content = await parseToolResultContent(result.content);
-      } catch (err) {
-        log.warn('Image processing failed, falling back to raw content', {
-          tool: tool.name,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        content = parseToolResultContentRaw(result.content);
+      // Set execution context so shell commands can show UI if needed
+      if (onUpdate) {
+        setToolExecutionContext({ onUpdate, toolName: tool.name });
       }
-      return {
-        content,
-        details: { isError: result.isError },
-      };
+
+      try {
+        const result = await tool.execute(params);
+        let content: (TextContent | ImageContent)[];
+        try {
+          content = await parseToolResultContent(result.content);
+        } catch (err) {
+          log.warn('Image processing failed, falling back to raw content', {
+            tool: tool.name,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          content = parseToolResultContentRaw(result.content);
+        }
+        return {
+          content,
+          details: { isError: result.isError },
+        };
+      } finally {
+        // Clear execution context
+        setToolExecutionContext(null);
+      }
     },
   };
 }

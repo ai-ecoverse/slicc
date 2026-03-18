@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: auto; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+
+  /* Default tool UI styles */
+  .tool-ui {
+    padding: 12px;
+    background: var(--bg-secondary, #1a1a1a);
+    border-radius: 8px;
+    color: var(--text-primary, #e0e0e0);
+  }
+
+  .tool-ui p { margin: 0 0 12px 0; }
+
+  .tool-ui code {
+    background: var(--bg-tertiary, #2a2a2a);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'SF Mono', Menlo, monospace;
+    font-size: 0.9em;
+  }
+
+  .tool-ui__actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  .tool-ui__btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+
+  .tool-ui__btn:hover { opacity: 0.9; }
+  .tool-ui__btn--primary { background: var(--accent, #3b82f6); color: white; }
+  .tool-ui__btn--secondary { background: var(--bg-tertiary, #2a2a2a); color: var(--text-primary, #e0e0e0); }
+  .tool-ui__btn--danger { background: #dc2626; color: white; }
+</style>
+<script>
+/**
+ * Tool UI Sandbox — CSP-exempt page for rendering tool UI elements.
+ * Receives HTML via postMessage, renders it, and relays button clicks
+ * back to the parent with user gesture context.
+ *
+ * Unlike sprinkle-sandbox, this is simpler — no persistent state,
+ * just render HTML and handle actions.
+ */
+
+window.__toolui_id = '';
+
+// Handle clicks on elements with data-action attribute
+document.addEventListener('click', function(e) {
+  var target = e.target;
+  while (target && target !== document.body) {
+    if (target.dataset && target.dataset.action) {
+      var action = target.dataset.action;
+      var data = target.dataset.actionData;
+      try { data = data ? JSON.parse(data) : undefined; } catch(err) { /* keep as string */ }
+
+      // Post the action to parent — this runs with user gesture context!
+      parent.postMessage({
+        type: 'tool-ui-action',
+        id: window.__toolui_id,
+        action: action,
+        data: data,
+      }, '*');
+
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    target = target.parentElement;
+  }
+});
+
+// Handle form submissions
+document.addEventListener('submit', function(e) {
+  e.preventDefault();
+  var form = e.target;
+  var formData = new FormData(form);
+  var data = {};
+  formData.forEach(function(value, key) { data[key] = value; });
+
+  parent.postMessage({
+    type: 'tool-ui-action',
+    id: window.__toolui_id,
+    action: form.dataset.action || 'submit',
+    data: data,
+  }, '*');
+});
+
+// Listen for render messages from parent
+addEventListener('message', function(e) {
+  var msg = e.data;
+  if (!msg || !msg.type) return;
+
+  if (msg.type === 'tool-ui-render') {
+    window.__toolui_id = msg.id || '';
+
+    // Inject theme CSS from parent
+    if (msg.themeCSS) {
+      var themeStyle = document.createElement('style');
+      themeStyle.textContent = msg.themeCSS;
+      document.head.appendChild(themeStyle);
+    }
+
+    // Render the HTML content
+    document.body.innerHTML = msg.html;
+
+    parent.postMessage({ type: 'tool-ui-rendered', id: msg.id }, '*');
+  }
+});
+</script>
+</head>
+<body></body>
+</html>

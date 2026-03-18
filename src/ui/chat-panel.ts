@@ -15,6 +15,7 @@ import {
 import { SessionStore } from './session-store.js';
 import { createLogger } from '../core/logger.js';
 import { VoiceInput, getVoiceAutoSend, getVoiceLang } from './voice-input.js';
+import { createToolUIRenderer, disposeToolUIRenderer } from './tool-ui-renderer.js';
 
 const log = createLogger('chat-panel');
 
@@ -497,6 +498,12 @@ export class ChatPanel {
       case 'tool_result':
         this.handleToolResult(event.messageId, event.toolName, event.result, event.isError);
         break;
+      case 'tool_ui':
+        this.handleToolUI(event.messageId, event.toolName, event.requestId, event.html);
+        break;
+      case 'tool_ui_done':
+        this.handleToolUIDone(event.messageId, event.requestId);
+        break;
       case 'turn_end':
         this.handleTurnEnd(event.messageId);
         break;
@@ -576,6 +583,46 @@ export class ChatPanel {
       tc.isError = isError;
     }
     this.updateMessageEl(messageId);
+  }
+
+  private handleToolUI(messageId: string, toolName: string, requestId: string, html: string): void {
+    const msg = this.findMessage(messageId);
+    if (!msg || !msg.toolCalls) return;
+
+    // Find the tool call to attach the UI to
+    const tc = [...msg.toolCalls].reverse().find((t) => t.name === toolName && t.result === undefined);
+    if (!tc) return;
+
+    // Store the request ID for later cleanup
+    (tc as any)._toolUIRequestId = requestId;
+
+    // Find the tool call element and add a UI container
+    const wrapper = this.messagesEl.querySelector(`[data-message-id="${messageId}"]`);
+    if (!wrapper) return;
+
+    // Find the tool call element (last one with matching name)
+    const toolCallEls = wrapper.querySelectorAll('.tool-call');
+    const toolCallEl = [...toolCallEls].reverse().find((el) => {
+      const nameEl = el.querySelector('.tool-call__name');
+      return nameEl?.textContent === toolName;
+    });
+
+    if (toolCallEl) {
+      // Create a container for the tool UI
+      let uiContainer = toolCallEl.querySelector('.tool-call__ui') as HTMLElement;
+      if (!uiContainer) {
+        uiContainer = document.createElement('div');
+        uiContainer.className = 'tool-call__ui';
+        toolCallEl.appendChild(uiContainer);
+      }
+
+      // Render the tool UI
+      createToolUIRenderer(uiContainer, requestId, html);
+    }
+  }
+
+  private handleToolUIDone(_messageId: string, requestId: string): void {
+    disposeToolUIRenderer(requestId);
   }
 
   private handleTurnEnd(_messageId: string): void {

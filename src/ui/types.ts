@@ -28,6 +28,8 @@ export type AgentEvent =
   | { type: 'content_done'; messageId: string }
   | { type: 'tool_use_start'; messageId: string; toolName: string; toolInput: unknown }
   | { type: 'tool_result'; messageId: string; toolName: string; result: string; isError?: boolean }
+  | { type: 'tool_ui'; messageId: string; toolName: string; requestId: string; html: string }
+  | { type: 'tool_ui_done'; messageId: string; requestId: string }
   | { type: 'turn_end'; messageId: string }
   | { type: 'error'; error: string }
   | { type: 'screenshot'; base64: string; url?: string }

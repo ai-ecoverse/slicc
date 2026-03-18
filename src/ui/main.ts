@@ -715,6 +715,19 @@ async function main(): Promise<void> {
           emitToUI({ type: 'tool_result', messageId: msgId, toolName, result, isError });
         }
       },
+      onToolUI: (scoopJid, toolName, requestId, html) => {
+        // Emit tool UI request to chat panel
+        const msgId = scoopCurrentMessageId.get(scoopJid);
+        if (selectedScoop?.jid === scoopJid && msgId) {
+          emitToUI({ type: 'tool_ui', messageId: msgId, toolName, requestId, html });
+        }
+      },
+      onToolUIDone: (scoopJid, requestId) => {
+        const msgId = scoopCurrentMessageId.get(scoopJid);
+        if (selectedScoop?.jid === scoopJid && msgId) {
+          emitToUI({ type: 'tool_ui_done', messageId: msgId, requestId });
+        }
+      },
       onIncomingMessage: (scoopJid, message) => {
         // Buffer incoming messages (delegations, etc.) for display
         const chatMsg: ChatMessage = {
