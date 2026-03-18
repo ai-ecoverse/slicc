@@ -183,6 +183,8 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   const { VirtualFS } = await import('../fs/index.js');
 
   const layout = new Layout(app, true);
+  // Expose debug tab toggle for the shell `debug` command
+  (window as any).__slicc_debug_tabs = (show: boolean) => layout.setDebugTabs(show);
   await layout.panels.chat.initSession('session-cone');
 
   let selectedScoop: RegisteredScoop | null = null;

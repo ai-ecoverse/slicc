@@ -143,6 +143,7 @@
 | `oauth-token-command.ts` | `oauth-token` — retrieve OAuth access tokens for configured providers with auto-login |
 | `playwright-command.ts` | `playwright-cli` / `playwright` / `puppeteer` — browser automation shell commands (navigate, snapshot, click, screenshot, cookies, HAR recording) |
 | `sprinkle-command.ts` | `sprinkle` — list, open, close, and refresh `.shtml` sprinkle panels from the agent |
+| `debug-command.ts` | `debug` — toggle Terminal/Memory tabs in extension mode (extension-only, uses dual-context hook+relay pattern) |
 | `magick-wasm.ts` | Shared ImageMagick WASM initialization module for dual-mode (CLI/browser CDN vs extension bundled) image processing |
 
 ### src/skills/ — Skill Package Manager
@@ -304,6 +305,8 @@ The Chrome extension uses a three-layer design to keep the agent engine alive ac
 - `slicc-groups` DB: Orchestrator routing data (scoops, tasks, webhooks, crontasks)
 
 **CDP Proxy:** Offscreen documents can't call `chrome.debugger` directly. Instead, offscreen sends `CdpProxyMessage` through the service worker, which translates to `chrome.debugger` commands and routes results back.
+
+**Dual Shell Context:** Both the side panel and offscreen document run their own WasmShell instance. The panel shell powers the Terminal tab; the offscreen shell executes agent bash tool calls. They share VFS via IndexedDB but NOT window globals or DOM. Shell commands that affect the panel UI (e.g., `debug on`) must use the dual-context pattern: try `window.__slicc_*` hook first (panel), fall back to `chrome.runtime.sendMessage` relay (offscreen → panel). See `docs/pitfalls.md` "Extension Dual-Shell Context".
 
 ## Data Flow Diagrams
 

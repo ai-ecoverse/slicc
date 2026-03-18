@@ -82,7 +82,7 @@ Virtual Filesystem (src/fs/) → RestrictedFS → Shell (src/shell/) + Git (src/
 
 **VirtualFS** (`src/fs/`): POSIX-like async FS backed by LightningFS (IndexedDB). `RestrictedFS` wraps it with path ACLs for scoops. `FsError` carries POSIX error codes.
 
-**Shell** (`src/shell/`): WasmShell wraps just-bash 2.11.7 (WASM). 78+ commands including `git`, `node -e`, `python3 -c`, `playwright-cli`, `open`, `serve`, `sqlite3`, `convert`, `pdftk`, `skill`, `upskill`, `webhook`, `crontask`, `mount`, `oauth-token`. Any `*.jsh` file on VFS is auto-discovered as a command. Extension CSP workaround: dynamic code routes through `sandbox.html`.
+**Shell** (`src/shell/`): WasmShell wraps just-bash 2.11.7 (WASM). 78+ commands including `git`, `node -e`, `python3 -c`, `playwright-cli`, `open`, `serve`, `sqlite3`, `convert`, `pdftk`, `skill`, `upskill`, `webhook`, `crontask`, `mount`, `oauth-token`, `debug`. Any `*.jsh` file on VFS is auto-discovered as a command. Extension CSP workaround: dynamic code routes through `sandbox.html`. **Two shell contexts in extension mode**: side panel has its own WasmShell (mounted in terminal tab), offscreen document has the agent's WasmShell (runs bash tool calls). Commands that affect the UI must handle both — use `window.__slicc_*` hooks for direct calls (panel) and `chrome.runtime.sendMessage` relay for offscreen→panel communication.
 
 **CDP** (`src/cdp/`): `CDPTransport` interface with WebSocket (CLI) and `chrome.debugger` (extension) implementations. `BrowserAPI` provides Playwright-style API (listPages, navigate, screenshot, evaluate, click, etc.). Screenshots normalize DPR to 1.
 
@@ -92,9 +92,9 @@ Virtual Filesystem (src/fs/) → RestrictedFS → Shell (src/shell/) + Git (src/
 
 **Context Compaction** (`src/core/context-compaction.ts`): LLM-summarized compaction at ~183K tokens. Images auto-resized before LLM (5MB base64 limit). Overflow recovery replaces oversized messages (>40K chars) with placeholders.
 
-**UI** (`src/ui/`): Vanilla TypeScript, no framework. Extension mode: compact tabbed interface. Standalone: resizable split layout. `main.ts` delegates to `mainExtension()` (OffscreenClient) or bootstraps Orchestrator directly.
+**UI** (`src/ui/`): Vanilla TypeScript, no framework. Extension mode: compact tabbed interface (Chat + Files visible by default; Terminal + Memory hidden — toggle with `debug on`). Standalone: resizable split layout with all panels visible. `main.ts` delegates to `mainExtension()` (OffscreenClient) or bootstraps Orchestrator directly. Tab bar is fully dynamic — `TabZone.addTab()`/`removeTab()` adds/removes tabs at runtime (used by sprinkle panels and the `debug` command).
 
-**Extension** (`src/extension/`): Service worker relays messages + proxies chrome.debugger. Offscreen document runs agent engine (survives side panel close). Chat persistence: `browser-coding-agent` IndexedDB is single source of truth.
+**Extension** (`src/extension/`): Service worker relays messages + proxies chrome.debugger. Offscreen document runs agent engine (survives side panel close). Chat persistence: `browser-coding-agent` IndexedDB is single source of truth. **Key architecture detail**: the extension has two separate execution contexts with independent shell instances — the side panel (UI, terminal shell, Layout) and the offscreen document (agent engine, bash tool shell, Orchestrator). They share IndexedDB but NOT window globals. Communication is via `chrome.runtime` messages routed through the service worker. See `docs/architecture.md` "Extension Three-Layer Architecture".
 
 **Preview SW** (`src/ui/preview-sw.ts`): Intercepts `/preview/*` requests, serves VFS content. Built as IIFE via esbuild (not rollup — avoids code-splitting issues in SWs).
 
