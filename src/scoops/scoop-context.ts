@@ -689,6 +689,11 @@ ${scoopMemory}
       fullPrompt += skillsSection;
     }
 
+    // Add coordination directory hint for sibling awareness
+    if (!this.scoop.isCone) {
+      fullPrompt += `\n\n## Sibling Coordination\nCheck \`/shared/.coordination/\` for JSON files describing other scoops working in parallel. Each file contains the scoop's name, task, status, and delegation time.`;
+    }
+
     return fullPrompt;
   }
 }

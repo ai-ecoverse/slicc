@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { VirtualFS } from './virtual-fs.js';
 import { FsError } from './types.js';
 
@@ -172,6 +172,88 @@ describe('VirtualFS', () => {
         expect(err).toBeInstanceOf(FsError);
         expect((err as FsError).code).toBe('ENOENT');
       }
+    });
+  });
+
+  describe('onWrite callback', () => {
+    it('fires on writeFile under /shared/', async () => {
+      const cb = vi.fn();
+      vfs.onWrite = cb;
+      await vfs.mkdir('/shared', { recursive: true });
+      cb.mockClear(); // ignore mkdir notification
+
+      await vfs.writeFile('/shared/data.txt', 'hello');
+      expect(cb).toHaveBeenCalledWith('/shared/data.txt', undefined);
+    });
+
+    it('fires on mkdir under /shared/', async () => {
+      const cb = vi.fn();
+      await vfs.mkdir('/shared', { recursive: true });
+      vfs.onWrite = cb;
+
+      await vfs.mkdir('/shared/subdir');
+      expect(cb).toHaveBeenCalledWith('/shared/subdir', undefined);
+    });
+
+    it('fires on rm under /shared/', async () => {
+      const cb = vi.fn();
+      await vfs.writeFile('/shared/doomed.txt', 'bye');
+      vfs.onWrite = cb;
+
+      await vfs.rm('/shared/doomed.txt');
+      expect(cb).toHaveBeenCalledWith('/shared/doomed.txt', undefined);
+    });
+
+    it('fires on rename when source or dest is under /shared/', async () => {
+      const cb = vi.fn();
+      await vfs.mkdir('/shared', { recursive: true });
+      await vfs.writeFile('/shared/old.txt', 'data');
+      vfs.onWrite = cb;
+
+      await vfs.rename('/shared/old.txt', '/shared/new.txt');
+      expect(cb).toHaveBeenCalledTimes(2);
+      expect(cb).toHaveBeenCalledWith('/shared/old.txt', undefined);
+      expect(cb).toHaveBeenCalledWith('/shared/new.txt', undefined);
+    });
+
+    it('does NOT fire for writes outside /shared/', async () => {
+      const cb = vi.fn();
+      vfs.onWrite = cb;
+
+      await vfs.writeFile('/workspace/file.txt', 'data');
+      await vfs.mkdir('/scoops/test', { recursive: true });
+      await vfs.rm('/workspace/file.txt');
+      expect(cb).not.toHaveBeenCalled();
+    });
+
+    it('does NOT fire for writes to /shared/.coordination/', async () => {
+      const cb = vi.fn();
+      await vfs.mkdir('/shared/.coordination', { recursive: true });
+      vfs.onWrite = cb;
+
+      await vfs.writeFile('/shared/.coordination/scoop.json', '{}');
+      expect(cb).not.toHaveBeenCalled();
+    });
+
+    it('works normally without a callback registered', async () => {
+      // No onWrite set — should not throw
+      await vfs.mkdir('/shared', { recursive: true });
+      await vfs.writeFile('/shared/file.txt', 'data');
+      await vfs.rm('/shared/file.txt');
+      expect(await vfs.exists('/shared/file.txt')).toBe(false);
+    });
+
+    it('passes currentWriter to the callback', async () => {
+      const cb = vi.fn();
+      vfs.onWrite = cb;
+      await vfs.mkdir('/shared', { recursive: true });
+      cb.mockClear();
+
+      vfs.currentWriter = 'my-scoop';
+      await vfs.writeFile('/shared/output.txt', 'result');
+      vfs.currentWriter = undefined;
+
+      expect(cb).toHaveBeenCalledWith('/shared/output.txt', 'my-scoop');
     });
   });
 });

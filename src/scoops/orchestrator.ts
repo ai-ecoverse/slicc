@@ -28,6 +28,19 @@ import { SessionStore } from '../core/session.js';
 
 const log = createLogger('orchestrator');
 
+/** Time window (ms) for grouping consecutive delegateToScoop calls into a wave. */
+const WAVE_WINDOW_MS = 1000;
+
+/** A delegation wave groups scoops delegated in quick succession. */
+export interface DelegationWave {
+  id: string;
+  scoopJids: Set<string>;
+  completedJids: Set<string>;
+  /** Per-scoop filesystem snapshots captured at delegation time (before). */
+  snapshots: Map<string, Map<string, { size: number }>>;
+  createdAt: number;
+}
+
 export interface OrchestratorCallbacks {
   /** Called when a scoop sends a response */
   onResponse: (scoopJid: string, text: string, isPartial: boolean) => void;
@@ -69,8 +82,16 @@ export class Orchestrator {
   private sharedFs: VirtualFS | null = null;
   /** Accumulates response text per scoop for routing back to cone on completion. */
   private scoopResponseBuffer: Map<string, string> = new Map();
+  /** Stores the first ~200 chars of each delegation prompt per scoop for coordination context. */
+  private scoopTaskSummaries: Map<string, string> = new Map();
+  /** Captures filesystem state at delegation time for structured completion diffs. */
+  private scoopFilesystemSnapshots: Map<string, Map<string, { size: number }>> = new Map();
   private lickManager: LickManager | null = null;
   private sessionStore: SessionStore | null = null;
+  /** Tracks delegation waves — scoops delegated within WAVE_WINDOW_MS are grouped. */
+  private delegationWaves: DelegationWave[] = [];
+  /** Timestamp of the last delegateToScoop call, used to detect wave boundaries. */
+  private lastDelegationTime: number = 0;
 
   constructor(
     container: HTMLElement,
@@ -89,6 +110,28 @@ export class Orchestrator {
     // Create the single shared VirtualFS
     this.sharedFs = await VirtualFS.create({ dbName: 'slicc-fs' });
     this.sessionStore = new SessionStore();
+
+    // Register write notification callback for /shared/ changes
+    this.sharedFs.onWrite = (path: string, writer?: string) => {
+      const cone = Array.from(this.scoops.values()).find(s => s.isCone);
+      if (!cone || !writer) return;
+      const content = `[filesystem] Scoop '${writer}' modified ${path}`;
+      const notifyMsg: ChannelMessage = {
+        id: `fs-notify-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        chatJid: cone.jid,
+        senderId: writer,
+        senderName: writer,
+        content,
+        timestamp: new Date().toISOString(),
+        fromAssistant: false,
+        channel: 'fs-notify',
+      };
+      this.handleMessage(notifyMsg).catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn('Failed to route fs-notify to cone', { path, writer, error: msg });
+      });
+    };
+
     await this.ensureRootStructure();
 
     const savedScoops = await db.getAllScoops();
@@ -226,6 +269,13 @@ export class Orchestrator {
       if (err) throw err;
     }
 
+    // Delete coordination file before losing the scoop reference
+    if (scoop) {
+      await this.deleteCoordinationFile(scoop.folder).catch((err) => {
+        log.warn('Failed to delete coordination file', { jid, error: err instanceof Error ? err.message : String(err) });
+      });
+    }
+
     await this.destroyScoopTab(jid);
     this.sessionStore?.delete(jid).catch((err) => {
       log.warn('Failed to delete agent session', { jid, error: err instanceof Error ? err.message : String(err) });
@@ -234,6 +284,8 @@ export class Orchestrator {
     this.scoops.delete(jid);
     this.messageQueues.delete(jid);
     this.lastAgentTimestamp.delete(jid);
+    this.scoopTaskSummaries.delete(jid);
+    this.scoopFilesystemSnapshots.delete(jid);
     log.info('Scoop unregistered', { jid });
   }
 
@@ -249,6 +301,9 @@ export class Orchestrator {
 
   /** Wipe the virtual filesystem and re-seed default files (skills, shared CLAUDE.md). */
   async resetFilesystem(): Promise<void> {
+    // Clean up coordination directory before wiping
+    await this.cleanupCoordinationDirectory();
+
     // Destroy all scoop contexts (they hold references to the old VFS)
     for (const [jid, ctx] of this.contexts.entries()) {
       ctx.stop();
@@ -274,6 +329,8 @@ export class Orchestrator {
       ctx.clearMessages();
     }
     this.lastAgentTimestamp.clear();
+    this.scoopFilesystemSnapshots.clear();
+    this.delegationWaves.length = 0;
     for (const jid of this.scoops.keys()) {
       this.messageQueues.set(jid, []);
     }
@@ -299,12 +356,60 @@ export class Orchestrator {
     await this.routeToScoop(message);
   }
 
+  /** Build a coordination context block listing active sibling scoops.
+   *  Returns empty string if there are no active non-cone siblings. */
+  buildCoordinationContext(excludeJid: string): string {
+    const siblings: { name: string; folder: string; status: string; taskSummary: string }[] = [];
+
+    for (const [jid, scoop] of this.scoops) {
+      if (jid === excludeJid || scoop.isCone) continue;
+      const tab = this.tabs.get(jid);
+      const status = tab?.status ?? 'unknown';
+      const taskSummary = this.scoopTaskSummaries.get(jid) ?? '(no task assigned)';
+      siblings.push({ name: scoop.name, folder: scoop.folder, status, taskSummary });
+    }
+
+    if (siblings.length === 0) return '';
+
+    const lines = siblings.map(
+      (s) => `- ${s.name} (${s.status}): ${s.taskSummary}\n  Working in: /scoops/${s.folder}/ + /shared/`,
+    );
+    return `\n\n---\n## Coordination Context\nOther scoops currently active:\n${lines.join('\n')}\n`;
+  }
+
   /** Delegate a prompt directly to a scoop's agent. Used by the delegate_to_scoop tool. */
   async delegateToScoop(scoopJid: string, prompt: string, senderName: string): Promise<void> {
     const scoop = this.scoops.get(scoopJid);
     if (!scoop) throw new Error(`Scoop not found: ${scoopJid}`);
 
-    // Save as a channel message so it shows up in history
+    // Store the task summary (first ~200 chars of the prompt)
+    const taskSummary = prompt.slice(0, 200);
+    this.scoopTaskSummaries.set(scoopJid, taskSummary);
+
+    // Write coordination file for sibling awareness
+    await this.updateCoordinationFile(scoop, taskSummary, 'delegated');
+
+    // Track delegation wave — group calls within WAVE_WINDOW_MS
+    const now = Date.now();
+    let wave = this.delegationWaves[this.delegationWaves.length - 1];
+    if (!wave || (now - this.lastDelegationTime) > WAVE_WINDOW_MS) {
+      wave = {
+        id: `wave-${now}-${Math.random().toString(36).slice(2)}`,
+        scoopJids: new Set(),
+        completedJids: new Set(),
+        snapshots: new Map(),
+        createdAt: now,
+      };
+      this.delegationWaves.push(wave);
+    }
+    wave.scoopJids.add(scoopJid);
+    this.lastDelegationTime = now;
+
+    // Build coordination context with sibling awareness
+    const coordinationContext = this.buildCoordinationContext(scoopJid);
+    const enrichedPrompt = prompt + coordinationContext;
+
+    // Save as a channel message so it shows up in history (original prompt, not enriched)
     const msg: ChannelMessage = {
       id: `delegate-${Date.now()}-${Math.random().toString(36).slice(2)}`,
       chatJid: scoopJid,
@@ -320,11 +425,20 @@ export class Orchestrator {
     // Notify UI about the incoming delegation
     this.callbacks.onIncomingMessage?.(scoopJid, msg);
 
-    log.info('Delegating to scoop', { scoopJid, scoopName: scoop.name, promptLength: prompt.length });
+    // Capture filesystem snapshot before delegation for structured completion diff
+    // Also store in wave for integration check
+    this.captureFilesystemSnapshot(scoop.folder, scoopJid).then(() => {
+      const snapshot = this.scoopFilesystemSnapshots.get(scoopJid);
+      if (snapshot) wave.snapshots.set(scoopJid, snapshot);
+    }).catch((err) => {
+      log.warn('Failed to capture filesystem snapshot', { scoopJid, error: err instanceof Error ? err.message : String(err) });
+    });
+
+    log.info('Delegating to scoop', { scoopJid, scoopName: scoop.name, promptLength: enrichedPrompt.length, waveId: wave.id });
     // Fire-and-forget: don't await the scoop's agent loop.
     // The cone's tool call returns immediately so the cone can finish its turn.
     // The scoop processes in the background; completion notification routes back to cone.
-    this.sendPrompt(scoopJid, prompt, 'cone', senderName).catch((err) => {
+    this.sendPrompt(scoopJid, enrichedPrompt, 'cone', senderName).catch((err) => {
       const msg = err instanceof Error ? err.message : String(err);
       log.error('Delegation failed', { scoopJid, error: msg });
       this.callbacks.onError(scoopJid, `Delegation failed: ${msg}`);
@@ -446,6 +560,13 @@ export class Orchestrator {
         }
         this.callbacks.onStatusChange(jid, status);
 
+        // Update coordination file with new status (non-cone scoops only)
+        if (!scoop.isCone) {
+          this.updateCoordinationFile(scoop, undefined, status).catch((err) => {
+            log.warn('Failed to update coordination file', { jid, error: err instanceof Error ? err.message : String(err) });
+          });
+        }
+
         // When a non-cone scoop finishes, route its response to the cone
         // so the cone's agent can react (e.g., move files, report to user).
         if (status === 'ready' && !scoop.isCone) {
@@ -454,27 +575,38 @@ export class Orchestrator {
           if (responseText) {
             const cone = Array.from(this.scoops.values()).find(s => s.isCone);
             if (cone) {
-              const summary = responseText.length > 2000
-                ? responseText.slice(0, 2000) + '\n... (truncated)'
-                : responseText;
-              const notifyMsg: ChannelMessage = {
-                id: `scoop-done-${jid}-${Date.now()}`,
-                chatJid: cone.jid,
-                senderId: scoop.folder,
-                senderName: scoop.assistantLabel,
-                content: `[@${scoop.assistantLabel} completed]:\n${summary}`,
-                timestamp: new Date().toISOString(),
-                fromAssistant: false,
-                channel: 'scoop-notify',
-              };
-              log.info('Routing scoop completion to cone', { scoop: scoop.folder, responseLength: responseText.length });
-              this.handleMessage(notifyMsg).catch((err) => {
+              // Build structured completion report with filesystem diff
+              this.generateFilesystemDiff(scoop.folder, jid).then((diffSection) => {
+                const summary = responseText.length > 2000
+                  ? responseText.slice(0, 2000) + '\n... (truncated)'
+                  : responseText;
+                const content = diffSection
+                  ? `[@${scoop.assistantLabel} completed]:\n${diffSection}\n## Summary\n${summary}`
+                  : `[@${scoop.assistantLabel} completed]:\n${summary}`;
+                const notifyMsg: ChannelMessage = {
+                  id: `scoop-done-${jid}-${Date.now()}`,
+                  chatJid: cone.jid,
+                  senderId: scoop.folder,
+                  senderName: scoop.assistantLabel,
+                  content,
+                  timestamp: new Date().toISOString(),
+                  fromAssistant: false,
+                  channel: 'scoop-notify',
+                };
+                log.info('Routing scoop completion to cone', { scoop: scoop.folder, responseLength: responseText.length, hasDiff: !!diffSection });
+                return this.handleMessage(notifyMsg);
+              }).catch((err) => {
                 const msg = err instanceof Error ? err.message : String(err);
                 log.error('Failed to route scoop completion to cone', { scoop: scoop.folder, error: msg });
                 this.callbacks.onError(cone.jid, `Scoop ${scoop.folder} completed but notification failed: ${msg}`);
               });
             }
           }
+
+          // Track wave completion and run integration check
+          this.markWaveCompletion(jid).catch((err) => {
+            log.warn('Integration check failed', { jid, error: err instanceof Error ? err.message : String(err) });
+          });
         }
       },
       onToolStart: (toolName, toolInput) => {
@@ -735,6 +867,143 @@ export class Orchestrator {
     }
   }
 
+  /** Write or update a coordination file at `/shared/.coordination/{folder}.json`.
+   *  Other scoops can read this directory to discover their siblings. */
+  private async updateCoordinationFile(
+    scoop: RegisteredScoop,
+    task?: string,
+    status?: string,
+  ): Promise<void> {
+    if (!this.sharedFs) return;
+
+    const coordDir = '/shared/.coordination';
+    const filePath = `${coordDir}/${scoop.folder}.json`;
+
+    // Ensure the coordination directory exists
+    try {
+      await this.sharedFs.mkdir(coordDir, { recursive: true });
+    } catch {
+      // Already exists
+    }
+
+    // Read existing file to preserve fields not being updated
+    let existing: Record<string, unknown> = {};
+    try {
+      const content = await this.sharedFs.readFile(filePath, { encoding: 'utf-8' });
+      const raw = typeof content === 'string' ? content : new TextDecoder().decode(content);
+      existing = JSON.parse(raw);
+    } catch {
+      // File doesn't exist yet — start fresh
+    }
+
+    const data = {
+      name: scoop.name,
+      task: task ?? existing.task ?? '',
+      status: status ?? existing.status ?? 'unknown',
+      delegatedAt: existing.delegatedAt ?? new Date().toISOString(),
+      ...(existing.filesOwned ? { filesOwned: existing.filesOwned } : {}),
+    };
+
+    await this.sharedFs.writeFile(filePath, JSON.stringify(data, null, 2));
+    log.debug('Coordination file updated', { folder: scoop.folder, status: data.status });
+  }
+
+  /** Delete the coordination file for a scoop. */
+  private async deleteCoordinationFile(folder: string): Promise<void> {
+    if (!this.sharedFs) return;
+    const filePath = `/shared/.coordination/${folder}.json`;
+    try {
+      await this.sharedFs.rm(filePath);
+      log.debug('Coordination file deleted', { folder });
+    } catch {
+      // File may not exist — that's fine
+    }
+  }
+
+  /** Remove all coordination files. Called during reset. */
+  async cleanupCoordinationDirectory(): Promise<void> {
+    if (!this.sharedFs) return;
+    const coordDir = '/shared/.coordination';
+    try {
+      await this.sharedFs.rm(coordDir, { recursive: true });
+    } catch {
+      // Directory may not exist — that's fine
+    }
+    log.debug('Coordination directory cleaned up');
+  }
+
+  /** Capture a snapshot of file paths and sizes for a scoop's writable directories. */
+  private async captureFilesystemSnapshot(scoopFolder: string, jid: string): Promise<void> {
+    if (!this.sharedFs) return;
+    const snapshot = await captureSnapshot(this.sharedFs, scoopFolder);
+    this.scoopFilesystemSnapshots.set(jid, snapshot);
+    log.debug('Filesystem snapshot captured', { jid, fileCount: snapshot.size });
+  }
+
+  /** Generate a structured diff of filesystem changes since the snapshot was taken. */
+  private async generateFilesystemDiff(scoopFolder: string, jid: string): Promise<string> {
+    const before = this.scoopFilesystemSnapshots.get(jid);
+    this.scoopFilesystemSnapshots.delete(jid);
+    if (!before || !this.sharedFs) return '';
+
+    const after = await captureSnapshot(this.sharedFs, scoopFolder);
+    return buildDiffReport(before, after);
+  }
+
+  /** Mark a scoop as completed in its delegation wave and run integration check if wave is done. */
+  private async markWaveCompletion(jid: string): Promise<void> {
+    const wave = this.delegationWaves.find(w => w.scoopJids.has(jid));
+    if (!wave) return; // Not part of a tracked wave (single delegation)
+
+    wave.completedJids.add(jid);
+
+    // Only run integration check when ALL scoops in the wave have completed
+    if (wave.completedJids.size < wave.scoopJids.size) {
+      log.debug('Wave partial completion', { waveId: wave.id, completed: wave.completedJids.size, total: wave.scoopJids.size });
+      return;
+    }
+
+    // Wave complete — run integration check if wave has 2+ scoops
+    if (wave.scoopJids.size >= 2) {
+      log.info('Wave complete, running integration check', { waveId: wave.id, scoopCount: wave.scoopJids.size });
+      await this.runIntegrationCheck(wave);
+    }
+
+    // Clean up the completed wave
+    const idx = this.delegationWaves.indexOf(wave);
+    if (idx !== -1) this.delegationWaves.splice(idx, 1);
+  }
+
+  /** Run post-wave integration check: detect file conflicts across scoops. */
+  async runIntegrationCheck(wave: DelegationWave): Promise<void> {
+    if (!this.sharedFs) return;
+
+    const report = await buildIntegrationReport(this.sharedFs, wave, this.scoops);
+    if (!report) return; // No conflicts detected
+
+    // Route the report to the cone
+    const cone = Array.from(this.scoops.values()).find(s => s.isCone);
+    if (!cone) return;
+
+    const notifyMsg: ChannelMessage = {
+      id: `integration-check-${wave.id}-${Date.now()}`,
+      chatJid: cone.jid,
+      senderId: 'orchestrator',
+      senderName: 'orchestrator',
+      content: report,
+      timestamp: new Date().toISOString(),
+      fromAssistant: false,
+      channel: 'integration-check',
+    };
+    log.info('Integration check report sent to cone', { waveId: wave.id });
+    await this.handleMessage(notifyMsg);
+  }
+
+  /** Get delegation waves (for testing). */
+  getDelegationWaves(): DelegationWave[] {
+    return this.delegationWaves;
+  }
+
   /** Cleanup */
   async shutdown(): Promise<void> {
     this.stopMessageLoop();
@@ -749,4 +1018,136 @@ export class Orchestrator {
 
     log.info('Orchestrator shutdown');
   }
+}
+
+/** Walk a scoop's writable directories and record file paths + sizes. */
+export async function captureSnapshot(
+  fs: VirtualFS,
+  scoopFolder: string,
+): Promise<Map<string, { size: number }>> {
+  const snapshot = new Map<string, { size: number }>();
+  const dirs = [`/scoops/${scoopFolder}`, '/shared'];
+  for (const dir of dirs) {
+    try {
+      for await (const filePath of fs.walk(dir)) {
+        try {
+          const stats = await fs.stat(filePath);
+          snapshot.set(filePath, { size: stats.size });
+        } catch {
+          // Skip files we can't stat
+        }
+      }
+    } catch {
+      // Directory may not exist yet — that's fine
+    }
+  }
+  return snapshot;
+}
+
+/** Compare two filesystem snapshots and return a structured diff report. */
+export function buildDiffReport(
+  before: Map<string, { size: number }>,
+  after: Map<string, { size: number }>,
+): string {
+  const created: string[] = [];
+  const modified: string[] = [];
+  const deleted: string[] = [];
+
+  for (const [path, { size }] of after) {
+    const prev = before.get(path);
+    if (!prev) {
+      created.push(path);
+    } else if (prev.size !== size) {
+      modified.push(path);
+    }
+  }
+  for (const path of before.keys()) {
+    if (!after.has(path)) {
+      deleted.push(path);
+    }
+  }
+
+  if (created.length === 0 && modified.length === 0 && deleted.length === 0) {
+    return '';
+  }
+
+  const lines: string[] = ['## Changes'];
+  if (created.length > 0) lines.push(`- Files created: ${created.join(', ')}`);
+  if (modified.length > 0) lines.push(`- Files modified: ${modified.join(', ')}`);
+  if (deleted.length > 0) lines.push(`- Files deleted: ${deleted.join(', ')}`);
+  return lines.join('\n');
+}
+
+/** Build a post-wave integration check report detecting file conflicts across scoops.
+ *  Returns null if no conflicts detected (clean wave). */
+export async function buildIntegrationReport(
+  fs: VirtualFS,
+  wave: DelegationWave,
+  scoops: Map<string, RegisteredScoop>,
+): Promise<string | null> {
+  // Collect per-scoop changed files by comparing before-snapshot to current state
+  const changedFilesByScoopJid = new Map<string, Set<string>>();
+
+  for (const jid of wave.scoopJids) {
+    const before = wave.snapshots.get(jid);
+    const scoop = scoops.get(jid);
+    if (!before || !scoop) continue;
+
+    const after = await captureSnapshot(fs, scoop.folder);
+    const changed = new Set<string>();
+
+    // Files created or modified
+    for (const [path, { size }] of after) {
+      const prev = before.get(path);
+      if (!prev || prev.size !== size) changed.add(path);
+    }
+    // Files deleted
+    for (const path of before.keys()) {
+      if (!after.has(path)) changed.add(path);
+    }
+
+    if (changed.size > 0) changedFilesByScoopJid.set(jid, changed);
+  }
+
+  // Detect same-file modifications across multiple scoops (only /shared/ files can conflict)
+  const fileToScoops = new Map<string, string[]>();
+  for (const [jid, files] of changedFilesByScoopJid) {
+    const scoop = scoops.get(jid);
+    const label = scoop?.assistantLabel ?? jid;
+    for (const file of files) {
+      if (!file.startsWith('/shared/')) continue;
+      // Skip coordination metadata files
+      if (file.startsWith('/shared/.coordination/')) continue;
+      const existing = fileToScoops.get(file) ?? [];
+      existing.push(label);
+      fileToScoops.set(file, existing);
+    }
+  }
+
+  const conflicts: { file: string; scoops: string[] }[] = [];
+  for (const [file, scoopLabels] of fileToScoops) {
+    if (scoopLabels.length >= 2) {
+      conflicts.push({ file, scoops: scoopLabels });
+    }
+  }
+
+  if (conflicts.length === 0) return null;
+
+  const scoopNames = Array.from(wave.scoopJids)
+    .map(jid => scoops.get(jid)?.assistantLabel ?? jid)
+    .join(', ');
+
+  const lines: string[] = [
+    `[integration-check] Wave completed (${wave.scoopJids.size} scoops: ${scoopNames})`,
+    '',
+    `**${conflicts.length} file conflict${conflicts.length > 1 ? 's' : ''} detected:**`,
+  ];
+
+  for (const c of conflicts) {
+    lines.push(`- \`${c.file}\` modified by: ${c.scoops.join(', ')}`);
+  }
+
+  lines.push('', 'Review these files for conflicting changes before proceeding.');
+
+  return lines.join('\n');
 }

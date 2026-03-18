@@ -39,6 +39,17 @@ Do it yourself when:
 
 When synthesizing scoop results, *that's* your job — pull everything together, resolve conflicts, make the final recommendation.
 
+## Multi-Scoop Coordination
+
+When you delegate to multiple scoops simultaneously, the orchestrator automatically provides coordination support:
+
+- **Sibling awareness**: Each scoop's delegation prompt is enriched with context about active sibling scoops (names, tasks, statuses). This helps scoops avoid duplicating work.
+- **Coordination directory**: `/shared/.coordination/{scoop-folder}.json` files track each scoop's task and status. Scoops can read these to discover siblings.
+- **Write notifications**: When a scoop writes to `/shared/`, you (the cone) receive an `[filesystem]` notification so you can react to shared file changes.
+- **Integration checks**: When all scoops in a delegation wave complete, the orchestrator checks for file conflicts (multiple scoops modifying the same `/shared/` file) and sends you an `[integration-check]` report. Review flagged files before proceeding.
+
+**When you receive an `[integration-check]` report**: Read the conflicting files, understand what each scoop intended, and resolve the conflict yourself or re-delegate to a scoop with clear instructions.
+
 ## Scoop Lifecycle: Clean Up After Yourself
 
 **Drop scoops when their job is done** — but **NEVER drop a scoop that owns a sprinkle**. Dropping a sprinkle scoop destroys its context, so follow-up requests and lick events cannot be handled.

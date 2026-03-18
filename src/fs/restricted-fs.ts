@@ -19,6 +19,8 @@ import { normalizePath } from './path-utils.js';
 export class RestrictedFS {
   private vfs: VirtualFS;
   private allowedPrefixes: string[];
+  /** Scoop name derived from the first allowed /scoops/{name}/ path. */
+  private scoopName: string | undefined;
 
   constructor(vfs: VirtualFS, allowedPaths: string[]) {
     this.vfs = vfs;
@@ -27,6 +29,14 @@ export class RestrictedFS {
       const n = normalizePath(p);
       return n.endsWith('/') ? n : n + '/';
     });
+    // Derive scoop name from the first /scoops/{name}/ path
+    for (const prefix of this.allowedPrefixes) {
+      const match = prefix.match(/^\/scoops\/([^/]+)\//);
+      if (match) {
+        this.scoopName = match[1];
+        break;
+      }
+    }
   }
 
   /** Check if a path is within or is a parent of allowed prefixes. */
@@ -122,25 +132,36 @@ export class RestrictedFS {
 
   // ── Write operations: throw EACCES for outside paths ─────────────────
 
+  /** Set the writer identity on the VFS before a write, restore after. */
+  private async withWriter<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = this.vfs.currentWriter;
+    this.vfs.currentWriter = this.scoopName;
+    try {
+      return await fn();
+    } finally {
+      this.vfs.currentWriter = prev;
+    }
+  }
+
   async writeFile(path: string, content: FileContent, options?: { recursive?: boolean }): Promise<void> {
     this.checkWrite(path);
-    return this.vfs.writeFile(path, content, options);
+    return this.withWriter(() => this.vfs.writeFile(path, content, options));
   }
 
   async mkdir(path: string, options?: MkdirOptions): Promise<void> {
     this.checkWrite(path);
-    return this.vfs.mkdir(path, options);
+    return this.withWriter(() => this.vfs.mkdir(path, options));
   }
 
   async rm(path: string, options?: RmOptions): Promise<void> {
     this.checkWrite(path);
-    return this.vfs.rm(path, options);
+    return this.withWriter(() => this.vfs.rm(path, options));
   }
 
   async rename(oldPath: string, newPath: string): Promise<void> {
     this.checkWrite(oldPath);
     this.checkWrite(newPath);
-    return this.vfs.rename(oldPath, newPath);
+    return this.withWriter(() => this.vfs.rename(oldPath, newPath));
   }
 
   async copyFile(src: string, dest: string): Promise<void> {
@@ -149,7 +170,7 @@ export class RestrictedFS {
       throw new FsError('ENOENT', 'no such file or directory', normalizePath(src));
     }
     this.checkWrite(dest);
-    return this.vfs.copyFile(src, dest);
+    return this.withWriter(() => this.vfs.copyFile(src, dest));
   }
 
   // ── Path utilities (no access control) ───────────────────────────────

@@ -33,6 +33,10 @@ export class VirtualFS {
   private _ready: Promise<void>;
   /** Map from absolute mount path → FileSystemDirectoryHandle (File System Access API). */
   private mountPoints = new Map<string, FileSystemDirectoryHandle>();
+  /** Optional callback fired after a write operation under /shared/. */
+  onWrite?: (path: string, writer?: string) => void;
+  /** Current writer identity, set by RestrictedFS before delegating writes. */
+  currentWriter?: string;
 
   private constructor(dbName: string, wipe: boolean) {
     const fs = new FS(dbName, { wipe });
@@ -53,6 +57,13 @@ export class VirtualFS {
   /** Get the underlying LightningFS promises API (for isomorphic-git). */
   getLightningFS(): FS.PromisifiedFS {
     return this.lfs;
+  }
+
+  /** Fire the onWrite callback if the path is under /shared/ (but not /shared/.coordination/ or /shared/.coordination itself). */
+  private notifyWrite(path: string): void {
+    if (this.onWrite && path.startsWith('/shared/') && path !== '/shared/.coordination' && !path.startsWith('/shared/.coordination/')) {
+      this.onWrite(path, this.currentWriter);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -188,6 +199,7 @@ export class VirtualFS {
         await writable.write(data as unknown as FileSystemWriteChunkType);
         await writable.close();
       } catch (err) { throw this.convertFsaError(err, normalized); }
+      this.notifyWrite(normalized);
       return;
     }
     // Ensure parent directory exists
@@ -200,6 +212,7 @@ export class VirtualFS {
     } catch (err) {
       throw this.convertError(err, normalized);
     }
+    this.notifyWrite(normalized);
   }
 
   /**
@@ -257,6 +270,7 @@ export class VirtualFS {
       try {
         await VirtualFS.fsaNavDir(mount.handle, mount.relParts, true);
       } catch (err) { throw this.convertFsaError(err, normalized); }
+      this.notifyWrite(normalized);
       return;
     }
 
@@ -282,6 +296,7 @@ export class VirtualFS {
         throw this.convertError(err, normalized);
       }
     }
+    this.notifyWrite(normalized);
   }
 
   /**
@@ -304,6 +319,7 @@ export class VirtualFS {
           : await VirtualFS.fsaNavDir(mount.handle, parentParts);
         await parentDir.removeEntry(name, { recursive: options?.recursive });
       } catch (err) { throw this.convertFsaError(err, normalized); }
+      this.notifyWrite(normalized);
       return;
     }
     try {
@@ -320,6 +336,7 @@ export class VirtualFS {
     } catch (err) {
       throw this.convertError(err, normalized);
     }
+    this.notifyWrite(normalized);
   }
 
   private async rmRecursive(path: string): Promise<void> {
@@ -407,6 +424,9 @@ export class VirtualFS {
     } catch (err) {
       throw this.convertError(err, normalizedOld);
     }
+    // Notify for both source (removed) and destination (created) if under /shared/
+    this.notifyWrite(normalizedOld);
+    this.notifyWrite(normalizedNew);
   }
 
   /**
