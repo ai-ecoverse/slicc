@@ -220,27 +220,45 @@ export async function showToolUI(request: ToolUIRequest, onUpdate?: OnUpdateCall
  * This allows shell commands (like mount) to show UI even though they don't
  * have direct access to onUpdate.
  */
-interface ToolExecutionContext {
+export interface ToolExecutionContext {
   onUpdate: OnUpdateCallback;
   toolName: string;
+  toolCallId: string;
 }
 
-let currentExecutionContext: ToolExecutionContext | null = null;
-
 /**
- * Set the current tool execution context.
- * Call this before executing a tool that might need to show UI.
+ * Stack of execution contexts to handle nested/concurrent tool calls.
+ * Each tool pushes its context on start and pops on finish.
  */
-export function setToolExecutionContext(ctx: ToolExecutionContext | null): void {
-  currentExecutionContext = ctx;
+const executionContextStack: ToolExecutionContext[] = [];
+
+/**
+ * Push a tool execution context onto the stack.
+ * Call this before executing a tool that might need to show UI.
+ * Returns the context so it can be passed to popToolExecutionContext.
+ */
+export function pushToolExecutionContext(ctx: ToolExecutionContext): ToolExecutionContext {
+  executionContextStack.push(ctx);
+  return ctx;
 }
 
 /**
- * Get the current tool execution context.
+ * Pop a specific tool execution context from the stack.
+ * Call this after tool execution completes.
+ */
+export function popToolExecutionContext(ctx: ToolExecutionContext): void {
+  const idx = executionContextStack.lastIndexOf(ctx);
+  if (idx !== -1) {
+    executionContextStack.splice(idx, 1);
+  }
+}
+
+/**
+ * Get the current (top) tool execution context.
  * Returns null if not in a tool execution context.
  */
 export function getToolExecutionContext(): ToolExecutionContext | null {
-  return currentExecutionContext;
+  return executionContextStack.length > 0 ? executionContextStack[executionContextStack.length - 1] : null;
 }
 
 /**
@@ -249,7 +267,7 @@ export function getToolExecutionContext(): ToolExecutionContext | null {
  * Returns null if no execution context is available.
  */
 export async function showToolUIFromContext(request: Omit<ToolUIRequest, 'id'>): Promise<unknown | null> {
-  const ctx = currentExecutionContext;
+  const ctx = getToolExecutionContext();
   if (!ctx) {
     log.warn('showToolUIFromContext called without execution context');
     return null;

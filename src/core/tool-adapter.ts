@@ -11,7 +11,7 @@ import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { ToolDefinition, ImageContent, TextContent } from './types.js';
 import { processImageContent } from './image-processor.js';
 import { createLogger } from './logger.js';
-import { setToolExecutionContext } from '../tools/tool-ui.js';
+import { pushToolExecutionContext, popToolExecutionContext, type ToolExecutionContext } from '../tools/tool-ui.js';
 
 const log = createLogger('tool-adapter');
 
@@ -80,14 +80,15 @@ export function adaptTool(tool: ToolDefinition): AgentTool<any> {
     description: tool.description,
     parameters: tool.inputSchema as any,
     async execute(
-      _toolCallId: string,
+      toolCallId: string,
       params: Record<string, any>,
       _signal?: AbortSignal,
       onUpdate?: (partialResult: AgentToolResult<any>) => void,
     ): Promise<AgentToolResult<any>> {
-      // Set execution context so shell commands can show UI if needed
+      // Push execution context so shell commands can show UI if needed
+      let ctx: ToolExecutionContext | undefined;
       if (onUpdate) {
-        setToolExecutionContext({ onUpdate, toolName: tool.name });
+        ctx = pushToolExecutionContext({ onUpdate, toolName: tool.name, toolCallId });
       }
 
       try {
@@ -107,8 +108,10 @@ export function adaptTool(tool: ToolDefinition): AgentTool<any> {
           details: { isError: result.isError },
         };
       } finally {
-        // Clear execution context
-        setToolExecutionContext(null);
+        // Pop execution context
+        if (ctx) {
+          popToolExecutionContext(ctx);
+        }
       }
     },
   };
