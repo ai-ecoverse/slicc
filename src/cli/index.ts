@@ -504,7 +504,7 @@ async function main() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
-        }).catch(function() {});
+        }).catch(function(err) { console.error('[oauth-callback] Failed to relay result to server:', err); });
       }
       window.close();
     </script><p>Completing login... you can close this window.</p></body></html>`);
@@ -512,8 +512,12 @@ async function main() {
 
   app.post('/api/oauth-result', express.json(), (req: Request, res: Response) => {
     const body = req.body as Record<string, unknown>;
+    const redirectUrl = typeof body.redirectUrl === 'string' ? body.redirectUrl : '';
+    if (!redirectUrl) {
+      console.warn('[oauth-result] Received callback with empty redirectUrl');
+    }
     pendingOAuthResult = {
-      redirectUrl: typeof body.redirectUrl === 'string' ? body.redirectUrl : '',
+      redirectUrl,
       error: typeof body.error === 'string' ? body.error : undefined,
     };
     res.json({ ok: true });

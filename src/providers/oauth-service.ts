@@ -77,8 +77,9 @@ async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
         }
 
         resolve(data.redirectUrl ?? null);
-      } catch {
-        // Server not available or network error — keep polling
+      } catch (err) {
+        // Network error or JSON parse failure — keep polling
+        console.warn('[oauth-service] Poll failed:', err instanceof Error ? err.message : String(err));
       }
     }, 1000);
 

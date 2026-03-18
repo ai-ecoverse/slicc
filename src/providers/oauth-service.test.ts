@@ -178,6 +178,30 @@ describe('createOAuthLauncher', () => {
     expect(result).toBe('http://localhost:5710/auth/callback#token=polled');
   });
 
+  it('continues polling on server errors and resolves when result arrives', async () => {
+    const mockFetch = vi.mocked(fetch);
+    // First poll: server error
+    mockFetch.mockResolvedValueOnce({ status: 500 } as Response);
+    // Second poll: success
+    mockFetch.mockResolvedValueOnce({
+      status: 200,
+      json: () => Promise.resolve({
+        redirectUrl: 'http://localhost:5710/auth/callback#token=recovered',
+      }),
+    } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    // First poll — 500 error, caught and retried
+    await vi.advanceTimersByTimeAsync(1000);
+    // Second poll — success
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const result = await promise;
+    expect(result).toBe('http://localhost:5710/auth/callback#token=recovered');
+  });
+
   it('does not resolve twice on duplicate callbacks', async () => {
     const launcher = createOAuthLauncher();
     const promise = launcher('https://idp.example.com/authorize');
