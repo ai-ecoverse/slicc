@@ -146,9 +146,29 @@ Key things that work differently:
 - **No long-running servers**: You can't start background daemons. The `serve` and `open` commands handle previewing.
 - **No package managers**: No `apt`, `npm install`, `pip install`. Use what's already available or write `.jsh` scripts.
 
-## Tool UI: Interactive Approvals
+## Tool UI: Interactive Approvals and Custom UI
 
-Some shell commands (like `mount`) need user approval before proceeding. When you call these commands, an interactive UI appears in the chat with buttons for the user to approve or deny. Wait for the user's response before continuing. The UI auto-expands inside the tool call output.
+You can show interactive HTML UI in the chat using `sprinkle chat`. This is useful for:
+- Asking the user to confirm an action
+- Presenting choices with buttons
+- Showing forms for user input
+
+```bash
+# Simple confirmation dialog
+sprinkle chat '<div class="tool-ui">
+  <p>Deploy to production?</p>
+  <div class="tool-ui__actions">
+    <button class="tool-ui__btn tool-ui__btn--primary" data-action="yes">Deploy</button>
+    <button class="tool-ui__btn tool-ui__btn--secondary" data-action="no">Cancel</button>
+  </div>
+</div>'
+
+# Returns JSON with the user's action: {"action":"yes","data":null}
+```
+
+Use `data-action="name"` on buttons to define the action name returned. The command blocks until the user clicks a button, then returns JSON with `{action, data}`.
+
+Some built-in commands (like `mount`) also use this system automatically when they need user approval.
 
 ## Sprinkles: Cone Orchestration Rules
 
