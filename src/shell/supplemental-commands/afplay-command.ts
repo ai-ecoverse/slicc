@@ -110,25 +110,28 @@ export function createAfplayCommand(): Command {
 
     for (let i = 0; i < args.length; i++) {
       const arg = args[i];
-      if (arg === '-v' && i + 1 < args.length) {
+      if (arg === '-v') {
+        if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+          return { stdout: '', stderr: 'afplay: -v requires a volume value\n', exitCode: 1 };
+        }
         volume = parseFloat(args[++i]);
         if (isNaN(volume) || volume < 0 || volume > 1) {
-          return {
-            stdout: '',
-            stderr: 'afplay: volume must be between 0 and 1\n',
-            exitCode: 1,
-          };
+          return { stdout: '', stderr: 'afplay: volume must be between 0 and 1\n', exitCode: 1 };
         }
-      } else if (arg === '-r' && i + 1 < args.length) {
+      } else if (arg === '-r') {
+        if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+          return { stdout: '', stderr: 'afplay: -r requires a rate value\n', exitCode: 1 };
+        }
         rate = parseFloat(args[++i]);
         if (isNaN(rate) || rate < 0.25 || rate > 4) {
-          return {
-            stdout: '',
-            stderr: 'afplay: rate must be between 0.25 and 4\n',
-            exitCode: 1,
-          };
+          return { stdout: '', stderr: 'afplay: rate must be between 0.25 and 4\n', exitCode: 1 };
         }
-      } else if (!arg.startsWith('-')) {
+      } else if (arg.startsWith('-')) {
+        return { stdout: '', stderr: `afplay: unknown option: ${arg}\n`, exitCode: 1 };
+      } else {
+        if (filePath !== null) {
+          return { stdout: '', stderr: 'afplay: only one file can be specified\n', exitCode: 1 };
+        }
         filePath = arg;
       }
     }

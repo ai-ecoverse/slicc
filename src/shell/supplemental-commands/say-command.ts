@@ -77,17 +77,21 @@ export function createSayCommand(): Command {
 
     for (let i = 0; i < args.length; i++) {
       const arg = args[i];
-      if (arg === '-v' && i + 1 < args.length) {
+      if (arg === '-v') {
+        if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+          return { stdout: '', stderr: 'say: -v requires a voice name\n', exitCode: 1 };
+        }
         voiceName = args[++i];
-      } else if (arg === '-r' && i + 1 < args.length) {
+      } else if (arg === '-r') {
+        if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+          return { stdout: '', stderr: 'say: -r requires a rate value\n', exitCode: 1 };
+        }
         rate = parseFloat(args[++i]);
         if (isNaN(rate) || rate < 0.1 || rate > 10) {
-          return {
-            stdout: '',
-            stderr: 'say: rate must be between 0.1 and 10\n',
-            exitCode: 1,
-          };
+          return { stdout: '', stderr: 'say: rate must be between 0.1 and 10\n', exitCode: 1 };
         }
+      } else if (arg.startsWith('-') && arg !== '--list') {
+        return { stdout: '', stderr: `say: unknown option: ${arg}\n`, exitCode: 1 };
       } else if (!arg.startsWith('-')) {
         textParts.push(arg);
       }
