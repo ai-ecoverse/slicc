@@ -190,10 +190,8 @@ export class BrowserAPI {
       const runtimeId = targetId.substring(0, colonIdx);
       const localTargetId = targetId.substring(colonIdx + 1);
 
-      const remoteEntries = this.trayTargetProvider.getTargets();
-      const isRemote = remoteEntries.some(t => t.targetId === targetId && !t.isLocal);
-
-      if (isRemote) {
+      // Trust the runtimeId:localTargetId format — don't require registry confirmation.
+      {
         const remoteTransport = this.trayTargetProvider.createRemoteTransport(runtimeId, localTargetId);
         try {
           await remoteTransport.send('Target.closeTarget', { targetId: localTargetId });
@@ -271,11 +269,10 @@ export class BrowserAPI {
       const runtimeId = targetId.substring(0, colonIdx);
       const localTargetId = targetId.substring(colonIdx + 1);
 
-      // Check if this target is actually in the remote registry
-      const remoteEntries = this.trayTargetProvider.getTargets();
-      const isRemote = remoteEntries.some(t => t.targetId === targetId && !t.isLocal);
-
-      if (isRemote) {
+      // The runtimeId:localTargetId format is a strong signal this is remote.
+      // Don't require registry confirmation — the target may have just been
+      // created via createRemotePage() and not yet advertised.
+      {
         const remoteTransport = this.trayTargetProvider.createRemoteTransport(runtimeId, localTargetId);
         this.client = remoteTransport;
         this.remoteTargetInfo = { runtimeId, localTargetId };

@@ -1978,8 +1978,14 @@ describe('playwright-cli teleport trigger and capture', () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(state.teleportWatcher!.phase).toBe('teleporting');
 
-    // Verify remote tab was created
-    expect(browser.createRemotePage).toHaveBeenCalledWith('f-runtime', 'https://login.example.com/auth');
+    // Verify leader cookies were captured before teleport
+    expect(browser.sendCDP).toHaveBeenCalledWith('Network.getCookies', {});
+
+    // Verify remote tab was opened with about:blank (cookies injected before navigation)
+    expect(browser.createRemotePage).toHaveBeenCalledWith('f-runtime', 'about:blank');
+
+    // Verify follower navigated to originalLeaderUrl (not the Okta trigger URL)
+    expect(browser.sendCDP).toHaveBeenCalledWith('Page.navigate', { url: 'https://app.example.com/dashboard' });
 
     // Cleanup timers and catch the unhandled rejection from the completion promise
     if (state.teleportWatcher) {

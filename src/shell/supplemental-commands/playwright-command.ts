@@ -591,7 +591,17 @@ async function triggerTeleport(
   if (watcher.pollInterval) { clearInterval(watcher.pollInterval); watcher.pollInterval = undefined; }
 
   try {
-    // 1. Select follower
+    // 1. Capture cookies from leader tab (before switching transport)
+    let leaderCookies: Array<Record<string, unknown>> = [];
+    try {
+      const cookieResult = await browser.sendCDP('Network.getCookies', {});
+      leaderCookies = (cookieResult['cookies'] as Array<Record<string, unknown>>) ?? [];
+      log.info('Captured leader cookies for follower', { count: leaderCookies.length });
+    } catch (err) {
+      log.warn('Could not capture leader cookies', { error: String(err) });
+    }
+
+    // 2. Select follower
     let runtimeId = watcher.runtimeId;
     if (!runtimeId) {
       const getBestFollower = getBestFollowerGetter?.();
@@ -602,19 +612,35 @@ async function triggerTeleport(
     }
     log.info('Selected follower for teleport', { runtimeId });
 
-    // 2. Open the trigger URL on the follower
-    const rawTargetId = await browser.createRemotePage(runtimeId, triggerUrl);
+    // 3. Open about:blank on the follower (we navigate manually after injecting cookies)
+    const rawTargetId = await browser.createRemotePage(runtimeId, 'about:blank');
     // Ensure composite runtimeId:localTargetId format for attachToPage() to detect as remote
     const followerTargetId = rawTargetId.includes(':') ? rawTargetId : `${runtimeId}:${rawTargetId}`;
     watcher.followerTargetId = followerTargetId;
-    log.info('Opened follower tab', { followerTargetId, url: triggerUrl });
+    log.info('Opened follower tab', { followerTargetId });
 
-    // 3. Attach to the follower tab (auto-swaps to RemoteCDPTransport)
+    // 4. Attach to the follower tab (auto-swaps to RemoteCDPTransport)
     await browser.attachToPage(followerTargetId);
     log.info('Attached to follower tab', { followerTargetId });
 
     // Enable Page events on the follower
     await browser.sendCDP('Page.enable');
+
+    // 5. Inject leader cookies into follower before navigating
+    if (leaderCookies.length > 0) {
+      try {
+        await browser.sendCDP('Network.setCookies', { cookies: leaderCookies });
+        log.info('Injected leader cookies into follower', { count: leaderCookies.length });
+      } catch (err) {
+        log.warn('Could not inject leader cookies into follower', { error: String(err) });
+      }
+    }
+
+    // 6. Navigate follower to original app URL (NOT the Okta trigger URL)
+    // The follower will naturally redirect through its own SSO flow with the injected cookies
+    const followerUrl = watcher.originalLeaderUrl || triggerUrl;
+    log.info('Navigating follower to app URL', { url: followerUrl, originalLeaderUrl: watcher.originalLeaderUrl, triggerUrl });
+    await browser.sendCDP('Page.navigate', { url: followerUrl });
 
     // 4. Start timeout timer
     log.info('Starting teleport timeout timer', { timeoutMs: watcher.timeoutMs });
