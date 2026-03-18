@@ -394,6 +394,11 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     client.clearFilesystem();
   };
 
+  // Wire inline sprinkle lick callback (extension mode)
+  layout.panels.chat.onInlineSprinkleLick = (action: string, data: unknown) => {
+    client.sendSprinkleLick('inline', { action, data });
+  };
+
   // ── Sprinkle Manager (SHTML sprinkle panels) ────────────────────────
   const sprinkleManager = new SprinkleManager(
     localFs,
@@ -1036,6 +1041,18 @@ async function main(): Promise<void> {
   };
 
   lickManager.setEventHandler(routeLickToScoop);
+
+  // Wire inline sprinkle lick callback — routes to cone as a sprinkle lick event
+  layout.panels.chat.onInlineSprinkleLick = (action: string, data: unknown) => {
+    const event: LickEvent = {
+      type: 'sprinkle',
+      sprinkleName: 'inline',
+      targetScoop: undefined,
+      timestamp: new Date().toISOString(),
+      body: { action, data },
+    };
+    routeLickToScoop(event);
+  };
 
   // ── Sprinkle Manager (SHTML sprinkle panels) ────────────────────────
   let sprinkleManager: SprinkleManager | null = null;

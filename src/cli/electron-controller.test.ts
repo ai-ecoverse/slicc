@@ -70,6 +70,32 @@ describe('findMatchingElectronAppPids', () => {
     ).toEqual([200, 201]);
   });
 
+  it('matches via executablePath when commandLine has no app path', () => {
+    expect(
+      findMatchingElectronAppPids(
+        [
+          {
+            pid: 111,
+            commandLine: '/Applications/Slack.app/Contents/Frameworks/Slack Helper --type=gpu',
+            executablePath: '/Applications/Slack.app/Contents/Frameworks/Slack Helper',
+          },
+          {
+            pid: 222,
+            commandLine: '',
+            executablePath: '/Applications/Slack.app/Contents/MacOS/Slack',
+          },
+          {
+            pid: 333,
+            commandLine: 'node server.js',
+            executablePath: '/usr/local/bin/node',
+          },
+        ],
+        ['/Applications/Slack.app', '/Applications/Slack.app/Contents/MacOS/Slack'],
+        999,
+      ),
+    ).toEqual([111, 222]);
+  });
+
   it('handles case-insensitive Node.js executable names', () => {
     expect(
       findMatchingElectronAppPids(

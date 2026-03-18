@@ -25,6 +25,16 @@ interface RunningProcessInfo {
   executablePath: string | null;
 }
 
+function commandLineExecutableMatchesPattern(commandLine: string, pattern: string): boolean {
+  // Extract the executable (first whitespace-separated token) from the command line.
+  // Only match when the target app path is the executable itself, not an argument —
+  // this avoids false positives when the path appears as a CLI flag (e.g. --kill /App.app).
+  const executable = commandLine.trimStart().split(/\s+/)[0] ?? '';
+  return executable === pattern
+    || executable.startsWith(pattern + '/')
+    || executable.startsWith(pattern + '\\');
+}
+
 export function findMatchingElectronAppPids(
   runningProcesses: RunningProcessInfo[],
   processMatchPatterns: string[],
@@ -40,7 +50,7 @@ export function findMatchingElectronAppPids(
     if (/^(\/\S*\/)?(node|npx|tsx|npm|open|bash|zsh|sh|csh|fish|dash|timeout|env|sudo|caffeinate)\b/i.test(cmdTrimmed)) return false;
 
     return processMatchPatterns.some((pattern) => {
-      return processInfo.commandLine.includes(pattern)
+      return commandLineExecutableMatchesPattern(processInfo.commandLine, pattern)
         || (processInfo.executablePath?.includes(pattern) ?? false);
     });
   });

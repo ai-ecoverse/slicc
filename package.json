@@ -49,6 +49,7 @@
     "electron": "41.0.0",
     "fake-indexeddb": "6.2.5",
     "jsdom": "^28.1.0",
+    "puppeteer-core": "^24.39.1",
     "typescript": "^5.7.3",
     "vite": "^6.1.0",
     "vitest": "4.0.18"

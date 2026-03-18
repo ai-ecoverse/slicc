@@ -149,6 +149,34 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - Same execution engine as `.jsh` — access `process`, `console`, `fs`, `exec()` globals
 - The BshWatchdog monitors browser navigations and runs matching scripts automatically
 
+## Inline Cards
+
+Use ` ```shtml ` fenced code blocks to show interactive cards inline in chat.
+Cards render after your response completes. Only `slicc.lick()` is available (no state, no readFile).
+
+Use for: choices, confirmations, progress, quick actions.
+Use panel sprinkles for: dashboards, reports, editors, persistent UIs.
+
+Example:
+
+    ```shtml
+    <div class="sprinkle-action-card">
+      <div class="sprinkle-action-card__header">
+        Deploy to production?
+        <span class="sprinkle-badge sprinkle-badge--notice">staging passed</span>
+      </div>
+      <div class="sprinkle-action-card__body">Branch main, commit abc123</div>
+      <div class="sprinkle-action-card__actions">
+        <button class="sprinkle-btn sprinkle-btn--secondary" onclick="slicc.lick('cancel')">Cancel</button>
+        <button class="sprinkle-btn sprinkle-btn--primary" onclick="slicc.lick({action:'deploy',data:{env:'prod'}})">Deploy</button>
+      </div>
+    </div>
+    ```
+
+When the user clicks a button, you receive the lick as a message. Respond conversationally — include another card if the next step needs interaction.
+
+Available components: all `.sprinkle-*` classes from the style guide (run `read_file /workspace/skills/sprinkles/style-guide.md`).
+
 ## Environment: This Is NOT a Regular Linux Box
 
 This is a sandboxed browser-based VFS environment. Many standard tools (e.g. `python3 -m http.server`, `npx serve`, `nginx`) do **not exist or don't work here**.
@@ -161,29 +189,24 @@ Key things that work differently:
 - **No long-running servers**: You can't start background daemons. The `serve` and `open` commands handle previewing.
 - **No package managers**: No `apt`, `npm install`, `pip install`. Use what's already available or write `.jsh` scripts.
 
-## Tool UI: Interactive Approvals and Custom UI
+## Sprinkle Chat: Blocking Inline Cards
 
-You can show interactive HTML UI in the chat using `sprinkle chat`. This is useful for:
-- Asking the user to confirm an action
-- Presenting choices with buttons
-- Showing forms for user input
+`sprinkle chat` shows an inline card in the chat and **blocks until the user clicks a button**, returning the result as JSON. Use it when a tool needs user input mid-execution.
 
 ```bash
-# Simple confirmation dialog
-sprinkle chat '<div class="tool-ui">
-  <p>Deploy to production?</p>
-  <div class="tool-ui__actions">
-    <button class="tool-ui__btn tool-ui__btn--primary" data-action="yes">Deploy</button>
-    <button class="tool-ui__btn tool-ui__btn--secondary" data-action="no">Cancel</button>
+sprinkle chat '<div class="sprinkle-action-card">
+  <div class="sprinkle-action-card__header">Deploy to production?</div>
+  <div class="sprinkle-action-card__actions">
+    <button class="sprinkle-btn sprinkle-btn--secondary" onclick="slicc.lick({action:\"cancel\"})">Cancel</button>
+    <button class="sprinkle-btn sprinkle-btn--primary" onclick="slicc.lick({action:\"deploy\",env:\"prod\"})">Deploy</button>
   </div>
 </div>'
-
-# Returns JSON with the user's action: {"action":"yes","data":null}
+# Returns: {"action":"deploy","data":{"action":"deploy","env":"prod"}}
 ```
 
-Use `data-action="name"` on buttons to define the action name returned. The command blocks until the user clicks a button, then returns JSON with `{action, data}`.
+Uses the same `.sprinkle-*` components and `slicc.lick()` bridge as inline cards. The difference: `sprinkle chat` blocks the tool and returns the lick result, while ` ```shtml ` cards are fire-and-forget (lick events arrive as messages).
 
-Some built-in commands (like `mount`) also use this system automatically when they need user approval.
+Some built-in commands (like `mount`) also use this system for approval dialogs.
 
 ## Sprinkles: Cone Orchestration Rules
 

@@ -152,31 +152,7 @@ export class SprinkleRenderer {
 
   /** Collect CSS custom properties and sprinkle component rules from the parent page. */
   private collectThemeCSS(): string {
-    if (typeof getComputedStyle !== 'function') return '';
-    const rootStyles = getComputedStyle(document.documentElement);
-    const cssVars: string[] = [];
-    const sprinkleRules: string[] = [];
-    for (const sheet of document.styleSheets) {
-      try {
-        for (const rule of sheet.cssRules) {
-          if (rule instanceof CSSStyleRule) {
-            if (rule.selectorText === ':root') {
-              for (let i = 0; i < rule.style.length; i++) {
-                const prop = rule.style[i];
-                if (prop.startsWith('--')) {
-                  cssVars.push(`${prop}: ${rootStyles.getPropertyValue(prop)};`);
-                }
-              }
-            }
-            if (rule.selectorText.includes('.sprinkle-') || rule.selectorText.includes('.fill')) {
-              sprinkleRules.push(rule.cssText);
-            }
-          }
-        }
-      } catch { /* cross-origin sheet, skip */ }
-    }
-    return (cssVars.length > 0 ? `:root { ${cssVars.join(' ')} }\n` : '')
-      + sprinkleRules.join('\n');
+    return collectThemeCSS();
   }
 
   /** Generate the postMessage bridge script injected into full-document iframes. */
@@ -395,4 +371,33 @@ export class SprinkleRenderer {
       delete window.__slicc_sprinkles[this.bridge.name];
     }
   }
+}
+
+/** Collect CSS custom properties and sprinkle component rules from the parent page. */
+export function collectThemeCSS(): string {
+  if (typeof getComputedStyle !== 'function') return '';
+  const rootStyles = getComputedStyle(document.documentElement);
+  const cssVars: string[] = [];
+  const sprinkleRules: string[] = [];
+  for (const sheet of document.styleSheets) {
+    try {
+      for (const rule of sheet.cssRules) {
+        if (rule instanceof CSSStyleRule) {
+          if (rule.selectorText === ':root') {
+            for (let i = 0; i < rule.style.length; i++) {
+              const prop = rule.style[i];
+              if (prop.startsWith('--')) {
+                cssVars.push(`${prop}: ${rootStyles.getPropertyValue(prop)};`);
+              }
+            }
+          }
+          if (rule.selectorText.includes('.sprinkle-') || rule.selectorText.includes('.fill')) {
+            sprinkleRules.push(rule.cssText);
+          }
+        }
+      }
+    } catch { /* cross-origin sheet, skip */ }
+  }
+  return (cssVars.length > 0 ? `:root { ${cssVars.join(' ')} }\n` : '')
+    + sprinkleRules.join('\n');
 }
