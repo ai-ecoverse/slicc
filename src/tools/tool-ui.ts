@@ -202,7 +202,17 @@ export async function showToolUI(request: ToolUIRequest, onUpdate?: OnUpdateCall
     log.warn('showToolUI called without onUpdate callback — UI may not render');
   }
 
-  return promise;
+  // When promise settles, emit tool_ui_done so the renderer can clean up
+  return promise.finally(() => {
+    if (onUpdate) {
+      onUpdate({
+        content: [{
+          type: 'tool_ui_done',
+          requestId: id,
+        } as { type: string; requestId: string }],
+      });
+    }
+  });
 }
 
 /**
