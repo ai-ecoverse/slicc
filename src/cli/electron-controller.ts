@@ -32,7 +32,10 @@ export function findMatchingElectronAppPids(
 ): number[] {
   const matches = runningProcesses.filter((processInfo) => {
     return processMatchPatterns.some((pattern) => {
-      return processInfo.commandLine.includes(pattern)
+      // Match the executable (first token of commandLine), not arguments.
+      // This avoids matching our own CLI process which passes the app path as an argument.
+      const executable = processInfo.commandLine.split(/\s+/)[0] ?? '';
+      return executable.includes(pattern)
         || (processInfo.executablePath?.includes(pattern) ?? false);
     });
   });

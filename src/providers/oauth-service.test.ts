@@ -25,6 +25,9 @@ const mockWindow = {
 
 vi.stubGlobal('window', mockWindow);
 
+// Stub fetch for the server-side polling fallback (returns 204 = no result yet)
+vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ status: 204 })));
+
 function fireMessage(data: unknown) {
   for (const handler of messageListeners) {
     handler({ data } as MessageEvent);
@@ -149,6 +152,30 @@ describe('createOAuthLauncher', () => {
     const result = await promise;
     expect(result).toBeNull();
     // Should not throw when trying to close a null popup
+  });
+
+  it('resolves via server-side polling when postMessage is unavailable', async () => {
+    const mockFetch = vi.mocked(fetch);
+    // First poll: no result yet
+    mockFetch.mockResolvedValueOnce({ status: 204 } as Response);
+    // Second poll: result available
+    mockFetch.mockResolvedValueOnce({
+      status: 200,
+      json: () => Promise.resolve({
+        redirectUrl: 'http://localhost:5710/auth/callback#token=polled',
+      }),
+    } as Response);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    // Advance past first poll (1s) — returns 204
+    await vi.advanceTimersByTimeAsync(1000);
+    // Advance past second poll (1s) — returns the result
+    await vi.advanceTimersByTimeAsync(1000);
+
+    const result = await promise;
+    expect(result).toBe('http://localhost:5710/auth/callback#token=polled');
   });
 
   it('does not resolve twice on duplicate callbacks', async () => {
