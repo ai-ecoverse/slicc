@@ -46,6 +46,10 @@ export interface OrchestratorCallbacks {
   onToolStart?: (scoopJid: string, toolName: string, toolInput: unknown) => void;
   /** Called when a tool finishes executing */
   onToolEnd?: (scoopJid: string, toolName: string, result: string, isError: boolean) => void;
+  /** Called when a tool requests UI interaction */
+  onToolUI?: (scoopJid: string, toolName: string, requestId: string, html: string) => void;
+  /** Called when tool UI interaction is complete */
+  onToolUIDone?: (scoopJid: string, requestId: string) => void;
   /** Called when a message is routed to a scoop (delegation, lick, etc.) */
   onIncomingMessage?: (scoopJid: string, message: ChannelMessage) => void;
 }
@@ -503,6 +507,12 @@ export class Orchestrator {
       },
       onToolEnd: (toolName, result, isError) => {
         this.callbacks.onToolEnd?.(jid, toolName, result, isError);
+      },
+      onToolUI: (toolName, requestId, html) => {
+        this.callbacks.onToolUI?.(jid, toolName, requestId, html);
+      },
+      onToolUIDone: (requestId) => {
+        this.callbacks.onToolUIDone?.(jid, requestId);
       },
       // NanoClaw tools callbacks
       onSendMessage: (text, sender) => {

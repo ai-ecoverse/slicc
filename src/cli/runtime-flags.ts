@@ -14,6 +14,8 @@ export interface CliRuntimeFlags {
   joinUrl: string | null;
   logLevel: LogLevel;
   logDir: string | null;
+  /** Initial prompt to auto-submit when the UI loads */
+  prompt: string | null;
 }
 
 export const DEFAULT_CLI_CDP_PORT = 9222;
@@ -40,6 +42,7 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
   let joinUrl: string | null = null;
   let logLevel: LogLevel = 'info';
   let logDir: string | null = null;
+  let prompt: string | null = null;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
@@ -69,6 +72,18 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
     }
     if (arg.startsWith('--log-dir=')) {
       logDir = arg.slice('--log-dir='.length) || null;
+      continue;
+    }
+    if (arg.startsWith('--prompt=')) {
+      prompt = arg.slice('--prompt='.length) || null;
+      continue;
+    }
+    if (arg === '--prompt') {
+      const nextArg = argv[index + 1];
+      if (nextArg && !nextArg.startsWith('--')) {
+        prompt = nextArg;
+        index += 1;
+      }
       continue;
     }
     if (arg === '--electron') {
@@ -161,5 +176,6 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
     joinUrl,
     logLevel,
     logDir,
+    prompt,
   };
 }

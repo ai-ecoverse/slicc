@@ -417,7 +417,7 @@ async function main() {
     }
     console.log(`Found Chrome: ${chromePath}`);
 
-    const browserLaunchUrl = resolveCliBrowserLaunchUrl({
+    let browserLaunchUrl = resolveCliBrowserLaunchUrl({
       serveOrigin: SERVE_ORIGIN,
       lead: RUNTIME_FLAGS.lead,
       leadWorkerBaseUrl: RUNTIME_FLAGS.leadWorkerBaseUrl,
@@ -425,6 +425,11 @@ async function main() {
       join: RUNTIME_FLAGS.join,
       joinUrl: RUNTIME_FLAGS.joinUrl,
     });
+    // Append optional prompt parameter
+    if (RUNTIME_FLAGS.prompt) {
+      const sep = browserLaunchUrl.includes('?') ? '&' : '?';
+      browserLaunchUrl += `${sep}prompt=${encodeURIComponent(RUNTIME_FLAGS.prompt)}`;
+    }
     if (RUNTIME_FLAGS.join) {
       console.log(`Join launch URL: ${browserLaunchUrl}`);
     } else if (RUNTIME_FLAGS.lead) {
@@ -1086,7 +1091,7 @@ async function main() {
       })();
     }
 
-    if (!ELECTRON_MODE && launchedBrowserProcess) {
+    if (!ELECTRON_MODE) {
       setTimeout(() => {
         attachConsoleForwarder(CDP_PORT, String(SERVE_PORT)).catch((err) => {
           console.error('[page] Console forwarder error:', err);

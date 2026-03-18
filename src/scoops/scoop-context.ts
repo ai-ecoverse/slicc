@@ -45,6 +45,10 @@ export interface ScoopContextCallbacks {
   onToolStart?: (toolName: string, toolInput: unknown) => void;
   /** Called when a tool finishes executing */
   onToolEnd?: (toolName: string, result: string, isError: boolean) => void;
+  /** Called when a tool requests UI interaction */
+  onToolUI?: (toolName: string, requestId: string, html: string) => void;
+  /** Called when tool UI interaction is complete */
+  onToolUIDone?: (requestId: string) => void;
   /** Called when agent uses send_message tool */
   onSendMessage: (text: string, sender?: string) => void;
   /** Get all scoops (for cone) */
@@ -73,7 +77,7 @@ export class ScoopContext {
   private isProcessing = false;
   private didStreamDeltas = false;
   private unsubscribe: (() => void) | null = null;
-  private pendingPrompts: string[] = [];
+
   private sessionStore: SessionStore | null = null;
   private sessionId: string;
   private sessionCreatedAt: number = 0;
@@ -223,16 +227,28 @@ export class ScoopContext {
     }
   }
 
-  /** Send a prompt to this scoop's agent. If already processing, queues it for sequential execution. */
+  /** Send a prompt to this scoop's agent. If already processing, queues it via followUp(). */
   async prompt(text: string): Promise<void> {
     if (!this.agent) {
       this.callbacks.onError('Agent not initialized');
       return;
     }
 
-    if (this.isProcessing) {
-      log.info('Queueing prompt while processing', { folder: this.scoop.folder, queueLength: this.pendingPrompts.length + 1 });
-      this.pendingPrompts.push(text);
+    // Check both our flag AND the agent's internal state to avoid race conditions.
+    // If the agent is streaming (tool executing, etc), use followUp() to queue.
+    const agentIsStreaming = this.agent.state?.isStreaming ?? false;
+    if (this.isProcessing || agentIsStreaming) {
+      log.info('Queueing prompt via followUp while processing', {
+        folder: this.scoop.folder,
+        isProcessing: this.isProcessing,
+        agentIsStreaming,
+      });
+      // Use pi-agent-core's followUp() to queue message for after current turn
+      this.agent.followUp({
+        role: 'user',
+        content: [{ type: 'text', text }],
+        timestamp: Date.now(),
+      });
       return;
     }
 
@@ -247,49 +263,15 @@ export class ScoopContext {
       log.error('Agent error', { folder: this.scoop.folder, error: message });
       this.callbacks.onError(message);
     } finally {
-      // Process next queued prompt if any
-      const next = this.pendingPrompts.shift();
-      if (next && this.agent) {
-        // Stay in processing state, process the next prompt
-        this.didStreamDeltas = false;
-        try {
-          await this.agent.prompt(next);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          log.error('Queued agent error', { folder: this.scoop.folder, error: message });
-          this.callbacks.onError(message);
-        } finally {
-          // Drain remaining queued prompts
-          await this.drainQueue();
-        }
-      } else {
-        this.isProcessing = false;
-        this.setStatus('ready');
-      }
+      this.isProcessing = false;
+      this.setStatus('ready');
     }
-  }
-
-  /** Drain the pending prompt queue sequentially */
-  private async drainQueue(): Promise<void> {
-    while (this.pendingPrompts.length > 0 && this.agent) {
-      const next = this.pendingPrompts.shift()!;
-      this.didStreamDeltas = false;
-      try {
-        await this.agent.prompt(next);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        log.error('Queued agent error', { folder: this.scoop.folder, error: message });
-        this.callbacks.onError(message);
-      }
-    }
-    this.isProcessing = false;
-    this.setStatus('ready');
   }
 
   /** Stop the current agent operation and clear any queued prompts */
   stop(): void {
-    this.pendingPrompts.length = 0;
-    this.agent?.abort();
+    this.agent?.clearAllQueues?.();
+    this.agent?.abort?.();
     this.isProcessing = false;
     this.setStatus('ready');
   }
@@ -344,6 +326,19 @@ export class ScoopContext {
 
       case 'tool_execution_start': {
         this.callbacks.onToolStart?.(event.toolName, event.args);
+        break;
+      }
+
+      case 'tool_execution_update': {
+        // Handle tool UI requests from onUpdate
+        const partialResult = event.partialResult as { content?: Array<{ type: string; requestId?: string; html?: string }> };
+        for (const c of partialResult?.content ?? []) {
+          if (c.type === 'tool_ui' && c.requestId && c.html) {
+            this.callbacks.onToolUI?.(event.toolName, c.requestId, c.html);
+          } else if (c.type === 'tool_ui_done' && c.requestId) {
+            this.callbacks.onToolUIDone?.(c.requestId);
+          }
+        }
         break;
       }
 

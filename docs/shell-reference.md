@@ -38,7 +38,7 @@ Custom commands implemented in TypeScript and registered in just-bash.
 | **playwright-cli / playwright / puppeteer** | `playwright-command.ts` | Browser automation shell CLI | `snapshot`, `click <ref>`, `cookie-set`, `tab-list` |
 | **screencapture** | `screencapture-command.ts` | Capture user's screen via browser screen sharing API | `<output.png>`, `-c` (clipboard), `-v` / `--view` (agent vision) |
 | **upskill** | `upskill-command.ts` | Install skills from GitHub/ClawHub | `upskill owner/repo`, `upskill clawhub:name`, `upskill search "query"` |
-| **sprinkle** | `sprinkle-command.ts` | Manage `.shtml` sprinkle panels | `sprinkle list`, `sprinkle open <name>`, `sprinkle close <name>` |
+| **sprinkle** | `sprinkle-command.ts` | Manage `.shtml` sprinkle panels and inline chat UI | `sprinkle list`, `sprinkle open <name>`, `sprinkle chat '<html>'` |
 | **git** | (isomorphic-git) | Full git support | `git clone`, `git commit`, `git push`, etc. |
 
 **Example usage**:

@@ -1,5 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   DEFAULT_EXTENSION_TAB_ID,
   EXTENSION_TAB_SPECS,
@@ -43,14 +42,25 @@ describe('tabbed-ui', () => {
 });
 
 describe('setHiddenTabs', () => {
+  let store: Map<string, string>;
+  let originalLocalStorage: Storage | undefined;
+
   beforeAll(() => {
-    if (typeof globalThis.localStorage === 'undefined' || typeof globalThis.localStorage?.setItem !== 'function') {
-      const store = new Map<string, string>();
-      (globalThis as Record<string, unknown>).localStorage = {
-        getItem: (k: string) => store.get(k) ?? null,
-        setItem: (k: string, v: string) => store.set(k, v),
-        removeItem: (k: string) => store.delete(k),
-      };
+    store = new Map<string, string>();
+    originalLocalStorage = globalThis.localStorage;
+    (globalThis as Record<string, unknown>).localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => store.set(k, v),
+      removeItem: (k: string) => store.delete(k),
+      clear: () => store.clear(),
+      key: () => null,
+      length: 0,
+    };
+  });
+
+  afterAll(() => {
+    if (originalLocalStorage !== undefined) {
+      (globalThis as Record<string, unknown>).localStorage = originalLocalStorage;
     }
   });
 

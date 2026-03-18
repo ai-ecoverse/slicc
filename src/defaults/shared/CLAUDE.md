@@ -123,7 +123,7 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **skill list/install/uninstall** — Manage skills from /workspace/skills/
 - **upskill** — Install skills from GitHub (`upskill owner/repo`) or ClawHub (`upskill clawhub:name`)
 - **webhook/crontask** — Set up licks (external event triggers)
-- **sprinkle** — Manage sprinkles: `sprinkle list`, `sprinkle open <name>`, `sprinkle close <name>`, `sprinkle send <name> '<json>'` (push data to a sprinkle)
+- **sprinkle** — Manage sprinkles: `sprinkle list`, `sprinkle open <name>`, `sprinkle close <name>`, `sprinkle send <name> '<json>'` (push data), `sprinkle chat '<html>'` (inline chat UI)
 - **oauth-token** — Get an OAuth access token for a provider (`oauth-token adobe`); auto-triggers login if no valid token exists. Use in shell: `curl -H "Authorization: Bearer $(oauth-token adobe)" https://api.example.com`
 - **aem** — AEM Edge Delivery Services: `aem list`, `aem get`, `aem put`, `aem preview`, `aem publish`, `aem upload`. Accepts EDS URLs (`https://main--repo--org.aem.page/path`). Auth via `oauth-token adobe`. Run `aem help` for details.
 - **git** — Full git support (clone, commit, push, pull)
@@ -133,6 +133,9 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **host** — Print the current leader tray status plus `join_url`. When this runtime is leader, shows the join URL and connected followers. Use `host reset` to disconnect all followers and create a fresh tray session with a new join URL (leader only).
 - **pbcopy / pbpaste** — Clipboard commands. `echo hello | pbcopy` copies stdin to clipboard, `pbpaste` outputs clipboard contents. Uses `navigator.clipboard` API.
 - **xclip / xsel** — Clipboard commands that auto-detect direction: `echo hello | xclip` copies (stdin present), `xclip` alone pastes (no stdin).
+- **say** — Text-to-speech using Web Speech API. `say hello world`, `say -v Samantha hello` (voice selection), `say -r 1.5 fast speech` (rate 0.1-10), `say --list` (list voices).
+- **afplay** — Play audio files using Web Audio API. `afplay /path/to/audio.mp3`, `afplay -v 0.5 file.wav` (volume 0-1), `afplay -r 1.5 file.mp3` (rate 0.25-4).
+- **chime** — Play a notification chime sound. Alias for `afplay /shared/sounds/chime.mp3`.
 - **playwright-cli** — Browser automation (built-in, no SKILL.md lookup needed). Key subcommands: `tab-list`, `tab-select <index>`, `snapshot`, `screenshot [--filename=<path>]`, `open <url> [--runtime=<id>]`, `click <ref>`, `fill <ref> "text"`, `close`. Use `--runtime` with `open`/`tab-new` to open a tab on a remote tray runtime. Run `playwright-cli --help` for full list.
 - **rsync** — Sync files between local VFS and a remote tray runtime. Push: `rsync /local runtime-id:/remote`. Pull: `rsync runtime-id:/remote /local`. Flags: `--dry-run` (preview), `--delete` (remove dest files not in source), `--verbose` (per-file detail). Requires an active tray connection.
 - **teleport** — Teleport browser cookies from a remote tray runtime to the local browser. Enables seamless authentication transfer between SLICC instances in a tray. Usage: `teleport` (auto-select best follower), `teleport <runtime-id>` (target specific runtime), `teleport --list` (show available runtimes), `teleport --url <url>` (open URL on follower for interactive auth). When `--url` is provided, the follower opens a browser tab for the human to complete login; cookies are captured after auth completion (hostname redirect) or a 2-minute timeout. Page reloads by default after applying cookies; use `--no-reload` to skip.
@@ -158,9 +161,35 @@ Key things that work differently:
 - **No long-running servers**: You can't start background daemons. The `serve` and `open` commands handle previewing.
 - **No package managers**: No `apt`, `npm install`, `pip install`. Use what's already available or write `.jsh` scripts.
 
+## Tool UI: Interactive Approvals and Custom UI
+
+You can show interactive HTML UI in the chat using `sprinkle chat`. This is useful for:
+- Asking the user to confirm an action
+- Presenting choices with buttons
+- Showing forms for user input
+
+```bash
+# Simple confirmation dialog
+sprinkle chat '<div class="tool-ui">
+  <p>Deploy to production?</p>
+  <div class="tool-ui__actions">
+    <button class="tool-ui__btn tool-ui__btn--primary" data-action="yes">Deploy</button>
+    <button class="tool-ui__btn tool-ui__btn--secondary" data-action="no">Cancel</button>
+  </div>
+</div>'
+
+# Returns JSON with the user's action: {"action":"yes","data":null}
+```
+
+Use `data-action="name"` on buttons to define the action name returned. The command blocks until the user clicks a button, then returns JSON with `{action, data}`.
+
+Some built-in commands (like `mount`) also use this system automatically when they need user approval.
+
 ## Sprinkles: Cone Orchestration Rules
 
-Sprinkles are persistent UI panels created and managed by scoops. The cone NEVER creates, modifies, or interacts with sprinkles directly — it only orchestrates scoops. See the `sprinkles` skill for the full reference (bridge API, CSS, style guide).
+Sprinkles are persistent UI panels created and managed by scoops. The cone orchestrates — scoops do the work.
+
+**When the user asks for a dashboard, audit, editor, analysis, or visualization** — read the sprinkles skill first (`read_file /workspace/skills/sprinkles/SKILL.md`) to check if a built-in sprinkle matches, and to get the brief templates for creating/modifying sprinkles and handling lick events.
 
 ### Rule 1: One scoop per sprinkle, named identically
 
@@ -174,50 +203,7 @@ The cone MUST NOT:
 - Run `write_file` or `edit_file` on sprinkle paths
 - Handle lick events by doing the work itself
 
-ALL sprinkle work goes through scoops via `feed_scoop`.
-
-### Rule 3: Creating sprinkles
-
-Create a scoop, then feed it a **complete, self-contained brief**. The brief MUST include:
-- The exact sprinkle name and file path
-- What data to show
-- The instruction to stay ready for follow-up work
-
-```
-scoop_scoop("giro-winners")
-feed_scoop("giro-winners", "You own the sprinkle 'giro-winners'. Your job:
-1. Run: read_file /workspace/skills/sprinkles/style-guide.md
-2. Research the last 3 Giro d'Italia winners
-3. Write the sprinkle to /shared/sprinkles/giro-winners/giro-winners.shtml
-4. Run: sprinkle open giro-winners
-5. IMPORTANT: After opening the sprinkle, do NOT finish. Stay ready — you will receive follow-up instructions and lick events for this sprinkle via feed_scoop. Do not send a completion message.")
-```
-
-### Rule 4: Modifying sprinkles — feed the EXISTING scoop
-
-When the user asks to change a sprinkle, feed the scoop that already owns it. Do NOT create a new scoop or do it yourself. Include the specific sprinkle name and file path in the brief:
-
-```
-feed_scoop("giro-winners", "Modify YOUR sprinkle 'giro-winners' at /shared/sprinkles/giro-winners/giro-winners.shtml:
-Add an 'Add Previous Year' button with onclick=\"slicc.lick({action: 'add-year'})\"
-Then reload: sprinkle close giro-winners && sprinkle open giro-winners
-Stay ready for more work.")
-```
-
-### Rule 5: Lick events — forward to owning scoop, never handle yourself
-
-When a sprinkle lick arrives (e.g. `[Sprinkle Event: giro-winners] {"action":"add-year"}`):
-1. Extract the sprinkle name from the event (here: `giro-winners`)
-2. Forward to the scoop with the SAME name via `feed_scoop`
-3. Include the sprinkle name, file path, and the full lick payload in the brief
-
-```
-feed_scoop("giro-winners", "Lick event on YOUR sprinkle 'giro-winners' (/shared/sprinkles/giro-winners/giro-winners.shtml):
-Action: 'add-year'
-Look up the next previous year's Giro d'Italia winner and update the sprinkle.
-Use: sprinkle send giro-winners '<json>' to push data, or edit the .shtml and reload.
-Stay ready for more lick events.")
-```
+ALL sprinkle work goes through scoops via `feed_scoop`. See Rules 3-5 in the `sprinkles` skill for creating, modifying, and handling lick events.
 
 **NEVER** handle a lick in the cone. NEVER run bash, write_file, or any tool to process lick data yourself. Always `feed_scoop`.
 

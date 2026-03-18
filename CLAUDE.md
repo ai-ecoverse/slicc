@@ -5,7 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build and Development Commands
 
 ```bash
-npm run dev:full        # Full dev mode: Vite HMR + Chrome + CDP proxy (port 3000)
+npm run dev:full        # Full dev mode: Vite HMR + Chrome + CDP proxy (port 5710)
+npm run dev:full -- --prompt "mount /tmp"  # Auto-submit prompt (clears history/fs first)
 npm run dev:electron -- /Applications/Slack.app  # Electron attach mode
 npm run dev             # Vite dev server only (no Chrome/CDP)
 npm run qa:setup        # Build dist/extension and scaffold dedicated leader/follower/extension Chrome QA profiles
@@ -23,7 +24,18 @@ npx wrangler deploy     # Deploy the Cloudflare Worker tray hub
 WORKER_BASE_URL=https://... npx vitest run src/worker/deployed.test.ts  # Smoke-test a deployed tray hub
 ```
 
-**Requires Node >= 22** (LTS). Ports: 3000 (UI), 9222 (Chrome CDP), 9223 (Electron CDP), 24679 (Vite HMR)
+### Automated Testing with `--prompt`
+
+The `--prompt` flag auto-submits a prompt when the UI loads, clearing chat history and filesystem first. Useful for testing agent flows without manual interaction:
+
+```bash
+npm run dev:full -- --prompt "mount /tmp"     # Test mount approval UI
+npm run dev:full -- --prompt "ls /workspace"  # Test any agent command
+```
+
+Console logs from the browser are forwarded to the CLI terminal for debugging.
+
+**Requires Node >= 22** (LTS). Ports: 5710 (UI), 9222 (Chrome CDP), 9223 (Electron CDP), 24679 (Vite HMR)
 
 ## Philosophy
 
@@ -252,6 +264,8 @@ LLM-summarized context compaction aligned with pi-mono's strategy. When context 
 - **Overflow recovery** (`scoop-context.ts`): When the API returns a "prompt too long" error, `ScoopContext` catches it via `isContextOverflow()` from pi-ai, removes the error message, replaces oversized messages (>40K chars) with placeholders, and re-prompts the agent with an explanation. Limited to 1 retry to prevent infinite loops. Uses deep import from `@mariozechner/pi-ai/dist/utils/overflow.js` (Vite alias in both configs).
 - **Factory**: `createCompactContext(config)` returns a `transformContext` function wired into each `ScoopContext`.
 - **Import**: Deep import from `@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js` (browser-safe submodule). Vite alias in `vite.config.ts` and `vite.config.extension.ts`. Types in `src/types/pi-coding-agent-compaction.d.ts`.
+
+**Sprinkle Rendering** (`src/ui/sprinkle-renderer.ts`): Renders `.shtml` files as interactive UI panels in sandbox iframes. See the sprinkles skill (`src/defaults/workspace/skills/sprinkles/`) for rendering modes, bridge API, and style guide.
 
 ### Data Flow
 

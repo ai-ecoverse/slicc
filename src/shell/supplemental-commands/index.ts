@@ -26,6 +26,8 @@ import { createWhichCommand } from './which-command.js';
 import { createZipCommand } from './zip-command.js';
 import { createScreencaptureCommand } from './screencapture-command.js';
 import { createPbcopyCommand, createPbpasteCommand, createClipboardAutoCommand } from './clipboard-commands.js';
+import { createSayCommand } from './say-command.js';
+import { createAfplayCommand, createChimeCommand } from './afplay-command.js';
 import type { BrowserAPI } from '../../cdp/index.js';
 export type {
   ImgcatCommandOptions as SupplementalCommandOptions,
@@ -72,6 +74,9 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createPbpasteCommand(),
     createClipboardAutoCommand('xclip'),
     createClipboardAutoCommand('xsel'),
+    createSayCommand(),
+    createAfplayCommand(),
+    createChimeCommand(),
   ];
 
   if (options.fs) {
