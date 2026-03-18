@@ -718,8 +718,12 @@ async function main(): Promise<void> {
       onToolUI: (scoopJid, toolName, requestId, html) => {
         // Emit tool UI request to chat panel
         const msgId = scoopCurrentMessageId.get(scoopJid);
+        log.info('onToolUI callback', { scoopJid, toolName, requestId, msgId, selectedJid: selectedScoop?.jid });
         if (selectedScoop?.jid === scoopJid && msgId) {
+          log.info('Emitting tool_ui event to UI', { messageId: msgId, requestId });
           emitToUI({ type: 'tool_ui', messageId: msgId, toolName, requestId, html });
+        } else {
+          log.warn('Not emitting tool_ui - scoop not selected or no msgId', { scoopJid, selectedJid: selectedScoop?.jid, msgId });
         }
       },
       onToolUIDone: (scoopJid, requestId) => {
@@ -1218,6 +1222,30 @@ async function main(): Promise<void> {
   }
 
   log.info('Orchestrator initialized — cone+scoops ready', { scoopCount: orchestrator.getScoops().length });
+
+  // Check for auto-prompt from URL parameter (for debugging)
+  const urlParams = new URLSearchParams(window.location.search);
+  const autoPrompt = urlParams.get('prompt');
+  if (autoPrompt && selectedScoop) {
+    log.info('Auto-submitting prompt from URL', { prompt: autoPrompt });
+    // Clear previous state first - both the chat panel UI and the orchestrator data
+    await layout.panels.chat.clearSession();
+    await layout.onClearChat?.();
+    await layout.onClearFilesystem?.();
+    // Small delay to ensure UI is ready after clearing
+    setTimeout(() => {
+      orchestrator.handleMessage({
+        id: `auto-${Date.now().toString(36)}`,
+        senderId: 'user',
+        senderName: 'User',
+        channel: 'web',
+        timestamp: new Date().toISOString(),
+        content: autoPrompt,
+        chatJid: selectedScoop!.jid,
+        fromAssistant: false,
+      });
+    }, 500);
+  }
 
   // Initialize operational telemetry (fire-and-forget)
   initTelemetry().catch(() => {});

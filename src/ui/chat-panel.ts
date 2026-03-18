@@ -585,20 +585,39 @@ export class ChatPanel {
     this.updateMessageEl(messageId);
   }
 
-  private handleToolUI(messageId: string, toolName: string, requestId: string, html: string): void {
+  private handleToolUI(messageId: string, toolName: string, requestId: string, html: string, retryCount = 0): void {
     const msg = this.findMessage(messageId);
-    if (!msg || !msg.toolCalls) return;
+    if (!msg || !msg.toolCalls) {
+      // Message/toolCalls might not be added yet - retry
+      if (retryCount < 10) {
+        setTimeout(() => this.handleToolUI(messageId, toolName, requestId, html, retryCount + 1), 100);
+        return;
+      }
+      log.warn('handleToolUI: message or toolCalls not found after retries', { messageId });
+      return;
+    }
 
     // Find the tool call to attach the UI to
     const tc = [...msg.toolCalls].reverse().find((t) => t.name === toolName && t.result === undefined);
-    if (!tc) return;
+    if (!tc) {
+      log.warn('handleToolUI: no matching tool call found', { messageId, toolName });
+      return;
+    }
 
     // Store the request ID for later cleanup
     (tc as any)._toolUIRequestId = requestId;
 
     // Find the tool call element and add a UI container
-    const wrapper = this.messagesEl.querySelector(`[data-message-id="${messageId}"]`);
-    if (!wrapper) return;
+    const wrapper = this.messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
+    if (!wrapper) {
+      // DOM element might not be rendered yet - retry
+      if (retryCount < 10) {
+        setTimeout(() => this.handleToolUI(messageId, toolName, requestId, html, retryCount + 1), 100);
+        return;
+      }
+      log.warn('handleToolUI: wrapper element not found after retries', { messageId });
+      return;
+    }
 
     // Find the tool call element (last one with matching name)
     const toolCallEls = wrapper.querySelectorAll('.tool-call');
@@ -608,6 +627,11 @@ export class ChatPanel {
     });
 
     if (toolCallEl) {
+      // Expand the tool call details element so the UI is visible
+      if (toolCallEl instanceof HTMLDetailsElement) {
+        toolCallEl.open = true;
+      }
+      
       // Create a container for the tool UI
       let uiContainer = toolCallEl.querySelector('.tool-call__ui') as HTMLElement;
       if (!uiContainer) {
@@ -618,6 +642,11 @@ export class ChatPanel {
 
       // Render the tool UI
       createToolUIRenderer(uiContainer, requestId, html);
+    } else if (retryCount < 10) {
+      // Tool call element might not be rendered yet - retry
+      setTimeout(() => this.handleToolUI(messageId, toolName, requestId, html, retryCount + 1), 100);
+    } else {
+      log.warn('handleToolUI: tool call element not found in DOM after retries', { toolName });
     }
   }
 

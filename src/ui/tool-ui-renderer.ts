@@ -97,6 +97,63 @@ export class ToolUIRenderer {
   private renderInline(html: string): void {
     const wrapper = document.createElement('div');
     wrapper.className = 'tool-ui-content';
+    // Inject default styles if not already present
+    if (!document.getElementById('tool-ui-styles')) {
+      const style = document.createElement('style');
+      style.id = 'tool-ui-styles';
+      style.textContent = `
+        .tool-call__ui {
+          margin-top: 8px;
+        }
+        .tool-ui-content {
+          padding: 12px;
+          background: var(--bg-secondary, #1e1e1e);
+          border-radius: 8px;
+          border: 1px solid var(--border-color, #333);
+        }
+        .tool-ui-content .tool-ui {
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+          color: var(--text-primary, #e0e0e0);
+        }
+        .tool-ui-content .tool-ui p {
+          margin: 0 0 12px 0;
+        }
+        .tool-ui-content .tool-ui code {
+          background: var(--bg-tertiary, #2a2a2a);
+          padding: 2px 6px;
+          border-radius: 4px;
+          font-family: monospace;
+        }
+        .tool-ui-content .tool-ui__actions {
+          display: flex;
+          gap: 8px;
+          margin-top: 12px;
+        }
+        .tool-ui-content .tool-ui__btn {
+          padding: 8px 16px;
+          border-radius: 6px;
+          border: none;
+          cursor: pointer;
+          font-size: 14px;
+          font-weight: 500;
+        }
+        .tool-ui-content .tool-ui__btn--primary {
+          background: var(--accent-color, #4a9eff);
+          color: white;
+        }
+        .tool-ui-content .tool-ui__btn--primary:hover {
+          background: var(--accent-hover, #3a8eef);
+        }
+        .tool-ui-content .tool-ui__btn--secondary {
+          background: var(--bg-tertiary, #333);
+          color: var(--text-primary, #e0e0e0);
+        }
+        .tool-ui-content .tool-ui__btn--secondary:hover {
+          background: var(--bg-hover, #444);
+        }
+      `;
+      document.head.appendChild(style);
+    }
     wrapper.innerHTML = html;
     this.container.appendChild(wrapper);
 

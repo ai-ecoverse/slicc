@@ -6,6 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 npm run dev:full        # Full dev mode: Vite HMR + Chrome + CDP proxy (port 3000)
+npm run dev:full -- --prompt "mount /tmp"  # Auto-submit prompt (clears history/fs first)
 npm run dev:electron -- /Applications/Slack.app  # Electron attach mode
 npm run dev             # Vite dev server only (no Chrome/CDP)
 npm run build           # Production build (UI via Vite + CLI/Electron via TSC)
@@ -14,6 +15,17 @@ npm run typecheck       # Typecheck browser + Node targets
 npm run test            # Vitest run (all tests)
 npx vitest run src/fs/virtual-fs.test.ts  # Single test file
 ```
+
+### Automated Testing with `--prompt`
+
+The `--prompt` flag auto-submits a prompt when the UI loads, clearing chat history and filesystem first. Useful for testing agent flows without manual interaction:
+
+```bash
+npm run dev:full -- --prompt "mount /tmp"     # Test mount approval UI
+npm run dev:full -- --prompt "ls /workspace"  # Test any agent command
+```
+
+Console logs from the browser are forwarded to the CLI terminal for debugging.
 
 **Requires Node >= 22** (LTS). Ports: 3000 (UI), 9222 (Chrome CDP), 9223 (Electron CDP), 24679 (Vite HMR)
 

@@ -332,8 +332,11 @@ export class ScoopContext {
       case 'tool_execution_update': {
         // Handle tool UI requests from onUpdate
         const partialResult = event.partialResult as { content?: Array<{ type: string; requestId?: string; html?: string }> };
+        log.info('tool_execution_update received', { toolName: event.toolName, contentCount: partialResult?.content?.length ?? 0 });
         for (const c of partialResult?.content ?? []) {
+          log.info('Processing content block', { type: c.type, hasRequestId: !!c.requestId, hasHtml: !!c.html });
           if (c.type === 'tool_ui' && c.requestId && c.html) {
+            log.info('Emitting onToolUI callback', { toolName: event.toolName, requestId: c.requestId });
             this.callbacks.onToolUI?.(event.toolName, c.requestId, c.html);
           }
         }
