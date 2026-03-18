@@ -168,7 +168,7 @@ async function cmdPut(args) {
   const url = `${DA_ADMIN_BASE}/source/${target.org}/${target.repo}/${aemPath}`;
 
   // Write HTML to a temp file, then use curl -F to upload
-  const tmpPath = '/tmp/_aem_put_' + Date.now() + '.html';
+  const tmpPath = process.cwd() + '/_aem_put_' + Date.now() + '.html';
   await fs.writeFile(tmpPath, html);
   await aemFetch('PUT', url, token, ['-F', `data=@${tmpPath};type=text/html`]);
   await fs.rm(tmpPath);
