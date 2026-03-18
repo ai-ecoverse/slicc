@@ -26,6 +26,8 @@ export function escapeHtml(text: string): string {
 function highlightCode(code: string, lang: string): string {
   let html = escapeHtml(code);
 
+  if (lang === 'shtml') return html; // preserve raw content for inline sprinkle hydration
+
   if (['js', 'javascript', 'ts', 'typescript', 'jsx', 'tsx'].includes(lang)) {
     html = highlightJS(html);
   } else if (lang === 'json') {

@@ -88,16 +88,12 @@ export class MountCommands {
       // Agent-driven: show approval UI before opening picker
       const result = await showToolUIFromContext({
         html: `
-          <div class="tool-ui">
-            <p>The agent wants to mount a local directory at <code>${escapeHtml(targetPath)}</code></p>
-            <p style="font-size: 0.9em; opacity: 0.8;">This will give the agent read/write access to files in the directory you select.</p>
-            <div class="tool-ui__actions">
-              <button class="tool-ui__btn tool-ui__btn--primary" data-action="approve">
-                Select Directory
-              </button>
-              <button class="tool-ui__btn tool-ui__btn--secondary" data-action="deny">
-                Deny
-              </button>
+          <div class="sprinkle-action-card">
+            <div class="sprinkle-action-card__header">Mount local directory <span class="sprinkle-badge sprinkle-badge--notice">approval</span></div>
+            <div class="sprinkle-action-card__body">The agent wants to mount a local directory at <code>${escapeHtml(targetPath)}</code>. This will give the agent read/write access to files in the directory you select.</div>
+            <div class="sprinkle-action-card__actions">
+              <button class="sprinkle-btn sprinkle-btn--secondary" data-action="deny">Deny</button>
+              <button class="sprinkle-btn sprinkle-btn--primary" data-action="approve">Select directory</button>
             </div>
           </div>
         `,
