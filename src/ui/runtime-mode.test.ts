@@ -41,6 +41,9 @@ describe('runtime-mode', () => {
     expect(getTrayWebhookUrl('https://hub.slicc.dev/webhook/abc.def', 'my-webhook')).toBe(
       'https://hub.slicc.dev/webhook/abc.def/my-webhook',
     );
+    expect(getTrayWebhookUrl('https://hub.slicc.dev/webhook/abc.def/', '/my-webhook')).toBe(
+      'https://hub.slicc.dev/webhook/abc.def/my-webhook',
+    );
   });
 
   it('recognizes overlay tab messages', () => {

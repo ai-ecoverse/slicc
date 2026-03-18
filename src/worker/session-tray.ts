@@ -26,7 +26,7 @@ import {
   type TurnIceServer,
   type WorkerToLeaderControlMessage,
 } from './tray-signaling.js';
-import { fetchTURNCredentials } from './turn-credentials.js';
+import { fetchTURNCredentials, TURN_CREDENTIAL_TTL_MS } from './turn-credentials.js';
 
 interface ControllerAttachRequest {
   controllerId?: string;
@@ -63,6 +63,12 @@ interface SessionTrayOptions {
 }
 
 const TRAY_STORAGE_KEY = 'tray';
+const TURN_CREDENTIAL_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+
+interface CachedIceServers {
+  iceServers: TurnIceServer[];
+  expiresAtMs: number;
+}
 
 export class SessionTrayDurableObject {
   private readonly now: () => number;
@@ -72,7 +78,7 @@ export class SessionTrayDurableObject {
   private readonly turnApiToken: string | undefined;
   private tray: TrayRecord | null = null;
   private leaderSocket: TrayWebSocketLike | null = null;
-  private cachedIceServers: TurnIceServer[] | null = null;
+  private cachedIceServers: CachedIceServers | null = null;
 
   constructor(
     private readonly state: DurableObjectStateLike,
@@ -1142,13 +1148,18 @@ export class SessionTrayDurableObject {
       return undefined;
     }
 
-    if (this.cachedIceServers) {
-      return this.cachedIceServers;
+    const now = this.now();
+    if (this.cachedIceServers && now < this.cachedIceServers.expiresAtMs) {
+      return this.cachedIceServers.iceServers;
     }
 
     try {
-      this.cachedIceServers = await fetchTURNCredentials(this.turnKeyId, this.turnApiToken, this.fetchImpl);
-      return this.cachedIceServers;
+      const iceServers = await fetchTURNCredentials(this.turnKeyId, this.turnApiToken, this.fetchImpl);
+      this.cachedIceServers = {
+        iceServers,
+        expiresAtMs: this.now() + Math.max(0, TURN_CREDENTIAL_TTL_MS - TURN_CREDENTIAL_REFRESH_MARGIN_MS),
+      };
+      return iceServers;
     } catch {
       return undefined;
     }

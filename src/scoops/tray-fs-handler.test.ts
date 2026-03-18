@@ -67,7 +67,7 @@ describe('tray-fs-handler', () => {
     });
 
     it('chunks large files', async () => {
-      // Create a file larger than 64KB
+      // Create content larger than the serialized chunk threshold.
       const largeContent = 'x'.repeat(100_000);
       await vfs.writeFile('/large.txt', largeContent);
 

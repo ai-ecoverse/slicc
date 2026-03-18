@@ -77,6 +77,8 @@ describe('ServiceWorkerLeaderTraySocket', () => {
 
   it('sends outbound frames and close requests through the service worker', async () => {
     const socket = new ServiceWorkerLeaderTraySocket('wss://tray.example.com/controller');
+    const closed = vi.fn();
+    socket.addEventListener('close', closed);
     await Promise.resolve();
     const id = getOpenedSocketId();
 
@@ -91,6 +93,15 @@ describe('ServiceWorkerLeaderTraySocket', () => {
       source: 'offscreen',
       payload: { type: 'tray-socket-close', id, code: 1000, reason: 'done' },
     });
+
+    expect(closed).not.toHaveBeenCalled();
+    expect(mockChrome.runtime.onMessage.removeListener).not.toHaveBeenCalled();
+
+    for (const listener of messageListeners) {
+      listener({ source: 'service-worker', payload: { type: 'tray-socket-closed', id } }, {}, () => {});
+    }
+
+    expect(closed).toHaveBeenCalledOnce();
     expect(mockChrome.runtime.onMessage.removeListener).toHaveBeenCalledOnce();
   });
 

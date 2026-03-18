@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { handleWorkerRequest } from './index.js';
 import {
   FOLLOWER_ATTACH_RETRY_AFTER_MS,
@@ -9,6 +9,7 @@ import {
 } from './shared.js';
 import { SessionTrayDurableObject } from './session-tray.js';
 import { TRAY_BOOTSTRAP_TIMEOUT_MS } from './tray-signaling.js';
+import { TURN_CREDENTIAL_TTL_MS } from './turn-credentials.js';
 
 class FakeStorage {
   private readonly data = new Map<string, unknown>();
@@ -351,6 +352,104 @@ describe('tray worker skeleton', () => {
       bootstrapId: follower.result.bootstrap.bootstrapId,
       attempt: 1,
     });
+  });
+
+  it('refreshes cached TURN credentials after their TTL elapses', async () => {
+    let now = Date.parse('2026-03-11T00:00:00.000Z');
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({
+          iceServers: {
+            urls: ['turn:turn-one.example.com:3478?transport=udp'],
+            username: 'user-one',
+            credential: 'cred-one',
+          },
+        }), { status: 200, headers: { 'content-type': 'application/json' } }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({
+          iceServers: {
+            urls: ['turn:turn-two.example.com:3478?transport=udp'],
+            username: 'user-two',
+            credential: 'cred-two',
+          },
+        }), { status: 200, headers: { 'content-type': 'application/json' } }),
+      );
+
+    const durableObject = new SessionTrayDurableObject(
+      new FakeDurableObjectState(),
+      {
+        CLOUDFLARE_TURN_KEY_ID: 'turn-key-id',
+        CLOUDFLARE_TURN_API_TOKEN: 'turn-api-token',
+      },
+      {
+        now: () => now,
+        webSocketPairFactory: createFakeWebSocketPair,
+        fetchImpl,
+      },
+    );
+
+    await durableObject.fetch(new Request('https://tray.test/internal/create', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        trayId: 'tray-turn-test',
+        createdAt: new Date(now).toISOString(),
+        joinToken: 'join-token',
+        controllerToken: 'controller-token',
+        webhookToken: 'webhook-token',
+      }),
+    }));
+
+    const leaderAttach = await durableObject.fetch(new Request('https://tray.test/controller/controller-token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ controllerId: 'cone-1', runtime: 'cli' }),
+    }));
+    const leader = (await leaderAttach.json()) as { websocket: { url: string } };
+    const socketResponse = await durableObject.fetch(new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }));
+    expect(socketResponse.status).toBe(101);
+
+    const firstFollowerAttach = await durableObject.fetch(new Request('https://tray.test/join/join-token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ controllerId: 'cone-2', runtime: 'electron' }),
+    }));
+    const firstFollower = (await firstFollowerAttach.json()) as { iceServers?: Array<{ urls: string[]; username: string; credential: string }> };
+    expect(firstFollower.iceServers?.[1]).toMatchObject({
+      urls: ['turn:turn-one.example.com:3478?transport=udp'],
+      username: 'user-one',
+      credential: 'cred-one',
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    now += 60_000;
+    const secondFollowerAttach = await durableObject.fetch(new Request('https://tray.test/join/join-token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ controllerId: 'cone-3', runtime: 'electron' }),
+    }));
+    const secondFollower = (await secondFollowerAttach.json()) as { iceServers?: Array<{ urls: string[]; username: string; credential: string }> };
+    expect(secondFollower.iceServers?.[1]).toMatchObject({
+      urls: ['turn:turn-one.example.com:3478?transport=udp'],
+      username: 'user-one',
+      credential: 'cred-one',
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    now += TURN_CREDENTIAL_TTL_MS;
+    const refreshedFollowerAttach = await durableObject.fetch(new Request('https://tray.test/join/join-token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ controllerId: 'cone-4', runtime: 'electron' }),
+    }));
+    const refreshedFollower = (await refreshedFollowerAttach.json()) as { iceServers?: Array<{ urls: string[]; username: string; credential: string }> };
+    expect(refreshedFollower.iceServers?.[1]).toMatchObject({
+      urls: ['turn:turn-two.example.com:3478?transport=udp'],
+      username: 'user-two',
+      credential: 'cred-two',
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it('relays leader offers plus follower answers and ICE candidates over the bootstrap join path', async () => {

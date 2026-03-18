@@ -140,9 +140,9 @@ describe('logger', () => {
 
       // The suppression summary is flushed when the warn entry is evicted
       // from the buffer by the incoming info messages. The flush uses the
-      // consoleFn of the evicting call (info level).
-      const infoCalls = (console.info as ReturnType<typeof vi.fn>).mock.calls;
-      const suppressionCall = infoCalls.find(
+      // original log level/console method of the suppressed entry.
+      const warnCalls = (console.warn as ReturnType<typeof vi.fn>).mock.calls;
+      const suppressionCall = warnCalls.find(
         (args: unknown[]) =>
           typeof args[1] === 'string' && args[1].includes('suppressed 4 similar'),
       );
@@ -189,11 +189,31 @@ describe('logger', () => {
       vi.advanceTimersByTime(61_000);
 
       log.info('heartbeat', { seq: 100 });
-      // The old entry was evicted by time, so this should log again
-      // (eviction happens when a new log call triggers the evict check)
-      expect(console.info).toHaveBeenCalledTimes(2);
+      // The old entry was evicted by time, so the logger flushes the
+      // suppression summary at info level and then logs the new message.
+      expect(console.info).toHaveBeenCalledTimes(3);
 
       vi.useRealTimers();
+    });
+
+    it('does not flush suppressed summaries below the current log level', () => {
+      const log = createLogger('filtered');
+
+      log.info('heartbeat', { seq: 1 });
+      log.info('heartbeat', { seq: 2 });
+      setLogLevel(LogLevel.WARN);
+
+      for (let i = 0; i < 10; i++) {
+        log.warn(`different-${i}`);
+      }
+
+      const infoCalls = (console.info as ReturnType<typeof vi.fn>).mock.calls;
+      expect(infoCalls).toHaveLength(1);
+      expect(
+        infoCalls.some(
+          (args: unknown[]) => typeof args[1] === 'string' && args[1].includes('suppressed'),
+        ),
+      ).toBe(false);
     });
   });
 });
