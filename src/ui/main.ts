@@ -44,11 +44,9 @@ import {
 import { setConnectedFollowersGetter, setTrayResetter } from '../shell/supplemental-commands/host-command.js';
 import { setRsyncSendFsRequest } from '../shell/supplemental-commands/rsync-command.js';
 import {
-  setTeleportSendRequest,
-  setTeleportBestFollower,
-  setTeleportConnectedFollowers,
-  setTeleportBrowserAPI,
-} from '../shell/supplemental-commands/teleport-command.js';
+  setPlaywrightTeleportBestFollower,
+  setPlaywrightTeleportConnectedFollowers,
+} from '../shell/supplemental-commands/playwright-command.js';
 import { SprinkleManager } from './sprinkle-manager.js';
 import { initTelemetry } from './telemetry.js';
 
@@ -1319,21 +1317,15 @@ async function main(): Promise<void> {
       return null;
     });
 
-    // Wire teleport command callbacks
-    setTeleportSendRequest(() => {
-      if (leaderSyncRef) return (rid, url, catchPattern, catchNotPattern, timeoutMs) => leaderSyncRef!.sendCookieTeleportRequest(rid, url, catchPattern, catchNotPattern, timeoutMs);
-      if (activeFollowerSync) return (rid, url, catchPattern, catchNotPattern, timeoutMs) => activeFollowerSync!.sendCookieTeleportRequest(rid, url, catchPattern, catchNotPattern, timeoutMs);
-      return null;
-    });
-    setTeleportBestFollower(() => {
+    // Wire playwright teleport command callbacks
+    setPlaywrightTeleportBestFollower(() => {
       if (leaderSyncRef) return () => leaderSyncRef!.getBestFollowerForTeleport();
       return null;
     });
-    setTeleportConnectedFollowers(() => {
+    setPlaywrightTeleportConnectedFollowers(() => {
       if (leaderSyncRef) return () => leaderSyncRef!.getConnectedFollowers();
       return null;
     });
-    setTeleportBrowserAPI(() => browser);
 
     const wireFollowerSync = (connection: import('../scoops/tray-webrtc.js').FollowerTrayConnection) => {
       // Clean up previous sync if any

@@ -12,6 +12,52 @@ import { HarRecorder } from '../../cdp/index.js';
 import { normalizeAccessibilityText } from '../../cdp/normalize-accessibility-text.js';
 import type { AccessibilityNode } from '../../cdp/types.js';
 import { FsError, type VirtualFS } from '../../fs/index.js';
+import type { FloatType } from '../../scoops/tray-leader-sync.js';
+// ---------------------------------------------------------------------------
+// Teleport watcher types and module-level getters
+// ---------------------------------------------------------------------------
+
+export type GetBestFollowerFn = () => { runtimeId: string; bootstrapId: string; floatType: FloatType } | null;
+export type GetConnectedFollowersFn = () => { runtimeId: string; runtime?: string; connectedAt?: string; lastActivity?: number; floatType?: FloatType }[];
+
+let getBestFollowerGetter: (() => GetBestFollowerFn | null) | null = null;
+let getConnectedFollowersGetter: (() => GetConnectedFollowersFn | null) | null = null;
+
+export function setPlaywrightTeleportBestFollower(getter: (() => GetBestFollowerFn | null) | null): void {
+  getBestFollowerGetter = getter;
+}
+
+export function setPlaywrightTeleportConnectedFollowers(getter: (() => GetConnectedFollowersFn | null) | null): void {
+  getConnectedFollowersGetter = getter;
+}
+
+/** Teleport watcher state machine phases. */
+export type TeleportPhase = 'armed' | 'teleporting' | 'capturing' | 'done' | 'timedOut';
+
+/** Teleport watcher that monitors leader tab navigation and triggers cookie teleport. */
+export interface TeleportWatcher {
+  startPattern: RegExp;
+  returnPattern: RegExp;
+  timeoutMs: number;
+  runtimeId?: string;
+  /** URL to open on the follower when start pattern triggers. If unset, uses the leader tab's current URL. */
+  teleportUrl?: string;
+  phase: TeleportPhase;
+  /** The leader tab being monitored. Falls back to state.currentTarget if unset. */
+  leaderTargetId?: string;
+  /** The composite targetId of the follower tab (runtimeId:localTargetId). */
+  followerTargetId?: string;
+  /** Promise that resolves/rejects when the teleport cycle completes. */
+  completionPromise?: Promise<string>;
+  resolveBlock?: (result: string) => void;
+  rejectBlock?: (err: Error) => void;
+  /** Interval for polling leader tab URL. */
+  pollInterval?: ReturnType<typeof setInterval>;
+  /** Timeout timer for the entire teleport cycle. */
+  timeoutTimer?: ReturnType<typeof setTimeout>;
+  /** CDP event listener cleanup function. */
+  cleanupListener?: () => void;
+}
 
 /** Per-tab snapshot: accessibility tree with element refs. */
 interface TabSnapshot {
@@ -45,6 +91,8 @@ interface PlaywrightState {
   harRecorder: HarRecorder | null;
   /** Whether /.playwright/ directories have been created */
   sessionDirsCreated: boolean;
+  /** Active teleport watcher (auto-disarms after one cycle). */
+  teleportWatcher: TeleportWatcher | null;
 }
 
 export const PLAYWRIGHT_COMMAND_NAMES = ['playwright-cli', 'playwright', 'puppeteer'] as const;
@@ -88,6 +136,7 @@ export function getSharedState(browser: BrowserAPI, fs: VirtualFS): PlaywrightSt
       appTabId: null,
       harRecorder: null,
       sessionDirsCreated: false,
+      teleportWatcher: null,
     };
     statesByFs.set(fs, state);
   }
@@ -439,15 +488,260 @@ async function takeSnapshot(
   return { snapshot, output };
 }
 
+// ---------------------------------------------------------------------------
+// Teleport helpers
+// ---------------------------------------------------------------------------
+
+/** Format a per-domain cookie count summary. */
+function formatCookieDomainSummary(cookies: Array<{ domain?: string }>): string {
+  const counts = new Map<string, number>();
+  for (const c of cookies) {
+    const d = c.domain ?? 'unknown';
+    counts.set(d, (counts.get(d) ?? 0) + 1);
+  }
+  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  return sorted.map(([domain, count]) => `${count} ${domain}`).join(', ');
+}
+
+/** Clean up all timers and listeners on a teleport watcher. */
+function cleanupTeleportWatcher(watcher: TeleportWatcher): void {
+  if (watcher.pollInterval) { clearInterval(watcher.pollInterval); watcher.pollInterval = undefined; }
+  if (watcher.timeoutTimer) { clearTimeout(watcher.timeoutTimer); watcher.timeoutTimer = undefined; }
+  if (watcher.cleanupListener) { watcher.cleanupListener(); watcher.cleanupListener = undefined; }
+}
+
+/**
+ * Arm a teleport watcher on the current leader tab.
+ * Starts monitoring navigation via polling + CDP events.
+ */
+function armTeleportWatcher(
+  browser: BrowserAPI,
+  state: PlaywrightState,
+  startPattern: RegExp,
+  returnPattern: RegExp,
+  timeoutMs: number,
+  runtimeId?: string,
+): TeleportWatcher {
+  const watcher: TeleportWatcher = {
+    startPattern,
+    returnPattern,
+    timeoutMs,
+    runtimeId,
+    phase: 'armed',
+  };
+
+  // Create a completion promise that blocks the current/next command.
+  // Attach a no-op catch to prevent unhandled rejection warnings when the
+  // watcher times out or errors without anyone awaiting the promise.
+  watcher.completionPromise = new Promise<string>((resolve, reject) => {
+    watcher.resolveBlock = resolve;
+    watcher.rejectBlock = reject;
+  });
+  watcher.completionPromise.catch(() => { /* swallow unhandled rejections */ });
+
+  // Start polling the leader tab URL for start pattern match
+  watcher.pollInterval = setInterval(async () => {
+    if (watcher.phase !== 'armed') return;
+    const targetId = state.currentTarget;
+    if (!targetId) return;
+
+    try {
+      await browser.attachToPage(targetId);
+      const raw = await browser.evaluate('window.location.href');
+      const href = typeof raw === 'string' ? raw : String(raw);
+      if (startPattern.test(href)) {
+        triggerTeleport(browser, state, watcher, href);
+      }
+    } catch {
+      // Tab may be navigating — ignore
+    }
+  }, 1000);
+
+  state.teleportWatcher = watcher;
+  return watcher;
+}
+
+/**
+ * Trigger the teleport flow: open the current URL on a follower,
+ * monitor the follower for returnPattern, capture cookies, inject on leader.
+ */
+async function triggerTeleport(
+  browser: BrowserAPI,
+  state: PlaywrightState,
+  watcher: TeleportWatcher,
+  triggerUrl: string,
+): Promise<void> {
+  if (watcher.phase !== 'armed') return;
+  watcher.phase = 'teleporting';
+
+  // Stop polling the leader
+  if (watcher.pollInterval) { clearInterval(watcher.pollInterval); watcher.pollInterval = undefined; }
+
+  try {
+    // 1. Select follower
+    let runtimeId = watcher.runtimeId;
+    if (!runtimeId) {
+      const getBestFollower = getBestFollowerGetter?.();
+      if (!getBestFollower) throw new Error('No follower selection available — not connected to a tray');
+      const best = getBestFollower();
+      if (!best) throw new Error('No followers connected to teleport to');
+      runtimeId = best.runtimeId;
+    }
+
+    // 2. Open the trigger URL on the follower
+    const followerTargetId = await browser.createRemotePage(runtimeId, triggerUrl);
+    watcher.followerTargetId = followerTargetId;
+
+    // 3. Attach to the follower tab (auto-swaps to RemoteCDPTransport)
+    await browser.attachToPage(followerTargetId);
+
+    // Enable Page events on the follower
+    await browser.sendCDP('Page.enable');
+
+    // 4. Start timeout timer
+    watcher.timeoutTimer = setTimeout(() => {
+      if (watcher.phase === 'teleporting') {
+        watcher.phase = 'timedOut';
+        cleanupTeleportWatcher(watcher);
+        // Close follower tab best-effort
+        if (watcher.followerTargetId) {
+          browser.closePage(watcher.followerTargetId).catch(() => {});
+        }
+        watcher.rejectBlock?.(new Error(`Teleport timed out after ${Math.round(watcher.timeoutMs / 1000)}s — human did not complete auth`));
+      }
+    }, watcher.timeoutMs);
+
+    // 5. Monitor follower tab for return pattern via polling
+    watcher.pollInterval = setInterval(async () => {
+      if (watcher.phase !== 'teleporting') return;
+      try {
+        await browser.attachToPage(followerTargetId);
+        const raw = await browser.evaluate('window.location.href');
+        const href = typeof raw === 'string' ? raw : String(raw);
+        if (watcher.returnPattern.test(href)) {
+          captureCookiesAndComplete(browser, state, watcher, runtimeId!);
+        }
+      } catch {
+        // Tab may be navigating — ignore
+      }
+    }, 1000);
+
+  } catch (err) {
+    watcher.phase = 'done';
+    cleanupTeleportWatcher(watcher);
+    watcher.rejectBlock?.(err instanceof Error ? err : new Error(String(err)));
+  }
+}
+
+/**
+ * Capture cookies from the follower, inject into the leader, navigate leader to the final URL.
+ */
+async function captureCookiesAndComplete(
+  browser: BrowserAPI,
+  state: PlaywrightState,
+  watcher: TeleportWatcher,
+  runtimeId: string,
+): Promise<void> {
+  if (watcher.phase !== 'teleporting') return;
+  watcher.phase = 'capturing';
+
+  // Stop polling and timeout
+  if (watcher.pollInterval) { clearInterval(watcher.pollInterval); watcher.pollInterval = undefined; }
+  if (watcher.timeoutTimer) { clearTimeout(watcher.timeoutTimer); watcher.timeoutTimer = undefined; }
+
+  try {
+    // 1. Wait for redirect chain to settle
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    // 2. Attach to follower and capture final URL + cookies
+    await browser.attachToPage(watcher.followerTargetId!);
+    let finalUrl: string | undefined;
+    try {
+      const raw = await browser.evaluate('window.location.href');
+      finalUrl = typeof raw === 'string' ? raw : String(raw);
+    } catch {
+      // Page may be mid-navigation
+    }
+
+    const cookieResult = await browser.sendCDP('Network.getCookies');
+    const cookies = (cookieResult['cookies'] as Array<Record<string, unknown>>) ?? [];
+
+    // 3. Close follower tab
+    try {
+      await browser.closePage(watcher.followerTargetId!);
+    } catch {
+      // Best-effort
+    }
+
+    // 4. Switch back to the leader tab and inject cookies
+    const leaderTargetId = state.currentTarget;
+    if (leaderTargetId) {
+      await browser.attachToPage(leaderTargetId);
+      if (cookies.length > 0) {
+        await browser.sendCDP('Network.setCookies', { cookies });
+      }
+      // Navigate leader to the final URL
+      if (finalUrl) {
+        await browser.sendCDP('Page.navigate', { url: finalUrl });
+      }
+    }
+
+    // 5. Complete
+    watcher.phase = 'done';
+    cleanupTeleportWatcher(watcher);
+    const domainSummary = cookies.length > 0 ? ` (${formatCookieDomainSummary(cookies as Array<{ domain?: string }>)})` : '';
+    const landedNote = finalUrl ? ` (landed on ${finalUrl})` : '';
+    watcher.resolveBlock?.(`Teleported ${cookies.length} cookie(s)${domainSummary} from ${runtimeId}${landedNote}`);
+  } catch (err) {
+    watcher.phase = 'done';
+    cleanupTeleportWatcher(watcher);
+    watcher.rejectBlock?.(err instanceof Error ? err : new Error(String(err)));
+  }
+}
+
+/**
+ * Check if a teleport watcher has been triggered and needs to block.
+ * Returns a result string if blocked, null if not blocking.
+ */
+async function checkTeleportBlock(state: PlaywrightState): Promise<string | null> {
+  const watcher = state.teleportWatcher;
+  if (!watcher) return null;
+  if (watcher.phase === 'done' || watcher.phase === 'timedOut') {
+    state.teleportWatcher = null;
+    return null;
+  }
+  if (watcher.phase === 'teleporting' || watcher.phase === 'capturing') {
+    // Block until the teleport completes
+    try {
+      const result = await watcher.completionPromise!;
+      state.teleportWatcher = null;
+      return result;
+    } catch (err) {
+      state.teleportWatcher = null;
+      throw err;
+    }
+  }
+  return null;
+}
+
 function formatHelp(commandName: string): string {
   const aliases = PLAYWRIGHT_COMMAND_NAMES.filter((name) => name !== commandName);
   return `Usage: ${commandName} <command> [args...]
 
 Commands:
   open [url|/vfs/path] [--foreground|--fg] [--runtime=<id>]
+       [--teleport-start=<regex>] [--teleport-return=<regex>] [--timeout=<s>]
                          Open a new tab (default: background). VFS paths are served via preview service worker.
                          Use --runtime to open the tab on a remote tray runtime (e.g. --runtime=follower-abc).
-  goto|navigate <url>    Navigate current tab to URL
+                         Use --teleport-start/--teleport-return to arm cookie teleport.
+  goto|navigate <url> [--teleport-start=<regex>] [--teleport-return=<regex>]
+                         Navigate current tab to URL. Supports teleport flags.
+  teleport --start <regex> --return <regex> [--timeout=<s>] [--runtime=<id>]
+                         Arm a teleport watcher on the current tab. Triggers when the
+                         leader tab URL matches --start, opens the URL on a follower
+                         for human auth. Captures cookies when follower URL matches --return.
+  teleport --off         Disarm the active teleport watcher.
+  teleport --list        List available follower runtimes for teleport.
   click <ref>            Click element by ref (e.g. e5)
   type <text>            Type text into focused element
   fill <ref> <text>      Fill an input by ref with text
@@ -475,7 +769,9 @@ Commands:
   reload                 Reload current tab
   tab-list               List open tabs
   tab-new [url] [--foreground|--fg] [--runtime=<id>]
+       [--teleport-start=<regex>] [--teleport-return=<regex>] [--timeout=<s>]
                          Open new tab (default: background). --runtime opens on a remote tray runtime.
+                         Supports teleport flags.
   tab-select <index>     Switch to tab by index
   tab-close [index]      Close tab (default: current)
   close                  Close current tab
@@ -552,9 +848,82 @@ export function createPlaywrightCommand(
     const subArgs = args.slice(1);
     const { positional, flags } = parseFlags(subArgs);
 
+    // Check if a teleport watcher has been triggered and needs to block
+    if (subcommand !== 'teleport') {
+      try {
+        const teleportResult = await checkTeleportBlock(state);
+        if (teleportResult) {
+          return { stdout: teleportResult + '\n', stderr: '', exitCode: 0 };
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { stdout: '', stderr: `Teleport error: ${msg}\n`, exitCode: 1 };
+      }
+    }
+
     let result: CmdResult;
     try {
       switch (subcommand) {
+        case 'teleport': {
+          // --off: disarm
+          if (flags['off'] === 'true') {
+            if (state.teleportWatcher) {
+              cleanupTeleportWatcher(state.teleportWatcher);
+              state.teleportWatcher = null;
+            }
+            result = { stdout: 'Teleport watcher disarmed\n', stderr: '', exitCode: 0 }; break;
+          }
+
+          // --list: list available follower runtimes
+          if (flags['list'] === 'true') {
+            const getFollowers = getConnectedFollowersGetter?.();
+            if (!getFollowers) {
+              result = { stdout: '', stderr: 'teleport: not connected to a tray\n', exitCode: 1 }; break;
+            }
+            const followers = getFollowers();
+            if (followers.length === 0) {
+              result = { stdout: 'No followers connected to the tray.\n', stderr: '', exitCode: 0 }; break;
+            }
+            const lines = ['Available runtimes for teleport:'];
+            for (const f of followers) {
+              const parts = [f.runtimeId];
+              if (f.floatType) parts.push(`[${f.floatType}]`);
+              if (f.runtime) parts.push(`(${f.runtime})`);
+              if (f.lastActivity) {
+                const ago = Math.round((Date.now() - f.lastActivity) / 1000);
+                parts.push(`active ${ago}s ago`);
+              }
+              lines.push(`  ${parts.join(' ')}`);
+            }
+            result = { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 }; break;
+          }
+
+          // Arm teleport watcher
+          const startPatternStr = flags['start'] || flags['teleport-start'];
+          const returnPatternStr = flags['return'] || flags['teleport-return'];
+          if (!startPatternStr || !returnPatternStr) {
+            result = { stdout: '', stderr: 'teleport requires --start <regex> and --return <regex>\n', exitCode: 1 }; break;
+          }
+          let startPattern: RegExp;
+          let returnPattern: RegExp;
+          try { startPattern = new RegExp(startPatternStr); } catch { result = { stdout: '', stderr: `Invalid regex for --start: ${startPatternStr}\n`, exitCode: 1 }; break; }
+          try { returnPattern = new RegExp(returnPatternStr); } catch { result = { stdout: '', stderr: `Invalid regex for --return: ${returnPatternStr}\n`, exitCode: 1 }; break; }
+          const timeoutSec = flags['timeout'] ? parseInt(flags['timeout'], 10) : 300;
+          if (isNaN(timeoutSec) || timeoutSec <= 0) {
+            result = { stdout: '', stderr: '--timeout must be a positive number\n', exitCode: 1 }; break;
+          }
+          const runtimeId = flags['runtime'];
+
+          // Disarm any existing watcher
+          if (state.teleportWatcher) {
+            cleanupTeleportWatcher(state.teleportWatcher);
+            state.teleportWatcher = null;
+          }
+
+          armTeleportWatcher(browser, state, startPattern, returnPattern, timeoutSec * 1000, runtimeId);
+          result = { stdout: `Teleport armed on current tab. Will trigger when URL matches ${startPatternStr}\n`, stderr: '', exitCode: 0 }; break;
+        }
+
         case 'open':
         case 'tab-new': {
           const url = positional[0] || 'about:blank';
@@ -574,6 +943,20 @@ export function createPlaywrightCommand(
           if (foreground || !previousTarget) {
             state.currentTarget = targetId;
           }
+
+          // Arm teleport watcher if --teleport-start and --teleport-return are set
+          const teleStartStr = flags['teleport-start'];
+          const teleReturnStr = flags['teleport-return'];
+          if (teleStartStr && teleReturnStr) {
+            let teleStart: RegExp;
+            let teleReturn: RegExp;
+            try { teleStart = new RegExp(teleStartStr); } catch { result = { stdout: '', stderr: `Invalid regex for --teleport-start: ${teleStartStr}\n`, exitCode: 1 }; break; }
+            try { teleReturn = new RegExp(teleReturnStr); } catch { result = { stdout: '', stderr: `Invalid regex for --teleport-return: ${teleReturnStr}\n`, exitCode: 1 }; break; }
+            const teleTimeout = flags['timeout'] ? parseInt(flags['timeout'], 10) : 300;
+            if (state.teleportWatcher) { cleanupTeleportWatcher(state.teleportWatcher); state.teleportWatcher = null; }
+            armTeleportWatcher(browser, state, teleStart, teleReturn, teleTimeout * 1000, flags['teleport-runtime']);
+          }
+
           result = { stdout: `Opened tab (targetId: ${targetId}) at ${url}\n`, stderr: '', exitCode: 0 }; break;
         }
 
@@ -588,6 +971,20 @@ export function createPlaywrightCommand(
           await browser.attachToPage(targetId);
           await browser.navigate(positional[0]);
           state.snapshots.delete(targetId);
+
+          // Arm teleport watcher if --teleport-start and --teleport-return are set
+          const teleStartStr = flags['teleport-start'];
+          const teleReturnStr = flags['teleport-return'];
+          if (teleStartStr && teleReturnStr) {
+            let teleStart: RegExp;
+            let teleReturn: RegExp;
+            try { teleStart = new RegExp(teleStartStr); } catch { result = { stdout: '', stderr: `Invalid regex for --teleport-start: ${teleStartStr}\n`, exitCode: 1 }; break; }
+            try { teleReturn = new RegExp(teleReturnStr); } catch { result = { stdout: '', stderr: `Invalid regex for --teleport-return: ${teleReturnStr}\n`, exitCode: 1 }; break; }
+            const teleTimeout = flags['timeout'] ? parseInt(flags['timeout'], 10) : 300;
+            if (state.teleportWatcher) { cleanupTeleportWatcher(state.teleportWatcher); state.teleportWatcher = null; }
+            armTeleportWatcher(browser, state, teleStart, teleReturn, teleTimeout * 1000, flags['teleport-runtime']);
+          }
+
           result = { stdout: `Navigated to ${positional[0]}\n`, stderr: '', exitCode: 0 }; break;
         }
 

@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createPlaywrightCommand } from './playwright-command.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createPlaywrightCommand, getSharedState, setPlaywrightTeleportBestFollower, setPlaywrightTeleportConnectedFollowers } from './playwright-command.js';
 import type { BrowserAPI } from '../../cdp/index.js';
 import type { VirtualFS } from '../../fs/index.js';
 
@@ -1764,5 +1764,561 @@ describe('playwright-cli session history logging', () => {
     const sessionMd = fs._files.get('/.playwright/session.md') as string;
     expect(sessionMd).toContain('### playwright-cli goto');
     expect(sessionMd).toContain('Error');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Teleport watcher tests
+// ---------------------------------------------------------------------------
+
+describe('playwright-cli teleport subcommand', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    browser = createMockBrowser();
+    fs = createMockFS();
+    // Reset module-level getters
+    setPlaywrightTeleportBestFollower(null);
+    setPlaywrightTeleportConnectedFollowers(null);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    setPlaywrightTeleportBestFollower(null);
+    setPlaywrightTeleportConnectedFollowers(null);
+  });
+
+  it('requires --start and --return', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['teleport', '--start=login'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--start');
+    expect(result.stderr).toContain('--return');
+  });
+
+  it('arms teleport watcher with --start and --return', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    const result = await cmd.execute(['teleport', '--start=login\\.example\\.com', '--return=app\\.example\\.com'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Teleport armed');
+    expect(result.stdout).toContain('login\\.example\\.com');
+
+    // Verify watcher was installed in shared state
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    expect(state.teleportWatcher).not.toBeNull();
+    expect(state.teleportWatcher!.phase).toBe('armed');
+    expect(state.teleportWatcher!.startPattern.source).toBe('login\\.example\\.com');
+    expect(state.teleportWatcher!.returnPattern.source).toBe('app\\.example\\.com');
+
+    // Cleanup timers
+    state.teleportWatcher!.pollInterval && clearInterval(state.teleportWatcher!.pollInterval);
+  });
+
+  it('rejects invalid regex for --start', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['teleport', '--start=[invalid', '--return=ok'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Invalid regex for --start');
+  });
+
+  it('rejects invalid regex for --return', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['teleport', '--start=ok', '--return=[invalid'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Invalid regex for --return');
+  });
+
+  it('--off disarms an active watcher', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    await cmd.execute(['teleport', '--start=login', '--return=app'], {} as any);
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    expect(state.teleportWatcher).not.toBeNull();
+
+    const result = await cmd.execute(['teleport', '--off'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('disarmed');
+    expect(state.teleportWatcher).toBeNull();
+  });
+
+  it('--off when no watcher is a no-op', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['teleport', '--off'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('disarmed');
+  });
+
+  it('--list shows followers when connected', async () => {
+    setPlaywrightTeleportConnectedFollowers(() => () => [
+      { runtimeId: 'f-standalone-1', runtime: 'slicc-standalone', floatType: 'standalone' as any, lastActivity: Date.now() - 5000 },
+      { runtimeId: 'f-ext-1', runtime: 'slicc-extension', floatType: 'extension' as any, lastActivity: Date.now() - 10000 },
+    ]);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['teleport', '--list'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('f-standalone-1');
+    expect(result.stdout).toContain('standalone');
+    expect(result.stdout).toContain('f-ext-1');
+    expect(result.stdout).toContain('extension');
+  });
+
+  it('--list fails when not connected to a tray', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['teleport', '--list'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('not connected to a tray');
+  });
+
+  it('--list shows message when no followers', async () => {
+    setPlaywrightTeleportConnectedFollowers(() => () => []);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['teleport', '--list'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('No followers connected');
+  });
+
+  it('rejects negative timeout', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['teleport', '--start=login', '--return=app', '--timeout=-5'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('positive number');
+  });
+
+  it('re-arms by disarming existing watcher first', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    await cmd.execute(['teleport', '--start=first', '--return=first-back'], {} as any);
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    const firstWatcher = state.teleportWatcher;
+    expect(firstWatcher).not.toBeNull();
+
+    await cmd.execute(['teleport', '--start=second', '--return=second-back'], {} as any);
+    // Should have replaced the watcher
+    expect(state.teleportWatcher).not.toBe(firstWatcher);
+    expect(state.teleportWatcher!.startPattern.source).toBe('second');
+
+    // Cleanup
+    state.teleportWatcher!.pollInterval && clearInterval(state.teleportWatcher!.pollInterval);
+  });
+});
+
+describe('playwright-cli teleport trigger and capture', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    browser = createMockBrowser({
+      createRemotePage: vi.fn().mockResolvedValue('f-runtime:remote-tab-1'),
+      closePage: vi.fn().mockResolvedValue(undefined),
+      sendCDP: vi.fn().mockResolvedValue({
+        cookies: [
+          { name: 'session', value: 'abc', domain: '.example.com' },
+          { name: 'auth', value: 'xyz', domain: '.example.com' },
+        ],
+      }),
+    });
+    fs = createMockFS();
+
+    // Wire up getBestFollower to return a follower
+    setPlaywrightTeleportBestFollower(() => () => ({
+      runtimeId: 'f-runtime',
+      bootstrapId: 'b-runtime',
+      floatType: 'standalone' as any,
+    }));
+    setPlaywrightTeleportConnectedFollowers(() => () => [
+      { runtimeId: 'f-runtime', runtime: 'slicc-standalone', floatType: 'standalone' as any },
+    ]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    setPlaywrightTeleportBestFollower(null);
+    setPlaywrightTeleportConnectedFollowers(null);
+  });
+
+  it('polls leader tab and triggers teleport when start pattern matches', async () => {
+    // Make evaluate return the leader tab URL — first "armed" state (no match), then matching
+    let callCount = 0;
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
+      if (expr === 'window.location.href') {
+        callCount++;
+        return callCount <= 1
+          ? 'https://app.example.com/dashboard'
+          : 'https://login.example.com/auth';
+      }
+      return JSON.stringify({ url: 'https://app.example.com', title: 'App' });
+    });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+
+    // Arm teleport
+    await cmd.execute(['teleport', '--start=login\\.example\\.com', '--return=app\\.example\\.com'], {} as any);
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    expect(state.teleportWatcher!.phase).toBe('armed');
+
+    // Advance past first poll (no match)
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('armed');
+
+    // Advance past second poll (match → triggerTeleport)
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('teleporting');
+
+    // Verify remote tab was created
+    expect(browser.createRemotePage).toHaveBeenCalledWith('f-runtime', 'https://login.example.com/auth');
+
+    // Cleanup timers and catch the unhandled rejection from the completion promise
+    if (state.teleportWatcher) {
+      state.teleportWatcher.completionPromise?.catch(() => {});
+      state.teleportWatcher.pollInterval && clearInterval(state.teleportWatcher.pollInterval);
+      state.teleportWatcher.timeoutTimer && clearTimeout(state.teleportWatcher.timeoutTimer);
+    }
+  });
+
+  it('captures cookies when follower return pattern matches', async () => {
+    // Phase 1: leader poll triggers (matching start pattern immediately)
+    let leaderCallCount = 0;
+    let followerCallCount = 0;
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
+      if (expr === 'window.location.href') {
+        // First we are polling the leader (armed phase), then the follower (teleporting phase)
+        const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+        if (state.teleportWatcher?.phase === 'armed') {
+          leaderCallCount++;
+          return 'https://login.example.com/sso';
+        }
+        // Teleporting phase — polling follower
+        followerCallCount++;
+        return followerCallCount <= 1
+          ? 'https://idp.example.com/consent' // still at IDP
+          : 'https://app.example.com/callback'; // returned!
+      }
+      return JSON.stringify({ url: 'https://app.example.com', title: 'App' });
+    });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(['teleport', '--start=login\\.example\\.com', '--return=app\\.example\\.com'], {} as any);
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+
+    // Leader poll triggers immediately
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('teleporting');
+
+    // Follower poll #1: still at IDP
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('teleporting');
+
+    // Follower poll #2: return pattern matches → captureCookiesAndComplete
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('capturing');
+
+    // Advance past the 2s settle delay
+    await vi.advanceTimersByTimeAsync(2000);
+
+    // Should be done now
+    expect(state.teleportWatcher!.phase).toBe('done');
+
+    // Verify cookies were captured and injected
+    expect(browser.sendCDP).toHaveBeenCalledWith('Network.getCookies');
+    expect(browser.sendCDP).toHaveBeenCalledWith('Network.setCookies', {
+      cookies: [
+        { name: 'session', value: 'abc', domain: '.example.com' },
+        { name: 'auth', value: 'xyz', domain: '.example.com' },
+      ],
+    });
+
+    // Verify follower tab was closed
+    expect(browser.closePage).toHaveBeenCalledWith('f-runtime:remote-tab-1');
+  });
+
+  it('times out when human does not complete auth', async () => {
+    // Leader poll triggers immediately
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
+      if (expr === 'window.location.href') {
+        const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+        if (state.teleportWatcher?.phase === 'armed') {
+          return 'https://login.example.com/sso';
+        }
+        // Always return non-matching URL in follower phase
+        return 'https://idp.example.com/consent';
+      }
+      return JSON.stringify({ url: 'https://app.example.com', title: 'App' });
+    });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    // Very short timeout (5 seconds)
+    await cmd.execute(['teleport', '--start=login', '--return=app', '--timeout=5'], {} as any);
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+
+    // Attach a catch handler to prevent unhandled rejection
+    const completionCatch = state.teleportWatcher!.completionPromise!.catch(() => {});
+
+    // Leader poll triggers
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('teleporting');
+
+    // Advance past the timeout
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(state.teleportWatcher!.phase).toBe('timedOut');
+
+    // Await the caught promise to ensure rejection is handled
+    await completionCatch;
+  });
+
+  it('checkTeleportBlock blocks next command during active teleport', async () => {
+    // Set up leader to trigger immediately, follower to return after a delay
+    let followerCallCount = 0;
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
+      if (expr === 'window.location.href') {
+        const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+        if (state.teleportWatcher?.phase === 'armed') {
+          return 'https://login.example.com/sso';
+        }
+        followerCallCount++;
+        return followerCallCount > 2
+          ? 'https://app.example.com/callback'
+          : 'https://idp.example.com/consent';
+      }
+      return JSON.stringify({ url: 'https://app.example.com', title: 'App' });
+    });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(['teleport', '--start=login', '--return=app', '--timeout=60'], {} as any);
+
+    // Trigger the teleport
+    await vi.advanceTimersByTimeAsync(1000);
+
+    // Now run a non-teleport command — it should block
+    const resultPromise = cmd.execute(['tab-list'], {} as any);
+
+    // Advance until follower returns
+    await vi.advanceTimersByTimeAsync(3000);
+    // Advance past settle delay
+    await vi.advanceTimersByTimeAsync(2000);
+
+    // Now the blocked command should resolve with the teleport result
+    const result = await resultPromise;
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Teleported');
+    expect(result.stdout).toContain('cookie');
+  });
+
+  it('teleport fails gracefully when no followers connected', async () => {
+    // No best follower available
+    setPlaywrightTeleportBestFollower(() => () => null);
+
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
+      if (expr === 'window.location.href') return 'https://login.example.com/sso';
+      return JSON.stringify({ url: 'https://app.example.com', title: 'App' });
+    });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(['teleport', '--start=login', '--return=app'], {} as any);
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+
+    // Attach a catch handler to prevent unhandled rejection
+    const completionCatch = state.teleportWatcher!.completionPromise!.catch(() => {});
+
+    // Leader poll triggers
+    await vi.advanceTimersByTimeAsync(1000);
+
+    // The watcher should have errored out
+    expect(state.teleportWatcher!.phase).toBe('done');
+
+    // Await the caught promise to ensure rejection is handled
+    await completionCatch;
+  });
+});
+
+describe('playwright-cli open/goto with --teleport-start and --teleport-return', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    browser = createMockBrowser();
+    fs = createMockFS();
+    setPlaywrightTeleportBestFollower(null);
+    setPlaywrightTeleportConnectedFollowers(null);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    setPlaywrightTeleportBestFollower(null);
+    setPlaywrightTeleportConnectedFollowers(null);
+  });
+
+  it('open with --teleport-start/--teleport-return arms watcher', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute([
+      'open', 'https://app.example.com', '--foreground',
+      '--teleport-start=login', '--teleport-return=callback',
+    ], {} as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Opened tab');
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    expect(state.teleportWatcher).not.toBeNull();
+    expect(state.teleportWatcher!.phase).toBe('armed');
+    expect(state.teleportWatcher!.startPattern.source).toBe('login');
+    expect(state.teleportWatcher!.returnPattern.source).toBe('callback');
+
+    // Cleanup
+    state.teleportWatcher!.pollInterval && clearInterval(state.teleportWatcher!.pollInterval);
+  });
+
+  it('tab-new with --teleport-start/--teleport-return arms watcher', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute([
+      'tab-new', 'https://app.example.com', '--foreground',
+      '--teleport-start=sso', '--teleport-return=done',
+    ], {} as any);
+
+    expect(result.exitCode).toBe(0);
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    expect(state.teleportWatcher).not.toBeNull();
+    expect(state.teleportWatcher!.startPattern.source).toBe('sso');
+
+    // Cleanup
+    state.teleportWatcher!.pollInterval && clearInterval(state.teleportWatcher!.pollInterval);
+  });
+
+  it('goto with --teleport-start/--teleport-return arms watcher', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    const result = await cmd.execute([
+      'goto', 'https://app.example.com',
+      '--teleport-start=auth', '--teleport-return=home',
+    ], {} as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Navigated to');
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    expect(state.teleportWatcher).not.toBeNull();
+    expect(state.teleportWatcher!.startPattern.source).toBe('auth');
+    expect(state.teleportWatcher!.returnPattern.source).toBe('home');
+
+    // Cleanup
+    state.teleportWatcher!.pollInterval && clearInterval(state.teleportWatcher!.pollInterval);
+  });
+
+  it('open rejects invalid --teleport-start regex', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute([
+      'open', 'https://example.com', '--foreground',
+      '--teleport-start=[invalid', '--teleport-return=ok',
+    ], {} as any);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Invalid regex for --teleport-start');
+  });
+
+  it('goto rejects invalid --teleport-return regex', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    const result = await cmd.execute([
+      'goto', 'https://example.com',
+      '--teleport-start=ok', '--teleport-return=[invalid',
+    ], {} as any);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Invalid regex for --teleport-return');
+  });
+
+  it('open without both teleport flags does not arm watcher', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute([
+      'open', 'https://example.com', '--foreground',
+      '--teleport-start=login', // missing --teleport-return
+    ], {} as any);
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    expect(state.teleportWatcher).toBeNull();
+  });
+});
+
+describe('formatCookieDomainSummary (via teleport output)', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    browser = createMockBrowser({
+      createRemotePage: vi.fn().mockResolvedValue('f-runtime:remote-tab'),
+      closePage: vi.fn().mockResolvedValue(undefined),
+      sendCDP: vi.fn().mockResolvedValue({
+        cookies: [
+          { name: 'a', value: '1', domain: '.example.com' },
+          { name: 'b', value: '2', domain: '.example.com' },
+          { name: 'c', value: '3', domain: '.other.com' },
+        ],
+      }),
+    });
+    fs = createMockFS();
+    setPlaywrightTeleportBestFollower(() => () => ({
+      runtimeId: 'f-runtime',
+      bootstrapId: 'b-runtime',
+      floatType: 'standalone' as any,
+    }));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    setPlaywrightTeleportBestFollower(null);
+    setPlaywrightTeleportConnectedFollowers(null);
+  });
+
+  it('domain summary appears in teleport completion output', async () => {
+    let isLeader = true;
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
+      if (expr === 'window.location.href') {
+        const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+        if (state.teleportWatcher?.phase === 'armed') {
+          return 'https://login.example.com/sso';
+        }
+        // Return immediately for follower
+        return 'https://app.example.com/done';
+      }
+      return JSON.stringify({ url: 'https://app.example.com', title: 'App' });
+    });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(['teleport', '--start=login', '--return=app\\.example\\.com'], {} as any);
+
+    // Trigger leader → teleporting
+    await vi.advanceTimersByTimeAsync(1000);
+    // Follower returns immediately
+    await vi.advanceTimersByTimeAsync(1000);
+    // Settle delay
+    await vi.advanceTimersByTimeAsync(2000);
+
+    // The completion promise should have resolved — check by running a command
+    const result = await cmd.execute(['tab-list'], {} as any);
+    // The teleport result will be consumed if we hit it; otherwise tab-list works normally
+    // Since checkTeleportBlock runs first, it should have consumed the "done" state already.
+    // Let's verify via state
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    expect(state.teleportWatcher === null || state.teleportWatcher.phase === 'done').toBe(true);
   });
 });

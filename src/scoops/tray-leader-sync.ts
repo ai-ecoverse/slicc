@@ -17,7 +17,6 @@ import {
   type TrayTargetEntry,
   type TrayFsRequest,
   type TrayFsResponse,
-  type CookieTeleportCookie,
 } from './tray-sync-protocol.js';
 import { handleFsRequest } from './tray-fs-handler.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
@@ -100,12 +99,6 @@ interface PendingFsRoute {
   totalChunks: number;
 }
 
-/** Tracks a cookie teleport request being routed through the leader. */
-interface PendingCookieTeleportRoute {
-  requesterBootstrapId: string;
-  requestId: string;
-}
-
 export class LeaderSyncManager {
   private readonly followers = new Map<string, ConnectedFollower>();
   private readonly registry = new TrayTargetRegistry();
@@ -125,11 +118,6 @@ export class LeaderSyncManager {
   private readonly pendingFsRoutes = new Map<string, PendingFsRoute>();
   /** Resolvers for leader-originated fs requests. */
   private readonly fsResolvers = new Map<string, { resolve: (responses: TrayFsResponse[]) => void; reject: (err: Error) => void; responses: TrayFsResponse[] }>();
-  /** Maps requestId → routing info for cookie teleport requests in flight through the leader. */
-  private readonly pendingCookieTeleportRoutes = new Map<string, PendingCookieTeleportRoute>();
-  /** Resolvers for leader-originated cookie teleport requests. */
-  private readonly cookieTeleportResolvers = new Map<string, { resolve: (result: { cookies: CookieTeleportCookie[]; timedOut?: boolean; finalUrl?: string }) => void; reject: (err: Error) => void }>();
-
   constructor(private readonly options: LeaderSyncManagerOptions) {}
 
   /**
@@ -332,20 +320,6 @@ export class LeaderSyncManager {
       }
       case 'fs.response': {
         this.handleFsResponse(message.requestId, message.response);
-        break;
-      }
-      case 'cookie.teleport.request': {
-        const { requestId, targetRuntimeId, url, catchPattern, catchNotPattern, timeoutMs } = message;
-        if (targetRuntimeId === 'leader') {
-          // Leader executes locally: capture cookies from the leader's own browser
-          this.executeLocalCookieTeleport(requestId, bootstrapId);
-        } else {
-          this.forwardCookieTeleportRequest(requestId, targetRuntimeId, bootstrapId, url, catchPattern, catchNotPattern, timeoutMs);
-        }
-        break;
-      }
-      case 'cookie.teleport.response': {
-        this.handleCookieTeleportResponse(message.requestId, message.cookies, message.error, message.timedOut, message.finalUrl);
         break;
       }
       case 'ping': {
@@ -868,129 +842,4 @@ export class LeaderSyncManager {
     });
   }
 
-  // ---------------------------------------------------------------------------
-  // Cookie teleport routing
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Execute a cookie teleport on the leader's own browser transport.
-   * Captures all cookies and sends them back to the requesting follower.
-   */
-  private async executeLocalCookieTeleport(requestId: string, requesterBootstrapId: string): Promise<void> {
-    const follower = this.followers.get(requesterBootstrapId);
-    if (!follower) return;
-
-    const browserAPI = this.options.browserAPI;
-    const transport = this.options.browserTransport;
-    if (!browserAPI && !transport) {
-      follower.sync.send({ type: 'cookie.teleport.response', requestId, error: 'Leader has no browser transport' });
-      return;
-    }
-
-    try {
-      if (browserAPI) {
-        // Use BrowserAPI to get a proper session for Network.getCookies
-        const pages = await browserAPI.listPages();
-        const target = pages.find(p => p.url && !p.url.startsWith('about:') && !p.url.includes('/preview/'))
-          ?? pages[0];
-        if (!target) {
-          follower.sync.send({ type: 'cookie.teleport.response', requestId, error: 'No browser tab available for cookie capture' });
-          return;
-        }
-        await browserAPI.attachToPage(target.targetId);
-        const result = await browserAPI.sendCDP('Network.getCookies');
-        const cookies = (result['cookies'] as CookieTeleportCookie[]) ?? [];
-        follower.sync.send({ type: 'cookie.teleport.response', requestId, cookies });
-      } else {
-        // Fallback to raw transport (will likely fail with -32601)
-        const result = await transport!.send('Network.getCookies', {});
-        const cookies = (result['cookies'] as CookieTeleportCookie[]) ?? [];
-        follower.sync.send({ type: 'cookie.teleport.response', requestId, cookies });
-      }
-    } catch (err) {
-      follower.sync.send({ type: 'cookie.teleport.response', requestId, error: err instanceof Error ? err.message : String(err) });
-    }
-  }
-
-  /**
-   * Forward a cookie teleport request from one follower to another.
-   */
-  private forwardCookieTeleportRequest(requestId: string, targetRuntimeId: string, requesterBootstrapId: string, url?: string, catchPattern?: string, catchNotPattern?: string, timeoutMs?: number): void {
-    const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
-    const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
-    const requester = this.followers.get(requesterBootstrapId);
-
-    if (!targetFollower) {
-      if (requester) {
-        requester.sync.send({ type: 'cookie.teleport.response', requestId, error: `Target runtime "${targetRuntimeId}" not connected` });
-      }
-      return;
-    }
-
-    log.info('[teleport-debug] forwarding cookie.teleport.request', { requestId, targetRuntimeId, url, catchPattern, catchNotPattern, timeoutMs });
-    this.pendingCookieTeleportRoutes.set(requestId, { requesterBootstrapId, requestId });
-    targetFollower.sync.send({ type: 'cookie.teleport.request', requestId, url, catchPattern, catchNotPattern, timeoutMs });
-  }
-
-  /**
-   * Handle a cookie teleport response from a follower (forwarding back to the original requester).
-   */
-  private handleCookieTeleportResponse(requestId: string, cookies?: CookieTeleportCookie[], error?: string, timedOut?: boolean, finalUrl?: string): void {
-    const route = this.pendingCookieTeleportRoutes.get(requestId);
-    if (!route) {
-      // Check if this is for a leader-originated request
-      const resolver = this.cookieTeleportResolvers.get(requestId);
-      if (resolver) {
-        this.cookieTeleportResolvers.delete(requestId);
-        if (error) {
-          resolver.reject(new Error(error));
-        } else {
-          resolver.resolve({ cookies: cookies ?? [], timedOut, finalUrl });
-        }
-      }
-      return;
-    }
-
-    this.pendingCookieTeleportRoutes.delete(requestId);
-
-    if (route.requesterBootstrapId === '__leader__') {
-      const resolver = this.cookieTeleportResolvers.get(requestId);
-      if (resolver) {
-        this.cookieTeleportResolvers.delete(requestId);
-        if (error) {
-          resolver.reject(new Error(error));
-        } else {
-          resolver.resolve({ cookies: cookies ?? [], timedOut, finalUrl });
-        }
-      }
-      return;
-    }
-
-    const requester = this.followers.get(route.requesterBootstrapId);
-    if (requester) {
-      requester.sync.send({ type: 'cookie.teleport.response', requestId, cookies, error, timedOut, finalUrl });
-    }
-  }
-
-  /**
-   * Send a cookie teleport request to a remote runtime from the leader's own code.
-   * Returns a promise that resolves with the cookies from the target runtime.
-   * If `url` is provided, the follower opens a tab for the human to authenticate before capturing cookies.
-   */
-  sendCookieTeleportRequest(targetRuntimeId: string, url?: string, catchPattern?: string, catchNotPattern?: string, timeoutMs?: number): Promise<{ cookies: CookieTeleportCookie[]; timedOut?: boolean; finalUrl?: string }> {
-    const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
-    const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
-
-    if (!targetFollower) {
-      return Promise.reject(new Error(`Target runtime "${targetRuntimeId}" not connected`));
-    }
-
-    const requestId = `cookie-teleport-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    return new Promise<{ cookies: CookieTeleportCookie[]; timedOut?: boolean; finalUrl?: string }>((resolve, reject) => {
-      this.cookieTeleportResolvers.set(requestId, { resolve, reject });
-      log.info('[teleport-debug] sending cookie.teleport.request to follower', { requestId, url, catchPattern, catchNotPattern, timeoutMs, targetRuntimeId });
-      this.pendingCookieTeleportRoutes.set(requestId, { requesterBootstrapId: '__leader__', requestId });
-      targetFollower.sync.send({ type: 'cookie.teleport.request', requestId, url, catchPattern, catchNotPattern, timeoutMs });
-    });
-  }
 }

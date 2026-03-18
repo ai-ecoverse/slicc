@@ -17,7 +17,6 @@ import {
   type TrayTargetEntry,
   type TrayFsRequest,
   type TrayFsResponse,
-  type CookieTeleportCookie,
 } from './tray-sync-protocol.js';
 import { handleFsRequest } from './tray-fs-handler.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
@@ -26,7 +25,6 @@ import type { BrowserAPI } from '../cdp/browser-api.js';
 import { RemoteCDPTransport, type RemoteCDPSender } from '../cdp/remote-cdp-transport.js';
 import { DataChannelKeepalive } from './data-channel-keepalive.js';
 import { setFollowerTrayRuntimeStatus, getFollowerTrayRuntimeStatus, setFollowerLastPingTime } from './tray-follower-status.js';
-import { executeTeleportAuth } from './teleport-auth.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('tray-follower-sync');
@@ -50,8 +48,6 @@ export interface FollowerSyncManagerOptions {
   onDisconnect?: (reason: string) => void;
   /** VirtualFS instance for handling remote fs requests targeting this follower. */
   vfs?: VirtualFS;
-  /** Called when the follower wants to show a notification to the human (e.g. teleport auth progress). */
-  onNotification?: (message: string) => void;
   /** Called when local browser targets may have changed (e.g. after a tab is opened or closed). */
   onTargetsChanged?: () => void;
 }
@@ -83,9 +79,6 @@ export class FollowerSyncManager implements AgentHandle {
   private readonly tabOpenResolvers = new Map<string, { resolve: (targetId: string) => void; reject: (err: Error) => void }>();
   /** Resolvers for outgoing fs requests. */
   private readonly fsResolvers = new Map<string, { resolve: (responses: TrayFsResponse[]) => void; reject: (err: Error) => void; responses: TrayFsResponse[] }>();
-  /** Resolvers for outgoing cookie teleport requests. */
-  private readonly cookieTeleportResolvers = new Map<string, { resolve: (result: { cookies: CookieTeleportCookie[]; timedOut?: boolean; finalUrl?: string }) => void; reject: (err: Error) => void }>();
-
   constructor(
     channel: TrayDataChannelLike,
     private readonly options: FollowerSyncManagerOptions = {},
@@ -296,14 +289,6 @@ export class FollowerSyncManager implements AgentHandle {
       }
       case 'fs.response': {
         this.routeFsResponse(message.requestId, message.response);
-        break;
-      }
-      case 'cookie.teleport.request': {
-        this.executeLocalCookieTeleport(message.requestId, message.url, message.catchPattern, message.catchNotPattern, message.timeoutMs);
-        break;
-      }
-      case 'cookie.teleport.response': {
-        this.routeCookieTeleportResponse(message.requestId, message.cookies, message.error, message.timedOut, message.finalUrl);
         break;
       }
       case 'ping': {
@@ -548,97 +533,4 @@ export class FollowerSyncManager implements AgentHandle {
     });
   }
 
-  // ---------------------------------------------------------------------------
-  // Cookie teleport
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Execute a cookie teleport on the follower's local browser transport.
-   *
-   * When `url` is provided, opens a browser tab for interactive authentication:
-   * the human logs in, a hostname redirect is detected, cookies are captured,
-   * and the tab is closed. Falls back to immediate capture if no url.
-   */
-  private async executeLocalCookieTeleport(requestId: string, url?: string, catchPattern?: string, catchNotPattern?: string, timeoutMs?: number): Promise<void> {
-    log.info('[teleport-debug] executeLocalCookieTeleport called', { requestId, url, catchPattern, catchNotPattern, timeoutMs });
-    const transport = this.options.browserTransport;
-    const browserAPI = this.options.browserAPI;
-    if (!transport && !browserAPI) {
-      log.info('[teleport-debug] no browser transport or API available');
-      this.sync.send({ type: 'cookie.teleport.response', requestId, error: 'Follower has no browser transport' });
-      return;
-    }
-
-    try {
-      if (url) {
-        // Interactive auth flow: open tab → wait for human auth → capture cookies
-        // teleport-auth manages its own CDP sessions via the raw transport
-        if (!transport) {
-          this.sync.send({ type: 'cookie.teleport.response', requestId, error: 'Follower has no browser transport for auth flow' });
-          return;
-        }
-        log.info('[teleport-debug] calling executeTeleportAuth', { url, timeoutMs, catchPattern, catchNotPattern });
-        const { cookies, timedOut, finalUrl } = await executeTeleportAuth({
-          transport,
-          url,
-          timeoutMs,
-          catchPattern,
-          catchNotPattern,
-          onNotification: (msg) => this.options.onNotification?.(msg),
-        });
-        log.info('[teleport-debug] executeTeleportAuth returned', { cookieCount: cookies.length, finalUrl });
-        this.sync.send({ type: 'cookie.teleport.response', requestId, cookies, timedOut, finalUrl });
-      } else {
-        // Immediate capture — use BrowserAPI to get a proper session for Network.getCookies
-        if (browserAPI) {
-          const pages = await browserAPI.listPages();
-          // Pick a real page (not about:blank, not the slicc UI)
-          const target = pages.find(p => p.url && !p.url.startsWith('about:') && !p.url.includes('/preview/'))
-            ?? pages[0];
-          if (!target) {
-            this.sync.send({ type: 'cookie.teleport.response', requestId, error: 'No browser tab available for cookie capture' });
-            return;
-          }
-          await browserAPI.attachToPage(target.targetId);
-          const result = await browserAPI.sendCDP('Network.getCookies');
-          const cookies = (result['cookies'] as CookieTeleportCookie[]) ?? [];
-          this.sync.send({ type: 'cookie.teleport.response', requestId, cookies });
-        } else {
-          // Fallback to raw transport (will likely fail with -32601, but preserves old behavior)
-          const result = await transport!.send('Network.getCookies', {});
-          const cookies = (result['cookies'] as CookieTeleportCookie[]) ?? [];
-          this.sync.send({ type: 'cookie.teleport.response', requestId, cookies });
-        }
-      }
-    } catch (err) {
-      this.sync.send({ type: 'cookie.teleport.response', requestId, error: err instanceof Error ? err.message : String(err) });
-    }
-  }
-
-  /**
-   * Route a cookie teleport response from the leader to the appropriate pending resolver.
-   */
-  private routeCookieTeleportResponse(requestId: string, cookies?: CookieTeleportCookie[], error?: string, timedOut?: boolean, finalUrl?: string): void {
-    const resolver = this.cookieTeleportResolvers.get(requestId);
-    if (!resolver) return;
-    this.cookieTeleportResolvers.delete(requestId);
-    if (error) {
-      resolver.reject(new Error(error));
-    } else {
-      resolver.resolve({ cookies: cookies ?? [], timedOut, finalUrl });
-    }
-  }
-
-  /**
-   * Send a cookie teleport request to a remote runtime via the leader.
-   * Returns a promise that resolves with the cookies from the target runtime.
-   * If `url` is provided, the target opens a tab for the human to authenticate before capturing cookies.
-   */
-  sendCookieTeleportRequest(targetRuntimeId: string, url?: string, catchPattern?: string, catchNotPattern?: string, timeoutMs?: number): Promise<{ cookies: CookieTeleportCookie[]; timedOut?: boolean; finalUrl?: string }> {
-    const requestId = `cookie-teleport-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    return new Promise<{ cookies: CookieTeleportCookie[]; timedOut?: boolean; finalUrl?: string }>((resolve, reject) => {
-      this.cookieTeleportResolvers.set(requestId, { resolve, reject });
-      this.sync.send({ type: 'cookie.teleport.request', requestId, targetRuntimeId, url, catchPattern, catchNotPattern, timeoutMs });
-    });
-  }
 }
