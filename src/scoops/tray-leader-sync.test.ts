@@ -1408,4 +1408,117 @@ describe('LeaderSyncManager', () => {
       expect(mockBrowserAPI.sendCDP).toHaveBeenCalledWith('Network.getCookies');
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Stale remote transport cleanup on disconnect / reconnect
+  // ---------------------------------------------------------------------------
+
+  describe('stale remote transport cleanup', () => {
+    it('removeFollower cleans up remoteTransports for that follower runtimeId', () => {
+      const { manager } = createManager();
+      const ch1 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+
+      // Follower advertises targets
+      ch1.simulateMessage({
+        type: 'targets.advertise',
+        targets: [{ targetId: 'tab1', title: 'Tab', url: 'https://example.com' }],
+        runtimeId: 'follower-b1',
+      });
+
+      // Leader creates a remote transport for that follower
+      const transport = manager.createRemoteTransport('follower-b1', 'tab1');
+      expect(transport.state).toBe('connected');
+
+      // Remove follower — transport should be disconnected and cleaned up
+      manager.removeFollower('b1');
+      expect(transport.state).toBe('disconnected');
+
+      // Verify internal map is clean (creating a new transport should work)
+      const transport2 = manager.createRemoteTransport('follower-b1', 'tab1');
+      expect(transport2).not.toBe(transport);
+    });
+
+    it('after follower disconnect and reconnect with new ID, CDP commands work with new ID', () => {
+      const { manager } = createManager();
+
+      // First connection
+      const ch1 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+      ch1.simulateMessage({
+        type: 'targets.advertise',
+        targets: [{ targetId: 'tab1', title: 'Tab', url: 'https://example.com' }],
+        runtimeId: 'follower-old',
+      });
+
+      // Leader creates a remote transport
+      const oldTransport = manager.createRemoteTransport('follower-old', 'tab1');
+
+      // Follower disconnects
+      manager.removeFollower('b1');
+      expect(oldTransport.state).toBe('disconnected');
+
+      // Follower reconnects with new ID
+      const ch2 = new FakeChannel();
+      manager.addFollower('b2', ch2);
+      ch2.simulateMessage({
+        type: 'targets.advertise',
+        targets: [{ targetId: 'tab1', title: 'Tab', url: 'https://example.com' }],
+        runtimeId: 'follower-new',
+      });
+
+      // New transport should work (sender will look up 'follower-new' in runtimeToBootstrap)
+      const newTransport = manager.createRemoteTransport('follower-new', 'tab1');
+      expect(newTransport.state).toBe('connected');
+
+      // Verify the new follower is in getConnectedFollowers
+      const followers = manager.getConnectedFollowers();
+      expect(followers).toHaveLength(1);
+      expect(followers[0].runtimeId).toBe('follower-new');
+    });
+
+    it('proactive cleanup removes orphaned transports on targets.advertise', () => {
+      const { manager } = createManager();
+      const ch1 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+
+      // Manually inject a stale transport for a runtimeId that no longer exists
+      // (simulating a race condition where removeFollower didn't clean up)
+      const staleTransport = manager.createRemoteTransport('stale-runtime', 'tab-x');
+      expect(staleTransport.state).toBe('connected');
+
+      // New follower advertises targets — this should trigger cleanup of stale-runtime
+      ch1.simulateMessage({
+        type: 'targets.advertise',
+        targets: [{ targetId: 'tab1', title: 'Tab', url: 'https://example.com' }],
+        runtimeId: 'follower-b1',
+      });
+
+      // Stale transport should have been disconnected
+      expect(staleTransport.state).toBe('disconnected');
+    });
+
+    it('removeFollower with multiple transports for same runtime cleans all', () => {
+      const { manager } = createManager();
+      const ch1 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+
+      ch1.simulateMessage({
+        type: 'targets.advertise',
+        targets: [
+          { targetId: 'tab1', title: 'Tab 1', url: 'https://example.com' },
+          { targetId: 'tab2', title: 'Tab 2', url: 'https://example2.com' },
+        ],
+        runtimeId: 'follower-b1',
+      });
+
+      const transport1 = manager.createRemoteTransport('follower-b1', 'tab1');
+      const transport2 = manager.createRemoteTransport('follower-b1', 'tab2');
+
+      manager.removeFollower('b1');
+
+      expect(transport1.state).toBe('disconnected');
+      expect(transport2.state).toBe('disconnected');
+    });
+  });
 });

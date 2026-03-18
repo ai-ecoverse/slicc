@@ -1474,6 +1474,7 @@ async function main(): Promise<void> {
         leaderSync.stop();
         trayPeers.stop();
         leaderTray.stop();
+        await leaderTray.clearSession();
         const session = await leaderTray.start();
         const trayUrl = buildTrayLaunchUrl(window.location.href, session.workerBaseUrl, session.trayId);
         if (trayUrl !== window.location.href) {

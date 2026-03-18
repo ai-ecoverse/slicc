@@ -834,7 +834,7 @@ describe('FollowerSyncManager', () => {
       channel.simulateLeaderMessage({
         type: 'cookie.teleport.request',
         requestId: 'ct-3',
-        url: 'https://login.site.com/auth',
+        url: 'https://app.site.com',
       } as any);
 
       // Flush multiple microtask rounds so the chained awaits inside
@@ -842,7 +842,17 @@ describe('FollowerSyncManager', () => {
       // all resolve and the Page.frameNavigated listener is registered.
       for (let i = 0; i < 10; i++) await Promise.resolve();
 
-      // Simulate auth redirect
+      // Phase 1: SSO redirect away from initial hostname
+      for (const listener of listeners.get('Page.frameNavigated') ?? []) {
+        (listener as (params: Record<string, unknown>) => void)({
+          sessionId: 'sess-auth',
+          frame: { url: 'https://login.site.com/auth', id: 'main' },
+        });
+      }
+
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+
+      // Phase 2: Callback redirect back to initial hostname — auth complete
       for (const listener of listeners.get('Page.frameNavigated') ?? []) {
         (listener as (params: Record<string, unknown>) => void)({
           sessionId: 'sess-auth',
@@ -863,7 +873,7 @@ describe('FollowerSyncManager', () => {
         expect(response.error).toBeUndefined();
       }
       expect(onNotification).toHaveBeenCalledWith(expect.stringContaining('Authentication requested'));
-      expect(fakeBrowserTransport.send).toHaveBeenCalledWith('Target.createTarget', { url: 'https://login.site.com/auth', background: false });
+      expect(fakeBrowserTransport.send).toHaveBeenCalledWith('Target.createTarget', { url: 'https://app.site.com', background: false });
     });
   });
 

@@ -322,4 +322,91 @@ describe('tray-leader', () => {
       vi.useRealTimers();
     }
   });
+
+  it('produces a different join URL after stop → clearSession → start (host reset)', async () => {
+    const store = new MemorySessionStore();
+    let socketIndex = 0;
+    const sockets: FakeWebSocket[] = [];
+    const socketReadyPromises: Array<{ promise: Promise<void>; resolve: () => void }> = [];
+    for (let i = 0; i < 2; i++) {
+      let resolve!: () => void;
+      const promise = new Promise<void>(r => { resolve = r; });
+      socketReadyPromises.push({ promise, resolve });
+    }
+
+    const fetchImpl = vi.fn<typeof fetch>()
+      // First start: create tray + attach
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        trayId: 'tray-1',
+        createdAt: '2026-03-11T00:00:00.000Z',
+        capabilities: {
+          join: { url: 'https://tray.example.com/join/token-1' },
+          controller: { url: 'https://tray.example.com/controller/token-1' },
+          webhook: { url: 'https://tray.example.com/webhook/token-1' },
+        },
+      }), { status: 201, headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        trayId: 'tray-1',
+        controllerId: 'controller-1',
+        role: 'leader',
+        leaderKey: 'leader-key-1',
+        websocket: { url: 'wss://tray.example.com/ws/1' },
+      }), { status: 200, headers: { 'content-type': 'application/json' } }))
+      // Second start (after reset): create tray + attach
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        trayId: 'tray-2',
+        createdAt: '2026-03-11T00:01:00.000Z',
+        capabilities: {
+          join: { url: 'https://tray.example.com/join/token-2' },
+          controller: { url: 'https://tray.example.com/controller/token-2' },
+          webhook: { url: 'https://tray.example.com/webhook/token-2' },
+        },
+      }), { status: 201, headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        trayId: 'tray-2',
+        controllerId: 'controller-2',
+        role: 'leader',
+        leaderKey: 'leader-key-2',
+        websocket: { url: 'wss://tray.example.com/ws/2' },
+      }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+    const manager = new LeaderTrayManager({
+      workerBaseUrl: 'https://tray.example.com',
+      runtime: 'slicc-standalone',
+      store,
+      fetchImpl,
+      webSocketFactory: () => {
+        const s = new FakeWebSocket();
+        sockets.push(s);
+        socketReadyPromises[socketIndex].resolve();
+        socketIndex++;
+        return s;
+      },
+      pingIntervalMs: 60_000,
+    });
+
+    // First start
+    const startPromise1 = manager.start();
+    await socketReadyPromises[0].promise;
+    sockets[0].dispatch('message', { data: JSON.stringify({ type: 'leader.connected', trayId: 'tray-1' }) });
+    const session1 = await startPromise1;
+    expect(session1.joinUrl).toBe('https://tray.example.com/join/token-1');
+
+    // Simulate host reset: stop → clearSession → start
+    manager.stop();
+    await manager.clearSession();
+    expect(await store.load()).toBeNull();
+
+    const startPromise2 = manager.start();
+    await socketReadyPromises[1].promise;
+    sockets[1].dispatch('message', { data: JSON.stringify({ type: 'leader.connected', trayId: 'tray-2' }) });
+    const session2 = await startPromise2;
+
+    expect(session2.joinUrl).toBe('https://tray.example.com/join/token-2');
+    expect(session2.joinUrl).not.toBe(session1.joinUrl);
+    expect(session2.trayId).toBe('tray-2');
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
+
+    manager.stop();
+  });
 });

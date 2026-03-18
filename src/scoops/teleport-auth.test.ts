@@ -7,20 +7,28 @@ import type { CDPTransport } from '../cdp/transport.js';
 // ---------------------------------------------------------------------------
 
 describe('isAuthRedirect', () => {
-  it('detects hostname change as auth redirect', () => {
-    expect(isAuthRedirect('https://login.example.com/auth', 'https://app.example.com/dashboard')).toBe(true);
+  it('returns true when navigated URL matches initial hostname (callback redirect)', () => {
+    expect(isAuthRedirect('https://app.example.com', 'https://app.example.com/callback')).toBe(true);
   });
 
-  it('detects redirect from auth provider to app', () => {
-    expect(isAuthRedirect('https://accounts.google.com/signin', 'https://myapp.com/callback')).toBe(true);
+  it('returns true for same hostname with different path', () => {
+    expect(isAuthRedirect('https://app.com/login', 'https://app.com/dashboard')).toBe(true);
   });
 
-  it('returns false when hostname stays the same', () => {
-    expect(isAuthRedirect('https://login.example.com/auth', 'https://login.example.com/success')).toBe(false);
+  it('returns true for exact same URL', () => {
+    expect(isAuthRedirect('https://app.example.com/page', 'https://app.example.com/page')).toBe(true);
   });
 
-  it('returns false when only path changes', () => {
-    expect(isAuthRedirect('https://app.com/login', 'https://app.com/dashboard')).toBe(false);
+  it('returns false when hostname differs (SSO redirect away)', () => {
+    expect(isAuthRedirect('https://app.example.com', 'https://login.okta.com/auth')).toBe(false);
+  });
+
+  it('returns false for redirect to auth provider', () => {
+    expect(isAuthRedirect('https://app.example.com', 'https://accounts.google.com/signin')).toBe(false);
+  });
+
+  it('returns false for subdomain changes', () => {
+    expect(isAuthRedirect('https://app.example.com', 'https://auth.example.com')).toBe(false);
   });
 
   it('handles invalid URLs gracefully', () => {
@@ -29,14 +37,6 @@ describe('isAuthRedirect', () => {
 
   it('handles one invalid URL gracefully', () => {
     expect(isAuthRedirect('https://valid.com', 'not-a-url')).toBe(false);
-  });
-
-  it('detects subdomain changes', () => {
-    expect(isAuthRedirect('https://auth.example.com', 'https://www.example.com')).toBe(true);
-  });
-
-  it('returns false for same URL', () => {
-    expect(isAuthRedirect('https://login.example.com/page', 'https://login.example.com/page')).toBe(false);
   });
 });
 
@@ -88,7 +88,7 @@ describe('executeTeleportAuth', () => {
     vi.useRealTimers();
   });
 
-  it('opens a tab, waits for auth redirect, captures cookies, and closes tab', async () => {
+  it('opens a tab, waits for SSO redirect and callback, captures cookies, and closes tab', async () => {
     const { transport, emit } = createFakeTransport();
 
     (transport.send as ReturnType<typeof vi.fn>)
@@ -106,7 +106,7 @@ describe('executeTeleportAuth', () => {
     const onNotification = vi.fn();
     const promise = executeTeleportAuth({
       transport,
-      url: 'https://login.example.com/auth',
+      url: 'https://app.example.com',
       timeoutMs: 5000,
       onNotification,
     });
@@ -114,10 +114,18 @@ describe('executeTeleportAuth', () => {
     // Let the initial awaits (createTarget, attachToTarget, Page.enable) complete
     await flushMicrotasks();
 
-    // Now the listener should be registered — simulate auth redirect
+    // Phase 1: SSO redirect away from initial hostname — should NOT complete auth
     emit('Page.frameNavigated', {
       sessionId: 'sess-1',
-      frame: { url: 'https://app.example.com/dashboard', id: 'main' },
+      frame: { url: 'https://login.okta.com/authorize', id: 'main' },
+    });
+
+    await flushMicrotasks();
+
+    // Phase 2: Callback redirect back to initial hostname — should complete auth
+    emit('Page.frameNavigated', {
+      sessionId: 'sess-1',
+      frame: { url: 'https://app.example.com/callback', id: 'main' },
     });
 
     const result = await promise;
@@ -127,8 +135,100 @@ describe('executeTeleportAuth', () => {
     expect(result.timedOut).toBe(false);
     expect(onNotification).toHaveBeenCalledWith(expect.stringContaining('Authentication requested'));
     expect(onNotification).toHaveBeenCalledWith(expect.stringContaining('Authentication complete'));
-    expect(transport.send).toHaveBeenCalledWith('Target.createTarget', { url: 'https://login.example.com/auth', background: false });
+    expect(transport.send).toHaveBeenCalledWith('Target.createTarget', { url: 'https://app.example.com', background: false });
     expect(transport.send).toHaveBeenCalledWith('Target.closeTarget', { targetId: 'tab-auth' });
+  });
+
+  it('ignores same-host path changes before leaving initial hostname', async () => {
+    const { transport, emit } = createFakeTransport();
+
+    (transport.send as ReturnType<typeof vi.fn>)
+      .mockImplementation((method: string) => {
+        if (method === 'Target.createTarget') return Promise.resolve({ targetId: 'tab-1' });
+        if (method === 'Target.attachToTarget') return Promise.resolve({ sessionId: 'sess-path' });
+        if (method === 'Page.enable') return Promise.resolve({});
+        if (method === 'Network.getCookies') return Promise.resolve({ cookies: [] });
+        if (method === 'Target.closeTarget') return Promise.resolve({});
+        return Promise.resolve({});
+      });
+
+    const promise = executeTeleportAuth({
+      transport,
+      url: 'https://app.example.com',
+      timeoutMs: 1000,
+    });
+
+    await flushMicrotasks();
+
+    // Same-host path change (e.g. app redirects /login → /login/form) — should NOT complete
+    emit('Page.frameNavigated', {
+      sessionId: 'sess-path',
+      frame: { url: 'https://app.example.com/login/form', id: 'main' },
+    });
+
+    // Should time out because we never left the initial hostname
+    vi.advanceTimersByTime(1000);
+    await flushMicrotasks();
+
+    const result = await promise;
+    expect(result.timedOut).toBe(true);
+  });
+
+  it('handles multi-hop SSO chains before callback', async () => {
+    const { transport, emit } = createFakeTransport();
+
+    (transport.send as ReturnType<typeof vi.fn>)
+      .mockImplementation((method: string) => {
+        if (method === 'Target.createTarget') return Promise.resolve({ targetId: 'tab-multi' });
+        if (method === 'Target.attachToTarget') return Promise.resolve({ sessionId: 'sess-multi' });
+        if (method === 'Page.enable') return Promise.resolve({});
+        if (method === 'Network.getCookies') return Promise.resolve({
+          cookies: [{ name: 'token', value: 'xyz', domain: '.app.navan.com', path: '/', expires: -1, size: 15, httpOnly: true, secure: true, session: true }],
+        });
+        if (method === 'Target.closeTarget') return Promise.resolve({});
+        return Promise.resolve({});
+      });
+
+    const promise = executeTeleportAuth({
+      transport,
+      url: 'https://app.navan.com',
+      timeoutMs: 10000,
+    });
+
+    await flushMicrotasks();
+
+    // Hop 1: app → login provider
+    emit('Page.frameNavigated', {
+      sessionId: 'sess-multi',
+      frame: { url: 'https://login.navan.com/sso', id: 'main' },
+    });
+    await flushMicrotasks();
+
+    // Hop 2: login provider → Okta
+    emit('Page.frameNavigated', {
+      sessionId: 'sess-multi',
+      frame: { url: 'https://idp.okta.com/login', id: 'main' },
+    });
+    await flushMicrotasks();
+
+    // Hop 3: Okta → SAML callback on login provider
+    emit('Page.frameNavigated', {
+      sessionId: 'sess-multi',
+      frame: { url: 'https://login.navan.com/saml/callback', id: 'main' },
+    });
+    await flushMicrotasks();
+
+    // Hop 4: login provider → back to app (auth complete!)
+    emit('Page.frameNavigated', {
+      sessionId: 'sess-multi',
+      frame: { url: 'https://app.navan.com/dashboard', id: 'main' },
+    });
+
+    const result = await promise;
+
+    expect(result.timedOut).toBe(false);
+    expect(result.cookies).toHaveLength(1);
+    expect(result.cookies[0].name).toBe('token');
   });
 
   it('times out and still captures cookies', async () => {
@@ -241,7 +341,7 @@ describe('executeTeleportAuth', () => {
     expect(result.timedOut).toBe(true);
   });
 
-  it('cleans up event listener on auth redirect', async () => {
+  it('cleans up event listener on auth completion', async () => {
     const { transport, emit } = createFakeTransport();
 
     (transport.send as ReturnType<typeof vi.fn>)
@@ -256,13 +356,20 @@ describe('executeTeleportAuth', () => {
 
     const promise = executeTeleportAuth({
       transport,
-      url: 'https://login.example.com',
+      url: 'https://app.example.com',
       timeoutMs: 10000,
     });
 
     await flushMicrotasks();
 
-    // Trigger auth redirect
+    // Phase 1: leave initial hostname
+    emit('Page.frameNavigated', {
+      sessionId: 'sess-4',
+      frame: { url: 'https://login.example.com/auth', id: 'main' },
+    });
+    await flushMicrotasks();
+
+    // Phase 2: return to initial hostname
     emit('Page.frameNavigated', {
       sessionId: 'sess-4',
       frame: { url: 'https://app.example.com/home', id: 'main' },
@@ -289,15 +396,23 @@ describe('executeTeleportAuth', () => {
 
     const promise = executeTeleportAuth({
       transport,
-      url: 'https://login.example.com',
+      url: 'https://app.example.com',
       timeoutMs: 5000,
     });
 
     await flushMicrotasks();
 
+    // Phase 1: leave
     emit('Page.frameNavigated', {
       sessionId: 'sess-5',
-      frame: { url: 'https://app.example.com', id: 'main' },
+      frame: { url: 'https://login.example.com/auth', id: 'main' },
+    });
+    await flushMicrotasks();
+
+    // Phase 2: return
+    emit('Page.frameNavigated', {
+      sessionId: 'sess-5',
+      frame: { url: 'https://app.example.com/callback', id: 'main' },
     });
 
     // Should not throw even though closeTarget fails

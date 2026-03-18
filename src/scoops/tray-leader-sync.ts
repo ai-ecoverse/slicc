@@ -183,6 +183,8 @@ export class LeaderSyncManager {
     // Find the runtimeId that maps to this bootstrapId
     for (const [runtimeId, bId] of this.runtimeToBootstrap) {
       if (bId === bootstrapId) {
+        // Clean up any cached RemoteCDPTransport instances for this runtime
+        this.cleanupRemoteTransports(runtimeId);
         this.registry.removeRuntime(runtimeId);
         this.runtimeToBootstrap.delete(runtimeId);
         break;
@@ -261,12 +263,24 @@ export class LeaderSyncManager {
         log.info('Follower snapshot request received', { bootstrapId });
         this.sendSnapshot(bootstrapId);
         break;
-      case 'targets.advertise':
+      case 'targets.advertise': {
         log.info('Follower targets advertised', { bootstrapId, runtimeId: message.runtimeId, targetCount: message.targets.length });
+        // Clean up stale remote transports for runtimeIds that are no longer in runtimeToBootstrap
+        // (e.g. a follower reconnected with a new runtimeId but old transports linger)
+        for (const key of [...this.remoteTransports.keys()]) {
+          const runtimeId = key.substring(0, key.indexOf(':'));
+          if (runtimeId !== 'leader' && !this.runtimeToBootstrap.has(runtimeId) && runtimeId !== message.runtimeId) {
+            const transport = this.remoteTransports.get(key);
+            transport?.disconnect();
+            this.remoteTransports.delete(key);
+            log.debug('Cleaned up orphaned remote transport on advertise', { key });
+          }
+        }
         this.runtimeToBootstrap.set(message.runtimeId, bootstrapId);
         this.registry.setTargets(message.runtimeId, message.targets);
         this.broadcastTargetRegistry();
         break;
+      }
       case 'cdp.request': {
         const { requestId, targetRuntimeId, localTargetId, method, params, sessionId } = message;
         if (targetRuntimeId === 'leader') {
@@ -411,6 +425,22 @@ export class LeaderSyncManager {
     if (transport) {
       transport.disconnect();
       this.remoteTransports.delete(key);
+    }
+  }
+
+  /**
+   * Clean up all cached RemoteCDPTransport instances for a given runtimeId.
+   * Called when a follower disconnects to prevent stale transports from lingering.
+   */
+  private cleanupRemoteTransports(runtimeId: string): void {
+    const prefix = `${runtimeId}:`;
+    for (const key of [...this.remoteTransports.keys()]) {
+      if (key.startsWith(prefix)) {
+        const transport = this.remoteTransports.get(key);
+        transport?.disconnect();
+        this.remoteTransports.delete(key);
+        log.debug('Cleaned up stale remote transport', { key });
+      }
     }
   }
 

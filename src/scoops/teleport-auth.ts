@@ -18,15 +18,22 @@ const log = createLogger('teleport-auth');
 // ---------------------------------------------------------------------------
 
 /**
- * Detect whether a navigation event signals auth completion.
- * Auth is considered complete when the hostname of the navigated URL differs
- * from the initial URL hostname (typical redirect-after-login pattern).
+ * Check whether a navigated URL has returned to the initial hostname.
+ *
+ * During SSO/OAuth flows the browser leaves the initial hostname (redirect to
+ * an identity provider) and eventually comes back (callback redirect).  This
+ * helper returns `true` when the navigated URL shares the same hostname as the
+ * initial URL — i.e. the user has been redirected *back* to where they started.
+ *
+ * Callers must track whether the page has actually *left* the initial hostname
+ * at least once, otherwise the very first same-host path change would
+ * incorrectly be treated as auth completion.
  */
 export function isAuthRedirect(initialUrl: string, navigatedUrl: string): boolean {
   try {
     const initial = new URL(initialUrl);
     const navigated = new URL(navigatedUrl);
-    return initial.hostname !== navigated.hostname;
+    return initial.hostname === navigated.hostname;
   } catch {
     return false;
   }
@@ -55,7 +62,7 @@ export interface TeleportAuthResult {
 /**
  * Execute the interactive auth flow:
  * 1. Open a new browser tab with the auth URL
- * 2. Wait for auth completion (hostname redirect) or timeout
+ * 2. Wait for auth completion (return to initial hostname after SSO redirect) or timeout
  * 3. Capture all browser cookies
  * 4. Close the auth tab
  */
@@ -116,7 +123,16 @@ export async function executeTeleportAuth(options: TeleportAuthOptions): Promise
 
 /**
  * Wait for auth completion by monitoring Page.frameNavigated events.
- * Resolves when a navigation to a different hostname is detected.
+ *
+ * The flow tracks two phases:
+ * 1. The page navigates AWAY from the initial hostname (SSO redirect) —
+ *    sets `hasLeftInitialHostname = true`.
+ * 2. The page navigates BACK to the initial hostname (callback redirect) —
+ *    resolves the promise (auth complete).
+ *
+ * Same-host path changes before the page has left are ignored (e.g. the
+ * initial URL redirecting to a login path on the same host).
+ *
  * Rejects with a timeout error if the deadline is exceeded.
  */
 function waitForAuthCompletion(
@@ -127,6 +143,8 @@ function waitForAuthCompletion(
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     let settled = false;
+    let hasLeftInitialHostname = false;
+
     const cleanup = () => {
       settled = true;
       transport.off('Page.frameNavigated', onNavigated);
@@ -141,11 +159,19 @@ function waitForAuthCompletion(
       const frame = params['frame'] as { url?: string; parentId?: string } | undefined;
       if (!frame?.url || frame.parentId) return; // Only top-level frames
 
-      if (isAuthRedirect(initialUrl, frame.url)) {
-        log.info('Auth redirect detected', { from: initialUrl, to: frame.url });
+      const backOnInitialHost = isAuthRedirect(initialUrl, frame.url);
+
+      if (!backOnInitialHost && !hasLeftInitialHostname) {
+        // First navigation away from the initial hostname — SSO redirect
+        hasLeftInitialHostname = true;
+        log.info('SSO redirect detected, waiting for callback', { from: initialUrl, to: frame.url });
+      } else if (backOnInitialHost && hasLeftInitialHostname) {
+        // Navigated back to the initial hostname after leaving — auth complete
+        log.info('Auth callback detected', { from: initialUrl, to: frame.url });
         cleanup();
         resolve();
       }
+      // Otherwise: same-host navigation before leaving, or still on SSO provider — ignore
     };
 
     const timer = setTimeout(() => {

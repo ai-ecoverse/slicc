@@ -208,6 +208,10 @@ export class LeaderTrayManager {
     setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
   }
 
+  async clearSession(): Promise<void> {
+    await this.store.clear();
+  }
+
   sendControlMessage(message: LeaderToWorkerControlMessage): void {
     if (!this.socket) {
       throw new Error('Tray leader WebSocket is not connected');

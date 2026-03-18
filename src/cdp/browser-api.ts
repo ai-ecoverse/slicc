@@ -859,13 +859,26 @@ export class BrowserAPI {
   /**
    * Lazily connect (or reconnect) to the CDP proxy.
    * Resets stale session/target state when reconnecting after a drop.
+   * If the current client is a disconnected remote transport, restores the local transport.
    */
   private async ensureConnected(): Promise<void> {
     if (this.client.state === 'disconnected') {
+      // If we were using a remote transport that got disconnected (follower went away),
+      // restore the local transport and clear stale remote state.
+      if (this.remoteTargetInfo && this.trayTargetProvider?.removeRemoteTransport) {
+        this.trayTargetProvider.removeRemoteTransport(
+          this.remoteTargetInfo.runtimeId,
+          this.remoteTargetInfo.localTargetId,
+        );
+        this.client = this.localClient;
+        this.remoteTargetInfo = null;
+      }
       // Previous session/target are no longer valid after reconnect
       this.sessionId = null;
       this.attachedTargetId = null;
-      await this.connect();
+      if (this.client.state === 'disconnected') {
+        await this.connect();
+      }
     }
   }
 
