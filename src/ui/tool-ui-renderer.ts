@@ -8,7 +8,7 @@
  * In CLI mode, renders directly in the DOM.
  */
 
-import { toolUIRegistry, type ToolUIAction } from '../tools/tool-ui.js';
+import { toolUIRegistry } from '../tools/tool-ui.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('tool-ui-renderer');
