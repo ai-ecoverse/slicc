@@ -44,7 +44,7 @@ describe('tabbed-ui', () => {
 
 describe('setHiddenTabs', () => {
   beforeAll(() => {
-    if (typeof globalThis.localStorage === 'undefined') {
+    if (typeof globalThis.localStorage === 'undefined' || typeof globalThis.localStorage?.setItem !== 'function') {
       const store = new Map<string, string>();
       (globalThis as Record<string, unknown>).localStorage = {
         getItem: (k: string) => store.get(k) ?? null,
