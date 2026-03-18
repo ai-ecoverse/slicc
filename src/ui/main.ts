@@ -974,8 +974,10 @@ async function main(): Promise<void> {
         removeSprinkle: (name) => layout.removeSprinkle(name),
       },
     );
-    // Expose for open command and sprinkle shell command
+    // Expose for open command, sprinkle shell command, and E2E/demo scripts
     (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
+    if (__DEV__) (window as unknown as Record<string, unknown>).__slicc_orchestrator = orchestrator;
+
     await sprinkleManager.refresh();
     layout.onSprinkleClose = (name) => sprinkleManager!.close(name);
 
