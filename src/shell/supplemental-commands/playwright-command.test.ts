@@ -1918,11 +1918,19 @@ describe('playwright-cli teleport trigger and capture', () => {
     browser = createMockBrowser({
       createRemotePage: vi.fn().mockResolvedValue('remote-tab-1'),
       closePage: vi.fn().mockResolvedValue(undefined),
-      sendCDP: vi.fn().mockResolvedValue({
-        cookies: [
-          { name: 'session', value: 'abc', domain: '.example.com' },
-          { name: 'auth', value: 'xyz', domain: '.example.com' },
-        ],
+      sendCDP: vi.fn().mockImplementation(async (method: string) => {
+        if (method === 'Network.getCookies') {
+          return {
+            cookies: [
+              { name: 'session', value: 'abc', domain: '.example.com' },
+              { name: 'auth', value: 'xyz', domain: '.example.com' },
+            ],
+          };
+        }
+        if (method === 'Page.addScriptToEvaluateOnNewDocument') {
+          return { identifier: `script-${Math.random()}` };
+        }
+        return {};
       }),
     });
     fs = createMockFS();
@@ -1944,18 +1952,27 @@ describe('playwright-cli teleport trigger and capture', () => {
     setPlaywrightTeleportConnectedFollowers(null);
   });
 
-  it('polls leader tab and triggers teleport when start pattern matches', async () => {
+  it('polls leader tab and triggers teleport on the intercepted auth URL', async () => {
     // Make evaluate return the leader tab URL
     // Call 1: during arm (capturing originalLeaderUrl) — no match
     // Call 2: first poll — no match
     // Call 3: second poll — match triggers teleport
     let callCount = 0;
+    let storageCaptureCount = 0;
     (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
       if (expr === 'window.location.href') {
         callCount++;
         return callCount <= 2
           ? 'https://app.example.com/dashboard'
           : 'https://login.example.com/auth';
+      }
+      if (expr.includes('window.localStorage')) {
+        storageCaptureCount++;
+        return JSON.stringify({
+          localStorage: { leaderEmail: 'person@example.com' },
+          sessionStorage: { leaderStep: 'email-entered' },
+          capture: storageCaptureCount,
+        });
       }
       return JSON.stringify({ url: 'https://app.example.com', title: 'App' });
     });
@@ -1974,9 +1991,9 @@ describe('playwright-cli teleport trigger and capture', () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(state.teleportWatcher!.phase).toBe('armed');
 
-    // Advance past second poll (match → triggerTeleport)
+    // Advance past second poll (match → triggerTeleport → waitingForAuth)
     await vi.advanceTimersByTimeAsync(1000);
-    expect(state.teleportWatcher!.phase).toBe('teleporting');
+    expect(state.teleportWatcher!.phase).toBe('waitingForAuth');
 
     // Verify leader cookies were captured before teleport
     expect(browser.sendCDP).toHaveBeenCalledWith('Network.getCookies', {});
@@ -1984,8 +2001,20 @@ describe('playwright-cli teleport trigger and capture', () => {
     // Verify remote tab was opened with about:blank (cookies injected before navigation)
     expect(browser.createRemotePage).toHaveBeenCalledWith('f-runtime', 'about:blank');
 
-    // Verify follower navigated to originalLeaderUrl (not the Okta trigger URL)
-    expect(browser.sendCDP).toHaveBeenCalledWith('Page.navigate', { url: 'https://app.example.com/dashboard' });
+    // Verify follower continues on the intercepted auth URL instead of restarting at the app URL
+    expect(browser.sendCDP).toHaveBeenCalledWith('Page.navigate', { url: 'https://login.example.com/auth' });
+    expect(browser.sendCDP).toHaveBeenCalledWith(
+      'Page.addScriptToEvaluateOnNewDocument',
+      expect.objectContaining({
+        source: expect.stringContaining('"leaderEmail":"person@example.com"'),
+      }),
+    );
+    expect(browser.sendCDP).toHaveBeenCalledWith(
+      'Page.addScriptToEvaluateOnNewDocument',
+      expect.objectContaining({
+        source: expect.stringContaining('"leaderStep":"email-entered"'),
+      }),
+    );
 
     // Cleanup timers and catch the unhandled rejection from the completion promise
     if (state.teleportWatcher) {
@@ -1997,8 +2026,10 @@ describe('playwright-cli teleport trigger and capture', () => {
 
   it('captures cookies when follower return pattern matches', async () => {
     // Phase 1: leader poll triggers (matching start pattern immediately)
+    // Phase 2: follower starts on the intercepted auth URL, then returns to the app
     let leaderCallCount = 0;
     let followerCallCount = 0;
+    let storageCaptureCount = 0;
     (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
       if (expr === 'window.location.href') {
         const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
@@ -2010,11 +2041,22 @@ describe('playwright-cli teleport trigger and capture', () => {
             ? 'https://app.example.com/dashboard' // original page URL captured at arm time
             : 'https://login.example.com/sso';    // SSO redirect detected by poll
         }
-        // Teleporting phase — polling follower
+        // Follower polling phases (waitingForAuth → waitingForReturn)
         followerCallCount++;
-        return followerCallCount <= 1
-          ? 'https://idp.example.com/consent' // still at IDP
-          : 'https://app.example.com/callback'; // returned!
+        if (followerCallCount <= 1) return 'https://login.example.com/sso';     // started on intercepted auth URL
+        return 'https://app.example.com/callback'; // returned from auth → returnPattern match
+      }
+      if (expr.includes('window.localStorage')) {
+        storageCaptureCount++;
+        return storageCaptureCount === 1
+          ? JSON.stringify({
+              localStorage: { leaderEmail: 'person@example.com' },
+              sessionStorage: { leaderStep: 'email-entered' },
+            })
+          : JSON.stringify({
+              localStorage: { followerToken: 'transferred-token' },
+              sessionStorage: { followerStep: 'authenticated' },
+            });
       }
       return JSON.stringify({ url: 'https://app.example.com', title: 'App' });
     });
@@ -2029,13 +2071,13 @@ describe('playwright-cli teleport trigger and capture', () => {
 
     // Leader poll triggers immediately
     await vi.advanceTimersByTimeAsync(1000);
-    expect(state.teleportWatcher!.phase).toBe('teleporting');
+    expect(state.teleportWatcher!.phase).toBe('waitingForAuth');
 
-    // Follower poll #1: still at IDP
+    // Follower poll #1: follower is on the intercepted auth URL
     await vi.advanceTimersByTimeAsync(1000);
-    expect(state.teleportWatcher!.phase).toBe('teleporting');
+    expect(state.teleportWatcher!.phase).toBe('waitingForReturn');
 
-    // Follower poll #2: return pattern matches → captureCookiesAndComplete
+    // Follower poll #2: returned from auth → captureCookiesAndComplete
     await vi.advanceTimersByTimeAsync(1000);
     expect(state.teleportWatcher!.phase).toBe('capturing');
 
@@ -2056,9 +2098,81 @@ describe('playwright-cli teleport trigger and capture', () => {
 
     // Verify leader navigated to originalLeaderUrl (not the follower's callback URL)
     expect(browser.sendCDP).toHaveBeenCalledWith('Page.navigate', { url: 'https://app.example.com/dashboard' });
+    expect(browser.sendCDP).toHaveBeenCalledWith(
+      'Page.addScriptToEvaluateOnNewDocument',
+      expect.objectContaining({
+        source: expect.stringContaining('"followerToken":"transferred-token"'),
+      }),
+    );
+    expect(browser.sendCDP).toHaveBeenCalledWith(
+      'Page.addScriptToEvaluateOnNewDocument',
+      expect.objectContaining({
+        source: expect.stringContaining('"followerStep":"authenticated"'),
+      }),
+    );
 
     // Verify follower tab was closed (raw targetId gets prefixed by triggerTeleport)
     expect(browser.closePage).toHaveBeenCalledWith('f-runtime:remote-tab-1');
+  });
+
+  it('should not match return pattern before start pattern seen on follower', async () => {
+    // The bug: follower navigates to app.navan.com which immediately matches the return
+    // pattern — before the Okta redirect even happens. The fix requires the follower to
+    // first hit a URL matching the startPattern before the returnPattern is checked.
+    let leaderCallCount = 0;
+    let followerCallCount = 0;
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
+      if (expr === 'window.location.href') {
+        const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+        if (!state.teleportWatcher || state.teleportWatcher.phase === 'armed') {
+          leaderCallCount++;
+          return leaderCallCount <= 1
+            ? 'https://app.example.com/dashboard'
+            : 'https://login.example.com/sso';
+        }
+        // Follower URL sequence: starts at the app URL (matches returnPattern!),
+        // then hits auth, then returns
+        followerCallCount++;
+        if (followerCallCount <= 2) return 'https://app.example.com/user2/'; // matches returnPattern but NOT startPattern
+        if (followerCallCount <= 3) return 'https://login.example.com/auth';  // matches startPattern → waitingForReturn
+        return 'https://app.example.com/callback'; // matches returnPattern → capture
+      }
+      return JSON.stringify({ url: 'https://app.example.com', title: 'App' });
+    });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(['teleport', '--start=login\\.example\\.com', '--return=app\\.example\\.com'], {} as any);
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+
+    // Leader poll triggers → enters waitingForAuth
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('waitingForAuth');
+
+    // Follower poll #1: URL is app.example.com/user2/ — matches returnPattern
+    // but should NOT trigger capture because startPattern hasn't been seen yet
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('waitingForAuth'); // Still waiting — NOT capturing!
+
+    // Follower poll #2: still at app URL — same situation
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('waitingForAuth');
+
+    // Follower poll #3: auth redirect happened → startPattern matches → waitingForReturn
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('waitingForReturn');
+
+    // Follower poll #4: returned from auth → returnPattern matches → capture
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('capturing');
+
+    // Advance past settle delay
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(state.teleportWatcher!.phase).toBe('done');
+
+    // Verify cookies were captured
+    expect(browser.sendCDP).toHaveBeenCalledWith('Network.getCookies');
   });
 
   it('times out when human does not complete auth', async () => {
@@ -2087,9 +2201,9 @@ describe('playwright-cli teleport trigger and capture', () => {
     // Attach a catch handler to prevent unhandled rejection
     const completionCatch = state.teleportWatcher!.completionPromise!.catch(() => {});
 
-    // Leader poll triggers
+    // Leader poll triggers — enters waitingForAuth phase
     await vi.advanceTimersByTimeAsync(1000);
-    expect(state.teleportWatcher!.phase).toBe('teleporting');
+    expect(state.teleportWatcher!.phase).toBe('waitingForAuth');
 
     // Advance past the timeout
     await vi.advanceTimersByTimeAsync(5000);
@@ -2100,7 +2214,7 @@ describe('playwright-cli teleport trigger and capture', () => {
   });
 
   it('checkTeleportBlock blocks next command during active teleport', async () => {
-    // Set up leader to trigger immediately, follower to return after a delay
+    // Set up leader to trigger immediately, follower to go through auth then return
     let followerCallCount = 0;
     (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
       if (expr === 'window.location.href') {
@@ -2111,9 +2225,9 @@ describe('playwright-cli teleport trigger and capture', () => {
           return 'https://login.example.com/sso';
         }
         followerCallCount++;
-        return followerCallCount > 2
-          ? 'https://app.example.com/callback'
-          : 'https://idp.example.com/consent';
+        if (followerCallCount <= 1) return 'https://login.example.com/sso';     // auth redirect → startPattern match
+        if (followerCallCount <= 2) return 'https://idp.example.com/consent';     // at IDP
+        return 'https://app.example.com/callback'; // returned → returnPattern match
       }
       return JSON.stringify({ url: 'https://app.example.com', title: 'App' });
     });
@@ -2122,13 +2236,15 @@ describe('playwright-cli teleport trigger and capture', () => {
     await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
     await cmd.execute(['teleport', '--start=login', '--return=app', '--timeout=60'], {} as any);
 
-    // Trigger the teleport
+    // Trigger the teleport (leader poll matches start pattern)
     await vi.advanceTimersByTimeAsync(1000);
 
     // Now run a non-teleport command — it should block
     const resultPromise = cmd.execute(['tab-list'], {} as any);
 
-    // Advance until follower returns
+    // Advance: follower poll #1 matches startPattern → waitingForReturn
+    // Advance: follower poll #2 at IDP → still waitingForReturn
+    // Advance: follower poll #3 matches returnPattern → capture
     await vi.advanceTimersByTimeAsync(3000);
     // Advance past settle delay
     await vi.advanceTimersByTimeAsync(2000);
@@ -2311,15 +2427,18 @@ describe('formatCookieDomainSummary (via teleport output)', () => {
   });
 
   it('domain summary appears in teleport completion output', async () => {
-    let isLeader = true;
+    let followerCallCount = 0;
     (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
       if (expr === 'window.location.href') {
         const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
-        if (state.teleportWatcher?.phase === 'armed') {
+        // Before watcher exists (capturing leader URL at arm time) or in armed phase
+        if (!state.teleportWatcher || state.teleportWatcher.phase === 'armed') {
           return 'https://login.example.com/sso';
         }
-        // Return immediately for follower
-        return 'https://app.example.com/done';
+        // Follower: first hit auth (startPattern), then return (returnPattern)
+        followerCallCount++;
+        if (followerCallCount <= 1) return 'https://login.example.com/auth'; // auth redirect → startPattern match
+        return 'https://app.example.com/done'; // returned → returnPattern match
       }
       return JSON.stringify({ url: 'https://app.example.com', title: 'App' });
     });
@@ -2328,9 +2447,11 @@ describe('formatCookieDomainSummary (via teleport output)', () => {
     await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
     await cmd.execute(['teleport', '--start=login', '--return=app\\.example\\.com'], {} as any);
 
-    // Trigger leader → teleporting
+    // Trigger leader → waitingForAuth
     await vi.advanceTimersByTimeAsync(1000);
-    // Follower returns immediately
+    // Follower poll #1: auth redirect → waitingForReturn
+    await vi.advanceTimersByTimeAsync(1000);
+    // Follower poll #2: return pattern matches → capturing
     await vi.advanceTimersByTimeAsync(1000);
     // Settle delay
     await vi.advanceTimersByTimeAsync(2000);
