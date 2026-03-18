@@ -102,9 +102,16 @@ export class ToolUIRenderer {
           data: msg.data,
         });
       } else if (msg.type === 'tool-ui-rendered' && msg.id === this.requestId) {
-        log.info('Tool UI rendered in sandbox', { id: msg.id });
-        // Auto-resize iframe based on content
-        this.resizeIframe();
+        log.info('Tool UI rendered in sandbox', { id: msg.id, height: msg.height });
+        // Set initial height from sandbox
+        if (msg.height && this.iframe) {
+          this.iframe.style.height = `${Math.max(60, msg.height)}px`;
+        }
+      } else if (msg.type === 'tool-ui-resize' && msg.id === this.requestId) {
+        // Update height when sandbox content changes
+        if (msg.height && this.iframe) {
+          this.iframe.style.height = `${Math.max(60, msg.height)}px`;
+        }
       }
     };
     window.addEventListener('message', this.messageHandler);
@@ -246,21 +253,7 @@ export class ToolUIRenderer {
     return cssVars.length > 0 ? `:root { ${cssVars.join(' ')} }` : '';
   }
 
-  /** Auto-resize iframe to fit content */
-  private resizeIframe(): void {
-    if (!this.iframe?.contentWindow) return;
 
-    // Poll for content height (sandbox doesn't send resize events)
-    const checkHeight = () => {
-      try {
-        // Can't access contentDocument in sandbox, use a fixed reasonable height
-        // In production, sandbox could postMessage its scrollHeight
-        this.iframe!.style.height = '80px';
-      } catch { /* ignore */ }
-    };
-
-    setTimeout(checkHeight, 50);
-  }
 
   /** Clean up */
   dispose(): void {

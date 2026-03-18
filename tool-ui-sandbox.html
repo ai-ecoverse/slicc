@@ -157,7 +157,18 @@ addEventListener('message', function(e) {
     // Sanitize and render the HTML content
     document.body.innerHTML = sanitizeHtml(msg.html);
 
-    sendToParent({ type: 'tool-ui-rendered', id: msg.id });
+    // Send rendered confirmation with initial height
+    var height = document.documentElement.scrollHeight;
+    sendToParent({ type: 'tool-ui-rendered', id: msg.id, height: height });
+
+    // Watch for size changes and report them
+    if (typeof ResizeObserver !== 'undefined') {
+      var observer = new ResizeObserver(function() {
+        var newHeight = document.documentElement.scrollHeight;
+        sendToParent({ type: 'tool-ui-resize', id: window.__toolui_id, height: newHeight });
+      });
+      observer.observe(document.body);
+    }
   }
 });
 </script>
