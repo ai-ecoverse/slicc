@@ -26,7 +26,7 @@ import type { FloatType } from '../../scoops/tray-leader-sync.js';
 // Types
 // ---------------------------------------------------------------------------
 
-export type SendCookieTeleportRequestFn = (targetRuntimeId: string, url?: string, catchPattern?: string, catchNotPattern?: string) => Promise<CookieTeleportCookie[]>;
+export type SendCookieTeleportRequestFn = (targetRuntimeId: string, url?: string, catchPattern?: string, catchNotPattern?: string, timeoutMs?: number) => Promise<CookieTeleportCookie[]>;
 
 export type GetBestFollowerForTeleportFn = () => { runtimeId: string; bootstrapId: string; floatType: FloatType } | null;
 
@@ -84,6 +84,7 @@ Flags:
   --url <url>             Open a browser tab on the follower for interactive auth
   --catch <regex>         Capture cookies when the URL MATCHES the regex
   --catch-not <regex>     Capture cookies when the URL NO LONGER MATCHES the regex
+  --timeout <seconds>     Auth flow timeout (default: 300, only with --url)
   --reload, -r            Reload the active tab after applying cookies (default)
   --no-reload             Don't reload the active tab after applying cookies
   --help, -h              Show this help
@@ -115,6 +116,7 @@ export interface ParsedTeleportArgs {
   url?: string;
   catchPattern?: string;
   catchNotPattern?: string;
+  timeout?: number;
   list: boolean;
   reload: boolean;
 }
@@ -125,6 +127,7 @@ export function parseTeleportArgs(args: string[]): ParsedTeleportArgs | { error:
   let url: string | undefined;
   let catchPattern: string | undefined;
   let catchNotPattern: string | undefined;
+  let timeout: number | undefined;
   const positional: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
@@ -137,6 +140,15 @@ export function parseTeleportArgs(args: string[]): ParsedTeleportArgs | { error:
       const next = args[i + 1];
       if (!next || next.startsWith('-')) return { error: '--url requires a URL argument' };
       url = next;
+      i++;
+      continue;
+    }
+    if (arg === '--timeout') {
+      const next = args[i + 1];
+      if (!next || next.startsWith('-')) return { error: '--timeout requires a number (seconds)' };
+      const parsed = Number(next);
+      if (!Number.isFinite(parsed) || parsed <= 0) return { error: `--timeout must be a positive number: ${next}` };
+      timeout = parsed;
       i++;
       continue;
     }
@@ -168,7 +180,7 @@ export function parseTeleportArgs(args: string[]): ParsedTeleportArgs | { error:
     return { error: '--catch and --catch-not are mutually exclusive' };
   }
 
-  return { targetRuntimeId: positional[0], url, catchPattern, catchNotPattern, list, reload };
+  return { targetRuntimeId: positional[0], url, catchPattern, catchNotPattern, timeout, list, reload };
 }
 
 // ---------------------------------------------------------------------------
@@ -245,7 +257,21 @@ export function createTeleportCommand(): Command {
 
     try {
       // 1. Request cookies from the remote runtime
-      const cookies = await sendRequest(targetRuntimeId, parsed.url, parsed.catchPattern, parsed.catchNotPattern);
+      // When --url is used, apply a timeout (default 120s) with a caller-side
+      // safety margin (+10s) to prevent indefinite hangs even if the follower
+      // becomes disconnected.
+      const timeoutMs = parsed.url ? (parsed.timeout ?? 300) * 1000 : undefined;
+      const callerTimeoutMs = timeoutMs ? timeoutMs + 10_000 : undefined;
+
+      const requestPromise = sendRequest(targetRuntimeId, parsed.url, parsed.catchPattern, parsed.catchNotPattern, timeoutMs);
+      const cookies = callerTimeoutMs
+        ? await Promise.race([
+            requestPromise,
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error(`Teleport timed out after ${Math.round(callerTimeoutMs / 1000)}s`)), callerTimeoutMs),
+            ),
+          ])
+        : await requestPromise;
       if (cookies.length === 0) {
         return { stdout: `No cookies on runtime ${targetRuntimeId}\n`, stderr: '', exitCode: 0 };
       }

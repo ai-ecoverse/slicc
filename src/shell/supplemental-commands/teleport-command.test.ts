@@ -127,6 +127,45 @@ describe('parseTeleportArgs', () => {
     const result = parseTeleportArgs(['--url', '--no-reload']);
     expect(result).toEqual({ error: '--url requires a URL argument' });
   });
+
+  // --timeout parsing tests
+  it('parses --timeout flag', () => {
+    const result = parseTeleportArgs(['--url', 'https://example.com', '--timeout', '60']);
+    expect(result).toEqual({ targetRuntimeId: undefined, url: 'https://example.com', catchPattern: undefined, catchNotPattern: undefined, timeout: 60, list: false, reload: true });
+  });
+
+  it('errors when --timeout has no value', () => {
+    const result = parseTeleportArgs(['--timeout']);
+    expect(result).toEqual({ error: '--timeout requires a number (seconds)' });
+  });
+
+  it('errors when --timeout is followed by a flag', () => {
+    const result = parseTeleportArgs(['--timeout', '--no-reload']);
+    expect(result).toEqual({ error: '--timeout requires a number (seconds)' });
+  });
+
+  it('errors when --timeout is not a positive number', () => {
+    const result = parseTeleportArgs(['--timeout', '0']);
+    expect(result).toHaveProperty('error');
+    expect((result as { error: string }).error).toContain('positive number');
+  });
+
+  it('errors when --timeout is negative', () => {
+    const result = parseTeleportArgs(['--timeout', '-5']);
+    // -5 starts with '-' so it's treated as a flag → "requires a number"
+    expect(result).toEqual({ error: '--timeout requires a number (seconds)' });
+  });
+
+  it('errors when --timeout is not a number', () => {
+    const result = parseTeleportArgs(['--timeout', 'abc']);
+    expect(result).toHaveProperty('error');
+    expect((result as { error: string }).error).toContain('positive number');
+  });
+
+  it('parses --timeout without --url', () => {
+    const result = parseTeleportArgs(['--timeout', '30']);
+    expect(result).toEqual({ targetRuntimeId: undefined, url: undefined, catchPattern: undefined, catchNotPattern: undefined, timeout: 30, list: false, reload: true });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -237,7 +276,7 @@ describe('createTeleportCommand', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Teleported 1 cookie(s) from follower-best');
     expect(result.stdout).toContain('page reloaded');
-    expect(sendRequest).toHaveBeenCalledWith('follower-best', undefined, undefined, undefined);
+    expect(sendRequest).toHaveBeenCalledWith('follower-best', undefined, undefined, undefined, undefined);
     expect(sendCDP).toHaveBeenCalledWith('Network.setCookies', { cookies: fakeCookies });
     expect(sendCDP).toHaveBeenCalledWith('Page.reload', {});
   });
@@ -263,7 +302,7 @@ describe('createTeleportCommand', () => {
 
     const result = await createTeleportCommand().execute(['follower-xyz'], {} as never);
     expect(result.exitCode).toBe(0);
-    expect(sendRequest).toHaveBeenCalledWith('follower-xyz', undefined, undefined, undefined);
+    expect(sendRequest).toHaveBeenCalledWith('follower-xyz', undefined, undefined, undefined, undefined);
     expect(sendCDP).toHaveBeenCalledWith('Network.setCookies', { cookies: fakeCookies });
   });
 
@@ -346,7 +385,7 @@ describe('createTeleportCommand', () => {
 
     const result = await createTeleportCommand().execute(['--url', 'https://login.example.com'], {} as never);
     expect(result.exitCode).toBe(0);
-    expect(sendRequest).toHaveBeenCalledWith('f1', 'https://login.example.com', undefined, undefined);
+    expect(sendRequest).toHaveBeenCalledWith('f1', 'https://login.example.com', undefined, undefined, 300_000);
   });
 
   it('errors when no local tabs available', async () => {

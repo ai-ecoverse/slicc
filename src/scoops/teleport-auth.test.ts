@@ -555,6 +555,108 @@ describe('executeTeleportAuth', () => {
   });
 
   // -----------------------------------------------------------------------
+  // Early URL match (redirect already completed)
+  // -----------------------------------------------------------------------
+
+  it('--catch: resolves immediately when current URL already matches (early match)', async () => {
+    const { transport } = createFakeTransport();
+
+    (transport.send as ReturnType<typeof vi.fn>)
+      .mockImplementation((method: string) => {
+        if (method === 'Target.createTarget') return Promise.resolve({ targetId: 'tab-early' });
+        if (method === 'Target.attachToTarget') return Promise.resolve({ sessionId: 'sess-early' });
+        if (method === 'Page.enable') return Promise.resolve({});
+        if (method === 'Runtime.evaluate') return Promise.resolve({ result: { value: 'https://httpbin.org/cookies' } });
+        if (method === 'Network.getCookies') return Promise.resolve({
+          cookies: [{ name: 'early', value: 'yes', domain: '.httpbin.org', path: '/', expires: -1, size: 10, httpOnly: false, secure: false, session: true }],
+        });
+        if (method === 'Target.closeTarget') return Promise.resolve({});
+        return Promise.resolve({});
+      });
+
+    const result = await executeTeleportAuth({
+      transport,
+      url: 'https://httpbin.org/redirect-to?url=https://httpbin.org/cookies',
+      timeoutMs: 5000,
+      catchPattern: 'httpbin\\.org/cookies$',
+    });
+
+    expect(result.timedOut).toBe(false);
+    expect(result.cookies).toHaveLength(1);
+    expect(result.cookies[0].name).toBe('early');
+  });
+
+  it('--catch-not: resolves immediately when current URL already does not match (early match)', async () => {
+    const { transport } = createFakeTransport();
+
+    (transport.send as ReturnType<typeof vi.fn>)
+      .mockImplementation((method: string) => {
+        if (method === 'Target.createTarget') return Promise.resolve({ targetId: 'tab-early-cn' });
+        if (method === 'Target.attachToTarget') return Promise.resolve({ sessionId: 'sess-early-cn' });
+        if (method === 'Page.enable') return Promise.resolve({});
+        if (method === 'Runtime.evaluate') return Promise.resolve({ result: { value: 'https://app.navan.com/dashboard' } });
+        if (method === 'Network.getCookies') return Promise.resolve({
+          cookies: [{ name: 'early-cn', value: 'yes', domain: '.navan.com', path: '/', expires: -1, size: 10, httpOnly: false, secure: false, session: true }],
+        });
+        if (method === 'Target.closeTarget') return Promise.resolve({});
+        return Promise.resolve({});
+      });
+
+    const result = await executeTeleportAuth({
+      transport,
+      url: 'https://app.navan.com/login',
+      timeoutMs: 5000,
+      catchNotPattern: 'login|okta|saml',
+    });
+
+    expect(result.timedOut).toBe(false);
+    expect(result.cookies).toHaveLength(1);
+    expect(result.cookies[0].name).toBe('early-cn');
+  });
+
+  // -----------------------------------------------------------------------
+  // Listener registered before Page.enable (race condition fix)
+  // -----------------------------------------------------------------------
+
+  it('registers frameNavigated listener before Page.enable (race condition fix)', async () => {
+    const { transport, listeners } = createFakeTransport();
+
+    const callOrder: string[] = [];
+    (transport.send as ReturnType<typeof vi.fn>)
+      .mockImplementation((method: string) => {
+        callOrder.push(method);
+        if (method === 'Target.createTarget') return Promise.resolve({ targetId: 'tab-race' });
+        if (method === 'Target.attachToTarget') return Promise.resolve({ sessionId: 'sess-race' });
+        if (method === 'Page.enable') {
+          // At this point, the listener should already be registered
+          expect(listeners.get('Page.frameNavigated')?.size).toBeGreaterThan(0);
+          return Promise.resolve({});
+        }
+        if (method === 'Network.getCookies') return Promise.resolve({ cookies: [] });
+        if (method === 'Target.closeTarget') return Promise.resolve({});
+        return Promise.resolve({});
+      });
+
+    const promise = executeTeleportAuth({
+      transport,
+      url: 'https://app.example.com',
+      timeoutMs: 1000,
+    });
+
+    await flushMicrotasks();
+
+    // Verify the listener was registered before Page.enable was called
+    const enableIdx = callOrder.indexOf('Page.enable');
+    expect(enableIdx).toBeGreaterThan(-1);
+
+    vi.advanceTimersByTime(1000);
+    await flushMicrotasks();
+
+    const result = await promise;
+    expect(result.timedOut).toBe(true);
+  });
+
+  // -----------------------------------------------------------------------
   // Backward compat: no pattern falls back to hostname heuristic
   // -----------------------------------------------------------------------
 

@@ -48,7 +48,7 @@ export interface TeleportAuthOptions {
   transport: CDPTransport;
   /** URL to open for authentication. */
   url: string;
-  /** Timeout in milliseconds before giving up. Default: 120_000 (2 minutes). */
+  /** Timeout in milliseconds before giving up. Default: 300_000 (5 minutes). */
   timeoutMs?: number;
   /** Callback to notify the UI about auth progress. */
   onNotification?: (message: string) => void;
@@ -71,7 +71,7 @@ export interface TeleportAuthResult {
  * 4. Close the auth tab
  */
 export async function executeTeleportAuth(options: TeleportAuthOptions): Promise<TeleportAuthResult> {
-  const { transport, url, timeoutMs = 120_000, onNotification, catchPattern, catchNotPattern } = options;
+  const { transport, url, timeoutMs = 300_000, onNotification, catchPattern, catchNotPattern } = options;
 
   let hostname: string;
   try {
@@ -84,18 +84,48 @@ export async function executeTeleportAuth(options: TeleportAuthOptions): Promise
   const createResult = await transport.send('Target.createTarget', { url, background: false });
   const targetId = createResult['targetId'] as string;
 
-  // 2. Attach to the tab and enable Page events
+  // 2. Attach to the tab
   const attachResult = await transport.send('Target.attachToTarget', { targetId, flatten: true });
   const sessionId = attachResult['sessionId'] as string;
+
+  // 3. Register the Page.frameNavigated listener BEFORE Page.enable to avoid
+  //    a race condition where the redirect completes before the listener is up.
+  const { promise: authCompletion, cancel } = waitForAuthCompletion(transport, url, sessionId, timeoutMs, catchPattern, catchNotPattern);
+
+  // 4. Enable Page events — this may flush buffered navigation events to the
+  //    already-registered listener.
   await transport.send('Page.enable', {}, sessionId);
+
+  // 5. Check if the URL already matches a catch/catch-not pattern (handles the
+  //    case where the redirect completed before Page.enable flushed events).
+  if (catchPattern || catchNotPattern) {
+    try {
+      const evalResult = await transport.send('Runtime.evaluate', { expression: 'window.location.href' }, sessionId);
+      const currentUrl = (evalResult as Record<string, unknown>)?.['result'] as { value?: string } | undefined;
+      if (currentUrl?.value) {
+        if (catchPattern && new RegExp(catchPattern).test(currentUrl.value)) {
+          log.info('Catch pattern already matches current URL', { pattern: catchPattern, url: currentUrl.value });
+          cancel();
+        } else if (catchNotPattern) {
+          // For catch-not, URL already NOT matching the pattern means auth is done
+          if (!new RegExp(catchNotPattern).test(currentUrl.value)) {
+            log.info('Catch-not pattern already does not match current URL', { pattern: catchNotPattern, url: currentUrl.value });
+            cancel();
+          }
+        }
+      }
+    } catch {
+      // Runtime.evaluate may fail if the page is mid-navigation — ignore
+    }
+  }
 
   onNotification?.(`Authentication requested for ${hostname}. Please complete login in the browser tab.`);
   log.info('Teleport auth tab opened', { url, targetId });
 
-  // 3. Wait for auth completion or timeout
+  // 6. Wait for auth completion or timeout
   let timedOut = false;
   try {
-    await waitForAuthCompletion(transport, url, sessionId, timeoutMs, catchPattern, catchNotPattern);
+    await authCompletion;
   } catch (err) {
     if (err instanceof Error && err.message === 'Teleport auth timeout') {
       timedOut = true;
@@ -143,6 +173,13 @@ export async function executeTeleportAuth(options: TeleportAuthOptions): Promise
  *
  * Rejects with a timeout error if the deadline is exceeded.
  */
+interface AuthCompletionHandle {
+  /** Promise that resolves on auth completion or rejects on timeout. */
+  promise: Promise<void>;
+  /** Cancel the wait — resolves the promise immediately (used for early URL match). */
+  cancel: () => void;
+}
+
 function waitForAuthCompletion(
   transport: CDPTransport,
   initialUrl: string,
@@ -150,8 +187,10 @@ function waitForAuthCompletion(
   timeoutMs: number,
   catchPattern?: string,
   catchNotPattern?: string,
-): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
+): AuthCompletionHandle {
+  let cancelFn: () => void;
+
+  const promise = new Promise<void>((resolve, reject) => {
     let settled = false;
     let hasLeftInitialHostname = false;
     let hasNavigated = false; // For catch-not: skip the first navigation
@@ -163,6 +202,12 @@ function waitForAuthCompletion(
       settled = true;
       transport.off('Page.frameNavigated', onNavigated);
       clearTimeout(timer);
+    };
+
+    cancelFn = () => {
+      if (settled) return;
+      cleanup();
+      resolve();
     };
 
     const onNavigated = (params: Record<string, unknown>) => {
@@ -222,4 +267,6 @@ function waitForAuthCompletion(
 
     transport.on('Page.frameNavigated', onNavigated);
   });
+
+  return { promise, cancel: cancelFn! };
 }
