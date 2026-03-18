@@ -477,9 +477,11 @@ export class FollowerSyncManager implements AgentHandle {
    * and the tab is closed. Falls back to immediate capture if no url.
    */
   private async executeLocalCookieTeleport(requestId: string, url?: string, catchPattern?: string, catchNotPattern?: string, timeoutMs?: number): Promise<void> {
+    log.info('[teleport-debug] executeLocalCookieTeleport called', { requestId, url, catchPattern, catchNotPattern, timeoutMs });
     const transport = this.options.browserTransport;
     const browserAPI = this.options.browserAPI;
     if (!transport && !browserAPI) {
+      log.info('[teleport-debug] no browser transport or API available');
       this.sync.send({ type: 'cookie.teleport.response', requestId, error: 'Follower has no browser transport' });
       return;
     }
@@ -492,6 +494,7 @@ export class FollowerSyncManager implements AgentHandle {
           this.sync.send({ type: 'cookie.teleport.response', requestId, error: 'Follower has no browser transport for auth flow' });
           return;
         }
+        log.info('[teleport-debug] calling executeTeleportAuth', { url, timeoutMs, catchPattern, catchNotPattern });
         const { cookies } = await executeTeleportAuth({
           transport,
           url,
@@ -500,6 +503,7 @@ export class FollowerSyncManager implements AgentHandle {
           catchNotPattern,
           onNotification: (msg) => this.options.onNotification?.(msg),
         });
+        log.info('[teleport-debug] executeTeleportAuth returned', { cookieCount: cookies.length });
         this.sync.send({ type: 'cookie.teleport.response', requestId, cookies });
       } else {
         // Immediate capture — use BrowserAPI to get a proper session for Network.getCookies

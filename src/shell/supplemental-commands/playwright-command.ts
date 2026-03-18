@@ -915,15 +915,13 @@ export function createPlaywrightCommand(
               result = { stdout: '', stderr: `Tab index ${index} out of range\n`, exitCode: 1 }; break;
             }
             const closeTarget = pages[index].targetId;
-            const transport = browser.getTransport();
-            await transport.send('Target.closeTarget', { targetId: closeTarget });
+            await browser.closePage(closeTarget);
             state.snapshots.delete(closeTarget);
             if (state.currentTarget === closeTarget) state.currentTarget = null;
             result = { stdout: `Closed tab ${index}\n`, stderr: '', exitCode: 0 }; break;
           }
           // Close current tab
-          const transport = browser.getTransport();
-          await transport.send('Target.closeTarget', { targetId });
+          await browser.closePage(targetId);
           state.snapshots.delete(targetId);
           state.currentTarget = null;
           result = { stdout: 'Closed current tab\n', stderr: '', exitCode: 0 }; break;

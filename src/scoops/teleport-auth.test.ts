@@ -662,6 +662,129 @@ describe('executeTeleportAuth', () => {
 
   // (Existing tests already cover the default hostname-return heuristic)
 
+  // -----------------------------------------------------------------------
+  // Polling fallback tests (no CDP events delivered)
+  // -----------------------------------------------------------------------
+
+  it('--catch: polling fallback detects URL match when no CDP events fire', async () => {
+    const { transport } = createFakeTransport();
+    let pollUrl = 'https://httpbin.org/redirect-to?url=https://httpbin.org/cookies';
+
+    (transport.send as ReturnType<typeof vi.fn>)
+      .mockImplementation((method: string) => {
+        if (method === 'Target.createTarget') return Promise.resolve({ targetId: 'tab-poll' });
+        if (method === 'Target.attachToTarget') return Promise.resolve({ sessionId: 'sess-poll' });
+        if (method === 'Page.enable') return Promise.resolve({});
+        if (method === 'Runtime.evaluate') return Promise.resolve({ result: { value: pollUrl } });
+        if (method === 'Network.getCookies') return Promise.resolve({
+          cookies: [{ name: 'polled', value: 'yes', domain: '.httpbin.org', path: '/', expires: -1, size: 10, httpOnly: false, secure: false, session: true }],
+        });
+        if (method === 'Target.closeTarget') return Promise.resolve({});
+        return Promise.resolve({});
+      });
+
+    const promise = executeTeleportAuth({
+      transport,
+      url: 'https://httpbin.org/redirect-to?url=https://httpbin.org/cookies',
+      timeoutMs: 10000,
+      catchPattern: 'httpbin\\.org/cookies$',
+    });
+
+    // Let initial awaits complete (createTarget, attachToTarget, Page.enable, Runtime.evaluate)
+    await flushMicrotasks();
+
+    // No CDP events emitted! But the page will have navigated.
+    // Simulate the URL changing before the next poll.
+    pollUrl = 'https://httpbin.org/cookies';
+
+    // Advance time to trigger the polling interval (1000ms)
+    vi.advanceTimersByTime(1000);
+    await flushMicrotasks();
+
+    const result = await promise;
+    expect(result.timedOut).toBe(false);
+    expect(result.cookies).toHaveLength(1);
+    expect(result.cookies[0].name).toBe('polled');
+  });
+
+  it('--catch-not: polling fallback detects URL change when no CDP events fire', async () => {
+    const { transport } = createFakeTransport();
+    let pollUrl = 'https://login.okta.com/authorize';
+
+    (transport.send as ReturnType<typeof vi.fn>)
+      .mockImplementation((method: string) => {
+        if (method === 'Target.createTarget') return Promise.resolve({ targetId: 'tab-poll-cn' });
+        if (method === 'Target.attachToTarget') return Promise.resolve({ sessionId: 'sess-poll-cn' });
+        if (method === 'Page.enable') return Promise.resolve({});
+        if (method === 'Runtime.evaluate') return Promise.resolve({ result: { value: pollUrl } });
+        if (method === 'Network.getCookies') return Promise.resolve({
+          cookies: [{ name: 'polled-cn', value: 'yes', domain: '.navan.com', path: '/', expires: -1, size: 10, httpOnly: false, secure: false, session: true }],
+        });
+        if (method === 'Target.closeTarget') return Promise.resolve({});
+        return Promise.resolve({});
+      });
+
+    const promise = executeTeleportAuth({
+      transport,
+      url: 'https://app.navan.com/login',
+      timeoutMs: 10000,
+      catchNotPattern: 'login|okta|saml',
+    });
+
+    // Let initial awaits complete
+    await flushMicrotasks();
+
+    // No CDP events! Poll sees matching URL a few times.
+    // First poll: URL still matches (login.okta.com)
+    vi.advanceTimersByTime(1000);
+    await flushMicrotasks();
+
+    // Second poll: URL still matches
+    vi.advanceTimersByTime(1000);
+    await flushMicrotasks();
+
+    // Third poll: URL changed to non-matching
+    pollUrl = 'https://app.navan.com/dashboard';
+    vi.advanceTimersByTime(1000);
+    await flushMicrotasks();
+
+    const result = await promise;
+    expect(result.timedOut).toBe(false);
+    expect(result.cookies).toHaveLength(1);
+    expect(result.cookies[0].name).toBe('polled-cn');
+  });
+
+  it('--catch: polling cleans up when auth times out', async () => {
+    const { transport } = createFakeTransport();
+
+    (transport.send as ReturnType<typeof vi.fn>)
+      .mockImplementation((method: string) => {
+        if (method === 'Target.createTarget') return Promise.resolve({ targetId: 'tab-poll-to' });
+        if (method === 'Target.attachToTarget') return Promise.resolve({ sessionId: 'sess-poll-to' });
+        if (method === 'Page.enable') return Promise.resolve({});
+        if (method === 'Runtime.evaluate') return Promise.resolve({ result: { value: 'https://example.com/login' } });
+        if (method === 'Network.getCookies') return Promise.resolve({ cookies: [] });
+        if (method === 'Target.closeTarget') return Promise.resolve({});
+        return Promise.resolve({});
+      });
+
+    const promise = executeTeleportAuth({
+      transport,
+      url: 'https://example.com/login',
+      timeoutMs: 3000,
+      catchPattern: 'example\\.com/dashboard',
+    });
+
+    await flushMicrotasks();
+
+    // Advance past timeout — polling should not prevent timeout
+    vi.advanceTimersByTime(3000);
+    await flushMicrotasks();
+
+    const result = await promise;
+    expect(result.timedOut).toBe(true);
+  });
+
   it('handles tab close failure gracefully', async () => {
     const { transport, emit } = createFakeTransport();
 

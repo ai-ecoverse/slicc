@@ -178,6 +178,54 @@ export class BrowserAPI {
   }
 
   /**
+   * Close a browser tab/target by its targetId.
+   * Handles remote tray targets by routing through RemoteCDPTransport.
+   */
+  async closePage(targetId: string): Promise<void> {
+    await this.ensureConnected();
+
+    // Check if this is a remote tray target (format: "runtimeId:localTargetId")
+    if (this.trayTargetProvider?.createRemoteTransport && targetId.includes(':')) {
+      const colonIdx = targetId.indexOf(':');
+      const runtimeId = targetId.substring(0, colonIdx);
+      const localTargetId = targetId.substring(colonIdx + 1);
+
+      const remoteEntries = this.trayTargetProvider.getTargets();
+      const isRemote = remoteEntries.some(t => t.targetId === targetId && !t.isLocal);
+
+      if (isRemote) {
+        const remoteTransport = this.trayTargetProvider.createRemoteTransport(runtimeId, localTargetId);
+        try {
+          await remoteTransport.send('Target.closeTarget', { targetId: localTargetId });
+        } finally {
+          if (this.trayTargetProvider.removeRemoteTransport) {
+            this.trayTargetProvider.removeRemoteTransport(runtimeId, localTargetId);
+          }
+        }
+
+        // If we were attached to the target being closed, clean up
+        if (this.attachedTargetId === targetId) {
+          if (this.remoteTargetInfo) {
+            this.client = this.localClient;
+            this.remoteTargetInfo = null;
+          }
+          this.sessionId = null;
+          this.attachedTargetId = null;
+        }
+        return;
+      }
+    }
+
+    await this.localClient.send('Target.closeTarget', { targetId });
+
+    // Clean up if we were attached to this target
+    if (this.attachedTargetId === targetId) {
+      this.sessionId = null;
+      this.attachedTargetId = null;
+    }
+  }
+
+  /**
    * Disconnect and clean up.
    */
   disconnect(): void {

@@ -21,6 +21,7 @@ function createMockBrowser(overrides: Partial<BrowserAPI> = {}): BrowserAPI {
     selectByBackendNodeId: vi.fn().mockResolvedValue(undefined),
     setCheckedByBackendNodeId: vi.fn().mockResolvedValue('toggled' as const),
     dragByBackendNodeIds: vi.fn().mockResolvedValue(undefined),
+    closePage: vi.fn().mockResolvedValue(undefined),
     sendCDP: vi.fn().mockResolvedValue({}),
     type: vi.fn().mockResolvedValue(undefined),
     getAccessibilityTree: vi.fn().mockResolvedValue({
@@ -685,37 +686,50 @@ describe('playwright-cli tab management', () => {
   });
 
   it('tab-close closes a valid indexed tab', async () => {
-    const send = vi.fn().mockResolvedValue({});
     (browser.listPages as ReturnType<typeof vi.fn>).mockResolvedValue([
       { targetId: 'tab-1', title: 'Test Page', url: 'https://example.com', type: 'page', attached: false },
       { targetId: 'tab-2', title: 'Other Page', url: 'https://other.example', type: 'page', attached: false },
     ]);
-    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue({ send });
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(['tab-close', '1'], {} as any);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Closed tab 1');
-    expect(send).toHaveBeenCalledWith('Target.closeTarget', { targetId: 'tab-2' });
+    expect(browser.closePage).toHaveBeenCalledWith('tab-2');
   });
 
   it('tab-close ignores internal UI targets when resolving indexes', async () => {
-    const send = vi.fn().mockResolvedValue({});
     (browser.listPages as ReturnType<typeof vi.fn>).mockResolvedValue([
       { targetId: 'popup', title: 'Omnibox Popup', url: 'chrome-search://local-omnibox-popup/local-omnibox-popup.html', type: 'page', attached: false },
       { targetId: 'tab-1', title: 'Settings', url: 'chrome://settings/', type: 'page', attached: false },
       { targetId: 'tab-2', title: 'Docs', url: 'https://example.com/docs', type: 'page', attached: false },
       { targetId: 'tab-3', title: 'Other Docs', url: 'https://example.com/other', type: 'page', attached: false },
     ]);
-    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue({ send });
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(['tab-close', '1'], {} as any);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Closed tab 1');
-    expect(send).toHaveBeenCalledWith('Target.closeTarget', { targetId: 'tab-3' });
+    expect(browser.closePage).toHaveBeenCalledWith('tab-3');
+  });
+
+  it('tab-close closes a remote (follower) tab via closePage', async () => {
+    const remoteTargetId = 'follower-abc:remote-tab-1';
+    browser = createMockBrowser({
+      listPages: vi.fn().mockResolvedValue([]),
+      listAllTargets: vi.fn().mockResolvedValue([
+        { targetId: remoteTargetId, title: 'Remote Page', url: 'https://httpbin.org/get' },
+      ]),
+    });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['tab-close', '0'], {} as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Closed tab 0');
+    expect(browser.closePage).toHaveBeenCalledWith(remoteTargetId);
   });
 
   it('tab-new opens a new tab', async () => {
