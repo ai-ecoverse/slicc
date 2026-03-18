@@ -536,6 +536,38 @@ function countTeleportStorageEntries(snapshot: TeleportStorageSnapshot): number 
   return Object.keys(snapshot.localStorage).length + Object.keys(snapshot.sessionStorage).length;
 }
 
+function tryGetTeleportUrlOrigin(url?: string): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+function buildTeleportStorageHydrationUrl(origin: string): string {
+  try {
+    return new URL('/favicon.ico', origin).toString();
+  } catch {
+    return origin;
+  }
+}
+
+function chooseTeleportLeaderLandingUrl(
+  storageOrigin: string,
+  originalLeaderUrl?: string,
+  finalUrl?: string,
+): string | undefined {
+  const originalOrigin = tryGetTeleportUrlOrigin(originalLeaderUrl);
+  if (originalLeaderUrl && originalOrigin === storageOrigin) return originalLeaderUrl;
+
+  const finalOrigin = tryGetTeleportUrlOrigin(finalUrl);
+  if (finalUrl && finalOrigin === storageOrigin) return finalUrl;
+
+  if (storageOrigin) return storageOrigin;
+  return originalLeaderUrl ?? finalUrl;
+}
+
 async function captureTeleportStorageSnapshot(
   browser: BrowserAPI,
   label: 'leader' | 'follower',
@@ -593,6 +625,46 @@ function buildTeleportStorageInitScript(snapshot: TeleportStorageSnapshot): stri
     apply(window.sessionStorage, snapshot.sessionStorage || {});
     try { window.sessionStorage.setItem(markerKey, '1'); } catch {}
   })();`;
+}
+
+function buildTeleportStorageApplyScript(snapshot: TeleportStorageSnapshot): string {
+  const serialized = JSON.stringify(snapshot);
+  return `(() => {
+    const snapshot = ${serialized};
+    if (!snapshot.origin || globalThis.location.origin !== snapshot.origin) {
+      throw new Error('Teleport storage origin mismatch');
+    }
+    const apply = (storage, values) => {
+      try { storage.clear(); } catch {}
+      for (const [key, value] of Object.entries(values || {})) {
+        storage.setItem(key, String(value));
+      }
+    };
+    apply(localStorage, snapshot.localStorage || {});
+    apply(sessionStorage, snapshot.sessionStorage || {});
+    return JSON.stringify({
+      origin: globalThis.location.origin,
+      localStorageCount: Object.keys(snapshot.localStorage || {}).length,
+      sessionStorageCount: Object.keys(snapshot.sessionStorage || {}).length,
+    });
+  })();`;
+}
+
+async function applyTeleportStorageSnapshot(
+  browser: BrowserAPI,
+  snapshot: TeleportStorageSnapshot,
+  target: 'leader' | 'follower',
+): Promise<void> {
+  const totalEntries = countTeleportStorageEntries(snapshot);
+  if (totalEntries === 0) return;
+
+  const raw = await browser.evaluate(buildTeleportStorageApplyScript(snapshot));
+  log.info('Applied teleport storage snapshot on current page', {
+    target,
+    origin: snapshot.origin || '(unknown)',
+    totalEntries,
+    resultType: typeof raw,
+  });
 }
 
 async function installTeleportStorageInitScript(
@@ -1012,38 +1084,87 @@ async function captureCookiesAndComplete(
       log.warn('Failed to close follower tab', { error: String(err) });
     }
 
-    // 4. Switch back to the leader tab and inject cookies + app state
+    // 4. Switch back to the leader tab and inject cookies + app state.
+    // For cross-origin SSO handoffs, hydrate the captured app origin first so
+    // SPA auth caches are materialized on the right origin before landing.
     const leaderTargetId = state.currentTarget;
-    const navigateUrl = watcher.originalLeaderUrl ?? finalUrl;
+    const leaderStorageOrigin = followerStorage.origin || '';
+    const landingUrl = chooseTeleportLeaderLandingUrl(
+      leaderStorageOrigin,
+      watcher.originalLeaderUrl,
+      finalUrl,
+    );
+    const originalLeaderOrigin = tryGetTeleportUrlOrigin(watcher.originalLeaderUrl);
+    const shouldHydrateLeaderOrigin = !!leaderStorageOrigin && originalLeaderOrigin !== leaderStorageOrigin;
+    const hydrationUrl = shouldHydrateLeaderOrigin
+      ? buildTeleportStorageHydrationUrl(leaderStorageOrigin)
+      : null;
     if (leaderTargetId) {
       await browser.attachToPage(leaderTargetId);
       if (cookies.length > 0) {
         await browser.sendCDP('Network.setCookies', { cookies });
         log.info('Injected cookies into leader tab', { count: cookies.length, leaderTargetId });
       }
-      const removeLeaderStorageScript = await installTeleportStorageInitScript(
-        browser,
-        followerStorage,
-        leaderTargetId,
-        'leader',
-      );
-      // Navigate leader to the original URL (before SSO redirect), falling back to finalUrl.
-      // Keep the replay script installed through the actual navigation/load so auth-state
-      // restoration is not a best-effort race against Page.navigate returning.
-      try {
-        if (navigateUrl) {
-          log.info('Navigating leader after auth-state injection', {
-            navigateUrl,
-            originalLeaderUrl: watcher.originalLeaderUrl,
-            finalUrl,
-            leaderTargetId,
-            storageOrigin: followerStorage.origin || '(unknown)',
-            storageEntries: followerStorageEntries,
+      if (shouldHydrateLeaderOrigin && hydrationUrl) {
+        log.info('Hydrating leader storage origin before landing', {
+          hydrationUrl,
+          landingUrl,
+          originalLeaderUrl: watcher.originalLeaderUrl,
+          finalUrl,
+          leaderTargetId,
+          storageOrigin: leaderStorageOrigin,
+          storageEntries: followerStorageEntries,
+        });
+        try {
+          await browser.navigate(hydrationUrl);
+          await applyTeleportStorageSnapshot(browser, followerStorage, 'leader');
+          if (landingUrl && landingUrl !== hydrationUrl) {
+            await browser.navigate(landingUrl);
+          }
+        } catch (err) {
+          log.warn('Direct leader origin hydration failed, falling back to init-script replay', {
+            hydrationUrl,
+            landingUrl,
+            error: String(err),
           });
-          await browser.navigate(navigateUrl);
+          const removeLeaderStorageScript = await installTeleportStorageInitScript(
+            browser,
+            followerStorage,
+            leaderTargetId,
+            'leader',
+          );
+          try {
+            if (landingUrl) {
+              await browser.navigate(landingUrl);
+            }
+          } finally {
+            await removeLeaderStorageScript?.();
+          }
         }
-      } finally {
-        await removeLeaderStorageScript?.();
+      } else {
+        const removeLeaderStorageScript = await installTeleportStorageInitScript(
+          browser,
+          followerStorage,
+          leaderTargetId,
+          'leader',
+        );
+        // Keep the replay script installed through the actual navigation/load so auth-state
+        // restoration is not a best-effort race against navigation returning.
+        try {
+          if (landingUrl) {
+            log.info('Navigating leader after auth-state injection', {
+              landingUrl,
+              originalLeaderUrl: watcher.originalLeaderUrl,
+              finalUrl,
+              leaderTargetId,
+              storageOrigin: followerStorage.origin || '(unknown)',
+              storageEntries: followerStorageEntries,
+            });
+            await browser.navigate(landingUrl);
+          }
+        } finally {
+          await removeLeaderStorageScript?.();
+        }
       }
     } else {
       log.warn('No leader tab available for auth-state injection');
@@ -1054,7 +1175,7 @@ async function captureCookiesAndComplete(
     cleanupTeleportWatcher(watcher);
     const domainNote = cookies.length > 0 ? ` (${formatCookieDomainSummary(cookies as Array<{ domain?: string }>)})` : '';
     const storageNote = followerStorageEntries > 0 ? ` + ${followerStorageEntries} storage entr${followerStorageEntries === 1 ? 'y' : 'ies'}` : '';
-    const landedNote = navigateUrl ? ` (navigated to ${navigateUrl})` : '';
+    const landedNote = landingUrl ? ` (navigated to ${landingUrl})` : '';
     const resultMsg = `Teleported ${cookies.length} cookie(s)${domainNote}${storageNote} from ${runtimeId}${landedNote}`;
     log.info('Teleport completed successfully', { result: resultMsg });
     watcher.resolveBlock?.(resultMsg);

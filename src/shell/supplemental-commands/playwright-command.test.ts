@@ -2118,6 +2118,68 @@ describe('playwright-cli teleport trigger and capture', () => {
     expect(browser.closePage).toHaveBeenCalledWith('f-runtime:remote-tab-1');
   });
 
+  it('hydrates the captured app origin before landing when the original leader URL is cross-origin', async () => {
+    let leaderCallCount = 0;
+    let followerCallCount = 0;
+    let storageCaptureCount = 0;
+    let appliedStorageCount = 0;
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
+      if (expr === 'window.location.href') {
+        const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+        if (!state.teleportWatcher || state.teleportWatcher.phase === 'armed') {
+          leaderCallCount++;
+          return leaderCallCount <= 1
+            ? 'https://idp.example.com/start'
+            : 'https://login.example.com/sso';
+        }
+        followerCallCount++;
+        if (followerCallCount <= 1) return 'https://login.example.com/sso';
+        return 'https://app.example.com/callback';
+      }
+      if (expr.includes('window.localStorage')) {
+        storageCaptureCount++;
+        return storageCaptureCount === 1
+          ? JSON.stringify({
+              origin: 'https://login.example.com',
+              localStorage: { leaderEmail: 'person@example.com' },
+              sessionStorage: { leaderStep: 'email-entered' },
+            })
+          : JSON.stringify({
+              origin: 'https://app.example.com',
+              localStorage: { authCache: 'cached-token', tripToken: 'trip-token' },
+              sessionStorage: { authFlow: 'complete' },
+            });
+      }
+      if (expr.includes('globalThis.location.origin')) {
+        appliedStorageCount++;
+        return JSON.stringify({
+          origin: 'https://app.example.com',
+          localStorageCount: 2,
+          sessionStorageCount: 1,
+        });
+      }
+      return JSON.stringify({ url: 'https://app.example.com/callback', title: 'Authenticated' });
+    });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    await cmd.execute(['teleport', '--start=login\.example\.com', '--return=app\.example\.com'], {} as any);
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    expect(state.teleportWatcher!.originalLeaderUrl).toBe('https://idp.example.com/start');
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(state.teleportWatcher!.phase).toBe('done');
+    expect(appliedStorageCount).toBe(1);
+    expect(browser.navigate).toHaveBeenNthCalledWith(1, 'https://app.example.com/favicon.ico');
+    expect(browser.navigate).toHaveBeenNthCalledWith(2, 'https://app.example.com/callback');
+    expect(browser.navigate).not.toHaveBeenCalledWith('https://idp.example.com/start');
+  });
+
   it('keeps leader storage replay installed until leader navigation resolves', async () => {
     let leaderCallCount = 0;
     let followerCallCount = 0;
