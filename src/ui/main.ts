@@ -1216,8 +1216,8 @@ async function main(): Promise<void> {
 
     // Wire teleport command callbacks
     setTeleportSendRequest(() => {
-      if (leaderSyncRef) return (rid) => leaderSyncRef!.sendCookieTeleportRequest(rid);
-      if (activeFollowerSync) return (rid) => activeFollowerSync!.sendCookieTeleportRequest(rid);
+      if (leaderSyncRef) return (rid, url) => leaderSyncRef!.sendCookieTeleportRequest(rid, url);
+      if (activeFollowerSync) return (rid, url) => activeFollowerSync!.sendCookieTeleportRequest(rid, url);
       return null;
     });
     setTeleportBestFollower(() => {
