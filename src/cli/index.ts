@@ -11,6 +11,7 @@ import {
   launchElectronApp,
 } from './electron-controller.js';
 import { parseCliRuntimeFlags } from './runtime-flags.js';
+import { FileLogger } from './file-logger.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const RUNTIME_FLAGS = parseCliRuntimeFlags(process.argv.slice(2));
@@ -19,6 +20,18 @@ const SERVE_ONLY = RUNTIME_FLAGS.serveOnly;
 const ELECTRON_MODE = RUNTIME_FLAGS.electron;
 const ELECTRON_APP = RUNTIME_FLAGS.electronApp;
 const KILL_EXISTING_ELECTRON_APP = RUNTIME_FLAGS.kill;
+
+// ---------------------------------------------------------------------------
+// File logger — persistent log file in ~/.slicc/logs/
+// ---------------------------------------------------------------------------
+const fileLogger = new FileLogger({
+  logDir: RUNTIME_FLAGS.logDir ?? undefined,
+  logLevel: RUNTIME_FLAGS.logLevel,
+  devMode: DEV_MODE,
+});
+if (fileLogger.logFile) {
+  console.log(`Log file: ${fileLogger.logFile}`);
+}
 
 // ---------------------------------------------------------------------------
 // Request logging middleware
@@ -717,6 +730,7 @@ async function main() {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log('\nShutting down...');
+    fileLogger.close();
 
     overlayInjector?.stop();
     overlayInjector = null;
@@ -899,6 +913,7 @@ async function main() {
   server.listen(SERVE_PORT, () => {
     console.log(`Serving UI at http://localhost:${SERVE_PORT}`);
     console.log(`CDP proxy at ws://localhost:${SERVE_PORT}/cdp`);
+    fileLogger.log('info', 'CLI server started', { port: SERVE_PORT, cdpPort: CDP_PORT, devMode: DEV_MODE, electronMode: ELECTRON_MODE });
 
     // Pre-connect to Chrome's CDP so the proxy is warm when the first client connects.
     // Without this, the first browser automation command has to wait for CDP discovery + WS handshake.
@@ -943,5 +958,10 @@ async function main() {
 
 main().catch((err) => {
   console.error('Fatal error:', err);
+  const errorData = err instanceof Error
+    ? { name: err.name, message: err.message, stack: err.stack }
+    : { value: String(err) };
+  fileLogger.log('error', 'Fatal error', errorData);
+  fileLogger.close();
   process.exit(1);
 });
