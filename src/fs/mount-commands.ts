@@ -12,6 +12,16 @@
 import type { VirtualFS } from './virtual-fs.js';
 import { getToolExecutionContext, showToolUIFromContext } from '../tools/tool-ui.js';
 
+/** Escape HTML special characters to prevent XSS */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export interface MountCommandResult {
   stdout: string;
   stderr: string;
@@ -79,7 +89,7 @@ export class MountCommands {
       const result = await showToolUIFromContext({
         html: `
           <div class="tool-ui">
-            <p>The agent wants to mount a local directory at <code>${targetPath}</code></p>
+            <p>The agent wants to mount a local directory at <code>${escapeHtml(targetPath)}</code></p>
             <p style="font-size: 0.9em; opacity: 0.8;">This will give the agent read/write access to files in the directory you select.</p>
             <div class="tool-ui__actions">
               <button class="tool-ui__btn tool-ui__btn--primary" data-action="approve">
