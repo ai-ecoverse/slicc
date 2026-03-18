@@ -127,7 +127,7 @@ export class LeaderSyncManager {
   /** Maps requestId → routing info for cookie teleport requests in flight through the leader. */
   private readonly pendingCookieTeleportRoutes = new Map<string, PendingCookieTeleportRoute>();
   /** Resolvers for leader-originated cookie teleport requests. */
-  private readonly cookieTeleportResolvers = new Map<string, { resolve: (cookies: CookieTeleportCookie[]) => void; reject: (err: Error) => void }>();
+  private readonly cookieTeleportResolvers = new Map<string, { resolve: (result: { cookies: CookieTeleportCookie[]; timedOut?: boolean }) => void; reject: (err: Error) => void }>();
 
   constructor(private readonly options: LeaderSyncManagerOptions) {}
 
@@ -339,7 +339,7 @@ export class LeaderSyncManager {
         break;
       }
       case 'cookie.teleport.response': {
-        this.handleCookieTeleportResponse(message.requestId, message.cookies, message.error);
+        this.handleCookieTeleportResponse(message.requestId, message.cookies, message.error, message.timedOut);
         break;
       }
       case 'ping': {
@@ -897,6 +897,7 @@ export class LeaderSyncManager {
       return;
     }
 
+    log.info('[teleport-debug] forwarding cookie.teleport.request', { requestId, targetRuntimeId, url, catchPattern, catchNotPattern, timeoutMs });
     this.pendingCookieTeleportRoutes.set(requestId, { requesterBootstrapId, requestId });
     targetFollower.sync.send({ type: 'cookie.teleport.request', requestId, url, catchPattern, catchNotPattern, timeoutMs });
   }
@@ -904,7 +905,7 @@ export class LeaderSyncManager {
   /**
    * Handle a cookie teleport response from a follower (forwarding back to the original requester).
    */
-  private handleCookieTeleportResponse(requestId: string, cookies?: CookieTeleportCookie[], error?: string): void {
+  private handleCookieTeleportResponse(requestId: string, cookies?: CookieTeleportCookie[], error?: string, timedOut?: boolean): void {
     const route = this.pendingCookieTeleportRoutes.get(requestId);
     if (!route) {
       // Check if this is for a leader-originated request
@@ -914,7 +915,7 @@ export class LeaderSyncManager {
         if (error) {
           resolver.reject(new Error(error));
         } else {
-          resolver.resolve(cookies ?? []);
+          resolver.resolve({ cookies: cookies ?? [], timedOut });
         }
       }
       return;
@@ -929,7 +930,7 @@ export class LeaderSyncManager {
         if (error) {
           resolver.reject(new Error(error));
         } else {
-          resolver.resolve(cookies ?? []);
+          resolver.resolve({ cookies: cookies ?? [], timedOut });
         }
       }
       return;
@@ -937,7 +938,7 @@ export class LeaderSyncManager {
 
     const requester = this.followers.get(route.requesterBootstrapId);
     if (requester) {
-      requester.sync.send({ type: 'cookie.teleport.response', requestId, cookies, error });
+      requester.sync.send({ type: 'cookie.teleport.response', requestId, cookies, error, timedOut });
     }
   }
 
@@ -946,7 +947,7 @@ export class LeaderSyncManager {
    * Returns a promise that resolves with the cookies from the target runtime.
    * If `url` is provided, the follower opens a tab for the human to authenticate before capturing cookies.
    */
-  sendCookieTeleportRequest(targetRuntimeId: string, url?: string, catchPattern?: string, catchNotPattern?: string, timeoutMs?: number): Promise<CookieTeleportCookie[]> {
+  sendCookieTeleportRequest(targetRuntimeId: string, url?: string, catchPattern?: string, catchNotPattern?: string, timeoutMs?: number): Promise<{ cookies: CookieTeleportCookie[]; timedOut?: boolean }> {
     const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
     const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
 
@@ -955,8 +956,9 @@ export class LeaderSyncManager {
     }
 
     const requestId = `cookie-teleport-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    return new Promise<CookieTeleportCookie[]>((resolve, reject) => {
+    return new Promise<{ cookies: CookieTeleportCookie[]; timedOut?: boolean }>((resolve, reject) => {
       this.cookieTeleportResolvers.set(requestId, { resolve, reject });
+      log.info('[teleport-debug] sending cookie.teleport.request to follower', { requestId, url, catchPattern, catchNotPattern, timeoutMs, targetRuntimeId });
       this.pendingCookieTeleportRoutes.set(requestId, { requesterBootstrapId: '__leader__', requestId });
       targetFollower.sync.send({ type: 'cookie.teleport.request', requestId, url, catchPattern, catchNotPattern, timeoutMs });
     });

@@ -30,7 +30,7 @@ export type LeaderToFollowerMessage =
   | { type: 'fs.request'; requestId: string; request: TrayFsRequest }
   | { type: 'fs.response'; requestId: string; response: TrayFsResponse }
   | { type: 'cookie.teleport.request'; requestId: string; url?: string; catchPattern?: string; catchNotPattern?: string; timeoutMs?: number }
-  | { type: 'cookie.teleport.response'; requestId: string; cookies?: CookieTeleportCookie[]; error?: string }
+  | { type: 'cookie.teleport.response'; requestId: string; cookies?: CookieTeleportCookie[]; timedOut?: boolean; error?: string }
   | { type: 'ping' }
   | { type: 'pong' };
 
@@ -47,7 +47,7 @@ export type FollowerToLeaderMessage =
   | { type: 'fs.request'; requestId: string; targetRuntimeId: string; request: TrayFsRequest }
   | { type: 'fs.response'; requestId: string; response: TrayFsResponse }
   | { type: 'cookie.teleport.request'; requestId: string; targetRuntimeId: string; url?: string; catchPattern?: string; catchNotPattern?: string; timeoutMs?: number }
-  | { type: 'cookie.teleport.response'; requestId: string; cookies?: CookieTeleportCookie[]; error?: string }
+  | { type: 'cookie.teleport.response'; requestId: string; cookies?: CookieTeleportCookie[]; timedOut?: boolean; error?: string }
   | { type: 'ping' }
   | { type: 'pong' };
 

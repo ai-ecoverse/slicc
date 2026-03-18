@@ -77,7 +77,7 @@ export class FollowerSyncManager implements AgentHandle {
   /** Resolvers for outgoing fs requests. */
   private readonly fsResolvers = new Map<string, { resolve: (responses: TrayFsResponse[]) => void; reject: (err: Error) => void; responses: TrayFsResponse[] }>();
   /** Resolvers for outgoing cookie teleport requests. */
-  private readonly cookieTeleportResolvers = new Map<string, { resolve: (cookies: CookieTeleportCookie[]) => void; reject: (err: Error) => void }>();
+  private readonly cookieTeleportResolvers = new Map<string, { resolve: (result: { cookies: CookieTeleportCookie[]; timedOut?: boolean }) => void; reject: (err: Error) => void }>();
 
   constructor(
     channel: TrayDataChannelLike,
@@ -275,7 +275,7 @@ export class FollowerSyncManager implements AgentHandle {
         break;
       }
       case 'cookie.teleport.response': {
-        this.routeCookieTeleportResponse(message.requestId, message.cookies, message.error);
+        this.routeCookieTeleportResponse(message.requestId, message.cookies, message.error, message.timedOut);
         break;
       }
       case 'ping': {
@@ -495,7 +495,7 @@ export class FollowerSyncManager implements AgentHandle {
           return;
         }
         log.info('[teleport-debug] calling executeTeleportAuth', { url, timeoutMs, catchPattern, catchNotPattern });
-        const { cookies } = await executeTeleportAuth({
+        const { cookies, timedOut } = await executeTeleportAuth({
           transport,
           url,
           timeoutMs,
@@ -504,7 +504,7 @@ export class FollowerSyncManager implements AgentHandle {
           onNotification: (msg) => this.options.onNotification?.(msg),
         });
         log.info('[teleport-debug] executeTeleportAuth returned', { cookieCount: cookies.length });
-        this.sync.send({ type: 'cookie.teleport.response', requestId, cookies });
+        this.sync.send({ type: 'cookie.teleport.response', requestId, cookies, timedOut });
       } else {
         // Immediate capture — use BrowserAPI to get a proper session for Network.getCookies
         if (browserAPI) {
@@ -535,14 +535,14 @@ export class FollowerSyncManager implements AgentHandle {
   /**
    * Route a cookie teleport response from the leader to the appropriate pending resolver.
    */
-  private routeCookieTeleportResponse(requestId: string, cookies?: CookieTeleportCookie[], error?: string): void {
+  private routeCookieTeleportResponse(requestId: string, cookies?: CookieTeleportCookie[], error?: string, timedOut?: boolean): void {
     const resolver = this.cookieTeleportResolvers.get(requestId);
     if (!resolver) return;
     this.cookieTeleportResolvers.delete(requestId);
     if (error) {
       resolver.reject(new Error(error));
     } else {
-      resolver.resolve(cookies ?? []);
+      resolver.resolve({ cookies: cookies ?? [], timedOut });
     }
   }
 
@@ -551,9 +551,9 @@ export class FollowerSyncManager implements AgentHandle {
    * Returns a promise that resolves with the cookies from the target runtime.
    * If `url` is provided, the target opens a tab for the human to authenticate before capturing cookies.
    */
-  sendCookieTeleportRequest(targetRuntimeId: string, url?: string, catchPattern?: string, catchNotPattern?: string, timeoutMs?: number): Promise<CookieTeleportCookie[]> {
+  sendCookieTeleportRequest(targetRuntimeId: string, url?: string, catchPattern?: string, catchNotPattern?: string, timeoutMs?: number): Promise<{ cookies: CookieTeleportCookie[]; timedOut?: boolean }> {
     const requestId = `cookie-teleport-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    return new Promise<CookieTeleportCookie[]>((resolve, reject) => {
+    return new Promise<{ cookies: CookieTeleportCookie[]; timedOut?: boolean }>((resolve, reject) => {
       this.cookieTeleportResolvers.set(requestId, { resolve, reject });
       this.sync.send({ type: 'cookie.teleport.request', requestId, targetRuntimeId, url, catchPattern, catchNotPattern, timeoutMs });
     });

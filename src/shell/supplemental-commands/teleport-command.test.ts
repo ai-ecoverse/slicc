@@ -231,7 +231,7 @@ describe('createTeleportCommand', () => {
   });
 
   it('errors when no browser available', async () => {
-    setTeleportSendRequest(() => () => Promise.resolve([]));
+    setTeleportSendRequest(() => () => Promise.resolve({ cookies: [] as CookieTeleportCookie[], timedOut: false }));
 
     const result = await createTeleportCommand().execute([], {} as never);
     expect(result.exitCode).toBe(1);
@@ -239,7 +239,7 @@ describe('createTeleportCommand', () => {
   });
 
   it('errors when no best follower available (auto-select)', async () => {
-    setTeleportSendRequest(() => () => Promise.resolve([]));
+    setTeleportSendRequest(() => () => Promise.resolve({ cookies: [] as CookieTeleportCookie[], timedOut: false }));
     setTeleportBrowserAPI(() => ({ listPages: vi.fn() }) as unknown as BrowserAPI);
     setTeleportBestFollower(() => () => null);
 
@@ -256,7 +256,7 @@ describe('createTeleportCommand', () => {
       },
     ];
 
-    const sendRequest = vi.fn().mockResolvedValue(fakeCookies);
+    const sendRequest = vi.fn().mockResolvedValue({ cookies: fakeCookies, timedOut: false });
     const sendCDP = vi.fn().mockResolvedValue({});
     const attachToPage = vi.fn().mockResolvedValue(undefined);
     const listPages = vi.fn().mockResolvedValue([
@@ -289,7 +289,7 @@ describe('createTeleportCommand', () => {
       },
     ];
 
-    const sendRequest = vi.fn().mockResolvedValue(fakeCookies);
+    const sendRequest = vi.fn().mockResolvedValue({ cookies: fakeCookies, timedOut: false });
     const sendCDP = vi.fn().mockResolvedValue({});
 
     setTeleportSendRequest(() => sendRequest);
@@ -316,7 +316,7 @@ describe('createTeleportCommand', () => {
 
     const sendCDP = vi.fn().mockResolvedValue({});
 
-    setTeleportSendRequest(() => vi.fn().mockResolvedValue(fakeCookies));
+    setTeleportSendRequest(() => vi.fn().mockResolvedValue({ cookies: fakeCookies, timedOut: false }));
     setTeleportBestFollower(() => () => ({ runtimeId: 'f1', bootstrapId: 'b1', floatType: 'standalone' as const }));
     setTeleportBrowserAPI(() => ({
       listPages: vi.fn().mockResolvedValue([{ targetId: 't1', title: 'T', url: 'https://x.com' }]),
@@ -334,7 +334,7 @@ describe('createTeleportCommand', () => {
   });
 
   it('handles no cookies from remote', async () => {
-    setTeleportSendRequest(() => vi.fn().mockResolvedValue([]));
+    setTeleportSendRequest(() => vi.fn().mockResolvedValue({ cookies: [], timedOut: false }));
     setTeleportBestFollower(() => () => ({ runtimeId: 'f1', bootstrapId: 'b1', floatType: 'standalone' as const }));
     setTeleportBrowserAPI(() => ({
       listPages: vi.fn().mockResolvedValue([{ targetId: 't1', title: 'T', url: 'https://x.com' }]),
@@ -371,7 +371,7 @@ describe('createTeleportCommand', () => {
       },
     ];
 
-    const sendRequest = vi.fn().mockResolvedValue(fakeCookies);
+    const sendRequest = vi.fn().mockResolvedValue({ cookies: fakeCookies, timedOut: false });
     const sendCDP = vi.fn().mockResolvedValue({});
 
     setTeleportSendRequest(() => sendRequest);
@@ -396,7 +396,7 @@ describe('createTeleportCommand', () => {
       },
     ];
 
-    setTeleportSendRequest(() => vi.fn().mockResolvedValue(fakeCookies));
+    setTeleportSendRequest(() => vi.fn().mockResolvedValue({ cookies: fakeCookies, timedOut: false }));
     setTeleportBestFollower(() => () => ({ runtimeId: 'f1', bootstrapId: 'b1', floatType: 'standalone' as const }));
     setTeleportBrowserAPI(() => ({
       listPages: vi.fn().mockResolvedValue([]),

@@ -255,6 +255,7 @@ function waitForAuthCompletion(
     const catchNotRegex = catchNotPattern ? new RegExp(catchNotPattern) : undefined;
 
     const cleanup = () => {
+      log.info('[teleport-debug] cleanup() called, removing listener', { settled });
       settled = true;
       transport.off('Page.frameNavigated', onNavigated);
       clearTimeout(timer);

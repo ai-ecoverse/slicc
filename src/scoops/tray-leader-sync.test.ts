@@ -1361,8 +1361,8 @@ describe('LeaderSyncManager', () => {
         });
       }
 
-      const cookies = await promise;
-      expect(cookies).toEqual(fakeCookies);
+      const result = await promise;
+      expect(result.cookies).toEqual(fakeCookies);
     });
 
     it('leader-originated sendCookieTeleportRequest rejects when target not connected', async () => {

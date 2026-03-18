@@ -26,7 +26,7 @@ import type { FloatType } from '../../scoops/tray-leader-sync.js';
 // Types
 // ---------------------------------------------------------------------------
 
-export type SendCookieTeleportRequestFn = (targetRuntimeId: string, url?: string, catchPattern?: string, catchNotPattern?: string, timeoutMs?: number) => Promise<CookieTeleportCookie[]>;
+export type SendCookieTeleportRequestFn = (targetRuntimeId: string, url?: string, catchPattern?: string, catchNotPattern?: string, timeoutMs?: number) => Promise<{ cookies: CookieTeleportCookie[]; timedOut?: boolean }>;
 
 export type GetBestFollowerForTeleportFn = () => { runtimeId: string; bootstrapId: string; floatType: FloatType } | null;
 
@@ -266,7 +266,7 @@ export function createTeleportCommand(): Command {
       console.log('[teleport-debug] sending request', { targetRuntimeId, url: parsed.url, catchPattern: parsed.catchPattern, catchNotPattern: parsed.catchNotPattern, timeoutMs, callerTimeoutMs });
 
       const requestPromise = sendRequest(targetRuntimeId, parsed.url, parsed.catchPattern, parsed.catchNotPattern, timeoutMs);
-      const cookies = callerTimeoutMs
+      const { cookies, timedOut } = callerTimeoutMs
         ? await Promise.race([
             requestPromise,
             new Promise<never>((_, reject) =>
@@ -277,8 +277,11 @@ export function createTeleportCommand(): Command {
             ),
           ])
         : await requestPromise;
-      console.log('[teleport-debug] request resolved', { cookieCount: cookies.length });
+      console.log('[teleport-debug] request resolved', { cookieCount: cookies.length, timedOut });
       if (cookies.length === 0) {
+        if (timedOut) {
+          return { stdout: `Teleport timed out \u2014 no cookies captured from ${targetRuntimeId}\n`, stderr: '', exitCode: 1 };
+        }
         return { stdout: `No cookies on runtime ${targetRuntimeId}\n`, stderr: '', exitCode: 0 };
       }
 
@@ -300,8 +303,9 @@ export function createTeleportCommand(): Command {
         await browser.sendCDP('Page.reload', {});
       }
 
+      const timeoutNote = timedOut ? ' (timed out, partial capture)' : '';
       return {
-        stdout: `Teleported ${cookies.length} cookie(s) from ${targetRuntimeId}${parsed.reload ? ' (page reloaded)' : ''}\n`,
+        stdout: `Teleported ${cookies.length} cookie(s) from ${targetRuntimeId}${parsed.reload ? ' (page reloaded)' : ''}${timeoutNote}\n`,
         stderr: '',
         exitCode: 0,
       };
