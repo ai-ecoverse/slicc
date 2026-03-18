@@ -20,6 +20,7 @@ import { handleFsRequest } from './tray-fs-handler.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import { TrayTargetRegistry } from './tray-target-registry.js';
 import type { CDPTransport } from '../cdp/transport.js';
+import type { BrowserAPI } from '../cdp/browser-api.js';
 import { RemoteCDPTransport, type RemoteCDPSender } from '../cdp/remote-cdp-transport.js';
 import { DataChannelKeepalive } from './data-channel-keepalive.js';
 import { createLogger } from '../core/logger.js';
@@ -37,6 +38,8 @@ export interface LeaderSyncManagerOptions {
   onFollowerAbort: () => void;
   /** Optional CDP transport for executing local CDP commands (leader's browser). */
   browserTransport?: CDPTransport;
+  /** Optional BrowserAPI instance for session-aware browser commands (e.g. cookie capture). */
+  browserAPI?: BrowserAPI;
   /** Called when a follower's data channel is considered dead (missed keepalive pongs). */
   onFollowerDead?: (bootstrapId: string) => void;
   /** VirtualFS instance for handling remote fs requests targeting the leader. */
@@ -804,16 +807,33 @@ export class LeaderSyncManager {
     const follower = this.followers.get(requesterBootstrapId);
     if (!follower) return;
 
+    const browserAPI = this.options.browserAPI;
     const transport = this.options.browserTransport;
-    if (!transport) {
+    if (!browserAPI && !transport) {
       follower.sync.send({ type: 'cookie.teleport.response', requestId, error: 'Leader has no browser transport' });
       return;
     }
 
     try {
-      const result = await transport.send('Network.getCookies', {});
-      const cookies = (result['cookies'] as CookieTeleportCookie[]) ?? [];
-      follower.sync.send({ type: 'cookie.teleport.response', requestId, cookies });
+      if (browserAPI) {
+        // Use BrowserAPI to get a proper session for Network.getCookies
+        const pages = await browserAPI.listPages();
+        const target = pages.find(p => p.url && !p.url.startsWith('about:') && !p.url.includes('/preview/'))
+          ?? pages[0];
+        if (!target) {
+          follower.sync.send({ type: 'cookie.teleport.response', requestId, error: 'No browser tab available for cookie capture' });
+          return;
+        }
+        await browserAPI.attachToPage(target.targetId);
+        const result = await browserAPI.sendCDP('Network.getCookies');
+        const cookies = (result['cookies'] as CookieTeleportCookie[]) ?? [];
+        follower.sync.send({ type: 'cookie.teleport.response', requestId, cookies });
+      } else {
+        // Fallback to raw transport (will likely fail with -32601)
+        const result = await transport!.send('Network.getCookies', {});
+        const cookies = (result['cookies'] as CookieTeleportCookie[]) ?? [];
+        follower.sync.send({ type: 'cookie.teleport.response', requestId, cookies });
+      }
     } catch (err) {
       follower.sync.send({ type: 'cookie.teleport.response', requestId, error: err instanceof Error ? err.message : String(err) });
     }

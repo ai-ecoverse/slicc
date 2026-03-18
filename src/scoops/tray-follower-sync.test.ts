@@ -716,20 +716,18 @@ describe('FollowerSyncManager', () => {
   });
 
   describe('cookie teleport handling', () => {
-    it('handles cookie.teleport.request without url — immediate capture', async () => {
+    it('handles cookie.teleport.request without url — immediate capture via BrowserAPI', async () => {
       const channel = new FakeChannel();
-      const fakeBrowserTransport = {
-        send: vi.fn().mockResolvedValue({
+      const fakeBrowserAPI = {
+        listPages: vi.fn().mockResolvedValue([
+          { targetId: 'tab1', title: 'Example', url: 'https://example.com' },
+        ]),
+        attachToPage: vi.fn().mockResolvedValue('sess-1'),
+        sendCDP: vi.fn().mockResolvedValue({
           cookies: [{ name: 'sess', value: 'v1', domain: '.example.com', path: '/' }],
         }),
-        connect: vi.fn(),
-        disconnect: vi.fn(),
-        on: vi.fn(),
-        off: vi.fn(),
-        once: vi.fn(),
-        state: 'connected' as const,
       };
-      const follower = new FollowerSyncManager(channel, { browserTransport: fakeBrowserTransport });
+      const follower = new FollowerSyncManager(channel, { browserAPI: fakeBrowserAPI as any });
 
       channel.simulateLeaderMessage({
         type: 'cookie.teleport.request',
@@ -737,8 +735,7 @@ describe('FollowerSyncManager', () => {
       } as any);
 
       await vi.waitFor(() => {
-        const sent = channel.parseSent();
-        return sent.some(m => m.type === 'cookie.teleport.response');
+        expect(channel.parseSent().some(m => m.type === 'cookie.teleport.response')).toBe(true);
       });
 
       const sent = channel.parseSent();
@@ -748,10 +745,35 @@ describe('FollowerSyncManager', () => {
         expect(response.requestId).toBe('ct-1');
         expect(response.cookies).toHaveLength(1);
       }
-      expect(fakeBrowserTransport.send).toHaveBeenCalledWith('Network.getCookies', {});
+      expect(fakeBrowserAPI.attachToPage).toHaveBeenCalledWith('tab1');
+      expect(fakeBrowserAPI.sendCDP).toHaveBeenCalledWith('Network.getCookies');
     });
 
-    it('handles cookie.teleport.request without browser transport', async () => {
+    it('handles cookie.teleport.request without url — skips about:blank tabs', async () => {
+      const channel = new FakeChannel();
+      const fakeBrowserAPI = {
+        listPages: vi.fn().mockResolvedValue([
+          { targetId: 'tab-blank', title: '', url: 'about:blank' },
+          { targetId: 'tab-real', title: 'Real Page', url: 'https://real.com' },
+        ]),
+        attachToPage: vi.fn().mockResolvedValue('sess-1'),
+        sendCDP: vi.fn().mockResolvedValue({ cookies: [] }),
+      };
+      const follower = new FollowerSyncManager(channel, { browserAPI: fakeBrowserAPI as any });
+
+      channel.simulateLeaderMessage({
+        type: 'cookie.teleport.request',
+        requestId: 'ct-skip',
+      } as any);
+
+      await vi.waitFor(() => {
+        expect(channel.parseSent().some(m => m.type === 'cookie.teleport.response')).toBe(true);
+      });
+
+      expect(fakeBrowserAPI.attachToPage).toHaveBeenCalledWith('tab-real');
+    });
+
+    it('handles cookie.teleport.request without browser transport or API', async () => {
       const channel = new FakeChannel();
       const follower = new FollowerSyncManager(channel);
 

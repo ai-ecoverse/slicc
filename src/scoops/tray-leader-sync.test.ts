@@ -1371,13 +1371,15 @@ describe('LeaderSyncManager', () => {
       await expect(manager.sendCookieTeleportRequest('nonexistent')).rejects.toThrow('not connected');
     });
 
-    it('executes local cookie teleport when targetRuntimeId is leader', async () => {
-      const mockTransport = {
-        send: vi.fn().mockResolvedValue({ cookies: [{ name: 'x', value: 'y' }] }),
-        onEvent: vi.fn(),
-        disconnect: vi.fn(),
+    it('executes local cookie teleport when targetRuntimeId is leader (via BrowserAPI)', async () => {
+      const mockBrowserAPI = {
+        listPages: vi.fn().mockResolvedValue([
+          { targetId: 'tab1', title: 'App', url: 'https://app.example.com' },
+        ]),
+        attachToPage: vi.fn().mockResolvedValue('sess-1'),
+        sendCDP: vi.fn().mockResolvedValue({ cookies: [{ name: 'x', value: 'y' }] }),
       };
-      const { manager } = createManager({ browserTransport: mockTransport as never });
+      const { manager } = createManager({ browserAPI: mockBrowserAPI as never });
 
       const chFollower = new FakeChannel();
       manager.addFollower('b-follower', chFollower, { runtime: 'slicc-standalone' });
@@ -1393,8 +1395,7 @@ describe('LeaderSyncManager', () => {
 
       // Wait for async handler
       await vi.waitFor(() => {
-        const sent = chFollower.parseSent();
-        return sent.some(m => m.type === 'cookie.teleport.response');
+        expect(chFollower.parseSent().some(m => m.type === 'cookie.teleport.response')).toBe(true);
       });
 
       const sent = chFollower.parseSent();
@@ -1403,7 +1404,8 @@ describe('LeaderSyncManager', () => {
       if (response?.type === 'cookie.teleport.response') {
         expect(response.cookies).toEqual([{ name: 'x', value: 'y' }]);
       }
-      expect(mockTransport.send).toHaveBeenCalledWith('Network.getCookies', {});
+      expect(mockBrowserAPI.attachToPage).toHaveBeenCalledWith('tab1');
+      expect(mockBrowserAPI.sendCDP).toHaveBeenCalledWith('Network.getCookies');
     });
   });
 });

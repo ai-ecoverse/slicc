@@ -19,6 +19,7 @@ import {
 import { handleFsRequest } from './tray-fs-handler.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { CDPTransport } from '../cdp/transport.js';
+import type { BrowserAPI } from '../cdp/browser-api.js';
 import { RemoteCDPTransport, type RemoteCDPSender } from '../cdp/remote-cdp-transport.js';
 import { DataChannelKeepalive } from './data-channel-keepalive.js';
 import { setFollowerTrayRuntimeStatus, getFollowerTrayRuntimeStatus, setFollowerLastPingTime } from './tray-follower-status.js';
@@ -38,6 +39,8 @@ export interface FollowerSyncManagerOptions {
   onTargetsUpdated?: (targets: TrayTargetEntry[]) => void;
   /** Optional CDP transport for executing local CDP commands (follower's browser). */
   browserTransport?: CDPTransport;
+  /** Optional BrowserAPI instance for session-aware browser commands (e.g. cookie capture). */
+  browserAPI?: BrowserAPI;
   /** Called when the leader data channel is considered dead (missed keepalive pongs). */
   onDead?: () => void;
   /** Called after the connection has been cleaned up due to keepalive death or channel failure. Higher-level code can use this to trigger reconnection. */
@@ -464,7 +467,8 @@ export class FollowerSyncManager implements AgentHandle {
    */
   private async executeLocalCookieTeleport(requestId: string, url?: string): Promise<void> {
     const transport = this.options.browserTransport;
-    if (!transport) {
+    const browserAPI = this.options.browserAPI;
+    if (!transport && !browserAPI) {
       this.sync.send({ type: 'cookie.teleport.response', requestId, error: 'Follower has no browser transport' });
       return;
     }
@@ -472,6 +476,11 @@ export class FollowerSyncManager implements AgentHandle {
     try {
       if (url) {
         // Interactive auth flow: open tab → wait for human auth → capture cookies
+        // teleport-auth manages its own CDP sessions via the raw transport
+        if (!transport) {
+          this.sync.send({ type: 'cookie.teleport.response', requestId, error: 'Follower has no browser transport for auth flow' });
+          return;
+        }
         const { cookies } = await executeTeleportAuth({
           transport,
           url,
@@ -479,10 +488,26 @@ export class FollowerSyncManager implements AgentHandle {
         });
         this.sync.send({ type: 'cookie.teleport.response', requestId, cookies });
       } else {
-        // Immediate capture (backward-compatible: no url means just grab current cookies)
-        const result = await transport.send('Network.getCookies', {});
-        const cookies = (result['cookies'] as CookieTeleportCookie[]) ?? [];
-        this.sync.send({ type: 'cookie.teleport.response', requestId, cookies });
+        // Immediate capture — use BrowserAPI to get a proper session for Network.getCookies
+        if (browserAPI) {
+          const pages = await browserAPI.listPages();
+          // Pick a real page (not about:blank, not the slicc UI)
+          const target = pages.find(p => p.url && !p.url.startsWith('about:') && !p.url.includes('/preview/'))
+            ?? pages[0];
+          if (!target) {
+            this.sync.send({ type: 'cookie.teleport.response', requestId, error: 'No browser tab available for cookie capture' });
+            return;
+          }
+          await browserAPI.attachToPage(target.targetId);
+          const result = await browserAPI.sendCDP('Network.getCookies');
+          const cookies = (result['cookies'] as CookieTeleportCookie[]) ?? [];
+          this.sync.send({ type: 'cookie.teleport.response', requestId, cookies });
+        } else {
+          // Fallback to raw transport (will likely fail with -32601, but preserves old behavior)
+          const result = await transport!.send('Network.getCookies', {});
+          const cookies = (result['cookies'] as CookieTeleportCookie[]) ?? [];
+          this.sync.send({ type: 'cookie.teleport.response', requestId, cookies });
+        }
       }
     } catch (err) {
       this.sync.send({ type: 'cookie.teleport.response', requestId, error: err instanceof Error ? err.message : String(err) });

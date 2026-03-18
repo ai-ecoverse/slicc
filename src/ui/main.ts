@@ -1325,6 +1325,7 @@ async function main(): Promise<void> {
 
       const followerSync = new FollowerSyncManager(connection.channel, {
         browserTransport: browser.getTransport(),
+        browserAPI: browser,
         onSnapshot: (messages) => {
           layout.panels.chat.loadMessages(messages);
         },
@@ -1402,6 +1403,7 @@ async function main(): Promise<void> {
       let leaderTray!: LeaderTrayManager;
       const leaderSync = new LeaderSyncManager({
         browserTransport: browser.getTransport(),
+        browserAPI: browser,
         getMessages: () => {
           return layout.panels.chat.getMessages();
         },
