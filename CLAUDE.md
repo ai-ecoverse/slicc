@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build and Development Commands
 
 ```bash
-npm run dev:full        # Full dev mode: Vite HMR + Chrome + CDP proxy (port 3000)
+npm run dev:full        # Full dev mode: Vite HMR + Chrome + CDP proxy (port 5710)
 npm run dev:full -- --prompt "mount /tmp"  # Auto-submit prompt (clears history/fs first)
 npm run dev:electron -- /Applications/Slack.app  # Electron attach mode
 npm run dev             # Vite dev server only (no Chrome/CDP)
@@ -27,7 +27,7 @@ npm run dev:full -- --prompt "ls /workspace"  # Test any agent command
 
 Console logs from the browser are forwarded to the CLI terminal for debugging.
 
-**Requires Node >= 22** (LTS). Ports: 3000 (UI), 9222 (Chrome CDP), 9223 (Electron CDP), 24679 (Vite HMR)
+**Requires Node >= 22** (LTS). Ports: 5710 (UI), 9222 (Chrome CDP), 9223 (Electron CDP), 24679 (Vite HMR)
 
 ## Philosophy
 
