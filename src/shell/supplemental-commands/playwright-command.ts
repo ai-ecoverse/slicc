@@ -62,6 +62,12 @@ export interface TeleportWatcher {
   timeoutTimer?: ReturnType<typeof setTimeout>;
   /** CDP event listener cleanup function. */
   cleanupListener?: () => void;
+  /** Cleanup function for the follower storage replay script. */
+  removeFollowerStorageScript?: (() => Promise<void>) | null;
+  /** Dedup key for callback/error diagnostics while polling the follower. */
+  lastFollowerDiagnosticKey?: string;
+  /** Last follower URL observed during teleport polling. */
+  lastFollowerUrl?: string;
 }
 
 /** Per-tab snapshot: accessibility tree with element refs. */
@@ -509,14 +515,22 @@ function formatCookieDomainSummary(cookies: Array<{ domain?: string }>): string 
 }
 
 interface TeleportStorageSnapshot {
+  origin: string;
   localStorage: Record<string, string>;
   sessionStorage: Record<string, string>;
 }
 
 const EMPTY_TELEPORT_STORAGE: TeleportStorageSnapshot = {
+  origin: '',
   localStorage: {},
   sessionStorage: {},
 };
+
+interface TeleportPageDiagnostics {
+  url: string;
+  title: string;
+  bodySnippet: string;
+}
 
 function countTeleportStorageEntries(snapshot: TeleportStorageSnapshot): number {
   return Object.keys(snapshot.localStorage).length + Object.keys(snapshot.sessionStorage).length;
@@ -536,6 +550,7 @@ async function captureTeleportStorageSnapshot(
       return items;
     };
     return JSON.stringify({
+      origin: window.location.origin,
       localStorage: collect(window.localStorage),
       sessionStorage: collect(window.sessionStorage),
     });
@@ -549,6 +564,7 @@ async function captureTeleportStorageSnapshot(
   try {
     const parsed = JSON.parse(raw) as Partial<TeleportStorageSnapshot>;
     return {
+      origin: typeof parsed.origin === 'string' ? parsed.origin : '',
       localStorage: parsed.localStorage ?? {},
       sessionStorage: parsed.sessionStorage ?? {},
     };
@@ -562,6 +578,11 @@ function buildTeleportStorageInitScript(snapshot: TeleportStorageSnapshot): stri
   const serialized = JSON.stringify(snapshot);
   return `(() => {
     const snapshot = ${serialized};
+    if (!snapshot.origin || window.location.origin !== snapshot.origin) return;
+    const markerKey = '__slicc_teleport_storage_applied__:' + snapshot.origin;
+    try {
+      if (window.sessionStorage.getItem(markerKey) === '1') return;
+    } catch {}
     const apply = (storage, values) => {
       try { storage.clear(); } catch {}
       for (const [key, value] of Object.entries(values || {})) {
@@ -570,12 +591,14 @@ function buildTeleportStorageInitScript(snapshot: TeleportStorageSnapshot): stri
     };
     apply(window.localStorage, snapshot.localStorage || {});
     apply(window.sessionStorage, snapshot.sessionStorage || {});
+    try { window.sessionStorage.setItem(markerKey, '1'); } catch {}
   })();`;
 }
 
 async function installTeleportStorageInitScript(
   browser: BrowserAPI,
   snapshot: TeleportStorageSnapshot,
+  targetId: string,
   target: 'leader' | 'follower',
 ): Promise<(() => Promise<void>) | null> {
   const totalEntries = countTeleportStorageEntries(snapshot);
@@ -588,6 +611,7 @@ async function installTeleportStorageInitScript(
 
   log.info('Installed teleport storage init script', {
     target,
+    origin: snapshot.origin || '(unknown)',
     localStorageCount: Object.keys(snapshot.localStorage).length,
     sessionStorageCount: Object.keys(snapshot.sessionStorage).length,
     hasIdentifier: !!identifier,
@@ -596,11 +620,113 @@ async function installTeleportStorageInitScript(
   if (!identifier) return null;
   return async () => {
     try {
+      await browser.attachToPage(targetId);
       await browser.sendCDP('Page.removeScriptToEvaluateOnNewDocument', { identifier });
     } catch (err) {
       log.warn('Failed to remove teleport storage init script', { target, error: String(err) });
     }
   };
+}
+
+async function captureTeleportPageDiagnostics(
+  browser: BrowserAPI,
+): Promise<TeleportPageDiagnostics> {
+  const raw = await browser.evaluate(`(() => JSON.stringify({
+    url: window.location.href,
+    title: document.title || '',
+    bodySnippet: document.body?.innerText?.replace(/\s+/g, ' ').trim().slice(0, 500) || '(empty)',
+  }))()`);
+
+  if (typeof raw !== 'string' || raw.length === 0) {
+    return { url: '', title: '', bodySnippet: '(unavailable)' };
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<TeleportPageDiagnostics>;
+    return {
+      url: typeof parsed.url === 'string' ? parsed.url : '',
+      title: typeof parsed.title === 'string' ? parsed.title : '',
+      bodySnippet: typeof parsed.bodySnippet === 'string' && parsed.bodySnippet.length > 0
+        ? parsed.bodySnippet
+        : '(empty)',
+    };
+  } catch {
+    return { url: '', title: '', bodySnippet: '(unparseable)' };
+  }
+}
+
+function shouldCaptureTeleportDiagnostics(href: string): boolean {
+  return /callback|authorize\/resume|error/i.test(href);
+}
+
+async function logFollowerTeleportDiagnosticsOnce(
+  browser: BrowserAPI,
+  watcher: TeleportWatcher,
+  reason: string,
+): Promise<void> {
+  try {
+    const diagnostics = await captureTeleportPageDiagnostics(browser);
+    const key = `${reason}:${diagnostics.url}:${diagnostics.title}`;
+    if (watcher.lastFollowerDiagnosticKey === key) return;
+    watcher.lastFollowerDiagnosticKey = key;
+    log.info('Teleport follower diagnostics', {
+      reason,
+      url: diagnostics.url,
+      title: diagnostics.title,
+      bodySnippet: diagnostics.bodySnippet,
+    });
+  } catch (err) {
+    log.warn('Could not capture teleport follower diagnostics', { reason, error: String(err) });
+  }
+}
+
+async function removeFollowerTeleportStorageScript(
+  watcher: TeleportWatcher,
+  reason: string,
+): Promise<void> {
+  const remove = watcher.removeFollowerStorageScript;
+  if (!remove) return;
+  watcher.removeFollowerStorageScript = null;
+  try {
+    await remove();
+    log.info('Removed follower teleport storage init script', { reason });
+  } catch (err) {
+    log.warn('Failed to remove follower teleport storage init script', { reason, error: String(err) });
+  }
+}
+
+async function handleTeleportTimeout(
+  browser: BrowserAPI,
+  watcher: TeleportWatcher,
+): Promise<void> {
+  log.warn('Teleport timed out', {
+    timeoutMs: watcher.timeoutMs,
+    phase: watcher.phase,
+    followerTargetId: watcher.followerTargetId,
+  });
+  watcher.phase = 'timedOut';
+
+  if (watcher.followerTargetId) {
+    try {
+      await browser.attachToPage(watcher.followerTargetId);
+      await logFollowerTeleportDiagnosticsOnce(browser, watcher, 'timeout');
+    } catch (err) {
+      log.warn('Could not attach to follower for timeout diagnostics', { error: String(err) });
+    }
+    await removeFollowerTeleportStorageScript(watcher, 'timeout');
+  }
+
+  cleanupTeleportWatcher(watcher);
+  if (watcher.followerTargetId) {
+    try {
+      await browser.closePage(watcher.followerTargetId);
+    } catch (err) {
+      log.warn('Failed to close follower tab after timeout', { error: String(err) });
+    }
+  }
+  watcher.rejectBlock?.(
+    new Error(`Teleport timed out after ${Math.round(watcher.timeoutMs / 1000)}s — human did not complete auth`),
+  );
 }
 
 /** Clean up all timers and listeners on a teleport watcher. */
@@ -699,6 +825,7 @@ async function triggerTeleport(
     try {
       leaderStorage = await captureTeleportStorageSnapshot(browser, 'leader');
       log.info('Captured leader storage for follower', {
+        origin: leaderStorage.origin || '(unknown)',
         localStorageCount: Object.keys(leaderStorage.localStorage).length,
         sessionStorageCount: Object.keys(leaderStorage.sessionStorage).length,
       });
@@ -744,28 +871,25 @@ async function triggerTeleport(
     // 6. Navigate follower directly to the intercepted auth/IdP URL so the human
     // can continue the in-progress flow without re-entering the earlier step.
     const followerUrl = triggerUrl;
-    const removeFollowerStorageScript = await installTeleportStorageInitScript(browser, leaderStorage, 'follower');
-    log.info('Navigating follower to intercepted URL', { url: followerUrl, originalLeaderUrl: watcher.originalLeaderUrl, triggerUrl });
-    try {
-      await browser.sendCDP('Page.navigate', { url: followerUrl });
-    } finally {
-      await removeFollowerStorageScript?.();
-    }
+    watcher.removeFollowerStorageScript = await installTeleportStorageInitScript(
+      browser,
+      leaderStorage,
+      followerTargetId,
+      'follower',
+    );
+    log.info('Navigating follower to intercepted URL', {
+      url: followerUrl,
+      originalLeaderUrl: watcher.originalLeaderUrl,
+      triggerUrl,
+      storageOrigin: leaderStorage.origin || '(unknown)',
+    });
+    await browser.sendCDP('Page.navigate', { url: followerUrl });
 
     // 4. Start timeout timer
     log.info('Starting teleport timeout timer', { timeoutMs: watcher.timeoutMs });
     watcher.timeoutTimer = setTimeout(() => {
       if (watcher.phase === 'teleporting' || watcher.phase === 'waitingForAuth' || watcher.phase === 'waitingForReturn') {
-        log.warn('Teleport timed out', { timeoutMs: watcher.timeoutMs, phase: watcher.phase, followerTargetId: watcher.followerTargetId });
-        watcher.phase = 'timedOut';
-        cleanupTeleportWatcher(watcher);
-        // Close follower tab best-effort
-        if (watcher.followerTargetId) {
-          browser.closePage(watcher.followerTargetId).catch((err) => {
-            log.warn('Failed to close follower tab after timeout', { error: String(err) });
-          });
-        }
-        watcher.rejectBlock?.(new Error(`Teleport timed out after ${Math.round(watcher.timeoutMs / 1000)}s — human did not complete auth`));
+        void handleTeleportTimeout(browser, watcher);
       }
     }, watcher.timeoutMs);
 
@@ -779,6 +903,10 @@ async function triggerTeleport(
         const raw = await browser.evaluate('window.location.href');
         const href = typeof raw === 'string' ? raw : String(raw);
         if (!href) return;
+        if (watcher.lastFollowerUrl !== href) {
+          watcher.lastFollowerUrl = href;
+          log.info('Follower teleport navigation', { href, phase: watcher.phase });
+        }
 
         if (watcher.phase === 'waitingForAuth') {
           // Phase 1: waiting for follower to redirect to auth (e.g. Okta)
@@ -793,6 +921,9 @@ async function triggerTeleport(
 
         // Phase 2: waiting for return from auth
         log.debug('Polling follower tab URL for return', { href, returnPattern: watcher.returnPattern.source });
+        if (shouldCaptureTeleportDiagnostics(href)) {
+          await logFollowerTeleportDiagnosticsOnce(browser, watcher, 'waiting-for-return');
+        }
         if (watcher.returnPattern.test(href)) {
           log.info('Return pattern matched on follower after auth', { href, returnPattern: watcher.returnPattern.source });
           captureCookiesAndComplete(browser, state, watcher, runtimeId!);
@@ -804,6 +935,7 @@ async function triggerTeleport(
 
   } catch (err) {
     log.error('Teleport trigger failed', { error: String(err) });
+    await removeFollowerTeleportStorageScript(watcher, 'trigger-error');
     watcher.phase = 'done';
     cleanupTeleportWatcher(watcher);
     watcher.rejectBlock?.(err instanceof Error ? err : new Error(String(err)));
@@ -860,12 +992,16 @@ async function captureCookiesAndComplete(
     try {
       followerStorage = await captureTeleportStorageSnapshot(browser, 'follower');
       log.info('Captured follower storage for leader', {
+        origin: followerStorage.origin || '(unknown)',
         localStorageCount: Object.keys(followerStorage.localStorage).length,
         sessionStorageCount: Object.keys(followerStorage.sessionStorage).length,
       });
     } catch (err) {
       log.warn('Could not capture follower storage', { error: String(err) });
     }
+
+    await logFollowerTeleportDiagnosticsOnce(browser, watcher, 'capture');
+    await removeFollowerTeleportStorageScript(watcher, 'capture');
 
     // 3. Close follower tab
     try {
@@ -884,7 +1020,12 @@ async function captureCookiesAndComplete(
         await browser.sendCDP('Network.setCookies', { cookies });
         log.info('Injected cookies into leader tab', { count: cookies.length, leaderTargetId });
       }
-      const removeLeaderStorageScript = await installTeleportStorageInitScript(browser, followerStorage, 'leader');
+      const removeLeaderStorageScript = await installTeleportStorageInitScript(
+        browser,
+        followerStorage,
+        leaderTargetId,
+        'leader',
+      );
       // Navigate leader to the original URL (before SSO redirect), falling back to finalUrl
       try {
         if (navigateUrl) {
@@ -908,6 +1049,7 @@ async function captureCookiesAndComplete(
     watcher.resolveBlock?.(resultMsg);
   } catch (err) {
     log.error('Cookie capture failed', { error: String(err) });
+    await removeFollowerTeleportStorageScript(watcher, 'capture-error');
     watcher.phase = 'done';
     cleanupTeleportWatcher(watcher);
     watcher.rejectBlock?.(err instanceof Error ? err : new Error(String(err)));

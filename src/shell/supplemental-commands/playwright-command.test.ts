@@ -1969,6 +1969,7 @@ describe('playwright-cli teleport trigger and capture', () => {
       if (expr.includes('window.localStorage')) {
         storageCaptureCount++;
         return JSON.stringify({
+          origin: 'https://login.example.com',
           localStorage: { leaderEmail: 'person@example.com' },
           sessionStorage: { leaderStep: 'email-entered' },
           capture: storageCaptureCount,
@@ -2050,10 +2051,12 @@ describe('playwright-cli teleport trigger and capture', () => {
         storageCaptureCount++;
         return storageCaptureCount === 1
           ? JSON.stringify({
+              origin: 'https://login.example.com',
               localStorage: { leaderEmail: 'person@example.com' },
               sessionStorage: { leaderStep: 'email-entered' },
             })
           : JSON.stringify({
+              origin: 'https://app.example.com',
               localStorage: { followerToken: 'transferred-token' },
               sessionStorage: { followerStep: 'authenticated' },
             });
@@ -2113,6 +2116,83 @@ describe('playwright-cli teleport trigger and capture', () => {
 
     // Verify follower tab was closed (raw targetId gets prefixed by triggerTeleport)
     expect(browser.closePage).toHaveBeenCalledWith('f-runtime:remote-tab-1');
+  });
+
+  it('keeps follower storage replay installed until capture and scopes it to the snapshot origin', async () => {
+    let leaderCallCount = 0;
+    let followerCallCount = 0;
+    let storageCaptureCount = 0;
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
+      if (expr === 'window.location.href') {
+        const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+        if (!state.teleportWatcher || state.teleportWatcher.phase === 'armed') {
+          leaderCallCount++;
+          return leaderCallCount <= 1
+            ? 'https://app.example.com/dashboard'
+            : 'https://login.example.com/sso';
+        }
+        followerCallCount++;
+        if (followerCallCount <= 1) return 'https://login.example.com/sso';
+        return 'https://app.example.com/callback';
+      }
+      if (expr.includes('window.localStorage')) {
+        storageCaptureCount++;
+        return storageCaptureCount === 1
+          ? JSON.stringify({
+              origin: 'https://login.example.com',
+              localStorage: { leaderEmail: 'person@example.com' },
+              sessionStorage: { leaderStep: 'email-entered' },
+            })
+          : JSON.stringify({
+              origin: 'https://app.example.com',
+              localStorage: { followerToken: 'transferred-token' },
+              sessionStorage: { followerStep: 'authenticated' },
+            });
+      }
+      return JSON.stringify({
+        url: 'https://app.example.com/callback',
+        title: 'Authenticated',
+        bodySnippet: 'Auth completed',
+      });
+    });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(['teleport', '--start=login\\.example\\.com', '--return=app\\.example\\.com'], {} as any);
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('waitingForAuth');
+    expect(browser.sendCDP).not.toHaveBeenCalledWith(
+      'Page.removeScriptToEvaluateOnNewDocument',
+      expect.anything(),
+    );
+
+    const addScriptCalls = (browser.sendCDP as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([method]) => method === 'Page.addScriptToEvaluateOnNewDocument',
+    );
+    expect(addScriptCalls[0]?.[1]).toEqual(expect.objectContaining({
+      source: expect.stringContaining('window.location.origin !== snapshot.origin'),
+    }));
+    expect(addScriptCalls[0]?.[1]).toEqual(expect.objectContaining({
+      source: expect.stringContaining('__slicc_teleport_storage_applied__:'),
+    }));
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('waitingForReturn');
+    expect(browser.sendCDP).not.toHaveBeenCalledWith(
+      'Page.removeScriptToEvaluateOnNewDocument',
+      expect.anything(),
+    );
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(browser.sendCDP).toHaveBeenCalledWith(
+      'Page.removeScriptToEvaluateOnNewDocument',
+      expect.objectContaining({ identifier: expect.stringMatching(/^script-/) }),
+    );
   });
 
   it('should not match return pattern before start pattern seen on follower', async () => {
