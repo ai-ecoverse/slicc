@@ -8,10 +8,23 @@
  * In CLI mode, renders directly in the DOM.
  */
 
+import DOMPurify from 'isomorphic-dompurify';
 import { toolUIRegistry } from '../tools/tool-ui.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('tool-ui-renderer');
+
+/**
+ * Sanitize HTML for tool UI rendering.
+ * Allows data-action attributes for button clicks but strips scripts.
+ */
+function sanitizeToolUIHtml(html: string): string {
+  return DOMPurify.sanitize(html, {
+    ADD_ATTR: ['data-action', 'data-action-data'],
+    FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed'],
+    FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur'],
+  });
+}
 
 const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
@@ -160,7 +173,8 @@ export class ToolUIRenderer {
       `;
       document.head.appendChild(style);
     }
-    wrapper.innerHTML = html;
+    // Sanitize HTML to prevent XSS - allows data-action but strips scripts
+    wrapper.innerHTML = sanitizeToolUIHtml(html);
     this.container.appendChild(wrapper);
 
     // Attach click handlers for data-action elements
