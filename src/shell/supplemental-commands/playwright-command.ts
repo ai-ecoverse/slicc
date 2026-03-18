@@ -661,6 +661,11 @@ async function applyTeleportStorageSnapshot(
   const raw = await browser.evaluate(buildTeleportStorageApplyScript(snapshot));
   log.info('Applied teleport storage snapshot on current page', {
     target,
+    totalEntries,
+    resultType: typeof raw,
+  });
+  log.debug('Applied teleport storage snapshot details', {
+    target,
     origin: snapshot.origin || '(unknown)',
     totalEntries,
     resultType: typeof raw,
@@ -682,6 +687,11 @@ async function installTeleportStorageInitScript(
   const identifier = typeof result['identifier'] === 'string' ? result['identifier'] : null;
 
   log.info('Installed teleport storage init script', {
+    target,
+    totalEntries,
+    hasIdentifier: !!identifier,
+  });
+  log.debug('Installed teleport storage init script details', {
     target,
     origin: snapshot.origin || '(unknown)',
     localStorageCount: Object.keys(snapshot.localStorage).length,
@@ -741,7 +751,7 @@ async function logFollowerTeleportDiagnosticsOnce(
     const key = `${reason}:${diagnostics.url}:${diagnostics.title}`;
     if (watcher.lastFollowerDiagnosticKey === key) return;
     watcher.lastFollowerDiagnosticKey = key;
-    log.info('Teleport follower diagnostics', {
+    log.debug('Teleport follower diagnostics', {
       reason,
       url: diagnostics.url,
       title: diagnostics.title,
@@ -772,6 +782,10 @@ async function handleTeleportTimeout(
   watcher: TeleportWatcher,
 ): Promise<void> {
   log.warn('Teleport timed out', {
+    timeoutMs: watcher.timeoutMs,
+    phase: watcher.phase,
+  });
+  log.debug('Teleport timeout details', {
     timeoutMs: watcher.timeoutMs,
     phase: watcher.phase,
     followerTargetId: watcher.followerTargetId,
@@ -822,7 +836,17 @@ function armTeleportWatcher(
   runtimeId?: string,
   originalUrl?: string,
 ): TeleportWatcher {
-  log.info('Arming teleport watcher', { startPattern: startPattern.source, returnPattern: returnPattern.source, timeoutMs, runtimeId: runtimeId ?? 'auto', originalUrl });
+  log.info('Arming teleport watcher', {
+    timeoutMs,
+    runtimeSelection: runtimeId ? 'explicit' : 'auto',
+  });
+  log.debug('Arming teleport watcher details', {
+    startPattern: startPattern.source,
+    returnPattern: returnPattern.source,
+    timeoutMs,
+    runtimeId: runtimeId ?? 'auto',
+    originalUrl,
+  });
 
   const watcher: TeleportWatcher = {
     startPattern,
@@ -854,7 +878,8 @@ function armTeleportWatcher(
       const href = typeof raw === 'string' ? raw : String(raw);
       log.debug('Polling leader tab URL', { href, startPattern: startPattern.source });
       if (startPattern.test(href)) {
-        log.info('Start pattern matched', { href, startPattern: startPattern.source });
+        log.info('Teleport start pattern matched on leader');
+        log.debug('Teleport start pattern matched on leader details', { href, startPattern: startPattern.source });
         triggerTeleport(browser, state, watcher, href);
       }
     } catch (err) {
@@ -878,7 +903,8 @@ async function triggerTeleport(
 ): Promise<void> {
   if (watcher.phase !== 'armed') return;
   watcher.phase = 'teleporting';
-  log.info('Teleport triggered', { triggerUrl });
+  log.info('Teleport triggered');
+  log.debug('Teleport trigger details', { triggerUrl });
 
   // Stop polling the leader
   if (watcher.pollInterval) { clearInterval(watcher.pollInterval); watcher.pollInterval = undefined; }
@@ -897,6 +923,11 @@ async function triggerTeleport(
     try {
       leaderStorage = await captureTeleportStorageSnapshot(browser, 'leader');
       log.info('Captured leader storage for follower', {
+        totalEntries: countTeleportStorageEntries(leaderStorage),
+        localStorageCount: Object.keys(leaderStorage.localStorage).length,
+        sessionStorageCount: Object.keys(leaderStorage.sessionStorage).length,
+      });
+      log.debug('Captured leader storage for follower details', {
         origin: leaderStorage.origin || '(unknown)',
         localStorageCount: Object.keys(leaderStorage.localStorage).length,
         sessionStorageCount: Object.keys(leaderStorage.sessionStorage).length,
@@ -914,18 +945,21 @@ async function triggerTeleport(
       if (!best) throw new Error('No followers connected to teleport to');
       runtimeId = best.runtimeId;
     }
-    log.info('Selected follower for teleport', { runtimeId });
+    log.info('Selected follower for teleport');
+    log.debug('Selected follower for teleport details', { runtimeId });
 
     // 3. Open about:blank on the follower (we navigate manually after injecting cookies)
     const rawTargetId = await browser.createRemotePage(runtimeId, 'about:blank');
     // Ensure composite runtimeId:localTargetId format for attachToPage() to detect as remote
     const followerTargetId = rawTargetId.includes(':') ? rawTargetId : `${runtimeId}:${rawTargetId}`;
     watcher.followerTargetId = followerTargetId;
-    log.info('Opened follower tab', { followerTargetId });
+    log.info('Opened follower tab for teleport');
+    log.debug('Opened follower tab for teleport details', { followerTargetId });
 
     // 4. Attach to the follower tab (auto-swaps to RemoteCDPTransport)
     await browser.attachToPage(followerTargetId);
-    log.info('Attached to follower tab', { followerTargetId });
+    log.info('Attached to follower tab for teleport');
+    log.debug('Attached to follower tab for teleport details', { followerTargetId });
 
     // Enable Page events on the follower
     await browser.sendCDP('Page.enable');
@@ -949,7 +983,8 @@ async function triggerTeleport(
       followerTargetId,
       'follower',
     );
-    log.info('Navigating follower to intercepted URL', {
+    log.info('Navigating follower to intercepted auth URL');
+    log.debug('Navigating follower to intercepted auth URL details', {
       url: followerUrl,
       originalLeaderUrl: watcher.originalLeaderUrl,
       triggerUrl,
@@ -967,7 +1002,8 @@ async function triggerTeleport(
 
     // 5. Monitor follower tab: first wait for auth redirect (startPattern), then watch for return
     watcher.phase = 'waitingForAuth';
-    log.info('Entering waitingForAuth phase — watching for start pattern on follower', { startPattern: watcher.startPattern.source });
+    log.info('Teleport waiting for follower auth redirect');
+    log.debug('Teleport waiting for follower auth redirect details', { startPattern: watcher.startPattern.source });
     watcher.pollInterval = setInterval(async () => {
       if (watcher.phase !== 'waitingForAuth' && watcher.phase !== 'waitingForReturn') return;
       try {
@@ -977,14 +1013,15 @@ async function triggerTeleport(
         if (!href) return;
         if (watcher.lastFollowerUrl !== href) {
           watcher.lastFollowerUrl = href;
-          log.info('Follower teleport navigation', { href, phase: watcher.phase });
+          log.debug('Follower teleport navigation', { href, phase: watcher.phase });
         }
 
         if (watcher.phase === 'waitingForAuth') {
           // Phase 1: waiting for follower to redirect to auth (e.g. Okta)
           if (watcher.startPattern.test(href)) {
             watcher.phase = 'waitingForReturn';
-            log.info('Follower redirected to auth provider — now watching for return pattern', { href, startPattern: watcher.startPattern.source });
+            log.info('Follower reached auth provider; waiting for return pattern');
+            log.debug('Follower reached auth provider details', { href, startPattern: watcher.startPattern.source });
           } else {
             log.debug('Waiting for auth redirect on follower', { href, startPattern: watcher.startPattern.source });
           }
@@ -997,7 +1034,8 @@ async function triggerTeleport(
           await logFollowerTeleportDiagnosticsOnce(browser, watcher, 'waiting-for-return');
         }
         if (watcher.returnPattern.test(href)) {
-          log.info('Return pattern matched on follower after auth', { href, returnPattern: watcher.returnPattern.source });
+          log.info('Follower return pattern matched after auth');
+          log.debug('Follower return pattern matched after auth details', { href, returnPattern: watcher.returnPattern.source });
           captureCookiesAndComplete(browser, state, watcher, runtimeId!);
         }
       } catch (err) {
@@ -1025,7 +1063,11 @@ async function captureCookiesAndComplete(
 ): Promise<void> {
   if (watcher.phase !== 'teleporting' && watcher.phase !== 'waitingForReturn') return;
   watcher.phase = 'capturing';
-  log.info('Capturing auth state from follower', { followerTargetId: watcher.followerTargetId, runtimeId });
+  log.info('Capturing auth state from follower');
+  log.debug('Capturing auth state from follower details', {
+    followerTargetId: watcher.followerTargetId,
+    runtimeId,
+  });
 
   // Stop polling and timeout
   if (watcher.pollInterval) { clearInterval(watcher.pollInterval); watcher.pollInterval = undefined; }
@@ -1042,7 +1084,7 @@ async function captureCookiesAndComplete(
     try {
       const raw = await browser.evaluate('window.location.href');
       finalUrl = typeof raw === 'string' ? raw : String(raw);
-      log.info('Captured final URL from follower', { finalUrl });
+      log.debug('Captured final URL from follower', { finalUrl });
     } catch (err) {
       log.warn('Could not read follower URL (may be mid-navigation)', { error: String(err) });
     }
@@ -1050,7 +1092,7 @@ async function captureCookiesAndComplete(
     // Log follower page content for debugging auth flow errors
     try {
       const bodyText = await browser.evaluate('document.body?.innerText?.substring(0, 500) || "(empty)"');
-      log.info('Follower page content at capture time', { bodyText });
+      log.debug('Follower page content at capture time', { bodyText });
     } catch (err) {
       log.warn('Could not read follower page content', { error: String(err) });
     }
@@ -1058,12 +1100,18 @@ async function captureCookiesAndComplete(
     const cookieResult = await browser.sendCDP('Network.getCookies');
     const cookies = (cookieResult['cookies'] as Array<Record<string, unknown>>) ?? [];
     const domainSummary = cookies.length > 0 ? formatCookieDomainSummary(cookies as Array<{ domain?: string }>) : 'none';
-    log.info('Captured cookies from follower', { count: cookies.length, domains: domainSummary });
+    log.info('Captured cookies from follower', { count: cookies.length });
+    log.debug('Captured cookies from follower details', { count: cookies.length, domains: domainSummary });
 
     let followerStorage = EMPTY_TELEPORT_STORAGE;
     try {
       followerStorage = await captureTeleportStorageSnapshot(browser, 'follower');
       log.info('Captured follower storage for leader', {
+        totalEntries: countTeleportStorageEntries(followerStorage),
+        localStorageCount: Object.keys(followerStorage.localStorage).length,
+        sessionStorageCount: Object.keys(followerStorage.sessionStorage).length,
+      });
+      log.debug('Captured follower storage for leader details', {
         origin: followerStorage.origin || '(unknown)',
         localStorageCount: Object.keys(followerStorage.localStorage).length,
         sessionStorageCount: Object.keys(followerStorage.sessionStorage).length,
@@ -1079,7 +1127,8 @@ async function captureCookiesAndComplete(
     // 3. Close follower tab
     try {
       await browser.closePage(watcher.followerTargetId!);
-      log.info('Closed follower tab', { followerTargetId: watcher.followerTargetId });
+      log.info('Closed follower tab after teleport');
+      log.debug('Closed follower tab after teleport details', { followerTargetId: watcher.followerTargetId });
     } catch (err) {
       log.warn('Failed to close follower tab', { error: String(err) });
     }
@@ -1103,10 +1152,14 @@ async function captureCookiesAndComplete(
       await browser.attachToPage(leaderTargetId);
       if (cookies.length > 0) {
         await browser.sendCDP('Network.setCookies', { cookies });
-        log.info('Injected cookies into leader tab', { count: cookies.length, leaderTargetId });
+        log.info('Injected cookies into leader tab', { count: cookies.length });
+        log.debug('Injected cookies into leader tab details', { count: cookies.length, leaderTargetId });
       }
       if (shouldHydrateLeaderOrigin && hydrationUrl) {
         log.info('Hydrating leader storage origin before landing', {
+          storageEntries: followerStorageEntries,
+        });
+        log.debug('Hydrating leader storage origin before landing details', {
           hydrationUrl,
           landingUrl,
           originalLeaderUrl: watcher.originalLeaderUrl,
@@ -1123,6 +1176,9 @@ async function captureCookiesAndComplete(
           }
         } catch (err) {
           log.warn('Direct leader origin hydration failed, falling back to init-script replay', {
+            error: String(err),
+          });
+          log.debug('Direct leader origin hydration fallback details', {
             hydrationUrl,
             landingUrl,
             error: String(err),
@@ -1153,6 +1209,10 @@ async function captureCookiesAndComplete(
         try {
           if (landingUrl) {
             log.info('Navigating leader after auth-state injection', {
+              hasLandingUrl: true,
+              storageEntries: followerStorageEntries,
+            });
+            log.debug('Navigating leader after auth-state injection details', {
               landingUrl,
               originalLeaderUrl: watcher.originalLeaderUrl,
               finalUrl,
@@ -1177,7 +1237,12 @@ async function captureCookiesAndComplete(
     const storageNote = followerStorageEntries > 0 ? ` + ${followerStorageEntries} storage entr${followerStorageEntries === 1 ? 'y' : 'ies'}` : '';
     const landedNote = landingUrl ? ` (navigated to ${landingUrl})` : '';
     const resultMsg = `Teleported ${cookies.length} cookie(s)${domainNote}${storageNote} from ${runtimeId}${landedNote}`;
-    log.info('Teleport completed successfully', { result: resultMsg });
+    log.info('Teleport completed successfully', {
+      cookieCount: cookies.length,
+      storageEntries: followerStorageEntries,
+      landed: !!landingUrl,
+    });
+    log.debug('Teleport completed successfully details', { result: resultMsg });
     watcher.resolveBlock?.(resultMsg);
   } catch (err) {
     log.error('Teleport auth-state capture failed', { error: String(err) });
@@ -1205,7 +1270,8 @@ async function checkTeleportBlock(state: PlaywrightState): Promise<string | null
     // Block until the teleport completes
     try {
       const result = await watcher.completionPromise!;
-      log.info('Teleport block resolved', { result });
+      log.info('Teleport block resolved');
+      log.debug('Teleport block resolved details', { result });
       state.teleportWatcher = null;
       return result;
     } catch (err) {
@@ -1428,7 +1494,17 @@ export function createPlaywrightCommand(
             }
           } catch { /* best-effort */ }
 
-          log.info('Arming teleport via explicit subcommand', { startPattern: startPatternStr, returnPattern: returnPatternStr, timeoutSec, runtimeId: runtimeId ?? 'auto', leaderUrl });
+          log.info('Arming teleport via explicit subcommand', {
+            timeoutSec,
+            runtimeSelection: runtimeId ? 'explicit' : 'auto',
+          });
+          log.debug('Arming teleport via explicit subcommand details', {
+            startPattern: startPatternStr,
+            returnPattern: returnPatternStr,
+            timeoutSec,
+            runtimeId: runtimeId ?? 'auto',
+            leaderUrl,
+          });
           armTeleportWatcher(browser, state, startPattern, returnPattern, timeoutSec * 1000, runtimeId, leaderUrl);
           result = { stdout: `Teleport armed on current tab. Will trigger when URL matches ${startPatternStr}\n`, stderr: '', exitCode: 0 }; break;
         }
@@ -1457,7 +1533,8 @@ export function createPlaywrightCommand(
           const teleStartStr = flags['teleport-start'];
           const teleReturnStr = flags['teleport-return'];
           if (teleStartStr && teleReturnStr) {
-            log.info('Arming teleport via --teleport-start/--teleport-return on open/tab-new', { startPattern: teleStartStr, returnPattern: teleReturnStr });
+            log.info('Arming teleport via open/tab-new flags');
+            log.debug('Arming teleport via open/tab-new flags details', { startPattern: teleStartStr, returnPattern: teleReturnStr });
             let teleStart: RegExp;
             let teleReturn: RegExp;
             try { teleStart = new RegExp(teleStartStr); } catch { result = { stdout: '', stderr: `Invalid regex for --teleport-start: ${teleStartStr}\n`, exitCode: 1 }; break; }
@@ -1486,7 +1563,8 @@ export function createPlaywrightCommand(
           const teleStartStr = flags['teleport-start'];
           const teleReturnStr = flags['teleport-return'];
           if (teleStartStr && teleReturnStr) {
-            log.info('Arming teleport via --teleport-start/--teleport-return on goto/navigate', { startPattern: teleStartStr, returnPattern: teleReturnStr });
+            log.info('Arming teleport via goto/navigate flags');
+            log.debug('Arming teleport via goto/navigate flags details', { startPattern: teleStartStr, returnPattern: teleReturnStr });
             let teleStart: RegExp;
             let teleReturn: RegExp;
             try { teleStart = new RegExp(teleStartStr); } catch { result = { stdout: '', stderr: `Invalid regex for --teleport-start: ${teleStartStr}\n`, exitCode: 1 }; break; }
