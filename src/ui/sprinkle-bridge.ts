@@ -5,6 +5,7 @@
 
 import type { VirtualFS } from '../fs/index.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
+import { toPreviewUrl } from '../shell/supplemental-commands/shared.js';
 
 export interface SprinkleBridgeAPI {
   /** Send a lick event to the agent. Accepts {action, data} or a plain action string. */
@@ -15,6 +16,12 @@ export interface SprinkleBridgeAPI {
   off(event: 'update', callback: (data: unknown) => void): void;
   /** Read a file from VFS */
   readFile(path: string): Promise<string>;
+  /** Persist sprinkle state (survives side panel close/reopen). */
+  setState(data: unknown): void;
+  /** Read persisted sprinkle state (null if none saved). */
+  getState(): unknown;
+  /** Open a VFS file in a browser tab via the preview service worker. */
+  open(path: string, opts?: { projectRoot?: string }): void;
   /** Close this sprinkle */
   close(): void;
   /** Sprinkle name */
@@ -66,6 +73,19 @@ export class SprinkleBridge {
         this.listeners.get(key)?.delete(callback);
       },
       readFile: async (path: string) => await this.fs.readFile(path, { encoding: 'utf-8' }) as string,
+      setState: (data: unknown) => {
+        try { localStorage.setItem(`slicc-sprinkle-state:${sprinkleName}`, JSON.stringify(data)); } catch { /* full */ }
+      },
+      getState: (): unknown => {
+        try {
+          const raw = localStorage.getItem(`slicc-sprinkle-state:${sprinkleName}`);
+          return raw ? JSON.parse(raw) : null;
+        } catch { return null; }
+      },
+      open: (path: string) => {
+        const url = /^https?:|^chrome-extension:/.test(path) ? path : toPreviewUrl(path);
+        window.open(url, '_blank');
+      },
       close: () => this.closeHandler(sprinkleName),
     };
   }

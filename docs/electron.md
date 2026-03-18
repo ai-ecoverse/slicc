@@ -39,7 +39,7 @@ node dist/cli/index.js --electron-app=/Applications/Slack.app --kill
 ## How overlay injection works
 
 1. The main CLI launches the target Electron app with a remote debugging port.
-2. The local SLICC server starts as usual on port `3000`.
+2. The local SLICC server starts as usual on port `5710`.
 3. An overlay injector polls the Electron CDP target list.
 4. For each eligible page target, it:
    - registers `Page.addScriptToEvaluateOnNewDocument`

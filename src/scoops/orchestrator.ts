@@ -22,9 +22,10 @@ import { TaskScheduler } from './scheduler.js';
 import { VirtualFS } from '../fs/index.js';
 import { RestrictedFS } from '../fs/restricted-fs.js';
 import type { BrowserAPI } from '../cdp/index.js';
-import { createDefaultSharedFiles } from './skills.js';
+import { createDefaultSharedFiles, createDefaultSkills } from './skills.js';
 import { buildActiveLicksError, type LickManager } from './lick-manager.js';
 import { SessionStore } from '../core/session.js';
+import { trackChatSend } from '../ui/telemetry.js';
 
 const log = createLogger('orchestrator');
 
@@ -209,6 +210,8 @@ export class Orchestrator {
     this.messageQueues.set(scoop.jid, []);
     log.info('Scoop registered', { jid: scoop.jid, name: scoop.name });
 
+
+
     // Fire-and-forget: init runs in background. sendPrompt waits if needed.
     this.createScoopTab(scoop.jid).catch((err) => {
       const msg = err instanceof Error ? err.message : String(err);
@@ -258,6 +261,9 @@ export class Orchestrator {
     this.sharedFs = await VirtualFS.create({ dbName: 'slicc-fs', wipe: true });
     await this.ensureRootStructure();
     await this.ensureGlobalMemory();
+    await createDefaultSkills(this.sharedFs).catch((err) => {
+      log.warn('Failed to re-seed default skills', { error: err instanceof Error ? err.message : String(err) });
+    });
     log.info('Filesystem reset and defaults re-seeded');
   }
 
@@ -290,6 +296,11 @@ export class Orchestrator {
       contentPreview: message.content.slice(0, 80),
     });
 
+    // Telemetry: track chat sends
+    const scoop = this.scoops.get(message.chatJid);
+    const scoopName = scoop?.isCone ? 'cone' : (scoop?.name ?? 'unknown');
+    trackChatSend(scoopName, localStorage.getItem('selected-model') ?? 'unknown');
+
     // Store the message
     await db.saveMessage(message);
 
@@ -321,6 +332,7 @@ export class Orchestrator {
     this.callbacks.onIncomingMessage?.(scoopJid, msg);
 
     log.info('Delegating to scoop', { scoopJid, scoopName: scoop.name, promptLength: prompt.length });
+
     // Fire-and-forget: don't await the scoop's agent loop.
     // The cone's tool call returns immediately so the cone can finish its turn.
     // The scoop processes in the background; completion notification routes back to cone.
@@ -358,14 +370,23 @@ export class Orchestrator {
     queue.push(message);
     this.messageQueues.set(message.chatJid, queue);
 
-    // Process immediately if tab is ready
-    const tab = this.tabs.get(message.chatJid);
+    // Process immediately if tab is ready; retry init if in error state
+    let tab = this.tabs.get(message.chatJid);
     log.debug('routeToScoop: queued', {
       chatJid: message.chatJid,
       scoopName: scoop.name,
       tabStatus: tab?.status ?? 'no-tab',
       queueLength: queue.length,
     });
+    if (tab?.status === 'error') {
+      log.info('routeToScoop: tab in error state, retrying init', { chatJid: message.chatJid });
+      try {
+        await this.createScoopTab(message.chatJid);
+        tab = this.tabs.get(message.chatJid);
+      } catch {
+        log.warn('routeToScoop: retry init failed', { chatJid: message.chatJid });
+      }
+    }
     if (tab?.status === 'ready') {
       await this.processScoopQueue(message.chatJid);
     }
@@ -517,6 +538,14 @@ export class Orchestrator {
 
     // Initialize the context
     await context.init();
+
+    // Mark tab as ready so queued messages (lick events, etc.) get processed
+    const initTab = this.tabs.get(jid);
+    if (initTab && initTab.status === 'initializing') {
+      initTab.status = 'ready';
+      this.tabs.set(jid, initTab);
+      this.callbacks.onStatusChange(jid, 'ready');
+    }
 
     log.info('Scoop context created', { jid, contextId });
   }

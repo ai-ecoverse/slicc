@@ -19,6 +19,7 @@
     "slicc": "scripts/slicc-instance"
   },
   "dependencies": {
+    "@adobe/helix-rum-js": "^2.14.2",
     "@cantoo/pdf-lib": "^2.6.1",
     "@imagemagick/magick-wasm": "^0.0.38",
     "@isomorphic-git/lightning-fs": "4.6.2",

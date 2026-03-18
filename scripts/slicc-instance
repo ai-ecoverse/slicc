@@ -12,7 +12,7 @@ set -euo pipefail
 #   slicc-instance --help                         Show this help
 #
 # Instances auto-allocate ports:
-#   Port 3000/9222, 3001/9224, 3002/9226, ...
+#   Port 5710/9222, 5711/9224, 5712/9226, ...
 #   HMR port is derived automatically (PORT + 21679).
 #
 # State tracked in /tmp/slicc-instances.json
@@ -21,7 +21,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 STATE_FILE="/tmp/slicc-instances.json"
-BASE_PORT=3000
+BASE_PORT=5710
 BASE_CDP=9222
 
 # -- helpers ----------------------------------------------------------------
@@ -390,7 +390,7 @@ Options:
   --chrome PATH    Chrome/Chromium binary path (overrides CHROME_PATH / auto-detection)
 
 Port allocation:
-  Serve ports start at 3000 and increment (3000, 3001, 3002, ...).
+  Serve ports start at 5710 and increment (5710, 5711, 5712, ...).
   CDP ports start at 9222 and increment by 2 (9222, 9224, 9226, ...).
   HMR ports (dev mode) are derived: SERVE_PORT + 21679.
 

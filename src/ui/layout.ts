@@ -101,6 +101,8 @@ export class Layout {
   public panels!: LayoutPanels;
   public readonly registry = new PanelRegistry();
   public onModelChange?: (model: string) => void;
+  /** Re-populate the model dropdown (call after provider login/logout). */
+  public refreshModels?: () => void;
   public onScoopSelect?: (scoop: RegisteredScoop) => void;
   public onClearChat?: () => Promise<void>;
   public onClearFilesystem?: () => Promise<void>;
@@ -237,12 +239,14 @@ export class Layout {
         }
       }
 
-      if (modelSelect.selectedIndex === -1 && modelSelect.options.length > 0) {
+      // Auto-select first model if nothing is explicitly selected in localStorage
+      if (!currentModelId && modelSelect.options.length > 0) {
         modelSelect.selectedIndex = 0;
         if (modelSelect.value) setSelectedModelId(modelSelect.value);
       }
     };
     populateModels();
+    this.refreshModels = populateModels;
     modelSelect.addEventListener('change', () => {
       setSelectedModelId(modelSelect.value);
       // Update provider indicator

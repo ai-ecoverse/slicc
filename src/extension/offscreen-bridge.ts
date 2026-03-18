@@ -317,6 +317,14 @@ export class OffscreenBridge {
         // Only handle messages from the panel (relayed by service worker)
         if (msg.source !== 'panel') return false;
 
+        // Route sprinkle-op-response to the proxy's pending request map
+        if ((msg.payload as any)?.type === 'sprinkle-op-response') {
+          import('./sprinkle-proxy.js').then(({ handleSprinkleOpResponse }) => {
+            handleSprinkleOpResponse(msg.payload as any);
+          });
+          return false;
+        }
+
         this.handlePanelMessage(msg.payload as PanelToOffscreenMessage).catch((err) => {
           console.error('[offscreen-bridge] handlePanelMessage error:', err);
           // Surface error to the panel so the user sees something instead of a silent hang
@@ -456,6 +464,34 @@ export class OffscreenBridge {
         // Side panel already wrote to localStorage (shared origin).
         // Just tell all running ScoopContexts to re-read the model.
         this.orchestrator.updateModel();
+        break;
+      }
+
+      case 'sprinkle-lick': {
+        // Sprinkle click event from the side panel — route to the cone
+        const scoops = this.orchestrator.getScoops();
+        const cone = scoops.find(s => s.isCone);
+        if (cone) {
+          const lickMsg = msg as any;
+          const msgId = `sprinkle-${lickMsg.sprinkleName}-${Date.now()}`;
+          const content = `[Sprinkle Event: ${lickMsg.sprinkleName}]\n\`\`\`json\n${JSON.stringify(lickMsg.body, null, 2)}\n\`\`\``;
+          const channelMsg: ChannelMessage = {
+            id: msgId,
+            chatJid: cone.jid,
+            senderId: 'sprinkle',
+            senderName: `sprinkle:${lickMsg.sprinkleName}`,
+            content,
+            timestamp: new Date().toISOString(),
+            fromAssistant: false,
+            channel: 'sprinkle',
+          };
+          this.getBuffer(cone.jid).push({
+            id: msgId, role: 'user', content, timestamp: Date.now(),
+            source: 'lick', channel: 'sprinkle',
+          } as any);
+          this.persistScoop(cone.jid);
+          await this.orchestrator.handleMessage(channelMsg);
+        }
         break;
       }
 

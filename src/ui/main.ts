@@ -30,6 +30,7 @@ import {
   resolveUiRuntimeMode,
 } from './runtime-mode.js';
 import { SprinkleManager } from './sprinkle-manager.js';
+import { initTelemetry } from './telemetry.js';
 
 const log = createLogger('main');
 
@@ -366,10 +367,93 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     client.clearFilesystem();
   };
 
+  // ── Sprinkle Manager (SHTML sprinkle panels) ────────────────────────
+  const sprinkleManager = new SprinkleManager(
+    localFs,
+    (event: LickEvent) => {
+      // Route sprinkle licks to the offscreen orchestrator's cone
+      if (event.type === 'sprinkle') {
+        client.sendSprinkleLick(event.sprinkleName!, event.body);
+      }
+    },
+    {
+      addSprinkle: (name, title, element, zone) => layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined),
+      removeSprinkle: (name) => layout.removeSprinkle(name),
+    },
+  );
+  (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
+
+  // Register handler so the offscreen proxy can relay sprinkle operations here.
+  // Routed through the OffscreenClient's existing onMessage listener to ensure delivery.
+  client.setSprinkleOpHandler((payload: any) => {
+    const { id, op, name, data } = payload;
+    console.log('[main-ext] sprinkle-op handler called', { id, op, name });
+    (async () => {
+      try {
+        let result: unknown;
+        switch (op) {
+          case 'list':
+            await sprinkleManager.refresh();
+            result = sprinkleManager.available();
+            break;
+          case 'opened':
+            result = sprinkleManager.opened();
+            break;
+          case 'refresh':
+            await sprinkleManager.refresh();
+            result = sprinkleManager.available().length;
+            break;
+          case 'open':
+            await sprinkleManager.open(name);
+            result = true;
+            break;
+          case 'close':
+            sprinkleManager.close(name);
+            result = true;
+            break;
+          case 'send':
+            sprinkleManager.sendToSprinkle(name, data);
+            result = true;
+            break;
+          case 'openNewAutoOpen':
+            await sprinkleManager.openNewAutoOpenSprinkles();
+            result = true;
+            break;
+        }
+        console.log('[main-ext] sprinkle-op response sending', { id, op, result: typeof result });
+        (chrome as any).runtime.sendMessage({
+          source: 'panel',
+          payload: { type: 'sprinkle-op-response', id, result },
+        }).catch(() => {});
+      } catch (err) {
+        (chrome as any).runtime.sendMessage({
+          source: 'panel',
+          payload: { type: 'sprinkle-op-response', id, error: err instanceof Error ? err.message : String(err) },
+        }).catch(() => {});
+      }
+    })();
+  });
+
+  await sprinkleManager.refresh();
+  layout.onSprinkleClose = (name) => sprinkleManager.close(name);
+  layout.getAvailableSprinkles = () => {
+    const opened = new Set(sprinkleManager.opened());
+    return sprinkleManager.available()
+      .filter(p => !opened.has(p.name))
+      .map(p => ({ name: p.name, title: p.title }));
+  };
+  layout.onOpenSprinkle = (name, zone) => sprinkleManager.open(name, zone);
+  layout.updateAddButtons();
+  await sprinkleManager.restoreOpenSprinkles();
+  log.info('SprinkleManager initialized (extension mode)');
+
   // Request state from offscreen — retries automatically until ready
   client.requestState();
 
   log.info('Extension UI connected to offscreen agent engine');
+
+  // Initialize operational telemetry (fire-and-forget)
+  initTelemetry().catch(() => {});
 }
 
 // ---------------------------------------------------------------------------
@@ -825,15 +909,15 @@ async function main(): Promise<void> {
     log.debug('Lick event', { type: event.type, name: eventName, targetScoop: event.targetScoop });
 
     // Determine the target:
-    // - Sprinkle licks always go to the cone (cone decides which scoop handles it)
+    // - Sprinkle licks and untargeted events default to cone
     // - Webhook/cron licks use explicit targetScoop if set
     const scoops = orchestrator.getScoops();
     let resolvedTarget: RegisteredScoop | undefined;
 
-    if (isSprinkle) {
-      // Sprinkle licks always route to cone — cone picks or creates a scoop
+    if (isSprinkle || !event.targetScoop) {
+      // Sprinkle licks + untargeted cron/webhook events → cone
       resolvedTarget = scoops.find(s => s.isCone);
-    } else if (event.targetScoop) {
+    } else {
       resolvedTarget = scoops.find(s =>
         s.name === event.targetScoop ||
         s.folder === event.targetScoop ||
@@ -915,6 +999,7 @@ async function main(): Promise<void> {
       }
     }
 
+    await sprinkleManager.restoreOpenSprinkles();
     log.info('SprinkleManager initialized');
   }
 
@@ -1118,6 +1203,9 @@ async function main(): Promise<void> {
   }
 
   log.info('Orchestrator initialized — cone+scoops ready', { scoopCount: orchestrator.getScoops().length });
+
+  // Initialize operational telemetry (fire-and-forget)
+  initTelemetry().catch(() => {});
 }
 
 main().catch((err) => {

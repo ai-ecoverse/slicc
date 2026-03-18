@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: auto; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+</style>
+<script>
+/**
+ * Sprinkle Sandbox — CSP-exempt page for rendering .shtml sprinkles
+ * in Chrome extension mode. Receives content via postMessage from the
+ * parent page (side panel), executes scripts freely, and relays
+ * bridge API calls back to the parent.
+ *
+ * IMPORTANT: Chrome's manifest sandbox creates a unique opaque origin.
+ * Closure variables inside IIFEs are NOT reliably shared between the
+ * initial script execution and dynamically created scripts. All shared
+ * state MUST live on `window` to be accessible from sprinkle scripts.
+ *
+ * NOTE: document.body.innerHTML usage below is intentional — sprinkle
+ * content is user/agent-authored .shtml, not external input. This is
+ * the same trusted-content pattern used in the CLI mode renderer.
+ */
+
+// ── Shared state on window (avoids closure scoping issues) ─────────
+window.__slicc_sd = {};           // localStorage backing store
+window.__slicc_listeners = new Set();
+window.__slicc_name = '';
+window.__slicc_state = null;
+
+// ── localStorage polyfill ──────────────────────────────────────────
+// Native localStorage throws SecurityError on opaque origins.
+// This polyfill reads/writes window.__slicc_sd and proxies
+// mutations to the parent page for persistence.
+window.__slicc_storage = {
+  getItem: function(key) {
+    var v = window.__slicc_sd[key];
+    return v === undefined ? null : v;
+  },
+  setItem: function(key, value) {
+    window.__slicc_sd[key] = String(value);
+    parent.postMessage({ type: 'sprinkle-storage-set', key: key, value: String(value) }, '*');
+  },
+  removeItem: function(key) {
+    delete window.__slicc_sd[key];
+    parent.postMessage({ type: 'sprinkle-storage-remove', key: key }, '*');
+  },
+  clear: function() {
+    var keys = Object.keys(window.__slicc_sd);
+    for (var i = 0; i < keys.length; i++) delete window.__slicc_sd[keys[i]];
+    parent.postMessage({ type: 'sprinkle-storage-clear' }, '*');
+  },
+  get length() {
+    return Object.keys(window.__slicc_sd).length;
+  },
+  key: function(index) {
+    var keys = Object.keys(window.__slicc_sd);
+    return index >= 0 && index < keys.length ? keys[index] : null;
+  },
+};
+
+// Shadow native localStorage — try instance, then prototype
+try {
+  Object.defineProperty(window, 'localStorage', {
+    get: function() { return window.__slicc_storage; },
+    configurable: true,
+  });
+} catch(e) {
+  console.warn('[sprinkle-sandbox] defineProperty on window failed:', e);
+  try {
+    Object.defineProperty(Window.prototype, 'localStorage', {
+      get: function() { return window.__slicc_storage; },
+      configurable: true,
+    });
+  } catch(e2) {
+    console.warn('[sprinkle-sandbox] defineProperty on prototype failed:', e2);
+  }
+}
+
+// ── Bridge proxy (globals for sprinkle scripts) ────────────────────
+window.slicc = {
+  get name() { return window.__slicc_name; },
+  lick: function(event) {
+    var action = typeof event === 'string' ? event : event.action;
+    var data = typeof event === 'string' ? undefined : event.data;
+    parent.postMessage({ type: 'sprinkle-lick', action: action, data: data }, '*');
+  },
+  on: function(event, callback) {
+    if (event === 'update') window.__slicc_listeners.add(callback);
+  },
+  off: function(event, callback) {
+    if (event === 'update') window.__slicc_listeners.delete(callback);
+  },
+  readFile: function(path) {
+    return new Promise(function(resolve, reject) {
+      var id = 'rf-' + Math.random().toString(36).slice(2);
+      function handler(event) {
+        if (event.data && event.data.type === 'sprinkle-readfile-response' && event.data.id === id) {
+          removeEventListener('message', handler);
+          if (event.data.error) reject(new Error(event.data.error));
+          else resolve(event.data.content);
+        }
+      }
+      addEventListener('message', handler);
+      parent.postMessage({ type: 'sprinkle-readfile', id: id, path: path }, '*');
+    });
+  },
+  setState: function(data) {
+    window.__slicc_state = data;
+    parent.postMessage({ type: 'sprinkle-set-state', data: data }, '*');
+  },
+  getState: function() {
+    return window.__slicc_state;
+  },
+  open: function(path, opts) {
+    parent.postMessage({ type: 'sprinkle-open', path: path, projectRoot: opts && opts.projectRoot || null }, '*');
+  },
+  close: function() {
+    parent.postMessage({ type: 'sprinkle-close' }, '*');
+  },
+};
+window.bridge = window.slicc;
+
+// ── Message handler ────────────────────────────────────────────────
+addEventListener('message', function(e) {
+  var msg = e.data;
+  if (!msg || !msg.type) return;
+
+  if (msg.type === 'sprinkle-render') {
+    window.__slicc_name = msg.name || '';
+    window.__slicc_state = msg.savedState || null;
+
+    // Restore persisted localStorage entries from the parent page
+    if (msg.savedStorage && typeof msg.savedStorage === 'object') {
+      var savedKeys = Object.keys(msg.savedStorage);
+      for (var si = 0; si < savedKeys.length; si++) {
+        window.__slicc_sd[savedKeys[si]] = msg.savedStorage[savedKeys[si]];
+      }
+    }
+
+    // Inject parent page's CSS custom properties (theme tokens)
+    if (msg.themeCSS) {
+      var themeStyle = document.createElement('style');
+      themeStyle.textContent = msg.themeCSS;
+      document.head.appendChild(themeStyle);
+    }
+
+    // Render the SHTML content (trusted user/agent-authored sprinkle)
+    // eslint-disable-next-line no-unsanitized/property -- trusted content, same as CLI renderer
+    document.body.innerHTML = msg.content;
+
+    // Auto-set width on .fill elements
+    var fills = document.querySelectorAll('.fill[data-value]');
+    for (var i = 0; i < fills.length; i++) {
+      var v = parseFloat(fills[i].getAttribute('data-value') || '0');
+      if (v >= 0 && v <= 100) fills[i].style.width = v + '%';
+    }
+
+    // Execute scripts (sandbox is CSP-exempt)
+    // IMPORTANT: scope to body — document.querySelectorAll would also grab
+    // the head script, re-execute it, and reset all window state.
+    var deadScripts = Array.from(document.body.querySelectorAll('script'));
+    for (var j = 0; j < deadScripts.length; j++) {
+      var dead = deadScripts[j];
+      dead.remove();
+      var live = document.createElement('script');
+      for (var k = 0; k < dead.attributes.length; k++) {
+        live.setAttribute(dead.attributes[k].name, dead.attributes[k].value);
+      }
+      if (!dead.src) {
+        live.textContent = dead.textContent;
+      }
+      document.body.appendChild(live);
+    }
+
+    parent.postMessage({ type: 'sprinkle-rendered' }, '*');
+  }
+
+  if (msg.type === 'sprinkle-update') {
+    window.__slicc_listeners.forEach(function(cb) {
+      try { cb(msg.data); } catch(e) { /* ignore */ }
+    });
+  }
+});
+</script>
+</head>
+<body></body>
+</html>

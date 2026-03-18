@@ -15,6 +15,8 @@ describe('parseCliRuntimeFlags', () => {
       electron: false,
       electronApp: null,
       kill: false,
+      logLevel: 'info',
+      logDir: null,
     });
   });
 
@@ -26,6 +28,8 @@ describe('parseCliRuntimeFlags', () => {
       electron: false,
       electronApp: null,
       kill: false,
+      logLevel: 'info',
+      logDir: null,
     });
   });
 
@@ -45,6 +49,8 @@ describe('parseCliRuntimeFlags', () => {
       electron: true,
       electronApp: '/Applications/Slack.app',
       kill: false,
+      logLevel: 'info',
+      logDir: null,
     });
   });
 
@@ -56,6 +62,8 @@ describe('parseCliRuntimeFlags', () => {
       electron: true,
       electronApp: '/Applications/Slack.app',
       kill: false,
+      logLevel: 'info',
+      logDir: null,
     });
   });
 
@@ -67,6 +75,8 @@ describe('parseCliRuntimeFlags', () => {
       electron: true,
       electronApp: '/Applications/Linear.app',
       kill: true,
+      logLevel: 'info',
+      logDir: null,
     });
   });
 
@@ -78,6 +88,26 @@ describe('parseCliRuntimeFlags', () => {
       electron: true,
       electronApp: null,
       kill: true,
+      logLevel: 'info',
+      logDir: null,
     });
+  });
+
+  it('parses --log-level flag', () => {
+    expect(parseCliRuntimeFlags(['--log-level=debug']).logLevel).toBe('debug');
+    expect(parseCliRuntimeFlags(['--log-level=error']).logLevel).toBe('error');
+    expect(parseCliRuntimeFlags(['--log-level=warn']).logLevel).toBe('warn');
+  });
+
+  it('ignores invalid log levels', () => {
+    expect(parseCliRuntimeFlags(['--log-level=verbose']).logLevel).toBe('info');
+  });
+
+  it('parses --log-dir flag', () => {
+    expect(parseCliRuntimeFlags(['--log-dir=/tmp/my-logs']).logDir).toBe('/tmp/my-logs');
+  });
+
+  it('sets logDir to null for empty --log-dir', () => {
+    expect(parseCliRuntimeFlags(['--log-dir=']).logDir).toBe(null);
   });
 });
