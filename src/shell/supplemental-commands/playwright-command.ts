@@ -50,6 +50,8 @@ export interface TeleportWatcher {
   leaderTargetId?: string;
   /** The composite targetId of the follower tab (runtimeId:localTargetId). */
   followerTargetId?: string;
+  /** The leader tab's URL before the SSO redirect, for navigation after cookie injection. */
+  originalLeaderUrl?: string;
   /** Promise that resolves/rejects when the teleport cycle completes. */
   completionPromise?: Promise<string>;
   resolveBlock?: (result: string) => void;
@@ -525,8 +527,9 @@ function armTeleportWatcher(
   returnPattern: RegExp,
   timeoutMs: number,
   runtimeId?: string,
+  originalUrl?: string,
 ): TeleportWatcher {
-  log.info('Arming teleport watcher', { startPattern: startPattern.source, returnPattern: returnPattern.source, timeoutMs, runtimeId: runtimeId ?? 'auto' });
+  log.info('Arming teleport watcher', { startPattern: startPattern.source, returnPattern: returnPattern.source, timeoutMs, runtimeId: runtimeId ?? 'auto', originalUrl });
 
   const watcher: TeleportWatcher = {
     startPattern,
@@ -534,6 +537,7 @@ function armTeleportWatcher(
     timeoutMs,
     runtimeId,
     phase: 'armed',
+    originalLeaderUrl: originalUrl,
   };
 
   // Create a completion promise that blocks the current/next command.
@@ -599,7 +603,9 @@ async function triggerTeleport(
     log.info('Selected follower for teleport', { runtimeId });
 
     // 2. Open the trigger URL on the follower
-    const followerTargetId = await browser.createRemotePage(runtimeId, triggerUrl);
+    const rawTargetId = await browser.createRemotePage(runtimeId, triggerUrl);
+    // Ensure composite runtimeId:localTargetId format for attachToPage() to detect as remote
+    const followerTargetId = rawTargetId.includes(':') ? rawTargetId : `${runtimeId}:${rawTargetId}`;
     watcher.followerTargetId = followerTargetId;
     log.info('Opened follower tab', { followerTargetId, url: triggerUrl });
 
@@ -685,6 +691,14 @@ async function captureCookiesAndComplete(
       log.warn('Could not read follower URL (may be mid-navigation)', { error: String(err) });
     }
 
+    // Log follower page content for debugging auth flow errors
+    try {
+      const bodyText = await browser.evaluate('document.body?.innerText?.substring(0, 500) || "(empty)"');
+      log.info('Follower page content at capture time', { bodyText });
+    } catch (err) {
+      log.warn('Could not read follower page content', { error: String(err) });
+    }
+
     const cookieResult = await browser.sendCDP('Network.getCookies');
     const cookies = (cookieResult['cookies'] as Array<Record<string, unknown>>) ?? [];
     const domainSummary = cookies.length > 0 ? formatCookieDomainSummary(cookies as Array<{ domain?: string }>) : 'none';
@@ -700,16 +714,17 @@ async function captureCookiesAndComplete(
 
     // 4. Switch back to the leader tab and inject cookies
     const leaderTargetId = state.currentTarget;
+    const navigateUrl = watcher.originalLeaderUrl ?? finalUrl;
     if (leaderTargetId) {
       await browser.attachToPage(leaderTargetId);
       if (cookies.length > 0) {
         await browser.sendCDP('Network.setCookies', { cookies });
         log.info('Injected cookies into leader tab', { count: cookies.length, leaderTargetId });
       }
-      // Navigate leader to the final URL
-      if (finalUrl) {
-        log.info('Navigating leader to final URL', { finalUrl, leaderTargetId });
-        await browser.sendCDP('Page.navigate', { url: finalUrl });
+      // Navigate leader to the original URL (before SSO redirect), falling back to finalUrl
+      if (navigateUrl) {
+        log.info('Navigating leader after cookie injection', { navigateUrl, originalLeaderUrl: watcher.originalLeaderUrl, finalUrl, leaderTargetId });
+        await browser.sendCDP('Page.navigate', { url: navigateUrl });
       }
     } else {
       log.warn('No leader tab available for cookie injection');
@@ -719,7 +734,7 @@ async function captureCookiesAndComplete(
     watcher.phase = 'done';
     cleanupTeleportWatcher(watcher);
     const domainNote = cookies.length > 0 ? ` (${formatCookieDomainSummary(cookies as Array<{ domain?: string }>)})` : '';
-    const landedNote = finalUrl ? ` (landed on ${finalUrl})` : '';
+    const landedNote = navigateUrl ? ` (navigated to ${navigateUrl})` : '';
     const resultMsg = `Teleported ${cookies.length} cookie(s)${domainNote} from ${runtimeId}${landedNote}`;
     log.info('Teleport completed successfully', { result: resultMsg });
     watcher.resolveBlock?.(resultMsg);
@@ -959,8 +974,19 @@ export function createPlaywrightCommand(
             state.teleportWatcher = null;
           }
 
-          log.info('Arming teleport via explicit subcommand', { startPattern: startPatternStr, returnPattern: returnPatternStr, timeoutSec, runtimeId: runtimeId ?? 'auto' });
-          armTeleportWatcher(browser, state, startPattern, returnPattern, timeoutSec * 1000, runtimeId);
+          // Capture the leader's current URL before the SSO redirect for post-teleport navigation
+          let leaderUrl: string | undefined;
+          try {
+            const targetId = state.currentTarget;
+            if (targetId) {
+              await browser.attachToPage(targetId);
+              const raw = await browser.evaluate('window.location.href');
+              leaderUrl = typeof raw === 'string' ? raw : String(raw);
+            }
+          } catch { /* best-effort */ }
+
+          log.info('Arming teleport via explicit subcommand', { startPattern: startPatternStr, returnPattern: returnPatternStr, timeoutSec, runtimeId: runtimeId ?? 'auto', leaderUrl });
+          armTeleportWatcher(browser, state, startPattern, returnPattern, timeoutSec * 1000, runtimeId, leaderUrl);
           result = { stdout: `Teleport armed on current tab. Will trigger when URL matches ${startPatternStr}\n`, stderr: '', exitCode: 0 }; break;
         }
 
@@ -995,7 +1021,7 @@ export function createPlaywrightCommand(
             try { teleReturn = new RegExp(teleReturnStr); } catch { result = { stdout: '', stderr: `Invalid regex for --teleport-return: ${teleReturnStr}\n`, exitCode: 1 }; break; }
             const teleTimeout = flags['timeout'] ? parseInt(flags['timeout'], 10) : 300;
             if (state.teleportWatcher) { cleanupTeleportWatcher(state.teleportWatcher); state.teleportWatcher = null; }
-            armTeleportWatcher(browser, state, teleStart, teleReturn, teleTimeout * 1000, flags['teleport-runtime']);
+            armTeleportWatcher(browser, state, teleStart, teleReturn, teleTimeout * 1000, flags['teleport-runtime'], url);
           }
 
           result = { stdout: `Opened tab (targetId: ${targetId}) at ${url}\n`, stderr: '', exitCode: 0 }; break;
@@ -1024,7 +1050,7 @@ export function createPlaywrightCommand(
             try { teleReturn = new RegExp(teleReturnStr); } catch { result = { stdout: '', stderr: `Invalid regex for --teleport-return: ${teleReturnStr}\n`, exitCode: 1 }; break; }
             const teleTimeout = flags['timeout'] ? parseInt(flags['timeout'], 10) : 300;
             if (state.teleportWatcher) { cleanupTeleportWatcher(state.teleportWatcher); state.teleportWatcher = null; }
-            armTeleportWatcher(browser, state, teleStart, teleReturn, teleTimeout * 1000, flags['teleport-runtime']);
+            armTeleportWatcher(browser, state, teleStart, teleReturn, teleTimeout * 1000, flags['teleport-runtime'], positional[0]);
           }
 
           result = { stdout: `Navigated to ${positional[0]}\n`, stderr: '', exitCode: 0 }; break;

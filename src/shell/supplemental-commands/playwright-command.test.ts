@@ -1916,7 +1916,7 @@ describe('playwright-cli teleport trigger and capture', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     browser = createMockBrowser({
-      createRemotePage: vi.fn().mockResolvedValue('f-runtime:remote-tab-1'),
+      createRemotePage: vi.fn().mockResolvedValue('remote-tab-1'),
       closePage: vi.fn().mockResolvedValue(undefined),
       sendCDP: vi.fn().mockResolvedValue({
         cookies: [
@@ -1945,12 +1945,15 @@ describe('playwright-cli teleport trigger and capture', () => {
   });
 
   it('polls leader tab and triggers teleport when start pattern matches', async () => {
-    // Make evaluate return the leader tab URL — first "armed" state (no match), then matching
+    // Make evaluate return the leader tab URL
+    // Call 1: during arm (capturing originalLeaderUrl) — no match
+    // Call 2: first poll — no match
+    // Call 3: second poll — match triggers teleport
     let callCount = 0;
     (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
       if (expr === 'window.location.href') {
         callCount++;
-        return callCount <= 1
+        return callCount <= 2
           ? 'https://app.example.com/dashboard'
           : 'https://login.example.com/auth';
       }
@@ -1965,6 +1968,7 @@ describe('playwright-cli teleport trigger and capture', () => {
 
     const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
     expect(state.teleportWatcher!.phase).toBe('armed');
+    expect(state.teleportWatcher!.originalLeaderUrl).toBe('https://app.example.com/dashboard');
 
     // Advance past first poll (no match)
     await vi.advanceTimersByTimeAsync(1000);
@@ -1991,11 +1995,14 @@ describe('playwright-cli teleport trigger and capture', () => {
     let followerCallCount = 0;
     (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
       if (expr === 'window.location.href') {
-        // First we are polling the leader (armed phase), then the follower (teleporting phase)
         const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
-        if (state.teleportWatcher?.phase === 'armed') {
+        // Before watcher is created (capturing leader URL at arm time) or in armed phase
+        if (!state.teleportWatcher || state.teleportWatcher.phase === 'armed') {
           leaderCallCount++;
-          return 'https://login.example.com/sso';
+          // First call is during arm (capturing originalLeaderUrl), rest are polls
+          return leaderCallCount <= 1
+            ? 'https://app.example.com/dashboard' // original page URL captured at arm time
+            : 'https://login.example.com/sso';    // SSO redirect detected by poll
         }
         // Teleporting phase — polling follower
         followerCallCount++;
@@ -2011,6 +2018,8 @@ describe('playwright-cli teleport trigger and capture', () => {
     await cmd.execute(['teleport', '--start=login\\.example\\.com', '--return=app\\.example\\.com'], {} as any);
 
     const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    // Verify the original leader URL was captured at arm time
+    expect(state.teleportWatcher!.originalLeaderUrl).toBe('https://app.example.com/dashboard');
 
     // Leader poll triggers immediately
     await vi.advanceTimersByTimeAsync(1000);
@@ -2039,7 +2048,10 @@ describe('playwright-cli teleport trigger and capture', () => {
       ],
     });
 
-    // Verify follower tab was closed
+    // Verify leader navigated to originalLeaderUrl (not the follower's callback URL)
+    expect(browser.sendCDP).toHaveBeenCalledWith('Page.navigate', { url: 'https://app.example.com/dashboard' });
+
+    // Verify follower tab was closed (raw targetId gets prefixed by triggerTeleport)
     expect(browser.closePage).toHaveBeenCalledWith('f-runtime:remote-tab-1');
   });
 
@@ -2048,7 +2060,9 @@ describe('playwright-cli teleport trigger and capture', () => {
     (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
       if (expr === 'window.location.href') {
         const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
-        if (state.teleportWatcher?.phase === 'armed') {
+        // Before watcher exists (capturing originalLeaderUrl at arm time)
+        if (!state.teleportWatcher) return 'https://app.example.com/dashboard';
+        if (state.teleportWatcher.phase === 'armed') {
           return 'https://login.example.com/sso';
         }
         // Always return non-matching URL in follower phase
@@ -2085,7 +2099,9 @@ describe('playwright-cli teleport trigger and capture', () => {
     (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
       if (expr === 'window.location.href') {
         const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
-        if (state.teleportWatcher?.phase === 'armed') {
+        // Before watcher exists (capturing originalLeaderUrl at arm time)
+        if (!state.teleportWatcher) return 'https://app.example.com/dashboard';
+        if (state.teleportWatcher.phase === 'armed') {
           return 'https://login.example.com/sso';
         }
         followerCallCount++;
