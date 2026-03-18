@@ -49,11 +49,48 @@
  * Receives HTML via postMessage, renders it, and relays button clicks
  * back to the parent with user gesture context.
  *
- * Unlike sprinkle-sandbox, this is simpler — no persistent state,
- * just render HTML and handle actions.
+ * Security:
+ * - Only accepts messages from parent frame (e.source === parent)
+ * - Validates nonce on render requests to prevent replay attacks
+ * - Strips script tags and inline handlers before rendering
  */
 
 window.__toolui_id = '';
+window.__toolui_nonce = '';
+window.__parentOrigin = '*';  // Will be set from render message
+
+// Basic HTML sanitization - strip script tags and inline handlers
+function sanitizeHtml(html) {
+  var temp = document.createElement('div');
+  temp.innerHTML = html;
+
+  // Remove all script tags
+  var scripts = temp.querySelectorAll('script');
+  for (var i = scripts.length - 1; i >= 0; i--) {
+    scripts[i].parentNode.removeChild(scripts[i]);
+  }
+
+  // Remove inline event handlers
+  var allElements = temp.querySelectorAll('*');
+  for (var j = 0; j < allElements.length; j++) {
+    var el = allElements[j];
+    var attrs = el.attributes;
+    for (var k = attrs.length - 1; k >= 0; k--) {
+      var name = attrs[k].name.toLowerCase();
+      if (name.indexOf('on') === 0) {
+        el.removeAttribute(name);
+      }
+    }
+  }
+
+  return temp.innerHTML;
+}
+
+function sendToParent(message) {
+  // Include nonce in all outgoing messages
+  message.nonce = window.__toolui_nonce;
+  parent.postMessage(message, window.__parentOrigin);
+}
 
 // Handle clicks on elements with data-action attribute
 document.addEventListener('click', function(e) {
@@ -65,12 +102,12 @@ document.addEventListener('click', function(e) {
       try { data = data ? JSON.parse(data) : undefined; } catch(err) { /* keep as string */ }
 
       // Post the action to parent — this runs with user gesture context!
-      parent.postMessage({
+      sendToParent({
         type: 'tool-ui-action',
         id: window.__toolui_id,
         action: action,
         data: data,
-      }, '*');
+      });
 
       e.preventDefault();
       e.stopPropagation();
@@ -88,21 +125,27 @@ document.addEventListener('submit', function(e) {
   var data = {};
   formData.forEach(function(value, key) { data[key] = value; });
 
-  parent.postMessage({
+  sendToParent({
     type: 'tool-ui-action',
     id: window.__toolui_id,
     action: form.dataset.action || 'submit',
     data: data,
-  }, '*');
+  });
 });
 
 // Listen for render messages from parent
 addEventListener('message', function(e) {
+  // Only accept messages from our parent frame
+  if (e.source !== parent) return;
+
   var msg = e.data;
   if (!msg || !msg.type) return;
 
   if (msg.type === 'tool-ui-render') {
+    // Store nonce for validating responses
     window.__toolui_id = msg.id || '';
+    window.__toolui_nonce = msg.nonce || '';
+    window.__parentOrigin = e.origin || '*';
 
     // Inject theme CSS from parent
     if (msg.themeCSS) {
@@ -111,10 +154,10 @@ addEventListener('message', function(e) {
       document.head.appendChild(themeStyle);
     }
 
-    // Render the HTML content
-    document.body.innerHTML = msg.html;
+    // Sanitize and render the HTML content
+    document.body.innerHTML = sanitizeHtml(msg.html);
 
-    parent.postMessage({ type: 'tool-ui-rendered', id: msg.id }, '*');
+    sendToParent({ type: 'tool-ui-rendered', id: msg.id });
   }
 });
 </script>

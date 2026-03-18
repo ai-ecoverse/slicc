@@ -33,10 +33,13 @@ export class ToolUIRenderer {
   private iframe: HTMLIFrameElement | null = null;
   private messageHandler: ((event: MessageEvent) => void) | null = null;
   private requestId: string;
+  private nonce: string;
 
   constructor(container: HTMLElement, requestId: string) {
     this.container = container;
     this.requestId = requestId;
+    // Generate a cryptographic nonce for validating sandbox messages
+    this.nonce = crypto.randomUUID();
   }
 
   /** Render HTML content */
@@ -86,6 +89,11 @@ export class ToolUIRenderer {
       if (event.source !== iframe.contentWindow) return;
       const msg = event.data;
       if (!msg?.type) return;
+      // Verify nonce to prevent spoofed messages
+      if (msg.nonce !== this.nonce) {
+        log.warn('Tool UI message nonce mismatch', { expected: this.nonce, received: msg.nonce });
+        return;
+      }
 
       if (msg.type === 'tool-ui-action' && msg.id === this.requestId) {
         log.info('Tool UI action received', { id: msg.id, action: msg.action });
@@ -103,10 +111,11 @@ export class ToolUIRenderer {
 
     const themeCSS = this.collectThemeCSS();
 
-    // Send content to sandbox
+    // Send content to sandbox with nonce for validation
     iframe.contentWindow!.postMessage({
       type: 'tool-ui-render',
       id: this.requestId,
+      nonce: this.nonce,
       html,
       themeCSS,
     }, '*');
