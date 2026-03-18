@@ -25,6 +25,21 @@ const BRIDGE_SCRIPT = `(function() {
     reportHeight();
     new ResizeObserver(reportHeight).observe(document.body);
   });
+  /* Support data-action attributes (Tool UI compat) — auto-lick on click */
+  document.addEventListener('click', function(e) {
+    var el = e.target;
+    while (el && el !== document.body) {
+      if (el.dataset && el.dataset.action) {
+        var actionData = el.dataset.actionData;
+        if (actionData) { try { actionData = JSON.parse(actionData); } catch(ex) {} }
+        window.slicc.lick({ action: el.dataset.action, data: actionData || null });
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      el = el.parentElement;
+    }
+  });
 })();`;
 
 export interface InlineSprinkleInstance {
