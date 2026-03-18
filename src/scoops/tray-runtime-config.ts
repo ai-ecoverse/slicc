@@ -1,10 +1,21 @@
 export const TRAY_WORKER_STORAGE_KEY = 'slicc.trayWorkerBaseUrl';
 export const TRAY_JOIN_STORAGE_KEY = 'slicc.trayJoinUrl';
-export const TRAY_WORKER_QUERY_PARAM = 'trayWorkerUrl';
-export const TRAY_QUERY_PARAM = 'tray';
-export const TRAY_LEGACY_LEAD_QUERY_PARAM = 'lead';
 
-import { parseCapabilityToken } from '../worker/shared.js';
+import {
+  TRAY_LEGACY_LEAD_QUERY_PARAM,
+  TRAY_QUERY_PARAM,
+  TRAY_WORKER_QUERY_PARAM,
+  buildCanonicalTrayLaunchUrl,
+  normalizeTrayWorkerBaseUrl,
+  parseTrayJoinUrl,
+} from '../tray-url-shared.js';
+
+export {
+  TRAY_LEGACY_LEAD_QUERY_PARAM,
+  TRAY_QUERY_PARAM,
+  TRAY_WORKER_QUERY_PARAM,
+  normalizeTrayWorkerBaseUrl,
+};
 
 export interface TrayUrlConfig {
   workerBaseUrl: string;
@@ -22,23 +33,6 @@ export interface RuntimeConfigStorage {
 interface RuntimeConfigResponse {
   trayWorkerBaseUrl?: string | null;
   trayJoinUrl?: string | null;
-}
-
-export function normalizeTrayWorkerBaseUrl(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-
-  try {
-    const url = new URL(raw.trim());
-    url.search = '';
-    url.hash = '';
-    if (url.pathname !== '/') {
-      url.pathname = url.pathname.replace(/\/+$/, '') || '/';
-    }
-    const normalized = url.toString();
-    return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
-  } catch {
-    return null;
-  }
 }
 
 export function buildTrayWorkerUrl(baseUrl: string, path: string): string {
@@ -66,15 +60,7 @@ export function parseTrayUrlValue(raw: string | null | undefined): TrayUrlConfig
       segments.splice(-2, 2);
       url.pathname = segments.length > 0 ? `/${segments.join('/')}` : '/';
     } else if (segments.length >= 2 && segments.at(-2) === 'join') {
-      const token = decodeURIComponent(segments.at(-1)!);
-      const capability = parseCapabilityToken(token);
-      if (!capability) {
-        return null;
-      }
-      trayId = capability.trayId;
-      joinUrl = url.toString();
-      segments.splice(-2, 2);
-      url.pathname = segments.length > 0 ? `/${segments.join('/')}` : '/';
+      return parseTrayJoinUrl(url.toString());
     }
 
     const workerBaseUrl = normalizeTrayWorkerBaseUrl(url.toString());
@@ -125,11 +111,7 @@ export function buildTrayUrlValue(workerBaseUrl: string, trayId?: string | null)
 }
 
 export function buildTrayLaunchUrl(locationHref: string, workerBaseUrl: string, trayId?: string | null): string {
-  const url = new URL(locationHref);
-  url.searchParams.delete(TRAY_WORKER_QUERY_PARAM);
-  url.searchParams.delete(TRAY_LEGACY_LEAD_QUERY_PARAM);
-  url.searchParams.set(TRAY_QUERY_PARAM, buildTrayUrlValue(workerBaseUrl, trayId));
-  return url.toString();
+  return buildCanonicalTrayLaunchUrl(locationHref, buildTrayUrlValue(workerBaseUrl, trayId));
 }
 
 export function parseTrayLeadValue(raw: string | null | undefined): TrayUrlConfig | null {

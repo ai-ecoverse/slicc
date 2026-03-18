@@ -1,6 +1,8 @@
-const TRAY_QUERY_PARAM = 'tray';
-const TRAY_WORKER_QUERY_PARAM = 'trayWorkerUrl';
-const TRAY_LEGACY_LEAD_QUERY_PARAM = 'lead';
+import {
+  buildCanonicalTrayLaunchUrl,
+  normalizeTrayWorkerBaseUrl,
+  parseTrayJoinUrl,
+} from '../tray-url-shared.js';
 
 export interface CliLaunchUrlOptions {
   serveOrigin: string;
@@ -12,58 +14,12 @@ export interface CliLaunchUrlOptions {
 }
 
 function buildTrayJoinLaunchUrl(locationHref: string, joinUrl: string): string {
-  const normalizedJoinUrl = normalizeTrayJoinUrl(joinUrl);
-  if (!normalizedJoinUrl) {
+  const parsedJoinUrl = parseTrayJoinUrl(joinUrl);
+  if (!parsedJoinUrl) {
     throw new Error(`Invalid tray join URL: ${joinUrl}`);
   }
 
-  const url = new URL(locationHref);
-  url.searchParams.delete(TRAY_LEGACY_LEAD_QUERY_PARAM);
-  url.searchParams.delete(TRAY_WORKER_QUERY_PARAM);
-  url.searchParams.set(TRAY_QUERY_PARAM, normalizedJoinUrl);
-  return url.toString();
-}
-
-function normalizeTrayWorkerBaseUrl(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-
-  try {
-    const url = new URL(raw.trim());
-    url.search = '';
-    url.hash = '';
-    if (url.pathname !== '/') {
-      url.pathname = url.pathname.replace(/\/+$/, '') || '/';
-    }
-    const normalized = url.toString();
-    return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
-  } catch {
-    return null;
-  }
-}
-
-function normalizeTrayJoinUrl(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-
-  try {
-    const url = new URL(raw.trim());
-    url.search = '';
-    url.hash = '';
-
-    const segments = url.pathname.split('/').filter(Boolean);
-    if (segments.length < 2 || segments.at(-2) !== 'join') {
-      return null;
-    }
-
-    const token = decodeURIComponent(segments.at(-1)!);
-    const [trayId, secret, ...rest] = token.split('.');
-    if (!trayId || !secret || rest.length > 0) {
-      return null;
-    }
-
-    return url.toString();
-  } catch {
-    return null;
-  }
+  return buildCanonicalTrayLaunchUrl(locationHref, parsedJoinUrl.joinUrl);
 }
 
 function buildTrayLeadLaunchUrl(locationHref: string, workerBaseUrl: string): string {
@@ -72,11 +28,7 @@ function buildTrayLeadLaunchUrl(locationHref: string, workerBaseUrl: string): st
     throw new Error(`Invalid tray worker base URL: ${workerBaseUrl}`);
   }
 
-  const url = new URL(locationHref);
-  url.searchParams.delete(TRAY_LEGACY_LEAD_QUERY_PARAM);
-  url.searchParams.delete(TRAY_WORKER_QUERY_PARAM);
-  url.searchParams.set(TRAY_QUERY_PARAM, normalizedBase);
-  return url.toString();
+  return buildCanonicalTrayLaunchUrl(locationHref, normalizedBase);
 }
 
 export function resolveCliBrowserLaunchUrl(options: CliLaunchUrlOptions): string {
