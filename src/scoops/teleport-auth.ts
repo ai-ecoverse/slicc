@@ -83,44 +83,95 @@ export async function executeTeleportAuth(options: TeleportAuthOptions): Promise
   // 1. Open a new tab
   const createResult = await transport.send('Target.createTarget', { url, background: false });
   const targetId = createResult['targetId'] as string;
+  log.info('[teleport-debug] createTarget done', { targetId });
 
   // 2. Attach to the tab
   const attachResult = await transport.send('Target.attachToTarget', { targetId, flatten: true });
   const sessionId = attachResult['sessionId'] as string;
+  log.info('[teleport-debug] attachToTarget done', { sessionId });
 
   // 3. Register the Page.frameNavigated listener BEFORE Page.enable to avoid
   //    a race condition where the redirect completes before the listener is up.
   const { promise: authCompletion, cancel } = waitForAuthCompletion(transport, url, sessionId, timeoutMs, catchPattern, catchNotPattern);
+  log.info('[teleport-debug] listener registered (before Page.enable)');
 
   // 4. Enable Page events — this may flush buffered navigation events to the
   //    already-registered listener.
   await transport.send('Page.enable', {}, sessionId);
+  log.info('[teleport-debug] Page.enable done');
 
   // 5. Check if the URL already matches a catch/catch-not pattern (handles the
   //    case where the redirect completed before Page.enable flushed events).
+  let earlyMatchResolved = false;
   if (catchPattern || catchNotPattern) {
     try {
       const evalResult = await transport.send('Runtime.evaluate', { expression: 'window.location.href' }, sessionId);
       const currentUrl = (evalResult as Record<string, unknown>)?.['result'] as { value?: string } | undefined;
+      log.info('[teleport-debug] Runtime.evaluate result', { currentUrl: currentUrl?.value });
       if (currentUrl?.value) {
         if (catchPattern && new RegExp(catchPattern).test(currentUrl.value)) {
-          log.info('Catch pattern already matches current URL', { pattern: catchPattern, url: currentUrl.value });
+          log.info('[teleport-debug] catch pattern early match!', { pattern: catchPattern, url: currentUrl.value });
           cancel();
+          earlyMatchResolved = true;
         } else if (catchNotPattern) {
           // For catch-not, URL already NOT matching the pattern means auth is done
-          if (!new RegExp(catchNotPattern).test(currentUrl.value)) {
-            log.info('Catch-not pattern already does not match current URL', { pattern: catchNotPattern, url: currentUrl.value });
+          const matches = new RegExp(catchNotPattern).test(currentUrl.value);
+          log.info('[teleport-debug] catch-not pattern check', { pattern: catchNotPattern, url: currentUrl.value, matches });
+          if (!matches) {
+            log.info('[teleport-debug] catch-not pattern early match (URL does not match)');
             cancel();
+            earlyMatchResolved = true;
           }
         }
       }
-    } catch {
+    } catch (err) {
+      log.info('[teleport-debug] Runtime.evaluate failed', { error: String(err) });
       // Runtime.evaluate may fail if the page is mid-navigation — ignore
     }
   }
 
+  // 5b. Start polling fallback for catch/catch-not patterns.
+  // CDP Page.frameNavigated events may not be reliably delivered through
+  // the CLI WebSocket proxy, so we poll as a robust fallback.
+  let pollInterval: ReturnType<typeof setInterval> | undefined;
+  if ((catchPattern || catchNotPattern) && !earlyMatchResolved) {
+    let catchNotSeenMatch = false;
+    let pollCount = 0;
+    pollInterval = setInterval(async () => {
+      pollCount++;
+      try {
+        const result = await transport.send('Runtime.evaluate', { expression: 'window.location.href' }, sessionId);
+        const urlValue = (result?.['result'] as { value?: string })?.value;
+        if (!urlValue) return;
+
+        log.info('[teleport-debug] poll check', { pollCount, url: urlValue });
+
+        if (catchPattern && new RegExp(catchPattern).test(urlValue)) {
+          log.info('[teleport-debug] poll: catch pattern matched!', { pattern: catchPattern, url: urlValue });
+          cancel();
+          clearInterval(pollInterval);
+          pollInterval = undefined;
+        } else if (catchNotPattern) {
+          const matches = new RegExp(catchNotPattern).test(urlValue);
+          if (matches) {
+            catchNotSeenMatch = true;
+          } else if (catchNotSeenMatch || pollCount >= 3) {
+            // Resolve when URL stops matching AND we've seen it match before
+            // (or after 3 polls = ~3s grace period for initial page load)
+            log.info('[teleport-debug] poll: catch-not pattern no longer matches!', { pattern: catchNotPattern, url: urlValue, catchNotSeenMatch, pollCount });
+            cancel();
+            clearInterval(pollInterval);
+            pollInterval = undefined;
+          }
+        }
+      } catch {
+        // Runtime.evaluate may fail during navigation — ignore
+      }
+    }, 1000);
+  }
+
   onNotification?.(`Authentication requested for ${hostname}. Please complete login in the browser tab.`);
-  log.info('Teleport auth tab opened', { url, targetId });
+  log.info('[teleport-debug] awaiting authCompletion...', { url, targetId, timeoutMs });
 
   // 6. Wait for auth completion or timeout
   let timedOut = false;
@@ -129,17 +180,22 @@ export async function executeTeleportAuth(options: TeleportAuthOptions): Promise
   } catch (err) {
     if (err instanceof Error && err.message === 'Teleport auth timeout') {
       timedOut = true;
-      log.warn('Teleport auth timed out', { url, timeoutMs });
+      log.warn('[teleport-debug] Teleport auth timed out', { url, timeoutMs });
     } else {
       throw err;
     }
+  } finally {
+    // Clean up polling
+    if (pollInterval) {
+      clearInterval(pollInterval);
+    }
   }
 
-  // 4. Capture cookies (even on timeout — partial auth may have set some)
+  // 7. Capture cookies (even on timeout — partial auth may have set some)
   const cookieResult = await transport.send('Network.getCookies', {}, sessionId);
   const cookies = (cookieResult['cookies'] as CookieTeleportCookie[]) ?? [];
 
-  // 5. Close the auth tab
+  // 8. Close the auth tab
   try {
     await transport.send('Target.closeTarget', { targetId });
   } catch {
@@ -150,7 +206,7 @@ export async function executeTeleportAuth(options: TeleportAuthOptions): Promise
     ? `Authentication timed out after ${Math.round(timeoutMs / 1000)}s. ${cookies.length} cookie(s) captured.`
     : `Authentication complete. ${cookies.length} cookie(s) captured and sent to leader.`;
   onNotification?.(status);
-  log.info('Teleport auth complete', { url, cookieCount: cookies.length, timedOut });
+  log.info('[teleport-debug] Teleport auth complete', { url, cookieCount: cookies.length, timedOut });
 
   return { cookies, timedOut };
 }
@@ -206,11 +262,20 @@ function waitForAuthCompletion(
 
     cancelFn = () => {
       if (settled) return;
+      log.info('[teleport-debug] cancel() called (early match or poll resolved)');
       cleanup();
       resolve();
     };
 
     const onNavigated = (params: Record<string, unknown>) => {
+      log.info('[teleport-debug] onNavigated called', {
+        eventSessionId: params['sessionId'],
+        expectedSessionId: sessionId,
+        match: params['sessionId'] === sessionId,
+        frame: params['frame'],
+        settled,
+      });
+
       if (settled) return;
       // Only react to events from our session
       if (params['sessionId'] !== sessionId) return;
@@ -220,7 +285,9 @@ function waitForAuthCompletion(
 
       // Mode A: --catch — complete when URL matches the regex
       if (catchRegex) {
-        if (catchRegex.test(frame.url)) {
+        const matches = catchRegex.test(frame.url);
+        log.info('[teleport-debug] catch regex test', { pattern: catchPattern, url: frame.url, matches });
+        if (matches) {
           log.info('Catch pattern matched', { pattern: catchPattern, url: frame.url });
           cleanup();
           resolve();
@@ -235,7 +302,9 @@ function waitForAuthCompletion(
           log.info('Catch-not: skipping first navigation', { url: frame.url });
           return; // Skip the first navigation event (initial page load)
         }
-        if (!catchNotRegex.test(frame.url)) {
+        const matches = catchNotRegex.test(frame.url);
+        log.info('[teleport-debug] catch-not regex test', { pattern: catchNotPattern, url: frame.url, matches });
+        if (!matches) {
           log.info('Catch-not pattern no longer matches', { pattern: catchNotPattern, url: frame.url });
           cleanup();
           resolve();
@@ -259,7 +328,9 @@ function waitForAuthCompletion(
       // Otherwise: same-host navigation before leaving, or still on SSO provider — ignore
     };
 
+    log.info('[teleport-debug] timer created', { timeoutMs });
     const timer = setTimeout(() => {
+      log.info('[teleport-debug] TIMEOUT fired', { timeoutMs, settled });
       if (settled) return;
       cleanup();
       reject(new Error('Teleport auth timeout'));

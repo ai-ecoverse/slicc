@@ -263,15 +263,21 @@ export function createTeleportCommand(): Command {
       const timeoutMs = parsed.url ? (parsed.timeout ?? 300) * 1000 : undefined;
       const callerTimeoutMs = timeoutMs ? timeoutMs + 10_000 : undefined;
 
+      console.log('[teleport-debug] sending request', { targetRuntimeId, url: parsed.url, catchPattern: parsed.catchPattern, catchNotPattern: parsed.catchNotPattern, timeoutMs, callerTimeoutMs });
+
       const requestPromise = sendRequest(targetRuntimeId, parsed.url, parsed.catchPattern, parsed.catchNotPattern, timeoutMs);
       const cookies = callerTimeoutMs
         ? await Promise.race([
             requestPromise,
             new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error(`Teleport timed out after ${Math.round(callerTimeoutMs / 1000)}s`)), callerTimeoutMs),
+              setTimeout(() => {
+                console.log('[teleport-debug] CALLER TIMEOUT fired', { callerTimeoutMs });
+                reject(new Error(`Teleport timed out after ${Math.round(callerTimeoutMs / 1000)}s`));
+              }, callerTimeoutMs),
             ),
           ])
         : await requestPromise;
+      console.log('[teleport-debug] request resolved', { cookieCount: cookies.length });
       if (cookies.length === 0) {
         return { stdout: `No cookies on runtime ${targetRuntimeId}\n`, stderr: '', exitCode: 0 };
       }
