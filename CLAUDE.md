@@ -137,6 +137,12 @@ Any `*.jsh` file anywhere on the VFS is auto-discovered as a shell command (base
 - `parse-shell-args.ts` — Shell-like argument parser handling double quotes, single quotes, and backslash escapes.
 - `which-command.ts` — Implements `which` to resolve built-in commands (`/usr/bin/<name>`) and `.jsh` scripts (actual VFS path).
 
+**BSH Scripts** (`src/shell/bsh-discovery.ts`, `src/shell/bsh-watchdog.ts`): `.bsh` (Browser Shell) files are JavaScript files that auto-execute when the browser navigates to a matching hostname. They use the same jsh-executor engine as `.jsh` files (same globals: `process`, `console`, `fs`, `exec()`).
+- **Filename convention**: The filename encodes the hostname pattern. `-.okta.com.bsh` → matches `*.okta.com` (dash-dot prefix = wildcard). `login.okta.com.bsh` → matches `login.okta.com` exactly.
+- **`// @match` directive**: Optional URL pattern restriction in the first 10 lines. Example: `// @match *://login.okta.com/app/*`. If present, the URL must match at least one pattern in addition to the hostname.
+- **Auto-discovery**: `bsh-discovery.ts` scans `/workspace/` and `/shared/` on the VFS for `*.bsh` files.
+- **BshWatchdog** (`bsh-watchdog.ts`): Monitors `Page.frameNavigated` CDP events on attached browser tabs. When a main-frame navigation occurs, it matches the URL against discovered `.bsh` entries and executes matching scripts. Periodically re-discovers `.bsh` files (default: 30s). Prevents re-entrant execution for the same script+URL combo.
+
 ### Skills System (src/skills/, src/scoops/skills.ts)
 Two complementary skill systems:
 

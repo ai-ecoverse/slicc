@@ -137,6 +137,15 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **rsync** — Sync files between local VFS and a remote tray runtime. Push: `rsync /local runtime-id:/remote`. Pull: `rsync runtime-id:/remote /local`. Flags: `--dry-run` (preview), `--delete` (remove dest files not in source), `--verbose` (per-file detail). Requires an active tray connection.
 - **teleport** — Teleport browser cookies from a remote tray runtime to the local browser. Enables seamless authentication transfer between SLICC instances in a tray. Usage: `teleport` (auto-select best follower), `teleport <runtime-id>` (target specific runtime), `teleport --list` (show available runtimes), `teleport --url <url>` (open URL on follower for interactive auth). When `--url` is provided, the follower opens a browser tab for the human to complete login; cookies are captured after auth completion (hostname redirect) or a 2-minute timeout. Page reloads by default after applying cookies; use `--no-reload` to skip.
 
+### Browser Shell Scripts (.bsh)
+
+`.bsh` files are JavaScript scripts that auto-execute when the browser navigates to a matching URL. Place them in `/workspace/` or `/shared/`.
+
+- **Filename = hostname pattern**: `-.okta.com.bsh` matches `*.okta.com`, `login.okta.com.bsh` matches exactly `login.okta.com`
+- **`// @match` directive**: Add in first 10 lines to restrict to specific URL patterns (e.g. `// @match *://login.okta.com/app/*`)
+- Same execution engine as `.jsh` — access `process`, `console`, `fs`, `exec()` globals
+- The BshWatchdog monitors browser navigations and runs matching scripts automatically
+
 ## Environment: This Is NOT a Regular Linux Box
 
 This is a sandboxed browser-based VFS environment. Many standard tools (e.g. `python3 -m http.server`, `npx serve`, `nginx`) do **not exist or don't work here**.
