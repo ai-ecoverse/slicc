@@ -46,6 +46,9 @@ export class ToolUIRenderer {
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         log.error('Tool UI iframe load timed out');
+        // Clean up iframe on timeout
+        iframe.remove();
+        this.iframe = null;
         reject(new Error('tool-ui sandbox iframe load timed out'));
       }, 5000);
 
@@ -56,6 +59,9 @@ export class ToolUIRenderer {
 
       iframe.addEventListener('error', () => {
         clearTimeout(timer);
+        // Clean up iframe on error
+        iframe.remove();
+        this.iframe = null;
         reject(new Error('tool-ui sandbox iframe failed to load'));
       }, { once: true });
 
