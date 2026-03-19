@@ -136,16 +136,43 @@ export function resolveElectronAppExecutablePath(
       // Expected path doesn't exist, scan the directory
     }
 
-    // Scan MacOS directory for executable files
+    // Scan MacOS directory for the main executable
     // Many Electron apps use "Electron" as the executable name
+    // Prefer known main executable names, filter out helper processes
+    const helperPatterns = [
+      /helper/i,
+      /crash/i,
+      /gpu/i,
+      /renderer/i,
+      /plugin/i,
+      /utility/i,
+    ];
     try {
       const entries = readdirSync(macOSDir);
+
+      // First pass: look for "Electron" executable (common in Electron apps)
+      if (entries.includes('Electron')) {
+        const electronPath = join(macOSDir, 'Electron');
+        try {
+          const stat = statSync(electronPath);
+          if (stat.isFile()) {
+            return electronPath;
+          }
+        } catch {
+          // Continue to next fallback
+        }
+      }
+
+      // Second pass: find first non-helper executable
       for (const entry of entries) {
+        // Skip hidden files, scripts, and helper executables
+        if (entry.startsWith('.') || entry.endsWith('.sh')) continue;
+        if (helperPatterns.some((p) => p.test(entry))) continue;
+
         const entryPath = join(macOSDir, entry);
         try {
           const stat = statSync(entryPath);
-          // Look for executable files (not directories, not helper scripts)
-          if (stat.isFile() && !entry.endsWith('.sh') && !entry.startsWith('.')) {
+          if (stat.isFile()) {
             return entryPath;
           }
         } catch {

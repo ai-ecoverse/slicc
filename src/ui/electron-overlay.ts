@@ -54,13 +54,13 @@ function createConeIconSvg(doc: Document): SVGSVGElement {
   const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 24 24');
   svg.setAttribute('aria-hidden', 'true');
-  
+
+  // Two scoops (circles)
   const circles = [
     { cx: '9', cy: '7.2', r: '4.1' },
     { cx: '15.2', cy: '8.1', r: '4' },
-    { cx: '12', cy: '14.6', r: '6.6' },
   ];
-  
+
   for (const { cx, cy, r } of circles) {
     const circle = doc.createElementNS('http://www.w3.org/2000/svg', 'circle');
     circle.setAttribute('cx', cx);
@@ -68,7 +68,12 @@ function createConeIconSvg(doc: Document): SVGSVGElement {
     circle.setAttribute('r', r);
     svg.appendChild(circle);
   }
-  
+
+  // Cone tip (path)
+  const path = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M9.8 12.4h5.1L12.4 21z');
+  svg.appendChild(path);
+
   return svg;
 }
 

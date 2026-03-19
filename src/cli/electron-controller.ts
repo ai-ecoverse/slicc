@@ -363,14 +363,18 @@ export class ElectronOverlayInjector {
 
     const cspBypassedTargets = this.cspBypassedTargets;
     const needsReload = !cspBypassedTargets.has(target.url);
-    
+    const bootstrapScript = this.bootstrapScript;
+    let pendingReload = false;
+
     ws.on('open', () => {
       console.log(`[electron-float] Connected to target, needsReload=${needsReload}, url=${target.url}`);
       send('Runtime.enable');
-      // Apply CSP bypass (needed for iframe to load external content in local file:// apps)
+      send('Page.enable'); // Required for lifecycle events
+
+      // Set CSP bypass before any navigation (must be set before page loads)
       send('Page.setBypassCSP', { enabled: true });
-      
-      // For web-based Electron apps (like Discord), we need to intercept at REQUEST stage
+
+      // For web-based Electron apps (like Discord), intercept at REQUEST stage
       // and proxy the request ourselves, stripping CSP headers from the response.
       // This is because Fetch.continueResponse doesn't actually modify headers for security policies.
       const isWebContent = target.url.startsWith('https://');
@@ -381,31 +385,32 @@ export class ElectronOverlayInjector {
           patterns: [{ urlPattern: `${urlOrigin}/*`, requestStage: 'Request' }],
         });
       }
-      
+
       if (needsReload) {
         cspBypassedTargets.add(target.url);
-        console.log(`[electron-float] Will reload for CSP bypass: ${target.url}`);
-        setTimeout(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            send('Page.reload', { ignoreCache: true });
-            setTimeout(() => {
-              if (ws.readyState === WebSocket.OPEN) {
-                console.log(`[electron-float] Injecting overlay after reload...`);
-                send('Runtime.evaluate', { expression: this.bootstrapScript, awaitPromise: false });
-              }
-            }, 3000);
-          }
-        }, 2000);
+        pendingReload = true;
+        console.log(`[electron-float] Reloading for CSP bypass: ${target.url}`);
+        send('Page.reload', { ignoreCache: true });
+        // Overlay will be injected on Page.loadEventFired
       } else {
         console.log(`[electron-float] Injecting overlay...`);
-        send('Runtime.evaluate', { expression: this.bootstrapScript, awaitPromise: false });
+        send('Runtime.evaluate', { expression: bootstrapScript, awaitPromise: false });
       }
     });
-    
-    // Handle Fetch.requestPaused events - proxy requests to strip CSP headers
+
+    // Handle CDP events: lifecycle events and Fetch interception
     ws.on('message', (data) => {
       try {
         const msg = JSON.parse(data.toString());
+
+        // Inject overlay after page load completes (replaces setTimeout)
+        if (msg.method === 'Page.loadEventFired' && pendingReload) {
+          pendingReload = false;
+          console.log(`[electron-float] Page loaded, injecting overlay...`);
+          if (ws.readyState === WebSocket.OPEN) {
+            send('Runtime.evaluate', { expression: bootstrapScript, awaitPromise: false });
+          }
+        }
         if (msg.method === 'Fetch.requestPaused') {
           const requestId = msg.params?.requestId;
           const url = msg.params?.request?.url || '';
