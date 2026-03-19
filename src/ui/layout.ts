@@ -40,6 +40,7 @@ import {
 import { EXTENSION_TAB_SPECS, setHiddenTabs, type ExtensionTabId } from './tabbed-ui.js';
 import { TabZone } from './tab-zone.js';
 import { PanelRegistry } from './panel-registry.js';
+import { createIcon } from './icons.js';
 import { showSprinklePicker } from './sprinkle-picker.js';
 import type { ZoneId } from './panel-types.js';
 import type { ChatMessage } from './types.js';
@@ -63,7 +64,6 @@ export class Layout {
   private scoopsEl!: HTMLElement;
   private leftEl!: HTMLElement;
   private rightEl!: HTMLElement;
-  private scoopsDivider!: HTMLElement;
   private verticalDivider!: HTMLElement;
   private horizontalDivider!: HTMLElement;
   private terminalContainer!: HTMLElement;
@@ -96,6 +96,10 @@ export class Layout {
   private clearTermBtn!: HTMLButtonElement;
   private clearFsBtn!: HTMLButtonElement;
 
+  // Hamburger menu button (standalone, Phase 3)
+  private menuBtn: HTMLButtonElement | null = null;
+  private scoopsCollapsed = false;
+
   // Dynamic logo
   private logoSvg: SVGSVGElement | null = null;
   private logoScoopCount = -1; // -1 = initial load, skip animation
@@ -115,7 +119,6 @@ export class Layout {
   /** Callback to open a sprinkle by name. */
   public onOpenSprinkle?: (name: string, zone?: ZoneId) => Promise<void>;
 
-  private scoopsWidth = 0.15;
   private leftWidth = 0.45;
 
   constructor(root: HTMLElement, isExtension = false) {
@@ -166,6 +169,14 @@ export class Layout {
   openTerminal(): void {
     if (this.isExtension) return;
     this.drawerZone.activateTab('terminal');
+  }
+
+  /** Toggle the left scoops panel between collapsed (icon-only) and expanded. */
+  toggleScoopsPanel(): void {
+    this.scoopsCollapsed = !this.scoopsCollapsed;
+    this.scoopsEl.classList.toggle('layout__scoops--collapsed', this.scoopsCollapsed);
+    // Re-apply sizes since scoops width changed
+    setTimeout(() => this.applySizes(), 210); // after CSS transition
   }
 
   /** Show or hide debug tabs (terminal, memory) in extension mode. */
@@ -407,32 +418,77 @@ export class Layout {
 
       header.appendChild(row);
     } else {
-      // ── Standalone: single row (original layout) ────────────────
-      const leftGroup = document.createElement('div');
-      leftGroup.style.cssText = 'display: flex; align-items: center; gap: 6px;';
+      // ── Standalone: three-section header ────────────────────────
+      // Left: hamburger + logo + title
+      const leftSection = document.createElement('div');
+      leftSection.style.cssText = 'display: flex; align-items: center; gap: 6px;';
+
+      const menuBtn = document.createElement('button');
+      menuBtn.className = 'header__btn';
+      menuBtn.id = 'header__menu-btn';
+      menuBtn.setAttribute('aria-label', 'Menu');
+      menuBtn.dataset.tooltip = 'Menu';
+      menuBtn.appendChild(createIcon('menu'));
+      this.menuBtn = menuBtn;
+      menuBtn.addEventListener('click', () => this.toggleScoopsPanel());
+      leftSection.appendChild(menuBtn);
 
       const logo = this.sliccLogo(22);
-      leftGroup.appendChild(logo);
+      leftSection.appendChild(logo);
 
       const title = document.createElement('div');
       title.className = 'header__title';
       title.textContent = 'slicc';
-      leftGroup.appendChild(title);
+      leftSection.appendChild(title);
 
-      // Separator between branding and controls
-      const headerSep = document.createElement('div');
-      headerSep.className = 'header__separator';
-      leftGroup.appendChild(headerSep);
+      header.appendChild(leftSection);
 
-      leftGroup.appendChild(providerIndicator);
-      leftGroup.appendChild(modelSelect);
+      // Center: empty spacer
+      const centerSection = document.createElement('div');
+      centerSection.style.flex = '1';
+      header.appendChild(centerSection);
 
-      header.appendChild(leftGroup);
+      // Right: model picker + provider + sep + help + bell + sep + actions + avatar
+      const rightSection = document.createElement('div');
+      rightSection.style.cssText = 'display: flex; align-items: center; gap: 2px;';
+
+      rightSection.appendChild(modelSelect);
+      rightSection.appendChild(providerIndicator);
+
+      const sep1 = document.createElement('div');
+      sep1.className = 'header__separator';
+      rightSection.appendChild(sep1);
+
+      const helpBtn = document.createElement('button');
+      helpBtn.className = 'header__btn';
+      helpBtn.setAttribute('aria-label', 'Help');
+      helpBtn.dataset.tooltip = 'Help';
+      helpBtn.appendChild(createIcon('helpCircle'));
+      rightSection.appendChild(helpBtn);
+
+      const bellBtn = document.createElement('button');
+      bellBtn.className = 'header__btn';
+      bellBtn.setAttribute('aria-label', 'Notifications');
+      bellBtn.dataset.tooltip = 'Notifications';
+      bellBtn.appendChild(createIcon('bell'));
+      rightSection.appendChild(bellBtn);
+
+      const sep2 = document.createElement('div');
+      sep2.className = 'header__separator';
+      rightSection.appendChild(sep2);
 
       this.actionsEl = document.createElement('div');
       this.actionsEl.className = 'header__actions';
       this.buildButtons();
-      header.appendChild(this.actionsEl);
+      rightSection.appendChild(this.actionsEl);
+
+      const avatar = document.createElement('div');
+      avatar.className = 'header__avatar';
+      avatar.textContent = 'U';
+      avatar.dataset.tooltip = 'User';
+      rightSection.appendChild(avatar);
+
+      header.appendChild(rightSection);
     }
 
     parent.appendChild(header);
@@ -860,11 +916,6 @@ export class Layout {
     this.scoopsEl.className = 'layout__scoops';
     layout.appendChild(this.scoopsEl);
 
-    // Scoops divider
-    this.scoopsDivider = document.createElement('div');
-    this.scoopsDivider.className = 'layout__divider';
-    layout.appendChild(this.scoopsDivider);
-
     // Left panel (chat)
     this.leftEl = document.createElement('div');
     this.leftEl.className = 'layout__left';
@@ -1006,21 +1057,28 @@ export class Layout {
 
     this.applySizes();
 
-    this.setupScoopsDrag();
     this.setupVerticalDrag();
     this.setupHorizontalDrag();
     window.addEventListener('resize', () => this.applySizes());
+
+    // Auto-collapse scoops panel on narrow viewports
+    const checkViewport = () => {
+      if (window.innerWidth < 1024 && !this.scoopsCollapsed) {
+        this.scoopsCollapsed = true;
+        this.scoopsEl.classList.add('layout__scoops--collapsed');
+      }
+    };
+    checkViewport();
   }
 
   private applySizes(): void {
     const totalWidth = this.root.clientWidth;
     const dividerW = 4;
 
-    const scoopsW = Math.round(totalWidth * this.scoopsWidth);
+    const scoopsW = this.scoopsEl.offsetWidth; // read actual width (CSS controls it now)
     const leftW = Math.round(totalWidth * this.leftWidth);
     const rightW = Math.max(0, totalWidth - scoopsW - leftW - (dividerW * 2));
 
-    this.scoopsEl.style.width = scoopsW + 'px';
     this.leftEl.style.width = leftW + 'px';
     this.rightEl.style.width = rightW + 'px';
 
@@ -1045,37 +1103,6 @@ export class Layout {
     }
   }
 
-  private setupScoopsDrag(): void {
-    let dragging = false;
-
-    const onMouseMove = (e: MouseEvent) => {
-      if (!dragging) return;
-      const rect = this.root.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      this.scoopsWidth = Math.max(0.1, Math.min(0.3, x / rect.width));
-      this.applySizes();
-    };
-
-    const onMouseUp = () => {
-      dragging = false;
-      this.scoopsDivider.classList.remove('active');
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-    };
-
-    this.scoopsDivider.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      dragging = true;
-      this.scoopsDivider.classList.add('active');
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
-      window.addEventListener('mousemove', onMouseMove);
-      window.addEventListener('mouseup', onMouseUp);
-    });
-  }
-
   private setupVerticalDrag(): void {
     let dragging = false;
 
@@ -1086,8 +1113,9 @@ export class Layout {
       const xFraction = x / rect.width;
       const minLeft = 0.2;
       const minRight = 0.2;
-      const maxLeft = Math.max(minLeft, 1 - this.scoopsWidth - minRight);
-      const rawLeft = xFraction - this.scoopsWidth;
+      const scoopsFraction = this.scoopsEl.offsetWidth / rect.width;
+      const maxLeft = Math.max(minLeft, 1 - scoopsFraction - minRight);
+      const rawLeft = xFraction - scoopsFraction;
       this.leftWidth = Math.max(minLeft, Math.min(maxLeft, rawLeft));
       this.applySizes();
     };

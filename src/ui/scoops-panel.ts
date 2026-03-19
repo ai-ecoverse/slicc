@@ -76,6 +76,7 @@ export class ScoopsPanel {
       const item = document.createElement('div');
       item.className = `scoop-item ${isSelected ? 'selected' : ''} status-${status}`;
       item.dataset.jid = scoop.jid;
+      item.dataset.tooltip = scoop.assistantLabel;
 
       // Build DOM safely
       // Colored dot indicator — uses SLICC brand palette
@@ -374,9 +375,10 @@ export class ScoopsPanel {
       }
 
       .scoop-icon {
-        width: 10px; height: 10px;
+        width: 32px; height: 32px;
         border-radius: 50%;
         flex-shrink: 0;
+        transition: width 200ms ease, height 200ms ease;
       }
 
       .scoop-info {

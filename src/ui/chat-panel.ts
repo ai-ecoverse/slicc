@@ -294,7 +294,7 @@ export class ChatPanel {
 
     this.textarea = document.createElement('textarea');
     this.textarea.className = 'chat__textarea';
-    this.textarea.placeholder = 'Type a message... (Enter to send)';
+    this.textarea.placeholder = 'Ask anything...';
     this.textarea.rows = 1;
 
     this.sendBtn = document.createElement('button');
@@ -335,16 +335,34 @@ export class ChatPanel {
     this.micBtn.appendChild(svg);
     this.micBtn.dataset.tooltip = 'Voice (Ctrl+Shift+V)';
 
-    // Input wrapper — textarea + inline actions
+    // Input wrapper — textarea + bottom bar
     const inputWrapper = document.createElement('div');
     inputWrapper.className = 'chat__input-wrapper';
     inputWrapper.appendChild(this.textarea);
 
     const inputActions = document.createElement('div');
     inputActions.className = 'chat__input-actions';
-    inputActions.appendChild(this.micBtn);
-    inputActions.appendChild(this.sendBtn);
-    inputActions.appendChild(this.stopBtn);
+
+    // Left side — "+" button
+    const actionsLeft = document.createElement('div');
+    actionsLeft.className = 'chat__input-actions-left';
+    const plusBtn = document.createElement('button');
+    plusBtn.className = 'chat__mic-btn'; // reuse mic button style
+    plusBtn.textContent = '+';
+    plusBtn.style.fontSize = '20px';
+    plusBtn.dataset.tooltip = 'Attach';
+    plusBtn.setAttribute('aria-label', 'Attach');
+    actionsLeft.appendChild(plusBtn);
+    inputActions.appendChild(actionsLeft);
+
+    // Right side — mic, send, stop
+    const actionsRight = document.createElement('div');
+    actionsRight.className = 'chat__input-actions-right';
+    actionsRight.appendChild(this.micBtn);
+    actionsRight.appendChild(this.sendBtn);
+    actionsRight.appendChild(this.stopBtn);
+    inputActions.appendChild(actionsRight);
+
     inputWrapper.appendChild(inputActions);
 
     inputArea.appendChild(inputWrapper);
@@ -373,6 +391,8 @@ export class ChatPanel {
       // Auto-resize textarea
       this.textarea.style.height = 'auto';
       this.textarea.style.height = Math.min(this.textarea.scrollHeight, 120) + 'px';
+      // Toggle send button active state
+      this.sendBtn.classList.toggle('chat__send-btn--active', this.textarea.value.trim().length > 0);
     });
 
     this.sendBtn.addEventListener('click', () => this.sendMessage());
@@ -477,6 +497,7 @@ export class ChatPanel {
     // Clear input
     this.textarea.value = '';
     this.textarea.style.height = 'auto';
+    this.sendBtn.classList.remove('chat__send-btn--active');
 
     // Only lock input if not already streaming (first message triggers streaming)
     if (!this.isStreaming) {
@@ -935,6 +956,26 @@ export class ChatPanel {
         this.hydrateInlineSprinklesInEl(contentEl, msg.id);
       }
       el.appendChild(contentEl);
+
+      // Feedback icons below completed assistant messages
+      if (msg.role === 'assistant' && !msg.isStreaming && msg.content.trim()) {
+        const feedbackRow = document.createElement('div');
+        feedbackRow.className = 'msg__feedback';
+        const feedbackIcons = [
+          { icon: '\uD83D\uDC4D', label: 'Good response' },
+          { icon: '\uD83D\uDC4E', label: 'Bad response' },
+          { icon: '\u21BB', label: 'Regenerate' },
+        ];
+        for (const fi of feedbackIcons) {
+          const btn = document.createElement('button');
+          btn.className = 'msg__feedback-btn';
+          btn.textContent = fi.icon;
+          btn.dataset.tooltip = fi.label;
+          btn.setAttribute('aria-label', fi.label);
+          feedbackRow.appendChild(btn);
+        }
+        el.appendChild(feedbackRow);
+      }
     }
 
     // Only show the message bubble if there's actual content

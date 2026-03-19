@@ -59,8 +59,8 @@ describe('theme', () => {
   });
 
   describe('getThemePreference', () => {
-    it('defaults to system when nothing stored', () => {
-      expect(getThemePreference()).toBe('system');
+    it('defaults to light when nothing stored', () => {
+      expect(getThemePreference()).toBe('light');
     });
 
     it('returns stored preference', () => {
@@ -68,9 +68,9 @@ describe('theme', () => {
       expect(getThemePreference()).toBe('dark');
     });
 
-    it('returns system for invalid stored value', () => {
+    it('returns light for invalid stored value', () => {
       storage.set('slicc-theme', 'invalid');
-      expect(getThemePreference()).toBe('system');
+      expect(getThemePreference()).toBe('light');
     });
   });
 
