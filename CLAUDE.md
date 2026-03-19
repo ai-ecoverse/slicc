@@ -13,6 +13,7 @@ npm run dev:electron -- /Applications/Slack.app  # Electron attach mode
 npm run dev             # Vite dev server only (no Chrome/CDP)
 npm run build           # Production build (UI via Vite + CLI/Electron via TSC)
 npm run build:extension # Build extension into dist/extension/
+npm run package:release # Package deterministic release artifacts into artifacts/release/
 npm run typecheck       # Typecheck browser + Node targets
 npm run test            # Vitest run (all tests)
 npx vitest run src/fs/virtual-fs.test.ts  # Single test file
