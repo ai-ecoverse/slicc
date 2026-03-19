@@ -17,6 +17,7 @@ Build, run, test, and debug SLICC locally.
 | `npm run build:ui` | Vite build only into `dist/ui/` | Build UI assets separately |
 | `npm run build:cli` | TSC build only into `dist/cli/` | Build CLI server + Electron attach helpers separately |
 | `npm run build:extension` | Chrome extension bundle into `dist/extension/` | Build extension; load in `chrome://extensions` |
+| `npm run package:release` | Package deterministic extension + Node/CLI release artifacts into `artifacts/release/` (after running the build commands) | Prepare CI/local release assets for GitHub Releases and later npm publish wiring |
 | `npm run start` | Run production CLI (requires build first) | Run built production bundle |
 | `npm run start:electron -- /Applications/Slack.app` | Run the built Electron attach mode | Smoke-test production Electron output |
 | `npm run typecheck` | Typecheck browser + Node targets | Verify no type errors before committing |
@@ -27,6 +28,54 @@ Build, run, test, and debug SLICC locally.
 | `npx wrangler deploy --env staging` | Deploy the staging Cloudflare Worker tray hub using `wrangler.jsonc` | Publish the staging tray hub (`slicc-tray-hub-staging`) used by GitHub Actions |
 | `npx wrangler deploy` | Deploy the production Cloudflare Worker tray hub using `wrangler.jsonc` | Publish the production tray hub |
 | `WORKER_BASE_URL=https://... npx vitest run src/worker/deployed.test.ts` | Run the deployed tray-hub smoke test | Verify the live Worker contract (`POST /tray`, controller attach, leader WebSocket, webhook responses) |
+
+## Release Operations
+
+Releases are automated with semantic-release. Maintainers do not cut version tags by hand; instead, merge conventional-commit changes onto `main` and let GitHub Actions publish from there.
+
+### End-to-end flow
+
+1. Merge or push conventional-commit changes onto `main`, or manually dispatch `.github/workflows/release.yml` against `main`.
+2. The release workflow runs `npm ci`, `npm run typecheck`, `npm run test`, `npm run build`, and `npm run build:extension` before calling `npx semantic-release`.
+3. `.releaserc.json` limits publishing to `main`, so the semantic-release run exits without publishing when invoked from other refs.
+4. During the semantic-release `prepare` step, `@semantic-release/npm` updates `package.json` to the computed release version, `node dist/cli/sync-release-version.js <version>` updates the root `manifest.json`, and `npm run build:extension && npm run package:release` regenerate versioned release assets in `artifacts/release/`.
+5. During publish, semantic-release publishes the `sliccy` npm package via GitHub Actions OIDC trusted publishing and creates a GitHub Release with generated release notes plus the packaged assets from `artifacts/release/`.
+
+### GitHub Release outputs
+
+Each published GitHub Release includes semantic-release generated release notes plus these attached artifacts from `npm run package:release`:
+
+- `slicc-extension-v<version>.zip` — ZIP archive of `dist/extension/` with normalized ordering, timestamps, and permissions
+- `sliccy-<version>.tgz` — npm tarball for the publishable Node/CLI package
+- `release-artifacts.json` — stable manifest describing the generated artifact paths
+
+### What gets published to npm
+
+`@semantic-release/npm` publishes the root `sliccy` package from `package.json`.
+
+- Published files: `dist/cli/` and `dist/ui/`
+- CLI entrypoint: `slicc`
+- Node requirement: `>=22`
+
+### Required repo configuration
+
+- Release branch: semantic-release is configured for `main` only.
+- Commit format: merges intended to trigger releases must use conventional commits so semantic-release can determine the next version.
+- npm trusted publisher: configure the `sliccy` package on npm to trust this repository's GitHub Actions release workflow. npm exposes trusted publishers per package in the package settings UI, and each package can only have one trusted publisher configured at a time.
+- First publish bootstrap: npm trusted publishing cannot do the very first publish for a brand-new package. A maintainer must publish the initial `sliccy` version manually/bootstrap it once so the package exists on npm, then attach the trusted publisher for subsequent GitHub Actions OIDC releases from `main`.
+- GitHub permissions: the release workflow must keep GitHub Actions `contents: write` access so semantic-release can create tags/releases and upload release assets, plus `id-token: write` so npm trusted publishing can mint the OIDC token. If you replace the default `GITHUB_TOKEN`, use a token with equivalent release/asset write access.
+
+### Local packaging and dry-run checks
+
+Run the packaging flow after the normal production builds:
+
+```bash
+npm run build
+npm run build:extension
+npm run package:release
+```
+
+For a local semantic-release config check, run `npx semantic-release --dry-run --no-ci` from a clone of `main` with full git history. This validates branch/configuration and GitHub release wiring, but local runs do not receive the GitHub Actions OIDC token that npm trusted publishing uses in CI.
 
 When `WORKER_BASE_URL` is set for the CLI/Electron server, the standalone browser runtime now exposes it at `/api/runtime-config` and the cone runtime will automatically create/attach a tray leader session on startup. Passing `--lead` to the CLI launches Chrome with the canonical `?tray=<worker-base-url>` query, and successful leader attach rewrites the visible URL to `?tray=<worker-base-url>/tray/<trayId>`. Passing `--join <join-url>` launches Chrome with the canonical `?tray=<join-url>` follower capability instead; the CLI validates that the value parses as a tray `.../join/<trayId>.<secret>` URL and strips any hash/query suffixes before launch. In standalone/Electron startup, if there is no query override, stored join/base URL, server runtime config, or `VITE_WORKER_BASE_URL`, the browser falls back to the staging worker in dev builds and the production worker in normal builds. Extension/offscreen builds can still use `VITE_WORKER_BASE_URL`, persisted runtime storage, or URL overrides via `tray` (canonical) plus legacy `lead` / `trayWorkerUrl` for the same leader-join path. `GET /join/:token` now reports readiness plus the supported bootstrap transport (`409 FOLLOWER_JOIN_NOT_READY` before a live leader, `200` with `signaling.transport = 'http-poll'` once the leader WebSocket is live), while **`POST /join/:token` remains the follower HTTP contract**: initial attach returns `result.action = wait|signal|fail`, and subsequent `poll` / `answer` / `ice-candidate` / `retry` actions drive the offer/answer/ICE bootstrap without requiring follower-owned tray WebSockets.
 
