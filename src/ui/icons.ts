@@ -15,7 +15,7 @@ export const ICONS = {
   plusCircle: ['M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16z', 'M10 6v8', 'M6 10h8'],
 
   // Chat
-  sendArrow: ['M4 10h12', 'M12 5l5 5-5 5'],
+  sendArrow: ['M6 4l11 6-11 6V4z'],
   plus: ['M10 4v12', 'M4 10h12'],
   sparkle: ['M10 2l1.5 4.5L16 8l-4.5 1.5L10 14l-1.5-4.5L4 8l4.5-1.5L10 2z'],
 
@@ -43,19 +43,25 @@ export const ICONS = {
 
 export type IconName = keyof typeof ICONS;
 
+/** Icons that render as filled shapes rather than stroked outlines. */
+const FILLED_ICONS: ReadonlySet<string> = new Set([]);
+
 /** Create an SVG element from an icon name. */
 export function createIcon(name: IconName, size = 16): SVGSVGElement {
   const paths = ICONS[name];
+  const filled = FILLED_ICONS.has(name);
   const svgNs = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(svgNs, 'svg');
   svg.setAttribute('width', String(size));
   svg.setAttribute('height', String(size));
   svg.setAttribute('viewBox', '0 0 20 20');
-  svg.setAttribute('fill', 'none');
-  svg.setAttribute('stroke', 'currentColor');
-  svg.setAttribute('stroke-width', '1.5');
-  svg.setAttribute('stroke-linecap', 'round');
-  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('fill', filled ? 'currentColor' : 'none');
+  if (!filled) {
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '1.5');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+  }
   for (const d of paths) {
     const path = document.createElementNS(svgNs, 'path');
     path.setAttribute('d', d);

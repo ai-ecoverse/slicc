@@ -421,7 +421,7 @@ export class Layout {
       // ── Standalone: three-section header ────────────────────────
       // Left: hamburger + logo + title
       const leftSection = document.createElement('div');
-      leftSection.style.cssText = 'display: flex; align-items: center; gap: 6px;';
+      leftSection.style.cssText = 'display: flex; align-items: center; gap: 12px;';
 
       const menuBtn = document.createElement('button');
       menuBtn.className = 'header__btn';
@@ -433,7 +433,7 @@ export class Layout {
       menuBtn.addEventListener('click', () => this.toggleScoopsPanel());
       leftSection.appendChild(menuBtn);
 
-      const logo = this.sliccLogo(22);
+      const logo = this.sliccLogo(32);
       leftSection.appendChild(logo);
 
       const title = document.createElement('div');
@@ -450,7 +450,7 @@ export class Layout {
 
       // Right: model picker + provider + sep + help + bell + sep + actions + avatar
       const rightSection = document.createElement('div');
-      rightSection.style.cssText = 'display: flex; align-items: center; gap: 2px;';
+      rightSection.style.cssText = 'display: flex; align-items: center; gap: 8px;';
 
       rightSection.appendChild(modelSelect);
       rightSection.appendChild(providerIndicator);

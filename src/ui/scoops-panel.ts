@@ -289,7 +289,7 @@ export class ScoopsPanel {
         display: flex;
         flex-direction: column;
         height: 100%;
-        background: var(--s2-bg-layer-1);
+        background: transparent;
         color: var(--s2-content-default);
       }
 

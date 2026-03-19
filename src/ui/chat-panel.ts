@@ -21,6 +21,7 @@ import {
   type InlineSprinkleInstance,
 } from './inline-sprinkle.js';
 import { createToolUIRenderer, disposeToolUIRenderer } from './tool-ui-renderer.js';
+import { createIcon } from './icons.js';
 
 const log = createLogger('chat-panel');
 
@@ -294,12 +295,12 @@ export class ChatPanel {
 
     this.textarea = document.createElement('textarea');
     this.textarea.className = 'chat__textarea';
-    this.textarea.placeholder = 'Ask anything...';
+    this.textarea.placeholder = 'Ask anything';
     this.textarea.rows = 1;
 
     this.sendBtn = document.createElement('button');
     this.sendBtn.className = 'chat__send-btn';
-    this.sendBtn.innerHTML = '&#9654;'; // ▶
+    this.sendBtn.appendChild(createIcon('sendArrow', 16));
     this.sendBtn.dataset.tooltip = 'Send message';
 
     this.stopBtn = document.createElement('button');
@@ -343,16 +344,21 @@ export class ChatPanel {
     const inputActions = document.createElement('div');
     inputActions.className = 'chat__input-actions';
 
-    // Left side — "+" button
+    // Left side — "+" and gear buttons (matches Figma promptbar)
     const actionsLeft = document.createElement('div');
     actionsLeft.className = 'chat__input-actions-left';
     const plusBtn = document.createElement('button');
-    plusBtn.className = 'chat__mic-btn'; // reuse mic button style
-    plusBtn.textContent = '+';
-    plusBtn.style.fontSize = '20px';
+    plusBtn.className = 'chat__mic-btn'; // reuse quiet action style
+    plusBtn.appendChild(createIcon('plusCircle', 18));
     plusBtn.dataset.tooltip = 'Attach';
     plusBtn.setAttribute('aria-label', 'Attach');
+    const gearBtn = document.createElement('button');
+    gearBtn.className = 'chat__mic-btn';
+    gearBtn.appendChild(createIcon('gear', 18));
+    gearBtn.dataset.tooltip = 'Settings';
+    gearBtn.setAttribute('aria-label', 'Settings');
     actionsLeft.appendChild(plusBtn);
+    actionsLeft.appendChild(gearBtn);
     inputActions.appendChild(actionsLeft);
 
     // Right side — mic, send, stop
