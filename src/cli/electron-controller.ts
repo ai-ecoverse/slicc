@@ -1,6 +1,8 @@
 import { execFile as nodeExecFile, spawn, type ChildProcess } from 'child_process';
 import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
+import * as http from 'http';
+import * as https from 'https';
 import { promisify } from 'util';
 
 import { WebSocket } from 'ws';
@@ -348,18 +350,27 @@ export class ElectronOverlayInjector {
     ws.on('open', () => {
       console.log(`[electron-float] Connected to target, needsReload=${needsReload}, url=${target.url}`);
       send('Runtime.enable');
-      // Apply CSP bypass (needed for iframe to load external content)
+      // Apply CSP bypass (needed for iframe to load external content in local file:// apps)
       send('Page.setBypassCSP', { enabled: true });
       
+      // For web-based Electron apps (like Discord), we need to intercept at REQUEST stage
+      // and proxy the request ourselves, stripping CSP headers from the response.
+      // This is because Fetch.continueResponse doesn't actually modify headers for security policies.
+      const isWebContent = target.url.startsWith('https://');
+      if (isWebContent) {
+        // Only intercept HTML documents from the main origin
+        const urlOrigin = new URL(target.url).origin;
+        send('Fetch.enable', {
+          patterns: [{ urlPattern: `${urlOrigin}/*`, requestStage: 'Request' }],
+        });
+      }
+      
       if (needsReload) {
-        // First connection: wait for page to stabilize, then set CSP bypass and reload
-        // CSP bypass only takes effect after reload
         cspBypassedTargets.add(target.url);
         console.log(`[electron-float] Will reload for CSP bypass: ${target.url}`);
         setTimeout(() => {
           if (ws.readyState === WebSocket.OPEN) {
-            send('Page.reload');
-            // After reload, inject overlay (keep connection open)
+            send('Page.reload', { ignoreCache: true });
             setTimeout(() => {
               if (ws.readyState === WebSocket.OPEN) {
                 console.log(`[electron-float] Injecting overlay after reload...`);
@@ -369,9 +380,89 @@ export class ElectronOverlayInjector {
           }
         }, 2000);
       } else {
-        // Subsequent connections: just inject overlay
         console.log(`[electron-float] Injecting overlay...`);
         send('Runtime.evaluate', { expression: this.bootstrapScript, awaitPromise: false });
+      }
+    });
+    
+    // Handle Fetch.requestPaused events - proxy requests to strip CSP headers
+    ws.on('message', (data) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg.method === 'Fetch.requestPaused') {
+          const requestId = msg.params?.requestId;
+          const url = msg.params?.request?.url || '';
+          const method = msg.params?.request?.method || 'GET';
+          const requestHeaders = msg.params?.request?.headers || {};
+          
+          // Only proxy HTML document requests (Accept header contains text/html)
+          const acceptHeader = requestHeaders['Accept'] || requestHeaders['accept'] || '';
+          if (!acceptHeader.includes('text/html')) {
+            send('Fetch.continueRequest', { requestId });
+            return;
+          }
+          
+          console.log(`[electron-float] Proxying request to strip CSP: ${url.substring(0, 60)}`);
+          
+          // Make the request ourselves using Node.js http/https
+          const parsedUrl = new URL(url);
+          const transport = parsedUrl.protocol === 'https:' ? https : http;
+          
+          const options = {
+            hostname: parsedUrl.hostname,
+            port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
+            path: parsedUrl.pathname + parsedUrl.search,
+            method: method,
+            headers: requestHeaders,
+          };
+          
+          const proxyReq = transport.request(options, (proxyRes) => {
+            const bodyChunks: Buffer[] = [];
+            proxyRes.on('data', (chunk: Buffer) => bodyChunks.push(chunk));
+            proxyRes.on('end', () => {
+              if (ws.readyState !== WebSocket.OPEN) return;
+              
+              const fullBody = Buffer.concat(bodyChunks);
+              
+              // Build response headers, stripping CSP
+              const responseHeaders: Array<{ name: string; value: string }> = [];
+              let strippedCSP = false;
+              for (const [name, value] of Object.entries(proxyRes.headers)) {
+                if (name.toLowerCase().includes('content-security-policy')) {
+                  strippedCSP = true;
+                  continue; // Skip CSP headers entirely
+                }
+                if (Array.isArray(value)) {
+                  value.forEach(v => responseHeaders.push({ name, value: v }));
+                } else if (value) {
+                  responseHeaders.push({ name, value });
+                }
+              }
+              
+              if (strippedCSP) {
+                console.log(`[electron-float] Stripped CSP from: ${url.substring(0, 60)}`);
+              }
+              
+              send('Fetch.fulfillRequest', {
+                requestId,
+                responseCode: proxyRes.statusCode || 200,
+                responseHeaders,
+                body: fullBody.toString('base64'),
+              });
+            });
+          });
+          
+          proxyReq.on('error', (err) => {
+            console.error(`[electron-float] Proxy request failed for ${url.substring(0, 60)}:`, err.message);
+            if (ws.readyState === WebSocket.OPEN) {
+              send('Fetch.failRequest', { requestId, errorReason: 'Failed' });
+            }
+          });
+          
+          proxyReq.end();
+        }
+      } catch {
+        // Ignore parse errors for non-JSON messages
       }
     });
 
