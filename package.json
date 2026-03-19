@@ -25,7 +25,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "vite",
+    "dev": "npx tsx src/cli/index.ts --dev",
     "build": "npm run build:ui && npm run build:cli",
     "build:ui": "vite build",
     "build:cli": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist/cli', { recursive: true, force: true });\" && tsc -p tsconfig.cli.json",

@@ -10,7 +10,7 @@ Keep this root file high-signal and low-churn. Put fast-changing implementation 
 npm run dev:full        # Full dev mode: Vite HMR + Chrome + CDP proxy (port 5710)
 npm run dev:full -- --prompt "mount /tmp"  # Auto-submit prompt (clears history/fs first)
 npm run dev:electron -- /Applications/Slack.app  # Electron attach mode
-npm run dev             # Vite dev server only (no Chrome/CDP)
+npm run dev             # Same as dev:full (Vite HMR + Chrome + CDP proxy)
 npm run build           # Production build (UI via Vite + CLI/Electron via TSC)
 npm run build:extension # Build extension into dist/extension/
 npm run package:release # Package deterministic release artifacts into artifacts/release/

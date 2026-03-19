@@ -107,13 +107,11 @@ function pipeChildOutput(child: ChildProcess, label: string): void {
 // Port selection — tries the preferred port, falls back to OS-assigned
 // ---------------------------------------------------------------------------
 
-function tryListenOnPort(port: number): Promise<number> {
+function tryListenOnPort(port: number, host: string): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createNetServer();
     server.on('error', reject);
-    // Bind on 127.0.0.1 specifically — Chrome's --remote-debugging-port binds
-    // on 127.0.0.1, so checking on 0.0.0.0/:: would miss the conflict.
-    server.listen(port, '127.0.0.1', () => {
+    server.listen(port, host, () => {
       const addr = server.address();
       const assignedPort = addr && typeof addr === 'object' ? addr.port : port;
       server.close(() => resolve(assignedPort));
@@ -121,12 +119,32 @@ function tryListenOnPort(port: number): Promise<number> {
   });
 }
 
-async function findAvailablePort(preferred: number): Promise<number> {
+/**
+ * Check that a port is free on both IPv4 (127.0.0.1) and IPv6 (::1).
+ * On macOS, `localhost` resolves to `::1`, so a server bound only on
+ * 127.0.0.1 is invisible to browsers connecting via `localhost`.
+ * Checking both address families avoids dual-stack port conflicts
+ * (e.g. a stale Vite process on `::1` while Express binds `127.0.0.1`).
+ */
+async function tryListenOnPortDualStack(port: number): Promise<number> {
+  const assignedPort = await tryListenOnPort(port, '127.0.0.1');
   try {
-    return await tryListenOnPort(preferred);
+    await tryListenOnPort(assignedPort, '::1');
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
-      return tryListenOnPort(0);
+      throw Object.assign(new Error(`Port ${assignedPort} in use on IPv6`), { code: 'EADDRINUSE' });
+    }
+    // ::1 may not be available on some systems — ignore non-EADDRINUSE errors
+  }
+  return assignedPort;
+}
+
+async function findAvailablePort(preferred: number): Promise<number> {
+  try {
+    return await tryListenOnPortDualStack(preferred);
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+      return tryListenOnPort(0, '127.0.0.1');
     }
     throw err;
   }
