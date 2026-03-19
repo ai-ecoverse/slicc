@@ -5,6 +5,7 @@ import AppKit
 struct SliccstartApp: App {
     @State private var bootstrapper = SliccBootstrapper()
     @State private var sliccProcess = SliccProcess()
+    @State private var appManagementPermission = AppManagementPermission()
     @State private var targets: [AppTarget] = []
     @State private var isReady = false
     @State private var alertMessage: String?
@@ -43,6 +44,7 @@ struct SliccstartApp: App {
                     AppListView(
                         targets: targets,
                         sliccProcess: sliccProcess,
+                        appManagementPermission: appManagementPermission,
                         onLaunchStandalone: { target in
                             do {
                                 try sliccProcess.launchStandalone(target)
@@ -91,7 +93,11 @@ struct SliccstartApp: App {
             }
             .frame(width: 340)
             .task { await initialize() }
-            .onDisappear { sliccProcess.stopAll() }
+            .onAppear { appManagementPermission.startPolling() }
+            .onDisappear {
+                sliccProcess.stopAll()
+                appManagementPermission.stopPolling()
+            }
             .alert("Sliccstart", isPresented: $showAlert) {
                 Button("OK") {}
             } message: {

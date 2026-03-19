@@ -3,6 +3,7 @@ import SwiftUI
 struct AppListView: View {
     let targets: [AppTarget]
     @Bindable var sliccProcess: SliccProcess
+    @Bindable var appManagementPermission: AppManagementPermission
     let onLaunchStandalone: (AppTarget) -> Void
     let onLaunchElectron: (AppTarget) -> Void
     let onGuidedInstall: (AppTarget) -> Void
@@ -21,6 +22,7 @@ struct AppListView: View {
                     AppRow(
                         target: target,
                         isRunning: sliccProcess.isRunning(target),
+                        statusDot: .running,
                         onLaunch: { onLaunchStandalone(target) }
                     )
                 }
@@ -32,7 +34,14 @@ struct AppListView: View {
                     AppRow(
                         target: target,
                         isRunning: sliccProcess.isRunning(target),
-                        onLaunch: { onLaunchElectron(target) }
+                        statusDot: appManagementPermission.isGranted ? .running : .needsPermission,
+                        onLaunch: {
+                            if appManagementPermission.isGranted {
+                                onLaunchElectron(target)
+                            } else {
+                                appManagementPermission.openSystemSettings()
+                            }
+                        }
                     )
                 }
             }
@@ -91,9 +100,15 @@ struct SectionHeader: View {
     }
 }
 
+enum AppRowStatusDot {
+    case running
+    case needsPermission
+}
+
 struct AppRow: View {
     let target: AppTarget
     let isRunning: Bool
+    let statusDot: AppRowStatusDot
     let onLaunch: () -> Void
 
     var body: some View {
@@ -106,6 +121,9 @@ struct AppRow: View {
                 Spacer()
                 if isRunning {
                     Circle().fill(.green).frame(width: 7, height: 7)
+                } else if statusDot == .needsPermission {
+                    Circle().fill(.yellow).frame(width: 7, height: 7)
+                        .help("App Management permission required. Click to open System Settings.")
                 }
             }
             .padding(.horizontal, 12)
