@@ -38,7 +38,10 @@ final class SliccProcess {
     // MARK: - Browser mode
 
     func launchStandalone(_ browser: AppTarget) throws {
-        if isRunning(browser) { stop(browser) }
+        if isRunning(browser) {
+            // Already running — just bring Chrome to front
+            return
+        }
         guard !Self.isPortInUse(Self.browserPort) else { throw LaunchError.portInUse(Self.browserPort) }
         try spawn(target: browser, extraArgs: ["--cdp-port=\(Self.browserCdpPort)"], env: [
             "CHROME_PATH": browser.executablePath,
@@ -49,7 +52,10 @@ final class SliccProcess {
     // MARK: - Electron mode (each app gets its own port)
 
     func launchWithElectronApp(_ app: AppTarget) throws {
-        if isRunning(app) { stop(app) }
+        if isRunning(app) {
+            // Already running
+            return
+        }
         let (port, cdpPort) = nextElectronPorts()
         guard !Self.isPortInUse(port) else { throw LaunchError.portInUse(port) }
         try spawn(target: app, extraArgs: [
