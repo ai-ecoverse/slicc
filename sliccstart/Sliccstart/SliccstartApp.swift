@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 @main
 struct SliccstartApp: App {
@@ -6,6 +7,27 @@ struct SliccstartApp: App {
     @State private var sliccProcess = SliccProcess()
     @State private var targets: [AppTarget] = []
     @State private var isReady = false
+    @State private var alertMessage: String?
+    @State private var showAlert = false
+
+    init() {
+        NSApplication.shared.setActivationPolicy(.regular)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+
+        if let iconPath = Self.findSliccIcon() {
+            NSApplication.shared.applicationIconImage = NSImage(contentsOfFile: iconPath)
+        }
+    }
+
+    private static func findSliccIcon() -> String? {
+        var dir = Bundle.main.bundlePath
+        for _ in 0..<6 {
+            dir = (dir as NSString).deletingLastPathComponent
+            let candidate = dir + "/logos/slicc-favicon-128.png"
+            if FileManager.default.fileExists(atPath: candidate) { return candidate }
+        }
+        return nil
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -23,21 +45,43 @@ struct SliccstartApp: App {
                         sliccProcess: sliccProcess,
                         onLaunchBrowser: { target in
                             sliccProcess.stop()
-                            try? sliccProcess.launchWithBrowser(target)
+                            do {
+                                try sliccProcess.launchWithBrowser(target)
+                            } catch {
+                                showError("Failed to launch: \(error.localizedDescription)")
+                            }
                         },
                         onLaunchElectron: { target in
                             sliccProcess.stop()
-                            try? sliccProcess.launchWithElectronApp(target)
+                            do {
+                                try sliccProcess.launchWithElectronApp(target)
+                            } catch {
+                                showError("Failed to launch: \(error.localizedDescription)")
+                            }
                         },
-                        onInstallExtension: { target in
-                            Task.detached {
-                                try? sliccProcess.installExtension(target)
+                        onGuidedInstall: {
+                            do {
+                                try sliccProcess.guidedInstallToDefaultChrome()
+                                showError(
+                                    "Extension path copied to clipboard!\n\n" +
+                                    "In Chrome:\n" +
+                                    "1. Enable 'Developer mode' (top-right toggle)\n" +
+                                    "2. Click 'Load unpacked'\n" +
+                                    "3. Paste the path and select the folder"
+                                )
+                            } catch {
+                                showError("Failed to prepare extension: \(error.localizedDescription)")
                             }
                         },
                         onUpdate: {
                             Task {
                                 isReady = false
-                                try? await bootstrapper.update()
+                                do {
+                                    try await bootstrapper.update()
+                                } catch {
+                                    bootstrapper.lastError = error.localizedDescription
+                                    bootstrapper.progressMessage = error.localizedDescription
+                                }
                                 targets = AppScanner.scan()
                                 isReady = true
                             }
@@ -50,14 +94,20 @@ struct SliccstartApp: App {
             .frame(minHeight: 400)
             .task { await initialize() }
             .onDisappear { sliccProcess.stop() }
+            .alert("Sliccstart", isPresented: $showAlert) {
+                Button("OK") {}
+            } message: {
+                Text(alertMessage ?? "")
+            }
         }
         .windowStyle(.titleBar)
         .windowResizability(.contentMinSize)
     }
 
     private func initialize() async {
-        let status = SliccBootstrapper.checkInstallation()
-        if status != .installed {
+        let sliccDir = sliccProcess.resolvedSliccDir
+        let status = SliccBootstrapper.checkInstallation(sliccDir: sliccDir)
+        if status != .installed && status != .needsBuild {
             do {
                 try await bootstrapper.bootstrap()
             } catch {
@@ -68,5 +118,10 @@ struct SliccstartApp: App {
         }
         targets = AppScanner.scan()
         isReady = true
+    }
+
+    private func showError(_ message: String) {
+        alertMessage = message
+        showAlert = true
     }
 }

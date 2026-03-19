@@ -131,14 +131,23 @@ export async function installExtension(options: {
     throw new Error(`Extension directory not found: ${extensionPath}`);
   }
 
-  // Spawn Chrome with pipe transport and unsafe extension debugging
+  // Chrome 136+ requires --user-data-dir for pipe debugging to activate.
+  // We use a dedicated SLICC profile so the extension persists across runs
+  // launched through Sliccstart. The default Chrome profile is not usable
+  // with --remote-debugging-pipe.
+  // Use the same profile dir the CLI server uses when launched via Sliccstart
+  // (Sliccstart sets TMPDIR=~/.slicc/, CLI creates browser-coding-agent-chrome inside it)
+  const homeDir = process.env['HOME'] ?? process.env['USERPROFILE'] ?? '/tmp';
+  const userDataDir = resolve(homeDir, '.slicc', 'browser-coding-agent-chrome');
+
   const child = spawn(chromePath, [
     '--remote-debugging-pipe',
     '--enable-unsafe-extension-debugging',
     '--no-first-run',
     '--no-default-browser-check',
+    `--user-data-dir=${userDataDir}`,
   ], {
-    stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'],
+    stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'],
   });
 
   try {
