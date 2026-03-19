@@ -173,11 +173,11 @@ describe('SprinkleRenderer', () => {
 
       await rendererA.render(
         `<button id="a" onclick="slicc.lick({action:'a'})">A</button><script></script>`,
-        'sprinkle-a',
+        'sprinkle-a'
       );
       await rendererB.render(
         `<button id="b" onclick="slicc.lick({action:'b'})">B</button><script></script>`,
-        'sprinkle-b',
+        'sprinkle-b'
       );
 
       const btnA = container.querySelector('#a');
@@ -198,7 +198,9 @@ describe('SprinkleRenderer', () => {
       const value = 'myValue';
       try {
         dom.window.localStorage.setItem(`${prefix}${key}`, value);
-      } catch { /* quota */ }
+      } catch {
+        /* quota */
+      }
 
       expect(dom.window.localStorage.getItem(`${prefix}${key}`)).toBe(value);
     });
@@ -214,7 +216,9 @@ describe('SprinkleRenderer', () => {
       // Simulate the storage-remove message handler
       try {
         dom.window.localStorage.removeItem(`${prefix}myKey`);
-      } catch { /* noop */ }
+      } catch {
+        /* noop */
+      }
 
       expect(dom.window.localStorage.getItem(`${prefix}myKey`)).toBeNull();
     });
@@ -244,7 +248,9 @@ describe('SprinkleRenderer', () => {
       expect(dom.window.localStorage.getItem(`${prefix}key2`)).toBeNull();
       expect(dom.window.localStorage.getItem(`${prefix}key3`)).toBeNull();
       // Verify other keys are preserved
-      expect(dom.window.localStorage.getItem('slicc-sprinkle-ls:other-sprinkle:key1')).toBe('other-value');
+      expect(dom.window.localStorage.getItem('slicc-sprinkle-ls:other-sprinkle:key1')).toBe(
+        'other-value'
+      );
       expect(dom.window.localStorage.getItem('some-other-key')).toBe('unrelated-value');
     });
 
@@ -285,19 +291,19 @@ describe('SprinkleRenderer', () => {
       const prefix = `slicc-sprinkle-ls:${sprinkleName}:`;
 
       // Mock localStorage.setItem to throw
-      const setItemSpy = vi
-        .spyOn(dom.window.localStorage, 'setItem')
-        .mockImplementation(() => {
-          const err = new Error('QuotaExceededError');
-          (err as any).name = 'QuotaExceededError';
-          throw err;
-        });
+      const setItemSpy = vi.spyOn(dom.window.localStorage, 'setItem').mockImplementation(() => {
+        const err = new Error('QuotaExceededError');
+        (err as any).name = 'QuotaExceededError';
+        throw err;
+      });
 
       // Simulate the storage-set message handler with error handling
       expect(() => {
         try {
           dom.window.localStorage.setItem(`${prefix}myKey`, 'myValue');
-        } catch { /* quota */ }
+        } catch {
+          /* quota */
+        }
       }).not.toThrow();
 
       setItemSpy.mockRestore();
@@ -318,7 +324,9 @@ describe('SprinkleRenderer', () => {
       expect(() => {
         try {
           dom.window.localStorage.removeItem(`${prefix}myKey`);
-        } catch { /* noop */ }
+        } catch {
+          /* noop */
+        }
       }).not.toThrow();
 
       removeItemSpy.mockRestore();
@@ -361,7 +369,8 @@ describe('full document rendering', () => {
   it('creates an iframe for full HTML documents', async () => {
     const bridge = makeBridge('full-doc');
     const renderer = new SprinkleRenderer(container, bridge);
-    const html = '<!DOCTYPE html><html><head><title>Test</title></head><body><p>Hello</p></body></html>';
+    const html =
+      '<!DOCTYPE html><html><head><title>Test</title></head><body><p>Hello</p></body></html>';
     await renderer.render(html, 'full-doc');
 
     const iframe = container.querySelector('iframe');
@@ -374,7 +383,8 @@ describe('full document rendering', () => {
   it('injects bridge script into srcdoc', async () => {
     const bridge = makeBridge('full-doc');
     const renderer = new SprinkleRenderer(container, bridge);
-    const html = '<!DOCTYPE html><html><head><title>Test</title></head><body><p>Hello</p></body></html>';
+    const html =
+      '<!DOCTYPE html><html><head><title>Test</title></head><body><p>Hello</p></body></html>';
     await renderer.render(html, 'full-doc');
 
     const iframe = container.querySelector('iframe');

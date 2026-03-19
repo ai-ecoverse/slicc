@@ -20,7 +20,12 @@ function serveHelp(): { stdout: string; stderr: string; exitCode: number } {
   };
 }
 
-function parseServeArgs(args: string[]): { directory?: string; entry: string; project: boolean; error?: string } {
+function parseServeArgs(args: string[]): {
+  directory?: string;
+  entry: string;
+  project: boolean;
+  error?: string;
+} {
   let entry = 'index.html';
   let directory: string | undefined;
   let project = false;

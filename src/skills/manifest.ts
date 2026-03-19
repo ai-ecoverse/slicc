@@ -91,7 +91,7 @@ function parseYaml(content: string): Record<string, unknown> {
  */
 export function parseManifestContent(
   content: string,
-  manifestPath: string = MANIFEST_FILE,
+  manifestPath: string = MANIFEST_FILE
 ): SkillManifest {
   const parsed = parseYaml(content);
 
@@ -119,10 +119,7 @@ export function parseManifestContent(
 /**
  * Read and parse a skill manifest from the virtual filesystem.
  */
-export async function readManifest(
-  fs: VirtualFS,
-  skillDir: string,
-): Promise<SkillManifest> {
+export async function readManifest(fs: VirtualFS, skillDir: string): Promise<SkillManifest> {
   const manifestPath = `${skillDir}/${MANIFEST_FILE}`;
   const content = await fs.readTextFile(manifestPath);
   return parseManifestContent(content, manifestPath);
@@ -133,11 +130,9 @@ export async function readManifest(
  */
 export function checkDependencies(
   manifest: SkillManifest,
-  appliedSkills: string[],
+  appliedSkills: string[]
 ): { ok: boolean; missing: string[] } {
-  const missing = (manifest.depends || []).filter(
-    (dep) => !appliedSkills.includes(dep),
-  );
+  const missing = (manifest.depends || []).filter((dep) => !appliedSkills.includes(dep));
   return { ok: missing.length === 0, missing };
 }
 
@@ -146,10 +141,8 @@ export function checkDependencies(
  */
 export function checkConflicts(
   manifest: SkillManifest,
-  appliedSkills: string[],
+  appliedSkills: string[]
 ): { ok: boolean; conflicting: string[] } {
-  const conflicting = (manifest.conflicts || []).filter((c) =>
-    appliedSkills.includes(c),
-  );
+  const conflicting = (manifest.conflicts || []).filter((c) => appliedSkills.includes(c));
   return { ok: conflicting.length === 0, conflicting };
 }

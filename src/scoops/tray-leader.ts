@@ -1,5 +1,8 @@
 import { createLogger } from '../core/logger.js';
-import type { LeaderToWorkerControlMessage, WorkerToLeaderControlMessage } from '../worker/tray-signaling.js';
+import type {
+  LeaderToWorkerControlMessage,
+  WorkerToLeaderControlMessage,
+} from '../worker/tray-signaling.js';
 import * as db from './db.js';
 import { buildTrayWorkerUrl } from './tray-runtime-config.js';
 
@@ -72,7 +75,10 @@ export interface LeaderTraySessionStore {
 }
 
 export interface LeaderTrayWebSocket {
-  addEventListener(type: 'open' | 'message' | 'close' | 'error', listener: (event: { data?: unknown }) => void): void;
+  addEventListener(
+    type: 'open' | 'message' | 'close' | 'error',
+    listener: (event: { data?: unknown }) => void
+  ): void;
   send(data: string): void;
   close(code?: number, reason?: string): void;
 }
@@ -110,14 +116,14 @@ export function parseLeaderTraySession(raw: string | null): LeaderTraySession | 
   try {
     const parsed = JSON.parse(raw) as Partial<LeaderTraySession>;
     if (
-      typeof parsed.workerBaseUrl !== 'string'
-      || typeof parsed.trayId !== 'string'
-      || typeof parsed.createdAt !== 'string'
-      || typeof parsed.controllerId !== 'string'
-      || typeof parsed.controllerUrl !== 'string'
-      || typeof parsed.joinUrl !== 'string'
-      || typeof parsed.webhookUrl !== 'string'
-      || typeof parsed.runtime !== 'string'
+      typeof parsed.workerBaseUrl !== 'string' ||
+      typeof parsed.trayId !== 'string' ||
+      typeof parsed.createdAt !== 'string' ||
+      typeof parsed.controllerId !== 'string' ||
+      typeof parsed.controllerUrl !== 'string' ||
+      typeof parsed.joinUrl !== 'string' ||
+      typeof parsed.webhookUrl !== 'string' ||
+      typeof parsed.runtime !== 'string'
     ) {
       return null;
     }
@@ -131,7 +137,8 @@ export function parseLeaderTraySession(raw: string | null): LeaderTraySession | 
       joinUrl: parsed.joinUrl,
       webhookUrl: parsed.webhookUrl,
       leaderKey: typeof parsed.leaderKey === 'string' ? parsed.leaderKey : undefined,
-      leaderWebSocketUrl: typeof parsed.leaderWebSocketUrl === 'string' ? parsed.leaderWebSocketUrl : null,
+      leaderWebSocketUrl:
+        typeof parsed.leaderWebSocketUrl === 'string' ? parsed.leaderWebSocketUrl : null,
       runtime: parsed.runtime,
     };
   } catch {
@@ -152,7 +159,7 @@ export class LeaderTrayManager {
   constructor(private readonly options: LeaderTrayManagerOptions) {
     this.store = options.store ?? new IndexedDbLeaderTraySessionStore();
     this.fetchImpl = options.fetchImpl ?? createTrayFetch();
-    this.webSocketFactory = options.webSocketFactory ?? (url => new WebSocket(url));
+    this.webSocketFactory = options.webSocketFactory ?? ((url) => new WebSocket(url));
     this.pingIntervalMs = options.pingIntervalMs ?? LEADER_TRAY_PING_INTERVAL_MS;
     this.connectTimeoutMs = options.connectTimeoutMs ?? LEADER_TRAY_CONNECT_TIMEOUT_MS;
   }
@@ -168,7 +175,8 @@ export class LeaderTrayManager {
 
     try {
       const storedSession = await this.store.load();
-      const reusableSession = storedSession?.workerBaseUrl === this.options.workerBaseUrl ? storedSession : null;
+      const reusableSession =
+        storedSession?.workerBaseUrl === this.options.workerBaseUrl ? storedSession : null;
 
       const session = await this.attachWithRecovery(reusableSession);
       this.currentSession = session;
@@ -177,7 +185,11 @@ export class LeaderTrayManager {
       this.startPingLoop(socket);
       setLeaderTrayRuntimeStatus({ state: 'leader', session, error: null });
 
-      log.info('Leader joined tray', { trayId: session.trayId, controllerId: session.controllerId, runtime: session.runtime });
+      log.info('Leader joined tray', {
+        trayId: session.trayId,
+        controllerId: session.controllerId,
+        runtime: session.runtime,
+      });
       return session;
     } catch (error) {
       setLeaderTrayRuntimeStatus({
@@ -237,7 +249,7 @@ export class LeaderTrayManager {
   }
 
   private async claimLeaderSession(session: LeaderTraySession | null): Promise<LeaderTraySession> {
-    const activeSession = session ?? await this.createTraySession();
+    const activeSession = session ?? (await this.createTraySession());
     const attach = await this.fetchJson<ControllerAttachResponse>(activeSession.controllerUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -249,7 +261,9 @@ export class LeaderTrayManager {
     });
 
     if (attach.role !== 'leader' || !attach.leaderKey || !attach.websocket?.url) {
-      throw new Error(`Tray attach did not return leader access for controller ${attach.controllerId}`);
+      throw new Error(
+        `Tray attach did not return leader access for controller ${attach.controllerId}`
+      );
     }
 
     const claimedSession: LeaderTraySession = {
@@ -266,9 +280,12 @@ export class LeaderTrayManager {
   }
 
   private async createTraySession(): Promise<LeaderTraySession> {
-    const created = await this.fetchJson<CreateTrayResponse>(buildTrayWorkerUrl(this.options.workerBaseUrl, 'tray'), {
-      method: 'POST',
-    });
+    const created = await this.fetchJson<CreateTrayResponse>(
+      buildTrayWorkerUrl(this.options.workerBaseUrl, 'tray'),
+      {
+        method: 'POST',
+      }
+    );
 
     return {
       workerBaseUrl: this.options.workerBaseUrl,
@@ -287,7 +304,9 @@ export class LeaderTrayManager {
       const socket = this.webSocketFactory(url);
       let settled = false;
       const timeout = setTimeout(() => {
-        fail(`Tray leader WebSocket timed out after ${this.connectTimeoutMs}ms waiting for leader.connected`);
+        fail(
+          `Tray leader WebSocket timed out after ${this.connectTimeoutMs}ms waiting for leader.connected`
+        );
         try {
           socket.close(1000, 'leader.connected timeout');
         } catch {
@@ -322,8 +341,12 @@ export class LeaderTrayManager {
 
         this.options.onControlMessage?.(payload);
       });
-      socket.addEventListener('close', () => fail('Tray leader WebSocket closed before leader.connected'));
-      socket.addEventListener('error', () => fail('Tray leader WebSocket failed before leader.connected'));
+      socket.addEventListener('close', () =>
+        fail('Tray leader WebSocket closed before leader.connected')
+      );
+      socket.addEventListener('error', () =>
+        fail('Tray leader WebSocket failed before leader.connected')
+      );
     });
   }
 
@@ -359,7 +382,7 @@ class LeaderTrayHttpError extends Error {
   constructor(
     readonly status: number,
     readonly code: string | null,
-    message: string,
+    message: string
   ) {
     super(message);
     this.name = 'LeaderTrayHttpError';
@@ -368,9 +391,17 @@ class LeaderTrayHttpError extends Error {
   static async fromResponse(response: Response): Promise<LeaderTrayHttpError> {
     try {
       const payload = (await response.json()) as { error?: string; code?: string };
-      return new LeaderTrayHttpError(response.status, payload.code ?? null, payload.error ?? `Tray request failed (${response.status})`);
+      return new LeaderTrayHttpError(
+        response.status,
+        payload.code ?? null,
+        payload.error ?? `Tray request failed (${response.status})`
+      );
     } catch {
-      return new LeaderTrayHttpError(response.status, null, `Tray request failed (${response.status})`);
+      return new LeaderTrayHttpError(
+        response.status,
+        null,
+        `Tray request failed (${response.status})`
+      );
     }
   }
 }

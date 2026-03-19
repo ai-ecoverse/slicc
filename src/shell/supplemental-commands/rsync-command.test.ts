@@ -37,24 +37,30 @@ describe('parseRsyncArgs', () => {
 
   it('parses flags', () => {
     const result = parseRsyncArgs(['--dry-run', '--delete', '--verbose', '/a', 'r:/b']);
-    expect(result).toEqual(expect.objectContaining({
-      dryRun: true,
-      delete: true,
-      verbose: true,
-    }));
+    expect(result).toEqual(
+      expect.objectContaining({
+        dryRun: true,
+        delete: true,
+        verbose: true,
+      })
+    );
   });
 
   it('parses short flags', () => {
     const result = parseRsyncArgs(['-n', '-v', '/a', 'r:/b']);
-    expect(result).toEqual(expect.objectContaining({
-      dryRun: true,
-      verbose: true,
-    }));
+    expect(result).toEqual(
+      expect.objectContaining({
+        dryRun: true,
+        verbose: true,
+      })
+    );
   });
 
   it('rejects two remote paths', () => {
     const result = parseRsyncArgs(['a:/foo', 'b:/bar']);
-    expect(result).toEqual({ error: 'Cannot sync between two remote paths — one side must be local' });
+    expect(result).toEqual({
+      error: 'Cannot sync between two remote paths — one side must be local',
+    });
   });
 
   it('rejects two local paths', () => {
@@ -104,20 +110,31 @@ describe('createRsyncCommand', () => {
     // Set up a simple mock remote filesystem state
     const remoteFiles: Record<string, { content: string; size: number; mtime: number }> = {};
 
-    mockSendFsRequest = async (runtimeId: string, request: TrayFsRequest): Promise<TrayFsResponse[]> => {
+    mockSendFsRequest = async (
+      runtimeId: string,
+      request: TrayFsRequest
+    ): Promise<TrayFsResponse[]> => {
       sendCalls.push({ runtimeId, request });
 
       switch (request.op) {
         case 'walk': {
           const paths = Object.keys(remoteFiles)
-            .filter(p => p.startsWith(request.path))
+            .filter((p) => p.startsWith(request.path))
             .sort();
           return [{ ok: true, data: { type: 'paths', paths } }];
         }
         case 'stat': {
           const f = remoteFiles[request.path];
           if (!f) return [{ ok: false, error: 'ENOENT', code: 'ENOENT' }];
-          return [{ ok: true, data: { type: 'stat', stat: { type: 'file', size: f.size, mtime: f.mtime, ctime: f.mtime } } }];
+          return [
+            {
+              ok: true,
+              data: {
+                type: 'stat',
+                stat: { type: 'file', size: f.size, mtime: f.mtime, ctime: f.mtime },
+              },
+            },
+          ];
         }
         case 'readFile': {
           const f = remoteFiles[request.path];
@@ -201,7 +218,7 @@ describe('createRsyncCommand', () => {
     expect(result.stdout).toContain('2 file(s) transferred');
 
     // Verify writeFile calls were made
-    const writes = sendCalls.filter(c => c.request.op === 'writeFile');
+    const writes = sendCalls.filter((c) => c.request.op === 'writeFile');
     expect(writes.length).toBe(2);
   });
 
@@ -216,7 +233,7 @@ describe('createRsyncCommand', () => {
     expect(result.stdout).toContain('1 file(s) would be transferred');
 
     // No writeFile calls
-    const writes = sendCalls.filter(c => c.request.op === 'writeFile');
+    const writes = sendCalls.filter((c) => c.request.op === 'writeFile');
     expect(writes.length).toBe(0);
   });
 
@@ -238,13 +255,21 @@ describe('createRsyncCommand', () => {
 
     const sendFn: SendFsRequestFn = async (_rid, req) => {
       if (req.op === 'walk') {
-        const paths = Object.keys(remoteState).filter(p => p.startsWith(req.path));
+        const paths = Object.keys(remoteState).filter((p) => p.startsWith(req.path));
         return [{ ok: true, data: { type: 'paths', paths } }];
       }
       if (req.op === 'stat') {
         const f = remoteState[req.path];
         if (!f) return [{ ok: false, error: 'ENOENT', code: 'ENOENT' }];
-        return [{ ok: true, data: { type: 'stat', stat: { type: 'file', size: f.size, mtime: f.mtime, ctime: f.mtime } } }];
+        return [
+          {
+            ok: true,
+            data: {
+              type: 'stat',
+              stat: { type: 'file', size: f.size, mtime: f.mtime, ctime: f.mtime },
+            },
+          },
+        ];
       }
       if (req.op === 'readFile') {
         const f = remoteState[req.path];
@@ -262,7 +287,7 @@ describe('createRsyncCommand', () => {
     expect(result.stdout).toContain('1 file(s) transferred');
 
     // Verify local file was created
-    const content = await vfs.readFile('/local/file.txt', { encoding: 'utf-8' }) as string;
+    const content = (await vfs.readFile('/local/file.txt', { encoding: 'utf-8' })) as string;
     expect(content).toBe('remote content');
   });
 });

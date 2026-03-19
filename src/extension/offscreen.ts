@@ -11,7 +11,11 @@ import { BrowserAPI, OffscreenCdpProxy } from '../cdp/index.js';
 import { Orchestrator } from '../scoops/index.js';
 import { LeaderTrayManager } from '../scoops/tray-leader.js';
 import { hasStoredTrayJoinUrl, resolveTrayRuntimeConfig } from '../scoops/tray-runtime-config.js';
-import { FollowerTrayManager, LeaderTrayPeerManager, startFollowerWithAutoReconnect } from '../scoops/tray-webrtc.js';
+import {
+  FollowerTrayManager,
+  LeaderTrayPeerManager,
+  startFollowerWithAutoReconnect,
+} from '../scoops/tray-webrtc.js';
 import { OffscreenBridge } from './offscreen-bridge.js';
 import { ServiceWorkerLeaderTraySocket } from './tray-socket-proxy.js';
 import { createLogger } from '../core/index.js';
@@ -25,7 +29,9 @@ import '../providers/index.js';
 const log = createLogger('offscreen');
 
 function isExtensionMessage(message: unknown): message is ExtensionMessage {
-  return typeof message === 'object' && message !== null && 'source' in message && 'payload' in message;
+  return (
+    typeof message === 'object' && message !== null && 'source' in message && 'payload' in message
+  );
 }
 
 // Use console.log directly for critical diagnostics (visible in chrome://extensions inspect)
@@ -46,13 +52,10 @@ async function init(): Promise<void> {
   const bridge = new OffscreenBridge();
   const callbacks = OffscreenBridge.createCallbacks(bridge);
 
-  const orchestrator = new Orchestrator(
-    container,
-    {
-      ...callbacks,
-      getBrowserAPI: () => browser,
-    },
-  );
+  const orchestrator = new Orchestrator(container, {
+    ...callbacks,
+    getBrowserAPI: () => browser,
+  });
 
   // Bind the orchestrator to the bridge (sets up message listener + session store)
   // Pass BrowserAPI so the bridge can proxy panel CDP commands through the offscreen transport.
@@ -72,21 +75,26 @@ async function init(): Promise<void> {
   lickManager.setEventHandler((event) => {
     const isWebhook = event.type === 'webhook';
     const isSprinkle = event.type === 'sprinkle';
-    const eventName = isWebhook ? event.webhookName : isSprinkle ? event.sprinkleName : event.cronName;
+    const eventName = isWebhook
+      ? event.webhookName
+      : isSprinkle
+        ? event.sprinkleName
+        : event.cronName;
     const eventId = isWebhook ? event.webhookId : isSprinkle ? event.sprinkleName : event.cronId;
     const channel = event.type;
 
     const scoops = orchestrator.getScoops();
-    let resolvedTarget: typeof scoops[number] | undefined;
+    let resolvedTarget: (typeof scoops)[number] | undefined;
 
     if (isSprinkle || !event.targetScoop) {
       // Sprinkle licks and untargeted cron/webhook events → cone
-      resolvedTarget = scoops.find(s => s.isCone);
+      resolvedTarget = scoops.find((s) => s.isCone);
     } else {
-      resolvedTarget = scoops.find(s =>
-        s.name === event.targetScoop ||
-        s.folder === event.targetScoop ||
-        s.folder === `${event.targetScoop}-scoop`
+      resolvedTarget = scoops.find(
+        (s) =>
+          s.name === event.targetScoop ||
+          s.folder === event.targetScoop ||
+          s.folder === `${event.targetScoop}-scoop`
       );
     }
 
@@ -122,10 +130,12 @@ async function init(): Promise<void> {
 
   // Ensure cone exists
   const allScoops = orchestrator.getScoops();
-  const hasCone = allScoops.some(s => s.isCone);
+  const hasCone = allScoops.some((s) => s.isCone);
   const allowProviderlessTrayJoin = !getApiKey() && hasStoredTrayJoinUrl(window.localStorage);
   if (allowProviderlessTrayJoin && !hasCone) {
-    console.log('[slicc-offscreen] Skipping cone auto-create while joining a tray without a configured provider');
+    console.log(
+      '[slicc-offscreen] Skipping cone auto-create while joining a tray without a configured provider'
+    );
   } else if (!hasCone) {
     await orchestrator.registerScoop({
       jid: `cone_${Date.now()}`,
@@ -171,7 +181,7 @@ async function init(): Promise<void> {
           onGaveUp: (lastError) => {
             log.warn('Extension follower reconnect gave up', { lastError });
           },
-        },
+        }
       );
       stopTrayRuntime = () => reconnectHandle.cancel();
       return;
@@ -180,8 +190,8 @@ async function init(): Promise<void> {
     if (trayRuntimeConfig?.workerBaseUrl) {
       let trayLeader!: LeaderTrayManager;
       const trayPeers = new LeaderTrayPeerManager({
-        sendControlMessage: message => trayLeader.sendControlMessage(message),
-        onPeerConnected: peer => {
+        sendControlMessage: (message) => trayLeader.sendControlMessage(message),
+        onPeerConnected: (peer) => {
           log.info('Tray follower data channel opened', {
             controllerId: peer.controllerId,
             bootstrapId: peer.bootstrapId,
@@ -192,8 +202,8 @@ async function init(): Promise<void> {
       trayLeader = new LeaderTrayManager({
         workerBaseUrl: trayRuntimeConfig.workerBaseUrl,
         runtime: 'slicc-extension-offscreen',
-        webSocketFactory: url => new ServiceWorkerLeaderTraySocket(url),
-        onControlMessage: message => {
+        webSocketFactory: (url) => new ServiceWorkerLeaderTraySocket(url),
+        onControlMessage: (message) => {
           void trayPeers.handleControlMessage(message).catch((error) => {
             log.warn('Tray leader bootstrap handling failed', {
               error: error instanceof Error ? error.message : String(error),
@@ -202,7 +212,9 @@ async function init(): Promise<void> {
         },
       });
       void trayLeader.start().catch((error) => {
-        log.warn('Leader tray join failed', { error: error instanceof Error ? error.message : String(error) });
+        log.warn('Leader tray join failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
       });
       stopTrayRuntime = () => {
         trayPeers.stop();
@@ -225,22 +237,31 @@ async function init(): Promise<void> {
   });
 
   // Signal readiness to any connected panels + send initial state
-  chrome.runtime.sendMessage({
-    source: 'offscreen' as const,
-    payload: { type: 'offscreen-ready' },
-  }).catch(() => { /* no panel yet */ });
+  chrome.runtime
+    .sendMessage({
+      source: 'offscreen' as const,
+      payload: { type: 'offscreen-ready' },
+    })
+    .catch(() => {
+      /* no panel yet */
+    });
 
   const snapshot = bridge.buildStateSnapshot();
-  chrome.runtime.sendMessage({
-    source: 'offscreen' as const,
-    payload: snapshot,
-  }).catch(() => { /* no panel yet */ });
+  chrome.runtime
+    .sendMessage({
+      source: 'offscreen' as const,
+      payload: snapshot,
+    })
+    .catch(() => {
+      /* no panel yet */
+    });
 
   // Set up sprinkle manager proxy so the `sprinkle` shell command works from scoops.
   // The real SprinkleManager runs in the side panel (needs DOM). This proxy relays
   // operations via BroadcastChannel.
   const { createSprinkleManagerProxy } = await import('./sprinkle-proxy.js');
-  (globalThis as unknown as Record<string, unknown>).__slicc_sprinkleManager = createSprinkleManagerProxy();
+  (globalThis as unknown as Record<string, unknown>).__slicc_sprinkleManager =
+    createSprinkleManagerProxy();
 
   console.log('[slicc-offscreen] Agent engine ready, scoops:', orchestrator.getScoops().length);
 }

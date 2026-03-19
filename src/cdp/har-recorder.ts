@@ -1,6 +1,6 @@
 /**
  * HAR (HTTP Archive) recorder for CDP sessions.
- * 
+ *
  * Records network traffic from browser tabs and saves snapshots to VFS
  * on navigation and when stopRecording() is called.
  * Supports filtering via user-provided JS functions.
@@ -160,22 +160,22 @@ export class HarRecorder {
    * @param filterCode - Optional JS code for filter function: `(entry) => false | true | object`
    * @returns Recording ID
    */
-  async startRecording(
-    targetId: string,
-    sessionId: string,
-    filterCode?: string,
-  ): Promise<string> {
+  async startRecording(targetId: string, sessionId: string, filterCode?: string): Promise<string> {
     const recordingId = `rec-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    
+
     // Enable Network domain
     await this.client.send('Network.enable', {}, sessionId);
     await this.client.send('Page.enable', {}, sessionId);
 
     // Get current URL
-    const pageInfo = await this.client.send('Runtime.evaluate', {
-      expression: 'location.href',
-      returnByValue: true,
-    }, sessionId);
+    const pageInfo = await this.client.send(
+      'Runtime.evaluate',
+      {
+        expression: 'location.href',
+        returnByValue: true,
+      },
+      sessionId
+    );
     const currentUrl = (pageInfo['result'] as { value?: string })?.value ?? 'about:blank';
 
     const session: RecordingSession = {
@@ -243,9 +243,14 @@ export class HarRecorder {
         session.entries = [];
         session.pendingRequests.clear();
         // Save snapshot with captured data
-        this.saveSnapshotWithEntries(session, 'navigation', entriesToSave, urlForSnapshot).catch(err => {
-          log.error('Failed to save navigation snapshot', { recordingId, error: err instanceof Error ? err.message : String(err) });
-        });
+        this.saveSnapshotWithEntries(session, 'navigation', entriesToSave, urlForSnapshot).catch(
+          (err) => {
+            log.error('Failed to save navigation snapshot', {
+              recordingId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        );
       }
     };
 
@@ -265,7 +270,10 @@ export class HarRecorder {
     });
   }
 
-  private handleRequestWillBeSent(session: RecordingSession, params: Record<string, unknown>): void {
+  private handleRequestWillBeSent(
+    session: RecordingSession,
+    params: Record<string, unknown>
+  ): void {
     const requestId = params['requestId'] as string;
     const request = params['request'] as {
       method: string;
@@ -309,7 +317,10 @@ export class HarRecorder {
     }
   }
 
-  private async handleLoadingFinished(session: RecordingSession, params: Record<string, unknown>): Promise<void> {
+  private async handleLoadingFinished(
+    session: RecordingSession,
+    params: Record<string, unknown>
+  ): Promise<void> {
     const requestId = params['requestId'] as string;
     const timestamp = params['timestamp'] as number;
 
@@ -320,7 +331,11 @@ export class HarRecorder {
 
     // Fetch response body
     try {
-      const bodyResult = await this.client.send('Network.getResponseBody', { requestId }, session.sessionId);
+      const bodyResult = await this.client.send(
+        'Network.getResponseBody',
+        { requestId },
+        session.sessionId
+      );
       pending.responseBody = bodyResult['body'] as string;
       pending.responseBodyBase64 = bodyResult['base64Encoded'] as boolean;
     } catch {
@@ -344,46 +359,57 @@ export class HarRecorder {
   private buildHarEntry(pending: PendingRequest): HarEntry | null {
     if (!pending.response) return null;
 
-    const { request, response, timing, startTime, endTime, responseBody, responseBodyBase64 } = pending;
+    const { request, response, timing, startTime, endTime, responseBody, responseBodyBase64 } =
+      pending;
     const duration = endTime ? endTime - startTime : 0;
 
     // Parse URL for query string
     let queryString: HarQueryParam[] = [];
     try {
       const url = new URL(request.url);
-      queryString = Array.from(url.searchParams.entries()).map(([name, value]) => ({ name, value }));
+      queryString = Array.from(url.searchParams.entries()).map(([name, value]) => ({
+        name,
+        value,
+      }));
     } catch {
       // Invalid URL
     }
 
     // Build timings - CDP timing fields are ms offsets from requestTime
     // HAR expects -1 for unavailable phases
-    const timings: HarTimings = timing ? (() => {
-      const phaseDuration = (start?: number, end?: number): number => {
-        if (start == null || end == null || start < 0 || end < 0) return -1;
-        const value = end - start;
-        return value >= 0 ? value : -1;
-      };
-      // "blocked" is time before DNS starts (or before connect if no DNS)
-      const blockedEnd = timing.dnsStart >= 0 ? timing.dnsStart : (timing.connectStart >= 0 ? timing.connectStart : 0);
-      return {
-        blocked: blockedEnd > 0 ? blockedEnd : -1,
-        dns: phaseDuration(timing.dnsStart, timing.dnsEnd),
-        connect: phaseDuration(timing.connectStart, timing.connectEnd),
-        ssl: phaseDuration(timing.sslStart, timing.sslEnd),
-        send: phaseDuration(timing.sendStart, timing.sendEnd),
-        wait: phaseDuration(timing.sendEnd, timing.receiveHeadersStart),
-        receive: phaseDuration(timing.receiveHeadersStart, timing.receiveHeadersEnd),
-      };
-    })() : {
-      blocked: -1,
-      dns: -1,
-      connect: -1,
-      ssl: -1,
-      send: 0,
-      wait: duration,
-      receive: 0,
-    };
+    const timings: HarTimings = timing
+      ? (() => {
+          const phaseDuration = (start?: number, end?: number): number => {
+            if (start == null || end == null || start < 0 || end < 0) return -1;
+            const value = end - start;
+            return value >= 0 ? value : -1;
+          };
+          // "blocked" is time before DNS starts (or before connect if no DNS)
+          const blockedEnd =
+            timing.dnsStart >= 0
+              ? timing.dnsStart
+              : timing.connectStart >= 0
+                ? timing.connectStart
+                : 0;
+          return {
+            blocked: blockedEnd > 0 ? blockedEnd : -1,
+            dns: phaseDuration(timing.dnsStart, timing.dnsEnd),
+            connect: phaseDuration(timing.connectStart, timing.connectEnd),
+            ssl: phaseDuration(timing.sslStart, timing.sslEnd),
+            send: phaseDuration(timing.sendStart, timing.sendEnd),
+            wait: phaseDuration(timing.sendEnd, timing.receiveHeadersStart),
+            receive: phaseDuration(timing.receiveHeadersStart, timing.receiveHeadersEnd),
+          };
+        })()
+      : {
+          blocked: -1,
+          dns: -1,
+          connect: -1,
+          ssl: -1,
+          send: 0,
+          wait: duration,
+          receive: 0,
+        };
 
     // Build content
     const content: HarContent = {
@@ -400,7 +426,8 @@ export class HarRecorder {
     // Build post data
     let postData: HarPostData | undefined;
     if (request.postData) {
-      const contentType = request.headers['content-type'] ?? request.headers['Content-Type'] ?? 'text/plain';
+      const contentType =
+        request.headers['content-type'] ?? request.headers['Content-Type'] ?? 'text/plain';
       postData = {
         mimeType: contentType,
         text: request.postData,
@@ -440,7 +467,10 @@ export class HarRecorder {
   /**
    * Save a HAR snapshot to the recordings directory.
    */
-  async saveSnapshot(session: RecordingSession, trigger: 'navigation' | 'close'): Promise<string | null> {
+  async saveSnapshot(
+    session: RecordingSession,
+    trigger: 'navigation' | 'close'
+  ): Promise<string | null> {
     return this.saveSnapshotWithEntries(session, trigger, session.entries, session.currentUrl);
   }
 
@@ -463,7 +493,7 @@ export class HarRecorder {
           sandbox.src = chrome.runtime.getURL('sandbox.html');
           document.body.appendChild(sandbox);
           await Promise.race([
-            new Promise<void>(resolve => {
+            new Promise<void>((resolve) => {
               sandbox!.addEventListener('load', () => resolve(), { once: true });
             }),
             new Promise<void>((_, reject) => {
@@ -492,17 +522,22 @@ export class HarRecorder {
           };
 
           window.addEventListener('message', handler);
-          sandbox!.contentWindow!.postMessage({
-            type: 'har_filter',
-            id,
-            entries,
-            filterCode,
-          }, '*');
+          sandbox!.contentWindow!.postMessage(
+            {
+              type: 'har_filter',
+              id,
+              entries,
+              filterCode,
+            },
+            '*'
+          );
         });
 
         return filtered;
       } catch (err) {
-        log.error('HAR filter sandbox error, returning unfiltered', { error: err instanceof Error ? err.message : String(err) });
+        log.error('HAR filter sandbox error, returning unfiltered', {
+          error: err instanceof Error ? err.message : String(err),
+        });
         return entries;
       }
     } else {
@@ -521,13 +556,17 @@ export class HarRecorder {
               result.push(entry);
             }
           } catch (err) {
-            log.error('Filter function error on entry, keeping it', { error: err instanceof Error ? err.message : String(err) });
+            log.error('Filter function error on entry, keeping it', {
+              error: err instanceof Error ? err.message : String(err),
+            });
             result.push(entry);
           }
         }
         return result;
       } catch (err) {
-        log.error('Failed to compile filter, returning unfiltered', { error: err instanceof Error ? err.message : String(err) });
+        log.error('Failed to compile filter, returning unfiltered', {
+          error: err instanceof Error ? err.message : String(err),
+        });
         return entries;
       }
     }
@@ -540,7 +579,7 @@ export class HarRecorder {
     session: RecordingSession,
     trigger: 'navigation' | 'close',
     entries: HarEntry[],
-    url: string,
+    url: string
   ): Promise<string | null> {
     if (entries.length === 0) {
       log.debug('No entries to save', { recordingId: session.id, trigger });
@@ -572,7 +611,11 @@ export class HarRecorder {
     };
 
     await this.fs.writeFile(path, JSON.stringify(har, null, 2));
-    log.debug('Saved HAR snapshot', { recordingId: session.id, path, entryCount: filteredEntries.length });
+    log.debug('Saved HAR snapshot', {
+      recordingId: session.id,
+      path,
+      entryCount: filteredEntries.length,
+    });
 
     return path;
   }

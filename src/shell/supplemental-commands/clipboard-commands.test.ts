@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IFileSystem } from 'just-bash';
-import { createPbcopyCommand, createPbpasteCommand, createClipboardAutoCommand } from './clipboard-commands.js';
+import {
+  createPbcopyCommand,
+  createPbpasteCommand,
+  createClipboardAutoCommand,
+} from './clipboard-commands.js';
 
 function createMockCtx(stdin = '') {
   const fs: Partial<IFileSystem> = {

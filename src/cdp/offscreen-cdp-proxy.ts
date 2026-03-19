@@ -19,11 +19,14 @@ export class OffscreenCdpProxy implements CDPTransport {
   private _state: ConnectionState = 'disconnected';
   private nextCommandId = 1;
   private listeners = new Map<string, Set<CDPEventListener>>();
-  private pendingCommands = new Map<number, {
-    resolve: (result: Record<string, unknown>) => void;
-    reject: (error: Error) => void;
-    timer: ReturnType<typeof setTimeout>;
-  }>();
+  private pendingCommands = new Map<
+    number,
+    {
+      resolve: (result: Record<string, unknown>) => void;
+      reject: (error: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
   private messageHandler: ((message: unknown) => void) | null = null;
 
   get state(): ConnectionState {
@@ -73,7 +76,7 @@ export class OffscreenCdpProxy implements CDPTransport {
     method: string,
     params?: Record<string, unknown>,
     sessionId?: string,
-    timeout = 30000,
+    timeout = 30000
   ): Promise<Record<string, unknown>> {
     if (this._state !== 'connected') {
       throw new Error('OffscreenCdpProxy is not connected');
@@ -100,16 +103,22 @@ export class OffscreenCdpProxy implements CDPTransport {
       this.pendingCommands.set(id, { resolve, reject, timer });
 
       // Send via chrome.runtime.sendMessage — service worker intercepts CDP commands
-      chrome.runtime.sendMessage({
-        source: 'offscreen' as const,
-        payload: cmd,
-      }).catch((err) => {
-        if (settled) return;
-        settled = true;
-        this.pendingCommands.delete(id);
-        clearTimeout(timer);
-        reject(new Error(`Failed to send CDP command: ${err instanceof Error ? err.message : String(err)}`));
-      });
+      chrome.runtime
+        .sendMessage({
+          source: 'offscreen' as const,
+          payload: cmd,
+        })
+        .catch((err) => {
+          if (settled) return;
+          settled = true;
+          this.pendingCommands.delete(id);
+          clearTimeout(timer);
+          reject(
+            new Error(
+              `Failed to send CDP command: ${err instanceof Error ? err.message : String(err)}`
+            )
+          );
+        });
     });
   }
 
@@ -180,10 +189,5 @@ export class OffscreenCdpProxy implements CDPTransport {
 }
 
 function isExtMsg(msg: unknown): boolean {
-  return (
-    typeof msg === 'object' &&
-    msg !== null &&
-    'source' in msg &&
-    'payload' in msg
-  );
+  return typeof msg === 'object' && msg !== null && 'source' in msg && 'payload' in msg;
 }

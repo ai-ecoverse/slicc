@@ -7,7 +7,12 @@ import { RemoteCDPTransport, type RemoteCDPSender } from './remote-cdp-transport
 // ---------------------------------------------------------------------------
 
 function createFakeSender() {
-  const calls: Array<{ requestId: string; method: string; params?: Record<string, unknown>; sessionId?: string }> = [];
+  const calls: Array<{
+    requestId: string;
+    method: string;
+    params?: Record<string, unknown>;
+    sessionId?: string;
+  }> = [];
   const sender: RemoteCDPSender = {
     sendCDPRequest(requestId, method, params, sessionId) {
       calls.push({ requestId, method, params, sessionId });
@@ -83,7 +88,9 @@ describe('RemoteCDPTransport', () => {
 
     vi.advanceTimersByTime(101);
 
-    await expect(promise).rejects.toThrow('Remote CDP request timed out after 100ms: Page.navigate');
+    await expect(promise).rejects.toThrow(
+      'Remote CDP request timed out after 100ms: Page.navigate'
+    );
     vi.useRealTimers();
   });
 
@@ -270,7 +277,14 @@ describe('RemoteCDPTransport', () => {
       // Send chunks out of order: 2, 0, 1
       transport.handleResponse(requestId, undefined, undefined, serialized.slice(2 * third), 2, 3);
       transport.handleResponse(requestId, undefined, undefined, serialized.slice(0, third), 0, 3);
-      transport.handleResponse(requestId, undefined, undefined, serialized.slice(third, 2 * third), 1, 3);
+      transport.handleResponse(
+        requestId,
+        undefined,
+        undefined,
+        serialized.slice(third, 2 * third),
+        1,
+        3
+      );
 
       const result = await promise;
       expect(result).toEqual(original);

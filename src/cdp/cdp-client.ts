@@ -24,10 +24,13 @@ const log = createLogger('cdp');
 export class CDPClient implements CDPTransport {
   private ws: WebSocket | null = null;
   private nextId = 1;
-  private pending = new Map<number, {
-    resolve: (result: Record<string, unknown>) => void;
-    reject: (error: Error) => void;
-  }>();
+  private pending = new Map<
+    number,
+    {
+      resolve: (result: Record<string, unknown>) => void;
+      reject: (error: Error) => void;
+    }
+  >();
   private listeners = new Map<string, Set<CDPEventListener>>();
   private _state: ConnectionState = 'disconnected';
 
@@ -109,7 +112,7 @@ export class CDPClient implements CDPTransport {
     method: string,
     params?: Record<string, unknown>,
     sessionId?: string,
-    timeout = 30000,
+    timeout = 30000
   ): Promise<Record<string, unknown>> {
     if (this._state !== 'connected' || !this.ws) {
       throw new Error('CDP client is not connected');
@@ -129,8 +132,14 @@ export class CDPClient implements CDPTransport {
       }, timeout);
 
       this.pending.set(id, {
-        resolve: (result) => { clearTimeout(timer); resolve(result); },
-        reject: (error) => { clearTimeout(timer); reject(error); },
+        resolve: (result) => {
+          clearTimeout(timer);
+          resolve(result);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
       });
       this.ws!.send(JSON.stringify(message));
     });
@@ -199,7 +208,11 @@ export class CDPClient implements CDPTransport {
       if (p) {
         this.pending.delete(response.id);
         if (response.error) {
-          log.error('Command error', { id: response.id, code: response.error.code, message: response.error.message });
+          log.error('Command error', {
+            id: response.id,
+            code: response.error.code,
+            message: response.error.message,
+          });
           p.reject(new Error(`CDP error: ${response.error.message} (${response.error.code})`));
         } else {
           p.resolve(response.result ?? {});

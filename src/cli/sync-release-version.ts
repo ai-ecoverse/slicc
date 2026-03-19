@@ -14,7 +14,9 @@ export function updateManifestVersionContents(contents: string, version: string)
   const manifest = JSON.parse(contents) as Partial<ExtensionManifest>;
 
   if (typeof manifest.version !== 'string') {
-    throw new Error('manifest.json must contain a string version before semantic-release can update it.');
+    throw new Error(
+      'manifest.json must contain a string version before semantic-release can update it.'
+    );
   }
 
   manifest.version = version;
@@ -24,7 +26,7 @@ export function updateManifestVersionContents(contents: string, version: string)
 export function writeManifestVersion(manifestPath: string, version: string): void {
   writeFileSync(
     manifestPath,
-    updateManifestVersionContents(readFileSync(manifestPath, 'utf8'), version),
+    updateManifestVersionContents(readFileSync(manifestPath, 'utf8'), version)
   );
 }
 

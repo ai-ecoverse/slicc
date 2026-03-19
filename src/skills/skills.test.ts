@@ -60,7 +60,7 @@ version: 1.0.0
 description: A test skill
 adds:
   - test/file.txt
-`,
+`
       );
 
       const skills = await discoverSkills(fs);
@@ -75,7 +75,7 @@ adds:
       await fs.mkdir(`/workspace/skills/simple-skill`);
       await fs.writeFile(
         `/workspace/skills/simple-skill/SKILL.md`,
-        '# Simple Skill\n\nInstructions here.',
+        '# Simple Skill\n\nInstructions here.'
       );
 
       const skills = await discoverSkills(fs);
@@ -102,7 +102,7 @@ depends:
   - base-skill
 conflicts:
   - other-skill
-`,
+`
       );
 
       const manifest = await readManifest(fs, `/workspace/skills/my-skill`);
@@ -128,7 +128,7 @@ version: 1.0.0
 description: Hello world skill
 adds:
   - hello.txt
-`,
+`
       );
       await fs.mkdir(`/workspace/skills/hello/add`);
       await fs.writeFile(`/workspace/skills/hello/add/hello.txt`, 'Hello, world!');
@@ -157,7 +157,7 @@ adds:
         `skill: hello
 version: 1.0.0
 description: Hello world skill
-`,
+`
       );
 
       await applySkill(fs, 'hello');
@@ -177,7 +177,7 @@ version: 1.0.0
 description: Depends on base
 depends:
   - base-skill
-`,
+`
       );
 
       const result = await applySkill(fs, 'dependent');
@@ -195,7 +195,7 @@ depends:
         `skill: skill-a
 version: 1.0.0
 description: Skill A
-`,
+`
       );
       await applySkill(fs, 'skill-a');
 
@@ -208,7 +208,7 @@ version: 1.0.0
 description: Skill B conflicts with A
 conflicts:
   - skill-a
-`,
+`
       );
 
       const result = await applySkill(fs, 'skill-b');
@@ -230,7 +230,7 @@ version: 1.0.0
 description: Hello world skill
 adds:
   - hello.txt
-`,
+`
       );
       await fs.mkdir(`/workspace/skills/hello/add`);
       await fs.writeFile(`/workspace/skills/hello/add/hello.txt`, 'Hello!');
@@ -268,7 +268,7 @@ adds:
         `skill: base
 version: 1.0.0
 description: Base skill
-`,
+`
       );
       await applySkill(fs, 'base');
 
@@ -281,7 +281,7 @@ version: 1.0.0
 description: Depends on base
 depends:
   - base
-`,
+`
       );
       await applySkill(fs, 'dependent');
 
@@ -303,7 +303,7 @@ version: 1.0.0
 description: Evil skill with path traversal
 adds:
   - ../../../etc/passwd
-`,
+`
       );
 
       const result = await applySkill(fs, 'evil');
@@ -321,7 +321,7 @@ version: 1.0.0
 description: Evil skill with absolute path
 adds:
   - /etc/passwd
-`,
+`
       );
 
       const result = await applySkill(fs, 'evil');
@@ -337,7 +337,7 @@ adds:
         `skill: different-name
 version: 1.0.0
 description: Mismatched skill name
-`,
+`
       );
 
       const result = await applySkill(fs, 'my-skill');

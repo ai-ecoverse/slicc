@@ -43,7 +43,9 @@ export function createGitHttpClient(): HttpClient {
 
       // Convert Uint8Array to Blob for fetch body (TypeScript compatibility)
       const contentType = headers['content-type'] ?? 'application/octet-stream';
-      const fetchBody = bodyData ? new Blob([bodyData.buffer as ArrayBuffer], { type: contentType }) : undefined;
+      const fetchBody = bodyData
+        ? new Blob([bodyData.buffer as ArrayBuffer], { type: contentType })
+        : undefined;
 
       if (isExtension()) {
         // Extension mode — direct fetch with host_permissions
@@ -82,8 +84,6 @@ export function createGitHttpClient(): HttpClient {
           throw new Error(errorMsg);
         }
       }
-
-
 
       // Convert response headers
       const responseHeaders: Record<string, string> = {};

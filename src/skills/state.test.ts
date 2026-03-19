@@ -284,12 +284,8 @@ describe('Skills State Management', () => {
       // Verify both skills exist
       const state = await readState(vfs);
       expect(state.applied_skills).toHaveLength(2);
-      expect(state.applied_skills.find((s) => s.name === 'skill-1')?.version).toBe(
-        '2.0.0',
-      );
-      expect(state.applied_skills.find((s) => s.name === 'skill-2')?.version).toBe(
-        '1.0.0',
-      );
+      expect(state.applied_skills.find((s) => s.name === 'skill-1')?.version).toBe('2.0.0');
+      expect(state.applied_skills.find((s) => s.name === 'skill-2')?.version).toBe('1.0.0');
     });
   });
 
@@ -420,9 +416,7 @@ describe('Skills State Management', () => {
 
       expect(hash).toMatch(/^[0-9a-f]{64}$/);
       // Empty string SHA-256 hash is well-known
-      expect(hash).toBe(
-        'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-      );
+      expect(hash).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
     });
 
     it('handles special characters and unicode', async () => {

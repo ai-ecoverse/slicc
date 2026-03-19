@@ -64,7 +64,7 @@ async function playAudioFile(
 
   try {
     const audioCtx = getAudioContext();
-    
+
     if (audioCtx.state === 'suspended') {
       await audioCtx.resume();
     }

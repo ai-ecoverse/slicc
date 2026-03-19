@@ -8,9 +8,7 @@ import { updateManifestVersionContents, writeManifestVersion } from './sync-rele
 
 describe('sync-release-version', () => {
   it('updates manifest version JSON content', () => {
-    expect(
-      updateManifestVersionContents('{"name":"slicc","version":"0.1.0"}\n', '1.2.3'),
-    ).toBe(`{
+    expect(updateManifestVersionContents('{"name":"slicc","version":"0.1.0"}\n', '1.2.3')).toBe(`{
   "name": "slicc",
   "version": "1.2.3"
 }\n`);
@@ -32,7 +30,7 @@ describe('sync-release-version', () => {
 
   it('fails when the manifest has no string version', () => {
     expect(() => updateManifestVersionContents('{"name":"slicc"}\n', '1.2.3')).toThrow(
-      'manifest.json must contain a string version',
+      'manifest.json must contain a string version'
     );
   });
 });

@@ -89,7 +89,7 @@ describe('overlay-shell-state', () => {
         viewportHeight: 800,
         velocityXPxPerMs: 1,
         velocityYPxPerMs: 1,
-      }),
+      })
     ).toBe('bottom-right');
   });
 });

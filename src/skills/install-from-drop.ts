@@ -69,8 +69,8 @@ function collectArchiveEntries(files: Record<string, Uint8Array>): ArchiveEntry[
 }
 
 function findManifestEntry(entries: ArchiveEntry[]): ArchiveEntry {
-  const manifests = entries.filter((entry) =>
-    entry.path === MANIFEST_FILE || entry.path.endsWith(`/${MANIFEST_FILE}`),
+  const manifests = entries.filter(
+    (entry) => entry.path === MANIFEST_FILE || entry.path.endsWith(`/${MANIFEST_FILE}`)
   );
 
   if (manifests.length === 0) {
@@ -92,14 +92,14 @@ function unzipArchiveWithSafetyLimits(bytes: Uint8Array): Record<string, Uint8Ar
       entryCount++;
       if (entryCount > MAX_SKILL_ARCHIVE_ENTRY_COUNT) {
         throw new ArchiveBudgetError(
-          `Skill archives may contain at most ${MAX_SKILL_ARCHIVE_ENTRY_COUNT} entries.`,
+          `Skill archives may contain at most ${MAX_SKILL_ARCHIVE_ENTRY_COUNT} entries.`
         );
       }
 
       totalUncompressedBytes += file.originalSize;
       if (totalUncompressedBytes > MAX_SKILL_ARCHIVE_UNCOMPRESSED_SIZE_BYTES) {
         throw new ArchiveBudgetError(
-          'Skill archives must expand to 50 MB or smaller after extraction.',
+          'Skill archives must expand to 50 MB or smaller after extraction.'
         );
       }
 
@@ -115,10 +115,12 @@ function createTemporaryDestinationPath(skillName: string): string {
 
 export async function installSkillFromDrop(
   fs: VirtualFS,
-  file: DroppedSkillFile,
+  file: DroppedSkillFile
 ): Promise<InstallSkillFromDropResult> {
   if (!file.name.toLowerCase().endsWith(SKILL_ARCHIVE_EXTENSION)) {
-    throw new Error(`Only ${SKILL_ARCHIVE_EXTENSION} archives can be installed with drag and drop.`);
+    throw new Error(
+      `Only ${SKILL_ARCHIVE_EXTENSION} archives can be installed with drag and drop.`
+    );
   }
   if (file.size > MAX_SKILL_ARCHIVE_SIZE_BYTES) {
     throw new Error('Skill archives must be 50 MB or smaller.');
@@ -147,9 +149,10 @@ export async function installSkillFromDrop(
   }
   const temporaryDestinationPath = createTemporaryDestinationPath(manifest.skill);
 
-  const manifestPrefix = manifestEntry.path === MANIFEST_FILE
-    ? ''
-    : manifestEntry.path.slice(0, -(MANIFEST_FILE.length + 1));
+  const manifestPrefix =
+    manifestEntry.path === MANIFEST_FILE
+      ? ''
+      : manifestEntry.path.slice(0, -(MANIFEST_FILE.length + 1));
 
   await fs.mkdir(temporaryDestinationPath, { recursive: true });
 
@@ -161,7 +164,9 @@ export async function installSkillFromDrop(
         if (!entry.path.startsWith(`${manifestPrefix}/`)) continue;
       }
 
-      const relativePath = manifestPrefix ? entry.path.slice(manifestPrefix.length + 1) : entry.path;
+      const relativePath = manifestPrefix
+        ? entry.path.slice(manifestPrefix.length + 1)
+        : entry.path;
       if (!relativePath) continue;
 
       const outputPath = joinPath(temporaryDestinationPath, relativePath);

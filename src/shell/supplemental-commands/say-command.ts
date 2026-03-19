@@ -106,9 +106,7 @@ export function createSayCommand(): Command {
     utterance.rate = rate;
 
     if (voiceName) {
-      const match = voices.find(
-        (v) => v.name.toLowerCase().includes(voiceName!.toLowerCase())
-      );
+      const match = voices.find((v) => v.name.toLowerCase().includes(voiceName!.toLowerCase()));
       if (match) {
         utterance.voice = match;
       } else {

@@ -63,9 +63,7 @@ export class SessionStore {
       const tx = db.transaction(STORE_NAME, 'readonly');
       const req = tx.objectStore(STORE_NAME).getAll();
       req.onsuccess = () => {
-        const sessions = (req.result as Session[]).sort(
-          (a, b) => b.updatedAt - a.updatedAt,
-        );
+        const sessions = (req.result as Session[]).sort((a, b) => b.updatedAt - a.updatedAt);
         resolve(sessions.map((s) => s.id));
       };
       req.onerror = () => reject(req.error);

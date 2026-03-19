@@ -17,14 +17,35 @@ const log = createLogger('tray-sync');
 
 export type LeaderToFollowerMessage =
   | { type: 'snapshot'; messages: ChatMessage[]; scoopJid: string }
-  | { type: 'snapshot_chunk'; chunkData: string; chunkIndex: number; totalChunks: number; scoopJid: string }
+  | {
+      type: 'snapshot_chunk';
+      chunkData: string;
+      chunkIndex: number;
+      totalChunks: number;
+      scoopJid: string;
+    }
   | { type: 'agent_event'; event: AgentEvent; scoopJid: string }
   | { type: 'user_message_echo'; text: string; messageId: string; scoopJid: string }
   | { type: 'status'; scoopStatus: string }
   | { type: 'error'; error: string }
   | { type: 'targets.registry'; targets: TrayTargetEntry[] }
-  | { type: 'cdp.request'; requestId: string; localTargetId: string; method: string; params?: Record<string, unknown>; sessionId?: string }
-  | { type: 'cdp.response'; requestId: string; result?: Record<string, unknown>; error?: string; chunkData?: string; chunkIndex?: number; totalChunks?: number }
+  | {
+      type: 'cdp.request';
+      requestId: string;
+      localTargetId: string;
+      method: string;
+      params?: Record<string, unknown>;
+      sessionId?: string;
+    }
+  | {
+      type: 'cdp.response';
+      requestId: string;
+      result?: Record<string, unknown>;
+      error?: string;
+      chunkData?: string;
+      chunkIndex?: number;
+      totalChunks?: number;
+    }
   | { type: 'cdp.event'; method: string; params: Record<string, unknown>; sessionId?: string }
   | { type: 'tab.open'; requestId: string; url: string }
   | { type: 'tab.opened'; requestId: string; targetId: string }
@@ -39,8 +60,24 @@ export type FollowerToLeaderMessage =
   | { type: 'abort' }
   | { type: 'request_snapshot' }
   | { type: 'targets.advertise'; targets: RemoteTargetInfo[]; runtimeId: string }
-  | { type: 'cdp.request'; requestId: string; targetRuntimeId: string; localTargetId: string; method: string; params?: Record<string, unknown>; sessionId?: string }
-  | { type: 'cdp.response'; requestId: string; result?: Record<string, unknown>; error?: string; chunkData?: string; chunkIndex?: number; totalChunks?: number }
+  | {
+      type: 'cdp.request';
+      requestId: string;
+      targetRuntimeId: string;
+      localTargetId: string;
+      method: string;
+      params?: Record<string, unknown>;
+      sessionId?: string;
+    }
+  | {
+      type: 'cdp.response';
+      requestId: string;
+      result?: Record<string, unknown>;
+      error?: string;
+      chunkData?: string;
+      chunkIndex?: number;
+      totalChunks?: number;
+    }
   | { type: 'cdp.event'; method: string; params: Record<string, unknown>; sessionId?: string }
   | { type: 'tab.open'; requestId: string; targetRuntimeId: string; url: string }
   | { type: 'tab.opened'; requestId: string; targetId: string }
@@ -61,12 +98,12 @@ export interface RemoteTargetInfo {
 }
 
 export interface TrayTargetEntry {
-  targetId: string;       // Unique within the tray: "{runtimeId}:{localTargetId}"
-  localTargetId: string;  // The original targetId on the owning runtime
-  runtimeId: string;      // Which runtime owns this target
+  targetId: string; // Unique within the tray: "{runtimeId}:{localTargetId}"
+  localTargetId: string; // The original targetId on the owning runtime
+  runtimeId: string; // Which runtime owns this target
   title: string;
   url: string;
-  isLocal: boolean;       // True if owned by the receiving runtime (set by consumer, not registry)
+  isLocal: boolean; // True if owned by the receiving runtime (set by consumer, not registry)
 }
 
 // ---------------------------------------------------------------------------
@@ -115,7 +152,10 @@ export type TrayFsResponse =
 /** Possible data payloads for successful FS responses. */
 export type TrayFsResponseData =
   | { type: 'file'; content: string; encoding: 'utf-8' | 'base64' }
-  | { type: 'stat'; stat: { type: 'file' | 'directory'; size: number; mtime: number; ctime: number } }
+  | {
+      type: 'stat';
+      stat: { type: 'file' | 'directory'; size: number; mtime: number; ctime: number };
+    }
   | { type: 'dirEntries'; entries: Array<{ name: string; type: 'file' | 'directory' }> }
   | { type: 'exists'; exists: boolean }
   | { type: 'paths'; paths: string[] }
@@ -144,7 +184,7 @@ export function sendCDPResponse(
   channel: { send(message: TraySyncMessage): boolean },
   requestId: string,
   result?: Record<string, unknown>,
-  error?: string,
+  error?: string
 ): boolean {
   // Error responses are always small — send directly
   if (error || !result) {
@@ -194,7 +234,7 @@ export function sendCDPResponse(
  */
 export function reassembleCDPResponse(
   buffers: Map<string, { chunks: string[]; received: number; totalChunks: number }>,
-  message: CDPResponseMessage,
+  message: CDPResponseMessage
 ): { result?: Record<string, unknown>; error?: string } | null {
   // Non-chunked response — return directly
   if (message.chunkIndex === undefined || message.totalChunks === undefined) {
@@ -210,7 +250,11 @@ export function reassembleCDPResponse(
   const requestId = message.requestId;
   let buffer = buffers.get(requestId);
   if (!buffer) {
-    buffer = { chunks: new Array(message.totalChunks), received: 0, totalChunks: message.totalChunks };
+    buffer = {
+      chunks: new Array(message.totalChunks),
+      received: 0,
+      totalChunks: message.totalChunks,
+    };
     buffers.set(requestId, buffer);
   }
 
@@ -226,7 +270,9 @@ export function reassembleCDPResponse(
       const result = JSON.parse(buffer.chunks.join('')) as Record<string, unknown>;
       return { result };
     } catch (err) {
-      return { error: `Failed to reassemble CDP response: ${err instanceof Error ? err.message : String(err)}` };
+      return {
+        error: `Failed to reassemble CDP response: ${err instanceof Error ? err.message : String(err)}`,
+      };
     }
   }
 
@@ -247,7 +293,7 @@ const SNAPSHOT_CHUNK_SIZE = 32 * 1024; // 32 KB
 export function sendSnapshot(
   channel: { send(message: LeaderToFollowerMessage): boolean },
   messages: ChatMessage[],
-  scoopJid: string,
+  scoopJid: string
 ): boolean {
   const serialized = JSON.stringify({ messages, scoopJid });
   if (serialized.length <= CDP_CHUNK_THRESHOLD) {
@@ -269,7 +315,11 @@ export function sendSnapshot(
     });
     if (!ok) {
       allSent = false;
-      log.error('Failed to send snapshot chunk', { chunkIndex: i, totalChunks, totalSize: serialized.length });
+      log.error('Failed to send snapshot chunk', {
+        chunkIndex: i,
+        totalChunks,
+        totalSize: serialized.length,
+      });
       break;
     }
   }
@@ -283,10 +333,16 @@ export function sendSnapshot(
  */
 export function reassembleSnapshot(
   buffer: { chunks: string[]; received: number; totalChunks: number } | null,
-  message: Extract<LeaderToFollowerMessage, { type: 'snapshot_chunk' }>,
-): { result: { messages: ChatMessage[]; scoopJid: string }; buffer: null } | { result: null; buffer: { chunks: string[]; received: number; totalChunks: number } } {
+  message: Extract<LeaderToFollowerMessage, { type: 'snapshot_chunk' }>
+):
+  | { result: { messages: ChatMessage[]; scoopJid: string }; buffer: null }
+  | { result: null; buffer: { chunks: string[]; received: number; totalChunks: number } } {
   if (!buffer) {
-    buffer = { chunks: new Array(message.totalChunks), received: 0, totalChunks: message.totalChunks };
+    buffer = {
+      chunks: new Array(message.totalChunks),
+      received: 0,
+      totalChunks: message.totalChunks,
+    };
   }
 
   // Store the chunk (supports out-of-order delivery)
@@ -297,10 +353,15 @@ export function reassembleSnapshot(
 
   if (buffer.received >= buffer.totalChunks) {
     try {
-      const parsed = JSON.parse(buffer.chunks.join('')) as { messages: ChatMessage[]; scoopJid: string };
+      const parsed = JSON.parse(buffer.chunks.join('')) as {
+        messages: ChatMessage[];
+        scoopJid: string;
+      };
       return { result: parsed, buffer: null };
     } catch (err) {
-      log.error('Failed to reassemble snapshot', { error: err instanceof Error ? err.message : String(err) });
+      log.error('Failed to reassemble snapshot', {
+        error: err instanceof Error ? err.message : String(err),
+      });
       return { result: { messages: [], scoopJid: message.scoopJid }, buffer: null };
     }
   }
@@ -374,13 +435,13 @@ export class TraySyncChannel<
 // ---------------------------------------------------------------------------
 
 export function createLeaderSyncChannel(
-  channel: TrayDataChannelLike,
+  channel: TrayDataChannelLike
 ): TraySyncChannel<LeaderToFollowerMessage, FollowerToLeaderMessage> {
   return new TraySyncChannel(channel);
 }
 
 export function createFollowerSyncChannel(
-  channel: TrayDataChannelLike,
+  channel: TrayDataChannelLike
 ): TraySyncChannel<FollowerToLeaderMessage, LeaderToFollowerMessage> {
   return new TraySyncChannel(channel);
 }

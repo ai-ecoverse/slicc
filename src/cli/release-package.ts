@@ -65,7 +65,7 @@ export function sanitizeArtifactName(value: string): string {
 export function assertMatchingVersions(packageVersion: string, extensionVersion: string): void {
   if (packageVersion !== extensionVersion) {
     throw new Error(
-      `package.json version (${packageVersion}) must match manifest.json version (${extensionVersion}) before packaging release artifacts.`,
+      `package.json version (${packageVersion}) must match manifest.json version (${extensionVersion}) before packaging release artifacts.`
     );
   }
 }
@@ -189,12 +189,11 @@ function crc32(buffer: Buffer): number {
 
 function encodeDosDateTime(value: Date): { dosDate: number; dosTime: number } {
   const year = Math.max(value.getUTCFullYear(), 1980);
-  const dosDate = ((year - 1980) << 9)
-    | ((value.getUTCMonth() + 1) << 5)
-    | value.getUTCDate();
-  const dosTime = (value.getUTCHours() << 11)
-    | (value.getUTCMinutes() << 5)
-    | Math.floor(value.getUTCSeconds() / 2);
+  const dosDate = ((year - 1980) << 9) | ((value.getUTCMonth() + 1) << 5) | value.getUTCDate();
+  const dosTime =
+    (value.getUTCHours() << 11) |
+    (value.getUTCMinutes() << 5) |
+    Math.floor(value.getUTCSeconds() / 2);
 
   return { dosDate, dosTime };
 }
@@ -205,7 +204,9 @@ function readJsonFile<T>(path: string): T {
 
 function requirePath(path: string, description: string): void {
   if (!existsSync(path)) {
-    throw new Error(`${description} was not found at ${path}. Run the required build command(s) first.`);
+    throw new Error(
+      `${description} was not found at ${path}. Run the required build command(s) first.`
+    );
   }
 }
 
@@ -241,7 +242,7 @@ function createExtensionArchive(metadata: ExtensionMetadata): string {
 
   const zipPath = resolve(
     RELEASE_DIR,
-    `${sanitizeArtifactName(metadata.name)}-extension-v${metadata.version}.zip`,
+    `${sanitizeArtifactName(metadata.name)}-extension-v${metadata.version}.zip`
   );
   const zipBuffer = createDeterministicZip(collectZipEntries(extensionDir));
   writeFileSync(zipPath, zipBuffer);
@@ -260,7 +261,7 @@ function createNpmPackageTarball(): string {
       cwd: PROJECT_ROOT,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
-    },
+    }
   );
 
   if (result.status !== 0) {
@@ -300,7 +301,9 @@ function main(): void {
   const manifest = packageReleaseArtifacts();
   console.log(`Created extension archive: ${manifest.extensionArchive}`);
   console.log(`Created npm package tarball: ${manifest.npmPackageTarball}`);
-  console.log(`Created release manifest: ${toProjectRelative(resolve(RELEASE_DIR, 'release-artifacts.json'))}`);
+  console.log(
+    `Created release manifest: ${toProjectRelative(resolve(RELEASE_DIR, 'release-artifacts.json'))}`
+  );
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {

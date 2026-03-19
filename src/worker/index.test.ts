@@ -35,7 +35,10 @@ class FakeWebSocket {
 
   accept(): void {}
 
-  addEventListener(type: 'message' | 'close' | 'error', listener: (event: { data?: string }) => void): void {
+  addEventListener(
+    type: 'message' | 'close' | 'error',
+    listener: (event: { data?: string }) => void
+  ): void {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
   }
 
@@ -90,13 +93,19 @@ class FakeNamespace {
     return new FakeDurableObjectId(name);
   }
 
-  get(id: DurableObjectIdLike): { fetch: (input: Request | string | URL, init?: RequestInit) => Promise<Response> } {
+  get(id: DurableObjectIdLike): {
+    fetch: (input: Request | string | URL, init?: RequestInit) => Promise<Response>;
+  } {
     const key = id.toString();
     let instance = this.instances.get(key);
     if (!instance) {
       const state = new FakeDurableObjectState();
       this.states.set(key, state);
-      instance = new SessionTrayDurableObject(state, {}, { now: this.now, webSocketPairFactory: createFakeWebSocketPair });
+      instance = new SessionTrayDurableObject(
+        state,
+        {},
+        { now: this.now, webSocketPairFactory: createFakeWebSocketPair }
+      );
       this.instances.set(key, instance);
     }
 
@@ -133,19 +142,29 @@ describe('tray worker skeleton', () => {
   it('creates a tray at /tray and rejects removed create aliases', async () => {
     const { env } = createTestHarness();
 
-    const response = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
+    const response = await handleWorkerRequest(
+      new Request('https://tray.test/tray', { method: 'POST' }),
+      env
+    );
     expect(response.status).toBe(201);
 
     const body = (await response.json()) as {
       trayId: string;
-      capabilities: { join: { url: string }; controller: { url: string }; webhook: { url: string } };
+      capabilities: {
+        join: { url: string };
+        controller: { url: string };
+        webhook: { url: string };
+      };
     };
     expect(body.capabilities.join.url).toContain(`/join/${body.trayId}.`);
     expect(body.capabilities.controller.url).toContain(`/controller/${body.trayId}.`);
     expect(body.capabilities.webhook.url).toContain(`/webhook/${body.trayId}.`);
 
     for (const legacyPath of ['/session', '/trays']) {
-      const legacy = await handleWorkerRequest(new Request(`https://tray.test${legacyPath}`, { method: 'POST' }), env);
+      const legacy = await handleWorkerRequest(
+        new Request(`https://tray.test${legacyPath}`, { method: 'POST' }),
+        env
+      );
       expect(legacy.status).toBe(410);
       await expect(legacy.json()).resolves.toMatchObject({
         code: 'TRAY_CREATE_ENDPOINT_MOVED',
@@ -156,7 +175,10 @@ describe('tray worker skeleton', () => {
 
   it('returns an explicit wait instruction when a follower attaches before a live leader exists', async () => {
     const { env } = createTestHarness();
-    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
+    const created = await handleWorkerRequest(
+      new Request('https://tray.test/tray', { method: 'POST' }),
+      env
+    );
     const session = (await created.json()) as {
       trayId: string;
       capabilities: { controller: { url: string }; join: { url: string } };
@@ -168,7 +190,7 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'cone-1', runtime: 'cli' }),
       }),
-      env,
+      env
     );
     const leader = (await leaderAttach.json()) as {
       role: string;
@@ -186,7 +208,7 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'cone-2', runtime: 'electron' }),
       }),
-      env,
+      env
     );
     const follower = (await followerAttach.json()) as {
       role: string;
@@ -206,13 +228,19 @@ describe('tray worker skeleton', () => {
 
   it('reports follower join readiness until the live leader websocket is available, then exposes signaling metadata', async () => {
     const { env } = createTestHarness();
-    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
+    const created = await handleWorkerRequest(
+      new Request('https://tray.test/tray', { method: 'POST' }),
+      env
+    );
     const session = (await created.json()) as {
       trayId: string;
       capabilities: { controller: { url: string }; join: { url: string } };
     };
 
-    const waitingForLeader = await handleWorkerRequest(new Request(session.capabilities.join.url), env);
+    const waitingForLeader = await handleWorkerRequest(
+      new Request(session.capabilities.join.url),
+      env
+    );
     expect(waitingForLeader.status).toBe(409);
     await expect(waitingForLeader.json()).resolves.toMatchObject({
       trayId: session.trayId,
@@ -228,11 +256,14 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'cone-1', runtime: 'cli' }),
       }),
-      env,
+      env
     );
     const leader = (await leaderAttach.json()) as { websocket: { url: string } };
 
-    const waitingForSocket = await handleWorkerRequest(new Request(session.capabilities.join.url), env);
+    const waitingForSocket = await handleWorkerRequest(
+      new Request(session.capabilities.join.url),
+      env
+    );
     expect(waitingForSocket.status).toBe(409);
     await expect(waitingForSocket.json()).resolves.toMatchObject({
       code: 'FOLLOWER_JOIN_NOT_READY',
@@ -240,10 +271,16 @@ describe('tray worker skeleton', () => {
       retryable: true,
     });
 
-    const socketResponse = await handleWorkerRequest(new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }), env);
+    const socketResponse = await handleWorkerRequest(
+      new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }),
+      env
+    );
     expect(socketResponse.status).toBe(101);
 
-    const signalingReady = await handleWorkerRequest(new Request(session.capabilities.join.url), env);
+    const signalingReady = await handleWorkerRequest(
+      new Request(session.capabilities.join.url),
+      env
+    );
     expect(signalingReady.status).toBe(200);
     await expect(signalingReady.json()).resolves.toMatchObject({
       trayId: session.trayId,
@@ -261,7 +298,10 @@ describe('tray worker skeleton', () => {
 
   it('returns CORS headers on join OPTIONS preflight and POST responses', async () => {
     const { env } = createTestHarness();
-    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
+    const created = await handleWorkerRequest(
+      new Request('https://tray.test/tray', { method: 'POST' }),
+      env
+    );
     const session = (await created.json()) as {
       capabilities: { join: { url: string } };
     };
@@ -269,7 +309,7 @@ describe('tray worker skeleton', () => {
     // OPTIONS preflight
     const preflight = await handleWorkerRequest(
       new Request(session.capabilities.join.url, { method: 'OPTIONS' }),
-      env,
+      env
     );
     expect(preflight.status).toBe(204);
     expect(preflight.headers.get('access-control-allow-origin')).toBe('*');
@@ -287,14 +327,17 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'cors-test', runtime: 'test' }),
       }),
-      env,
+      env
     );
     expect(attach.headers.get('access-control-allow-origin')).toBe('*');
   });
 
   it('returns bootstrap metadata and notifies the leader when a follower attaches after the leader websocket is live', async () => {
     const { env } = createTestHarness();
-    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
+    const created = await handleWorkerRequest(
+      new Request('https://tray.test/tray', { method: 'POST' }),
+      env
+    );
     const session = (await created.json()) as {
       capabilities: { controller: { url: string }; join: { url: string } };
     };
@@ -305,10 +348,13 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'cone-1', runtime: 'cli' }),
       }),
-      env,
+      env
     );
     const leader = (await leaderAttach.json()) as { websocket: { url: string } };
-    const socketResponse = await handleWorkerRequest(new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }), env);
+    const socketResponse = await handleWorkerRequest(
+      new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }),
+      env
+    );
     expect(socketResponse.status).toBe(101);
     const clientSocket = (socketResponse as unknown as { webSocket: FakeWebSocket }).webSocket;
 
@@ -318,7 +364,7 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'cone-2', runtime: 'electron' }),
       }),
-      env,
+      env
     );
 
     expect(followerAttach.status).toBe(200);
@@ -327,7 +373,12 @@ describe('tray worker skeleton', () => {
       result: {
         action: string;
         code: string;
-        bootstrap: { bootstrapId: string; attempt: number; state: string; retriesRemaining: number };
+        bootstrap: {
+          bootstrapId: string;
+          attempt: number;
+          state: string;
+          retriesRemaining: number;
+        };
       };
     };
     expect(follower).toMatchObject({
@@ -356,24 +407,31 @@ describe('tray worker skeleton', () => {
 
   it('refreshes cached TURN credentials after their TTL elapses', async () => {
     let now = Date.parse('2026-03-11T00:00:00.000Z');
-    const fetchImpl = vi.fn<typeof fetch>()
+    const fetchImpl = vi
+      .fn<typeof fetch>()
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({
-          iceServers: {
-            urls: ['turn:turn-one.example.com:3478?transport=udp'],
-            username: 'user-one',
-            credential: 'cred-one',
-          },
-        }), { status: 200, headers: { 'content-type': 'application/json' } }),
+        new Response(
+          JSON.stringify({
+            iceServers: {
+              urls: ['turn:turn-one.example.com:3478?transport=udp'],
+              username: 'user-one',
+              credential: 'cred-one',
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
       )
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({
-          iceServers: {
-            urls: ['turn:turn-two.example.com:3478?transport=udp'],
-            username: 'user-two',
-            credential: 'cred-two',
-          },
-        }), { status: 200, headers: { 'content-type': 'application/json' } }),
+        new Response(
+          JSON.stringify({
+            iceServers: {
+              urls: ['turn:turn-two.example.com:3478?transport=udp'],
+              username: 'user-two',
+              credential: 'cred-two',
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
       );
 
     const durableObject = new SessionTrayDurableObject(
@@ -386,36 +444,46 @@ describe('tray worker skeleton', () => {
         now: () => now,
         webSocketPairFactory: createFakeWebSocketPair,
         fetchImpl,
-      },
+      }
     );
 
-    await durableObject.fetch(new Request('https://tray.test/internal/create', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        trayId: 'tray-turn-test',
-        createdAt: new Date(now).toISOString(),
-        joinToken: 'join-token',
-        controllerToken: 'controller-token',
-        webhookToken: 'webhook-token',
-      }),
-    }));
+    await durableObject.fetch(
+      new Request('https://tray.test/internal/create', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          trayId: 'tray-turn-test',
+          createdAt: new Date(now).toISOString(),
+          joinToken: 'join-token',
+          controllerToken: 'controller-token',
+          webhookToken: 'webhook-token',
+        }),
+      })
+    );
 
-    const leaderAttach = await durableObject.fetch(new Request('https://tray.test/controller/controller-token', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ controllerId: 'cone-1', runtime: 'cli' }),
-    }));
+    const leaderAttach = await durableObject.fetch(
+      new Request('https://tray.test/controller/controller-token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'cone-1', runtime: 'cli' }),
+      })
+    );
     const leader = (await leaderAttach.json()) as { websocket: { url: string } };
-    const socketResponse = await durableObject.fetch(new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }));
+    const socketResponse = await durableObject.fetch(
+      new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } })
+    );
     expect(socketResponse.status).toBe(101);
 
-    const firstFollowerAttach = await durableObject.fetch(new Request('https://tray.test/join/join-token', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ controllerId: 'cone-2', runtime: 'electron' }),
-    }));
-    const firstFollower = (await firstFollowerAttach.json()) as { iceServers?: Array<{ urls: string[]; username: string; credential: string }> };
+    const firstFollowerAttach = await durableObject.fetch(
+      new Request('https://tray.test/join/join-token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'cone-2', runtime: 'electron' }),
+      })
+    );
+    const firstFollower = (await firstFollowerAttach.json()) as {
+      iceServers?: Array<{ urls: string[]; username: string; credential: string }>;
+    };
     expect(firstFollower.iceServers?.[1]).toMatchObject({
       urls: ['turn:turn-one.example.com:3478?transport=udp'],
       username: 'user-one',
@@ -424,12 +492,16 @@ describe('tray worker skeleton', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
 
     now += 60_000;
-    const secondFollowerAttach = await durableObject.fetch(new Request('https://tray.test/join/join-token', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ controllerId: 'cone-3', runtime: 'electron' }),
-    }));
-    const secondFollower = (await secondFollowerAttach.json()) as { iceServers?: Array<{ urls: string[]; username: string; credential: string }> };
+    const secondFollowerAttach = await durableObject.fetch(
+      new Request('https://tray.test/join/join-token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'cone-3', runtime: 'electron' }),
+      })
+    );
+    const secondFollower = (await secondFollowerAttach.json()) as {
+      iceServers?: Array<{ urls: string[]; username: string; credential: string }>;
+    };
     expect(secondFollower.iceServers?.[1]).toMatchObject({
       urls: ['turn:turn-one.example.com:3478?transport=udp'],
       username: 'user-one',
@@ -438,12 +510,16 @@ describe('tray worker skeleton', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
 
     now += TURN_CREDENTIAL_TTL_MS;
-    const refreshedFollowerAttach = await durableObject.fetch(new Request('https://tray.test/join/join-token', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ controllerId: 'cone-4', runtime: 'electron' }),
-    }));
-    const refreshedFollower = (await refreshedFollowerAttach.json()) as { iceServers?: Array<{ urls: string[]; username: string; credential: string }> };
+    const refreshedFollowerAttach = await durableObject.fetch(
+      new Request('https://tray.test/join/join-token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'cone-4', runtime: 'electron' }),
+      })
+    );
+    const refreshedFollower = (await refreshedFollowerAttach.json()) as {
+      iceServers?: Array<{ urls: string[]; username: string; credential: string }>;
+    };
     expect(refreshedFollower.iceServers?.[1]).toMatchObject({
       urls: ['turn:turn-two.example.com:3478?transport=udp'],
       username: 'user-two',
@@ -454,7 +530,10 @@ describe('tray worker skeleton', () => {
 
   it('relays leader offers plus follower answers and ICE candidates over the bootstrap join path', async () => {
     const { env } = createTestHarness();
-    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
+    const created = await handleWorkerRequest(
+      new Request('https://tray.test/tray', { method: 'POST' }),
+      env
+    );
     const session = (await created.json()) as {
       capabilities: { controller: { url: string }; join: { url: string } };
     };
@@ -465,10 +544,13 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'cone-1', runtime: 'cli' }),
       }),
-      env,
+      env
     );
     const leader = (await leaderAttach.json()) as { websocket: { url: string } };
-    const socketResponse = await handleWorkerRequest(new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }), env);
+    const socketResponse = await handleWorkerRequest(
+      new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }),
+      env
+    );
     const clientSocket = (socketResponse as unknown as { webSocket: FakeWebSocket }).webSocket;
 
     const followerAttach = await handleWorkerRequest(
@@ -477,24 +559,28 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'cone-2', runtime: 'electron' }),
       }),
-      env,
+      env
     );
     const follower = (await followerAttach.json()) as {
       result: { bootstrap: { bootstrapId: string } };
     };
 
-    clientSocket.send(JSON.stringify({
-      type: 'bootstrap.offer',
-      controllerId: 'cone-2',
-      bootstrapId: follower.result.bootstrap.bootstrapId,
-      offer: { type: 'offer', sdp: 'offer-sdp' },
-    }));
-    clientSocket.send(JSON.stringify({
-      type: 'bootstrap.ice_candidate',
-      controllerId: 'cone-2',
-      bootstrapId: follower.result.bootstrap.bootstrapId,
-      candidate: { candidate: 'leader-candidate' },
-    }));
+    clientSocket.send(
+      JSON.stringify({
+        type: 'bootstrap.offer',
+        controllerId: 'cone-2',
+        bootstrapId: follower.result.bootstrap.bootstrapId,
+        offer: { type: 'offer', sdp: 'offer-sdp' },
+      })
+    );
+    clientSocket.send(
+      JSON.stringify({
+        type: 'bootstrap.ice_candidate',
+        controllerId: 'cone-2',
+        bootstrapId: follower.result.bootstrap.bootstrapId,
+        candidate: { candidate: 'leader-candidate' },
+      })
+    );
 
     const polled = await handleWorkerRequest(
       new Request(session.capabilities.join.url, {
@@ -507,12 +593,16 @@ describe('tray worker skeleton', () => {
           cursor: 0,
         }),
       }),
-      env,
+      env
     );
     expect(polled.status).toBe(200);
     await expect(polled.json()).resolves.toMatchObject({
       controllerId: 'cone-2',
-      bootstrap: { bootstrapId: follower.result.bootstrap.bootstrapId, state: 'offered', cursor: 2 },
+      bootstrap: {
+        bootstrapId: follower.result.bootstrap.bootstrapId,
+        state: 'offered',
+        cursor: 2,
+      },
       events: [
         { type: 'bootstrap.offer', offer: { type: 'offer', sdp: 'offer-sdp' } },
         { type: 'bootstrap.ice_candidate', candidate: { candidate: 'leader-candidate' } },
@@ -530,7 +620,7 @@ describe('tray worker skeleton', () => {
           answer: { type: 'answer', sdp: 'answer-sdp' },
         }),
       }),
-      env,
+      env
     );
     expect(answered.status).toBe(200);
     await expect(answered.json()).resolves.toMatchObject({
@@ -548,7 +638,7 @@ describe('tray worker skeleton', () => {
           candidate: { candidate: 'follower-candidate' },
         }),
       }),
-      env,
+      env
     );
     expect(followerIce.status).toBe(200);
 
@@ -568,7 +658,10 @@ describe('tray worker skeleton', () => {
 
   it('marks timed out bootstrap attempts as failed and requires explicit retries', async () => {
     const { env, advance } = createTestHarness();
-    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
+    const created = await handleWorkerRequest(
+      new Request('https://tray.test/tray', { method: 'POST' }),
+      env
+    );
     const session = (await created.json()) as {
       capabilities: { controller: { url: string }; join: { url: string } };
     };
@@ -579,10 +672,13 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'cone-1', runtime: 'cli' }),
       }),
-      env,
+      env
     );
     const leader = (await leaderAttach.json()) as { websocket: { url: string } };
-    const socketResponse = await handleWorkerRequest(new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }), env);
+    const socketResponse = await handleWorkerRequest(
+      new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }),
+      env
+    );
     const clientSocket = (socketResponse as unknown as { webSocket: FakeWebSocket }).webSocket;
 
     const followerAttach = await handleWorkerRequest(
@@ -591,7 +687,7 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'cone-2', runtime: 'electron' }),
       }),
-      env,
+      env
     );
     const follower = (await followerAttach.json()) as {
       result: { bootstrap: { bootstrapId: string } };
@@ -609,7 +705,7 @@ describe('tray worker skeleton', () => {
           cursor: 0,
         }),
       }),
-      env,
+      env
     );
     expect(timedOut.status).toBe(200);
     await expect(timedOut.json()).resolves.toMatchObject({
@@ -636,13 +732,17 @@ describe('tray worker skeleton', () => {
           runtime: 'electron',
         }),
       }),
-      env,
+      env
     );
     expect(retried.status).toBe(200);
     const retriedBody = (await retried.json()) as {
       bootstrap: { bootstrapId: string; attempt: number; retriesRemaining: number; state: string };
     };
-    expect(retriedBody.bootstrap).toMatchObject({ attempt: 2, retriesRemaining: 2, state: 'pending' });
+    expect(retriedBody.bootstrap).toMatchObject({
+      attempt: 2,
+      retriesRemaining: 2,
+      state: 'pending',
+    });
     expect(retriedBody.bootstrap.bootstrapId).not.toBe(follower.result.bootstrap.bootstrapId);
     expect(JSON.parse(clientSocket.received[2]!)).toMatchObject({
       type: 'follower.join_requested',
@@ -654,7 +754,10 @@ describe('tray worker skeleton', () => {
 
   it('returns an explicit fail instruction when a follower attaches to an expired tray', async () => {
     const { env, advance } = createTestHarness();
-    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
+    const created = await handleWorkerRequest(
+      new Request('https://tray.test/tray', { method: 'POST' }),
+      env
+    );
     const session = (await created.json()) as {
       capabilities: { controller: { url: string }; join: { url: string } };
     };
@@ -665,10 +768,13 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'lead-1' }),
       }),
-      env,
+      env
     );
     const leader = (await attach.json()) as { websocket: { url: string } };
-    const socketResponse = await handleWorkerRequest(new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }), env);
+    const socketResponse = await handleWorkerRequest(
+      new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }),
+      env
+    );
     const clientSocket = (socketResponse as unknown as { webSocket: FakeWebSocket }).webSocket;
     clientSocket.close();
 
@@ -679,7 +785,7 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'follow-1', runtime: 'electron' }),
       }),
-      env,
+      env
     );
 
     expect(expiredAttach.status).toBe(410);
@@ -697,8 +803,13 @@ describe('tray worker skeleton', () => {
 
   it('allows only the leader to open the tray WebSocket', async () => {
     const { env } = createTestHarness();
-    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
-    const session = (await created.json()) as { capabilities: { controller: { url: string }; join: { url: string } } };
+    const created = await handleWorkerRequest(
+      new Request('https://tray.test/tray', { method: 'POST' }),
+      env
+    );
+    const session = (await created.json()) as {
+      capabilities: { controller: { url: string }; join: { url: string } };
+    };
 
     const leaderAttach = await handleWorkerRequest(
       new Request(session.capabilities.controller.url, {
@@ -706,7 +817,7 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'lead-1' }),
       }),
-      env,
+      env
     );
     const leader = (await leaderAttach.json()) as { leaderKey: string; websocket: { url: string } };
 
@@ -716,19 +827,25 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'follow-1' }),
       }),
-      env,
+      env
     );
     const follower = (await followerAttach.json()) as { controllerId: string };
 
     const denied = await handleWorkerRequest(
-      new Request(`${session.capabilities.controller.url}?controllerId=${follower.controllerId}&leaderKey=wrong`, {
-        headers: { Upgrade: 'websocket' },
-      }),
-      env,
+      new Request(
+        `${session.capabilities.controller.url}?controllerId=${follower.controllerId}&leaderKey=wrong`,
+        {
+          headers: { Upgrade: 'websocket' },
+        }
+      ),
+      env
     );
     expect(denied.status).toBe(403);
 
-    const accepted = await handleWorkerRequest(new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }), env);
+    const accepted = await handleWorkerRequest(
+      new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }),
+      env
+    );
     expect(accepted.status).toBe(101);
     const socket = (accepted as unknown as { webSocket: FakeWebSocket }).webSocket;
     expect(socket).toBeDefined();
@@ -737,8 +854,14 @@ describe('tray worker skeleton', () => {
 
   it('rejects webhooks without a live leader and does not buffer payload state', async () => {
     const { env, readTray } = createTestHarness();
-    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
-    const session = (await created.json()) as { trayId: string; capabilities: { controller: { url: string }; webhook: { url: string } } };
+    const created = await handleWorkerRequest(
+      new Request('https://tray.test/tray', { method: 'POST' }),
+      env
+    );
+    const session = (await created.json()) as {
+      trayId: string;
+      capabilities: { controller: { url: string }; webhook: { url: string } };
+    };
 
     await handleWorkerRequest(
       new Request(session.capabilities.controller.url, {
@@ -746,7 +869,7 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'lead-1' }),
       }),
-      env,
+      env
     );
 
     const rejected = await handleWorkerRequest(
@@ -755,7 +878,7 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ hello: 'world' }),
       }),
-      env,
+      env
     );
 
     expect(rejected.status).toBe(410);
@@ -766,8 +889,13 @@ describe('tray worker skeleton', () => {
 
   it('returns 400 when webhook POST has no webhookId suffix', async () => {
     const { env } = createTestHarness();
-    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
-    const session = (await created.json()) as { capabilities: { controller: { url: string }; webhook: { url: string } } };
+    const created = await handleWorkerRequest(
+      new Request('https://tray.test/tray', { method: 'POST' }),
+      env
+    );
+    const session = (await created.json()) as {
+      capabilities: { controller: { url: string }; webhook: { url: string } };
+    };
 
     // Attach leader and connect WebSocket
     const attach = await handleWorkerRequest(
@@ -776,10 +904,13 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'lead-1' }),
       }),
-      env,
+      env
     );
     const leader = (await attach.json()) as { leaderKey: string; websocket: { url: string } };
-    await handleWorkerRequest(new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }), env);
+    await handleWorkerRequest(
+      new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }),
+      env
+    );
 
     const rejected = await handleWorkerRequest(
       new Request(session.capabilities.webhook.url, {
@@ -787,7 +918,7 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ hello: 'world' }),
       }),
-      env,
+      env
     );
 
     expect(rejected.status).toBe(400);
@@ -797,8 +928,13 @@ describe('tray worker skeleton', () => {
 
   it('forwards webhook POST to the live leader via the control WebSocket', async () => {
     const { env } = createTestHarness();
-    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
-    const session = (await created.json()) as { capabilities: { controller: { url: string }; webhook: { url: string } } };
+    const created = await handleWorkerRequest(
+      new Request('https://tray.test/tray', { method: 'POST' }),
+      env
+    );
+    const session = (await created.json()) as {
+      capabilities: { controller: { url: string }; webhook: { url: string } };
+    };
 
     // Attach leader and connect WebSocket
     const attach = await handleWorkerRequest(
@@ -807,10 +943,13 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'lead-1' }),
       }),
-      env,
+      env
     );
     const leader = (await attach.json()) as { leaderKey: string; websocket: { url: string } };
-    const wsResponse = await handleWorkerRequest(new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }), env);
+    const wsResponse = await handleWorkerRequest(
+      new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }),
+      env
+    );
     const socket = (wsResponse as unknown as { webSocket: FakeWebSocket }).webSocket;
 
     // POST webhook with a webhookId
@@ -820,7 +959,7 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'opened', repo: 'test/repo' }),
       }),
-      env,
+      env
     );
 
     expect(webhookResponse.status).toBe(202);
@@ -831,10 +970,16 @@ describe('tray worker skeleton', () => {
     // Verify the leader WebSocket received the webhook event
     // socket.received includes the initial leader.connected message + the webhook.event
     const webhookMessages = socket.received
-      .map(raw => JSON.parse(raw) as { type: string })
-      .filter(msg => msg.type === 'webhook.event');
+      .map((raw) => JSON.parse(raw) as { type: string })
+      .filter((msg) => msg.type === 'webhook.event');
     expect(webhookMessages).toHaveLength(1);
-    const forwarded = webhookMessages[0] as { type: string; webhookId: string; headers: Record<string, string>; body: unknown; timestamp: string };
+    const forwarded = webhookMessages[0] as {
+      type: string;
+      webhookId: string;
+      headers: Record<string, string>;
+      body: unknown;
+      timestamp: string;
+    };
     expect(forwarded.webhookId).toBe('my-webhook-123');
     expect(forwarded.body).toEqual({ action: 'opened', repo: 'test/repo' });
     expect(forwarded.timestamp).toBeDefined();
@@ -843,8 +988,14 @@ describe('tray worker skeleton', () => {
 
   it('returns 403 for invalid webhook capability token', async () => {
     const { env } = createTestHarness();
-    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
-    const session = (await created.json()) as { trayId: string; capabilities: { webhook: { url: string } } };
+    const created = await handleWorkerRequest(
+      new Request('https://tray.test/tray', { method: 'POST' }),
+      env
+    );
+    const session = (await created.json()) as {
+      trayId: string;
+      capabilities: { webhook: { url: string } };
+    };
 
     // Use the correct trayId but a wrong secret to get routed to the right DO
     const rejected = await handleWorkerRequest(
@@ -853,7 +1004,7 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ hello: 'world' }),
       }),
-      env,
+      env
     );
 
     expect(rejected.status).toBe(403);
@@ -863,8 +1014,13 @@ describe('tray worker skeleton', () => {
 
   it('wraps non-JSON webhook body in a raw field', async () => {
     const { env } = createTestHarness();
-    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
-    const session = (await created.json()) as { capabilities: { controller: { url: string }; webhook: { url: string } } };
+    const created = await handleWorkerRequest(
+      new Request('https://tray.test/tray', { method: 'POST' }),
+      env
+    );
+    const session = (await created.json()) as {
+      capabilities: { controller: { url: string }; webhook: { url: string } };
+    };
 
     // Attach leader and connect WebSocket
     const attach = await handleWorkerRequest(
@@ -873,10 +1029,13 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'lead-1' }),
       }),
-      env,
+      env
     );
     const leader = (await attach.json()) as { leaderKey: string; websocket: { url: string } };
-    const wsResponse = await handleWorkerRequest(new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }), env);
+    const wsResponse = await handleWorkerRequest(
+      new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }),
+      env
+    );
     const socket = (wsResponse as unknown as { webSocket: FakeWebSocket }).webSocket;
 
     // POST webhook with plain text body
@@ -886,14 +1045,14 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'text/plain' },
         body: 'Hello, plain text webhook!',
       }),
-      env,
+      env
     );
 
     expect(webhookResponse.status).toBe(202);
 
     const webhookMessages = socket.received
-      .map(raw => JSON.parse(raw) as { type: string })
-      .filter(msg => msg.type === 'webhook.event');
+      .map((raw) => JSON.parse(raw) as { type: string })
+      .filter((msg) => msg.type === 'webhook.event');
     expect(webhookMessages).toHaveLength(1);
     const forwarded = webhookMessages[0] as unknown as { body: unknown };
     expect(forwarded.body).toEqual({ raw: 'Hello, plain text webhook!' });
@@ -901,7 +1060,10 @@ describe('tray worker skeleton', () => {
 
   it('supports leader reconnect with the issued key and expires after one hour without reclaim', async () => {
     const { env, advance } = createTestHarness();
-    const created = await handleWorkerRequest(new Request('https://tray.test/tray', { method: 'POST' }), env);
+    const created = await handleWorkerRequest(
+      new Request('https://tray.test/tray', { method: 'POST' }),
+      env
+    );
     const session = (await created.json()) as { capabilities: { controller: { url: string } } };
 
     const attach = await handleWorkerRequest(
@@ -910,11 +1072,14 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'lead-1' }),
       }),
-      env,
+      env
     );
     const leader = (await attach.json()) as { leaderKey: string; websocket: { url: string } };
 
-    const wsResponse = await handleWorkerRequest(new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }), env);
+    const wsResponse = await handleWorkerRequest(
+      new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }),
+      env
+    );
     const clientSocket = (wsResponse as unknown as { webSocket: FakeWebSocket }).webSocket;
     clientSocket.close();
 
@@ -924,19 +1089,27 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'lead-2', leaderKey: leader.leaderKey }),
       }),
-      env,
+      env
     );
-    const reclaimBody = (await reclaim.json()) as { role: string; leader: { controllerId: string; connected: boolean } };
+    const reclaimBody = (await reclaim.json()) as {
+      role: string;
+      leader: { controllerId: string; connected: boolean };
+    };
     expect(reclaimBody.role).toBe('leader');
     expect(reclaimBody.leader.controllerId).toBe('lead-2');
 
     const reclaimedSocketResponse = await handleWorkerRequest(
-      new Request(`${session.capabilities.controller.url}?controllerId=lead-2&leaderKey=${leader.leaderKey}`, {
-        headers: { Upgrade: 'websocket' },
-      }),
-      env,
+      new Request(
+        `${session.capabilities.controller.url}?controllerId=lead-2&leaderKey=${leader.leaderKey}`,
+        {
+          headers: { Upgrade: 'websocket' },
+        }
+      ),
+      env
     );
-    const reclaimedClientSocket = (reclaimedSocketResponse as unknown as { webSocket: FakeWebSocket }).webSocket;
+    const reclaimedClientSocket = (
+      reclaimedSocketResponse as unknown as { webSocket: FakeWebSocket }
+    ).webSocket;
     reclaimedClientSocket.close();
 
     advance(TRAY_RECLAIM_TTL_MS + 1);
@@ -946,7 +1119,7 @@ describe('tray worker skeleton', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ controllerId: 'lead-3' }),
       }),
-      env,
+      env
     );
     expect(expired.status).toBe(410);
   });
@@ -957,7 +1130,12 @@ describe('tray worker skeleton', () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      routes: ['POST /tray', 'GET|POST /join/:token', 'GET|POST /controller/:token', 'POST /webhook/:token/:webhookId'],
+      routes: [
+        'POST /tray',
+        'GET|POST /join/:token',
+        'GET|POST /controller/:token',
+        'POST /webhook/:token/:webhookId',
+      ],
     });
   });
 });

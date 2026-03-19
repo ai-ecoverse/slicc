@@ -7,12 +7,7 @@
 
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import 'fake-indexeddb/auto';
-import {
-  initDB,
-  saveScoop,
-  getMessagesForScoop,
-  clearAllMessages,
-} from './db.js';
+import { initDB, saveScoop, getMessagesForScoop, clearAllMessages } from './db.js';
 import type { RegisteredScoop, ChannelMessage } from './types.js';
 
 // Test helpers — we can't instantiate a full Orchestrator (needs VirtualFS, DOM, etc.)
@@ -178,16 +173,20 @@ describe('Orchestrator Message Routing (DB-level)', () => {
       const { saveMessage, getMessagesSince } = await import('./db.js');
       const ts = new Date(Date.now() - 5000).toISOString();
 
-      await saveMessage(makeMessage({
-        chatJid: testScoop.jid,
-        senderName: 'User',
-        content: 'user message',
-      }));
-      await saveMessage(makeMessage({
-        chatJid: testScoop.jid,
-        senderName: 'test-scoop',
-        content: 'scoop own response',
-      }));
+      await saveMessage(
+        makeMessage({
+          chatJid: testScoop.jid,
+          senderName: 'User',
+          content: 'user message',
+        })
+      );
+      await saveMessage(
+        makeMessage({
+          chatJid: testScoop.jid,
+          senderName: 'test-scoop',
+          content: 'scoop own response',
+        })
+      );
 
       // Exclude scoop's own messages (prevents processing own responses)
       const messages = await getMessagesSince(testScoop.jid, ts, 'test-scoop');
@@ -199,11 +198,13 @@ describe('Orchestrator Message Routing (DB-level)', () => {
       const { saveMessage, getMessagesSince } = await import('./db.js');
       const ts = new Date(Date.now() - 5000).toISOString();
 
-      await saveMessage(makeMessage({
-        chatJid: testScoop.jid,
-        senderName: 'sliccy',
-        content: 'cone delegation message',
-      }));
+      await saveMessage(
+        makeMessage({
+          chatJid: testScoop.jid,
+          senderName: 'sliccy',
+          content: 'cone delegation message',
+        })
+      );
 
       // Exclude only the scoop's own name, not 'sliccy'
       const messages = await getMessagesSince(testScoop.jid, ts, 'test-scoop');

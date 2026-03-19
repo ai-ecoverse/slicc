@@ -74,9 +74,13 @@ export async function getMagick(): Promise<ImageMagickModule> {
           const wasmBytes = new Uint8Array(await resp.arrayBuffer());
           await magickModule.initializeImageMagick(wasmBytes);
         } else {
-          const wasmBase = typeof window === 'undefined'
-            ? new URL('../../../node_modules/@imagemagick/magick-wasm/dist/', import.meta.url).toString()
-            : MAGICK_WASM_CDN;
+          const wasmBase =
+            typeof window === 'undefined'
+              ? new URL(
+                  '../../../node_modules/@imagemagick/magick-wasm/dist/',
+                  import.meta.url
+                ).toString()
+              : MAGICK_WASM_CDN;
           const wasmUrl = new URL('magick.wasm', wasmBase);
           await magickModule.initializeImageMagick(wasmUrl);
         }
