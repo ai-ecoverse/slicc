@@ -2,7 +2,7 @@
 
 # slicc — Self-Licking Ice Cream Cone
 
-[![npm](https://img.shields.io/npm/v/sliccy)](https://www.npmjs.com/package/sliccy)
+[![npm](https://img.shields.io/npm/v/sliccy)](https://www.npmjs.com/package/sliccy) ![Vibe Coded](https://img.shields.io/badge/vibe--coded-62%25_AI-blue?style=flat&logo=github)
 
 > A browser-native AI agent for getting practical work done in and through the browser.
 
@@ -152,8 +152,6 @@ SLICC is part of the [AI Ecoverse](https://github.com/ai-ecoverse), a growing se
 - [ai-aligned-git](https://github.com/ai-ecoverse/ai-aligned-git) and [ai-aligned-gh](https://github.com/ai-ecoverse/ai-aligned-gh) — guardrails and attribution helpers for AI-assisted Git/GitHub work
 
 SLICC would not have been possible without the pioneering inspiration of [OpenClaw](https://github.com/openclaw/openclaw), [NanoClaw](https://github.com/qwibitai/nanoclaw), and [Pi](https://github.com/badlogic/pi-mono). Pi is actually the frozen heart of every SLICC instance.
-
-![Vibe Coded](https://img.shields.io/badge/vibe--coded-62%25_AI-blue?style=for-the-badge&logo=github)
 
 ## Development and deeper docs
 
