@@ -12,6 +12,7 @@
 import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 import { discoverSkills } from '../skills/index.js';
+import type { SkillDiscoverySource } from '../skills/index.js';
 
 const log = createLogger('skills');
 
@@ -96,8 +97,8 @@ export interface Skill {
   path: string;
 }
 
-function dedupeSkillsByName(skills: Skill[]): Skill[] {
-  const winners = new Map<string, Skill>();
+function dedupeSkillsByName<T extends Skill>(skills: T[]): T[] {
+  const winners = new Map<string, T>();
 
   for (const skill of skills) {
     if (winners.has(skill.metadata.name)) {
@@ -158,15 +159,23 @@ function parseFrontmatter(content: string): { metadata: Partial<SkillMetadata>; 
 export async function loadSkills(fs: VirtualFS, skillsDir: string): Promise<Skill[]> {
   const discoveredSkills = await loadDiscoveredSkills(fs, skillsDir);
   const standaloneSkills = await loadStandaloneMarkdownSkills(fs, skillsDir);
-  const skills = dedupeSkillsByName([...discoveredSkills, ...standaloneSkills]);
+  const nativeDiscoveredSkills = discoveredSkills.filter((skill) => skill.source === 'native');
+  const compatibilityDiscoveredSkills = discoveredSkills.filter((skill) => skill.source !== 'native');
+  const skills = dedupeSkillsByName([
+    ...nativeDiscoveredSkills,
+    ...standaloneSkills,
+    ...compatibilityDiscoveredSkills,
+  ]);
 
   log.info('Skills loaded', { count: skills.length, dir: skillsDir });
   return skills;
 }
 
-async function loadDiscoveredSkills(fs: VirtualFS, skillsDir: string): Promise<Skill[]> {
+type LoadedDiscoveredSkill = Skill & { source: SkillDiscoverySource };
+
+async function loadDiscoveredSkills(fs: VirtualFS, skillsDir: string): Promise<LoadedDiscoveredSkill[]> {
   const discovered = await discoverSkills(fs, skillsDir);
-  const skills: Skill[] = [];
+  const skills: LoadedDiscoveredSkill[] = [];
 
   for (const discoveredSkill of discovered) {
     if (!discoveredSkill.skillFilePath) continue;
@@ -184,6 +193,7 @@ async function loadDiscoveredSkills(fs: VirtualFS, skillsDir: string): Promise<S
         },
         content: body,
         path: discoveredSkill.skillFilePath,
+        source: discoveredSkill.source,
       });
       log.debug('Loaded discovered skill', {
         name,

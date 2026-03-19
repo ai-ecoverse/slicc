@@ -142,6 +142,24 @@ Write clean code.
       expect(skills.find((skill) => skill.metadata.name === 'legacy')?.path).toBe('/workspace/skills/legacy.md');
     });
 
+    it('keeps standalone native markdown skills ahead of compatibility duplicates', async () => {
+      await vfs.mkdir('/workspace/skills', { recursive: true });
+      await vfs.writeFile('/workspace/skills/shared-skill.md', '# Native standalone');
+
+      await vfs.mkdir('/repo/.agents/skills/shared-skill', { recursive: true });
+      await vfs.writeFile('/repo/.agents/skills/shared-skill/SKILL.md', '# Agent');
+
+      await vfs.mkdir('/repo/.claude/skills/shared-skill', { recursive: true });
+      await vfs.writeFile('/repo/.claude/skills/shared-skill/SKILL.md', '# Claude');
+
+      const skills = await loadSkills(vfs, '/workspace/skills');
+      const sharedSkills = skills.filter((skill) => skill.metadata.name === 'shared-skill');
+
+      expect(sharedSkills).toHaveLength(1);
+      expect(sharedSkills[0].path).toBe('/workspace/skills/shared-skill.md');
+      expect(sharedSkills[0].content).toContain('# Native standalone');
+    });
+
     it('skips subdirectories without SKILL.md', async () => {
       await vfs.mkdir('/skills5/empty-dir', { recursive: true });
       await vfs.writeFile('/skills5/empty-dir/readme.txt', 'not a skill');
