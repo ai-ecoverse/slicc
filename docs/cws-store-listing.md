@@ -81,3 +81,17 @@ slicc is designed for developers who want an agent that works the way they think
 - [ ] **Marquee promo tile** — 1400×560 PNG (large promo, needed for featuring)
 
 Use `hero-banner.png` at the repo root as a starting point for promotional tiles.
+
+---
+
+## Reviewer Notes — Bundle Size
+
+The extension package is approximately 40 MB. This is expected and explained by two bundled WebAssembly modules required for the extension's core developer tool capabilities:
+
+**Pyodide (~13 MB)** — Python WASM runtime. slicc provides a `python3 -c` shell command that lets the AI agent run Python scripts for data processing, test execution, and automation tasks. Chrome's Manifest V3 Content Security Policy blocks loading WASM from external URLs (`wasm-unsafe-eval` only applies to same-origin or bundled resources), so Pyodide must be bundled with the extension. Pyodide is an open-source project (Mozilla/PSF license) maintained at [https://github.com/pyodide/pyodide](https://github.com/pyodide/pyodide).
+
+**ImageMagick WASM (~14 MB)** — Image processing runtime. The agent uses `convert` (the ImageMagick CLI) for image manipulation tasks developers commonly need: resizing screenshots, converting formats, compositing images. Like Pyodide, it cannot be loaded from an external CDN under MV3 CSP and must be bundled. The WASM build is open-source and maintained at [https://github.com/nicehash/magick-wasm](https://github.com/nicehash/magick-wasm).
+
+Both modules are legitimate open-source WASM binaries serving the extension's stated developer tool purpose. Neither contains obfuscated code. The combined uncompressed size of these two modules accounts for roughly 27 MB of the total 40 MB package — the remainder is the application code, bundled skills, and static assets.
+
+This explanation can be included verbatim in the "Additional Notes" field of the CWS submission form if the review team requests justification for the package size.
