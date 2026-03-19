@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from 'fs';
+import { type existsSync, type readdirSync } from 'fs';
 import { mkdtemp, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';

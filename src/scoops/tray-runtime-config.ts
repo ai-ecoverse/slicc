@@ -58,7 +58,7 @@ export function parseTrayUrlValue(raw: string | null | undefined): TrayUrlConfig
 
     const segments = url.pathname.split('/').filter(Boolean);
     let trayId: string | null = null;
-    let joinUrl: string | null = null;
+    const joinUrl: string | null = null;
     if (segments.length >= 2 && segments.at(-2) === 'tray') {
       trayId = decodeURIComponent(segments.at(-1)!);
       segments.splice(-2, 2);
