@@ -176,6 +176,10 @@ Options:
   --force                  Overwrite existing skills
   -h, --help               Show help
 
+GitHub rate limits:
+  On shared VPNs or corporate IPs, anonymous GitHub access may be rate-limited.
+  Configure a token to avoid shared-IP limits: git config github.token <PAT>
+
 Examples:
   upskill search "browser automation"
   upskill anthropics/skills --list
