@@ -3,9 +3,9 @@ import AppKit
 
 @Observable
 final class SliccProcess {
-    private var process: Process?
-    private(set) var isRunning = false
-    private(set) var target: AppTarget?
+    /// All running instances keyed by AppTarget.id
+    private var processes: [String: Process] = [:]
+    private(set) var runningTargets: Set<String> = []
 
     var resolvedSliccDir: String { sliccDir }
     private var sliccDir: String {
@@ -24,72 +24,93 @@ final class SliccProcess {
         return SliccBootstrapper.defaultSliccDir
     }
 
-    // MARK: - Standalone mode (CLI server launches Chrome with temp profile)
+    /// Port allocation: browser gets 5710, electron apps get 5711, 5712, ...
+    /// CDP ports: browser gets 9222, electron apps get 9223, 9224, ...
+    private static let browserPort: UInt16 = 5710
+    private static let browserCdpPort: UInt16 = 9222
+    private static let electronBasePort: UInt16 = 5711
+    private static let electronBaseCdpPort: UInt16 = 9223
+
+    func isRunning(_ target: AppTarget) -> Bool {
+        runningTargets.contains(target.id)
+    }
+
+    // MARK: - Browser mode
 
     func launchStandalone(_ browser: AppTarget) throws {
-        guard !isRunning else { throw LaunchError.alreadyRunning }
-        guard !Self.isPortInUse(5710) else { throw LaunchError.portInUse }
-        target = browser
-        try spawnCLI(extraArgs: ["--cdp-port=9222"], env: [
+        if isRunning(browser) { stop(browser) }
+        guard !Self.isPortInUse(Self.browserPort) else { throw LaunchError.portInUse(Self.browserPort) }
+        try spawn(target: browser, extraArgs: ["--cdp-port=\(Self.browserCdpPort)"], env: [
             "CHROME_PATH": browser.executablePath,
-            "PORT": "5710",
+            "PORT": "\(Self.browserPort)",
         ])
     }
 
-    // MARK: - Electron app (CLI server + overlay injection)
+    // MARK: - Electron mode (each app gets its own port)
 
     func launchWithElectronApp(_ app: AppTarget) throws {
-        guard !isRunning else { throw LaunchError.alreadyRunning }
-        guard !Self.isPortInUse(5710) else { throw LaunchError.portInUse }
-        target = app
-        try spawnCLI(extraArgs: [
+        if isRunning(app) { stop(app) }
+        let (port, cdpPort) = nextElectronPorts()
+        guard !Self.isPortInUse(port) else { throw LaunchError.portInUse(port) }
+        try spawn(target: app, extraArgs: [
             "--electron", app.path,
             "--kill",
-            "--cdp-port=9223",
-        ], env: ["PORT": "5710"])
+            "--cdp-port=\(cdpPort)",
+        ], env: ["PORT": "\(port)"])
+    }
+
+    /// Find the next available port pair for an Electron app.
+    private func nextElectronPorts() -> (port: UInt16, cdpPort: UInt16) {
+        let electronCount = UInt16(processes.count) // offset from base
+        for i: UInt16 in 0...20 {
+            let port = Self.electronBasePort + electronCount + i
+            let cdpPort = Self.electronBaseCdpPort + electronCount + i
+            if !Self.isPortInUse(port) && !Self.isPortInUse(cdpPort) {
+                return (port, cdpPort)
+            }
+        }
+        // Fallback — try anyway
+        let port = Self.electronBasePort + electronCount
+        return (port, Self.electronBaseCdpPort + electronCount)
     }
 
     // MARK: - Guided extension install
 
-    /// Copy extension to a stable path, open Chrome to chrome://extensions,
-    /// and open Finder at the extension folder so the user can select it.
     func guidedInstallExtension(chromePath: String) throws {
         let stablePath = NSHomeDirectory() + "/.slicc/extension"
         let sourcePath = sliccDir + "/dist/extension"
         let fm = FileManager.default
 
-        // Copy extension to stable path
         if fm.fileExists(atPath: stablePath) {
             try fm.removeItem(atPath: stablePath)
         }
         try fm.copyItem(atPath: sourcePath, toPath: stablePath)
 
-        // Open Chrome to chrome://extensions
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: chromePath)
         proc.arguments = ["chrome://extensions"]
         try proc.run()
 
-        // Open Finder at the extension folder (user selects this in "Load unpacked")
         NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: stablePath)
     }
 
     // MARK: - Lifecycle
 
-    func stop() {
-        process?.terminate()
-        markStopped()
+    func stop(_ target: AppTarget) {
+        processes[target.id]?.terminate()
+        processes.removeValue(forKey: target.id)
+        runningTargets.remove(target.id)
     }
 
-    private func markStopped() {
-        isRunning = false
-        target = nil
-        process = nil
+    func stopAll() {
+        for (_, proc) in processes { proc.terminate() }
+        processes.removeAll()
+        runningTargets.removeAll()
     }
 
     // MARK: - Private
 
-    private func spawnCLI(extraArgs: [String], env: [String: String]) throws {
+    private func spawn(target: AppTarget, extraArgs: [String], env: [String: String]) throws {
         guard let nodePath = SliccBootstrapper.findNode() else {
             throw LaunchError.nodeNotFound
         }
@@ -101,14 +122,16 @@ final class SliccProcess {
         proc.standardOutput = FileHandle.nullDevice
         proc.standardError = FileHandle.nullDevice
         proc.terminationHandler = { [weak self] _ in
-            DispatchQueue.main.async { self?.markStopped() }
+            DispatchQueue.main.async {
+                self?.processes.removeValue(forKey: target.id)
+                self?.runningTargets.remove(target.id)
+            }
         }
         try proc.run()
-        process = proc
-        isRunning = true
+        processes[target.id] = proc
+        runningTargets.insert(target.id)
     }
 
-    /// Check if a TCP port is already in use.
     private static func isPortInUse(_ port: UInt16) -> Bool {
         let sock = socket(AF_INET, SOCK_STREAM, 0)
         guard sock >= 0 else { return false }
@@ -129,13 +152,11 @@ final class SliccProcess {
 
     enum LaunchError: LocalizedError {
         case nodeNotFound
-        case alreadyRunning
-        case portInUse
+        case portInUse(UInt16)
         var errorDescription: String? {
             switch self {
             case .nodeNotFound: return "Node.js not found"
-            case .alreadyRunning: return "SLICC is already running. Stop it first."
-            case .portInUse: return "Port 5710 is already in use. Another SLICC instance may be running."
+            case .portInUse(let port): return "Port \(port) is already in use."
             }
         }
     }

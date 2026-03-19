@@ -44,19 +44,17 @@ struct SliccstartApp: App {
                         targets: targets,
                         sliccProcess: sliccProcess,
                         onLaunchStandalone: { target in
-                            sliccProcess.stop()
                             do {
                                 try sliccProcess.launchStandalone(target)
                             } catch {
-                                showError("Failed to launch: \(error.localizedDescription)")
+                                showError(error.localizedDescription)
                             }
                         },
                         onLaunchElectron: { target in
-                            sliccProcess.stop()
                             do {
                                 try sliccProcess.launchWithElectronApp(target)
                             } catch {
-                                showError("Failed to launch: \(error.localizedDescription)")
+                                showError(error.localizedDescription)
                             }
                         },
                         onGuidedInstall: { target in
@@ -93,7 +91,7 @@ struct SliccstartApp: App {
             }
             .frame(width: 340)
             .task { await initialize() }
-            .onDisappear { sliccProcess.stop() }
+            .onDisappear { sliccProcess.stopAll() }
             .alert("Sliccstart", isPresented: $showAlert) {
                 Button("OK") {}
             } message: {

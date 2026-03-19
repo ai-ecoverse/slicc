@@ -20,7 +20,7 @@ struct AppListView: View {
                 ForEach(browsers) { target in
                     AppRow(
                         target: target,
-                        isRunning: sliccProcess.target?.id == target.id && sliccProcess.isRunning,
+                        isRunning: sliccProcess.isRunning(target),
                         onLaunch: { onLaunchStandalone(target) }
                     )
                 }
@@ -31,7 +31,7 @@ struct AppListView: View {
                 ForEach(electronApps) { target in
                     AppRow(
                         target: target,
-                        isRunning: sliccProcess.target?.id == target.id && sliccProcess.isRunning,
+                        isRunning: sliccProcess.isRunning(target),
                         onLaunch: { onLaunchElectron(target) }
                     )
                 }
