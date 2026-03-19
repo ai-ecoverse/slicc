@@ -2,7 +2,20 @@
   "name": "browser-coding-agent",
   "version": "0.1.0",
   "description": "Browser-based coding agent with thin CLI server",
+  "license": "Apache-2.0",
   "type": "module",
+  "main": "./dist/cli/index.js",
+  "types": "./dist/cli/index.d.ts",
+  "bin": {
+    "slicc": "dist/cli/index.js"
+  },
+  "files": [
+    "dist/cli",
+    "dist/ui"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "vite",
     "build": "npm run build:ui && npm run build:cli",
@@ -18,6 +31,7 @@
     "qa:follower": "npm run dev:full -- --profile=follower",
     "qa:extension": "npm run build:extension && npm run dev:full -- --profile=extension",
     "build:extension": "vite build --config vite.config.extension.ts",
+    "package:release": "node dist/cli/release-package.js",
     "test": "vitest run",
     "test:watch": "vitest"
   },
