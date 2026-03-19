@@ -13,7 +13,8 @@
     [
       "@semantic-release/exec",
       {
-        "prepareCmd": "node dist/cli/sync-release-version.js ${nextRelease.version} && npm run build:extension && npm run package:release"
+        "prepareCmd": "node dist/cli/sync-release-version.js ${nextRelease.version} && npm run build:extension && npm run package:release",
+        "publishCmd": "npx wrangler deploy && npx vitest run src/worker/deployed.test.ts"
       }
     ],
     [
