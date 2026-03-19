@@ -1,6 +1,6 @@
 /**
  * Skills Engine Types
- * 
+ *
  * Defines the structure of skills, manifests, and state tracking.
  */
 

@@ -15,11 +15,7 @@ const log = createLogger('tool:fs');
 
 /** Create all file tools bound to a VirtualFS instance. */
 export function createFileTools(fs: VirtualFS): ToolDefinition[] {
-  return [
-    createReadFileTool(fs),
-    createWriteFileTool(fs),
-    createEditFileTool(fs),
-  ];
+  return [createReadFileTool(fs), createWriteFileTool(fs), createEditFileTool(fs)];
 }
 
 function createReadFileTool(fs: VirtualFS): ToolDefinition {
@@ -59,7 +55,7 @@ function createReadFileTool(fs: VirtualFS): ToolDefinition {
         const slice = lines.slice(startIdx, endIdx);
 
         const numbered = slice.map(
-          (line, i) => `${String(startIdx + i + 1).padStart(6)} | ${line}`,
+          (line, i) => `${String(startIdx + i + 1).padStart(6)} | ${line}`
         );
         return { content: numbered.join('\n') };
       } catch (err) {

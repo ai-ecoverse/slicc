@@ -71,6 +71,39 @@ describe('discoverSkillCandidates', () => {
       path: '/zz-after-cap/.claude/skills/late-skill',
     }));
   });
+
+  it('refreshes cached compatibility discovery after the same fs instance mutates', async () => {
+    await fs.mkdir('/repo/.claude/skills/first-skill', { recursive: true });
+    await fs.writeFile('/repo/.claude/skills/first-skill/SKILL.md', '# first');
+
+    const initialCandidates = await discoverSkillCandidates(fs);
+    expect(initialCandidates.map((candidate) => candidate.path)).toEqual([
+      '/repo/.claude/skills/first-skill',
+    ]);
+
+    await fs.mkdir('/repo/tools/.agents/skills/second-skill', { recursive: true });
+    await fs.writeFile('/repo/tools/.agents/skills/second-skill/SKILL.md', '# second');
+
+    const refreshedCandidates = await discoverSkillCandidates(fs);
+    expect(refreshedCandidates.map((candidate) => candidate.path)).toEqual([
+      '/repo/tools/.agents/skills/second-skill',
+      '/repo/.claude/skills/first-skill',
+    ]);
+  });
+
+  it('prunes internal .slicc compatibility trees without skipping normal roots', async () => {
+    await fs.mkdir('/.slicc/.claude/skills/hidden-skill', { recursive: true });
+    await fs.writeFile('/.slicc/.claude/skills/hidden-skill/SKILL.md', '# hidden');
+
+    await fs.mkdir('/repo/.claude/skills/visible-skill', { recursive: true });
+    await fs.writeFile('/repo/.claude/skills/visible-skill/SKILL.md', '# visible');
+
+    const candidates = await discoverSkillCandidates(fs);
+
+    expect(candidates.map((candidate) => candidate.path)).toEqual([
+      '/repo/.claude/skills/visible-skill',
+    ]);
+  });
 });
 
 describe('resolveSkillNameCollisions', () => {

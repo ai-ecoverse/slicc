@@ -21,13 +21,20 @@ describe('SprinkleManager', () => {
     addSprinkle = vi.fn();
     removeSprinkle = vi.fn();
     mgr = new SprinkleManager(vfs, lickHandler, {
-      addSprinkle: addSprinkle as unknown as (name: string, title: string, element: HTMLElement) => void,
+      addSprinkle: addSprinkle as unknown as (
+        name: string,
+        title: string,
+        element: HTMLElement
+      ) => void,
       removeSprinkle: removeSprinkle as unknown as (name: string) => void,
     });
   });
 
   it('refresh discovers available sprinkles', async () => {
-    await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>Dashboard</title><div>hi</div>');
+    await vfs.writeFile(
+      '/shared/sprinkles/dash/dash.shtml',
+      '<title>Dashboard</title><div>hi</div>'
+    );
     await mgr.refresh();
     const sprinkles = mgr.available();
     expect(sprinkles.length).toBe(1);

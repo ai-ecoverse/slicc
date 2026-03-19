@@ -16,5 +16,7 @@ declare module 'sql.js/dist/sql-wasm.js' {
     Database: new (data?: Uint8Array) => SqlJsDatabase;
   }
 
-  export default function initSqlJs(options?: { locateFile?: (file: string) => string }): Promise<SqlJsModule>;
+  export default function initSqlJs(options?: {
+    locateFile?: (file: string) => string;
+  }): Promise<SqlJsModule>;
 }

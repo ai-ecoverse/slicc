@@ -26,9 +26,7 @@ export interface Sprinkle {
  * sprinkle name → Sprinkle. First occurrence of a basename wins.
  * Priority roots are scanned before the general `/` walk.
  */
-export async function discoverSprinkles(
-  fs: VirtualFS,
-): Promise<Map<string, Sprinkle>> {
+export async function discoverSprinkles(fs: VirtualFS): Promise<Map<string, Sprinkle>> {
   const sprinkles = new Map<string, Sprinkle>();
 
   // Scan priority roots first
@@ -48,7 +46,7 @@ export async function discoverSprinkles(
 async function scanDir(
   fs: VirtualFS,
   root: string,
-  sprinkles: Map<string, Sprinkle>,
+  sprinkles: Map<string, Sprinkle>
 ): Promise<void> {
   for await (const filePath of fs.walk(root)) {
     if (!filePath.endsWith('.shtml')) continue;
@@ -56,7 +54,7 @@ async function scanDir(
     if (!sprinkles.has(name)) {
       let content: string;
       try {
-        content = await fs.readFile(filePath, { encoding: 'utf-8' }) as string;
+        content = (await fs.readFile(filePath, { encoding: 'utf-8' })) as string;
       } catch {
         content = '';
       }

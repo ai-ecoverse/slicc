@@ -51,19 +51,28 @@ describe('discoverSprinkles', () => {
   });
 
   it('extracts title from <title> tag', async () => {
-    await vfs.writeFile('/shared/sprinkles/test/test.shtml', '<title>My Dashboard</title><div>hello</div>');
+    await vfs.writeFile(
+      '/shared/sprinkles/test/test.shtml',
+      '<title>My Dashboard</title><div>hello</div>'
+    );
     const result = await discoverSprinkles(vfs);
     expect(result.get('test')!.title).toBe('My Dashboard');
   });
 
   it('extracts title from data-sprinkle-title attribute', async () => {
-    await vfs.writeFile('/shared/sprinkles/test/test.shtml', '<div data-sprinkle-title="Custom Title">hello</div>');
+    await vfs.writeFile(
+      '/shared/sprinkles/test/test.shtml',
+      '<div data-sprinkle-title="Custom Title">hello</div>'
+    );
     const result = await discoverSprinkles(vfs);
     expect(result.get('test')!.title).toBe('Custom Title');
   });
 
   it('data-sprinkle-title takes priority over <title>', async () => {
-    await vfs.writeFile('/shared/sprinkles/test/test.shtml', '<title>Title Tag</title><div data-sprinkle-title="Attr Title">hello</div>');
+    await vfs.writeFile(
+      '/shared/sprinkles/test/test.shtml',
+      '<title>Title Tag</title><div data-sprinkle-title="Attr Title">hello</div>'
+    );
     const result = await discoverSprinkles(vfs);
     expect(result.get('test')!.title).toBe('Attr Title');
   });
@@ -92,7 +101,9 @@ describe('discoverSprinkles', () => {
 
 describe('extractTitle', () => {
   it('extracts from data-sprinkle-title', () => {
-    expect(extractTitle('<div data-sprinkle-title="Hello">content</div>', 'fallback')).toBe('Hello');
+    expect(extractTitle('<div data-sprinkle-title="Hello">content</div>', 'fallback')).toBe(
+      'Hello'
+    );
   });
 
   it('extracts from <title> tag', () => {
@@ -100,7 +111,9 @@ describe('extractTitle', () => {
   });
 
   it('prefers data-sprinkle-title over <title>', () => {
-    expect(extractTitle('<title>Tag</title><div data-sprinkle-title="Attr">x</div>', 'fallback')).toBe('Attr');
+    expect(
+      extractTitle('<title>Tag</title><div data-sprinkle-title="Attr">x</div>', 'fallback')
+    ).toBe('Attr');
   });
 
   it('returns fallback when no title found', () => {
@@ -142,7 +155,10 @@ describe('discoverSprinkles autoOpen', () => {
   });
 
   it('sets autoOpen true when data-sprinkle-autoopen is present', async () => {
-    await vfs.writeFile('/shared/sprinkles/panel/panel.shtml', '<div data-sprinkle-autoopen>hi</div>');
+    await vfs.writeFile(
+      '/shared/sprinkles/panel/panel.shtml',
+      '<div data-sprinkle-autoopen>hi</div>'
+    );
     const result = await discoverSprinkles(vfs);
     expect(result.get('panel')!.autoOpen).toBe(true);
   });

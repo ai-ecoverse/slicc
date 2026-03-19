@@ -99,7 +99,8 @@ describe('compactContext (legacy)', () => {
     const result = await compactContext(messages);
 
     const marker = result.find(
-      (msg) => msg.role === 'user' && (msg.content as any)[0]?.text?.includes('Earlier conversation'),
+      (msg) =>
+        msg.role === 'user' && (msg.content as any)[0]?.text?.includes('Earlier conversation')
     );
     expect(marker).toBeDefined();
     expect(marker!.role).toBe('user');
@@ -133,9 +134,12 @@ describe('compactContext (legacy)', () => {
           const prev = result[j] as any;
           if (prev.role === 'assistant' && Array.isArray(prev.content)) {
             const hasToolCall = prev.content.some(
-              (c: any) => c.type === 'toolCall' && c.id === msg.toolCallId,
+              (c: any) => c.type === 'toolCall' && c.id === msg.toolCallId
             );
-            if (hasToolCall) { found = true; break; }
+            if (hasToolCall) {
+              found = true;
+              break;
+            }
           }
           if (prev.role !== 'toolResult') break;
         }
@@ -187,9 +191,12 @@ describe('compactContext (legacy)', () => {
           const prev = result[j] as any;
           if (prev.role === 'assistant' && Array.isArray(prev.content)) {
             const hasToolCall = prev.content.some(
-              (c: any) => c.type === 'toolCall' && c.id === msg.toolCallId,
+              (c: any) => c.type === 'toolCall' && c.id === msg.toolCallId
             );
-            if (hasToolCall) { found = true; break; }
+            if (hasToolCall) {
+              found = true;
+              break;
+            }
           }
           if (prev.role !== 'toolResult') break;
         }
@@ -214,10 +221,7 @@ describe('createCompactContext', () => {
 
   it('returns messages unchanged when under threshold', async () => {
     const compact = createCompactContext(mockConfig);
-    const messages = [
-      createMessage('user', 'Hello'),
-      createMessage('assistant', 'Hi'),
-    ];
+    const messages = [createMessage('user', 'Hello'), createMessage('assistant', 'Hi')];
 
     const result = await compact(messages);
     expect(result).toEqual(messages);
@@ -314,9 +318,12 @@ describe('createCompactContext', () => {
           const prev = result[j] as any;
           if (prev.role === 'assistant' && Array.isArray(prev.content)) {
             const hasToolCall = prev.content.some(
-              (c: any) => c.type === 'toolCall' && c.id === msg.toolCallId,
+              (c: any) => c.type === 'toolCall' && c.id === msg.toolCallId
             );
-            if (hasToolCall) { found = true; break; }
+            if (hasToolCall) {
+              found = true;
+              break;
+            }
           }
           if (prev.role !== 'toolResult') break;
         }
@@ -413,4 +420,3 @@ describe('createCompactContext', () => {
     expect((result[2].content as any)[0].text).toBe(largeResult);
   });
 });
-

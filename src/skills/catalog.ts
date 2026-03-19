@@ -27,13 +27,25 @@ const COMPATIBILITY_DIRECTORY_SOURCES = new Map<string, Exclude<SkillDiscoverySo
   ['.agents', 'agents'],
   ['.claude', 'claude'],
 ]);
+const PRUNED_COMPATIBILITY_DIRECTORY_NAMES = new Set(['.git', '.slicc']);
+const COMPATIBILITY_CACHE_INVALIDATION_METHODS = [
+  'mkdir',
+  'mount',
+  'rename',
+  'rm',
+  'unmount',
+  'writeFile',
+] as const;
+
+const compatibilityCandidatesCache = new WeakMap<object, DiscoveredSkillCandidate[]>();
+const compatibilityCacheHooksInstalled = new WeakSet<object>();
 
 export async function discoverSkillCandidates(
   fs: VirtualFS,
   nativeSkillsDir: string = WORKSPACE_SKILLS_PATH,
 ): Promise<DiscoveredSkillCandidate[]> {
   const nativeCandidates = await discoverNativeSkillCandidates(fs, nativeSkillsDir);
-  const compatibilityCandidates = await discoverCompatibilitySkillCandidates(fs);
+  const compatibilityCandidates = await getCompatibilitySkillCandidates(fs);
 
   return [...DISCOVERY_ORDER.flatMap((source) => {
     const candidates = source === 'native'
@@ -41,6 +53,20 @@ export async function discoverSkillCandidates(
       : compatibilityCandidates.filter((candidate) => candidate.source === source);
     return candidates.sort((a, b) => a.path.localeCompare(b.path));
   })];
+}
+
+async function getCompatibilitySkillCandidates(fs: VirtualFS): Promise<DiscoveredSkillCandidate[]> {
+  installCompatibilityCacheInvalidationHooks(fs);
+
+  const cacheKey = fs as object;
+  const cached = compatibilityCandidatesCache.get(cacheKey);
+  if (cached) {
+    return cached.map((candidate) => ({ ...candidate }));
+  }
+
+  const discovered = await discoverCompatibilitySkillCandidates(fs);
+  compatibilityCandidatesCache.set(cacheKey, discovered);
+  return discovered.map((candidate) => ({ ...candidate }));
 }
 
 export function resolveSkillNameCollisions<T>(
@@ -107,8 +133,8 @@ async function discoverCompatibilitySkillCandidates(fs: VirtualFS): Promise<Disc
   const seenPaths = new Set<string>();
   const queue = ['/'];
 
-  while (queue.length > 0) {
-    const currentPath = queue.shift()!;
+  for (let index = 0; index < queue.length; index += 1) {
+    const currentPath = queue[index];
 
     const entries = await readSortedDir(fs, currentPath);
     for (const entry of entries) {
@@ -141,11 +167,38 @@ async function discoverCompatibilitySkillCandidates(fs: VirtualFS): Promise<Disc
         }
       }
 
+      if (PRUNED_COMPATIBILITY_DIRECTORY_NAMES.has(entry.name)) continue;
+
       queue.push(childPath);
     }
   }
 
   return discovered;
+}
+
+function installCompatibilityCacheInvalidationHooks(fs: VirtualFS): void {
+  const cacheKey = fs as object;
+  if (compatibilityCacheHooksInstalled.has(cacheKey)) return;
+  compatibilityCacheHooksInstalled.add(cacheKey);
+
+  const mutableFs = fs as Record<string, unknown>;
+  for (const methodName of COMPATIBILITY_CACHE_INVALIDATION_METHODS) {
+    const candidate = mutableFs[methodName];
+    if (typeof candidate !== 'function') continue;
+
+    const original = candidate as (...args: unknown[]) => unknown;
+
+    try {
+      mutableFs[methodName] = async (...args: unknown[]) => {
+        const result = await original.apply(fs, args);
+        compatibilityCandidatesCache.delete(cacheKey);
+        return result;
+      };
+    } catch {
+      // Some FS wrappers may not allow method reassignment. In that case we
+      // keep discovery correct but skip automatic invalidation for this cache.
+    }
+  }
 }
 
 async function pathExists(fs: VirtualFS, path: string): Promise<boolean> {

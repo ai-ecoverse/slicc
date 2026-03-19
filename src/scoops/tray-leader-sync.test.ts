@@ -4,7 +4,11 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { LeaderSyncManager, type LeaderSyncManagerOptions } from './tray-leader-sync.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
 import type { AgentEvent, ChatMessage } from '../ui/types.js';
-import type { LeaderToFollowerMessage, FollowerToLeaderMessage, TrayTargetEntry } from './tray-sync-protocol.js';
+import type {
+  LeaderToFollowerMessage,
+  FollowerToLeaderMessage,
+  TrayTargetEntry,
+} from './tray-sync-protocol.js';
 import { VirtualFS } from '../fs/virtual-fs.js';
 
 // ---------------------------------------------------------------------------
@@ -38,7 +42,7 @@ class FakeChannel implements TrayDataChannelLike {
   }
 
   parseSent(): LeaderToFollowerMessage[] {
-    return this.sent.map(s => JSON.parse(s));
+    return this.sent.map((s) => JSON.parse(s));
   }
 }
 
@@ -91,7 +95,9 @@ describe('LeaderSyncManager', () => {
     // Create messages large enough to exceed the 64KB chunk threshold
     const largeMessages: ChatMessage[] = [];
     for (let i = 0; i < 50; i++) {
-      largeMessages.push(makeChatMessage(`m${i}`, i % 2 === 0 ? 'user' : 'assistant', 'x'.repeat(2000)));
+      largeMessages.push(
+        makeChatMessage(`m${i}`, i % 2 === 0 ? 'user' : 'assistant', 'x'.repeat(2000))
+      );
     }
     const { manager } = createManager({ getMessages: () => [...largeMessages] });
     const channel = new FakeChannel();
@@ -108,7 +114,7 @@ describe('LeaderSyncManager', () => {
     }
 
     // All chunks should have sequential indices
-    const chunks = sent.filter(m => m.type === 'snapshot_chunk');
+    const chunks = sent.filter((m) => m.type === 'snapshot_chunk');
     expect(chunks).toHaveLength(sent.length);
     for (let i = 0; i < chunks.length; i++) {
       if (chunks[i].type === 'snapshot_chunk') {
@@ -118,7 +124,7 @@ describe('LeaderSyncManager', () => {
 
     // Reassembling all chunks should recover the original data
     const reassembled = chunks
-      .map(c => (c.type === 'snapshot_chunk' ? c.chunkData : ''))
+      .map((c) => (c.type === 'snapshot_chunk' ? c.chunkData : ''))
       .join('');
     const parsed = JSON.parse(reassembled) as { messages: ChatMessage[]; scoopJid: string };
     expect(parsed.messages).toHaveLength(50);
@@ -254,8 +260,8 @@ describe('LeaderSyncManager', () => {
 
     const followers2 = manager.getConnectedFollowers();
     expect(followers2).toHaveLength(2);
-    expect(followers2.map(f => f.runtimeId)).toContain('follower-b1');
-    expect(followers2.map(f => f.runtimeId)).toContain('follower-b2');
+    expect(followers2.map((f) => f.runtimeId)).toContain('follower-b1');
+    expect(followers2.map((f) => f.runtimeId)).toContain('follower-b2');
 
     // Remove follower b1
     manager.removeFollower('b1');
@@ -494,7 +500,7 @@ describe('LeaderSyncManager', () => {
       });
 
       const sent = ch1.parseSent();
-      const response = sent.find(m => m.type === 'cdp.response');
+      const response = sent.find((m) => m.type === 'cdp.response');
       expect(response).toBeDefined();
       if (response && response.type === 'cdp.response') {
         expect(response.requestId).toBe('req-1');
@@ -524,7 +530,7 @@ describe('LeaderSyncManager', () => {
       });
 
       const sent = ch1.parseSent();
-      const response = sent.find(m => m.type === 'cdp.response');
+      const response = sent.find((m) => m.type === 'cdp.response');
       expect(response).toBeDefined();
       if (response && response.type === 'cdp.response') {
         expect(response.requestId).toBe('req-2');
@@ -606,7 +612,7 @@ describe('LeaderSyncManager', () => {
 
       // ch1 should receive the response
       const sent1 = ch1.parseSent();
-      const response = sent1.find(m => m.type === 'cdp.response');
+      const response = sent1.find((m) => m.type === 'cdp.response');
       expect(response).toBeDefined();
       if (response && response.type === 'cdp.response') {
         expect(response.requestId).toBe('req-4');
@@ -668,7 +674,7 @@ describe('LeaderSyncManager', () => {
       });
 
       const sent = ch1.parseSent();
-      const response = sent.find(m => m.type === 'tab.opened');
+      const response = sent.find((m) => m.type === 'tab.opened');
       expect(response).toBeDefined();
       if (response && response.type === 'tab.opened') {
         expect(response.requestId).toBe('tabopen-1');
@@ -695,7 +701,7 @@ describe('LeaderSyncManager', () => {
       });
 
       const sent = ch1.parseSent();
-      const response = sent.find(m => m.type === 'tab.open.error');
+      const response = sent.find((m) => m.type === 'tab.open.error');
       expect(response).toBeDefined();
       if (response && response.type === 'tab.open.error') {
         expect(response.requestId).toBe('tabopen-2');
@@ -767,7 +773,7 @@ describe('LeaderSyncManager', () => {
       } as any);
 
       const sent1 = ch1.parseSent();
-      const response = sent1.find(m => m.type === 'tab.opened');
+      const response = sent1.find((m) => m.type === 'tab.opened');
       expect(response).toBeDefined();
       if (response && response.type === 'tab.opened') {
         expect(response.requestId).toBe('tabopen-4');
@@ -805,7 +811,7 @@ describe('LeaderSyncManager', () => {
       } as any);
 
       const sent1 = ch1.parseSent();
-      const response = sent1.find(m => m.type === 'tab.open.error');
+      const response = sent1.find((m) => m.type === 'tab.open.error');
       expect(response).toBeDefined();
       if (response && response.type === 'tab.open.error') {
         expect(response.requestId).toBe('tabopen-5');
@@ -852,7 +858,7 @@ describe('LeaderSyncManager', () => {
 
       // Check that the request was sent
       const sent = ch1.parseSent();
-      const tabOpenMsg = sent.find(m => m.type === 'tab.open');
+      const tabOpenMsg = sent.find((m) => m.type === 'tab.open');
       expect(tabOpenMsg).toBeDefined();
       if (tabOpenMsg && tabOpenMsg.type === 'tab.open') {
         expect(tabOpenMsg.url).toBe('https://remote-tab.com');
@@ -872,7 +878,9 @@ describe('LeaderSyncManager', () => {
     it('openRemoteTab rejects when target runtime is not connected', async () => {
       const { manager } = createManager();
 
-      await expect(manager.openRemoteTab('unknown', 'https://example.com')).rejects.toThrow('not connected');
+      await expect(manager.openRemoteTab('unknown', 'https://example.com')).rejects.toThrow(
+        'not connected'
+      );
     });
   });
 
@@ -957,7 +965,7 @@ describe('LeaderSyncManager', () => {
       });
 
       const sent = ch1.parseSent();
-      const response = sent.find(m => m.type === 'fs.response');
+      const response = sent.find((m) => m.type === 'fs.response');
       expect(response).toBeDefined();
       if (response && response.type === 'fs.response') {
         expect(response.requestId).toBe('fs-1');
@@ -991,7 +999,7 @@ describe('LeaderSyncManager', () => {
       });
 
       const sent = ch1.parseSent();
-      const response = sent.find(m => m.type === 'fs.response');
+      const response = sent.find((m) => m.type === 'fs.response');
       expect(response).toBeDefined();
       if (response && response.type === 'fs.response') {
         expect(response.response.ok).toBe(false);
@@ -1062,11 +1070,14 @@ describe('LeaderSyncManager', () => {
       ch2.simulateMessage({
         type: 'fs.response',
         requestId: 'fs-4',
-        response: { ok: true, data: { type: 'file', content: 'remote content', encoding: 'utf-8' } },
+        response: {
+          ok: true,
+          data: { type: 'file', content: 'remote content', encoding: 'utf-8' },
+        },
       } as any);
 
       const sent1 = ch1.parseSent();
-      const response = sent1.find(m => m.type === 'fs.response');
+      const response = sent1.find((m) => m.type === 'fs.response');
       expect(response).toBeDefined();
       if (response && response.type === 'fs.response') {
         expect(response.requestId).toBe('fs-4');
@@ -1115,7 +1126,7 @@ describe('LeaderSyncManager', () => {
 
       // Find the sent fs.request
       const sent = ch1.parseSent();
-      const fsReq = sent.find(m => m.type === 'fs.request');
+      const fsReq = sent.find((m) => m.type === 'fs.request');
       expect(fsReq).toBeDefined();
       if (fsReq && fsReq.type === 'fs.request') {
         // Simulate follower responding
@@ -1135,7 +1146,10 @@ describe('LeaderSyncManager', () => {
       const { manager } = createManager({ vfs });
       await vfs.writeFile('/local.txt', 'local content');
 
-      const responses = await manager.sendFsRequest('leader', { op: 'readFile', path: '/local.txt' });
+      const responses = await manager.sendFsRequest('leader', {
+        op: 'readFile',
+        path: '/local.txt',
+      });
       expect(responses).toHaveLength(1);
       expect(responses[0].ok).toBe(true);
       if (responses[0].ok) {
@@ -1164,7 +1178,10 @@ describe('LeaderSyncManager', () => {
     it('sets lastActivity and floatType on addFollower', () => {
       const { manager } = createManager();
       const ch = new FakeChannel();
-      manager.addFollower('b1', ch, { runtime: 'slicc-standalone', connectedAt: new Date().toISOString() });
+      manager.addFollower('b1', ch, {
+        runtime: 'slicc-standalone',
+        connectedAt: new Date().toISOString(),
+      });
 
       const followers = manager.getConnectedFollowers();
       // No runtimeId mapping yet because targets.advertise hasn't been sent
@@ -1200,10 +1217,10 @@ describe('LeaderSyncManager', () => {
       ch4.simulateMessage({ type: 'targets.advertise', targets: [], runtimeId: 'f4' });
 
       const followers = manager.getConnectedFollowers();
-      expect(followers.find(f => f.runtimeId === 'f1')?.floatType).toBe('standalone');
-      expect(followers.find(f => f.runtimeId === 'f2')?.floatType).toBe('extension');
-      expect(followers.find(f => f.runtimeId === 'f3')?.floatType).toBe('electron');
-      expect(followers.find(f => f.runtimeId === 'f4')?.floatType).toBe('unknown');
+      expect(followers.find((f) => f.runtimeId === 'f1')?.floatType).toBe('standalone');
+      expect(followers.find((f) => f.runtimeId === 'f2')?.floatType).toBe('extension');
+      expect(followers.find((f) => f.runtimeId === 'f3')?.floatType).toBe('electron');
+      expect(followers.find((f) => f.runtimeId === 'f4')?.floatType).toBe('unknown');
     });
 
     it('updates lastActivity on pong', () => {

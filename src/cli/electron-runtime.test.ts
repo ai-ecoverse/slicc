@@ -32,10 +32,9 @@ describe('electron-runtime', () => {
 
   it('parses explicit dev, cdp, target url, and env port overrides', () => {
     expect(
-      parseElectronFloatFlags(
-        ['--dev', '--cdp-port=9333', '--target-url=https://claude.ai'],
-        { PORT: '3333' },
-      ),
+      parseElectronFloatFlags(['--dev', '--cdp-port=9333', '--target-url=https://claude.ai'], {
+        PORT: '3333',
+      })
     ).toEqual({
       dev: true,
       cdpPort: 9333,
@@ -46,7 +45,7 @@ describe('electron-runtime', () => {
 
   it('accepts a positional target url and ignores invalid numeric flags', () => {
     expect(
-      parseElectronFloatFlags(['--cdp-port=nope', 'https://example.com'], { PORT: 'nope' }),
+      parseElectronFloatFlags(['--cdp-port=nope', 'https://example.com'], { PORT: 'nope' })
     ).toEqual({
       dev: false,
       cdpPort: DEFAULT_ELECTRON_CDP_PORT,
@@ -57,7 +56,7 @@ describe('electron-runtime', () => {
 
   it('builds the child process command for dev mode', () => {
     expect(
-      buildElectronServerSpawnConfig('/repo', { dev: true, cdpPort: 9444, platform: 'darwin' }),
+      buildElectronServerSpawnConfig('/repo', { dev: true, cdpPort: 9444, platform: 'darwin' })
     ).toEqual({
       command: 'npx',
       args: ['tsx', 'src/cli/index.ts', '--dev', '--serve-only', '--cdp-port=9444'],
@@ -70,7 +69,7 @@ describe('electron-runtime', () => {
         dev: false,
         cdpPort: 9555,
         nodePath: '/custom/node',
-      }),
+      })
     ).toEqual({
       command: '/custom/node',
       args: ['/repo/dist/cli/index.js', '--serve-only', '--cdp-port=9555'],
@@ -86,7 +85,7 @@ describe('electron-runtime', () => {
         buildElectronServerSpawnConfig('/repo', {
           dev: false,
           cdpPort: 9666,
-        }),
+        })
       ).toEqual({
         command: '/npm/node',
         args: ['/repo/dist/cli/index.js', '--serve-only', '--cdp-port=9666'],
@@ -104,15 +103,17 @@ describe('electron-runtime', () => {
     const serveOrigin = getElectronServeOrigin(3005);
     expect(serveOrigin).toBe(`http://${DEFAULT_ELECTRON_SERVE_HOST}:3005`);
     expect(buildElectronOverlayAppUrl(serveOrigin)).toBe(
-      `http://${DEFAULT_ELECTRON_SERVE_HOST}:3005/electron`,
+      `http://${DEFAULT_ELECTRON_SERVE_HOST}:3005/electron`
     );
     expect(buildElectronOverlayAppUrl(serveOrigin, 'memory')).toBe(
-      `http://${DEFAULT_ELECTRON_SERVE_HOST}:3005/electron?tab=memory`,
+      `http://${DEFAULT_ELECTRON_SERVE_HOST}:3005/electron?tab=memory`
     );
     expect(buildElectronOverlayEntryUrl(serveOrigin)).toBe(
-      `http://${DEFAULT_ELECTRON_SERVE_HOST}:3005/electron-overlay-entry.js`,
+      `http://${DEFAULT_ELECTRON_SERVE_HOST}:3005/electron-overlay-entry.js`
     );
-    expect(getElectronOverlayEntryDistPath('/repo')).toBe('/repo/dist/ui/electron-overlay-entry.js');
+    expect(getElectronOverlayEntryDistPath('/repo')).toBe(
+      '/repo/dist/ui/electron-overlay-entry.js'
+    );
   });
 
   it('serializes the overlay injection call', () => {
@@ -121,15 +122,15 @@ describe('electron-runtime', () => {
         appUrl: `http://${DEFAULT_ELECTRON_SERVE_HOST}:3000/electron`,
         open: true,
         activeTab: 'files',
-      }),
+      })
     ).toBe(
-      `window.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://${DEFAULT_ELECTRON_SERVE_HOST}:3000/electron","open":true,"activeTab":"files"});`,
+      `window.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://${DEFAULT_ELECTRON_SERVE_HOST}:3000/electron","open":true,"activeTab":"files"});`
     );
   });
 
   it('builds a macOS app launch spec from a .app bundle path', () => {
     expect(
-      buildElectronAppLaunchSpec('/Applications/Slack.app', { cdpPort: 9223, platform: 'darwin' }),
+      buildElectronAppLaunchSpec('/Applications/Slack.app', { cdpPort: 9223, platform: 'darwin' })
     ).toEqual({
       command: '/Applications/Slack.app/Contents/MacOS/Slack',
       args: ['--remote-debugging-port=9223'],
@@ -144,7 +145,7 @@ describe('electron-runtime', () => {
 
   it('builds a direct executable launch spec outside macOS app bundles', () => {
     expect(
-      buildElectronAppLaunchSpec('/opt/Linear/linear', { cdpPort: 9555, platform: 'linux' }),
+      buildElectronAppLaunchSpec('/opt/Linear/linear', { cdpPort: 9555, platform: 'linux' })
     ).toEqual({
       command: '/opt/Linear/linear',
       args: ['--remote-debugging-port=9555'],
@@ -157,7 +158,7 @@ describe('electron-runtime', () => {
   it('derives the app display name and executable path from a macOS bundle', () => {
     expect(getElectronAppDisplayName('/Applications/Slack.app')).toBe('Slack');
     expect(resolveElectronAppExecutablePath('/Applications/Slack.app', 'darwin')).toBe(
-      '/Applications/Slack.app/Contents/MacOS/Slack',
+      '/Applications/Slack.app/Contents/MacOS/Slack'
     );
     expect(buildElectronAppProcessMatchPatterns('/Applications/Slack.app', 'darwin')).toEqual([
       '/Applications/Slack.app',
@@ -170,9 +171,9 @@ describe('electron-runtime', () => {
       buildElectronOverlayBootstrapScript({
         bundleSource: 'window.__overlayLoaded = true;',
         appUrl: 'http://localhost:5710/electron',
-      }),
+      })
     ).toBe(
-      'window.__overlayLoaded = true;\nwindow.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://localhost:5710/electron"});',
+      'window.__overlayLoaded = true;\nwindow.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://localhost:5710/electron"});'
     );
   });
 
@@ -182,21 +183,21 @@ describe('electron-runtime', () => {
         type: 'page',
         url: 'https://example.com',
         webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/page/1',
-      }),
+      })
     ).toBe(true);
     expect(
       shouldInjectElectronOverlayTarget({
         type: 'browser',
         url: 'about:blank',
         webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/browser',
-      }),
+      })
     ).toBe(false);
     expect(
       shouldInjectElectronOverlayTarget({
         type: 'page',
         url: 'devtools://devtools/bundled/inspector.html',
         webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/page/2',
-      }),
+      })
     ).toBe(false);
   });
 });

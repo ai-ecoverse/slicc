@@ -321,11 +321,7 @@ describe('screencapture command', () => {
       const ctx = createMockCtx();
       await cmd.execute(['screenshot.jpg'], ctx as any);
 
-      expect(mockCanvas.toBlob).toHaveBeenCalledWith(
-        expect.any(Function),
-        'image/jpeg',
-        0.92,
-      );
+      expect(mockCanvas.toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/jpeg', 0.92);
     });
 
     it('uses correct mime type for webp extension', async () => {
@@ -333,11 +329,7 @@ describe('screencapture command', () => {
       const ctx = createMockCtx();
       await cmd.execute(['screenshot.webp'], ctx as any);
 
-      expect(mockCanvas.toBlob).toHaveBeenCalledWith(
-        expect.any(Function),
-        'image/webp',
-        0.92,
-      );
+      expect(mockCanvas.toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/webp', 0.92);
     });
   });
 });

@@ -676,7 +676,7 @@ Available commands:
    */
   private async logAllBranches(
     cwd: string,
-    maxCount?: number,
+    maxCount?: number
   ): Promise<Awaited<ReturnType<typeof git.log>>> {
     const branches = await git.listBranches({ fs: this.lfs, dir: cwd });
     const seen = new Set<string>();
@@ -753,7 +753,7 @@ Available commands:
    */
   private async logStatForCommit(
     cwd: string,
-    entry: Awaited<ReturnType<typeof git.log>>[0],
+    entry: Awaited<ReturnType<typeof git.log>>[0]
   ): Promise<string> {
     const { commit, oid } = entry;
     const parentOid = commit.parent.length > 0 ? commit.parent[0] : undefined;
@@ -874,7 +874,7 @@ Available commands:
   private async checkoutFiles(
     cwd: string,
     filePaths: string[],
-    commitRef?: string,
+    commitRef?: string
   ): Promise<GitCommandResult> {
     const ref = commitRef ?? 'HEAD';
     const oid = await git.resolveRef({ fs: this.lfs, dir: cwd, ref });
@@ -934,7 +934,9 @@ Available commands:
             try {
               const { blob } = await git.readBlob({ fs: this.lfs, dir: cwd, oid: headOid });
               oldText = new TextDecoder().decode(blob);
-            } catch { /* not in HEAD */ }
+            } catch {
+              /* not in HEAD */
+            }
           }
 
           let newText = '';
@@ -942,7 +944,9 @@ Available commands:
             try {
               const { blob } = await git.readBlob({ fs: this.lfs, dir: cwd, oid: stageOid });
               newText = new TextDecoder().decode(blob);
-            } catch { /* not in stage */ }
+            } catch {
+              /* not in stage */
+            }
           }
 
           changes.push({ filepath, oldContent: oldText, newContent: newText });
@@ -974,12 +978,16 @@ Available commands:
         try {
           const { blob } = await git.readBlob({ fs: this.lfs, dir: cwd, oid: stageOid });
           oldText = new TextDecoder().decode(blob);
-        } catch { /* not readable */ }
+        } catch {
+          /* not readable */
+        }
 
         let newText = '';
         try {
           newText = await this.options.fs.readTextFile(`${cwd}/${file}`);
-        } catch { /* file deleted in workdir */ }
+        } catch {
+          /* file deleted in workdir */
+        }
 
         if (oldText !== newText) {
           changes.push({ filepath: file, oldContent: oldText, newContent: newText });
@@ -1021,7 +1029,7 @@ Available commands:
     cwd: string,
     ref1: string,
     ref2: string,
-    opts: { nameOnly: boolean; stat: boolean },
+    opts: { nameOnly: boolean; stat: boolean }
   ): Promise<GitCommandResult> {
     // Resolve short SHAs to full OIDs
     let resolvedRef1 = ref1;
@@ -1032,14 +1040,18 @@ Available commands:
       // Not a short OID, try as branch/tag ref
       try {
         resolvedRef1 = await git.resolveRef({ fs: this.lfs, dir: cwd, ref: ref1 });
-      } catch { /* use as-is */ }
+      } catch {
+        /* use as-is */
+      }
     }
     try {
       resolvedRef2 = await git.expandOid({ fs: this.lfs, dir: cwd, oid: ref2 });
     } catch {
       try {
         resolvedRef2 = await git.resolveRef({ fs: this.lfs, dir: cwd, ref: ref2 });
-      } catch { /* use as-is */ }
+      } catch {
+        /* use as-is */
+      }
     }
 
     type FileChange = {
@@ -1105,7 +1117,7 @@ Available commands:
   }
 
   private formatDiffStat(
-    changes: { filepath: string; oldContent: string; newContent: string }[],
+    changes: { filepath: string; oldContent: string; newContent: string }[]
   ): GitCommandResult {
     const RED = '\x1b[31m';
     const GREEN = '\x1b[32m';
@@ -1131,8 +1143,10 @@ Available commands:
     }
 
     output += ` ${changes.length} file${changes.length !== 1 ? 's' : ''} changed`;
-    if (totalInsertions > 0) output += `, ${totalInsertions} insertion${totalInsertions !== 1 ? 's' : ''}(+)`;
-    if (totalDeletions > 0) output += `, ${totalDeletions} deletion${totalDeletions !== 1 ? 's' : ''}(-)`;
+    if (totalInsertions > 0)
+      output += `, ${totalInsertions} insertion${totalInsertions !== 1 ? 's' : ''}(+)`;
+    if (totalDeletions > 0)
+      output += `, ${totalDeletions} deletion${totalDeletions !== 1 ? 's' : ''}(-)`;
     output += '\n';
 
     return { stdout: output, stderr: '', exitCode: 0 };
@@ -1206,13 +1220,15 @@ Available commands:
 
   private formatShowHeader(oid: string, commit: git.CommitObject, format?: string): string {
     if (format) {
-      return format
-        .replace(/%H/g, oid)
-        .replace(/%h/g, oid.slice(0, 7))
-        .replace(/%s/g, commit.message.split('\n')[0])
-        .replace(/%an/g, commit.author.name)
-        .replace(/%ae/g, commit.author.email)
-        .replace(/%ad/g, new Date(commit.author.timestamp * 1000).toLocaleString()) + '\n';
+      return (
+        format
+          .replace(/%H/g, oid)
+          .replace(/%h/g, oid.slice(0, 7))
+          .replace(/%s/g, commit.message.split('\n')[0])
+          .replace(/%an/g, commit.author.name)
+          .replace(/%ae/g, commit.author.email)
+          .replace(/%ad/g, new Date(commit.author.timestamp * 1000).toLocaleString()) + '\n'
+      );
     }
     let output = `\x1b[33mcommit ${oid}\x1b[0m\n`;
     output += `Author: ${commit.author.name} <${commit.author.email}>\n`;
@@ -1243,7 +1259,11 @@ Available commands:
     if (files.length === 0) return '';
 
     if (stat) {
-      const changes = files.map((f) => ({ filepath: f.filepath, oldContent: '', newContent: f.content }));
+      const changes = files.map((f) => ({
+        filepath: f.filepath,
+        oldContent: '',
+        newContent: f.content,
+      }));
       return this.formatDiffStat(changes).stdout;
     }
 
@@ -1418,7 +1438,7 @@ Available commands:
       const result = await git.merge({
         fs: this.lfs,
         dir: cwd,
-        ours: await git.currentBranch({ fs: this.lfs, dir: cwd }) ?? undefined,
+        ours: (await git.currentBranch({ fs: this.lfs, dir: cwd })) ?? undefined,
         theirs,
         fastForward: !noFf,
         fastForwardOnly: ffOnly,
@@ -1435,7 +1455,11 @@ Available commands:
 
       if (result.fastForward) {
         // Fast-forward: update the working directory to match the new HEAD
-        await git.checkout({ fs: this.lfs, dir: cwd, ref: await git.currentBranch({ fs: this.lfs, dir: cwd }) ?? 'HEAD' });
+        await git.checkout({
+          fs: this.lfs,
+          dir: cwd,
+          ref: (await git.currentBranch({ fs: this.lfs, dir: cwd })) ?? 'HEAD',
+        });
         return {
           stdout: `Updating..${result.oid ? result.oid.slice(0, 7) : ''}\nFast-forward\n`,
           stderr: '',
@@ -1445,7 +1469,11 @@ Available commands:
 
       if (result.mergeCommit) {
         // Merge commit created — checkout the working directory
-        await git.checkout({ fs: this.lfs, dir: cwd, ref: await git.currentBranch({ fs: this.lfs, dir: cwd }) ?? 'HEAD' });
+        await git.checkout({
+          fs: this.lfs,
+          dir: cwd,
+          ref: (await git.currentBranch({ fs: this.lfs, dir: cwd })) ?? 'HEAD',
+        });
         return {
           stdout: `Merge made by the 'ort' strategy.\n`,
           stderr: '',
@@ -1666,7 +1694,9 @@ Available commands:
           const content = await globalFs.readTextFile('/workspace/.gitconfig');
           const newContent = this.removeConfigKey(content, path);
           await globalFs.writeFile('/workspace/.gitconfig', newContent);
-        } catch { /* file may not exist */ }
+        } catch {
+          /* file may not exist */
+        }
       } else {
         // isomorphic-git doesn't have a deleteConfig, so we set to empty then remove from file
         try {
@@ -1674,14 +1704,20 @@ Available commands:
           const content = await this.options.fs.readTextFile(configPath);
           const newContent = this.removeConfigKey(content, path);
           await this.options.fs.writeFile(configPath, newContent);
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }
       return { stdout: '', stderr: '', exitCode: 0 };
     }
 
     if (!path) {
       // No key and no --list: show usage hint
-      return { stdout: '', stderr: 'usage: git config [--global] [--list] [--unset] <key> [<value>]\n', exitCode: 1 };
+      return {
+        stdout: '',
+        stderr: 'usage: git config [--global] [--list] [--unset] <key> [<value>]\n',
+        exitCode: 1,
+      };
     }
 
     // Find value: the arg after the key that is not a flag
@@ -1753,7 +1789,9 @@ Available commands:
         const configPath = `${cwd}/.git/config`;
         const content = await this.options.fs.readTextFile(configPath);
         output += this.parseGitConfigToList(content);
-      } catch { /* no config file */ }
+      } catch {
+        /* no config file */
+      }
     }
 
     // Read global config
@@ -1761,7 +1799,9 @@ Available commands:
       const globalFs = await this.getGlobalFs();
       const content = await globalFs.readTextFile('/workspace/.gitconfig');
       output += this.parseGitConfigToList(content);
-    } catch { /* no global config */ }
+    } catch {
+      /* no global config */
+    }
 
     return { stdout: output, stderr: '', exitCode: 0 };
   }
@@ -1843,7 +1883,9 @@ Available commands:
     let content = '';
     try {
       content = await globalFs.readTextFile(configPath);
-    } catch { /* file doesn't exist yet */ }
+    } catch {
+      /* file doesn't exist yet */
+    }
 
     const parts = key.split('.');
     const configKey = parts.pop()!;
@@ -1942,7 +1984,9 @@ Available commands:
           }
         }
       }
-    } catch { /* no global config */ }
+    } catch {
+      /* no global config */
+    }
     return undefined;
   }
 
@@ -2037,7 +2081,7 @@ Available commands:
     cwd: string,
     commitOid: string,
     tree: Array<{ mode: string; path: string; oid: string; type: string }>,
-    prefix: string,
+    prefix: string
   ): Promise<void> {
     for (const entry of tree) {
       const filepath = prefix ? `${prefix}/${entry.path}` : entry.path;
@@ -2054,7 +2098,11 @@ Available commands:
     }
   }
 
-  private async resetWorkdirToCommit(cwd: string, oid: string, previouslyTracked: Set<string>): Promise<void> {
+  private async resetWorkdirToCommit(
+    cwd: string,
+    oid: string,
+    previouslyTracked: Set<string>
+  ): Promise<void> {
     const targetFiles = new Set<string>();
     const { tree } = await git.readTree({ fs: this.lfs, dir: cwd, oid });
     await this.collectTreeFiles(cwd, tree, '', targetFiles);
@@ -2085,7 +2133,7 @@ Available commands:
     cwd: string,
     tree: Array<{ mode: string; path: string; oid: string; type: string }>,
     prefix: string,
-    files: Set<string>,
+    files: Set<string>
   ): Promise<void> {
     for (const entry of tree) {
       const filepath = prefix ? `${prefix}/${entry.path}` : entry.path;
@@ -2127,7 +2175,7 @@ Available commands:
   }
 
   private async stashPush(cwd: string, _args: string[]): Promise<GitCommandResult> {
-    const branch = await git.currentBranch({ fs: this.lfs, dir: cwd }) ?? 'HEAD';
+    const branch = (await git.currentBranch({ fs: this.lfs, dir: cwd })) ?? 'HEAD';
     let headOid: string;
     try {
       headOid = await git.resolveRef({ fs: this.lfs, dir: cwd, ref: 'HEAD' });
@@ -2157,7 +2205,9 @@ Available commands:
       let workdirContent: string | undefined;
       try {
         workdirContent = await this.options.fs.readTextFile(`${cwd}/${filepath}`);
-      } catch { /* file doesn't exist in workdir */ }
+      } catch {
+        /* file doesn't exist in workdir */
+      }
 
       if (inHead) {
         const { blob } = await git.readBlob({ fs: this.lfs, dir: cwd, oid: headOid, filepath });
@@ -2167,7 +2217,11 @@ Available commands:
           dirtyFiles.push({ file: filepath, inHead: true, existsInWorkdir: false });
         } else if (workdirContent !== headContent) {
           dirtyFiles.push({ file: filepath, inHead: true, existsInWorkdir: true });
-          const oid = await git.writeBlob({ fs: this.lfs, dir: cwd, blob: new TextEncoder().encode(workdirContent) });
+          const oid = await git.writeBlob({
+            fs: this.lfs,
+            dir: cwd,
+            blob: new TextEncoder().encode(workdirContent),
+          });
           indexEntries.push({ filepath, oid });
         } else {
           // Unchanged — include in stash tree as-is
@@ -2177,7 +2231,11 @@ Available commands:
       } else if (workdirContent !== undefined) {
         // New file not in HEAD
         dirtyFiles.push({ file: filepath, inHead: false, existsInWorkdir: true });
-        const oid = await git.writeBlob({ fs: this.lfs, dir: cwd, blob: new TextEncoder().encode(workdirContent) });
+        const oid = await git.writeBlob({
+          fs: this.lfs,
+          dir: cwd,
+          blob: new TextEncoder().encode(workdirContent),
+        });
         indexEntries.push({ filepath, oid });
       }
     }
@@ -2192,7 +2250,9 @@ Available commands:
     try {
       const prevStash = await git.resolveRef({ fs: this.lfs, dir: cwd, ref: 'refs/stash' });
       parents.push(prevStash);
-    } catch { /* no previous stash */ }
+    } catch {
+      /* no previous stash */
+    }
 
     const { commit: headCommit } = await git.readCommit({ fs: this.lfs, dir: cwd, oid: headOid });
     const message = `WIP on ${branch}: ${headOid.slice(0, 7)} ${headCommit.message.split('\n')[0]}`;
@@ -2224,24 +2284,43 @@ Available commands:
     for (const dirty of dirtyFiles) {
       if (!dirty.inHead) {
         // New file — remove from workdir and index
-        try { await this.options.fs.rm(`${cwd}/${dirty.file}`); } catch { /* ignore */ }
-        try { await git.remove({ fs: this.lfs, dir: cwd, filepath: dirty.file }); } catch { /* ignore */ }
+        try {
+          await this.options.fs.rm(`${cwd}/${dirty.file}`);
+        } catch {
+          /* ignore */
+        }
+        try {
+          await git.remove({ fs: this.lfs, dir: cwd, filepath: dirty.file });
+        } catch {
+          /* ignore */
+        }
       } else {
         // Modified/deleted — restore from HEAD
-        const { blob } = await git.readBlob({ fs: this.lfs, dir: cwd, oid: headOid, filepath: dirty.file });
+        const { blob } = await git.readBlob({
+          fs: this.lfs,
+          dir: cwd,
+          oid: headOid,
+          filepath: dirty.file,
+        });
         await this.options.fs.writeFile(`${cwd}/${dirty.file}`, blob);
         await git.resetIndex({ fs: this.lfs, dir: cwd, filepath: dirty.file, ref: headOid });
       }
     }
 
-    return { stdout: `Saved working directory and index state ${message}\n`, stderr: '', exitCode: 0 };
+    return {
+      stdout: `Saved working directory and index state ${message}\n`,
+      stderr: '',
+      exitCode: 0,
+    };
   }
 
   private async buildTreeFromEntries(
     cwd: string,
-    entries: { filepath: string; oid: string }[],
+    entries: { filepath: string; oid: string }[]
   ): Promise<string> {
-    type TreeNode = { type: 'blob'; oid: string; mode: string } | { type: 'tree'; children: Map<string, TreeNode> };
+    type TreeNode =
+      | { type: 'blob'; oid: string; mode: string }
+      | { type: 'tree'; children: Map<string, TreeNode> };
     const root = new Map<string, TreeNode>();
 
     for (const { filepath, oid } of entries) {
@@ -2288,12 +2367,22 @@ Available commands:
     await this.restoreStashTree(cwd, stashCommit.tree, headOid);
 
     if (stashCommit.parent.length > 1) {
-      await git.writeRef({ fs: this.lfs, dir: cwd, ref: 'refs/stash', value: stashCommit.parent[1], force: true });
+      await git.writeRef({
+        fs: this.lfs,
+        dir: cwd,
+        ref: 'refs/stash',
+        value: stashCommit.parent[1],
+        force: true,
+      });
     } else {
       await this.deleteRef(cwd, 'refs/stash');
     }
 
-    return { stdout: `Dropped refs/stash@{0} (${stashOid.slice(0, 7)})\n`, stderr: '', exitCode: 0 };
+    return {
+      stdout: `Dropped refs/stash@{0} (${stashOid.slice(0, 7)})\n`,
+      stderr: '',
+      exitCode: 0,
+    };
   }
 
   private async restoreStashTree(cwd: string, treeOid: string, headOid: string): Promise<void> {
@@ -2317,7 +2406,9 @@ Available commands:
     try {
       const headFiles = await git.listFiles({ fs: this.lfs, dir: cwd, ref: 'HEAD' });
       for (const f of headFiles) headFileSet.add(f);
-    } catch { /* no HEAD */ }
+    } catch {
+      /* no HEAD */
+    }
 
     for (const [filepath, blob] of stashFiles) {
       const slashIdx = filepath.lastIndexOf('/');
@@ -2330,9 +2421,16 @@ Available commands:
       let headText: string | undefined;
       if (headFileSet.has(filepath)) {
         try {
-          const { blob: headBlob } = await git.readBlob({ fs: this.lfs, dir: cwd, oid: headOid, filepath });
+          const { blob: headBlob } = await git.readBlob({
+            fs: this.lfs,
+            dir: cwd,
+            oid: headOid,
+            filepath,
+          });
           headText = new TextDecoder().decode(headBlob);
-        } catch { /* not in HEAD */ }
+        } catch {
+          /* not in HEAD */
+        }
       }
       if (headText !== blobText) {
         await git.add({ fs: this.lfs, dir: cwd, filepath });
@@ -2341,7 +2439,11 @@ Available commands:
 
     for (const filepath of headFileSet) {
       if (!stashFiles.has(filepath)) {
-        try { await this.options.fs.rm(`${cwd}/${filepath}`); } catch { /* ignore */ }
+        try {
+          await this.options.fs.rm(`${cwd}/${filepath}`);
+        } catch {
+          /* ignore */
+        }
         await git.remove({ fs: this.lfs, dir: cwd, filepath });
       }
     }
@@ -2365,7 +2467,9 @@ Available commands:
           break;
         }
       }
-    } catch { /* no stash ref */ }
+    } catch {
+      /* no stash ref */
+    }
 
     return { stdout: output, stderr: '', exitCode: 0 };
   }
@@ -2388,11 +2492,21 @@ Available commands:
     if (index === 0) {
       const { commit } = await git.readCommit({ fs: this.lfs, dir: cwd, oid: topOid });
       if (commit.parent.length > 1) {
-        await git.writeRef({ fs: this.lfs, dir: cwd, ref: 'refs/stash', value: commit.parent[1], force: true });
+        await git.writeRef({
+          fs: this.lfs,
+          dir: cwd,
+          ref: 'refs/stash',
+          value: commit.parent[1],
+          force: true,
+        });
       } else {
         await this.deleteRef(cwd, 'refs/stash');
       }
-      return { stdout: `Dropped refs/stash@{0} (${topOid.slice(0, 7)})\n`, stderr: '', exitCode: 0 };
+      return {
+        stdout: `Dropped refs/stash@{0} (${topOid.slice(0, 7)})\n`,
+        stderr: '',
+        exitCode: 0,
+      };
     }
 
     // Collect the stash chain from top to the entry just before the dropped one
@@ -2409,7 +2523,11 @@ Available commands:
 
     // `current` is now the stash entry to drop
     const dropOid = current;
-    const { commit: droppedCommit } = await git.readCommit({ fs: this.lfs, dir: cwd, oid: dropOid });
+    const { commit: droppedCommit } = await git.readCommit({
+      fs: this.lfs,
+      dir: cwd,
+      oid: dropOid,
+    });
     const nextStash = droppedCommit.parent.length > 1 ? droppedCommit.parent[1] : undefined;
 
     // Rewrite the chain from the entry just before the drop backwards to the top
@@ -2427,12 +2545,22 @@ Available commands:
 
     // newChild is now the rewritten top stash entry
     if (newChild) {
-      await git.writeRef({ fs: this.lfs, dir: cwd, ref: 'refs/stash', value: newChild, force: true });
+      await git.writeRef({
+        fs: this.lfs,
+        dir: cwd,
+        ref: 'refs/stash',
+        value: newChild,
+        force: true,
+      });
     } else {
       await this.deleteRef(cwd, 'refs/stash');
     }
 
-    return { stdout: `Dropped refs/stash@{${index}} (${dropOid.slice(0, 7)})\n`, stderr: '', exitCode: 0 };
+    return {
+      stdout: `Dropped refs/stash@{${index}} (${dropOid.slice(0, 7)})\n`,
+      stderr: '',
+      exitCode: 0,
+    };
   }
 
   private async stashShow(cwd: string): Promise<GitCommandResult> {
@@ -2452,7 +2580,9 @@ Available commands:
   private async deleteRef(cwd: string, ref: string): Promise<void> {
     try {
       await this.lfs.unlink(`${cwd}/.git/${ref}`);
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 
   private async rm(cwd: string, args: string[]): Promise<GitCommandResult> {
@@ -2462,7 +2592,11 @@ Available commands:
     const paths = args.filter((a) => !a.startsWith('-'));
 
     if (paths.length === 0) {
-      return { stdout: '', stderr: 'fatal: No pathspec given. Which files should I remove?\n', exitCode: 128 };
+      return {
+        stdout: '',
+        stderr: 'fatal: No pathspec given. Which files should I remove?\n',
+        exitCode: 128,
+      };
     }
 
     for (const filepath of paths) {
@@ -2472,7 +2606,9 @@ Available commands:
       try {
         const stat = await this.options.fs.stat(fullPath);
         isDir = stat.type === 'directory';
-      } catch { /* file might not exist in workdir */ }
+      } catch {
+        /* file might not exist in workdir */
+      }
 
       if (isDir) {
         if (!recursive) {
@@ -2483,18 +2619,28 @@ Available commands:
           };
         }
         const indexFiles = await git.listFiles({ fs: this.lfs, dir: cwd });
-        const matchingFiles = indexFiles.filter((f) => f === filepath || f.startsWith(filepath + '/'));
+        const matchingFiles = indexFiles.filter(
+          (f) => f === filepath || f.startsWith(filepath + '/')
+        );
 
         for (const file of matchingFiles) {
           await git.remove({ fs: this.lfs, dir: cwd, filepath: file });
           if (!cached) {
-            try { await this.options.fs.rm(`${cwd}/${file}`); } catch { /* ignore */ }
+            try {
+              await this.options.fs.rm(`${cwd}/${file}`);
+            } catch {
+              /* ignore */
+            }
           }
         }
       } else {
         await git.remove({ fs: this.lfs, dir: cwd, filepath });
         if (!cached) {
-          try { await this.options.fs.rm(fullPath); } catch { /* ignore */ }
+          try {
+            await this.options.fs.rm(fullPath);
+          } catch {
+            /* ignore */
+          }
         }
       }
     }
@@ -2518,7 +2664,11 @@ Available commands:
     try {
       content = await this.options.fs.readFile(srcPath, { encoding: 'binary' });
     } catch {
-      return { stdout: '', stderr: `fatal: bad source, source=${src}, destination=${dst}\n`, exitCode: 128 };
+      return {
+        stdout: '',
+        stderr: `fatal: bad source, source=${src}, destination=${dst}\n`,
+        exitCode: 128,
+      };
     }
 
     const dstSlash = dstPath.lastIndexOf('/');

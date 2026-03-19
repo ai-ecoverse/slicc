@@ -86,7 +86,8 @@ export function showApiKeyDialog(): Promise<string> {
 
     // Provider selector — segmented control
     const providerGroup = document.createElement('div');
-    providerGroup.style.cssText = 'display: flex; gap: 0; margin-bottom: 16px; border-radius: 6px; overflow: hidden; border: 1px solid #3a3a5a;';
+    providerGroup.style.cssText =
+      'display: flex; gap: 0; margin-bottom: 16px; border-radius: 6px; overflow: hidden; border: 1px solid #3a3a5a;';
     const providers: [ApiProvider, string][] = [
       ['anthropic', 'Anthropic'],
       ['azure', 'Azure'],
@@ -99,7 +100,8 @@ export function showApiKeyDialog(): Promise<string> {
       b.type = 'button';
       b.textContent = label;
       b.dataset.provider = value;
-      b.style.cssText = 'flex: 1; padding: 8px 0; border: none; font-size: 13px; font-weight: 600; cursor: pointer; transition: background .15s, color .15s;';
+      b.style.cssText =
+        'flex: 1; padding: 8px 0; border: none; font-size: 13px; font-weight: 600; cursor: pointer; transition: background .15s, color .15s;';
       providerBtns.push(b);
       providerGroup.appendChild(b);
     }
@@ -108,7 +110,9 @@ export function showApiKeyDialog(): Promise<string> {
       for (const b of providerBtns) {
         const active = b.dataset.provider === selectedProvider;
         const cs = getComputedStyle(document.documentElement);
-        b.style.background = active ? cs.getPropertyValue('--s2-accent').trim() : cs.getPropertyValue('--s2-bg-layer-2').trim();
+        b.style.background = active
+          ? cs.getPropertyValue('--s2-accent').trim()
+          : cs.getPropertyValue('--s2-bg-layer-2').trim();
         b.style.color = active ? '#fff' : cs.getPropertyValue('--s2-content-secondary').trim();
       }
     }
@@ -232,8 +236,12 @@ export function showApiKeyDialog(): Promise<string> {
     }
 
     btn.addEventListener('click', submit);
-    keyInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
-    resourceInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+    keyInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submit();
+    });
+    resourceInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submit();
+    });
 
     overlay.appendChild(dialog);
     document.body.appendChild(overlay);

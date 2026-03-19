@@ -71,4 +71,3 @@ describe('isExtensionMessage', () => {
     expect(isExtensionMessage({})).toBe(false);
   });
 });
-

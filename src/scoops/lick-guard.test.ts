@@ -31,7 +31,7 @@ describe('LickManager.getLicksForScoop', () => {
 
     const result = manager.getLicksForScoop('test', 'test-scoop');
     expect(result.webhooks).toHaveLength(2);
-    expect(result.webhooks.map(w => w.name)).toEqual(['hook1', 'hook3']);
+    expect(result.webhooks.map((w) => w.name)).toEqual(['hook1', 'hook3']);
     expect(result.cronTasks).toEqual([]);
   });
 
@@ -142,7 +142,7 @@ describe('Scoop removal guard (integration-style)', () => {
     await manager.createCronTask('cron1', '*/5 * * * *', 'test-scoop');
 
     expect(() => checkGuard('test', 'test-scoop')).toThrow(
-      "it has 1 active webhook and 1 active cron task"
+      'it has 1 active webhook and 1 active cron task'
     );
   });
 

@@ -2,11 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import { VirtualFS } from '../fs/index.js';
-import {
-  discoverSkills,
-  getSkillInfo,
-  readSkillInstructions,
-} from './discover.js';
+import { discoverSkills, getSkillInfo, readSkillInstructions } from './discover.js';
 import { initSkillsSystem, recordSkillApplication } from './state.js';
 
 const SKILLS_DIR = '/workspace/skills';
@@ -27,7 +23,7 @@ describe('discoverSkills', () => {
       `${SKILLS_DIR}/manifest-skill/manifest.yaml`,
       `skill: manifest-skill
 version: 1.0.0
-description: A skill with manifest`,
+description: A skill with manifest`
     );
 
     const skills = await discoverSkills(fs);
@@ -43,7 +39,7 @@ description: A skill with manifest`,
     await fs.mkdir(`${SKILLS_DIR}/md-only-skill`);
     await fs.writeFile(
       `${SKILLS_DIR}/md-only-skill/SKILL.md`,
-      '# MD Only Skill\n\nThis is a skill with only instructions.',
+      '# MD Only Skill\n\nThis is a skill with only instructions.'
     );
 
     const skills = await discoverSkills(fs);
@@ -74,7 +70,7 @@ description: A skill with manifest`,
       `${SKILLS_DIR}/installed-skill/manifest.yaml`,
       `skill: installed-skill
 version: 2.0.0
-description: An installed skill`,
+description: An installed skill`
     );
 
     // Record the skill as installed
@@ -156,7 +152,7 @@ describe('getSkillInfo', () => {
       `${SKILLS_DIR}/test-skill/manifest.yaml`,
       `skill: test-skill
 version: 1.5.0
-description: Test skill`,
+description: Test skill`
     );
 
     const skill = await getSkillInfo(fs, 'test-skill');
@@ -210,7 +206,7 @@ describe('readSkillInstructions', () => {
       `${SKILLS_DIR}/no-docs-skill/manifest.yaml`,
       `skill: no-docs-skill
 version: 1.0.0
-description: No docs`,
+description: No docs`
     );
 
     const content = await readSkillInstructions(fs, 'no-docs-skill');

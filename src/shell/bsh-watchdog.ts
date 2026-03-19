@@ -94,7 +94,9 @@ export class BshWatchdog {
       this.entries = await discoverBshScripts(this.fs);
       log.debug('BSH discovery complete', { count: this.entries.length });
     } catch (err) {
-      log.error('BSH discovery failed', { error: err instanceof Error ? err.message : String(err) });
+      log.error('BSH discovery failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 

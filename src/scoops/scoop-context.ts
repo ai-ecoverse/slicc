@@ -16,13 +16,25 @@ import type { RestrictedFS } from '../fs/restricted-fs.js';
 import { WasmShell } from '../shell/index.js';
 import { Agent, adaptTools, createLogger } from '../core/index.js';
 import { createCompactContext } from '../core/context-compaction.js';
-import type { AgentEvent as CoreAgentEvent, AgentMessage, AssistantMessage, AssistantMessageEvent, TextContent, Model } from '../core/index.js';
+import type {
+  AgentEvent as CoreAgentEvent,
+  AgentMessage,
+  AssistantMessage,
+  AssistantMessageEvent,
+  TextContent,
+  Model,
+} from '../core/index.js';
 import { isContextOverflow } from '@mariozechner/pi-ai/dist/utils/overflow.js';
 import type { AssistantMessage as PiAssistantMessage } from '@mariozechner/pi-ai';
 import type { SessionStore } from '../core/session.js';
 import { createFileTools, createBashTool, createJavaScriptTool } from '../tools/index.js';
 import type { BrowserAPI } from '../cdp/index.js';
-import { getApiKey, resolveCurrentModel, resolveModelById, getSelectedProvider } from '../ui/provider-settings.js';
+import {
+  getApiKey,
+  resolveCurrentModel,
+  resolveModelById,
+  getSelectedProvider,
+} from '../ui/provider-settings.js';
 import { loadSkills, formatSkillsForPrompt, createDefaultSkills, type Skill } from './skills.js';
 import { createNanoClawTools, type NanoClawToolsConfig } from './nanoclaw-tools.js';
 
@@ -30,10 +42,12 @@ const log = createLogger('scoop-context');
 
 /** Detect API errors caused by invalid/oversized images. */
 export function isImageProcessingError(msg: string): boolean {
-  return /image exceeds.*maximum/i.test(msg)
-    || /Could not process image/i.test(msg)
-    || /invalid.*image/i.test(msg)
-    || /image.*too (large|big)/i.test(msg);
+  return (
+    /image exceeds.*maximum/i.test(msg) ||
+    /Could not process image/i.test(msg) ||
+    /invalid.*image/i.test(msg) ||
+    /image.*too (large|big)/i.test(msg)
+  );
 }
 
 export interface ScoopContextCallbacks {
@@ -83,7 +97,12 @@ export class ScoopContext {
   private sessionCreatedAt: number = 0;
   private isRecovering: 'overflow' | 'image' | false = false;
 
-  constructor(scoop: RegisteredScoop, callbacks: ScoopContextCallbacks, fs: VirtualFS | RestrictedFS, sessionStore?: SessionStore) {
+  constructor(
+    scoop: RegisteredScoop,
+    callbacks: ScoopContextCallbacks,
+    fs: VirtualFS | RestrictedFS,
+    sessionStore?: SessionStore
+  ) {
     this.scoop = scoop;
     this.callbacks = callbacks;
     this.fs = fs;
@@ -158,9 +177,10 @@ export class ScoopContext {
         try {
           // Only cone writes to /shared — scoops read it via their allowed paths
           if (this.scoop.isCone) {
-            const underlying = 'getUnderlyingFS' in this.fs
-              ? (this.fs as RestrictedFS).getUnderlyingFS()
-              : this.fs as VirtualFS;
+            const underlying =
+              'getUnderlyingFS' in this.fs
+                ? (this.fs as RestrictedFS).getUnderlyingFS()
+                : (this.fs as VirtualFS);
             await underlying.writeFile('/shared/CLAUDE.md', globalMemory);
           }
         } catch {
@@ -189,10 +209,16 @@ export class ScoopContext {
           if (saved) {
             restoredMessages = saved.messages;
             this.sessionCreatedAt = saved.createdAt;
-            log.info('Restored agent session', { folder: this.scoop.folder, messageCount: restoredMessages.length });
+            log.info('Restored agent session', {
+              folder: this.scoop.folder,
+              messageCount: restoredMessages.length,
+            });
           }
         } catch (err) {
-          log.error('Failed to restore agent session', { folder: this.scoop.folder, error: err instanceof Error ? err.message : String(err) });
+          log.error('Failed to restore agent session', {
+            folder: this.scoop.folder,
+            error: err instanceof Error ? err.message : String(err),
+          });
           this.callbacks.onError(`Conversation history could not be restored. Starting fresh.`);
         }
       }
@@ -218,7 +244,6 @@ export class ScoopContext {
 
       this.setStatus('ready');
       log.info('ScoopContext initialized', { folder: this.scoop.folder, toolCount: tools.length });
-
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log.error('ScoopContext init failed', { folder: this.scoop.folder, error: message });
@@ -331,7 +356,9 @@ export class ScoopContext {
 
       case 'tool_execution_update': {
         // Handle tool UI requests from onUpdate
-        const partialResult = event.partialResult as { content?: Array<{ type: string; requestId?: string; html?: string }> };
+        const partialResult = event.partialResult as {
+          content?: Array<{ type: string; requestId?: string; html?: string }>;
+        };
         for (const c of partialResult?.content ?? []) {
           if (c.type === 'tool_ui' && c.requestId && c.html) {
             this.callbacks.onToolUI?.(event.toolName, c.requestId, c.html);
@@ -343,11 +370,14 @@ export class ScoopContext {
       }
 
       case 'tool_execution_end': {
-        const result = event.result as { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> };
+        const result = event.result as {
+          content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+        };
         const parts: string[] = [];
         for (const c of result?.content ?? []) {
           if (c.type === 'text' && c.text) parts.push(c.text);
-          if (c.type === 'image' && c.data && c.mimeType) parts.push(`<img:data:${c.mimeType};base64,${c.data}>`);
+          if (c.type === 'image' && c.data && c.mimeType)
+            parts.push(`<img:data:${c.mimeType};base64,${c.data}>`);
         }
         this.callbacks.onToolEnd?.(event.toolName, parts.join('\n'), event.isError);
         break;
@@ -379,15 +409,20 @@ export class ScoopContext {
 
         // Persist session (fire-and-forget — subscribe callback is sync)
         if (this.sessionStore && messages.length > 0) {
-          this.sessionStore.save({
-            id: this.sessionId,
-            messages,
-            config: {},
-            createdAt: this.sessionCreatedAt || Date.now(),
-            updatedAt: Date.now(),
-          }).catch((err) => {
-            log.error('Failed to save agent session', { folder: this.scoop.folder, error: err instanceof Error ? err.message : String(err) });
-          });
+          this.sessionStore
+            .save({
+              id: this.sessionId,
+              messages,
+              config: {},
+              createdAt: this.sessionCreatedAt || Date.now(),
+              updatedAt: Date.now(),
+            })
+            .catch((err) => {
+              log.error('Failed to save agent session', {
+                folder: this.scoop.folder,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            });
         }
 
         if (messages.length > 0) {
@@ -427,12 +462,18 @@ export class ScoopContext {
   private recoverFromOverflow(messages: AgentMessage[]): void {
     if (!this.agent) return;
 
-    log.warn('Context overflow detected, attempting recovery', { folder: this.scoop.folder, messageCount: messages.length });
+    log.warn('Context overflow detected, attempting recovery', {
+      folder: this.scoop.folder,
+      messageCount: messages.length,
+    });
 
     this.isRecovering = 'overflow';
 
     // Notify the user that recovery is in progress
-    this.callbacks.onResponse('Context window exceeded — recovering by trimming oversized messages...', false);
+    this.callbacks.onResponse(
+      'Context window exceeded — recovering by trimming oversized messages...',
+      false
+    );
 
     try {
       // Remove the error assistant message (last message)
@@ -477,7 +518,15 @@ export class ScoopContext {
             };
           }
           replaced++;
-          log.info('Replaced oversized message', { index: i, role: msg.role, size: msgSize, preservedToolCalls: msg.role === 'assistant' ? msg.content.filter((b: any) => b.type === 'toolCall').length : 0 });
+          log.info('Replaced oversized message', {
+            index: i,
+            role: msg.role,
+            size: msgSize,
+            preservedToolCalls:
+              msg.role === 'assistant'
+                ? msg.content.filter((b: any) => b.type === 'toolCall').length
+                : 0,
+          });
         }
       }
 
@@ -485,19 +534,30 @@ export class ScoopContext {
       this.agent.replaceMessages(trimmed);
 
       // Re-prompt with an explanation so the agent can adapt
-      const explanation = replaced > 0
-        ? `[System: Context overflow recovered. ${replaced} oversized message(s) were replaced with placeholders to fit within the context window. The conversation continues — you may need to re-read files or re-run commands if their output was removed.]`
-        : `[System: Context overflow recovered. Older messages were trimmed. The conversation continues — compaction will summarize history on the next turn.]`;
+      const explanation =
+        replaced > 0
+          ? `[System: Context overflow recovered. ${replaced} oversized message(s) were replaced with placeholders to fit within the context window. The conversation continues — you may need to re-read files or re-run commands if their output was removed.]`
+          : `[System: Context overflow recovered. Older messages were trimmed. The conversation continues — compaction will summarize history on the next turn.]`;
 
       this.agent.prompt(explanation).catch((err) => {
-        log.error('Recovery re-prompt failed', { folder: this.scoop.folder, error: err instanceof Error ? err.message : String(err) });
+        log.error('Recovery re-prompt failed', {
+          folder: this.scoop.folder,
+          error: err instanceof Error ? err.message : String(err),
+        });
         this.isRecovering = false;
-        this.callbacks.onError(`Context overflow recovery failed: ${err instanceof Error ? err.message : String(err)}`);
+        this.callbacks.onError(
+          `Context overflow recovery failed: ${err instanceof Error ? err.message : String(err)}`
+        );
       });
     } catch (err) {
-      log.error('Recovery failed', { folder: this.scoop.folder, error: err instanceof Error ? err.message : String(err) });
+      log.error('Recovery failed', {
+        folder: this.scoop.folder,
+        error: err instanceof Error ? err.message : String(err),
+      });
       this.isRecovering = false;
-      this.callbacks.onError(`Context overflow recovery failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.callbacks.onError(
+        `Context overflow recovery failed: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
   }
 
@@ -508,11 +568,17 @@ export class ScoopContext {
   private recoverFromImageError(messages: AgentMessage[]): void {
     if (!this.agent) return;
 
-    log.warn('Image processing error detected, attempting recovery', { folder: this.scoop.folder, messageCount: messages.length });
+    log.warn('Image processing error detected, attempting recovery', {
+      folder: this.scoop.folder,
+      messageCount: messages.length,
+    });
 
     this.isRecovering = 'image';
 
-    this.callbacks.onResponse('Image rejected by API — removing problematic images and continuing...', false);
+    this.callbacks.onResponse(
+      'Image rejected by API — removing problematic images and continuing...',
+      false
+    );
 
     try {
       // Remove the error assistant message (last)
@@ -549,14 +615,24 @@ export class ScoopContext {
       const explanation = `[System: An image was rejected by the API and has been removed from the conversation (${stripped} message(s) affected). The conversation continues without the image.]`;
 
       this.agent.prompt(explanation).catch((err) => {
-        log.error('Image recovery re-prompt failed', { folder: this.scoop.folder, error: err instanceof Error ? err.message : String(err) });
+        log.error('Image recovery re-prompt failed', {
+          folder: this.scoop.folder,
+          error: err instanceof Error ? err.message : String(err),
+        });
         this.isRecovering = false;
-        this.callbacks.onError(`Image error recovery failed: ${err instanceof Error ? err.message : String(err)}`);
+        this.callbacks.onError(
+          `Image error recovery failed: ${err instanceof Error ? err.message : String(err)}`
+        );
       });
     } catch (err) {
-      log.error('Image recovery failed', { folder: this.scoop.folder, error: err instanceof Error ? err.message : String(err) });
+      log.error('Image recovery failed', {
+        folder: this.scoop.folder,
+        error: err instanceof Error ? err.message : String(err),
+      });
       this.isRecovering = false;
-      this.callbacks.onError(`Image error recovery failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.callbacks.onError(
+        `Image error recovery failed: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
   }
 
@@ -604,7 +680,11 @@ Created: ${new Date().toISOString()}
     }
   }
 
-  private buildSystemPrompt(globalMemory: string, scoopMemory: string, skills: import('./skills.js').Skill[]): string {
+  private buildSystemPrompt(
+    globalMemory: string,
+    scoopMemory: string,
+    skills: import('./skills.js').Skill[]
+  ): string {
     const assistantName = this.scoop.config?.assistantName || this.scoop.assistantLabel;
 
     const basePrompt = `# ${assistantName}
@@ -622,7 +702,9 @@ You have access to:
 - **schedule_task**: Schedule recurring or one-time tasks
 - **list_tasks**, **pause_task**, **resume_task**, **cancel_task**: Manage scheduled tasks
 
-${this.scoop.isCone ? `
+${
+  this.scoop.isCone
+    ? `
 As the cone (main assistant), you have elevated privileges:
 - **list_scoops**: See all registered scoops
 - **register_scoop**: Add new scoops
@@ -641,12 +723,14 @@ Use the **delegate_to_scoop** tool to send work to scoops. IMPORTANT:
 **You will automatically receive a notification when a scoop finishes.** The notification contains their full response.
 You do NOT need to schedule polling tasks or check for completion markers — just delegate and wait. You will be
 prompted again with the scoop's results when they are done. Then you can act on those results (move files, etc.).
-` : `
+`
+    : `
 You are a scoop with restricted filesystem access:
 - Your workspace: /scoops/${this.scoop.folder}/
 - Shared directory: /shared/ (read-write for all scoops)
 - Stay focused on your assigned tasks.
-`}
+`
+}
 
 ## Memory
 

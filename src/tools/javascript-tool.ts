@@ -23,7 +23,16 @@ interface ExecRequest {
 interface VfsRequest {
   type: 'vfs';
   id: string;
-  op: 'readFile' | 'readFileBinary' | 'writeFile' | 'writeFileBinary' | 'readDir' | 'exists' | 'stat' | 'mkdir' | 'rm';
+  op:
+    | 'readFile'
+    | 'readFileBinary'
+    | 'writeFile'
+    | 'writeFileBinary'
+    | 'readDir'
+    | 'exists'
+    | 'stat'
+    | 'mkdir'
+    | 'rm';
   args: string[];
   /** Binary data for writeFileBinary — transferred via structured clone. */
   binaryData?: Uint8Array;
@@ -66,7 +75,13 @@ interface FetchProxyResponse {
   error?: string;
 }
 
-type IframeMessage = ExecRequest | VfsRequest | VfsResponse | ExecResult | FetchProxyRequest | FetchProxyResponse;
+type IframeMessage =
+  | ExecRequest
+  | VfsRequest
+  | VfsResponse
+  | ExecResult
+  | FetchProxyRequest
+  | FetchProxyResponse;
 
 // NOTE: The use of Function constructor inside the iframe is intentional —
 // this tool's purpose IS to execute arbitrary user-provided JavaScript code.
@@ -214,7 +229,9 @@ export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
         const resp = await fetch(msg.url, init);
         const buf = await resp.arrayBuffer();
         const headers: Record<string, string> = {};
-        resp.headers.forEach((v, k) => { headers[k] = v; });
+        resp.headers.forEach((v, k) => {
+          headers[k] = v;
+        });
         iframe?.contentWindow?.postMessage(
           {
             type: 'fetch_proxy_response',
@@ -224,14 +241,14 @@ export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
             headers,
             body: new Uint8Array(buf),
           } satisfies FetchProxyResponse,
-          '*',
+          '*'
         );
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         log.error('Fetch proxy error', { url: msg.url, error: errMsg });
         iframe?.contentWindow?.postMessage(
           { type: 'fetch_proxy_response', id: msg.id, error: errMsg } satisfies FetchProxyResponse,
-          '*',
+          '*'
         );
       }
     })();
@@ -251,10 +268,14 @@ export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
       // Extension mode — use sandboxed page (allows Function constructor).
       // Must wait for load event before posting messages.
       iframeReady = new Promise<HTMLIFrameElement>((resolve) => {
-        iframe!.addEventListener('load', () => {
-          log.debug('Sandbox iframe loaded');
-          resolve(iframe!);
-        }, { once: true });
+        iframe!.addEventListener(
+          'load',
+          () => {
+            log.debug('Sandbox iframe loaded');
+            resolve(iframe!);
+          },
+          { once: true }
+        );
         iframe!.src = chrome.runtime.getURL('sandbox.html');
         document.body.appendChild(iframe!);
       });
@@ -285,7 +306,8 @@ export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
           case 'readFileBinary': {
             // Return raw bytes as Uint8Array via structured clone
             const content = await fs.readFile(msg.args[0], { encoding: 'binary' });
-            result = content instanceof Uint8Array ? content : new TextEncoder().encode(content as string);
+            result =
+              content instanceof Uint8Array ? content : new TextEncoder().encode(content as string);
             break;
           }
           case 'writeFile':
@@ -298,7 +320,7 @@ export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
             result = true;
             break;
           case 'readDir':
-            result = (await fs.readDir(msg.args[0])).map(e => e.name);
+            result = (await fs.readDir(msg.args[0])).map((e) => e.name);
             break;
           case 'exists':
             try {
@@ -310,7 +332,11 @@ export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
             break;
           case 'stat': {
             const st = await fs.stat(msg.args[0]);
-            result = { isDirectory: st.type === 'directory', isFile: st.type === 'file', size: st.size };
+            result = {
+              isDirectory: st.type === 'directory',
+              isFile: st.type === 'file',
+              size: st.size,
+            };
             break;
           }
           case 'mkdir':
@@ -324,7 +350,7 @@ export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
         }
         iframe?.contentWindow?.postMessage(
           { type: 'vfs_response', id: msg.id, result } satisfies VfsResponse,
-          '*',
+          '*'
         );
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -335,7 +361,7 @@ export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
             id: msg.id,
             error: errMsg,
           } satisfies VfsResponse,
-          '*',
+          '*'
         );
       }
     })();
@@ -360,7 +386,8 @@ export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
       properties: {
         code: {
           type: 'string',
-          description: 'JavaScript code to execute. Runs inside an async function — use await freely, use return to produce a result.',
+          description:
+            'JavaScript code to execute. Runs inside an async function — use await freely, use return to produce a result.',
         },
         timeout: {
           type: 'number',
@@ -403,10 +430,7 @@ export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
 
           window.addEventListener('message', handler);
 
-          frame.contentWindow!.postMessage(
-            { type: 'exec', id, code } satisfies ExecRequest,
-            '*',
-          );
+          frame.contentWindow!.postMessage({ type: 'exec', id, code } satisfies ExecRequest, '*');
         });
 
         let output = '';

@@ -49,7 +49,7 @@ async function scanDir(
   fs: VirtualFS,
   root: string,
   entries: BshEntry[],
-  seen: Set<string>,
+  seen: Set<string>
 ): Promise<void> {
   for await (const filePath of fs.walk(root)) {
     if (!filePath.endsWith('.bsh')) continue;
@@ -177,9 +177,7 @@ export function urlMatchesPattern(url: string, pattern: string): boolean {
  */
 function pathGlobMatches(path: string, pattern: string): boolean {
   // Convert glob pattern to regex
-  const regexStr = '^' + pattern
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*/g, '.*') + '$';
+  const regexStr = '^' + pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$';
   return new RegExp(regexStr).test(path);
 }
 
@@ -193,10 +191,10 @@ function pathGlobMatches(path: string, pattern: string): boolean {
 export function findMatchingScripts(entries: BshEntry[], url: string): BshEntry[] {
   try {
     const parsed = new URL(url);
-    return entries.filter(entry => {
+    return entries.filter((entry) => {
       if (!hostnameMatches(parsed.hostname, entry.hostnamePattern)) return false;
       if (entry.matchPatterns.length > 0) {
-        return entry.matchPatterns.some(p => urlMatchesPattern(url, p));
+        return entry.matchPatterns.some((p) => urlMatchesPattern(url, p));
       }
       return true;
     });

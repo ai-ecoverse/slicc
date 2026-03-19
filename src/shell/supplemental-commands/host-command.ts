@@ -76,7 +76,10 @@ export function formatDuration(seconds: number): string {
   return `${hours}h ${remainingMinutes}m ago`;
 }
 
-export function formatLeaderOutput(status: LeaderTrayRuntimeStatus, followers: ConnectedFollowerInfo[]): string {
+export function formatLeaderOutput(
+  status: LeaderTrayRuntimeStatus,
+  followers: ConnectedFollowerInfo[]
+): string {
   const lines = [`status: ${status.state}`];
 
   if (status.session) {
@@ -185,7 +188,7 @@ export function createHostCommand(options: HostCommandOptions = {}): Command {
 async function handleReset(
   getFollowerStatus: () => FollowerTrayRuntimeStatus,
   getLeaderStatus: () => LeaderTrayRuntimeStatus,
-  resetTray: (() => Promise<LeaderTrayRuntimeStatus>) | undefined,
+  resetTray: (() => Promise<LeaderTrayRuntimeStatus>) | undefined
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   // Only leaders can reset
   const followerStatus = getFollowerStatus();
@@ -216,7 +219,8 @@ async function handleReset(
 
   try {
     const newStatus = await resetTray();
-    const output = 'Tray session reset. All followers disconnected.\n' + formatLeaderOutput(newStatus, []);
+    const output =
+      'Tray session reset. All followers disconnected.\n' + formatLeaderOutput(newStatus, []);
     return { stdout: output, stderr: '', exitCode: 0 };
   } catch (error) {
     return {

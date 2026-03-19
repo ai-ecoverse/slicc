@@ -35,7 +35,10 @@ function clipboardAutoHelp(name: string): { stdout: string; stderr: string; exit
   };
 }
 
-async function copyToClipboard(stdin: string, cmdName: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+async function copyToClipboard(
+  stdin: string,
+  cmdName: string
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   if (!globalThis.navigator?.clipboard) {
     return {
       stdout: '',
@@ -56,7 +59,9 @@ async function copyToClipboard(stdin: string, cmdName: string): Promise<{ stdout
   }
 }
 
-async function pasteFromClipboard(cmdName: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+async function pasteFromClipboard(
+  cmdName: string
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   if (!globalThis.navigator?.clipboard) {
     return {
       stdout: '',

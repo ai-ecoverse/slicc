@@ -20,9 +20,7 @@ export function resolveUiRuntimeMode(locationHref: string, isExtension: boolean)
 
   try {
     const url = new URL(locationHref);
-    return isElectronOverlayUrl(url)
-      ? 'electron-overlay'
-      : 'standalone';
+    return isElectronOverlayUrl(url) ? 'electron-overlay' : 'standalone';
   } catch {
     return 'standalone';
   }
@@ -30,9 +28,11 @@ export function resolveUiRuntimeMode(locationHref: string, isExtension: boolean)
 
 export function shouldUseRuntimeModeTrayDefaults(
   runtimeMode: UiRuntimeMode,
-  hasRuntimeConfigEndpoint: boolean,
+  hasRuntimeConfigEndpoint: boolean
 ): boolean {
-  return runtimeMode === 'electron-overlay' || (runtimeMode === 'standalone' && hasRuntimeConfigEndpoint);
+  return (
+    runtimeMode === 'electron-overlay' || (runtimeMode === 'standalone' && hasRuntimeConfigEndpoint)
+  );
 }
 
 export function getElectronOverlayInitialTab(locationHref: string): ExtensionTabId {
@@ -72,7 +72,7 @@ export function getTrayWebhookUrl(trayWebhookUrl: string, webhookId: string): st
 }
 
 export function isElectronOverlaySetTabMessage(
-  value: unknown,
+  value: unknown
 ): value is ElectronOverlaySetTabMessage {
   return (
     typeof value === 'object' &&

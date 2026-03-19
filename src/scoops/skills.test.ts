@@ -17,7 +17,9 @@ describe('Skills', () => {
   describe('loadSkills', () => {
     it('loads a skill from a subdirectory with SKILL.md', async () => {
       await vfs.mkdir('/skills/browser', { recursive: true });
-      await vfs.writeFile('/skills/browser/SKILL.md', `---
+      await vfs.writeFile(
+        '/skills/browser/SKILL.md',
+        `---
 name: browser
 description: Browse the web
 allowed-tools: bash
@@ -26,7 +28,8 @@ allowed-tools: bash
 # Browser Skill
 
 Use the playwright-cli shell command via bash to navigate pages.
-`);
+`
+      );
       const skills = await loadSkills(vfs, '/skills');
       expect(skills).toHaveLength(1);
       expect(skills[0].metadata.name).toBe('browser');
@@ -38,13 +41,16 @@ Use the playwright-cli shell command via bash to navigate pages.
 
     it('loads a standalone .md skill file', async () => {
       await vfs.mkdir('/skills2', { recursive: true });
-      await vfs.writeFile('/skills2/coding.md', `---
+      await vfs.writeFile(
+        '/skills2/coding.md',
+        `---
 name: coding
 description: Write code
 ---
 
 Write clean code.
-`);
+`
+      );
       const skills = await loadSkills(vfs, '/skills2');
       expect(skills).toHaveLength(1);
       expect(skills[0].metadata.name).toBe('coding');
@@ -69,12 +75,18 @@ Write clean code.
     it('loads multiple skills', async () => {
       await vfs.mkdir('/skills4/a', { recursive: true });
       await vfs.mkdir('/skills4/b', { recursive: true });
-      await vfs.writeFile('/skills4/a/SKILL.md', '---\nname: alpha\ndescription: first\n---\nAlpha content');
-      await vfs.writeFile('/skills4/b/SKILL.md', '---\nname: beta\ndescription: second\n---\nBeta content');
+      await vfs.writeFile(
+        '/skills4/a/SKILL.md',
+        '---\nname: alpha\ndescription: first\n---\nAlpha content'
+      );
+      await vfs.writeFile(
+        '/skills4/b/SKILL.md',
+        '---\nname: beta\ndescription: second\n---\nBeta content'
+      );
 
       const skills = await loadSkills(vfs, '/skills4');
       expect(skills).toHaveLength(2);
-      const names = skills.map(s => s.metadata.name).sort();
+      const names = skills.map((s) => s.metadata.name).sort();
       expect(names).toEqual(['alpha', 'beta']);
     });
 
@@ -145,11 +157,13 @@ Write clean code.
     });
 
     it('formats skill header with path for on-demand reading', () => {
-      const result = formatSkillsForPrompt([{
-        metadata: { name: 'test', description: 'A test skill' },
-        content: 'Do the thing.',
-        path: '/skills/test/SKILL.md',
-      }]);
+      const result = formatSkillsForPrompt([
+        {
+          metadata: { name: 'test', description: 'A test skill' },
+          content: 'Do the thing.',
+          path: '/skills/test/SKILL.md',
+        },
+      ]);
       expect(result).toContain('AVAILABLE SKILLS');
       expect(result).toContain('**test**');
       expect(result).toContain('A test skill');
@@ -160,11 +174,17 @@ Write clean code.
     });
 
     it('includes allowed tools when present', () => {
-      const result = formatSkillsForPrompt([{
-        metadata: { name: 'browser', description: 'Browse', allowedTools: ['browser', 'screenshot'] },
-        content: 'Content',
-        path: '/skills/browser/SKILL.md',
-      }]);
+      const result = formatSkillsForPrompt([
+        {
+          metadata: {
+            name: 'browser',
+            description: 'Browse',
+            allowedTools: ['browser', 'screenshot'],
+          },
+          content: 'Content',
+          path: '/skills/browser/SKILL.md',
+        },
+      ]);
       expect(result).toContain('Allowed tools: browser, screenshot');
     });
 

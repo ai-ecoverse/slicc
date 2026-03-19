@@ -56,17 +56,25 @@ export class ToolUIRenderer {
         reject(new Error('tool-ui sandbox iframe load timed out'));
       }, 5000);
 
-      iframe.addEventListener('load', () => {
-        clearTimeout(timer);
-        resolve();
-      }, { once: true });
+      iframe.addEventListener(
+        'load',
+        () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        { once: true }
+      );
 
-      iframe.addEventListener('error', () => {
-        clearTimeout(timer);
-        iframe.remove();
-        this.iframe = null;
-        reject(new Error('tool-ui sandbox iframe failed to load'));
-      }, { once: true });
+      iframe.addEventListener(
+        'error',
+        () => {
+          clearTimeout(timer);
+          iframe.remove();
+          this.iframe = null;
+          reject(new Error('tool-ui sandbox iframe failed to load'));
+        },
+        { once: true }
+      );
 
       this.container.appendChild(iframe);
     });
@@ -101,13 +109,16 @@ export class ToolUIRenderer {
     const { collectThemeCSS } = await import('./sprinkle-renderer.js');
     const themeCSS = collectThemeCSS();
 
-    iframe.contentWindow!.postMessage({
-      type: 'tool-ui-render',
-      id: this.requestId,
-      nonce: this.nonce,
-      html,
-      themeCSS,
-    }, '*');
+    iframe.contentWindow!.postMessage(
+      {
+        type: 'tool-ui-render',
+        id: this.requestId,
+        nonce: this.nonce,
+        html,
+        themeCSS,
+      },
+      '*'
+    );
   }
 
   /**
@@ -149,7 +160,11 @@ const activeRenderers = new Map<string, ToolUIRenderer>();
 /**
  * Create and show a tool UI in a container element.
  */
-export function createToolUIRenderer(container: HTMLElement, requestId: string, html: string): ToolUIRenderer {
+export function createToolUIRenderer(
+  container: HTMLElement,
+  requestId: string,
+  html: string
+): ToolUIRenderer {
   const existing = activeRenderers.get(requestId);
   if (existing) {
     existing.dispose();

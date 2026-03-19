@@ -69,7 +69,7 @@ version: 0.1.0`;
 description: No skill field`;
 
       expect(() => parseManifestContent(content)).toThrow(
-        "Invalid manifest: missing 'skill' field",
+        "Invalid manifest: missing 'skill' field"
       );
     });
 
@@ -78,7 +78,7 @@ description: No skill field`;
 description: Missing version`;
 
       expect(() => parseManifestContent(content)).toThrow(
-        "Invalid manifest: missing 'version' field",
+        "Invalid manifest: missing 'version' field"
       );
     });
 
@@ -142,9 +142,9 @@ modifies: []`;
       const content = `version: 1.0.0`;
 
       expect(() =>
-        parseManifestContent(content, '/workspace/skills/test-skill/manifest.yaml'),
+        parseManifestContent(content, '/workspace/skills/test-skill/manifest.yaml')
       ).toThrow(
-        "Invalid manifest: missing 'skill' field in /workspace/skills/test-skill/manifest.yaml",
+        "Invalid manifest: missing 'skill' field in /workspace/skills/test-skill/manifest.yaml"
       );
     });
 
@@ -159,10 +159,7 @@ structured:
       const manifest = parseManifestContent(content);
 
       expect(manifest.skill).toBe('structured-skill');
-      expect(manifest.structured?.env_additions).toEqual([
-        'VAR1=value1',
-        'VAR2=value2',
-      ]);
+      expect(manifest.structured?.env_additions).toEqual(['VAR1=value1', 'VAR2=value2']);
     });
   });
 
@@ -196,11 +193,11 @@ author: VFS Author`;
       await fs.mkdir(skillDir, { recursive: true });
       await fs.writeFile(
         `${skillDir}/manifest.yaml`,
-        `version: 1.0.0\ndescription: Missing skill field`,
+        `version: 1.0.0\ndescription: Missing skill field`
       );
 
       await expect(readManifest(fs, skillDir)).rejects.toThrow(
-        "Invalid manifest: missing 'skill' field",
+        "Invalid manifest: missing 'skill' field"
       );
     });
   });

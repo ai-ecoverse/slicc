@@ -3,10 +3,12 @@ import { createWhichCommand } from './which-command.js';
 import type { IFileSystem } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 
-function createMockCtx(overrides: {
-  registeredCommands?: string[];
-  fs?: Partial<IFileSystem>;
-} = {}) {
+function createMockCtx(
+  overrides: {
+    registeredCommands?: string[];
+    fs?: Partial<IFileSystem>;
+  } = {}
+) {
   const fs: Partial<IFileSystem> = {
     resolvePath: (base: string, path: string) => (path.startsWith('/') ? path : `${base}/${path}`),
     ...overrides.fs,
@@ -85,9 +87,12 @@ describe('which command', () => {
     ]);
 
     const cmd = createWhichCommand(mockVfs);
-    const result = await cmd.execute(['hello'], createMockCtx({
-      registeredCommands: ['ls', 'cat'],
-    }));
+    const result = await cmd.execute(
+      ['hello'],
+      createMockCtx({
+        registeredCommands: ['ls', 'cat'],
+      })
+    );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('/workspace/skills/test-skill/hello.jsh\n');
   });

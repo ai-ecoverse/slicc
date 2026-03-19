@@ -5,7 +5,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock chrome.runtime
-const messageListeners: Array<(message: unknown, sender: unknown, sendResponse: (r?: unknown) => void) => void> = [];
+const messageListeners: Array<
+  (message: unknown, sender: unknown, sendResponse: (r?: unknown) => void) => void
+> = [];
 const sentMessages: unknown[] = [];
 
 const mockChrome = {
@@ -157,8 +159,22 @@ describe('OffscreenClient', () => {
     simulateMessage('offscreen', {
       type: 'state-snapshot',
       scoops: [
-        { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy', status: 'ready' },
-        { jid: 'scoop_1', name: 'Worker', folder: 'worker-scoop', isCone: false, assistantLabel: 'worker-scoop', status: 'processing' },
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          isCone: true,
+          assistantLabel: 'sliccy',
+          status: 'ready',
+        },
+        {
+          jid: 'scoop_1',
+          name: 'Worker',
+          folder: 'worker-scoop',
+          isCone: false,
+          assistantLabel: 'worker-scoop',
+          status: 'processing',
+        },
       ],
       activeScoopJid: 'cone_1',
     });
@@ -217,8 +233,14 @@ describe('OffscreenClient', () => {
 
   it('registerScoop sends scoop-create message', () => {
     client.registerScoop({
-      jid: 'temp', name: 'Test', folder: 'test-scoop', isCone: false,
-      type: 'scoop', requiresTrigger: true, assistantLabel: 'test-scoop', addedAt: '',
+      jid: 'temp',
+      name: 'Test',
+      folder: 'test-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: true,
+      assistantLabel: 'test-scoop',
+      addedAt: '',
     });
     const envelope = sentMessages[0] as { payload: any };
     expect(envelope.payload.type).toBe('scoop-create');
@@ -230,7 +252,16 @@ describe('OffscreenClient', () => {
     // First add a scoop via state snapshot
     simulateMessage('offscreen', {
       type: 'state-snapshot',
-      scoops: [{ jid: 'scoop_1', name: 'Test', folder: 'test', isCone: false, assistantLabel: 'test', status: 'ready' }],
+      scoops: [
+        {
+          jid: 'scoop_1',
+          name: 'Test',
+          folder: 'test',
+          isCone: false,
+          assistantLabel: 'test',
+          status: 'ready',
+        },
+      ],
       activeScoopJid: null,
     });
     expect(client.getScoops().length).toBe(1);
@@ -252,7 +283,16 @@ describe('OffscreenClient', () => {
     expect(client.isReady()).toBe(false);
     simulateMessage('offscreen', {
       type: 'state-snapshot',
-      scoops: [{ jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy', status: 'ready' }],
+      scoops: [
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          isCone: true,
+          assistantLabel: 'sliccy',
+          status: 'ready',
+        },
+      ],
       activeScoopJid: 'cone_1',
     });
     expect(client.isReady()).toBe(true);
