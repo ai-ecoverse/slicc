@@ -4,6 +4,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('../tools/tool-ui.js', () => ({
+  getToolExecutionContext: vi.fn(),
+  showToolUIFromContext: vi.fn(),
+}));
+
 describe('hasHostPermission', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -152,5 +157,145 @@ describe('onHostPermissionRevoked', () => {
 
     capturedListener!({});
     expect(callback).not.toHaveBeenCalled();
+  });
+});
+
+describe('ensureHostPermission', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('returns true when not in extension mode', async () => {
+    // No chrome global at all
+    vi.unstubAllGlobals();
+    const { ensureHostPermission } = await import('./host-permission.js');
+    expect(await ensureHostPermission()).toBe(true);
+  });
+
+  it('returns true when chrome exists but runtime.id is falsy', async () => {
+    vi.stubGlobal('chrome', { runtime: {} });
+    const { ensureHostPermission } = await import('./host-permission.js');
+    expect(await ensureHostPermission()).toBe(true);
+  });
+
+  it('returns true when permission is already granted', async () => {
+    vi.stubGlobal('chrome', {
+      runtime: { id: 'test-ext' },
+      permissions: {
+        contains: vi.fn().mockResolvedValue(true),
+        request: vi.fn(),
+        onRemoved: { addListener: vi.fn() },
+      },
+    });
+    const { ensureHostPermission } = await import('./host-permission.js');
+    expect(await ensureHostPermission()).toBe(true);
+  });
+
+  it('returns false when no tool context is available', async () => {
+    vi.stubGlobal('chrome', {
+      runtime: { id: 'test-ext' },
+      permissions: {
+        contains: vi.fn().mockResolvedValue(false),
+        request: vi.fn(),
+        onRemoved: { addListener: vi.fn() },
+      },
+    });
+    const toolUI = await import('../tools/tool-ui.js');
+    vi.mocked(toolUI.getToolExecutionContext).mockReturnValue(null);
+
+    const { ensureHostPermission } = await import('./host-permission.js');
+    expect(await ensureHostPermission()).toBe(false);
+  });
+
+  it('returns true when user grants permission via approval card', async () => {
+    vi.stubGlobal('chrome', {
+      runtime: { id: 'test-ext' },
+      permissions: {
+        contains: vi.fn().mockResolvedValue(false),
+        request: vi.fn().mockResolvedValue(true),
+        onRemoved: { addListener: vi.fn() },
+      },
+    });
+    const toolUI = await import('../tools/tool-ui.js');
+    const fakeCtx = { onUpdate: vi.fn(), toolName: 'bash', toolCallId: '1' };
+    vi.mocked(toolUI.getToolExecutionContext).mockReturnValue(fakeCtx);
+    vi.mocked(toolUI.showToolUIFromContext).mockImplementation(
+      async (req) => {
+        const result = await req.onAction!('grant');
+        return result;
+      },
+    );
+
+    const { ensureHostPermission } = await import('./host-permission.js');
+    expect(await ensureHostPermission()).toBe(true);
+  });
+
+  it('returns false when user denies via approval card', async () => {
+    vi.stubGlobal('chrome', {
+      runtime: { id: 'test-ext' },
+      permissions: {
+        contains: vi.fn().mockResolvedValue(false),
+        request: vi.fn(),
+        onRemoved: { addListener: vi.fn() },
+      },
+    });
+    const toolUI = await import('../tools/tool-ui.js');
+    const fakeCtx = { onUpdate: vi.fn(), toolName: 'bash', toolCallId: '1' };
+    vi.mocked(toolUI.getToolExecutionContext).mockReturnValue(fakeCtx);
+    vi.mocked(toolUI.showToolUIFromContext).mockImplementation(
+      async (req) => {
+        const result = await req.onAction!('deny');
+        return result;
+      },
+    );
+
+    const { ensureHostPermission } = await import('./host-permission.js');
+    expect(await ensureHostPermission()).toBe(false);
+  });
+
+  it('returns false when Chrome denies the permission request', async () => {
+    vi.stubGlobal('chrome', {
+      runtime: { id: 'test-ext' },
+      permissions: {
+        contains: vi.fn().mockResolvedValue(false),
+        request: vi.fn().mockResolvedValue(false),
+        onRemoved: { addListener: vi.fn() },
+      },
+    });
+    const toolUI = await import('../tools/tool-ui.js');
+    const fakeCtx = { onUpdate: vi.fn(), toolName: 'bash', toolCallId: '1' };
+    vi.mocked(toolUI.getToolExecutionContext).mockReturnValue(fakeCtx);
+    vi.mocked(toolUI.showToolUIFromContext).mockImplementation(
+      async (req) => {
+        const result = await req.onAction!('grant');
+        return result;
+      },
+    );
+
+    const { ensureHostPermission } = await import('./host-permission.js');
+    expect(await ensureHostPermission()).toBe(false);
+  });
+
+  it('returns false when showToolUIFromContext returns null', async () => {
+    vi.stubGlobal('chrome', {
+      runtime: { id: 'test-ext' },
+      permissions: {
+        contains: vi.fn().mockResolvedValue(false),
+        request: vi.fn(),
+        onRemoved: { addListener: vi.fn() },
+      },
+    });
+    const toolUI = await import('../tools/tool-ui.js');
+    const fakeCtx = { onUpdate: vi.fn(), toolName: 'bash', toolCallId: '1' };
+    vi.mocked(toolUI.getToolExecutionContext).mockReturnValue(fakeCtx);
+    vi.mocked(toolUI.showToolUIFromContext).mockResolvedValue(null);
+
+    const { ensureHostPermission } = await import('./host-permission.js');
+    expect(await ensureHostPermission()).toBe(false);
   });
 });
