@@ -181,7 +181,7 @@ function installCompatibilityCacheInvalidationHooks(fs: VirtualFS): void {
   if (compatibilityCacheHooksInstalled.has(cacheKey)) return;
   compatibilityCacheHooksInstalled.add(cacheKey);
 
-  const mutableFs = fs as Record<string, unknown>;
+  const mutableFs = fs as unknown as Record<string, unknown>;
   for (const methodName of COMPATIBILITY_CACHE_INVALIDATION_METHODS) {
     const candidate = mutableFs[methodName];
     if (typeof candidate !== 'function') continue;
