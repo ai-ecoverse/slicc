@@ -248,6 +248,7 @@ export class ElectronOverlayInjector {
   private readonly cdpPort: number;
   private readonly bootstrapScript: string;
   private readonly connections = new Map<string, WebSocket>();
+  private readonly cspBypassedTargets = new Set<string>();
   private syncTimer: ReturnType<typeof setInterval> | null = null;
   private syncing = false;
 
@@ -341,12 +342,37 @@ export class ElectronOverlayInjector {
       ws.send(JSON.stringify({ id: messageId++, method, params }));
     };
 
+    const cspBypassedTargets = this.cspBypassedTargets;
+    const needsReload = !cspBypassedTargets.has(target.url);
+    
     ws.on('open', () => {
-      send('Page.enable');
+      console.log(`[electron-float] Connected to target, needsReload=${needsReload}, url=${target.url}`);
       send('Runtime.enable');
-      send('Page.addScriptToEvaluateOnNewDocument', { source: this.bootstrapScript });
-      send('Runtime.evaluate', { expression: this.bootstrapScript, awaitPromise: false });
-      console.log(`[electron-float] Overlay injector attached to ${target.url}`);
+      // Apply CSP bypass (needed for iframe to load external content)
+      send('Page.setBypassCSP', { enabled: true });
+      
+      if (needsReload) {
+        // First connection: wait for page to stabilize, then set CSP bypass and reload
+        // CSP bypass only takes effect after reload
+        cspBypassedTargets.add(target.url);
+        console.log(`[electron-float] Will reload for CSP bypass: ${target.url}`);
+        setTimeout(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            send('Page.reload');
+            // After reload, inject overlay (keep connection open)
+            setTimeout(() => {
+              if (ws.readyState === WebSocket.OPEN) {
+                console.log(`[electron-float] Injecting overlay after reload...`);
+                send('Runtime.evaluate', { expression: this.bootstrapScript, awaitPromise: false });
+              }
+            }, 3000);
+          }
+        }, 2000);
+      } else {
+        // Subsequent connections: just inject overlay
+        console.log(`[electron-float] Injecting overlay...`);
+        send('Runtime.evaluate', { expression: this.bootstrapScript, awaitPromise: false });
+      }
     });
 
     ws.on('close', () => {
