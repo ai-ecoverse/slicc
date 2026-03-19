@@ -129,7 +129,9 @@ export class Layout {
   }
 
   /** Set the orchestrator on the scoop switcher (extension mode). */
-  setScoopSwitcherOrchestrator?(orchestrator: import('../scoops/orchestrator.js').Orchestrator): void {
+  setScoopSwitcherOrchestrator?(
+    orchestrator: import('../scoops/orchestrator.js').Orchestrator
+  ): void {
     this.scoopSwitcher?.setOrchestrator(orchestrator);
   }
 
@@ -173,8 +175,18 @@ export class Layout {
     if (!this.isExtension || !this.debugTabContainers) return;
 
     const DEBUG_TABS = [
-      { id: 'terminal' as const, label: 'Terminal', container: this.debugTabContainers.terminal, onActivate: () => this.panels?.terminal?.refit?.() },
-      { id: 'memory' as const, label: 'Memory', container: this.debugTabContainers.memory, onActivate: () => this.panels?.memory?.refresh() },
+      {
+        id: 'terminal' as const,
+        label: 'Terminal',
+        container: this.debugTabContainers.terminal,
+        onActivate: () => this.panels?.terminal?.refit?.(),
+      },
+      {
+        id: 'memory' as const,
+        label: 'Memory',
+        container: this.debugTabContainers.memory,
+        onActivate: () => this.panels?.memory?.refresh(),
+      },
     ];
 
     for (const { id, label, container, onActivate } of DEBUG_TABS) {
@@ -248,7 +260,8 @@ export class Layout {
             const opt = document.createElement('option');
             opt.value = `${group.providerId}:${model.id}`;
             opt.textContent = model.name;
-            if (model.id === currentModelId && group.providerId === currentProvider) opt.selected = true;
+            if (model.id === currentModelId && group.providerId === currentProvider)
+              opt.selected = true;
             optgroup.appendChild(opt);
           }
           modelSelect.appendChild(optgroup);
@@ -297,8 +310,12 @@ export class Layout {
       this.scoopSwitcherEl.className = 'scoop-switcher';
       this.scoopSwitcher = new ScoopSwitcher(this.scoopSwitcherEl, {
         onScoopSelect: (scoop) => this.onScoopSelect?.(scoop),
-        onCreateScoop: (name) => { this.panels?.scoops?.createScoop(name); },
-        onDeleteScoop: (jid) => { this.panels?.scoops?.deleteScoop?.(jid); },
+        onCreateScoop: (name) => {
+          this.panels?.scoops?.createScoop(name);
+        },
+        onDeleteScoop: (jid) => {
+          this.panels?.scoops?.deleteScoop?.(jid);
+        },
       });
       row.appendChild(this.scoopSwitcherEl);
 
@@ -359,8 +376,12 @@ export class Layout {
               item.style.color = 'var(--slicc-cone)';
               item.style.fontWeight = '700';
             }
-            item.addEventListener('mouseenter', () => { item.style.background = 'var(--s2-bg-elevated)'; });
-            item.addEventListener('mouseleave', () => { item.style.background = ''; });
+            item.addEventListener('mouseenter', () => {
+              item.style.background = 'var(--s2-bg-elevated)';
+            });
+            item.addEventListener('mouseleave', () => {
+              item.style.background = '';
+            });
 
             const check = document.createElement('span');
             check.style.cssText = 'width: 14px; text-align: center; font-size: 10px;';
@@ -390,7 +411,10 @@ export class Layout {
         renderModelMenu();
       });
       document.addEventListener('click', () => {
-        if (modelMenuOpen) { modelMenuOpen = false; renderModelMenu(); }
+        if (modelMenuOpen) {
+          modelMenuOpen = false;
+          renderModelMenu();
+        }
       });
 
       modelDD.appendChild(modelBtn);
@@ -471,7 +495,7 @@ export class Layout {
   /** Fixed scoop radius in SVG units — scoops never shrink. */
   private static readonly SCOOP_R = 5;
   private static readonly SCOOP_SPACING = 8.5; // center-to-center horizontal
-  private static readonly ROW_STEP = 7.5;      // center-to-center vertical
+  private static readonly ROW_STEP = 7.5; // center-to-center vertical
 
   /**
    * Calculate pyramid layout positions for N scoops.
@@ -484,7 +508,7 @@ export class Layout {
 
     // Find bottom row width: smallest w where w*(w+1)/2 >= count
     let w = 1;
-    while (w * (w + 1) / 2 < count) w++;
+    while ((w * (w + 1)) / 2 < count) w++;
 
     // Build rows bottom-up
     const rows: number[] = [];
@@ -522,7 +546,7 @@ export class Layout {
     const group = this.logoSvg.querySelector('.logo-scoops');
     if (!group) return;
 
-    const nonCone = scoops.filter(s => !s.isCone);
+    const nonCone = scoops.filter((s) => !s.isCone);
     const prevCount = this.logoScoopCount;
 
     // Skip redundant calls (same count, no change)
@@ -575,8 +599,8 @@ export class Layout {
     }
 
     // Expand viewBox to fit the growing ice cream — never shrink scoops
-    const allX = positions.map(p => p.cx);
-    const allY = positions.map(p => p.cy);
+    const allX = positions.map((p) => p.cx);
+    const allY = positions.map((p) => p.cy);
     const minX = Math.min(...allX) - r - 1;
     const maxX = Math.max(...allX) + r + 1;
     const minY = Math.min(...allY) - r - 1;
@@ -617,12 +641,33 @@ export class Layout {
   private buildButtons(): void {
     // SVG icon paths (S2 outline style: 20×20 canvas, 1.5px stroke)
     const icons = {
-      trash: ['M4 6h12', 'M8 6V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2', 'M6 6v10a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V6'],
+      trash: [
+        'M4 6h12',
+        'M8 6V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2',
+        'M6 6v10a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V6',
+      ],
       copy: ['M7 7h9v9H7z', 'M13 7V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h2'],
-      terminal: ['M3 4h14a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z', 'M6 10l2-2', 'M6 10l2 2', 'M11 12h3'],
-      database: ['M10 3c3.87 0 7 1.12 7 2.5S13.87 8 10 8 3 6.88 3 5.5 6.13 3 10 3z', 'M3 5.5v9C3 15.88 6.13 17 10 17s7-1.12 7-2.5v-9', 'M3 10c0 1.38 3.13 2.5 7 2.5s7-1.12 7-2.5'],
-      gear: ['M10 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6z', 'M17.4 10a7.46 7.46 0 0 0-.1-1.3l1.5-1.2-1.5-2.6-1.8.7a7.13 7.13 0 0 0-1.9-1.1L13.2 3h-3l-.4 1.5a7.13 7.13 0 0 0-1.9 1.1l-1.8-.7-1.5 2.6 1.5 1.2a7.46 7.46 0 0 0 0 2.6l-1.5 1.2 1.5 2.6 1.8-.7c.6.5 1.2.8 1.9 1.1l.4 1.5h3l.4-1.5c.7-.3 1.3-.6 1.9-1.1l1.8.7 1.5-2.6-1.5-1.2a7.46 7.46 0 0 0 .1-1.3z'],
-      clearScoops: ['M10 3c3.87 0 7 1.12 7 2.5S13.87 8 10 8 3 6.88 3 5.5 6.13 3 10 3z', 'M3 5.5v9C3 15.88 6.13 17 10 17s7-1.12 7-2.5v-9', 'M7 12l6-4', 'M7 8l6 4'],
+      terminal: [
+        'M3 4h14a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z',
+        'M6 10l2-2',
+        'M6 10l2 2',
+        'M11 12h3',
+      ],
+      database: [
+        'M10 3c3.87 0 7 1.12 7 2.5S13.87 8 10 8 3 6.88 3 5.5 6.13 3 10 3z',
+        'M3 5.5v9C3 15.88 6.13 17 10 17s7-1.12 7-2.5v-9',
+        'M3 10c0 1.38 3.13 2.5 7 2.5s7-1.12 7-2.5',
+      ],
+      gear: [
+        'M10 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
+        'M17.4 10a7.46 7.46 0 0 0-.1-1.3l1.5-1.2-1.5-2.6-1.8.7a7.13 7.13 0 0 0-1.9-1.1L13.2 3h-3l-.4 1.5a7.13 7.13 0 0 0-1.9 1.1l-1.8-.7-1.5 2.6 1.5 1.2a7.46 7.46 0 0 0 0 2.6l-1.5 1.2 1.5 2.6 1.8-.7c.6.5 1.2.8 1.9 1.1l.4 1.5h3l.4-1.5c.7-.3 1.3-.6 1.9-1.1l1.8.7 1.5-2.6-1.5-1.2a7.46 7.46 0 0 0 .1-1.3z',
+      ],
+      clearScoops: [
+        'M10 3c3.87 0 7 1.12 7 2.5S13.87 8 10 8 3 6.88 3 5.5 6.13 3 10 3z',
+        'M3 5.5v9C3 15.88 6.13 17 10 17s7-1.12 7-2.5v-9',
+        'M7 12l6-4',
+        'M7 8l6 4',
+      ],
     };
 
     // Clear Chat
@@ -651,7 +696,9 @@ export class Layout {
       await navigator.clipboard.writeText(formatted);
       // Brief visual feedback — swap icon color
       this.copyChatBtn.style.color = 'var(--s2-positive)';
-      setTimeout(() => { this.copyChatBtn.style.color = ''; }, 1500);
+      setTimeout(() => {
+        this.copyChatBtn.style.color = '';
+      }, 1500);
     });
     this.actionsEl.appendChild(this.copyChatBtn);
 
@@ -734,19 +781,25 @@ export class Layout {
     content.className = 'tab-content';
     this.root.appendChild(content);
 
-    this.extensionZone = new TabZone(tabBar, content, 'primary', {
-      onTabActivate: (id) => {
-        this.activeTab = id;
-        this.updateButtonVisibility();
-        if (id === 'terminal') this.panels?.terminal?.refit?.();
-        if (id === 'memory') this.panels?.memory?.refresh();
+    this.extensionZone = new TabZone(
+      tabBar,
+      content,
+      'primary',
+      {
+        onTabActivate: (id) => {
+          this.activeTab = id;
+          this.updateButtonVisibility();
+          if (id === 'terminal') this.panels?.terminal?.refit?.();
+          if (id === 'memory') this.panels?.memory?.refresh();
+        },
+        onTabClose: (id) => {
+          const name = id.startsWith('sprinkle-') ? id.slice(9) : id;
+          this.onSprinkleClose?.(name);
+        },
+        onAddClick: () => this.showExtensionPicker(tabBar),
       },
-      onTabClose: (id) => {
-        const name = id.startsWith('sprinkle-') ? id.slice(9) : id;
-        this.onSprinkleClose?.(name);
-      },
-      onAddClick: () => this.showExtensionPicker(tabBar),
-    }, { classPrefix: 'tab-bar' });
+      { classPrefix: 'tab-bar' }
+    );
 
     // Create containers for built-in tabs
     const chatContainer = document.createElement('div');
@@ -763,18 +816,25 @@ export class Layout {
 
     // Add built-in tabs
     for (const { id, label } of EXTENSION_TAB_SPECS) {
-      const container = id === 'chat' ? chatContainer
-        : id === 'terminal' ? terminalContainer
-        : id === 'files' ? filesContainer
-        : memoryContainer;
+      const container =
+        id === 'chat'
+          ? chatContainer
+          : id === 'terminal'
+            ? terminalContainer
+            : id === 'files'
+              ? filesContainer
+              : memoryContainer;
       this.extensionZone.addTab({
         id,
         label,
         closable: false,
         element: container,
-        onActivate: id === 'terminal' ? () => this.panels?.terminal?.refit?.()
-          : id === 'memory' ? () => this.panels?.memory?.refresh()
-          : undefined,
+        onActivate:
+          id === 'terminal'
+            ? () => this.panels?.terminal?.refit?.()
+            : id === 'memory'
+              ? () => this.panels?.memory?.refresh()
+              : undefined,
       });
       // Keep tabContainers in sync for backward compat
       this.tabContainers.set(id, container);
@@ -819,10 +879,10 @@ export class Layout {
 
   /** Show the [+] picker in extension mode. */
   private showExtensionPicker(anchor: HTMLElement): void {
-    const availableSprinkles = (this.getAvailableSprinkles?.() ?? []);
+    const availableSprinkles = this.getAvailableSprinkles?.() ?? [];
     // In extension mode, all panels are in one zone — filter already-open ones
     const openIds = new Set(this.extensionZone.getTabIds());
-    const available = availableSprinkles.filter(p => !openIds.has(`sprinkle-${p.name}`));
+    const available = availableSprinkles.filter((p) => !openIds.has(`sprinkle-${p.name}`));
 
     if (available.length === 0) return;
 
@@ -881,14 +941,16 @@ export class Layout {
 
     // ── Primary zone (Terminal + sprinkle tabs) ──
     this.primaryZoneEl = document.createElement('div');
-    this.primaryZoneEl.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: none;';
+    this.primaryZoneEl.style.cssText =
+      'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: none;';
 
     const primaryTabBar = document.createElement('div');
     primaryTabBar.className = 'mini-tabs';
     this.primaryZoneEl.appendChild(primaryTabBar);
 
     const primaryContentArea = document.createElement('div');
-    primaryContentArea.style.cssText = 'flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;';
+    primaryContentArea.style.cssText =
+      'flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;';
     this.primaryZoneEl.appendChild(primaryContentArea);
 
     this.primaryZone = new TabZone(primaryTabBar, primaryContentArea, 'primary', {
@@ -912,14 +974,16 @@ export class Layout {
 
     // ── Drawer zone (Files + Memory) ──
     this.drawerZoneEl = document.createElement('div');
-    this.drawerZoneEl.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden;';
+    this.drawerZoneEl.style.cssText =
+      'display: flex; flex-direction: column; min-height: 0; overflow: hidden;';
 
     const drawerTabBar = document.createElement('div');
     drawerTabBar.className = 'mini-tabs';
     this.drawerZoneEl.appendChild(drawerTabBar);
 
     const drawerContentArea = document.createElement('div');
-    drawerContentArea.style.cssText = 'flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;';
+    drawerContentArea.style.cssText =
+      'flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;';
     this.drawerZoneEl.appendChild(drawerContentArea);
 
     this.drawerZone = new TabZone(drawerTabBar, drawerContentArea, 'drawer', {
@@ -937,7 +1001,8 @@ export class Layout {
 
     // Terminal tab
     this.terminalContainer = document.createElement('div');
-    this.terminalContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1;';
+    this.terminalContainer.style.cssText =
+      'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1;';
     this.drawerZone.addTab({
       id: 'terminal',
       label: 'Terminal',
@@ -948,7 +1013,8 @@ export class Layout {
 
     // Files tab
     const fileBrowserContainer = document.createElement('div');
-    fileBrowserContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1;';
+    fileBrowserContainer.style.cssText =
+      'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1;';
     this.drawerZone.addTab({
       id: 'files',
       label: 'Files',
@@ -958,7 +1024,8 @@ export class Layout {
 
     // Memory tab
     const memoryContainer = document.createElement('div');
-    memoryContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; flex: 1;';
+    memoryContainer.style.cssText =
+      'display: flex; flex-direction: column; min-height: 0; flex: 1;';
     this.drawerZone.addTab({
       id: 'memory',
       label: 'Memory',
@@ -1018,7 +1085,7 @@ export class Layout {
 
     const scoopsW = Math.round(totalWidth * this.scoopsWidth);
     const leftW = Math.round(totalWidth * this.leftWidth);
-    const rightW = Math.max(0, totalWidth - scoopsW - leftW - (dividerW * 2));
+    const rightW = Math.max(0, totalWidth - scoopsW - leftW - dividerW * 2);
 
     this.scoopsEl.style.width = scoopsW + 'px';
     this.leftEl.style.width = leftW + 'px';
@@ -1122,7 +1189,10 @@ export class Layout {
       const y = e.clientY - rect.top;
       // drawerHeightFraction = fraction from bottom
       const primaryFraction = y / rightH;
-      this.drawerHeightFraction = Math.max(28 / rightH, Math.min(1 - 100 / rightH, 1 - primaryFraction));
+      this.drawerHeightFraction = Math.max(
+        28 / rightH,
+        Math.min(1 - 100 / rightH, 1 - primaryFraction)
+      );
       this.applySizes();
     };
 
@@ -1160,7 +1230,7 @@ export class Layout {
         openSprinkles.add(id.slice(9));
       }
     }
-    const unopenedSprinkles = availableSprinkles.filter(p => !openSprinkles.has(p.name)).length;
+    const unopenedSprinkles = availableSprinkles.filter((p) => !openSprinkles.has(p.name)).length;
     const hasAvailable = closedCount + unopenedSprinkles > 0;
     this.primaryZone?.setAddButtonEnabled(hasAvailable);
     this.drawerZone?.setAddButtonEnabled(hasAvailable);
@@ -1175,8 +1245,9 @@ export class Layout {
         openSprinkles.add(id.slice(9)); // strip 'sprinkle-' prefix
       }
     }
-    const availableSprinkles = (this.getAvailableSprinkles?.() ?? [])
-      .filter(p => !openSprinkles.has(p.name));
+    const availableSprinkles = (this.getAvailableSprinkles?.() ?? []).filter(
+      (p) => !openSprinkles.has(p.name)
+    );
 
     showSprinklePicker(anchor, zone, {
       registry: this.registry,
@@ -1242,7 +1313,8 @@ export class Layout {
       const tabId = `sprinkle-${name}`;
 
       const container = document.createElement('div');
-      container.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: auto; flex: 1;';
+      container.style.cssText =
+        'display: flex; flex-direction: column; min-height: 0; overflow: auto; flex: 1;';
       container.appendChild(element);
 
       // Register in the panel registry

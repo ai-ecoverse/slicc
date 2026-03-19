@@ -1,7 +1,5 @@
 {
   "permissions": {
-    "deny": [
-      "Read(./providers.json)"
-    ]
+    "deny": ["Read(./providers.json)"]
   }
 }

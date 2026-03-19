@@ -67,15 +67,17 @@ export function fingerprint(message: string, data: unknown[]): string {
       raw += ' [unserializable]';
     }
   }
-  return raw
-    // UUIDs: 8-4-4-4-12 hex pattern
-    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '<id>')
-    // Hex strings (8+ chars)
-    .replace(/\b[0-9a-f]{8,}\b/gi, '<hex>')
-    // Timestamps (10+ digit numbers)
-    .replace(/\b\d{10,}\b/g, '<ts>')
-    // Remaining numbers (integers and floats)
-    .replace(/\b\d+(\.\d+)?\b/g, '<n>');
+  return (
+    raw
+      // UUIDs: 8-4-4-4-12 hex pattern
+      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '<id>')
+      // Hex strings (8+ chars)
+      .replace(/\b[0-9a-f]{8,}\b/gi, '<hex>')
+      // Timestamps (10+ digit numbers)
+      .replace(/\b\d{10,}\b/g, '<ts>')
+      // Remaining numbers (integers and floats)
+      .replace(/\b\d+(\.\d+)?\b/g, '<n>')
+  );
 }
 
 class DedupBuffer {
@@ -92,7 +94,7 @@ class DedupBuffer {
     prefix: string,
     level: LogLevel,
     message: string,
-    data: unknown[],
+    data: unknown[]
   ): boolean {
     const fp = fingerprint(message, data);
     const now = Date.now();
@@ -101,7 +103,7 @@ class DedupBuffer {
     this.evict(now);
 
     // Check for an existing matching entry
-    const existing = this.entries.find(e => e.fingerprint === fp && e.level === level);
+    const existing = this.entries.find((e) => e.fingerprint === fp && e.level === level);
     if (existing) {
       existing.count++;
       return false; // suppress
@@ -113,7 +115,15 @@ class DedupBuffer {
       const evicted = this.entries.shift()!;
       this.flushEntry(evicted);
     }
-    this.entries.push({ fingerprint: fp, count: 0, firstSeen: now, level, consoleFn, prefix, message });
+    this.entries.push({
+      fingerprint: fp,
+      count: 0,
+      firstSeen: now,
+      level,
+      consoleFn,
+      prefix,
+      message,
+    });
     return true; // allow
   }
 
@@ -151,10 +161,13 @@ export function createLogger(namespace: string): Logger {
     return (message: string, ...data: unknown[]) => {
       if (currentLevel > level) return;
       const consoleFn =
-        level === LogLevel.DEBUG ? console.debug :
-        level === LogLevel.INFO ? console.info :
-        level === LogLevel.WARN ? console.warn :
-        console.error;
+        level === LogLevel.DEBUG
+          ? console.debug
+          : level === LogLevel.INFO
+            ? console.info
+            : level === LogLevel.WARN
+              ? console.warn
+              : console.error;
 
       if (dedup.log(consoleFn, prefix, level, message, data)) {
         consoleFn(prefix, message, ...data);

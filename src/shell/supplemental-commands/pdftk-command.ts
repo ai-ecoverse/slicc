@@ -299,7 +299,9 @@ export function createPdftkCommand(name: string = 'pdftk'): Command {
             const totalPages = doc.getPageCount();
             const indices = Array.from({ length: totalPages }, (_, i) => i);
             const copiedPages = await outputDoc.copyPages(doc, indices);
-            copiedPages.forEach((page: Awaited<ReturnType<typeof outputDoc.copyPages>>[number]) => outputDoc.addPage(page));
+            copiedPages.forEach((page: Awaited<ReturnType<typeof outputDoc.copyPages>>[number]) =>
+              outputDoc.addPage(page)
+            );
             continue;
           }
 
@@ -318,7 +320,7 @@ export function createPdftkCommand(name: string = 'pdftk'): Command {
           const pageNumbers = expandPageRange(range, totalPages);
 
           // Convert to 0-based indices
-          const indices = pageNumbers.map(p => p - 1);
+          const indices = pageNumbers.map((p) => p - 1);
           const copiedPages = await outputDoc.copyPages(defaultDoc, indices);
 
           for (const page of copiedPages) {

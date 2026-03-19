@@ -1,6 +1,14 @@
 import { createLogger } from '../core/logger.js';
-import type { LeaderToWorkerControlMessage, WorkerToLeaderControlMessage, FollowerJoinRequestedMessage } from '../worker/tray-signaling.js';
-import type { TrayBootstrapStatus, TrayIceCandidate, TraySessionDescription } from '../worker/tray-signaling.js';
+import type {
+  LeaderToWorkerControlMessage,
+  WorkerToLeaderControlMessage,
+  FollowerJoinRequestedMessage,
+} from '../worker/tray-signaling.js';
+import type {
+  TrayBootstrapStatus,
+  TrayIceCandidate,
+  TraySessionDescription,
+} from '../worker/tray-signaling.js';
 import {
   attachTrayFollower,
   pollTrayFollowerBootstrap,
@@ -8,7 +16,10 @@ import {
   sendTrayFollowerAnswer,
   sendTrayFollowerIceCandidate,
 } from './tray-follower.js';
-import { setFollowerTrayRuntimeStatus, getFollowerTrayRuntimeStatus } from './tray-follower-status.js';
+import {
+  setFollowerTrayRuntimeStatus,
+  getFollowerTrayRuntimeStatus,
+} from './tray-follower-status.js';
 
 const log = createLogger('tray-webrtc');
 const DEFAULT_DATA_CHANNEL_LABEL = 'tray-control';
@@ -32,7 +43,10 @@ export interface TrayPeerConnectionLike {
   setRemoteDescription(description: TraySessionDescription): Promise<void>;
   addIceCandidate(candidate: TrayIceCandidate): Promise<void>;
   addEventListener(type: 'icecandidate', listener: (event: { candidate: unknown }) => void): void;
-  addEventListener(type: 'datachannel', listener: (event: { channel: TrayDataChannelLike }) => void): void;
+  addEventListener(
+    type: 'datachannel',
+    listener: (event: { channel: TrayDataChannelLike }) => void
+  ): void;
   addEventListener(type: 'connectionstatechange', listener: () => void): void;
   close(): void;
 }
@@ -105,7 +119,8 @@ export class LeaderTrayPeerManager {
 
   constructor(private readonly options: LeaderTrayPeerManagerOptions) {
     this.iceServers = options.iceServers;
-    this.peerConnectionFactory = options.peerConnectionFactory ?? (() => createBrowserPeerConnection(this.iceServers));
+    this.peerConnectionFactory =
+      options.peerConnectionFactory ?? (() => createBrowserPeerConnection(this.iceServers));
     this.dataChannelLabel = options.dataChannelLabel ?? DEFAULT_DATA_CHANNEL_LABEL;
   }
 
@@ -176,8 +191,14 @@ export class LeaderTrayPeerManager {
       } else {
         // Post-connection: detect disconnected/failed ICE states
         if (peer.connectionState === 'disconnected' || peer.connectionState === 'failed') {
-          log.warn('Leader peer connection state changed post-connect', { bootstrapId: message.bootstrapId, state: peer.connectionState });
-          this.options.onPeerDisconnected?.(message.bootstrapId, `Peer connection ${peer.connectionState}`);
+          log.warn('Leader peer connection state changed post-connect', {
+            bootstrapId: message.bootstrapId,
+            state: peer.connectionState,
+          });
+          this.options.onPeerDisconnected?.(
+            message.bootstrapId,
+            `Peer connection ${peer.connectionState}`
+          );
         }
       }
     });
@@ -249,7 +270,9 @@ export class LeaderTrayPeerManager {
         retryAfterMs: 1000,
       });
     } catch (error) {
-      log.warn('Failed to report tray bootstrap failure', { error: error instanceof Error ? error.message : String(error) });
+      log.warn('Failed to report tray bootstrap failure', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 }
@@ -267,9 +290,10 @@ export class FollowerTrayManager {
   constructor(private readonly options: FollowerTrayManagerOptions) {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.iceServers = options.iceServers;
-    this.peerConnectionFactory = options.peerConnectionFactory ?? (() => createBrowserPeerConnection(this.iceServers));
+    this.peerConnectionFactory =
+      options.peerConnectionFactory ?? (() => createBrowserPeerConnection(this.iceServers));
     this.controllerIdFactory = options.controllerIdFactory ?? (() => crypto.randomUUID());
-    this.sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
+    this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   }
 
@@ -323,9 +347,17 @@ export class FollowerTrayManager {
 
       if (attach.action === 'wait') {
         const retryMs = attach.retryAfterMs ?? 1000;
-        log.info('Follower tray attach waiting', { attempt: attachAttempt, code: attach.code, retryAfterMs: retryMs });
+        log.info('Follower tray attach waiting', {
+          attempt: attachAttempt,
+          code: attach.code,
+          retryAfterMs: retryMs,
+        });
         if (attachAttempt % 10 === 0) {
-          log.warn(`Follower tray attach still waiting after ${attachAttempt} attempts`, { attempt: attachAttempt, code: attach.code, retryAfterMs: retryMs });
+          log.warn(`Follower tray attach still waiting after ${attachAttempt} attempts`, {
+            attempt: attachAttempt,
+            code: attach.code,
+            retryAfterMs: retryMs,
+          });
         }
         await this.sleep(retryMs);
         continue;
@@ -351,7 +383,11 @@ export class FollowerTrayManager {
         this.iceServers = attach.iceServers;
       }
       try {
-        const connection = await this.completeBootstrap(attach.trayId, controllerId, attach.bootstrap);
+        const connection = await this.completeBootstrap(
+          attach.trayId,
+          controllerId,
+          attach.bootstrap
+        );
         setFollowerTrayRuntimeStatus({
           state: 'connected',
           joinUrl: this.options.joinUrl,
@@ -408,7 +444,7 @@ export class FollowerTrayManager {
   private async completeBootstrap(
     trayId: string,
     controllerId: string,
-    initialBootstrap: TrayBootstrapStatus,
+    initialBootstrap: TrayBootstrapStatus
   ): Promise<FollowerTrayConnection> {
     let bootstrap = initialBootstrap;
     let cursor = 0;
@@ -417,7 +453,12 @@ export class FollowerTrayManager {
     for (;;) {
       ensureNotStopped(this.stopped);
       if (this.activePeer.open && this.activePeer.channel) {
-        return { trayId, controllerId, bootstrapId: bootstrap.bootstrapId, channel: this.activePeer.channel };
+        return {
+          trayId,
+          controllerId,
+          bootstrapId: bootstrap.bootstrapId,
+          channel: this.activePeer.channel,
+        };
       }
       if (this.activePeer.openError) {
         throw new Error(this.activePeer.openError);
@@ -443,7 +484,10 @@ export class FollowerTrayManager {
               joinUrl: this.options.joinUrl,
               controllerId,
               bootstrapId: bootstrap.bootstrapId,
-              answer: normalizeSessionDescription(this.activePeer.peer.localDescription ?? answer, 'answer'),
+              answer: normalizeSessionDescription(
+                this.activePeer.peer.localDescription ?? answer,
+                'answer'
+              ),
               fetchImpl: this.fetchImpl,
             });
           } else if (event.type === 'bootstrap.ice_candidate') {
@@ -485,7 +529,10 @@ export class FollowerTrayManager {
         return;
       }
       if (peer.connectionState === 'disconnected' || peer.connectionState === 'failed') {
-        log.warn('Follower peer connection state changed post-connect', { bootstrapId, state: peer.connectionState });
+        log.warn('Follower peer connection state changed post-connect', {
+          bootstrapId,
+          state: peer.connectionState,
+        });
         this.options.onDisconnected?.(`Peer connection ${peer.connectionState}`);
       }
     });
@@ -521,7 +568,9 @@ export class FollowerTrayManager {
         candidate: normalized,
         fetchImpl: this.fetchImpl,
       }).catch((error) => {
-        log.warn('Failed to send follower ICE candidate', { error: error instanceof Error ? error.message : String(error) });
+        log.warn('Failed to send follower ICE candidate', {
+          error: error instanceof Error ? error.message : String(error),
+        });
       });
     });
     return active;
@@ -570,13 +619,16 @@ export interface FollowerAutoReconnectHandle {
  */
 export function startFollowerWithAutoReconnect(
   managerOptions: FollowerTrayManagerOptions,
-  reconnectOptions: FollowerAutoReconnectOptions,
+  reconnectOptions: FollowerAutoReconnectOptions
 ): FollowerAutoReconnectHandle {
   const baseDelay = reconnectOptions.baseDelayMs ?? 1000;
   const multiplier = reconnectOptions.backoffMultiplier ?? 2;
   const maxDelay = reconnectOptions.maxDelayMs ?? 30_000;
   const maxAttempts = reconnectOptions.maxAttempts ?? 10;
-  const sleepFn = reconnectOptions.sleep ?? managerOptions.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+  const sleepFn =
+    reconnectOptions.sleep ??
+    managerOptions.sleep ??
+    ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
   let cancelled = false;
   let reconnecting = false;
@@ -594,7 +646,10 @@ export function startFollowerWithAutoReconnect(
     },
   };
 
-  const connectOnce = (): { manager: FollowerTrayManager; connectionPromise: Promise<FollowerTrayConnection> } => {
+  const connectOnce = (): {
+    manager: FollowerTrayManager;
+    connectionPromise: Promise<FollowerTrayConnection>;
+  } => {
     const manager = new FollowerTrayManager({
       ...managerOptions,
       sleep: sleepFn,
@@ -696,7 +751,9 @@ export function startFollowerWithAutoReconnect(
     })
     .catch((error) => {
       if (cancelled) return;
-      log.warn('Initial follower connection failed', { error: error instanceof Error ? error.message : String(error) });
+      log.warn('Initial follower connection failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
 
   return handle;
@@ -712,7 +769,7 @@ function createBrowserPeerConnection(iceServers?: TrayIceServerConfig[]): TrayPe
 
 function normalizeSessionDescription(
   description: TraySessionDescription | null | undefined,
-  expectedType: 'offer' | 'answer',
+  expectedType: 'offer' | 'answer'
 ): TraySessionDescription {
   if (!description || description.type !== expectedType || typeof description.sdp !== 'string') {
     throw new Error(`Expected a local ${expectedType} description before signaling`);
@@ -728,7 +785,8 @@ function normalizeIceCandidate(candidate: unknown): TrayIceCandidate | null {
         candidate: value['candidate'],
         sdpMid: typeof value['sdpMid'] === 'string' ? value['sdpMid'] : null,
         sdpMLineIndex: typeof value['sdpMLineIndex'] === 'number' ? value['sdpMLineIndex'] : null,
-        usernameFragment: typeof value['usernameFragment'] === 'string' ? value['usernameFragment'] : null,
+        usernameFragment:
+          typeof value['usernameFragment'] === 'string' ? value['usernameFragment'] : null,
       }
     : null;
 }

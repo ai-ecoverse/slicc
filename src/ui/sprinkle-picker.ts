@@ -28,7 +28,7 @@ export interface SprinklePickerOptions {
 export function showSprinklePicker(
   anchor: HTMLElement,
   zone: ZoneId,
-  options: SprinklePickerOptions,
+  options: SprinklePickerOptions
 ): void {
   // Remove any existing picker
   const existing = document.querySelector('.sprinkle-picker');
@@ -105,8 +105,12 @@ function createMenuItem(label: string, onClick: () => void): HTMLElement {
     'padding: 6px 12px; cursor: pointer; font-size: 12px; color: var(--s2-content-default); ' +
     'border-radius: var(--s2-radius-s); margin: 0 4px; transition: background 130ms ease;';
   item.textContent = label;
-  item.addEventListener('mouseenter', () => { item.style.background = 'var(--s2-bg-elevated)'; });
-  item.addEventListener('mouseleave', () => { item.style.background = ''; });
+  item.addEventListener('mouseenter', () => {
+    item.style.background = 'var(--s2-bg-elevated)';
+  });
+  item.addEventListener('mouseleave', () => {
+    item.style.background = '';
+  });
   item.addEventListener('click', onClick);
   return item;
 }

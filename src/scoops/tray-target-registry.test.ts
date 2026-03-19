@@ -48,7 +48,7 @@ describe('TrayTargetRegistry', () => {
 
     const entries = reg.getEntries();
     expect(entries).toHaveLength(2);
-    expect(entries.map(e => e.targetId)).toEqual(['rt-A:t1', 'rt-B:t1']);
+    expect(entries.map((e) => e.targetId)).toEqual(['rt-A:t1', 'rt-B:t1']);
   });
 
   it('removes targets when a runtime is removed', () => {

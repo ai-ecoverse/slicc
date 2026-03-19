@@ -95,7 +95,9 @@ describe('WasmShell playwright command discoverability', () => {
       browserAPI: {} as BrowserAPI,
     });
 
-    const whichResult = await shell.executeCommand('which playwright-cli playwright puppeteer host');
+    const whichResult = await shell.executeCommand(
+      'which playwright-cli playwright puppeteer host'
+    );
     expect(whichResult.exitCode).toBe(0);
     expect(whichResult.stdout).toContain('/usr/bin/playwright-cli');
     expect(whichResult.stdout).toContain('/usr/bin/playwright');

@@ -9,7 +9,11 @@ import { VirtualFS } from '../fs/virtual-fs.js';
 class MockCDPTransport implements CDPTransport {
   state: ConnectionState = 'connected';
   private listeners = new Map<string, Set<CDPEventListener>>();
-  private sentCommands: Array<{ method: string; params?: Record<string, unknown>; sessionId?: string }> = [];
+  private sentCommands: Array<{
+    method: string;
+    params?: Record<string, unknown>;
+    sessionId?: string;
+  }> = [];
 
   async connect(_options?: CDPConnectOptions): Promise<void> {
     this.state = 'connected';
@@ -22,7 +26,7 @@ class MockCDPTransport implements CDPTransport {
   async send(
     method: string,
     params?: Record<string, unknown>,
-    sessionId?: string,
+    sessionId?: string
   ): Promise<Record<string, unknown>> {
     this.sentCommands.push({ method, params, sessionId });
 
@@ -96,8 +100,16 @@ describe('HarRecorder', () => {
       expect(recordingId).toMatch(/^rec-/);
 
       const commands = transport.getSentCommands();
-      expect(commands).toContainEqual({ method: 'Network.enable', params: {}, sessionId: 'session-1' });
-      expect(commands).toContainEqual({ method: 'Page.enable', params: {}, sessionId: 'session-1' });
+      expect(commands).toContainEqual({
+        method: 'Network.enable',
+        params: {},
+        sessionId: 'session-1',
+      });
+      expect(commands).toContainEqual({
+        method: 'Page.enable',
+        params: {},
+        sessionId: 'session-1',
+      });
     });
 
     it('creates recordings directory', async () => {
@@ -109,7 +121,11 @@ describe('HarRecorder', () => {
 
     it('stores invalid filter code without throwing (deferred to save time)', async () => {
       // Invalid filter code is stored as-is; compilation error surfaces at save time
-      const recordingId = await recorder.startRecording('target-1', 'session-1', 'invalid syntax {{{');
+      const recordingId = await recorder.startRecording(
+        'target-1',
+        'session-1',
+        'invalid syntax {{{'
+      );
       expect(recordingId).toBeTruthy();
       const session = recorder.getRecording(recordingId);
       expect(session?.filterCode).toBe('invalid syntax {{{');
@@ -119,7 +135,7 @@ describe('HarRecorder', () => {
       const recordingId = await recorder.startRecording(
         'target-1',
         'session-1',
-        '(entry) => entry.request.url.includes("api")',
+        '(entry) => entry.request.url.includes("api")'
       );
       expect(recordingId).toMatch(/^rec-/);
     });
@@ -142,7 +158,7 @@ describe('HarRecorder', () => {
         request: {
           method: 'GET',
           url: 'https://api.example.com/data',
-          headers: { 'Accept': 'application/json' },
+          headers: { Accept: 'application/json' },
         },
       });
 
@@ -218,7 +234,7 @@ describe('HarRecorder', () => {
       const recordingId = await recorder.startRecording(
         'target-1',
         'session-1',
-        '(entry) => !entry.request.url.includes("exclude")',
+        '(entry) => !entry.request.url.includes("exclude")'
       );
 
       // Request that should be excluded by filter
@@ -254,7 +270,7 @@ describe('HarRecorder', () => {
       const recordingId = await recorder.startRecording(
         'target-1',
         'session-1',
-        '(entry) => ({ ...entry, request: { ...entry.request, url: "transformed" } })',
+        '(entry) => ({ ...entry, request: { ...entry.request, url: "transformed" } })'
       );
 
       transport.emit('Network.requestWillBeSent', {
@@ -292,7 +308,7 @@ describe('HarRecorder', () => {
       const recordingId = await recorder.startRecording(
         'target-1',
         'session-1',
-        'invalid syntax {{{',
+        'invalid syntax {{{'
       );
 
       transport.emit('Network.requestWillBeSent', {
@@ -327,7 +343,7 @@ describe('HarRecorder', () => {
       const recordingId = await recorder.startRecording(
         'target-1',
         'session-1',
-        '(entry) => !entry.request.url.includes("analytics")',
+        '(entry) => !entry.request.url.includes("analytics")'
       );
 
       // Entry that should pass filter
@@ -383,7 +399,7 @@ describe('HarRecorder', () => {
       const recordingId = await recorder.startRecording(
         'target-1',
         'session-1',
-        '(entry) => entry.nonexistent.property',
+        '(entry) => entry.nonexistent.property'
       );
 
       transport.emit('Network.requestWillBeSent', {
@@ -525,7 +541,7 @@ describe('HarRecorder', () => {
         response: {
           status: 201,
           statusText: 'Created',
-          headers: { 'Content-Type': 'application/json', 'Location': '/data/123' },
+          headers: { 'Content-Type': 'application/json', Location: '/data/123' },
           mimeType: 'application/json',
         },
       });

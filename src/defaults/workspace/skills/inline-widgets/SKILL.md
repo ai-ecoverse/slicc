@@ -14,6 +14,7 @@ Use ` ```shtml ` fenced code blocks to render interactive widgets inline in chat
 ## Pre-styled elements
 
 Inside inline shtml blocks, bare HTML form elements are pre-styled to match S2:
+
 - `<input type="range">` — 4px track, 18px accent-colored thumb
 - `<input type="text">`, `<textarea>` — S2 layer-2 background, accent focus ring
 - `<select>` — S2 styled with focus ring
@@ -27,17 +28,17 @@ No custom CSS needed for basic widgets. Just write bare HTML.
 
 Use these classes on chart elements, diagram nodes, or badges:
 
-| Class | Use for |
-|-------|---------|
+| Class       | Use for                 |
+| ----------- | ----------------------- |
 | `.c-purple` | Primary category, AI/ML |
-| `.c-teal` | Success, growth |
-| `.c-coral` | Secondary category |
-| `.c-pink` | Tertiary category |
-| `.c-gray` | Neutral, structural |
-| `.c-blue` | Informational |
-| `.c-amber` | Warning, in-progress |
-| `.c-red` | Error, critical |
-| `.c-green` | Success, complete |
+| `.c-teal`   | Success, growth         |
+| `.c-coral`  | Secondary category      |
+| `.c-pink`   | Tertiary category       |
+| `.c-gray`   | Neutral, structural     |
+| `.c-blue`   | Informational           |
+| `.c-amber`  | Warning, in-progress    |
+| `.c-red`    | Error, critical         |
+| `.c-green`  | Success, complete       |
 
 Use 2–3 colors per visualization, not 6+. Assign by meaning, not by sequence.
 
@@ -89,6 +90,7 @@ When showing multiple cards, each should be a separate `.sprinkle-action-card`. 
 ## The 10 patterns
 
 ### 1. Drag-on-canvas
+
 Drag control points on `<canvas>` — live computed output.
 
 ```shtml
@@ -110,6 +112,7 @@ Drag control points on `<canvas>` — live computed output.
 **Use for**: easing curves, color gradients, graph layouts, image crop, timeline scrubbing.
 
 ### 2. Animated step loop
+
 Async loop with speed slider — algorithm visualization.
 
 ```shtml
@@ -133,6 +136,7 @@ Async loop with speed slider — algorithm visualization.
 **Use for**: sorting algorithms, data pipeline steps, simulation, process walkthroughs.
 
 ### 3. Keystroke → live output
+
 `oninput` on text fields — instant transformation/matching.
 
 ```shtml
@@ -156,6 +160,7 @@ Async loop with speed slider — algorithm visualization.
 **Use for**: regex testers, format validation, search preview, JSON path, CSS selector testers.
 
 ### 4. Slider → DOM reflow
+
 Range slider drives visual output (rendered elements, not charts).
 
 ```shtml
@@ -181,6 +186,7 @@ Range slider drives visual output (rendered elements, not charts).
 **Use for**: design token explorers, spacing visualizers, animation timing, grid configurators.
 
 ### 5. Multi-slider → computed summary
+
 Multiple sliders feed a formula → metric cards.
 
 ```shtml
@@ -203,24 +209,31 @@ Multiple sliders feed a formula → metric cards.
 **Use for**: pricing calculators, ROI estimators, capacity models, compound growth.
 
 ### 6. Cascading sliders
+
 Each stage feeds the next — funnel visualization.
 
 **Use for**: sales funnels, user journey drop-off, referral chains, pipeline modeling.
 
 ### 7. Mode picker → visual palette
+
 Select + slider → generated set of visual elements (swatches, variants).
 
 **Use for**: color pickers, design token generators, layout variant pickers.
 
 ### 8. Any-field → all-fields sync
+
 Multiple inputs share a single source-of-truth value. Editing any field updates all others.
 
 Use an `updating` flag to prevent `oninput` re-entrancy:
+
 ```javascript
-let n = 255, updating = false;
+let n = 255,
+  updating = false;
 function setAll() {
-  if (updating) return; updating = true;
-  dec.value = n; hex.value = n.toString(16).toUpperCase();
+  if (updating) return;
+  updating = true;
+  dec.value = n;
+  hex.value = n.toString(16).toUpperCase();
   updating = false;
 }
 ```
@@ -228,11 +241,13 @@ function setAll() {
 **Use for**: unit converters (px/rem, kg/lb, °C/°F), base converters, encoding/decoding pairs.
 
 ### 9. Stacked bar + threshold
+
 N sliders → proportional stacked bar → over/under budget indicator.
 
 **Use for**: latency budgets, build timing, resource allocation, sprint capacity, page weight budgets.
 
 ### 10. Paste → structured tree
+
 Textarea input → parsed recursive DOM tree with collapse/expand.
 
 **Use for**: JSON explorers, config viewers, log parsers, schema inspectors, AST browsers.
@@ -241,15 +256,15 @@ Textarea input → parsed recursive DOM tree with collapse/expand.
 
 ```javascript
 // Explicit "send to agent" button
-slicc.lick({ action: 'use-config', config: getCurrentConfig() })
+slicc.lick({ action: 'use-config', config: getCurrentConfig() });
 
 // Lick on threshold crossing
 if (total > budget) {
-  slicc.lick({ action: 'over-budget', total, budget, breakdown })
+  slicc.lick({ action: 'over-budget', total, budget, breakdown });
 }
 
 // Lick on completion
-slicc.lick({ action: 'sort-complete', algorithm: algo, comparisons: n })
+slicc.lick({ action: 'sort-complete', algorithm: algo, comparisons: n });
 ```
 
 The agent receives the lick as a structured message and can respond with prose, another inline widget, or spawn a scoop.

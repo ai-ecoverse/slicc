@@ -32,15 +32,17 @@ function commandLineExecutableMatchesPattern(commandLine: string, pattern: strin
   // Only match when the target app path is the executable itself, not an argument —
   // this avoids false positives when the path appears as a CLI flag (e.g. --kill /App.app).
   const executable = commandLine.trimStart().split(/\s+/)[0] ?? '';
-  return executable === pattern
-    || executable.startsWith(pattern + '/')
-    || executable.startsWith(pattern + '\\');
+  return (
+    executable === pattern ||
+    executable.startsWith(pattern + '/') ||
+    executable.startsWith(pattern + '\\')
+  );
 }
 
 export function findMatchingElectronAppPids(
   runningProcesses: RunningProcessInfo[],
   processMatchPatterns: string[],
-  currentPid = process.pid,
+  currentPid = process.pid
 ): number[] {
   const matches = runningProcesses.filter((processInfo) => {
     // Skip Node.js tool-chain processes and shell wrappers — they may have the app path
@@ -49,16 +51,23 @@ export function findMatchingElectronAppPids(
     // Shell wrappers like `zsh -c ... /Applications/Slack.app --kill` or
     // `timeout 30 npm run dev:electron -- /Applications/Slack.app` also match.
     const cmdTrimmed = processInfo.commandLine.trimStart();
-    if (/^(\/\S*\/)?(node|npx|tsx|npm|open|bash|zsh|sh|csh|fish|dash|timeout|env|sudo|caffeinate)\b/i.test(cmdTrimmed)) return false;
+    if (
+      /^(\/\S*\/)?(node|npx|tsx|npm|open|bash|zsh|sh|csh|fish|dash|timeout|env|sudo|caffeinate)\b/i.test(
+        cmdTrimmed
+      )
+    )
+      return false;
 
     return processMatchPatterns.some((pattern) => {
-      return commandLineExecutableMatchesPattern(processInfo.commandLine, pattern)
-        || (processInfo.executablePath?.includes(pattern) ?? false);
+      return (
+        commandLineExecutableMatchesPattern(processInfo.commandLine, pattern) ||
+        (processInfo.executablePath?.includes(pattern) ?? false)
+      );
     });
   });
 
   return Array.from(
-    new Set(matches.map((processInfo) => processInfo.pid).filter((pid) => pid !== currentPid)),
+    new Set(matches.map((processInfo) => processInfo.pid).filter((pid) => pid !== currentPid))
   );
 }
 
@@ -109,7 +118,7 @@ function parseWindowsProcessList(stdout: string): RunningProcessInfo[] {
 }
 
 async function listRunningProcesses(
-  platform: NodeJS.Platform = process.platform,
+  platform: NodeJS.Platform = process.platform
 ): Promise<RunningProcessInfo[]> {
   if (platform === 'win32') {
     const { stdout } = await execFile('powershell', [
@@ -170,7 +179,7 @@ async function terminateRunningApp(pids: number[]): Promise<void> {
 
 async function findRunningElectronAppPids(
   appPath: string,
-  platform: NodeJS.Platform = process.platform,
+  platform: NodeJS.Platform = process.platform
 ): Promise<number[]> {
   const { processMatchPatterns } = buildElectronAppLaunchSpec(appPath, { cdpPort: 0, platform });
   const runningProcesses = await listRunningProcesses(platform);
@@ -194,16 +203,20 @@ export async function launchElectronApp(options: {
   }
   if (!existsSync(launchSpec.command)) {
     throw new Error(
-      `Electron executable not found at ${launchSpec.command}. Pass the app executable path directly if needed.`,
+      `Electron executable not found at ${launchSpec.command}. Pass the app executable path directly if needed.`
     );
   }
-  const runningPids = await findRunningElectronAppPids(launchSpec.resolvedAppPath, options.platform);
+  const runningPids = await findRunningElectronAppPids(
+    launchSpec.resolvedAppPath,
+    options.platform
+  );
   const platform = options.platform ?? process.platform;
-  const isMacAppBundle = platform === 'darwin' && launchSpec.resolvedAppPath.toLowerCase().endsWith('.app');
+  const isMacAppBundle =
+    platform === 'darwin' && launchSpec.resolvedAppPath.toLowerCase().endsWith('.app');
 
   if (runningPids.length > 0 && !options.kill) {
     throw new ElectronAppAlreadyRunningError(
-      `${launchSpec.displayName} is already running. Re-run with --kill to relaunch it with remote debugging enabled.`,
+      `${launchSpec.displayName} is already running. Re-run with --kill to relaunch it with remote debugging enabled.`
     );
   }
   if (runningPids.length > 0) {
@@ -238,7 +251,9 @@ async function loadElectronOverlayBundleSource(options: {
   if (options.dev) {
     const response = await fetch(buildElectronOverlayEntryUrl(serveOrigin));
     if (!response.ok) {
-      throw new Error(`Failed to fetch electron overlay entry: ${response.status} ${response.statusText}`);
+      throw new Error(
+        `Failed to fetch electron overlay entry: ${response.status} ${response.statusText}`
+      );
     }
     return await response.text();
   }
@@ -309,7 +324,9 @@ export class ElectronOverlayInjector {
 
       const targets = (await response.json()) as ElectronInspectableTarget[];
       const injectableTargets = targets.filter(shouldInjectElectronOverlayTarget);
-      const liveConnectionIds = new Set(injectableTargets.map((target) => target.webSocketDebuggerUrl!));
+      const liveConnectionIds = new Set(
+        injectableTargets.map((target) => target.webSocketDebuggerUrl!)
+      );
 
       for (const [targetId, connection] of this.connections.entries()) {
         if (liveConnectionIds.has(targetId)) continue;
@@ -474,7 +491,10 @@ export class ElectronOverlayInjector {
 
     ws.on('error', (error) => {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`[electron-float] Overlay target connection failed for ${target.url}:`, message);
+      console.error(
+        `[electron-float] Overlay target connection failed for ${target.url}:`,
+        message
+      );
       if (this.connections.get(targetId) === ws) {
         this.connections.delete(targetId);
       }

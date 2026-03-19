@@ -40,12 +40,7 @@ describe('TaskScheduler', () => {
   describe('Cron scheduling', () => {
     it('createTask with "* * * * *" (every minute) calculates nextRun within 60 seconds', async () => {
       const now = new Date();
-      const task = await scheduler.createTask(
-        'test-scoop',
-        'test prompt',
-        'cron',
-        '* * * * *',
-      );
+      const task = await scheduler.createTask('test-scoop', 'test prompt', 'cron', '* * * * *');
 
       expect(task.nextRun).toBeTruthy();
       const nextRun = new Date(task.nextRun!);
@@ -59,12 +54,7 @@ describe('TaskScheduler', () => {
     });
 
     it('createTask with "0 9 * * *" (daily at 9am) calculates nextRun at 09:00', async () => {
-      const task = await scheduler.createTask(
-        'test-scoop',
-        'test prompt',
-        'cron',
-        '0 9 * * *',
-      );
+      const task = await scheduler.createTask('test-scoop', 'test prompt', 'cron', '0 9 * * *');
 
       expect(task.nextRun).toBeTruthy();
       const nextRun = new Date(task.nextRun!);
@@ -76,12 +66,7 @@ describe('TaskScheduler', () => {
     });
 
     it('createTask with "*/5 * * * *" (every 5 minutes) has minute divisible by 5', async () => {
-      const task = await scheduler.createTask(
-        'test-scoop',
-        'test prompt',
-        'cron',
-        '*/5 * * * *',
-      );
+      const task = await scheduler.createTask('test-scoop', 'test prompt', 'cron', '*/5 * * * *');
 
       expect(task.nextRun).toBeTruthy();
       const nextRun = new Date(task.nextRun!);
@@ -91,12 +76,7 @@ describe('TaskScheduler', () => {
     });
 
     it('createTask with "0 0 15 * *" (15th day of month at midnight) has correct date and time', async () => {
-      const task = await scheduler.createTask(
-        'test-scoop',
-        'test prompt',
-        'cron',
-        '0 0 15 * *',
-      );
+      const task = await scheduler.createTask('test-scoop', 'test prompt', 'cron', '0 0 15 * *');
 
       expect(task.nextRun).toBeTruthy();
       const nextRun = new Date(task.nextRun!);
@@ -108,12 +88,7 @@ describe('TaskScheduler', () => {
     });
 
     it('createTask with "0 0 * * 1" (Mondays at midnight) has day of week = 1 (Monday)', async () => {
-      const task = await scheduler.createTask(
-        'test-scoop',
-        'test prompt',
-        'cron',
-        '0 0 * * 1',
-      );
+      const task = await scheduler.createTask('test-scoop', 'test prompt', 'cron', '0 0 * * 1');
 
       expect(task.nextRun).toBeTruthy();
       const nextRun = new Date(task.nextRun!);
@@ -125,12 +100,7 @@ describe('TaskScheduler', () => {
     });
 
     it('createTask with "0 12 * * 0" (Sundays at noon) has day of week = 0 (Sunday)', async () => {
-      const task = await scheduler.createTask(
-        'test-scoop',
-        'test prompt',
-        'cron',
-        '0 12 * * 0',
-      );
+      const task = await scheduler.createTask('test-scoop', 'test prompt', 'cron', '0 12 * * 0');
 
       expect(task.nextRun).toBeTruthy();
       const nextRun = new Date(task.nextRun!);
@@ -142,12 +112,7 @@ describe('TaskScheduler', () => {
     });
 
     it('createTask with "0 9,17 * * *" (9am and 5pm) has hour in list', async () => {
-      const task = await scheduler.createTask(
-        'test-scoop',
-        'test prompt',
-        'cron',
-        '0 9,17 * * *',
-      );
+      const task = await scheduler.createTask('test-scoop', 'test prompt', 'cron', '0 9,17 * * *');
 
       expect(task.nextRun).toBeTruthy();
       const nextRun = new Date(task.nextRun!);
@@ -158,12 +123,7 @@ describe('TaskScheduler', () => {
     });
 
     it('createTask with "0 9-17 * * *" (9am to 5pm) has hour in range', async () => {
-      const task = await scheduler.createTask(
-        'test-scoop',
-        'test prompt',
-        'cron',
-        '0 9-17 * * *',
-      );
+      const task = await scheduler.createTask('test-scoop', 'test prompt', 'cron', '0 9-17 * * *');
 
       expect(task.nextRun).toBeTruthy();
       const nextRun = new Date(task.nextRun!);
@@ -179,7 +139,7 @@ describe('TaskScheduler', () => {
         'test-scoop',
         'test prompt',
         'cron',
-        '* * * *', // Only 4 fields
+        '* * * *' // Only 4 fields
       );
 
       expect(task.nextRun).toBeNull();
@@ -195,7 +155,7 @@ describe('TaskScheduler', () => {
         'test-scoop',
         'test prompt',
         'interval',
-        String(intervalMs),
+        String(intervalMs)
       );
 
       expect(task.nextRun).toBeTruthy();
@@ -216,7 +176,7 @@ describe('TaskScheduler', () => {
         'test-scoop',
         'test prompt',
         'interval',
-        String(intervalMs),
+        String(intervalMs)
       );
 
       expect(task.nextRun).toBeTruthy();
@@ -234,30 +194,20 @@ describe('TaskScheduler', () => {
         'test-scoop',
         'test prompt',
         'interval',
-        'not-a-number',
+        'not-a-number'
       );
 
       expect(task.nextRun).toBeNull();
     });
 
     it('createTask with invalid interval (negative) returns null nextRun', async () => {
-      const task = await scheduler.createTask(
-        'test-scoop',
-        'test prompt',
-        'interval',
-        '-1000',
-      );
+      const task = await scheduler.createTask('test-scoop', 'test prompt', 'interval', '-1000');
 
       expect(task.nextRun).toBeNull();
     });
 
     it('createTask with interval 0 returns null nextRun', async () => {
-      const task = await scheduler.createTask(
-        'test-scoop',
-        'test prompt',
-        'interval',
-        '0',
-      );
+      const task = await scheduler.createTask('test-scoop', 'test prompt', 'interval', '0');
 
       expect(task.nextRun).toBeNull();
     });
@@ -269,12 +219,7 @@ describe('TaskScheduler', () => {
       future.setHours(future.getHours() + 1);
       const futureISO = future.toISOString();
 
-      const task = await scheduler.createTask(
-        'test-scoop',
-        'test prompt',
-        'once',
-        futureISO,
-      );
+      const task = await scheduler.createTask('test-scoop', 'test prompt', 'once', futureISO);
 
       expect(task.nextRun).toBe(futureISO);
     });
@@ -284,12 +229,7 @@ describe('TaskScheduler', () => {
       past.setHours(past.getHours() - 1);
       const pastISO = past.toISOString();
 
-      const task = await scheduler.createTask(
-        'test-scoop',
-        'test prompt',
-        'once',
-        pastISO,
-      );
+      const task = await scheduler.createTask('test-scoop', 'test prompt', 'once', pastISO);
 
       expect(task.nextRun).toBeNull();
     });
@@ -297,12 +237,7 @@ describe('TaskScheduler', () => {
     it('createTask with once schedule now (current time) returns null nextRun', async () => {
       const now = new Date().toISOString();
 
-      const task = await scheduler.createTask(
-        'test-scoop',
-        'test prompt',
-        'once',
-        now,
-      );
+      const task = await scheduler.createTask('test-scoop', 'test prompt', 'once', now);
 
       // Should be null because it's not strictly in the future
       expect(task.nextRun).toBeNull();
@@ -311,12 +246,7 @@ describe('TaskScheduler', () => {
 
   describe('Task status operations', () => {
     it('pauseTask sets status to "paused"', async () => {
-      const task = await scheduler.createTask(
-        'test-scoop',
-        'test prompt',
-        'interval',
-        '60000',
-      );
+      const task = await scheduler.createTask('test-scoop', 'test prompt', 'interval', '60000');
 
       const paused = await scheduler.pauseTask(task.id);
       expect(paused).toBe(true);
@@ -326,12 +256,7 @@ describe('TaskScheduler', () => {
     });
 
     it('resumeTask sets status to "active"', async () => {
-      const task = await scheduler.createTask(
-        'test-scoop',
-        'test prompt',
-        'interval',
-        '60000',
-      );
+      const task = await scheduler.createTask('test-scoop', 'test prompt', 'interval', '60000');
 
       await scheduler.pauseTask(task.id);
       const resumed = await scheduler.resumeTask(task.id);
@@ -352,12 +277,7 @@ describe('TaskScheduler', () => {
     });
 
     it('deleteTask removes the task from database', async () => {
-      const task = await scheduler.createTask(
-        'test-scoop',
-        'test prompt',
-        'interval',
-        '60000',
-      );
+      const task = await scheduler.createTask('test-scoop', 'test prompt', 'interval', '60000');
 
       const deleted = await scheduler.deleteTask(task.id);
       expect(deleted).toBe(true);
@@ -374,12 +294,7 @@ describe('TaskScheduler', () => {
 
   describe('Task persistence', () => {
     it('createTask saves task to database and retrieves it', async () => {
-      const task = await scheduler.createTask(
-        'test-scoop',
-        'test prompt',
-        'interval',
-        '120000',
-      );
+      const task = await scheduler.createTask('test-scoop', 'test prompt', 'interval', '120000');
 
       const retrieved = await db.getTask(task.id);
 
@@ -394,12 +309,7 @@ describe('TaskScheduler', () => {
     });
 
     it('updateTask modifies task and recalculates nextRun when schedule changes', async () => {
-      const task = await scheduler.createTask(
-        'test-scoop',
-        'test prompt',
-        'interval',
-        '60000',
-      );
+      const task = await scheduler.createTask('test-scoop', 'test prompt', 'interval', '60000');
 
       const originalNextRun = task.nextRun;
 
@@ -417,19 +327,9 @@ describe('TaskScheduler', () => {
     });
 
     it('getTasksByScoop returns only tasks for specified scoop', async () => {
-      const task1 = await scheduler.createTask(
-        'scoop-a',
-        'prompt 1',
-        'interval',
-        '60000',
-      );
+      const task1 = await scheduler.createTask('scoop-a', 'prompt 1', 'interval', '60000');
 
-      const task2 = await scheduler.createTask(
-        'scoop-b',
-        'prompt 2',
-        'interval',
-        '60000',
-      );
+      const task2 = await scheduler.createTask('scoop-b', 'prompt 2', 'interval', '60000');
 
       const tasksA = await scheduler.getTasksByScoop('scoop-a');
       const tasksB = await scheduler.getTasksByScoop('scoop-b');
@@ -442,19 +342,9 @@ describe('TaskScheduler', () => {
     });
 
     it('getAllTasks returns all tasks', async () => {
-      const task1 = await scheduler.createTask(
-        'scoop-1',
-        'prompt 1',
-        'interval',
-        '60000',
-      );
+      const task1 = await scheduler.createTask('scoop-1', 'prompt 1', 'interval', '60000');
 
-      const task2 = await scheduler.createTask(
-        'scoop-2',
-        'prompt 2',
-        'cron',
-        '0 9 * * *',
-      );
+      const task2 = await scheduler.createTask('scoop-2', 'prompt 2', 'cron', '0 9 * * *');
 
       const allTasks = await scheduler.getAllTasks();
 
@@ -466,19 +356,9 @@ describe('TaskScheduler', () => {
 
   describe('Task properties', () => {
     it('createTask generates unique task ID', async () => {
-      const task1 = await scheduler.createTask(
-        'test-scoop',
-        'prompt 1',
-        'interval',
-        '60000',
-      );
+      const task1 = await scheduler.createTask('test-scoop', 'prompt 1', 'interval', '60000');
 
-      const task2 = await scheduler.createTask(
-        'test-scoop',
-        'prompt 2',
-        'interval',
-        '60000',
-      );
+      const task2 = await scheduler.createTask('test-scoop', 'prompt 2', 'interval', '60000');
 
       expect(task1.id).not.toBe(task2.id);
       expect(task1.id).toMatch(/^task-/);
@@ -486,24 +366,14 @@ describe('TaskScheduler', () => {
     });
 
     it('createTask sets initial status to "active"', async () => {
-      const task = await scheduler.createTask(
-        'test-scoop',
-        'test prompt',
-        'interval',
-        '60000',
-      );
+      const task = await scheduler.createTask('test-scoop', 'test prompt', 'interval', '60000');
 
       expect(task.status).toBe('active');
     });
 
     it('createTask sets createdAt to current timestamp', async () => {
       const before = new Date();
-      const task = await scheduler.createTask(
-        'test-scoop',
-        'test prompt',
-        'interval',
-        '60000',
-      );
+      const task = await scheduler.createTask('test-scoop', 'test prompt', 'interval', '60000');
       const after = new Date();
 
       const createdAt = new Date(task.createdAt);
@@ -512,12 +382,7 @@ describe('TaskScheduler', () => {
     });
 
     it('createTask sets lastRun to null', async () => {
-      const task = await scheduler.createTask(
-        'test-scoop',
-        'test prompt',
-        'interval',
-        '60000',
-      );
+      const task = await scheduler.createTask('test-scoop', 'test prompt', 'interval', '60000');
 
       expect(task.lastRun).toBeNull();
     });

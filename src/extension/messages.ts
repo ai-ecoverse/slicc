@@ -272,7 +272,11 @@ export interface TraySocketClosedMsg {
 }
 
 export type TraySocketCommandMessage = TraySocketOpenMsg | TraySocketSendMsg | TraySocketCloseMsg;
-export type TraySocketEventMessage = TraySocketOpenedMsg | TraySocketMessageMsg | TraySocketErrorMsg | TraySocketClosedMsg;
+export type TraySocketEventMessage =
+  | TraySocketOpenedMsg
+  | TraySocketMessageMsg
+  | TraySocketErrorMsg
+  | TraySocketClosedMsg;
 
 // ---------------------------------------------------------------------------
 // Envelope — all messages are wrapped with a source tag for routing

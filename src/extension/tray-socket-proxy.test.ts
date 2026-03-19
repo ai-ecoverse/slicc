@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const messageListeners: Array<(message: unknown, sender: unknown, sendResponse: (r?: unknown) => void) => void> = [];
+const messageListeners: Array<
+  (message: unknown, sender: unknown, sendResponse: (r?: unknown) => void) => void
+> = [];
 const sentMessages: unknown[] = [];
 
 const mockChrome = {
@@ -29,11 +31,13 @@ const { ServiceWorkerLeaderTraySocket } = await import('./tray-socket-proxy.js')
 
 function getOpenedSocketId(): number {
   const openMessage = sentMessages.find((message) => {
-    return typeof message === 'object'
-      && message !== null
-      && 'payload' in message
-      && typeof (message as { payload?: { type?: string } }).payload?.type === 'string'
-      && (message as { payload: { type: string } }).payload.type === 'tray-socket-open';
+    return (
+      typeof message === 'object' &&
+      message !== null &&
+      'payload' in message &&
+      typeof (message as { payload?: { type?: string } }).payload?.type === 'string' &&
+      (message as { payload: { type: string } }).payload.type === 'tray-socket-open'
+    );
   }) as { payload: { id: number } } | undefined;
 
   expect(openMessage).toBeDefined();
@@ -67,8 +71,19 @@ describe('ServiceWorkerLeaderTraySocket', () => {
     });
 
     for (const listener of messageListeners) {
-      listener({ source: 'service-worker', payload: { type: 'tray-socket-opened', id } }, {}, () => {});
-      listener({ source: 'service-worker', payload: { type: 'tray-socket-message', id, data: '{"type":"leader.connected"}' } }, {}, () => {});
+      listener(
+        { source: 'service-worker', payload: { type: 'tray-socket-opened', id } },
+        {},
+        () => {}
+      );
+      listener(
+        {
+          source: 'service-worker',
+          payload: { type: 'tray-socket-message', id, data: '{"type":"leader.connected"}' },
+        },
+        {},
+        () => {}
+      );
     }
 
     expect(opened).toHaveBeenCalledOnce();
@@ -98,7 +113,11 @@ describe('ServiceWorkerLeaderTraySocket', () => {
     expect(mockChrome.runtime.onMessage.removeListener).not.toHaveBeenCalled();
 
     for (const listener of messageListeners) {
-      listener({ source: 'service-worker', payload: { type: 'tray-socket-closed', id } }, {}, () => {});
+      listener(
+        { source: 'service-worker', payload: { type: 'tray-socket-closed', id } },
+        {},
+        () => {}
+      );
     }
 
     expect(closed).toHaveBeenCalledOnce();
@@ -113,9 +132,27 @@ describe('ServiceWorkerLeaderTraySocket', () => {
     const id = getOpenedSocketId();
 
     for (const listener of messageListeners) {
-      listener({ source: 'panel', payload: { type: 'tray-socket-error', id, error: 'wrong-source' } }, {}, () => {});
-      listener({ source: 'service-worker', payload: { type: 'tray-socket-error', id: 999, error: 'wrong-id' } }, {}, () => {});
-      listener({ source: 'service-worker', payload: { type: 'tray-socket-error', id, error: 'socket failed' } }, {}, () => {});
+      listener(
+        { source: 'panel', payload: { type: 'tray-socket-error', id, error: 'wrong-source' } },
+        {},
+        () => {}
+      );
+      listener(
+        {
+          source: 'service-worker',
+          payload: { type: 'tray-socket-error', id: 999, error: 'wrong-id' },
+        },
+        {},
+        () => {}
+      );
+      listener(
+        {
+          source: 'service-worker',
+          payload: { type: 'tray-socket-error', id, error: 'socket failed' },
+        },
+        {},
+        () => {}
+      );
     }
 
     expect(onError).toHaveBeenCalledOnce();

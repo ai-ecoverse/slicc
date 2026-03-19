@@ -139,8 +139,8 @@ export function createConvertCommand(name: string = 'convert'): Command {
               if (resizeMatch) {
                 // Percentage resize
                 const percent = parseInt(resizeMatch[1], 10);
-                const newWidth = Math.round(image.width * percent / 100);
-                const newHeight = Math.round(image.height * percent / 100);
+                const newWidth = Math.round((image.width * percent) / 100);
+                const newHeight = Math.round((image.height * percent) / 100);
                 image.resize(newWidth, newHeight);
               } else {
                 // WxH or WxH! format

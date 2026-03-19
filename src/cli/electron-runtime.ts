@@ -117,13 +117,13 @@ export function getElectronAppDisplayName(appPath: string): string {
 
 export function resolveElectronAppExecutablePath(
   appPath: string,
-  platform: NodeJS.Platform = process.platform,
+  platform: NodeJS.Platform = process.platform
 ): string {
   const resolvedAppPath = resolve(appPath);
 
   if (platform === 'darwin' && resolvedAppPath.toLowerCase().endsWith('.app')) {
     const macOSDir = join(resolvedAppPath, 'Contents', 'MacOS');
-    
+
     // First try the expected name (app name without .app)
     const expectedName = getElectronAppDisplayName(resolvedAppPath);
     const expectedPath = join(macOSDir, expectedName);
@@ -135,7 +135,7 @@ export function resolveElectronAppExecutablePath(
     } catch {
       // Expected path doesn't exist, scan the directory
     }
-    
+
     // Scan MacOS directory for executable files
     // Many Electron apps use "Electron" as the executable name
     try {
@@ -155,7 +155,7 @@ export function resolveElectronAppExecutablePath(
     } catch {
       // Can't read directory, fall back to expected path
     }
-    
+
     // Fall back to expected path even if it doesn't exist
     // (error will be caught later)
     return expectedPath;
@@ -166,13 +166,10 @@ export function resolveElectronAppExecutablePath(
 
 export function buildElectronAppProcessMatchPatterns(
   appPath: string,
-  platform: NodeJS.Platform = process.platform,
+  platform: NodeJS.Platform = process.platform
 ): string[] {
   return Array.from(
-    new Set([
-      resolve(appPath),
-      resolveElectronAppExecutablePath(appPath, platform),
-    ]),
+    new Set([resolve(appPath), resolveElectronAppExecutablePath(appPath, platform)])
   );
 }
 
@@ -181,7 +178,7 @@ export function buildElectronAppLaunchSpec(
   options: {
     cdpPort: number;
     platform?: NodeJS.Platform;
-  },
+  }
 ): ElectronAppLaunchSpec {
   const platform = options.platform ?? process.platform;
   const resolvedAppPath = resolve(appPath);
@@ -205,7 +202,7 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
 
 export function parseElectronFloatFlags(
   argv: string[],
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = process.env
 ): ElectronFloatFlags {
   let dev = false;
   let cdpPort = DEFAULT_ELECTRON_CDP_PORT;
@@ -245,7 +242,7 @@ export function buildElectronServerSpawnConfig(
     cdpPort: number;
     platform?: NodeJS.Platform;
     nodePath?: string;
-  },
+  }
 ): ElectronServerSpawnConfig {
   if (options.dev) {
     return {
@@ -256,7 +253,11 @@ export function buildElectronServerSpawnConfig(
 
   return {
     command: options.nodePath ?? process.env['npm_node_execpath'] ?? 'node',
-    args: [resolve(projectRoot, 'dist/cli/index.js'), '--serve-only', `--cdp-port=${options.cdpPort}`],
+    args: [
+      resolve(projectRoot, 'dist/cli/index.js'),
+      '--serve-only',
+      `--cdp-port=${options.cdpPort}`,
+    ],
   };
 }
 
@@ -266,7 +267,7 @@ export function getElectronServeOrigin(servePort: number): string {
 
 export function buildElectronOverlayAppUrl(
   serveOrigin: string,
-  activeTab = DEFAULT_ELECTRON_OVERLAY_TAB,
+  activeTab = DEFAULT_ELECTRON_OVERLAY_TAB
 ): string {
   const url = new URL(ELECTRON_OVERLAY_APP_PATH, serveOrigin);
   if (activeTab && activeTab !== DEFAULT_ELECTRON_OVERLAY_TAB) {

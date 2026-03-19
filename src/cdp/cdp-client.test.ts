@@ -54,7 +54,8 @@ const originalWebSocket = globalThis.WebSocket;
 
 beforeEach(() => {
   MockWebSocket.instances = [];
-  (globalThis as unknown as Record<string, unknown>).WebSocket = MockWebSocket as unknown as typeof WebSocket;
+  (globalThis as unknown as Record<string, unknown>).WebSocket =
+    MockWebSocket as unknown as typeof WebSocket;
 });
 
 afterEach(() => {
@@ -118,9 +119,9 @@ describe('CDPClient', () => {
       MockWebSocket.instances[0].simulateOpen();
       await p;
 
-      await expect(
-        client.connect({ url: 'ws://localhost:5710/cdp' }),
-      ).rejects.toThrow('Cannot connect');
+      await expect(client.connect({ url: 'ws://localhost:5710/cdp' })).rejects.toThrow(
+        'Cannot connect'
+      );
     });
   });
 

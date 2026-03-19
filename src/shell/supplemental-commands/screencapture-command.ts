@@ -63,7 +63,10 @@ async function captureScreen(mimeType: string, quality: number): Promise<Blob> {
 
     await new Promise<void>((resolve, reject) => {
       video.onloadedmetadata = () => {
-        video.play().then(() => resolve()).catch(reject);
+        video
+          .play()
+          .then(() => resolve())
+          .catch(reject);
       };
       video.onerror = () => reject(new Error('Failed to load video stream'));
     });
@@ -95,7 +98,7 @@ async function captureScreen(mimeType: string, quality: number): Promise<Blob> {
           }
         },
         mimeType,
-        quality,
+        quality
       );
     });
   } finally {
@@ -109,7 +112,11 @@ export function createScreencaptureCommand(): Command {
       return screencaptureHelp();
     }
 
-    if (typeof window === 'undefined' || typeof navigator === 'undefined' || typeof document === 'undefined') {
+    if (
+      typeof window === 'undefined' ||
+      typeof navigator === 'undefined' ||
+      typeof document === 'undefined'
+    ) {
       return {
         stdout: '',
         stderr: 'screencapture: browser APIs are unavailable in this environment\n',
@@ -129,9 +136,10 @@ export function createScreencaptureCommand(): Command {
     const view = args.includes('--view') || args.includes('-v');
     const knownFlags = ['--clipboard', '-c', '--view', '-v', '--help', '-h'];
     const dashDashIndex = args.indexOf('--');
-    const filteredArgs = dashDashIndex >= 0
-      ? args.slice(dashDashIndex + 1)
-      : args.filter((a) => !knownFlags.includes(a));
+    const filteredArgs =
+      dashDashIndex >= 0
+        ? args.slice(dashDashIndex + 1)
+        : args.filter((a) => !knownFlags.includes(a));
     const outputFile = filteredArgs[0];
 
     if (!toClipboard && !outputFile) {
@@ -202,9 +210,7 @@ export function createScreencaptureCommand(): Command {
           });
         }
 
-        await navigator.clipboard.write([
-          new ClipboardItem({ 'image/png': pngBlob }),
-        ]);
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
 
         const sizeKB = Math.round(pngBlob.size / 1024);
         return {

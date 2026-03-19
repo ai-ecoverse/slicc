@@ -14,11 +14,11 @@
 
 ## File Structure
 
-| File | Action | Responsibility |
-|------|--------|----------------|
-| `src/defaults/shared/migrate-config.json` | Create | Default workspace config with `adobe/aem-boilerplate` repo and `currentMigration: null` |
-| `src/defaults/shared/sprinkles/migrate-page/migrate-page.shtml` | Create | Sprinkle UI: 4 states (ready, migrating, done, error), bridge API integration, state recovery |
-| `src/defaults/workspace/skills/migrate-page/SKILL.md` | Modify | Add "Sprinkle Trigger" section (carve-out + lick handling) and `sprinkle send` / config-write commands at each phase transition |
+| File                                                            | Action | Responsibility                                                                                                                  |
+| --------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `src/defaults/shared/migrate-config.json`                       | Create | Default workspace config with `adobe/aem-boilerplate` repo and `currentMigration: null`                                         |
+| `src/defaults/shared/sprinkles/migrate-page/migrate-page.shtml` | Create | Sprinkle UI: 4 states (ready, migrating, done, error), bridge API integration, state recovery                                   |
+| `src/defaults/workspace/skills/migrate-page/SKILL.md`           | Modify | Add "Sprinkle Trigger" section (carve-out + lick handling) and `sprinkle send` / config-write commands at each phase transition |
 
 No TypeScript source changes needed. The `import.meta.glob('/src/defaults/**/*')` in `src/scoops/skills.ts` auto-discovers all files under `src/defaults/`.
 
@@ -29,6 +29,7 @@ No TypeScript source changes needed. The `import.meta.glob('/src/defaults/**/*')
 ### Task 1: Create workspace config
 
 **Files:**
+
 - Create: `src/defaults/shared/migrate-config.json`
 
 - [ ] **Step 1: Create the config file**
@@ -57,9 +58,11 @@ git commit -m "feat(migrate): add default workspace config"
 ### Task 2: Create the migrate-page sprinkle
 
 **Files:**
+
 - Create: `src/defaults/shared/sprinkles/migrate-page/migrate-page.shtml`
 
 **Reference:**
+
 - Existing sprinkle: `src/defaults/shared/sprinkles/welcome/welcome.shtml`
 - Bridge API: `slicc.lick()`, `slicc.readFile()`, `slicc.on('update')`, `slicc.getState()`, `slicc.setState()`, `slicc.close()`
 - Component classes: `.sprinkle-stack`, `.sprinkle-card`, `.sprinkle-btn`, `.sprinkle-btn--primary`, `.sprinkle-progress-bar`, `.sprinkle-status-light`, `.sprinkle-badge`, `.sprinkle-heading`, `.sprinkle-body`, `.sprinkle-detail`, `.sprinkle-row`, `.sprinkle-btn-group`
@@ -70,15 +73,22 @@ git commit -m "feat(migrate): add default workspace config"
 The sprinkle has one root `<div>` with `data-sprinkle-title="Migrate Page"`. Four state containers, shown/hidden via JavaScript. The structure:
 
 ```html
-<div data-sprinkle-title="Migrate Page" class="sprinkle-stack" style="padding: 16px; max-width: 480px; margin: 0 auto;">
-
+<div
+  data-sprinkle-title="Migrate Page"
+  class="sprinkle-stack"
+  style="padding: 16px; max-width: 480px; margin: 0 auto;"
+>
   <!-- Ready state -->
   <div id="state-ready">
     <div class="sprinkle-row" style="align-items: center; gap: 8px; margin-bottom: 12px;">
       <span class="sprinkle-status-light sprinkle-status-light--positive"></span>
       <span class="sprinkle-detail" id="repo-label">loading...</span>
     </div>
-    <button class="sprinkle-btn sprinkle-btn--primary" style="width: 100%;" onclick="handleMigrate()">
+    <button
+      class="sprinkle-btn sprinkle-btn--primary"
+      style="width: 100%;"
+      onclick="handleMigrate()"
+    >
       Migrate This Page
     </button>
     <div class="sprinkle-detail" style="text-align: center; margin-top: 8px;">
@@ -88,11 +98,20 @@ The sprinkle has one root `<div>` with `data-sprinkle-title="Migrate Page"`. Fou
 
   <!-- No config state -->
   <div id="state-no-config" style="display: none;">
-    <div class="sprinkle-card" style="border-color: var(--s2-color-warning, #e68a00); margin-bottom: 12px;">
-      <div class="sprinkle-body" style="color: var(--s2-color-warning, #e68a00);">No repo configured</div>
+    <div
+      class="sprinkle-card"
+      style="border-color: var(--s2-color-warning, #e68a00); margin-bottom: 12px;"
+    >
+      <div class="sprinkle-body" style="color: var(--s2-color-warning, #e68a00);">
+        No repo configured
+      </div>
       <div class="sprinkle-detail">Click below — the agent will ask in chat</div>
     </div>
-    <button class="sprinkle-btn sprinkle-btn--primary" style="width: 100%;" onclick="handleMigrate()">
+    <button
+      class="sprinkle-btn sprinkle-btn--primary"
+      style="width: 100%;"
+      onclick="handleMigrate()"
+    >
       Migrate This Page
     </button>
   </div>
@@ -101,7 +120,9 @@ The sprinkle has one root `<div>` with `data-sprinkle-title="Migrate Page"`. Fou
   <div id="state-migrating" style="display: none;">
     <div class="sprinkle-row" style="justify-content: space-between; margin-bottom: 12px;">
       <span class="sprinkle-detail" id="migrating-url">...</span>
-      <span class="sprinkle-badge sprinkle-badge--informative" id="migrating-phase-badge">Phase 1/4</span>
+      <span class="sprinkle-badge sprinkle-badge--informative" id="migrating-phase-badge"
+        >Phase 1/4</span
+      >
     </div>
 
     <div class="sprinkle-stack" style="gap: 10px;" id="phase-list">
@@ -115,19 +136,33 @@ The sprinkle has one root `<div>` with `data-sprinkle-title="Migrate Page"`. Fou
 
   <!-- Done state -->
   <div id="state-done" style="display: none; text-align: center;">
-    <div class="sprinkle-heading" style="color: var(--s2-color-positive, #4ade80);">Migration Complete</div>
+    <div class="sprinkle-heading" style="color: var(--s2-color-positive, #4ade80);">
+      Migration Complete
+    </div>
     <div class="sprinkle-detail" id="done-url" style="margin-top: 4px;">...</div>
     <div class="sprinkle-btn-group" style="justify-content: center; margin-top: 16px;">
-      <button class="sprinkle-btn sprinkle-btn--primary" id="preview-btn" onclick="handlePreview()">Preview</button>
-      <button class="sprinkle-btn sprinkle-btn--secondary" onclick="handleReset()">New Migration</button>
+      <button class="sprinkle-btn sprinkle-btn--primary" id="preview-btn" onclick="handlePreview()">
+        Preview
+      </button>
+      <button class="sprinkle-btn sprinkle-btn--secondary" onclick="handleReset()">
+        New Migration
+      </button>
     </div>
   </div>
 
   <!-- Error state -->
   <div id="state-error" style="display: none; text-align: center;">
-    <div class="sprinkle-heading" style="color: var(--s2-color-negative, #f87171);">Migration Failed</div>
+    <div class="sprinkle-heading" style="color: var(--s2-color-negative, #f87171);">
+      Migration Failed
+    </div>
     <div class="sprinkle-detail" id="error-message" style="margin-top: 4px;">...</div>
-    <button class="sprinkle-btn sprinkle-btn--secondary" style="margin-top: 16px;" onclick="handleReset()">Try Again</button>
+    <button
+      class="sprinkle-btn sprinkle-btn--secondary"
+      style="margin-top: 16px;"
+      onclick="handleReset()"
+    >
+      Try Again
+    </button>
   </div>
 </div>
 ```
@@ -140,7 +175,12 @@ Appended as a `<script>` block after the HTML. Handles state transitions, bridge
 <script>
   // --- State management ---
   var PHASES = ['extraction', 'decomposition', 'blocks', 'assembly'];
-  var PHASE_LABELS = { extraction: 'Extraction', decomposition: 'Decomposition', blocks: 'Generating Blocks', assembly: 'Assembly' };
+  var PHASE_LABELS = {
+    extraction: 'Extraction',
+    decomposition: 'Decomposition',
+    blocks: 'Generating Blocks',
+    assembly: 'Assembly',
+  };
   var PHASE_PROGRESS = { extraction: 25, decomposition: 50, blocks: 75, assembly: 90 };
   var currentState = 'ready';
   var previewUrl = '';
@@ -162,18 +202,38 @@ Appended as a `<script>` block after the HTML. Handles state transitions, bridge
     for (var i = 0; i < PHASES.length; i++) {
       var phase = PHASES[i];
       var label = PHASE_LABELS[phase];
-      var icon, color, sub = '';
+      var icon,
+        color,
+        sub = '';
       if (i < currentIdx || (i === currentIdx && status === 'done')) {
-        icon = '&#10003;'; color = 'var(--s2-color-positive, #4ade80)';
+        icon = '&#10003;';
+        color = 'var(--s2-color-positive, #4ade80)';
       } else if (i === currentIdx && status === 'running') {
-        icon = '&#9672;'; color = 'var(--s2-color-informative, #60a5fa)';
-        if (detail) sub = '<div class="sprinkle-detail" style="color: var(--s2-color-informative, #60a5fa);">' + detail + '</div>';
+        icon = '&#9672;';
+        color = 'var(--s2-color-informative, #60a5fa)';
+        if (detail)
+          sub =
+            '<div class="sprinkle-detail" style="color: var(--s2-color-informative, #60a5fa);">' +
+            detail +
+            '</div>';
       } else {
-        icon = '&#9675;'; color = 'var(--s2-color-gray-500, #555)';
+        icon = '&#9675;';
+        color = 'var(--s2-color-gray-500, #555)';
       }
-      html += '<div class="sprinkle-row" style="align-items: flex-start; gap: 10px;">'
-        + '<span style="color:' + color + '; font-size: 14px; line-height: 1.4;">' + icon + '</span>'
-        + '<div><div style="font-size: 13px; color:' + color + ';">' + label + '</div>' + sub + '</div></div>';
+      html +=
+        '<div class="sprinkle-row" style="align-items: flex-start; gap: 10px;">' +
+        '<span style="color:' +
+        color +
+        '; font-size: 14px; line-height: 1.4;">' +
+        icon +
+        '</span>' +
+        '<div><div style="font-size: 13px; color:' +
+        color +
+        ';">' +
+        label +
+        '</div>' +
+        sub +
+        '</div></div>';
     }
     list.innerHTML = html;
 
@@ -241,29 +301,32 @@ Appended as a `<script>` block after the HTML. Handles state transitions, bridge
 
   // --- Config loading ---
   function loadConfig() {
-    slicc.readFile('/shared/migrate-config.json').then(function(content) {
-      try {
-        var config = JSON.parse(content);
-        var label = document.getElementById('repo-label');
-        if (label) label.textContent = config.repo || 'no repo set';
+    slicc
+      .readFile('/shared/migrate-config.json')
+      .then(function (content) {
+        try {
+          var config = JSON.parse(content);
+          var label = document.getElementById('repo-label');
+          if (label) label.textContent = config.repo || 'no repo set';
 
-        // Check for in-progress migration (recovery)
-        if (config.currentMigration && config.currentMigration.phase) {
-          handleUpdate(config.currentMigration);
-          return;
-        }
+          // Check for in-progress migration (recovery)
+          if (config.currentMigration && config.currentMigration.phase) {
+            handleUpdate(config.currentMigration);
+            return;
+          }
 
-        if (!config.repo) {
+          if (!config.repo) {
+            showState('no-config');
+          } else {
+            showState('ready');
+          }
+        } catch (e) {
           showState('no-config');
-        } else {
-          showState('ready');
         }
-      } catch (e) {
+      })
+      .catch(function () {
         showState('no-config');
-      }
-    }).catch(function() {
-      showState('no-config');
-    });
+      });
   }
 
   // --- Init ---
@@ -303,13 +366,14 @@ git commit -m "feat(migrate): add migrate-page sprinkle with 4-state UI"
 ### Task 3: Add Sprinkle Trigger section to SKILL.md
 
 **Files:**
+
 - Modify: `src/defaults/workspace/skills/migrate-page/SKILL.md` (insert after line 23, before "## Four Phases")
 
 - [ ] **Step 1: Add the Sprinkle Trigger section**
 
 Insert after the "Triggers" section (line 23) and before "## Four Phases" (line 25):
 
-```markdown
+````markdown
 ## Sprinkle Trigger
 
 **EXCEPTION TO RULES 2 AND 5:** When this skill is triggered via a sprinkle
@@ -326,6 +390,8 @@ When you receive a lick from the `migrate-page` sprinkle:
    ```bash
    sprinkle send migrate-page '{"phase":"error","message":"No page to migrate — navigate to a webpage first"}'
    ```
+````
+
 2. Read the workspace config:
    ```bash
    read_file /shared/migrate-config.json
@@ -356,18 +422,18 @@ write_file /shared/migrate-config.json
 
 **Phase transition points** (add these commands at each point):
 
-| When | phase | status | detail |
-|------|-------|--------|--------|
-| Phase 1 starts | `extraction` | `running` | — |
-| Phase 1 complete | `extraction` | `done` | — |
-| Phase 2 starts | `decomposition` | `running` | — |
-| Phase 2 complete | `decomposition` | `done` | `{N} blocks identified` |
-| Phase 3 starts | `blocks` | `running` | block names |
-| Phase 3 scoop completes | `blocks` | `running` | `name1, name2 ({done}/{total})` |
-| Phase 3 complete | `blocks` | `done` | — |
-| Phase 4 starts | `assembly` | `running` | — |
-| Phase 4 complete (success) | `done` | — | set `url` and `previewUrl` |
-| Any phase fails | `error` | — | set `message` |
+| When                       | phase           | status    | detail                          |
+| -------------------------- | --------------- | --------- | ------------------------------- |
+| Phase 1 starts             | `extraction`    | `running` | —                               |
+| Phase 1 complete           | `extraction`    | `done`    | —                               |
+| Phase 2 starts             | `decomposition` | `running` | —                               |
+| Phase 2 complete           | `decomposition` | `done`    | `{N} blocks identified`         |
+| Phase 3 starts             | `blocks`        | `running` | block names                     |
+| Phase 3 scoop completes    | `blocks`        | `running` | `name1, name2 ({done}/{total})` |
+| Phase 3 complete           | `blocks`        | `done`    | —                               |
+| Phase 4 starts             | `assembly`      | `running` | —                               |
+| Phase 4 complete (success) | `done`          | —         | set `url` and `previewUrl`      |
+| Any phase fails            | `error`         | —         | set `message`                   |
 
 On completion, clear `currentMigration`:
 
@@ -379,7 +445,8 @@ sprinkle send migrate-page '{"phase":"done","url":"SOURCE_URL","previewUrl":"PRE
 write_file /shared/migrate-config.json
 {"repo":"REPO","currentMigration":null}
 ```
-```
+
+````
 
 - [ ] **Step 2: Verify SKILL.md is well-formed**
 
@@ -391,7 +458,7 @@ Expected: Frontmatter intact, "Sprinkle Trigger" section appears between "Trigge
 ```bash
 git add src/defaults/workspace/skills/migrate-page/SKILL.md
 git commit -m "feat(migrate): add sprinkle trigger and progress reporting to SKILL.md"
-```
+````
 
 ---
 
@@ -420,6 +487,7 @@ Expected: Build succeeds.
 - [ ] **Step 5: Manual verification (extension mode)**
 
 Load the built extension from `dist/extension/` in Chrome:
+
 1. Open `chrome://extensions` → Load unpacked → select `dist/extension/`
 2. Open the side panel
 3. Click [+] in the sprinkle picker → "Migrate Page" should appear

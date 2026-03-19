@@ -23,19 +23,34 @@ function shouldIncludeBuiltIn(providerId: string, buildConfig: BuildConfig): boo
   return false;
 }
 
-function filterProviders(
-  providers: ProviderConfig[],
-  buildConfig: BuildConfig,
-): ProviderConfig[] {
-  return providers.filter(p => shouldIncludeBuiltIn(p.id, buildConfig));
+function filterProviders(providers: ProviderConfig[], buildConfig: BuildConfig): ProviderConfig[] {
+  return providers.filter((p) => shouldIncludeBuiltIn(p.id, buildConfig));
 }
 
 const ALL_PROVIDERS: ProviderConfig[] = [
-  { id: 'anthropic', name: 'Anthropic', description: '', requiresApiKey: true, requiresBaseUrl: false },
+  {
+    id: 'anthropic',
+    name: 'Anthropic',
+    description: '',
+    requiresApiKey: true,
+    requiresBaseUrl: false,
+  },
   { id: 'openai', name: 'OpenAI', description: '', requiresApiKey: true, requiresBaseUrl: false },
   { id: 'groq', name: 'Groq', description: '', requiresApiKey: true, requiresBaseUrl: false },
-  { id: 'bedrock-camp', name: 'Bedrock CAMP', description: '', requiresApiKey: true, requiresBaseUrl: true },
-  { id: 'huggingface', name: 'HuggingFace', description: '', requiresApiKey: true, requiresBaseUrl: false },
+  {
+    id: 'bedrock-camp',
+    name: 'Bedrock CAMP',
+    description: '',
+    requiresApiKey: true,
+    requiresBaseUrl: true,
+  },
+  {
+    id: 'huggingface',
+    name: 'HuggingFace',
+    description: '',
+    requiresApiKey: true,
+    requiresBaseUrl: false,
+  },
 ];
 
 describe('provider build-time filtering', () => {
@@ -47,13 +62,16 @@ describe('provider build-time filtering', () => {
   it('include: ["*"] with exclude: ["groq"] excludes groq', () => {
     const result = filterProviders(ALL_PROVIDERS, { include: ['*'], exclude: ['groq'] });
     expect(result).toHaveLength(4);
-    expect(result.find(p => p.id === 'groq')).toBeUndefined();
+    expect(result.find((p) => p.id === 'groq')).toBeUndefined();
   });
 
   it('include: ["anthropic", "openai"] includes only those two', () => {
-    const result = filterProviders(ALL_PROVIDERS, { include: ['anthropic', 'openai'], exclude: [] });
+    const result = filterProviders(ALL_PROVIDERS, {
+      include: ['anthropic', 'openai'],
+      exclude: [],
+    });
     expect(result).toHaveLength(2);
-    expect(result.map(p => p.id)).toEqual(['anthropic', 'openai']);
+    expect(result.map((p) => p.id)).toEqual(['anthropic', 'openai']);
   });
 
   it('exclude: ["*"] excludes everything', () => {
@@ -77,8 +95,8 @@ describe('provider build-time filtering', () => {
       exclude: ['bedrock-camp', 'huggingface'],
     });
     expect(result).toHaveLength(3);
-    expect(result.find(p => p.id === 'bedrock-camp')).toBeUndefined();
-    expect(result.find(p => p.id === 'huggingface')).toBeUndefined();
+    expect(result.find((p) => p.id === 'bedrock-camp')).toBeUndefined();
+    expect(result.find((p) => p.id === 'huggingface')).toBeUndefined();
   });
 });
 
@@ -97,7 +115,10 @@ describe('provider config shape', () => {
   });
 
   it('ProviderConfig supports onOAuthLogin and onOAuthLogout callbacks', () => {
-    const loginFn = async (_launcher: (url: string) => Promise<string | null>, _onSuccess: () => void) => {};
+    const loginFn = async (
+      _launcher: (url: string) => Promise<string | null>,
+      _onSuccess: () => void
+    ) => {};
     const logoutFn = async () => {};
 
     const oauthProvider: ProviderConfig = {
@@ -133,7 +154,9 @@ describe('provider config shape', () => {
       },
     };
 
-    await provider.onOAuthLogin!(mockLauncher, () => { successCalled = true; });
+    await provider.onOAuthLogin!(mockLauncher, () => {
+      successCalled = true;
+    });
     expect(successCalled).toBe(true);
   });
 
@@ -155,7 +178,9 @@ describe('provider config shape', () => {
       },
     };
 
-    await provider.onOAuthLogin!(mockLauncher, () => { successCalled = true; });
+    await provider.onOAuthLogin!(mockLauncher, () => {
+      successCalled = true;
+    });
     expect(successCalled).toBe(false);
   });
 });

@@ -55,7 +55,7 @@ export interface InlineSprinkleInstance {
 export function mountInlineSprinkle(
   container: HTMLElement,
   content: string,
-  onLick: (action: string, data: unknown) => void,
+  onLick: (action: string, data: unknown) => void
 ): InlineSprinkleInstance {
   const themeCSS = collectThemeCSS();
 
@@ -134,7 +134,7 @@ mark{background:color-mix(in srgb,var(--s2-accent) 25%,transparent);color:inheri
  */
 export function hydrateInlineSprinkles(
   containerEl: HTMLElement,
-  onLick: (action: string, data: unknown) => void,
+  onLick: (action: string, data: unknown) => void
 ): InlineSprinkleInstance[] {
   const codeEls = containerEl.querySelectorAll<HTMLElement>('pre > code.language-shtml');
   if (codeEls.length === 0) return [];
@@ -158,7 +158,11 @@ export function hydrateInlineSprinkles(
 /** Dispose all inline sprinkle instances and clear the array. */
 export function disposeInlineSprinkles(instances: InlineSprinkleInstance[]): void {
   for (const inst of instances) {
-    try { inst.dispose(); } catch { /* best-effort cleanup */ }
+    try {
+      inst.dispose();
+    } catch {
+      /* best-effort cleanup */
+    }
   }
   instances.length = 0;
 }
@@ -170,7 +174,7 @@ export function disposeInlineSprinkles(instances: InlineSprinkleInstance[]): voi
 function mountInlineSprinkleExtension(
   container: HTMLElement,
   srcdoc: string,
-  onLick: (action: string, data: unknown) => void,
+  onLick: (action: string, data: unknown) => void
 ): InlineSprinkleInstance {
   const iframe = document.createElement('iframe');
   iframe.src = chrome.runtime.getURL('sprinkle-sandbox.html');
@@ -190,11 +194,13 @@ function mountInlineSprinkleExtension(
   };
   window.addEventListener('message', messageHandler);
 
-  iframe.addEventListener('load', () => {
-    iframe.contentWindow?.postMessage(
-      { type: 'inline-sprinkle-render', srcdoc }, '*',
-    );
-  }, { once: true });
+  iframe.addEventListener(
+    'load',
+    () => {
+      iframe.contentWindow?.postMessage({ type: 'inline-sprinkle-render', srcdoc }, '*');
+    },
+    { once: true }
+  );
 
   return {
     dispose() {

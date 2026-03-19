@@ -27,7 +27,7 @@ function cacheKey(s: string): string {
   const d = len > 3 ? s.charCodeAt(3) : 0;
   const e = len > 4 ? s.charCodeAt(Math.floor(len / 4)) : 0;
   const f = len > 4 ? s.charCodeAt(Math.floor(len / 2)) : 0;
-  const g = len > 4 ? s.charCodeAt(Math.floor(3 * len / 4)) : 0;
+  const g = len > 4 ? s.charCodeAt(Math.floor((3 * len) / 4)) : 0;
   const h = s.charCodeAt(len - 1);
   return `${len}:${a}:${b}:${c}:${d}:${e}:${f}:${g}:${h}`;
 }

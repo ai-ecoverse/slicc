@@ -62,8 +62,9 @@ export class ScoopSwitcher {
 
     // Scoops first, cone last (cone holds the scoops)
     const allScoops = this.orchestrator.getScoops();
-    const scoops = [...allScoops.filter(s => !s.isCone), ...allScoops.filter(s => s.isCone)];
-    const selected = scoops.find(s => s.jid === this.selectedJid) ?? scoops.find(s => s.isCone) ?? scoops[0];
+    const scoops = [...allScoops.filter((s) => !s.isCone), ...allScoops.filter((s) => s.isCone)];
+    const selected =
+      scoops.find((s) => s.jid === this.selectedJid) ?? scoops.find((s) => s.isCone) ?? scoops[0];
 
     // Selected scoop button (always visible)
     const trigger = document.createElement('button');
@@ -95,7 +96,7 @@ export class ScoopSwitcher {
     });
 
     // Active scoop count badge (excludes cone — only scoops)
-    const activeCount = allScoops.filter(s => {
+    const activeCount = allScoops.filter((s) => {
       if (s.isCone) return false;
       const status = this.statuses.get(s.jid);
       return status === 'processing';
@@ -203,7 +204,7 @@ export class ScoopSwitcher {
     if (scoop.isCone) {
       icon.style.background = '#f07000';
     } else {
-      const scoopIndex = allScoops.filter(s => !s.isCone).indexOf(scoop);
+      const scoopIndex = allScoops.filter((s) => !s.isCone).indexOf(scoop);
       icon.style.background = SCOOP_COLORS[scoopIndex % SCOOP_COLORS.length];
     }
     return icon;

@@ -26,7 +26,7 @@ export class DebuggerClient implements CDPTransport {
   private onEventHandler = (
     source: { tabId: number },
     method: string,
-    params?: Record<string, unknown>,
+    params?: Record<string, unknown>
   ): void => {
     if (!this.attachedTabs.has(source.tabId)) return;
     // Find sessionId for this tabId
@@ -41,23 +41,21 @@ export class DebuggerClient implements CDPTransport {
     const set = this.listeners.get(method);
     if (set) {
       // Include sessionId in params so listeners can filter by session
-      const paramsWithSession = sessionId
-        ? { ...params, sessionId }
-        : (params ?? {});
+      const paramsWithSession = sessionId ? { ...params, sessionId } : (params ?? {});
       for (const listener of set) {
         try {
           listener(paramsWithSession);
         } catch (err) {
-          log.error('CDP event listener error', { method, error: err instanceof Error ? err.message : String(err) });
+          log.error('CDP event listener error', {
+            method,
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       }
     }
   };
 
-  private onDetachHandler = (
-    source: { tabId: number },
-    reason: string,
-  ): void => {
+  private onDetachHandler = (source: { tabId: number }, reason: string): void => {
     log.warn('Debugger detached', { tabId: source.tabId, reason });
     this.attachedTabs.delete(source.tabId);
     // Remove session mappings for this tab
@@ -95,7 +93,10 @@ export class DebuggerClient implements CDPTransport {
   disconnect(): void {
     for (const tabId of this.attachedTabs) {
       chrome.debugger.detach({ tabId }).catch((err) => {
-        log.debug('Detach during disconnect', { tabId, error: err instanceof Error ? err.message : String(err) });
+        log.debug('Detach during disconnect', {
+          tabId,
+          error: err instanceof Error ? err.message : String(err),
+        });
       });
     }
     chrome.debugger.onEvent.removeListener(this.onEventHandler);
@@ -114,7 +115,7 @@ export class DebuggerClient implements CDPTransport {
     method: string,
     params?: Record<string, unknown>,
     sessionId?: string,
-    _timeout?: number,
+    _timeout?: number
   ): Promise<Record<string, unknown>> {
     if (this._state !== 'connected') {
       throw new Error('DebuggerClient is not connected');
@@ -198,7 +199,7 @@ export class DebuggerClient implements CDPTransport {
   }
 
   private async handleAttachToTarget(
-    params: Record<string, unknown>,
+    params: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
     const targetId = params['targetId'] as string;
     const tabId = parseInt(targetId, 10);
@@ -218,7 +219,7 @@ export class DebuggerClient implements CDPTransport {
   }
 
   private async handleDetachFromTarget(
-    params: Record<string, unknown>,
+    params: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
     const sessionId = params['sessionId'] as string;
     const tabId = this.sessionToTab.get(sessionId);
@@ -230,7 +231,10 @@ export class DebuggerClient implements CDPTransport {
       if (!stillReferenced) {
         this.attachedTabs.delete(tabId);
         await chrome.debugger.detach({ tabId }).catch((err) => {
-          log.debug('Detach failed (tab may be closed)', { tabId, error: err instanceof Error ? err.message : String(err) });
+          log.debug('Detach failed (tab may be closed)', {
+            tabId,
+            error: err instanceof Error ? err.message : String(err),
+          });
         });
       }
     }
@@ -239,7 +243,7 @@ export class DebuggerClient implements CDPTransport {
   }
 
   private async handleCreateTarget(
-    params: Record<string, unknown>,
+    params: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
     const url = (params['url'] as string) ?? 'about:blank';
     const tab = await chrome.tabs.create({ url, active: false });
@@ -248,7 +252,7 @@ export class DebuggerClient implements CDPTransport {
   }
 
   private async handleCloseTarget(
-    params: Record<string, unknown>,
+    params: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
     const targetId = params['targetId'] as string;
     const tabId = parseInt(targetId, 10);
@@ -265,7 +269,10 @@ export class DebuggerClient implements CDPTransport {
     if (this.attachedTabs.has(tabId)) {
       this.attachedTabs.delete(tabId);
       await chrome.debugger.detach({ tabId }).catch((err) => {
-        log.debug('Detach before close failed', { tabId, error: err instanceof Error ? err.message : String(err) });
+        log.debug('Detach before close failed', {
+          tabId,
+          error: err instanceof Error ? err.message : String(err),
+        });
       });
     }
 
@@ -280,22 +287,17 @@ export class DebuggerClient implements CDPTransport {
   private async sendCdpCommand(
     method: string,
     params?: Record<string, unknown>,
-    sessionId?: string,
+    sessionId?: string
   ): Promise<Record<string, unknown>> {
     const tabId = sessionId ? this.sessionToTab.get(sessionId) : undefined;
     if (tabId === undefined) {
       throw new Error(
-        `No tab attached for sessionId: ${sessionId ?? '(none)'}. ` +
-        'Attach to a target first.',
+        `No tab attached for sessionId: ${sessionId ?? '(none)'}. ` + 'Attach to a target first.'
       );
     }
 
     log.debug('Send', { method, tabId, sessionId });
-    const result = await chrome.debugger.sendCommand(
-      { tabId },
-      method,
-      params,
-    );
+    const result = await chrome.debugger.sendCommand({ tabId }, method, params);
     return result ?? {};
   }
 }

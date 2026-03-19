@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { VoiceInput, getVoiceAutoSend, setVoiceAutoSend, getVoiceLang, setVoiceLang } from './voice-input.js';
+import {
+  VoiceInput,
+  getVoiceAutoSend,
+  setVoiceAutoSend,
+  getVoiceLang,
+  setVoiceLang,
+} from './voice-input.js';
 
 // Mock SpeechRecognition
 class MockSpeechRecognition {
@@ -191,7 +197,9 @@ describe('VoiceInput (direct mode)', () => {
     it('should report not-allowed error', () => {
       voice.start();
       mockInstance.simulateError('not-allowed');
-      expect(onError).toHaveBeenCalledWith('Microphone access denied. Check Chrome site permissions.');
+      expect(onError).toHaveBeenCalledWith(
+        'Microphone access denied. Check Chrome site permissions.'
+      );
       expect(onStateChange).toHaveBeenCalledWith('error');
     });
 
@@ -376,12 +384,16 @@ describe('Voice settings (localStorage)', () => {
 
   beforeEach(() => {
     // Mock localStorage for Node test environment
-    Object.keys(store).forEach(k => delete store[k]);
+    Object.keys(store).forEach((k) => delete store[k]);
     (globalThis as any).localStorage = {
       getItem: (key: string) => store[key] ?? null,
-      setItem: (key: string, value: string) => { store[key] = value; },
-      removeItem: (key: string) => { delete store[key]; },
-      clear: () => Object.keys(store).forEach(k => delete store[k]),
+      setItem: (key: string, value: string) => {
+        store[key] = value;
+      },
+      removeItem: (key: string) => {
+        delete store[key];
+      },
+      clear: () => Object.keys(store).forEach((k) => delete store[k]),
     };
   });
 

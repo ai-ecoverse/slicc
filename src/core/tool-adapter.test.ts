@@ -26,7 +26,8 @@ describe('parseToolResultContentRaw', () => {
   });
 
   it('handles multiple img tags', () => {
-    const text = 'Before\n<img:data:image/png;base64,aaa>\nMiddle\n<img:data:image/png;base64,bbb>\nAfter';
+    const text =
+      'Before\n<img:data:image/png;base64,aaa>\nMiddle\n<img:data:image/png;base64,bbb>\nAfter';
     const blocks = parseToolResultContentRaw(text);
 
     expect(blocks).toHaveLength(5);
@@ -116,7 +117,8 @@ describe('parseToolResultContent (async)', () => {
   });
 
   it('handles mixed valid and unsupported images in one result', async () => {
-    const text = 'Result:\n<img:data:image/bmp;base64,bad>\nMiddle\n<img:data:image/png;base64,good>';
+    const text =
+      'Result:\n<img:data:image/bmp;base64,bad>\nMiddle\n<img:data:image/png;base64,good>';
     const blocks = await parseToolResultContent(text);
 
     expect(blocks).toHaveLength(4);

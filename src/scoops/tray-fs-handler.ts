@@ -23,7 +23,7 @@ const CHUNK_THRESHOLD_CHARS = 64 * 1024;
  */
 export async function handleFsRequest(
   vfs: VirtualFS,
-  request: TrayFsRequest,
+  request: TrayFsRequest
 ): Promise<TrayFsResponse[]> {
   try {
     switch (request.op) {
@@ -58,15 +58,15 @@ export async function handleFsRequest(
 async function handleReadFile(
   vfs: VirtualFS,
   path: string,
-  encoding?: 'utf-8' | 'binary',
+  encoding?: 'utf-8' | 'binary'
 ): Promise<TrayFsResponse[]> {
   const enc = encoding ?? 'utf-8';
   if (enc === 'utf-8') {
-    const text = await vfs.readFile(path, { encoding: 'utf-8' }) as string;
+    const text = (await vfs.readFile(path, { encoding: 'utf-8' })) as string;
     return chunkContent(text, 'utf-8');
   }
   // Binary — read as Uint8Array and base64-encode
-  const data = await vfs.readFile(path, { encoding: 'binary' }) as Uint8Array;
+  const data = (await vfs.readFile(path, { encoding: 'binary' })) as Uint8Array;
   const b64 = uint8ToBase64(data);
   return chunkContent(b64, 'base64');
 }
@@ -75,7 +75,7 @@ async function handleWriteFile(
   vfs: VirtualFS,
   path: string,
   content: string,
-  encoding: 'utf-8' | 'base64',
+  encoding: 'utf-8' | 'base64'
 ): Promise<TrayFsResponse> {
   if (encoding === 'base64') {
     const data = base64ToUint8(content);
@@ -96,12 +96,20 @@ async function handleReadDir(vfs: VirtualFS, path: string): Promise<TrayFsRespon
   return { ok: true, data: { type: 'dirEntries', entries } };
 }
 
-async function handleMkdir(vfs: VirtualFS, path: string, recursive?: boolean): Promise<TrayFsResponse> {
+async function handleMkdir(
+  vfs: VirtualFS,
+  path: string,
+  recursive?: boolean
+): Promise<TrayFsResponse> {
   await vfs.mkdir(path, { recursive });
   return { ok: true, data: { type: 'void' } };
 }
 
-async function handleRm(vfs: VirtualFS, path: string, recursive?: boolean): Promise<TrayFsResponse> {
+async function handleRm(
+  vfs: VirtualFS,
+  path: string,
+  recursive?: boolean
+): Promise<TrayFsResponse> {
   await vfs.rm(path, { recursive });
   return { ok: true, data: { type: 'void' } };
 }

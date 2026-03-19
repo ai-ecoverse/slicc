@@ -12,11 +12,12 @@ import { createLogger } from '../core/logger.js';
 
 const log = createLogger('tool:bash');
 
-const SEARCH_COMMAND_PREFIX = /^(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:command\s+)?(?:grep|egrep|fgrep|rg)\b/;
+const SEARCH_COMMAND_PREFIX =
+  /^(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:command\s+)?(?:grep|egrep|fgrep|rg)\b/;
 
 function getLastCommandSegment(command: string): string {
   let current = '';
-  let quote: '"' | '\'' | null = null;
+  let quote: '"' | "'" | null = null;
   let escaped = false;
 
   for (let i = 0; i < command.length; i++) {
@@ -40,7 +41,7 @@ function getLastCommandSegment(command: string): string {
       continue;
     }
 
-    if (char === '"' || char === '\'') {
+    if (char === '"' || char === "'") {
       current += char;
       quote = char;
       continue;
@@ -101,7 +102,11 @@ export function createBashTool(shell: WasmShell): ToolDefinition {
       try {
         const result = await shell.executeCommand(command);
 
-        log.debug('Result', { exitCode: result.exitCode, stdoutLength: result.stdout.length, stderrLength: result.stderr.length });
+        log.debug('Result', {
+          exitCode: result.exitCode,
+          stdoutLength: result.stdout.length,
+          stderrLength: result.stderr.length,
+        });
 
         let output = '';
         if (result.stdout) output += result.stdout;
@@ -110,7 +115,9 @@ export function createBashTool(shell: WasmShell): ToolDefinition {
 
         return {
           content: output,
-          isError: result.exitCode !== 0 && !isExpectedNoMatchSearch(command, result.exitCode, result.stderr),
+          isError:
+            result.exitCode !== 0 &&
+            !isExpectedNoMatchSearch(command, result.exitCode, result.stderr),
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

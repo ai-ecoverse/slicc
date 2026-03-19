@@ -96,7 +96,7 @@ export class OffscreenBridge {
         const msgId = bridge.currentMessageId.get(scoopJid);
         if (msgId) {
           const buf = bridge.getBuffer(scoopJid);
-          const msg = buf.find(m => m.id === msgId);
+          const msg = buf.find((m) => m.id === msgId);
           if (msg) msg.isStreaming = false;
           bridge.currentMessageId.delete(scoopJid);
         }
@@ -181,10 +181,15 @@ export class OffscreenBridge {
         const msgId = bridge.currentMessageId.get(scoopJid);
         if (msgId) {
           const buf = bridge.getBuffer(scoopJid);
-          const msg = buf.find(m => m.id === msgId);
+          const msg = buf.find((m) => m.id === msgId);
           if (msg?.toolCalls) {
-            const tc = [...msg.toolCalls].reverse().find(t => t.name === toolName && t.result === undefined);
-            if (tc) { tc.result = result; tc.isError = isError; }
+            const tc = [...msg.toolCalls]
+              .reverse()
+              .find((t) => t.name === toolName && t.result === undefined);
+            if (tc) {
+              tc.result = result;
+              tc.isError = isError;
+            }
           }
         }
 
@@ -204,9 +209,10 @@ export class OffscreenBridge {
         const chatMsg: BufferedChatMessage = {
           id: message.id,
           role: 'user',
-          content: message.channel === 'delegation'
-            ? `**[Instructions from sliccy]**\n\n${message.content}`
-            : message.content,
+          content:
+            message.channel === 'delegation'
+              ? `**[Instructions from sliccy]**\n\n${message.content}`
+              : message.content,
           timestamp: new Date(message.timestamp).getTime(),
           source: message.channel === 'delegation' ? 'delegation' : undefined,
           channel: message.channel,
@@ -232,16 +238,17 @@ export class OffscreenBridge {
 
   /** Build a full state snapshot for panel reconnect. */
   buildStateSnapshot(): StateSnapshotMsg {
-    const scoops = this.orchestrator?.getScoops().map(s => ({
-      jid: s.jid,
-      name: s.name,
-      folder: s.folder,
-      isCone: s.isCone,
-      assistantLabel: s.assistantLabel,
-      status: (this.scoopStatuses.get(s.jid) ?? 'ready') as ScoopTabState['status'],
-    })) ?? [];
+    const scoops =
+      this.orchestrator?.getScoops().map((s) => ({
+        jid: s.jid,
+        name: s.name,
+        folder: s.folder,
+        isCone: s.isCone,
+        assistantLabel: s.assistantLabel,
+        status: (this.scoopStatuses.get(s.jid) ?? 'ready') as ScoopTabState['status'],
+      })) ?? [];
 
-    const cone = scoops.find(s => s.isCone);
+    const cone = scoops.find((s) => s.isCone);
 
     return {
       type: 'state-snapshot',
@@ -256,7 +263,7 @@ export class OffscreenBridge {
    */
   private persistScoop(jid: string): void {
     if (!this.sessionStore || !this.orchestrator) return;
-    const scoop = this.orchestrator.getScoops().find(s => s.jid === jid);
+    const scoop = this.orchestrator.getScoops().find((s) => s.jid === jid);
     if (!scoop) return;
     const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
     const buf = this.messageBuffers.get(jid);
@@ -273,7 +280,10 @@ export class OffscreenBridge {
 
   /** @internal */ getBuffer(jid: string): BufferedChatMessage[] {
     let buf = this.messageBuffers.get(jid);
-    if (!buf) { buf = []; this.messageBuffers.set(jid, buf); }
+    if (!buf) {
+      buf = [];
+      this.messageBuffers.set(jid, buf);
+    }
     return buf;
   }
 
@@ -281,14 +291,14 @@ export class OffscreenBridge {
     const buf = this.getBuffer(jid);
     let msgId = this.currentMessageId.get(jid);
     if (msgId) {
-      const existing = buf.find(m => m.id === msgId);
+      const existing = buf.find((m) => m.id === msgId);
       if (existing) return existing;
     }
     msgId = `scoop-${jid}-${uid()}`;
     this.currentMessageId.set(jid, msgId);
 
     const scoops = this.orchestrator?.getScoops() ?? [];
-    const scoop = scoops.find(s => s.jid === jid);
+    const scoop = scoops.find((s) => s.jid === jid);
     const source = scoop?.isCone ? 'cone' : (scoop?.name ?? 'unknown');
 
     const msg: BufferedChatMessage = {
@@ -310,7 +320,11 @@ export class OffscreenBridge {
 
   private setupMessageListener(): void {
     chrome.runtime.onMessage.addListener(
-      (message: unknown, _sender: ChromeMessageSender, _sendResponse: (response?: unknown) => void) => {
+      (
+        message: unknown,
+        _sender: ChromeMessageSender,
+        _sendResponse: (response?: unknown) => void
+      ) => {
         if (!isExtMsg(message)) return false;
         const msg = message as ExtensionMessage;
 
@@ -338,7 +352,7 @@ export class OffscreenBridge {
           }
         });
         return false;
-      },
+      }
     );
   }
 
@@ -358,7 +372,10 @@ export class OffscreenBridge {
           channel: 'web',
         };
         this.getBuffer(msg.scoopJid).push({
-          id: msg.messageId, role: 'user', content: msg.text, timestamp: Date.now(),
+          id: msg.messageId,
+          role: 'user',
+          content: msg.text,
+          timestamp: Date.now(),
         });
         this.persistScoop(msg.scoopJid);
         await this.orchestrator.handleMessage(channelMsg);
@@ -367,7 +384,11 @@ export class OffscreenBridge {
       }
 
       case 'scoop-create': {
-        const folder = msg.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '') + (msg.isCone ? '' : '-scoop');
+        const folder =
+          msg.name
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/-+$/, '') + (msg.isCone ? '' : '-scoop');
         const scoop: RegisteredScoop = {
           jid: msg.isCone ? `cone_${Date.now()}` : `scoop_${folder}_${Date.now()}`,
           name: msg.name,
@@ -400,7 +421,7 @@ export class OffscreenBridge {
       }
 
       case 'scoop-drop': {
-        const droppedScoop = this.orchestrator.getScoops().find(s => s.jid === msg.scoopJid);
+        const droppedScoop = this.orchestrator.getScoops().find((s) => s.jid === msg.scoopJid);
         await this.orchestrator.unregisterScoop(msg.scoopJid);
         this.messageBuffers.delete(msg.scoopJid);
         this.currentMessageId.delete(msg.scoopJid);
@@ -408,7 +429,11 @@ export class OffscreenBridge {
         if (droppedScoop && this.sessionStore) {
           const sessionId = droppedScoop.isCone ? 'session-cone' : `session-${droppedScoop.folder}`;
           this.sessionStore.delete(sessionId).catch((err) => {
-            console.warn('[offscreen-bridge] Failed to delete session on scoop drop:', sessionId, err);
+            console.warn(
+              '[offscreen-bridge] Failed to delete session on scoop drop:',
+              sessionId,
+              err
+            );
           });
         }
         this.emitScoopList();
@@ -441,10 +466,12 @@ export class OffscreenBridge {
         // complete before the panel reloads and re-reads from IndexedDB
         if (this.sessionStore) {
           const scoops = this.orchestrator.getScoops();
-          await Promise.all(scoops.map(scoop => {
-            const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
-            return this.sessionStore!.delete(sessionId);
-          }));
+          await Promise.all(
+            scoops.map((scoop) => {
+              const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
+              return this.sessionStore!.delete(sessionId);
+            })
+          );
         }
         this.messageBuffers.clear();
         this.currentMessageId.clear();
@@ -470,7 +497,7 @@ export class OffscreenBridge {
       case 'sprinkle-lick': {
         // Sprinkle click event from the side panel — route to the cone
         const scoops = this.orchestrator.getScoops();
-        const cone = scoops.find(s => s.isCone);
+        const cone = scoops.find((s) => s.isCone);
         if (cone) {
           const lickMsg = msg as any;
           const msgId = `sprinkle-${lickMsg.sprinkleName}-${Date.now()}`;
@@ -486,8 +513,12 @@ export class OffscreenBridge {
             channel: 'sprinkle',
           };
           this.getBuffer(cone.jid).push({
-            id: msgId, role: 'user', content, timestamp: Date.now(),
-            source: 'lick', channel: 'sprinkle',
+            id: msgId,
+            role: 'user',
+            content,
+            timestamp: Date.now(),
+            source: 'lick',
+            channel: 'sprinkle',
           } as any);
           this.persistScoop(cone.jid);
           await this.orchestrator.handleMessage(channelMsg);
@@ -499,7 +530,11 @@ export class OffscreenBridge {
         const { id, method, params, sessionId } = msg;
         if (!this.browserAPI) {
           console.warn('[offscreen-bridge] Panel CDP command received but BrowserAPI is null');
-          this.emit({ type: 'panel-cdp-response', id, error: 'BrowserAPI not available' } satisfies PanelCdpResponseMsg);
+          this.emit({
+            type: 'panel-cdp-response',
+            id,
+            error: 'BrowserAPI not available',
+          } satisfies PanelCdpResponseMsg);
           break;
         }
         try {
@@ -518,25 +553,28 @@ export class OffscreenBridge {
   }
 
   /** @internal */ emitScoopList(): void {
-    const scoops = this.orchestrator?.getScoops().map(s => ({
-      jid: s.jid,
-      name: s.name,
-      folder: s.folder,
-      isCone: s.isCone,
-      assistantLabel: s.assistantLabel,
-      status: (this.scoopStatuses.get(s.jid) ?? 'ready') as ScoopTabState['status'],
-    })) ?? [];
+    const scoops =
+      this.orchestrator?.getScoops().map((s) => ({
+        jid: s.jid,
+        name: s.name,
+        folder: s.folder,
+        isCone: s.isCone,
+        assistantLabel: s.assistantLabel,
+        status: (this.scoopStatuses.get(s.jid) ?? 'ready') as ScoopTabState['status'],
+      })) ?? [];
     this.emit({ type: 'scoop-list', scoops } satisfies ScoopListMsg);
   }
 
   /** Send a message to all panels via the service worker relay. */
   private emit(payload: import('./messages.js').OffscreenToPanelMessage | StateSnapshotMsg): void {
-    chrome.runtime.sendMessage({
-      source: 'offscreen' as const,
-      payload,
-    }).catch(() => {
-      // No panel open — that's expected
-    });
+    chrome.runtime
+      .sendMessage({
+        source: 'offscreen' as const,
+        payload,
+      })
+      .catch(() => {
+        // No panel open — that's expected
+      });
   }
 }
 
@@ -545,11 +583,5 @@ function uid(): string {
 }
 
 function isExtMsg(msg: unknown): boolean {
-  return (
-    typeof msg === 'object' &&
-    msg !== null &&
-    'source' in msg &&
-    'payload' in msg
-  );
+  return typeof msg === 'object' && msg !== null && 'source' in msg && 'payload' in msg;
 }
-

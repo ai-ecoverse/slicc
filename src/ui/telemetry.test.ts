@@ -10,9 +10,15 @@ vi.mock('@adobe/helix-rum-js', () => ({
 const localStorageMock: Record<string, string> = {};
 const mockLocalStorage = {
   getItem: (key: string) => localStorageMock[key] ?? null,
-  setItem: (key: string, value: string) => { localStorageMock[key] = value; },
-  removeItem: (key: string) => { delete localStorageMock[key]; },
-  clear: () => { Object.keys(localStorageMock).forEach(k => delete localStorageMock[k]); },
+  setItem: (key: string, value: string) => {
+    localStorageMock[key] = value;
+  },
+  removeItem: (key: string) => {
+    delete localStorageMock[key];
+  },
+  clear: () => {
+    Object.keys(localStorageMock).forEach((k) => delete localStorageMock[k]);
+  },
 };
 
 vi.stubGlobal('localStorage', mockLocalStorage);
@@ -31,9 +37,12 @@ describe('telemetry', () => {
   it('initializes and emits navigate checkpoint', async () => {
     const { initTelemetry } = await import('./telemetry.js');
     await initTelemetry();
-    expect(mockSampleRUM).toHaveBeenCalledWith('navigate', expect.objectContaining({
-      target: expect.stringMatching(/^(cli|extension|electron)$/),
-    }));
+    expect(mockSampleRUM).toHaveBeenCalledWith(
+      'navigate',
+      expect.objectContaining({
+        target: expect.stringMatching(/^(cli|extension|electron)$/),
+      })
+    );
   });
 
   it('respects telemetry-disabled flag', async () => {
@@ -48,16 +57,19 @@ describe('telemetry', () => {
     const { initTelemetry, trackChatSend } = await import('./telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
-    
+
     trackChatSend('cone', 'claude-sonnet');
-    expect(mockSampleRUM).toHaveBeenCalledWith('formsubmit', { source: 'cone', target: 'claude-sonnet' });
+    expect(mockSampleRUM).toHaveBeenCalledWith('formsubmit', {
+      source: 'cone',
+      target: 'claude-sonnet',
+    });
   });
 
   it('trackShellCommand emits fill', async () => {
     const { initTelemetry, trackShellCommand } = await import('./telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
-    
+
     trackShellCommand('git');
     expect(mockSampleRUM).toHaveBeenCalledWith('fill', { source: 'git' });
   });
@@ -66,7 +78,7 @@ describe('telemetry', () => {
     const { initTelemetry, trackSprinkleView } = await import('./telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
-    
+
     trackSprinkleView('welcome');
     expect(mockSampleRUM).toHaveBeenCalledWith('viewblock', { source: 'welcome' });
   });
@@ -75,7 +87,7 @@ describe('telemetry', () => {
     const { initTelemetry, trackError } = await import('./telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
-    
+
     trackError('llm', 'rate_limit');
     expect(mockSampleRUM).toHaveBeenCalledWith('error', { source: 'llm', target: 'rate_limit' });
   });
@@ -108,10 +120,10 @@ describe('isTelemetryEnabled / setTelemetryEnabled', () => {
   it('setTelemetryEnabled toggles the flag', async () => {
     const { isTelemetryEnabled, setTelemetryEnabled } = await import('./telemetry.js');
     expect(isTelemetryEnabled()).toBe(true);
-    
+
     setTelemetryEnabled(false);
     expect(mockLocalStorage.getItem('telemetry-disabled')).toBe('true');
-    
+
     setTelemetryEnabled(true);
     expect(mockLocalStorage.getItem('telemetry-disabled')).toBeNull();
   });
