@@ -27,7 +27,8 @@ final class SliccProcess {
     // MARK: - Standalone mode (CLI server launches Chrome with temp profile)
 
     func launchStandalone(_ browser: AppTarget) throws {
-        guard !isRunning else { return }
+        guard !isRunning else { throw LaunchError.alreadyRunning }
+        guard !Self.isPortInUse(5710) else { throw LaunchError.portInUse }
         target = browser
         try spawnCLI(extraArgs: ["--cdp-port=9222"], env: [
             "CHROME_PATH": browser.executablePath,
@@ -38,7 +39,8 @@ final class SliccProcess {
     // MARK: - Electron app (CLI server + overlay injection)
 
     func launchWithElectronApp(_ app: AppTarget) throws {
-        guard !isRunning else { return }
+        guard !isRunning else { throw LaunchError.alreadyRunning }
+        guard !Self.isPortInUse(5710) else { throw LaunchError.portInUse }
         target = app
         try spawnCLI(extraArgs: [
             "--electron", app.path,
@@ -106,11 +108,34 @@ final class SliccProcess {
         isRunning = true
     }
 
+    /// Check if a TCP port is already in use.
+    private static func isPortInUse(_ port: UInt16) -> Bool {
+        let sock = socket(AF_INET, SOCK_STREAM, 0)
+        guard sock >= 0 else { return false }
+        defer { close(sock) }
+
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = port.bigEndian
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+
+        let result = withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
+                connect(sock, sockPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        return result == 0
+    }
+
     enum LaunchError: LocalizedError {
         case nodeNotFound
+        case alreadyRunning
+        case portInUse
         var errorDescription: String? {
             switch self {
             case .nodeNotFound: return "Node.js not found"
+            case .alreadyRunning: return "SLICC is already running. Stop it first."
+            case .portInUse: return "Port 5710 is already in use. Another SLICC instance may be running."
             }
         }
     }
