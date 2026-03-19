@@ -9,7 +9,7 @@
  */
 
 import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
-import { Orchestrator } from '../scoops/orchestrator.js';
+import { type Orchestrator } from '../scoops/orchestrator.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('scoops-panel');

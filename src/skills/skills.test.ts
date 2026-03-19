@@ -238,7 +238,7 @@ adds:
       await applySkill(fs, 'hello');
 
       // Verify file exists
-      let content = await fs.readFile('/hello.txt');
+      const content = await fs.readFile('/hello.txt');
       expect(content).toBe('Hello!');
 
       // Uninstall

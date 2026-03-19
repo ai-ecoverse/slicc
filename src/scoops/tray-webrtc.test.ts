@@ -728,7 +728,7 @@ describe('startFollowerWithAutoReconnect', () => {
         },
       });
 
-      let bootstrap: TrayBootstrapStatus = {
+      const bootstrap: TrayBootstrapStatus = {
         controllerId: 'follower-1',
         bootstrapId: `bootstrap-${connectCount + 1}`,
         attempt: 1,
@@ -906,7 +906,7 @@ describe('startFollowerWithAutoReconnect', () => {
 
     const onConnected = vi.fn();
     const onReconnecting = vi.fn();
-    let disconnectFn: ((reason: string) => void) | null = null;
+    const disconnectFn: ((reason: string) => void) | null = null;
 
     const handle = startFollowerWithAutoReconnect(
       {
