@@ -73,7 +73,7 @@ jobs:
           # Code sign if certificate is available
           if [ -n "$APPLE_TEAM_ID" ]; then
             echo "Code signing Sliccstart.app..."
-            codesign --force --options runtime --sign "Developer ID Application: ($APPLE_TEAM_ID)" \
+            codesign --force --options runtime --sign "Developer ID Application: Lars Trieloff ($APPLE_TEAM_ID)" \
               --timestamp build/Sliccstart.app
             
             # Verify signature
