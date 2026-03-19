@@ -114,7 +114,7 @@ Once the product makes sense, the ice-cream language is easier to enjoy: it maps
 - **Tray** — multiple floats can form a tray, a joint session with remote control.
 - **Sprinkles** — everything is better with sprinkles: small, optional enhancements you can add on top of the core system.
 
-Why the name? SLICC stands for **Self-Licking Ice Cream Cone**: a recursive system that can help build, extend, and operate itself. A browser agent running inside the browser: that's as self-recursive as tounge-out gelato.
+Why the name? SLICC stands for **Self-Licking Ice Cream Cone**: a recursive system that can help build, extend, and operate itself. A browser agent running inside the browser: that's as self-recursive as tongue-out gelato.
 
 ## API Keys and Providers
 
