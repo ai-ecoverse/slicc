@@ -8,10 +8,9 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   eslintConfigPrettier,
   {
+    // Base config - shared globals only
     languageOptions: {
       globals: {
-        ...globals.browser,
-        ...globals.node,
         __DEV__: 'readonly',
       },
       parserOptions: {
@@ -89,8 +88,42 @@ export default tseslint.config(
     },
   },
   {
-    // Test files - more lenient rules
+    // CLI / Node.js files - Node globals only
+    files: ['src/cli/**/*.ts', 'src/worker/**/*.ts', 'vite.config*.ts'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
+    },
+  },
+  {
+    // Browser UI files - Browser globals only
+    files: ['src/ui/**/*.ts', 'src/cdp/**/*.ts', 'src/core/**/*.ts', 'src/fs/**/*.ts', 'src/git/**/*.ts', 'src/providers/**/*.ts', 'src/scoops/**/*.ts', 'src/shell/**/*.ts', 'src/skills/**/*.ts', 'src/tools/**/*.ts'],
+    languageOptions: {
+      globals: {
+        ...globals.browser,
+      },
+    },
+  },
+  {
+    // Browser extension files - Browser + chrome globals
+    files: ['voice-popup.js', 'src/extension/**/*.ts'],
+    languageOptions: {
+      globals: {
+        ...globals.browser,
+        chrome: 'readonly',
+      },
+    },
+  },
+  {
+    // Test files - Both environments + lenient rules
     files: ['**/*.test.ts', '**/*.test.mjs', 'test-*.mjs'],
+    languageOptions: {
+      globals: {
+        ...globals.browser,
+        ...globals.node,
+      },
+    },
     rules: {
       '@typescript-eslint/no-unused-vars': [
         'warn',
@@ -100,15 +133,6 @@ export default tseslint.config(
           caughtErrorsIgnorePattern: '^_',
         },
       ],
-    },
-  },
-  {
-    // Browser extension files with chrome global
-    files: ['voice-popup.js', 'src/extension/**/*.ts'],
-    languageOptions: {
-      globals: {
-        chrome: 'readonly',
-      },
     },
   },
   {

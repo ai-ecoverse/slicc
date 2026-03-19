@@ -22,7 +22,7 @@
     "url": "https://github.com/ai-ecoverse/slicc"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "dev": "npx tsx src/cli/index.ts --dev",
