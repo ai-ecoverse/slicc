@@ -335,13 +335,13 @@ export class LickManager {
     try {
       if (isWebhook) {
         // Webhook filter: (event) => ...
-        // eslint-disable-next-line @typescript-eslint/no-implied-eval
+         
         return new Function('event', `return (${filterCode})(event);`) as (
           event: unknown
         ) => boolean | unknown;
       } else {
         // Cron filter: () => ...
-        // eslint-disable-next-line @typescript-eslint/no-implied-eval
+         
         return new Function(`return (${filterCode})();`) as () => boolean | unknown;
       }
     } catch (err) {

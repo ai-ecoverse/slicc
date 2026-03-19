@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { BrowserAPI, getDefaultCdpUrl } from './browser-api.js';
-import { CDPClient } from './cdp-client.js';
+import { type CDPClient } from './cdp-client.js';
 
 // ---------------------------------------------------------------------------
 // Mock CDPClient
