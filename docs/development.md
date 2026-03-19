@@ -31,27 +31,27 @@ Build, run, test, and debug SLICC locally.
 
 ## Release Operations
 
-Releases are automated with semantic-release. Maintainers do not cut version tags by hand; instead, merge conventional-commit changes onto `release` and let GitHub Actions publish from there.
+Releases are automated with semantic-release. Maintainers do not cut version tags by hand; instead, merge conventional-commit changes onto `main` and let GitHub Actions publish from there.
 
 ### End-to-end flow
 
-1. Merge or push conventional-commit changes onto the `release` branch, or manually dispatch `.github/workflows/release.yml` against `release`.
+1. Merge or push conventional-commit changes onto `main`, or manually dispatch `.github/workflows/release.yml` against `main`.
 2. The release workflow runs `npm ci`, `npm run typecheck`, `npm run test`, `npm run build`, and `npm run build:extension` before calling `npx semantic-release`.
-3. `.releaserc.json` limits publishing to the `release` branch, so the semantic-release run exits without publishing when invoked from other refs.
+3. `.releaserc.json` limits publishing to `main`, so the semantic-release run exits without publishing when invoked from other refs.
 4. During the semantic-release `prepare` step, `@semantic-release/npm` updates `package.json` to the computed release version, `node dist/cli/sync-release-version.js <version>` updates the root `manifest.json`, and `npm run build:extension && npm run package:release` regenerate versioned release assets in `artifacts/release/`.
-5. During publish, semantic-release publishes the `browser-coding-agent` npm package and creates a GitHub Release with generated release notes plus the packaged assets from `artifacts/release/`.
+5. During publish, semantic-release publishes the `sliccy` npm package via GitHub Actions OIDC trusted publishing and creates a GitHub Release with generated release notes plus the packaged assets from `artifacts/release/`.
 
 ### GitHub Release outputs
 
 Each published GitHub Release includes semantic-release generated release notes plus these attached artifacts from `npm run package:release`:
 
 - `slicc-extension-v<version>.zip` — ZIP archive of `dist/extension/` with normalized ordering, timestamps, and permissions
-- `browser-coding-agent-<version>.tgz` — npm tarball for the publishable Node/CLI package
+- `sliccy-<version>.tgz` — npm tarball for the publishable Node/CLI package
 - `release-artifacts.json` — stable manifest describing the generated artifact paths
 
 ### What gets published to npm
 
-`@semantic-release/npm` publishes the root `browser-coding-agent` package from `package.json`.
+`@semantic-release/npm` publishes the root `sliccy` package from `package.json`.
 
 - Published files: `dist/cli/` and `dist/ui/`
 - CLI entrypoint: `slicc`
@@ -59,11 +59,11 @@ Each published GitHub Release includes semantic-release generated release notes 
 
 ### Required repo configuration
 
-- Release branch: semantic-release is configured for `release` only.
-- Remote branch state: `origin/release` must already exist before `npx semantic-release --dry-run --no-ci` or a real release can succeed. For first-time setup, create it with `git push origin release`.
+- Release branch: semantic-release is configured for `main` only.
 - Commit format: merges intended to trigger releases must use conventional commits so semantic-release can determine the next version.
-- npm credentials: set `NPM_TOKEN` with permission to publish `browser-coding-agent` on npm.
-- GitHub permissions: the release workflow must keep GitHub Actions `contents: write` access so semantic-release can create tags/releases and upload release assets. If you replace the default `GITHUB_TOKEN`, use a token with equivalent release/asset write access.
+- npm trusted publisher: configure the `sliccy` package on npm to trust this repository's GitHub Actions release workflow. npm exposes trusted publishers per package in the package settings UI, and each package can only have one trusted publisher configured at a time.
+- First publish bootstrap: npm trusted publishing cannot do the very first publish for a brand-new package. A maintainer must publish the initial `sliccy` version manually/bootstrap it once so the package exists on npm, then attach the trusted publisher for subsequent GitHub Actions OIDC releases from `main`.
+- GitHub permissions: the release workflow must keep GitHub Actions `contents: write` access so semantic-release can create tags/releases and upload release assets, plus `id-token: write` so npm trusted publishing can mint the OIDC token. If you replace the default `GITHUB_TOKEN`, use a token with equivalent release/asset write access.
 
 ### Local packaging and dry-run checks
 
@@ -75,7 +75,7 @@ npm run build:extension
 npm run package:release
 ```
 
-For a local semantic-release config check, run `npx semantic-release --dry-run --no-ci` from a clone that can see `origin/release` and has access to the same release credentials.
+For a local semantic-release config check, run `npx semantic-release --dry-run --no-ci` from a clone of `main` with full git history. This validates branch/configuration and GitHub release wiring, but local runs do not receive the GitHub Actions OIDC token that npm trusted publishing uses in CI.
 
 When `WORKER_BASE_URL` is set for the CLI/Electron server, the standalone browser runtime now exposes it at `/api/runtime-config` and the cone runtime will automatically create/attach a tray leader session on startup. Passing `--lead` to the CLI launches Chrome with the canonical `?tray=<worker-base-url>` query, and successful leader attach rewrites the visible URL to `?tray=<worker-base-url>/tray/<trayId>`. Passing `--join <join-url>` launches Chrome with the canonical `?tray=<join-url>` follower capability instead; the CLI validates that the value parses as a tray `.../join/<trayId>.<secret>` URL and strips any hash/query suffixes before launch. Extension/offscreen builds can use `VITE_WORKER_BASE_URL`, persisted runtime storage, or URL overrides via `tray` (canonical) plus legacy `lead` / `trayWorkerUrl` for the same leader-join path. `GET /join/:token` now reports readiness plus the supported bootstrap transport (`409 FOLLOWER_JOIN_NOT_READY` before a live leader, `200` with `signaling.transport = 'http-poll'` once the leader WebSocket is live), while **`POST /join/:token` remains the follower HTTP contract**: initial attach returns `result.action = wait|signal|fail`, and subsequent `poll` / `answer` / `ice-candidate` / `retry` actions drive the offer/answer/ICE bootstrap without requiring follower-owned tray WebSockets.
 
