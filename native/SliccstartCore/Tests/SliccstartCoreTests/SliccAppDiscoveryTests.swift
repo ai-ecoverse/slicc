@@ -88,4 +88,29 @@ final class SliccAppDiscoveryTests: XCTestCase {
     XCTAssertEqual(app.compatibility.code, .missingExecutable)
     XCTAssertFalse(app.isLaunchable)
   }
+
+  func testDiscoverAppsIncludesAdditionalBundlePathsWithoutDuplicates() throws {
+    let systemApps = rootURL.appendingPathComponent("Applications", isDirectory: true)
+    let extraApps = rootURL.appendingPathComponent("ExtraApps", isDirectory: true)
+    try FileManager.default.createDirectory(at: systemApps, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: extraApps, withIntermediateDirectories: true)
+
+    let chrome = try TestSupport.createAppBundle(
+      in: systemApps,
+      name: "Google Chrome",
+      bundleIdentifier: "com.google.Chrome",
+      executableName: "Google Chrome"
+    )
+    let brave = try TestSupport.createAppBundle(
+      in: extraApps,
+      name: "Brave Browser",
+      bundleIdentifier: "com.brave.Browser"
+    )
+
+    let discovery = SliccAppDiscovery(searchDirectories: [systemApps.path])
+    let apps = try discovery.discoverApps(additionalBundlePaths: [brave.path, chrome.path])
+
+    XCTAssertEqual(apps.filter { $0.bundlePath == chrome.resolvingSymlinksInPath().path }.count, 1)
+    XCTAssertNotNil(apps.first { $0.bundlePath == brave.resolvingSymlinksInPath().path })
+  }
 }
