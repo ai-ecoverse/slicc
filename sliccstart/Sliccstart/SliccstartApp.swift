@@ -63,11 +63,11 @@ struct SliccstartApp: App {
                             do {
                                 try sliccProcess.guidedInstallExtension(chromePath: target.executablePath)
                                 showError(
-                                    "Extension path copied to clipboard!\n\n" +
+                                    "Chrome and Finder are open.\n\n" +
                                     "In chrome://extensions:\n" +
                                     "1. Enable 'Developer mode' (top-right toggle)\n" +
                                     "2. Click 'Load unpacked'\n" +
-                                    "3. Paste the path and select the folder\n\n" +
+                                    "3. Select the ~/.slicc/extension folder shown in Finder\n\n" +
                                     "Keep Developer Mode enabled — the extension needs it."
                                 )
                             } catch {

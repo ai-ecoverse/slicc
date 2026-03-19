@@ -50,7 +50,7 @@ final class SliccProcess {
     // MARK: - Guided extension install
 
     /// Copy extension to a stable path, open Chrome to chrome://extensions,
-    /// and copy the path to clipboard for the user to "Load unpacked".
+    /// and open Finder at the extension folder so the user can select it.
     func guidedInstallExtension(chromePath: String) throws {
         let stablePath = NSHomeDirectory() + "/.slicc/extension"
         let sourcePath = sliccDir + "/dist/extension"
@@ -62,17 +62,14 @@ final class SliccProcess {
         }
         try fm.copyItem(atPath: sourcePath, toPath: stablePath)
 
-        // Copy path to clipboard
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.setString(stablePath, forType: .string)
-
-        // Open Chrome specifically (not the default browser) to chrome://extensions
-        // NSWorkspace can't open chrome:// URLs, so we launch Chrome directly.
+        // Open Chrome to chrome://extensions
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: chromePath)
         proc.arguments = ["chrome://extensions"]
         try proc.run()
+
+        // Open Finder at the extension folder (user selects this in "Load unpacked")
+        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: stablePath)
     }
 
     // MARK: - Lifecycle
