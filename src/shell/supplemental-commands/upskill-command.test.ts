@@ -3,7 +3,7 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IFileSystem, SecureFetch } from 'just-bash';
 import { VirtualFS } from '../../fs/index.js';
-import { createUpskillCommand } from './upskill-command.js';
+import { createUpskillCommand, _resetGlobalFsCache } from './upskill-command.js';
 
 function createMockCtx() {
   const fs: Partial<IFileSystem> = {
@@ -40,6 +40,7 @@ describe('upskill command GitHub flows', () => {
   });
 
   afterEach(async () => {
+    _resetGlobalFsCache();
     await Promise.allSettled(
       createdFileSystems.map((instance) => (instance.getLightningFS() as { _deactivate?: () => Promise<void> })._deactivate?.()),
     );

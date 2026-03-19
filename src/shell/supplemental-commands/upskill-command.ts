@@ -44,9 +44,23 @@ interface GitHubRequestContext {
   request: (url: string, accept?: string) => Promise<GitHubFetchResponse>;
 }
 
+let cachedGlobalFsPromise: Promise<VirtualFS> | undefined;
+
+function getGlobalFs(): Promise<VirtualFS> {
+  if (!cachedGlobalFsPromise) {
+    cachedGlobalFsPromise = SharedVirtualFS.create({ dbName: GITHUB_GLOBAL_DB });
+  }
+  return cachedGlobalFsPromise;
+}
+
+/** @internal Exported only for test cleanup. */
+export function _resetGlobalFsCache(): void {
+  cachedGlobalFsPromise = undefined;
+}
+
 async function loadConfiguredGitHubToken(): Promise<string | undefined> {
   try {
-    const globalFs = await SharedVirtualFS.create({ dbName: GITHUB_GLOBAL_DB });
+    const globalFs = await getGlobalFs();
     const token = (await globalFs.readTextFile(GITHUB_TOKEN_PATH)).trim();
     return token || undefined;
   } catch {
@@ -478,7 +492,8 @@ async function installFromGitHub(
               github.hasToken,
             ));
           }
-          await fs.writeFile(`${destBase}/${item.name}`, fileResponse.body);
+          const cached = consumeCachedBinaryByUrl(item.download_url);
+          await fs.writeFile(`${destBase}/${item.name}`, cached ?? fileResponse.body);
         } else if (item.type === 'dir') {
           // Recursively download subdirectory
           const subUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${item.path}`;
@@ -497,7 +512,13 @@ async function installFromGitHub(
       }
     }
 
-    await downloadDir(contents, destDir);
+    try {
+      await downloadDir(contents, destDir);
+    } catch (downloadErr) {
+      // Clean up partial install so retries don't require --force
+      try { await fs.rm(destDir, { recursive: true }); } catch { /* best-effort */ }
+      throw downloadErr;
+    }
 
     await refreshSprinklesAfterInstall();
     return {
