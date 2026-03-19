@@ -10,10 +10,7 @@ import {
 
 describe('tabbed-ui', () => {
   it('keeps the extension and overlay tab order in one shared place', () => {
-    expect(EXTENSION_TAB_SPECS.map(tab => tab.id)).toEqual([
-      'chat',
-      'files',
-    ]);
+    expect(EXTENSION_TAB_SPECS.map((tab) => tab.id)).toEqual(['chat', 'files']);
   });
 
   it('recognizes built-in tab ids', () => {
@@ -67,7 +64,9 @@ describe('setHiddenTabs', () => {
   it('stores hidden tab IDs in localStorage', () => {
     setHiddenTabs(['terminal', 'files', 'memory']);
     expect(JSON.parse(localStorage.getItem('slicc-hidden-tabs')!)).toEqual([
-      'terminal', 'files', 'memory',
+      'terminal',
+      'files',
+      'memory',
     ]);
   });
 

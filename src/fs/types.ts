@@ -52,20 +52,20 @@ export interface ReadFileOptions {
 
 /** Filesystem error codes, mirroring common POSIX errno values. */
 export type FsErrorCode =
-  | 'ENOENT'    // No such file or directory
-  | 'EEXIST'    // File/dir already exists
-  | 'ENOTDIR'   // Not a directory
-  | 'EISDIR'    // Is a directory (when file expected)
+  | 'ENOENT' // No such file or directory
+  | 'EEXIST' // File/dir already exists
+  | 'ENOTDIR' // Not a directory
+  | 'EISDIR' // Is a directory (when file expected)
   | 'ENOTEMPTY' // Directory not empty
-  | 'EINVAL'    // Invalid argument
-  | 'EACCES';   // Permission denied
+  | 'EINVAL' // Invalid argument
+  | 'EACCES'; // Permission denied
 
 /** Custom error class for filesystem operations. */
 export class FsError extends Error {
   constructor(
     public readonly code: FsErrorCode,
     message: string,
-    public readonly path?: string,
+    public readonly path?: string
   ) {
     super(`${code}: ${message}${path ? ` '${path}'` : ''}`);
     this.name = 'FsError';

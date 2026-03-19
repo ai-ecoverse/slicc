@@ -41,7 +41,9 @@
     "build:extension": "vite build --config vite.config.extension.ts",
     "package:release": "node dist/cli/release-package.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "@adobe/helix-rum-js": "^2.14.2",
@@ -76,6 +78,7 @@
     "electron": "41.0.0",
     "fake-indexeddb": "6.2.5",
     "jsdom": "^28.1.0",
+    "prettier": "3.8.1",
     "puppeteer-core": "^24.39.1",
     "semantic-release": "25.0.3",
     "typescript": "^5.7.3",

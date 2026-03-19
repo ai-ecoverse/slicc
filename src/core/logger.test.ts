@@ -143,8 +143,7 @@ describe('logger', () => {
       // original log level/console method of the suppressed entry.
       const warnCalls = (console.warn as ReturnType<typeof vi.fn>).mock.calls;
       const suppressionCall = warnCalls.find(
-        (args: unknown[]) =>
-          typeof args[1] === 'string' && args[1].includes('suppressed 4 similar'),
+        (args: unknown[]) => typeof args[1] === 'string' && args[1].includes('suppressed 4 similar')
       );
       expect(suppressionCall).toBeDefined();
     });
@@ -211,8 +210,8 @@ describe('logger', () => {
       expect(infoCalls).toHaveLength(1);
       expect(
         infoCalls.some(
-          (args: unknown[]) => typeof args[1] === 'string' && args[1].includes('suppressed'),
-        ),
+          (args: unknown[]) => typeof args[1] === 'string' && args[1].includes('suppressed')
+        )
       ).toBe(false);
     });
   });

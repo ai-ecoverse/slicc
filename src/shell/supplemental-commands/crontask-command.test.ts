@@ -2,8 +2,20 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createCrontaskCommand } from './crontask-command.js';
 
 interface MockLickManager {
-  createCronTask: (name: string, cron: string, scoop?: string) => Promise<{ id: string; name: string; cron: string; scoop?: string; nextRun?: string }>;
-  listCronTasks: () => { id: string; name: string; cron: string; scoop?: string; filter?: string; nextRun?: string; status: string }[];
+  createCronTask: (
+    name: string,
+    cron: string,
+    scoop?: string
+  ) => Promise<{ id: string; name: string; cron: string; scoop?: string; nextRun?: string }>;
+  listCronTasks: () => {
+    id: string;
+    name: string;
+    cron: string;
+    scoop?: string;
+    filter?: string;
+    nextRun?: string;
+    status: string;
+  }[];
   deleteCronTask: (id: string) => Promise<boolean>;
 }
 
@@ -104,8 +116,13 @@ describe('crontask command - CLI mode', () => {
         '/api/crontasks',
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({ name: 'my-task', cron: '0 * * * *', filter: undefined, scoop: undefined }),
-        }),
+          body: JSON.stringify({
+            name: 'my-task',
+            cron: '0 * * * *',
+            filter: undefined,
+            scoop: undefined,
+          }),
+        })
       );
     });
 
@@ -122,7 +139,15 @@ describe('crontask command - CLI mode', () => {
         }),
       });
 
-      const result = await run(['create', '--name', 'monitor-task', '--cron', '*/5 * * * *', '--scoop', 'monitor']);
+      const result = await run([
+        'create',
+        '--name',
+        'monitor-task',
+        '--cron',
+        '*/5 * * * *',
+        '--scoop',
+        'monitor',
+      ]);
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('Scoop:    monitor');
@@ -135,7 +160,7 @@ describe('crontask command - CLI mode', () => {
             filter: undefined,
             scoop: 'monitor',
           }),
-        }),
+        })
       );
     });
 
@@ -154,9 +179,12 @@ describe('crontask command - CLI mode', () => {
 
       const result = await run([
         'create',
-        '--name', 'filtered-task',
-        '--cron', '*/10 * * * *',
-        '--filter', '() => Math.random() > 0.5',
+        '--name',
+        'filtered-task',
+        '--cron',
+        '*/10 * * * *',
+        '--filter',
+        '() => Math.random() > 0.5',
       ]);
 
       expect(result.exitCode).toBe(0);
@@ -170,7 +198,7 @@ describe('crontask command - CLI mode', () => {
             filter: '() => Math.random() > 0.5',
             scoop: undefined,
           }),
-        }),
+        })
       );
     });
 
@@ -256,7 +284,13 @@ describe('crontask command - CLI mode', () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => [
-          { id: 'task1', name: 'filtered', cron: '0 * * * *', filter: '() => true', status: 'active' },
+          {
+            id: 'task1',
+            name: 'filtered',
+            cron: '0 * * * *',
+            filter: '() => true',
+            status: 'active',
+          },
         ],
       });
 
@@ -270,7 +304,13 @@ describe('crontask command - CLI mode', () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => [
-          { id: 'task1', name: 'scheduled', cron: '0 9 * * *', nextRun: '2026-03-17T09:00:00Z', status: 'active' },
+          {
+            id: 'task1',
+            name: 'scheduled',
+            cron: '0 9 * * *',
+            nextRun: '2026-03-17T09:00:00Z',
+            status: 'active',
+          },
         ],
       });
 
@@ -453,7 +493,11 @@ describe('crontask command - Extension mode', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('Created cron task "ext-task"');
       expect(result.stdout).toContain('ID:       ext-task-1');
-      expect(mockLickManager.createCronTask).toHaveBeenCalledWith('ext-task', '0 * * * *', undefined);
+      expect(mockLickManager.createCronTask).toHaveBeenCalledWith(
+        'ext-task',
+        '0 * * * *',
+        undefined
+      );
     });
 
     it('creates task with scoop via LickManager', async () => {
@@ -464,19 +508,34 @@ describe('crontask command - Extension mode', () => {
         scoop: 'monitor',
       });
 
-      const result = await run(['create', '--name', 'monitor-task', '--cron', '*/5 * * * *', '--scoop', 'monitor']);
+      const result = await run([
+        'create',
+        '--name',
+        'monitor-task',
+        '--cron',
+        '*/5 * * * *',
+        '--scoop',
+        'monitor',
+      ]);
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('Scoop:    monitor');
-      expect(mockLickManager.createCronTask).toHaveBeenCalledWith('monitor-task', '*/5 * * * *', 'monitor');
+      expect(mockLickManager.createCronTask).toHaveBeenCalledWith(
+        'monitor-task',
+        '*/5 * * * *',
+        'monitor'
+      );
     });
 
     it('rejects --filter in extension mode (CSP restriction)', async () => {
       const result = await run([
         'create',
-        '--name', 'filtered-task',
-        '--cron', '0 * * * *',
-        '--filter', '() => true',
+        '--name',
+        'filtered-task',
+        '--cron',
+        '0 * * * *',
+        '--filter',
+        '() => true',
       ]);
 
       expect(result.exitCode).toBe(1);
@@ -513,7 +572,14 @@ describe('crontask command - Extension mode', () => {
   describe('list subcommand in extension', () => {
     it('lists tasks via LickManager', async () => {
       (mockLickManager.listCronTasks as ReturnType<typeof vi.fn>).mockReturnValueOnce([
-        { id: 'task1', name: 'monitor', cron: '0 * * * *', scoop: 'monitor', status: 'active', filter: undefined },
+        {
+          id: 'task1',
+          name: 'monitor',
+          cron: '0 * * * *',
+          scoop: 'monitor',
+          status: 'active',
+          filter: undefined,
+        },
         { id: 'task2', name: 'alert', cron: '*/5 * * * *', status: 'active', filter: undefined },
       ]);
 
@@ -611,7 +677,9 @@ describe('crontask command - Extension mode', () => {
     });
 
     it('handles async errors from createCronTask', async () => {
-      (mockLickManager.createCronTask as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('Create failed'));
+      (mockLickManager.createCronTask as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+        new Error('Create failed')
+      );
 
       const result = await run(['create', '--name', 'task', '--cron', '0 * * * *']);
 

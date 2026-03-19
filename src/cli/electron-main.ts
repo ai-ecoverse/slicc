@@ -54,7 +54,9 @@ async function loadOverlayBundleSource(): Promise<string> {
   if (FLAGS.dev) {
     const response = await fetch(buildElectronOverlayEntryUrl(SERVE_ORIGIN));
     if (!response.ok) {
-      throw new Error(`Failed to fetch electron overlay entry: ${response.status} ${response.statusText}`);
+      throw new Error(
+        `Failed to fetch electron overlay entry: ${response.status} ${response.statusText}`
+      );
     }
     return await response.text();
   }
@@ -67,7 +69,7 @@ async function injectOverlay(window: BrowserWindow): Promise<void> {
   await window.webContents.executeJavaScript(bundleSource, true);
   await window.webContents.executeJavaScript(
     buildElectronOverlayInjectionCall({ appUrl: OVERLAY_APP_URL }),
-    true,
+    true
   );
 }
 
@@ -216,7 +218,7 @@ app.on('will-quit', () => {
 });
 
 main().catch((error: unknown) => {
-  const message = error instanceof Error ? error.stack ?? error.message : String(error);
+  const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
   console.error('[electron-float] Fatal error:', message);
   void stopCliServer().finally(() => {
     app.exit(1);

@@ -27,15 +27,18 @@ export class SprinkleManager {
   private bridge: SprinkleBridge;
   private callbacks: SprinkleManagerCallbacks;
   private availableSprinkles = new Map<string, Sprinkle>();
-  private openSprinkles = new Map<string, {
-    renderer: SprinkleRenderer;
-    container: HTMLElement;
-  }>();
+  private openSprinkles = new Map<
+    string,
+    {
+      renderer: SprinkleRenderer;
+      container: HTMLElement;
+    }
+  >();
 
   constructor(
     fs: VirtualFS,
     lickHandler: (event: LickEvent) => void,
-    callbacks: SprinkleManagerCallbacks,
+    callbacks: SprinkleManagerCallbacks
   ) {
     this.fs = fs;
     this.bridge = new SprinkleBridge(fs, lickHandler, (name) => this.close(name));
@@ -68,13 +71,17 @@ export class SprinkleManager {
           log.warn('Failed to restore sprinkle', { name });
         }
       }
-    } catch { /* corrupt localStorage, ignore */ }
+    } catch {
+      /* corrupt localStorage, ignore */
+    }
   }
 
   private persistOpenSprinkles(): void {
     try {
       localStorage.setItem(OPEN_SPRINKLES_KEY, JSON.stringify([...this.openSprinkles.keys()]));
-    } catch { /* localStorage full, ignore */ }
+    } catch {
+      /* localStorage full, ignore */
+    }
   }
 
   /** Refresh and auto-open any new sprinkles with autoOpen that aren't already open. */
@@ -115,10 +122,11 @@ export class SprinkleManager {
       throw new Error(`Sprinkle not found: ${name}`);
     }
 
-    const content = await this.fs.readFile(sprinkle.path, { encoding: 'utf-8' }) as string;
+    const content = (await this.fs.readFile(sprinkle.path, { encoding: 'utf-8' })) as string;
     const container = document.createElement('div');
     container.className = 'sprinkle-panel';
-    container.style.cssText = 'width: 100%; height: 100%; display: flex; flex-direction: column; overflow: hidden;';
+    container.style.cssText =
+      'width: 100%; height: 100%; display: flex; flex-direction: column; overflow: hidden;';
     container.dataset.sprinkle = name;
 
     // Attach container to the layout BEFORE rendering so the sandbox iframe

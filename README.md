@@ -108,8 +108,6 @@ For the full Electron workflow, see [docs/electron.md](docs/electron.md).
 
 ## Screenshots and proof
 
-
-
 ## How it works
 
 SLICC shares one core across the CLI, extension, and Electron modes. The browser is not just where you view the product — it is where the agent runtime lives.
@@ -136,6 +134,7 @@ Why the name? SLICC stands for **Self-Licking Ice Cream Cone**: a recursive syst
 ## API Keys and Providers
 
 To use SLICC, you need an LLM provider. SLICC is very much a BYOT (bring your own tokens) affair. We have built-in support for many providers, and these have actually been tested.
+
 - Adobe (for AEM customers. Talk to the team to get enabled)
 - AWS Bedrock (because enterprise)
 - AWS Bedrock CAMP (this is Adobe-internal. Did I say "because enterprise" already?)

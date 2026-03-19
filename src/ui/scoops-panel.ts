@@ -54,7 +54,7 @@ export class ScoopsPanel {
 
     // Cone first (sliccy), then scoops
     const allScoops = this.orchestrator.getScoops();
-    const scoops = [...allScoops.filter(s => s.isCone), ...allScoops.filter(s => !s.isCone)];
+    const scoops = [...allScoops.filter((s) => s.isCone), ...allScoops.filter((s) => !s.isCone)];
     const listEl = this.container.querySelector('.scoops-list');
     if (!listEl) return;
 
@@ -96,7 +96,7 @@ export class ScoopsPanel {
       } else {
         const iconEl = document.createElement('div');
         iconEl.className = 'scoop-icon';
-        const scoopIndex = scoops.filter(s => !s.isCone).indexOf(scoop);
+        const scoopIndex = scoops.filter((s) => !s.isCone).indexOf(scoop);
         iconEl.style.background = SCOOP_COLORS[scoopIndex % SCOOP_COLORS.length];
         item.appendChild(iconEl);
       }
@@ -163,7 +163,7 @@ export class ScoopsPanel {
   selectScoopByFolder(folder: string): void {
     if (!this.orchestrator) return;
     const scoops = this.orchestrator.getScoops();
-    const scoop = scoops.find(s => s.folder === folder);
+    const scoop = scoops.find((s) => s.folder === folder);
     if (scoop) {
       this.selectScoop(scoop);
     }
@@ -244,11 +244,13 @@ export class ScoopsPanel {
 
   /** Sanitize a name into a valid folder name */
   private sanitizeFolderName(name: string): string {
-    return name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 50) || 'scoop';
+    return (
+      name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 50) || 'scoop'
+    );
   }
 
   /** Render the panel */

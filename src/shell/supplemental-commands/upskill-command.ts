@@ -68,9 +68,12 @@ async function loadConfiguredGitHubToken(): Promise<string | undefined> {
   }
 }
 
-function buildGitHubHeaders(token?: string, accept: string = GITHUB_API_ACCEPT): Record<string, string> {
+function buildGitHubHeaders(
+  token?: string,
+  accept: string = GITHUB_API_ACCEPT
+): Record<string, string> {
   const headers: Record<string, string> = {
-    'Accept': accept,
+    Accept: accept,
     'User-Agent': 'slicc-upskill',
   };
   if (token) {
@@ -83,9 +86,10 @@ async function createGitHubRequestContext(fetch: SecureFetch): Promise<GitHubReq
   const token = await loadConfiguredGitHubToken();
   return {
     hasToken: Boolean(token),
-    request: (url: string, accept: string = GITHUB_API_ACCEPT) => fetch(url, {
-      headers: buildGitHubHeaders(token, accept),
-    }),
+    request: (url: string, accept: string = GITHUB_API_ACCEPT) =>
+      fetch(url, {
+        headers: buildGitHubHeaders(token, accept),
+      }),
   };
 }
 
@@ -117,16 +121,17 @@ function getGitHubErrorDetail(body: string): string | undefined {
 function formatGitHubFailure(
   response: GitHubFetchResponse,
   resourceLabel: string,
-  hasToken: boolean,
+  hasToken: boolean
 ): string {
   const detail = getGitHubErrorDetail(response.body);
   const detailSuffix = detail ? ` GitHub said: ${detail}` : '';
   const retryAfter = getHeader(response.headers, 'retry-after');
   const rateLimitRemaining = getHeader(response.headers, 'x-ratelimit-remaining');
   const normalizedDetail = detail?.toLowerCase() ?? '';
-  const isRateLimit = response.status === 429
-    || rateLimitRemaining === '0'
-    || normalizedDetail.includes('rate limit');
+  const isRateLimit =
+    response.status === 429 ||
+    rateLimitRemaining === '0' ||
+    normalizedDetail.includes('rate limit');
 
   if (isRateLimit) {
     if (hasToken) {
@@ -217,7 +222,7 @@ async function searchClawHub(
   try {
     const url = `${CLAWHUB_API}/search?q=${encodeURIComponent(query)}`;
     const response = await fetch(url, {
-      headers: { 'Accept': 'application/json' },
+      headers: { Accept: 'application/json' },
     });
 
     if (response.status !== 200) {
@@ -312,12 +317,12 @@ async function installFromClawHub(
     // The response body should be latin1-encoded by the fetch proxy for binary content.
     // Try to get the raw binary from the cache first (bypasses string encoding issues).
     const contentType = downloadResponse.headers['content-type'] || '';
-    
+
     // Try to get cached binary data by URL first (most reliable - bypasses string encoding issues)
     let zipBytes = consumeCachedBinaryByUrl(downloadUrl);
     let badCharIdx = -1;
     let badCharCode = 0;
-    
+
     if (!zipBytes) {
       // Fallback: Convert latin1 string to bytes - each char code maps directly to a byte
       zipBytes = new Uint8Array(downloadResponse.body.length);
@@ -327,7 +332,7 @@ async function installFromClawHub(
           badCharIdx = i;
           badCharCode = code;
         }
-        zipBytes[i] = code & 0xFF; // Mask to byte range
+        zipBytes[i] = code & 0xff; // Mask to byte range
       }
     }
 
@@ -338,7 +343,9 @@ async function installFromClawHub(
     } catch (unzipErr) {
       const msg = unzipErr instanceof Error ? unzipErr.message : String(unzipErr);
       // Debug info
-      const hexPreview = Array.from(zipBytes.slice(0, 20)).map(b => b.toString(16).padStart(2, '0')).join(' ');
+      const hexPreview = Array.from(zipBytes.slice(0, 20))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join(' ');
       const badCharInfo = badCharIdx >= 0 ? `\nBad char at ${badCharIdx}: code ${badCharCode}` : '';
       return {
         stdout: '',
@@ -402,11 +409,9 @@ async function listGitHubSkills(
     const response = await github.request(url);
 
     if (response.status !== 200) {
-      throw new Error(formatGitHubFailure(
-        response,
-        `${owner}/${repo}${path ? `/${path}` : ''}`,
-        github.hasToken,
-      ));
+      throw new Error(
+        formatGitHubFailure(response, `${owner}/${repo}${path ? `/${path}` : ''}`, github.hasToken)
+      );
     }
 
     const contents = JSON.parse(response.body) as GitHubContent[];
@@ -486,11 +491,9 @@ async function installFromGitHub(
         if (item.type === 'file' && item.download_url) {
           const fileResponse = await github.request(item.download_url, '*/*');
           if (fileResponse.status !== 200) {
-            throw new Error(formatGitHubFailure(
-              fileResponse,
-              `${owner}/${repo}/${item.path}`,
-              github.hasToken,
-            ));
+            throw new Error(
+              formatGitHubFailure(fileResponse, `${owner}/${repo}/${item.path}`, github.hasToken)
+            );
           }
           const cached = consumeCachedBinaryByUrl(item.download_url);
           await fs.writeFile(`${destBase}/${item.name}`, cached ?? fileResponse.body);
@@ -499,11 +502,9 @@ async function installFromGitHub(
           const subUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${item.path}`;
           const subResponse = await github.request(subUrl);
           if (subResponse.status !== 200) {
-            throw new Error(formatGitHubFailure(
-              subResponse,
-              `${owner}/${repo}/${item.path}`,
-              github.hasToken,
-            ));
+            throw new Error(
+              formatGitHubFailure(subResponse, `${owner}/${repo}/${item.path}`, github.hasToken)
+            );
           }
           const subContents = JSON.parse(subResponse.body) as GitHubContent[];
           await fs.mkdir(`${destBase}/${item.name}`, { recursive: true });
@@ -516,7 +517,11 @@ async function installFromGitHub(
       await downloadDir(contents, destDir);
     } catch (downloadErr) {
       // Clean up partial install so retries don't require --force
-      try { await fs.rm(destDir, { recursive: true }); } catch { /* best-effort */ }
+      try {
+        await fs.rm(destDir, { recursive: true });
+      } catch {
+        /* best-effort */
+      }
       throw downloadErr;
     }
 
@@ -582,7 +587,9 @@ async function refreshSprinklesAfterInstall(): Promise<void> {
     if (mgr && typeof (mgr as Record<string, unknown>).openNewAutoOpenSprinkles === 'function') {
       await (mgr as { openNewAutoOpenSprinkles: () => Promise<void> }).openNewAutoOpenSprinkles();
     }
-  } catch { /* best-effort */ }
+  } catch {
+    /* best-effort */
+  }
 }
 
 /**
@@ -742,9 +749,7 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
       let skillsToInstall = result.skills;
 
       if (selectedSkills.length > 0) {
-        skillsToInstall = result.skills.filter((s) =>
-          selectedSkills.includes(s.name)
-        );
+        skillsToInstall = result.skills.filter((s) => selectedSkills.includes(s.name));
 
         // Check for missing skills
         for (const name of selectedSkills) {
@@ -854,7 +859,8 @@ Examples:
 
           if (discovered.length === 0) {
             return {
-              stdout: 'No skills found in /workspace/skills/\n\nInstall skills with: upskill owner/repo --all\n',
+              stdout:
+                'No skills found in /workspace/skills/\n\nInstall skills with: upskill owner/repo --all\n',
               stderr: '',
               exitCode: 0,
             };
@@ -865,9 +871,7 @@ Examples:
           output += '  ────────────────────────────────────────\n';
 
           for (const skill of discovered) {
-            const status = skill.installed
-              ? `installed (v${skill.installedVersion})`
-              : 'available';
+            const status = skill.installed ? `installed (v${skill.installedVersion})` : 'available';
             output += `  ${skill.name.padEnd(20)} ${skill.manifest.version.padEnd(10)} ${status}\n`;
           }
 
@@ -916,7 +920,11 @@ Examples:
           const result = await skills.applySkill(fs, name);
           if (result.success) {
             await refreshSprinklesAfterInstall();
-            return { stdout: `Installed skill "${result.skill}" v${result.version}\n`, stderr: '', exitCode: 0 };
+            return {
+              stdout: `Installed skill "${result.skill}" v${result.version}\n`,
+              stderr: '',
+              exitCode: 0,
+            };
           }
           return { stdout: '', stderr: `skill: ${result.error}\n`, exitCode: 1 };
         }

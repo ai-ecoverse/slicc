@@ -11,11 +11,7 @@ import {
   type ElectronOverlayShellState,
 } from './overlay-shell-state.js';
 import { ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE } from './runtime-mode.js';
-import {
-  EXTENSION_TAB_SPECS,
-  normalizeExtensionTabId,
-  type ExtensionTabId,
-} from './tabbed-ui.js';
+import { EXTENSION_TAB_SPECS, normalizeExtensionTabId, type ExtensionTabId } from './tabbed-ui.js';
 
 export const ELECTRON_OVERLAY_HOST_ID = 'slicc-electron-overlay-root';
 export const ELECTRON_OVERLAY_TAG_NAME = 'slicc-electron-overlay';
@@ -258,14 +254,16 @@ class SliccElectronLauncherElement extends HTMLElement {
     `;
 
     this.button = root.querySelector('button');
-    this.button?.addEventListener('click', event => {
+    this.button?.addEventListener('click', (event) => {
       if (this.suppressClick) {
         this.suppressClick = false;
         event.preventDefault();
         event.stopImmediatePropagation();
         return;
       }
-      this.dispatchEvent(new CustomEvent('slicc-overlay-toggle', { bubbles: true, composed: true }));
+      this.dispatchEvent(
+        new CustomEvent('slicc-overlay-toggle', { bubbles: true, composed: true })
+      );
     });
     this.button?.addEventListener('pointerdown', this.onPointerDown);
     this.button?.addEventListener('pointermove', this.onPointerMove);
@@ -316,16 +314,24 @@ class SliccElectronLauncherElement extends HTMLElement {
     const dt = Math.max(event.timeStamp - state.lastTimestamp, 1);
     const nextVelocityX = (event.clientX - state.lastX) / dt;
     const nextVelocityY = (event.clientY - state.lastY) / dt;
-    state.velocityX = state.velocityX === 0 ? nextVelocityX : state.velocityX * 0.35 + nextVelocityX * 0.65;
-    state.velocityY = state.velocityY === 0 ? nextVelocityY : state.velocityY * 0.35 + nextVelocityY * 0.65;
+    state.velocityX =
+      state.velocityX === 0 ? nextVelocityX : state.velocityX * 0.35 + nextVelocityX * 0.65;
+    state.velocityY =
+      state.velocityY === 0 ? nextVelocityY : state.velocityY * 0.35 + nextVelocityY * 0.65;
     state.lastX = event.clientX;
     state.lastY = event.clientY;
     state.lastTimestamp = event.timeStamp;
 
     if (!state.dragging) return;
 
-    const maxLeft = Math.max(ELECTRON_OVERLAY_LAUNCHER_OFFSET_PX, window.innerWidth - state.width - ELECTRON_OVERLAY_LAUNCHER_OFFSET_PX);
-    const maxTop = Math.max(ELECTRON_OVERLAY_LAUNCHER_OFFSET_PX, window.innerHeight - state.height - ELECTRON_OVERLAY_LAUNCHER_OFFSET_PX);
+    const maxLeft = Math.max(
+      ELECTRON_OVERLAY_LAUNCHER_OFFSET_PX,
+      window.innerWidth - state.width - ELECTRON_OVERLAY_LAUNCHER_OFFSET_PX
+    );
+    const maxTop = Math.max(
+      ELECTRON_OVERLAY_LAUNCHER_OFFSET_PX,
+      window.innerHeight - state.height - ELECTRON_OVERLAY_LAUNCHER_OFFSET_PX
+    );
     const left = clamp(state.startLeft + deltaX, ELECTRON_OVERLAY_LAUNCHER_OFFSET_PX, maxLeft);
     const top = clamp(state.startTop + deltaY, ELECTRON_OVERLAY_LAUNCHER_OFFSET_PX, maxTop);
     this.style.left = `${left}px`;
@@ -349,7 +355,8 @@ class SliccElectronLauncherElement extends HTMLElement {
 
     const distance = Math.hypot(event.clientX - state.startX, event.clientY - state.startY);
     const velocity = Math.hypot(state.velocityX, state.velocityY);
-    const shouldSnap = allowSnap && (state.dragging || shouldSnapElectronOverlayLauncher(distance, velocity));
+    const shouldSnap =
+      allowSnap && (state.dragging || shouldSnapElectronOverlayLauncher(distance, velocity));
 
     if (shouldSnap) {
       const corner = resolveElectronOverlayLauncherCorner({
@@ -365,7 +372,7 @@ class SliccElectronLauncherElement extends HTMLElement {
           bubbles: true,
           composed: true,
           detail: { corner },
-        }),
+        })
       );
       this.suppressClick = true;
       event.preventDefault();
@@ -590,7 +597,7 @@ class SliccElectronSidebarElement extends HTMLElement {
       this.dispatchEvent(new CustomEvent('slicc-overlay-close', { bubbles: true, composed: true }));
     });
 
-    root.querySelectorAll<HTMLButtonElement>('[data-tab]').forEach(button => {
+    root.querySelectorAll<HTMLButtonElement>('[data-tab]').forEach((button) => {
       const tab = normalizeExtensionTabId(button.dataset.tab);
       this.tabButtons.set(tab, button);
       button.addEventListener('click', () => {
@@ -599,7 +606,7 @@ class SliccElectronSidebarElement extends HTMLElement {
             bubbles: true,
             composed: true,
             detail: { tab },
-          }),
+          })
         );
       });
     });
@@ -659,7 +666,7 @@ class SliccElectronSidebarElement extends HTMLElement {
         type: ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE,
         tab: activeTab,
       },
-      '*',
+      '*'
     );
     this.lastPostedTab = activeTab;
   }
@@ -677,7 +684,8 @@ export class SliccElectronOverlayElement extends HTMLElement {
       open: this.hasAttribute('open'),
       activeTab: normalizeExtensionTabId(this.getAttribute('active-tab')),
       corner: normalizeElectronOverlayLauncherCorner(
-        this.getAttribute('corner') ?? readPersistedElectronOverlayCorner(this.ownerDocument.defaultView),
+        this.getAttribute('corner') ??
+          readPersistedElectronOverlayCorner(this.ownerDocument.defaultView)
       ),
     });
     this.appUrlValue = this.getAttribute('app-url')?.trim() ?? DEFAULT_APP_URL;
@@ -697,7 +705,8 @@ export class SliccElectronOverlayElement extends HTMLElement {
       open: this.hasAttribute('open'),
       activeTab: normalizeExtensionTabId(this.getAttribute('active-tab')),
       corner: normalizeElectronOverlayLauncherCorner(
-        this.getAttribute('corner') ?? readPersistedElectronOverlayCorner(this.ownerDocument.defaultView),
+        this.getAttribute('corner') ??
+          readPersistedElectronOverlayCorner(this.ownerDocument.defaultView)
       ),
     });
     this.appUrlValue = this.getAttribute('app-url')?.trim() ?? DEFAULT_APP_URL;
@@ -802,16 +811,20 @@ export class SliccElectronOverlayElement extends HTMLElement {
       <${ELECTRON_OVERLAY_SIDEBAR_TAG_NAME}></${ELECTRON_OVERLAY_SIDEBAR_TAG_NAME}>
     `;
 
-    root.querySelector<SliccElectronLauncherElement>(ELECTRON_OVERLAY_LAUNCHER_TAG_NAME)
+    root
+      .querySelector<SliccElectronLauncherElement>(ELECTRON_OVERLAY_LAUNCHER_TAG_NAME)
       ?.addEventListener('slicc-overlay-toggle', () => this.toggle());
-    root.querySelector<SliccElectronLauncherElement>(ELECTRON_OVERLAY_LAUNCHER_TAG_NAME)
+    root
+      .querySelector<SliccElectronLauncherElement>(ELECTRON_OVERLAY_LAUNCHER_TAG_NAME)
       ?.addEventListener('slicc-overlay-move', (event: Event) => {
         const corner = (event as CustomEvent<{ corner?: string }>).detail?.corner;
         this.applyState(setElectronOverlayCorner(this.state, corner));
       });
-    root.querySelector<SliccElectronSidebarElement>(ELECTRON_OVERLAY_SIDEBAR_TAG_NAME)
+    root
+      .querySelector<SliccElectronSidebarElement>(ELECTRON_OVERLAY_SIDEBAR_TAG_NAME)
       ?.addEventListener('slicc-overlay-close', () => this.hideSidebar());
-    root.querySelector<SliccElectronSidebarElement>(ELECTRON_OVERLAY_SIDEBAR_TAG_NAME)
+    root
+      .querySelector<SliccElectronSidebarElement>(ELECTRON_OVERLAY_SIDEBAR_TAG_NAME)
       ?.addEventListener('slicc-overlay-select-tab', (event: Event) => {
         const tab = (event as CustomEvent<{ tab?: string }>).detail?.tab;
         this.applyState(setElectronOverlayTab(this.state, tab));
@@ -822,8 +835,12 @@ export class SliccElectronOverlayElement extends HTMLElement {
     const root = this.shadowRoot;
     if (!root) return;
 
-    const launcher = root.querySelector<SliccElectronLauncherElement>(ELECTRON_OVERLAY_LAUNCHER_TAG_NAME);
-    const sidebar = root.querySelector<SliccElectronSidebarElement>(ELECTRON_OVERLAY_SIDEBAR_TAG_NAME);
+    const launcher = root.querySelector<SliccElectronLauncherElement>(
+      ELECTRON_OVERLAY_LAUNCHER_TAG_NAME
+    );
+    const sidebar = root.querySelector<SliccElectronSidebarElement>(
+      ELECTRON_OVERLAY_SIDEBAR_TAG_NAME
+    );
     if (!launcher || !sidebar) return;
 
     launcher.toggleAttribute('open', this.state.open);
@@ -846,7 +863,7 @@ export interface InjectElectronOverlayOptions {
 }
 
 export function registerElectronOverlayElements(
-  registry: CustomElementRegistry = customElements,
+  registry: CustomElementRegistry = customElements
 ): void {
   if (!registry.get(ELECTRON_OVERLAY_LAUNCHER_TAG_NAME)) {
     registry.define(ELECTRON_OVERLAY_LAUNCHER_TAG_NAME, SliccElectronLauncherElement);
@@ -861,7 +878,7 @@ export function registerElectronOverlayElements(
 
 export function injectElectronOverlayShell(
   targetDocument: Document = document,
-  options: InjectElectronOverlayOptions = {},
+  options: InjectElectronOverlayOptions = {}
 ): SliccElectronOverlayElement {
   registerElectronOverlayElements(targetDocument.defaultView?.customElements ?? customElements);
 
@@ -872,7 +889,9 @@ export function injectElectronOverlayShell(
     overlay = existing;
   } else {
     existing?.remove();
-    overlay = targetDocument.createElement(ELECTRON_OVERLAY_TAG_NAME) as SliccElectronOverlayElement;
+    overlay = targetDocument.createElement(
+      ELECTRON_OVERLAY_TAG_NAME
+    ) as SliccElectronOverlayElement;
   }
 
   overlay.id = ELECTRON_OVERLAY_HOST_ID;
@@ -891,7 +910,8 @@ export function injectElectronOverlayShell(
     overlay.appUrl = options.appUrl ?? DEFAULT_APP_URL;
   }
   if (options.corner !== undefined) {
-    overlay.corner = options.corner ?? readPersistedElectronOverlayCorner(targetDocument.defaultView);
+    overlay.corner =
+      options.corner ?? readPersistedElectronOverlayCorner(targetDocument.defaultView);
   }
 
   return overlay;
@@ -902,11 +922,11 @@ export function removeElectronOverlayShell(targetDocument: Document = document):
 }
 
 function readPersistedElectronOverlayCorner(
-  view: Window | null | undefined,
+  view: Window | null | undefined
 ): ElectronOverlayLauncherCorner {
   try {
     return normalizeElectronOverlayLauncherCorner(
-      view?.sessionStorage.getItem(ELECTRON_OVERLAY_LAUNCHER_SESSION_STORAGE_KEY),
+      view?.sessionStorage.getItem(ELECTRON_OVERLAY_LAUNCHER_SESSION_STORAGE_KEY)
     );
   } catch {
     return normalizeElectronOverlayLauncherCorner(null);
@@ -915,7 +935,7 @@ function readPersistedElectronOverlayCorner(
 
 function persistElectronOverlayCorner(
   view: Window | null | undefined,
-  corner: ElectronOverlayLauncherCorner,
+  corner: ElectronOverlayLauncherCorner
 ): void {
   try {
     view?.sessionStorage.setItem(ELECTRON_OVERLAY_LAUNCHER_SESSION_STORAGE_KEY, corner);

@@ -22,16 +22,28 @@ function createMockFs(files: Record<string, string> = {}): IFileSystem {
     },
     async appendFile(path: string, content: string | Uint8Array): Promise<void> {
       const existing = store.get(path) || '';
-      store.set(path, existing + (typeof content === 'string' ? content : new TextDecoder().decode(content)));
+      store.set(
+        path,
+        existing + (typeof content === 'string' ? content : new TextDecoder().decode(content))
+      );
     },
     async exists(path: string): Promise<boolean> {
       return store.has(path);
     },
     async stat(path: string): Promise<FsStat> {
       if (!store.has(path)) throw new Error(`ENOENT: ${path}`);
-      return { isFile: true, isDirectory: false, isSymbolicLink: false, mode: 0o644, size: (store.get(path) || '').length, mtime: new Date() };
+      return {
+        isFile: true,
+        isDirectory: false,
+        isSymbolicLink: false,
+        mode: 0o644,
+        size: (store.get(path) || '').length,
+        mtime: new Date(),
+      };
     },
-    async mkdir(): Promise<void> { /* noop for tests */ },
+    async mkdir(): Promise<void> {
+      /* noop for tests */
+    },
     async readdir(path: string): Promise<string[]> {
       const entries: string[] = [];
       const prefix = path.endsWith('/') ? path : path + '/';
@@ -44,9 +56,15 @@ function createMockFs(files: Record<string, string> = {}): IFileSystem {
       }
       return entries;
     },
-    async rm(path: string): Promise<void> { store.delete(path); },
-    async cp(): Promise<void> { /* noop */ },
-    async mv(): Promise<void> { /* noop */ },
+    async rm(path: string): Promise<void> {
+      store.delete(path);
+    },
+    async cp(): Promise<void> {
+      /* noop */
+    },
+    async mv(): Promise<void> {
+      /* noop */
+    },
     resolvePath(base: string, path: string): string {
       if (path.startsWith('/')) return path;
       if (path === '.') return base;
@@ -60,14 +78,30 @@ function createMockFs(files: Record<string, string> = {}): IFileSystem {
       }
       return '/' + resolved.join('/');
     },
-    getAllPaths(): string[] { return [...store.keys()]; },
-    async chmod(): Promise<void> { /* noop */ },
-    async symlink(): Promise<void> { /* noop */ },
-    async link(): Promise<void> { /* noop */ },
-    async readlink(): Promise<string> { return ''; },
-    async lstat(path: string): Promise<FsStat> { return fs.stat(path); },
-    async realpath(path: string): Promise<string> { return path; },
-    async utimes(): Promise<void> { /* noop */ },
+    getAllPaths(): string[] {
+      return [...store.keys()];
+    },
+    async chmod(): Promise<void> {
+      /* noop */
+    },
+    async symlink(): Promise<void> {
+      /* noop */
+    },
+    async link(): Promise<void> {
+      /* noop */
+    },
+    async readlink(): Promise<string> {
+      return '';
+    },
+    async lstat(path: string): Promise<FsStat> {
+      return fs.stat(path);
+    },
+    async realpath(path: string): Promise<string> {
+      return path;
+    },
+    async utimes(): Promise<void> {
+      /* noop */
+    },
   };
   return fs;
 }
@@ -75,7 +109,10 @@ function createMockFs(files: Record<string, string> = {}): IFileSystem {
 function createMockCtx(
   files: Record<string, string> = {},
   envVars: Record<string, string> = {},
-  execFn?: (command: string, options: { cwd?: string }) => Promise<{ stdout: string; stderr: string; exitCode: number }>,
+  execFn?: (
+    command: string,
+    options: { cwd?: string }
+  ) => Promise<{ stdout: string; stderr: string; exitCode: number }>
 ): CommandContext {
   const env = new Map<string, string>(Object.entries(envVars));
   const ctx: CommandContext = {
@@ -124,7 +161,7 @@ describe('executeJshFile', () => {
   it('provides process.env from shell environment', async () => {
     const ctx = createMockCtx(
       { '/workspace/env.jsh': 'console.log(process.env.MY_VAR);' },
-      { MY_VAR: 'hello_env' },
+      { MY_VAR: 'hello_env' }
     );
     const result = await executeJshFile('/workspace/env.jsh', [], ctx);
     expect(result.exitCode).toBe(0);
@@ -178,7 +215,8 @@ describe('executeJshFile', () => {
 
   it('provides fs.readFile for VFS access', async () => {
     const ctx = createMockCtx({
-      '/workspace/reader.jsh': 'const content = await fs.readFile("data.txt"); console.log(content);',
+      '/workspace/reader.jsh':
+        'const content = await fs.readFile("data.txt"); console.log(content);',
       '/workspace/data.txt': 'file contents here',
     });
     const result = await executeJshFile('/workspace/reader.jsh', [], ctx);
@@ -200,7 +238,8 @@ describe('executeJshFile', () => {
 
   it('provides fs.exists', async () => {
     const ctx = createMockCtx({
-      '/workspace/check.jsh': 'console.log(await fs.exists("data.txt")); console.log(await fs.exists("nope.txt"));',
+      '/workspace/check.jsh':
+        'console.log(await fs.exists("data.txt")); console.log(await fs.exists("nope.txt"));',
       '/workspace/data.txt': 'exists',
     });
     const result = await executeJshFile('/workspace/check.jsh', [], ctx);
@@ -210,7 +249,8 @@ describe('executeJshFile', () => {
 
   it('provides fs.readDir', async () => {
     const ctx = createMockCtx({
-      '/workspace/lsdir.jsh': 'const entries = await fs.readDir("."); console.log(entries.sort().join(","));',
+      '/workspace/lsdir.jsh':
+        'const entries = await fs.readDir("."); console.log(entries.sort().join(","));',
       '/workspace/a.txt': 'a',
       '/workspace/b.txt': 'b',
     });
@@ -272,7 +312,7 @@ describe('executeJsCode', () => {
     const result = await executeJsCode(
       'console.log(process.argv.join(","));',
       ['node', 'test.js', 'a', 'b'],
-      ctx,
+      ctx
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe('node,test.js,a,b');
@@ -285,7 +325,7 @@ describe('executeJsCode', () => {
     const result = await executeJsCode(
       'const data = await fs.readFile("data.txt"); console.log(data);',
       ['node'],
-      ctx,
+      ctx
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe('async content');
@@ -302,7 +342,7 @@ describe('exec bridge', () => {
     const ctx = createMockCtx(
       { '/workspace/run.jsh': 'const r = await exec("echo hello"); console.log(r.stdout.trim());' },
       {},
-      mockExec,
+      mockExec
     );
     const result = await executeJshFile('/workspace/run.jsh', [], ctx);
     expect(result.exitCode).toBe(0);
@@ -318,7 +358,7 @@ describe('exec bridge', () => {
     const ctx = createMockCtx(
       { '/workspace/check.jsh': 'const r = await exec("bad-cmd"); console.log(r.exitCode);' },
       {},
-      mockExec,
+      mockExec
     );
     const result = await executeJshFile('/workspace/check.jsh', [], ctx);
     expect(result.exitCode).toBe(0);
@@ -344,7 +384,7 @@ describe('exec bridge', () => {
     const result = await executeJsCode(
       'const r = await exec("oauth-token adobe"); process.stdout.write(r.stdout);',
       ['node'],
-      ctx,
+      ctx
     );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('output of oauth-token adobe\n');
@@ -357,9 +397,12 @@ describe('exec bridge', () => {
       exitCode: 1,
     });
     const ctx = createMockCtx(
-      { '/workspace/fail.jsh': 'const r = await exec("restricted-cmd"); console.error(r.stderr.trim()); console.log(r.exitCode);' },
+      {
+        '/workspace/fail.jsh':
+          'const r = await exec("restricted-cmd"); console.error(r.stderr.trim()); console.log(r.exitCode);',
+      },
       {},
-      mockExec,
+      mockExec
     );
     const result = await executeJshFile('/workspace/fail.jsh', [], ctx);
     expect(result.exitCode).toBe(0);

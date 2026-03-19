@@ -16,22 +16,39 @@ const log = createLogger('skills');
 
 // Load default text files at build time using import.meta.glob
 // The '?raw' query imports file contents as strings
-const defaultTextFiles = import.meta.glob('/src/defaults/**/*.{md,jsh,shtml,json,txt,css,js,ts,html}', { 
-  query: '?raw',
-  import: 'default',
-  eager: true 
-}) as Record<string, string>;
+const defaultTextFiles = import.meta.glob(
+  '/src/defaults/**/*.{md,jsh,shtml,json,txt,css,js,ts,html}',
+  {
+    query: '?raw',
+    import: 'default',
+    eager: true,
+  }
+) as Record<string, string>;
 
 // Load default binary files (audio, images, etc.) as base64
 // The '?inline' query gives us a data URL we can decode
-const defaultBinaryFiles = import.meta.glob('/src/defaults/**/*.{mp3,wav,ogg,png,jpg,jpeg,gif,webp,ico,pdf}', { 
-  query: '?inline',
-  import: 'default',
-  eager: true 
-}) as Record<string, string>;
+const defaultBinaryFiles = import.meta.glob(
+  '/src/defaults/**/*.{mp3,wav,ogg,png,jpg,jpeg,gif,webp,ico,pdf}',
+  {
+    query: '?inline',
+    import: 'default',
+    eager: true,
+  }
+) as Record<string, string>;
 
 // Binary file extensions that need special handling
-const BINARY_EXTENSIONS = new Set(['.mp3', '.wav', '.ogg', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.pdf']);
+const BINARY_EXTENSIONS = new Set([
+  '.mp3',
+  '.wav',
+  '.ogg',
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.ico',
+  '.pdf',
+]);
 
 function isBinaryFile(path: string): boolean {
   const ext = path.slice(path.lastIndexOf('.')).toLowerCase();
@@ -52,17 +69,17 @@ function decodeDataUrl(dataUrl: string): Uint8Array {
 // Combined view of all default files
 function getDefaultFiles(): Record<string, string | Uint8Array> {
   const result: Record<string, string | Uint8Array> = {};
-  
+
   // Add text files as-is
   for (const [path, content] of Object.entries(defaultTextFiles)) {
     result[path] = content;
   }
-  
+
   // Add binary files decoded from data URLs
   for (const [path, dataUrl] of Object.entries(defaultBinaryFiles)) {
     result[path] = decodeDataUrl(dataUrl);
   }
-  
+
   return result;
 }
 
@@ -107,7 +124,7 @@ function parseFrontmatter(content: string): { metadata: Partial<SkillMetadata>; 
         metadata.description = trimmedValue;
         break;
       case 'allowed-tools':
-        metadata.allowedTools = trimmedValue.split(',').map(t => t.trim());
+        metadata.allowedTools = trimmedValue.split(',').map((t) => t.trim());
         break;
     }
   }
@@ -190,9 +207,9 @@ export async function loadSkills(fs: VirtualFS, skillsDir: string): Promise<Skil
 export function formatSkillsForPrompt(skills: Skill[]): string {
   if (skills.length === 0) return '';
 
-  const sections = skills.map(skill => {
-    const toolsLine = skill.metadata.allowedTools 
-      ? `  Allowed tools: ${skill.metadata.allowedTools.join(', ')}\n` 
+  const sections = skills.map((skill) => {
+    const toolsLine = skill.metadata.allowedTools
+      ? `  Allowed tools: ${skill.metadata.allowedTools.join(', ')}\n`
       : '';
     return `- **${skill.metadata.name}**: ${skill.metadata.description}\n${toolsLine}  Path: ${skill.path}`;
   });
@@ -212,15 +229,18 @@ ${sections.join('\n')}
  * Create default files in VFS from bundled defaults.
  * Files are loaded from src/defaults/ at build time via import.meta.glob.
  */
-export async function createDefaultSkills(fs: VirtualFS, skillsDir: string = '/workspace/skills'): Promise<void> {
+export async function createDefaultSkills(
+  fs: VirtualFS,
+  skillsDir: string = '/workspace/skills'
+): Promise<void> {
   const prefix = '/src/defaults';
   const defaultFiles = getDefaultFiles();
-  
+
   for (const [importPath, content] of Object.entries(defaultFiles)) {
     // Convert import path like '/src/defaults/workspace/skills/browser/SKILL.md'
     // to VFS path like '/workspace/skills/browser/SKILL.md'
     const vfsPath = importPath.slice(prefix.length);
-    
+
     // Copy files under /workspace/skills and /workspace/scripts
     const isSkill = vfsPath.startsWith('/workspace/skills');
     const isScript = vfsPath.startsWith('/workspace/scripts');
@@ -236,7 +256,7 @@ export async function createDefaultSkills(fs: VirtualFS, skillsDir: string = '/w
       const scoopBase = skillsDir.replace('/workspace/skills', '');
       targetPath = scoopBase + vfsPath;
     }
-    
+
     try {
       // Check if file already exists
       await fs.stat(targetPath);
@@ -261,13 +281,13 @@ export async function createDefaultSkills(fs: VirtualFS, skillsDir: string = '/w
 export async function createDefaultSharedFiles(fs: VirtualFS): Promise<void> {
   const prefix = '/src/defaults';
   const defaultFiles = getDefaultFiles();
-  
+
   for (const [importPath, content] of Object.entries(defaultFiles)) {
     const vfsPath = importPath.slice(prefix.length);
-    
+
     // Only copy files that belong under /shared/
     if (!vfsPath.startsWith('/shared/')) continue;
-    
+
     try {
       // Check if file already exists
       await fs.stat(vfsPath);

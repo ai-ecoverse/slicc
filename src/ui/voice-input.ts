@@ -49,8 +49,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   'not-allowed': 'Microphone access denied. Check Chrome site permissions.',
   'no-speech': 'No speech detected. Try again.',
   'audio-capture': 'No microphone found. Check your audio input device.',
-  'network': 'Voice input requires an internet connection.',
-  'aborted': 'Voice input was interrupted.',
+  network: 'Voice input requires an internet connection.',
+  aborted: 'Voice input was interrupted.',
   'service-not-available': 'Speech recognition service unavailable. Try again later.',
   'start-failed': 'Failed to start speech recognition.',
   'not-supported': 'Speech recognition is not supported in this browser.',
@@ -107,27 +107,30 @@ export class VoiceInput {
     // Try getUserMedia to ensure mic permission, then start recognition.
     // If getUserMedia fails in extension side panel, fall back to popup window.
     if (navigator.mediaDevices?.getUserMedia) {
-      navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
-        for (const track of stream.getTracks()) track.stop();
-        if (!this.shouldBeListening) return;
-        this.startRecognition(new Ctor());
-      }).catch((err: any) => {
-        if (!this.shouldBeListening) return;
-        if (isExtension()) {
-          this.startExtensionPopup();
-        } else {
-          this.shouldBeListening = false;
-          const name = err?.name;
-          let message = ERROR_MESSAGES['not-allowed'];
-          if (name === 'NotFoundError') {
-            message = ERROR_MESSAGES['audio-capture'];
-          } else if (name === 'NotReadableError') {
-            message = 'Microphone is in use by another app. Try again.';
+      navigator.mediaDevices
+        .getUserMedia({ audio: true })
+        .then((stream) => {
+          for (const track of stream.getTracks()) track.stop();
+          if (!this.shouldBeListening) return;
+          this.startRecognition(new Ctor());
+        })
+        .catch((err: any) => {
+          if (!this.shouldBeListening) return;
+          if (isExtension()) {
+            this.startExtensionPopup();
+          } else {
+            this.shouldBeListening = false;
+            const name = err?.name;
+            let message = ERROR_MESSAGES['not-allowed'];
+            if (name === 'NotFoundError') {
+              message = ERROR_MESSAGES['audio-capture'];
+            } else if (name === 'NotReadableError') {
+              message = 'Microphone is in use by another app. Try again.';
+            }
+            this.options.onError(message);
+            this.options.onStateChange('error');
           }
-          this.options.onError(message);
-          this.options.onStateChange('error');
-        }
-      });
+        });
     } else {
       // No getUserMedia — try speech recognition directly
       this.startRecognition(new Ctor());
@@ -140,21 +143,24 @@ export class VoiceInput {
     const lang = this.options.lang ?? 'en-US';
     const url = chrome.runtime.getURL(`voice-popup.html?lang=${encodeURIComponent(lang)}`);
 
-    chrome.windows.create({
-      url,
-      type: 'popup',
-      width: 300,
-      height: 68,
-      focused: true,
-    }).then((win) => {
-      if (!this.shouldBeListening) return; // user stopped while popup was opening
-      this.setupExtensionListener();
-      if (win?.id) this.popupWindowId = win.id;
-    }).catch(() => {
-      this.shouldBeListening = false;
-      this.options.onError('Failed to open voice input window.');
-      this.options.onStateChange('error');
-    });
+    chrome.windows
+      .create({
+        url,
+        type: 'popup',
+        width: 300,
+        height: 68,
+        focused: true,
+      })
+      .then((win) => {
+        if (!this.shouldBeListening) return; // user stopped while popup was opening
+        this.setupExtensionListener();
+        if (win?.id) this.popupWindowId = win.id;
+      })
+      .catch(() => {
+        this.shouldBeListening = false;
+        this.options.onError('Failed to open voice input window.');
+        this.options.onStateChange('error');
+      });
   }
 
   private setupExtensionListener(): void {
@@ -368,7 +374,9 @@ export class VoiceInput {
     }
 
     if (this.popupWindowId != null) {
-      try { chrome.runtime.sendMessage({ target: 'voice-popup', type: 'voice-stop' }); } catch {}
+      try {
+        chrome.runtime.sendMessage({ target: 'voice-popup', type: 'voice-stop' });
+      } catch {}
       chrome.windows.remove(this.popupWindowId).catch(() => {});
       this.popupWindowId = null;
     } else if (this.recognition) {
@@ -377,7 +385,9 @@ export class VoiceInput {
       this.recognition.onresult = null;
       this.recognition.onerror = null;
       this.recognition.onend = null;
-      try { this.recognition.stop(); } catch {}
+      try {
+        this.recognition.stop();
+      } catch {}
       this.recognition = null;
     }
 

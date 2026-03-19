@@ -17,7 +17,12 @@ function createMockCtx() {
   };
 }
 
-function response(status: number, body: string, headers: Record<string, string> = {}, statusText = '') {
+function response(
+  status: number,
+  body: string,
+  headers: Record<string, string> = {},
+  statusText = ''
+) {
   return { status, statusText, headers, body, url: 'https://example.test' };
 }
 
@@ -42,7 +47,9 @@ describe('upskill command GitHub flows', () => {
   afterEach(async () => {
     _resetGlobalFsCache();
     await Promise.allSettled(
-      createdFileSystems.map((instance) => (instance.getLightningFS() as { _deactivate?: () => Promise<void> })._deactivate?.()),
+      createdFileSystems.map((instance) =>
+        (instance.getLightningFS() as { _deactivate?: () => Promise<void> })._deactivate?.()
+      )
     );
     vi.restoreAllMocks();
   });
@@ -69,10 +76,23 @@ describe('upskill command GitHub flows', () => {
         return response(200, JSON.stringify([{ name: 'alpha', path: 'alpha', type: 'dir' }]));
       }
       if (url.endsWith('/contents/alpha')) {
-        return response(200, JSON.stringify([
-          { name: 'SKILL.md', path: 'alpha/SKILL.md', type: 'file', download_url: 'https://raw.githubusercontent.com/octo/skills/main/alpha/SKILL.md' },
-          { name: 'helper.txt', path: 'alpha/helper.txt', type: 'file', download_url: 'https://raw.githubusercontent.com/octo/skills/main/alpha/helper.txt' },
-        ]));
+        return response(
+          200,
+          JSON.stringify([
+            {
+              name: 'SKILL.md',
+              path: 'alpha/SKILL.md',
+              type: 'file',
+              download_url: 'https://raw.githubusercontent.com/octo/skills/main/alpha/SKILL.md',
+            },
+            {
+              name: 'helper.txt',
+              path: 'alpha/helper.txt',
+              type: 'file',
+              download_url: 'https://raw.githubusercontent.com/octo/skills/main/alpha/helper.txt',
+            },
+          ])
+        );
       }
       if (url.endsWith('/alpha/SKILL.md')) return response(200, '# Alpha skill\n');
       if (url.endsWith('/alpha/helper.txt')) return response(200, 'helper\n');
@@ -84,7 +104,9 @@ describe('upskill command GitHub flows', () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Installed skill "alpha" from octo/skills');
-    await expect(fs.readTextFile('/workspace/skills/alpha/SKILL.md')).resolves.toContain('Alpha skill');
+    await expect(fs.readTextFile('/workspace/skills/alpha/SKILL.md')).resolves.toContain(
+      'Alpha skill'
+    );
 
     for (const [url, options] of fetchMock.mock.calls) {
       expect(url).toContain('github');
@@ -93,15 +115,17 @@ describe('upskill command GitHub flows', () => {
   });
 
   it('classifies anonymous GitHub rate-limit failures when listing skills', async () => {
-    const fetchMock = vi.fn(async (_url: string, options?: { headers?: Record<string, string> }) => {
-      expect(options?.headers?.Authorization).toBeUndefined();
-      return response(
-        403,
-        JSON.stringify({ message: 'API rate limit exceeded for 198.51.100.10.' }),
-        { 'x-ratelimit-remaining': '0' },
-        'Forbidden',
-      );
-    });
+    const fetchMock = vi.fn(
+      async (_url: string, options?: { headers?: Record<string, string> }) => {
+        expect(options?.headers?.Authorization).toBeUndefined();
+        return response(
+          403,
+          JSON.stringify({ message: 'API rate limit exceeded for 198.51.100.10.' }),
+          { 'x-ratelimit-remaining': '0' },
+          'Forbidden'
+        );
+      }
+    );
 
     const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
     const result = await cmd.execute(['octo/skills', '--list'], createMockCtx() as any);
@@ -125,15 +149,26 @@ describe('upskill command GitHub flows', () => {
       if (url.endsWith('/contents/alpha')) {
         alphaRequests += 1;
         if (alphaRequests === 1) {
-          return response(200, JSON.stringify([
-            { name: 'SKILL.md', path: 'alpha/SKILL.md', type: 'file', download_url: 'https://raw.githubusercontent.com/octo/skills/main/alpha/SKILL.md' },
-          ]));
+          return response(
+            200,
+            JSON.stringify([
+              {
+                name: 'SKILL.md',
+                path: 'alpha/SKILL.md',
+                type: 'file',
+                download_url: 'https://raw.githubusercontent.com/octo/skills/main/alpha/SKILL.md',
+              },
+            ])
+          );
         }
         return response(
           429,
-          JSON.stringify({ message: 'You have exceeded a secondary rate limit. Please wait a few minutes before you try again.' }),
+          JSON.stringify({
+            message:
+              'You have exceeded a secondary rate limit. Please wait a few minutes before you try again.',
+          }),
           { 'retry-after': '60' },
-          'Too Many Requests',
+          'Too Many Requests'
         );
       }
       throw new Error(`unexpected url: ${url}`);

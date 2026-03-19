@@ -11,7 +11,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock chrome.runtime
-const messageListeners: Array<(message: unknown, sender: unknown, sendResponse: (r?: unknown) => void) => void> = [];
+const messageListeners: Array<
+  (message: unknown, sender: unknown, sendResponse: (r?: unknown) => void) => void
+> = [];
 const sentMessages: unknown[] = [];
 
 const mockChrome = {
@@ -63,7 +65,13 @@ describe('OffscreenBridge createCallbacks', () => {
     mockOrchestrator = {
       getScoops: vi.fn(() => [
         { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
-        { jid: 'scoop_test', name: 'Test', folder: 'test-scoop', isCone: false, assistantLabel: 'test-scoop' },
+        {
+          jid: 'scoop_test',
+          name: 'Test',
+          folder: 'test-scoop',
+          isCone: false,
+          assistantLabel: 'test-scoop',
+        },
       ]),
       handleMessage: vi.fn().mockResolvedValue(undefined),
       createScoopTab: vi.fn().mockResolvedValue(undefined),
@@ -331,7 +339,13 @@ describe('OffscreenBridge buildStateSnapshot', () => {
     mockOrchestrator = {
       getScoops: vi.fn(() => [
         { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
-        { jid: 'scoop_test', name: 'Test', folder: 'test-scoop', isCone: false, assistantLabel: 'test-scoop' },
+        {
+          jid: 'scoop_test',
+          name: 'Test',
+          folder: 'test-scoop',
+          isCone: false,
+          assistantLabel: 'test-scoop',
+        },
       ]),
     };
 
@@ -357,7 +371,13 @@ describe('OffscreenBridge buildStateSnapshot', () => {
 
   it('sets activeScoopJid to null when no cone', () => {
     mockOrchestrator.getScoops.mockReturnValue([
-      { jid: 'scoop_1', name: 'Test', folder: 'test-scoop', isCone: false, assistantLabel: 'test-scoop' },
+      {
+        jid: 'scoop_1',
+        name: 'Test',
+        folder: 'test-scoop',
+        isCone: false,
+        assistantLabel: 'test-scoop',
+      },
     ]);
 
     const snapshot = bridge.buildStateSnapshot();
@@ -407,7 +427,13 @@ describe('OffscreenBridge getBuffer/getOrCreateAssistantMsg', () => {
     mockOrchestrator = {
       getScoops: vi.fn(() => [
         { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
-        { jid: 'scoop_test', name: 'Test', folder: 'test-scoop', isCone: false, assistantLabel: 'test-scoop' },
+        {
+          jid: 'scoop_test',
+          name: 'Test',
+          folder: 'test-scoop',
+          isCone: false,
+          assistantLabel: 'test-scoop',
+        },
       ]),
     };
 
@@ -487,7 +513,13 @@ describe('OffscreenBridge persistScoop', () => {
     mockOrchestrator = {
       getScoops: vi.fn(() => [
         { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
-        { jid: 'scoop_test', name: 'Test', folder: 'test-scoop', isCone: false, assistantLabel: 'test-scoop' },
+        {
+          jid: 'scoop_test',
+          name: 'Test',
+          folder: 'test-scoop',
+          isCone: false,
+          assistantLabel: 'test-scoop',
+        },
       ]),
     };
 
@@ -573,7 +605,13 @@ describe('OffscreenBridge handlePanelMessage', () => {
     mockOrchestrator = {
       getScoops: vi.fn(() => [
         { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
-        { jid: 'scoop_test', name: 'Test', folder: 'test-scoop', isCone: false, assistantLabel: 'test-scoop' },
+        {
+          jid: 'scoop_test',
+          name: 'Test',
+          folder: 'test-scoop',
+          isCone: false,
+          assistantLabel: 'test-scoop',
+        },
       ]),
       handleMessage: vi.fn().mockResolvedValue(undefined),
       createScoopTab: vi.fn(),
@@ -604,7 +642,7 @@ describe('OffscreenBridge handlePanelMessage', () => {
     });
 
     // handlePanelMessage is async — give it a tick
-    await new Promise(r => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 10));
 
     expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -612,7 +650,7 @@ describe('OffscreenBridge handlePanelMessage', () => {
         senderId: 'user',
         content: 'Hello world',
         channel: 'web',
-      }),
+      })
     );
     expect(mockOrchestrator.createScoopTab).toHaveBeenCalledWith('cone_1');
   });
@@ -623,7 +661,7 @@ describe('OffscreenBridge handlePanelMessage', () => {
       scoopJid: 'scoop_test',
     });
 
-    await new Promise(r => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 10));
 
     expect(mockOrchestrator.unregisterScoop).toHaveBeenCalledWith('scoop_test');
     // Session store delete should have been called for the scoop's session
@@ -634,7 +672,7 @@ describe('OffscreenBridge handlePanelMessage', () => {
   it('dispatches clear-chat and clears all sessions', async () => {
     simulatePanelMessage({ type: 'clear-chat' });
 
-    await new Promise(r => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 10));
 
     expect(mockOrchestrator.clearAllMessages).toHaveBeenCalled();
     const store = (bridge as any).sessionStore;
@@ -646,17 +684,24 @@ describe('OffscreenBridge handlePanelMessage', () => {
   it('dispatches abort to orchestrator.stopScoop', async () => {
     simulatePanelMessage({ type: 'abort', scoopJid: 'cone_1' });
 
-    await new Promise(r => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 10));
 
     expect(mockOrchestrator.stopScoop).toHaveBeenCalledWith('cone_1');
   });
 
   it('ignores non-panel messages', async () => {
     for (const listener of messageListeners) {
-      listener({ source: 'offscreen', payload: { type: 'user-message', scoopJid: 'cone_1', text: 'x', messageId: 'm' } }, {}, () => {});
+      listener(
+        {
+          source: 'offscreen',
+          payload: { type: 'user-message', scoopJid: 'cone_1', text: 'x', messageId: 'm' },
+        },
+        {},
+        () => {}
+      );
     }
 
-    await new Promise(r => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 10));
 
     expect(mockOrchestrator.handleMessage).not.toHaveBeenCalled();
   });
@@ -678,9 +723,13 @@ describe('OffscreenBridge handlePanelMessage', () => {
       sessionId: 'session-1',
     });
 
-    await new Promise(r => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 10));
 
-    expect(mockTransport.send).toHaveBeenCalledWith('Page.navigate', { url: 'https://example.com' }, 'session-1');
+    expect(mockTransport.send).toHaveBeenCalledWith(
+      'Page.navigate',
+      { url: 'https://example.com' },
+      'session-1'
+    );
 
     // Should emit panel-cdp-response with result
     const response = sentMessages.find((m: any) => m.payload?.type === 'panel-cdp-response') as any;
@@ -699,7 +748,7 @@ describe('OffscreenBridge handlePanelMessage', () => {
       params: { url: 'https://example.com' },
     });
 
-    await new Promise(r => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 10));
 
     const response = sentMessages.find((m: any) => m.payload?.type === 'panel-cdp-response') as any;
     expect(response).toBeDefined();
@@ -723,7 +772,7 @@ describe('OffscreenBridge handlePanelMessage', () => {
       params: { url: 'https://bad.example' },
     });
 
-    await new Promise(r => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 10));
 
     const response = sentMessages.find((m: any) => m.payload?.type === 'panel-cdp-response') as any;
     expect(response).toBeDefined();

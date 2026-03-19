@@ -16,13 +16,13 @@ function validatePath(filePath: string): boolean {
   if (filePath.startsWith('/')) {
     return false;
   }
-  
+
   // Reject paths with .. segments
   const segments = filePath.split('/');
-  if (segments.some(s => s === '..')) {
+  if (segments.some((s) => s === '..')) {
     return false;
   }
-  
+
   return true;
 }
 
@@ -34,7 +34,7 @@ function validatePath(filePath: string): boolean {
 export async function uninstallSkill(
   fs: VirtualFS,
   skillName: string,
-  skillsDir: string = '/workspace/skills',
+  skillsDir: string = '/workspace/skills'
 ): Promise<UninstallResult> {
   const state = await readState(fs);
   const appliedSkill = state.applied_skills.find((s) => s.name === skillName);
@@ -88,7 +88,7 @@ export async function uninstallSkill(
     // Use added_files from state if available (more reliable than manifest)
     // Fall back to manifest.adds for backward compatibility with older state
     const filesToRemove = appliedSkill.added_files ?? manifest.adds ?? [];
-    
+
     // Remove added files
     for (const filePath of filesToRemove) {
       // Validate path to prevent traversal attacks
@@ -96,7 +96,7 @@ export async function uninstallSkill(
         console.warn(`Skipping invalid path during uninstall: ${filePath}`);
         continue;
       }
-      
+
       try {
         await fs.rm(`/${filePath}`);
       } catch {

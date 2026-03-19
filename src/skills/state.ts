@@ -56,10 +56,7 @@ export async function readState(fs: VirtualFS): Promise<SkillsState> {
 /**
  * Write the skills state.
  */
-export async function writeState(
-  fs: VirtualFS,
-  state: SkillsState,
-): Promise<void> {
+export async function writeState(fs: VirtualFS, state: SkillsState): Promise<void> {
   await initSkillsSystem(fs);
   await fs.writeFile(STATE_PATH, JSON.stringify(state, null, 2));
 }
@@ -75,16 +72,11 @@ export async function getAppliedSkills(fs: VirtualFS): Promise<string[]> {
 /**
  * Record a skill application.
  */
-export async function recordSkillApplication(
-  fs: VirtualFS,
-  skill: AppliedSkill,
-): Promise<void> {
+export async function recordSkillApplication(fs: VirtualFS, skill: AppliedSkill): Promise<void> {
   const state = await readState(fs);
 
   // Remove existing entry if present (for updates)
-  state.applied_skills = state.applied_skills.filter(
-    (s) => s.name !== skill.name,
-  );
+  state.applied_skills = state.applied_skills.filter((s) => s.name !== skill.name);
 
   // Add new entry
   state.applied_skills.push(skill);
@@ -95,14 +87,9 @@ export async function recordSkillApplication(
 /**
  * Remove a skill from state.
  */
-export async function removeSkillFromState(
-  fs: VirtualFS,
-  skillName: string,
-): Promise<void> {
+export async function removeSkillFromState(fs: VirtualFS, skillName: string): Promise<void> {
   const state = await readState(fs);
-  state.applied_skills = state.applied_skills.filter(
-    (s) => s.name !== skillName,
-  );
+  state.applied_skills = state.applied_skills.filter((s) => s.name !== skillName);
   await writeState(fs, state);
 }
 

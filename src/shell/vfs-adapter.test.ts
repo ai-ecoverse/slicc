@@ -24,7 +24,8 @@ describe('VfsAdapter', () => {
     it('writes ASCII text correctly', async () => {
       await adapter.writeFile('/test.txt', 'hello world');
       const content = await vfs.readFile('/test.txt', { encoding: 'binary' });
-      const bytes = content instanceof Uint8Array ? content : new TextEncoder().encode(content as string);
+      const bytes =
+        content instanceof Uint8Array ? content : new TextEncoder().encode(content as string);
       // ASCII bytes should match character codes exactly
       expect(bytes[0]).toBe(104); // 'h'
       expect(bytes[4]).toBe(111); // 'o'
@@ -32,14 +33,14 @@ describe('VfsAdapter', () => {
 
     it('preserves latin1-encoded binary data (chars <= 0xFF)', async () => {
       // Simulate a latin1-encoded JPEG header
-      const latin1 = String.fromCharCode(0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10);
+      const latin1 = String.fromCharCode(0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10);
       await adapter.writeFile('/image.jpg', latin1);
       const content = await vfs.readFile('/image.jpg', { encoding: 'binary' });
       const bytes = content instanceof Uint8Array ? content : new Uint8Array();
-      expect(bytes[0]).toBe(0xFF);
-      expect(bytes[1]).toBe(0xD8);
-      expect(bytes[2]).toBe(0xFF);
-      expect(bytes[3]).toBe(0xE0);
+      expect(bytes[0]).toBe(0xff);
+      expect(bytes[1]).toBe(0xd8);
+      expect(bytes[2]).toBe(0xff);
+      expect(bytes[3]).toBe(0xe0);
       expect(bytes[4]).toBe(0x00);
       expect(bytes[5]).toBe(0x10);
     });
@@ -55,7 +56,7 @@ describe('VfsAdapter', () => {
     it('writes Uint8Array content directly', async () => {
       const bytes = new Uint8Array([1, 2, 3, 4, 5]);
       await adapter.writeFile('/binary.bin', bytes);
-      const content = await vfs.readFile('/binary.bin', { encoding: 'binary' }) as Uint8Array;
+      const content = (await vfs.readFile('/binary.bin', { encoding: 'binary' })) as Uint8Array;
       // LightningFS may return a view into a larger buffer, so compare actual bytes
       expect(content.length).toBe(bytes.length);
       expect(Array.from(content)).toEqual(Array.from(bytes));
@@ -180,12 +181,19 @@ describe('VfsAdapter', () => {
     it('readdirWithFileTypes /usr/bin returns file entries', async () => {
       const entries = await adapter.readdirWithFileTypes('/usr/bin');
       expect(entries.length).toBe(4);
-      expect(entries[0]).toEqual({ name: 'cat', isFile: true, isDirectory: false, isSymbolicLink: false });
+      expect(entries[0]).toEqual({
+        name: 'cat',
+        isFile: true,
+        isDirectory: false,
+        isSymbolicLink: false,
+      });
     });
 
     it('readdirWithFileTypes /usr returns directory entry for bin', async () => {
       const entries = await adapter.readdirWithFileTypes('/usr');
-      expect(entries).toEqual([{ name: 'bin', isFile: false, isDirectory: true, isSymbolicLink: false }]);
+      expect(entries).toEqual([
+        { name: 'bin', isFile: false, isDirectory: true, isSymbolicLink: false },
+      ]);
     });
 
     it('works without setRegisteredCommandsFn (empty list)', async () => {

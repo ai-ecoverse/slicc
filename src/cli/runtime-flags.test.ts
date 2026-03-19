@@ -73,7 +73,9 @@ describe('parseCliRuntimeFlags', () => {
   });
 
   it('keeps an explicit CDP port in electron mode', () => {
-    expect(parseCliRuntimeFlags(['--electron', '--cdp-port=9444', '/Applications/Slack.app'])).toEqual({
+    expect(
+      parseCliRuntimeFlags(['--electron', '--cdp-port=9444', '/Applications/Slack.app'])
+    ).toEqual({
       dev: false,
       serveOnly: false,
       cdpPort: 9444,
@@ -191,7 +193,9 @@ describe('parseCliRuntimeFlags', () => {
   });
 
   it('parses join mode with an explicit join URL', () => {
-    expect(parseCliRuntimeFlags(['--join', 'https://tray.example.com/base/join/tray-123.secret'])).toEqual({
+    expect(
+      parseCliRuntimeFlags(['--join', 'https://tray.example.com/base/join/tray-123.secret'])
+    ).toEqual({
       dev: false,
       serveOnly: false,
       cdpPort: DEFAULT_CLI_CDP_PORT,
@@ -229,7 +233,9 @@ describe('parseCliRuntimeFlags', () => {
   });
 
   it('parses --join=<url> syntax', () => {
-    expect(parseCliRuntimeFlags(['--join=https://tray.example.com/base/join/tray-123.secret'])).toMatchObject({
+    expect(
+      parseCliRuntimeFlags(['--join=https://tray.example.com/base/join/tray-123.secret'])
+    ).toMatchObject({
       join: true,
       joinUrl: 'https://tray.example.com/base/join/tray-123.secret',
     });

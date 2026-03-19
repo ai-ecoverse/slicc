@@ -1,4 +1,12 @@
-import { mkdirSync, openSync, writeSync, closeSync, readdirSync, statSync, unlinkSync } from 'node:fs';
+import {
+  mkdirSync,
+  openSync,
+  writeSync,
+  closeSync,
+  readdirSync,
+  statSync,
+  unlinkSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { LogLevel } from './runtime-flags.js';
@@ -53,7 +61,10 @@ function safeStringify(value: unknown): string {
 
 /** Generates a filename-safe ISO timestamp + PID string. */
 export function generateLogFilename(): string {
-  const ts = new Date().toISOString().replace(/:/g, '-').replace(/\.\d{3}Z$/, '');
+  const ts = new Date()
+    .toISOString()
+    .replace(/:/g, '-')
+    .replace(/\.\d{3}Z$/, '');
   return `${ts}_${process.pid}.log`;
 }
 
@@ -151,7 +162,10 @@ export class FileLogger {
       this.registerShutdownHandlers();
     } catch (err) {
       // Logging is auxiliary — don't crash the CLI if file logging fails
-      console.error('[file-logger] Failed to initialize file logging:', err instanceof Error ? err.message : String(err));
+      console.error(
+        '[file-logger] Failed to initialize file logging:',
+        err instanceof Error ? err.message : String(err)
+      );
       console.error('[file-logger] File logging disabled for this session.');
       this.fd = null;
     }
@@ -175,7 +189,11 @@ export class FileLogger {
     this.deregisterShutdownHandlers();
     if (this.fd === null) return;
     this.writeLine(`--- SLICC CLI log ended at ${timestamp()} ---`);
-    try { closeSync(this.fd); } catch { /* already closed */ }
+    try {
+      closeSync(this.fd);
+    } catch {
+      /* already closed */
+    }
     this.fd = null;
     this.restoreConsole();
   }
@@ -228,10 +246,16 @@ export class FileLogger {
 
   private writeLine(line: string): void {
     if (this.fd === null) return;
-    try { writeSync(this.fd, stripAnsi(line) + '\n'); } catch { /* fd may be invalid */ }
+    try {
+      writeSync(this.fd, stripAnsi(line) + '\n');
+    } catch {
+      /* fd may be invalid */
+    }
   }
 
-  private onExit = () => { this.close(); };
+  private onExit = () => {
+    this.close();
+  };
 
   private registerShutdownHandlers(): void {
     process.once('SIGINT', this.onExit);

@@ -23,9 +23,7 @@ export function applyTheme(): void {
   const pref = getThemePreference();
   let isLight = pref === 'light';
   if (pref === 'system') {
-    isLight =
-      window.matchMedia?.('(prefers-color-scheme: light)').matches ??
-      false;
+    isLight = window.matchMedia?.('(prefers-color-scheme: light)').matches ?? false;
   }
   document.documentElement.classList.toggle('theme-light', isLight);
 }

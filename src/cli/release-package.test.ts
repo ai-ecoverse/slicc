@@ -19,19 +19,17 @@ describe('release-package', () => {
 
   it('fails when package and extension versions diverge', () => {
     expect(() => assertMatchingVersions('0.1.0', '0.2.0')).toThrow(
-      'package.json version (0.1.0) must match manifest.json version (0.2.0)',
+      'package.json version (0.1.0) must match manifest.json version (0.2.0)'
     );
   });
 
   it('reads the packed tarball filename from npm pack json output', () => {
-    expect(parseNpmPackFilename('[{"filename":"sliccy-0.1.0.tgz"}]\n')).toBe(
-      'sliccy-0.1.0.tgz',
-    );
+    expect(parseNpmPackFilename('[{"filename":"sliccy-0.1.0.tgz"}]\n')).toBe('sliccy-0.1.0.tgz');
   });
 
   it('fails when npm pack json output does not report a filename', () => {
     expect(() => parseNpmPackFilename('[{}]\n')).toThrow(
-      'npm pack did not report an output filename.',
+      'npm pack did not report an output filename.'
     );
   });
 
