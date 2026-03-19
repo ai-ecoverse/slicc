@@ -54,8 +54,8 @@ export function hashString(str: string, max: number): number {
 /**
  * Try to listen on a specific port and host, returning the assigned port.
  */
-function tryListenOnPort(port: number, host: string): Promise<number> {
-  const { createServer } = require('net');
+async function tryListenOnPort(port: number, host: string): Promise<number> {
+  const { createServer } = await import('net');
   return new Promise((resolve, reject) => {
     const server = createServer();
     server.on('error', reject);
