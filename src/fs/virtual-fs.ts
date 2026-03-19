@@ -38,7 +38,10 @@ export class VirtualFS {
     const fs = new FS(dbName, { wipe });
     this.lfs = fs.promises;
     // LightningFS initializes asynchronously; wait for first stat to complete
-    this._ready = this.lfs.stat('/').then(() => {}).catch(() => {});
+    this._ready = this.lfs
+      .stat('/')
+      .then(() => {})
+      .catch(() => {});
   }
 
   /** Create a VirtualFS instance. */
@@ -72,7 +75,11 @@ export class VirtualFS {
     // Ensure parent dirs exist in LFS, then create placeholder for mount root
     const { dir } = splitPath(normalized);
     if (dir !== '/') await this.mkdir(dir, { recursive: true });
-    try { await this.lfs.mkdir(normalized); } catch { /* EEXIST is fine */ }
+    try {
+      await this.lfs.mkdir(normalized);
+    } catch {
+      /* EEXIST is fine */
+    }
     this.mountPoints.set(normalized, handle);
   }
 
@@ -91,11 +98,19 @@ export class VirtualFS {
    * Returns the handle and the path segments relative to the mount root,
    * or null if the path is not under any mount.
    */
-  private findMount(path: string): { handle: FileSystemDirectoryHandle; relParts: string[] } | null {
+  private findMount(
+    path: string
+  ): { handle: FileSystemDirectoryHandle; relParts: string[] } | null {
     for (const [mountPath, handle] of this.mountPoints) {
       if (path === mountPath) return { handle, relParts: [] };
       if (path.startsWith(mountPath + '/')) {
-        return { handle, relParts: path.slice(mountPath.length + 1).split('/').filter(Boolean) };
+        return {
+          handle,
+          relParts: path
+            .slice(mountPath.length + 1)
+            .split('/')
+            .filter(Boolean),
+        };
       }
     }
     return null;
@@ -105,7 +120,7 @@ export class VirtualFS {
   private static async fsaNavDir(
     root: FileSystemDirectoryHandle,
     parts: string[],
-    create = false,
+    create = false
   ): Promise<FileSystemDirectoryHandle> {
     let dir = root;
     for (const part of parts) {
@@ -118,7 +133,7 @@ export class VirtualFS {
   private static async fsaGetFile(
     root: FileSystemDirectoryHandle,
     parts: string[],
-    create = false,
+    create = false
   ): Promise<FileSystemFileHandle> {
     const dir = await VirtualFS.fsaNavDir(root, parts.slice(0, -1), create);
     return dir.getFileHandle(parts[parts.length - 1], { create });
@@ -128,13 +143,13 @@ export class VirtualFS {
   private convertFsaError(err: unknown, path: string): FsError {
     if (err instanceof FsError) return err;
     if (err instanceof Error) {
-      if (err.name === 'NotFoundError') return new FsError('ENOENT', 'no such file or directory', path);
+      if (err.name === 'NotFoundError')
+        return new FsError('ENOENT', 'no such file or directory', path);
       if (err.name === 'TypeMismatchError') return new FsError('ENOTDIR', 'not a directory', path);
       if (err.name === 'NotAllowedError') return new FsError('EINVAL', 'permission denied', path);
     }
     return new FsError('EINVAL', err instanceof Error ? err.message : String(err), path);
   }
-
 
   /**
    * Read a file's content.
@@ -151,7 +166,9 @@ export class VirtualFS {
         const encoding = options?.encoding ?? 'utf-8';
         if (encoding === 'utf-8') return await file.text();
         return new Uint8Array(await file.arrayBuffer());
-      } catch (err) { throw this.convertFsaError(err, normalized); }
+      } catch (err) {
+        throw this.convertFsaError(err, normalized);
+      }
     }
     try {
       const encoding = options?.encoding ?? 'utf-8';
@@ -173,7 +190,7 @@ export class VirtualFS {
   async writeFile(
     path: string,
     content: FileContent,
-    _options?: { recursive?: boolean },
+    _options?: { recursive?: boolean }
   ): Promise<void> {
     const normalized = normalizePath(path);
     const mount = this.findMount(normalized);
@@ -182,12 +199,19 @@ export class VirtualFS {
       try {
         const fh = await VirtualFS.fsaGetFile(mount.handle, mount.relParts, true);
         const writable = await fh.createWritable();
-        const data = typeof content === 'string'
-          ? new TextEncoder().encode(content)
-          : new Uint8Array(content instanceof Uint8Array ? content.buffer as ArrayBuffer : content as ArrayBuffer);
+        const data =
+          typeof content === 'string'
+            ? new TextEncoder().encode(content)
+            : new Uint8Array(
+                content instanceof Uint8Array
+                  ? (content.buffer as ArrayBuffer)
+                  : (content as ArrayBuffer)
+              );
         await writable.write(data as unknown as FileSystemWriteChunkType);
         await writable.close();
-      } catch (err) { throw this.convertFsaError(err, normalized); }
+      } catch (err) {
+        throw this.convertFsaError(err, normalized);
+      }
       return;
     }
     // Ensure parent directory exists
@@ -211,15 +235,20 @@ export class VirtualFS {
     const mount = this.findMount(normalized);
     if (mount) {
       try {
-        const dirHandle = mount.relParts.length === 0
-          ? mount.handle
-          : await VirtualFS.fsaNavDir(mount.handle, mount.relParts);
+        const dirHandle =
+          mount.relParts.length === 0
+            ? mount.handle
+            : await VirtualFS.fsaNavDir(mount.handle, mount.relParts);
         const entries: DirEntry[] = [];
-        for await (const [name, handle] of dirHandle as unknown as AsyncIterable<[string, FileSystemHandle]>) {
+        for await (const [name, handle] of dirHandle as unknown as AsyncIterable<
+          [string, FileSystemHandle]
+        >) {
           entries.push({ name, type: handle.kind === 'directory' ? 'directory' : 'file' });
         }
         return entries;
-      } catch (err) { throw this.convertFsaError(err, normalized); }
+      } catch (err) {
+        throw this.convertFsaError(err, normalized);
+      }
     }
     try {
       const names = await this.lfs.readdir(normalized);
@@ -256,7 +285,9 @@ export class VirtualFS {
       if (mount.relParts.length === 0) return; // mount root placeholder already exists
       try {
         await VirtualFS.fsaNavDir(mount.handle, mount.relParts, true);
-      } catch (err) { throw this.convertFsaError(err, normalized); }
+      } catch (err) {
+        throw this.convertFsaError(err, normalized);
+      }
       return;
     }
 
@@ -299,11 +330,14 @@ export class VirtualFS {
       try {
         const parentParts = mount.relParts.slice(0, -1);
         const name = mount.relParts[mount.relParts.length - 1];
-        const parentDir = parentParts.length === 0
-          ? mount.handle
-          : await VirtualFS.fsaNavDir(mount.handle, parentParts);
+        const parentDir =
+          parentParts.length === 0
+            ? mount.handle
+            : await VirtualFS.fsaNavDir(mount.handle, parentParts);
         await parentDir.removeEntry(name, { recursive: options?.recursive });
-      } catch (err) { throw this.convertFsaError(err, normalized); }
+      } catch (err) {
+        throw this.convertFsaError(err, normalized);
+      }
       return;
     }
     try {
@@ -358,13 +392,20 @@ export class VirtualFS {
         try {
           const fh = await VirtualFS.fsaGetFile(mount.handle, mount.relParts);
           const file = await fh.getFile();
-          return { type: 'file', size: file.size, mtime: file.lastModified, ctime: file.lastModified };
+          return {
+            type: 'file',
+            size: file.size,
+            mtime: file.lastModified,
+            ctime: file.lastModified,
+          };
         } catch {
           // Try as directory
           await VirtualFS.fsaNavDir(mount.handle, mount.relParts);
           return { type: 'directory', size: 0, mtime: Date.now(), ctime: Date.now() };
         }
-      } catch (err) { throw this.convertFsaError(err, normalized); }
+      } catch (err) {
+        throw this.convertFsaError(err, normalized);
+      }
     }
     try {
       const stat = await this.lfs.stat(normalized);
@@ -385,7 +426,12 @@ export class VirtualFS {
     const mount = this.findMount(normalized);
     if (mount) {
       if (mount.relParts.length === 0) return true;
-      try { await this.stat(normalized); return true; } catch { return false; }
+      try {
+        await this.stat(normalized);
+        return true;
+      } catch {
+        return false;
+      }
     }
     try {
       await this.lfs.stat(normalized);

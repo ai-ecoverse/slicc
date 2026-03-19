@@ -15,7 +15,15 @@ export type {
   ThinkingLevel,
 } from '@mariozechner/pi-agent-core';
 
-export { EventStream, stream, streamSimple, getModel, getModels, getProviders, registerApiProvider } from '@mariozechner/pi-ai';
+export {
+  EventStream,
+  stream,
+  streamSimple,
+  getModel,
+  getModels,
+  getProviders,
+  registerApiProvider,
+} from '@mariozechner/pi-ai';
 export type {
   TextContent,
   ThinkingContent,

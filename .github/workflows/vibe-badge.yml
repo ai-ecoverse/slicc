@@ -2,7 +2,7 @@ name: Update Vibe Coded Badge
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
 
 permissions:
   contents: write

@@ -107,24 +107,41 @@ export class LeaderSyncManager {
   /** Maps requestId → routing info for CDP requests in flight through the leader. */
   private readonly pendingCDPRoutes = new Map<string, PendingCDPRoute>();
   /** Chunk buffers for reassembling chunked CDP responses from followers. */
-  private readonly cdpChunkBuffers = new Map<string, { chunks: string[]; received: number; totalChunks: number }>();
+  private readonly cdpChunkBuffers = new Map<
+    string,
+    { chunks: string[]; received: number; totalChunks: number }
+  >();
   /** Active RemoteCDPTransport instances for the leader's own BrowserAPI (keyed by runtimeId:localTargetId). */
   private readonly remoteTransports = new Map<string, RemoteCDPTransport>();
   /** Maps requestId → routing info for tab.open requests in flight through the leader. */
   private readonly pendingTabOpenRoutes = new Map<string, PendingTabOpenRoute>();
   /** Resolvers for leader-originated tab.open requests. */
-  private readonly tabOpenResolvers = new Map<string, { resolve: (targetId: string) => void; reject: (err: Error) => void }>();
+  private readonly tabOpenResolvers = new Map<
+    string,
+    { resolve: (targetId: string) => void; reject: (err: Error) => void }
+  >();
   /** Maps requestId → routing info for fs requests in flight through the leader. */
   private readonly pendingFsRoutes = new Map<string, PendingFsRoute>();
   /** Resolvers for leader-originated fs requests. */
-  private readonly fsResolvers = new Map<string, { resolve: (responses: TrayFsResponse[]) => void; reject: (err: Error) => void; responses: TrayFsResponse[] }>();
+  private readonly fsResolvers = new Map<
+    string,
+    {
+      resolve: (responses: TrayFsResponse[]) => void;
+      reject: (err: Error) => void;
+      responses: TrayFsResponse[];
+    }
+  >();
   constructor(private readonly options: LeaderSyncManagerOptions) {}
 
   /**
    * Add a connected follower's data channel.
    * Sends an initial snapshot and subscribes to follower messages.
    */
-  addFollower(bootstrapId: string, channel: TrayDataChannelLike, meta?: { runtime?: string; connectedAt?: string }): void {
+  addFollower(
+    bootstrapId: string,
+    channel: TrayDataChannelLike,
+    meta?: { runtime?: string; connectedAt?: string }
+  ): void {
     // Clean up existing connection for same bootstrap
     this.removeFollower(bootstrapId);
 
@@ -145,9 +162,14 @@ export class LeaderSyncManager {
     keepalive.start();
 
     this.followers.set(bootstrapId, {
-      bootstrapId, sync, unsubscribe, keepalive,
-      runtime: meta?.runtime, connectedAt: meta?.connectedAt,
-      lastActivity: Date.now(), floatType: deriveFloatType(meta?.runtime),
+      bootstrapId,
+      sync,
+      unsubscribe,
+      keepalive,
+      runtime: meta?.runtime,
+      connectedAt: meta?.connectedAt,
+      lastActivity: Date.now(),
+      floatType: deriveFloatType(meta?.runtime),
     });
     log.info('Follower added to sync', { bootstrapId, followerCount: this.followers.size });
 
@@ -210,7 +232,12 @@ export class LeaderSyncManager {
   broadcastUserMessage(text: string, messageId: string): void {
     if (this.followers.size === 0) return;
     const scoopJid = this.options.getScoopJid();
-    const message: LeaderToFollowerMessage = { type: 'user_message_echo', text, messageId, scoopJid };
+    const message: LeaderToFollowerMessage = {
+      type: 'user_message_echo',
+      text,
+      messageId,
+      scoopJid,
+    };
     for (const follower of this.followers.values()) {
       follower.sync.send(message);
     }
@@ -258,12 +285,20 @@ export class LeaderSyncManager {
         this.sendSnapshotToFollower(bootstrapId);
         break;
       case 'targets.advertise': {
-        log.info('Follower targets advertised', { bootstrapId, runtimeId: message.runtimeId, targetCount: message.targets.length });
+        log.info('Follower targets advertised', {
+          bootstrapId,
+          runtimeId: message.runtimeId,
+          targetCount: message.targets.length,
+        });
         // Clean up stale remote transports for runtimeIds that are no longer in runtimeToBootstrap
         // (e.g. a follower reconnected with a new runtimeId but old transports linger)
         for (const key of [...this.remoteTransports.keys()]) {
           const runtimeId = key.substring(0, key.indexOf(':'));
-          if (runtimeId !== 'leader' && !this.runtimeToBootstrap.has(runtimeId) && runtimeId !== message.runtimeId) {
+          if (
+            runtimeId !== 'leader' &&
+            !this.runtimeToBootstrap.has(runtimeId) &&
+            runtimeId !== message.runtimeId
+          ) {
             const transport = this.remoteTransports.get(key);
             transport?.disconnect();
             this.remoteTransports.delete(key);
@@ -280,7 +315,15 @@ export class LeaderSyncManager {
         if (targetRuntimeId === 'leader') {
           this.executeLocalCDP(requestId, localTargetId, method, params, sessionId, bootstrapId);
         } else {
-          this.forwardCDPRequest(requestId, targetRuntimeId, localTargetId, method, params, sessionId, bootstrapId);
+          this.forwardCDPRequest(
+            requestId,
+            targetRuntimeId,
+            localTargetId,
+            method,
+            params,
+            sessionId,
+            bootstrapId
+          );
         }
         break;
       }
@@ -383,16 +426,29 @@ export class LeaderSyncManager {
     const sender: RemoteCDPSender = {
       sendCDPRequest: (requestId, method, params, sessionId) => {
         const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
-        const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
+        const targetFollower = targetBootstrapId
+          ? this.followers.get(targetBootstrapId)
+          : undefined;
         if (!targetFollower) {
           // Immediately resolve as error — the transport will handle it
           const transport = this.remoteTransports.get(`${targetRuntimeId}:${localTargetId}`);
-          transport?.handleResponse(requestId, undefined, `Target runtime "${targetRuntimeId}" not connected`);
+          transport?.handleResponse(
+            requestId,
+            undefined,
+            `Target runtime "${targetRuntimeId}" not connected`
+          );
           return;
         }
         // Track the route so the response can be delivered to the RemoteCDPTransport
         this.pendingCDPRoutes.set(requestId, { requesterBootstrapId: '__leader__', requestId });
-        targetFollower.sync.send({ type: 'cdp.request', requestId, localTargetId, method, params, sessionId });
+        targetFollower.sync.send({
+          type: 'cdp.request',
+          requestId,
+          localTargetId,
+          method,
+          params,
+          sessionId,
+        });
       },
     };
     const transport = new RemoteCDPTransport(sender);
@@ -431,12 +487,21 @@ export class LeaderSyncManager {
   /**
    * Return the list of connected follower runtimeIds with metadata.
    */
-  getConnectedFollowers(): { runtimeId: string; runtime?: string; connectedAt?: string; lastActivity?: number; floatType?: FloatType }[] {
+  getConnectedFollowers(): {
+    runtimeId: string;
+    runtime?: string;
+    connectedAt?: string;
+    lastActivity?: number;
+    floatType?: FloatType;
+  }[] {
     return [...this.runtimeToBootstrap.entries()].map(([runtimeId, bootstrapId]) => {
       const follower = this.followers.get(bootstrapId);
       return {
-        runtimeId, runtime: follower?.runtime, connectedAt: follower?.connectedAt,
-        lastActivity: follower?.lastActivity, floatType: follower?.floatType,
+        runtimeId,
+        runtime: follower?.runtime,
+        connectedAt: follower?.connectedAt,
+        lastActivity: follower?.lastActivity,
+        floatType: follower?.floatType,
       };
     });
   }
@@ -446,18 +511,30 @@ export class LeaderSyncManager {
    * Prefers standalone floats, then sorts by most recent activity.
    * Returns null if no alive followers exist.
    */
-  getBestFollowerForTeleport(): { runtimeId: string; bootstrapId: string; floatType: FloatType } | null {
-    const candidates: { runtimeId: string; bootstrapId: string; floatType: FloatType; lastActivity: number }[] = [];
+  getBestFollowerForTeleport(): {
+    runtimeId: string;
+    bootstrapId: string;
+    floatType: FloatType;
+  } | null {
+    const candidates: {
+      runtimeId: string;
+      bootstrapId: string;
+      floatType: FloatType;
+      lastActivity: number;
+    }[] = [];
     for (const [runtimeId, bootstrapId] of this.runtimeToBootstrap) {
       const follower = this.followers.get(bootstrapId);
       if (!follower) continue;
       candidates.push({
-        runtimeId, bootstrapId, floatType: follower.floatType, lastActivity: follower.lastActivity,
+        runtimeId,
+        bootstrapId,
+        floatType: follower.floatType,
+        lastActivity: follower.lastActivity,
       });
     }
     if (candidates.length === 0) return null;
     // Prefer standalone, then sort by most recent activity
-    const standalone = candidates.filter(c => c.floatType === 'standalone');
+    const standalone = candidates.filter((c) => c.floatType === 'standalone');
     const pool = standalone.length > 0 ? standalone : candidates;
     pool.sort((a, b) => b.lastActivity - a.lastActivity);
     return pool[0];
@@ -493,14 +570,18 @@ export class LeaderSyncManager {
     method: string,
     params: Record<string, unknown> | undefined,
     sessionId: string | undefined,
-    requesterBootstrapId: string,
+    requesterBootstrapId: string
   ): Promise<void> {
     const follower = this.followers.get(requesterBootstrapId);
     if (!follower) return;
 
     const transport = this.options.browserTransport;
     if (!transport) {
-      follower.sync.send({ type: 'cdp.response', requestId, error: 'Leader has no browser transport' });
+      follower.sync.send({
+        type: 'cdp.response',
+        requestId,
+        error: 'Leader has no browser transport',
+      });
       return;
     }
 
@@ -508,7 +589,11 @@ export class LeaderSyncManager {
       const result = await transport.send(method, params, sessionId);
       sendCDPResponse(follower.sync, requestId, result);
     } catch (err) {
-      follower.sync.send({ type: 'cdp.response', requestId, error: err instanceof Error ? err.message : String(err) });
+      follower.sync.send({
+        type: 'cdp.response',
+        requestId,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -522,7 +607,7 @@ export class LeaderSyncManager {
     method: string,
     params: Record<string, unknown> | undefined,
     sessionId: string | undefined,
-    requesterBootstrapId: string,
+    requesterBootstrapId: string
   ): void {
     const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
     const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
@@ -530,7 +615,11 @@ export class LeaderSyncManager {
 
     if (!targetFollower) {
       if (requester) {
-        requester.sync.send({ type: 'cdp.response', requestId, error: `Target runtime "${targetRuntimeId}" not connected` });
+        requester.sync.send({
+          type: 'cdp.response',
+          requestId,
+          error: `Target runtime "${targetRuntimeId}" not connected`,
+        });
       }
       return;
     }
@@ -539,7 +628,14 @@ export class LeaderSyncManager {
     this.pendingCDPRoutes.set(requestId, { requesterBootstrapId, requestId });
 
     // Forward to the target follower (without targetRuntimeId — it's always for their local target)
-    targetFollower.sync.send({ type: 'cdp.request', requestId, localTargetId, method, params, sessionId });
+    targetFollower.sync.send({
+      type: 'cdp.request',
+      requestId,
+      localTargetId,
+      method,
+      params,
+      sessionId,
+    });
   }
 
   /**
@@ -577,7 +673,12 @@ export class LeaderSyncManager {
    * Handle a CDP event from a follower. Routes the event to the leader's
    * RemoteCDPTransport for that follower so that `remoteTransport.on(event, handler)` fires.
    */
-  private handleCDPEvent(bootstrapId: string, method: string, params: Record<string, unknown>, sessionId?: string): void {
+  private handleCDPEvent(
+    bootstrapId: string,
+    method: string,
+    params: Record<string, unknown>,
+    sessionId?: string
+  ): void {
     // Find the runtimeId for this follower
     let followerRuntimeId: string | undefined;
     for (const [runtimeId, bId] of this.runtimeToBootstrap) {
@@ -624,13 +725,21 @@ export class LeaderSyncManager {
   /**
    * Execute a tab.open on the leader's own browser transport.
    */
-  private async executeLocalTabOpen(requestId: string, url: string, requesterBootstrapId: string): Promise<void> {
+  private async executeLocalTabOpen(
+    requestId: string,
+    url: string,
+    requesterBootstrapId: string
+  ): Promise<void> {
     const follower = this.followers.get(requesterBootstrapId);
     if (!follower) return;
 
     const transport = this.options.browserTransport;
     if (!transport) {
-      follower.sync.send({ type: 'tab.open.error', requestId, error: 'Leader has no browser transport' });
+      follower.sync.send({
+        type: 'tab.open.error',
+        requestId,
+        error: 'Leader has no browser transport',
+      });
       return;
     }
 
@@ -639,21 +748,34 @@ export class LeaderSyncManager {
       const targetId = result['targetId'] as string;
       follower.sync.send({ type: 'tab.opened', requestId, targetId: `leader:${targetId}` });
     } catch (err) {
-      follower.sync.send({ type: 'tab.open.error', requestId, error: err instanceof Error ? err.message : String(err) });
+      follower.sync.send({
+        type: 'tab.open.error',
+        requestId,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
   /**
    * Forward a tab.open request from one follower to another.
    */
-  private forwardTabOpen(requestId: string, targetRuntimeId: string, url: string, requesterBootstrapId: string): void {
+  private forwardTabOpen(
+    requestId: string,
+    targetRuntimeId: string,
+    url: string,
+    requesterBootstrapId: string
+  ): void {
     const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
     const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
     const requester = this.followers.get(requesterBootstrapId);
 
     if (!targetFollower) {
       if (requester) {
-        requester.sync.send({ type: 'tab.open.error', requestId, error: `Target runtime "${targetRuntimeId}" not connected` });
+        requester.sync.send({
+          type: 'tab.open.error',
+          requestId,
+          error: `Target runtime "${targetRuntimeId}" not connected`,
+        });
       }
       return;
     }
@@ -719,14 +841,18 @@ export class LeaderSyncManager {
   private async executeLocalFs(
     requestId: string,
     request: TrayFsRequest,
-    requesterBootstrapId: string,
+    requesterBootstrapId: string
   ): Promise<void> {
     const follower = this.followers.get(requesterBootstrapId);
     if (!follower) return;
 
     const vfs = this.options.vfs;
     if (!vfs) {
-      follower.sync.send({ type: 'fs.response', requestId, response: { ok: false, error: 'Leader has no VFS' } });
+      follower.sync.send({
+        type: 'fs.response',
+        requestId,
+        response: { ok: false, error: 'Leader has no VFS' },
+      });
       return;
     }
 
@@ -743,7 +869,7 @@ export class LeaderSyncManager {
     requestId: string,
     targetRuntimeId: string,
     request: TrayFsRequest,
-    requesterBootstrapId: string,
+    requesterBootstrapId: string
   ): void {
     const targetBootstrapId = this.runtimeToBootstrap.get(targetRuntimeId);
     const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
@@ -761,7 +887,12 @@ export class LeaderSyncManager {
     }
 
     // Track the pending route so we can return the response to the requester
-    this.pendingFsRoutes.set(requestId, { requesterBootstrapId, requestId, chunks: [], totalChunks: 1 });
+    this.pendingFsRoutes.set(requestId, {
+      requesterBootstrapId,
+      requestId,
+      chunks: [],
+      totalChunks: 1,
+    });
 
     // Forward to the target follower
     targetFollower.sync.send({ type: 'fs.request', requestId, request });
@@ -831,15 +962,21 @@ export class LeaderSyncManager {
     const targetFollower = targetBootstrapId ? this.followers.get(targetBootstrapId) : undefined;
 
     if (!targetFollower) {
-      return Promise.resolve([{ ok: false, error: `Target runtime "${targetRuntimeId}" not connected` }]);
+      return Promise.resolve([
+        { ok: false, error: `Target runtime "${targetRuntimeId}" not connected` },
+      ]);
     }
 
     const requestId = `fs-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     return new Promise<TrayFsResponse[]>((resolve, reject) => {
       this.fsResolvers.set(requestId, { resolve, reject, responses: [] });
-      this.pendingFsRoutes.set(requestId, { requesterBootstrapId: '__leader__', requestId, chunks: [], totalChunks: 1 });
+      this.pendingFsRoutes.set(requestId, {
+        requesterBootstrapId: '__leader__',
+        requestId,
+        chunks: [],
+        totalChunks: 1,
+      });
       targetFollower.sync.send({ type: 'fs.request', requestId, request });
     });
   }
-
 }

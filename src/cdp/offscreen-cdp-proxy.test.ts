@@ -5,7 +5,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock chrome.runtime
-const messageListeners: Array<(message: unknown, sender: unknown, sendResponse: (r?: unknown) => void) => void> = [];
+const messageListeners: Array<
+  (message: unknown, sender: unknown, sendResponse: (r?: unknown) => void) => void
+> = [];
 const sentMessages: unknown[] = [];
 
 const mockChrome = {
@@ -91,9 +93,12 @@ describe('OffscreenCdpProxy', () => {
     const commandId = envelope.payload.id;
     for (const listener of messageListeners) {
       listener(
-        { source: 'service-worker', payload: { type: 'cdp-response', id: commandId, result: { frameId: '123' } } },
+        {
+          source: 'service-worker',
+          payload: { type: 'cdp-response', id: commandId, result: { frameId: '123' } },
+        },
         {},
-        () => {},
+        () => {}
       );
     }
 
@@ -110,9 +115,12 @@ describe('OffscreenCdpProxy', () => {
     const commandId = envelope.payload.id;
     for (const listener of messageListeners) {
       listener(
-        { source: 'service-worker', payload: { type: 'cdp-response', id: commandId, error: 'Navigation failed' } },
+        {
+          source: 'service-worker',
+          payload: { type: 'cdp-response', id: commandId, error: 'Navigation failed' },
+        },
         {},
-        () => {},
+        () => {}
       );
     }
 
@@ -141,7 +149,7 @@ describe('OffscreenCdpProxy', () => {
           },
         },
         {},
-        () => {},
+        () => {}
       );
     }
 
@@ -155,9 +163,12 @@ describe('OffscreenCdpProxy', () => {
 
     for (const listener of messageListeners) {
       listener(
-        { source: 'service-worker', payload: { type: 'cdp-event', method: 'Page.loadEventFired', params: { timestamp: 123 } } },
+        {
+          source: 'service-worker',
+          payload: { type: 'cdp-event', method: 'Page.loadEventFired', params: { timestamp: 123 } },
+        },
         {},
-        () => {},
+        () => {}
       );
     }
 
@@ -174,9 +185,12 @@ describe('OffscreenCdpProxy', () => {
 
     for (const listener of messageListeners) {
       listener(
-        { source: 'service-worker', payload: { type: 'cdp-event', method: 'Test.event', params: {} } },
+        {
+          source: 'service-worker',
+          payload: { type: 'cdp-event', method: 'Test.event', params: {} },
+        },
         {},
-        () => {},
+        () => {}
       );
     }
 
@@ -194,7 +208,7 @@ describe('OffscreenCdpProxy', () => {
       listener(
         { source: 'panel', payload: { type: 'cdp-event', method: 'Test.event', params: {} } },
         {},
-        () => {},
+        () => {}
       );
     }
 

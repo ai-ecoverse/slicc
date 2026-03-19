@@ -15,18 +15,20 @@ function getHiddenTabs(): Set<string> {
     const raw = localStorage.getItem(HIDDEN_TABS_KEY);
     if (!raw) return new Set(DEFAULT_HIDDEN_TABS);
     return new Set(JSON.parse(raw) as string[]);
-  } catch { return new Set(DEFAULT_HIDDEN_TABS); }
+  } catch {
+    return new Set(DEFAULT_HIDDEN_TABS);
+  }
 }
 
 /** Set hidden tab IDs in localStorage. Chat cannot be hidden. */
 export function setHiddenTabs(ids: string[]): void {
-  const filtered = ids.filter(id => id !== 'chat');
+  const filtered = ids.filter((id) => id !== 'chat');
   localStorage.setItem(HIDDEN_TABS_KEY, JSON.stringify(filtered));
 }
 
 /** Visible extension tab specs (filtered by localStorage config). */
 export const EXTENSION_TAB_SPECS = ALL_EXTENSION_TAB_SPECS.filter(
-  tab => !getHiddenTabs().has(tab.id),
+  (tab) => !getHiddenTabs().has(tab.id)
 );
 
 /** Built-in tab id union. Dynamic sprinkles use arbitrary string ids. */
@@ -40,7 +42,7 @@ export type ExtensionTabId = string;
 
 export const DEFAULT_EXTENSION_TAB_ID: ExtensionTabId = 'chat';
 
-const BUILTIN_TAB_ID_SET = new Set<string>(ALL_EXTENSION_TAB_SPECS.map(tab => tab.id));
+const BUILTIN_TAB_ID_SET = new Set<string>(ALL_EXTENSION_TAB_SPECS.map((tab) => tab.id));
 
 /** Check if a value is a built-in extension tab id. */
 export function isBuiltinExtensionTabId(value: string): value is BuiltinExtensionTabId {
@@ -61,7 +63,7 @@ export function isExtensionTabId(value: string): value is ExtensionTabId {
  */
 export function normalizeExtensionTabId(
   value: string | null | undefined,
-  fallback: ExtensionTabId = DEFAULT_EXTENSION_TAB_ID,
+  fallback: ExtensionTabId = DEFAULT_EXTENSION_TAB_ID
 ): ExtensionTabId {
   return value && value.length > 0 ? value : fallback;
 }

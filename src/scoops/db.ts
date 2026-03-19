@@ -24,7 +24,7 @@ let db: IDBDatabase | null = null;
 async function openDB(): Promise<IDBDatabase> {
   // If we have a cached connection, verify it has all required stores
   if (db) {
-    const hasAllStores = Object.values(STORES).every(name => db!.objectStoreNames.contains(name));
+    const hasAllStores = Object.values(STORES).every((name) => db!.objectStoreNames.contains(name));
     if (db.version === DB_VERSION && hasAllStores) {
       return db;
     }
@@ -89,17 +89,19 @@ async function openDB(): Promise<IDBDatabase> {
                 jid: g.jid,
                 name: g.name,
                 folder: g.folder,
-                trigger: isCone ? undefined : (g.trigger || `@${g.folder}`),
+                trigger: isCone ? undefined : g.trigger || `@${g.folder}`,
                 requiresTrigger: !isCone && (g.requiresTrigger ?? true),
                 isCone,
                 type: isCone ? 'cone' : 'scoop',
-                assistantLabel: isCone ? 'sliccy' : (g.config?.assistantName || g.folder),
+                assistantLabel: isCone ? 'sliccy' : g.config?.assistantName || g.folder,
                 addedAt: g.addedAt,
-                config: g.config ? {
-                  systemPromptAppend: g.config.systemPromptAppend,
-                  timeout: g.config.timeout,
-                  assistantName: g.config.assistantName,
-                } : undefined,
+                config: g.config
+                  ? {
+                      systemPromptAppend: g.config.systemPromptAppend,
+                      timeout: g.config.timeout,
+                      assistantName: g.config.assistantName,
+                    }
+                  : undefined,
               };
               scoopsStore.put(scoop);
             }
@@ -130,7 +132,10 @@ async function openDB(): Promise<IDBDatabase> {
   });
 }
 
-async function getStore(name: string, mode: IDBTransactionMode = 'readonly'): Promise<IDBObjectStore> {
+async function getStore(
+  name: string,
+  mode: IDBTransactionMode = 'readonly'
+): Promise<IDBObjectStore> {
   const database = await openDB();
   return database.transaction(name, mode).objectStore(name);
 }
@@ -221,7 +226,7 @@ export async function getMessagesForScoop(chatJid: string): Promise<ChannelMessa
 export async function getMessagesSince(
   chatJid: string,
   since: string,
-  excludeSender?: string,
+  excludeSender?: string
 ): Promise<ChannelMessage[]> {
   const store = await getStore(STORES.MESSAGES);
   const index = store.index('chatJid_timestamp');

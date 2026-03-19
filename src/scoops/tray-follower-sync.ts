@@ -24,7 +24,11 @@ import type { CDPTransport } from '../cdp/transport.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { RemoteCDPTransport, type RemoteCDPSender } from '../cdp/remote-cdp-transport.js';
 import { DataChannelKeepalive } from './data-channel-keepalive.js';
-import { setFollowerTrayRuntimeStatus, getFollowerTrayRuntimeStatus, setFollowerLastPingTime } from './tray-follower-status.js';
+import {
+  setFollowerTrayRuntimeStatus,
+  getFollowerTrayRuntimeStatus,
+  setFollowerLastPingTime,
+} from './tray-follower-status.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('tray-follower-sync');
@@ -68,20 +72,34 @@ export class FollowerSyncManager implements AgentHandle {
   /** Active RemoteCDPTransport instances keyed by requestId prefix for response routing. */
   private readonly remoteTransports = new Map<string, RemoteCDPTransport>();
   /** Chunk buffers for reassembling chunked CDP responses from the leader. */
-  private readonly cdpChunkBuffers = new Map<string, { chunks: string[]; received: number; totalChunks: number }>();
+  private readonly cdpChunkBuffers = new Map<
+    string,
+    { chunks: string[]; received: number; totalChunks: number }
+  >();
   /** Buffer for reassembling chunked snapshots from the leader. */
-  private snapshotChunkBuffer: { chunks: string[]; received: number; totalChunks: number } | null = null;
+  private snapshotChunkBuffer: { chunks: string[]; received: number; totalChunks: number } | null =
+    null;
   /** CDP sessions initiated by remote requests (leader attached to follower tabs). Events for these sessions are forwarded. */
   private readonly remoteCDPSessions = new Set<string>();
   /** Cleanup functions for CDP event listeners registered on the local transport. */
   private readonly cdpEventCleanups: Array<() => void> = [];
   /** Resolvers for outgoing tab.open requests. */
-  private readonly tabOpenResolvers = new Map<string, { resolve: (targetId: string) => void; reject: (err: Error) => void }>();
+  private readonly tabOpenResolvers = new Map<
+    string,
+    { resolve: (targetId: string) => void; reject: (err: Error) => void }
+  >();
   /** Resolvers for outgoing fs requests. */
-  private readonly fsResolvers = new Map<string, { resolve: (responses: TrayFsResponse[]) => void; reject: (err: Error) => void; responses: TrayFsResponse[] }>();
+  private readonly fsResolvers = new Map<
+    string,
+    {
+      resolve: (responses: TrayFsResponse[]) => void;
+      reject: (err: Error) => void;
+      responses: TrayFsResponse[];
+    }
+  >();
   constructor(
     channel: TrayDataChannelLike,
-    private readonly options: FollowerSyncManagerOptions = {},
+    private readonly options: FollowerSyncManagerOptions = {}
   ) {
     this.sync = createFollowerSyncChannel(channel);
     this.unsubscribe = this.sync.onMessage((message: LeaderToFollowerMessage) => {
@@ -200,7 +218,10 @@ export class FollowerSyncManager implements AgentHandle {
   private handleLeaderMessage(message: LeaderToFollowerMessage): void {
     switch (message.type) {
       case 'snapshot':
-        log.info('Snapshot received from leader', { messageCount: message.messages.length, scoopJid: message.scoopJid });
+        log.info('Snapshot received from leader', {
+          messageCount: message.messages.length,
+          scoopJid: message.scoopJid,
+        });
         this.snapshotChunkBuffer = null; // Clear any in-progress chunked snapshot
         this.latestSnapshot = { messages: message.messages, scoopJid: message.scoopJid };
         this.options.onSnapshot?.(message.messages, message.scoopJid);
@@ -210,7 +231,10 @@ export class FollowerSyncManager implements AgentHandle {
         const assembled = reassembleSnapshot(this.snapshotChunkBuffer, message);
         this.snapshotChunkBuffer = assembled.buffer;
         if (assembled.result) {
-          log.info('Chunked snapshot reassembled from leader', { messageCount: assembled.result.messages.length, scoopJid: assembled.result.scoopJid });
+          log.info('Chunked snapshot reassembled from leader', {
+            messageCount: assembled.result.messages.length,
+            scoopJid: assembled.result.scoopJid,
+          });
           this.latestSnapshot = assembled.result;
           this.options.onSnapshot?.(assembled.result.messages, assembled.result.scoopJid);
         }
@@ -227,7 +251,10 @@ export class FollowerSyncManager implements AgentHandle {
           log.debug('Skipping own message echo', { messageId: message.messageId });
           break;
         }
-        log.info('User message echo received', { messageId: message.messageId, scoopJid: message.scoopJid });
+        log.info('User message echo received', {
+          messageId: message.messageId,
+          scoopJid: message.scoopJid,
+        });
         this.options.onUserMessage?.(message.text, message.messageId, message.scoopJid);
         break;
 
@@ -311,7 +338,10 @@ export class FollowerSyncManager implements AgentHandle {
       try {
         cb(event);
       } catch (err) {
-        log.error('Listener error', { eventType: event.type, error: err instanceof Error ? err.message : String(err) });
+        log.error('Listener error', {
+          eventType: event.type,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
   }
@@ -374,7 +404,11 @@ export class FollowerSyncManager implements AgentHandle {
   private async executeLocalTabOpen(requestId: string, url: string): Promise<void> {
     const transport = this.options.browserTransport;
     if (!transport) {
-      this.sync.send({ type: 'tab.open.error', requestId, error: 'Follower has no browser transport' });
+      this.sync.send({
+        type: 'tab.open.error',
+        requestId,
+        error: 'Follower has no browser transport',
+      });
       return;
     }
 
@@ -384,7 +418,11 @@ export class FollowerSyncManager implements AgentHandle {
       this.sync.send({ type: 'tab.opened', requestId, targetId });
       this.options.onTargetsChanged?.();
     } catch (err) {
-      this.sync.send({ type: 'tab.open.error', requestId, error: err instanceof Error ? err.message : String(err) });
+      this.sync.send({
+        type: 'tab.open.error',
+        requestId,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -401,11 +439,15 @@ export class FollowerSyncManager implements AgentHandle {
     localTargetId: string,
     method: string,
     params: Record<string, unknown> | undefined,
-    sessionId: string | undefined,
+    sessionId: string | undefined
   ): Promise<void> {
     const transport = this.options.browserTransport;
     if (!transport) {
-      this.sync.send({ type: 'cdp.response', requestId, error: 'Follower has no browser transport' });
+      this.sync.send({
+        type: 'cdp.response',
+        requestId,
+        error: 'Follower has no browser transport',
+      });
       return;
     }
 
@@ -421,14 +463,22 @@ export class FollowerSyncManager implements AgentHandle {
       }
 
       // Clean up session tracking when detached
-      if (method === 'Target.detachFromTarget' && sessionId && this.remoteCDPSessions.has(sessionId)) {
+      if (
+        method === 'Target.detachFromTarget' &&
+        sessionId &&
+        this.remoteCDPSessions.has(sessionId)
+      ) {
         this.remoteCDPSessions.delete(sessionId);
         log.debug('Removed remote CDP session on detach', { sessionId });
       }
 
       sendCDPResponse(this.sync, requestId, result);
     } catch (err) {
-      this.sync.send({ type: 'cdp.response', requestId, error: err instanceof Error ? err.message : String(err) });
+      this.sync.send({
+        type: 'cdp.response',
+        requestId,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -454,7 +504,12 @@ export class FollowerSyncManager implements AgentHandle {
         if (!this.remoteCDPSessions.has(remoteSessionId)) return;
         // Strip sessionId from forwarded params — the leader routes by sessionId at the message level
         const { sessionId: _sid, ...forwardedParams } = params;
-        this.sync.send({ type: 'cdp.event', method: eventName, params: forwardedParams, sessionId: remoteSessionId });
+        this.sync.send({
+          type: 'cdp.event',
+          method: eventName,
+          params: forwardedParams,
+          sessionId: remoteSessionId,
+        });
       };
       transport.on(eventName, listener);
       this.cdpEventCleanups.push(() => transport.off(eventName, listener));
@@ -493,7 +548,11 @@ export class FollowerSyncManager implements AgentHandle {
   private async executeLocalFs(requestId: string, request: TrayFsRequest): Promise<void> {
     const vfs = this.options.vfs;
     if (!vfs) {
-      this.sync.send({ type: 'fs.response', requestId, response: { ok: false, error: 'Follower has no VFS' } });
+      this.sync.send({
+        type: 'fs.response',
+        requestId,
+        response: { ok: false, error: 'Follower has no VFS' },
+      });
       return;
     }
 
@@ -532,5 +591,4 @@ export class FollowerSyncManager implements AgentHandle {
       this.sync.send({ type: 'fs.request', requestId, targetRuntimeId, request });
     });
   }
-
 }

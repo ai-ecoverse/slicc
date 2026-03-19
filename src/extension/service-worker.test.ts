@@ -1,7 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-type OnMessageListener = (message: unknown, sender: unknown, sendResponse: (response?: unknown) => void) => void | boolean;
-type DebuggerEventListener = (source: { tabId: number }, method: string, params?: Record<string, unknown>) => void;
+type OnMessageListener = (
+  message: unknown,
+  sender: unknown,
+  sendResponse: (response?: unknown) => void
+) => void | boolean;
+type DebuggerEventListener = (
+  source: { tabId: number },
+  method: string,
+  params?: Record<string, unknown>
+) => void;
 type DebuggerDetachListener = (source: { tabId: number }, reason: string) => void;
 
 const runtimeMessageListeners: OnMessageListener[] = [];
@@ -105,14 +113,20 @@ describe('extension service worker tray socket proxy', () => {
     vi.clearAllMocks();
     vi.resetModules();
 
-    (globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }).chrome = createChromeMock();
-    (globalThis as typeof globalThis & { WebSocket: typeof MockWebSocket }).WebSocket = MockWebSocket as never;
+    (globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }).chrome =
+      createChromeMock();
+    (globalThis as typeof globalThis & { WebSocket: typeof MockWebSocket }).WebSocket =
+      MockWebSocket as never;
 
     await import('./service-worker.js');
   });
 
   it('hosts the leader tray socket in the service worker and relays frames', async () => {
-    dispatchOffscreenMessage({ type: 'tray-socket-open', id: 7, url: 'wss://tray.example.com/controller' });
+    dispatchOffscreenMessage({
+      type: 'tray-socket-open',
+      id: 7,
+      url: 'wss://tray.example.com/controller',
+    });
 
     expect(MockWebSocket.instances).toHaveLength(1);
     const socket = MockWebSocket.instances[0];

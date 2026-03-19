@@ -26,7 +26,7 @@ export interface ElectronOverlayShellState {
 
 export function normalizeElectronOverlayLauncherCorner(
   corner: string | null | undefined,
-  fallback: ElectronOverlayLauncherCorner = DEFAULT_ELECTRON_OVERLAY_LAUNCHER_CORNER,
+  fallback: ElectronOverlayLauncherCorner = DEFAULT_ELECTRON_OVERLAY_LAUNCHER_CORNER
 ): ElectronOverlayLauncherCorner {
   return ELECTRON_OVERLAY_LAUNCHER_CORNERS.includes(corner as ElectronOverlayLauncherCorner)
     ? (corner as ElectronOverlayLauncherCorner)
@@ -34,7 +34,7 @@ export function normalizeElectronOverlayLauncherCorner(
 }
 
 export function createElectronOverlayShellState(
-  init: Partial<ElectronOverlayShellState> = {},
+  init: Partial<ElectronOverlayShellState> = {}
 ): ElectronOverlayShellState {
   return {
     open: init.open ?? false,
@@ -43,9 +43,7 @@ export function createElectronOverlayShellState(
   };
 }
 
-export function toggleElectronOverlay(
-  state: ElectronOverlayShellState,
-): ElectronOverlayShellState {
+export function toggleElectronOverlay(state: ElectronOverlayShellState): ElectronOverlayShellState {
   return {
     ...state,
     open: !state.open,
@@ -54,14 +52,14 @@ export function toggleElectronOverlay(
 
 export function setElectronOverlayOpen(
   state: ElectronOverlayShellState,
-  open: boolean,
+  open: boolean
 ): ElectronOverlayShellState {
   return state.open === open ? state : { ...state, open };
 }
 
 export function setElectronOverlayTab(
   state: ElectronOverlayShellState,
-  tab: string | null | undefined,
+  tab: string | null | undefined
 ): ElectronOverlayShellState {
   const activeTab = normalizeExtensionTabId(tab, state.activeTab);
   return state.activeTab === activeTab ? state : { ...state, activeTab };
@@ -69,7 +67,7 @@ export function setElectronOverlayTab(
 
 export function setElectronOverlayCorner(
   state: ElectronOverlayShellState,
-  corner: string | null | undefined,
+  corner: string | null | undefined
 ): ElectronOverlayShellState {
   const nextCorner = normalizeElectronOverlayLauncherCorner(corner, state.corner);
   return state.corner === nextCorner ? state : { ...state, corner: nextCorner };
@@ -77,7 +75,7 @@ export function setElectronOverlayCorner(
 
 export function shouldSnapElectronOverlayLauncher(
   distancePx: number,
-  velocityPxPerMs: number,
+  velocityPxPerMs: number
 ): boolean {
   return (
     distancePx >= ELECTRON_OVERLAY_LAUNCHER_DRAG_THRESHOLD_PX ||

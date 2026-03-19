@@ -12,24 +12,43 @@ import { reassembleCDPResponse } from '../scoops/tray-sync-protocol.js';
  * Implemented by FollowerSyncManager and LeaderSyncManager.
  */
 export interface RemoteCDPSender {
-  sendCDPRequest(requestId: string, method: string, params?: Record<string, unknown>, sessionId?: string): void;
+  sendCDPRequest(
+    requestId: string,
+    method: string,
+    params?: Record<string, unknown>,
+    sessionId?: string
+  ): void;
 }
 
 export class RemoteCDPTransport implements CDPTransport {
-  private readonly pending = new Map<string, { resolve: (r: Record<string, unknown>) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private readonly pending = new Map<
+    string,
+    {
+      resolve: (r: Record<string, unknown>) => void;
+      reject: (e: Error) => void;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
   private readonly eventListeners = new Map<string, Set<CDPEventListener>>();
-  private readonly chunkBuffers = new Map<string, { chunks: string[]; received: number; totalChunks: number }>();
+  private readonly chunkBuffers = new Map<
+    string,
+    { chunks: string[]; received: number; totalChunks: number }
+  >();
   private _state: ConnectionState = 'connected';
   private requestCounter = 0;
 
   constructor(
     private readonly sender: RemoteCDPSender,
-    private readonly timeoutMs = 30000,
+    private readonly timeoutMs = 30000
   ) {}
 
-  get state(): ConnectionState { return this._state; }
+  get state(): ConnectionState {
+    return this._state;
+  }
 
-  async connect(): Promise<void> { /* no-op — connected via data channel */ }
+  async connect(): Promise<void> {
+    /* no-op — connected via data channel */
+  }
 
   disconnect(): void {
     this._state = 'disconnected';
@@ -40,7 +59,12 @@ export class RemoteCDPTransport implements CDPTransport {
     this.pending.clear();
   }
 
-  async send(method: string, params?: Record<string, unknown>, sessionId?: string, timeout?: number): Promise<Record<string, unknown>> {
+  async send(
+    method: string,
+    params?: Record<string, unknown>,
+    sessionId?: string,
+    timeout?: number
+  ): Promise<Record<string, unknown>> {
     if (this._state === 'disconnected') {
       throw new Error('Transport disconnected');
     }
@@ -58,7 +82,10 @@ export class RemoteCDPTransport implements CDPTransport {
 
   on(event: string, listener: CDPEventListener): void {
     let set = this.eventListeners.get(event);
-    if (!set) { set = new Set(); this.eventListeners.set(event, set); }
+    if (!set) {
+      set = new Set();
+      this.eventListeners.set(event, set);
+    }
     set.add(listener);
   }
 
@@ -83,7 +110,14 @@ export class RemoteCDPTransport implements CDPTransport {
   }
 
   /** Called by the sync manager when a cdp.response arrives for this transport. */
-  handleResponse(requestId: string, result?: Record<string, unknown>, error?: string, chunkData?: string, chunkIndex?: number, totalChunks?: number): void {
+  handleResponse(
+    requestId: string,
+    result?: Record<string, unknown>,
+    error?: string,
+    chunkData?: string,
+    chunkIndex?: number,
+    totalChunks?: number
+  ): void {
     const entry = this.pending.get(requestId);
     if (!entry) return;
 

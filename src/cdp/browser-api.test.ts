@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { BrowserAPI, getDefaultCdpUrl } from './browser-api.js';
-import { CDPClient } from './cdp-client.js';
+import { type CDPClient } from './cdp-client.js';
 
 // ---------------------------------------------------------------------------
 // Mock CDPClient
@@ -57,8 +57,12 @@ describe('BrowserAPI', () => {
 
   describe('connect / disconnect', () => {
     it('derives the default URL from the current location when available', () => {
-      expect(getDefaultCdpUrl({ protocol: 'https:', host: 'example.com' })).toBe('wss://example.com/cdp');
-      expect(getDefaultCdpUrl({ protocol: 'http:', host: 'localhost:3030' })).toBe('ws://localhost:3030/cdp');
+      expect(getDefaultCdpUrl({ protocol: 'https:', host: 'example.com' })).toBe(
+        'wss://example.com/cdp'
+      );
+      expect(getDefaultCdpUrl({ protocol: 'http:', host: 'localhost:3030' })).toBe(
+        'ws://localhost:3030/cdp'
+      );
     });
 
     it('connects with default URL', async () => {
@@ -124,7 +128,9 @@ describe('BrowserAPI', () => {
 
     it('auto-connects on attachToPage when disconnected', async () => {
       (mockClient as unknown as { state: string }).state = 'disconnected';
-      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ sessionId: 'sess-new' });
+      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        sessionId: 'sess-new',
+      });
 
       const sessionId = await api.attachToPage('target-1');
       expect(sessionId).toBe('sess-new');
@@ -136,9 +142,27 @@ describe('BrowserAPI', () => {
     it('returns page targets', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
         targetInfos: [
-          { targetId: 't1', type: 'page', title: 'Google', url: 'https://google.com', attached: false },
-          { targetId: 't2', type: 'page', title: 'GitHub', url: 'https://github.com', attached: false },
-          { targetId: 't3', type: 'service_worker', title: 'SW', url: 'chrome://sw', attached: false },
+          {
+            targetId: 't1',
+            type: 'page',
+            title: 'Google',
+            url: 'https://google.com',
+            attached: false,
+          },
+          {
+            targetId: 't2',
+            type: 'page',
+            title: 'GitHub',
+            url: 'https://github.com',
+            attached: false,
+          },
+          {
+            targetId: 't3',
+            type: 'service_worker',
+            title: 'SW',
+            url: 'chrome://sw',
+            attached: false,
+          },
         ],
       });
 
@@ -161,7 +185,13 @@ describe('BrowserAPI', () => {
     it('keeps remote tray targets whose local target ids match a local page', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
         targetInfos: [
-          { targetId: 'tab-1', type: 'page', title: 'Local Page', url: 'https://local.example.com', attached: false },
+          {
+            targetId: 'tab-1',
+            type: 'page',
+            title: 'Local Page',
+            url: 'https://local.example.com',
+            attached: false,
+          },
         ],
       });
 
@@ -222,7 +252,7 @@ describe('BrowserAPI', () => {
       // send should not have been called for detach
       expect(mockClient.send).not.toHaveBeenCalledWith(
         'Target.detachFromTarget',
-        expect.anything(),
+        expect.anything()
       );
     });
 
@@ -244,7 +274,7 @@ describe('BrowserAPI', () => {
         'Page.handleJavaScriptDialog',
         { accept: false },
         'sess-1',
-        5000,
+        5000
       );
     });
 
@@ -273,7 +303,7 @@ describe('BrowserAPI', () => {
         'Page.handleJavaScriptDialog',
         { accept: false },
         'remote-sess',
-        5000,
+        5000
       );
     });
   });
@@ -297,7 +327,7 @@ describe('BrowserAPI', () => {
       expect(mockClient.send).toHaveBeenCalledWith(
         'Page.navigate',
         { url: 'https://example.com' },
-        'sess-1',
+        'sess-1'
       );
     });
 
@@ -315,15 +345,16 @@ describe('BrowserAPI', () => {
     });
 
     it('captures a viewport screenshot (no clip, Chrome default)', async () => {
-      (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({ data: 'viewport-shot' }); // Page.captureScreenshot
+      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        data: 'viewport-shot',
+      }); // Page.captureScreenshot
 
       const data = await api.screenshot();
       expect(data).toBe('viewport-shot');
       expect(mockClient.send).toHaveBeenCalledWith(
         'Page.captureScreenshot',
         { format: 'png', captureBeyondViewport: true },
-        'sess-1',
+        'sess-1'
       );
     });
 
@@ -342,7 +373,7 @@ describe('BrowserAPI', () => {
           captureBeyondViewport: true,
           clip: { x: 0, y: 0, width: 1280, height: 5000, scale: 1 },
         },
-        'sess-1',
+        'sess-1'
       );
     });
 
@@ -361,7 +392,7 @@ describe('BrowserAPI', () => {
           captureBeyondViewport: true,
           clip: { x: 0, y: 0, width: 1440, height: 3130, scale: 1 },
         },
-        'sess-1',
+        'sess-1'
       );
     });
 
@@ -380,7 +411,7 @@ describe('BrowserAPI', () => {
           captureBeyondViewport: true,
           clip: { x: 10, y: 20, width: 300, height: 400, scale: 1 },
         },
-        'sess-1',
+        'sess-1'
       );
     });
   });
@@ -449,7 +480,9 @@ describe('BrowserAPI', () => {
 
       // Verify mouse events were dispatched at center of element
       const pressCall = (mockClient.send as ReturnType<typeof vi.fn>).mock.calls.find(
-        (c: unknown[]) => c[0] === 'Input.dispatchMouseEvent' && (c[1] as Record<string, unknown>).type === 'mousePressed',
+        (c: unknown[]) =>
+          c[0] === 'Input.dispatchMouseEvent' &&
+          (c[1] as Record<string, unknown>).type === 'mousePressed'
       );
       expect(pressCall).toBeDefined();
       expect((pressCall![1] as Record<string, unknown>).x).toBe(150); // 100 + 100/2
@@ -480,7 +513,7 @@ describe('BrowserAPI', () => {
 
       // Filter to Input.dispatchKeyEvent calls
       const keyCalls = (mockClient.send as ReturnType<typeof vi.fn>).mock.calls.filter(
-        (c: unknown[]) => c[0] === 'Input.dispatchKeyEvent',
+        (c: unknown[]) => c[0] === 'Input.dispatchKeyEvent'
       );
       expect(keyCalls).toHaveLength(4); // 2 chars × 2 events
       expect((keyCalls[0][1] as Record<string, unknown>).type).toBe('keyDown');
@@ -498,36 +531,32 @@ describe('BrowserAPI', () => {
 
     it('resolves when selector is found', async () => {
       let callCount = 0;
-      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(
-        async (method: string) => {
-          if (method === 'Runtime.enable') return {};
-          if (method === 'Runtime.evaluate') {
-            callCount++;
-            // Found on the 2nd poll
-            return { result: { type: 'boolean', value: callCount >= 2 } };
-          }
-          return {};
-        },
-      );
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        if (method === 'Runtime.enable') return {};
+        if (method === 'Runtime.evaluate') {
+          callCount++;
+          // Found on the 2nd poll
+          return { result: { type: 'boolean', value: callCount >= 2 } };
+        }
+        return {};
+      });
 
       await api.waitForSelector('.target', { interval: 10 });
       expect(callCount).toBeGreaterThanOrEqual(2);
     });
 
     it('times out if selector never appears', async () => {
-      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(
-        async (method: string) => {
-          if (method === 'Runtime.enable') return {};
-          if (method === 'Runtime.evaluate') {
-            return { result: { type: 'boolean', value: false } };
-          }
-          return {};
-        },
-      );
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        if (method === 'Runtime.enable') return {};
+        if (method === 'Runtime.evaluate') {
+          return { result: { type: 'boolean', value: false } };
+        }
+        return {};
+      });
 
-      await expect(
-        api.waitForSelector('.never', { timeout: 100, interval: 10 }),
-      ).rejects.toThrow('waitForSelector timed out');
+      await expect(api.waitForSelector('.never', { timeout: 100, interval: 10 })).rejects.toThrow(
+        'waitForSelector timed out'
+      );
     });
   });
 

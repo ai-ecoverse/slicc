@@ -64,16 +64,23 @@ export function createOpenCommand(): Command {
       // .shtml files → open as sprinkle via sprinkle manager
       if (fullPath.endsWith('.shtml')) {
         // Access global sprinkle manager if available
-        const mgr = typeof window !== 'undefined'
-          ? (window as unknown as Record<string, unknown>).__slicc_sprinkleManager as import('../../ui/sprinkle-manager.js').SprinkleManager | undefined
-          : undefined;
+        const mgr =
+          typeof window !== 'undefined'
+            ? ((window as unknown as Record<string, unknown>).__slicc_sprinkleManager as
+                | import('../../ui/sprinkle-manager.js').SprinkleManager
+                | undefined)
+            : undefined;
         if (mgr) {
           const name = (fullPath.split('/').pop() ?? '').replace(/\.shtml$/, '');
           try {
             await mgr.open(name);
             results.push(`opened sprinkle ${name} from ${fullPath}`);
           } catch (err) {
-            return { stdout: '', stderr: `open: ${err instanceof Error ? err.message : String(err)}\n`, exitCode: 1 };
+            return {
+              stdout: '',
+              stderr: `open: ${err instanceof Error ? err.message : String(err)}\n`,
+              exitCode: 1,
+            };
           }
         } else {
           // Fallback: open in browser tab if no sprinkle manager
@@ -115,7 +122,9 @@ export function createOpenCommand(): Command {
         }
         const mimeType = detectMimeType(fullPath);
         const base64 = toBase64(new Uint8Array(bytes));
-        results.push(`${fullPath} (${Math.round(bytes.byteLength / 1024)} KB)\n<img:data:${mimeType};base64,${base64}>`);
+        results.push(
+          `${fullPath} (${Math.round(bytes.byteLength / 1024)} KB)\n<img:data:${mimeType};base64,${base64}>`
+        );
       } else if (download) {
         let stat;
         try {

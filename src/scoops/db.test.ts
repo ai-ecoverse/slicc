@@ -104,8 +104,16 @@ describe('Scoops Database', () => {
 
     it('filters messages by timestamp', async () => {
       const now = new Date();
-      const msg1 = { ...testMessage, id: 'msg-1', timestamp: new Date(now.getTime() - 2000).toISOString() };
-      const msg2 = { ...testMessage, id: 'msg-2', timestamp: new Date(now.getTime() - 1000).toISOString() };
+      const msg1 = {
+        ...testMessage,
+        id: 'msg-1',
+        timestamp: new Date(now.getTime() - 2000).toISOString(),
+      };
+      const msg2 = {
+        ...testMessage,
+        id: 'msg-2',
+        timestamp: new Date(now.getTime() - 1000).toISOString(),
+      };
       const msg3 = { ...testMessage, id: 'msg-3', timestamp: now.toISOString() };
 
       await saveMessage(msg1);
@@ -118,8 +126,18 @@ describe('Scoops Database', () => {
 
     it('excludes sender from results', async () => {
       const uniqueJid = `chat-exclude-${Date.now()}`;
-      const msg1 = { ...testMessage, id: `msg-exclude-1-${Date.now()}`, chatJid: uniqueJid, senderName: 'User' };
-      const msg2 = { ...testMessage, id: `msg-exclude-2-${Date.now()}`, chatJid: uniqueJid, senderName: 'sliccy' };
+      const msg1 = {
+        ...testMessage,
+        id: `msg-exclude-1-${Date.now()}`,
+        chatJid: uniqueJid,
+        senderName: 'User',
+      };
+      const msg2 = {
+        ...testMessage,
+        id: `msg-exclude-2-${Date.now()}`,
+        chatJid: uniqueJid,
+        senderName: 'sliccy',
+      };
 
       await saveMessage(msg1);
       await saveMessage(msg2);

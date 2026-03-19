@@ -29,7 +29,10 @@ describe('toPreviewUrl', () => {
   it('uses chrome.runtime.getURL in extension mode', () => {
     const savedChrome = (globalThis as any).chrome;
     (globalThis as any).chrome = {
-      runtime: { id: 'test-ext-id', getURL: (path: string) => `chrome-extension://test-ext-id${path}` },
+      runtime: {
+        id: 'test-ext-id',
+        getURL: (path: string) => `chrome-extension://test-ext-id${path}`,
+      },
     };
 
     const url = toPreviewUrl('/workspace/app/index.html');
@@ -137,42 +140,46 @@ describe('isSafeServeEntry', () => {
 
 describe('resolveServeEntryPath', () => {
   it('constructs entry path for absolute directory', () => {
-    expect(resolveServeEntryPath('/workspace/my-app', 'index.html'))
-      .toBe('/workspace/my-app/index.html');
+    expect(resolveServeEntryPath('/workspace/my-app', 'index.html')).toBe(
+      '/workspace/my-app/index.html'
+    );
   });
 
   it('normalizes relative-looking nested paths to a VFS path', () => {
-    expect(resolveServeEntryPath('workspace/my-app', 'index.html'))
-      .toBe('/workspace/my-app/index.html');
+    expect(resolveServeEntryPath('workspace/my-app', 'index.html')).toBe(
+      '/workspace/my-app/index.html'
+    );
   });
 
   it('handles directory with trailing slash', () => {
-    expect(resolveServeEntryPath('/workspace/my-app/', 'index.html'))
-      .toBe('/workspace/my-app/index.html');
+    expect(resolveServeEntryPath('/workspace/my-app/', 'index.html')).toBe(
+      '/workspace/my-app/index.html'
+    );
   });
 
   it('handles custom entry file', () => {
-    expect(resolveServeEntryPath('/html', 'hello.html'))
-      .toBe('/html/hello.html');
+    expect(resolveServeEntryPath('/html', 'hello.html')).toBe('/html/hello.html');
   });
 
   it('handles root directory', () => {
-    expect(resolveServeEntryPath('/', 'index.html'))
-      .toBe('/index.html');
+    expect(resolveServeEntryPath('/', 'index.html')).toBe('/index.html');
   });
 
   it('handles nested directories', () => {
-    expect(resolveServeEntryPath('/workspace/my-app/pages', 'about.html'))
-      .toBe('/workspace/my-app/pages/about.html');
+    expect(resolveServeEntryPath('/workspace/my-app/pages', 'about.html')).toBe(
+      '/workspace/my-app/pages/about.html'
+    );
   });
 
   it('normalizes dot segments in the entry path', () => {
-    expect(resolveServeEntryPath('/workspace/my-app', './index.html'))
-      .toBe('/workspace/my-app/index.html');
+    expect(resolveServeEntryPath('/workspace/my-app', './index.html')).toBe(
+      '/workspace/my-app/index.html'
+    );
   });
 
   it('collapses repeated separators in the entry path', () => {
-    expect(resolveServeEntryPath('/workspace/my-app', 'pages//about.html'))
-      .toBe('/workspace/my-app/pages/about.html');
+    expect(resolveServeEntryPath('/workspace/my-app', 'pages//about.html')).toBe(
+      '/workspace/my-app/pages/about.html'
+    );
   });
 });

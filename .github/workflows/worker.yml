@@ -7,12 +7,6 @@ on:
       - 'src/worker/**'
       - 'wrangler.jsonc'
       - '.github/workflows/worker.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'src/worker/**'
-      - 'wrangler.jsonc'
-      - '.github/workflows/worker.yml'
   workflow_dispatch:
     inputs:
       target:
@@ -137,10 +131,8 @@ jobs:
           done
 
   deploy-production:
-    name: Deploy production + smoke test
-    if: |
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && inputs.target == 'production' && github.ref == 'refs/heads/main')
+    name: Deploy production + smoke test (manual only)
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'production' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

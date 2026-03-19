@@ -18,16 +18,18 @@ interface Entry {
 }
 
 function makeFingerprint(message: string): string {
-  return message
-    // UUIDs
-    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '<id>')
-    // Hex strings (8+ chars, e.g. session IDs, target IDs)
-    .replace(/\b[0-9A-Fa-f]{8,}\b/g, '<hex>')
-    // JSON object/array blobs — collapse {...} and [...]
-    .replace(/\{[^}]{20,}\}/g, '{…}')
-    .replace(/\[[^\]]{20,}\]/g, '[…]')
-    // Numbers (integers and floats)
-    .replace(/\b\d+(\.\d+)?\b/g, '<n>');
+  return (
+    message
+      // UUIDs
+      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '<id>')
+      // Hex strings (8+ chars, e.g. session IDs, target IDs)
+      .replace(/\b[0-9A-Fa-f]{8,}\b/g, '<hex>')
+      // JSON object/array blobs — collapse {...} and [...]
+      .replace(/\{[^}]{20,}\}/g, '{…}')
+      .replace(/\[[^\]]{20,}\]/g, '[…]')
+      // Numbers (integers and floats)
+      .replace(/\b\d+(\.\d+)?\b/g, '<n>')
+  );
 }
 
 export class CliLogDedup {
@@ -50,7 +52,7 @@ export class CliLogDedup {
     this.evict(now);
 
     // Check for existing match
-    const existing = this.entries.find(e => e.fingerprint === fp);
+    const existing = this.entries.find((e) => e.fingerprint === fp);
     if (existing) {
       existing.count++;
       return false;

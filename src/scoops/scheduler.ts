@@ -58,7 +58,7 @@ export class TaskScheduler {
     groupFolder: string,
     prompt: string,
     scheduleType: ScheduledTask['scheduleType'],
-    scheduleValue: string,
+    scheduleValue: string
   ): Promise<ScheduledTask> {
     const task: ScheduledTask = {
       id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -78,7 +78,10 @@ export class TaskScheduler {
   }
 
   /** Update a task */
-  async updateTask(id: string, updates: Partial<Pick<ScheduledTask, 'prompt' | 'scheduleType' | 'scheduleValue' | 'status'>>): Promise<ScheduledTask | null> {
+  async updateTask(
+    id: string,
+    updates: Partial<Pick<ScheduledTask, 'prompt' | 'scheduleType' | 'scheduleValue' | 'status'>>
+  ): Promise<ScheduledTask | null> {
     const task = await db.getTask(id);
     if (!task) return null;
 
@@ -89,10 +92,7 @@ export class TaskScheduler {
 
     // Recalculate next run if schedule changed
     if (updates.scheduleType || updates.scheduleValue) {
-      updated.nextRun = this.calculateNextRun(
-        updated.scheduleType,
-        updated.scheduleValue,
-      );
+      updated.nextRun = this.calculateNextRun(updated.scheduleType, updated.scheduleValue);
     }
 
     await db.saveTask(updated);
@@ -195,7 +195,7 @@ export class TaskScheduler {
   /** Calculate the next run time for a task */
   private calculateNextRun(
     scheduleType: ScheduledTask['scheduleType'],
-    scheduleValue: string,
+    scheduleValue: string
   ): string | null {
     const now = new Date();
 
@@ -250,7 +250,7 @@ export class TaskScheduler {
     hour: string,
     dayOfMonth: string,
     month: string,
-    dayOfWeek: string,
+    dayOfWeek: string
   ): boolean {
     return (
       this.cronFieldMatches(date.getMinutes(), minute) &&

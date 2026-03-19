@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { createHostCommand, formatFollowerOutput, formatLeaderOutput, formatDuration } from './host-command.js';
+import {
+  createHostCommand,
+  formatFollowerOutput,
+  formatLeaderOutput,
+  formatDuration,
+} from './host-command.js';
 import type { FollowerTrayRuntimeStatus } from '../../scoops/tray-follower-status.js';
 
 /** Helper to build a FollowerTrayRuntimeStatus with sensible defaults for the new diagnostic fields. */
-function followerStatus(overrides: Partial<FollowerTrayRuntimeStatus> & Pick<FollowerTrayRuntimeStatus, 'state'>): FollowerTrayRuntimeStatus {
+function followerStatus(
+  overrides: Partial<FollowerTrayRuntimeStatus> & Pick<FollowerTrayRuntimeStatus, 'state'>
+): FollowerTrayRuntimeStatus {
   return {
     joinUrl: null,
     trayId: null,
@@ -78,10 +85,7 @@ describe('host command', () => {
         },
         error: null,
       }),
-      getFollowers: () => [
-        { runtimeId: 'follower-abc123' },
-        { runtimeId: 'follower-def456' },
-      ],
+      getFollowers: () => [{ runtimeId: 'follower-abc123' }, { runtimeId: 'follower-def456' }],
     });
 
     const result = await cmd.execute([], {} as never);
@@ -141,10 +145,11 @@ describe('host command', () => {
 
   it('host reset errors when follower is active', async () => {
     const cmd = createHostCommand({
-      getFollowerStatus: () => followerStatus({
-        state: 'connected',
-        joinUrl: 'https://tray.example.com/join/token',
-      }),
+      getFollowerStatus: () =>
+        followerStatus({
+          state: 'connected',
+          joinUrl: 'https://tray.example.com/join/token',
+        }),
       resetTray: async () => ({ state: 'leader', session: null, error: null }),
     });
 
@@ -181,7 +186,9 @@ describe('host command', () => {
     const cmd = createHostCommand({
       getStatus: () => ({ state: 'leader', session: null, error: null }),
       getFollowerStatus: () => followerStatus({ state: 'inactive' }),
-      resetTray: async () => { throw new Error('POST /tray failed'); },
+      resetTray: async () => {
+        throw new Error('POST /tray failed');
+      },
     });
 
     const result = await cmd.execute(['reset'], {} as never);
@@ -191,11 +198,12 @@ describe('host command', () => {
 
   it('shows follower status when follower is connected', async () => {
     const result = await createHostCommand({
-      getFollowerStatus: () => followerStatus({
-        state: 'connected',
-        joinUrl: 'https://tray.example.com/join/token',
-        trayId: 'tray-456',
-      }),
+      getFollowerStatus: () =>
+        followerStatus({
+          state: 'connected',
+          joinUrl: 'https://tray.example.com/join/token',
+          trayId: 'tray-456',
+        }),
     }).execute([], {} as never);
 
     expect(result.exitCode).toBe(0);
@@ -206,10 +214,11 @@ describe('host command', () => {
 
   it('shows follower connecting status', async () => {
     const result = await createHostCommand({
-      getFollowerStatus: () => followerStatus({
-        state: 'connecting',
-        joinUrl: 'https://tray.example.com/join/token',
-      }),
+      getFollowerStatus: () =>
+        followerStatus({
+          state: 'connecting',
+          joinUrl: 'https://tray.example.com/join/token',
+        }),
     }).execute([], {} as never);
 
     expect(result.exitCode).toBe(0);
@@ -221,13 +230,14 @@ describe('host command', () => {
   it('shows follower connecting diagnostics', async () => {
     const now = Date.now();
     const result = await createHostCommand({
-      getFollowerStatus: () => followerStatus({
-        state: 'connecting',
-        joinUrl: 'https://tray.example.com/join/token',
-        connectingSince: now - 15000,
-        attachAttempts: 7,
-        lastAttachCode: 'LEADER_NOT_CONNECTED',
-      }),
+      getFollowerStatus: () =>
+        followerStatus({
+          state: 'connecting',
+          joinUrl: 'https://tray.example.com/join/token',
+          connectingSince: now - 15000,
+          attachAttempts: 7,
+          lastAttachCode: 'LEADER_NOT_CONNECTED',
+        }),
     }).execute([], {} as never);
 
     expect(result.exitCode).toBe(0);
@@ -239,11 +249,12 @@ describe('host command', () => {
 
   it('shows follower error status', async () => {
     const result = await createHostCommand({
-      getFollowerStatus: () => followerStatus({
-        state: 'error',
-        joinUrl: 'https://tray.example.com/join/token',
-        error: 'WebRTC failed',
-      }),
+      getFollowerStatus: () =>
+        followerStatus({
+          state: 'error',
+          joinUrl: 'https://tray.example.com/join/token',
+          error: 'WebRTC failed',
+        }),
     }).execute([], {} as never);
 
     expect(result.exitCode).toBe(0);
@@ -266,12 +277,13 @@ describe('host command', () => {
   it('shows last_ping when follower is connected with lastPingTime', async () => {
     const now = Date.now();
     const result = await createHostCommand({
-      getFollowerStatus: () => followerStatus({
-        state: 'connected',
-        joinUrl: 'https://tray.example.com/join/token',
-        trayId: 'tray-456',
-        lastPingTime: now - 5000,
-      }),
+      getFollowerStatus: () =>
+        followerStatus({
+          state: 'connected',
+          joinUrl: 'https://tray.example.com/join/token',
+          trayId: 'tray-456',
+          lastPingTime: now - 5000,
+        }),
     }).execute([], {} as never);
 
     expect(result.exitCode).toBe(0);
@@ -281,13 +293,14 @@ describe('host command', () => {
 
   it('shows reconnect_attempts when follower is reconnecting', async () => {
     const result = await createHostCommand({
-      getFollowerStatus: () => followerStatus({
-        state: 'reconnecting',
-        joinUrl: 'https://tray.example.com/join/token',
-        trayId: 'tray-456',
-        lastPingTime: Date.now() - 30000,
-        reconnectAttempts: 3,
-      }),
+      getFollowerStatus: () =>
+        followerStatus({
+          state: 'reconnecting',
+          joinUrl: 'https://tray.example.com/join/token',
+          trayId: 'tray-456',
+          lastPingTime: Date.now() - 30000,
+          reconnectAttempts: 3,
+        }),
     }).execute([], {} as never);
 
     expect(result.exitCode).toBe(0);
@@ -315,7 +328,7 @@ describe('formatLeaderOutput', () => {
         },
         error: null,
       },
-      [],
+      []
     );
     expect(output).toBe('status: leader\njoin_url: https://tray.example.com/join/tray-123\n');
   });
@@ -338,7 +351,7 @@ describe('formatLeaderOutput', () => {
         },
         error: null,
       },
-      [{ runtimeId: 'follower-abc' }],
+      [{ runtimeId: 'follower-abc' }]
     );
     expect(output).toContain('followers:');
     expect(output).toContain('  - follower-abc');
@@ -363,97 +376,112 @@ describe('formatLeaderOutput', () => {
         },
         error: null,
       },
-      [{ runtimeId: 'follower-abc', runtime: 'slicc-electron', connectedAt }],
+      [{ runtimeId: 'follower-abc', runtime: 'slicc-electron', connectedAt }]
     );
     expect(output).toContain('followers:');
     expect(output).toContain('  - follower-abc (slicc-electron) connected 2m ago');
   });
 
   it('formats leader with error and no session', () => {
-    const output = formatLeaderOutput(
-      { state: 'error', session: null, error: 'boom' },
-      [],
-    );
+    const output = formatLeaderOutput({ state: 'error', session: null, error: 'boom' }, []);
     expect(output).toBe('status: error\njoin_url: unavailable\nerror: boom\n');
   });
 });
 
 describe('formatFollowerOutput', () => {
   it('formats connected follower without tray_id', () => {
-    const output = formatFollowerOutput(followerStatus({
-      state: 'connected',
-      joinUrl: 'https://tray.example.com/join/token',
-      trayId: 'tray-789',
-    }));
-    expect(output).toBe('status: follower (connected)\njoin_url: https://tray.example.com/join/token\n');
+    const output = formatFollowerOutput(
+      followerStatus({
+        state: 'connected',
+        joinUrl: 'https://tray.example.com/join/token',
+        trayId: 'tray-789',
+      })
+    );
+    expect(output).toBe(
+      'status: follower (connected)\njoin_url: https://tray.example.com/join/token\n'
+    );
     expect(output).not.toContain('tray_id');
   });
 
   it('omits join_url when null', () => {
-    const output = formatFollowerOutput(followerStatus({
-      state: 'connecting',
-    }));
+    const output = formatFollowerOutput(
+      followerStatus({
+        state: 'connecting',
+      })
+    );
     expect(output).toBe('status: follower (connecting)\n');
   });
 
   it('includes error when present', () => {
-    const output = formatFollowerOutput(followerStatus({
-      state: 'error',
-      error: 'something broke',
-    }));
+    const output = formatFollowerOutput(
+      followerStatus({
+        state: 'error',
+        error: 'something broke',
+      })
+    );
     expect(output).toContain('error: something broke');
   });
 
   it('shows last_ping for connected follower with lastPingTime', () => {
     const now = Date.now();
-    const output = formatFollowerOutput(followerStatus({
-      state: 'connected',
-      joinUrl: 'https://tray.example.com/join/token',
-      trayId: 'tray-789',
-      lastPingTime: now - 10000,
-    }));
+    const output = formatFollowerOutput(
+      followerStatus({
+        state: 'connected',
+        joinUrl: 'https://tray.example.com/join/token',
+        trayId: 'tray-789',
+        lastPingTime: now - 10000,
+      })
+    );
     expect(output).toContain('last_ping: 10s ago');
   });
 
   it('omits last_ping when lastPingTime is null', () => {
-    const output = formatFollowerOutput(followerStatus({
-      state: 'connected',
-      joinUrl: 'https://tray.example.com/join/token',
-      trayId: 'tray-789',
-    }));
+    const output = formatFollowerOutput(
+      followerStatus({
+        state: 'connected',
+        joinUrl: 'https://tray.example.com/join/token',
+        trayId: 'tray-789',
+      })
+    );
     expect(output).not.toContain('last_ping');
   });
 
   it('shows reconnect_attempts for reconnecting follower', () => {
-    const output = formatFollowerOutput(followerStatus({
-      state: 'reconnecting',
-      joinUrl: 'https://tray.example.com/join/token',
-      trayId: 'tray-789',
-      lastPingTime: Date.now() - 30000,
-      reconnectAttempts: 5,
-    }));
+    const output = formatFollowerOutput(
+      followerStatus({
+        state: 'reconnecting',
+        joinUrl: 'https://tray.example.com/join/token',
+        trayId: 'tray-789',
+        lastPingTime: Date.now() - 30000,
+        reconnectAttempts: 5,
+      })
+    );
     expect(output).toContain('status: follower (reconnecting)');
     expect(output).toContain('reconnect_attempts: 5');
     expect(output).not.toContain('last_ping');
   });
 
   it('omits reconnect_attempts when 0', () => {
-    const output = formatFollowerOutput(followerStatus({
-      state: 'reconnecting',
-      joinUrl: 'https://tray.example.com/join/token',
-    }));
+    const output = formatFollowerOutput(
+      followerStatus({
+        state: 'reconnecting',
+        joinUrl: 'https://tray.example.com/join/token',
+      })
+    );
     expect(output).not.toContain('reconnect_attempts');
   });
 
   it('shows connecting diagnostics when available', () => {
     const now = Date.now();
-    const output = formatFollowerOutput(followerStatus({
-      state: 'connecting',
-      joinUrl: 'https://tray.example.com/join/token',
-      connectingSince: now - 30000,
-      attachAttempts: 15,
-      lastAttachCode: 'LEADER_NOT_ELECTED',
-    }));
+    const output = formatFollowerOutput(
+      followerStatus({
+        state: 'connecting',
+        joinUrl: 'https://tray.example.com/join/token',
+        connectingSince: now - 30000,
+        attachAttempts: 15,
+        lastAttachCode: 'LEADER_NOT_ELECTED',
+      })
+    );
     expect(output).toContain('status: follower (connecting)');
     expect(output).toContain('connecting_for: 30s');
     expect(output).toContain('attach_attempts: 15');
@@ -461,22 +489,28 @@ describe('formatFollowerOutput', () => {
   });
 
   it('shows last_error when present', () => {
-    const output = formatFollowerOutput(followerStatus({
-      state: 'connecting',
-      joinUrl: 'https://tray.example.com/join/token',
-      lastError: 'Tray follower attach returned an invalid response (502): Bad Gateway',
-    }));
-    expect(output).toContain('last_error: Tray follower attach returned an invalid response (502): Bad Gateway');
+    const output = formatFollowerOutput(
+      followerStatus({
+        state: 'connecting',
+        joinUrl: 'https://tray.example.com/join/token',
+        lastError: 'Tray follower attach returned an invalid response (502): Bad Gateway',
+      })
+    );
+    expect(output).toContain(
+      'last_error: Tray follower attach returned an invalid response (502): Bad Gateway'
+    );
   });
 
   it('omits connecting diagnostics when not in connecting state', () => {
-    const output = formatFollowerOutput(followerStatus({
-      state: 'connected',
-      joinUrl: 'https://tray.example.com/join/token',
-      attachAttempts: 5,
-      lastAttachCode: 'LEADER_CONNECTED',
-      connectingSince: Date.now() - 10000,
-    }));
+    const output = formatFollowerOutput(
+      followerStatus({
+        state: 'connected',
+        joinUrl: 'https://tray.example.com/join/token',
+        attachAttempts: 5,
+        lastAttachCode: 'LEADER_CONNECTED',
+        connectingSince: Date.now() - 10000,
+      })
+    );
     expect(output).not.toContain('attach_attempts');
     expect(output).not.toContain('last_code');
     expect(output).not.toContain('connecting_for');

@@ -1,0 +1,36 @@
+{
+  "branches": ["main"],
+  "plugins": [
+    "@semantic-release/commit-analyzer",
+    "@semantic-release/release-notes-generator",
+    [
+      "@semantic-release/npm",
+      {
+        "npmPublish": true,
+        "provenance": true
+      }
+    ],
+    [
+      "@semantic-release/exec",
+      {
+        "prepareCmd": "node dist/cli/sync-release-version.js ${nextRelease.version} && npm run build:extension && npm run package:release",
+        "publishCmd": "npx wrangler deploy && npx vitest run src/worker/deployed.test.ts"
+      }
+    ],
+    [
+      "@semantic-release/github",
+      {
+        "successComment": false,
+        "failComment": false,
+        "failTitle": false,
+        "labels": false,
+        "releasedLabels": false,
+        "assets": [
+          "artifacts/release/*.zip",
+          "artifacts/release/*.tgz",
+          "artifacts/release/release-artifacts.json"
+        ]
+      }
+    ]
+  ]
+}

@@ -100,7 +100,9 @@ describe('SprinkleBridge', () => {
 
   it('listener errors are silently caught', () => {
     const api = bridge.createAPI('test-sprinkle');
-    const bad = vi.fn(() => { throw new Error('boom'); });
+    const bad = vi.fn(() => {
+      throw new Error('boom');
+    });
     const good = vi.fn();
 
     api.on('update', bad);

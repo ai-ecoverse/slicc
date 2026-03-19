@@ -40,24 +40,42 @@ function getLFS(): FS.PromisifiedFS {
 function getMimeType(filePath: string): string {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
   const map: Record<string, string> = {
-    html: 'text/html', htm: 'text/html',
+    html: 'text/html',
+    htm: 'text/html',
     css: 'text/css',
-    js: 'application/javascript', mjs: 'application/javascript',
+    js: 'application/javascript',
+    mjs: 'application/javascript',
     json: 'application/json',
     svg: 'image/svg+xml',
-    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
-    gif: 'image/gif', webp: 'image/webp', ico: 'image/x-icon', avif: 'image/avif',
-    woff: 'font/woff', woff2: 'font/woff2', ttf: 'font/ttf',
-    mp3: 'audio/mpeg', mp4: 'video/mp4', webm: 'video/webm',
-    pdf: 'application/pdf', txt: 'text/plain', xml: 'application/xml',
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    ico: 'image/x-icon',
+    avif: 'image/avif',
+    woff: 'font/woff',
+    woff2: 'font/woff2',
+    ttf: 'font/ttf',
+    mp3: 'audio/mpeg',
+    mp4: 'video/mp4',
+    webm: 'video/webm',
+    pdf: 'application/pdf',
+    txt: 'text/plain',
+    xml: 'application/xml',
     wasm: 'application/wasm',
   };
   return map[ext] ?? 'application/octet-stream';
 }
 
 const TEXT_TYPES = new Set([
-  'text/html', 'text/css', 'text/plain', 'application/javascript',
-  'application/json', 'image/svg+xml', 'application/xml',
+  'text/html',
+  'text/css',
+  'text/plain',
+  'application/javascript',
+  'application/json',
+  'image/svg+xml',
+  'application/xml',
 ]);
 
 const sw = self as unknown as ServiceWorkerGlobalScope;
@@ -77,7 +95,7 @@ function getVfsBroadcast(): BroadcastChannel {
 
 async function readViaMainPage(
   vfsPath: string,
-  asText: boolean,
+  asText: boolean
 ): Promise<string | Uint8Array | null> {
   const bc = getVfsBroadcast();
   const id = `pvfs-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -118,11 +136,13 @@ async function handlePreviewRequest(vfsPath: string): Promise<Response> {
       if (stat.isDirectory()) {
         vfsPath = vfsPath.endsWith('/') ? vfsPath + 'index.html' : vfsPath + '/index.html';
       }
-    } catch { /* stat failed — not a dir or doesn't exist yet, continue to readFile */ }
+    } catch {
+      /* stat failed — not a dir or doesn't exist yet, continue to readFile */
+    }
 
     const raw = isText
-      ? await fs.readFile(vfsPath, { encoding: 'utf8' }) as string
-      : new Uint8Array(await fs.readFile(vfsPath) as Uint8Array);
+      ? ((await fs.readFile(vfsPath, { encoding: 'utf8' })) as string)
+      : new Uint8Array((await fs.readFile(vfsPath)) as Uint8Array);
 
     return new Response(raw, {
       status: 200,
@@ -132,7 +152,10 @@ async function handlePreviewRequest(vfsPath: string): Promise<Response> {
     const msg = err instanceof Error ? err.message : String(err);
     if (!msg.includes('ENOENT')) {
       console.error('[preview-sw] Error serving', vfsPath, msg);
-      return new Response(`Preview error: ${msg}`, { status: 500, headers: { 'Content-Type': 'text/plain' } });
+      return new Response(`Preview error: ${msg}`, {
+        status: 500,
+        headers: { 'Content-Type': 'text/plain' },
+      });
     }
     // Fall through to main-page fallback for mounted files
   }
@@ -150,7 +173,9 @@ async function handlePreviewRequest(vfsPath: string): Promise<Response> {
   return new Response('Not found', { status: 404, headers: { 'Content-Type': 'text/plain' } });
 }
 
-sw.addEventListener('install', () => { sw.skipWaiting(); });
+sw.addEventListener('install', () => {
+  sw.skipWaiting();
+});
 
 sw.addEventListener('activate', (event) => {
   event.waitUntil(sw.clients.claim());
@@ -161,13 +186,15 @@ sw.addEventListener('activate', (event) => {
  * belong to the slicc app itself (Vite HMR, API endpoints, UI assets).
  */
 function isSliccAppPath(pathname: string): boolean {
-  return pathname.startsWith('/@') ||
+  return (
+    pathname.startsWith('/@') ||
     pathname.startsWith('/__') ||
     pathname.startsWith('/api/') ||
     pathname.startsWith('/src/') ||
     pathname.startsWith('/node_modules/') ||
     pathname === '/' ||
-    pathname === '/index.html';
+    pathname === '/index.html'
+  );
 }
 
 sw.addEventListener('fetch', (event) => {

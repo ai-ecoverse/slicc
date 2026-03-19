@@ -13,5 +13,6 @@
     "rootDir": "src",
     "declaration": true
   },
-  "include": ["src/cli/**/*.ts", "src/tray-url-shared.ts"]
+  "include": ["src/cli/**/*.ts", "src/tray-url-shared.ts"],
+  "exclude": ["src/cli/**/*.test.ts"]
 }
