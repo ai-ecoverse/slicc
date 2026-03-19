@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+Keep this root file high-signal and low-churn. Put fast-changing implementation detail in `docs/architecture.md`, `docs/development.md`, `docs/shell-reference.md`, or feature-local docs instead of expanding this file.
+
 ## Build and Development Commands
 
 ```bash
@@ -9,15 +11,20 @@ npm run dev:full        # Full dev mode: Vite HMR + Chrome + CDP proxy (port 571
 npm run dev:full -- --prompt "mount /tmp"  # Auto-submit prompt (clears history/fs first)
 npm run dev:electron -- /Applications/Slack.app  # Electron attach mode
 npm run dev             # Vite dev server only (no Chrome/CDP)
-npm run qa:setup        # Build dist/extension and scaffold dedicated leader/follower/extension Chrome QA profiles
-npm run qa:leader       # Launch CLI dev mode with the isolated leader Chrome profile, auto-connected to staging tray hub
-npm run qa:follower     # Launch CLI dev mode with the isolated follower Chrome profile
-npm run qa:extension    # Rebuild/load the unpacked extension in the isolated extension Chrome profile
 npm run build           # Production build (UI via Vite + CLI/Electron via TSC)
 npm run build:extension # Build extension into dist/extension/
 npm run typecheck       # Typecheck browser + Node targets
 npm run test            # Vitest run (all tests)
 npx vitest run src/fs/virtual-fs.test.ts  # Single test file
+```
+
+### Tray / QA / Worker Commands
+
+```bash
+npm run qa:setup        # Build dist/extension and scaffold dedicated leader/follower/extension Chrome QA profiles
+npm run qa:leader       # Launch CLI dev mode with the isolated leader Chrome profile, auto-connected to staging tray hub
+npm run qa:follower     # Launch CLI dev mode with the isolated follower Chrome profile
+npm run qa:extension    # Rebuild/load the unpacked extension in the isolated extension Chrome profile
 npx wrangler dev        # Run the Cloudflare Worker tray hub locally (requires Wrangler)
 npx wrangler deploy --env staging  # Deploy the staging tray hub
 npx wrangler deploy     # Deploy the Cloudflare Worker tray hub
@@ -86,43 +93,31 @@ Virtual Filesystem (src/fs/) → RestrictedFS → Shell (src/shell/) + Git (src/
 
 ### Key Subsystems
 
-**Orchestrator** (`src/scoops/orchestrator.ts`): Creates/destroys scoops, routes messages, and manages the VFS. Cone delegation via `feed_scoop` is intentionally self-contained.
+**Orchestrator** (`src/scoops/orchestrator.ts`): Creates/destroys scoops, routes messages, manages VFS. Cone delegates via `feed_scoop` — scoops get complete self-contained prompts (no access to cone's conversation).
 
-**VirtualFS** (`src/fs/`): POSIX-like async FS on LightningFS/IndexedDB. `RestrictedFS` enforces scoop ACLs and `FsError` carries POSIX codes.
+**VirtualFS** (`src/fs/`): POSIX-like async FS backed by LightningFS (IndexedDB). `RestrictedFS` wraps it with path ACLs for scoops. `FsError` carries POSIX error codes.
 
-**Shell** (`src/shell/`): WasmShell over just-bash. Prefer shell commands over bespoke tools. Important built-ins include `playwright-cli`, `open`, `serve`, `git`, `webhook`, `crontask`, `mount`, `oauth-token`, `convert`, `sqlite3`, and `rsync`. Any `*.jsh` file on the VFS becomes a command; `*.bsh` files auto-run on matching browser navigations. Extension mode routes dynamic JS through `sandbox.html` and loads Pyodide/ImageMagick from bundled assets.
+**Shell** (`src/shell/`): WasmShell wraps just-bash 2.11.7 (WASM). 78+ commands including `git`, `node -e`, `python3 -c`, `playwright-cli`, `open`, `serve`, `sqlite3`, `convert`, `pdftk`, `skill`, `upskill`, `webhook`, `crontask`, `mount`, `oauth-token`. Any `*.jsh` file on VFS is auto-discovered as a command. Extension CSP workaround: dynamic code routes through `sandbox.html`.
 
-**Skills** (`src/scoops/skills.ts`, `src/skills/`): Skills in `/workspace/skills/` are prompt-injected from `SKILL.md`; the install engine also supports manifests, dependency/conflict checks, uninstall, and dropped `.skill` bundles. Default skills come from `src/defaults/workspace/skills/`.
+**CDP** (`src/cdp/`): `CDPTransport` interface with WebSocket (CLI) and `chrome.debugger` (extension) implementations. `BrowserAPI` provides Playwright-style API (listPages, navigate, screenshot, evaluate, click, etc.). Screenshots normalize DPR to 1.
 
-**Tray / worker** (`wrangler.jsonc`, `src/worker/`): Cloudflare Worker + Durable Object tray hub handles `POST /tray`, controller attach, leader-only WebSocket control, webhook forwarding via `POST /webhook/:token/:webhookId`, and deployed smoke tests.
+**Tools** (`src/tools/`): Active tool surface: `read_file`, `write_file`, `edit_file`, `bash`, `javascript`, plus NanoClaw tools (`send_message`, cone-only: `list_scoops`, `scoop_scoop`, `feed_scoop`, `drop_scoop`, `update_global_memory`). Browser automation goes through shell commands via `bash`.
 
-### CDP (src/cdp/)
-`CDPTransport` abstracts CLI WebSocket transport and extension `chrome.debugger` transport. `BrowserAPI` sits on top for Playwright-style tab automation and normalizes screenshot DPR.
+**Core Agent** (`src/core/`): Uses pi-agent-core for agent loop, pi-ai for LLM streaming. `tool-adapter.ts` bridges legacy ToolDefinition to pi-compatible AgentTool. `SessionStore` persists conversations to IndexedDB.
 
-When a tray is connected, `BrowserAPI` can expose remote tabs via federated targets (`TrayTargetProvider`, `listAllTargets()`). Remote targets use `runtimeId:localTargetId`, and `attachToPage()` swaps to `RemoteCDPTransport`, which tunnels CDP over the tray WebRTC data channel between leader/follower runtimes.
+**Context Compaction** (`src/core/context-compaction.ts`): LLM-summarized compaction at ~183K tokens. Images auto-resized before LLM (5MB base64 limit). Overflow recovery replaces oversized messages (>40K chars) with placeholders.
 
-Teleport is built into the shell/browser path: `playwright teleport --start=<regex> --return=<regex>` (or equivalent flags on `open`, `tab-new`, `goto`) hands auth to a follower and restores cookies + storage back into the leader. Keep this flow accurate when changing tray/browser code.
+**UI** (`src/ui/`): Vanilla TypeScript, no framework. Extension mode: compact tabbed interface. Standalone: resizable split layout. `main.ts` delegates to `mainExtension()` (OffscreenClient) or bootstraps Orchestrator directly.
 
-### Tools (src/tools/)
-Legacy `ToolDefinition` objects are adapted to pi-compatible tools by `tool-adapter.ts`. Active scoop/cone tools are `read_file`, `write_file`, `edit_file`, `bash`, `javascript`, and NanoClaw messaging tools. Active agents should do browser automation and search via shell commands (`playwright-cli`, `rg`, `grep`, `find`) rather than expanding the dedicated tool surface.
+**Extension** (`src/extension/`): Service worker relays messages + proxies chrome.debugger. Offscreen document runs agent engine (survives side panel close). Chat persistence: `browser-coding-agent` IndexedDB is single source of truth.
 
-### Core Agent (src/core/)
-Built on `@mariozechner/pi-agent-core` + `@mariozechner/pi-ai`. Important files are `tool-adapter.ts`, `tool-registry.ts`, `context-compaction.ts`, and `session.ts`. Sessions persist in IndexedDB (`agent-sessions`) per scoop JID so agents can resume after restarts.
+**Preview SW** (`src/ui/preview-sw.ts`): Intercepts `/preview/*` requests, serves VFS content. Built as IIFE via esbuild (not rollup — avoids code-splitting issues in SWs).
 
-### Context Compaction
-Compaction kicks in near the 200K context window (~183K usable after reserve), preserves recent turns, avoids splitting assistant/tool pairs, and falls back if summary generation fails. Image inputs are validated/resized before the LLM; overflow/image errors trigger one recovery retry in `scoop-context.ts`. The deep-import/Vite alias wiring for pi compaction/overflow helpers is intentional.
+**Sprinkle Rendering** (`src/ui/sprinkle-renderer.ts`): Renders `.shtml` files as interactive UI panels in sandbox iframes. See the sprinkles skill (`src/defaults/workspace/skills/sprinkles/`) for rendering modes, bridge API, and style guide.
 
-### UI / Runtimes
-Vanilla TS UI. Standalone mode uses a resizable split layout; extension mode uses a compact tabbed layout; Electron reuses the CLI server in `--serve-only` and injects the overlay shell from `src/ui/electron-overlay.ts`. `main.ts` boots the Orchestrator directly in CLI/Electron and delegates to `mainExtension()` in extension mode.
+**Inline Sprinkles** (`src/ui/inline-sprinkle.ts`): Agent ` ```shtml ` code blocks in chat messages are hydrated into sandboxed srcdoc iframes after streaming completes. Minimal bridge (lick-only, no state) via postMessage. Auto-height via ResizeObserver. No sprinkle manager involvement. Lick events route to the cone via `routeLickToScoop` (CLI) or `client.sendSprinkleLick` (extension). CSS: `.msg__inline-sprinkle` container, `.sprinkle-action-card` component.
 
-### Extension (src/extension/)
-Manifest V3 extension uses a three-layer design: side panel UI, service worker relay/CDP proxy, and offscreen document running the agent engine so work survives panel close. `offscreen-cdp-proxy.ts` / `panel-cdp-proxy.ts` bridge browser automation through the service worker. `browser-coding-agent` IndexedDB is the display-message source of truth; `agent-sessions` stores LLM history; `slicc-groups` stores orchestrator state.
-
-### Preview Service Worker (src/ui/preview-sw.ts)
-Serves `/preview/*` from the VFS so generated apps can open in real tabs. Keep it as a self-contained esbuild IIFE; rollup code-splitting breaks service-worker imports.
-
-### CLI Server (src/cli/index.ts)
-Express server launches Chrome with remote debugging, serves the app, proxies CDP at `/cdp`, exposes `/api/fetch-proxy` and `/auth/callback`, and is reused by Electron. QA profiles live under `.qa/chrome/*`.
+**Skills** (`src/skills/`, `src/scoops/skills.ts`): SKILL.md files in `/workspace/skills/` auto-load into system prompt. Installation engine supports manifest-based packages with dependency/conflict checking.
 
 ### Data Flow
 
@@ -131,6 +126,13 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
   → Tool calls → RestrictedFS / WasmShell / BrowserAPI → results → back to agent loop
   → Scoop completes → Orchestrator → Cone's message queue
 ```
+
+### Tray / Teleport Addendum
+
+- Tray hub code lives in `src/worker/` with config in `wrangler.jsonc`; treat it as coordination infrastructure, not canonical session storage.
+- When a tray is connected, remote browser targets are exposed through federated target routing; keep CDP local to the runtime that owns the page.
+- Teleport is part of the browser/shell workflow: `playwright teleport --start=<regex> --return=<regex>` and equivalent flags on `open`, `tab-new`, and navigation commands.
+- Any `*.bsh` file is a browser-navigation helper. Keep detailed behavior in docs rather than growing this root guide.
 
 ## Key Conventions
 
@@ -171,7 +173,9 @@ npm run build:extension
 ```
 **CI**: Same four gates run on every PR via `.github/workflows/ci.yml`.
 
-**Worker deploy CI**: the tray hub uses `.github/workflows/worker.yml` for both staging and production. It does not require separate GitHub environments: use the repo-level `CLOUDFLARE_API_TOKEN` secret plus `CLOUDFLARE_ACCOUNT_ID` variable, and let `cloudflare/wrangler-action` provide the deployed URL for `src/worker/deployed.test.ts`.
+### Worker Deploy CI
+
+Tray-hub deploys use `.github/workflows/worker.yml` for staging and production. Use the repo-level `CLOUDFLARE_API_TOKEN` secret plus `CLOUDFLARE_ACCOUNT_ID` variable, and let `cloudflare/wrangler-action` surface the deployed URL for `src/worker/deployed.test.ts`.
 
 ## Git Integration (src/git/)
 isomorphic-git with LightningFS. Auth: `git config github.token <PAT>`. CORS: CLI routes through `/api/fetch-proxy`, extension uses direct fetch.
