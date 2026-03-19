@@ -508,6 +508,8 @@ export class HarRecorder {
     } else {
       // Non-extension: compile and apply directly (intentional dynamic eval for developer tool filter)
       try {
+        // User-authored HAR filter expression — evaluated via sandbox postMessage in extension mode.
+        // The filterCode string comes from the user's har filter command, not from remote input.
         // eslint-disable-next-line @typescript-eslint/no-implied-eval
         const filterFn = new Function('entry', `return (${filterCode})(entry);`) as HarFilterFn;
         const result: HarEntry[] = [];
