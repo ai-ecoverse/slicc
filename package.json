@@ -56,6 +56,11 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@semantic-release/commit-analyzer": "13.0.1",
+    "@semantic-release/exec": "7.1.0",
+    "@semantic-release/github": "12.0.6",
+    "@semantic-release/npm": "13.1.5",
+    "@semantic-release/release-notes-generator": "14.1.0",
     "@types/express": "^5.0.0",
     "@types/jsdom": "^28.0.0",
     "@types/node": "^22.13.0",
@@ -64,6 +69,7 @@
     "fake-indexeddb": "6.2.5",
     "jsdom": "^28.1.0",
     "puppeteer-core": "^24.39.1",
+    "semantic-release": "25.0.3",
     "typescript": "^5.7.3",
     "vite": "^6.1.0",
     "vitest": "4.0.18"

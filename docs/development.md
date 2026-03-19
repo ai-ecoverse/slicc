@@ -17,6 +17,7 @@ Build, run, test, and debug SLICC locally.
 | `npm run build:ui` | Vite build only into `dist/ui/` | Build UI assets separately |
 | `npm run build:cli` | TSC build only into `dist/cli/` | Build CLI server + Electron attach helpers separately |
 | `npm run build:extension` | Chrome extension bundle into `dist/extension/` | Build extension; load in `chrome://extensions` |
+| `npm run package:release` | Package deterministic extension + Node/CLI release artifacts into `artifacts/release/` (after running the build commands) | Prepare CI/local release assets for GitHub Releases and later npm publish wiring |
 | `npm run start` | Run production CLI (requires build first) | Run built production bundle |
 | `npm run start:electron -- /Applications/Slack.app` | Run the built Electron attach mode | Smoke-test production Electron output |
 | `npm run typecheck` | Typecheck browser + Node targets | Verify no type errors before committing |
@@ -27,6 +28,22 @@ Build, run, test, and debug SLICC locally.
 | `npx wrangler deploy --env staging` | Deploy the staging Cloudflare Worker tray hub using `wrangler.jsonc` | Publish the staging tray hub (`slicc-tray-hub-staging`) used by GitHub Actions |
 | `npx wrangler deploy` | Deploy the production Cloudflare Worker tray hub using `wrangler.jsonc` | Publish the production tray hub |
 | `WORKER_BASE_URL=https://... npx vitest run src/worker/deployed.test.ts` | Run the deployed tray-hub smoke test | Verify the live Worker contract (`POST /tray`, controller attach, leader WebSocket, webhook responses) |
+
+## Release Packaging
+
+Run the release packaging flow after the normal production builds:
+
+```bash
+npm run build
+npm run build:extension
+npm run package:release
+```
+
+This writes deterministic release assets to `artifacts/release/`:
+
+- `<extension-name>-extension-v<version>.zip` — ZIP archive of `dist/extension/` with normalized ordering, timestamps, and permissions
+- `<npm-package-name>-<version>.tgz` — npm tarball from the publishable Node/CLI package metadata and built `dist/ui` + `dist/cli` assets
+- `release-artifacts.json` — stable manifest describing the generated artifact paths
 
 When `WORKER_BASE_URL` is set for the CLI/Electron server, the standalone browser runtime now exposes it at `/api/runtime-config` and the cone runtime will automatically create/attach a tray leader session on startup. Passing `--lead` to the CLI launches Chrome with the canonical `?tray=<worker-base-url>` query, and successful leader attach rewrites the visible URL to `?tray=<worker-base-url>/tray/<trayId>`. Passing `--join <join-url>` launches Chrome with the canonical `?tray=<join-url>` follower capability instead; the CLI validates that the value parses as a tray `.../join/<trayId>.<secret>` URL and strips any hash/query suffixes before launch. Extension/offscreen builds can use `VITE_WORKER_BASE_URL`, persisted runtime storage, or URL overrides via `tray` (canonical) plus legacy `lead` / `trayWorkerUrl` for the same leader-join path. `GET /join/:token` now reports readiness plus the supported bootstrap transport (`409 FOLLOWER_JOIN_NOT_READY` before a live leader, `200` with `signaling.transport = 'http-poll'` once the leader WebSocket is live), while **`POST /join/:token` remains the follower HTTP contract**: initial attach returns `result.action = wait|signal|fail`, and subsequent `poll` / `answer` / `ice-candidate` / `retry` actions drive the offer/answer/ICE bootstrap without requiring follower-owned tray WebSockets.
 
