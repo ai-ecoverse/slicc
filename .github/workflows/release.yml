@@ -41,3 +41,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx semantic-release
+
+      - name: Deploy worker to production
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: 3.91.0
+          command: deploy
+
+      - name: Smoke test production worker
+        env:
+          WORKER_BASE_URL: https://slicc-tray-hub.minivelos.workers.dev
+        run: npx vitest run src/worker/deployed.test.ts
