@@ -24,6 +24,8 @@ import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import { LeaderTrayManager, createTrayFetch, getLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import {
+  DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
+  DEFAULT_STAGING_TRAY_WORKER_BASE_URL,
   buildTrayLaunchUrl,
   fetchRuntimeConfig,
   hasStoredTrayJoinUrl,
@@ -1320,6 +1322,9 @@ async function main(): Promise<void> {
       locationHref: window.location.href,
       storage: window.localStorage,
       envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
+      defaultWorkerBaseUrl: __DEV__
+        ? DEFAULT_STAGING_TRAY_WORKER_BASE_URL
+        : DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
       runtimeConfigFetcher: () => fetchRuntimeConfig(),
     });
 

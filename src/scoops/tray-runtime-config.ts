@@ -1,5 +1,7 @@
 export const TRAY_WORKER_STORAGE_KEY = 'slicc.trayWorkerBaseUrl';
 export const TRAY_JOIN_STORAGE_KEY = 'slicc.trayJoinUrl';
+export const DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL = 'https://slicc-tray-hub.minivelos.workers.dev';
+export const DEFAULT_STAGING_TRAY_WORKER_BASE_URL = 'https://slicc-tray-hub-staging.minivelos.workers.dev';
 
 import {
   TRAY_LEGACY_LEAD_QUERY_PARAM,
@@ -130,6 +132,7 @@ export async function resolveTrayRuntimeConfig(options: {
   locationHref: string;
   storage?: RuntimeConfigStorage | null;
   envBaseUrl?: string | null;
+  defaultWorkerBaseUrl?: string | null;
   runtimeConfigFetcher?: (() => Promise<RuntimeConfigResponse | null>) | null;
 }): Promise<TrayUrlConfig | null> {
   const queryConfig = readQueryTrayConfig(options.locationHref);
@@ -165,8 +168,9 @@ export async function resolveTrayRuntimeConfig(options: {
   const serverBaseUrl = serverConfig?.workerBaseUrl ?? null;
   const storedBaseUrl = normalizeTrayWorkerBaseUrl(options.storage?.getItem(TRAY_WORKER_STORAGE_KEY) ?? null);
   const envBaseUrl = normalizeTrayWorkerBaseUrl(options.envBaseUrl ?? null);
+  const defaultWorkerBaseUrl = normalizeTrayWorkerBaseUrl(options.defaultWorkerBaseUrl ?? null);
 
-  const workerBaseUrl = serverBaseUrl ?? storedBaseUrl ?? envBaseUrl;
+  const workerBaseUrl = serverBaseUrl ?? storedBaseUrl ?? envBaseUrl ?? defaultWorkerBaseUrl;
   if (!workerBaseUrl) {
     return null;
   }
@@ -180,6 +184,7 @@ export async function resolveTrayWorkerBaseUrl(options: {
   locationHref: string;
   storage?: RuntimeConfigStorage | null;
   envBaseUrl?: string | null;
+  defaultWorkerBaseUrl?: string | null;
   runtimeConfigFetcher?: (() => Promise<RuntimeConfigResponse | null>) | null;
 }): Promise<string | null> {
   return (await resolveTrayRuntimeConfig(options))?.workerBaseUrl ?? null;

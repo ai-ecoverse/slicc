@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
+  DEFAULT_STAGING_TRAY_WORKER_BASE_URL,
   buildTrayLaunchUrl,
   buildTrayUrlValue,
   buildTrayWorkerUrl,
@@ -163,7 +165,7 @@ describe('tray-runtime-config', () => {
     })).resolves.toBe('https://legacy.example.com');
   });
 
-  it('falls back to the server runtime config, then stored config, then build config', async () => {
+  it('falls back to the server runtime config, then stored config, then build config, then runtime default', async () => {
     const serverStorage = new MemoryStorage();
     serverStorage.setItem('slicc.trayWorkerBaseUrl', 'https://stored.example.com');
 
@@ -171,6 +173,7 @@ describe('tray-runtime-config', () => {
       locationHref: 'http://localhost:3000/',
       storage: serverStorage,
       envBaseUrl: 'https://env.example.com',
+      defaultWorkerBaseUrl: DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
       runtimeConfigFetcher: async () => ({ trayWorkerBaseUrl: 'https://server.example.com/' }),
     })).resolves.toBe('https://server.example.com');
 
@@ -181,6 +184,7 @@ describe('tray-runtime-config', () => {
       locationHref: 'chrome-extension://abc/index.html',
       storage: storedOnlyStorage,
       envBaseUrl: 'https://env.example.com',
+      defaultWorkerBaseUrl: DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
       runtimeConfigFetcher: async () => null,
     })).resolves.toBe('https://stored.example.com');
 
@@ -188,8 +192,39 @@ describe('tray-runtime-config', () => {
       locationHref: 'chrome-extension://abc/index.html',
       storage: new MemoryStorage(),
       envBaseUrl: 'https://env.example.com/',
+      defaultWorkerBaseUrl: DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
       runtimeConfigFetcher: async () => null,
     })).resolves.toBe('https://env.example.com');
+
+    const defaultOnlyStorage = new MemoryStorage();
+
+    await expect(resolveTrayWorkerBaseUrl({
+      locationHref: 'http://localhost:5710/',
+      storage: defaultOnlyStorage,
+      envBaseUrl: null,
+      defaultWorkerBaseUrl: DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
+      runtimeConfigFetcher: async () => null,
+    })).resolves.toBe(DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL);
+
+    expect(defaultOnlyStorage.getItem('slicc.trayWorkerBaseUrl')).toBe(DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL);
+  });
+
+  it('uses runtime-mode defaults only when no stronger override exists', async () => {
+    await expect(resolveTrayWorkerBaseUrl({
+      locationHref: 'http://localhost:5710/',
+      storage: new MemoryStorage(),
+      envBaseUrl: null,
+      defaultWorkerBaseUrl: DEFAULT_STAGING_TRAY_WORKER_BASE_URL,
+      runtimeConfigFetcher: async () => null,
+    })).resolves.toBe(DEFAULT_STAGING_TRAY_WORKER_BASE_URL);
+
+    await expect(resolveTrayWorkerBaseUrl({
+      locationHref: 'http://localhost:5710/',
+      storage: new MemoryStorage(),
+      envBaseUrl: null,
+      defaultWorkerBaseUrl: DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
+      runtimeConfigFetcher: async () => null,
+    })).resolves.toBe(DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL);
   });
 
   it('returns null when runtime config cannot provide a worker URL', async () => {
