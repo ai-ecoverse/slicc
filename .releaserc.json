@@ -13,7 +13,7 @@
     [
       "@semantic-release/exec",
       {
-        "prepareCmd": "node dist/cli/sync-release-version.js ${nextRelease.version} && npm run build:extension && npm run package:release && cp sliccstart/build/Sliccstart.dmg artifacts/release/Sliccstart-macos.dmg",
+        "prepareCmd": "node dist/cli/sync-release-version.js ${nextRelease.version} && npm run build:extension && npm run package:release && cp sliccstart/build/Sliccstart.dmg artifacts/release/sliccstart-v${nextRelease.version}.dmg",
         "publishCmd": "npx wrangler deploy && npx vitest run src/worker/deployed.test.ts"
       }
     ],
@@ -29,7 +29,7 @@
           "artifacts/release/*.zip",
           "artifacts/release/*.tgz",
           "artifacts/release/release-artifacts.json",
-          "artifacts/release/Sliccstart-macos.dmg"
+          "artifacts/release/sliccstart-v*.dmg"
         ]
       }
     ]
