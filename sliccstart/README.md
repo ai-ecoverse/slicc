@@ -7,41 +7,74 @@ launches them with SLICC attached.
 
 - macOS 14+
 - Node.js 22+ (LTS)
-- Xcode 15+ or Swift 5.9+ (to build from source)
+- Swift 5.9+ (Command Line Tools or Xcode)
 
-## Build & Run
+## Quick Start
+
+```bash
+# Build the .app bundle
+cd sliccstart
+./build-app.sh
+
+# Strip quarantine (unsigned app)
+xattr -cr build/Sliccstart.app
+
+# Run it
+open build/Sliccstart.app
+```
+
+Optionally install to Applications:
+```bash
+cp -r build/Sliccstart.app /Applications/
+```
+
+## Development
 
 ```bash
 cd sliccstart
-swift build
-swift run Sliccstart
+swift build           # Build
+swift run Sliccstart  # Run from terminal (no .app bundle)
 ```
 
 ## First Launch
 
-On first run, Sliccstart clones the SLICC repository to `~/.slicc/slicc/`
-and builds it. This takes 2-3 minutes. Subsequent launches are instant.
+If Sliccstart is run from outside the SLICC repo, it clones the repository
+to `~/.slicc/slicc/` and builds it on first run (2-3 minutes).
+
+If run from inside the SLICC repo (e.g., `sliccstart/build/Sliccstart.app`),
+it auto-detects the local checkout and uses it directly — no clone needed.
+You still need to build SLICC first: `npm install && npm run build && npm run build:extension`
 
 ## Features
 
 - **Launch browser**: Click any Chromium browser to start SLICC CLI server
-  with that browser (like `npm run dev:full` but with browser choice).
-- **Launch Electron app**: Click any Electron app to attach SLICC as an
-  overlay (like `npm run dev:electron`).
-- **Install extension**: Click the puzzle piece icon next to Chrome to
-  permanently install the SLICC extension via CDP pipe.
-- **Update**: Click "Update SLICC" to pull latest changes and rebuild.
+  with that browser (standalone mode, temporary profile).
+- **Launch Electron app**: Click any Electron app to attach SLICC as a
+  side panel overlay. Multiple apps can run simultaneously on separate ports.
+- **Install extension**: Guided "Load Unpacked" flow — copies the extension
+  to `~/.slicc/extension/`, opens Chrome to `chrome://extensions`, opens
+  Finder at the extension folder for easy selection.
+- **Update**: Pulls latest SLICC changes and rebuilds with one click.
 
 ## Architecture
 
-Sliccstart is a thin GUI. All intelligence lives in SLICC's TypeScript code:
+Sliccstart is a thin GUI. All SLICC intelligence stays in TypeScript:
 
 | Action | What Sliccstart runs |
 |--------|---------------------|
-| Launch browser | `node dist/cli/index.js --cdp-port=9222` with `CHROME_PATH` env |
-| Launch Electron | `node dist/cli/index.js --electron /path/to/app --kill` |
-| Install extension | `node dist/cli/install-extension.js --chrome-path=... --extension-path=...` |
+| Launch browser | `node dist/cli/index.js --cdp-port=9222` with `CHROME_PATH` env (port 5710) |
+| Launch Electron | `node dist/cli/index.js --electron /path/to/app --kill` (port 5711+) |
+| Install extension | Copies `dist/extension/` → opens Chrome + Finder |
 | Update | `git pull && npm install && npm run build && npm run build:extension` |
 
-The extension install strategy is in TypeScript (`src/cli/install-extension.ts`)
-so it can be updated via `git pull` without rebuilding the native app.
+Each browser/Electron instance gets its own port (5710 for browser, 5711+ for
+Electron apps), so you can run multiple apps simultaneously.
+
+## Ports
+
+| Port | Purpose |
+|------|---------|
+| 5710 | Browser standalone mode |
+| 5711+ | Electron app instances (auto-assigned) |
+| 9222 | Chrome CDP (browser mode) |
+| 9223+ | Electron CDP (auto-assigned) |
