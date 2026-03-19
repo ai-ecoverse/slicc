@@ -4,7 +4,9 @@ import { createDebugCommand } from './debug-command.js';
 
 function createMockCtx() {
   return {
-    fs: { resolvePath: (b: string, p: string) => p.startsWith('/') ? p : `${b}/${p}` } as IFileSystem,
+    fs: {
+      resolvePath: (b: string, p: string) => (p.startsWith('/') ? p : `${b}/${p}`),
+    } as IFileSystem,
     cwd: '/home',
     env: new Map<string, string>(),
     stdin: '',

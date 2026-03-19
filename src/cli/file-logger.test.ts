@@ -1,5 +1,12 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, utimesSync } from 'node:fs';
+import {
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  readdirSync,
+  existsSync,
+  utimesSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { rmSync } from 'node:fs';
@@ -56,7 +63,10 @@ describe('cleanupOldLogs', () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = join(tmpdir(), `slicc-test-cleanup-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    tmpDir = join(
+      tmpdir(),
+      `slicc-test-cleanup-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
     mkdirSync(tmpDir, { recursive: true });
   });
 
@@ -116,7 +126,10 @@ describe('FileLogger', () => {
   let logger: FileLogger | null = null;
 
   beforeEach(() => {
-    tmpDir = join(tmpdir(), `slicc-test-logger-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    tmpDir = join(
+      tmpdir(),
+      `slicc-test-logger-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
   });
 
   afterEach(() => {

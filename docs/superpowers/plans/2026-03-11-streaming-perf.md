@@ -15,6 +15,7 @@
 ### Task 1: Add rAF batching state and flush helper
 
 **Files:**
+
 - Modify: `src/ui/chat-panel.ts:68-78` (add new private fields after existing state)
 - Modify: `src/ui/chat-panel.ts` (add flushPendingDelta and cancelPendingDelta methods)
 
@@ -75,6 +76,7 @@ git commit -m "feat: add rAF batching state and flush/cancel helpers"
 ### Task 2: Add targeted streaming content update
 
 **Files:**
+
 - Modify: `src/ui/chat-panel.ts` (add `updateStreamingContent` method)
 
 - [ ] **Step 1: Add `updateStreamingContent()` method**
@@ -119,6 +121,7 @@ git commit -m "feat: add targeted streaming content update method"
 ### Task 3: Wire rAF batching into handleContentDelta
 
 **Files:**
+
 - Modify: `src/ui/chat-panel.ts:527-532` (replace `handleContentDelta` body)
 
 - [ ] **Step 1: Replace `handleContentDelta` implementation**
@@ -158,6 +161,7 @@ git commit -m "feat: wire rAF batching into handleContentDelta"
 ### Task 4: Add cleanup to content_done, switchToContext, and dispose
 
 **Files:**
+
 - Modify: `src/ui/chat-panel.ts:534-539` (handleContentDone)
 - Modify: `src/ui/chat-panel.ts:133-159` (switchToContext)
 - Modify: `src/ui/chat-panel.ts:967-976` (dispose)

@@ -7,13 +7,14 @@
  */
 
 import type { ProviderConfig } from '../types.js';
-import {
-  registerApiProvider,
-  calculateCost,
-} from '@mariozechner/pi-ai';
+import { registerApiProvider, calculateCost } from '@mariozechner/pi-ai';
 import { AssistantMessageEventStream } from '@mariozechner/pi-ai/dist/utils/event-stream.js';
 import { transformMessages } from '@mariozechner/pi-ai/dist/providers/transform-messages.js';
-import { buildBaseOptions, adjustMaxTokensForThinking, clampReasoning } from '@mariozechner/pi-ai/dist/providers/simple-options.js';
+import {
+  buildBaseOptions,
+  adjustMaxTokensForThinking,
+  clampReasoning,
+} from '@mariozechner/pi-ai/dist/providers/simple-options.js';
 import type {
   Api,
   Model,
@@ -55,7 +56,10 @@ function normalizeToolCallId(id: string): string {
 
 function sanitize(text: string | undefined | null): string {
   if (!text) return '';
-  return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD');
+  return text.replace(
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+    '\uFFFD'
+  );
 }
 
 function convertMessages(context: Context, model: Model<Api>): any[] {
@@ -68,13 +72,17 @@ function convertMessages(context: Context, model: Model<Api>): any[] {
       case 'user':
         result.push({
           role: 'user',
-          content: typeof m.content === 'string'
-            ? [{ text: sanitize(m.content) }]
-            : m.content.map((c: any) => {
-                if (c.type === 'text') return { text: sanitize(c.text) };
-                if (c.type === 'image') return { image: { source: { bytes: c.data }, format: mimeToFormat(c.mimeType) } };
-                throw new Error(`Unknown user content type: ${c.type}`);
-              }),
+          content:
+            typeof m.content === 'string'
+              ? [{ text: sanitize(m.content) }]
+              : m.content.map((c: any) => {
+                  if (c.type === 'text') return { text: sanitize(c.text) };
+                  if (c.type === 'image')
+                    return {
+                      image: { source: { bytes: c.data }, format: mimeToFormat(c.mimeType) },
+                    };
+                  throw new Error(`Unknown user content type: ${c.type}`);
+                }),
         });
         break;
 
@@ -93,9 +101,15 @@ function convertMessages(context: Context, model: Model<Api>): any[] {
             case 'thinking':
               if (c.thinking.trim().length === 0) continue;
               if (supportsThinkingSignature(model)) {
-                blocks.push({ reasoningContent: { reasoningText: { text: sanitize(c.thinking), signature: c.thinkingSignature } } });
+                blocks.push({
+                  reasoningContent: {
+                    reasoningText: { text: sanitize(c.thinking), signature: c.thinkingSignature },
+                  },
+                });
               } else {
-                blocks.push({ reasoningContent: { reasoningText: { text: sanitize(c.thinking) } } });
+                blocks.push({
+                  reasoningContent: { reasoningText: { text: sanitize(c.thinking) } },
+                });
               }
               break;
           }
@@ -113,7 +127,7 @@ function convertMessages(context: Context, model: Model<Api>): any[] {
             content: m.content.map((c: any) =>
               c.type === 'image'
                 ? { image: { source: { bytes: c.data }, format: mimeToFormat(c.mimeType) } }
-                : { text: sanitize(c.text ?? c.json ?? JSON.stringify(c)) },
+                : { text: sanitize(c.text ?? c.json ?? JSON.stringify(c)) }
             ),
             status: m.isError ? 'error' : 'success',
           },
@@ -127,7 +141,7 @@ function convertMessages(context: Context, model: Model<Api>): any[] {
               content: next.content.map((c: any) =>
                 c.type === 'image'
                   ? { image: { source: { bytes: c.data }, format: mimeToFormat(c.mimeType) } }
-                  : { text: sanitize(c.text ?? c.json ?? JSON.stringify(c)) },
+                  : { text: sanitize(c.text ?? c.json ?? JSON.stringify(c)) }
               ),
               status: next.isError ? 'error' : 'success',
             },
@@ -165,15 +179,22 @@ function supportsThinkingSignature(model: Model<Api>): boolean {
 }
 
 function supportsAdaptiveThinking(modelId: string): boolean {
-  return modelId.includes('opus-4-6') || modelId.includes('opus-4.6')
-    || modelId.includes('sonnet-4-6') || modelId.includes('sonnet-4.6');
+  return (
+    modelId.includes('opus-4-6') ||
+    modelId.includes('opus-4.6') ||
+    modelId.includes('sonnet-4-6') ||
+    modelId.includes('sonnet-4.6')
+  );
 }
 
 // ── Tool config ─────────────────────────────────────────────────────
 
-function convertToolConfig(tools: Context['tools'], toolChoice?: BedrockCampOptions['toolChoice']): any | undefined {
+function convertToolConfig(
+  tools: Context['tools'],
+  toolChoice?: BedrockCampOptions['toolChoice']
+): any | undefined {
   if (!tools?.length || toolChoice === 'none') return undefined;
-  const bedrockTools = tools.map(t => ({
+  const bedrockTools = tools.map((t) => ({
     toolSpec: { name: t.name, description: t.description, inputSchema: { json: t.parameters } },
   }));
   let choice: any;
@@ -204,21 +225,35 @@ function mapThinkingLevelToEffort(level: ThinkingLevel | undefined, modelId: str
     case 'high':
       return 'high';
     case 'xhigh':
-      return (modelId.includes('opus-4-6') || modelId.includes('opus-4.6')) ? 'max' : 'high';
+      return modelId.includes('opus-4-6') || modelId.includes('opus-4.6') ? 'max' : 'high';
     default:
       return 'high';
   }
 }
 
-function buildAdditionalModelRequestFields(model: Model<Api>, options: BedrockCampOptions): any | undefined {
+function buildAdditionalModelRequestFields(
+  model: Model<Api>,
+  options: BedrockCampOptions
+): any | undefined {
   if (!options.reasoning || !model.reasoning) return undefined;
   if (model.id.includes('anthropic.claude') || model.id.includes('anthropic/claude')) {
     const result: any = supportsAdaptiveThinking(model.id)
-      ? { thinking: { type: 'adaptive' }, output_config: { effort: mapThinkingLevelToEffort(options.reasoning, model.id) } }
+      ? {
+          thinking: { type: 'adaptive' },
+          output_config: { effort: mapThinkingLevelToEffort(options.reasoning, model.id) },
+        }
       : (() => {
-          const defaults: Record<string, number> = { minimal: 1024, low: 2048, medium: 8192, high: 16384, xhigh: 16384 };
+          const defaults: Record<string, number> = {
+            minimal: 1024,
+            low: 2048,
+            medium: 8192,
+            high: 16384,
+            xhigh: 16384,
+          };
           const level = options.reasoning === 'xhigh' ? 'high' : options.reasoning!;
-          const budget = options.thinkingBudgets?.[level as keyof ThinkingBudgets] ?? defaults[options.reasoning!];
+          const budget =
+            options.thinkingBudgets?.[level as keyof ThinkingBudgets] ??
+            defaults[options.reasoning!];
           return { thinking: { type: 'enabled', budget_tokens: budget } };
         })();
     return result;
@@ -252,7 +287,12 @@ function mapStopReason(reason: string): 'stop' | 'length' | 'toolUse' | 'error' 
 
 // ── Response parsing (non-streaming /converse) ──────────────────────
 
-function parseConverseResponse(body: any, model: Model<Api>, output: AssistantMessage, stream: AssistantMessageEventStream): void {
+function parseConverseResponse(
+  body: any,
+  model: Model<Api>,
+  output: AssistantMessage,
+  stream: AssistantMessageEventStream
+): void {
   stream.push({ type: 'start', partial: output });
 
   const message = body.output?.message;
@@ -291,8 +331,18 @@ function parseConverseResponse(body: any, model: Model<Api>, output: AssistantMe
         output.content.push(thinkingBlock);
         const idx = output.content.length - 1;
         stream.push({ type: 'thinking_start', contentIndex: idx, partial: output });
-        stream.push({ type: 'thinking_delta', contentIndex: idx, delta: thinkingBlock.thinking, partial: output });
-        stream.push({ type: 'thinking_end', contentIndex: idx, content: thinkingBlock.thinking, partial: output });
+        stream.push({
+          type: 'thinking_delta',
+          contentIndex: idx,
+          delta: thinkingBlock.thinking,
+          partial: output,
+        });
+        stream.push({
+          type: 'thinking_end',
+          contentIndex: idx,
+          content: thinkingBlock.thinking,
+          partial: output,
+        });
       }
     }
   }
@@ -303,7 +353,7 @@ function parseConverseResponse(body: any, model: Model<Api>, output: AssistantMe
     output.usage.output = body.usage.outputTokens || 0;
     output.usage.cacheRead = body.usage.cacheReadInputTokens || 0;
     output.usage.cacheWrite = body.usage.cacheWriteInputTokens || 0;
-    output.usage.totalTokens = body.usage.totalTokens || (output.usage.input + output.usage.output);
+    output.usage.totalTokens = body.usage.totalTokens || output.usage.input + output.usage.output;
     calculateCost(model, output.usage);
   }
 
@@ -316,7 +366,7 @@ function parseConverseResponse(body: any, model: Model<Api>, output: AssistantMe
 export const streamBedrockCamp = (
   model: Model<Api>,
   context: Context,
-  options: BedrockCampOptions = {},
+  options: BedrockCampOptions = {}
 ): AssistantMessageEventStream => {
   const stream = new AssistantMessageEventStream();
 
@@ -373,7 +423,7 @@ export const streamBedrockCamp = (
       const fetchUrl = isExtension ? targetUrl : '/api/fetch-proxy';
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
+        Authorization: `Bearer ${apiKey}`,
       };
       if (!isExtension) {
         headers['X-Target-URL'] = targetUrl;
@@ -419,7 +469,7 @@ export const streamBedrockCamp = (
 export const streamSimpleBedrockCamp = (
   model: Model<Api>,
   context: Context,
-  options?: SimpleStreamOptions,
+  options?: SimpleStreamOptions
 ): AssistantMessageEventStream => {
   const base = buildBaseOptions(model, options, undefined);
   if (!options?.reasoning) {
@@ -437,7 +487,7 @@ export const streamSimpleBedrockCamp = (
       base.maxTokens || 0,
       model.maxTokens,
       options.reasoning,
-      options.thinkingBudgets,
+      options.thinkingBudgets
     );
     return streamBedrockCamp(model, context, {
       ...base,

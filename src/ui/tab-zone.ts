@@ -34,11 +34,14 @@ export class TabZone {
 
   private tabBar: HTMLElement;
   private contentArea: HTMLElement;
-  private tabs = new Map<string, {
-    btn: HTMLButtonElement;
-    container: HTMLElement;
-    tab: TabZoneTab;
-  }>();
+  private tabs = new Map<
+    string,
+    {
+      btn: HTMLButtonElement;
+      container: HTMLElement;
+      tab: TabZoneTab;
+    }
+  >();
   private activeTabId: string | null = null;
   private callbacks: TabZoneCallbacks;
   private addBtn: HTMLButtonElement | null = null;
@@ -50,7 +53,7 @@ export class TabZone {
     contentArea: HTMLElement,
     zoneId: ZoneId,
     callbacks: TabZoneCallbacks = {},
-    options: TabZoneOptions = {},
+    options: TabZoneOptions = {}
   ) {
     this.tabBar = tabBar;
     this.contentArea = contentArea;

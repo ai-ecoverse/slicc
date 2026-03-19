@@ -69,7 +69,7 @@ describe('tray-sync-protocol', () => {
       const dc = new FakeSyncDataChannel();
       const sync = new TraySyncChannel<LeaderToFollowerMessage, FollowerToLeaderMessage>(dc);
       const received: FollowerToLeaderMessage[] = [];
-      sync.onMessage(msg => received.push(msg));
+      sync.onMessage((msg) => received.push(msg));
 
       dc.simulateMessage(JSON.stringify({ type: 'request_snapshot' }));
       expect(received).toEqual([{ type: 'request_snapshot' }]);
@@ -79,7 +79,7 @@ describe('tray-sync-protocol', () => {
       const dc = new FakeSyncDataChannel();
       const sync = new TraySyncChannel(dc);
       const received: unknown[] = [];
-      sync.onMessage(msg => received.push(msg));
+      sync.onMessage((msg) => received.push(msg));
 
       dc.simulateMessage('not-json');
       expect(received).toEqual([]);
@@ -89,7 +89,7 @@ describe('tray-sync-protocol', () => {
       const dc = new FakeSyncDataChannel();
       const sync = new TraySyncChannel<LeaderToFollowerMessage, FollowerToLeaderMessage>(dc);
       const received: FollowerToLeaderMessage[] = [];
-      const unsub = sync.onMessage(msg => received.push(msg));
+      const unsub = sync.onMessage((msg) => received.push(msg));
 
       dc.simulateMessage(JSON.stringify({ type: 'abort' }));
       expect(received).toHaveLength(1);
@@ -103,7 +103,7 @@ describe('tray-sync-protocol', () => {
       const dc = new FakeSyncDataChannel();
       const sync = new TraySyncChannel<LeaderToFollowerMessage, FollowerToLeaderMessage>(dc);
       const received: FollowerToLeaderMessage[] = [];
-      sync.onMessage(msg => received.push(msg));
+      sync.onMessage((msg) => received.push(msg));
 
       sync.close();
 
@@ -130,7 +130,9 @@ describe('tray-sync-protocol', () => {
 
     it('gracefully handles send errors and returns false', () => {
       const dc = new FakeSyncDataChannel();
-      dc.send = () => { throw new Error('send failed'); };
+      dc.send = () => {
+        throw new Error('send failed');
+      };
       const sync = new TraySyncChannel<LeaderToFollowerMessage, FollowerToLeaderMessage>(dc);
       // Should not throw, and should return false
       const result = sync.send({ type: 'status', scoopStatus: 'idle' });
@@ -158,7 +160,7 @@ describe('tray-sync-protocol', () => {
       const dc = new FakeSyncDataChannel();
       const sync = createLeaderSyncChannel(dc);
       const received: FollowerToLeaderMessage[] = [];
-      sync.onMessage(msg => received.push(msg));
+      sync.onMessage((msg) => received.push(msg));
 
       const snapshot: LeaderToFollowerMessage = {
         type: 'snapshot',
@@ -178,10 +180,14 @@ describe('tray-sync-protocol', () => {
       const dc = new FakeSyncDataChannel();
       const sync = createFollowerSyncChannel(dc);
       const received: LeaderToFollowerMessage[] = [];
-      sync.onMessage(msg => received.push(msg));
+      sync.onMessage((msg) => received.push(msg));
 
       sync.send({ type: 'user_message', text: 'test', messageId: 'm2' });
-      expect(JSON.parse(dc.sent[0])).toEqual({ type: 'user_message', text: 'test', messageId: 'm2' });
+      expect(JSON.parse(dc.sent[0])).toEqual({
+        type: 'user_message',
+        text: 'test',
+        messageId: 'm2',
+      });
 
       dc.simulateMessage(JSON.stringify({ type: 'status', scoopStatus: 'processing' }));
       expect(received).toEqual([{ type: 'status', scoopStatus: 'processing' }]);
@@ -191,7 +197,7 @@ describe('tray-sync-protocol', () => {
       const dc = new FakeSyncDataChannel();
       const sync = createFollowerSyncChannel(dc);
       const received: LeaderToFollowerMessage[] = [];
-      sync.onMessage(msg => received.push(msg));
+      sync.onMessage((msg) => received.push(msg));
 
       const echo: LeaderToFollowerMessage = {
         type: 'user_message_echo',
@@ -207,7 +213,12 @@ describe('tray-sync-protocol', () => {
   describe('sendCDPResponse', () => {
     it('sends small responses as a single message without chunking', () => {
       const sent: TraySyncMessage[] = [];
-      const channel = { send: (msg: TraySyncMessage) => { sent.push(msg); return true; } };
+      const channel = {
+        send: (msg: TraySyncMessage) => {
+          sent.push(msg);
+          return true;
+        },
+      };
 
       const result = { data: 'small' };
       sendCDPResponse(channel, 'req-1', result);
@@ -218,17 +229,32 @@ describe('tray-sync-protocol', () => {
 
     it('sends error responses directly without chunking', () => {
       const sent: TraySyncMessage[] = [];
-      const channel = { send: (msg: TraySyncMessage) => { sent.push(msg); return true; } };
+      const channel = {
+        send: (msg: TraySyncMessage) => {
+          sent.push(msg);
+          return true;
+        },
+      };
 
       sendCDPResponse(channel, 'req-1', undefined, 'Something broke');
 
       expect(sent).toHaveLength(1);
-      expect(sent[0]).toEqual({ type: 'cdp.response', requestId: 'req-1', result: undefined, error: 'Something broke' });
+      expect(sent[0]).toEqual({
+        type: 'cdp.response',
+        requestId: 'req-1',
+        result: undefined,
+        error: 'Something broke',
+      });
     });
 
     it('chunks large responses and includes chunkIndex/totalChunks', () => {
       const sent: TraySyncMessage[] = [];
-      const channel = { send: (msg: TraySyncMessage) => { sent.push(msg); return true; } };
+      const channel = {
+        send: (msg: TraySyncMessage) => {
+          sent.push(msg);
+          return true;
+        },
+      };
 
       // Create a result larger than CDP_CHUNK_THRESHOLD
       const largePayload = 'x'.repeat(CDP_CHUNK_THRESHOLD + 1000);
@@ -279,7 +305,12 @@ describe('tray-sync-protocol', () => {
 
     it('returns false when a chunk fails', () => {
       let sendCount = 0;
-      const channel = { send: () => { sendCount++; return sendCount !== 2; } };
+      const channel = {
+        send: () => {
+          sendCount++;
+          return sendCount !== 2;
+        },
+      };
       const largePayload = 'z'.repeat(CDP_CHUNK_THRESHOLD + 1000);
       const ok = sendCDPResponse(channel, 'req', { data: largePayload });
       expect(ok).toBe(false);
@@ -343,19 +374,32 @@ describe('tray-sync-protocol', () => {
       const third = Math.ceil(serialized.length / 3);
 
       // Send chunk 2 first, then 0, then 1
-      expect(reassembleCDPResponse(buffers, {
-        type: 'cdp.response', requestId: 'req-3',
-        chunkData: serialized.slice(2 * third), chunkIndex: 2, totalChunks: 3,
-      })).toBeNull();
+      expect(
+        reassembleCDPResponse(buffers, {
+          type: 'cdp.response',
+          requestId: 'req-3',
+          chunkData: serialized.slice(2 * third),
+          chunkIndex: 2,
+          totalChunks: 3,
+        })
+      ).toBeNull();
 
-      expect(reassembleCDPResponse(buffers, {
-        type: 'cdp.response', requestId: 'req-3',
-        chunkData: serialized.slice(0, third), chunkIndex: 0, totalChunks: 3,
-      })).toBeNull();
+      expect(
+        reassembleCDPResponse(buffers, {
+          type: 'cdp.response',
+          requestId: 'req-3',
+          chunkData: serialized.slice(0, third),
+          chunkIndex: 0,
+          totalChunks: 3,
+        })
+      ).toBeNull();
 
       const result = reassembleCDPResponse(buffers, {
-        type: 'cdp.response', requestId: 'req-3',
-        chunkData: serialized.slice(third, 2 * third), chunkIndex: 1, totalChunks: 3,
+        type: 'cdp.response',
+        requestId: 'req-3',
+        chunkData: serialized.slice(third, 2 * third),
+        chunkIndex: 1,
+        totalChunks: 3,
       });
       expect(result).toEqual({ result: original });
     });
@@ -365,16 +409,21 @@ describe('tray-sync-protocol', () => {
 
       // First chunk arrives
       reassembleCDPResponse(buffers, {
-        type: 'cdp.response', requestId: 'req-4',
-        chunkData: '{"partial":', chunkIndex: 0, totalChunks: 2,
+        type: 'cdp.response',
+        requestId: 'req-4',
+        chunkData: '{"partial":',
+        chunkIndex: 0,
+        totalChunks: 2,
       });
       expect(buffers.size).toBe(1);
 
       // Error arrives for the same request
       const result = reassembleCDPResponse(buffers, {
-        type: 'cdp.response', requestId: 'req-4',
+        type: 'cdp.response',
+        requestId: 'req-4',
         error: 'Failed to send chunk 1',
-        chunkIndex: 1, totalChunks: 2,
+        chunkIndex: 1,
+        totalChunks: 2,
       });
       expect(result).toEqual({ error: 'Failed to send chunk 1' });
       expect(buffers.size).toBe(0); // cleaned up
@@ -388,18 +437,27 @@ describe('tray-sync-protocol', () => {
 
       // Deliver chunk 0 twice
       reassembleCDPResponse(buffers, {
-        type: 'cdp.response', requestId: 'req-5',
-        chunkData: serialized.slice(0, mid), chunkIndex: 0, totalChunks: 2,
+        type: 'cdp.response',
+        requestId: 'req-5',
+        chunkData: serialized.slice(0, mid),
+        chunkIndex: 0,
+        totalChunks: 2,
       });
       reassembleCDPResponse(buffers, {
-        type: 'cdp.response', requestId: 'req-5',
-        chunkData: serialized.slice(0, mid), chunkIndex: 0, totalChunks: 2,
+        type: 'cdp.response',
+        requestId: 'req-5',
+        chunkData: serialized.slice(0, mid),
+        chunkIndex: 0,
+        totalChunks: 2,
       });
 
       // Complete with chunk 1
       const result = reassembleCDPResponse(buffers, {
-        type: 'cdp.response', requestId: 'req-5',
-        chunkData: serialized.slice(mid), chunkIndex: 1, totalChunks: 2,
+        type: 'cdp.response',
+        requestId: 'req-5',
+        chunkData: serialized.slice(mid),
+        chunkIndex: 1,
+        totalChunks: 2,
       });
       expect(result).toEqual({ result: original });
     });
@@ -408,7 +466,12 @@ describe('tray-sync-protocol', () => {
   describe('sendSnapshot', () => {
     it('sends small snapshots as a single message', () => {
       const sent: LeaderToFollowerMessage[] = [];
-      const channel = { send: (msg: LeaderToFollowerMessage) => { sent.push(msg); return true; } };
+      const channel = {
+        send: (msg: LeaderToFollowerMessage) => {
+          sent.push(msg);
+          return true;
+        },
+      };
 
       const messages = [{ id: '1', role: 'user', content: 'hi', timestamp: 1 }] as ChatMessage[];
       sendSnapshot(channel, messages, 'cone');
@@ -419,13 +482,23 @@ describe('tray-sync-protocol', () => {
 
     it('chunks large snapshots into snapshot_chunk messages', () => {
       const sent: LeaderToFollowerMessage[] = [];
-      const channel = { send: (msg: LeaderToFollowerMessage) => { sent.push(msg); return true; } };
+      const channel = {
+        send: (msg: LeaderToFollowerMessage) => {
+          sent.push(msg);
+          return true;
+        },
+      };
 
       // Create messages large enough to exceed the 64KB threshold
       const bigContent = 'x'.repeat(2000);
       const messages: ChatMessage[] = [];
       for (let i = 0; i < 50; i++) {
-        messages.push({ id: `m${i}`, role: i % 2 === 0 ? 'user' : 'assistant', content: bigContent, timestamp: i } as ChatMessage);
+        messages.push({
+          id: `m${i}`,
+          role: i % 2 === 0 ? 'user' : 'assistant',
+          content: bigContent,
+          timestamp: i,
+        } as ChatMessage);
       }
 
       const ok = sendSnapshot(channel, messages, 'cone');
@@ -444,7 +517,9 @@ describe('tray-sync-protocol', () => {
 
       // Reassembling should produce the original data
       const serialized = JSON.stringify({ messages, scoopJid: 'cone' });
-      const reassembled = sent.map(m => (m as Extract<LeaderToFollowerMessage, { type: 'snapshot_chunk' }>).chunkData).join('');
+      const reassembled = sent
+        .map((m) => (m as Extract<LeaderToFollowerMessage, { type: 'snapshot_chunk' }>).chunkData)
+        .join('');
       expect(reassembled).toBe(serialized);
     });
 
@@ -462,7 +537,12 @@ describe('tray-sync-protocol', () => {
       const bigContent = 'y'.repeat(2000);
       const messages: ChatMessage[] = [];
       for (let i = 0; i < 50; i++) {
-        messages.push({ id: `m${i}`, role: 'user', content: bigContent, timestamp: i } as ChatMessage);
+        messages.push({
+          id: `m${i}`,
+          role: 'user',
+          content: bigContent,
+          timestamp: i,
+        } as ChatMessage);
       }
 
       const ok = sendSnapshot(channel, messages, 'cone');
@@ -474,48 +554,69 @@ describe('tray-sync-protocol', () => {
 
   describe('reassembleSnapshot', () => {
     it('reassembles chunks in order', () => {
-      const original = { messages: [{ id: '1', role: 'user', content: 'hello', timestamp: 1 }] as ChatMessage[], scoopJid: 'cone' };
+      const original = {
+        messages: [{ id: '1', role: 'user', content: 'hello', timestamp: 1 }] as ChatMessage[],
+        scoopJid: 'cone',
+      };
       const serialized = JSON.stringify(original);
       const mid = Math.ceil(serialized.length / 2);
 
       // First chunk — returns null (still waiting)
       const r1 = reassembleSnapshot(null, {
-        type: 'snapshot_chunk', chunkData: serialized.slice(0, mid),
-        chunkIndex: 0, totalChunks: 2, scoopJid: 'cone',
+        type: 'snapshot_chunk',
+        chunkData: serialized.slice(0, mid),
+        chunkIndex: 0,
+        totalChunks: 2,
+        scoopJid: 'cone',
       });
       expect(r1.result).toBeNull();
       expect(r1.buffer).not.toBeNull();
 
       // Second chunk — returns result
       const r2 = reassembleSnapshot(r1.buffer, {
-        type: 'snapshot_chunk', chunkData: serialized.slice(mid),
-        chunkIndex: 1, totalChunks: 2, scoopJid: 'cone',
+        type: 'snapshot_chunk',
+        chunkData: serialized.slice(mid),
+        chunkIndex: 1,
+        totalChunks: 2,
+        scoopJid: 'cone',
       });
       expect(r2.result).toEqual(original);
       expect(r2.buffer).toBeNull();
     });
 
     it('handles out-of-order chunk delivery', () => {
-      const original = { messages: [{ id: '1', role: 'user', content: 'test', timestamp: 1 }] as ChatMessage[], scoopJid: 'cone' };
+      const original = {
+        messages: [{ id: '1', role: 'user', content: 'test', timestamp: 1 }] as ChatMessage[],
+        scoopJid: 'cone',
+      };
       const serialized = JSON.stringify(original);
       const third = Math.ceil(serialized.length / 3);
 
       // Send chunk 2, then 0, then 1
       const r1 = reassembleSnapshot(null, {
-        type: 'snapshot_chunk', chunkData: serialized.slice(2 * third),
-        chunkIndex: 2, totalChunks: 3, scoopJid: 'cone',
+        type: 'snapshot_chunk',
+        chunkData: serialized.slice(2 * third),
+        chunkIndex: 2,
+        totalChunks: 3,
+        scoopJid: 'cone',
       });
       expect(r1.result).toBeNull();
 
       const r2 = reassembleSnapshot(r1.buffer, {
-        type: 'snapshot_chunk', chunkData: serialized.slice(0, third),
-        chunkIndex: 0, totalChunks: 3, scoopJid: 'cone',
+        type: 'snapshot_chunk',
+        chunkData: serialized.slice(0, third),
+        chunkIndex: 0,
+        totalChunks: 3,
+        scoopJid: 'cone',
       });
       expect(r2.result).toBeNull();
 
       const r3 = reassembleSnapshot(r2.buffer, {
-        type: 'snapshot_chunk', chunkData: serialized.slice(third, 2 * third),
-        chunkIndex: 1, totalChunks: 3, scoopJid: 'cone',
+        type: 'snapshot_chunk',
+        chunkData: serialized.slice(third, 2 * third),
+        chunkIndex: 1,
+        totalChunks: 3,
+        scoopJid: 'cone',
       });
       expect(r3.result).toEqual(original);
       expect(r3.buffer).toBeNull();
@@ -527,21 +628,30 @@ describe('tray-sync-protocol', () => {
       const mid = Math.ceil(serialized.length / 2);
 
       const r1 = reassembleSnapshot(null, {
-        type: 'snapshot_chunk', chunkData: serialized.slice(0, mid),
-        chunkIndex: 0, totalChunks: 2, scoopJid: 'cone',
+        type: 'snapshot_chunk',
+        chunkData: serialized.slice(0, mid),
+        chunkIndex: 0,
+        totalChunks: 2,
+        scoopJid: 'cone',
       });
 
       // Duplicate of chunk 0
       const r1dup = reassembleSnapshot(r1.buffer, {
-        type: 'snapshot_chunk', chunkData: serialized.slice(0, mid),
-        chunkIndex: 0, totalChunks: 2, scoopJid: 'cone',
+        type: 'snapshot_chunk',
+        chunkData: serialized.slice(0, mid),
+        chunkIndex: 0,
+        totalChunks: 2,
+        scoopJid: 'cone',
       });
       expect(r1dup.result).toBeNull(); // Still waiting for chunk 1
 
       // Complete with chunk 1
       const r2 = reassembleSnapshot(r1dup.buffer, {
-        type: 'snapshot_chunk', chunkData: serialized.slice(mid),
-        chunkIndex: 1, totalChunks: 2, scoopJid: 'cone',
+        type: 'snapshot_chunk',
+        chunkData: serialized.slice(mid),
+        chunkIndex: 1,
+        totalChunks: 2,
+        scoopJid: 'cone',
       });
       expect(r2.result).toEqual(original);
     });
@@ -549,12 +659,18 @@ describe('tray-sync-protocol', () => {
     it('returns empty messages on corrupt JSON', () => {
       // Simulate two chunks that when joined produce invalid JSON
       const r1 = reassembleSnapshot(null, {
-        type: 'snapshot_chunk', chunkData: '{"messages":',
-        chunkIndex: 0, totalChunks: 2, scoopJid: 'cone',
+        type: 'snapshot_chunk',
+        chunkData: '{"messages":',
+        chunkIndex: 0,
+        totalChunks: 2,
+        scoopJid: 'cone',
       });
       const r2 = reassembleSnapshot(r1.buffer, {
-        type: 'snapshot_chunk', chunkData: 'INVALID}}}',
-        chunkIndex: 1, totalChunks: 2, scoopJid: 'cone',
+        type: 'snapshot_chunk',
+        chunkData: 'INVALID}}}',
+        chunkIndex: 1,
+        totalChunks: 2,
+        scoopJid: 'cone',
       });
       // Should return fallback with empty messages
       expect(r2.result).toEqual({ messages: [], scoopJid: 'cone' });
@@ -563,18 +679,28 @@ describe('tray-sync-protocol', () => {
 
     it('round-trips with sendSnapshot for large payloads', () => {
       const sent: LeaderToFollowerMessage[] = [];
-      const channel = { send: (msg: LeaderToFollowerMessage) => { sent.push(msg); return true; } };
+      const channel = {
+        send: (msg: LeaderToFollowerMessage) => {
+          sent.push(msg);
+          return true;
+        },
+      };
 
       const bigContent = 'z'.repeat(3000);
       const messages: ChatMessage[] = [];
       for (let i = 0; i < 40; i++) {
-        messages.push({ id: `m${i}`, role: 'user', content: bigContent, timestamp: i } as ChatMessage);
+        messages.push({
+          id: `m${i}`,
+          role: 'user',
+          content: bigContent,
+          timestamp: i,
+        } as ChatMessage);
       }
 
       sendSnapshot(channel, messages, 'test-scoop');
 
       // All sent messages should be snapshot_chunk
-      expect(sent.every(m => m.type === 'snapshot_chunk')).toBe(true);
+      expect(sent.every((m) => m.type === 'snapshot_chunk')).toBe(true);
 
       // Reassemble them
       let buffer: { chunks: string[]; received: number; totalChunks: number } | null = null;

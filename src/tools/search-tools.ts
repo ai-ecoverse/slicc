@@ -103,7 +103,8 @@ function createFindTool(fs: VirtualFS): ToolDefinition {
       properties: {
         pattern: {
           type: 'string',
-          description: 'Glob pattern to match (e.g., "*.ts", "src/**/*.js"). Default: * (all files)',
+          description:
+            'Glob pattern to match (e.g., "*.ts", "src/**/*.js"). Default: * (all files)',
         },
         path: {
           type: 'string',

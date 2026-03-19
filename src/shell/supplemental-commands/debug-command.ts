@@ -33,7 +33,7 @@ export function createDebugCommand(): Command {
     if (!arg) {
       try {
         const raw = localStorage.getItem('slicc-hidden-tabs');
-        const hidden = raw ? JSON.parse(raw) as string[] : ['terminal', 'memory'];
+        const hidden = raw ? (JSON.parse(raw) as string[]) : ['terminal', 'memory'];
         const on = !hidden.includes('terminal');
         return { stdout: `Debug tabs: ${on ? 'on' : 'off'}\n`, stderr: '', exitCode: 0 };
       } catch {

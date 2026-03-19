@@ -83,9 +83,7 @@ export class SessionStore {
       const request = store.getAll();
       request.onsuccess = () => {
         const sessions = (request.result as SessionData[]) ?? [];
-        resolve(
-          sessions.map((s) => ({ id: s.id, updatedAt: s.updatedAt })),
-        );
+        resolve(sessions.map((s) => ({ id: s.id, updatedAt: s.updatedAt })));
       };
       request.onerror = () => reject(request.error);
     });
@@ -109,10 +107,7 @@ export class SessionStore {
   }
 
   /** Create a fresh SessionData object. */
-  static createSession(
-    id: string,
-    config: SessionData['config'],
-  ): SessionData {
+  static createSession(id: string, config: SessionData['config']): SessionData {
     const now = Date.now();
     return {
       id,
@@ -124,10 +119,7 @@ export class SessionStore {
   }
 
   /** Update session messages and timestamp. */
-  static updateMessages(
-    session: SessionData,
-    messages: AgentMessage[],
-  ): SessionData {
+  static updateMessages(session: SessionData, messages: AgentMessage[]): SessionData {
     return {
       ...session,
       messages,

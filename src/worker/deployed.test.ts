@@ -26,7 +26,12 @@ describeIfConfigured('deployed tray worker', () => {
     const rootResponse = await fetch(baseUrl);
     expect(rootResponse.status).toBe(200);
     await expect(rootResponse.json()).resolves.toMatchObject({
-      routes: ['POST /tray', 'GET|POST /join/:token', 'GET|POST /controller/:token', 'POST /webhook/:token/:webhookId'],
+      routes: [
+        'POST /tray',
+        'GET|POST /join/:token',
+        'GET|POST /controller/:token',
+        'POST /webhook/:token/:webhookId',
+      ],
     });
 
     const legacyCreate = await fetch(new URL('/session', baseUrl), { method: 'POST' });
@@ -88,7 +93,9 @@ describeIfConfigured('deployed tray worker', () => {
       body: JSON.stringify({ hello: 'world' }),
     });
     expect(webhookBeforeLeader.status).toBe(400);
-    await expect(webhookBeforeLeader.json()).resolves.toMatchObject({ code: 'WEBHOOK_ID_REQUIRED' });
+    await expect(webhookBeforeLeader.json()).resolves.toMatchObject({
+      code: 'WEBHOOK_ID_REQUIRED',
+    });
 
     const { socket, nextMessage } = await openWebSocket(controller.websocket!.url);
     const connected = await nextMessage();
@@ -142,12 +149,14 @@ describeIfConfigured('deployed tray worker', () => {
       },
     });
 
-    socket.send(JSON.stringify({
-      type: 'bootstrap.offer',
-      controllerId: 'ci-follower-signal',
-      bootstrapId: signalFollower.result.bootstrap.bootstrapId,
-      offer: { type: 'offer', sdp: 'offer-sdp' },
-    }));
+    socket.send(
+      JSON.stringify({
+        type: 'bootstrap.offer',
+        controllerId: 'ci-follower-signal',
+        bootstrapId: signalFollower.result.bootstrap.bootstrapId,
+        offer: { type: 'offer', sdp: 'offer-sdp' },
+      })
+    );
 
     const polledBootstrap = await fetch(created.capabilities.join.url, {
       method: 'POST',
@@ -201,14 +210,18 @@ describeIfConfigured('deployed tray worker', () => {
   }, 30_000);
 });
 
-function openWebSocket(url: string): Promise<{ socket: WebSocket; nextMessage: () => Promise<Record<string, unknown>> }> {
+function openWebSocket(
+  url: string
+): Promise<{ socket: WebSocket; nextMessage: () => Promise<Record<string, unknown>> }> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(url);
     const queue: Record<string, unknown>[] = [];
     const waiters: Array<(msg: Record<string, unknown>) => void> = [];
 
     socket.on('message', (data: Buffer | ArrayBuffer | Buffer[]) => {
-      const raw = Array.isArray(data) ? Buffer.concat(data).toString('utf8') : Buffer.from(data as ArrayBuffer).toString('utf8');
+      const raw = Array.isArray(data)
+        ? Buffer.concat(data).toString('utf8')
+        : Buffer.from(data as ArrayBuffer).toString('utf8');
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       if (waiters.length > 0) {
         waiters.shift()!(parsed);
@@ -223,7 +236,10 @@ function openWebSocket(url: string): Promise<{ socket: WebSocket; nextMessage: (
       }
       return new Promise((res, rej) => {
         const timeout = setTimeout(() => rej(new Error('WebSocket message timeout')), 15_000);
-        waiters.push(msg => { clearTimeout(timeout); res(msg); });
+        waiters.push((msg) => {
+          clearTimeout(timeout);
+          res(msg);
+        });
       });
     };
 

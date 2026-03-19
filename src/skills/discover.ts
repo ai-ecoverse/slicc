@@ -11,15 +11,16 @@ import { readState } from './state.js';
 /**
  * Discover all available skills in the /workspace/skills directory.
  */
-export async function discoverSkills(fs: VirtualFS, skillsDir: string = '/workspace/skills'): Promise<DiscoveredSkill[]> {
+export async function discoverSkills(
+  fs: VirtualFS,
+  skillsDir: string = '/workspace/skills'
+): Promise<DiscoveredSkill[]> {
   const skillsPath = skillsDir;
   const discovered: DiscoveredSkill[] = [];
 
   // Get current state to check installation status
   const state = await readState(fs);
-  const installedMap = new Map(
-    state.applied_skills.map((s) => [s.name, s.version]),
-  );
+  const installedMap = new Map(state.applied_skills.map((s) => [s.name, s.version]));
 
   try {
     const entries = await fs.readDir(skillsPath);
@@ -59,9 +60,7 @@ export async function discoverSkills(fs: VirtualFS, skillsDir: string = '/worksp
             path: skillDir,
             manifest,
             installed,
-            installedVersion: installed
-              ? installedMap.get(manifest.skill)
-              : undefined,
+            installedVersion: installed ? installedMap.get(manifest.skill) : undefined,
           });
         } else {
           // SKILL.md only - create minimal manifest from directory name
@@ -95,7 +94,7 @@ export async function discoverSkills(fs: VirtualFS, skillsDir: string = '/worksp
 export async function getSkillInfo(
   fs: VirtualFS,
   skillName: string,
-  skillsDir: string = '/workspace/skills',
+  skillsDir: string = '/workspace/skills'
 ): Promise<DiscoveredSkill | null> {
   const skills = await discoverSkills(fs, skillsDir);
   return skills.find((s) => s.name === skillName) || null;
@@ -107,7 +106,7 @@ export async function getSkillInfo(
 export async function readSkillInstructions(
   fs: VirtualFS,
   skillName: string,
-  skillsDir: string = '/workspace/skills',
+  skillsDir: string = '/workspace/skills'
 ): Promise<string | null> {
   const skillDir = `${skillsDir}/${skillName}`;
 

@@ -5,7 +5,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock chrome.runtime
-const messageListeners: Array<(message: unknown, sender: unknown, sendResponse: (r?: unknown) => void) => void> = [];
+const messageListeners: Array<
+  (message: unknown, sender: unknown, sendResponse: (r?: unknown) => void) => void
+> = [];
 const sentMessages: unknown[] = [];
 
 const mockChrome = {
@@ -90,9 +92,12 @@ describe('PanelCdpProxy', () => {
     const commandId = envelope.payload.id;
     for (const listener of messageListeners) {
       listener(
-        { source: 'offscreen', payload: { type: 'panel-cdp-response', id: commandId, result: { frameId: '123' } } },
+        {
+          source: 'offscreen',
+          payload: { type: 'panel-cdp-response', id: commandId, result: { frameId: '123' } },
+        },
         {},
-        () => {},
+        () => {}
       );
     }
 
@@ -109,9 +114,12 @@ describe('PanelCdpProxy', () => {
     const commandId = envelope.payload.id;
     for (const listener of messageListeners) {
       listener(
-        { source: 'offscreen', payload: { type: 'panel-cdp-response', id: commandId, error: 'Navigation failed' } },
+        {
+          source: 'offscreen',
+          payload: { type: 'panel-cdp-response', id: commandId, error: 'Navigation failed' },
+        },
         {},
-        () => {},
+        () => {}
       );
     }
 
@@ -140,7 +148,7 @@ describe('PanelCdpProxy', () => {
           },
         },
         {},
-        () => {},
+        () => {}
       );
     }
 
@@ -154,9 +162,12 @@ describe('PanelCdpProxy', () => {
 
     for (const listener of messageListeners) {
       listener(
-        { source: 'service-worker', payload: { type: 'cdp-event', method: 'Page.loadEventFired', params: { timestamp: 123 } } },
+        {
+          source: 'service-worker',
+          payload: { type: 'cdp-event', method: 'Page.loadEventFired', params: { timestamp: 123 } },
+        },
         {},
-        () => {},
+        () => {}
       );
     }
 
@@ -173,9 +184,12 @@ describe('PanelCdpProxy', () => {
 
     for (const listener of messageListeners) {
       listener(
-        { source: 'service-worker', payload: { type: 'cdp-event', method: 'Test.event', params: {} } },
+        {
+          source: 'service-worker',
+          payload: { type: 'cdp-event', method: 'Test.event', params: {} },
+        },
         {},
-        () => {},
+        () => {}
       );
     }
 
@@ -194,7 +208,7 @@ describe('PanelCdpProxy', () => {
       listener(
         { source: 'panel', payload: { type: 'panel-cdp-response', id: commandId, result: {} } },
         {},
-        () => {},
+        () => {}
       );
     }
 
@@ -213,7 +227,7 @@ describe('PanelCdpProxy', () => {
       listener(
         { source: 'panel', payload: { type: 'cdp-event', method: 'Test.event', params: {} } },
         {},
-        () => {},
+        () => {}
       );
     }
 
@@ -242,14 +256,20 @@ describe('PanelCdpProxy', () => {
     // Send responses in REVERSE order
     for (const listener of messageListeners) {
       listener(
-        { source: 'offscreen', payload: { type: 'panel-cdp-response', id: id2, result: { value: 'eval-result' } } },
+        {
+          source: 'offscreen',
+          payload: { type: 'panel-cdp-response', id: id2, result: { value: 'eval-result' } },
+        },
         {},
-        () => {},
+        () => {}
       );
       listener(
-        { source: 'offscreen', payload: { type: 'panel-cdp-response', id: id1, result: { frameId: '123' } } },
+        {
+          source: 'offscreen',
+          payload: { type: 'panel-cdp-response', id: id1, result: { frameId: '123' } },
+        },
         {},
-        () => {},
+        () => {}
       );
     }
 
@@ -261,7 +281,9 @@ describe('PanelCdpProxy', () => {
   it('continues firing subsequent listeners even if one throws', async () => {
     await proxy.connect();
 
-    const handler1 = vi.fn(() => { throw new Error('oops'); });
+    const handler1 = vi.fn(() => {
+      throw new Error('oops');
+    });
     const handler2 = vi.fn();
 
     proxy.on('Test.event', handler1);
@@ -269,9 +291,12 @@ describe('PanelCdpProxy', () => {
 
     for (const listener of messageListeners) {
       listener(
-        { source: 'service-worker', payload: { type: 'cdp-event', method: 'Test.event', params: { data: 1 } } },
+        {
+          source: 'service-worker',
+          payload: { type: 'cdp-event', method: 'Test.event', params: { data: 1 } },
+        },
         {},
-        () => {},
+        () => {}
       );
     }
 

@@ -14,7 +14,8 @@ describe('findMatchingElectronAppPids', () => {
           },
           {
             pid: 222,
-            commandLine: '/Applications/Slack.app/Contents/MacOS/Slack --remote-debugging-port=9223',
+            commandLine:
+              '/Applications/Slack.app/Contents/MacOS/Slack --remote-debugging-port=9223',
             executablePath: '/Applications/Slack.app/Contents/MacOS/Slack',
           },
           {
@@ -24,8 +25,8 @@ describe('findMatchingElectronAppPids', () => {
           },
         ],
         ['/Applications/Slack.app', '/Applications/Slack.app/Contents/MacOS/Slack'],
-        111,
-      ),
+        111
+      )
     ).toEqual([222]);
   });
 
@@ -55,18 +56,20 @@ describe('findMatchingElectronAppPids', () => {
           },
           {
             pid: 200,
-            commandLine: '/Applications/Slack.app/Contents/MacOS/Slack --remote-debugging-port=9223',
+            commandLine:
+              '/Applications/Slack.app/Contents/MacOS/Slack --remote-debugging-port=9223',
             executablePath: '/Applications/Slack.app/Contents/MacOS/Slack',
           },
           {
             pid: 201,
-            commandLine: '/Applications/Slack.app/Contents/Frameworks/Slack Helper.app/Contents/MacOS/Slack Helper --type=renderer',
+            commandLine:
+              '/Applications/Slack.app/Contents/Frameworks/Slack Helper.app/Contents/MacOS/Slack Helper --type=renderer',
             executablePath: null,
           },
         ],
         ['/Applications/Slack.app', '/Applications/Slack.app/Contents/MacOS/Slack'],
-        103,
-      ),
+        103
+      )
     ).toEqual([200, 201]);
   });
 
@@ -91,8 +94,8 @@ describe('findMatchingElectronAppPids', () => {
           },
         ],
         ['/Applications/Slack.app', '/Applications/Slack.app/Contents/MacOS/Slack'],
-        999,
-      ),
+        999
+      )
     ).toEqual([111, 222]);
   });
 
@@ -117,8 +120,8 @@ describe('findMatchingElectronAppPids', () => {
           },
         ],
         ['/Applications/Slack.app'],
-        999,
-      ),
+        999
+      )
     ).toEqual([60]);
   });
 
@@ -134,13 +137,14 @@ describe('findMatchingElectronAppPids', () => {
           },
           {
             pid: 401,
-            commandLine: '/Applications/Slack.app/Contents/MacOS/Slack --remote-debugging-port=9223',
+            commandLine:
+              '/Applications/Slack.app/Contents/MacOS/Slack --remote-debugging-port=9223',
             executablePath: '/Applications/Slack.app/Contents/MacOS/Slack',
           },
         ],
         ['/Applications/Slack.app', '/Applications/Slack.app/Contents/MacOS/Slack'],
-        999,
-      ),
+        999
+      )
     ).toEqual([401]);
   });
 
@@ -150,18 +154,20 @@ describe('findMatchingElectronAppPids', () => {
         [
           {
             pid: 500,
-            commandLine: 'open -n -a /Applications/Slack.app -W --args --remote-debugging-port=9223',
+            commandLine:
+              'open -n -a /Applications/Slack.app -W --args --remote-debugging-port=9223',
             executablePath: '/usr/bin/open',
           },
           {
             pid: 501,
-            commandLine: '/Applications/Slack.app/Contents/MacOS/Slack --remote-debugging-port=9223',
+            commandLine:
+              '/Applications/Slack.app/Contents/MacOS/Slack --remote-debugging-port=9223',
             executablePath: '/Applications/Slack.app/Contents/MacOS/Slack',
           },
         ],
         ['/Applications/Slack.app', '/Applications/Slack.app/Contents/MacOS/Slack'],
-        999,
-      ),
+        999
+      )
     ).toEqual([501]);
   });
 
@@ -171,7 +177,8 @@ describe('findMatchingElectronAppPids', () => {
         [
           {
             pid: 600,
-            commandLine: 'zsh -c -l source /dev/stdin npm run dev:electron -- /Applications/Slack.app --kill',
+            commandLine:
+              'zsh -c -l source /dev/stdin npm run dev:electron -- /Applications/Slack.app --kill',
             executablePath: '/bin/zsh',
           },
           {
@@ -206,13 +213,14 @@ describe('findMatchingElectronAppPids', () => {
           },
           {
             pid: 700,
-            commandLine: '/Applications/Slack.app/Contents/MacOS/Slack --remote-debugging-port=9223',
+            commandLine:
+              '/Applications/Slack.app/Contents/MacOS/Slack --remote-debugging-port=9223',
             executablePath: '/Applications/Slack.app/Contents/MacOS/Slack',
           },
         ],
         ['/Applications/Slack.app', '/Applications/Slack.app/Contents/MacOS/Slack'],
-        999,
-      ),
+        999
+      )
     ).toEqual([700]);
   });
 
@@ -237,13 +245,14 @@ describe('findMatchingElectronAppPids', () => {
           },
           {
             pid: 700,
-            commandLine: '/Applications/Slack.app/Contents/MacOS/Slack --remote-debugging-port=9223',
+            commandLine:
+              '/Applications/Slack.app/Contents/MacOS/Slack --remote-debugging-port=9223',
             executablePath: '/Applications/Slack.app/Contents/MacOS/Slack',
           },
         ],
         ['/Applications/Slack.app', '/Applications/Slack.app/Contents/MacOS/Slack'],
-        999,
-      ),
+        999
+      )
     ).toEqual([700]);
   });
 
@@ -253,13 +262,14 @@ describe('findMatchingElectronAppPids', () => {
         [
           {
             pid: 70,
-            commandLine: '/Applications/Slack.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Helpers/crashpad_handler --monitor-self',
+            commandLine:
+              '/Applications/Slack.app/Contents/Frameworks/Electron Framework.framework/Versions/A/Helpers/crashpad_handler --monitor-self',
             executablePath: null,
           },
         ],
         ['/Applications/Slack.app'],
-        999,
-      ),
+        999
+      )
     ).toEqual([70]);
   });
 });

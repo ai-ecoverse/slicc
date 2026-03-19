@@ -16,11 +16,13 @@ function normalizeMockPath(path: string): string {
   return `/${resolved.join('/')}`;
 }
 
-function createMockCtx(opts: {
-  directories?: string[];
-  files?: string[];
-  cwd?: string;
-} = {}) {
+function createMockCtx(
+  opts: {
+    directories?: string[];
+    files?: string[];
+    cwd?: string;
+  } = {}
+) {
   const directories = new Set((opts.directories ?? []).map(normalizeMockPath));
   const files = new Set((opts.files ?? []).map(normalizeMockPath));
 
@@ -94,7 +96,7 @@ describe('serve command', () => {
     expect(openSpy).toHaveBeenCalledWith(
       'http://localhost:5710/preview/workspace/app/index.html',
       '_blank',
-      'noopener,noreferrer',
+      'noopener,noreferrer'
     );
     expect(result.stdout).toContain('serving /workspace/app');
   });
@@ -113,7 +115,7 @@ describe('serve command', () => {
     expect(openSpy).toHaveBeenCalledWith(
       'http://localhost:5710/preview/workspace/project/site/index.html',
       '_blank',
-      'noopener,noreferrer',
+      'noopener,noreferrer'
     );
   });
 
@@ -124,13 +126,16 @@ describe('serve command', () => {
       files: ['/workspace/app/pages/home.html'],
     });
 
-    const result = await cmd.execute(['--entry', 'pages/home.html', '/workspace/app'], ctx as never);
+    const result = await cmd.execute(
+      ['--entry', 'pages/home.html', '/workspace/app'],
+      ctx as never
+    );
 
     expect(result.exitCode).toBe(0);
     expect(openSpy).toHaveBeenCalledWith(
       'http://localhost:5710/preview/workspace/app/pages/home.html',
       '_blank',
-      'noopener,noreferrer',
+      'noopener,noreferrer'
     );
   });
 
@@ -147,7 +152,7 @@ describe('serve command', () => {
     expect(openSpy).toHaveBeenCalledWith(
       'http://localhost:5710/preview/workspace/app/index.html',
       '_blank',
-      'noopener,noreferrer',
+      'noopener,noreferrer'
     );
   });
 
@@ -158,13 +163,16 @@ describe('serve command', () => {
       files: ['/workspace/app/pages/home.html'],
     });
 
-    const result = await cmd.execute(['--entry', 'pages//home.html', '/workspace/app'], ctx as never);
+    const result = await cmd.execute(
+      ['--entry', 'pages//home.html', '/workspace/app'],
+      ctx as never
+    );
 
     expect(result.exitCode).toBe(0);
     expect(openSpy).toHaveBeenCalledWith(
       'http://localhost:5710/preview/workspace/app/pages/home.html',
       '_blank',
-      'noopener,noreferrer',
+      'noopener,noreferrer'
     );
   });
 

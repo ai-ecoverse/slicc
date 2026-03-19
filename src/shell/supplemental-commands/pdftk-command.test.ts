@@ -155,7 +155,10 @@ describe('pdftk cat', () => {
 
   it('errors when input file does not exist', async () => {
     const cmd = createPdftkCommand();
-    const result = await cmd.execute(['missing.pdf', 'cat', '1-3', 'output', 'out.pdf'], createMockCtx());
+    const result = await cmd.execute(
+      ['missing.pdf', 'cat', '1-3', 'output', 'out.pdf'],
+      createMockCtx()
+    );
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('file not found');
   });
@@ -166,7 +169,7 @@ describe('pdftk rotate', () => {
     const cmd = createPdftkCommand();
     const result = await cmd.execute(
       ['a.pdf', 'b.pdf', 'rotate', '1-endright', 'output', 'out.pdf'],
-      createMockCtx(),
+      createMockCtx()
     );
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('rotate only supports a single input file');
@@ -178,7 +181,7 @@ describe('pdftk rotate', () => {
     // so file-not-found is the first error hit.
     const result = await cmd.execute(
       ['missing.pdf', 'rotate', '1-endright', 'output', 'out.pdf'],
-      createMockCtx(),
+      createMockCtx()
     );
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('file not found');
@@ -199,7 +202,7 @@ describe('pdftk handle syntax', () => {
     const cmd = createPdftkCommand();
     await cmd.execute(
       ['A=one.pdf', 'B=two.pdf', 'cat', 'A', 'B', 'output', 'merged.pdf'],
-      createMockCtx({ fs: { readFileBuffer } }),
+      createMockCtx({ fs: { readFileBuffer } })
     );
     // Should resolve both handle paths
     expect(readFileBuffer).toHaveBeenCalledWith('/home/one.pdf');

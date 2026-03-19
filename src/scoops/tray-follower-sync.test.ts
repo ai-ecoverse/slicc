@@ -1,10 +1,17 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 import { FollowerSyncManager } from './tray-follower-sync.js';
-import { setFollowerTrayRuntimeStatus, getFollowerTrayRuntimeStatus } from './tray-follower-status.js';
+import {
+  setFollowerTrayRuntimeStatus,
+  getFollowerTrayRuntimeStatus,
+} from './tray-follower-status.js';
 import type { TrayDataChannelLike } from './tray-webrtc.js';
 import type { AgentEvent, ChatMessage } from '../ui/types.js';
-import type { LeaderToFollowerMessage, FollowerToLeaderMessage, TrayTargetEntry } from './tray-sync-protocol.js';
+import type {
+  LeaderToFollowerMessage,
+  FollowerToLeaderMessage,
+  TrayTargetEntry,
+} from './tray-sync-protocol.js';
 
 // ---------------------------------------------------------------------------
 // Fake data channel
@@ -49,7 +56,7 @@ class FakeChannel implements TrayDataChannelLike {
   }
 
   parseSent(): FollowerToLeaderMessage[] {
-    return this.sent.map(s => JSON.parse(s));
+    return this.sent.map((s) => JSON.parse(s));
   }
 }
 
@@ -103,7 +110,7 @@ describe('FollowerSyncManager', () => {
       const channel = new FakeChannel();
       const follower = new FollowerSyncManager(channel);
       const events: AgentEvent[] = [];
-      follower.onEvent(e => events.push(e));
+      follower.onEvent((e) => events.push(e));
 
       const event: AgentEvent = { type: 'content_delta', messageId: 'm1', text: 'chunk' };
       channel.simulateLeaderMessage({ type: 'agent_event', event, scoopJid: 'cone' });
@@ -115,7 +122,7 @@ describe('FollowerSyncManager', () => {
       const channel = new FakeChannel();
       const follower = new FollowerSyncManager(channel);
       const events: AgentEvent[] = [];
-      const unsub = follower.onEvent(e => events.push(e));
+      const unsub = follower.onEvent((e) => events.push(e));
 
       channel.simulateLeaderMessage({
         type: 'agent_event',
@@ -137,7 +144,7 @@ describe('FollowerSyncManager', () => {
       const channel = new FakeChannel();
       const follower = new FollowerSyncManager(channel);
       const events: AgentEvent[] = [];
-      follower.onEvent(e => events.push(e));
+      follower.onEvent((e) => events.push(e));
 
       channel.simulateLeaderMessage({ type: 'error', error: 'something broke' });
 
@@ -298,7 +305,7 @@ describe('FollowerSyncManager', () => {
       const channel = new FakeChannel();
       const follower = new FollowerSyncManager(channel);
       const events: AgentEvent[] = [];
-      follower.onEvent(e => events.push(e));
+      follower.onEvent((e) => events.push(e));
 
       follower.close();
 
@@ -319,8 +326,10 @@ describe('FollowerSyncManager', () => {
       const channel = new FakeChannel();
       const follower = new FollowerSyncManager(channel);
       const events: AgentEvent[] = [];
-      follower.onEvent(() => { throw new Error('bad listener'); });
-      follower.onEvent(e => events.push(e));
+      follower.onEvent(() => {
+        throw new Error('bad listener');
+      });
+      follower.onEvent((e) => events.push(e));
 
       channel.simulateLeaderMessage({
         type: 'agent_event',
@@ -339,7 +348,7 @@ describe('FollowerSyncManager', () => {
 
       follower.advertiseTargets(
         [{ targetId: 'tab1', title: 'Google', url: 'https://google.com' }],
-        'follower-rt1',
+        'follower-rt1'
       );
 
       const sent = channel.parseSent();
@@ -358,7 +367,14 @@ describe('FollowerSyncManager', () => {
       const follower = new FollowerSyncManager(channel);
 
       const targets: TrayTargetEntry[] = [
-        { targetId: 'leader:tab1', localTargetId: 'tab1', runtimeId: 'leader', title: 'Tab', url: 'https://example.com', isLocal: false },
+        {
+          targetId: 'leader:tab1',
+          localTargetId: 'tab1',
+          runtimeId: 'leader',
+          title: 'Tab',
+          url: 'https://example.com',
+          isLocal: false,
+        },
       ];
       channel.simulateLeaderMessage({ type: 'targets.registry', targets });
 
@@ -378,7 +394,14 @@ describe('FollowerSyncManager', () => {
       const follower = new FollowerSyncManager(channel, { onTargetsUpdated });
 
       const targets: TrayTargetEntry[] = [
-        { targetId: 'rt:t1', localTargetId: 't1', runtimeId: 'rt', title: 'Tab', url: 'https://example.com', isLocal: false },
+        {
+          targetId: 'rt:t1',
+          localTargetId: 't1',
+          runtimeId: 'rt',
+          title: 'Tab',
+          url: 'https://example.com',
+          isLocal: false,
+        },
       ];
       channel.simulateLeaderMessage({ type: 'targets.registry', targets });
 
@@ -392,7 +415,16 @@ describe('FollowerSyncManager', () => {
       // Should not throw
       channel.simulateLeaderMessage({
         type: 'targets.registry',
-        targets: [{ targetId: 'rt:t1', localTargetId: 't1', runtimeId: 'rt', title: 'Tab', url: 'https://x.com', isLocal: false }],
+        targets: [
+          {
+            targetId: 'rt:t1',
+            localTargetId: 't1',
+            runtimeId: 'rt',
+            title: 'Tab',
+            url: 'https://x.com',
+            isLocal: false,
+          },
+        ],
       });
 
       expect(follower.getTargets()).toHaveLength(1);
@@ -404,11 +436,29 @@ describe('FollowerSyncManager', () => {
 
       channel.simulateLeaderMessage({
         type: 'targets.registry',
-        targets: [{ targetId: 'a:t1', localTargetId: 't1', runtimeId: 'a', title: 'Old', url: 'https://old.com', isLocal: false }],
+        targets: [
+          {
+            targetId: 'a:t1',
+            localTargetId: 't1',
+            runtimeId: 'a',
+            title: 'Old',
+            url: 'https://old.com',
+            isLocal: false,
+          },
+        ],
       });
       channel.simulateLeaderMessage({
         type: 'targets.registry',
-        targets: [{ targetId: 'b:t2', localTargetId: 't2', runtimeId: 'b', title: 'New', url: 'https://new.com', isLocal: false }],
+        targets: [
+          {
+            targetId: 'b:t2',
+            localTargetId: 't2',
+            runtimeId: 'b',
+            title: 'New',
+            url: 'https://new.com',
+            isLocal: false,
+          },
+        ],
       });
 
       const targets = follower.getTargets();
@@ -445,7 +495,7 @@ describe('FollowerSyncManager', () => {
       });
 
       const sent = channel.parseSent();
-      const response = sent.find(m => m.type === 'cdp.response');
+      const response = sent.find((m) => m.type === 'cdp.response');
       expect(response).toBeDefined();
       if (response && response.type === 'cdp.response') {
         expect(response.requestId).toBe('req-1');
@@ -470,7 +520,7 @@ describe('FollowerSyncManager', () => {
       });
 
       const sent = channel.parseSent();
-      const response = sent.find(m => m.type === 'cdp.response');
+      const response = sent.find((m) => m.type === 'cdp.response');
       expect(response).toBeDefined();
       if (response && response.type === 'cdp.response') {
         expect(response.requestId).toBe('req-2');
@@ -504,7 +554,7 @@ describe('FollowerSyncManager', () => {
       });
 
       const sent = channel.parseSent();
-      const response = sent.find(m => m.type === 'cdp.response');
+      const response = sent.find((m) => m.type === 'cdp.response');
       expect(response).toBeDefined();
       if (response && response.type === 'cdp.response') {
         expect(response.requestId).toBe('req-3');
@@ -609,7 +659,7 @@ describe('FollowerSyncManager', () => {
       });
 
       const sent = channel.parseSent();
-      const response = sent.find(m => m.type === 'tab.opened');
+      const response = sent.find((m) => m.type === 'tab.opened');
       expect(response).toBeDefined();
       if (response && response.type === 'tab.opened') {
         expect(response.requestId).toBe('tabopen-1');
@@ -632,7 +682,7 @@ describe('FollowerSyncManager', () => {
       });
 
       const sent = channel.parseSent();
-      const response = sent.find(m => m.type === 'tab.open.error');
+      const response = sent.find((m) => m.type === 'tab.open.error');
       expect(response).toBeDefined();
       if (response && response.type === 'tab.open.error') {
         expect(response.requestId).toBe('tabopen-2');
@@ -664,7 +714,7 @@ describe('FollowerSyncManager', () => {
       });
 
       const sent = channel.parseSent();
-      const response = sent.find(m => m.type === 'tab.open.error');
+      const response = sent.find((m) => m.type === 'tab.open.error');
       expect(response).toBeDefined();
       if (response && response.type === 'tab.open.error') {
         expect(response.requestId).toBe('tabopen-3');
@@ -696,7 +746,7 @@ describe('FollowerSyncManager', () => {
       } as any);
 
       await vi.waitFor(() => {
-        expect(channel.parseSent().some(m => m.type === 'tab.opened')).toBe(true);
+        expect(channel.parseSent().some((m) => m.type === 'tab.opened')).toBe(true);
       });
 
       expect(onTargetsChanged).toHaveBeenCalledTimes(1);
@@ -726,7 +776,7 @@ describe('FollowerSyncManager', () => {
       } as any);
 
       await vi.waitFor(() => {
-        expect(channel.parseSent().some(m => m.type === 'tab.open.error')).toBe(true);
+        expect(channel.parseSent().some((m) => m.type === 'tab.open.error')).toBe(true);
       });
 
       expect(onTargetsChanged).not.toHaveBeenCalled();
@@ -811,7 +861,8 @@ describe('FollowerSyncManager', () => {
       const eventListeners = new Map<string, Set<Function>>();
       const fakeBrowserTransport = {
         send: vi.fn().mockImplementation((method: string) => {
-          if (method === 'Target.attachToTarget') return Promise.resolve({ sessionId: 'sess-remote' });
+          if (method === 'Target.attachToTarget')
+            return Promise.resolve({ sessionId: 'sess-remote' });
           return Promise.resolve({});
         }),
         connect: vi.fn(),
@@ -838,7 +889,7 @@ describe('FollowerSyncManager', () => {
       } as any);
 
       await vi.waitFor(() => {
-        expect(channel.parseSent().some(m => m.type === 'cdp.response')).toBe(true);
+        expect(channel.parseSent().some((m) => m.type === 'cdp.response')).toBe(true);
       });
 
       // Event listeners should have been registered on the local transport
@@ -856,12 +907,15 @@ describe('FollowerSyncManager', () => {
 
       // The follower should have forwarded the event to the leader
       const sent = channel.parseSent();
-      const eventMsg = sent.find(m => m.type === 'cdp.event');
+      const eventMsg = sent.find((m) => m.type === 'cdp.event');
       expect(eventMsg).toBeDefined();
       if (eventMsg && eventMsg.type === 'cdp.event') {
         expect(eventMsg.method).toBe('Page.frameNavigated');
         expect(eventMsg.sessionId).toBe('sess-remote');
-        expect((eventMsg as any).params.frame).toEqual({ url: 'https://navigated.com', id: 'main' });
+        expect((eventMsg as any).params.frame).toEqual({
+          url: 'https://navigated.com',
+          id: 'main',
+        });
         // sessionId should NOT be in the forwarded params (it's at message level)
         expect((eventMsg as any).params.sessionId).toBeUndefined();
       }
@@ -872,7 +926,8 @@ describe('FollowerSyncManager', () => {
       const eventListeners = new Map<string, Set<Function>>();
       const fakeBrowserTransport = {
         send: vi.fn().mockImplementation((method: string) => {
-          if (method === 'Target.attachToTarget') return Promise.resolve({ sessionId: 'sess-remote' });
+          if (method === 'Target.attachToTarget')
+            return Promise.resolve({ sessionId: 'sess-remote' });
           return Promise.resolve({});
         }),
         connect: vi.fn(),
@@ -899,7 +954,7 @@ describe('FollowerSyncManager', () => {
       } as any);
 
       await vi.waitFor(() => {
-        expect(channel.parseSent().some(m => m.type === 'cdp.response')).toBe(true);
+        expect(channel.parseSent().some((m) => m.type === 'cdp.response')).toBe(true);
       });
 
       channel.sent.length = 0;
@@ -914,7 +969,7 @@ describe('FollowerSyncManager', () => {
 
       // Should NOT forward the event
       const sent = channel.parseSent();
-      expect(sent.filter(m => m.type === 'cdp.event')).toHaveLength(0);
+      expect(sent.filter((m) => m.type === 'cdp.event')).toHaveLength(0);
     });
 
     it('cleans up event forwarding on close', async () => {
@@ -946,7 +1001,7 @@ describe('FollowerSyncManager', () => {
       } as any);
 
       await vi.waitFor(() => {
-        expect(channel.parseSent().some(m => m.type === 'cdp.response')).toBe(true);
+        expect(channel.parseSent().some((m) => m.type === 'cdp.response')).toBe(true);
       });
 
       // Verify listeners were registered
@@ -1004,7 +1059,7 @@ describe('FollowerSyncManager', () => {
       const onDisconnect = vi.fn();
       const follower = new FollowerSyncManager(channel, { onDisconnect });
       const events: AgentEvent[] = [];
-      follower.onEvent(e => events.push(e));
+      follower.onEvent((e) => events.push(e));
 
       channel.simulateClose();
 
@@ -1021,7 +1076,7 @@ describe('FollowerSyncManager', () => {
       const onDisconnect = vi.fn();
       const follower = new FollowerSyncManager(channel, { onDisconnect });
       const events: AgentEvent[] = [];
-      follower.onEvent(e => events.push(e));
+      follower.onEvent((e) => events.push(e));
 
       channel.simulateError();
 
@@ -1038,7 +1093,7 @@ describe('FollowerSyncManager', () => {
       const onDisconnect = vi.fn();
       const follower = new FollowerSyncManager(channel, { onDisconnect });
       const events: AgentEvent[] = [];
-      follower.onEvent(e => events.push(e));
+      follower.onEvent((e) => events.push(e));
 
       // Trigger two disconnects — only first should fire
       channel.simulateClose();

@@ -55,12 +55,16 @@ export class MountCommands {
     if (sub === 'list' || sub === '-l') {
       const mounts = this.options.fs.listMounts();
       if (mounts.length === 0) return { stdout: 'No active mounts\n', stderr: '', exitCode: 0 };
-      return { stdout: mounts.map(m => m).join('\n') + '\n', stderr: '', exitCode: 0 };
+      return { stdout: mounts.map((m) => m).join('\n') + '\n', stderr: '', exitCode: 0 };
     }
 
     // mount <target-path>
     if (!sub) {
-      return { stdout: '', stderr: 'mount: mount point required\nUsage: mount <target-path>\n', exitCode: 1 };
+      return {
+        stdout: '',
+        stderr: 'mount: mount point required\nUsage: mount <target-path>\n',
+        exitCode: 1,
+      };
     }
 
     if (typeof window === 'undefined' || !('showDirectoryPicker' in window)) {
@@ -101,7 +105,10 @@ export class MountCommands {
           if (action === 'approve') {
             // This runs with user gesture context!
             try {
-              const handle = await (window as Window & typeof globalThis & { showDirectoryPicker: ShowDirectoryPickerFn }).showDirectoryPicker({ mode: 'readwrite' });
+              const handle = await (
+                window as Window &
+                  typeof globalThis & { showDirectoryPicker: ShowDirectoryPickerFn }
+              ).showDirectoryPicker({ mode: 'readwrite' });
               return { approved: true, handle };
             } catch (err: unknown) {
               if (err instanceof Error && err.name === 'AbortError') {
@@ -118,7 +125,13 @@ export class MountCommands {
         return { stdout: '', stderr: 'mount: tool UI not available', exitCode: 1 };
       }
 
-      const res = result as { approved?: boolean; handle?: FileSystemDirectoryHandle; denied?: boolean; cancelled?: boolean; error?: string };
+      const res = result as {
+        approved?: boolean;
+        handle?: FileSystemDirectoryHandle;
+        denied?: boolean;
+        cancelled?: boolean;
+        error?: string;
+      };
 
       if (res.denied) {
         return { stdout: '', stderr: 'mount: denied by user', exitCode: 1 };
@@ -137,12 +150,18 @@ export class MountCommands {
     } else {
       // Terminal/interactive: direct picker (has user gesture)
       try {
-        dirHandle = await (window as Window & typeof globalThis & { showDirectoryPicker: ShowDirectoryPickerFn }).showDirectoryPicker({ mode: 'readwrite' });
+        dirHandle = await (
+          window as Window & typeof globalThis & { showDirectoryPicker: ShowDirectoryPickerFn }
+        ).showDirectoryPicker({ mode: 'readwrite' });
       } catch (err: unknown) {
         if (err instanceof Error && err.name === 'AbortError') {
           return { stdout: '', stderr: 'mount: cancelled', exitCode: 1 };
         }
-        return { stdout: '', stderr: `mount: ${err instanceof Error ? err.message : String(err)}`, exitCode: 1 };
+        return {
+          stdout: '',
+          stderr: `mount: ${err instanceof Error ? err.message : String(err)}`,
+          exitCode: 1,
+        };
       }
     }
 
@@ -164,28 +183,29 @@ export class MountCommands {
 
   private help(): MountCommandResult {
     return {
-      stdout: [
-        'Usage: mount <target-path>',
-        '       mount unmount <path>',
-        '       mount list',
-        '',
-        'Transparently bridge a real filesystem directory into the virtual filesystem.',
-        'Opens a directory picker; all reads and writes under <target-path> go directly',
-        'to the real directory — no copying occurs. Changes are immediately visible on',
-        'both sides.',
-        '',
-        'Arguments:',
-        '  <target-path>  Mount point in the virtual filesystem (required).',
-        '',
-        'Sub-commands:',
-        '  unmount <path>  Remove a mount point',
-        '  list            Show active mount points',
-        '',
-        'Examples:',
-        '  mount /workspace/myapp   # Mount selected dir at /workspace/myapp',
-        '  mount list               # Show active mounts',
-        '  mount unmount /workspace/myapp',
-      ].join('\n') + '\n',
+      stdout:
+        [
+          'Usage: mount <target-path>',
+          '       mount unmount <path>',
+          '       mount list',
+          '',
+          'Transparently bridge a real filesystem directory into the virtual filesystem.',
+          'Opens a directory picker; all reads and writes under <target-path> go directly',
+          'to the real directory — no copying occurs. Changes are immediately visible on',
+          'both sides.',
+          '',
+          'Arguments:',
+          '  <target-path>  Mount point in the virtual filesystem (required).',
+          '',
+          'Sub-commands:',
+          '  unmount <path>  Remove a mount point',
+          '  list            Show active mount points',
+          '',
+          'Examples:',
+          '  mount /workspace/myapp   # Mount selected dir at /workspace/myapp',
+          '  mount list               # Show active mounts',
+          '  mount unmount /workspace/myapp',
+        ].join('\n') + '\n',
       stderr: '',
       exitCode: 0,
     };
