@@ -11,6 +11,7 @@ import {
   ElectronOverlayInjector,
   launchElectronApp,
 } from './electron-controller.js';
+import { getElectronAppPorts } from './electron-runtime.js';
 import {
   buildChromeLaunchArgs,
   ensureQaProfileScaffold,
@@ -307,13 +308,26 @@ const PREFERRED_HMR_PORT = 24679;
 async function main() {
   // Resolve available ports before anything else — serve port must be known
   // before Chrome launches (the launch URL contains it).
-  const SERVE_PORT = await findAvailablePort(PREFERRED_SERVE_PORT);
-  // For Chrome CDP, we pass port 0 to let Chrome pick any available port,
-  // then parse the actual port from its stderr. This avoids race conditions
-  // where Node's port probe succeeds but Chrome still can't bind the port.
-  // Electron mode keeps the preferred port (external CDP, not launched by us).
-  const REQUESTED_CDP_PORT = ELECTRON_MODE ? PREFERRED_CDP_PORT : 0;
-  let CDP_PORT = ELECTRON_MODE ? PREFERRED_CDP_PORT : 0;
+  let SERVE_PORT: number;
+  let CDP_PORT: number;
+  let REQUESTED_CDP_PORT: number;
+  
+  if (ELECTRON_MODE && ELECTRON_APP && !RUNTIME_FLAGS.explicitCdpPort) {
+    // Dynamic port allocation for Electron apps (hash-based with fallback)
+    const ports = await getElectronAppPorts(ELECTRON_APP);
+    CDP_PORT = ports.cdpPort;
+    SERVE_PORT = ports.servePort;
+    REQUESTED_CDP_PORT = CDP_PORT;
+  } else {
+    SERVE_PORT = await findAvailablePort(PREFERRED_SERVE_PORT);
+    // For Chrome CDP, we pass port 0 to let Chrome pick any available port,
+    // then parse the actual port from its stderr. This avoids race conditions
+    // where Node's port probe succeeds but Chrome still can't bind the port.
+    // Electron mode keeps the preferred port (external CDP, not launched by us).
+    REQUESTED_CDP_PORT = ELECTRON_MODE ? PREFERRED_CDP_PORT : 0;
+    CDP_PORT = ELECTRON_MODE ? PREFERRED_CDP_PORT : 0;
+  }
+  
   const HMR_PORT = DEV_MODE
     ? await findAvailablePort(PREFERRED_HMR_PORT)
     : PREFERRED_HMR_PORT;

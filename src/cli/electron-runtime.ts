@@ -34,6 +34,76 @@ export const DEFAULT_ELECTRON_TARGET_URL = 'about:blank';
 export const DEFAULT_ELECTRON_OVERLAY_TAB = 'chat';
 export const ELECTRON_OVERLAY_APP_PATH = '/electron';
 
+// Port allocation constants
+const PORT_HASH_RANGE = 40;
+
+/**
+ * Simple string hash function that returns a value between 0 and max-1.
+ */
+function hashString(str: string, max: number): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  return Math.abs(hash) % max;
+}
+
+/**
+ * Check if a port is available by attempting to listen on it.
+ */
+async function isPortAvailable(port: number): Promise<boolean> {
+  const { createServer } = await import('net');
+  return new Promise((resolve) => {
+    const server = createServer();
+    server.once('error', () => resolve(false));
+    server.once('listening', () => {
+      server.close();
+      resolve(true);
+    });
+    server.listen(port, '127.0.0.1');
+  });
+}
+
+/**
+ * Find an available port starting from the given port.
+ */
+async function findAvailablePort(startPort: number, maxAttempts = 100): Promise<number> {
+  for (let i = 0; i < maxAttempts; i++) {
+    const port = startPort + i;
+    if (await isPortAvailable(port)) {
+      return port;
+    }
+  }
+  throw new Error(`Could not find available port starting from ${startPort}`);
+}
+
+/**
+ * Get a port for an Electron app based on its path.
+ * Uses hash-based offset from base port, with fallback to next available.
+ */
+export async function getElectronAppPort(appPath: string, basePort: number): Promise<number> {
+  const offset = hashString(appPath, PORT_HASH_RANGE);
+  const preferredPort = basePort + offset;
+  
+  if (await isPortAvailable(preferredPort)) {
+    return preferredPort;
+  }
+  
+  // Fallback: find next available port
+  return findAvailablePort(basePort);
+}
+
+/**
+ * Get both CDP and serve ports for an Electron app.
+ */
+export async function getElectronAppPorts(appPath: string): Promise<{ cdpPort: number; servePort: number }> {
+  const cdpPort = await getElectronAppPort(appPath, DEFAULT_ELECTRON_CDP_PORT);
+  const servePort = await getElectronAppPort(appPath, DEFAULT_ELECTRON_SERVE_PORT);
+  return { cdpPort, servePort };
+}
+
 export function getElectronAppDisplayName(appPath: string): string {
   const trimmedPath = appPath.replace(/[\\/]+$/, '');
   const fileName = basename(trimmedPath);

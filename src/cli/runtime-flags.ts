@@ -4,6 +4,8 @@ export interface CliRuntimeFlags {
   dev: boolean;
   serveOnly: boolean;
   cdpPort: number;
+  /** Whether --cdp-port was explicitly specified */
+  explicitCdpPort: boolean;
   electron: boolean;
   electronApp: string | null;
   kill: boolean;
@@ -166,6 +168,7 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
     dev,
     serveOnly,
     cdpPort,
+    explicitCdpPort,
     electron,
     electronApp,
     kill,
