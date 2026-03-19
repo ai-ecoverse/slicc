@@ -101,17 +101,43 @@ final class SliccBootstrapper {
         progressMessage = "Updated!"
     }
 
+    /// Ensure PATH includes common tool locations (Homebrew, nvm, etc.)
+    /// Finder-launched apps get a minimal PATH that may miss these.
+    private static var enrichedEnvironment: [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        let extraPaths = [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+            NSHomeDirectory() + "/.nvm/current/bin",
+        ]
+        let currentPath = env["PATH"] ?? "/usr/bin:/bin"
+        let allPaths = (extraPaths + currentPath.split(separator: ":").map(String.init))
+        env["PATH"] = Array(Set(allPaths)).joined(separator: ":")
+        return env
+    }
+
     private func runSync(_ command: String, _ args: [String], cwd: String? = nil) throws {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: command)
         task.arguments = args
+        task.environment = Self.enrichedEnvironment
         if let cwd { task.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+
+        let stderrPipe = Pipe()
         task.standardOutput = FileHandle.nullDevice
-        task.standardError = FileHandle.nullDevice
+        task.standardError = stderrPipe
         try task.run()
         task.waitUntilExit()
+
         guard task.terminationStatus == 0 else {
-            throw BootstrapError.commandFailed("\(command) \(args.joined(separator: " "))")
+            let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let detail = stderr.isEmpty ? "" : "\n\(stderr.suffix(300))"
+            throw BootstrapError.commandFailed("\(command) \(args.joined(separator: " "))\(detail)")
         }
     }
 
