@@ -2,7 +2,7 @@
 
 # slicc — Self-Licking Ice Cream Cone
 
-[![npm](https://img.shields.io/npm/v/sliccy)](https://www.npmjs.com/package/sliccy) ![Vibe Coded](https://img.shields.io/badge/vibe--coded-62%25_AI-blue?style=flat&logo=github)
+[![npm](https://img.shields.io/npm/v/sliccy)](https://www.npmjs.com/package/sliccy)
 
 > A browser-native AI agent for getting practical work done in and through the browser.
 
