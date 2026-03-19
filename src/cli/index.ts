@@ -330,6 +330,7 @@ async function main() {
   let SERVE_PORT: number;
   let CDP_PORT: number;
   let REQUESTED_CDP_PORT: number;
+  let usingDynamicElectronPorts = false;
 
   if (ELECTRON_MODE && ELECTRON_APP && !RUNTIME_FLAGS.explicitCdpPort) {
     // Dynamic port allocation for Electron apps (hash-based with fallback)
@@ -337,6 +338,7 @@ async function main() {
     CDP_PORT = ports.cdpPort;
     SERVE_PORT = ports.servePort;
     REQUESTED_CDP_PORT = CDP_PORT;
+    usingDynamicElectronPorts = true;
   } else {
     SERVE_PORT = await findAvailablePort(PREFERRED_SERVE_PORT);
     // For Chrome CDP, we pass port 0 to let Chrome pick any available port,
@@ -350,7 +352,9 @@ async function main() {
   const HMR_PORT = DEV_MODE ? await findAvailablePort(PREFERRED_HMR_PORT) : PREFERRED_HMR_PORT;
   const SERVE_ORIGIN = `http://localhost:${SERVE_PORT}`;
 
-  if (SERVE_PORT !== PREFERRED_SERVE_PORT) {
+  if (usingDynamicElectronPorts) {
+    console.log(`Dynamic port allocation for Electron app: CDP=${CDP_PORT}, serve=${SERVE_PORT}`);
+  } else if (SERVE_PORT !== PREFERRED_SERVE_PORT) {
     console.log(`Port ${PREFERRED_SERVE_PORT} in use, serving on port ${SERVE_PORT}`);
   }
   if (DEV_MODE && HMR_PORT !== PREFERRED_HMR_PORT) {

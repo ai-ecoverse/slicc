@@ -1,5 +1,5 @@
 import { basename, join, resolve } from 'path';
-import { readdirSync, statSync } from 'fs';
+import { accessSync, constants, readdirSync, statSync } from 'fs';
 
 export interface ElectronFloatFlags {
   dev: boolean;
@@ -35,12 +35,13 @@ export const DEFAULT_ELECTRON_OVERLAY_TAB = 'chat';
 export const ELECTRON_OVERLAY_APP_PATH = '/electron';
 
 // Port allocation constants
-const PORT_HASH_RANGE = 40;
+export const PORT_HASH_RANGE = 40;
 
 /**
  * Simple string hash function that returns a value between 0 and max-1.
+ * Exported for testing.
  */
-function hashString(str: string, max: number): number {
+export function hashString(str: string, max: number): number {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i);
@@ -51,19 +52,40 @@ function hashString(str: string, max: number): number {
 }
 
 /**
- * Check if a port is available by attempting to listen on it.
+ * Try to listen on a specific port and host, returning the assigned port.
+ */
+function tryListenOnPort(port: number, host: string): Promise<number> {
+  const { createServer } = require('net');
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.on('error', reject);
+    server.listen(port, host, () => {
+      const addr = server.address();
+      const assignedPort = addr && typeof addr === 'object' ? addr.port : port;
+      server.close(() => resolve(assignedPort));
+    });
+  });
+}
+
+/**
+ * Check if a port is available on both IPv4 (127.0.0.1) and IPv6 (::1).
+ * On macOS, `localhost` resolves to `::1`, so we need to check both.
  */
 async function isPortAvailable(port: number): Promise<boolean> {
-  const { createServer } = await import('net');
-  return new Promise((resolve) => {
-    const server = createServer();
-    server.once('error', () => resolve(false));
-    server.once('listening', () => {
-      server.close();
-      resolve(true);
-    });
-    server.listen(port, '127.0.0.1');
-  });
+  try {
+    await tryListenOnPort(port, '127.0.0.1');
+    try {
+      await tryListenOnPort(port, '::1');
+    } catch (err: unknown) {
+      // ::1 may not be available on some systems — only fail on EADDRINUSE
+      if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+        return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -81,18 +103,19 @@ async function findAvailablePort(startPort: number, maxAttempts = 100): Promise<
 
 /**
  * Get a port for an Electron app based on its path.
- * Uses hash-based offset from base port, with fallback to next available.
+ * Uses hash-based offset from base port, with fallback to next available port
+ * starting from the preferred port (to stay in the app's "slot" range).
  */
 export async function getElectronAppPort(appPath: string, basePort: number): Promise<number> {
   const offset = hashString(appPath, PORT_HASH_RANGE);
   const preferredPort = basePort + offset;
-  
+
   if (await isPortAvailable(preferredPort)) {
     return preferredPort;
   }
-  
-  // Fallback: find next available port
-  return findAvailablePort(basePort);
+
+  // Fallback: find next available port starting from preferred (stay in slot range)
+  return findAvailablePort(preferredPort + 1);
 }
 
 /**
@@ -150,12 +173,22 @@ export function resolveElectronAppExecutablePath(
     try {
       const entries = readdirSync(macOSDir);
 
+      // Helper to check if a file is executable
+      const isExecutable = (path: string): boolean => {
+        try {
+          accessSync(path, constants.X_OK);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+
       // First pass: look for "Electron" executable (common in Electron apps)
       if (entries.includes('Electron')) {
         const electronPath = join(macOSDir, 'Electron');
         try {
           const stat = statSync(electronPath);
-          if (stat.isFile()) {
+          if (stat.isFile() && isExecutable(electronPath)) {
             return electronPath;
           }
         } catch {
@@ -163,7 +196,7 @@ export function resolveElectronAppExecutablePath(
         }
       }
 
-      // Second pass: find first non-helper executable
+      // Second pass: find first non-helper executable with execute permission
       for (const entry of entries) {
         // Skip hidden files, scripts, and helper executables
         if (entry.startsWith('.') || entry.endsWith('.sh')) continue;
@@ -172,7 +205,7 @@ export function resolveElectronAppExecutablePath(
         const entryPath = join(macOSDir, entry);
         try {
           const stat = statSync(entryPath);
-          if (stat.isFile()) {
+          if (stat.isFile() && isExecutable(entryPath)) {
             return entryPath;
           }
         } catch {
