@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IFileSystem, SecureFetch } from 'just-bash';
 import { VirtualFS } from '../../fs/index.js';
 import { createUpskillCommand } from './upskill-command.js';
@@ -23,11 +23,40 @@ function response(status: number, body: string, headers: Record<string, string> 
 
 describe('upskill command GitHub flows', () => {
   let fs: VirtualFS;
+  let createdFileSystems: VirtualFS[];
   let dbCounter = 0;
 
   beforeEach(async () => {
+    createdFileSystems = [];
+    const originalCreate = VirtualFS.create.bind(VirtualFS);
+    vi.spyOn(VirtualFS, 'create').mockImplementation(async (options) => {
+      const instance = await originalCreate(options);
+      createdFileSystems.push(instance);
+      return instance;
+    });
+
     fs = await VirtualFS.create({ dbName: `upskill-test-${dbCounter++}`, wipe: true });
     await VirtualFS.create({ dbName: 'slicc-fs-global', wipe: true });
+  });
+
+  afterEach(async () => {
+    await Promise.allSettled(
+      createdFileSystems.map((instance) => (instance.getLightningFS() as { _deactivate?: () => Promise<void> })._deactivate?.()),
+    );
+    vi.restoreAllMocks();
+  });
+
+  it('documents github.token guidance in help output for shared-IP rate limits', async () => {
+    const fetchMock = vi.fn();
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['--help'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('anonymous GitHub access may be rate-limited');
+    expect(result.stdout).toContain('shared VPNs or corporate IPs');
+    expect(result.stdout).toContain('git config github.token <PAT>');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('uses configured github.token for GitHub API and content requests', async () => {
