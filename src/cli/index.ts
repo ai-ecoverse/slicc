@@ -399,14 +399,55 @@ async function main() {
       launchedBrowserLabel = displayName;
       pipeChildOutput(child, 'electron-app');
 
+      // Track when app exits - quick exits before CDP connects indicate a problem
+      let cdpConnected = false;
+      let exitCode: number | null = null;
+      let exitResolve: (() => void) | null = null;
+      const exitPromise = new Promise<void>((resolve) => {
+        exitResolve = resolve;
+      });
+
       child.on('exit', (code) => {
+        exitCode = code;
+        exitResolve?.();
         if (shuttingDown) return;
-        console.log(`${displayName} exited with code ${code}`);
-        process.exit(0);
+        if (cdpConnected) {
+          // Normal exit after we connected
+          console.log(`${displayName} exited with code ${code}`);
+          process.exit(0);
+        }
+        // If CDP not yet connected, don't exit - let waitForCDP handle it
       });
 
       console.log(`Waiting for ${displayName} CDP on port ${CDP_PORT}...`);
-      await waitForCDP(CDP_PORT, 40, 500);
+      try {
+        // Race between CDP connection and app exit
+        await Promise.race([
+          waitForCDP(CDP_PORT, 40, 500).then(() => {
+            cdpConnected = true;
+          }),
+          exitPromise.then(() => {
+            if (!cdpConnected) {
+              throw new Error('app-exited');
+            }
+          }),
+        ]);
+      } catch (err) {
+        // Check if app exited quickly (likely due to disabled remote debugging fuse)
+        if (exitCode !== null) {
+          console.error(
+            `\n${displayName} exited with code ${exitCode} before remote debugging was available.`
+          );
+          console.error(
+            'This usually means the app has disabled remote debugging (EnableNodeCliInspectArguments fuse).'
+          );
+          console.error(
+            'Some Electron apps disable this for security. Check if there is a developer/debug build available.\n'
+          );
+          process.exit(1);
+        }
+        throw new Error(`Could not connect to ${displayName} CDP on port ${CDP_PORT}`);
+      }
       console.log(`Connected to ${displayName} on CDP port ${CDP_PORT}`);
 
       // Auto-discover leader's tray join URL when another instance runs on the preferred port.
