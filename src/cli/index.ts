@@ -433,6 +433,7 @@ async function main() {
           projectRoot: PROJECT_ROOT,
           tmpDir: process.env['TMPDIR'] ?? '/tmp',
           profile: RUNTIME_FLAGS.profile,
+          servePort: SERVE_PORT,
         });
       } catch (error: unknown) {
         console.error(error instanceof Error ? error.message : String(error));
@@ -816,8 +817,9 @@ async function main() {
       headers['accept-encoding'] = 'identity';
       if (Object.keys(headers).length > 0) fetchInit.headers = headers;
       if (rawBody.length > 0 && !['GET', 'HEAD'].includes(req.method)) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        fetchInit.body = rawBody as any;
+        // Buffer extends Uint8Array (valid BodyInit at runtime) but TS can't
+        // prove the backing ArrayBuffer is non-shared, so double-cast is needed.
+        fetchInit.body = rawBody as unknown as BodyInit;
       }
 
       const upstream = await fetch(targetUrl, fetchInit);

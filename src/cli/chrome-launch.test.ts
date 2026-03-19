@@ -49,6 +49,26 @@ describe('chrome-launch', () => {
     });
   });
 
+  it('appends serve port to default profile dir when not the default port', () => {
+    const profile = resolveChromeLaunchProfile({
+      projectRoot: '/repo',
+      tmpDir: '/tmp/test-root',
+      servePort: 5720,
+    });
+
+    expect(profile.userDataDir).toBe('/tmp/test-root/browser-coding-agent-chrome-5720');
+  });
+
+  it('omits port suffix for the default serve port 5710', () => {
+    const profile = resolveChromeLaunchProfile({
+      projectRoot: '/repo',
+      tmpDir: '/tmp/test-root',
+      servePort: 5710,
+    });
+
+    expect(profile.userDataDir).toBe('/tmp/test-root/browser-coding-agent-chrome');
+  });
+
   it('rejects unknown QA profile names', () => {
     expect(() =>
       resolveChromeLaunchProfile({
