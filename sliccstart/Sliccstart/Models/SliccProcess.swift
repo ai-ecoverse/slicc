@@ -39,7 +39,7 @@ final class SliccProcess {
 
     func launchStandalone(_ browser: AppTarget) throws {
         if isRunning(browser) {
-            // Already running — just bring Chrome to front
+            // Already running — no-op
             return
         }
         guard !Self.isPortInUse(Self.browserPort) else { throw LaunchError.portInUse(Self.browserPort) }

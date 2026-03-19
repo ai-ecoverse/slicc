@@ -4,6 +4,4 @@
 .DS_Store
 *.xcodeproj/
 *.playground
-.build/
-.swiftpm/
 build/
