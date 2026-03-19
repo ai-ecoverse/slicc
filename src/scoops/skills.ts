@@ -174,10 +174,11 @@ async function loadDiscoveredSkills(fs: VirtualFS, skillsDir: string): Promise<S
     try {
       const text = await fs.readTextFile(discoveredSkill.skillFilePath);
       const { metadata, body } = parseFrontmatter(text);
+      const name = metadata.name || discoveredSkill.name;
 
       skills.push({
         metadata: {
-          name: discoveredSkill.name,
+          name,
           description: metadata.description || discoveredSkill.manifest.description || '',
           allowedTools: metadata.allowedTools,
         },
@@ -185,7 +186,7 @@ async function loadDiscoveredSkills(fs: VirtualFS, skillsDir: string): Promise<S
         path: discoveredSkill.skillFilePath,
       });
       log.debug('Loaded discovered skill', {
-        name: discoveredSkill.name,
+        name,
         path: discoveredSkill.skillFilePath,
         source: discoveredSkill.source,
       });
