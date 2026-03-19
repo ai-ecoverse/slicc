@@ -1,4 +1,5 @@
 import { basename, join, resolve } from 'path';
+import { readdirSync, statSync } from 'fs';
 
 export interface ElectronFloatFlags {
   dev: boolean;
@@ -51,12 +52,43 @@ export function resolveElectronAppExecutablePath(
   const resolvedAppPath = resolve(appPath);
 
   if (platform === 'darwin' && resolvedAppPath.toLowerCase().endsWith('.app')) {
-    return join(
-      resolvedAppPath,
-      'Contents',
-      'MacOS',
-      getElectronAppDisplayName(resolvedAppPath),
-    );
+    const macOSDir = join(resolvedAppPath, 'Contents', 'MacOS');
+    
+    // First try the expected name (app name without .app)
+    const expectedName = getElectronAppDisplayName(resolvedAppPath);
+    const expectedPath = join(macOSDir, expectedName);
+    try {
+      const stat = statSync(expectedPath);
+      if (stat.isFile()) {
+        return expectedPath;
+      }
+    } catch {
+      // Expected path doesn't exist, scan the directory
+    }
+    
+    // Scan MacOS directory for executable files
+    // Many Electron apps use "Electron" as the executable name
+    try {
+      const entries = readdirSync(macOSDir);
+      for (const entry of entries) {
+        const entryPath = join(macOSDir, entry);
+        try {
+          const stat = statSync(entryPath);
+          // Look for executable files (not directories, not helper scripts)
+          if (stat.isFile() && !entry.endsWith('.sh') && !entry.startsWith('.')) {
+            return entryPath;
+          }
+        } catch {
+          continue;
+        }
+      }
+    } catch {
+      // Can't read directory, fall back to expected path
+    }
+    
+    // Fall back to expected path even if it doesn't exist
+    // (error will be caught later)
+    return expectedPath;
   }
 
   return resolvedAppPath;
