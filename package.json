@@ -1,5 +1,5 @@
 {
-  "name": "browser-coding-agent",
+  "name": "sliccy",
   "version": "0.1.0",
   "description": "Browser-based coding agent with thin CLI server",
   "license": "Apache-2.0",
@@ -13,6 +13,9 @@
     "dist/cli",
     "dist/ui"
   ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
+  },
   "engines": {
     "node": ">=22"
   },

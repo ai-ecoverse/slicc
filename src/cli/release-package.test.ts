@@ -24,8 +24,8 @@ describe('release-package', () => {
   });
 
   it('reads the packed tarball filename from npm pack json output', () => {
-    expect(parseNpmPackFilename('[{"filename":"browser-coding-agent-0.1.0.tgz"}]\n')).toBe(
-      'browser-coding-agent-0.1.0.tgz',
+    expect(parseNpmPackFilename('[{"filename":"sliccy-0.1.0.tgz"}]\n')).toBe(
+      'sliccy-0.1.0.tgz',
     );
   });
 
