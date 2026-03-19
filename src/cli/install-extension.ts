@@ -136,9 +136,12 @@ export async function installExtension(options: {
   // launched through Sliccstart. The default Chrome profile is not usable
   // with --remote-debugging-pipe.
   // Use the same profile dir the CLI server uses when launched via Sliccstart
-  // (Sliccstart sets TMPDIR=~/.slicc/, CLI creates browser-coding-agent-chrome inside it)
   const homeDir = process.env['HOME'] ?? process.env['USERPROFILE'] ?? '/tmp';
   const userDataDir = resolve(homeDir, '.slicc', 'browser-coding-agent-chrome');
+
+  // Pre-seed the profile with developer mode enabled so the extension
+  // stays active when Chrome is launched normally afterward.
+  ensureProfileWithDeveloperMode(userDataDir);
 
   const child = spawn(chromePath, [
     '--remote-debugging-pipe',
@@ -209,20 +212,26 @@ export async function installExtension(options: {
 }
 
 /**
- * Enable developer mode in the Chrome profile Preferences so unpacked
- * extensions stay active when Chrome restarts without debug flags.
+ * Ensure the Chrome profile exists with developer mode enabled.
+ * Called BEFORE spawning Chrome so the preference is baked in from the start.
+ * Also called AFTER Chrome exits to re-apply in case Chrome overwrites it.
  */
-function enableDeveloperMode(): void {
-  const homeDir = process.env['HOME'] ?? process.env['USERPROFILE'] ?? '/tmp';
-  const prefsPath = join(homeDir, '.slicc', 'browser-coding-agent-chrome', 'Default', 'Preferences');
+function ensureProfileWithDeveloperMode(userDataDir: string): void {
+  const defaultDir = join(userDataDir, 'Default');
+  const prefsPath = join(defaultDir, 'Preferences');
+  const firstRunPath = join(userDataDir, 'First Run');
 
   try {
+    mkdirSync(defaultDir, { recursive: true });
+
+    // Create "First Run" marker to skip Chrome's first-run experience
+    if (!existsSync(firstRunPath)) {
+      writeFileSync(firstRunPath, '', 'utf8');
+    }
+
     let prefs: Record<string, unknown> = {};
     if (existsSync(prefsPath)) {
       prefs = JSON.parse(readFileSync(prefsPath, 'utf8')) as Record<string, unknown>;
-    } else {
-      // Ensure directory exists
-      mkdirSync(join(homeDir, '.slicc', 'browser-coding-agent-chrome', 'Default'), { recursive: true });
     }
 
     // Set extensions.ui.developer_mode = true
@@ -235,11 +244,9 @@ function enableDeveloperMode(): void {
     }
     (ext.ui as Record<string, unknown>).developer_mode = true;
 
-    writeFileSync(prefsPath, JSON.stringify(prefs, null, 2), 'utf8');
-    console.log('Developer mode enabled in profile preferences.');
+    writeFileSync(prefsPath, JSON.stringify(prefs), 'utf8');
   } catch (err) {
-    // Non-fatal — developer mode can be enabled manually
-    console.warn('Warning: could not enable developer mode in preferences:', err instanceof Error ? err.message : String(err));
+    console.warn('Warning: could not set developer mode:', err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -283,10 +290,10 @@ async function main(): Promise<void> {
     });
     console.log(`Extension installed successfully. ID: ${extensionId}`);
 
-    // Enable developer mode in the profile so unpacked extensions stay active.
-    // Must happen after Chrome has fully exited and written its prefs.
-    enableDeveloperMode();
-    console.log('Developer mode enabled.');
+    // Re-apply developer mode after Chrome exit (Chrome may have overwritten prefs)
+    const homeDir = process.env['HOME'] ?? process.env['USERPROFILE'] ?? '/tmp';
+    ensureProfileWithDeveloperMode(resolve(homeDir, '.slicc', 'browser-coding-agent-chrome'));
+    console.log('Developer mode ensured.');
     process.exit(0);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

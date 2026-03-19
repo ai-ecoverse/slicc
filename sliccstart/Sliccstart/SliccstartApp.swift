@@ -51,14 +51,6 @@ struct SliccstartApp: App {
                                 showError("Failed to launch: \(error.localizedDescription)")
                             }
                         },
-                        onLaunchWithExtension: { target in
-                            sliccProcess.stop()
-                            do {
-                                try sliccProcess.launchWithExtension(target)
-                            } catch {
-                                showError("Failed to launch: \(error.localizedDescription)")
-                            }
-                        },
                         onLaunchElectron: { target in
                             sliccProcess.stop()
                             do {
@@ -67,19 +59,19 @@ struct SliccstartApp: App {
                                 showError("Failed to launch: \(error.localizedDescription)")
                             }
                         },
-                        onGuidedInstall: {
+                        onGuidedInstall: { target in
                             do {
-                                try sliccProcess.guidedInstallToDefaultChrome()
+                                try sliccProcess.guidedInstallExtension(chromePath: target.executablePath)
                                 showError(
                                     "Extension path copied to clipboard!\n\n" +
-                                    "In Chrome:\n" +
+                                    "In chrome://extensions:\n" +
                                     "1. Enable 'Developer mode' (top-right toggle)\n" +
                                     "2. Click 'Load unpacked'\n" +
                                     "3. Paste the path and select the folder\n\n" +
-                                    "Keep Developer Mode enabled — disabling it removes the extension."
+                                    "Keep Developer Mode enabled — the extension needs it."
                                 )
                             } catch {
-                                showError("Failed to prepare extension: \(error.localizedDescription)")
+                                showError("Failed: \(error.localizedDescription)")
                             }
                         },
                         onUpdate: {

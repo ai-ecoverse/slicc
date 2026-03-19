@@ -24,18 +24,6 @@ final class SliccProcess {
         return SliccBootstrapper.defaultSliccDir
     }
 
-    private var sliccProfileDir: String {
-        NSHomeDirectory() + "/.slicc/browser-coding-agent-chrome"
-    }
-
-    private var extensionInstalledInProfile: Bool {
-        let extensionsDir = sliccProfileDir + "/Default/Extensions"
-        guard let contents = try? FileManager.default.contentsOfDirectory(atPath: extensionsDir) else {
-            return false
-        }
-        return !contents.isEmpty
-    }
-
     // MARK: - Standalone mode (CLI server launches Chrome with temp profile)
 
     func launchStandalone(_ browser: AppTarget) throws {
@@ -45,36 +33,6 @@ final class SliccProcess {
             "CHROME_PATH": browser.executablePath,
             "PORT": "5710",
         ])
-    }
-
-    // MARK: - Extension mode (launch Chrome directly with SLICC profile, no CLI server)
-
-    /// Launch Chrome with the persistent SLICC profile. The extension IS the agent —
-    /// no CLI server needed. Auto-installs the extension on first launch via CDP pipe.
-    func launchWithExtension(_ browser: AppTarget) throws {
-        guard !isRunning else { return }
-        target = browser
-
-        // Auto-install extension on first launch
-        if !extensionInstalledInProfile {
-            try installExtensionToProfile(browser)
-        }
-
-        // Launch Chrome directly with the SLICC profile — no CLI server
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: browser.executablePath)
-        proc.arguments = [
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--user-data-dir=\(sliccProfileDir)",
-        ]
-        proc.terminationHandler = { [weak self] _ in
-            DispatchQueue.main.async { self?.markStopped() }
-        }
-
-        try proc.run()
-        process = proc
-        isRunning = true
     }
 
     // MARK: - Electron app (CLI server + overlay injection)
@@ -89,47 +47,32 @@ final class SliccProcess {
         ], env: ["PORT": "5710"])
     }
 
-    // MARK: - Extension install (CDP pipe to SLICC profile)
+    // MARK: - Guided extension install
 
-    private func installExtensionToProfile(_ browser: AppTarget) throws {
-        guard let nodePath = SliccBootstrapper.findNode() else {
-            throw LaunchError.nodeNotFound
-        }
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: nodePath)
-        proc.arguments = [
-            sliccDir + "/dist/cli/install-extension.js",
-            "--chrome-path=\(browser.executablePath)",
-            "--extension-path=\(sliccDir)/dist/extension",
-        ]
-        proc.currentDirectoryURL = URL(fileURLWithPath: sliccDir)
-        proc.standardOutput = FileHandle.nullDevice
-        proc.standardError = FileHandle.nullDevice
-        try proc.run()
-        proc.waitUntilExit()
-        if proc.terminationStatus != 0 {
-            throw LaunchError.extensionInstallFailed
-        }
-    }
-
-    // MARK: - Guided install to default Chrome
-
-    func guidedInstallToDefaultChrome() throws {
+    /// Copy extension to a stable path, open Chrome to chrome://extensions,
+    /// and copy the path to clipboard for the user to "Load unpacked".
+    func guidedInstallExtension(chromePath: String) throws {
         let stablePath = NSHomeDirectory() + "/.slicc/extension"
         let sourcePath = sliccDir + "/dist/extension"
         let fm = FileManager.default
+
+        // Copy extension to stable path
         if fm.fileExists(atPath: stablePath) {
             try fm.removeItem(atPath: stablePath)
         }
         try fm.copyItem(atPath: sourcePath, toPath: stablePath)
 
+        // Copy path to clipboard
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(stablePath, forType: .string)
 
-        if let url = URL(string: "chrome://extensions") {
-            NSWorkspace.shared.open(url)
-        }
+        // Open Chrome specifically (not the default browser) to chrome://extensions
+        // NSWorkspace can't open chrome:// URLs, so we launch Chrome directly.
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: chromePath)
+        proc.arguments = ["chrome://extensions"]
+        try proc.run()
     }
 
     // MARK: - Lifecycle
@@ -168,11 +111,9 @@ final class SliccProcess {
 
     enum LaunchError: LocalizedError {
         case nodeNotFound
-        case extensionInstallFailed
         var errorDescription: String? {
             switch self {
             case .nodeNotFound: return "Node.js not found"
-            case .extensionInstallFailed: return "Extension installation failed"
             }
         }
     }
