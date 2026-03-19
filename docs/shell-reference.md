@@ -39,6 +39,7 @@ Custom commands implemented in TypeScript and registered in just-bash.
 | **screencapture** | `screencapture-command.ts` | Capture user's screen via browser screen sharing API | `<output.png>`, `-c` (clipboard), `-v` / `--view` (agent vision) |
 | **upskill** | `upskill-command.ts` | Install skills from GitHub/ClawHub | `upskill owner/repo`, `upskill clawhub:name`, `upskill search "query"` |
 | **sprinkle** | `sprinkle-command.ts` | Manage `.shtml` sprinkle panels and inline chat UI | `sprinkle list`, `sprinkle open <name>`, `sprinkle chat '<html>'` |
+| **debug** | `debug-command.ts` | Toggle Terminal/Memory tabs in extension mode | `debug on`, `debug off`, no args = show state; extension-only (not registered in CLI) |
 | **git** | (isomorphic-git) | Full git support | `git clone`, `git commit`, `git push`, etc. |
 
 **Example usage**:

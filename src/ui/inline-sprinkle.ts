@@ -8,6 +8,8 @@
 
 import { collectThemeCSS } from './sprinkle-renderer.js';
 
+const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
+
 /** Minimal bridge script: lick-only + auto-height reporting. */
 const BRIDGE_SCRIPT = `(function() {
   window.slicc = window.bridge = {
@@ -95,6 +97,10 @@ mark{background:color-mix(in srgb,var(--s2-accent) 25%,transparent);color:inheri
 </head>
 <body class="sprinkle-inline">${content}</body></html>`;
 
+  if (isExtension) {
+    return mountInlineSprinkleExtension(container, srcdoc, onLick);
+  }
+
   const iframe = document.createElement('iframe');
   iframe.setAttribute('sandbox', 'allow-scripts');
   iframe.style.cssText = 'width:100%;border:none;overflow:hidden;display:block;';
@@ -152,7 +158,48 @@ export function hydrateInlineSprinkles(
 /** Dispose all inline sprinkle instances and clear the array. */
 export function disposeInlineSprinkles(instances: InlineSprinkleInstance[]): void {
   for (const inst of instances) {
-    inst.dispose();
+    try { inst.dispose(); } catch { /* best-effort cleanup */ }
   }
   instances.length = 0;
+}
+
+/**
+ * Extension mode: route inline sprinkle through the manifest sandbox (CSP-exempt).
+ * The sandbox creates a nested srcdoc iframe and relays messages back.
+ */
+function mountInlineSprinkleExtension(
+  container: HTMLElement,
+  srcdoc: string,
+  onLick: (action: string, data: unknown) => void,
+): InlineSprinkleInstance {
+  const iframe = document.createElement('iframe');
+  iframe.src = chrome.runtime.getURL('sprinkle-sandbox.html');
+  iframe.style.cssText = 'width:100%;border:none;overflow:hidden;display:block;';
+  container.appendChild(iframe);
+
+  const messageHandler = (event: MessageEvent) => {
+    if (event.source !== iframe.contentWindow) return;
+    const msg = event.data;
+    if (!msg?.type) return;
+
+    if (msg.type === 'inline-sprinkle-lick') {
+      onLick(msg.action, msg.data);
+    } else if (msg.type === 'inline-sprinkle-height') {
+      iframe.style.height = msg.height + 'px';
+    }
+  };
+  window.addEventListener('message', messageHandler);
+
+  iframe.addEventListener('load', () => {
+    iframe.contentWindow?.postMessage(
+      { type: 'inline-sprinkle-render', srcdoc }, '*',
+    );
+  }, { once: true });
+
+  return {
+    dispose() {
+      window.removeEventListener('message', messageHandler);
+      iframe.remove();
+    },
+  };
 }

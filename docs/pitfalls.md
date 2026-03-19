@@ -13,13 +13,15 @@ Chrome extension Manifest V3 blocks dynamic code construction on extension pages
 
 **The Solution: Sandbox Iframe**
 
-All dynamic code execution (JavaScript tool, `node -e`) routes through a sandboxed iframe (`sandbox.html`) exempt from extension CSP.
+All dynamic code execution (JavaScript tool, `node -e`) routes through a sandboxed iframe (`sandbox.html`) exempt from extension CSP. Sprinkles and inline widgets use a separate sandbox (`sprinkle-sandbox.html`).
 
 | Component | CLI Behavior | Extension Behavior |
 |-----------|--------------|-------------------|
 | **JavaScript tool** | Inline iframe with IFRAME_HTML string and constructor | Routes through `sandbox.html` via postMessage |
 | **Node command** | Direct constructor usage | Wraps user code, posts to sandbox iframe |
 | **Fetch proxy** | `/api/fetch-proxy` endpoint | Same sandbox iframe postMessage |
+| **Panel sprinkles** | Fragments: direct DOM; Full docs: srcdoc iframe | ALL: routes through `sprinkle-sandbox.html` via postMessage |
+| **Inline sprinkles** | Direct srcdoc iframe | Routes through `sprinkle-sandbox.html` via postMessage |
 
 **Code Pattern: Three-Branch Detection**
 
@@ -435,6 +437,45 @@ The service worker must only import **types** (erased at compile time) from othe
 | Core modules | `import { createLogger } from '../core/logger.js'` | **No** (pulls in dependency tree) |
 
 **Current example**: `addToSliccGroup` has an inline copy in `service-worker.ts` and a canonical version in `tab-group.ts` (imported by `debugger-client.ts` in the offscreen document, which IS an ES module).
+
+## Extension Dual-Shell Context
+
+**The Problem**
+
+In extension mode, there are **two separate WasmShell instances** running in different execution contexts:
+
+| Context | Location | Shell purpose | Window globals |
+|---------|----------|---------------|----------------|
+| **Side panel** | `src/ui/main.ts` (mainExtension) | Terminal tab — user-facing shell | Has Layout, `__slicc_debug_tabs`, DOM |
+| **Offscreen document** | `src/extension/offscreen.ts` | Agent's bash tool — LLM-driven | Has Orchestrator, no DOM/Layout |
+
+These contexts share IndexedDB (VFS, sessions) but **NOT** window globals, DOM, or Layout instances. They communicate via `chrome.runtime` messages routed through the service worker.
+
+**The Pattern: UI-Affecting Shell Commands**
+
+Shell commands that need to affect the side panel UI (e.g., `debug on` toggling tabs) must handle both contexts:
+
+1. **Direct hook** (panel context): check `window.__slicc_*` — if present, call directly
+2. **Message relay** (offscreen context): send `chrome.runtime.sendMessage({ source: 'offscreen', payload: { type: '...', ... } })` → service worker routes to panel → `OffscreenClient` handles in `setupMessageListener()`
+
+```typescript
+// Pattern: try direct hook, fall back to message relay
+const toggle = (window as any).__slicc_debug_tabs;
+if (toggle) {
+  toggle(show); // Running in panel context
+} else {
+  chrome.runtime.sendMessage({ source: 'offscreen', payload: { type: 'debug-tabs', show } });
+}
+```
+
+**Current example**: `debug-command.ts` uses this pattern. Panel registers hook in `main.ts`; `offscreen-client.ts` handles the relay message.
+
+**Related Files**
+- `src/shell/supplemental-commands/debug-command.ts` (dual-context command, tries hook then relay)
+- `src/ui/main.ts` line 187 (registers `__slicc_debug_tabs` hook)
+- `src/ui/offscreen-client.ts` line 235 (relays `debug-tabs` message to hook)
+- `src/ui/layout.ts` `setDebugTabs()` (UI state — adds/removes tabs dynamically)
+- `src/ui/tabbed-ui.ts` `setHiddenTabs()` (persistence — saves to localStorage)
 
 ## Dual-Mode Testing Checklist
 

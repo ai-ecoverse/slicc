@@ -37,7 +37,7 @@ import {
   getProviderConfig,
   clearAllSettings,
 } from './provider-settings.js';
-import { EXTENSION_TAB_SPECS, type ExtensionTabId } from './tabbed-ui.js';
+import { EXTENSION_TAB_SPECS, setHiddenTabs, type ExtensionTabId } from './tabbed-ui.js';
 import { TabZone } from './tab-zone.js';
 import { PanelRegistry } from './panel-registry.js';
 import { showSprinklePicker } from './sprinkle-picker.js';
@@ -82,6 +82,8 @@ export class Layout {
   // Tabbed-layout elements (extension only)
   private tabContainers = new Map<TabId, HTMLElement>();
   private activeTab: TabId = 'chat';
+  /** Pre-created containers for debug tabs (terminal, memory) — always created, tab added on demand. */
+  private debugTabContainers: { terminal: HTMLElement; memory: HTMLElement } | null = null;
   private actionsEl!: HTMLElement;
 
   // Scoop switcher (extension mode)
@@ -164,6 +166,28 @@ export class Layout {
   openTerminal(): void {
     if (this.isExtension) return;
     this.drawerZone.activateTab('terminal');
+  }
+
+  /** Show or hide debug tabs (terminal, memory) in extension mode. */
+  setDebugTabs(show: boolean): void {
+    if (!this.isExtension || !this.debugTabContainers) return;
+
+    const DEBUG_TABS = [
+      { id: 'terminal' as const, label: 'Terminal', container: this.debugTabContainers.terminal, onActivate: () => this.panels?.terminal?.refit?.() },
+      { id: 'memory' as const, label: 'Memory', container: this.debugTabContainers.memory, onActivate: () => this.panels?.memory?.refresh() },
+    ];
+
+    for (const { id, label, container, onActivate } of DEBUG_TABS) {
+      if (show && !this.extensionZone.hasTab(id)) {
+        this.extensionZone.addTab({ id, label, closable: false, element: container, onActivate });
+        this.tabContainers.set(id, container);
+      } else if (!show && this.extensionZone.hasTab(id)) {
+        this.extensionZone.removeTab(id);
+        this.tabContainers.delete(id);
+      }
+    }
+
+    setHiddenTabs(show ? [] : ['terminal', 'memory']);
   }
 
   // ── Shared: Header ──────────────────────────────────────────────────
@@ -755,6 +779,9 @@ export class Layout {
       // Keep tabContainers in sync for backward compat
       this.tabContainers.set(id, container);
     }
+
+    // Store debug tab containers for dynamic add/remove
+    this.debugTabContainers = { terminal: terminalContainer, memory: memoryContainer };
 
     this.extensionZone.enableAddButton();
 

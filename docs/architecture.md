@@ -146,6 +146,7 @@
 | `oauth-token-command.ts` | `oauth-token` — retrieve OAuth access tokens for configured providers with auto-login |
 | `playwright-command.ts` | `playwright-cli` / `playwright` / `puppeteer` — browser automation shell commands (navigate, snapshot, click, screenshot, cookies, HAR recording) |
 | `sprinkle-command.ts` | `sprinkle` — list, open, close, and refresh `.shtml` sprinkle panels from the agent |
+| `debug-command.ts` | `debug` — toggle Terminal/Memory tabs in extension mode (extension-only, uses dual-context hook+relay pattern) |
 | `magick-wasm.ts` | Shared ImageMagick WASM initialization module for dual-mode (CLI/browser CDN vs extension bundled) image processing |
 
 ### src/skills/ — Skill Package Manager
@@ -219,7 +220,8 @@
 | `tab-zone.ts` | Generic reusable tab bar + content area manager for a single zone |
 | `sprinkle-manager.ts` | Registry of available and open `.shtml` sprinkle panels with placement and lifecycle management |
 | `sprinkle-discovery.ts` | Scans VirtualFS for `.shtml` sprinkle files and builds a map of names to metadata (path, title) |
-| `sprinkle-renderer.ts` | Loads `.shtml` content from VFS and renders into DOM; uses sandbox iframe in extension mode for CSP compliance |
+| `sprinkle-renderer.ts` | Loads `.shtml` content from VFS and renders into DOM. CLI: direct DOM injection (fragments) or srcdoc iframe (full docs). Extension: ALL content routes through `sprinkle-sandbox.html` (CSP-exempt) |
+| `inline-sprinkle.ts` | Hydrates ` ```shtml ` code blocks in chat into sandboxed iframes. CLI: direct srcdoc. Extension: routes through `sprinkle-sandbox.html` |
 | `sprinkle-bridge.ts` | API available to `.shtml` sprinkle scripts for communicating with the agent via lick events and state persistence |
 | `sprinkle-picker.ts` | Popup menu listing closed panels and unopened sprinkles for opening in a zone |
 | `index.ts` | Re-exports |
@@ -306,6 +308,8 @@ The Chrome extension uses a three-layer design to keep the agent engine alive ac
 - `slicc-groups` DB: Orchestrator routing data (scoops, tasks, webhooks, crontasks)
 
 **CDP Proxy:** Offscreen documents can't call `chrome.debugger` directly. Instead, offscreen sends `CdpProxyMessage` through the service worker, which translates to `chrome.debugger` commands and routes results back.
+
+**Dual Shell Context:** Both the side panel and offscreen document run their own WasmShell instance. The panel shell powers the Terminal tab; the offscreen shell executes agent bash tool calls. They share VFS via IndexedDB but NOT window globals or DOM. Shell commands that affect the panel UI (e.g., `debug on`) must use the dual-context pattern: try `window.__slicc_*` hook first (panel), fall back to `chrome.runtime.sendMessage` relay (offscreen → panel). See `docs/pitfalls.md` "Extension Dual-Shell Context".
 
 ## Data Flow Diagrams
 
@@ -515,7 +519,7 @@ Scoop removal / app clear
 | I need to... | Modify |
 |---|---|
 | Add/change sprinkle discovery | `src/ui/sprinkle-discovery.ts` |
-| Change sprinkle rendering or CSP handling | `src/ui/sprinkle-renderer.ts` |
+| Change sprinkle rendering or CSP handling | `src/ui/sprinkle-renderer.ts`, `src/ui/inline-sprinkle.ts`, `sprinkle-sandbox.html` |
 | Change the sprinkle↔agent bridge API | `src/ui/sprinkle-bridge.ts` |
 | Change sprinkle lifecycle/placement | `src/ui/sprinkle-manager.ts` |
 | Add sprinkle picker UI features | `src/ui/sprinkle-picker.ts` |
