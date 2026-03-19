@@ -21,6 +21,7 @@
  */
 
 export { applySkill } from './apply.js';
+export { discoverSkillCandidates, resolveSkillNameCollisions } from './catalog.js';
 export { discoverSkills, getSkillInfo, readSkillInstructions } from './discover.js';
 export { installSkillFromDrop } from './install-from-drop.js';
 export { uninstallSkill } from './uninstall.js';
@@ -54,3 +55,8 @@ export type {
   UninstallResult,
   DiscoveredSkill,
 } from './types.js';
+export type {
+  SkillDiscoverySource,
+  DiscoveredSkillCandidate,
+  SkillNameCollision,
+} from './catalog.js';
