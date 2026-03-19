@@ -87,6 +87,17 @@ const testScoop: RegisteredScoop = {
   addedAt: new Date().toISOString(),
 };
 
+const cone: RegisteredScoop = {
+  jid: 'cone_main_1',
+  name: 'Main',
+  folder: 'main',
+  isCone: true,
+  type: 'cone',
+  requiresTrigger: false,
+  assistantLabel: 'sliccy',
+  addedAt: new Date().toISOString(),
+};
+
 function createMockCallbacks() {
   return {
     onResponse: vi.fn(),
@@ -145,5 +156,45 @@ describe('ScoopContext active tool surface', () => {
     const systemPrompt = mocks.agentCtorCalls[0].initialState.systemPrompt;
     expect(systemPrompt).toContain('Use shell commands like `rg`, `grep`, and `find` through the bash tool for search');
     expect(systemPrompt).not.toContain('Search tools (grep, find)');
+  });
+
+  it('includes discovered compatibility skill paths in scoop system prompts', async () => {
+    mocks.loadSkills.mockResolvedValueOnce([
+      {
+        metadata: { name: 'compat-skill', description: 'Compatibility skill' },
+        content: 'Use this skill.',
+        path: '/repo/.claude/skills/compat-skill/SKILL.md',
+      },
+    ]);
+    mocks.formatSkillsForPrompt.mockImplementationOnce((skills: Array<{ path: string }>) =>
+      `AVAILABLE SKILLS\n${skills.map((skill) => `Path: ${skill.path}`).join('\n')}`,
+    );
+
+    const ctx = new ScoopContext(testScoop, createMockCallbacks(), createMockFs() as any);
+    await ctx.init();
+
+    expect(mocks.loadSkills).toHaveBeenCalledWith(expect.anything(), '/scoops/test-scoop/workspace/skills');
+    const systemPrompt = mocks.agentCtorCalls[0].initialState.systemPrompt;
+    expect(systemPrompt).toContain('/repo/.claude/skills/compat-skill/SKILL.md');
+  });
+
+  it('includes discovered compatibility skill paths in cone system prompts', async () => {
+    mocks.loadSkills.mockResolvedValueOnce([
+      {
+        metadata: { name: 'agent-skill', description: 'Agent compatibility skill' },
+        content: 'Use this skill.',
+        path: '/repo/.agents/skills/agent-skill/SKILL.md',
+      },
+    ]);
+    mocks.formatSkillsForPrompt.mockImplementationOnce((skills: Array<{ path: string }>) =>
+      `AVAILABLE SKILLS\n${skills.map((skill) => `Path: ${skill.path}`).join('\n')}`,
+    );
+
+    const ctx = new ScoopContext(cone, createMockCallbacks(), createMockFs() as any);
+    await ctx.init();
+
+    expect(mocks.loadSkills).toHaveBeenCalledWith(expect.anything(), '/workspace/skills');
+    const systemPrompt = mocks.agentCtorCalls[0].initialState.systemPrompt;
+    expect(systemPrompt).toContain('/repo/.agents/skills/agent-skill/SKILL.md');
   });
 });

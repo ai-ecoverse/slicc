@@ -23,7 +23,7 @@
       <dt><code>commands</code></dt>
       <dd>List all shell commands</dd>
       <dt><code>skill list</code></dt>
-      <dd>Show installed skills</dd>
+      <dd>Show discoverable skills</dd>
       <dt><code>sprinkle open &lt;name&gt;</code></dt>
       <dd>Open a sprinkle panel</dd>
       <dt><code>git clone &lt;url&gt;</code></dt>

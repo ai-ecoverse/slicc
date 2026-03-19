@@ -2,7 +2,7 @@
  * Tests for the skills system — frontmatter parsing, loading, and prompt formatting.
  */
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import 'fake-indexeddb/auto';
 import { VirtualFS } from '../fs/virtual-fs.js';
 import { loadSkills, formatSkillsForPrompt } from './skills.js';
@@ -10,7 +10,7 @@ import { loadSkills, formatSkillsForPrompt } from './skills.js';
 describe('Skills', () => {
   let vfs: VirtualFS;
 
-  beforeAll(async () => {
+  beforeEach(async () => {
     vfs = await VirtualFS.create({ dbName: 'test-skills', wipe: true });
   });
 
@@ -33,6 +33,7 @@ Use the playwright-cli shell command via bash to navigate pages.
       expect(skills[0].metadata.description).toBe('Browse the web');
       expect(skills[0].metadata.allowedTools).toEqual(['bash']);
       expect(skills[0].content).toContain('# Browser Skill');
+      expect(skills[0].path).toBe('/skills/browser/SKILL.md');
     });
 
     it('loads a standalone .md skill file', async () => {
@@ -75,6 +76,58 @@ Write clean code.
       expect(skills).toHaveLength(2);
       const names = skills.map(s => s.metadata.name).sort();
       expect(names).toEqual(['alpha', 'beta']);
+    });
+
+    it('loads recursively discovered compatibility skills without frontmatter', async () => {
+      await vfs.mkdir('/repo/.claude/skills/compat-skill', { recursive: true });
+      await vfs.writeFile(
+        '/repo/.claude/skills/compat-skill/SKILL.md',
+        '# Compat Skill\n\nUse this compatibility skill.',
+      );
+
+      const skills = await loadSkills(vfs, '/workspace/skills');
+
+      expect(skills).toHaveLength(1);
+      expect(skills[0]).toMatchObject({
+        metadata: {
+          name: 'compat-skill',
+          description: 'Skill from compat-skill',
+        },
+        path: '/repo/.claude/skills/compat-skill/SKILL.md',
+      });
+      expect(skills[0].content).toContain('Use this compatibility skill.');
+    });
+
+    it('uses unified discovery precedence for duplicate discovered skill names', async () => {
+      await vfs.mkdir('/workspace/skills/shared-skill', { recursive: true });
+      await vfs.writeFile('/workspace/skills/shared-skill/SKILL.md', '# Native');
+
+      await vfs.mkdir('/repo/.agents/skills/shared-skill', { recursive: true });
+      await vfs.writeFile('/repo/.agents/skills/shared-skill/SKILL.md', '# Agent');
+
+      await vfs.mkdir('/repo/.claude/skills/shared-skill', { recursive: true });
+      await vfs.writeFile('/repo/.claude/skills/shared-skill/SKILL.md', '# Claude');
+
+      const skills = await loadSkills(vfs, '/workspace/skills');
+      const sharedSkills = skills.filter((skill) => skill.metadata.name === 'shared-skill');
+
+      expect(sharedSkills).toHaveLength(1);
+      expect(sharedSkills[0].path).toBe('/workspace/skills/shared-skill/SKILL.md');
+      expect(sharedSkills[0].content).toContain('# Native');
+    });
+
+    it('preserves standalone native markdown skills alongside discovered compatibility skills', async () => {
+      await vfs.mkdir('/workspace/skills', { recursive: true });
+      await vfs.writeFile('/workspace/skills/legacy.md', 'Legacy instructions.');
+
+      await vfs.mkdir('/repo/.agents/skills/compat-skill', { recursive: true });
+      await vfs.writeFile('/repo/.agents/skills/compat-skill/SKILL.md', '# Compat');
+
+      const skills = await loadSkills(vfs, '/workspace/skills');
+      const names = skills.map((skill) => skill.metadata.name).sort();
+
+      expect(names).toEqual(['compat-skill', 'legacy']);
+      expect(skills.find((skill) => skill.metadata.name === 'legacy')?.path).toBe('/workspace/skills/legacy.md');
     });
 
     it('skips subdirectories without SKILL.md', async () => {

@@ -55,6 +55,22 @@ describe('discoverSkillCandidates', () => {
       '/z-last/.agents/skills/duplicate',
     ]);
   });
+
+  it('continues scanning until later reachable compatibility roots are visited', async () => {
+    for (let index = 0; index < 10_000; index += 1) {
+      await fs.mkdir(`/node-${index.toString().padStart(5, '0')}`, { recursive: true });
+    }
+
+    await fs.mkdir('/zz-after-cap/.claude/skills/late-skill', { recursive: true });
+    await fs.writeFile('/zz-after-cap/.claude/skills/late-skill/SKILL.md', '# late');
+
+    const candidates = await discoverSkillCandidates(fs);
+
+    expect(candidates).toContainEqual(expect.objectContaining({
+      source: 'claude',
+      path: '/zz-after-cap/.claude/skills/late-skill',
+    }));
+  });
 });
 
 describe('resolveSkillNameCollisions', () => {

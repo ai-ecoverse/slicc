@@ -29,7 +29,7 @@ A browser-based coding agent that runs as a **Chrome extension**, with a thin **
 - :globe_with_meridians: **Networking** — curl and fetch support with binary-safe downloads
 - :wrench: **JavaScript Tool** — sandboxed JS execution with VFS bridge and persistent context
 - :scroll: **JSH Scripts** — `.jsh` files anywhere on the VFS are auto-discovered as shell commands. Skills can ship executable scripts alongside `SKILL.md`. Scripts get Node-like globals (`process`, `console`, `fs`, `exec`) and work in both CLI and extension mode
-- :package: **Drag-and-Drop Skill Imports** — drop a `.skill` archive anywhere in the window to unpack it into `/workspace/skills/{name}` with a visual overlay, path-safety checks, and toast feedback
+- :package: **Drag-and-Drop Skill Imports** — drop a `.skill` archive anywhere in the window to unpack it into `/workspace/skills/{name}` as an install-managed native skill, with a visual overlay, path-safety checks, and toast feedback
 - :page_facing_up: **AEM Commands** — AEM Edge Delivery Services via `.jsh` skill (`aem list`, `aem get`, `aem put`, `aem preview`, `aem publish`, `aem upload`). Accepts EDS URLs, auth via `oauth-token adobe`
 - :key: **Multi-Provider Auth** — Anthropic (direct), Azure AI Foundry, AWS Bedrock, Adobe (IMS OAuth), and custom OAuth providers (corporate proxies, SSO) with segmented control
 - :zap: **Real-Time Streaming** — responses stream token-by-token as Claude thinks
@@ -101,7 +101,7 @@ SLICC takes this literally: the virtual filesystem, the shell, git, the agent lo
 
 3. **If you think the server is minimal enough, it's still too big** — Every line of server code is a line that doesn't work in the extension. The extension float has zero server. That's the target.
 
-4. **Everything should be a skill** — New capabilities are `SKILL.md` files written in natural language, installed through `upskill` and [ClawHub](https://clawhub.io). The core stays minimal. Skills follow the [Agent Skills](https://agentskills.io) open standard. Ship a few defaults, let the ecosystem grow.
+4. **Everything should be a skill** — New capabilities are `SKILL.md` files written in natural language. Native skills live in `/workspace/skills`, can be installed through `upskill` and [ClawHub](https://clawhub.io), and remain install-managed there. SLICC also discovers accessible compatibility skills from `.agents/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md` anywhere in the VFS without auto-mutating those external directories. The core stays minimal. Skills follow the [Agent Skills](https://agentskills.io) open standard. Ship a few defaults, let the ecosystem grow.
 
 | Skills | Capabilities |
 |--------|-------------|
