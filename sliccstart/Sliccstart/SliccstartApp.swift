@@ -91,8 +91,7 @@ struct SliccstartApp: App {
                     )
                 }
             }
-            .frame(width: 420)
-            .frame(minHeight: 400)
+            .frame(width: 340)
             .task { await initialize() }
             .onDisappear { sliccProcess.stop() }
             .alert("Sliccstart", isPresented: $showAlert) {
@@ -101,8 +100,9 @@ struct SliccstartApp: App {
                 Text(alertMessage ?? "")
             }
         }
+        .defaultSize(width: 340, height: 100)
         .windowStyle(.titleBar)
-        .windowResizability(.contentMinSize)
+        .windowResizability(.contentSize)
     }
 
     private func initialize() async {
