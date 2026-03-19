@@ -14,20 +14,6 @@ struct SliccstartApp: App {
     init() {
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
-
-        if let iconPath = Self.findSliccIcon() {
-            NSApplication.shared.applicationIconImage = NSImage(contentsOfFile: iconPath)
-        }
-    }
-
-    private static func findSliccIcon() -> String? {
-        var dir = Bundle.main.bundlePath
-        for _ in 0..<6 {
-            dir = (dir as NSString).deletingLastPathComponent
-            let candidate = dir + "/logos/slicc-favicon-128.png"
-            if FileManager.default.fileExists(atPath: candidate) { return candidate }
-        }
-        return nil
     }
 
     var body: some Scene {
