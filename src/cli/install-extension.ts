@@ -1,6 +1,6 @@
-import { existsSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { spawn } from 'child_process';
-import { resolve } from 'path';
+import { resolve, join } from 'path';
 import type { Writable, Readable } from 'stream';
 
 /**
@@ -197,8 +197,49 @@ export async function installExtension(options: {
 
     return extensionId;
   } finally {
-    // Kill Chrome process
+    // Kill Chrome and wait for it to fully exit and flush prefs to disk
     child.kill();
+    await new Promise<void>((resolveExit) => {
+      child.on('exit', () => resolveExit());
+      setTimeout(resolveExit, 5000);
+    });
+    // Extra delay for Chrome's async pref flush after exit signal
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
+
+/**
+ * Enable developer mode in the Chrome profile Preferences so unpacked
+ * extensions stay active when Chrome restarts without debug flags.
+ */
+function enableDeveloperMode(): void {
+  const homeDir = process.env['HOME'] ?? process.env['USERPROFILE'] ?? '/tmp';
+  const prefsPath = join(homeDir, '.slicc', 'browser-coding-agent-chrome', 'Default', 'Preferences');
+
+  try {
+    let prefs: Record<string, unknown> = {};
+    if (existsSync(prefsPath)) {
+      prefs = JSON.parse(readFileSync(prefsPath, 'utf8')) as Record<string, unknown>;
+    } else {
+      // Ensure directory exists
+      mkdirSync(join(homeDir, '.slicc', 'browser-coding-agent-chrome', 'Default'), { recursive: true });
+    }
+
+    // Set extensions.ui.developer_mode = true
+    if (!prefs.extensions || typeof prefs.extensions !== 'object') {
+      prefs.extensions = {};
+    }
+    const ext = prefs.extensions as Record<string, unknown>;
+    if (!ext.ui || typeof ext.ui !== 'object') {
+      ext.ui = {};
+    }
+    (ext.ui as Record<string, unknown>).developer_mode = true;
+
+    writeFileSync(prefsPath, JSON.stringify(prefs, null, 2), 'utf8');
+    console.log('Developer mode enabled in profile preferences.');
+  } catch (err) {
+    // Non-fatal — developer mode can be enabled manually
+    console.warn('Warning: could not enable developer mode in preferences:', err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -241,6 +282,11 @@ async function main(): Promise<void> {
       extensionPath,
     });
     console.log(`Extension installed successfully. ID: ${extensionId}`);
+
+    // Enable developer mode in the profile so unpacked extensions stay active.
+    // Must happen after Chrome has fully exited and written its prefs.
+    enableDeveloperMode();
+    console.log('Developer mode enabled.');
     process.exit(0);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
