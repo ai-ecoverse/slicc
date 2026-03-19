@@ -42,6 +42,7 @@ import {
   getWebhookUrl,
   isElectronOverlaySetTabMessage,
   resolveUiRuntimeMode,
+  shouldUseRuntimeModeTrayDefaults,
 } from './runtime-mode.js';
 import { setConnectedFollowersGetter, setTrayResetter } from '../shell/supplemental-commands/host-command.js';
 import { setRsyncSendFsRequest } from '../shell/supplemental-commands/rsync-command.js';
@@ -1318,14 +1319,19 @@ async function main(): Promise<void> {
   }
 
   if (runtimeMode === 'standalone' || runtimeMode === 'electron-overlay') {
+    const runtimeConfig = await fetchRuntimeConfig();
+    const runtimeDefaultWorkerBaseUrl = shouldUseRuntimeModeTrayDefaults(runtimeMode, runtimeConfig !== null)
+      ? (__DEV__
+        ? DEFAULT_STAGING_TRAY_WORKER_BASE_URL
+        : DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL)
+      : null;
+
     const trayRuntimeConfig = await resolveTrayRuntimeConfig({
       locationHref: window.location.href,
       storage: window.localStorage,
       envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
-      defaultWorkerBaseUrl: __DEV__
-        ? DEFAULT_STAGING_TRAY_WORKER_BASE_URL
-        : DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
-      runtimeConfigFetcher: () => fetchRuntimeConfig(),
+      defaultWorkerBaseUrl: runtimeDefaultWorkerBaseUrl,
+      runtimeConfigFetcher: async () => runtimeConfig,
     });
 
     // Start follower join from a joinUrl. Reusable — called at startup
