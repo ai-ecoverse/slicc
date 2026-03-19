@@ -42,8 +42,8 @@
     "package:release": "node dist/cli/release-package.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "format": "prettier --write \"src/**/*.ts\"",
-    "format:check": "prettier --check \"src/**/*.ts\""
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "@adobe/helix-rum-js": "^2.14.2",

@@ -4,3 +4,8 @@ node_modules/
 *.min.css
 package-lock.json
 artifacts/
+# HTML files with embedded content that shouldn't be reformatted
+index.html
+sandbox.html
+sprinkle-sandbox.html
+tool-ui-sandbox.html

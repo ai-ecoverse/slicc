@@ -39,6 +39,7 @@ The sprinkle appears in the [+] sprinkle picker alongside other available sprink
 **Ready** — Default state. Shows the configured repo name (e.g., `adobe/aem-boilerplate`) as a small indicator, a prominent "Migrate This Page" button, and a hint that it targets the active browser tab.
 
 **Migrating** — After clicking. The button area transforms into a phase tracker:
+
 - Four phases: Extraction, Decomposition, Generating Blocks, Assembly
 - Each phase shows: checkmark (done), spinner (running), or circle (pending)
 - Running phase includes a sub-status line (e.g., "hero, cards (2/5)")
@@ -52,19 +53,23 @@ The sprinkle appears in the [+] sprinkle picker alongside other available sprink
 ### Sprinkle JavaScript
 
 On load:
+
 - `slicc.readFile("/shared/migrate-config.json")` → parse JSON → display repo name
 - `slicc.getState()` → restore last known state (handles side panel close/reopen during migration)
 
 On click:
+
 - Set state to "migrating" locally (disables button, prevents double-trigger)
 - `slicc.lick({action: "migrate-page"})`
 
 On update (`slicc.on('update', callback)`):
+
 - Receives progress payloads from the cone
 - Updates phase tracker UI
 - Persists state via `slicc.setState()` for side panel recovery
 
 On load recovery:
+
 - `slicc.getState()` returns the last state persisted by the update handler
 - If the panel was closed mid-migration, `sprinkle send` calls during that window are silently dropped (fire-and-forget). The sprinkle also reads `/shared/migrate-config.json` which includes a `currentMigration` field written by the cone at each phase transition. This is the authoritative recovery source.
 
@@ -150,15 +155,15 @@ Cone sends `{phase: "done", previewUrl: "..."}`. Sprinkle transitions to Done st
 
 ### New files
 
-| File | Purpose |
-|------|---------|
+| File                                                            | Purpose                                                              |
+| --------------------------------------------------------------- | -------------------------------------------------------------------- |
 | `src/defaults/shared/sprinkles/migrate-page/migrate-page.shtml` | The sprinkle (HTML + JS for 4 states: ready, migrating, done, error) |
-| `src/defaults/shared/migrate-config.json` | Default workspace config with `adobe/aem-boilerplate` |
+| `src/defaults/shared/migrate-config.json`                       | Default workspace config with `adobe/aem-boilerplate`                |
 
 ### Modified files
 
-| File | Change |
-|------|--------|
+| File                                                  | Change                                                                                                                                                                                                                                                                                                                            |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/defaults/workspace/skills/migrate-page/SKILL.md` | Add "Sprinkle Trigger" section: (1) carve-out overriding Rules 2/5 to authorize cone-direct lick handling and `sprinkle send`; (2) instructions to detect active tab, read config, start migration; (3) `sprinkle send` commands at each phase transition; (4) `write_file` to update `currentMigration` in config at each phase. |
 
 ### No changes needed
@@ -170,23 +175,23 @@ Cone sends `{phase: "done", previewUrl: "..."}`. Sprinkle transitions to Done st
 
 ## Edge Cases
 
-| Scenario | Behavior |
-|----------|----------|
-| No active tab (user on `chrome://` or new tab) | Cone detects no HTTP URL from `playwright-cli tab-list`. Sends `{phase: "error", message: "No page to migrate — navigate to a webpage first"}`. Sprinkle shows error, resets to Ready. |
-| Migration already running | Sprinkle tracks `migrating` state locally. Button disabled while in progress. Prevents double-trigger. |
-| Side panel closed mid-migration | Migration continues in offscreen. `sprinkle send` calls during the closed window are silently dropped (fire-and-forget). On reopen, sprinkle reads `currentMigration` from `/shared/migrate-config.json` — this is the authoritative recovery source since the cone writes it at every phase transition. If `currentMigration` is `null`, migration finished or errored while closed. |
-| Error mid-migration | Cone sends `{phase: "error", message: "..."}`. Sprinkle shows error with message and "Try Again" button. |
-| User wants different repo | Asks in chat. Cone updates `/shared/migrate-config.json`. On next sprinkle load, new repo is shown. |
+| Scenario                                       | Behavior                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No active tab (user on `chrome://` or new tab) | Cone detects no HTTP URL from `playwright-cli tab-list`. Sends `{phase: "error", message: "No page to migrate — navigate to a webpage first"}`. Sprinkle shows error, resets to Ready.                                                                                                                                                                                                |
+| Migration already running                      | Sprinkle tracks `migrating` state locally. Button disabled while in progress. Prevents double-trigger.                                                                                                                                                                                                                                                                                |
+| Side panel closed mid-migration                | Migration continues in offscreen. `sprinkle send` calls during the closed window are silently dropped (fire-and-forget). On reopen, sprinkle reads `currentMigration` from `/shared/migrate-config.json` — this is the authoritative recovery source since the cone writes it at every phase transition. If `currentMigration` is `null`, migration finished or errored while closed. |
+| Error mid-migration                            | Cone sends `{phase: "error", message: "..."}`. Sprinkle shows error with message and "Try Again" button.                                                                                                                                                                                                                                                                              |
+| User wants different repo                      | Asks in chat. Cone updates `/shared/migrate-config.json`. On next sprinkle load, new repo is shown.                                                                                                                                                                                                                                                                                   |
 
 ## Testing
 
-| Test | Approach |
-|------|----------|
-| Sprinkle state transitions | Unit: feed mock progress payloads to the update handler, verify DOM transitions (ready → migrating → done, ready → error → ready) |
-| Config read on load | Unit: mock `slicc.readFile()` returning valid config / malformed JSON, verify repo indicator display |
-| Lick event payload | Integration: verify `slicc.lick({action: "migrate-page"})` produces the expected lick event shape at the cone |
-| Progress display | Unit: each progress payload renders the correct phase as done/running/pending with correct detail text |
-| Extension sandbox rendering | Manual: load extension, open sprinkle, verify it renders in sandbox iframe with theme CSS |
+| Test                        | Approach                                                                                                                          |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Sprinkle state transitions  | Unit: feed mock progress payloads to the update handler, verify DOM transitions (ready → migrating → done, ready → error → ready) |
+| Config read on load         | Unit: mock `slicc.readFile()` returning valid config / malformed JSON, verify repo indicator display                              |
+| Lick event payload          | Integration: verify `slicc.lick({action: "migrate-page"})` produces the expected lick event shape at the cone                     |
+| Progress display            | Unit: each progress payload renders the correct phase as done/running/pending with correct detail text                            |
+| Extension sandbox rendering | Manual: load extension, open sprinkle, verify it renders in sandbox iframe with theme CSS                                         |
 
 ## Out of Scope (v1)
 

@@ -11,19 +11,23 @@ allowed-tools: bash
 Before using this skill, you need the BlueBubbles server URL and password.
 
 **Ask the user:**
+
 1. "What is your BlueBubbles server URL?" (default: `http://localhost:1234`)
 2. "What is your BlueBubbles password?"
 
 **Store in memory** using `update_global_memory`:
+
 ```
 bluebubbles_url: http://localhost:1234
 bluebubbles_password: <user's password>
 ```
 
 **Test the connection:**
+
 ```bash
 curl -s "http://localhost:1234/api/v1/server/info?password=PASSWORD" | jq '.status'
 ```
+
 If this returns `200`, the connection works.
 
 ## Authentication
@@ -49,6 +53,7 @@ curl -s --max-time 5 -X POST "SERVER_URL/api/v1/message/text?password=PASSWORD" 
 ```
 
 **Required Parameters:**
+
 - `chatGuid`: Chat identifier (see Chat GUID Format below)
 - `message`: Text content to send
 - `tempGuid`: **Required** - A unique temporary ID. Use `temp-$(date +%s)`
@@ -59,13 +64,14 @@ curl -s --max-time 5 -X POST "SERVER_URL/api/v1/message/text?password=PASSWORD" 
 
 There are THREE different GUID prefixes with different meanings:
 
-| Prefix | Meaning | Use Case |
-|--------|---------|----------|
-| `iMessage;-;` | Direct message format | **Use this to SEND messages** to a phone/email |
-| `any;-;` | Existing 1:1 chat | Returned by chat queries for existing conversations |
-| `any;+;` | **Group chat** | Multiple participants - be careful! |
+| Prefix        | Meaning               | Use Case                                            |
+| ------------- | --------------------- | --------------------------------------------------- |
+| `iMessage;-;` | Direct message format | **Use this to SEND messages** to a phone/email      |
+| `any;-;`      | Existing 1:1 chat     | Returned by chat queries for existing conversations |
+| `any;+;`      | **Group chat**        | Multiple participants - be careful!                 |
 
 **To send a direct message to someone**: Always use `iMessage;-;address` format:
+
 - Phone: `iMessage;-;+1234567890` (include country code)
 - Email: `iMessage;-;user@example.com`
 
@@ -83,6 +89,7 @@ curl -s "SERVER_URL/api/v1/contact?password=PASSWORD" \
 ## Find Existing Chats with a Contact
 
 **Step 1**: Find chats containing a specific address:
+
 ```bash
 curl -s -X POST "SERVER_URL/api/v1/chat/query?password=PASSWORD" \
   -H "Content-Type: application/json" \
@@ -90,6 +97,7 @@ curl -s -X POST "SERVER_URL/api/v1/chat/query?password=PASSWORD" \
 ```
 
 **Step 2**: Filter to ONLY direct chats (1 participant):
+
 ```bash
 curl -s -X POST "SERVER_URL/api/v1/chat/query?password=PASSWORD" \
   -H "Content-Type: application/json" \
@@ -101,6 +109,7 @@ curl -s -X POST "SERVER_URL/api/v1/chat/query?password=PASSWORD" \
 ## Distinguish Direct vs Group Chats
 
 Check the participant count before sending:
+
 ```bash
 # This returns group chats (2+ participants) - DON'T send personal messages here!
 curl -s -X POST "SERVER_URL/api/v1/chat/query?password=PASSWORD" \
@@ -119,6 +128,7 @@ curl -s -X POST "SERVER_URL/api/v1/message/query?password=PASSWORD" \
 ## Get Messages from a Specific Chat
 
 Use the `chatGuid` parameter in message query:
+
 ```bash
 curl -s -X POST "SERVER_URL/api/v1/message/query?password=PASSWORD" \
   -H "Content-Type: application/json" \
@@ -131,6 +141,7 @@ curl -s -X POST "SERVER_URL/api/v1/message/query?password=PASSWORD" \
 ## Verify Message Was Sent
 
 After sending (even if timed out), check if message appears:
+
 ```bash
 curl -s -X POST "SERVER_URL/api/v1/message/query?password=PASSWORD" \
   -H "Content-Type: application/json" \
