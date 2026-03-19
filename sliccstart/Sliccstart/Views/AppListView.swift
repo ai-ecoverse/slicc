@@ -3,7 +3,8 @@ import SwiftUI
 struct AppListView: View {
     let targets: [AppTarget]
     @Bindable var sliccProcess: SliccProcess
-    let onLaunchBrowser: (AppTarget) -> Void
+    let onLaunchStandalone: (AppTarget) -> Void
+    let onLaunchWithExtension: (AppTarget) -> Void
     let onLaunchElectron: (AppTarget) -> Void
     let onGuidedInstall: () -> Void
     let onUpdate: () -> Void
@@ -18,6 +19,7 @@ struct AppListView: View {
             Divider()
 
             List {
+                // Browsers — standalone mode (throwaway profile)
                 let browsers = targets.filter { $0.type == .chromiumBrowser }
                 if !browsers.isEmpty {
                     Section {
@@ -25,39 +27,42 @@ struct AppListView: View {
                             AppRow(
                                 target: target,
                                 isRunning: sliccProcess.target?.id == target.id && sliccProcess.isRunning,
-                                onLaunch: { onLaunchBrowser(target) }
+                                onLaunch: { onLaunchStandalone(target) }
                             )
                         }
                     } header: {
                         Text("Browsers")
                     } footer: {
-                        Text("Opens with a SLICC profile. Extension auto-installs on first launch.")
+                        Text("Standalone mode — opens in a temporary profile.")
                             .font(.caption2)
                     }
                 }
 
-                let electronApps = targets.filter { $0.type == .electronApp }
-                if !electronApps.isEmpty {
+                // SLICC Extension — persistent profile + guided install
+                let chromeTarget = targets.first { $0.type == .chromiumBrowser && $0.name.contains("Chrome") }
+                if let chrome = chromeTarget {
                     Section {
-                        ForEach(electronApps) { target in
-                            AppRow(
-                                target: target,
-                                isRunning: sliccProcess.target?.id == target.id && sliccProcess.isRunning,
-                                onLaunch: { onLaunchElectron(target) }
-                            )
+                        // Launch with SLICC profile
+                        Button { onLaunchWithExtension(chrome) } label: {
+                            HStack(spacing: 12) {
+                                Image(nsImage: chrome.icon)
+                                    .resizable().frame(width: 32, height: 32)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Launch with Extension")
+                                        .font(.body)
+                                    Text("SLICC profile — extension auto-installs on first run")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if sliccProcess.target?.id == chrome.id && sliccProcess.isRunning {
+                                    Circle().fill(.green).frame(width: 8, height: 8)
+                                }
+                            }
                         }
-                    } header: {
-                        Text("Electron Apps")
-                    } footer: {
-                        Text("Attaches SLICC as a side panel overlay.")
-                            .font(.caption2)
-                    }
-                }
+                        .buttonStyle(.plain)
 
-                // Guided install to default Chrome
-                let hasChrome = targets.contains { $0.type == .chromiumBrowser && $0.name.contains("Chrome") }
-                if hasChrome {
-                    Section {
+                        // Guided install to default Chrome
                         Button { onGuidedInstall() } label: {
                             HStack(spacing: 12) {
                                 Image(systemName: "arrow.down.to.line")
@@ -76,7 +81,26 @@ struct AppListView: View {
                         }
                         .buttonStyle(.plain)
                     } header: {
-                        Text("Permanent Install")
+                        Text("SLICC Extension")
+                    }
+                }
+
+                // Electron apps
+                let electronApps = targets.filter { $0.type == .electronApp }
+                if !electronApps.isEmpty {
+                    Section {
+                        ForEach(electronApps) { target in
+                            AppRow(
+                                target: target,
+                                isRunning: sliccProcess.target?.id == target.id && sliccProcess.isRunning,
+                                onLaunch: { onLaunchElectron(target) }
+                            )
+                        }
+                    } header: {
+                        Text("Electron Apps")
+                    } footer: {
+                        Text("Attaches SLICC as a side panel overlay.")
+                            .font(.caption2)
                     }
                 }
             }

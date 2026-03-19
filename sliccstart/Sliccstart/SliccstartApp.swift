@@ -43,10 +43,18 @@ struct SliccstartApp: App {
                     AppListView(
                         targets: targets,
                         sliccProcess: sliccProcess,
-                        onLaunchBrowser: { target in
+                        onLaunchStandalone: { target in
                             sliccProcess.stop()
                             do {
-                                try sliccProcess.launchWithBrowser(target)
+                                try sliccProcess.launchStandalone(target)
+                            } catch {
+                                showError("Failed to launch: \(error.localizedDescription)")
+                            }
+                        },
+                        onLaunchWithExtension: { target in
+                            sliccProcess.stop()
+                            do {
+                                try sliccProcess.launchWithExtension(target)
                             } catch {
                                 showError("Failed to launch: \(error.localizedDescription)")
                             }
