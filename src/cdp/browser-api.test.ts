@@ -157,6 +157,34 @@ describe('BrowserAPI', () => {
     });
   });
 
+  describe('listAllTargets', () => {
+    it('keeps remote tray targets whose local target ids match a local page', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        targetInfos: [
+          { targetId: 'tab-1', type: 'page', title: 'Local Page', url: 'https://local.example.com', attached: false },
+        ],
+      });
+
+      api.setTrayTargetProvider({
+        getTargets: () => [
+          {
+            targetId: 'follower-1:tab-1',
+            localTargetId: 'tab-1',
+            runtimeId: 'follower-1',
+            title: 'Remote Page',
+            url: 'https://remote.example.com',
+            isLocal: false,
+          },
+        ],
+      });
+
+      await expect(api.listAllTargets()).resolves.toEqual([
+        { targetId: 'tab-1', title: 'Local Page', url: 'https://local.example.com' },
+        { targetId: 'follower-1:tab-1', title: 'Remote Page', url: 'https://remote.example.com' },
+      ]);
+    });
+  });
+
   describe('attachToPage / detach', () => {
     it('attaches to a target and returns session ID', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
@@ -216,6 +244,35 @@ describe('BrowserAPI', () => {
         'Page.handleJavaScriptDialog',
         { accept: false },
         'sess-1',
+        5000,
+      );
+    });
+
+    it('keeps auto-dismiss handling after switching to a remote transport', async () => {
+      const remoteClient = createMockClient();
+      api.setTrayTargetProvider({
+        getTargets: () => [],
+        createRemoteTransport: () => remoteClient as unknown as CDPClient,
+      });
+
+      (remoteClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        sessionId: 'remote-sess',
+      });
+
+      await api.attachToPage('follower-1:tab-1');
+
+      remoteClient._fireEvent('Page.javascriptDialogOpening', {
+        sessionId: 'remote-sess',
+        type: 'alert',
+        message: 'blocked remotely',
+      });
+
+      await Promise.resolve();
+
+      expect(remoteClient.send).toHaveBeenCalledWith(
+        'Page.handleJavaScriptDialog',
+        { accept: false },
+        'remote-sess',
         5000,
       );
     });

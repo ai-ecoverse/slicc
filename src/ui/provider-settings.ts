@@ -7,8 +7,11 @@
 import { getProviders, getModels, getModel, createLogger } from '../core/index.js';
 import type { Model } from '../core/index.js';
 import type { Api } from '@mariozechner/pi-ai';
+import { storeTrayJoinUrl, hasStoredTrayJoinUrl } from '../scoops/tray-runtime-config.js';
+import { getFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import { getThemePreference, setThemePreference } from './theme.js';
 import type { ThemePreference } from './theme.js';
+import type { RefreshTrayRuntimeMsg } from '../extension/messages.js';
 import {
   getRegisteredProviderConfig,
   getRegisteredProviderIds,
@@ -29,6 +32,10 @@ const getModelDynamic = getModel as (
 const getModelsDynamic = getModels as (
   provider: string
 ) => Model<Api>[];
+
+function isExtensionRuntime(): boolean {
+  return typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+}
 
 // Storage keys
 const ACCOUNTS_KEY = 'slicc_accounts';
@@ -551,12 +558,17 @@ const ICON_PATHS = {
   ],
 };
 
+export interface ShowProviderSettingsOptions {
+  /** When true, start with the "Join a tray" form instead of the account form (when no accounts exist). */
+  preferTrayJoin?: boolean;
+}
+
 /**
  * Show the Accounts management dialog.
  * Returns a promise that resolves to `true` if accounts were modified,
  * `false` if the user closed without changes (so callers can skip reload).
  */
-export function showProviderSettings(): Promise<boolean> {
+export function showProviderSettings(options?: ShowProviderSettingsOptions): Promise<boolean> {
   return new Promise((resolve) => {
     const accountsBefore = localStorage.getItem(ACCOUNTS_KEY) ?? '';
 
@@ -567,9 +579,11 @@ export function showProviderSettings(): Promise<boolean> {
     dialog.className = 'dialog';
     dialog.style.cssText = 'max-width: 480px; width: 90vw; padding: 32px;';
 
-    // Decide initial view: list if accounts exist, add-form if empty
+    // Decide initial view: list if accounts exist, tray-join or add-form if empty
     if (getAccounts().length > 0) {
       renderAccountsList();
+    } else if (options?.preferTrayJoin) {
+      renderJoinTrayForm();
     } else {
       renderAccountForm();
     }
@@ -700,6 +714,41 @@ export function showProviderSettings(): Promise<boolean> {
       btnRow.appendChild(exportBtn);
 
       dialog.appendChild(btnRow);
+
+      // ── Tray section ────────────────────────────────────────────
+      const traySep = document.createElement('hr');
+      traySep.style.cssText =
+        'border: none; border-top: 1px solid var(--s2-border-subtle); margin: 16px 0;';
+      dialog.appendChild(traySep);
+
+      const trayLabel = document.createElement('div');
+      trayLabel.className = 'dialog__desc';
+      trayLabel.style.cssText = 'font-weight: 600; margin-bottom: 8px;';
+      trayLabel.textContent = 'Tray';
+      dialog.appendChild(trayLabel);
+
+      const followerStatus = getFollowerTrayRuntimeStatus();
+      const isFollowerActive = followerStatus.state !== 'inactive';
+      const hasJoinUrl = hasStoredTrayJoinUrl(window.localStorage);
+
+      if (isFollowerActive || hasJoinUrl) {
+        const trayStatus = document.createElement('div');
+        trayStatus.style.cssText =
+          'font-size: 12px; color: var(--s2-content-secondary); margin-bottom: 8px;';
+        const stateLabel = isFollowerActive ? followerStatus.state : 'configured';
+        trayStatus.textContent = `Follower: ${stateLabel}`;
+        if (followerStatus.error) {
+          trayStatus.textContent += ` — ${followerStatus.error}`;
+          trayStatus.style.color = 'var(--slicc-cone)';
+        }
+        dialog.appendChild(trayStatus);
+      }
+
+      const joinTrayBtn = document.createElement('button');
+      joinTrayBtn.className = 'dialog__btn dialog__btn--secondary';
+      joinTrayBtn.textContent = isFollowerActive || hasJoinUrl ? 'Rejoin tray' : 'Join a tray';
+      joinTrayBtn.addEventListener('click', () => renderJoinTrayForm());
+      dialog.appendChild(joinTrayBtn);
 
       // ── Theme section ───────────────────────────────────────────
       const themeSep = document.createElement('hr');
@@ -1017,7 +1066,16 @@ export function showProviderSettings(): Promise<boolean> {
 
       // Back button (only shown when accounts already exist)
       const hasAccounts = getAccounts().length > 0;
-      if (hasAccounts) {
+      if (!isEdit && !hasAccounts) {
+        const joinBtn = document.createElement('button');
+        joinBtn.className = 'dialog__btn dialog__btn--secondary';
+        joinBtn.style.marginTop = '8px';
+        joinBtn.textContent = 'Join a tray';
+        joinBtn.addEventListener('click', () => {
+          renderJoinTrayForm();
+        });
+        dialog.appendChild(joinBtn);
+      } else if (hasAccounts) {
         const backBtn = document.createElement('button');
         backBtn.className = 'dialog__btn dialog__btn--secondary';
         backBtn.style.marginTop = '8px';
@@ -1038,6 +1096,97 @@ export function showProviderSettings(): Promise<boolean> {
           baseUrlInput.focus();
         }
       });
+    }
+
+    function renderJoinTrayForm() {
+      dialog.innerHTML = '';
+
+      const title = document.createElement('div');
+      title.className = 'dialog__title';
+      title.textContent = 'Join a tray';
+      dialog.appendChild(title);
+
+      const desc = document.createElement('div');
+      desc.className = 'dialog__desc';
+      desc.style.marginBottom = '12px';
+      desc.textContent = 'Paste the tray join URL shared by the tray leader. It must include a /join/... capability.';
+      dialog.appendChild(desc);
+
+      const trayUrlLabel = document.createElement('div');
+      trayUrlLabel.className = 'dialog__desc';
+      trayUrlLabel.textContent = 'Tray URL:';
+      dialog.appendChild(trayUrlLabel);
+
+      const trayUrlInput = document.createElement('input');
+      trayUrlInput.className = 'dialog__input';
+      trayUrlInput.type = 'text';
+      trayUrlInput.autocomplete = 'off';
+      trayUrlInput.spellcheck = false;
+      trayUrlInput.placeholder = 'https://tray.example.com/base/join/tray-123.capability-token';
+      trayUrlInput.style.marginBottom = '12px';
+      dialog.appendChild(trayUrlInput);
+
+      const errorEl = document.createElement('div');
+      errorEl.style.cssText = 'color: var(--slicc-cone); font-size: 12px; margin-bottom: 8px; display: none;';
+      dialog.appendChild(errorEl);
+
+      const statusEl = document.createElement('div');
+      statusEl.style.cssText = 'font-size: 12px; color: var(--s2-content-secondary); margin-bottom: 8px; display: none;';
+
+      const joinBtn = document.createElement('button');
+      joinBtn.className = 'dialog__btn';
+      joinBtn.textContent = 'Join tray';
+      joinBtn.addEventListener('click', () => {
+        const stored = storeTrayJoinUrl(window.localStorage, trayUrlInput.value);
+        if (!stored) {
+          errorEl.textContent = 'Enter a valid tray join URL with a /join/... capability.';
+          errorEl.style.display = '';
+          trayUrlInput.focus();
+          return;
+        }
+
+        if (isExtensionRuntime()) {
+          const payload: RefreshTrayRuntimeMsg = { type: 'refresh-tray-runtime' };
+          void chrome.runtime.sendMessage({ source: 'panel' as const, payload }).catch(() => {
+            // Offscreen may not be ready yet; mainExtension will reconnect shortly.
+          });
+        } else {
+          // Trigger follower join in standalone mode without page reload
+          window.dispatchEvent(new CustomEvent('slicc:tray-join', {
+            detail: { joinUrl: stored.joinUrl },
+          }));
+        }
+
+        statusEl.textContent = 'Connecting to tray...';
+        statusEl.style.display = '';
+        statusEl.style.color = 'var(--s2-content-secondary)';
+
+        // Close dialog after brief feedback
+        setTimeout(() => {
+          overlay.remove();
+          resolve(false);
+        }, 800);
+      });
+      dialog.appendChild(joinBtn);
+      dialog.appendChild(statusEl);
+
+      const backBtn = document.createElement('button');
+      backBtn.className = 'dialog__btn dialog__btn--secondary';
+      backBtn.style.marginTop = '8px';
+      backBtn.textContent = 'Back';
+      backBtn.addEventListener('click', () => {
+        renderAccountForm();
+      });
+      dialog.appendChild(backBtn);
+
+      trayUrlInput.addEventListener('input', () => {
+        errorEl.style.display = 'none';
+      });
+      trayUrlInput.addEventListener('keydown', (e: KeyboardEvent) => {
+        if (e.key === 'Enter') joinBtn.click();
+      });
+
+      requestAnimationFrame(() => trayUrlInput.focus());
     }
   });
 }

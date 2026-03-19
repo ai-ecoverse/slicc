@@ -6,19 +6,19 @@ function webhookHelp(): { stdout: string; stderr: string; exitCode: number } {
     stdout: `usage: webhook <command> [options]
 
 Commands:
-  create [--name <name>] [--scoop <name>] [--filter <code>]   Create a new webhook endpoint
+  create --scoop <name> [--name <name>] [--filter <code>]    Create a new webhook endpoint
   list                                                         List all active webhooks
   delete <id>                                                  Delete a webhook by ID
 
 Options:
-  --scoop <name>    Route webhook events to this scoop (scoop receives events as messages)
+  --scoop <name>    Route webhook events to this scoop (required; scoop receives events as messages)
   --filter <code>   JS filter function: (event) => false (drop), true (keep), or object (transform)
                     The event has: type, webhookId, webhookName, timestamp, headers, body
 
 Examples:
-  webhook create --name clicks --scoop click-handler
-  webhook create --name github --scoop pr-reviewer --filter "(e) => e.body.action === 'opened'"
-  webhook create --name slack --filter "(e) => ({ text: e.body.text, user: e.body.user })"
+  webhook create --scoop click-handler --name clicks
+  webhook create --scoop pr-reviewer --name github --filter "(e) => e.body.action === 'opened'"
+  webhook create --scoop slack-relay --name slack --filter "(e) => ({ text: e.body.text, user: e.body.user })"
   webhook list
   webhook delete abc123
 `,
@@ -89,6 +89,14 @@ export function createWebhookCommand(): Command {
           const scoopIdx = args.indexOf('--scoop');
           if (scoopIdx !== -1 && args[scoopIdx + 1]) {
             scoop = args[scoopIdx + 1];
+          }
+
+          if (!scoop) {
+            return {
+              stdout: '',
+              stderr: 'webhook: --scoop is required (every webhook must route to a scoop)\n',
+              exitCode: 1,
+            };
           }
 
           const { ok, data } = await apiCall('POST', '', { name, filter, scoop });

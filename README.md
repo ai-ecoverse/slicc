@@ -253,6 +253,7 @@ Source layout:
 | `src/cdp/` | Chrome DevTools Protocol client (WebSocket + chrome.debugger), HAR recorder |
 | `src/cli/` | Main CLI entrypoint + Electron attach mode — Chrome launch, Electron app lifecycle management, CDP proxy, overlay reinjection |
 | `src/extension/` | Chrome extension service worker and type declarations |
+| `src/worker/` | Cloudflare Worker + Durable Object tray hub for `POST /tray`, controller attach, leader WebSocket control, webhook forwarding (`POST /webhook/:token/:webhookId` → leader), and deployed smoke tests |
 
 ## Getting Started
 
@@ -276,6 +277,53 @@ npm run dev:full
 ```
 
 The `dev:full` command starts both the CLI server and Vite dev server, launches Chrome, and opens the agent UI.
+
+To launch directly into standalone tray leader mode, pass `--lead` and provide a worker base URL either inline or via `WORKER_BASE_URL`:
+
+```bash
+WORKER_BASE_URL=https://tray.example.com/base npm run dev:full -- --lead
+
+# or against the built CLI:
+npm run start -- --lead=https://tray.example.com/base
+```
+
+The `--lead` flow opens the browser with the canonical `?tray=<worker-base-url>` query. Once the leader attaches, the browser URL is rewritten to `?tray=<worker-base-url>/tray/<trayId>` so the active tray/session id stays visible. Inside the terminal, run `host` to print the current leader status and launch URL.
+
+To launch directly into follower-join mode from a tray join capability URL, pass `--join`:
+
+```bash
+npm run start -- --join=https://tray.example.com/base/join/tray-123.capability-token
+```
+
+The `--join` flow validates that the value is a tray follower join URL, strips any hash/query noise, and opens Chrome with the canonical `?tray=<join-url>` query so the runtime enters follower attach mode immediately.
+
+When connected to a tray, SLICC can see and automate browser tabs on any connected instance. Run `playwright-cli tab-list` to see all targets — local and remote — and use `playwright-cli tab-select` to operate on a remote target. CDP commands are routed over the tray data channel transparently.
+
+### QA Chrome Profiles
+
+For manual verification, you can scaffold dedicated Chrome profiles for `leader`, `follower`, and `extension`:
+
+```bash
+npm run qa:setup
+
+# Launch the CLI with an isolated QA profile
+npm run qa:leader
+npm run qa:follower
+
+# Rebuild dist/extension and launch Chrome with it auto-loaded
+npm run qa:extension
+```
+
+The same behavior is also available through the CLI flag directly:
+
+```bash
+npm run dev:full -- --profile=leader
+npm run start -- --profile=extension
+```
+
+QA profiles live under `.qa/chrome/<profile>/`. The `extension` profile auto-loads the unpacked build from `dist/extension`, while `qa:setup` seeds the profile metadata Chrome uses for distinct profile colors.
+
+If no LLM provider is configured yet, the first-run settings dialog also offers `Join a tray`. Paste the same canonical `/join/...` tray URL there to enter follower mode without adding a provider account first.
 
 ### Pre-configuring LLM Providers
 
@@ -358,6 +406,14 @@ npm run dev
 
 # Run the Electron float against an Electron app path
 npm run dev:electron -- /Applications/Slack.app
+
+# Scaffold dedicated QA Chrome profiles
+npm run qa:setup
+
+# Launch named QA profiles
+npm run qa:leader
+npm run qa:follower
+npm run qa:extension
 
 # Build everything (UI + CLI/Electron)
 npm run build

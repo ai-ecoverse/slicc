@@ -16,8 +16,21 @@ import type {
   BoundingBox,
   AccessibilityNode,
 } from './types.js';
+import type { TrayTargetEntry } from '../scoops/tray-sync-protocol.js';
 import { normalizeAccessibilityText } from './normalize-accessibility-text.js';
 import { createLogger } from '../core/logger.js';
+
+/**
+ * Provider of remote tray targets and transport factory.
+ * Set via `setTrayTargetProvider()` to enable remote target support.
+ */
+export interface TrayTargetProvider {
+  getTargets(): TrayTargetEntry[];
+  createRemoteTransport?(runtimeId: string, localTargetId: string): CDPTransport;
+  removeRemoteTransport?(runtimeId: string, localTargetId: string): void;
+  /** Open a new tab on a remote runtime. Returns the composite targetId. */
+  openRemoteTab?(runtimeId: string, url: string): Promise<string>;
+}
 
 const FALLBACK_CDP_URL = 'ws://localhost:5710/cdp';
 const log = createLogger('browser-api');
@@ -34,8 +47,11 @@ export function getDefaultCdpUrl(
 
 export class BrowserAPI {
   private client: CDPTransport;
+  private localClient: CDPTransport; // preserved original when using remote transport
   private sessionId: string | null = null;
   private attachedTargetId: string | null = null;
+  private trayTargetProvider: TrayTargetProvider | null = null;
+  private remoteTargetInfo: { runtimeId: string; localTargetId: string } | null = null;
   private readonly handleJavaScriptDialogOpening = async (
     params: Record<string, unknown>,
   ): Promise<void> => {
@@ -67,7 +83,8 @@ export class BrowserAPI {
 
   constructor(client?: CDPTransport) {
     this.client = client ?? new CDPClient();
-    this.client.on('Page.javascriptDialogOpening', this.handleJavaScriptDialogOpening);
+    this.localClient = this.client;
+    this.addDialogListener(this.client);
   }
 
   /**
@@ -93,6 +110,37 @@ export class BrowserAPI {
   }
 
   /**
+   * Set a provider of remote tray targets.
+   * When set, listAllTargets() includes remote targets and attachToPage()
+   * can attach to remote targets using the "{runtimeId}:{localTargetId}" format.
+   */
+  setTrayTargetProvider(provider: TrayTargetProvider | null): void {
+    this.trayTargetProvider = provider;
+  }
+
+  /**
+   * List all pages — local + remote tray targets.
+   * Remote targets have targetId format "{runtimeId}:{localTargetId}".
+   * Deduplicates by excluding registry entries whose tray-wide targetId matches a local page.
+   */
+  async listAllTargets(): Promise<PageInfo[]> {
+    const local = await this.listPages();
+    if (!this.trayTargetProvider) return local;
+
+    const localIds = new Set(local.map(p => p.targetId));
+    const remoteEntries = this.trayTargetProvider.getTargets();
+    const remote: PageInfo[] = remoteEntries
+      .filter(t => !localIds.has(t.targetId))
+      .map(t => ({
+        targetId: t.targetId,
+        title: t.title,
+        url: t.url,
+      }));
+
+    return [...local, ...remote];
+  }
+
+  /**
    * Connect to the CDP proxy.
    * DebuggerClient (extension mode) accepts but ignores these options.
    */
@@ -115,6 +163,64 @@ export class BrowserAPI {
       background: true,
     });
     return result['targetId'] as string;
+  }
+
+  /**
+   * Create a new tab on a remote runtime within the tray.
+   * Requires a tray target provider with openRemoteTab support.
+   * Returns the composite targetId ("{runtimeId}:{localTargetId}").
+   */
+  async createRemotePage(runtimeId: string, url?: string): Promise<string> {
+    if (!this.trayTargetProvider?.openRemoteTab) {
+      throw new Error('Remote tab opening not available (no tray target provider)');
+    }
+    return this.trayTargetProvider.openRemoteTab(runtimeId, url ?? 'about:blank');
+  }
+
+  /**
+   * Close a browser tab/target by its targetId.
+   * Handles remote tray targets by routing through RemoteCDPTransport.
+   */
+  async closePage(targetId: string): Promise<void> {
+    await this.ensureConnected();
+
+    // Check if this is a remote tray target (format: "runtimeId:localTargetId")
+    if (this.trayTargetProvider?.createRemoteTransport && targetId.includes(':')) {
+      const colonIdx = targetId.indexOf(':');
+      const runtimeId = targetId.substring(0, colonIdx);
+      const localTargetId = targetId.substring(colonIdx + 1);
+
+      // Trust the runtimeId:localTargetId format — don't require registry confirmation.
+      {
+        const remoteTransport = this.trayTargetProvider.createRemoteTransport(runtimeId, localTargetId);
+        try {
+          await remoteTransport.send('Target.closeTarget', { targetId: localTargetId });
+        } finally {
+          if (this.trayTargetProvider.removeRemoteTransport) {
+            this.trayTargetProvider.removeRemoteTransport(runtimeId, localTargetId);
+          }
+        }
+
+        // If we were attached to the target being closed, clean up
+        if (this.attachedTargetId === targetId) {
+          if (this.remoteTargetInfo) {
+            this.setClient(this.localClient);
+            this.remoteTargetInfo = null;
+          }
+          this.sessionId = null;
+          this.attachedTargetId = null;
+        }
+        return;
+      }
+    }
+
+    await this.localClient.send('Target.closeTarget', { targetId });
+
+    // Clean up if we were attached to this target
+    if (this.attachedTargetId === targetId) {
+      this.sessionId = null;
+      this.attachedTargetId = null;
+    }
   }
 
   /**
@@ -146,12 +252,41 @@ export class BrowserAPI {
   /**
    * Attach to a specific page target, enabling page-level commands.
    * Returns the CDP session ID for the attached target.
+   *
+   * If the targetId contains a colon (format "{runtimeId}:{localTargetId}"),
+   * it's treated as a remote tray target and a RemoteCDPTransport is used.
    */
   async attachToPage(targetId: string): Promise<string> {
     await this.ensureConnected();
     // Detach from previous target if needed
     if (this.sessionId && this.attachedTargetId !== targetId) {
       await this.detach();
+    }
+
+    // Check if this is a remote tray target (format: "runtimeId:localTargetId")
+    if (this.trayTargetProvider?.createRemoteTransport && targetId.includes(':')) {
+      const colonIdx = targetId.indexOf(':');
+      const runtimeId = targetId.substring(0, colonIdx);
+      const localTargetId = targetId.substring(colonIdx + 1);
+
+      // The runtimeId:localTargetId format is a strong signal this is remote.
+      // Don't require registry confirmation — the target may have just been
+      // created via createRemotePage() and not yet advertised.
+      {
+        const remoteTransport = this.trayTargetProvider.createRemoteTransport(runtimeId, localTargetId);
+        this.setClient(remoteTransport);
+        this.remoteTargetInfo = { runtimeId, localTargetId };
+
+        // Send attachToTarget via the remote transport
+        const result = await this.client.send('Target.attachToTarget', {
+          targetId: localTargetId,
+          flatten: true,
+        });
+        this.sessionId = result['sessionId'] as string;
+        this.attachedTargetId = targetId;
+        await this.client.send('Page.enable', {}, this.sessionId);
+        return this.sessionId;
+      }
     }
 
     const result = await this.client.send('Target.attachToTarget', {
@@ -168,6 +303,7 @@ export class BrowserAPI {
 
   /**
    * Detach from the currently attached target.
+   * If attached to a remote target, restores the local transport.
    */
   async detach(): Promise<void> {
     if (this.sessionId) {
@@ -178,6 +314,17 @@ export class BrowserAPI {
       } catch {
         // Target may already be detached
       }
+
+      // Restore local transport if we were using a remote one
+      if (this.remoteTargetInfo && this.trayTargetProvider?.removeRemoteTransport) {
+        this.trayTargetProvider.removeRemoteTransport(
+          this.remoteTargetInfo.runtimeId,
+          this.remoteTargetInfo.localTargetId,
+        );
+        this.setClient(this.localClient);
+        this.remoteTargetInfo = null;
+      }
+
       this.sessionId = null;
       this.attachedTargetId = null;
     }
@@ -757,13 +904,26 @@ export class BrowserAPI {
   /**
    * Lazily connect (or reconnect) to the CDP proxy.
    * Resets stale session/target state when reconnecting after a drop.
+   * If the current client is a disconnected remote transport, restores the local transport.
    */
   private async ensureConnected(): Promise<void> {
     if (this.client.state === 'disconnected') {
+      // If we were using a remote transport that got disconnected (follower went away),
+      // restore the local transport and clear stale remote state.
+      if (this.remoteTargetInfo && this.trayTargetProvider?.removeRemoteTransport) {
+        this.trayTargetProvider.removeRemoteTransport(
+          this.remoteTargetInfo.runtimeId,
+          this.remoteTargetInfo.localTargetId,
+        );
+        this.setClient(this.localClient);
+        this.remoteTargetInfo = null;
+      }
       // Previous session/target are no longer valid after reconnect
       this.sessionId = null;
       this.attachedTargetId = null;
-      await this.connect();
+      if (this.client.state === 'disconnected') {
+        await this.connect();
+      }
     }
   }
 
@@ -773,6 +933,24 @@ export class BrowserAPI {
         'Not attached to a page. Call attachToPage(targetId) first.',
       );
     }
+  }
+
+  private addDialogListener(client: CDPTransport): void {
+    client.on('Page.javascriptDialogOpening', this.handleJavaScriptDialogOpening);
+  }
+
+  private removeDialogListener(client: CDPTransport): void {
+    client.off('Page.javascriptDialogOpening', this.handleJavaScriptDialogOpening);
+  }
+
+  private setClient(client: CDPTransport): void {
+    if (this.client === client) {
+      return;
+    }
+
+    this.removeDialogListener(this.client);
+    this.client = client;
+    this.addDialogListener(this.client);
   }
 
   /**
