@@ -408,15 +408,6 @@ async function main() {
       throw error;
     }
   } else if (!SERVE_ONLY) {
-    const chromePath = findChromeExecutable();
-    if (!chromePath) {
-      console.error(
-        'Could not find Chrome/Chromium. Please install Chrome or set CHROME_PATH.',
-      );
-      process.exit(1);
-    }
-    console.log(`Found Chrome: ${chromePath}`);
-
     let browserLaunchUrl = resolveCliBrowserLaunchUrl({
       serveOrigin: SERVE_ORIGIN,
       lead: RUNTIME_FLAGS.lead,
@@ -450,6 +441,17 @@ async function main() {
 
       throw new Error('unreachable');
     })();
+
+    const chromePath = findChromeExecutable({
+      executablePreference: !DEV_MODE && !chromeProfile.id ? 'installed' : 'chrome-for-testing',
+    });
+    if (!chromePath) {
+      console.error(
+        'Could not find Chrome/Chromium. Please install Chrome or set CHROME_PATH.',
+      );
+      process.exit(1);
+    }
+    console.log(`Found Chrome: ${chromePath}`);
 
     if (chromeProfile.id) {
       await ensureQaProfileScaffold(PROJECT_ROOT);
