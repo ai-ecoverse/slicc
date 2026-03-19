@@ -1,4 +1,4 @@
-![slicc - A felt-toy of an antropomorphized ice cream cone, with pink and mint-green colors for the scoop, googly eyes, an oversized mouth and tounge sticking out](hero-banner.png)
+![slicc - A felt-toy of an anthropomorphized ice cream cone, with pink and mint-green colors for the scoop, googly eyes, an oversized mouth and tongue sticking out](hero-banner.png)
 
 # slicc — Self-Licking Ice Cream Cone
 
