@@ -20,7 +20,7 @@
     "dev": "vite",
     "build": "npm run build:ui && npm run build:cli",
     "build:ui": "vite build",
-    "build:cli": "tsc -p tsconfig.cli.json",
+    "build:cli": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist/cli', { recursive: true, force: true });\" && tsc -p tsconfig.cli.json",
     "start": "node dist/cli/index.js",
     "start:electron": "node dist/cli/index.js --electron",
     "typecheck": "tsc --noEmit -p tsconfig.cli.json && tsc --noEmit -p tsconfig.json",
