@@ -37,7 +37,10 @@ export function parseCDPResponse(buffer: Buffer): Record<string, unknown> | null
   try {
     const text = buffer.toString('utf-8').replace(/\0+$/, '');
     return JSON.parse(text) as Record<string, unknown>;
-  } catch {
+  } catch (err) {
+    console.warn('[install-extension] Failed to parse CDP response:',
+      err instanceof Error ? err.message : String(err),
+      '| raw:', buffer.toString('utf-8').slice(0, 200));
     return null;
   }
 }
@@ -58,10 +61,17 @@ async function readCDPMessage(
     const chunks: Buffer[] = [];
     let settled = false;
 
+    const cleanup = () => {
+      stream.removeListener('data', onData);
+      stream.removeListener('error', onError);
+      stream.removeListener('end', onEnd);
+      clearTimeout(timer);
+    };
+
     const timer = setTimeout(() => {
       if (!settled) {
         settled = true;
-        stream.removeListener('data', onData);
+        cleanup();
         reject(new Error(`Timeout waiting for CDP response (${timeoutMs}ms)`));
       }
     }, timeoutMs);
@@ -75,29 +85,30 @@ async function readCDPMessage(
 
       if (nullIndex !== -1) {
         settled = true;
-        clearTimeout(timer);
-        stream.removeListener('data', onData);
+        cleanup();
         resolve(full.subarray(0, nullIndex + 1));
       }
     };
 
-    stream.on('data', onData);
-
-    stream.on('error', (err) => {
+    const onError = (err: Error) => {
       if (!settled) {
         settled = true;
-        clearTimeout(timer);
+        cleanup();
         reject(err);
       }
-    });
+    };
 
-    stream.on('end', () => {
+    const onEnd = () => {
       if (!settled) {
         settled = true;
-        clearTimeout(timer);
+        cleanup();
         reject(new Error('Stream ended without receiving complete CDP message'));
       }
-    });
+    };
+
+    stream.on('data', onData);
+    stream.on('error', onError);
+    stream.on('end', onEnd);
   });
 }
 
@@ -216,7 +227,7 @@ export async function installExtension(options: {
  * Called BEFORE spawning Chrome so the preference is baked in from the start.
  * Also called AFTER Chrome exits to re-apply in case Chrome overwrites it.
  */
-function ensureProfileWithDeveloperMode(userDataDir: string): void {
+function ensureProfileWithDeveloperMode(userDataDir: string): boolean {
   const defaultDir = join(userDataDir, 'Default');
   const prefsPath = join(defaultDir, 'Preferences');
   const firstRunPath = join(userDataDir, 'First Run');
@@ -245,8 +256,10 @@ function ensureProfileWithDeveloperMode(userDataDir: string): void {
     (ext.ui as Record<string, unknown>).developer_mode = true;
 
     writeFileSync(prefsPath, JSON.stringify(prefs), 'utf8');
+    return true;
   } catch (err) {
-    console.warn('Warning: could not set developer mode:', err instanceof Error ? err.message : String(err));
+    console.warn('[install-extension] Could not set developer mode:', err instanceof Error ? err.message : String(err));
+    return false;
   }
 }
 
@@ -292,8 +305,11 @@ async function main(): Promise<void> {
 
     // Re-apply developer mode after Chrome exit (Chrome may have overwritten prefs)
     const homeDir = process.env['HOME'] ?? process.env['USERPROFILE'] ?? '/tmp';
-    ensureProfileWithDeveloperMode(resolve(homeDir, '.slicc', 'browser-coding-agent-chrome'));
-    console.log('Developer mode ensured.');
+    if (ensureProfileWithDeveloperMode(resolve(homeDir, '.slicc', 'browser-coding-agent-chrome'))) {
+      console.log('Developer mode ensured.');
+    } else {
+      console.warn('Developer mode may not be enabled. Enable it manually in chrome://extensions.');
+    }
     process.exit(0);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
