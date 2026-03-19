@@ -2,6 +2,8 @@
 
 # slicc — Self-Licking Ice Cream Cone
 
+[![npm](https://img.shields.io/npm/v/sliccy)](https://www.npmjs.com/package/sliccy)
+
 > A browser-native AI agent for getting practical work done in and through the browser.
 
 SLICC runs in a browser and controls the browser it runs in. It combines a shell, files, browser automation, and multi-agent delegation so you can do real work from one workspace — coding, web automation, authenticated app tasks, and the weird in-between jobs that do not fit neatly inside a chat panel. SLICC can orchestrate multiple browsers, and even some apps through telepathy, making it a powerful hub for your digital work.
@@ -45,24 +47,39 @@ SLICC is for you if:
 
 ## Getting started
 
-### 1. CLI quickstart (primary path)
+### 1. Quick start with npx
 
-The CLI is the best way to try SLICC today.
+The fastest way to try SLICC — no clone, no install:
 
 ```bash
+npx sliccy
+```
+
+This downloads the latest release, launches Chrome, and opens the workspace. Configure your LLM provider in the first-run settings dialog. Requires Node >= 22.
+
+### 2. Install globally
+
+If you plan to use SLICC regularly:
+
+```bash
+npm install -g sliccy
+slicc
+```
+
+### 3. Run from source (contributors)
+
+```bash
+git clone https://github.com/ai-ecoverse/slicc.git
+cd slicc
 npm install
-### optional: pre-configure providers
-# cp providers.example.json providers.json 
 npm start
 ```
 
-Then open the URL printed in the terminal. If you skip `providers.json`, configure a provider in the first-run settings dialog instead.
-
-- `npm start` starts the CLI server, Vite dev server, launches Chrome, and opens the workspace.
+- Optionally pre-configure providers: `cp providers.example.json providers.json`
 - See [providers.example.json](providers.example.json) for the available provider fields.
 - For contributor-focused setup details, see [docs/development.md](docs/development.md).
 
-### 2. Chrome extension
+### 4. Chrome extension
 
 The extension runs the same core experience as a Chrome side panel with no separate server process.
 
@@ -73,13 +90,13 @@ npm run build:extension
 
 Load `dist/extension/` as an unpacked extension in `chrome://extensions`, then open the SLICC side panel.
 
-### 3. Run a second browser
+### 5. Run a second browser
 
 If you want to control a second browser (even on another machine), ask your main browser agent for a Tray Join URL. You can also type `host` in the built-in terminal, to get it. Copy that URL and launch a second browser throught the CLI.
 
 In the dialog, click "Join Tray" and paste the URL. Once you connect, the sessions are fully synchronized.
 
-### 4. Electron
+### 6. Electron
 
 SLICC can also attach to Electron apps and inject the same shared overlay into their pages. The best way to use it with Electron apps is to use the Join Tray feature, so that the Electron app becomes a remote-controllable target.
 
