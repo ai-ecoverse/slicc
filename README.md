@@ -101,7 +101,7 @@ SLICC shares one core across the CLI, extension, and Electron modes. The browser
 - **Thin server where needed:** the CLI path mainly exists to launch Chrome, proxy CDP, and bridge the few things browsers cannot do alone.
 - **One model across floats:** CLI, extension, tray/follower flows, and Electron all reuse the same underlying system.
 - **Cone + scoops delegation:** the main agent orchestrates; sub-agents execute in isolated sandboxes and report back.
-- **Skills explain the agent the world:** don't expect the agent to know everything, ask it to search and install skills that are relevant to the task.
+- **Skills explain the world to the agent:** don't expect the agent to know everything, ask it to search and install skills that are relevant to the task.
 
 ## The SLICC vocabulary and lore
 
