@@ -28,6 +28,13 @@ export function resolveUiRuntimeMode(locationHref: string, isExtension: boolean)
   }
 }
 
+export function shouldUseRuntimeModeTrayDefaults(
+  runtimeMode: UiRuntimeMode,
+  hasRuntimeConfigEndpoint: boolean,
+): boolean {
+  return runtimeMode === 'electron-overlay' || (runtimeMode === 'standalone' && hasRuntimeConfigEndpoint);
+}
+
 export function getElectronOverlayInitialTab(locationHref: string): ExtensionTabId {
   try {
     const url = new URL(locationHref);

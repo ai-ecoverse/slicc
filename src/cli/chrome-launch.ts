@@ -32,7 +32,10 @@ interface FindChromeExecutableOptions {
   homeDir?: string;
   existsSyncImpl?: typeof existsSync;
   readdirSyncImpl?: typeof readdirSync;
+  executablePreference?: 'chrome-for-testing' | 'installed';
 }
+
+type ChromeExecutablePreference = NonNullable<FindChromeExecutableOptions['executablePreference']>;
 
 type JsonObject = Record<string, unknown>;
 
@@ -230,29 +233,9 @@ function resolveMacAppBundle(
   return existsSyncImpl(candidate) ? candidate : null;
 }
 
-export function findChromeExecutable(options: FindChromeExecutableOptions = {}): string | null {
-  const env = options.env ?? process.env;
-  const existsSyncImpl = options.existsSyncImpl ?? existsSync;
-  const readdirSyncImpl = options.readdirSyncImpl ?? readdirSync;
-  const platform = options.platform ?? process.platform;
-  const homeDir = options.homeDir ?? homedir();
-
-  const envPath = env['CHROME_PATH'];
-  if (envPath && existsSyncImpl(envPath)) {
-    const resolved = resolveMacAppBundle(envPath, platform, existsSyncImpl);
-    return resolved ?? envPath;
-  }
-
-  const chromeForTesting = findPuppeteerChromeForTesting({
-    platform,
-    homeDir,
-    existsSyncImpl,
-    readdirSyncImpl,
-  });
-  if (chromeForTesting) {
-    return chromeForTesting;
-  }
-
+function findInstalledChrome(
+  options: Required<Pick<FindChromeExecutableOptions, 'env' | 'platform' | 'existsSyncImpl'>>,
+): string | null {
   const candidates: Record<string, string[]> = {
     darwin: [
       '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -267,19 +250,52 @@ export function findChromeExecutable(options: FindChromeExecutableOptions = {}):
       '/snap/bin/chromium',
     ],
     win32: [
-      `${env['LOCALAPPDATA']}\\Google\\Chrome\\Application\\chrome.exe`,
-      `${env['PROGRAMFILES']}\\Google\\Chrome\\Application\\chrome.exe`,
-      `${env['PROGRAMFILES(X86)']}\\Google\\Chrome\\Application\\chrome.exe`,
+      `${options.env['LOCALAPPDATA']}\\Google\\Chrome\\Application\\chrome.exe`,
+      `${options.env['PROGRAMFILES']}\\Google\\Chrome\\Application\\chrome.exe`,
+      `${options.env['PROGRAMFILES(X86)']}\\Google\\Chrome\\Application\\chrome.exe`,
     ],
   };
 
-  for (const candidate of candidates[platform] ?? []) {
-    if (candidate && existsSyncImpl(candidate)) {
+  for (const candidate of candidates[options.platform] ?? []) {
+    if (candidate && options.existsSyncImpl(candidate)) {
       return candidate;
     }
   }
 
   return null;
+}
+
+export function findChromeExecutable(options: FindChromeExecutableOptions = {}): string | null {
+  const env = options.env ?? process.env;
+  const existsSyncImpl = options.existsSyncImpl ?? existsSync;
+  const readdirSyncImpl = options.readdirSyncImpl ?? readdirSync;
+  const platform = options.platform ?? process.platform;
+  const homeDir = options.homeDir ?? homedir();
+  const executablePreference: ChromeExecutablePreference =
+    options.executablePreference ?? 'chrome-for-testing';
+
+  const envPath = env['CHROME_PATH'];
+  if (envPath && existsSyncImpl(envPath)) {
+    const resolved = resolveMacAppBundle(envPath, platform, existsSyncImpl);
+    return resolved ?? envPath;
+  }
+
+  const installedChrome = findInstalledChrome({
+    env,
+    platform,
+    existsSyncImpl,
+  });
+
+  const chromeForTesting = findPuppeteerChromeForTesting({
+    platform,
+    homeDir,
+    existsSyncImpl,
+    readdirSyncImpl,
+  });
+
+  return executablePreference === 'installed'
+    ? installedChrome ?? chromeForTesting
+    : chromeForTesting ?? installedChrome;
 }
 
 async function readJsonFile(filePath: string): Promise<JsonObject> {

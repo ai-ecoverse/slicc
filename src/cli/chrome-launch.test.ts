@@ -121,6 +121,47 @@ describe('chrome-launch', () => {
     ).toBe(appPath);
   });
 
+  it('keeps Chrome for Testing first by default when both it and installed Chrome exist', () => {
+    const installedChrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+    const chromeForTesting =
+      '/Users/tester/.cache/puppeteer/chrome/mac_arm-131.0.6778.204/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing';
+
+    expect(
+      findChromeExecutable({
+        platform: 'darwin',
+        homeDir: '/Users/tester',
+        env: {},
+        readdirSyncImpl: ((path: Parameters<typeof readdirSync>[0]) => {
+          expect(String(path)).toBe('/Users/tester/.cache/puppeteer/chrome');
+          return ['mac_arm-131.0.6778.204'];
+        }) as typeof readdirSync,
+        existsSyncImpl: (path: Parameters<typeof existsSync>[0]) =>
+          [installedChrome, chromeForTesting].includes(String(path)),
+      }),
+    ).toBe(chromeForTesting);
+  });
+
+  it('prefers installed Chrome when explicitly requested', () => {
+    const installedChrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+    const chromeForTesting =
+      '/Users/tester/.cache/puppeteer/chrome/mac_arm-131.0.6778.204/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing';
+
+    expect(
+      findChromeExecutable({
+        platform: 'darwin',
+        homeDir: '/Users/tester',
+        env: {},
+        executablePreference: 'installed',
+        readdirSyncImpl: ((path: Parameters<typeof readdirSync>[0]) => {
+          expect(String(path)).toBe('/Users/tester/.cache/puppeteer/chrome');
+          return ['mac_arm-131.0.6778.204'];
+        }) as typeof readdirSync,
+        existsSyncImpl: (path: Parameters<typeof existsSync>[0]) =>
+          [installedChrome, chromeForTesting].includes(String(path)),
+      }),
+    ).toBe(installedChrome);
+  });
+
   it('finds the newest Chrome for Testing binary in the Puppeteer cache', () => {
     expect(
       findChromeExecutable({
@@ -138,6 +179,25 @@ describe('chrome-launch', () => {
     ).toBe(
       '/Users/tester/.cache/puppeteer/chrome/mac_arm-131.0.6778.204/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
     );
+  });
+
+  it('falls back to Chrome for Testing when installed-preferred mode has no installed Chrome', () => {
+    const chromeForTesting =
+      '/Users/tester/.cache/puppeteer/chrome/mac_arm-131.0.6778.204/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing';
+
+    expect(
+      findChromeExecutable({
+        platform: 'darwin',
+        homeDir: '/Users/tester',
+        env: {},
+        executablePreference: 'installed',
+        readdirSyncImpl: ((path: Parameters<typeof readdirSync>[0]) => {
+          expect(String(path)).toBe('/Users/tester/.cache/puppeteer/chrome');
+          return ['mac_arm-131.0.6778.204'];
+        }) as typeof readdirSync,
+        existsSyncImpl: (path: Parameters<typeof existsSync>[0]) => String(path) === chromeForTesting,
+      }),
+    ).toBe(chromeForTesting);
   });
 
   it('creates seeded QA profile directories and profile metadata files', async () => {
