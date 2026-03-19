@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+Keep this root file high-signal and low-churn. Put fast-changing implementation detail in `docs/architecture.md`, `docs/development.md`, `docs/shell-reference.md`, or feature-local docs instead of expanding this file.
+
 ## Build and Development Commands
 
 ```bash
@@ -14,6 +16,19 @@ npm run build:extension # Build extension into dist/extension/
 npm run typecheck       # Typecheck browser + Node targets
 npm run test            # Vitest run (all tests)
 npx vitest run src/fs/virtual-fs.test.ts  # Single test file
+```
+
+### Tray / QA / Worker Commands
+
+```bash
+npm run qa:setup        # Build dist/extension and scaffold dedicated leader/follower/extension Chrome QA profiles
+npm run qa:leader       # Launch CLI dev mode with the isolated leader Chrome profile, auto-connected to staging tray hub
+npm run qa:follower     # Launch CLI dev mode with the isolated follower Chrome profile
+npm run qa:extension    # Rebuild/load the unpacked extension in the isolated extension Chrome profile
+npx wrangler dev        # Run the Cloudflare Worker tray hub locally (requires Wrangler)
+npx wrangler deploy --env staging  # Deploy the staging tray hub
+npx wrangler deploy     # Deploy the Cloudflare Worker tray hub
+WORKER_BASE_URL=https://... npx vitest run src/worker/deployed.test.ts  # Smoke-test a deployed tray hub
 ```
 
 ### Automated Testing with `--prompt`
@@ -112,6 +127,13 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
   → Scoop completes → Orchestrator → Cone's message queue
 ```
 
+### Tray / Teleport Addendum
+
+- Tray hub code lives in `src/worker/` with config in `wrangler.jsonc`; treat it as coordination infrastructure, not canonical session storage.
+- When a tray is connected, remote browser targets are exposed through federated target routing; keep CDP local to the runtime that owns the page.
+- Teleport is part of the browser/shell workflow: `playwright teleport --start=<regex> --return=<regex>` and equivalent flags on `open`, `tab-new`, and navigation commands.
+- Any `*.bsh` file is a browser-navigation helper. Keep detailed behavior in docs rather than growing this root guide.
+
 ## Key Conventions
 
 - **Two type systems**: Legacy ToolDefinition (src/tools/) and pi-compatible AgentTool (src/core/). Bridged by `tool-adapter.ts`.
@@ -150,6 +172,10 @@ npm run build
 npm run build:extension
 ```
 **CI**: Same four gates run on every PR via `.github/workflows/ci.yml`.
+
+### Worker Deploy CI
+
+Tray-hub deploys use `.github/workflows/worker.yml` for staging and production. Use the repo-level `CLOUDFLARE_API_TOKEN` secret plus `CLOUDFLARE_ACCOUNT_ID` variable, and let `cloudflare/wrangler-action` surface the deployed URL for `src/worker/deployed.test.ts`.
 
 ## Git Integration (src/git/)
 isomorphic-git with LightningFS. Auth: `git config github.token <PAT>`. CORS: CLI routes through `/api/fetch-proxy`, extension uses direct fetch.

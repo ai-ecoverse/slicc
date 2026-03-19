@@ -28,7 +28,6 @@ import { ScoopsPanel } from './scoops-panel.js';
 import { ScoopSwitcher } from './scoop-switcher.js';
 import {
   getApiKey,
-  clearAllSettings,
   getSelectedProvider,
   getProviderModels,
   getSelectedModelId,
@@ -36,6 +35,7 @@ import {
   showProviderSettings,
   getAllAvailableModels,
   getProviderConfig,
+  clearAllSettings,
 } from './provider-settings.js';
 import { EXTENSION_TAB_SPECS, setHiddenTabs, type ExtensionTabId } from './tabbed-ui.js';
 import { TabZone } from './tab-zone.js';

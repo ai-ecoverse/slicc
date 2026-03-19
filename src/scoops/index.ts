@@ -19,3 +19,16 @@ export { TaskScheduler, type SchedulerCallbacks } from './scheduler.js';
 export { loadSkills, formatSkillsForPrompt, createDefaultSkills, type Skill, type SkillMetadata } from './skills.js';
 export { createNanoClawTools, type NanoClawToolsConfig } from './nanoclaw-tools.js';
 export { Heartbeat, type HeartbeatStatus, type HeartbeatCallbacks } from './heartbeat.js';
+export {
+  attachTrayFollower,
+  normalizeFollowerAttachResponse,
+  normalizeFollowerBootstrapResponse,
+  pollTrayFollowerBootstrap,
+  retryTrayFollowerBootstrap,
+  sendTrayFollowerAnswer,
+  sendTrayFollowerIceCandidate,
+  type FollowerAttachOptions,
+  type FollowerAttachPlan,
+  type FollowerBootstrapOptions,
+  type FollowerBootstrapPlan,
+} from './tray-follower.js';

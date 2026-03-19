@@ -99,6 +99,9 @@ To close the current tab: `playwright-cli close`. To close a specific tab: `play
 - `*` = the user's active/focused tab in Chrome
 - These can differ! If the user switches tabs in Chrome, `*` moves but `→` stays. Use `tab-select` to follow the user's active tab when needed.
 
+**Remote targets (tray mode):**
+When connected to a tray, `playwright-cli tab-list` shows browser tabs from all connected SLICC instances. Remote targets appear with a `[remote:runtimeId]` annotation. Use `playwright-cli tab-select <index>` to target a remote tab, then use the usual commands (`snapshot`, `screenshot`, `click`, `fill`, etc.) — CDP commands are routed transparently over the tray data channel to the runtime that owns the tab. To open a new tab on a specific remote runtime, use `playwright-cli open <url> --runtime=<runtimeId>` or `playwright-cli tab-new <url> --runtime=<runtimeId>`.
+
 **Do NOT:**
 - Try to `read_file` on a PNG, `base64` encode it, or `convert` it to view images
 - Run `imgcat` or `cat` on screenshots expecting to see them yourself
@@ -127,12 +130,24 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **node -e / python3 -c** — Execute JavaScript or Python. JSH/node scripts have access to `exec(command)` to run shell commands: `const r = await exec('oauth-token adobe'); const token = r.stdout.trim();`
 - **serve <dir>** — Open a VFS app directory in a new browser tab. Defaults to `index.html`; use `--entry` to override the entry file.
 - **open <path|url>** — Open a URL or single VFS file in a new browser tab. Use `open --view` when you need to see an image inline. `.shtml` files are opened as sprinkles instead of browser tabs.
+- **host** — Print the current leader tray status plus `join_url`. When this runtime is leader, shows the join URL and connected followers. Use `host reset` to disconnect all followers and create a fresh tray session with a new join URL (leader only).
 - **pbcopy / pbpaste** — Clipboard commands. `echo hello | pbcopy` copies stdin to clipboard, `pbpaste` outputs clipboard contents. Uses `navigator.clipboard` API.
 - **xclip / xsel** — Clipboard commands that auto-detect direction: `echo hello | xclip` copies (stdin present), `xclip` alone pastes (no stdin).
 - **say** — Text-to-speech using Web Speech API. `say hello world`, `say -v Samantha hello` (voice selection), `say -r 1.5 fast speech` (rate 0.1-10), `say --list` (list voices).
 - **afplay** — Play audio files using Web Audio API. `afplay /path/to/audio.mp3`, `afplay -v 0.5 file.wav` (volume 0-1), `afplay -r 1.5 file.mp3` (rate 0.25-4).
 - **chime** — Play a notification chime sound. Alias for `afplay /shared/sounds/chime.mp3`.
-- **playwright-cli** — Browser automation (built-in, no SKILL.md lookup needed). Key subcommands: `tab-list`, `tab-select <index>`, `snapshot`, `screenshot [--filename=<path>]`, `open <url>`, `click <ref>`, `fill <ref> "text"`, `close`. Run `playwright-cli --help` for full list.
+- **playwright-cli** — Browser automation (built-in, no SKILL.md lookup needed). Key subcommands: `tab-list`, `tab-select <index>`, `snapshot`, `screenshot [--filename=<path>]`, `open <url> [--runtime=<id>]`, `click <ref>`, `fill <ref> "text"`, `close`. Use `--runtime` with `open`/`tab-new` to open a tab on a remote tray runtime. Run `playwright-cli --help` for full list.
+- **rsync** — Sync files between local VFS and a remote tray runtime. Push: `rsync /local runtime-id:/remote`. Pull: `rsync runtime-id:/remote /local`. Flags: `--dry-run` (preview), `--delete` (remove dest files not in source), `--verbose` (per-file detail). Requires an active tray connection.
+- **teleport** — Teleport browser cookies from a remote tray runtime to the local browser. Enables seamless authentication transfer between SLICC instances in a tray. Usage: `teleport` (auto-select best follower), `teleport <runtime-id>` (target specific runtime), `teleport --list` (show available runtimes), `teleport --url <url>` (open URL on follower for interactive auth). When `--url` is provided, the follower opens a browser tab for the human to complete login; cookies are captured after auth completion (hostname redirect) or a 2-minute timeout. Page reloads by default after applying cookies; use `--no-reload` to skip.
+
+### Browser Shell Scripts (.bsh)
+
+`.bsh` files are JavaScript scripts that auto-execute when the browser navigates to a matching URL. Place them in `/workspace/` or `/shared/`.
+
+- **Filename = hostname pattern**: `-.okta.com.bsh` matches `*.okta.com`, `login.okta.com.bsh` matches exactly `login.okta.com`
+- **`// @match` directive**: Add in first 10 lines to restrict to specific URL patterns (e.g. `// @match *://login.okta.com/app/*`)
+- Same execution engine as `.jsh` — access `process`, `console`, `fs`, `exec()` globals
+- The BshWatchdog monitors browser navigations and runs matching scripts automatically
 
 ## Inline Cards
 

@@ -28,6 +28,13 @@ export function resolveUiRuntimeMode(locationHref: string, isExtension: boolean)
   }
 }
 
+export function shouldUseRuntimeModeTrayDefaults(
+  runtimeMode: UiRuntimeMode,
+  hasRuntimeConfigEndpoint: boolean,
+): boolean {
+  return runtimeMode === 'electron-overlay' || (runtimeMode === 'standalone' && hasRuntimeConfigEndpoint);
+}
+
 export function getElectronOverlayInitialTab(locationHref: string): ExtensionTabId {
   try {
     const url = new URL(locationHref);
@@ -55,6 +62,13 @@ export function getLickWebSocketUrl(locationHref: string): string {
 export function getWebhookUrl(locationHref: string, webhookId: string): string {
   const url = new URL(locationHref);
   return `${url.origin}/webhooks/${webhookId}`;
+}
+
+/** Construct a per-webhook URL under a tray webhook capability URL. */
+export function getTrayWebhookUrl(trayWebhookUrl: string, webhookId: string): string {
+  const normalizedBase = trayWebhookUrl.replace(/\/+$/, '');
+  const normalizedWebhookId = webhookId.replace(/^\/+/, '');
+  return `${normalizedBase}/${normalizedWebhookId}`;
 }
 
 export function isElectronOverlaySetTabMessage(

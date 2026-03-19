@@ -9,6 +9,10 @@ Build, run, test, and debug SLICC locally.
 | `npm run dev:full` | Full dev mode: Vite HMR + Chrome + CDP proxy (port 5710) | Interactive development; live reload; test browser features |
 | `npm run dev:electron -- /Applications/Slack.app` | Launch the main CLI in Electron attach mode against an Electron app | Electron overlay/runtime work |
 | `npm run dev` | Vite dev server only (no Chrome/CDP) | Quick UI iteration without launching browser |
+| `npm run qa:setup` | Build the extension and scaffold dedicated `leader` / `follower` / `extension` Chrome QA profiles | First-time manual verification setup; reset profile colors/state |
+| `npm run qa:leader` | Launch the CLI with the dedicated leader Chrome profile, auto-connected to the staging tray hub | Manual tray-leader verification; `host` should show `status: leader` |
+| `npm run qa:follower` | Launch the CLI with the dedicated follower Chrome profile | Manual follower-join verification with isolated browser state |
+| `npm run qa:extension` | Rebuild the extension, then launch the CLI with the dedicated extension profile auto-loading `dist/extension` | Extension verification without re-loading unpacked extension by hand |
 | `npm run build` | Production build: Vite UI + TSC CLI/Electron Node target | Pre-deployment validation; final bundle check |
 | `npm run build:ui` | Vite build only into `dist/ui/` | Build UI assets separately |
 | `npm run build:cli` | TSC build only into `dist/cli/` | Build CLI server + Electron attach helpers separately |
@@ -19,6 +23,12 @@ Build, run, test, and debug SLICC locally.
 | `npm run test` | Vitest run (all tests) | Run full test suite; CI validation |
 | `npm run test:watch` | Vitest watch mode | Iterate on test changes; TDD workflow |
 | `npx vitest run src/fs/virtual-fs.test.ts` | Run single test file | Debug a specific module |
+| `npx wrangler dev` | Run the Cloudflare Worker tray hub locally (if Wrangler is installed/authenticated) | Exercise `src/worker/` against a real Worker runtime |
+| `npx wrangler deploy --env staging` | Deploy the staging Cloudflare Worker tray hub using `wrangler.jsonc` | Publish the staging tray hub (`slicc-tray-hub-staging`) used by GitHub Actions |
+| `npx wrangler deploy` | Deploy the production Cloudflare Worker tray hub using `wrangler.jsonc` | Publish the production tray hub |
+| `WORKER_BASE_URL=https://... npx vitest run src/worker/deployed.test.ts` | Run the deployed tray-hub smoke test | Verify the live Worker contract (`POST /tray`, controller attach, leader WebSocket, webhook responses) |
+
+When `WORKER_BASE_URL` is set for the CLI/Electron server, the standalone browser runtime now exposes it at `/api/runtime-config` and the cone runtime will automatically create/attach a tray leader session on startup. Passing `--lead` to the CLI launches Chrome with the canonical `?tray=<worker-base-url>` query, and successful leader attach rewrites the visible URL to `?tray=<worker-base-url>/tray/<trayId>`. Passing `--join <join-url>` launches Chrome with the canonical `?tray=<join-url>` follower capability instead; the CLI validates that the value parses as a tray `.../join/<trayId>.<secret>` URL and strips any hash/query suffixes before launch. In standalone/Electron startup, if there is no query override, stored join/base URL, server runtime config, or `VITE_WORKER_BASE_URL`, the browser falls back to the staging worker in dev builds and the production worker in normal builds. Extension/offscreen builds can still use `VITE_WORKER_BASE_URL`, persisted runtime storage, or URL overrides via `tray` (canonical) plus legacy `lead` / `trayWorkerUrl` for the same leader-join path. `GET /join/:token` now reports readiness plus the supported bootstrap transport (`409 FOLLOWER_JOIN_NOT_READY` before a live leader, `200` with `signaling.transport = 'http-poll'` once the leader WebSocket is live), while **`POST /join/:token` remains the follower HTTP contract**: initial attach returns `result.action = wait|signal|fail`, and subsequent `poll` / `answer` / `ice-candidate` / `retry` actions drive the offer/answer/ICE bootstrap without requiring follower-owned tray WebSockets.
 
 ## Ports (CLI Mode Only)
 
@@ -57,6 +67,10 @@ Manual verification in the relevant runtimes:
   - Launch Chrome automatically
   - Navigate to http://localhost:5710
   - Interact with UI; check functionality
+- [ ] Feature works with QA Chrome profiles when browser isolation matters (`npm run qa:setup`, then `qa:leader` / `qa:follower` / `qa:extension`)
+  - Dedicated profile colors are visible
+  - Leader/follower state stays isolated between windows
+  - Extension profile auto-loads `dist/extension`
 - [ ] Feature works in extension mode (load `dist/extension/` unpacked in `chrome://extensions`)
   - Load `dist/extension/` as unpacked extension
   - Open side panel
@@ -68,7 +82,48 @@ Manual verification in the relevant runtimes:
 - [ ] No console errors in DevTools (F12 in CLI mode)
 - [ ] No TypeScript errors in browser console (watch CLI stdout)
 
+## Cloudflare Worker Deploy Pipeline
+
+The tray hub now assumes **`POST /tray` is the only canonical tray-creation endpoint**. `POST /session` and `POST /trays` are intentionally rejected with `410` so callers move to the single public route.
+
+### GitHub repo settings to create
+
+This pipeline no longer relies on separate GitHub `staging` / `production` environments.
+
+Add these at the **repository** level instead:
+
+- **Secret:** `CLOUDFLARE_API_TOKEN`
+  - should have permission to deploy Workers and manage Durable Objects for the target account
+- **Variable:** `CLOUDFLARE_ACCOUNT_ID`
+  - the Cloudflare account ID used by Wrangler in CI
+
+Nothing else is required for CI configuration:
+
+- production deploys use the default Worker name from `wrangler.jsonc`: `slicc-tray-hub`
+- staging deploys use the hardcoded staging Worker name in `wrangler.jsonc`: `slicc-tray-hub-staging`
+- the post-deploy smoke test reads the deployed URL from `cloudflare/wrangler-action` output, so GitHub does **not** need a `WORKER_BASE_URL` variable
+
+### Workflow behavior
+
+- `.github/workflows/worker.yml`
+  - runs staging deploy + smoke test on pull requests to `main` that touch the Worker/Wrangler config
+  - skips forked PRs because GitHub does not expose deployment secrets there
+  - runs production deploy + smoke test on pushes to `main` that touch the Worker/Wrangler config
+  - supports manual dispatch with `target=staging|production`
+  - uses `cloudflare/wrangler-action@v3`, pins Wrangler `3.91.0` (first release with `wrangler.jsonc` support), and passes its `deployment-url` output into `src/worker/deployed.test.ts`
+  - retries the deployed smoke test for up to ~90 seconds after deploy so brief `workers.dev` propagation lag does not fail an otherwise healthy rollout
+
+### Local validation commands
+
+Use these before relying on CI:
+
+- `npx wrangler deploy --dry-run --env staging`
+- `npx wrangler deploy --dry-run`
+- `WORKER_BASE_URL=<deployed-worker-url> npx vitest run src/worker/deployed.test.ts`
+
 ## Extension Testing Steps
+
+If you want a reusable browser profile instead of re-loading the unpacked extension by hand every time, run `npm run qa:setup` once and use `npm run qa:extension` for subsequent launches.
 
 1. **Build extension bundle**
    ```bash
@@ -256,6 +311,7 @@ src/
   ui/              Chat, terminal, file browser UI
   cli/             Express server + Chrome launcher
   extension/       Chrome Manifest V3 extension files
+  worker/          Cloudflare Worker + Durable Object tray hub
   shims/           Node module shims for browser bundle
   defaults/        Bundled default skills, sprinkles, and workspace
   skills/          Skill installation engine

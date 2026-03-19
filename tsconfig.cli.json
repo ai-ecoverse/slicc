@@ -9,9 +9,9 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "outDir": "dist/cli",
-    "rootDir": "src/cli",
+    "outDir": "dist",
+    "rootDir": "src",
     "declaration": true
   },
-  "include": ["src/cli/**/*.ts"]
+  "include": ["src/cli/**/*.ts", "src/tray-url-shared.ts"]
 }

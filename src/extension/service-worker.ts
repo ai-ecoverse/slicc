@@ -6,6 +6,7 @@
  * 2. Create/maintain the offscreen document (agent engine)
  * 3. Relay messages between side panel ↔ offscreen document
  * 4. Proxy chrome.debugger CDP calls for the offscreen document
+ * 5. Host the leader tray WebSocket for the offscreen document
  *
  * Chrome extension API types provided by ./chrome.d.ts
  */
@@ -15,6 +16,11 @@ import type {
   CdpCommandMsg,
   CdpResponseMsg,
   CdpEventMsg,
+  TraySocketCommandMessage,
+  TraySocketErrorMsg,
+  TraySocketMessageMsg,
+  TraySocketOpenMsg,
+  TraySocketOpenedMsg,
   OAuthRequestMsg,
   OAuthResultMsg,
 } from './messages.js';
@@ -118,6 +124,8 @@ async function addToSliccGroup(tabId: number): Promise<void> {
 const sessionToTab = new Map<string, number>();
 /** Tracks which tab IDs we've attached the debugger to. */
 const attachedTabs = new Set<number>();
+/** Tracks leader tray WebSockets opened on behalf of the offscreen document. */
+const traySockets = new Map<number, WebSocket>();
 
 // ---------------------------------------------------------------------------
 // Message relay
@@ -191,7 +199,19 @@ chrome.runtime.onMessage.addListener(
         return false;
       }
 
-      // Non-CDP offscreen messages reach the side panel directly via
+      if (isTraySocketCommand(payload)) {
+        void handleTraySocketCommand(payload)
+          .catch((err) => {
+            void sendServiceWorkerMessage({
+              type: 'tray-socket-error',
+              id: payload.id,
+              error: err instanceof Error ? err.message : String(err),
+            } satisfies TraySocketErrorMsg);
+          });
+        return false;
+      }
+
+      // Other offscreen messages reach the side panel directly via
       // chrome.runtime.sendMessage broadcast — no relay needed.
       return false;
     }
@@ -209,9 +229,75 @@ function isExtMsg(msg: unknown): boolean {
   );
 }
 
+function isTraySocketCommand(payload: ExtensionMessage['payload']): payload is TraySocketCommandMessage {
+  return payload.type === 'tray-socket-open' || payload.type === 'tray-socket-send' || payload.type === 'tray-socket-close';
+}
+
 // Note: No relay functions needed. chrome.runtime.sendMessage broadcasts to
 // all extension contexts (except the sender). Panel ↔ offscreen messages
-// reach each other directly. The service worker only handles CDP proxy commands.
+// reach each other directly. The service worker only handles CDP + tray socket proxy commands.
+
+async function handleTraySocketCommand(command: TraySocketCommandMessage): Promise<void> {
+  switch (command.type) {
+    case 'tray-socket-open':
+      openTraySocket(command);
+      return;
+    case 'tray-socket-send': {
+      const socket = traySockets.get(command.id);
+      if (!socket) {
+        throw new Error(`Tray socket ${command.id} is not open`);
+      }
+      socket.send(command.data);
+      return;
+    }
+    case 'tray-socket-close': {
+      const socket = traySockets.get(command.id);
+      traySockets.delete(command.id);
+      socket?.close(command.code, command.reason);
+      return;
+    }
+  }
+}
+
+function openTraySocket(command: TraySocketOpenMsg): void {
+  traySockets.get(command.id)?.close(1000, 'replaced');
+  const socket = new WebSocket(command.url);
+  traySockets.set(command.id, socket);
+
+  socket.addEventListener('open', () => {
+    void sendServiceWorkerMessage({ type: 'tray-socket-opened', id: command.id } satisfies TraySocketOpenedMsg);
+  });
+  socket.addEventListener('message', (event) => {
+    void sendServiceWorkerMessage({
+      type: 'tray-socket-message',
+      id: command.id,
+      data: typeof event.data === 'string' ? event.data : String(event.data),
+    } satisfies TraySocketMessageMsg);
+  });
+  socket.addEventListener('error', () => {
+    if (traySockets.get(command.id) === socket) {
+      traySockets.delete(command.id);
+    }
+    void sendServiceWorkerMessage({
+      type: 'tray-socket-error',
+      id: command.id,
+      error: 'Tray leader WebSocket failed in extension service worker',
+    } satisfies TraySocketErrorMsg);
+  });
+  socket.addEventListener('close', () => {
+    if (traySockets.get(command.id) === socket) {
+      traySockets.delete(command.id);
+    }
+    void sendServiceWorkerMessage({ type: 'tray-socket-closed', id: command.id });
+  });
+}
+
+async function sendServiceWorkerMessage(payload: ExtensionMessage['payload']): Promise<void> {
+  await chrome.runtime.sendMessage({
+    source: 'service-worker' as const,
+    payload,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // CDP proxy — translate offscreen CDP commands to chrome.debugger calls

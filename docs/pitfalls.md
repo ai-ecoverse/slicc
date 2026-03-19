@@ -204,6 +204,21 @@ Use `chrome.debugger` API to control tabs directly.
 
 **Active Tab Detection**: BrowserAPI includes `active` field (boolean) only in extension mode, identifying the user's currently focused tab for intelligent tool auto-dispatch.
 
+## Leader Tray WebSocket: Extension Mode
+
+**The Problem**
+
+Leader tray bootstrap waits for a `leader.connected` control frame. In extension mode, that WebSocket must not live in the offscreen document.
+
+**The Solution**
+
+Host the real leader tray `WebSocket` in `src/extension/service-worker.ts` and relay frames through `chrome.runtime.sendMessage`. The offscreen document should use `ServiceWorkerLeaderTraySocket` from `src/extension/tray-socket-proxy.ts` as the `LeaderTrayManager` `webSocketFactory`.
+
+| Mode | Leader tray socket owner |
+|------|--------------------------|
+| **CLI** | Direct `WebSocket` in the app runtime |
+| **Extension** | Service worker proxy, not the offscreen document |
+
 ## Fetch Proxy: CORS & CSP
 
 | Mode | Fetch Strategy | CORS Handling |

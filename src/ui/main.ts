@@ -22,13 +22,34 @@ import { BrowserAPI } from '../cdp/index.js';
 import { Orchestrator } from '../scoops/index.js';
 import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
+import { LeaderTrayManager, createTrayFetch, getLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
+import {
+  DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
+  DEFAULT_STAGING_TRAY_WORKER_BASE_URL,
+  buildTrayLaunchUrl,
+  fetchRuntimeConfig,
+  hasStoredTrayJoinUrl,
+  resolveTrayRuntimeConfig,
+  TRAY_JOIN_STORAGE_KEY,
+} from '../scoops/tray-runtime-config.js';
+import { FollowerTrayManager, LeaderTrayPeerManager, startFollowerWithAutoReconnect, type FollowerAutoReconnectHandle } from '../scoops/tray-webrtc.js';
+import { LeaderSyncManager } from '../scoops/tray-leader-sync.js';
+import { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
 import {
   getElectronOverlayInitialTab,
   getLickWebSocketUrl,
+  getTrayWebhookUrl,
   getWebhookUrl,
   isElectronOverlaySetTabMessage,
   resolveUiRuntimeMode,
+  shouldUseRuntimeModeTrayDefaults,
 } from './runtime-mode.js';
+import { setConnectedFollowersGetter, setTrayResetter } from '../shell/supplemental-commands/host-command.js';
+import { setRsyncSendFsRequest } from '../shell/supplemental-commands/rsync-command.js';
+import {
+  setPlaywrightTeleportBestFollower,
+  setPlaywrightTeleportConnectedFollowers,
+} from '../shell/supplemental-commands/playwright-command.js';
 import { SprinkleManager } from './sprinkle-manager.js';
 import { initTelemetry } from './telemetry.js';
 import { showTelemetryConsent } from './telemetry-consent.js';
@@ -319,6 +340,15 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       try {
         log.info('Offscreen engine ready, scoop count:', client.getScoops().length);
 
+        if (window.localStorage.getItem(TRAY_JOIN_STORAGE_KEY)) {
+          void chrome.runtime.sendMessage({
+            source: 'panel' as const,
+            payload: { type: 'refresh-tray-runtime' as const },
+          }).catch(() => {
+            // Offscreen may already be syncing runtime state.
+          });
+        }
+
         // Pick the cone (or first scoop) and run full scoop selection.
         // switchToContext inside selectScoop loads from shared IndexedDB.
         const target = selectedScoop ?? client.getScoops().find(s => s.isCone) ?? client.getScoops()[0];
@@ -485,11 +515,16 @@ async function main(): Promise<void> {
   applyProviderDefaults();
 
   // Check for API key (first-run dialog)
+  // Skip the dialog if the user already has a stored tray join URL (providerless follower mode)
   let apiKey = getApiKey();
-  if (!apiKey) {
-    await showProviderSettings();
+  const hasTrayJoin = hasStoredTrayJoinUrl(window.localStorage);
+  if (!apiKey && !hasTrayJoin) {
+    // Default to tray-join form when not on the default port (5710 prod, 3000 legacy dev)
+    const isDefaultPort = window.location.port === '5710' || window.location.port === '3000' || window.location.port === '';
+    await showProviderSettings({ preferTrayJoin: !isDefaultPort });
     apiKey = getApiKey();
   }
+  const allowProviderlessTrayJoin = !apiKey && hasStoredTrayJoinUrl(window.localStorage);
 
   // Build the layout — tabbed in extension mode, split panels in standalone
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
@@ -817,6 +852,21 @@ async function main(): Promise<void> {
       const shell = new WasmShell({ fs: sharedFs, browserAPI: browser });
       await layout.panels.terminal.mountShell(shell);
       log.info('Terminal mounted with shared VFS');
+
+      // Start BSH navigation watchdog — auto-executes .bsh scripts on matching navigations
+      try {
+        const { BshWatchdog } = await import('../shell/bsh-watchdog.js');
+        const bshWatchdog = new BshWatchdog({
+          transport: browser.getTransport(),
+          fs: sharedFs,
+          execute: (scriptPath) => shell.executeScriptFile(scriptPath),
+        });
+        void bshWatchdog.start();
+        window.addEventListener('beforeunload', () => bshWatchdog.stop(), { once: true });
+        log.info('BSH navigation watchdog started');
+      } catch (e) {
+        log.warn('Failed to start BSH watchdog', e);
+      }
     } catch (e) {
       log.warn('Failed to mount shell to terminal', e);
     }
@@ -825,7 +875,9 @@ async function main(): Promise<void> {
   // Create cone if it doesn't exist
   const allScoops = orchestrator.getScoops();
   const hasCone = allScoops.some((s) => s.isCone);
-  if (!hasCone) {
+  if (allowProviderlessTrayJoin) {
+    log.info('Skipping local cone bootstrap while joining a tray without a configured provider');
+  } else if (!hasCone) {
     const cone = await layout.panels.scoops.createScoop('Cone', true);
     selectedScoop = cone;
     log.info('Created cone');
@@ -851,6 +903,10 @@ async function main(): Promise<void> {
     layout.panels.memory.setSelectedScoop(selectedScoop.jid);
   }
 
+  // Mutable reference to leader sync — set when tray leader mode is active.
+  // Used by coneAgentHandle to broadcast user messages to followers.
+  let leaderSyncRef: LeaderSyncManager | null = null;
+
   // Build the cone agent handle — all user input routes through orchestrator
   const coneAgentHandle: AgentHandle = {
     sendMessage(text: string, messageId?: string): void {
@@ -874,6 +930,9 @@ async function main(): Promise<void> {
       getBuffer(selectedScoop.jid).push({
         id: msg.id, role: 'user', content: text, timestamp: Date.now(),
       });
+
+      // Broadcast user message to all followers (leader mode)
+      leaderSyncRef?.broadcastUserMessage(text, msg.id);
 
       orchestrator.handleMessage(msg);
       orchestrator.createScoopTab(selectedScoop.jid);
@@ -1071,7 +1130,11 @@ async function main(): Promise<void> {
                   data.scoop as string | undefined,
                   data.filter as string | undefined,
                 );
-                response = { type: 'response', requestId: data.requestId, data: { ...wh, url: getWebhookUrl(window.location.href, wh.id) } };
+                const traySession = getLeaderTrayRuntimeStatus().session;
+                const webhookUrl = traySession?.webhookUrl
+                  ? getTrayWebhookUrl(traySession.webhookUrl, wh.id)
+                  : getWebhookUrl(window.location.href, wh.id);
+                response = { type: 'response', requestId: data.requestId, data: { ...wh, url: webhookUrl } };
                 break;
               }
               case 'delete_webhook': {
@@ -1101,6 +1164,20 @@ async function main(): Promise<void> {
                 response = ok
                   ? { type: 'response', requestId: data.requestId, data: { ok: true } }
                   : { type: 'response', requestId: data.requestId, data: { error: 'Cron task not found' } };
+                break;
+              }
+              case 'tray_status': {
+                const leaderStatus = getLeaderTrayRuntimeStatus();
+                response = {
+                  type: 'response',
+                  requestId: data.requestId,
+                  data: {
+                    state: leaderStatus.state,
+                    joinUrl: leaderStatus.session?.joinUrl ?? null,
+                    workerBaseUrl: leaderStatus.session?.workerBaseUrl ?? null,
+                    trayId: leaderStatus.session?.trayId ?? null,
+                  },
+                };
                 break;
               }
               default:
@@ -1240,6 +1317,248 @@ async function main(): Promise<void> {
     orchestrator.createScoopTab(selectedScoop.jid);
     // Trigger scoop select to properly load the chat context
     await handleScoopSelect(selectedScoop);
+  }
+
+  if (runtimeMode === 'standalone' || runtimeMode === 'electron-overlay') {
+    const runtimeConfig = await fetchRuntimeConfig();
+    const runtimeDefaultWorkerBaseUrl = shouldUseRuntimeModeTrayDefaults(runtimeMode, runtimeConfig !== null)
+      ? (__DEV__
+        ? DEFAULT_STAGING_TRAY_WORKER_BASE_URL
+        : DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL)
+      : null;
+
+    const trayRuntimeConfig = await resolveTrayRuntimeConfig({
+      locationHref: window.location.href,
+      storage: window.localStorage,
+      envBaseUrl: import.meta.env.VITE_WORKER_BASE_URL ?? null,
+      defaultWorkerBaseUrl: runtimeDefaultWorkerBaseUrl,
+      runtimeConfigFetcher: async () => runtimeConfig,
+    });
+
+    // Start follower join from a joinUrl. Reusable — called at startup
+    // and when the user pastes a join URL in the settings dialog.
+    let activeFollowerSync: FollowerSyncManager | null = null;
+    let activeReconnectHandle: FollowerAutoReconnectHandle | null = null;
+    let followerTargetRefreshInterval: ReturnType<typeof setInterval> | null = null;
+
+    // Wire rsync sendFsRequest — picks whichever sync manager is active (leader or follower)
+    setRsyncSendFsRequest(() => {
+      if (leaderSyncRef) return (rid, req) => leaderSyncRef!.sendFsRequest(rid, req);
+      if (activeFollowerSync) return (rid, req) => activeFollowerSync!.sendFsRequest(rid, req);
+      return null;
+    });
+
+    // Wire playwright teleport command callbacks
+    setPlaywrightTeleportBestFollower(() => {
+      if (leaderSyncRef) return () => leaderSyncRef!.getBestFollowerForTeleport();
+      return null;
+    });
+    setPlaywrightTeleportConnectedFollowers(() => {
+      if (leaderSyncRef) return () => leaderSyncRef!.getConnectedFollowers();
+      return null;
+    });
+
+    const wireFollowerSync = (connection: import('../scoops/tray-webrtc.js').FollowerTrayConnection) => {
+      // Clean up previous sync if any
+      if (followerTargetRefreshInterval) {
+        clearInterval(followerTargetRefreshInterval);
+        followerTargetRefreshInterval = null;
+      }
+      activeFollowerSync?.close();
+
+      const runtimeId = `follower-${connection.bootstrapId}`;
+      const followerSync = new FollowerSyncManager(connection.channel, {
+        browserTransport: browser.getTransport(),
+        browserAPI: browser,
+        onSnapshot: (messages) => {
+          layout.panels.chat.loadMessages(messages);
+        },
+        onUserMessage: (text) => {
+          layout.panels.chat.addUserMessage(text);
+        },
+        onStatus: (status) => {
+          layout.panels.chat.setProcessing(status === 'processing');
+        },
+        onTargetsChanged: () => void refreshFollowerTargets(),
+      });
+      activeFollowerSync = followerSync;
+      browser.setTrayTargetProvider(followerSync);
+      layout.panels.chat.setAgent(followerSync);
+      followerSync.requestSnapshot();
+
+      const refreshFollowerTargets = async () => {
+        try {
+          const pages = await browser.listPages();
+          followerSync.advertiseTargets(
+            pages.map(p => ({ targetId: p.targetId, title: p.title, url: p.url })),
+            runtimeId,
+          );
+        } catch { /* ignore errors */ }
+      };
+      followerTargetRefreshInterval = setInterval(refreshFollowerTargets, 5000);
+      void refreshFollowerTargets();
+
+      log.info('Follower sync wired to chat panel', { trayId: connection.trayId });
+    };
+
+    const startFollowerJoin = (joinUrl: string) => {
+      // Cancel any existing reconnect loop / follower
+      activeReconnectHandle?.cancel();
+      if (followerTargetRefreshInterval) {
+        clearInterval(followerTargetRefreshInterval);
+        followerTargetRefreshInterval = null;
+      }
+      activeFollowerSync?.close();
+      activeFollowerSync = null;
+
+      activeReconnectHandle = startFollowerWithAutoReconnect(
+        {
+          joinUrl,
+          runtime: 'slicc-standalone',
+          fetchImpl: createTrayFetch(),
+        },
+        {
+          onConnected: (connection) => wireFollowerSync(connection),
+          onReconnecting: (attempt) => {
+            log.info('Follower reconnecting', { attempt });
+          },
+          onGaveUp: (lastError) => {
+            log.warn('Follower reconnect gave up', { lastError });
+          },
+        },
+      );
+    };
+
+    // Listen for join events from the settings dialog
+    window.addEventListener('slicc:tray-join', ((event: CustomEvent<{ joinUrl: string }>) => {
+      startFollowerJoin(event.detail.joinUrl);
+    }) as EventListener);
+
+    // Clean up on page unload
+    window.addEventListener('beforeunload', () => {
+      if (followerTargetRefreshInterval) clearInterval(followerTargetRefreshInterval);
+      activeFollowerSync?.close();
+      activeReconnectHandle?.cancel();
+    }, { once: true });
+
+    if (trayRuntimeConfig?.joinUrl) {
+      startFollowerJoin(trayRuntimeConfig.joinUrl);
+    } else if (trayRuntimeConfig?.workerBaseUrl) {
+      let leaderTray!: LeaderTrayManager;
+      // Helper: create and wire a LeaderSyncManager + LeaderTrayPeerManager pair.
+      // Called on initial startup and again after `host reset`.
+      let leaderSync!: LeaderSyncManager;
+      let trayPeers!: LeaderTrayPeerManager;
+      let leaderTargetRefreshInterval: ReturnType<typeof setInterval>;
+
+      const createAndWireLeaderSync = () => {
+        leaderSync = new LeaderSyncManager({
+          browserTransport: browser.getTransport(),
+          browserAPI: browser,
+          getMessages: () => {
+            return layout.panels.chat.getMessages();
+          },
+          getScoopJid: () => selectedScoop?.jid ?? 'cone',
+          onFollowerMessage: (text, messageId) => {
+            // Display the follower's message in the leader's chat panel
+            layout.panels.chat.addUserMessage(text);
+            // Route follower messages through the same path as local user messages.
+            // coneAgentHandle.sendMessage broadcasts user_message_echo to all followers.
+            coneAgentHandle.sendMessage(text, messageId);
+          },
+          onFollowerAbort: () => {
+            coneAgentHandle.stop();
+          },
+        });
+        leaderSyncRef = leaderSync;
+        setConnectedFollowersGetter(() => leaderSync.getConnectedFollowers());
+        // Wire the leader as a TrayTargetProvider so BrowserAPI can list all tray targets
+        browser.setTrayTargetProvider(leaderSync);
+
+        // Periodically refresh leader's own browser targets into the registry
+        if (leaderTargetRefreshInterval) clearInterval(leaderTargetRefreshInterval);
+        const refreshLeaderTargets = async () => {
+          try {
+            const pages = await browser.listPages();
+            leaderSync.setLocalTargets(pages.map(p => ({ targetId: p.targetId, title: p.title, url: p.url })));
+          } catch { /* ignore errors */ }
+        };
+        leaderTargetRefreshInterval = setInterval(refreshLeaderTargets, 5000);
+        void refreshLeaderTargets();
+
+        trayPeers = new LeaderTrayPeerManager({
+          sendControlMessage: message => leaderTray.sendControlMessage(message),
+          onPeerConnected: (peer, channel) => {
+            log.info('Tray follower data channel opened', {
+              controllerId: peer.controllerId,
+              bootstrapId: peer.bootstrapId,
+              attempt: peer.attempt,
+              runtime: peer.runtime,
+            });
+            leaderSync.addFollower(peer.bootstrapId, channel, {
+              runtime: peer.runtime,
+              connectedAt: peer.connectedAt ?? undefined,
+            });
+          },
+        });
+      };
+
+      createAndWireLeaderSync();
+
+      // Tap into the event system to broadcast to followers
+      // Uses `leaderSync` variable (reassigned on reset) so it always targets the current instance.
+      eventListeners.add((event: UIAgentEvent) => {
+        leaderSync.broadcastEvent(event);
+      });
+      leaderTray = new LeaderTrayManager({
+        workerBaseUrl: trayRuntimeConfig.workerBaseUrl,
+        runtime: 'slicc-standalone',
+        fetchImpl: createTrayFetch(),
+        onControlMessage: message => {
+          if (message.type === 'webhook.event') {
+            lickManager.handleWebhookEvent(message.webhookId, message.headers, message.body);
+            return;
+          }
+          void trayPeers.handleControlMessage(message).catch((error) => {
+            log.warn('Tray leader bootstrap handling failed', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        },
+      });
+      // Wire the tray reset callback for `host reset` command
+      setTrayResetter(async () => {
+        leaderSync.stop();
+        trayPeers.stop();
+        leaderTray.stop();
+        await leaderTray.clearSession();
+        const session = await leaderTray.start();
+        const trayUrl = buildTrayLaunchUrl(window.location.href, session.workerBaseUrl, session.trayId);
+        if (trayUrl !== window.location.href) {
+          window.history.replaceState(window.history.state, '', trayUrl);
+        }
+        // Re-create LeaderSyncManager + TrayPeerManager so new followers can connect
+        createAndWireLeaderSync();
+        return getLeaderTrayRuntimeStatus();
+      });
+
+      void leaderTray.start()
+        .then((session) => {
+          const trayUrl = buildTrayLaunchUrl(window.location.href, session.workerBaseUrl, session.trayId);
+          if (trayUrl !== window.location.href) {
+            window.history.replaceState(window.history.state, '', trayUrl);
+          }
+        })
+        .catch((error) => {
+          log.warn('Leader tray join failed', { error: error instanceof Error ? error.message : String(error) });
+        });
+      window.addEventListener('beforeunload', () => {
+        clearInterval(leaderTargetRefreshInterval);
+        leaderSync.stop();
+        trayPeers.stop();
+        leaderTray.stop();
+      }, { once: true });
+    }
   }
 
   log.info('Orchestrator initialized — cone+scoops ready', { scoopCount: orchestrator.getScoops().length });
