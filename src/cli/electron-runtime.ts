@@ -193,7 +193,10 @@ export function buildElectronOverlayInjectionCall(options: {
     payload['activeTab'] = options.activeTab;
   }
 
-  return `window.__SLICC_ELECTRON_OVERLAY__?.inject(${JSON.stringify(payload)});`;
+  // Wait for document.body before injecting — Runtime.evaluate and
+  // addScriptToEvaluateOnNewDocument can fire before the DOM is ready.
+  const call = `window.__SLICC_ELECTRON_OVERLAY__?.inject(${JSON.stringify(payload)});`;
+  return `if(document.body){${call}}else{document.addEventListener('DOMContentLoaded',function(){${call}});}`;
 }
 
 export function buildElectronOverlayBootstrapScript(options: {

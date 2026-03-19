@@ -116,16 +116,14 @@ describe('electron-runtime', () => {
     );
   });
 
-  it('serializes the overlay injection call', () => {
-    expect(
-      buildElectronOverlayInjectionCall({
-        appUrl: `http://${DEFAULT_ELECTRON_SERVE_HOST}:3000/electron`,
-        open: true,
-        activeTab: 'files',
-      })
-    ).toBe(
-      `window.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://${DEFAULT_ELECTRON_SERVE_HOST}:3000/electron","open":true,"activeTab":"files"});`
-    );
+  it('serializes the overlay injection call with DOMContentLoaded guard', () => {
+    const result = buildElectronOverlayInjectionCall({
+      appUrl: `http://${DEFAULT_ELECTRON_SERVE_HOST}:3000/electron`,
+      open: true,
+      activeTab: 'files',
+    });
+    const call = `window.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://${DEFAULT_ELECTRON_SERVE_HOST}:3000/electron","open":true,"activeTab":"files"});`;
+    expect(result).toBe(`if(document.body){${call}}else{document.addEventListener('DOMContentLoaded',function(){${call}});}`)
   });
 
   it('builds a macOS app launch spec from a .app bundle path', () => {
@@ -173,7 +171,9 @@ describe('electron-runtime', () => {
         appUrl: 'http://localhost:5710/electron',
       })
     ).toBe(
-      'window.__overlayLoaded = true;\nwindow.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://localhost:5710/electron"});'
+      'window.__overlayLoaded = true;\n' +
+      'if(document.body){window.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://localhost:5710/electron"});}' +
+      'else{document.addEventListener(\'DOMContentLoaded\',function(){window.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://localhost:5710/electron"});});}',
     );
   });
 
