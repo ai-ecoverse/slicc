@@ -413,23 +413,28 @@ export class ElectronOverlayInjector {
         }
         if (msg.method === 'Fetch.requestPaused') {
           const requestId = msg.params?.requestId;
+          if (!requestId) {
+            console.warn('[electron-float] Fetch.requestPaused without requestId, skipping');
+            return;
+          }
           const url = msg.params?.request?.url || '';
           const method = msg.params?.request?.method || 'GET';
           const requestHeaders = msg.params?.request?.headers || {};
-          
+          const postData = msg.params?.request?.postData;
+
           // Only proxy HTML document requests (Accept header contains text/html)
           const acceptHeader = requestHeaders['Accept'] || requestHeaders['accept'] || '';
           if (!acceptHeader.includes('text/html')) {
             send('Fetch.continueRequest', { requestId });
             return;
           }
-          
+
           console.log(`[electron-float] Proxying request to strip CSP: ${url.substring(0, 60)}`);
-          
+
           // Make the request ourselves using Node.js http/https
           const parsedUrl = new URL(url);
           const transport = parsedUrl.protocol === 'https:' ? https : http;
-          
+
           const options = {
             hostname: parsedUrl.hostname,
             port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
@@ -437,7 +442,7 @@ export class ElectronOverlayInjector {
             method: method,
             headers: requestHeaders,
           };
-          
+
           const proxyReq = transport.request(options, (proxyRes) => {
             const bodyChunks: Buffer[] = [];
             proxyRes.on('data', (chunk: Buffer) => bodyChunks.push(chunk));
@@ -480,7 +485,11 @@ export class ElectronOverlayInjector {
               send('Fetch.failRequest', { requestId, errorReason: 'Failed' });
             }
           });
-          
+
+          // Forward request body if present (for POST/PUT requests)
+          if (postData) {
+            proxyReq.write(postData);
+          }
           proxyReq.end();
         }
       } catch {
