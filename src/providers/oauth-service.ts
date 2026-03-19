@@ -57,31 +57,37 @@ async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
 
     window.addEventListener('message', handler);
 
-    // Poll the server for the OAuth result (Electron overlay fallback).
-    // In normal CLI mode the postMessage handler above resolves first and
-    // cleanup() stops the polling. In Electron overlay mode this is the
-    // only path that works.
-    pollTimer = setInterval(async () => {
-      if (resolved) return;
-      try {
-        const res = await fetch('/api/oauth-result');
-        if (res.status === 204) return; // no result yet
-        const data = await res.json() as { redirectUrl?: string; error?: string };
+    // Poll the server for the OAuth result — Electron overlay only.
+    // In Electron overlay mode, window.open opens the system browser so
+    // window.opener is null and postMessage won't work. The callback page
+    // falls back to POSTing the result to /api/oauth-result, and we poll.
+    // In normal CLI mode, postMessage works so polling is unnecessary.
+    const isElectronOverlay =
+      location.pathname.startsWith('/electron') ||
+      new URLSearchParams(location.search).get('runtime') === 'electron-overlay';
+    if (isElectronOverlay) {
+      pollTimer = setInterval(async () => {
         if (resolved) return;
-        cleanup();
+        try {
+          const res = await fetch('/api/oauth-result');
+          if (res.status === 204) return; // no result yet
+          const data = await res.json() as { redirectUrl?: string; error?: string };
+          if (resolved) return;
+          cleanup();
 
-        if (data.error) {
-          console.error('[oauth-service] Server relay OAuth error:', data.error);
-          resolve(null);
-          return;
+          if (data.error) {
+            console.error('[oauth-service] Server relay OAuth error:', data.error);
+            resolve(null);
+            return;
+          }
+
+          resolve(data.redirectUrl ?? null);
+        } catch (err) {
+          // Network error or JSON parse failure — keep polling
+          console.warn('[oauth-service] Poll failed:', err instanceof Error ? err.message : String(err));
         }
-
-        resolve(data.redirectUrl ?? null);
-      } catch (err) {
-        // Network error or JSON parse failure — keep polling
-        console.warn('[oauth-service] Poll failed:', err instanceof Error ? err.message : String(err));
-      }
-    }, 1000);
+      }, 1000);
+    }
 
     // Timeout after 2 minutes
     const timer = setTimeout(() => {

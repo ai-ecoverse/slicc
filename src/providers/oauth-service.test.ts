@@ -28,6 +28,9 @@ vi.stubGlobal('window', mockWindow);
 // Stub fetch for the server-side polling fallback (returns 204 = no result yet)
 vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ status: 204 })));
 
+// Default location: standalone CLI (no polling)
+vi.stubGlobal('location', { pathname: '/', search: '' });
+
 function fireMessage(data: unknown) {
   for (const handler of messageListeners) {
     handler({ data } as MessageEvent);
@@ -154,7 +157,10 @@ describe('createOAuthLauncher', () => {
     // Should not throw when trying to close a null popup
   });
 
-  it('resolves via server-side polling when postMessage is unavailable', async () => {
+  it('resolves via server-side polling in Electron overlay mode', async () => {
+    // Simulate Electron overlay URL
+    vi.stubGlobal('location', { pathname: '/electron', search: '' });
+
     const mockFetch = vi.mocked(fetch);
     // First poll: no result yet
     mockFetch.mockResolvedValueOnce({ status: 204 } as Response);
@@ -176,9 +182,38 @@ describe('createOAuthLauncher', () => {
 
     const result = await promise;
     expect(result).toBe('http://localhost:5710/auth/callback#token=polled');
+
+    // Restore default location
+    vi.stubGlobal('location', { pathname: '/', search: '' });
   });
 
-  it('continues polling on server errors and resolves when result arrives', async () => {
+  it('does not poll in standalone CLI mode', async () => {
+    vi.stubGlobal('location', { pathname: '/', search: '' });
+
+    const mockFetch = vi.mocked(fetch);
+
+    const launcher = createOAuthLauncher();
+    const promise = launcher('https://idp.example.com/authorize');
+
+    // Advance past where polling would fire
+    await vi.advanceTimersByTimeAsync(2000);
+
+    // fetch should NOT have been called (no polling in standalone mode)
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    // Resolve via postMessage
+    fireMessage({
+      type: 'oauth-callback',
+      redirectUrl: 'http://localhost:5710/auth/callback#token=msg',
+    });
+
+    const result = await promise;
+    expect(result).toBe('http://localhost:5710/auth/callback#token=msg');
+  });
+
+  it('continues polling on server errors in Electron overlay mode', async () => {
+    vi.stubGlobal('location', { pathname: '/electron', search: '' });
+
     const mockFetch = vi.mocked(fetch);
     // First poll: server error
     mockFetch.mockResolvedValueOnce({ status: 500 } as Response);
@@ -200,6 +235,8 @@ describe('createOAuthLauncher', () => {
 
     const result = await promise;
     expect(result).toBe('http://localhost:5710/auth/callback#token=recovered');
+
+    vi.stubGlobal('location', { pathname: '/', search: '' });
   });
 
   it('does not resolve twice on duplicate callbacks', async () => {
