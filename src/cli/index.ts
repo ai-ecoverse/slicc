@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { createServer } from 'http';
 import { createServer as createNetServer } from 'net';
 import { spawn, type ChildProcess } from 'child_process';
