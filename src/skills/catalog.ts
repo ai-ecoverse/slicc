@@ -27,7 +27,6 @@ const COMPATIBILITY_DIRECTORY_SOURCES = new Map<string, Exclude<SkillDiscoverySo
   ['.agents', 'agents'],
   ['.claude', 'claude'],
 ]);
-const MAX_DISCOVERY_DIRECTORIES = 10_000;
 
 export async function discoverSkillCandidates(
   fs: VirtualFS,
@@ -107,11 +106,9 @@ async function discoverCompatibilitySkillCandidates(fs: VirtualFS): Promise<Disc
   const discovered: DiscoveredSkillCandidate[] = [];
   const seenPaths = new Set<string>();
   const queue = ['/'];
-  let scannedDirectories = 0;
 
-  while (queue.length > 0 && scannedDirectories < MAX_DISCOVERY_DIRECTORIES) {
+  while (queue.length > 0) {
     const currentPath = queue.shift()!;
-    scannedDirectories += 1;
 
     const entries = await readSortedDir(fs, currentPath);
     for (const entry of entries) {
