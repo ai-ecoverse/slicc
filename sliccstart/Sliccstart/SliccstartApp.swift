@@ -75,7 +75,8 @@ struct SliccstartApp: App {
                                     "In Chrome:\n" +
                                     "1. Enable 'Developer mode' (top-right toggle)\n" +
                                     "2. Click 'Load unpacked'\n" +
-                                    "3. Paste the path and select the folder"
+                                    "3. Paste the path and select the folder\n\n" +
+                                    "Keep Developer Mode enabled — disabling it removes the extension."
                                 )
                             } catch {
                                 showError("Failed to prepare extension: \(error.localizedDescription)")

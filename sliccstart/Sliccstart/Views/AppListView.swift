@@ -50,7 +50,7 @@ struct AppListView: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("Launch with Extension")
                                         .font(.body)
-                                    Text("SLICC profile — extension auto-installs on first run")
+                                    Text("Opens Chrome with a dedicated SLICC profile")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
@@ -72,7 +72,7 @@ struct AppListView: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("Install to my Chrome")
                                         .font(.body)
-                                    Text("Load unpacked into your default Chrome profile")
+                                    Text("Load unpacked — requires Developer Mode enabled")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }

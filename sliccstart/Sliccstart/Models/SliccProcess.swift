@@ -24,15 +24,19 @@ final class SliccProcess {
         return SliccBootstrapper.defaultSliccDir
     }
 
+    private var sliccProfileDir: String {
+        NSHomeDirectory() + "/.slicc/browser-coding-agent-chrome"
+    }
+
     private var extensionInstalledInProfile: Bool {
-        let extensionsDir = NSHomeDirectory() + "/.slicc/browser-coding-agent-chrome/Default/Extensions"
+        let extensionsDir = sliccProfileDir + "/Default/Extensions"
         guard let contents = try? FileManager.default.contentsOfDirectory(atPath: extensionsDir) else {
             return false
         }
         return !contents.isEmpty
     }
 
-    // MARK: - Standalone mode (throwaway /tmp/ profile, no extension)
+    // MARK: - Standalone mode (CLI server launches Chrome with temp profile)
 
     func launchStandalone(_ browser: AppTarget) throws {
         guard !isRunning else { return }
@@ -43,8 +47,10 @@ final class SliccProcess {
         ])
     }
 
-    // MARK: - SLICC profile mode (persistent ~/.slicc/ profile, with extension)
+    // MARK: - Extension mode (launch Chrome directly with SLICC profile, no CLI server)
 
+    /// Launch Chrome with the persistent SLICC profile. The extension IS the agent —
+    /// no CLI server needed. Auto-installs the extension on first launch via CDP pipe.
     func launchWithExtension(_ browser: AppTarget) throws {
         guard !isRunning else { return }
         target = browser
@@ -54,14 +60,24 @@ final class SliccProcess {
             try installExtensionToProfile(browser)
         }
 
-        try spawnCLI(extraArgs: ["--cdp-port=9222"], env: [
-            "CHROME_PATH": browser.executablePath,
-            "PORT": "5710",
-            "TMPDIR": NSHomeDirectory() + "/.slicc",
-        ])
+        // Launch Chrome directly with the SLICC profile — no CLI server
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: browser.executablePath)
+        proc.arguments = [
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--user-data-dir=\(sliccProfileDir)",
+        ]
+        proc.terminationHandler = { [weak self] _ in
+            DispatchQueue.main.async { self?.markStopped() }
+        }
+
+        try proc.run()
+        process = proc
+        isRunning = true
     }
 
-    // MARK: - Electron app
+    // MARK: - Electron app (CLI server + overlay injection)
 
     func launchWithElectronApp(_ app: AppTarget) throws {
         guard !isRunning else { return }
@@ -73,7 +89,7 @@ final class SliccProcess {
         ], env: ["PORT": "5710"])
     }
 
-    // MARK: - Extension install (CDP pipe)
+    // MARK: - Extension install (CDP pipe to SLICC profile)
 
     private func installExtensionToProfile(_ browser: AppTarget) throws {
         guard let nodePath = SliccBootstrapper.findNode() else {
@@ -129,7 +145,7 @@ final class SliccProcess {
         process = nil
     }
 
-    // MARK: - Private helpers
+    // MARK: - Private
 
     private func spawnCLI(extraArgs: [String], env: [String: String]) throws {
         guard let nodePath = SliccBootstrapper.findNode() else {
