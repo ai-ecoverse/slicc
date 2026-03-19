@@ -28,9 +28,9 @@ export function showHostPermissionDialog(
       '<div class="dialog__desc" style="font-size: 11px; opacity: 0.7;">',
       'You can revoke this anytime in chrome://extensions.',
       '</div>',
-      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">',
-      '<button class="dialog__btn--secondary" data-action="dismiss">Not now</button>',
-      '<button class="dialog__btn" data-action="grant">Grant access</button>',
+      '<div style="display:flex;gap:8px;margin-top:16px;">',
+      '<button class="dialog__btn--secondary" style="flex:1;" data-action="dismiss">Not now</button>',
+      '<button class="dialog__btn" style="flex:1;width:auto;" data-action="grant">Grant access</button>',
       '</div>',
     ].join('');
 
