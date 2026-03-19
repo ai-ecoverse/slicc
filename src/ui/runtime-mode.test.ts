@@ -8,6 +8,7 @@ import {
   getWebhookUrl,
   isElectronOverlaySetTabMessage,
   resolveUiRuntimeMode,
+  shouldUseRuntimeModeTrayDefaults,
 } from './runtime-mode.js';
 
 describe('runtime-mode', () => {
@@ -20,6 +21,13 @@ describe('runtime-mode', () => {
     expect(resolveUiRuntimeMode('http://localhost:5710/electron/', false)).toBe('electron-overlay');
     expect(resolveUiRuntimeMode('http://localhost:5710/?runtime=electron-overlay', false)).toBe('electron-overlay');
     expect(resolveUiRuntimeMode('http://localhost:5710/', false)).toBe('standalone');
+  });
+
+  it('uses runtime-mode tray defaults only for CLI-served standalone and electron overlay', () => {
+    expect(shouldUseRuntimeModeTrayDefaults('standalone', false)).toBe(false);
+    expect(shouldUseRuntimeModeTrayDefaults('standalone', true)).toBe(true);
+    expect(shouldUseRuntimeModeTrayDefaults('electron-overlay', false)).toBe(true);
+    expect(shouldUseRuntimeModeTrayDefaults('extension', true)).toBe(false);
   });
 
   it('normalizes the initial overlay tab from the URL', () => {
