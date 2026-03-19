@@ -12,6 +12,7 @@ public struct SliccAppDiscovery {
   private let supportedBrowsers = [
     BrowserDefinition(bundleName: "Google Chrome.app", bundleIdentifier: "com.google.Chrome"),
     BrowserDefinition(bundleName: "Google Chrome Canary.app", bundleIdentifier: "com.google.Chrome.canary"),
+    BrowserDefinition(bundleName: "Microsoft Edge.app", bundleIdentifier: "com.microsoft.edgemac"),
     BrowserDefinition(bundleName: "Chromium.app", bundleIdentifier: "org.chromium.Chromium"),
   ]
 
@@ -25,14 +26,32 @@ public struct SliccAppDiscovery {
     self.fileManager = fileManager
   }
 
-  public func discoverApps() throws -> [SliccDiscoveredApp] {
+  public func discoverApps(additionalBundlePaths: [String] = []) throws -> [SliccDiscoveredApp] {
     let bundleURLs = searchDirectories.flatMap { appBundleURLs(in: URL(fileURLWithPath: $0, isDirectory: true)) }
-    let apps = bundleURLs.compactMap(classifyApp)
+    var apps: [SliccDiscoveredApp] = []
+    var seenBundlePaths = Set<String>()
+
+    for bundleURL in bundleURLs {
+      appendClassifiedApp(classifyApp(at: bundleURL), to: &apps, seenBundlePaths: &seenBundlePaths)
+    }
+    for bundlePath in additionalBundlePaths {
+      appendClassifiedApp(classifyApp(at: bundlePath), to: &apps, seenBundlePaths: &seenBundlePaths)
+    }
+
     return apps.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
   }
 
   public func classifyApp(at bundlePath: String) -> SliccDiscoveredApp? {
     classifyApp(at: URL(fileURLWithPath: bundlePath, isDirectory: true))
+  }
+
+  private func appendClassifiedApp(
+    _ app: SliccDiscoveredApp?,
+    to apps: inout [SliccDiscoveredApp],
+    seenBundlePaths: inout Set<String>
+  ) {
+    guard let app, seenBundlePaths.insert(app.bundlePath).inserted else { return }
+    apps.append(app)
   }
 
   private func appBundleURLs(in directory: URL) -> [URL] {
