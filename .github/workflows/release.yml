@@ -100,10 +100,6 @@ jobs:
             echo "Skipping code signing (no APPLE_TEAM_ID)"
             ditto -c -k --keepParent build/Sliccstart.app build/Sliccstart.zip
           fi
-          
-          # Copy to artifacts directory
-          mkdir -p ../artifacts/release
-          cp build/Sliccstart.zip ../artifacts/release/Sliccstart-macos.zip
 
       - name: Publish release
         env:
