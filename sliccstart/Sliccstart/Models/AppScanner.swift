@@ -19,7 +19,7 @@ final class AppScanner {
             ))
         }
 
-        // Scan /Applications for Electron apps
+        // Scan /Applications for CDP-compatible desktop apps (Electron, WebView2)
         let fm = FileManager.default
         guard let contents = try? fm.contentsOfDirectory(atPath: "/Applications") else {
             return targets
@@ -27,7 +27,7 @@ final class AppScanner {
         for item in contents where item.hasSuffix(".app") {
             let appPath = "/Applications/\(item)"
             if targets.contains(where: { $0.path == appPath }) { continue }
-            guard hasElectronFramework(atPath: appPath) else { continue }
+            guard hasCDPFramework(atPath: appPath) else { continue }
             let name = appName(fromPath: appPath)
             let icon = NSWorkspace.shared.icon(forFile: appPath)
             targets.append(AppTarget(
@@ -46,10 +46,19 @@ final class AppScanner {
         AppTarget.knownChromiumBrowsers.contains { $0.bundleId == bundleId }
     }
 
-    static func hasElectronFramework(atPath appPath: String) -> Bool {
-        FileManager.default.fileExists(
-            atPath: "\(appPath)/Contents/Frameworks/Electron Framework.framework"
-        )
+    /// Checks whether the app embeds a CDP-compatible browser engine
+    /// (Electron Framework or Microsoft Edge WebView2).
+    static func hasCDPFramework(atPath appPath: String) -> Bool {
+        let fm = FileManager.default
+        // Electron apps
+        if fm.fileExists(atPath: "\(appPath)/Contents/Frameworks/Electron Framework.framework") {
+            return true
+        }
+        // Microsoft Edge WebView2 apps (e.g. Teams)
+        if fm.fileExists(atPath: "\(appPath)/Contents/Frameworks/MSWebView2.framework") {
+            return true
+        }
+        return false
     }
 
     static func appName(fromPath path: String) -> String {

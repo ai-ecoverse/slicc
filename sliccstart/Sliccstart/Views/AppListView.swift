@@ -29,7 +29,7 @@ struct AppListView: View {
             }
 
             if !electronApps.isEmpty {
-                SectionHeader("Electron Apps")
+                SectionHeader("Desktop Apps")
                 ForEach(electronApps) { target in
                     AppRow(
                         target: target,
