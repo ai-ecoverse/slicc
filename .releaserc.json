@@ -28,7 +28,8 @@
         "assets": [
           "artifacts/release/*.zip",
           "artifacts/release/*.tgz",
-          "artifacts/release/release-artifacts.json"
+          "artifacts/release/release-artifacts.json",
+          "artifacts/release/Sliccstart-macos.zip"
         ]
       }
     ]
