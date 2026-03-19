@@ -855,6 +855,20 @@ export function showProviderSettings(): Promise<boolean> {
         if (!pid) return;
         const providerConfig = getProviderConfig(pid);
         if (!providerConfig.onOAuthLogin) return;
+
+        const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+        if (isExtension) {
+          const { hasHostPermission } = await import('../extension/host-permission.js');
+          if (!await hasHostPermission()) {
+            const { showHostPermissionDialog } = await import('./host-permission-dialog.js');
+            const granted = await showHostPermissionDialog(
+              document.body,
+              'connect to your LLM provider',
+            );
+            if (!granted) return;
+          }
+        }
+
         // Validate base URL if required
         const hadAccountBefore = getAccounts().some(a => a.providerId === pid);
         const existingBaseUrl = getBaseUrlForProvider(pid);
@@ -977,7 +991,7 @@ export function showProviderSettings(): Promise<boolean> {
       });
       updateFormFields();
 
-      function validateAndSave() {
+      async function validateAndSave() {
         const pid = providerSelect.value;
         if (!pid) return;
         const config = getProviderConfig(pid);
@@ -994,6 +1008,19 @@ export function showProviderSettings(): Promise<boolean> {
           errorEl.style.display = '';
           baseUrlInput.focus();
           return;
+        }
+
+        const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+        if (isExtension) {
+          const { hasHostPermission } = await import('../extension/host-permission.js');
+          if (!await hasHostPermission()) {
+            const { showHostPermissionDialog } = await import('./host-permission-dialog.js');
+            const granted = await showHostPermissionDialog(
+              document.body,
+              'connect to your LLM provider',
+            );
+            if (!granted) return;
+          }
         }
 
         addAccount(

@@ -272,6 +272,16 @@ export async function executeJsCode(
         if (!msg || msg.type !== 'fetch_proxy') return;
         (async () => {
           try {
+            const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+            if (isExtension) {
+              const { hasHostPermission } = await import('../extension/host-permission.js');
+              if (!await hasHostPermission()) {
+                sandbox!.contentWindow!.postMessage(
+                  { type: 'fetch_proxy_response', id: msg.id, error: 'Host permission not granted. Configure a provider in settings to enable web access.' }, '*',
+                );
+                return;
+              }
+            }
             const init: RequestInit = { method: msg.init?.method ?? 'GET', cache: 'no-store' };
             if (msg.init?.headers) init.headers = msg.init.headers;
             if (msg.init?.body && !['GET', 'HEAD'].includes(init.method as string)) {

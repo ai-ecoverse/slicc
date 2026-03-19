@@ -206,6 +206,21 @@ export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
   function handleFetchProxy(msg: FetchProxyRequest): void {
     (async () => {
       try {
+        const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+        if (isExtension) {
+          const { hasHostPermission } = await import('../extension/host-permission.js');
+          if (!await hasHostPermission()) {
+            iframe?.contentWindow?.postMessage(
+              {
+                type: 'fetch_proxy_response',
+                id: msg.id,
+                error: 'Host permission not granted. Configure a provider in settings to enable web access.',
+              } satisfies FetchProxyResponse,
+              '*',
+            );
+            return;
+          }
+        }
         const init: RequestInit = { method: msg.init?.method ?? 'GET', cache: 'no-store' };
         if (msg.init?.headers) init.headers = msg.init.headers;
         if (msg.init?.body && !['GET', 'HEAD'].includes(init.method as string)) {
