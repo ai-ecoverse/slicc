@@ -59,6 +59,9 @@ describe('electron-runtime', () => {
     expect(
       buildElectronServerSpawnConfig('/repo', { dev: true, cdpPort: 9444, platform: 'darwin' }),
     ).toEqual({
+      runtime: 'node',
+      requestedRuntime: 'node',
+      fallbackReason: null,
       command: 'npx',
       args: ['tsx', 'src/cli/index.ts', '--dev', '--serve-only', '--cdp-port=9444'],
     });
@@ -72,6 +75,9 @@ describe('electron-runtime', () => {
         nodePath: '/custom/node',
       }),
     ).toEqual({
+      runtime: 'node',
+      requestedRuntime: 'node',
+      fallbackReason: null,
       command: '/custom/node',
       args: ['/repo/dist/cli/index.js', '--serve-only', '--cdp-port=9555'],
     });
@@ -88,6 +94,9 @@ describe('electron-runtime', () => {
           cdpPort: 9666,
         }),
       ).toEqual({
+        runtime: 'node',
+        requestedRuntime: 'node',
+        fallbackReason: null,
         command: '/npm/node',
         args: ['/repo/dist/cli/index.js', '--serve-only', '--cdp-port=9666'],
       });

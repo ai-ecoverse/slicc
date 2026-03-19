@@ -22,6 +22,9 @@ Build, run, test, and debug SLICC locally.
 | `npm run typecheck` | Typecheck browser + Node targets | Verify no type errors before committing |
 | `npm run test` | Vitest run (all tests) | Run full test suite; CI validation |
 | `cd native/SliccstartCore && swift test` | Run the native launcher foundation tests | Verify Swift discovery, launch modeling, and preference persistence |
+| `cd native/SliccstartCore && swift build --product SliccstartApp` | Build the native macOS launcher target | Verify the SwiftUI desktop app target compiles |
+| `cd native/SliccstartCore && swift run SliccstartAppBundler` | Build `dist/Sliccstart.app` from the SwiftPM executable | Produce a Launch Services-friendly macOS app bundle for manual verification |
+| `open -n native/SliccstartCore/dist/Sliccstart.app` | Launch the bundled native macOS launcher | Verify the app stays visible/interactable as a real `.app` |
 | `npm run test:watch` | Vitest watch mode | Iterate on test changes; TDD workflow |
 | `npx vitest run src/fs/virtual-fs.test.ts` | Run single test file | Debug a specific module |
 | `npx wrangler dev` | Run the Cloudflare Worker tray hub locally (if Wrangler is installed/authenticated) | Exercise `src/worker/` against a real Worker runtime |
@@ -239,6 +242,9 @@ log.error('error message');
 | `npm run test` | Run all tests once |
 | `npm run test:watch` | Watch mode; re-run on file change |
 | `cd native/SliccstartCore && swift test` | Run the Swift launcher package tests |
+| `cd native/SliccstartCore && swift build --product SliccstartApp` | Build the Swift desktop launcher target |
+| `cd native/SliccstartCore && swift run SliccstartAppBundler` | Build `dist/Sliccstart.app` for manual launch verification |
+| `open -n native/SliccstartCore/dist/Sliccstart.app` | Launch the bundled Swift desktop launcher target |
 | `npx vitest run src/fs/virtual-fs.test.ts` | Run single file |
 | `npx vitest run src/fs/` | Run all tests in directory |
 | `npx vitest run --reporter=verbose` | Verbose test output |

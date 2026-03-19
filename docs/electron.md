@@ -36,6 +36,15 @@ node dist/cli/index.js --electron-app=/Applications/Slack.app --kill
 - If the target Electron app is already running and `--kill` is **not** supplied, SLICC exits with a clear message.
 - If `--kill` **is** supplied, SLICC terminates the running app, relaunches it with remote debugging enabled, starts the local SLICC server, and reconnects the overlay path.
 
+## Server runtime selection
+
+Electron float now launches the server through a small runtime-selection boundary in `src/cli/server-runtime.ts`.
+
+- Default runtime: Node (`src/cli/index.ts`)
+- Optional requested runtime: set `SLICC_SERVER_RUNTIME=swift`
+- Swift binary path: set `SLICC_SWIFT_SERVER_PATH=/path/to/SliccServer`
+- Current behavior: if Swift is requested but unavailable, or if the float is running in `--dev`, SLICC logs the reason and falls back to Node.
+
 ## How overlay injection works
 
 1. The main CLI launches the target Electron app with a remote debugging port.
@@ -46,6 +55,29 @@ node dist/cli/index.js --electron-app=/Applications/Slack.app --kill
    - evaluates the overlay bootstrap script immediately
 5. That keeps the SLICC launcher/overlay available across page navigations.
 
+## macOS trust and distribution readiness
+
+- **Local dev builds are different from shipped builds.** A locally built binary that never picked up the "downloaded from the internet" quarantine flow may launch without showing the same Gatekeeper dialogs that end users will see.
+- **Direct-distribution builds should be Developer ID signed and notarized before sharing.** Apple’s current guidance for software distributed outside the Mac App Store is to sign with a Developer ID certificate and notarize the app before distribution.
+- **Expect one normal first-launch confirmation even for a good release build.** A signed and notarized app downloaded from the internet can still show the standard "downloaded from the Internet" confirmation on first open.
+- **Do not train users to bypass hard-fail malware warnings.** If macOS says it "cannot check the app for malicious software," the developer "cannot be verified," or the app is "damaged" / "will damage your computer," treat that as a packaging or trust failure. The only acceptable "Open Anyway" guidance is for internal or local dev builds.
+- **Plain app launch does not imply an Automation prompt.** If `Sliccstart` launches target apps with `NSWorkspace.openApplication(...)`, no Apple Events privacy prompt should be required just for launch. Only add `NSAppleEventsUsageDescription` and Automation UX copy if the launcher later sends Apple Events / AppleScript to control another app.
+
+## Suggested first-run guidance for a native `Sliccstart` app
+
+- "If you downloaded `Sliccstart` from the internet, macOS may ask you to confirm opening it once."
+- "If macOS says Apple cannot check it for malicious software or the developer cannot be verified, you are using an unsigned or unnotarized build. Prefer a notarized release."
+- "If you are intentionally testing a local/internal build, you can retry once and then use **System Settings → Privacy & Security → Open Anyway**."
+- "If macOS says the app is damaged or will damage your computer, stop and re-download or replace the build instead of bypassing the warning."
+- "Launching Chrome or an Electron app should not require Accessibility or Automation approval unless a future build adds Apple Events-based control."
+
+## Packaging checklist for the future native launcher
+
+- Local development: expect unsigned / unnotarized binaries and document that Gatekeeper behavior may not match a downloaded release unless the artifact is actually quarantined.
+- Direct distribution: archive the `.app`, sign with Developer ID, notarize it, and staple the ticket before shipping a downloadable artifact.
+- First-run UX: include a help link or inline explanation that distinguishes the benign first-open confirmation from a true trust failure.
+- Escalation path: if the app ever adds Apple Events-based automation, add `NSAppleEventsUsageDescription` with user-facing copy before shipping that change.
+
 ## Verification checklist
 
 - Start Electron mode against a real Electron app path.
@@ -54,6 +86,7 @@ node dist/cli/index.js --electron-app=/Applications/Slack.app --kill
 - Re-run while the app is already open and confirm:
   - without `--kill`, SLICC exits clearly
   - with `--kill`, SLICC relaunches the app and reconnects
+- For macOS packaging review, compare the intended release path against Apple’s current Gatekeeper / notarization support guidance before shipping a downloadable `.app`.
 
 ## Notes
 

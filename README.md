@@ -379,6 +379,8 @@ npm run dev:electron -- /Applications/Slack.app
 
 Pass the Electron app bundle/executable path to the main CLI's `--electron` mode. If the app is already running, SLICC exits with a clear message unless you also pass `--kill`, in which case it stops the running app, relaunches it with remote debugging enabled, starts the local server, and keeps the injected launcher/overlay alive across navigations. The overlay iframe is still loaded from the same local SLICC origin that the CLI server serves (default `http://localhost:5710`).
 
+On macOS, keep in mind that local unsigned builds and downloaded direct-distribution builds have different first-run trust behavior. Gatekeeper warnings are expected to differ once quarantine metadata is involved, and any shipped `.app` should be Developer ID signed and notarized. See [docs/electron.md](docs/electron.md#macos-trust-and-distribution-readiness) for the current trust/distribution checklist and recommended first-run guidance.
+
 ## Tech Stack
 
 | Dependency | Role |

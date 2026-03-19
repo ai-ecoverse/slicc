@@ -39,14 +39,20 @@ public final class SliccAppPreferencesStore {
 
   public func normalizedPreferences(for apps: [SliccDiscoveredApp], preferences: SliccAppPreferences) -> SliccAppPreferences {
     let livePaths = Set(apps.map(\.bundlePath))
-    var ordered = preferences.orderedBundlePaths.filter { livePaths.contains($0) }
+    var ordered = uniqueBundlePaths(preferences.orderedBundlePaths.filter { livePaths.contains($0) })
 
     for app in apps where !ordered.contains(app.bundlePath) {
       ordered.append(app.bundlePath)
     }
 
     let preferred = preferences.preferredBundlePath.flatMap { livePaths.contains($0) ? $0 : nil }
-    return SliccAppPreferences(preferredBundlePath: preferred, orderedBundlePaths: ordered)
+    let manuallyAdded = uniqueBundlePaths(preferences.manuallyAddedBundlePaths.filter { livePaths.contains($0) })
+    return SliccAppPreferences(
+      preferredBundlePath: preferred,
+      orderedBundlePaths: ordered,
+      manuallyAddedBundlePaths: manuallyAdded,
+      autoLaunchPreferredBrowser: preferences.autoLaunchPreferredBrowser
+    )
   }
 
   public func orderedApps(_ apps: [SliccDiscoveredApp], preferences: SliccAppPreferences) -> [SliccDiscoveredApp] {
@@ -65,5 +71,22 @@ public final class SliccAppPreferencesStore {
         return left.displayName.localizedCaseInsensitiveCompare(right.displayName) == .orderedAscending
       }
     }
+  }
+
+  public func preferredLaunchableApp(_ apps: [SliccDiscoveredApp], preferences: SliccAppPreferences) -> SliccDiscoveredApp? {
+    let normalized = normalizedPreferences(for: apps, preferences: preferences)
+    let ordered = orderedApps(apps, preferences: normalized)
+
+    if let preferredBundlePath = normalized.preferredBundlePath,
+       let preferred = ordered.first(where: { $0.bundlePath == preferredBundlePath && $0.isLaunchable }) {
+      return preferred
+    }
+
+    return ordered.first(where: \.isLaunchable)
+  }
+
+  private func uniqueBundlePaths(_ bundlePaths: [String]) -> [String] {
+    var seen = Set<String>()
+    return bundlePaths.filter { seen.insert($0).inserted }
   }
 }

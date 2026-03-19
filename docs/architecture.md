@@ -14,7 +14,7 @@
 | Core Agent | `src/core/` | pi-mono agent loop + streaming | `index.ts` | `agent.test.ts` |
 | Scoops Orchestrator | `src/scoops/` | Multi-agent system (cone + scoops) | `orchestrator.ts` | N/A |
 | UI | `src/ui/` | Chat, Terminal, Files, Memory panels | `main.ts` | `types.test.ts` |
-| CLI / Electron Node Runtime | `src/cli/` | Express server, Chrome launcher, Electron float entrypoint | `index.ts` | `electron-runtime.test.ts` |
+| CLI / Electron Runtime Boundary | `src/cli/` | Current Node server, launchers, Electron float entrypoint, and Swift migration spawn boundary | `index.ts`, `server-runtime.ts` | `electron-runtime.test.ts`, `server-runtime.test.ts` |
 | Extension | `src/extension/` | Chrome Manifest V3 entry point | `service-worker.ts` | N/A |
 | Cloud Tray Hub | `src/worker/` | Cloudflare Worker + Durable Object control-plane skeleton + deployed smoke test | `index.ts` | `index.test.ts`, `deployed.test.ts` |
 | Providers | `src/providers/` | Provider types, OAuth service, auto-discovery, build-time filtering | `types.ts`, `oauth-service.ts`, `index.ts` | `index.test.ts`, `oauth-service.test.ts` |

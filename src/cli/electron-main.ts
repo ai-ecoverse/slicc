@@ -137,6 +137,14 @@ function startCliServer(): ChildProcess {
     nodePath: process.env['npm_node_execpath'] ?? 'node',
   });
 
+  if (spawnConfig.runtime !== spawnConfig.requestedRuntime && spawnConfig.fallbackReason) {
+    console.warn(
+      `[electron-float] Requested ${spawnConfig.requestedRuntime} server runtime; falling back to ${spawnConfig.runtime}. ${spawnConfig.fallbackReason}`,
+    );
+  } else {
+    console.log(`[electron-float] Starting ${spawnConfig.runtime} server runtime`);
+  }
+
   const child = spawn(spawnConfig.command, spawnConfig.args, {
     cwd: PROJECT_ROOT,
     env: {

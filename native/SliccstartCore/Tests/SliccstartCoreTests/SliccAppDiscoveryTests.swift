@@ -71,6 +71,25 @@ final class SliccAppDiscoveryTests: XCTestCase {
     XCTAssertNotNil(braveApp.executablePath)
   }
 
+  func testTreatsMicrosoftEdgeAsSupportedBrowser() throws {
+    let appsURL = rootURL.appendingPathComponent("Applications", isDirectory: true)
+    try FileManager.default.createDirectory(at: appsURL, withIntermediateDirectories: true)
+
+    let edge = try TestSupport.createAppBundle(
+      in: appsURL,
+      name: "Microsoft Edge",
+      bundleIdentifier: "com.microsoft.edgemac",
+      executableName: "Microsoft Edge"
+    )
+
+    let discovery = SliccAppDiscovery(searchDirectories: [appsURL.path])
+    let app = try XCTUnwrap(discovery.classifyApp(at: edge.path))
+
+    XCTAssertEqual(app.type, .browser)
+    XCTAssertEqual(app.compatibility, .supported)
+    XCTAssertEqual(app.executablePath, edge.resolvingSymlinksInPath().appendingPathComponent("Contents/MacOS/Microsoft Edge").path)
+  }
+
   func testMarksKnownAppsWithoutExecutablesAsDisabled() throws {
     let appsURL = rootURL.appendingPathComponent("Applications", isDirectory: true)
     try FileManager.default.createDirectory(at: appsURL, withIntermediateDirectories: true)

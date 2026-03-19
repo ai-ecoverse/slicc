@@ -1,5 +1,10 @@
 import { basename, join, resolve } from 'path';
 
+import {
+  buildServerRuntimeSpawnConfig,
+  type ServerRuntimeKind,
+} from './server-runtime.js';
+
 export interface ElectronFloatFlags {
   dev: boolean;
   cdpPort: number;
@@ -8,6 +13,9 @@ export interface ElectronFloatFlags {
 }
 
 export interface ElectronServerSpawnConfig {
+  runtime: ServerRuntimeKind;
+  requestedRuntime: ServerRuntimeKind;
+  fallbackReason: string | null;
   command: string;
   args: string[];
 }
@@ -145,16 +153,20 @@ export function buildElectronServerSpawnConfig(
     nodePath?: string;
   },
 ): ElectronServerSpawnConfig {
-  if (options.dev) {
-    return {
-      command: (options.platform ?? process.platform) === 'win32' ? 'npx.cmd' : 'npx',
-      args: ['tsx', 'src/cli/index.ts', '--dev', '--serve-only', `--cdp-port=${options.cdpPort}`],
-    };
-  }
+  const spawnConfig = buildServerRuntimeSpawnConfig({
+    projectRoot,
+    dev: options.dev,
+    cdpPort: options.cdpPort,
+    platform: options.platform,
+    nodePath: options.nodePath,
+  });
 
   return {
-    command: options.nodePath ?? process.env['npm_node_execpath'] ?? 'node',
-    args: [resolve(projectRoot, 'dist/cli/index.js'), '--serve-only', `--cdp-port=${options.cdpPort}`],
+    runtime: spawnConfig.selectedRuntime,
+    requestedRuntime: spawnConfig.requestedRuntime,
+    fallbackReason: spawnConfig.fallbackReason,
+    command: spawnConfig.command,
+    args: spawnConfig.args,
   };
 }
 
