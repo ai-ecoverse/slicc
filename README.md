@@ -118,13 +118,13 @@ Why the name? SLICC stands for **Self-Licking Ice Cream Cone**: a recursive syst
 
 ## API Keys and Providers
 
-To use SLICC, you need an LLM provider, SLICC is very much a BYOT (bring your own tokens) affair. We have built in support for many providers and these have actually been tested
+To use SLICC, you need an LLM provider. SLICC is very much a BYOT (bring your own tokens) affair. We have built-in support for many providers, and these have actually been tested.
 - Adobe (for AEM customers. Talk to the team to get enabled)
 - AWS Bedrock (because enterprise)
 - AWS Bedrock CAMP (this is Adobe-internal. Did I say "because enterprise" already?)
 - Anthropic
 
-The other providers are in YMMV territory, please file an issue if you find them working or broken.
+The other providers are in YMMV territory. Please file an issue if you find them working or broken.
 
 ## Related projects and lineage
 
