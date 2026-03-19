@@ -11,7 +11,8 @@
   },
   "files": [
     "dist/cli",
-    "dist/ui"
+    "dist/ui",
+    "dist/tray-url-shared*"
   ],
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"
