@@ -7,6 +7,7 @@ import { consumeCachedBinaryByUrl } from '../binary-cache.js';
 
 // ClawHub uses a Convex backend - this is the actual API endpoint
 const CLAWHUB_API = 'https://wry-manatee-359.convex.site/api/v1';
+const TESSL_API = 'https://api.tessl.io';
 const SKILLS_DIR = '/workspace/skills';
 const GITHUB_GLOBAL_DB = 'slicc-fs-global';
 const GITHUB_TOKEN_PATH = '/workspace/.git/github-token';
@@ -23,6 +24,42 @@ interface ClawHubSearchResult {
 
 interface ClawHubSearchResponse {
   results: ClawHubSearchResult[];
+}
+
+interface TesslSkillAttributes {
+  name: string;
+  description: string;
+  sourceUrl: string;
+  path: string;
+  featured: boolean;
+  scores: {
+    aggregate: number | null;
+    quality: number | null;
+    security: string | null;
+    evalImprovementMultiplier: number | null;
+  };
+}
+
+interface TesslSearchResult {
+  id: string;
+  type: 'skill' | 'tile';
+  attributes: TesslSkillAttributes;
+}
+
+interface TesslSearchResponse {
+  meta: { pagination: { total: number } };
+  data: TesslSearchResult[];
+}
+
+interface UnifiedSearchResult {
+  name: string;
+  displayName: string;
+  summary: string;
+  source: 'clawhub' | 'tessl';
+  qualityScore: number | null;
+  installHint: string;
+  featured?: boolean;
+  sourceRepo?: string;
 }
 
 interface GitHubContent {
@@ -166,15 +203,16 @@ function upskillHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout: `usage: upskill <command> [options]
 
-Install skills from GitHub repositories or ClawHub registry.
+Install skills from GitHub repositories, ClawHub, or Tessl registry.
 
 Commands:
-  search <query>           Search ClawHub for skills
+  search <query>           Search ClawHub + Tessl for skills
   list                     List locally installed skills
   info <name>              Show details about a local skill
   read <name>              Read the SKILL.md instructions
   <owner/repo>             Install skill(s) from GitHub repository
   <clawhub-url>            Install skill from ClawHub URL
+  tessl:<name>             Install skill from Tessl registry
 
 GitHub Installation:
   upskill owner/repo                     List available skills in repo
@@ -182,10 +220,11 @@ GitHub Installation:
   upskill owner/repo --all               Install all skills from repo
   upskill owner/repo --path subdir       Restrict to subfolder
 
-ClawHub Installation:
-  upskill search "pdf conversion"        Search for skills
+Registry Installation:
+  upskill search "pdf conversion"        Search all registries
   upskill https://clawhub.ai/user/skill  Install from ClawHub URL
   upskill clawhub:user/skill             Install from ClawHub shorthand
+  upskill tessl:postgres-pro             Install from Tessl (via GitHub)
 
 Options:
   --skill <name>           Install specific skill (repeatable)
@@ -205,6 +244,7 @@ Examples:
   upskill anthropics/skills --skill pdf --skill xlsx
   upskill adobe/skills --path skills/aem --all
   upskill https://clawhub.ai/arun-8687/tavily-search
+  upskill tessl:postgres-pro
 `,
     stderr: '',
     exitCode: 0,
@@ -212,59 +252,140 @@ Examples:
 }
 
 /**
- * Search ClawHub registry for skills
+ * Search ClawHub registry for skills, returning unified results.
  */
-async function searchClawHub(
+async function fetchClawHubResults(
   query: string,
-  fetch: SecureFetch,
-  _limit: number = 10
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  try {
-    const url = `${CLAWHUB_API}/search?q=${encodeURIComponent(query)}`;
-    const response = await fetch(url, {
-      headers: { Accept: 'application/json' },
+  fetch: SecureFetch
+): Promise<UnifiedSearchResult[]> {
+  const url = `${CLAWHUB_API}/search?q=${encodeURIComponent(query)}`;
+  const response = await fetch(url, {
+    headers: { Accept: 'application/json' },
+  });
+  if (response.status !== 200) return [];
+  const data = JSON.parse(response.body) as ClawHubSearchResponse;
+  if (!data.results) return [];
+  return data.results.map((r) => ({
+    name: r.slug,
+    displayName: r.displayName || r.slug,
+    summary: r.summary || '',
+    source: 'clawhub' as const,
+    qualityScore: null,
+    installHint: `upskill clawhub:${r.slug}`,
+  }));
+}
+
+/**
+ * Extract owner/repo from a GitHub URL.
+ */
+function parseGitHubUrl(url: string): { owner: string; repo: string } | null {
+  const match = url.match(/github\.com\/([^/]+)\/([^/]+)/);
+  if (!match) return null;
+  return { owner: match[1], repo: match[2].replace(/\.git$/, '') };
+}
+
+/**
+ * Search Tessl registry for skills, returning unified results.
+ */
+async function fetchTesslResults(
+  query: string,
+  fetch: SecureFetch
+): Promise<UnifiedSearchResult[]> {
+  const url = `${TESSL_API}/experimental/search?q=${encodeURIComponent(query)}&contentType=skills&page%5Bsize%5D=20`;
+  const response = await fetch(url, {
+    headers: { Accept: 'application/json' },
+  });
+  if (response.status !== 200) return [];
+  const data = JSON.parse(response.body) as TesslSearchResponse;
+  if (!data.data) return [];
+
+  // Filter to skills only (exclude tiles), deduplicate by sourceUrl
+  const seen = new Map<string, UnifiedSearchResult>();
+  for (const item of data.data) {
+    if (item.type !== 'skill') continue;
+    const a = item.attributes;
+    const gh = parseGitHubUrl(a.sourceUrl);
+    const repo = gh ? `${gh.owner}/${gh.repo}` : undefined;
+    const score = a.scores.aggregate != null ? Math.round(a.scores.aggregate * 100) : null;
+    const key = a.sourceUrl || item.id;
+    const existing = seen.get(key);
+    // Keep the highest-scored entry per source repo
+    if (existing && existing.qualityScore != null && score != null && existing.qualityScore >= score) continue;
+    // Derive skill directory from path (parent of SKILL.md)
+    const skillDir = a.path.replace(/\/SKILL\.md$/i, '');
+    const installHint = gh
+      ? `upskill ${gh.owner}/${gh.repo} --path ${skillDir.split('/').slice(0, -1).join('/') || '.'} --skill ${a.name}`
+      : `upskill tessl:${a.name}`;
+    seen.set(key, {
+      name: a.name,
+      displayName: a.name,
+      summary: a.description || '',
+      source: 'tessl' as const,
+      qualityScore: score,
+      installHint,
+      featured: a.featured,
+      sourceRepo: repo,
     });
+  }
+  return Array.from(seen.values());
+}
 
-    if (response.status !== 200) {
-      return {
-        stdout: '',
-        stderr: `upskill: ClawHub search failed (HTTP ${response.status})\n`,
-        exitCode: 1,
-      };
+/**
+ * Search both ClawHub and Tessl registries, interleave results.
+ */
+async function searchRegistries(
+  query: string,
+  fetch: SecureFetch
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const [clawHubResult, tesslResult] = await Promise.allSettled([
+    fetchClawHubResults(query, fetch),
+    fetchTesslResults(query, fetch),
+  ]);
+
+  const clawHub = clawHubResult.status === 'fulfilled' ? clawHubResult.value : [];
+  const tessl = tesslResult.status === 'fulfilled' ? tesslResult.value : [];
+
+  if (clawHub.length === 0 && tessl.length === 0) {
+    let stderr = '';
+    if (clawHubResult.status === 'rejected' && tesslResult.status === 'rejected') {
+      stderr = 'upskill: both registries failed to respond\n';
     }
-
-    const data = JSON.parse(response.body) as ClawHubSearchResponse;
-
-    if (!data.results || data.results.length === 0) {
-      return {
-        stdout: `No skills found for "${query}"\n\nTry a different search term or browse https://clawhub.ai\n`,
-        stderr: '',
-        exitCode: 0,
-      };
-    }
-
-    let output = `Search results for "${query}" (${data.results.length} found):\n\n`;
-
-    for (const skill of data.results) {
-      output += `  ${skill.slug.padEnd(35)} ${(skill.displayName || skill.slug).padEnd(25)}\n`;
-      if (skill.summary) {
-        output += `    ${skill.summary.slice(0, 70)}${skill.summary.length > 70 ? '...' : ''}\n`;
-      }
-      output += '\n';
-    }
-
-    output += `\nTo install: upskill clawhub:<slug>\n`;
-    output += `Example: upskill clawhub:${data.results[0]?.slug || 'skill-name'}\n`;
-
-    return { stdout: output, stderr: '', exitCode: 0 };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
     return {
-      stdout: '',
-      stderr: `upskill: search failed: ${msg}\n`,
-      exitCode: 1,
+      stdout: `No skills found for "${query}"\n\nTry a different search term or browse https://clawhub.ai or https://tessl.io/registry\n`,
+      stderr,
+      exitCode: stderr ? 1 : 0,
     };
   }
+
+  // Interleave results alternately from each source by their respective rank order
+  const merged: UnifiedSearchResult[] = [];
+  let ci = 0;
+  let ti = 0;
+  while (ci < clawHub.length || ti < tessl.length) {
+    if (ci < clawHub.length) merged.push(clawHub[ci++]);
+    if (ti < tessl.length) merged.push(tessl[ti++]);
+  }
+
+  const clawHubCount = clawHub.length;
+  const tesslCount = tessl.length;
+  let output = `Search results for "${query}" (${clawHubCount} ClawHub, ${tesslCount} Tessl):\n\n`;
+
+  for (const skill of merged) {
+    const scoreStr = skill.qualityScore != null ? String(skill.qualityScore).padStart(3) : '   ';
+    const tag = `[${skill.source}]`;
+    const repoStr = skill.sourceRepo ? `  ${skill.sourceRepo}` : '';
+    output += `  ${skill.name.padEnd(30)} ${scoreStr} ${tag.padEnd(10)}${repoStr}\n`;
+    if (skill.summary) {
+      output += `    ${skill.summary.slice(0, 70)}${skill.summary.length > 70 ? '...' : ''}\n`;
+    }
+    output += '\n';
+  }
+
+  output += `To install:\n`;
+  if (clawHubCount > 0) output += `  From ClawHub:  upskill clawhub:<slug>\n`;
+  if (tesslCount > 0) output += `  From Tessl:    upskill <owner/repo> --skill <name>\n`;
+
+  return { stdout: output, stderr: '', exitCode: 0 };
 }
 
 /**
@@ -274,7 +395,8 @@ async function installFromClawHub(
   slug: string,
   fs: VirtualFS,
   fetch: SecureFetch,
-  force: boolean = false
+  force: boolean = false,
+  registeredCommands?: string[]
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   try {
     // Check if skill already exists
@@ -377,9 +499,12 @@ async function installFromClawHub(
       fileCount++;
     }
 
+    // Check for required bins in SKILL.md frontmatter
+    const binsWarning = checkRequiredBins(files, registeredCommands);
+
     await refreshSprinklesAfterInstall();
     return {
-      stdout: `Installed skill "${slug}" from ClawHub (${fileCount} files)\n`,
+      stdout: `Installed skill "${slug}" from ClawHub (${fileCount} files)\n${binsWarning}`,
       stderr: '',
       exitCode: 0,
     };
@@ -391,6 +516,114 @@ async function installFromClawHub(
       exitCode: 1,
     };
   }
+}
+
+/**
+ * Parse SKILL.md frontmatter for openclaw/clawdis requires.bins and check availability.
+ */
+function checkRequiredBins(
+  files: Record<string, Uint8Array>,
+  registeredCommands?: string[]
+): string {
+  // Find SKILL.md in the extracted files
+  let skillMdContent: string | undefined;
+  for (const [path, content] of Object.entries(files)) {
+    if (path.toLowerCase().endsWith('skill.md') || path.toLowerCase() === 'skill.md') {
+      skillMdContent = new TextDecoder().decode(content);
+      break;
+    }
+  }
+  if (!skillMdContent) return '';
+
+  // Extract frontmatter
+  const fmMatch = skillMdContent.match(/^---\s*\n([\s\S]*?)\n---/);
+  if (!fmMatch) return '';
+
+  // Look for requires.bins in the metadata JSON block
+  const frontmatter = fmMatch[1];
+  const bins = extractRequiredBins(frontmatter);
+  if (bins.length === 0) return '';
+
+  if (!registeredCommands || registeredCommands.length === 0) {
+    return `  Requires: ${bins.join(', ')}\n`;
+  }
+
+  const available = new Set(registeredCommands);
+  const missing = bins.filter((b) => !available.has(b));
+
+  if (missing.length === 0) {
+    return `  Requires: ${bins.join(', ')} (all available)\n`;
+  }
+
+  return `  Requires: ${bins.join(', ')}\n  Missing: ${missing.join(', ')} -- this skill may not work in the SLICC shell\n`;
+}
+
+/**
+ * Extract bins array from SKILL.md frontmatter metadata block.
+ * Handles both JSON metadata blocks and YAML-ish patterns.
+ */
+function extractRequiredBins(frontmatter: string): string[] {
+  // Try to find a JSON metadata block
+  const metaMatch = frontmatter.match(/metadata:\s*\n\s*(\{[\s\S]*\})/);
+  if (metaMatch) {
+    try {
+      const meta = JSON.parse(metaMatch[1]) as Record<string, unknown>;
+      // Check openclaw.requires.bins or clawdis.requires.bins
+      for (const key of ['openclaw', 'clawdis', 'clawdbot']) {
+        const section = meta[key] as Record<string, unknown> | undefined;
+        if (section?.requires && typeof section.requires === 'object') {
+          const req = section.requires as Record<string, unknown>;
+          if (Array.isArray(req.bins)) {
+            return req.bins.filter((b): b is string => typeof b === 'string');
+          }
+        }
+      }
+    } catch {
+      // JSON parse failed, try regex fallback
+    }
+  }
+
+  // Regex fallback: look for "bins": ["python3", ...] anywhere in frontmatter
+  const binsMatch = frontmatter.match(/"bins"\s*:\s*\[([^\]]*)\]/);
+  if (binsMatch) {
+    return binsMatch[1]
+      .split(',')
+      .map((s) => s.trim().replace(/^["']|["']$/g, ''))
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
+/**
+ * Parse Tessl reference (tessl:name) and resolve to GitHub source.
+ */
+async function resolveTesslRef(
+  name: string,
+  fetch: SecureFetch
+): Promise<{ owner: string; repo: string; skillPath: string; skillName: string } | { error: string }> {
+  const url = `${TESSL_API}/experimental/search?q=${encodeURIComponent(name)}&contentType=skills&page%5Bsize%5D=5`;
+  const response = await fetch(url, {
+    headers: { Accept: 'application/json' },
+  });
+  if (response.status !== 200) {
+    return { error: `Tessl search failed (HTTP ${response.status})` };
+  }
+  const data = JSON.parse(response.body) as TesslSearchResponse;
+  // Find exact name match among skills
+  const match = data.data?.find(
+    (item) => item.type === 'skill' && item.attributes.name === name
+  );
+  if (!match) {
+    return { error: `skill "${name}" not found on Tessl registry` };
+  }
+  const gh = parseGitHubUrl(match.attributes.sourceUrl);
+  if (!gh) {
+    return { error: `skill "${name}" has no GitHub source URL` };
+  }
+  // Derive skill directory path (parent of SKILL.md)
+  const skillDir = match.attributes.path.replace(/\/SKILL\.md$/i, '');
+  return { owner: gh.owner, repo: gh.repo, skillPath: skillDir, skillName: name };
 }
 
 /**
@@ -695,7 +928,7 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
 
     // Handle search
     if (searchQuery) {
-      return searchClawHub(searchQuery, fetchFn);
+      return searchRegistries(searchQuery, fetchFn);
     }
 
     if (!sourceRef) {
@@ -705,7 +938,22 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
     // Check if it's a ClawHub reference
     const clawHubSlug = parseClawHubRef(sourceRef);
     if (clawHubSlug) {
-      return installFromClawHub(clawHubSlug, fs, fetchFn, force);
+      const registeredCommands = _ctx.getRegisteredCommands?.() ?? [];
+      return installFromClawHub(clawHubSlug, fs, fetchFn, force, registeredCommands);
+    }
+
+    // Check if it's a Tessl reference (tessl:name)
+    if (sourceRef.startsWith('tessl:')) {
+      const tesslName = sourceRef.slice(6);
+      if (!tesslName) {
+        return { stdout: '', stderr: 'upskill: tessl: requires a skill name\n', exitCode: 1 };
+      }
+      const resolved = await resolveTesslRef(tesslName, fetchFn);
+      if ('error' in resolved) {
+        return { stdout: '', stderr: `upskill: ${resolved.error}\n`, exitCode: 1 };
+      }
+      const github = await createGitHubRequestContext(fetchFn);
+      return installFromGitHub(resolved.owner, resolved.repo, resolved.skillPath, resolved.skillName, fs, github, force);
     }
 
     // Check if it's a GitHub reference
@@ -812,7 +1060,7 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
     // Unknown source format
     return {
       stdout: '',
-      stderr: `upskill: unrecognized source "${sourceRef}"\n\nExpected: owner/repo, https://clawhub.ai/user/skill, or clawhub:user/skill\n`,
+      stderr: `upskill: unrecognized source "${sourceRef}"\n\nExpected: owner/repo, clawhub:<slug>, tessl:<name>, or https://clawhub.ai/user/skill\n`,
       exitCode: 1,
     };
   });
@@ -834,10 +1082,11 @@ Commands:
   install <name>         Install a local skill (apply manifest)
   uninstall <name>       Uninstall a skill
 
-For installing skills from GitHub or ClawHub, use 'upskill':
-  upskill search "query"           Search ClawHub
+For installing skills from registries or GitHub, use 'upskill':
+  upskill search "query"           Search ClawHub + Tessl
   upskill owner/repo --list        List skills in GitHub repo
   upskill owner/repo --all         Install from GitHub
+  upskill tessl:<name>             Install from Tessl registry
 
 Examples:
   skill list
