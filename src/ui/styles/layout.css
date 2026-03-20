@@ -154,6 +154,16 @@
 .layout__right--fullpage {
   flex: 1;
   min-width: 0;
+  /* Override overlay mode positioning so fullpage works at all breakpoints */
+  position: static !important;
+  width: auto !important;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+/* Desktop ≥1440px: right panel is always visible, hide its toggle */
+@media (min-width: 1440px) {
+  .thread-header__panel-toggle--right { display: none; }
 }
 
 /* ================================================================== */

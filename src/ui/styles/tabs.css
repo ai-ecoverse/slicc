@@ -166,6 +166,23 @@
   overflow: hidden;
 }
 
+/* Utility button in mini-tabs — icon-only, right-aligned */
+.mini-tabs__tab--utility {
+  border-color: transparent;
+  background: transparent;
+  color: var(--s2-content-tertiary);
+  padding: 0;
+  width: 28px; height: 28px;
+  justify-content: center;
+  flex: none;
+}
+.mini-tabs__tab--utility:hover {
+  background: var(--s2-gray-200);
+  border-color: transparent;
+  color: var(--s2-content-default);
+}
+.mini-tabs__tab--utility svg { width: 14px; height: 14px; flex-shrink: 0; }
+
 /* ================================================================== */
 /* SHTML Canvas Panel Components                                      */
 /* ================================================================== */

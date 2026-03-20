@@ -661,6 +661,7 @@ export class Layout {
           await this.runFileBrowserCommand(command);
           this.extensionZone.activateTab('terminal');
         },
+        onClearFilesystem: () => this.onClearFilesystem?.(),
       }),
       memory: new MemoryPanel(memoryContainer),
       scoops: new ScoopsPanel(this.scoopsEl, {
@@ -739,15 +740,28 @@ export class Layout {
 
     // Right panel toggle button
     const panelToggle = document.createElement('button');
-    panelToggle.className = 'thread-header__panel-toggle';
+    panelToggle.className = 'thread-header__panel-toggle thread-header__panel-toggle--right';
     panelToggle.dataset.tooltip = 'Toggle panel';
     panelToggle.setAttribute('aria-label', 'Toggle panel');
     panelToggle.innerHTML = '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h14a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M12 3v14"/></svg>';
     panelToggle.addEventListener('click', () => {
       this.rightEl.classList.toggle('layout__right--open');
     });
+    // Clear chat button (in thread header, before panel toggle)
+    const clearChatBtn = document.createElement('button');
+    clearChatBtn.className = 'thread-header__panel-toggle';
+    clearChatBtn.dataset.tooltip = 'Clear Chat';
+    clearChatBtn.setAttribute('aria-label', 'Clear Chat');
+    clearChatBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="m8.249,15.021c-.4,0-.733-.317-.748-.72l-.25-6.5c-.017-.414.307-.763.72-.778.01-.001.021-.001.03-.001.4,0,.733.317.748.72l.25,6.5c.017.414-.307.763-.72.778-.01.001-.021.001-.03.001Z" fill="currentColor"/><path d="m11.751,15.021c-.01,0-.02,0-.03-.001-.413-.016-.736-.364-.72-.778l.25-6.5c.015-.403.348-.72.748-.72.01,0,.02,0,.03.001.413.016.736.364.72.778l-.25,6.5c-.015.403-.348.72-.748.72Z" fill="currentColor"/><path d="m17,4h-3.5v-.75c0-1.24-1.01-2.25-2.25-2.25h-2.5c-1.24,0-2.25,1.01-2.25,2.25v.75h-3.5c-.414,0-.75.336-.75.75s.336.75.75.75h.52l.422,10.342c.048,1.21,1.036,2.158,2.248,2.158h7.619c1.212,0,2.2-.948,2.248-2.158l.422-10.342h.52c.414,0,.75-.336.75-.75s-.336-.75-.75-.75Zm-9-.75c0-.413.337-.75.75-.75h2.5c.413,0,.75.337.75.75v.75h-4v-.75Zm6.56,12.531c-.017.403-.346.719-.75.719h-7.619c-.404,0-.733-.316-.75-.719l-.42-10.281h9.959l-.42,10.281Z" fill="currentColor"/></svg>';
+    clearChatBtn.addEventListener('click', async () => {
+      await this.panels.chat.clearSession();
+      await this.onClearChat?.();
+      location.reload();
+    });
+
     const threadActions = document.createElement('div');
     threadActions.className = 'thread-header__actions';
+    threadActions.appendChild(clearChatBtn);
     threadActions.appendChild(panelToggle);
     this.threadHeaderEl.appendChild(threadActions);
 
@@ -774,6 +788,18 @@ export class Layout {
 
     const primaryTabBar = document.createElement('div');
     primaryTabBar.className = 'mini-tabs';
+
+    // Close button for overlay mode (<1440px) — first item in tab bar
+    const rightCloseBtn = document.createElement('button');
+    rightCloseBtn.className = 'thread-header__panel-toggle thread-header__panel-toggle--right';
+    rightCloseBtn.dataset.tooltip = 'Close panel';
+    rightCloseBtn.setAttribute('aria-label', 'Close panel');
+    rightCloseBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v14"/><path d="M3 3h14a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/></svg>';
+    rightCloseBtn.addEventListener('click', () => {
+      this.rightEl.classList.remove('layout__right--open');
+    });
+    primaryTabBar.appendChild(rightCloseBtn);
+
     this.primaryZoneEl.appendChild(primaryTabBar);
 
     const primaryContentArea = document.createElement('div');
@@ -835,6 +861,18 @@ export class Layout {
     this.primaryZone.enableAddButton();
     this.primaryZone.enableFullpageButton();
 
+    // Clear Terminal utility button in tab bar
+    const clearTermBtn = document.createElement('button');
+    clearTermBtn.className = 'mini-tabs__tab mini-tabs__tab--utility';
+    clearTermBtn.dataset.tooltip = 'Clear Terminal';
+    clearTermBtn.setAttribute('aria-label', 'Clear Terminal');
+    clearTermBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="m8.249,15.021c-.4,0-.733-.317-.748-.72l-.25-6.5c-.017-.414.307-.763.72-.778.01-.001.021-.001.03-.001.4,0,.733.317.748.72l.25,6.5c.017.414-.307.763-.72.778-.01.001-.021.001-.03.001Z" fill="currentColor"/><path d="m11.751,15.021c-.01,0-.02,0-.03-.001-.413-.016-.736-.364-.72-.778l.25-6.5c.015-.403.348-.72.748-.72.01,0,.02,0,.03.001.413.016.736.364.72.778l-.25,6.5c-.015.403-.348.72-.748.72Z" fill="currentColor"/><path d="m17,4h-3.5v-.75c0-1.24-1.01-2.25-2.25-2.25h-2.5c-1.24,0-2.25,1.01-2.25,2.25v.75h-3.5c-.414,0-.75.336-.75.75s.336.75.75.75h.52l.422,10.342c.048,1.21,1.036,2.158,2.248,2.158h7.619c1.212,0,2.2-.948,2.248-2.158l.422-10.342h.52c.414,0,.75-.336.75-.75s-.336-.75-.75-.75Zm-9-.75c0-.413.337-.75.75-.75h2.5c.413,0,.75.337.75.75v.75h-4v-.75Zm6.56,12.531c-.017.403-.346.719-.75.719h-7.619c-.404,0-.733-.316-.75-.719l-.42-10.281h9.959l-.42,10.281Z" fill="currentColor"/></svg>';
+    clearTermBtn.addEventListener('click', () => {
+      this.panels.terminal.clearTerminal();
+      this.openTerminal();
+    });
+    primaryTabBar.appendChild(clearTermBtn);
+
     this.rightEl.appendChild(this.primaryZoneEl);
     layout.appendChild(this.rightEl);
 
@@ -854,6 +892,7 @@ export class Layout {
         onRunCommand: (command) => {
           void this.runFileBrowserCommand(command);
         },
+        onClearFilesystem: () => this.onClearFilesystem?.(),
       }),
       memory: new MemoryPanel(memoryContainer),
       scoops: new ScoopsPanel(this.scoopsEl, {

@@ -99,6 +99,40 @@
 /* ================================================================== */
 /* File browser — S2 Tree View pattern                                */
 /* ================================================================== */
+/* File browser header — toolbar with title + actions */
+.file-browser__header {
+  display: flex; align-items: center;
+  height: 32px; min-height: 32px;
+  padding: 0 var(--s2-spacing-200);
+  border-bottom: 1px solid var(--s2-border-subtle);
+  flex-shrink: 0;
+  gap: var(--s2-spacing-100);
+}
+.file-browser__header-title {
+  font-size: var(--s2-font-size-50);
+  font-weight: 700;
+  color: var(--s2-content-tertiary);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  flex: 1;
+}
+.file-browser__header-btn {
+  background: transparent;
+  border: none;
+  color: var(--s2-content-tertiary);
+  cursor: pointer;
+  width: 24px; height: 24px;
+  border-radius: var(--s2-radius-s);
+  display: flex; align-items: center; justify-content: center;
+  padding: 0; flex-shrink: 0;
+  transition: background var(--s2-transition-default), color var(--s2-transition-default);
+}
+.file-browser__header-btn:hover {
+  background: var(--s2-gray-200);
+  color: var(--s2-content-default);
+}
+.file-browser__header-btn svg { width: 14px; height: 14px; }
+
 .file-browser { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .file-browser__body {
   flex: 1; min-height: 0; overflow-y: auto;
