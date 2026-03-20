@@ -396,6 +396,10 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     (event: LickEvent) => {
       // Route sprinkle licks to the offscreen orchestrator's cone
       if (event.type === 'sprinkle') {
+        // Mark onboarding complete so welcome sprinkle doesn't reappear
+        if (event.sprinkleName === 'welcome' && (event.body as any)?.action === 'onboarding-complete') {
+          localStorage.setItem('slicc-welcomed', '1');
+        }
         client.sendSprinkleLick(event.sprinkleName!, event.body);
       }
     },
@@ -468,6 +472,16 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   layout.onOpenSprinkle = (name, zone) => sprinkleManager.open(name, zone);
   layout.updateAddButtons();
   await sprinkleManager.restoreOpenSprinkles();
+
+  // Open welcome sprinkle on first run (extension mode)
+  if (!localStorage.getItem('slicc-welcomed') && sprinkleManager.available().some(p => p.name === 'welcome')) {
+    try {
+      await sprinkleManager.open('welcome');
+    } catch (e) {
+      log.warn('Failed to open welcome sprinkle', e);
+    }
+  }
+
   log.info('SprinkleManager initialized (extension mode)');
 
   // Request state from offscreen — retries automatically until ready
@@ -703,11 +717,6 @@ async function main(): Promise<void> {
       },
       getBrowserAPI: () => browser,
       onToolStart: (scoopJid, toolName, toolInput) => {
-        // Switch to terminal tab when agent uses bash
-        if (toolName === 'bash') {
-          layout.openTerminal();
-        }
-
         // Hide infrastructure tools from the chat (their output is shown elsewhere)
         const hiddenTools = new Set(['send_message', 'list_scoops', 'list_tasks']);
         if (hiddenTools.has(toolName)) return;
@@ -951,6 +960,11 @@ async function main(): Promise<void> {
 
     log.debug('Lick event', { type: event.type, name: eventName, targetScoop: event.targetScoop });
 
+    // Mark onboarding complete so welcome sprinkle doesn't reappear
+    if (isSprinkle && event.sprinkleName === 'welcome' && (event.body as any)?.action === 'onboarding-complete') {
+      localStorage.setItem('slicc-welcomed', '1');
+    }
+
     // Determine the target:
     // - Sprinkle licks and untargeted events default to cone
     // - Webhook/cron licks use explicit targetScoop if set
@@ -1046,11 +1060,10 @@ async function main(): Promise<void> {
     layout.onOpenSprinkle = (name, zone) => sprinkleManager!.open(name, zone);
     layout.updateAddButtons();
 
-    // Open welcome sprinkle on first run
+    // Open welcome sprinkle on first run (flag set when onboarding-complete lick fires)
     if (!localStorage.getItem('slicc-welcomed') && sprinkleManager.available().some(p => p.name === 'welcome')) {
       try {
         await sprinkleManager.open('welcome');
-        localStorage.setItem('slicc-welcomed', '1');
       } catch (e) {
         log.warn('Failed to open welcome sprinkle', e);
       }

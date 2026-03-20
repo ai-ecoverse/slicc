@@ -9,335 +9,265 @@
 
   body {
     font-family: 'Adobe Clean', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-    background: var(--s2-bg-base);
-    color: var(--s2-content-default);
+    background: var(--s2-bg-base, #fff);
+    color: var(--s2-content-default, #292929);
     min-height: 100vh;
     overflow-x: hidden;
   }
 
-  /* ── Gradient banner (exact Figma: -1deg, 0.40 opacity, white overlay) ── */
+  /* ── Gradient banner (Figma: subtle gradient bg, fades to white) ── */
   .banner {
     position: relative;
-    padding: 48px 24px 40px;
+    padding: 40px 24px 32px;
     text-align: center;
     overflow: hidden;
-    border-radius: 16px 16px 0 0;
   }
   .banner-bg {
     position: absolute; inset: 0;
     background: linear-gradient(-1.17deg, #ffcaec 16.77%, #bf8bf4 92.01%, #602dff 131.89%);
-    opacity: 0.40;
+    opacity: 0.25;
   }
   .banner-fade {
     position: absolute; inset: 0;
     background:
       linear-gradient(56.42deg, rgba(255,255,255,0) 49.79%, rgba(255,255,255,0.85) 96.09%),
-      linear-gradient(to bottom, rgba(255,255,255,0) 40%, rgba(255,255,255,1) 100%);
+      linear-gradient(to bottom, rgba(255,255,255,0) 30%, var(--s2-bg-base, #fff) 100%);
   }
   .banner-content { position: relative; z-index: 1; }
+
+  /* ── Title (Figma: 40px, black/900 weight, line-height 1.1) ── */
   .banner-title {
-    font-size: 32px;
+    font-size: 40px;
     font-weight: 900;
-    line-height: 38px;
-    color: var(--s2-content-default);
+    line-height: 1.1;
+    color: var(--s2-content-default, #292929);
     letter-spacing: -0.01em;
   }
   .banner-sub {
-    font-size: 14px;
-    color: var(--s2-content-secondary);
-    margin-top: 4px;
-    line-height: 18px;
+    font-size: 16px;
+    color: var(--s2-content-secondary, #717171);
+    margin-top: 8px;
+    line-height: 1.5;
+    max-width: 420px;
+    margin-left: auto;
+    margin-right: auto;
   }
 
   /* ── Content area ── */
-  .content { padding: 0 24px 48px; }
+  .content {
+    padding: 0 24px 32px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  /* ── Step heading ── */
+  .step-heading {
+    font-size: 20px;
+    font-weight: 800;
+    color: var(--s2-content-default, #292929);
+    text-align: center;
+    margin-bottom: 4px;
+    line-height: 1.2;
+  }
+  .step-sub {
+    font-size: 14px;
+    color: var(--s2-content-secondary, #717171);
+    text-align: center;
+    line-height: 1.5;
+  }
 
   /* ── Step visibility ── */
-  .step { display: none; animation: fadeUp 0.4s ease both; }
+  .step { display: none; animation: fadeUp 0.4s ease both; width: 100%; }
   .step.active { display: block; }
   @keyframes fadeUp {
     from { opacity: 0; transform: translateY(12px); }
     to { opacity: 1; transform: translateY(0); }
   }
 
-  /* ── Prompt bar (Figma: 140px card, gradient glow, 2px purple border) ── */
+  /* ── Pills (Figma: suggestion chips — 40px, rounded-12, translucent bg, thin border, sparkle icon) ── */
+  .pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    max-width: 520px;
+    margin: 20px auto 0;
+    justify-content: center;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    height: 40px;
+    padding: 0 16px;
+    gap: 8px;
+    border-radius: 12px;
+    background: rgba(255,255,255,0.66);
+    border: 1px solid rgba(0,0,0,0.12);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 16px;
+    font-weight: 400;
+    line-height: 1.5;
+    color: var(--s2-content-default, #292929);
+    transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+    user-select: none;
+    white-space: nowrap;
+  }
+  .pill:hover {
+    background: rgba(255,255,255,0.9);
+    border-color: rgba(0,0,0,0.2);
+  }
+  .pill.selected {
+    background: rgba(255,255,255,0.95);
+    border-color: #9a3cf9;
+    box-shadow: 0 0 0 1px #9a3cf9;
+  }
+  /* Gradient sparkle icon in each pill */
+  .pill-icon {
+    width: 16px; height: 16px;
+    flex-shrink: 0;
+    background: linear-gradient(98deg, #9a3cf9 4%, #e743c8 35%, #ed457e 69%, #ff7918 105%);
+    -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M10 1.5l2.1 4.3 4.7.7-3.4 3.3.8 4.7L10 12.2 5.8 14.5l.8-4.7L3.2 6.5l4.7-.7z'/%3E%3C/svg%3E");
+    mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M10 1.5l2.1 4.3 4.7.7-3.4 3.3.8 4.7L10 12.2 5.8 14.5l.8-4.7L3.2 6.5l4.7-.7z'/%3E%3C/svg%3E");
+    -webkit-mask-size: contain;
+    mask-size: contain;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+  }
+
+  /* ── Navigation ── */
+  .nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    max-width: 520px;
+    margin: 20px auto 0;
+    width: 100%;
+  }
+  .nav-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: none;
+    border: none;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--s2-content-secondary, #717171);
+    cursor: pointer;
+    padding: 6px 10px;
+    border-radius: 8px;
+    transition: background 0.15s;
+  }
+  .nav-back:hover { background: var(--s2-gray-100, #f5f5f5); }
+  .nav-skip {
+    background: none;
+    border: none;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--s2-content-secondary, #717171);
+    cursor: pointer;
+    padding: 6px 10px;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .nav-skip:hover { color: var(--s2-content-default); }
+
+  /* ── CTA button ── */
+  .cta {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px 28px;
+    border-radius: 9999px;
+    background: var(--s2-accent, #3B63FB);
+    color: #fff;
+    border: none;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s, opacity 0.15s;
+  }
+  .cta:hover { background: var(--s2-accent-hover, #2b4ed4); }
+  .cta:disabled { opacity: 0.4; cursor: default; }
+
+  /* ── Progress dots ── */
+  .dots {
+    display: flex;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 24px;
+  }
+  .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--s2-gray-300, #ccc);
+    transition: background 0.2s;
+  }
+  .dot.active { background: #9a3cf9; }
+  .dot.done { background: #9a3cf9; opacity: 0.4; }
+
+  /* ── Prompt bar (Figma: 28px radius, 2px purple border, gradient glow) ── */
   .prompt-bar {
     position: relative;
-    margin: -24px auto 0;
+    margin: 20px auto 0;
     max-width: 520px;
-    z-index: 2;
+    width: 100%;
   }
-  .prompt-bar--inline { margin-top: 20px; }
   .prompt-bar-glow {
     position: absolute; inset: 0;
     border-radius: 28px;
     background: linear-gradient(142deg, #9a3cf9 4%, #e743c8 35%, #ed457e 69%, #ff7918 105%);
-    opacity: 0.20;
+    opacity: 0.50;
     filter: blur(20px);
     box-shadow: 0px 4px 24px 0px #340349;
-  }
-  .prompt-bar-border {
-    position: absolute; inset: 0;
-    border-radius: 16px;
-    padding: 2px;
-    background: linear-gradient(142deg, #9a3cf9 4%, #e743c8 35%, #ed457e 69%, #ff7918 105%);
-    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-    -webkit-mask-composite: xor;
-    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-    mask-composite: exclude;
-    pointer-events: none;
-    z-index: 1;
   }
   .prompt-bar-inner {
     position: relative;
     background: var(--s2-bg-elevated, #fff);
-    border: none;
-    border-radius: 16px;
-    box-shadow: 0px 1px 6px 0px rgba(0,0,0,0.12);
-    padding: 16px;
-    height: 140px;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-  }
-
-  .prompt-bar-inner input,
-  .prompt-bar-inner textarea {
-    width: 100%;
-    border: none; outline: none;
-    font-family: inherit;
-    font-size: 14px; line-height: 18px;
-    color: var(--s2-content-default, #131313);
-    background: transparent;
-    resize: none;
-    flex: 1;
-  }
-  .prompt-bar-inner input::placeholder,
-  .prompt-bar-inner textarea::placeholder { color: var(--s2-gray-600); }
-
-  .prompt-actions {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-shrink: 0;
-  }
-  .plus-btn {
-    width: 32px; height: 32px;
-    border: none; background: none;
-    cursor: pointer; padding: 0;
-    display: flex; align-items: center; justify-content: center;
-    color: var(--s2-gray-600);
-    border-radius: 8px;
-    transition: background 0.15s, color 0.15s;
-  }
-  .plus-btn:hover { background: var(--s2-gray-100); color: var(--s2-gray-800); }
-  .plus-btn svg { width: 20px; height: 20px; }
-  .send-btn {
-    width: 32px; height: 32px;
-    border-radius: 50%; border: none;
-    background: #3B63FB;
-    color: #fff; cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    flex-shrink: 0;
-    transition: background 0.15s, transform 0.1s;
-  }
-  .send-btn:hover { background: #2b4ed4; transform: scale(1.06); }
-  .send-btn:disabled { background: var(--s2-gray-300); cursor: default; transform: none; }
-  .send-btn svg { width: 18px; height: 18px; }
-
-  /* ── Quick starts table (Figma "My work" widget style) ── */
-  .qs-widget {
-    background: var(--s2-bg-elevated, #fff);
-    border: 1px solid #dadada;
-    border-radius: 16px;
-    padding: 0 24px;
-    max-width: 520px;
-    margin: 24px auto 0;
-  }
-  .qs-header {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    padding: 16px 0 12px;
-  }
-  .qs-title {
-    font-size: 18px;
-    font-weight: 700;
-    color: var(--s2-content-default, #292929);
-  }
-  .qs-viewall {
-    font-size: 14px;
-    font-weight: 500;
-    color: var(--s2-content-default, #292929);
-    background: none; border: none;
-    cursor: pointer;
-    font-family: inherit;
-  }
-  .qs-viewall:hover { text-decoration: underline; }
-  .qs-row {
+    border: 2px solid #9a3cf9;
+    border-radius: 28px;
+    padding: 12px 12px 12px 16px;
     display: flex;
     align-items: center;
     gap: 12px;
-    height: 56px;
-    border-top: 1px solid #e9e9e9;
-    cursor: pointer;
-    transition: background 0.12s;
   }
-  .qs-row:hover { background: #fafafa; margin: 0 -24px; padding: 0 24px; }
-  .qs-badge {
-    display: inline-flex;
-    align-items: center;
-    height: 22px;
-    padding: 0 8px;
-    border-radius: 11px;
-    font-size: 12px;
-    font-weight: 700;
-    white-space: nowrap;
-    flex-shrink: 0;
-    min-width: 72px;
-    justify-content: center;
-  }
-  .qs-task {
+  .prompt-bar-inner input {
     flex: 1;
-    font-size: 14px;
-    font-weight: 700;
+    border: none;
+    outline: none;
+    font-family: inherit;
+    font-size: 16px;
+    line-height: 1.5;
     color: var(--s2-content-default, #292929);
-    line-height: 1.3;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    background: transparent;
   }
-  .qs-desc {
-    font-size: 12px;
-    color: #505050;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 180px;
-  }
-  .qs-arrow {
-    color: #dadada;
-    font-size: 18px;
-    flex-shrink: 0;
-  }
-
-  /* ── Section label ── */
-  .section-label {
-    font-size: 11px; font-weight: 700;
-    color: var(--s2-gray-600); text-transform: uppercase;
-    letter-spacing: 0.06em; text-align: center;
-    margin: 28px 0 16px;
-  }
-
-  /* ── Skills grid ── */
-  .skills-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 8px;
-    max-width: 520px;
-    margin: 0 auto;
-  }
-  .skill-card {
-    display: flex; align-items: center;
-    gap: 10px; padding: 12px;
-    border-radius: 12px; background: var(--s2-bg-elevated);
-    box-shadow: 0 0 1px 0 rgba(0,0,0,0.08), 0 1px 4px 0 rgba(0,0,0,0.04), 0 2px 8px 0 rgba(0,0,0,0.08);
-    border: 1px solid var(--s2-gray-200);
+  .prompt-bar-inner input::placeholder { color: var(--s2-content-secondary, #717171); }
+  .send-btn {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    border: none;
+    background: var(--s2-accent, #3B63FB);
+    color: #fff;
     cursor: pointer;
-    transition: border-color 0.15s, box-shadow 0.15s;
-    user-select: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.15s, transform 0.1s;
   }
-  .skill-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
-  .skill-card.on { border-color: #9a3cf9; background: color-mix(in srgb, #9a3cf9 6%, var(--s2-bg-elevated)); }
-  .skill-icon {
-    width: 28px; height: 28px; border-radius: 8px;
-    display: flex; align-items: center; justify-content: center;
-    color: var(--s2-gray-25); font-size: 13px; font-weight: 800; flex-shrink: 0;
-  }
-  .skill-name { font-size: 13px; font-weight: 600; flex: 1; }
-  .skill-chk {
-    width: 18px; height: 18px; border-radius: 50%;
-    border: 2px solid var(--s2-gray-300); flex-shrink: 0;
-    transition: all 0.15s;
-  }
-  .skill-card.on .skill-chk {
-    border-color: #9a3cf9; background: #9a3cf9;
-    box-shadow: inset 0 0 0 3px var(--s2-bg-elevated);
-  }
+  .send-btn:hover { background: var(--s2-accent-hover, #2b4ed4); transform: scale(1.06); }
+  .send-btn svg { width: 18px; height: 18px; }
 
-  /* ── Widget cards ── */
-  .widget {
-    background: var(--s2-bg-elevated); border-radius: 16px;
-    box-shadow: 0 0 1px 0 rgba(0,0,0,0.08), 0 1px 4px 0 rgba(0,0,0,0.04), 0 2px 8px 0 rgba(0,0,0,0.08);
-    padding: 24px; max-width: 520px; margin: 0 auto;
+  /* ── Completion state ── */
+  .heading-state {
+    text-align: center;
+    padding: 40px 0;
+    animation: fadeUp 0.3s ease both;
   }
-  .widget-title { font-size: 18px; font-weight: 800; margin-bottom: 4px; }
-  .widget-sub { font-size: 13px; color: var(--s2-content-secondary); margin-bottom: 20px; }
-
-  /* ── Install list ── */
-  .install-item {
-    display: flex; align-items: center;
-    gap: 12px; padding: 10px 0;
-    font-size: 14px; font-weight: 600; color: var(--s2-gray-400);
-    border-bottom: 1px solid var(--s2-gray-100);
-    transition: color 0.3s;
-  }
-  .install-item:last-child { border-bottom: none; }
-  .install-item.done { color: var(--s2-content-default); }
-  .install-dot {
-    width: 20px; height: 20px; border-radius: 50%;
-    background: var(--s2-gray-200);
-    display: flex; align-items: center; justify-content: center;
-    flex-shrink: 0; transition: background 0.3s;
-  }
-  .install-item.done .install-dot { background: var(--s2-positive); }
-  .install-dot svg { width: 12px; height: 12px; opacity: 0; transition: opacity 0.3s; }
-  .install-item.done .install-dot svg { opacity: 1; }
-
-  /* ── Suggestion rows ── */
-  .suggestions { display: flex; flex-direction: column; gap: 8px; max-width: 520px; margin: 0 auto; }
-  .sug-btn {
-    display: flex; align-items: center; gap: 14px;
-    padding: 14px 16px; border-radius: 12px;
-    background: var(--s2-bg-elevated); box-shadow: 0 0 1px 0 rgba(0,0,0,0.08), 0 1px 4px 0 rgba(0,0,0,0.04), 0 2px 8px 0 rgba(0,0,0,0.08);
-    border: none; font-family: inherit; font-size: 14px; font-weight: 600;
-    color: var(--s2-content-default); cursor: pointer; text-align: left; width: 100%;
-    transition: box-shadow 0.2s, transform 0.12s;
-  }
-  .sug-btn:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.16); transform: translateY(-1px); }
-  .sug-icon {
-    width: 36px; height: 36px; border-radius: 10px;
-    display: flex; align-items: center; justify-content: center;
-    color: var(--s2-gray-25); font-size: 16px; flex-shrink: 0;
-  }
-  .sug-text { flex: 1; }
-  .sug-label { font-weight: 700; }
-  .sug-desc { font-size: 12px; color: var(--s2-content-secondary); font-weight: 400; margin-top: 2px; }
-  .sug-arrow { color: var(--s2-gray-400); font-size: 20px; flex-shrink: 0; }
-
-  /* ── CTA button ── */
-  .cta {
-    display: inline-flex; align-items: center; justify-content: center;
-    padding: 10px 28px; border-radius: 9999px;
-    background: var(--s2-accent); color: var(--s2-gray-25); border: none;
-    font-family: inherit; font-size: 14px; font-weight: 700;
-    cursor: pointer; transition: background 0.15s;
-  }
-  .cta:hover { background: var(--s2-accent-hover, #2b4ed4); }
-
-  /* ── Avatar ── */
-  .avatar {
-    width: 48px; height: 48px; border-radius: 50%;
-    background: linear-gradient(135deg, #9a3cf9, #e743c8);
-    display: flex; align-items: center; justify-content: center;
-    color: var(--s2-gray-25); font-size: 22px; font-weight: 800;
-    margin: 0 auto 12px;
-  }
-
-  .center { text-align: center; }
-  .muted { font-size: 13px; color: var(--s2-content-secondary); }
-  .mt-24 { margin-top: 24px; }
-  .mt-16 { margin-top: 16px; }
+  .heading-state .step-heading { font-size: 22px; }
 </style>
 </head>
 <body>
@@ -347,201 +277,260 @@
     <div class="banner-bg"></div>
     <div class="banner-fade"></div>
     <div class="banner-content">
-      <div class="banner-title" id="bTitle">Welcome to SLICC</div>
-      <div class="banner-sub" id="bSub">Your browser-native AI coding agent</div>
+      <div class="banner-title">Welcome</div>
+      <div class="banner-sub">Your browser-native AI agent for code, automation, web browsing, and interactive tools.</div>
     </div>
   </div>
 
   <div class="content">
 
-    <!-- Step 0: Name -->
-    <div class="step active" id="s0">
+    <!-- Step 1: Purpose -->
+    <div class="step active" id="s1">
+      <div class="step-heading">What brings you here?</div>
+      <div class="step-sub">Let's personalize your experience</div>
+      <div class="pills" id="purposePills"></div>
+      <div class="nav">
+        <span></span>
+        <button class="nav-skip" onclick="skip(1)">Skip</button>
+      </div>
+    </div>
+
+    <!-- Step 2: Role -->
+    <div class="step" id="s2">
+      <div class="step-heading">What do you do?</div>
+      <div class="step-sub" id="s2Sub"></div>
+      <div class="pills" id="rolePills"></div>
+      <div class="nav">
+        <button class="nav-back" onclick="back(1)">&larr; Back</button>
+        <button class="nav-skip" onclick="skip(2)">Skip</button>
+      </div>
+    </div>
+
+    <!-- Step 3: Tasks -->
+    <div class="step" id="s3">
+      <div class="step-heading">What do you want to tackle?</div>
+      <div class="step-sub">Pick as many as you like</div>
+      <div class="pills" id="taskPills"></div>
+      <div class="nav">
+        <button class="nav-back" onclick="back(2)">&larr; Back</button>
+        <div>
+          <button class="nav-skip" onclick="skip(3)" style="margin-right:8px">Skip</button>
+          <button class="cta" id="taskContinue" disabled onclick="goStep(4)">Continue</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 4: Name -->
+    <div class="step" id="s4">
+      <div class="step-heading">Almost there</div>
+      <div class="step-sub"></div>
       <div class="prompt-bar">
         <div class="prompt-bar-glow"></div>
-        <div class="prompt-bar-border"></div>
         <div class="prompt-bar-inner">
-          <input type="text" id="nameIn" placeholder="What's your name?" autofocus
-            onkeydown="if(event.key==='Enter'&&this.value.trim())go(1)">
-          <div class="prompt-actions">
-            <button class="plus-btn" title="Attach">
-              <svg viewBox="0 0 20 20" fill="currentColor"><path d="M16.25 9.25H10.75V3.75C10.75 3.336 10.414 3 10 3C9.586 3 9.25 3.336 9.25 3.75V9.25H3.75C3.336 9.25 3 9.586 3 10C3 10.414 3.336 10.75 3.75 10.75H9.25V16.25C9.25 16.664 9.586 17 10 17C10.414 17 10.75 16.664 10.75 16.25V10.75H16.25C16.664 10.75 17 10.414 17 10C17 9.586 16.664 9.25 16.25 9.25Z"/></svg>
-            </button>
-            <button class="send-btn" id="nameBtn" disabled onclick="go(1)">
-              <svg viewBox="0 0 20 20" fill="currentColor"><path d="M3.1 17.4a.75.75 0 01-.96-1.05L5.68 10 2.14 3.65a.75.75 0 01.96-1.05l14.5 6.75a.75.75 0 010 1.3l-14.5 6.75z"/></svg>
-            </button>
-          </div>
+          <input type="text" id="nameIn" placeholder="What should I call you?" autofocus
+            onkeydown="if(event.key==='Enter')finish()">
+          <button class="send-btn" onclick="finish()" aria-label="Let's go" data-tooltip="Let's go">
+            <svg viewBox="0 0 20 20" fill="currentColor"><path d="M3.1 17.4a.75.75 0 01-.96-1.05L5.68 10 2.14 3.65a.75.75 0 01.96-1.05l14.5 6.75a.75.75 0 010 1.3l-14.5 6.75z"/></svg>
+          </button>
         </div>
+      </div>
+      <div class="nav">
+        <button class="nav-back" onclick="back(3)">&larr; Back</button>
+        <button class="nav-skip" onclick="skip(4)">Skip</button>
       </div>
     </div>
 
-    <!-- Step 1: Welcome + Quick Actions -->
-    <div class="step" id="s1">
-      <div class="prompt-bar prompt-bar--inline">
-        <div class="prompt-bar-glow"></div>
-        <div class="prompt-bar-border"></div>
-        <div class="prompt-bar-inner">
-          <textarea id="taskIn" rows="2" placeholder="What do you want to work on?"
-            onkeydown="if(event.key==='Enter'&&!event.shiftKey&&this.value.trim()){event.preventDefault();go(3)}"></textarea>
-          <div class="prompt-actions">
-            <button class="plus-btn" title="Attach">
-              <svg viewBox="0 0 20 20" fill="currentColor"><path d="M16.25 9.25H10.75V3.75C10.75 3.336 10.414 3 10 3C9.586 3 9.25 3.336 9.25 3.75V9.25H3.75C3.336 9.25 3 9.586 3 10C3 10.414 3.336 10.75 3.75 10.75H9.25V16.25C9.25 16.664 9.586 17 10 17C10.414 17 10.75 16.664 10.75 16.25V10.75H16.25C16.664 10.75 17 10.414 17 10C17 9.586 16.664 9.25 16.25 9.25Z"/></svg>
-            </button>
-            <button class="send-btn" onclick="go(3)">
-              <svg viewBox="0 0 20 20" fill="currentColor"><path d="M3.1 17.4a.75.75 0 01-.96-1.05L5.68 10 2.14 3.65a.75.75 0 01.96-1.05l14.5 6.75a.75.75 0 010 1.3l-14.5 6.75z"/></svg>
-            </button>
-          </div>
-        </div>
-      </div>
-      <div class="qs-widget" id="qsTable"></div>
-    </div>
-
-    <!-- Step 3: Installing -->
-    <div class="step" id="s3">
-      <div style="padding-top:12px">
-        <div class="avatar" id="av">?</div>
-        <div class="center">
-          <div class="widget-title" id="niceT">Nice to meet you!</div>
-          <div class="muted" id="installLabel">Setting up your workspace&hellip;</div>
-        </div>
-        <div class="widget mt-16" id="installCard">
-          <div id="installList"></div>
-        </div>
+    <!-- Completion state -->
+    <div class="step" id="sDone">
+      <div class="heading-state">
+        <div class="step-heading">Setting things up&hellip;</div>
       </div>
     </div>
 
-    <!-- Step 4: First task -->
-    <div class="step" id="s4">
-      <div class="section-label">What do you want to work on first?</div>
-      <div class="suggestions" id="sugs"></div>
-      <div class="center mt-24 muted">Or just type a message in the chat to get started.</div>
+    <!-- Progress dots -->
+    <div class="dots" id="dots">
+      <div class="dot active"></div>
+      <div class="dot"></div>
+      <div class="dot"></div>
+      <div class="dot"></div>
     </div>
 
   </div>
 
 <script>
-  var cur = 0, uname = '', picks = [];
+  var cur = 1;
+  var profile = { purpose: '', role: '', roleCustom: '', tasks: [], name: '' };
 
-
-  var QUICK_STARTS = [
-    { badge:'Research',  bg:'#ACCFFD', color:'#292929', task:'Research a topic',         desc:'Scrape sites, synthesize findings' },
-    { badge:'Automate',  bg:'#FFC15E', color:'#292929', task:'Automate a workflow',      desc:'Browser macros, cron tasks, webhooks' },
-    { badge:'Extract',   bg:'#F7B5FF', color:'#292929', task:'Extract structured data',  desc:'Tables, PDFs, screenshots to JSON' },
-    { badge:'Analyze',   bg:'#BFDFBF', color:'#292929', task:'Audit a website',          desc:'SEO, a11y, performance, content' },
-    { badge:'Build',     bg:'#ACCFFD', color:'#292929', task:'Build an app',             desc:'Scaffold a site or dashboard' },
-    { badge:'Monitor',   bg:'#FFDE2C', color:'#292929', task:'Monitor a page',           desc:'Watch for changes, track metrics' },
+  var PURPOSES = [
+    { id: 'work', label: 'Work' },
+    { id: 'school', label: 'School' },
+    { id: 'personal', label: 'Personal' },
+    { id: 'side-project', label: 'Side project' },
+    { id: 'exploring', label: 'Just exploring' },
   ];
 
-  var SKILLS = [
-    { id:'web',    name:'Web Development',  ic:'&lt;/&gt;', bg:'#3b63fb' },
-    { id:'data',   name:'Data Analysis',    ic:'&#x2261;',  bg:'#52a119' },
-    { id:'content',name:'Content Writing',  ic:'&#x270E;',  bg:'#a65ce7' },
-    { id:'auto',   name:'Automation',       ic:'&#x26A1;',  bg:'#ff7918' },
-    { id:'design', name:'UI Design',        ic:'&#x25CB;',  bg:'#e743c8' },
-    { id:'seo',    name:'SEO',              ic:'&#x2191;',  bg:'#d92361' },
-    { id:'devops', name:'DevOps',           ic:'&#x2699;',  bg:'#6338ee' },
-    { id:'api',    name:'API Integration',  ic:'&#x21C4;',  bg:'#0097a7' },
+  var ROLES_BY_PURPOSE = {
+    work: {
+      subtitle: "What's your role?",
+      roles: [
+        { id: 'developer', label: 'Developer' },
+        { id: 'designer', label: 'Designer' },
+        { id: 'content-creator', label: 'Content creator' },
+        { id: 'marketer', label: 'Marketer' },
+        { id: 'product-pm', label: 'Product / PM' },
+        { id: 'founder', label: 'Founder' },
+        { id: 'other', label: 'Something else' },
+      ]
+    },
+    school: {
+      subtitle: "What are you studying?",
+      roles: [
+        { id: 'student', label: 'Student' },
+        { id: 'researcher', label: 'Researcher' },
+        { id: 'developer', label: 'Developer' },
+        { id: 'designer', label: 'Designer' },
+        { id: 'other', label: 'Something else' },
+      ]
+    },
+    _default: {
+      subtitle: "What's your background?",
+      roles: [
+        { id: 'developer', label: 'Developer' },
+        { id: 'designer', label: 'Designer' },
+        { id: 'content-creator', label: 'Content creator' },
+        { id: 'marketer', label: 'Marketer' },
+        { id: 'product-pm', label: 'Product / PM' },
+        { id: 'student', label: 'Student' },
+        { id: 'researcher', label: 'Researcher' },
+        { id: 'founder', label: 'Founder' },
+        { id: 'other', label: 'Something else' },
+      ]
+    }
+  };
+
+  var TASKS = [
+    { id: 'build-websites', label: 'Build websites' },
+    { id: 'automate', label: 'Automate tasks' },
+    { id: 'research', label: 'Research & analyze' },
+    { id: 'write-content', label: 'Write content' },
+    { id: 'extract-data', label: 'Extract data' },
+    { id: 'monitor', label: 'Monitor sites' },
+    { id: 'seo', label: 'SEO & audits' },
+    { id: 'manage-files', label: 'Manage files' },
+    { id: 'browser-automation', label: 'Browser automation' },
+    { id: 'not-sure', label: 'Not sure yet' },
   ];
 
-  var SUGS = [
-    { l:'Build an app',          d:'Scaffold a site or web app from scratch',  bg:'#3b63fb' },
-    { l:'Analyze a website',     d:'Run an SEO, performance, or a11y audit',   bg:'#52a119' },
-    { l:'Automate a workflow',   d:'Write a script or set up a cron task',     bg:'#ff7918' },
-    { l:'Research a topic',      d:'Scrape sites and summarize findings',      bg:'#a65ce7' },
-  ];
+  function makeIcon() {
+    var span = document.createElement('span');
+    span.className = 'pill-icon';
+    return span;
+  }
 
-  /* ── Build quick starts table ── */
-  var qt = document.getElementById('qsTable');
-  var qh = document.createElement('div');
-  qh.className = 'qs-header';
-  qh.innerHTML = '<span class="qs-title">Quick starts</span>';
-  qt.appendChild(qh);
-
-  QUICK_STARTS.forEach(function(q) {
-    var row = document.createElement('div');
-    row.className = 'qs-row';
-    row.innerHTML = '<span class="qs-badge" style="background:'+q.bg+';color:'+q.color+'">'+q.badge+'</span>'
-      + '<span class="qs-task">'+q.task+'</span>'
-      + '<span class="qs-desc">'+q.desc+'</span>'
-      + '<span class="qs-arrow">\u203A</span>';
-    row.onclick = function() {
-      document.getElementById('taskIn').value = q.task;
-      document.getElementById('taskIn').focus();
+  /* ── Build step 1: Purpose pills ── */
+  var purposeEl = document.getElementById('purposePills');
+  PURPOSES.forEach(function(p) {
+    var btn = document.createElement('button');
+    btn.className = 'pill';
+    btn.appendChild(makeIcon());
+    btn.appendChild(document.createTextNode(p.label));
+    btn.dataset.id = p.id;
+    btn.onclick = function() {
+      profile.purpose = p.id;
+      purposeEl.querySelectorAll('.pill').forEach(function(el) { el.classList.remove('selected'); });
+      btn.classList.add('selected');
+      setTimeout(function() { goStep(2); }, 300);
     };
-    qt.appendChild(row);
+    purposeEl.appendChild(btn);
   });
 
-  /* ── Name input ── */
-  var ni = document.getElementById('nameIn'), nb = document.getElementById('nameBtn');
-  ni.oninput = function() { nb.disabled = !ni.value.trim(); };
+  /* ── Build step 3: Task pills ── */
+  var taskEl = document.getElementById('taskPills');
+  var taskBtn = document.getElementById('taskContinue');
+  TASKS.forEach(function(t) {
+    var btn = document.createElement('button');
+    btn.className = 'pill';
+    btn.appendChild(makeIcon());
+    btn.appendChild(document.createTextNode(t.label));
+    btn.dataset.id = t.id;
+    btn.onclick = function() {
+      btn.classList.toggle('selected');
+      profile.tasks = [];
+      taskEl.querySelectorAll('.pill.selected').forEach(function(el) {
+        profile.tasks.push(el.dataset.id);
+      });
+      taskBtn.disabled = profile.tasks.length === 0;
+    };
+    taskEl.appendChild(btn);
+  });
 
-  function go(n) {
-    if (n === 1) {
-      uname = ni.value.trim();
-      if (!uname) return;
-      document.getElementById('bTitle').textContent = 'Welcome, ' + uname;
-      document.getElementById('bSub').textContent = '';
+  function buildRolePills() {
+    var roleEl = document.getElementById('rolePills');
+    roleEl.innerHTML = '';
+    var config = ROLES_BY_PURPOSE[profile.purpose] || ROLES_BY_PURPOSE._default;
+    document.getElementById('s2Sub').textContent = config.subtitle;
+    config.roles.forEach(function(r) {
+      var btn = document.createElement('button');
+      btn.className = 'pill';
+      btn.appendChild(makeIcon());
+      btn.appendChild(document.createTextNode(r.label));
+      btn.dataset.id = r.id;
+      btn.onclick = function() {
+        profile.role = r.id;
+        roleEl.querySelectorAll('.pill').forEach(function(el) { el.classList.remove('selected'); });
+        btn.classList.add('selected');
+        setTimeout(function() { goStep(3); }, 300);
+      };
+      roleEl.appendChild(btn);
+    });
+  }
+
+  function updateDots(step) {
+    var dots = document.getElementById('dots').children;
+    for (var i = 0; i < dots.length; i++) {
+      dots[i].className = 'dot';
+      if (i + 1 === step) dots[i].className = 'dot active';
+      else if (i + 1 < step) dots[i].className = 'dot done';
     }
-    if (n === 3) {
-      var task = document.getElementById('taskIn')
-        ? document.getElementById('taskIn').value.trim() : '';
-      document.getElementById('bTitle').textContent = '';
-      document.getElementById('bSub').textContent = '';
-      document.getElementById('banner').style.padding = '20px 24px';
-      document.getElementById('niceT').textContent = 'Nice to meet you, ' + uname + '!';
-      document.getElementById('av').textContent = uname.charAt(0).toUpperCase();
-      runInstall();
-    }
-    document.getElementById('s'+cur).classList.remove('active');
-    document.getElementById('s'+n).classList.add('active');
+  }
+
+  function goStep(n) {
+    if (n === 2) buildRolePills();
+    document.getElementById('s' + cur).classList.remove('active');
+    document.getElementById('s' + n).classList.add('active');
     cur = n;
-  }
-
-  function runInstall() {
-    var items = [
-      {t:'Initializing workspace'},
-      {t:'Loading core tools'},
-      {t:'Installing Web Development'},
-      {t:'Installing Content Writing'},
-      {t:'Installing Automation'},
-      {t:'Ready to go'},
-    ];
-
-    var el = document.getElementById('installList');
-    el.innerHTML = '';
-    items.forEach(function(it) {
-      var d = document.createElement('div');
-      d.className = 'install-item';
-      d.innerHTML = '<div class="install-dot"><svg viewBox="0 0 12 12" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><polyline points="2.5,6 5,8.5 9.5,3.5"/></svg></div><span>'+it.t+'</span>';
-      el.appendChild(d);
-    });
-
-    var all = el.querySelectorAll('.install-item'), i = 0;
-    function tick() {
-      if (i >= all.length) { setTimeout(function(){ go(4); showSugs(); }, 500); return; }
-      all[i].classList.add('done');
-      i++;
-      setTimeout(tick, 350 + Math.random()*250);
+    updateDots(n);
+    if (n === 4) {
+      var nameIn = document.getElementById('nameIn');
+      setTimeout(function() { nameIn.focus(); }, 100);
     }
-    setTimeout(tick, 400);
   }
 
-  function showSugs() {
-    document.getElementById('bTitle').textContent = 'You\u2019re all set, ' + uname;
-    document.getElementById('bSub').textContent = 'Your workspace is ready';
-    document.getElementById('banner').style.padding = '36px 24px 32px';
+  function back(toStep) {
+    goStep(toStep);
+  }
 
-    var el = document.getElementById('sugs');
-    el.innerHTML = '';
-    SUGS.forEach(function(s) {
-      var b = document.createElement('button');
-      b.className = 'sug-btn';
-      b.innerHTML = '<div class="sug-icon" style="background:'+s.bg+'">'
-        + '<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M14.5 14.5c-.19 0-.38-.07-.53-.22-.29-.29-.29-.77 0-1.06l3.22-3.22-3.22-3.22a.75.75 0 011.06-1.06l3.75 3.75c.29.29.29.77 0 1.06l-3.75 3.75c-.15.15-.34.22-.53.22z"/></svg>'
-        + '</div><div class="sug-text"><div class="sug-label">'+s.l+'</div><div class="sug-desc">'+s.d+'</div></div>'
-        + '<div class="sug-arrow">\u203A</div>';
-      b.onclick = function(){ if(window.slicc) slicc.lick({action:'start-task',task:s.l}); };
-      el.appendChild(b);
-    });
+  function skip(fromStep) {
+    if (fromStep < 4) {
+      goStep(fromStep + 1);
+    } else {
+      finish();
+    }
+  }
+
+  function finish() {
+    profile.name = (document.getElementById('nameIn').value || '').trim();
+
+    // Show completion state
+    document.getElementById('s' + cur).classList.remove('active');
+    document.getElementById('sDone').classList.add('active');
+    document.getElementById('dots').style.display = 'none';
+    document.getElementById('banner').style.display = 'none';
+
+    // Fire lick (panel stays open)
+    if (window.slicc) {
+      slicc.lick({ action: 'onboarding-complete', data: profile });
+    }
   }
 </script>
 </body>
