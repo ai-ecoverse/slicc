@@ -1,8 +1,38 @@
 import AppKit
+import Foundation
 
 final class AppScanner {
+    /// Directory for debug builds
+    static var userApplicationsDir: String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/Applications"
+    }
+
     static func scan() -> [AppTarget] {
         var targets: [AppTarget] = []
+        var debugBuilds: [String: AppTarget] = [:] // originalPath -> debugTarget
+
+        // First scan ~/Applications for debug builds
+        let fm = FileManager.default
+        if let userApps = try? fm.contentsOfDirectory(atPath: userApplicationsDir) {
+            for item in userApps where item.hasSuffix(" Debug.app") {
+                let debugPath = "\(userApplicationsDir)/\(item)"
+                guard hasCDPFramework(atPath: debugPath) else { continue }
+                let baseName = String(item.dropLast(" Debug.app".count))
+                let originalPath = "/Applications/\(baseName).app"
+                let name = "\(baseName)"
+                let icon = NSWorkspace.shared.icon(forFile: debugPath)
+                let debugTarget = AppTarget(
+                    id: debugPath, name: name, path: debugPath,
+                    executablePath: executablePath(forApp: debugPath, name: baseName),
+                    type: .electronApp, icon: icon,
+                    debugSupport: .supported,
+                    isDebugBuild: true,
+                    originalAppPath: originalPath
+                )
+                debugBuilds[originalPath] = debugTarget
+            }
+        }
 
         // Known Chromium browsers by bundle ID
         for (bundleId, displayName) in AppTarget.knownChromiumBrowsers {
@@ -15,25 +45,38 @@ final class AppScanner {
             targets.append(AppTarget(
                 id: path, name: displayName, path: path,
                 executablePath: executablePath(forApp: path, name: name),
-                type: .chromiumBrowser, icon: icon
+                type: .chromiumBrowser, icon: icon,
+                debugSupport: .supported,
+                isDebugBuild: false,
+                originalAppPath: nil
             ))
         }
 
-        // Scan /Applications for Electron apps
-        let fm = FileManager.default
+        // Scan /Applications for CDP-compatible desktop apps (Electron, WebView2)
         guard let contents = try? fm.contentsOfDirectory(atPath: "/Applications") else {
             return targets
         }
         for item in contents where item.hasSuffix(".app") {
             let appPath = "/Applications/\(item)"
             if targets.contains(where: { $0.path == appPath }) { continue }
-            guard hasElectronFramework(atPath: appPath) else { continue }
+            guard hasCDPFramework(atPath: appPath) else { continue }
+
+            // If there's a debug build for this app, use that instead
+            if let debugTarget = debugBuilds[appPath] {
+                targets.append(debugTarget)
+                continue
+            }
+
             let name = appName(fromPath: appPath)
             let icon = NSWorkspace.shared.icon(forFile: appPath)
+            let debugSupport = checkDebugSupport(atPath: appPath)
             targets.append(AppTarget(
                 id: appPath, name: name, path: appPath,
                 executablePath: executablePath(forApp: appPath, name: name),
-                type: .electronApp, icon: icon
+                type: .electronApp, icon: icon,
+                debugSupport: debugSupport,
+                isDebugBuild: false,
+                originalAppPath: nil
             ))
         }
 
@@ -46,10 +89,48 @@ final class AppScanner {
         AppTarget.knownChromiumBrowsers.contains { $0.bundleId == bundleId }
     }
 
-    static func hasElectronFramework(atPath appPath: String) -> Bool {
-        FileManager.default.fileExists(
-            atPath: "\(appPath)/Contents/Frameworks/Electron Framework.framework"
-        )
+    /// Checks whether the app embeds a CDP-compatible browser engine
+    /// (Electron Framework or Microsoft Edge WebView2).
+    static func hasCDPFramework(atPath appPath: String) -> Bool {
+        let fm = FileManager.default
+        // Electron apps
+        if fm.fileExists(atPath: "\(appPath)/Contents/Frameworks/Electron Framework.framework") {
+            return true
+        }
+        // Microsoft Edge WebView2 apps (e.g. Teams)
+        if fm.fileExists(atPath: "\(appPath)/Contents/Frameworks/MSWebView2.framework") {
+            return true
+        }
+        return false
+    }
+
+    /// Check if an Electron app has remote debugging enabled
+    /// This checks for known apps that block remote debugging at the application level
+    /// (beyond just the Electron fuse). Fuse checking alone is unreliable across Electron versions.
+    static func checkDebugSupport(atPath appPath: String) -> ElectronDebugSupport {
+        let fm = FileManager.default
+        let electronFramework = "\(appPath)/Contents/Frameworks/Electron Framework.framework"
+        guard fm.fileExists(atPath: electronFramework) else {
+            return .supported // Not Electron - assume it works
+        }
+
+        // Known apps that block remote debugging at the application level
+        // These apps have explicit checks in their JavaScript code that exit
+        // when --remote-debugging-port is detected, even if the Electron fuse allows it.
+        let knownBlockedApps = [
+            "Claude",       // Checks CLAUDE_CDP_AUTH JWT, exits without it
+            "1Password",    // Security-focused, blocks remote debugging
+        ]
+
+        let appName = self.appName(fromPath: appPath)
+        if knownBlockedApps.contains(appName) {
+            return .disabled
+        }
+
+        // For all other Electron apps, assume remote debugging works.
+        // The Electron fuse system is inconsistent across versions and
+        // many apps work fine even when the fuse appears disabled.
+        return .supported
     }
 
     static func appName(fromPath path: String) -> String {

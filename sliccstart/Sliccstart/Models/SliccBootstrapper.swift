@@ -1,4 +1,7 @@
 import Foundation
+import os
+
+private let log = Logger(subsystem: "com.slicc.sliccstart", category: "Bootstrapper")
 
 enum InstallationStatus: Equatable {
     case notInstalled
@@ -18,7 +21,34 @@ final class SliccBootstrapper {
     var isWorking = false
     var lastError: String?
 
+    /// Whether the SLICC runtime is bundled inside the .app bundle
+    static var isBundled: Bool {
+        guard let resourcePath = Bundle.main.resourcePath else { return false }
+        return FileManager.default.fileExists(atPath: resourcePath + "/slicc/dist/cli/index.js")
+    }
+
+    /// Path to the bundled SLICC directory, or nil if not bundled
+    static var bundledSliccDir: String? {
+        guard let resourcePath = Bundle.main.resourcePath else { return nil }
+        let path = resourcePath + "/slicc"
+        return FileManager.default.fileExists(atPath: path + "/dist/cli/index.js") ? path : nil
+    }
+
+    /// Path to the bundled Node.js binary, or nil if not bundled
+    static var bundledNodePath: String? {
+        guard let resourcePath = Bundle.main.resourcePath else { return nil }
+        let path = resourcePath + "/node/bin/node"
+        return FileManager.default.fileExists(atPath: path) ? path : nil
+    }
+
     static func findNode() -> String? {
+        // Priority 1: Bundled Node.js inside the .app
+        if let bundled = bundledNodePath {
+            log.info("findNode: using bundled node at \(bundled)")
+            return bundled
+        }
+        log.info("findNode: no bundled node, searching system")
+        // Priority 2: Well-known system locations
         for candidate in [
             "/usr/local/bin/node",
             "/opt/homebrew/bin/node",
@@ -26,6 +56,7 @@ final class SliccBootstrapper {
         ] {
             if FileManager.default.fileExists(atPath: candidate) { return candidate }
         }
+        // Priority 3: which node
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/which")
         task.arguments = ["node"]
@@ -40,6 +71,12 @@ final class SliccBootstrapper {
     }
 
     static func checkInstallation(sliccDir: String = defaultSliccDir) -> InstallationStatus {
+        // Bundled mode: everything is inside the .app
+        if isBundled {
+            log.info("checkInstallation: bundled mode — installed")
+            return .installed
+        }
+        // External mode: check the sliccDir
         let fm = FileManager.default
         guard fm.fileExists(atPath: sliccDir + "/package.json") else { return .notInstalled }
         guard fm.fileExists(atPath: sliccDir + "/dist/cli/index.js") else { return .needsBuild }
@@ -47,6 +84,11 @@ final class SliccBootstrapper {
     }
 
     func bootstrap(sliccDir: String = SliccBootstrapper.defaultSliccDir) async throws {
+        if Self.isBundled {
+            progressMessage = "Ready!"
+            return
+        }
+
         isWorking = true
         lastError = nil
         defer { isWorking = false }
@@ -79,6 +121,11 @@ final class SliccBootstrapper {
     }
 
     func update(sliccDir: String = SliccBootstrapper.defaultSliccDir) async throws {
+        if Self.isBundled {
+            progressMessage = "App is self-contained. Download the latest release to update."
+            return
+        }
+
         isWorking = true
         lastError = nil
         defer { isWorking = false }

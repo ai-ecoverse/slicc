@@ -38,6 +38,45 @@ interface LauncherPointerState {
   dragging: boolean;
 }
 
+/**
+ * Create a style element with CSS text (works with Trusted Types).
+ */
+function createStyle(doc: Document, css: string): HTMLStyleElement {
+  const style = doc.createElement('style');
+  style.textContent = css;
+  return style;
+}
+
+/**
+ * Create an SVG element with the cone icon.
+ */
+function createConeIconSvg(doc: Document): SVGSVGElement {
+  const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+
+  // Two scoops (circles)
+  const circles = [
+    { cx: '9', cy: '7.2', r: '4.1' },
+    { cx: '15.2', cy: '8.1', r: '4' },
+  ];
+
+  for (const { cx, cy, r } of circles) {
+    const circle = doc.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', cx);
+    circle.setAttribute('cy', cy);
+    circle.setAttribute('r', r);
+    svg.appendChild(circle);
+  }
+
+  // Cone tip (path)
+  const path = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M9.8 12.4h5.1L12.4 21z');
+  svg.appendChild(path);
+
+  return svg;
+}
+
 const BASE_TOKENS = `
   :host {
     color-scheme: dark light;
@@ -89,31 +128,6 @@ const BASE_TOKENS = `
   }
 `;
 
-function coneIconMarkup(): string {
-  return `
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="9" cy="7.2" r="4.1"></circle>
-      <circle cx="15.2" cy="8.1" r="4"></circle>
-      <path d="M9.8 12.4h5.1L12.4 21z"></path>
-    </svg>
-  `;
-}
-
-function buildOverlayTabsMarkup(activeTab: ExtensionTabId): string {
-  return EXTENSION_TAB_SPECS.map(({ id, label }) => {
-    const active = id === activeTab;
-    return `
-      <button
-        type="button"
-        class="tab-bar__tab${active ? ' tab-bar__tab--active' : ''}"
-        role="tab"
-        aria-selected="${String(active)}"
-        data-tab="${id}"
-      >${label}</button>
-    `;
-  }).join('');
-}
-
 function withTabQuery(appUrl: string, activeTab: ExtensionTabId): string {
   try {
     const url = new URL(appUrl, window.location.href);
@@ -142,118 +156,68 @@ class SliccElectronLauncherElement extends HTMLElement {
 
   private render(): void {
     const root = this.attachShadow({ mode: 'open' });
-    root.innerHTML = `
-      <style>
-        ${BASE_TOKENS}
-        :host {
-          all: initial;
-          position: fixed;
-          top: ${ELECTRON_OVERLAY_LAUNCHER_OFFSET_PX}px;
-          right: ${ELECTRON_OVERLAY_LAUNCHER_OFFSET_PX}px;
-          z-index: 1;
-          pointer-events: auto;
-          display: block;
-          font-family: var(--s2-font-family);
-          transition: top var(--s2-transition-default), right var(--s2-transition-default), bottom var(--s2-transition-default), left var(--s2-transition-default);
-        }
-        :host([corner="top-left"]) {
-          top: ${ELECTRON_OVERLAY_LAUNCHER_OFFSET_PX}px;
-          right: auto;
-          bottom: auto;
-          left: ${ELECTRON_OVERLAY_LAUNCHER_OFFSET_PX}px;
-        }
-        :host([corner="top-right"]) {
-          top: ${ELECTRON_OVERLAY_LAUNCHER_OFFSET_PX}px;
-          right: ${ELECTRON_OVERLAY_LAUNCHER_OFFSET_PX}px;
-          bottom: auto;
-          left: auto;
-        }
-        :host([corner="bottom-left"]) {
-          top: auto;
-          right: auto;
-          bottom: ${ELECTRON_OVERLAY_LAUNCHER_OFFSET_PX}px;
-          left: ${ELECTRON_OVERLAY_LAUNCHER_OFFSET_PX}px;
-        }
-        :host([corner="bottom-right"]) {
-          top: auto;
-          right: ${ELECTRON_OVERLAY_LAUNCHER_OFFSET_PX}px;
-          bottom: ${ELECTRON_OVERLAY_LAUNCHER_OFFSET_PX}px;
-          left: auto;
-        }
-        :host([dragging]) {
-          transition: none;
-        }
-        *, *::before, *::after { box-sizing: border-box; }
-        button {
-          width: 44px;
-          height: 44px;
-          position: relative;
-          border: 1px solid rgba(255, 255, 255, 0.62);
-          border-radius: var(--s2-radius-pill);
-          background:
-            radial-gradient(circle at 30% 28%, rgba(255, 255, 255, 0.34), transparent 34%),
-            linear-gradient(160deg, #ffb15c 0%, color-mix(in srgb, var(--slicc-cone) 92%, #ffb15c) 34%, #a34b00 72%, #38220f 100%);
-          color: #fff;
-          box-shadow:
-            0 0 0 1px rgba(255, 255, 255, 0.18) inset,
-            0 0 0 4px rgba(0, 0, 0, 0.28),
-            0 12px 30px rgba(0, 0, 0, 0.4),
-            0 2px 10px rgba(0, 0, 0, 0.24);
-          cursor: grab;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          transition:
-            transform var(--s2-transition-default),
-            background var(--s2-transition-default),
-            border-color var(--s2-transition-default),
-            box-shadow var(--s2-transition-default);
-          backdrop-filter: blur(12px) saturate(1.05);
-          touch-action: none;
-          user-select: none;
-          -webkit-user-select: none;
-        }
-        button::before {
-          content: '';
-          position: absolute;
-          inset: -5px;
-          border-radius: inherit;
-          border: 1px solid rgba(255, 255, 255, 0.32);
-          box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18);
-          pointer-events: none;
-        }
-        :host([dragging]) button { cursor: grabbing; }
-        button:hover {
-          transform: translateY(-1px);
-          border-color: rgba(255, 255, 255, 0.78);
-          box-shadow:
-            0 0 0 1px rgba(255, 255, 255, 0.24) inset,
-            0 0 0 4px rgba(0, 0, 0, 0.34),
-            0 16px 34px rgba(0, 0, 0, 0.44),
-            0 0 18px color-mix(in srgb, var(--slicc-cone) 40%, transparent);
-        }
-        button:active { transform: scale(0.96); }
-        button[aria-pressed="true"] {
-          border-color: rgba(255, 255, 255, 0.84);
-          box-shadow:
-            0 0 0 1px rgba(255, 255, 255, 0.24) inset,
-            0 0 0 4px rgba(0, 0, 0, 0.36),
-            0 16px 38px rgba(0, 0, 0, 0.46),
-            0 0 22px color-mix(in srgb, var(--slicc-cone) 52%, transparent);
-        }
-        svg {
-          width: 20px;
-          height: 20px;
-          fill: currentColor;
-          filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55));
-        }
-      </style>
-      <button type="button" aria-label="Toggle SLICC overlay">
-        ${coneIconMarkup()}
-      </button>
-    `;
+    const doc = this.ownerDocument;
+    const offset = ELECTRON_OVERLAY_LAUNCHER_OFFSET_PX;
 
-    this.button = root.querySelector('button');
+    // Create style
+    root.appendChild(createStyle(doc, `
+      ${BASE_TOKENS}
+      :host {
+        all: initial;
+        position: fixed;
+        top: ${offset}px;
+        right: ${offset}px;
+        z-index: 1;
+        pointer-events: auto;
+        display: block;
+        font-family: var(--s2-font-family);
+        transition: top var(--s2-transition-default), right var(--s2-transition-default), bottom var(--s2-transition-default), left var(--s2-transition-default);
+      }
+      :host([corner="top-left"]) { top: ${offset}px; right: auto; bottom: auto; left: ${offset}px; }
+      :host([corner="top-right"]) { top: ${offset}px; right: ${offset}px; bottom: auto; left: auto; }
+      :host([corner="bottom-left"]) { top: auto; right: auto; bottom: ${offset}px; left: ${offset}px; }
+      :host([corner="bottom-right"]) { top: auto; right: ${offset}px; bottom: ${offset}px; left: auto; }
+      :host([dragging]) { transition: none; }
+      *, *::before, *::after { box-sizing: border-box; }
+      button {
+        width: 44px; height: 44px; position: relative;
+        border: 1px solid rgba(255, 255, 255, 0.62);
+        border-radius: var(--s2-radius-pill);
+        background: radial-gradient(circle at 30% 28%, rgba(255, 255, 255, 0.34), transparent 34%),
+          linear-gradient(160deg, #ffb15c 0%, color-mix(in srgb, var(--slicc-cone) 92%, #ffb15c) 34%, #a34b00 72%, #38220f 100%);
+        color: #fff;
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18) inset, 0 0 0 4px rgba(0, 0, 0, 0.28), 0 12px 30px rgba(0, 0, 0, 0.4), 0 2px 10px rgba(0, 0, 0, 0.24);
+        cursor: grab;
+        display: inline-flex; align-items: center; justify-content: center;
+        transition: transform var(--s2-transition-default), background var(--s2-transition-default), border-color var(--s2-transition-default), box-shadow var(--s2-transition-default);
+        backdrop-filter: blur(12px) saturate(1.05);
+        touch-action: none; user-select: none; -webkit-user-select: none;
+      }
+      button::before {
+        content: ''; position: absolute; inset: -5px; border-radius: inherit;
+        border: 1px solid rgba(255, 255, 255, 0.32); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18); pointer-events: none;
+      }
+      :host([dragging]) button { cursor: grabbing; }
+      button:hover {
+        transform: translateY(-1px); border-color: rgba(255, 255, 255, 0.78);
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.24) inset, 0 0 0 4px rgba(0, 0, 0, 0.34), 0 16px 34px rgba(0, 0, 0, 0.44), 0 0 18px color-mix(in srgb, var(--slicc-cone) 40%, transparent);
+      }
+      button:active { transform: scale(0.96); }
+      button[aria-pressed="true"] {
+        border-color: rgba(255, 255, 255, 0.84);
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.24) inset, 0 0 0 4px rgba(0, 0, 0, 0.36), 0 16px 38px rgba(0, 0, 0, 0.46), 0 0 22px color-mix(in srgb, var(--slicc-cone) 52%, transparent);
+      }
+      svg { width: 20px; height: 20px; fill: currentColor; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55)); }
+    `));
+
+    // Create button with SVG icon
+    const button = doc.createElement('button');
+    button.type = 'button';
+    button.setAttribute('aria-label', 'Toggle SLICC overlay');
+    button.appendChild(createConeIconSvg(doc));
+    root.appendChild(button);
+
+    this.button = button;
     this.button?.addEventListener('click', (event) => {
       if (this.suppressClick) {
         this.suppressClick = false;
@@ -415,204 +379,141 @@ class SliccElectronSidebarElement extends HTMLElement {
 
   private render(): void {
     const root = this.attachShadow({ mode: 'open' });
+    const doc = this.ownerDocument;
     const activeTab = normalizeExtensionTabId(this.getAttribute('active-tab'));
-    root.innerHTML = `
-      <style>
-        ${BASE_TOKENS}
-        :host {
-          all: initial;
-          position: fixed;
-          inset: 0;
-          display: block;
-          pointer-events: none;
-          font-family: var(--s2-font-family);
-        }
-        :host([open]) {
-          pointer-events: auto;
-        }
-        *, *::before, *::after { box-sizing: border-box; }
-        .backdrop {
-          position: absolute;
-          inset: 0;
-          background: rgba(0, 0, 0, 0.18);
-          opacity: 0;
-          transition: opacity var(--s2-transition-default);
-        }
-        :host([open]) .backdrop {
-          opacity: 1;
-        }
-        .sidebar {
-          position: absolute;
-          top: 12px;
-          right: 12px;
-          bottom: 12px;
-          width: min(440px, calc(100vw - 24px));
-          display: flex;
-          flex-direction: column;
-          overflow: hidden;
-          background: color-mix(in srgb, var(--s2-bg-base) 96%, transparent);
-          color: var(--s2-content-default);
-          border: 1px solid var(--s2-border-subtle);
-          border-radius: var(--s2-radius-xl);
-          box-shadow: var(--s2-shadow-elevated);
-          transform: translateX(calc(100% + 28px));
-          transition: transform var(--s2-transition-default);
-          backdrop-filter: blur(16px);
-        }
-        :host([open]) .sidebar {
-          transform: translateX(0);
-        }
-        .header {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-          padding: 14px 16px 12px;
-          border-bottom: 1px solid var(--s2-border-subtle);
-          background: color-mix(in srgb, var(--s2-bg-layer-1) 92%, transparent);
-        }
-        .header__brand {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          min-width: 0;
-        }
-        .header__logo {
-          width: 34px;
-          height: 34px;
-          border-radius: 50%;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          background: linear-gradient(180deg, rgba(239, 112, 0, 0.9), rgba(239, 112, 0, 0.7));
-          color: #fff;
-          box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
-        }
-        .header__logo svg {
-          width: 18px;
-          height: 18px;
-          fill: currentColor;
-        }
-        .header__title {
-          font-size: 15px;
-          font-weight: 700;
-          letter-spacing: 0.01em;
-        }
-        .header__subtitle {
-          font-size: 11px;
-          color: var(--s2-content-secondary);
-        }
-        .header__close {
-          appearance: none;
-          border: 1px solid var(--s2-border-subtle);
-          background: var(--s2-bg-layer-2);
-          color: var(--s2-content-default);
-          width: 32px;
-          height: 32px;
-          border-radius: 50%;
-          cursor: pointer;
-          font-size: 18px;
-          line-height: 1;
-        }
-        .tab-bar {
-          display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 8px;
-          padding: 12px 16px;
-          border-bottom: 1px solid var(--s2-border-subtle);
-          background: color-mix(in srgb, var(--s2-bg-layer-1) 96%, transparent);
-        }
-        .tab-bar__tab {
-          appearance: none;
-          border: 1px solid var(--s2-border-subtle);
-          border-radius: var(--s2-radius-default);
-          background: var(--s2-bg-layer-2);
-          color: var(--s2-content-secondary);
-          padding: 9px 8px;
-          font-size: 12px;
-          font-weight: 600;
-          cursor: pointer;
-          transition: background var(--s2-transition-default), color var(--s2-transition-default), border-color var(--s2-transition-default);
-        }
-        .tab-bar__tab--active {
-          background: color-mix(in srgb, var(--s2-accent) 18%, var(--s2-bg-layer-2));
-          color: var(--s2-content-default);
-          border-color: color-mix(in srgb, var(--s2-accent) 45%, var(--s2-border-default));
-        }
-        .viewport {
-          position: relative;
-          flex: 1;
-          min-height: 0;
-          background: var(--s2-bg-sunken);
-        }
-        iframe {
-          border: 0;
-          width: 100%;
-          height: 100%;
-          display: block;
-          background: var(--s2-bg-base);
-        }
-        .empty-state {
-          position: absolute;
-          inset: 0;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          padding: 24px;
-          text-align: center;
-          color: var(--s2-content-secondary);
-          font-size: 13px;
-          line-height: 1.5;
-        }
-        .empty-state[hidden] {
-          display: none;
-        }
-      </style>
-      <div class="backdrop" part="backdrop"></div>
-      <aside class="sidebar" part="sidebar" aria-label="SLICC overlay sidebar">
-        <header class="header">
-          <div class="header__brand">
-            <span class="header__logo">${coneIconMarkup()}</span>
-            <div>
-              <div class="header__title">slicc</div>
-              <div class="header__subtitle">electron float</div>
-            </div>
-          </div>
-          <button type="button" class="header__close" aria-label="Close SLICC overlay">×</button>
-        </header>
-        <div class="tab-bar" role="tablist" aria-label="SLICC overlay tabs">
-          ${buildOverlayTabsMarkup(activeTab)}
-        </div>
-        <div class="viewport">
-          <iframe title="SLICC electron float"></iframe>
-          <div class="empty-state">Starting the local SLICC runtime…</div>
-        </div>
-      </aside>
-    `;
 
-    root.querySelector('.backdrop')?.addEventListener('click', () => {
+    // Create style
+    root.appendChild(createStyle(doc, `
+      ${BASE_TOKENS}
+      :host { all: initial; position: fixed; inset: 0; display: block; pointer-events: none; font-family: var(--s2-font-family); }
+      :host([open]) { pointer-events: auto; }
+      *, *::before, *::after { box-sizing: border-box; }
+      .backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.18); opacity: 0; transition: opacity var(--s2-transition-default); }
+      :host([open]) .backdrop { opacity: 1; }
+      .sidebar {
+        position: absolute; top: 12px; right: 12px; bottom: 12px; width: min(440px, calc(100vw - 24px));
+        display: flex; flex-direction: column; overflow: hidden;
+        background: color-mix(in srgb, var(--s2-bg-base) 96%, transparent); color: var(--s2-content-default);
+        border: 1px solid var(--s2-border-subtle); border-radius: var(--s2-radius-xl);
+        box-shadow: var(--s2-shadow-elevated); transform: translateX(calc(100% + 28px));
+        transition: transform var(--s2-transition-default); backdrop-filter: blur(16px);
+      }
+      :host([open]) .sidebar { transform: translateX(0); }
+      .header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px 12px; border-bottom: 1px solid var(--s2-border-subtle); background: color-mix(in srgb, var(--s2-bg-layer-1) 92%, transparent); }
+      .header__brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+      .header__logo { width: 34px; height: 34px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: linear-gradient(180deg, rgba(239, 112, 0, 0.9), rgba(239, 112, 0, 0.7)); color: #fff; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18); }
+      .header__logo svg { width: 18px; height: 18px; fill: currentColor; }
+      .header__title { font-size: 15px; font-weight: 700; letter-spacing: 0.01em; }
+      .header__subtitle { font-size: 11px; color: var(--s2-content-secondary); }
+      .header__close { appearance: none; border: 1px solid var(--s2-border-subtle); background: var(--s2-bg-layer-2); color: var(--s2-content-default); width: 32px; height: 32px; border-radius: 50%; cursor: pointer; font-size: 18px; line-height: 1; }
+      .tab-bar { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--s2-border-subtle); background: color-mix(in srgb, var(--s2-bg-layer-1) 96%, transparent); }
+      .tab-bar__tab { appearance: none; border: 1px solid var(--s2-border-subtle); border-radius: var(--s2-radius-default); background: var(--s2-bg-layer-2); color: var(--s2-content-secondary); padding: 9px 8px; font-size: 12px; font-weight: 600; cursor: pointer; transition: background var(--s2-transition-default), color var(--s2-transition-default), border-color var(--s2-transition-default); }
+      .tab-bar__tab--active { background: color-mix(in srgb, var(--s2-accent) 18%, var(--s2-bg-layer-2)); color: var(--s2-content-default); border-color: color-mix(in srgb, var(--s2-accent) 45%, var(--s2-border-default)); }
+      .viewport { position: relative; flex: 1; min-height: 0; background: var(--s2-bg-sunken); }
+      iframe { border: 0; width: 100%; height: 100%; display: block; background: var(--s2-bg-base); }
+      .empty-state { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; text-align: center; color: var(--s2-content-secondary); font-size: 13px; line-height: 1.5; }
+      .empty-state[hidden] { display: none; }
+    `));
+
+    // Create backdrop
+    const backdrop = doc.createElement('div');
+    backdrop.className = 'backdrop';
+    backdrop.setAttribute('part', 'backdrop');
+    backdrop.addEventListener('click', () => {
       this.dispatchEvent(new CustomEvent('slicc-overlay-close', { bubbles: true, composed: true }));
     });
-    root.querySelector('.header__close')?.addEventListener('click', () => {
+    root.appendChild(backdrop);
+
+    // Create sidebar
+    const aside = doc.createElement('aside');
+    aside.className = 'sidebar';
+    aside.setAttribute('part', 'sidebar');
+    aside.setAttribute('aria-label', 'SLICC overlay sidebar');
+
+    // Header
+    const header = doc.createElement('header');
+    header.className = 'header';
+
+    const brand = doc.createElement('div');
+    brand.className = 'header__brand';
+
+    const logo = doc.createElement('span');
+    logo.className = 'header__logo';
+    logo.appendChild(createConeIconSvg(doc));
+    brand.appendChild(logo);
+
+    const titleContainer = doc.createElement('div');
+    const title = doc.createElement('div');
+    title.className = 'header__title';
+    title.textContent = 'slicc';
+    const subtitle = doc.createElement('div');
+    subtitle.className = 'header__subtitle';
+    subtitle.textContent = 'electron float';
+    titleContainer.appendChild(title);
+    titleContainer.appendChild(subtitle);
+    brand.appendChild(titleContainer);
+    header.appendChild(brand);
+
+    const closeBtn = doc.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'header__close';
+    closeBtn.setAttribute('aria-label', 'Close SLICC overlay');
+    closeBtn.textContent = '×';
+    closeBtn.addEventListener('click', () => {
       this.dispatchEvent(new CustomEvent('slicc-overlay-close', { bubbles: true, composed: true }));
     });
+    header.appendChild(closeBtn);
+    aside.appendChild(header);
 
-    root.querySelectorAll<HTMLButtonElement>('[data-tab]').forEach((button) => {
-      const tab = normalizeExtensionTabId(button.dataset.tab);
-      this.tabButtons.set(tab, button);
-      button.addEventListener('click', () => {
+    // Tab bar
+    const tabBar = doc.createElement('div');
+    tabBar.className = 'tab-bar';
+    tabBar.setAttribute('role', 'tablist');
+    tabBar.setAttribute('aria-label', 'SLICC overlay tabs');
+
+    for (const { id, label } of EXTENSION_TAB_SPECS) {
+      const tabBtn = doc.createElement('button');
+      tabBtn.type = 'button';
+      tabBtn.className = 'tab-bar__tab' + (id === activeTab ? ' tab-bar__tab--active' : '');
+      tabBtn.setAttribute('role', 'tab');
+      tabBtn.setAttribute('aria-selected', String(id === activeTab));
+      tabBtn.dataset.tab = id;
+      tabBtn.textContent = label;
+      this.tabButtons.set(id, tabBtn);
+      tabBtn.addEventListener('click', () => {
         this.dispatchEvent(
           new CustomEvent('slicc-overlay-select-tab', {
             bubbles: true,
             composed: true,
-            detail: { tab },
+            detail: { tab: id },
           })
         );
       });
-    });
+      tabBar.appendChild(tabBtn);
+    }
+    aside.appendChild(tabBar);
 
-    this.iframe = root.querySelector('iframe');
-    this.emptyState = root.querySelector('.empty-state');
+    // Viewport
+    const viewport = doc.createElement('div');
+    viewport.className = 'viewport';
+
+    const iframe = doc.createElement('iframe');
+    iframe.title = 'SLICC electron float';
+    this.iframe = iframe;
+    iframe.addEventListener('load', () => {
+      this.frameLoaded = true;
+      this.postActiveTab();
+    });
+    viewport.appendChild(iframe);
+
+    const emptyState = doc.createElement('div');
+    emptyState.className = 'empty-state';
+    emptyState.textContent = 'Starting the local SLICC runtime…';
+    this.emptyState = emptyState;
+    viewport.appendChild(emptyState);
+
+    aside.appendChild(viewport);
+    root.appendChild(aside);
     this.iframe?.addEventListener('load', () => {
       this.frameLoaded = true;
       this.postActiveTab();
@@ -794,41 +695,39 @@ export class SliccElectronOverlayElement extends HTMLElement {
 
   private render(): void {
     const root = this.attachShadow({ mode: 'open' });
-    root.innerHTML = `
-      <style>
-        ${BASE_TOKENS}
-        :host {
-          all: initial;
-          position: fixed;
-          inset: 0;
-          display: block;
-          pointer-events: none;
-          z-index: 2147483647;
-          contain: layout style paint;
-        }
-      </style>
-      <${ELECTRON_OVERLAY_LAUNCHER_TAG_NAME}></${ELECTRON_OVERLAY_LAUNCHER_TAG_NAME}>
-      <${ELECTRON_OVERLAY_SIDEBAR_TAG_NAME}></${ELECTRON_OVERLAY_SIDEBAR_TAG_NAME}>
-    `;
+    const doc = this.ownerDocument;
 
-    root
-      .querySelector<SliccElectronLauncherElement>(ELECTRON_OVERLAY_LAUNCHER_TAG_NAME)
-      ?.addEventListener('slicc-overlay-toggle', () => this.toggle());
-    root
-      .querySelector<SliccElectronLauncherElement>(ELECTRON_OVERLAY_LAUNCHER_TAG_NAME)
-      ?.addEventListener('slicc-overlay-move', (event: Event) => {
-        const corner = (event as CustomEvent<{ corner?: string }>).detail?.corner;
-        this.applyState(setElectronOverlayCorner(this.state, corner));
-      });
-    root
-      .querySelector<SliccElectronSidebarElement>(ELECTRON_OVERLAY_SIDEBAR_TAG_NAME)
-      ?.addEventListener('slicc-overlay-close', () => this.hideSidebar());
-    root
-      .querySelector<SliccElectronSidebarElement>(ELECTRON_OVERLAY_SIDEBAR_TAG_NAME)
-      ?.addEventListener('slicc-overlay-select-tab', (event: Event) => {
-        const tab = (event as CustomEvent<{ tab?: string }>).detail?.tab;
-        this.applyState(setElectronOverlayTab(this.state, tab));
-      });
+    // Create style
+    root.appendChild(createStyle(doc, `
+      ${BASE_TOKENS}
+      :host {
+        all: initial;
+        position: fixed;
+        inset: 0;
+        display: block;
+        pointer-events: none;
+        z-index: 2147483647;
+        contain: layout style paint;
+      }
+    `));
+
+    // Create launcher
+    const launcher = doc.createElement(ELECTRON_OVERLAY_LAUNCHER_TAG_NAME) as SliccElectronLauncherElement;
+    launcher.addEventListener('slicc-overlay-toggle', () => this.toggle());
+    launcher.addEventListener('slicc-overlay-move', (event: Event) => {
+      const corner = (event as CustomEvent<{ corner?: string }>).detail?.corner;
+      this.applyState(setElectronOverlayCorner(this.state, corner));
+    });
+    root.appendChild(launcher);
+
+    // Create sidebar
+    const sidebar = doc.createElement(ELECTRON_OVERLAY_SIDEBAR_TAG_NAME) as SliccElectronSidebarElement;
+    sidebar.addEventListener('slicc-overlay-close', () => this.hideSidebar());
+    sidebar.addEventListener('slicc-overlay-select-tab', (event: Event) => {
+      const tab = (event as CustomEvent<{ tab?: string }>).detail?.tab;
+      this.applyState(setElectronOverlayTab(this.state, tab));
+    });
+    root.appendChild(sidebar);
   }
 
   private syncChildren(): void {

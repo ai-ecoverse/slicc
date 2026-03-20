@@ -49,8 +49,8 @@ final class AppManagementPermission {
         // Known third-party apps that are commonly installed
         let preferredTestApps = [
             "Slack.app", "Discord.app", "Spotify.app", "Visual Studio Code.app",
-            "Figma.app", "Notion.app", "1Password.app", "Zoom.app",
-            "Google Chrome.app", "Firefox.app", "Brave Browser.app"
+            "Microsoft Teams.app", "Figma.app", "Notion.app", "1Password.app",
+            "Zoom.app", "Google Chrome.app", "Firefox.app", "Brave Browser.app"
         ]
         
         // Try preferred apps first, then any .app
