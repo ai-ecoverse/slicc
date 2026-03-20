@@ -132,7 +132,12 @@
         --s2-transition-default: 130ms ease;
 
         /* ── Header height ───────────────────────────────────────── */
-        --s2-header-height: 48px;
+        --s2-header-height: 56px;
+
+        /* ── UXC Layout ────────────────────────────────────────── */
+        --uxc-nav-rail-width: 58px;
+        --uxc-thread-header-height: 56px;
+        --uxc-content-max-width: 800px;
       }
 
       /* ================================================================== */
@@ -140,37 +145,37 @@
       /* Applied via .theme-light class on <html> by src/ui/theme.ts        */
       /* ================================================================== */
       :root.theme-light {
-        /* ── S2 Gray Scale (Light Theme) ─────────────────────────── */
+        /* ── S2 Gray Scale (Light Theme — from Figma UXC) ─────────── */
         --s2-gray-25:   #ffffff;
-        --s2-gray-50:   #f8f8f8;
-        --s2-gray-75:   #f0f0f0;
-        --s2-gray-100:  #e8e8e8;
-        --s2-gray-200:  #d6d6d6;
-        --s2-gray-300:  #c4c4c4;
-        --s2-gray-400:  #a1a1a1;
-        --s2-gray-500:  #8a8a8a;
-        --s2-gray-600:  #6e6e6e;
-        --s2-gray-700:  #5a5a5a;
-        --s2-gray-800:  #3a3a3a;
-        --s2-gray-900:  #1a1a1a;
+        --s2-gray-50:   #F8F8F8;
+        --s2-gray-75:   #F3F3F3;
+        --s2-gray-100:  #E9E9E9;
+        --s2-gray-200:  #e1e1e1;
+        --s2-gray-300:  #dadada;
+        --s2-gray-400:  #c6c6c6;
+        --s2-gray-500:  #8f8f8f;
+        --s2-gray-600:  #717171;
+        --s2-gray-700:  #505050;
+        --s2-gray-800:  #292929;
+        --s2-gray-900:  #131313;
         --s2-gray-1000: #000000;
 
-        /* ── S2 Semantic Backgrounds (Light) ─────────────────────── */
-        --s2-bg-sunken:     #f0f0f0;
+        /* ── S2 Semantic Backgrounds (Light — Figma UXC) ──────────── */
+        --s2-bg-sunken:     #F3F3F3;
 
-        /* ── S2 Accent (slightly darker for light bg contrast) ───── */
-        --s2-accent:          #2b54db;
-        --s2-accent-hover:    #1e44c4;
-        --s2-accent-down:     #1a3aaa;
+        /* ── S2 Accent (from Figma: Palette/blue/900) ──────────────── */
+        --s2-accent:          #3b63fb;
+        --s2-accent-hover:    #2b54db;
+        --s2-accent-down:     #1e44c4;
 
-        /* ── S2 Semantic Colors (Light — slightly adjusted) ──────── */
-        --s2-negative:        #d73220;
-        --s2-positive:        #268e6c;
-        --s2-notice:          #d17a00;
+        /* ── S2 Semantic Colors (Light — from Figma UXC) ──────────── */
+        --s2-negative:        #d92361;
+        --s2-positive:        #05834e;
+        --s2-notice:          #d45b00;
 
-        /* ── S2 Shadows (Light) ──────────────────────────────────── */
-        --s2-shadow-elevated: 0 4px 16px rgba(0,0,0,0.10), 0 1px 4px rgba(0,0,0,0.06);
-        --s2-shadow-container: 0 1px 4px rgba(0,0,0,0.06);
+        /* ── S2 Shadows (Light — from Figma UXC) ─────────────────── */
+        --s2-shadow-elevated: 0 4px 12px rgba(0,0,0,0.08), 0 2px 6px rgba(0,0,0,0.04), 0 0px 2px rgba(0,0,0,0.12);
+        --s2-shadow-container: 0 2px 8px rgba(0,0,0,0.08), 0 1px 4px rgba(0,0,0,0.04), 0 0px 1px rgba(0,0,0,0.08);
       }
 
       /* Syntax tokens — light theme overrides */
@@ -226,13 +231,28 @@
       .layout { display: flex; flex: 1; min-height: 0; }
       .layout__scoops {
         display: flex; flex-direction: column;
-        min-width: 180px; max-width: 300px;
-        background: var(--s2-bg-layer-1);
+        width: var(--uxc-nav-rail-width);
+        min-width: var(--uxc-nav-rail-width);
+        max-width: var(--uxc-nav-rail-width);
+        background: #f8f8f8;
+        flex-shrink: 0;
+        transition: width 200ms ease, min-width 200ms ease, max-width 200ms ease;
+        overflow: visible;
       }
-      .layout__left { display: flex; flex-direction: column; min-width: 320px; }
+      .layout__scoops--expanded {
+        width: 230px;
+        min-width: 230px;
+        max-width: 230px;
+      }
+      .layout__left {
+        display: flex; flex-direction: column; min-width: 320px;
+        flex: 1;
+        background: #f8f8f8;
+      }
       .layout__right {
         display: flex; flex-direction: column; min-width: 240px;
-        overflow: hidden; background: var(--s2-bg-layer-1);
+        overflow: hidden; background: #ffffff;
+        flex: 1;
       }
       .layout__divider {
         width: 1px; cursor: col-resize;
@@ -247,21 +267,55 @@
         background: var(--s2-accent);
       }
 
+      /* ── Thread Header (sub-header with scoop name) ─────────────── */
+      .thread-header {
+        display: flex; align-items: center; justify-content: space-between;
+        height: var(--uxc-thread-header-height);
+        min-height: var(--uxc-thread-header-height);
+        padding: 0 16px;
+        background: #ffffff;
+        border-bottom: 1px solid #e1e1e1;
+        border-top-left-radius: 12px;
+        flex-shrink: 0;
+        overflow: hidden;
+      }
+      .thread-header__title {
+        display: flex; align-items: center; gap: 8px;
+        flex: 1; min-width: 0;
+      }
+      .thread-header__name {
+        font-size: 14px;
+        font-weight: 700;
+        line-height: 18px;
+        letter-spacing: 0;
+        color: #131313;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .thread-header__icon {
+        width: 20px; height: 20px;
+        display: flex; align-items: center; justify-content: center;
+        flex-shrink: 0;
+        color: #292929;
+      }
+      .thread-header__actions {
+        display: flex; align-items: center; gap: 4px;
+        flex-shrink: 0;
+      }
+
       /* ================================================================== */
       /* Header (S2 App Frame Header — 48px)                               */
       /* ================================================================== */
       .header {
         display: flex; align-items: center; justify-content: space-between;
-        padding: 0 var(--s2-spacing-300);
+        padding: 8px 12px;
         height: var(--s2-header-height); min-height: var(--s2-header-height);
-        background: var(--s2-bg-layer-1);
-        border-bottom: 1px solid var(--s2-border-subtle);
+        background: #f8f8f8;
         flex-shrink: 0;
         z-index: 10;
       }
       .header__logo {
-        width: 22px; height: 22px;
-        margin-right: var(--s2-spacing-75);
+        width: 32px; height: 32px;
+        margin-right: 12px;
         flex-shrink: 0;
         transition: viewBox 300ms ease;
       }
@@ -305,28 +359,29 @@
         100% { transform: scaleY(1) scaleX(1); }
       }
       .header__title {
-        font-size: var(--s2-font-size-100);
-        font-weight: 800;
-        color: var(--s2-content-default);
-        letter-spacing: -0.01em;
+        font-size: 16px;
+        font-weight: 700;
+        color: #131313;
+        line-height: 20px;
+        letter-spacing: 0;
       }
-      .header__actions { display: flex; gap: 2px; align-items: center; }
+      .header__actions { display: flex; gap: 8px; align-items: center; }
       .header__separator {
         width: 1px; height: 20px;
-        background: var(--s2-border-subtle);
-        margin: 0 var(--s2-spacing-75);
+        background: #e1e1e1;
+        margin: 0;
       }
 
       /* S2 Ghost Action Button — icon-only pill */
       .header__btn {
         background: transparent;
-        color: var(--s2-content-secondary);
+        color: #292929;
         border: none;
-        border-radius: var(--s2-radius-pill);
+        border-radius: 8px;
         padding: 0;
         width: 32px; height: 32px;
         display: inline-flex; align-items: center; justify-content: center;
-        font-size: var(--s2-font-size-100);
+        font-size: 14px;
         font-family: var(--s2-font-family);
         cursor: pointer;
         transition: background var(--s2-transition-default), color var(--s2-transition-default), transform var(--s2-transition-default);
@@ -334,11 +389,11 @@
         position: relative;
       }
       .header__btn:hover {
-        background: var(--s2-gray-200);
-        color: var(--s2-content-default);
+        background: #e9e9e9;
+        color: #292929;
       }
       .header__btn:active { transform: scale(0.92); }
-      .header__btn svg { width: 16px; height: 16px; }
+      .header__btn svg { width: 20px; height: 20px; }
       /* Text variant for standalone mode labels */
       .header__btn--text {
         width: auto; padding: var(--s2-spacing-50) var(--s2-spacing-200);
@@ -398,8 +453,15 @@
       /* ================================================================== */
       .chat { display: flex; flex-direction: column; flex: 1; min-height: 0; background: var(--s2-bg-base); position: relative; }
       .chat__messages {
-        flex: 1; overflow-y: auto; padding: var(--s2-spacing-300);
-        display: flex; flex-direction: column; gap: var(--s2-spacing-100);
+        flex: 1; overflow-y: auto; padding: 16px;
+        display: flex; flex-direction: column; gap: 16px;
+      }
+      /* UXC: center chat content at 800px max-width */
+      .chat__messages-inner {
+        width: 100%;
+        max-width: var(--uxc-content-max-width);
+        margin: 0 auto;
+        display: flex; flex-direction: column; gap: 16px;
       }
 
       /* Jump pill — shown when auto-scroll is detached */
@@ -415,15 +477,22 @@
 
       /* S2 Message bubbles — user right-aligned, assistant left-aligned */
       .msg {
-        padding: var(--s2-spacing-100) 0;
+        padding: 0;
         max-width: 100%; word-wrap: break-word;
+        font-size: 14px; line-height: 1.5; letter-spacing: 0;
+        color: #292929;
       }
       .msg--user {
         align-self: flex-end;
-        background: var(--s2-bg-layer-2);
-        border-radius: var(--s2-radius-default);
-        padding: var(--s2-spacing-100) var(--s2-spacing-200);
-        max-width: 85%;
+        background: #7155fa;
+        color: #fff;
+        border-radius: 10px;
+        padding: 8px 16px;
+        max-width: 560px;
+        font-size: 14px;
+        font-weight: 500;
+        line-height: 18px;
+        letter-spacing: 0;
       }
       .msg-group--continuation .msg--user { padding-left: 0; }
       .msg--assistant {
@@ -432,7 +501,9 @@
       }
       .msg--assistant .msg__content {
         white-space: normal;
-        color: var(--s2-gray-800);
+        color: #292929;
+        font-size: 14px;
+        line-height: 1.5;
       }
       .msg--assistant .msg__error {
         margin: var(--s2-spacing-75) 0;
@@ -490,27 +561,12 @@
         background: transparent;
       }
 
-      /* Continuation messages (same sender, no label) — indent message content only */
-      .msg-group--continuation .msg { padding-left: 26px; }
+      /* Continuation messages (same sender, no label) */
+      .msg-group--continuation .msg { padding-left: 0; }
 
-      /* S2 Detail typography for role labels */
-      .msg__role {
-        font-size: var(--s2-font-size-50);
-        font-weight: 600;
-        color: var(--s2-content-tertiary);
-        margin-bottom: var(--s2-spacing-50);
-        display: flex; align-items: center; gap: var(--s2-spacing-75);
-      }
-      .msg--user .msg__role { color: var(--s2-content-secondary); }
-      .msg--assistant .msg__role { color: var(--s2-content-secondary); }
-
-      .msg__icon {
-        width: 18px; height: 18px; border-radius: var(--s2-radius-pill);
-        display: inline-flex; align-items: center; justify-content: center;
-        font-size: 10px; font-weight: 700; color: #fff; flex-shrink: 0;
-      }
-      .msg--user .msg__icon { background: var(--slicc-scoop-blue); }
-      .msg--assistant .msg__icon { background: var(--slicc-cone); }
+      /* Role labels — hidden per UXC Figma (no user/sliccy badges in chat) */
+      .msg__role { display: none; }
+      .msg__icon { display: none; }
 
       /* Collapsible messages */
       .msg__collapsible { cursor: pointer; }
@@ -531,33 +587,39 @@
       .msg__collapsible[open] .msg__content { margin-top: var(--s2-spacing-100); }
 
       /* Message group */
-      .msg-group { display: flex; flex-direction: column; gap: var(--s2-spacing-50); }
+      .msg-group { display: flex; flex-direction: column; gap: 8px; }
 
       /* ================================================================== */
       /* Tool calls — S2 compact inline style                               */
       /* ================================================================== */
-      .tool-call { padding: 0; font-size: var(--s2-font-size-75); margin-left: 20px; }
+      .tool-call { padding: 0; font-size: 12px; }
       .tool-call summary {
         list-style: none; cursor: pointer;
-        padding: 2px var(--s2-spacing-75);
-        display: flex; align-items: center; gap: var(--s2-spacing-50);
-        border-radius: var(--s2-radius-default);
-        color: var(--s2-content-tertiary);
+        padding: 11px 12px;
+        display: flex; align-items: center; gap: 4px;
+        border-radius: 8px;
+        background: #f8f8f8;
+        color: #505050;
+        font-weight: 400;
+        font-size: 12px;
+        line-height: 1.5;
         transition: background var(--s2-transition-default);
       }
-      .tool-call summary:hover { background: var(--s2-bg-layer-2); }
+      .tool-call summary:hover { background: #f3f3f3; }
       .tool-call summary::-webkit-details-marker { display: none; }
-      .tool-call__header { display: flex; align-items: center; gap: var(--s2-spacing-50); cursor: pointer; }
+      .tool-call__header { display: flex; align-items: center; gap: 4px; cursor: pointer; }
       .tool-call__icon {
-        font-size: 10px; width: 18px; height: 18px;
+        font-size: 10px; width: 10px; height: 10px;
         display: inline-flex; align-items: center; justify-content: center;
-        border-radius: var(--s2-radius-s); background: var(--s2-gray-200);
+        border-radius: 0; background: transparent;
         flex-shrink: 0;
+        transition: transform 150ms ease;
       }
-      .tool-call__name { color: var(--s2-content-secondary); font-weight: 500; font-family: var(--s2-font-mono); font-size: var(--s2-font-size-50); }
+      .tool-call[open] .tool-call__icon { transform: rotate(180deg); }
+      .tool-call__name { color: #505050; font-weight: 400; font-family: var(--s2-font-family); font-size: 12px; }
       .tool-call__preview {
-        color: var(--s2-content-tertiary); font-size: var(--s2-font-size-50);
-        margin-left: var(--s2-spacing-50);
+        color: #717171; font-size: 11px;
+        margin-left: 4px;
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
         max-width: 300px; font-family: var(--s2-font-mono);
       }
@@ -728,57 +790,193 @@
       /* Chat input — flat field with inline actions                         */
       /* ================================================================== */
       .chat__input-area {
-        padding: var(--s2-spacing-200) var(--s2-spacing-300);
-        background: var(--s2-bg-layer-1);
-        border-top: 1px solid var(--s2-border-subtle);
+        padding: var(--s2-spacing-300);
+        background: var(--s2-bg-base);
+        border-top: none;
+      }
+      .chat__input-area-inner {
+        max-width: var(--uxc-content-max-width);
+        margin: 0 auto;
+        width: 100%;
+      }
+      /* UXC: Suggested action buttons above prompt */
+      .chat__suggested-actions {
+        display: flex;
+        gap: var(--s2-spacing-100);
+        justify-content: center;
+        margin-bottom: var(--s2-spacing-200);
+        flex-wrap: wrap;
+      }
+      .chat__suggested-btn {
+        display: inline-flex; align-items: center; gap: var(--s2-spacing-75);
+        height: 32px; padding: 0 16px;
+        border: 1px solid var(--s2-gray-200);
+        border-radius: var(--s2-radius-pill);
+        background: var(--s2-bg-base);
+        color: var(--s2-content-default);
+        font-size: var(--s2-font-size-75); font-weight: 600;
+        font-family: var(--s2-font-family);
+        cursor: pointer;
+        transition: background var(--s2-transition-default), border-color var(--s2-transition-default);
+      }
+      .chat__suggested-btn:hover {
+        background: var(--s2-gray-75);
+        border-color: var(--s2-gray-300);
+      }
+      .chat__suggested-btn--accent {
+        background: var(--s2-accent); color: #fff; border-color: transparent;
+      }
+      .chat__suggested-btn--accent:hover {
+        background: var(--s2-accent-hover);
       }
       .chat__input-wrapper {
-        display: flex; align-items: flex-end;
-        border-radius: var(--s2-radius-default);
-        border: 1px solid var(--s2-border-default);
-        background: var(--s2-bg-sunken);
-        transition: border-color var(--s2-transition-default);
-        padding-right: var(--s2-spacing-50);
+        display: flex; flex-direction: column;
+        border-radius: 16px;
+        border: 1px solid #e1e1e1;
+        background: #fff;
+        box-shadow: 0 0 1px 0 rgba(0,0,0,0.08), 0 1px 4px 0 rgba(0,0,0,0.04), 0 2px 8px 0 rgba(0,0,0,0.08);
+        transition: border-color var(--s2-transition-default), box-shadow var(--s2-transition-default);
+        padding: 16px;
+        min-height: 112px;
       }
       .chat__input-wrapper:focus-within {
         border-color: var(--s2-accent);
+        box-shadow: 0 0 1px 0 rgba(0,0,0,0.08), 0 1px 4px 0 rgba(0,0,0,0.04), 0 4px 16px 0 rgba(0,0,0,0.12);
       }
       .chat__textarea {
-        flex: 1; resize: none; min-height: 36px; max-height: 120px;
-        padding: 8px var(--s2-spacing-200);
+        flex: 1; resize: none; min-height: 18px; max-height: 120px;
+        padding: 0;
         border: none; background: transparent;
-        color: var(--s2-content-default);
+        color: #292929;
         font-family: var(--s2-font-family);
-        font-size: var(--s2-font-size-100);
-        line-height: 1.4; outline: none;
+        font-size: 14px;
+        line-height: 18px; letter-spacing: 0;
+        font-weight: 400;
+        outline: none;
       }
-      .chat__textarea::placeholder { color: var(--s2-content-disabled); }
+      .chat__textarea::placeholder { color: #717171; }
 
-      /* Inline action buttons — inside the input wrapper */
-      .chat__input-actions {
-        display: flex; align-items: center; gap: 2px;
-        padding-bottom: 4px;
+      /* Action bar — bottom row of prompt bar */
+      .chat__action-bar {
+        display: flex; align-items: center; justify-content: space-between;
         flex-shrink: 0;
       }
+      .chat__action-bar-left {
+        display: flex; align-items: center; gap: 8px;
+      }
+      .chat__action-bar-right {
+        display: flex; align-items: center; gap: 8px;
+        margin-left: 12px;
+      }
 
-      /* S2 Accent fill send button (small, inside input) */
+      /* Model selector in prompt bar */
+      .chat__model-selector {
+        display: flex; align-items: center; gap: 6px;
+        flex: 1; justify-content: flex-end;
+        position: relative;
+      }
+
+      /* Pill buttons — shown when chat is empty */
+      .chat__model-pill {
+        border: 1px solid var(--s2-border-subtle);
+        background: transparent;
+        color: var(--s2-content-secondary);
+        border-radius: var(--s2-radius-pill);
+        padding: 4px 12px;
+        font-size: 12px;
+        font-family: var(--s2-font-family);
+        cursor: pointer;
+        white-space: nowrap;
+        transition: background 130ms ease, color 130ms ease, border-color 130ms ease;
+      }
+      .chat__model-pill:hover {
+        background: var(--s2-bg-elevated);
+        color: var(--s2-content-default);
+      }
+      .chat__model-pill--active {
+        background: var(--s2-accent);
+        color: #fff;
+        border-color: var(--s2-accent);
+      }
+      .chat__model-pill--active:hover {
+        background: var(--s2-accent-hover);
+        border-color: var(--s2-accent-hover);
+      }
+
+      /* Compact dropdown button — shown when chat has messages */
+      .chat__model-btn--compact {
+        border: 1px solid var(--s2-border-subtle);
+        background: transparent;
+        color: var(--s2-content-secondary);
+        border-radius: var(--s2-radius-pill);
+        padding: 4px 8px 4px 12px;
+        font-size: 12px;
+        font-family: var(--s2-font-family);
+        cursor: pointer;
+        display: flex; align-items: center; gap: 4px;
+        white-space: nowrap;
+        transition: background 130ms ease, color 130ms ease;
+      }
+      .chat__model-btn--compact:hover {
+        background: var(--s2-bg-elevated);
+        color: var(--s2-content-default);
+      }
+      .chat__model-chevron { display: flex; align-items: center; opacity: 0.6; }
+      .chat__model-btn--disabled {
+        cursor: default;
+        opacity: 0.5;
+        pointer-events: none;
+      }
+
+      /* Dropdown menu */
+      .chat__model-menu {
+        display: none;
+        position: absolute;
+        bottom: calc(100% + 6px);
+        right: 0;
+        background: var(--s2-bg-base);
+        border: 1px solid var(--s2-border-subtle);
+        border-radius: 12px;
+        box-shadow: 0 4px 24px rgba(0,0,0,0.12);
+        max-height: 240px;
+        overflow-y: auto;
+        min-width: 200px;
+        padding: 6px;
+        z-index: 100;
+      }
+      .chat__model-menu-item {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 8px 12px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 13px;
+        font-family: var(--s2-font-family);
+        color: var(--s2-content-default);
+        transition: background 100ms ease;
+      }
+      .chat__model-menu-item:hover { background: var(--s2-bg-elevated); }
+      .chat__model-menu-item--active { font-weight: 600; }
+      .chat__model-check { color: var(--s2-accent); display: flex; align-items: center; }
+
+      /* S2 Send button (accent, rounded) */
       .chat__send-btn {
-        width: 28px; height: 28px; border: none;
-        border-radius: var(--s2-radius-default);
-        background: var(--s2-accent); color: #fff;
-        font-size: 12px; cursor: pointer;
+        width: 32px; height: 32px; border: none;
+        border-radius: 50%;
+        background: #e9e9e9; color: #c6c6c6;
+        font-size: 14px; cursor: pointer;
         display: flex; align-items: center; justify-content: center;
         flex-shrink: 0;
-        transition: background var(--s2-transition-default), transform var(--s2-transition-default);
+        transition: background var(--s2-transition-default), color var(--s2-transition-default), transform var(--s2-transition-default);
       }
-      .chat__send-btn:hover { background: var(--s2-accent-hover); }
+      .chat__send-btn:not(:disabled) { background: var(--s2-accent); color: #fff; }
+      .chat__send-btn:not(:disabled):hover { background: var(--s2-accent-hover); }
       .chat__send-btn:active { transform: scale(0.92); }
-      .chat__send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+      .chat__send-btn:disabled { cursor: not-allowed; }
 
       /* S2 Stop button (inside input) */
       .chat__stop-btn {
-        width: 28px; height: 28px; border: none;
-        border-radius: var(--s2-radius-default);
+        width: 32px; height: 32px; border: none;
+        border-radius: 50%;
         background: var(--s2-negative); color: #fff;
         font-size: 10px; cursor: pointer;
         display: flex; align-items: center; justify-content: center;
@@ -788,20 +986,20 @@
       .chat__stop-btn:hover { background: #c43039; }
       .chat__stop-btn:active { transform: scale(0.92); }
 
-      /* Mic button — subtle secondary action */
+      /* Mic button — quiet action button style */
       .chat__mic-btn {
-        width: 28px; height: 28px; border: none;
+        width: 32px; height: 32px; border: none;
         border-radius: var(--s2-radius-default);
-        background: transparent; color: var(--s2-content-disabled);
+        background: transparent; color: #292929;
         cursor: pointer;
         display: flex; align-items: center; justify-content: center;
         flex-shrink: 0;
         transition: background var(--s2-transition-default), color var(--s2-transition-default), transform var(--s2-transition-default);
       }
-      .chat__mic-btn svg { width: 14px; height: 14px; }
+      .chat__mic-btn svg { width: 20px; height: 20px; }
       .chat__mic-btn:hover {
-        background: var(--s2-gray-200);
-        color: var(--s2-content-secondary);
+        background: #e9e9e9;
+        color: #292929;
       }
       .chat__mic-btn:disabled { opacity: 0.3; cursor: not-allowed; }
       .chat__mic-btn--active {
@@ -1027,39 +1225,64 @@
       /* ================================================================== */
       /* Mini tabs — S2 Tabs pattern                                         */
       /* ================================================================== */
+      /* UXC: Pill-style tabs (artifact/sprinkle header) */
       .mini-tabs {
         display: flex; gap: var(--s2-spacing-100);
-        padding: 0 var(--s2-spacing-200);
+        padding: var(--s2-spacing-200) var(--s2-spacing-300);
         border-bottom: 1px solid var(--s2-border-subtle);
         flex-shrink: 0;
+        overflow-x: auto;
+        align-items: center;
       }
       .mini-tabs__tab {
         position: relative;
         flex: none;
-        padding: var(--s2-spacing-100) var(--s2-spacing-100);
-        border: none; background: transparent;
-        color: var(--s2-content-tertiary);
-        font-size: var(--s2-font-size-75);
+        padding: 7px var(--s2-spacing-300);
+        border: 1px solid transparent;
+        background: #e9e9e9;
+        color: #292929;
+        font-size: 14px;
         font-weight: 500; font-family: var(--s2-font-family);
+        line-height: 18px; letter-spacing: 0;
         cursor: pointer; white-space: nowrap;
-        transition: color var(--s2-transition-default);
+        border-radius: var(--s2-radius-default);
+        transition: color var(--s2-transition-default), background var(--s2-transition-default), border-color var(--s2-transition-default);
+        height: 32px;
+        display: inline-flex; align-items: center; gap: var(--s2-spacing-75);
       }
-      .mini-tabs__tab::after {
-        content: ''; position: absolute;
-        bottom: -1px; left: var(--s2-spacing-100); right: var(--s2-spacing-100);
-        height: 2px; border-radius: 1px;
-        background: transparent;
-        transition: background var(--s2-transition-default);
+      .mini-tabs__tab::after { display: none; }
+      .mini-tabs__tab:hover {
+        color: var(--s2-content-default);
+        background: #dedede;
+        border-color: transparent;
       }
-      .mini-tabs__tab:hover { color: var(--s2-content-default); }
-      .mini-tabs__tab--active { color: var(--s2-content-default); }
-      .mini-tabs__tab--active::after { background: var(--s2-content-default); }
+      .mini-tabs__tab--active {
+        color: #fff;
+        background: var(--s2-gray-800);
+        border-color: var(--s2-gray-800);
+      }
+      .mini-tabs__tab--active:hover {
+        background: var(--s2-gray-800);
+        border-color: var(--s2-gray-800);
+        color: #fff;
+      }
       .mini-tabs__tab:focus-visible {
         outline: 2px solid var(--s2-accent);
-        outline-offset: -2px; border-radius: var(--s2-radius-s);
+        outline-offset: 2px; border-radius: var(--s2-radius-default);
       }
       .mini-tabs__tab:disabled {
         color: var(--s2-content-disabled); cursor: not-allowed;
+      }
+      .mini-tabs__tab--add {
+        border-color: transparent;
+        background: transparent;
+        color: var(--s2-content-tertiary);
+        font-size: 16px;
+      }
+      .mini-tabs__tab--add:hover {
+        border-color: var(--s2-gray-200);
+        background: var(--s2-gray-75);
+        color: var(--s2-content-default);
       }
 
       /* ================================================================== */
@@ -1193,40 +1416,188 @@
       .sprinkle-action-card {
         display: flex;
         flex-direction: column;
-        background: var(--s2-bg-layer-2);
-        border: 1px solid var(--s2-border-subtle);
-        border-radius: var(--s2-radius-l);
+        background: #ffffff;
+        border: 1px solid #e1e1e1;
+        border-radius: 8px;
         overflow: hidden;
+        box-shadow: 0 0 1px 0 rgba(0,0,0,0.08), 0 1px 4px 0 rgba(0,0,0,0.04), 0 2px 8px 0 rgba(0,0,0,0.08);
       }
       .sprinkle-action-card__header {
         display: flex;
         align-items: center;
-        gap: var(--s2-spacing-100);
-        padding: var(--s2-spacing-200) var(--s2-spacing-200) var(--s2-spacing-75);
+        gap: 12px;
+        padding: 16px;
         font-weight: 700;
-        font-size: var(--s2-font-size-100);
-        color: var(--s2-content-default);
+        font-size: 14px;
+        line-height: 18px;
+        color: #131313;
+      }
+      /* Header inline icon → 48px thumbnail container */
+      .sprinkle-action-card__header > div:first-child > svg {
+        width: 48px !important; height: 48px !important;
+        padding: 14px !important;
+        background: #e5f0fe !important;
+        border-radius: 7px !important;
+        color: #3b63fb !important;
+        flex-shrink: 0 !important;
+        box-sizing: border-box !important;
+      }
+      .sprinkle-action-card__header > div:first-child > div:first-child {
+        font-size: 14px !important; font-weight: 700 !important;
+        color: #131313 !important;
+      }
+      .sprinkle-action-card__header > div:first-child > div:nth-child(2) {
+        font-size: 12px !important; font-weight: 500 !important;
+        color: #505050 !important;
       }
       .sprinkle-action-card__header .sprinkle-badge {
         margin-left: auto;
       }
+      /* Header "Details" link styling */
+      .sprinkle-action-card__header a {
+        font-size: 12px !important; font-weight: 500 !important;
+        color: #292929 !important; text-decoration: none !important;
+        display: flex; align-items: center; gap: 4px;
+      }
       .sprinkle-action-card__body {
-        padding: 0 var(--s2-spacing-200) var(--s2-spacing-100);
-        font-size: var(--s2-font-size-75);
-        color: var(--s2-content-secondary);
+        padding: 16px;
+        font-size: 14px;
+        color: #505050;
         line-height: 1.5;
+      }
+      /* Score values inside stat containers */
+      .sprinkle-action-card__body div[style*="28px"] {
+        font-size: 22px !important;
+        font-weight: 800 !important;
+        color: #05834e !important;
+        line-height: 26px !important;
+      }
+      /* Score label text */
+      .sprinkle-action-card__body div[style*="12px"][style*="margin-bottom"] {
+        font-size: 12px !important; font-weight: 500 !important;
+        color: #292929 !important;
+      }
+      /* Score change text "+50 from pre-migration" */
+      .sprinkle-action-card__body div[style*="11px"] {
+        font-size: 12px !important; font-weight: 500 !important;
+        color: #505050 !important;
+      }
+      /* Score container — flex layout fix */
+      .sprinkle-action-card__body > div[style*="border-radius: 12px"] {
+        flex-wrap: nowrap !important;
+        gap: 16px !important;
+        padding: 20px !important;
+      }
+      /* Stats group — prevent shrinking */
+      .sprinkle-action-card__body > div[style*="border-radius: 12px"] > div[style*="gap: 32px"] {
+        flex-shrink: 0 !important;
+        gap: 24px !important;
+      }
+      /* Thumbnails group — flex-shrink and smaller */
+      .sprinkle-action-card__body > div[style*="border-radius: 12px"] > div[style*="gap: 8px"] {
+        flex: 1 !important; min-width: 0 !important;
+      }
+      /* Thumbnail placeholders — Figma shows ~116px rounded cards */
+      .sprinkle-action-card__body div[style*="120px"][style*="80px"] {
+        width: 0 !important; flex: 1 !important;
+        height: 80px !important;
+        background: #e9e9e9 !important;
+        border-radius: 8px !important;
+      }
+      /* Header icon — yellow/gold document icon per Figma */
+      .sprinkle-action-card__header > div:first-child > svg {
+        background: #fff197 !important;
+        color: #9e6600 !important;
+        stroke: #9e6600 !important;
       }
       .sprinkle-action-card__actions {
         display: flex;
-        gap: var(--s2-spacing-100);
+        gap: 8px;
         justify-content: flex-end;
-        padding: var(--s2-spacing-100) var(--s2-spacing-200);
-        border-top: 1px solid var(--s2-border-subtle);
+        padding: 12px 16px;
+        border-top: 1px solid #e1e1e1;
+      }
+
+      /* Figma-accurate overrides for inline sprinkle card list items
+         Only target divs with border-bottom (opportunity list items), not score/table containers */
+      .sprinkle-action-card__body > div[style*="border-bottom"] {
+        display: flex !important;
+        align-items: center !important;
+        gap: 24px !important;
+        padding: 24px !important;
+      }
+      /* Icon thumbnails in list items: 48px square, 7px radius */
+      .sprinkle-action-card__body > div[style*="border-bottom"] > div:first-child {
+        width: 48px !important; height: 48px !important; min-width: 48px !important;
+        border-radius: 7px !important;
+      }
+      /* Text content area in list items */
+      .sprinkle-action-card__body > div[style*="border-bottom"] > div:nth-child(2) {
+        flex: 1 !important; min-width: 0 !important;
+      }
+      /* Title text in list items */
+      .sprinkle-action-card__body > div[style*="border-bottom"] > div:nth-child(2) > div:first-child {
+        font-size: 16px !important; font-weight: 700 !important;
+        color: #131313 !important; line-height: 20px !important;
+      }
+      /* Description text in list items */
+      .sprinkle-action-card__body > div[style*="border-bottom"] > div:nth-child(2) > div:nth-child(2) {
+        font-size: 14px !important; color: #292929 !important;
+        line-height: 1.5 !important;
+      }
+      /* Badges inside card list items — subtle fill style, aligned right */
+      .sprinkle-action-card__body > div[style*="border-bottom"] > div:nth-child(2) > span {
+        border: none !important; border-radius: 8px !important;
+        padding: 4px 8px !important; font-size: 12px !important;
+        font-weight: 500 !important; line-height: 16px !important;
+        white-space: nowrap !important;
+        margin-bottom: 0 !important;
+      }
+      /* Green "Published" badges in list items — subtle positive fill */
+      .sprinkle-action-card__body > div[style*="border-bottom"] > div:nth-child(2) > span[style*="22c55e"],
+      .sprinkle-action-card__body > div[style*="border-bottom"] > div:nth-child(2) > span[style*="positive"],
+      .sprinkle-action-card__body > div[style*="border-bottom"] > div:nth-child(2) > span[style*="green"] {
+        background: #d7f7e1 !important; color: #07816d !important;
+        border: none !important;
+      }
+      /* Yellow/orange "Pending" badges in list items — subtle notice fill */
+      .sprinkle-action-card__body > div[style*="border-bottom"] > div:nth-child(2) > span[style*="eab308"],
+      .sprinkle-action-card__body > div[style*="border-bottom"] > div:nth-child(2) > span[style*="notice"],
+      .sprinkle-action-card__body > div[style*="border-bottom"] > div:nth-child(2) > span[style*="yellow"],
+      .sprinkle-action-card__body > div[style*="border-bottom"] > div:nth-child(2) > span[style*="orange"] {
+        background: #ffeccf !important; color: #d45b00 !important;
+        border: none !important;
+      }
+      /* Magenta/red badges in list items — subtle negative fill */
+      .sprinkle-action-card__body > div[style*="border-bottom"] > div:nth-child(2) > span[style*="ef4444"],
+      .sprinkle-action-card__body > div[style*="border-bottom"] > div:nth-child(2) > span[style*="negative"],
+      .sprinkle-action-card__body > div[style*="border-bottom"] > div:nth-child(2) > span[style*="red"] {
+        background: #ffe8f0 !important; color: #d92361 !important;
+        border: none !important;
+      }
+      .sprinkle-action-card__body > div[style*="border-bottom"] {
+        flex-wrap: nowrap !important;
+      }
+      /* Move badge out of text flow — make it a flex sibling of content */
+      .sprinkle-action-card__body > div[style*="border-bottom"] > div:nth-child(2) {
+        display: flex !important; flex-wrap: wrap !important;
+        align-items: flex-start !important;
+        padding-right: 140px !important;
+        position: relative !important;
+      }
+      .sprinkle-action-card__body > div[style*="border-bottom"] > div:nth-child(2) > span {
+        position: absolute !important;
+        right: 0 !important; top: 0 !important;
+      }
+      /* Item icons in list items: keep rounded, ensure 48px sizing */
+      .sprinkle-action-card__body > div[style*="border-bottom"] > div:first-child svg {
+        flex-shrink: 0 !important;
       }
 
       /* ── Cards (S2 Cards — flex variant, 10px radius, shadow instead of border) ── */
       .sprinkle-card {
-        background: var(--s2-bg-layer-2);
+        background: var(--s2-bg-elevated);
+        border: 1px solid var(--s2-gray-200);
         border-radius: var(--s2-radius-l);
         padding: var(--s2-spacing-300);
         margin-bottom: var(--s2-spacing-200);
@@ -1237,7 +1608,8 @@
         box-shadow: var(--s2-shadow-elevated);
       }
       .sprinkle-stat-card {
-        background: var(--s2-bg-layer-2);
+        background: var(--s2-bg-elevated);
+        border: 1px solid var(--s2-gray-200);
         border-radius: var(--s2-radius-l);
         padding: var(--s2-spacing-200) var(--s2-spacing-300);
         text-align: center;
@@ -1263,49 +1635,63 @@
       /* ── Tables (S2 Table — no uppercase, no letter-spacing, proper hierarchy) ── */
       .sprinkle-table {
         width: 100%; border-collapse: collapse;
-        font-size: var(--s2-font-size-75);
+        font-size: 14px;
+        border: 1px solid var(--s2-gray-300);
+        border-radius: var(--s2-radius-default);
+        overflow: hidden;
       }
       .sprinkle-table th {
         text-align: left;
-        padding: var(--s2-spacing-100) var(--s2-spacing-200);
-        border-bottom: 2px solid var(--s2-border-default);
-        color: var(--s2-content-secondary);
+        padding: 7px 16px;
+        background: var(--s2-bg-layer-1);
+        border-bottom: 1px solid var(--s2-gray-300);
+        color: var(--s2-content-default);
         font-weight: 700;
-        font-size: var(--s2-font-size-75);
+        font-size: 14px;
+        line-height: 18px;
+        height: 32px;
+        box-sizing: border-box;
       }
       .sprinkle-table td {
-        padding: var(--s2-spacing-100) var(--s2-spacing-200);
-        border-bottom: 1px solid var(--s2-border-subtle);
+        padding: 10px 16px;
+        border-bottom: 1px solid var(--s2-gray-200);
         color: var(--s2-content-default);
+        font-size: 14px;
+        line-height: 18px;
+        height: 40px;
+        box-sizing: border-box;
+      }
+      .sprinkle-table tr:last-child td {
+        border-bottom: none;
       }
       .sprinkle-table tr:hover td {
-        background: color-mix(in srgb, var(--s2-bg-elevated) 50%, transparent);
+        background: var(--s2-bg-layer-1);
       }
 
       /* ── Badges (S2 Badge — bold style default, 8px radius, solid fill + white text) ── */
       .sprinkle-badge {
-        display: inline-flex; align-items: center;
-        padding: 3px 8px; border-radius: var(--s2-radius-default);
-        font-size: var(--s2-font-size-50); font-weight: 500;
-        line-height: var(--s2-line-height-50);
-        /* neutral/gray — bold style default */
-        background: var(--s2-gray-400); color: #fff;
+        display: inline-flex; align-items: center; gap: 4px;
+        padding: 4px 8px; border-radius: 8px;
+        font-size: 12px; font-weight: 500;
+        line-height: 16px;
+        /* neutral — dark style matching Figma */
+        background: var(--s2-gray-800); color: var(--s2-gray-25);
       }
-      .sprinkle-badge--positive { background: var(--s2-positive); color: #fff; }
-      .sprinkle-badge--negative { background: var(--s2-negative); color: #fff; }
-      .sprinkle-badge--notice { background: var(--s2-notice); color: #fff; }
-      .sprinkle-badge--informative { background: var(--s2-informative); color: #fff; }
-      .sprinkle-badge--accent { background: var(--s2-accent); color: #fff; }
+      .sprinkle-badge--positive { background: var(--s2-positive); color: var(--s2-gray-25); }
+      .sprinkle-badge--negative { background: var(--s2-negative); color: var(--s2-gray-25); }
+      .sprinkle-badge--notice { background: var(--s2-notice); color: var(--s2-gray-25); }
+      .sprinkle-badge--informative { background: var(--s2-informative); color: var(--s2-gray-25); }
+      .sprinkle-badge--accent { background: var(--s2-accent); color: var(--s2-gray-25); }
       /* subtle style variant — tinted backgrounds with colored text */
       .sprinkle-badge--subtle {
         background: color-mix(in srgb, var(--s2-gray-400) 15%, transparent);
         color: var(--s2-content-secondary);
       }
-      .sprinkle-badge--subtle.sprinkle-badge--positive { background: color-mix(in srgb, var(--s2-positive) 15%, transparent); color: var(--s2-positive); }
-      .sprinkle-badge--subtle.sprinkle-badge--negative { background: color-mix(in srgb, var(--s2-negative) 15%, transparent); color: var(--s2-negative); }
-      .sprinkle-badge--subtle.sprinkle-badge--notice { background: color-mix(in srgb, var(--s2-notice) 15%, transparent); color: var(--s2-notice); }
-      .sprinkle-badge--subtle.sprinkle-badge--informative { background: color-mix(in srgb, var(--s2-informative) 15%, transparent); color: var(--s2-informative); }
-      .sprinkle-badge--subtle.sprinkle-badge--accent { background: color-mix(in srgb, var(--s2-accent) 15%, transparent); color: var(--s2-accent); }
+      .sprinkle-badge--subtle.sprinkle-badge--positive { background: color-mix(in srgb, var(--s2-positive) 12%, transparent); color: var(--s2-positive); }
+      .sprinkle-badge--subtle.sprinkle-badge--negative { background: color-mix(in srgb, var(--s2-negative) 12%, transparent); color: var(--s2-negative); }
+      .sprinkle-badge--subtle.sprinkle-badge--notice { background: color-mix(in srgb, var(--s2-notice) 12%, transparent); color: var(--s2-notice); }
+      .sprinkle-badge--subtle.sprinkle-badge--informative { background: color-mix(in srgb, var(--s2-informative) 12%, transparent); color: var(--s2-informative); }
+      .sprinkle-badge--subtle.sprinkle-badge--accent { background: color-mix(in srgb, var(--s2-accent) 12%, transparent); color: var(--s2-accent); }
       /* outline style variant — stroke with no fill */
       .sprinkle-badge--outline {
         background: transparent; color: var(--s2-content-secondary);
@@ -1482,7 +1868,7 @@
         display: inline-flex; align-items: center; justify-content: center; gap: var(--s2-spacing-75);
         height: 32px;
         padding: 0 16px;
-        border: 2px solid var(--s2-border-default);
+        border: 1px solid var(--s2-border-default);
         border-radius: var(--s2-radius-pill);
         background: transparent;
         color: var(--s2-content-default);
@@ -1502,7 +1888,7 @@
       }
       /* Accent (fill) — S2 default CTA */
       .sprinkle-btn--primary {
-        background: var(--s2-accent); color: #fff; border-color: transparent;
+        background: var(--s2-accent); color: var(--s2-gray-25); border-color: transparent;
       }
       .sprinkle-btn--primary:hover { background: var(--s2-accent-hover); }
       .sprinkle-btn--primary:active { background: var(--s2-accent-down); transform: scale(0.98); }
@@ -1514,7 +1900,7 @@
       .sprinkle-btn--secondary:hover { background: color-mix(in srgb, var(--s2-content-default) 6%, transparent); }
       /* Negative (fill) — destructive */
       .sprinkle-btn--negative {
-        background: var(--s2-negative); color: #fff; border-color: transparent;
+        background: var(--s2-negative); color: var(--s2-gray-25); border-color: transparent;
       }
       .sprinkle-btn--negative:hover { background: color-mix(in srgb, var(--s2-negative) 85%, #000); }
 
@@ -1972,6 +2358,122 @@
       .skill-drop-toast--error {
         border-color: color-mix(in srgb, var(--s2-negative) 65%, var(--s2-border-subtle));
       }
+
+      /* ================================================================== */
+      /* UXC Feedback Row — icon buttons below assistant messages            */
+      /* ================================================================== */
+      .msg__feedback {
+        display: flex; align-items: center; gap: 8px;
+        padding-top: 8px;
+      }
+      .msg__feedback-btn {
+        width: 24px; height: 24px;
+        border: none; background: transparent;
+        color: #505050;
+        border-radius: 7px;
+        cursor: pointer;
+        display: inline-flex; align-items: center; justify-content: center;
+        padding: 4px;
+        transition: color var(--s2-transition-default), background var(--s2-transition-default);
+        flex-shrink: 0;
+      }
+      .msg__feedback-btn:hover {
+        color: #292929;
+        background: #e9e9e9;
+      }
+      .msg__feedback-btn svg { width: 16px; height: 16px; }
+
+      /* ================================================================== */
+      /* UXC Responsive Breakpoints                                         */
+      /* ================================================================== */
+
+      /* Laptop: 1024–1439px — hide right panel by default, overlay */
+      @media (max-width: 1439px) {
+        .layout__right {
+          position: fixed; right: 0; top: var(--s2-header-height);
+          bottom: 0; width: 50vw; min-width: 400px;
+          z-index: 50;
+          transform: translateX(100%);
+          transition: transform 250ms ease;
+          box-shadow: -4px 0 24px rgba(0,0,0,0.1);
+        }
+        .layout__right--open {
+          transform: translateX(0);
+        }
+        /* Hide the vertical divider between chat and right panel */
+        .layout__divider--vertical { display: none; }
+        .layout__left { flex: 1; min-width: 0; }
+      }
+
+      /* Tablet: 768–1023px — hide nav rail by default */
+      @media (max-width: 1023px) {
+        .layout__scoops {
+          position: fixed; left: 0; top: var(--s2-header-height);
+          bottom: 0; z-index: 60;
+          transform: translateX(-100%);
+          transition: transform 250ms ease;
+          box-shadow: 4px 0 24px rgba(0,0,0,0.1);
+          border-right: 1px solid var(--s2-border-subtle);
+          width: var(--uxc-nav-rail-width);
+          min-width: var(--uxc-nav-rail-width);
+          max-width: var(--uxc-nav-rail-width);
+        }
+        .layout__scoops--expanded {
+          transform: translateX(0);
+          width: 200px;
+          min-width: 200px;
+          max-width: 200px;
+        }
+        /* Hide the scoops divider */
+        .layout__divider--scoops { display: none; }
+      }
+
+      /* Mobile: <768px — everything full-screen */
+      @media (max-width: 767px) {
+        .layout__right {
+          width: 100vw; min-width: 100vw;
+        }
+        .thread-header { padding: 0 var(--s2-spacing-200); }
+        .chat__input-area { padding: var(--s2-spacing-200); }
+      }
+
+      /* Desktop ≥1440px — nav rail visible */
+      @media (min-width: 1440px) {
+        .layout__left { flex: 1; }
+        .layout__right { flex: 1; }
+      }
+
+      /* Legacy header hamburger — no longer used, hamburger is in nav rail */
+
+      /* UXC: Right panel toggle button in thread header */
+      .thread-header__panel-toggle {
+        width: 32px; height: 32px;
+        border: none; background: transparent;
+        color: var(--s2-content-secondary);
+        border-radius: var(--s2-radius-pill);
+        cursor: pointer;
+        display: inline-flex; align-items: center; justify-content: center;
+        transition: background var(--s2-transition-default), color var(--s2-transition-default);
+      }
+      .thread-header__panel-toggle:hover {
+        background: var(--s2-gray-200);
+        color: var(--s2-content-default);
+      }
+      .thread-header__panel-toggle svg { width: 16px; height: 16px; }
+
+      /* UXC: Chat gradient overlay at top */
+      .chat__gradient-top {
+        position: absolute; top: 0; left: 0; right: 0;
+        height: 80px;
+        background: linear-gradient(to bottom, var(--s2-bg-base) 0%, transparent 100%);
+        pointer-events: none;
+        z-index: 1;
+      }
+
+      /* UXC: Message link styles for light mode */
+      .theme-light .msg__content a { color: #1e66f5; }
+      .theme-light .msg__content a:hover { color: #1444b0; }
+      .theme-light .msg__content a:visited { color: #1e66f5; }
     </style>
   </head>
   <body>
