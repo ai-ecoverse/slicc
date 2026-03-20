@@ -125,7 +125,6 @@ export class TabZone {
 
       // Pinned tabs: content NOT mounted yet
       this.tabs.set(tab.id, { btn, container: tab.element, tab, mounted: false });
-
     } else {
       // Normal text tab
       btn.className = `${this.classPrefix}__tab`;
@@ -277,7 +276,8 @@ export class TabZone {
     this.fullpageBtn.dataset.tooltipPos = 'top';
     this.fullpageBtn.setAttribute('aria-label', 'Toggle full page');
     // Expand icon (arrows pointing outward)
-    this.fullpageBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2h4v4"/><path d="M6 14H2v-4"/><path d="M14 2L9.5 6.5"/><path d="M2 14l4.5-4.5"/></svg>';
+    this.fullpageBtn.innerHTML =
+      '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2h4v4"/><path d="M6 14H2v-4"/><path d="M14 2L9.5 6.5"/><path d="M2 14l4.5-4.5"/></svg>';
 
     this.fullpageBtn.addEventListener('click', () => {
       this.isFullpage = !this.isFullpage;

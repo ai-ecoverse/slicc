@@ -11,7 +11,15 @@ When you receive a `[Sprinkle Event: welcome]` with `onboarding-complete`, follo
 The lick payload contains the user's profile:
 
 ```json
-{ "action": "onboarding-complete", "data": { "purpose": "work", "role": "developer", "tasks": ["build-websites", "automate"], "name": "Paolo" } }
+{
+  "action": "onboarding-complete",
+  "data": {
+    "purpose": "work",
+    "role": "developer",
+    "tasks": ["build-websites", "automate"],
+    "name": "Paolo"
+  }
+}
 ```
 
 ## IMPORTANT RULES

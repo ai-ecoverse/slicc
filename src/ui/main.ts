@@ -445,7 +445,10 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       // Route sprinkle licks to the offscreen orchestrator's cone
       if (event.type === 'sprinkle') {
         // Mark onboarding complete so welcome sprinkle doesn't reappear
-        if (event.sprinkleName === 'welcome' && (event.body as any)?.action === 'onboarding-complete') {
+        if (
+          event.sprinkleName === 'welcome' &&
+          (event.body as any)?.action === 'onboarding-complete'
+        ) {
           localStorage.setItem('slicc-welcomed', '1');
         }
         client.sendSprinkleLick(event.sprinkleName!, event.body);
@@ -532,7 +535,10 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   await sprinkleManager.restoreOpenSprinkles();
 
   // Open welcome sprinkle on first run (extension mode)
-  if (!localStorage.getItem('slicc-welcomed') && sprinkleManager.available().some(p => p.name === 'welcome')) {
+  if (
+    !localStorage.getItem('slicc-welcomed') &&
+    sprinkleManager.available().some((p) => p.name === 'welcome')
+  ) {
     try {
       await sprinkleManager.open('welcome');
     } catch (e) {
@@ -778,8 +784,7 @@ async function main(): Promise<void> {
           layout.panels.chat.setProcessing(true);
         } else if (status === 'ready') {
           layout.panels.chat.setProcessing(false);
-          const messageId =
-            scoopCurrentMessageId.get(scoopJid) ?? `done-${scoopJid}-${uid()}`;
+          const messageId = scoopCurrentMessageId.get(scoopJid) ?? `done-${scoopJid}-${uid()}`;
           scoopCurrentMessageId.delete(scoopJid);
           emitToUI({ type: 'turn_end', messageId });
         }
@@ -1078,7 +1083,11 @@ async function main(): Promise<void> {
     log.debug('Lick event', { type: event.type, name: eventName, targetScoop: event.targetScoop });
 
     // Mark onboarding complete so welcome sprinkle doesn't reappear
-    if (isSprinkle && event.sprinkleName === 'welcome' && (event.body as any)?.action === 'onboarding-complete') {
+    if (
+      isSprinkle &&
+      event.sprinkleName === 'welcome' &&
+      (event.body as any)?.action === 'onboarding-complete'
+    ) {
       localStorage.setItem('slicc-welcomed', '1');
     }
 
