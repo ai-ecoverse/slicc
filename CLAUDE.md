@@ -2,18 +2,34 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+Keep this root file high-signal and low-churn. Put fast-changing implementation detail in `docs/architecture.md`, `docs/development.md`, `docs/shell-reference.md`, or feature-local docs instead of expanding this file.
+
 ## Build and Development Commands
 
 ```bash
 npm run dev:full        # Full dev mode: Vite HMR + Chrome + CDP proxy (port 5710)
 npm run dev:full -- --prompt "mount /tmp"  # Auto-submit prompt (clears history/fs first)
 npm run dev:electron -- /Applications/Slack.app  # Electron attach mode
-npm run dev             # Vite dev server only (no Chrome/CDP)
+npm run dev             # Same as dev:full (Vite HMR + Chrome + CDP proxy)
 npm run build           # Production build (UI via Vite + CLI/Electron via TSC)
 npm run build:extension # Build extension into dist/extension/
+npm run package:release # Package deterministic release artifacts into artifacts/release/
 npm run typecheck       # Typecheck browser + Node targets
 npm run test            # Vitest run (all tests)
 npx vitest run src/fs/virtual-fs.test.ts  # Single test file
+```
+
+### Tray / QA / Worker Commands
+
+```bash
+npm run qa:setup        # Build dist/extension and scaffold dedicated leader/follower/extension Chrome QA profiles
+npm run qa:leader       # Launch CLI dev mode with the isolated leader Chrome profile, auto-connected to staging tray hub
+npm run qa:follower     # Launch CLI dev mode with the isolated follower Chrome profile
+npm run qa:extension    # Rebuild/load the unpacked extension in the isolated extension Chrome profile
+npx wrangler dev        # Run the Cloudflare Worker tray hub locally (requires Wrangler)
+npx wrangler deploy --env staging  # Deploy the staging tray hub
+npx wrangler deploy     # Deploy the Cloudflare Worker tray hub
+WORKER_BASE_URL=https://... npx vitest run src/worker/deployed.test.ts  # Smoke-test a deployed tray hub
 ```
 
 ### Automated Testing with `--prompt`
@@ -47,7 +63,7 @@ Console logs from the browser are forwarded to the CLI terminal for debugging.
 - **Cone**: Main agent ("sliccy"). Full filesystem access, all tools. Code: `orchestrator.ts`, `RegisteredScoop` with `isCone: true`.
 - **Scoops**: Isolated sub-agents with sandboxed filesystem (`/scoops/{name}/` + `/shared/`), own shell/conversation. Tools: `scoop_scoop`, `feed_scoop`, `drop_scoop`. Code: `scoop-context.ts`, `restricted-fs.ts`.
 - **Licks**: External events triggering scoops (webhooks, cron tasks). Code: `LickManager`, `LickEvent`. Shell: `webhook`, `crontask`.
-- **Floats**: Runtime environments — CLI (`src/cli/`), Extension (`src/extension/`), Electron (`src/cli/electron-main.ts`), Cloud (planned).
+- **Floats**: Runtime environments — CLI (`src/cli/`), Extension (`src/extension/`), Electron (`src/cli/electron-main.ts`), Sliccstart (`sliccstart/` — native macOS launcher), Cloud (planned).
 
 Use ice cream terms over technical jargon (e.g., "feed_scoop" not "delegate_to_scoop").
 
@@ -112,6 +128,13 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
   → Scoop completes → Orchestrator → Cone's message queue
 ```
 
+### Tray / Teleport Addendum
+
+- Tray hub code lives in `src/worker/` with config in `wrangler.jsonc`; treat it as coordination infrastructure, not canonical session storage.
+- When a tray is connected, remote browser targets are exposed through federated target routing; keep CDP local to the runtime that owns the page.
+- Teleport is part of the browser/shell workflow: `playwright teleport --start=<regex> --return=<regex>` and equivalent flags on `open`, `tab-new`, and navigation commands.
+- Any `*.bsh` file is a browser-navigation helper. Keep detailed behavior in docs rather than growing this root guide.
+
 ## Key Conventions
 
 - **Two type systems**: Legacy ToolDefinition (src/tools/) and pi-compatible AgentTool (src/core/). Bridged by `tool-adapter.ts`.
@@ -131,6 +154,7 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 Every change MUST satisfy three gates: **tests**, **docs**, and **verification**.
 
 ### Tests
+
 New pure-logic code MUST have colocated tests (`foo.test.ts`). See `docs/testing.md`.
 
 ### Visual Sprinkle Testing
@@ -146,21 +170,29 @@ npm run dev   # then open:
 
 ### Documentation
 
-| Tier | File | Update when... |
-|------|------|----------------|
-| **Public** | `README.md` | User-facing changes |
-| **Development** | `CLAUDE.md` | Developer conventions, architecture, build changes |
-| **Agent reference** | `docs/` | Agent-facing tools, commands, patterns |
+| Tier                | File        | Update when...                                     |
+| ------------------- | ----------- | -------------------------------------------------- |
+| **Public**          | `README.md` | User-facing changes                                |
+| **Development**     | `CLAUDE.md` | Developer conventions, architecture, build changes |
+| **Agent reference** | `docs/`     | Agent-facing tools, commands, patterns             |
 
 ### Verification
+
 All four must pass before committing:
+
 ```bash
 npm run typecheck
 npm run test
 npm run build
 npm run build:extension
 ```
+
 **CI**: Same four gates run on every PR via `.github/workflows/ci.yml`.
 
+### Worker Deploy CI
+
+Tray-hub deploys use `.github/workflows/worker.yml` for staging and production. Use the repo-level `CLOUDFLARE_API_TOKEN` secret plus `CLOUDFLARE_ACCOUNT_ID` variable, and let `cloudflare/wrangler-action` surface the deployed URL for `src/worker/deployed.test.ts`.
+
 ## Git Integration (src/git/)
+
 isomorphic-git with LightningFS. Auth: `git config github.token <PAT>`. CORS: CLI routes through `/api/fetch-proxy`, extension uses direct fetch.

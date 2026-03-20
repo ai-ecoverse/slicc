@@ -39,7 +39,7 @@ export class SprinkleBridge {
   constructor(
     fs: VirtualFS,
     lickHandler: (event: LickEvent) => void,
-    closeHandler: (name: string) => void,
+    closeHandler: (name: string) => void
   ) {
     this.fs = fs;
     this.lickHandler = lickHandler;
@@ -65,22 +65,32 @@ export class SprinkleBridge {
       on: (event: string, callback: UpdateCallback) => {
         const key = `${sprinkleName}:${event}`;
         let set = this.listeners.get(key);
-        if (!set) { set = new Set(); this.listeners.set(key, set); }
+        if (!set) {
+          set = new Set();
+          this.listeners.set(key, set);
+        }
         set.add(callback);
       },
       off: (event: string, callback: UpdateCallback) => {
         const key = `${sprinkleName}:${event}`;
         this.listeners.get(key)?.delete(callback);
       },
-      readFile: async (path: string) => await this.fs.readFile(path, { encoding: 'utf-8' }) as string,
+      readFile: async (path: string) =>
+        (await this.fs.readFile(path, { encoding: 'utf-8' })) as string,
       setState: (data: unknown) => {
-        try { localStorage.setItem(`slicc-sprinkle-state:${sprinkleName}`, JSON.stringify(data)); } catch { /* full */ }
+        try {
+          localStorage.setItem(`slicc-sprinkle-state:${sprinkleName}`, JSON.stringify(data));
+        } catch {
+          /* full */
+        }
       },
       getState: (): unknown => {
         try {
           const raw = localStorage.getItem(`slicc-sprinkle-state:${sprinkleName}`);
           return raw ? JSON.parse(raw) : null;
-        } catch { return null; }
+        } catch {
+          return null;
+        }
       },
       open: (path: string) => {
         const url = /^https?:|^chrome-extension:/.test(path) ? path : toPreviewUrl(path);
@@ -96,7 +106,11 @@ export class SprinkleBridge {
     const set = this.listeners.get(key);
     if (set) {
       for (const cb of set) {
-        try { cb(data); } catch { /* ignore listener errors */ }
+        try {
+          cb(data);
+        } catch {
+          /* ignore listener errors */
+        }
       }
     }
   }

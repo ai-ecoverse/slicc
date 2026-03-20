@@ -27,7 +27,7 @@ version: 1.0.0
 description: A skill to remove
 adds:
   - added/file1.txt
-  - added/file2.txt`,
+  - added/file2.txt`
     );
 
     // Create the added files
@@ -63,9 +63,7 @@ adds:
 
     // Verify state updated
     const state = await readState(fs);
-    const stillInstalled = state.applied_skills.find(
-      (s) => s.name === 'removable-skill',
-    );
+    const stillInstalled = state.applied_skills.find((s) => s.name === 'removable-skill');
     expect(stillInstalled).toBeUndefined();
   });
 
@@ -84,7 +82,7 @@ adds:
       `${SKILLS_DIR}/base-skill/manifest.yaml`,
       `skill: base-skill
 version: 1.0.0
-description: Base skill`,
+description: Base skill`
     );
     await recordSkillApplication(fs, {
       name: 'base-skill',
@@ -101,7 +99,7 @@ description: Base skill`,
 version: 1.0.0
 description: Depends on base
 depends:
-  - base-skill`,
+  - base-skill`
     );
     await recordSkillApplication(fs, {
       name: 'dependent-skill',
@@ -125,7 +123,7 @@ depends:
       `${SKILLS_DIR}/cleanup-skill/manifest.yaml`,
       `skill: cleanup-skill
 version: 1.0.0
-description: Cleanup skill`,
+description: Cleanup skill`
     );
     await recordSkillApplication(fs, {
       name: 'cleanup-skill',
@@ -141,9 +139,7 @@ description: Cleanup skill`,
 
     // Verify state was updated
     const state = await readState(fs);
-    const stillInstalled = state.applied_skills.find(
-      (s) => s.name === 'cleanup-skill',
-    );
+    const stillInstalled = state.applied_skills.find((s) => s.name === 'cleanup-skill');
     expect(stillInstalled).toBeUndefined();
   });
 
@@ -155,7 +151,7 @@ description: Cleanup skill`,
       `${SKILLS_DIR}/malicious-skill/manifest.yaml`,
       `skill: malicious-skill
 version: 1.0.0
-description: Malicious skill`,
+description: Malicious skill`
     );
 
     // Create some normal files that should be deleted
@@ -184,9 +180,7 @@ description: Malicious skill`,
 
     // State should be updated
     const state = await readState(fs);
-    const stillInstalled = state.applied_skills.find(
-      (s) => s.name === 'malicious-skill',
-    );
+    const stillInstalled = state.applied_skills.find((s) => s.name === 'malicious-skill');
     expect(stillInstalled).toBeUndefined();
   });
 });

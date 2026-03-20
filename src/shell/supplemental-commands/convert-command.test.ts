@@ -86,7 +86,10 @@ describe('convert argument parsing errors', () => {
 
   it('errors when -rotate is missing argument (followed by another flag)', async () => {
     const cmd = createConvertCommand();
-    const result = await cmd.execute(['input.png', '-rotate', '-quality', '80', 'output.png'], createMockCtx());
+    const result = await cmd.execute(
+      ['input.png', '-rotate', '-quality', '80', 'output.png'],
+      createMockCtx()
+    );
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('missing argument for -rotate');
   });
@@ -133,7 +136,10 @@ describe('convert argument parsing (valid args, file-not-found)', () => {
 
   it('parses -resize WxH and proceeds to file read', async () => {
     const cmd = createConvertCommand();
-    const result = await cmd.execute(['input.png', '-resize', '800x600', 'output.png'], createMockCtx());
+    const result = await cmd.execute(
+      ['input.png', '-resize', '800x600', 'output.png'],
+      createMockCtx()
+    );
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('file not found');
     // It got past arg parsing (no "unsupported option" error)
@@ -150,7 +156,10 @@ describe('convert argument parsing (valid args, file-not-found)', () => {
 
   it('parses -crop and proceeds to file read', async () => {
     const cmd = createConvertCommand();
-    const result = await cmd.execute(['input.png', '-crop', '100x100+0+0', 'output.png'], createMockCtx());
+    const result = await cmd.execute(
+      ['input.png', '-crop', '100x100+0+0', 'output.png'],
+      createMockCtx()
+    );
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('file not found');
     expect(result.stderr).not.toContain('unsupported option');
@@ -158,7 +167,10 @@ describe('convert argument parsing (valid args, file-not-found)', () => {
 
   it('parses -quality and proceeds to file read', async () => {
     const cmd = createConvertCommand();
-    const result = await cmd.execute(['input.png', '-quality', '85', 'output.png'], createMockCtx());
+    const result = await cmd.execute(
+      ['input.png', '-quality', '85', 'output.png'],
+      createMockCtx()
+    );
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('file not found');
     expect(result.stderr).not.toContain('unsupported option');
@@ -168,7 +180,7 @@ describe('convert argument parsing (valid args, file-not-found)', () => {
     const cmd = createConvertCommand();
     const result = await cmd.execute(
       ['input.png', '-resize', '800x600', '-rotate', '90', '-quality', '75', 'output.png'],
-      createMockCtx(),
+      createMockCtx()
     );
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('file not found');

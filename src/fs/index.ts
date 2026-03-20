@@ -14,9 +14,4 @@ export type {
   ReadFileOptions,
   FsErrorCode,
 } from './types.js';
-export {
-  normalizePath,
-  splitPath,
-  pathSegments,
-  joinPath,
-} from './path-utils.js';
+export { normalizePath, splitPath, pathSegments, joinPath } from './path-utils.js';

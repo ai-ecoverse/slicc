@@ -57,12 +57,17 @@ const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
 /** Get the LickManager from globalThis (set by offscreen.ts in extension mode) */
 function getExtensionLickManager(): import('../../scoops/lick-manager.js').LickManager | null {
-  return (globalThis as unknown as Record<string, unknown>).__slicc_lickManager as
-    import('../../scoops/lick-manager.js').LickManager | null ?? null;
+  return (
+    ((globalThis as unknown as Record<string, unknown>).__slicc_lickManager as
+      | import('../../scoops/lick-manager.js').LickManager
+      | null) ?? null
+  );
 }
 
 /** Lazy-loaded proxy for when the command runs in the side panel terminal */
-let _lickProxy: Awaited<ReturnType<typeof import('../../extension/lick-manager-proxy.js').createLickManagerProxy>> | null = null;
+let _lickProxy: Awaited<
+  ReturnType<typeof import('../../extension/lick-manager-proxy.js').createLickManagerProxy>
+> | null = null;
 async function getLickProxy() {
   if (_lickProxy) return _lickProxy;
   const { createLickManagerProxy } = await import('../../extension/lick-manager-proxy.js');
@@ -73,7 +78,7 @@ async function getLickProxy() {
 async function apiCall(
   method: string,
   path: string,
-  body?: unknown,
+  body?: unknown
 ): Promise<{ ok: boolean; status: number; data: unknown }> {
   const init: RequestInit = {
     method,
@@ -144,7 +149,11 @@ export function createCrontaskCommand(): Command {
           if (isExtension) {
             // Warn about filter limitation in extension mode (CSP blocks dynamic eval)
             if (filter) {
-              return { stdout: '', stderr: 'crontask: --filter is not supported in extension mode (CSP restriction)\n', exitCode: 1 };
+              return {
+                stdout: '',
+                stderr: 'crontask: --filter is not supported in extension mode (CSP restriction)\n',
+                exitCode: 1,
+              };
             }
             const extLm = getExtensionLickManager();
             const entry = extLm
@@ -194,7 +203,8 @@ export function createCrontaskCommand(): Command {
             const tasks = extLm
               ? extLm.listCronTasks()
               : await (async () => {
-                  const { listCronTasksAsync } = await import('../../extension/lick-manager-proxy.js');
+                  const { listCronTasksAsync } =
+                    await import('../../extension/lick-manager-proxy.js');
                   return listCronTasksAsync();
                 })();
             if (tasks.length === 0) {

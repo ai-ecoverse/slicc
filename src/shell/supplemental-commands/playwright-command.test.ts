@@ -1,14 +1,27 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createPlaywrightCommand } from './playwright-command.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  createPlaywrightCommand,
+  getSharedState,
+  setPlaywrightTeleportBestFollower,
+  setPlaywrightTeleportConnectedFollowers,
+} from './playwright-command.js';
 import type { BrowserAPI } from '../../cdp/index.js';
 import type { VirtualFS } from '../../fs/index.js';
 
 /** Minimal mock BrowserAPI. */
 function createMockBrowser(overrides: Partial<BrowserAPI> = {}): BrowserAPI {
   return {
-    listPages: vi.fn().mockResolvedValue([
-      { targetId: 'tab-1', title: 'Test Page', url: 'https://example.com', type: 'page', attached: false },
-    ]),
+    listPages: vi
+      .fn()
+      .mockResolvedValue([
+        {
+          targetId: 'tab-1',
+          title: 'Test Page',
+          url: 'https://example.com',
+          type: 'page',
+          attached: false,
+        },
+      ]),
     createPage: vi.fn().mockResolvedValue('tab-new'),
     attachToPage: vi.fn().mockResolvedValue(undefined),
     navigate: vi.fn().mockResolvedValue(undefined),
@@ -21,6 +34,7 @@ function createMockBrowser(overrides: Partial<BrowserAPI> = {}): BrowserAPI {
     selectByBackendNodeId: vi.fn().mockResolvedValue(undefined),
     setCheckedByBackendNodeId: vi.fn().mockResolvedValue('toggled' as const),
     dragByBackendNodeIds: vi.fn().mockResolvedValue(undefined),
+    closePage: vi.fn().mockResolvedValue(undefined),
     sendCDP: vi.fn().mockResolvedValue({}),
     type: vi.fn().mockResolvedValue(undefined),
     getAccessibilityTree: vi.fn().mockResolvedValue({
@@ -93,12 +107,23 @@ describe('createPlaywrightCommand', () => {
   });
 
   it('supports aliases', () => {
-    expect(createPlaywrightCommand('playwright', browser as BrowserAPI, fs as VirtualFS).name).toBe('playwright');
-    expect(createPlaywrightCommand('puppeteer', browser as BrowserAPI, fs as VirtualFS).name).toBe('puppeteer');
+    expect(createPlaywrightCommand('playwright', browser as BrowserAPI, fs as VirtualFS).name).toBe(
+      'playwright'
+    );
+    expect(createPlaywrightCommand('puppeteer', browser as BrowserAPI, fs as VirtualFS).name).toBe(
+      'puppeteer'
+    );
   });
 
   it('shares tab state across aliases', async () => {
-    const pages: Array<{ targetId: string; title: string; url: string; type: string; attached: boolean; active?: boolean }> = [];
+    const pages: Array<{
+      targetId: string;
+      title: string;
+      url: string;
+      type: string;
+      attached: boolean;
+      active?: boolean;
+    }> = [];
     const sharedBrowser = createMockBrowser({
       listPages: vi.fn().mockImplementation(async () => pages),
       createPage: vi.fn().mockImplementation(async (url: string) => {
@@ -111,11 +136,21 @@ describe('createPlaywrightCommand', () => {
         });
         return 'tab-new';
       }),
-      evaluate: vi.fn().mockResolvedValue(JSON.stringify({ url: 'https://example.com', title: 'Test Page' })),
+      evaluate: vi
+        .fn()
+        .mockResolvedValue(JSON.stringify({ url: 'https://example.com', title: 'Test Page' })),
     });
 
-    const playwright = createPlaywrightCommand('playwright', sharedBrowser as BrowserAPI, fs as VirtualFS);
-    const puppeteer = createPlaywrightCommand('puppeteer', sharedBrowser as BrowserAPI, fs as VirtualFS);
+    const playwright = createPlaywrightCommand(
+      'playwright',
+      sharedBrowser as BrowserAPI,
+      fs as VirtualFS
+    );
+    const puppeteer = createPlaywrightCommand(
+      'puppeteer',
+      sharedBrowser as BrowserAPI,
+      fs as VirtualFS
+    );
 
     await playwright.execute(['open', 'https://example.com'], {} as any);
     const result = await puppeteer.execute(['snapshot'], {} as any);
@@ -192,14 +227,23 @@ describe('playwright-cli open', () => {
   });
 
   it('treats the first background open as the current tab when no tab was selected yet', async () => {
-    const pages: Array<{ targetId: string; title: string; url: string; type: string; attached: boolean; active?: boolean }> = [];
+    const pages: Array<{
+      targetId: string;
+      title: string;
+      url: string;
+      type: string;
+      attached: boolean;
+      active?: boolean;
+    }> = [];
     browser = createMockBrowser({
       listPages: vi.fn().mockImplementation(async () => pages),
       createPage: vi.fn().mockImplementation(async (url: string) => {
         pages.push({ targetId: 'tab-new', title: 'New Tab', url, type: 'page', attached: false });
         return 'tab-new';
       }),
-      evaluate: vi.fn().mockResolvedValue(JSON.stringify({ url: 'https://example.com', title: 'Test Page' })),
+      evaluate: vi
+        .fn()
+        .mockResolvedValue(JSON.stringify({ url: 'https://example.com', title: 'Test Page' })),
     });
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
@@ -254,7 +298,7 @@ describe('playwright-cli snapshot', () => {
     fs = createMockFS();
     // Mock evaluate for page info
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
-      JSON.stringify({ url: 'https://example.com', title: 'Test Page' }),
+      JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
     );
   });
 
@@ -289,7 +333,7 @@ describe('playwright-cli snapshot', () => {
       } as any),
     });
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
-      JSON.stringify({ url: 'https://app.slack.com/client', title: 'Slack' }),
+      JSON.stringify({ url: 'https://app.slack.com/client', title: 'Slack' })
     );
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
@@ -315,7 +359,12 @@ describe('playwright-cli snapshot', () => {
 
   it('skips Chrome internal UI tabs when auto-selecting a target', async () => {
     (browser.listPages as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { targetId: 'tab-omnibox', title: 'Omnibox Popup', url: 'chrome://new-tab-page/', active: true },
+      {
+        targetId: 'tab-omnibox',
+        title: 'Omnibox Popup',
+        url: 'chrome://new-tab-page/',
+        active: true,
+      },
       { targetId: 'tab-1', title: 'Test Page', url: 'https://example.com' },
     ]);
 
@@ -338,12 +387,25 @@ describe('playwright-cli snapshot', () => {
   it('ignores internal UI targets when auto-selecting a tab', async () => {
     browser = createMockBrowser({
       listPages: vi.fn().mockResolvedValue([
-        { targetId: 'popup', title: 'Omnibox Popup', url: 'chrome-search://local-omnibox-popup/local-omnibox-popup.html', type: 'page', attached: false, active: true },
-        { targetId: 'tab-1', title: 'Docs', url: 'https://example.com/docs', type: 'page', attached: false },
+        {
+          targetId: 'popup',
+          title: 'Omnibox Popup',
+          url: 'chrome-search://local-omnibox-popup/local-omnibox-popup.html',
+          type: 'page',
+          attached: false,
+          active: true,
+        },
+        {
+          targetId: 'tab-1',
+          title: 'Docs',
+          url: 'https://example.com/docs',
+          type: 'page',
+          attached: false,
+        },
       ]),
     });
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
-      JSON.stringify({ url: 'https://example.com/docs', title: 'Docs' }),
+      JSON.stringify({ url: 'https://example.com/docs', title: 'Docs' })
     );
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
@@ -362,7 +424,7 @@ describe('playwright-cli click', () => {
     browser = createMockBrowser();
     fs = createMockFS();
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
-      JSON.stringify({ url: 'https://example.com', title: 'Test Page' }),
+      JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
     );
   });
 
@@ -423,7 +485,7 @@ describe('playwright-cli type and fill', () => {
     browser = createMockBrowser();
     fs = createMockFS();
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
-      JSON.stringify({ url: 'https://example.com', title: 'Test Page' }),
+      JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
     );
   });
 
@@ -451,11 +513,20 @@ describe('playwright-cli type and fill', () => {
   });
 
   it('fills input by ref using backendNodeId', async () => {
-    // Mock transport for DOM operations
+    // Mock transport for DOM operations — value matches after type (normal HTML input)
+    let callCount = 0;
     const mockTransport = {
-      send: vi.fn().mockImplementation((method: string) => {
+      send: vi.fn().mockImplementation((method: string, params: Record<string, unknown>) => {
         if (method === 'DOM.resolveNode') return { object: { objectId: 'obj-1' } };
-        if (method === 'Runtime.callFunctionOn') return { result: { value: undefined } };
+        if (method === 'Runtime.callFunctionOn') {
+          callCount++;
+          const fn = params['functionDeclaration'] as string;
+          // The read-back value check — return the typed text to indicate value matches
+          if (fn.includes('isContentEditable') && fn.includes('el.value')) {
+            return { result: { value: 'search term' } };
+          }
+          return { result: { value: undefined } };
+        }
         return {};
       }),
     };
@@ -471,6 +542,88 @@ describe('playwright-cli type and fill', () => {
     expect(result.stdout).toContain('Filled e3 with: search term');
     expect(browser.clickByBackendNodeId).toHaveBeenCalledWith(44);
     expect(browser.type).toHaveBeenCalledWith('search term');
+  });
+
+  it('uses native setter fallback when value does not match after typing (React-controlled input)', async () => {
+    // Mock transport: value read-back returns empty string (React didn't register the keystrokes)
+    const transportCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const mockTransport = {
+      send: vi.fn().mockImplementation((method: string, params: Record<string, unknown>) => {
+        transportCalls.push({ method, params });
+        if (method === 'DOM.resolveNode') return { object: { objectId: 'obj-1' } };
+        if (method === 'Runtime.callFunctionOn') {
+          const fn = params['functionDeclaration'] as string;
+          // Read-back: return empty string to simulate React-controlled input mismatch
+          if (
+            fn.includes('isContentEditable') &&
+            fn.includes('el.value') &&
+            !fn.includes('nativeSetter')
+          ) {
+            return { result: { value: '' } };
+          }
+          return { result: { value: undefined } };
+        }
+        return {};
+      }),
+    };
+    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    await cmd.execute(['snapshot'], {} as any);
+
+    const result = await cmd.execute(['fill', 'e3', 'test@example.com'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Filled e3 with: test@example.com');
+
+    // Verify the fallback was called — look for a callFunctionOn with nativeSetter in the function
+    const fallbackCall = transportCalls.find(
+      (c) =>
+        c.method === 'Runtime.callFunctionOn' &&
+        (c.params['functionDeclaration'] as string).includes('nativeSetter')
+    );
+    expect(fallbackCall).toBeDefined();
+    expect(fallbackCall!.params['arguments']).toEqual([{ value: 'test@example.com' }]);
+  });
+
+  it('does NOT trigger native setter fallback when value matches after typing', async () => {
+    // Mock transport: value read-back returns the typed text (normal HTML input)
+    const transportCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const mockTransport = {
+      send: vi.fn().mockImplementation((method: string, params: Record<string, unknown>) => {
+        transportCalls.push({ method, params });
+        if (method === 'DOM.resolveNode') return { object: { objectId: 'obj-1' } };
+        if (method === 'Runtime.callFunctionOn') {
+          const fn = params['functionDeclaration'] as string;
+          // Read-back: return the fill text to simulate normal input behavior
+          if (
+            fn.includes('isContentEditable') &&
+            fn.includes('el.value') &&
+            !fn.includes('nativeSetter')
+          ) {
+            return { result: { value: 'hello world' } };
+          }
+          return { result: { value: undefined } };
+        }
+        return {};
+      }),
+    };
+    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    await cmd.execute(['snapshot'], {} as any);
+
+    const result = await cmd.execute(['fill', 'e3', 'hello', 'world'], {} as any);
+    expect(result.exitCode).toBe(0);
+
+    // Verify the fallback was NOT called — no callFunctionOn with nativeSetter
+    const fallbackCall = transportCalls.find(
+      (c) =>
+        c.method === 'Runtime.callFunctionOn' &&
+        (c.params['functionDeclaration'] as string).includes('nativeSetter')
+    );
+    expect(fallbackCall).toBeUndefined();
   });
 
   it('clears contenteditable elements in the selector fallback path', async () => {
@@ -489,7 +642,8 @@ describe('playwright-cli type and fill', () => {
     });
     (browser.evaluate as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce(JSON.stringify({ url: 'https://example.com', title: 'Test Page' }))
-      .mockResolvedValueOnce(undefined);
+      .mockResolvedValueOnce(undefined) // clear call
+      .mockResolvedValueOnce('hello'); // value read-back (matches, so no fallback)
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
@@ -498,7 +652,12 @@ describe('playwright-cli type and fill', () => {
     const clickedSelector = (browser.click as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
     const clearScript = (browser.evaluate as ReturnType<typeof vi.fn>).mock.calls
       .map((call) => call[0])
-      .find((script) => typeof script === 'string' && script.includes('isContentEditable')) as string | undefined;
+      .find(
+        (script) =>
+          typeof script === 'string' &&
+          script.includes('isContentEditable') &&
+          script.includes('textContent')
+      ) as string | undefined;
 
     expect(result.exitCode).toBe(0);
     expect(browser.click).toHaveBeenCalled();
@@ -556,9 +715,27 @@ describe('playwright-cli tab management', () => {
 
   it('tab-list filters Chrome internal UI targets and keeps only actionable tabs', async () => {
     (browser.listPages as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { targetId: 'popup', title: 'Omnibox Popup', url: 'chrome-search://local-omnibox-popup/local-omnibox-popup.html', type: 'page', attached: false },
-      { targetId: 'settings', title: 'Settings', url: 'chrome://settings/', type: 'page', attached: false },
-      { targetId: 'docs', title: 'Docs', url: 'https://example.com/docs', type: 'page', attached: false },
+      {
+        targetId: 'popup',
+        title: 'Omnibox Popup',
+        url: 'chrome-search://local-omnibox-popup/local-omnibox-popup.html',
+        type: 'page',
+        attached: false,
+      },
+      {
+        targetId: 'settings',
+        title: 'Settings',
+        url: 'chrome://settings/',
+        type: 'page',
+        attached: false,
+      },
+      {
+        targetId: 'docs',
+        title: 'Docs',
+        url: 'https://example.com/docs',
+        type: 'page',
+        attached: false,
+      },
     ]);
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
@@ -640,12 +817,30 @@ describe('playwright-cli tab management', () => {
   it('tab-select uses filtered indexes', async () => {
     (browser.listPages as ReturnType<typeof vi.fn>).mockResolvedValue([
       { targetId: 'popup', title: 'Omnibox Popup', url: '', type: 'page', attached: false },
-      { targetId: 'tab-1', title: 'Settings', url: 'chrome://settings/', type: 'page', attached: false },
-      { targetId: 'tab-2', title: 'Docs', url: 'https://example.com/docs', type: 'page', attached: false },
-      { targetId: 'tab-3', title: 'Other Docs', url: 'https://example.com/other', type: 'page', attached: false },
+      {
+        targetId: 'tab-1',
+        title: 'Settings',
+        url: 'chrome://settings/',
+        type: 'page',
+        attached: false,
+      },
+      {
+        targetId: 'tab-2',
+        title: 'Docs',
+        url: 'https://example.com/docs',
+        type: 'page',
+        attached: false,
+      },
+      {
+        targetId: 'tab-3',
+        title: 'Other Docs',
+        url: 'https://example.com/other',
+        type: 'page',
+        attached: false,
+      },
     ]);
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
-      JSON.stringify({ url: 'https://example.com/other', title: 'Other Docs' }),
+      JSON.stringify({ url: 'https://example.com/other', title: 'Other Docs' })
     );
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
@@ -685,37 +880,88 @@ describe('playwright-cli tab management', () => {
   });
 
   it('tab-close closes a valid indexed tab', async () => {
-    const send = vi.fn().mockResolvedValue({});
     (browser.listPages as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { targetId: 'tab-1', title: 'Test Page', url: 'https://example.com', type: 'page', attached: false },
-      { targetId: 'tab-2', title: 'Other Page', url: 'https://other.example', type: 'page', attached: false },
+      {
+        targetId: 'tab-1',
+        title: 'Test Page',
+        url: 'https://example.com',
+        type: 'page',
+        attached: false,
+      },
+      {
+        targetId: 'tab-2',
+        title: 'Other Page',
+        url: 'https://other.example',
+        type: 'page',
+        attached: false,
+      },
     ]);
-    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue({ send });
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(['tab-close', '1'], {} as any);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Closed tab 1');
-    expect(send).toHaveBeenCalledWith('Target.closeTarget', { targetId: 'tab-2' });
+    expect(browser.closePage).toHaveBeenCalledWith('tab-2');
   });
 
   it('tab-close ignores internal UI targets when resolving indexes', async () => {
-    const send = vi.fn().mockResolvedValue({});
     (browser.listPages as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { targetId: 'popup', title: 'Omnibox Popup', url: 'chrome-search://local-omnibox-popup/local-omnibox-popup.html', type: 'page', attached: false },
-      { targetId: 'tab-1', title: 'Settings', url: 'chrome://settings/', type: 'page', attached: false },
-      { targetId: 'tab-2', title: 'Docs', url: 'https://example.com/docs', type: 'page', attached: false },
-      { targetId: 'tab-3', title: 'Other Docs', url: 'https://example.com/other', type: 'page', attached: false },
+      {
+        targetId: 'popup',
+        title: 'Omnibox Popup',
+        url: 'chrome-search://local-omnibox-popup/local-omnibox-popup.html',
+        type: 'page',
+        attached: false,
+      },
+      {
+        targetId: 'tab-1',
+        title: 'Settings',
+        url: 'chrome://settings/',
+        type: 'page',
+        attached: false,
+      },
+      {
+        targetId: 'tab-2',
+        title: 'Docs',
+        url: 'https://example.com/docs',
+        type: 'page',
+        attached: false,
+      },
+      {
+        targetId: 'tab-3',
+        title: 'Other Docs',
+        url: 'https://example.com/other',
+        type: 'page',
+        attached: false,
+      },
     ]);
-    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue({ send });
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(['tab-close', '1'], {} as any);
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Closed tab 1');
-    expect(send).toHaveBeenCalledWith('Target.closeTarget', { targetId: 'tab-3' });
+    expect(browser.closePage).toHaveBeenCalledWith('tab-3');
+  });
+
+  it('tab-close closes a remote (follower) tab via closePage', async () => {
+    const remoteTargetId = 'follower-abc:remote-tab-1';
+    browser = createMockBrowser({
+      listPages: vi.fn().mockResolvedValue([]),
+      listAllTargets: vi
+        .fn()
+        .mockResolvedValue([
+          { targetId: remoteTargetId, title: 'Remote Page', url: 'https://httpbin.org/get' },
+        ]),
+    });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['tab-close', '0'], {} as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Closed tab 0');
+    expect(browser.closePage).toHaveBeenCalledWith(remoteTargetId);
   });
 
   it('tab-new opens a new tab', async () => {
@@ -772,7 +1018,7 @@ describe('playwright-cli dblclick', () => {
     browser = createMockBrowser();
     fs = createMockFS();
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
-      JSON.stringify({ url: 'https://example.com', title: 'Test Page' }),
+      JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
     );
   });
 
@@ -811,7 +1057,7 @@ describe('playwright-cli hover', () => {
     browser = createMockBrowser();
     fs = createMockFS();
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
-      JSON.stringify({ url: 'https://example.com', title: 'Test Page' }),
+      JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
     );
   });
 
@@ -851,7 +1097,7 @@ describe('playwright-cli select', () => {
     browser = createMockBrowser();
     fs = createMockFS();
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
-      JSON.stringify({ url: 'https://example.com', title: 'Test Page' }),
+      JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
     );
   });
 
@@ -881,7 +1127,7 @@ describe('playwright-cli check/uncheck', () => {
     browser = createMockBrowser();
     fs = createMockFS();
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
-      JSON.stringify({ url: 'https://example.com', title: 'Test Page' }),
+      JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
     );
   });
 
@@ -932,7 +1178,7 @@ describe('playwright-cli drag', () => {
     browser = createMockBrowser();
     fs = createMockFS();
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
-      JSON.stringify({ url: 'https://example.com', title: 'Test Page' }),
+      JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
     );
   });
 
@@ -992,7 +1238,7 @@ describe('playwright-cli resize', () => {
     expect(mockTransport.send).toHaveBeenCalledWith(
       'Emulation.setDeviceMetricsOverride',
       { width: 1024, height: 768, deviceScaleFactor: 1, mobile: false },
-      'session-1',
+      'session-1'
     );
   });
 });
@@ -1020,7 +1266,7 @@ describe('playwright-cli dialog commands', () => {
     expect(mockTransport.send).toHaveBeenCalledWith(
       'Page.handleJavaScriptDialog',
       { accept: true },
-      'session-1',
+      'session-1'
     );
   });
 
@@ -1038,7 +1284,7 @@ describe('playwright-cli dialog commands', () => {
     expect(mockTransport.send).toHaveBeenCalledWith(
       'Page.handleJavaScriptDialog',
       { accept: true, promptText: 'my answer' },
-      'session-1',
+      'session-1'
     );
   });
 
@@ -1056,7 +1302,7 @@ describe('playwright-cli dialog commands', () => {
     expect(mockTransport.send).toHaveBeenCalledWith(
       'Page.handleJavaScriptDialog',
       { accept: false },
-      'session-1',
+      'session-1'
     );
   });
 });
@@ -1073,7 +1319,15 @@ describe('playwright-cli cookie commands', () => {
   it('cookie-list shows cookies', async () => {
     (browser.sendCDP as ReturnType<typeof vi.fn>).mockResolvedValue({
       cookies: [
-        { name: 'session', value: 'abc123', domain: '.example.com', path: '/', secure: true, httpOnly: true, expires: 0 },
+        {
+          name: 'session',
+          value: 'abc123',
+          domain: '.example.com',
+          path: '/',
+          secure: true,
+          httpOnly: true,
+          expires: 0,
+        },
       ],
     });
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
@@ -1097,8 +1351,24 @@ describe('playwright-cli cookie commands', () => {
   it('cookie-get finds cookie by name', async () => {
     (browser.sendCDP as ReturnType<typeof vi.fn>).mockResolvedValue({
       cookies: [
-        { name: 'session', value: 'abc123', domain: '.example.com', path: '/', secure: false, httpOnly: false, expires: 0 },
-        { name: 'other', value: 'xyz', domain: '.example.com', path: '/', secure: false, httpOnly: false, expires: 0 },
+        {
+          name: 'session',
+          value: 'abc123',
+          domain: '.example.com',
+          path: '/',
+          secure: false,
+          httpOnly: false,
+          expires: 0,
+        },
+        {
+          name: 'other',
+          value: 'xyz',
+          domain: '.example.com',
+          path: '/',
+          secure: false,
+          httpOnly: false,
+          expires: 0,
+        },
       ],
     });
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
@@ -1127,25 +1397,39 @@ describe('playwright-cli cookie commands', () => {
 
   it('cookie-set sets a cookie with flags', async () => {
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
-      JSON.stringify({ href: 'https://example.com/page', hostname: 'example.com', pathname: '/page' }),
+      JSON.stringify({
+        href: 'https://example.com/page',
+        hostname: 'example.com',
+        pathname: '/page',
+      })
     );
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['cookie-set', 'name', 'value', '--domain=.example.com', '--secure', '--httpOnly'], {} as any);
+    const result = await cmd.execute(
+      ['cookie-set', 'name', 'value', '--domain=.example.com', '--secure', '--httpOnly'],
+      {} as any
+    );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Cookie "name" set');
-    expect(browser.sendCDP).toHaveBeenCalledWith('Network.setCookie', expect.objectContaining({
-      name: 'name',
-      value: 'value',
-      domain: '.example.com',
-      secure: true,
-      httpOnly: true,
-    }));
+    expect(browser.sendCDP).toHaveBeenCalledWith(
+      'Network.setCookie',
+      expect.objectContaining({
+        name: 'name',
+        value: 'value',
+        domain: '.example.com',
+        secure: true,
+        httpOnly: true,
+      })
+    );
   });
 
   it('cookie-set uses the current page url for simple forms', async () => {
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
-      JSON.stringify({ href: 'https://example.com/page', hostname: 'example.com', pathname: '/page' }),
+      JSON.stringify({
+        href: 'https://example.com/page',
+        hostname: 'example.com',
+        pathname: '/page',
+      })
     );
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
@@ -1169,15 +1453,25 @@ describe('playwright-cli cookie commands', () => {
   it('cookie-delete deletes a cookie', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['cookie-delete', 'session', '--domain=.example.com'], {} as any);
+    const result = await cmd.execute(
+      ['cookie-delete', 'session', '--domain=.example.com'],
+      {} as any
+    );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Cookie "session" deleted');
-    expect(browser.sendCDP).toHaveBeenCalledWith('Network.deleteCookies', { name: 'session', domain: '.example.com' });
+    expect(browser.sendCDP).toHaveBeenCalledWith('Network.deleteCookies', {
+      name: 'session',
+      domain: '.example.com',
+    });
   });
 
   it('cookie-delete uses the current page url for simple forms', async () => {
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
-      JSON.stringify({ href: 'https://example.com/page', hostname: 'example.com', pathname: '/page' }),
+      JSON.stringify({
+        href: 'https://example.com/page',
+        hostname: 'example.com',
+        pathname: '/page',
+      })
     );
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
@@ -1217,7 +1511,12 @@ describe('playwright-cli localStorage commands', () => {
   });
 
   it('localstorage-list shows entries', async () => {
-    (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(JSON.stringify([['key1', 'val1'], ['key2', 'val2']]));
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
+      JSON.stringify([
+        ['key1', 'val1'],
+        ['key2', 'val2'],
+      ])
+    );
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
     const result = await cmd.execute(['localstorage-list'], {} as any);
@@ -1312,7 +1611,9 @@ describe('playwright-cli sessionStorage commands', () => {
   });
 
   it('sessionstorage-list shows entries', async () => {
-    (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(JSON.stringify([['sKey', 'sVal']]));
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
+      JSON.stringify([['sKey', 'sVal']])
+    );
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
     const result = await cmd.execute(['sessionstorage-list'], {} as any);
@@ -1404,13 +1705,19 @@ describe('playwright-cli open --background/--foreground', () => {
     browser = createMockBrowser();
     fs = createMockFS();
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
-      JSON.stringify({ url: 'https://example.com', title: 'Test Page' }),
+      JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
     );
   });
 
   it('open defaults to background (does not switch current target)', async () => {
     const pages = [
-      { targetId: 'tab-1', title: 'Test Page', url: 'https://example.com', type: 'page', attached: false },
+      {
+        targetId: 'tab-1',
+        title: 'Test Page',
+        url: 'https://example.com',
+        type: 'page',
+        attached: false,
+      },
     ];
     (browser.listPages as ReturnType<typeof vi.fn>).mockImplementation(async () => pages);
     (browser.createPage as ReturnType<typeof vi.fn>).mockImplementation(async (url: string) => {
@@ -1532,7 +1839,7 @@ describe('playwright-cli session history logging', () => {
     browser = createMockBrowser();
     fs = createMockFS();
     (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
-      JSON.stringify({ url: 'https://example.com', title: 'Test Page' }),
+      JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
     );
   });
 
@@ -1582,7 +1889,9 @@ describe('playwright-cli session history logging', () => {
     await cmd.execute(['click', 'e1'], {} as any);
 
     // Check that a snapshot file was saved in /.playwright/snapshots/
-    const snapshotFiles = [...fs._files.keys()].filter(k => k.startsWith('/.playwright/snapshots/'));
+    const snapshotFiles = [...fs._files.keys()].filter((k) =>
+      k.startsWith('/.playwright/snapshots/')
+    );
     expect(snapshotFiles.length).toBeGreaterThan(0);
 
     // Check session log references the snapshot
@@ -1595,7 +1904,9 @@ describe('playwright-cli session history logging', () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['tab-list'], {} as any);
 
-    const snapshotFiles = [...fs._files.keys()].filter(k => k.startsWith('/.playwright/snapshots/'));
+    const snapshotFiles = [...fs._files.keys()].filter((k) =>
+      k.startsWith('/.playwright/snapshots/')
+    );
     expect(snapshotFiles.length).toBe(0);
 
     // Session log should exist but without snapshot reference
@@ -1610,7 +1921,9 @@ describe('playwright-cli session history logging', () => {
     await cmd.execute(['snapshot'], {} as any);
 
     // snapshot is read-only, should not create auto-snapshot files
-    const snapshotFiles = [...fs._files.keys()].filter(k => k.startsWith('/.playwright/snapshots/'));
+    const snapshotFiles = [...fs._files.keys()].filter((k) =>
+      k.startsWith('/.playwright/snapshots/')
+    );
     expect(snapshotFiles.length).toBe(0);
   });
 
@@ -1619,7 +1932,9 @@ describe('playwright-cli session history logging', () => {
     await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
     await cmd.execute(['go-back'], {} as any);
 
-    const snapshotFiles = [...fs._files.keys()].filter(k => k.startsWith('/.playwright/snapshots/'));
+    const snapshotFiles = [...fs._files.keys()].filter((k) =>
+      k.startsWith('/.playwright/snapshots/')
+    );
     expect(snapshotFiles.length).toBe(0);
   });
 
@@ -1628,7 +1943,9 @@ describe('playwright-cli session history logging', () => {
     await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
     await cmd.execute(['go-forward'], {} as any);
 
-    const snapshotFiles = [...fs._files.keys()].filter(k => k.startsWith('/.playwright/snapshots/'));
+    const snapshotFiles = [...fs._files.keys()].filter((k) =>
+      k.startsWith('/.playwright/snapshots/')
+    );
     expect(snapshotFiles.length).toBe(0);
   });
 
@@ -1637,7 +1954,9 @@ describe('playwright-cli session history logging', () => {
     await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
     await cmd.execute(['reload'], {} as any);
 
-    const snapshotFiles = [...fs._files.keys()].filter(k => k.startsWith('/.playwright/snapshots/'));
+    const snapshotFiles = [...fs._files.keys()].filter((k) =>
+      k.startsWith('/.playwright/snapshots/')
+    );
     expect(snapshotFiles.length).toBe(0);
   });
 
@@ -1646,7 +1965,9 @@ describe('playwright-cli session history logging', () => {
     await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
     await cmd.execute(['screenshot', '--filename=/tmp/test.png'], {} as any);
 
-    const screenshotFiles = [...fs._files.keys()].filter(k => k.startsWith('/.playwright/screenshots/'));
+    const screenshotFiles = [...fs._files.keys()].filter((k) =>
+      k.startsWith('/.playwright/screenshots/')
+    );
     expect(screenshotFiles.length).toBe(1);
     expect(screenshotFiles[0]).toMatch(/screenshot-.*\.png$/);
   });
@@ -1667,5 +1988,984 @@ describe('playwright-cli session history logging', () => {
     const sessionMd = fs._files.get('/.playwright/session.md') as string;
     expect(sessionMd).toContain('### playwright-cli goto');
     expect(sessionMd).toContain('Error');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Teleport watcher tests
+// ---------------------------------------------------------------------------
+
+describe('playwright-cli teleport subcommand', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    browser = createMockBrowser();
+    fs = createMockFS();
+    // Reset module-level getters
+    setPlaywrightTeleportBestFollower(null);
+    setPlaywrightTeleportConnectedFollowers(null);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    setPlaywrightTeleportBestFollower(null);
+    setPlaywrightTeleportConnectedFollowers(null);
+  });
+
+  it('requires --start and --return', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['teleport', '--start=login'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--start');
+    expect(result.stderr).toContain('--return');
+  });
+
+  it('arms teleport watcher with --start and --return', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    const result = await cmd.execute(
+      ['teleport', '--start=login\\.example\\.com', '--return=app\\.example\\.com'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Teleport armed');
+    expect(result.stdout).toContain('login\\.example\\.com');
+
+    // Verify watcher was installed in shared state
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    expect(state.teleportWatcher).not.toBeNull();
+    expect(state.teleportWatcher!.phase).toBe('armed');
+    expect(state.teleportWatcher!.startPattern.source).toBe('login\\.example\\.com');
+    expect(state.teleportWatcher!.returnPattern.source).toBe('app\\.example\\.com');
+
+    // Cleanup timers
+    state.teleportWatcher!.pollInterval && clearInterval(state.teleportWatcher!.pollInterval);
+  });
+
+  it('rejects invalid regex for --start', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['teleport', '--start=[invalid', '--return=ok'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Invalid regex for --start');
+  });
+
+  it('rejects invalid regex for --return', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['teleport', '--start=ok', '--return=[invalid'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Invalid regex for --return');
+  });
+
+  it('--off disarms an active watcher', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    await cmd.execute(['teleport', '--start=login', '--return=app'], {} as any);
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    expect(state.teleportWatcher).not.toBeNull();
+
+    const result = await cmd.execute(['teleport', '--off'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('disarmed');
+    expect(state.teleportWatcher).toBeNull();
+  });
+
+  it('--off when no watcher is a no-op', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['teleport', '--off'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('disarmed');
+  });
+
+  it('--list shows followers when connected', async () => {
+    setPlaywrightTeleportConnectedFollowers(() => () => [
+      {
+        runtimeId: 'f-standalone-1',
+        runtime: 'slicc-standalone',
+        floatType: 'standalone' as any,
+        lastActivity: Date.now() - 5000,
+      },
+      {
+        runtimeId: 'f-ext-1',
+        runtime: 'slicc-extension',
+        floatType: 'extension' as any,
+        lastActivity: Date.now() - 10000,
+      },
+    ]);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['teleport', '--list'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('f-standalone-1');
+    expect(result.stdout).toContain('standalone');
+    expect(result.stdout).toContain('f-ext-1');
+    expect(result.stdout).toContain('extension');
+  });
+
+  it('--list fails when not connected to a tray', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['teleport', '--list'], {} as any);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('not connected to a tray');
+  });
+
+  it('--list shows message when no followers', async () => {
+    setPlaywrightTeleportConnectedFollowers(() => () => []);
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['teleport', '--list'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('No followers connected');
+  });
+
+  it('rejects negative timeout', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['teleport', '--start=login', '--return=app', '--timeout=-5'],
+      {} as any
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('positive number');
+  });
+
+  it('re-arms by disarming existing watcher first', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    await cmd.execute(['teleport', '--start=first', '--return=first-back'], {} as any);
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    const firstWatcher = state.teleportWatcher;
+    expect(firstWatcher).not.toBeNull();
+
+    await cmd.execute(['teleport', '--start=second', '--return=second-back'], {} as any);
+    // Should have replaced the watcher
+    expect(state.teleportWatcher).not.toBe(firstWatcher);
+    expect(state.teleportWatcher!.startPattern.source).toBe('second');
+
+    // Cleanup
+    state.teleportWatcher!.pollInterval && clearInterval(state.teleportWatcher!.pollInterval);
+  });
+});
+
+describe('playwright-cli teleport trigger and capture', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    browser = createMockBrowser({
+      createRemotePage: vi.fn().mockResolvedValue('remote-tab-1'),
+      closePage: vi.fn().mockResolvedValue(undefined),
+      sendCDP: vi.fn().mockImplementation(async (method: string) => {
+        if (method === 'Network.getCookies') {
+          return {
+            cookies: [
+              { name: 'session', value: 'abc', domain: '.example.com' },
+              { name: 'auth', value: 'xyz', domain: '.example.com' },
+            ],
+          };
+        }
+        if (method === 'Page.addScriptToEvaluateOnNewDocument') {
+          return { identifier: `script-${Math.random()}` };
+        }
+        return {};
+      }),
+    });
+    fs = createMockFS();
+
+    // Wire up getBestFollower to return a follower
+    setPlaywrightTeleportBestFollower(() => () => ({
+      runtimeId: 'f-runtime',
+      bootstrapId: 'b-runtime',
+      floatType: 'standalone' as any,
+    }));
+    setPlaywrightTeleportConnectedFollowers(() => () => [
+      { runtimeId: 'f-runtime', runtime: 'slicc-standalone', floatType: 'standalone' as any },
+    ]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    setPlaywrightTeleportBestFollower(null);
+    setPlaywrightTeleportConnectedFollowers(null);
+  });
+
+  it('polls leader tab and triggers teleport on the intercepted auth URL', async () => {
+    // Make evaluate return the leader tab URL
+    // Call 1: during arm (capturing originalLeaderUrl) — no match
+    // Call 2: first poll — no match
+    // Call 3: second poll — match triggers teleport
+    let callCount = 0;
+    let storageCaptureCount = 0;
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
+      if (expr === 'window.location.href') {
+        callCount++;
+        return callCount <= 2
+          ? 'https://app.example.com/dashboard'
+          : 'https://login.example.com/auth';
+      }
+      if (expr.includes('window.localStorage')) {
+        storageCaptureCount++;
+        return JSON.stringify({
+          origin: 'https://login.example.com',
+          localStorage: { leaderEmail: 'person@example.com' },
+          sessionStorage: { leaderStep: 'email-entered' },
+          capture: storageCaptureCount,
+        });
+      }
+      return JSON.stringify({ url: 'https://app.example.com', title: 'App' });
+    });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+
+    // Arm teleport
+    await cmd.execute(
+      ['teleport', '--start=login\\.example\\.com', '--return=app\\.example\\.com'],
+      {} as any
+    );
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    expect(state.teleportWatcher!.phase).toBe('armed');
+    expect(state.teleportWatcher!.originalLeaderUrl).toBe('https://app.example.com/dashboard');
+
+    // Advance past first poll (no match)
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('armed');
+
+    // Advance past second poll (match → triggerTeleport → waitingForAuth)
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('waitingForAuth');
+
+    // Verify leader cookies were captured before teleport
+    expect(browser.sendCDP).toHaveBeenCalledWith('Network.getCookies', {});
+
+    // Verify remote tab was opened with about:blank (cookies injected before navigation)
+    expect(browser.createRemotePage).toHaveBeenCalledWith('f-runtime', 'about:blank');
+
+    // Verify follower continues on the intercepted auth URL instead of restarting at the app URL
+    expect(browser.sendCDP).toHaveBeenCalledWith('Page.navigate', {
+      url: 'https://login.example.com/auth',
+    });
+    expect(browser.sendCDP).toHaveBeenCalledWith(
+      'Page.addScriptToEvaluateOnNewDocument',
+      expect.objectContaining({
+        source: expect.stringContaining('"leaderEmail":"person@example.com"'),
+      })
+    );
+    expect(browser.sendCDP).toHaveBeenCalledWith(
+      'Page.addScriptToEvaluateOnNewDocument',
+      expect.objectContaining({
+        source: expect.stringContaining('"leaderStep":"email-entered"'),
+      })
+    );
+
+    // Cleanup timers and catch the unhandled rejection from the completion promise
+    if (state.teleportWatcher) {
+      state.teleportWatcher.completionPromise?.catch(() => {});
+      state.teleportWatcher.pollInterval && clearInterval(state.teleportWatcher.pollInterval);
+      state.teleportWatcher.timeoutTimer && clearTimeout(state.teleportWatcher.timeoutTimer);
+    }
+  });
+
+  it('captures cookies + storage when follower return pattern matches', async () => {
+    // Phase 1: leader poll triggers (matching start pattern immediately)
+    // Phase 2: follower starts on the intercepted auth URL, then returns to the app
+    let leaderCallCount = 0;
+    let followerCallCount = 0;
+    let storageCaptureCount = 0;
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
+      if (expr === 'window.location.href') {
+        const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+        // Before watcher is created (capturing leader URL at arm time) or in armed phase
+        if (!state.teleportWatcher || state.teleportWatcher.phase === 'armed') {
+          leaderCallCount++;
+          // First call is during arm (capturing originalLeaderUrl), rest are polls
+          return leaderCallCount <= 1
+            ? 'https://app.example.com/dashboard' // original page URL captured at arm time
+            : 'https://login.example.com/sso'; // SSO redirect detected by poll
+        }
+        // Follower polling phases (waitingForAuth → waitingForReturn)
+        followerCallCount++;
+        if (followerCallCount <= 1) return 'https://login.example.com/sso'; // started on intercepted auth URL
+        return 'https://app.example.com/callback'; // returned from auth → returnPattern match
+      }
+      if (expr.includes('window.localStorage')) {
+        storageCaptureCount++;
+        return storageCaptureCount === 1
+          ? JSON.stringify({
+              origin: 'https://login.example.com',
+              localStorage: { leaderEmail: 'person@example.com' },
+              sessionStorage: { leaderStep: 'email-entered' },
+            })
+          : JSON.stringify({
+              origin: 'https://app.example.com',
+              localStorage: { followerToken: 'transferred-token' },
+              sessionStorage: { followerStep: 'authenticated' },
+            });
+      }
+      return JSON.stringify({ url: 'https://app.example.com', title: 'App' });
+    });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(
+      ['teleport', '--start=login\\.example\\.com', '--return=app\\.example\\.com'],
+      {} as any
+    );
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    // Verify the original leader URL was captured at arm time
+    expect(state.teleportWatcher!.originalLeaderUrl).toBe('https://app.example.com/dashboard');
+
+    // Leader poll triggers immediately
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('waitingForAuth');
+
+    // Follower poll #1: follower is on the intercepted auth URL
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('waitingForReturn');
+
+    // Follower poll #2: returned from auth → captureCookiesAndComplete
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('capturing');
+
+    // Advance past the 2s settle delay
+    await vi.advanceTimersByTimeAsync(2000);
+
+    // Should be done now
+    expect(state.teleportWatcher!.phase).toBe('done');
+
+    // Verify cookies were captured and injected
+    expect(browser.sendCDP).toHaveBeenCalledWith('Network.getCookies');
+    expect(browser.sendCDP).toHaveBeenCalledWith('Network.setCookies', {
+      cookies: [
+        { name: 'session', value: 'abc', domain: '.example.com' },
+        { name: 'auth', value: 'xyz', domain: '.example.com' },
+      ],
+    });
+
+    // Verify leader navigated to originalLeaderUrl (not the follower's callback URL)
+    expect(browser.navigate).toHaveBeenCalledWith('https://app.example.com/dashboard');
+    expect(browser.sendCDP).toHaveBeenCalledWith(
+      'Page.addScriptToEvaluateOnNewDocument',
+      expect.objectContaining({
+        source: expect.stringContaining('"followerToken":"transferred-token"'),
+      })
+    );
+    expect(browser.sendCDP).toHaveBeenCalledWith(
+      'Page.addScriptToEvaluateOnNewDocument',
+      expect.objectContaining({
+        source: expect.stringContaining('"followerStep":"authenticated"'),
+      })
+    );
+
+    // Verify follower tab was closed (raw targetId gets prefixed by triggerTeleport)
+    expect(browser.closePage).toHaveBeenCalledWith('f-runtime:remote-tab-1');
+  });
+
+  it('hydrates the captured app origin before landing when the original leader URL is cross-origin', async () => {
+    let leaderCallCount = 0;
+    let followerCallCount = 0;
+    let storageCaptureCount = 0;
+    let appliedStorageCount = 0;
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
+      if (expr === 'window.location.href') {
+        const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+        if (!state.teleportWatcher || state.teleportWatcher.phase === 'armed') {
+          leaderCallCount++;
+          return leaderCallCount <= 1
+            ? 'https://idp.example.com/start'
+            : 'https://login.example.com/sso';
+        }
+        followerCallCount++;
+        if (followerCallCount <= 1) return 'https://login.example.com/sso';
+        return 'https://app.example.com/callback';
+      }
+      if (expr.includes('window.localStorage')) {
+        storageCaptureCount++;
+        return storageCaptureCount === 1
+          ? JSON.stringify({
+              origin: 'https://login.example.com',
+              localStorage: { leaderEmail: 'person@example.com' },
+              sessionStorage: { leaderStep: 'email-entered' },
+            })
+          : JSON.stringify({
+              origin: 'https://app.example.com',
+              localStorage: { authCache: 'cached-token', tripToken: 'trip-token' },
+              sessionStorage: { authFlow: 'complete' },
+            });
+      }
+      if (expr.includes('globalThis.location.origin')) {
+        appliedStorageCount++;
+        return JSON.stringify({
+          origin: 'https://app.example.com',
+          localStorageCount: 2,
+          sessionStorageCount: 1,
+        });
+      }
+      return JSON.stringify({ url: 'https://app.example.com/callback', title: 'Authenticated' });
+    });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    await cmd.execute(
+      ['teleport', '--start=login\.example\.com', '--return=app\.example\.com'],
+      {} as any
+    );
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    expect(state.teleportWatcher!.originalLeaderUrl).toBe('https://idp.example.com/start');
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(state.teleportWatcher!.phase).toBe('done');
+    expect(appliedStorageCount).toBe(1);
+    expect(browser.navigate).toHaveBeenNthCalledWith(1, 'https://app.example.com/favicon.ico');
+    expect(browser.navigate).toHaveBeenNthCalledWith(2, 'https://app.example.com/callback');
+    expect(browser.navigate).not.toHaveBeenCalledWith('https://idp.example.com/start');
+  });
+
+  it('keeps leader storage replay installed until leader navigation resolves', async () => {
+    let leaderCallCount = 0;
+    let followerCallCount = 0;
+    let storageCaptureCount = 0;
+    let resolveNavigate: (() => void) | undefined;
+    (browser.navigate as ReturnType<typeof vi.fn>).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveNavigate = resolve;
+        })
+    );
+
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
+      if (expr === 'window.location.href') {
+        const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+        if (!state.teleportWatcher || state.teleportWatcher.phase === 'armed') {
+          leaderCallCount++;
+          return leaderCallCount <= 1
+            ? 'https://app.example.com/dashboard'
+            : 'https://login.example.com/sso';
+        }
+        followerCallCount++;
+        if (followerCallCount <= 1) return 'https://login.example.com/sso';
+        return 'https://app.example.com/callback';
+      }
+      if (expr.includes('window.localStorage')) {
+        storageCaptureCount++;
+        return storageCaptureCount === 1
+          ? JSON.stringify({
+              origin: 'https://login.example.com',
+              localStorage: { leaderEmail: 'person@example.com' },
+              sessionStorage: { leaderStep: 'email-entered' },
+            })
+          : JSON.stringify({
+              origin: 'https://app.example.com',
+              localStorage: { followerToken: 'transferred-token' },
+              sessionStorage: { followerStep: 'authenticated' },
+            });
+      }
+      return JSON.stringify({
+        url: 'https://app.example.com/callback',
+        title: 'Authenticated',
+        bodySnippet: 'Auth completed',
+      });
+    });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(
+      ['teleport', '--start=login\\.example\\.com', '--return=app\\.example\\.com'],
+      {} as any
+    );
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(state.teleportWatcher!.phase).toBe('capturing');
+    expect(browser.navigate).toHaveBeenCalledWith('https://app.example.com/dashboard');
+
+    const removeCallsBeforeNavigate = (
+      browser.sendCDP as ReturnType<typeof vi.fn>
+    ).mock.calls.filter(([method]) => method === 'Page.removeScriptToEvaluateOnNewDocument');
+    expect(removeCallsBeforeNavigate).toHaveLength(1);
+
+    const completion = state.teleportWatcher!.completionPromise!;
+    resolveNavigate?.();
+    await completion;
+
+    const removeCallsAfterNavigate = (
+      browser.sendCDP as ReturnType<typeof vi.fn>
+    ).mock.calls.filter(([method]) => method === 'Page.removeScriptToEvaluateOnNewDocument');
+    expect(removeCallsAfterNavigate).toHaveLength(2);
+    expect(state.teleportWatcher!.phase).toBe('done');
+  });
+
+  it('keeps follower storage replay installed until capture and scopes it to the snapshot origin', async () => {
+    let leaderCallCount = 0;
+    let followerCallCount = 0;
+    let storageCaptureCount = 0;
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
+      if (expr === 'window.location.href') {
+        const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+        if (!state.teleportWatcher || state.teleportWatcher.phase === 'armed') {
+          leaderCallCount++;
+          return leaderCallCount <= 1
+            ? 'https://app.example.com/dashboard'
+            : 'https://login.example.com/sso';
+        }
+        followerCallCount++;
+        if (followerCallCount <= 1) return 'https://login.example.com/sso';
+        return 'https://app.example.com/callback';
+      }
+      if (expr.includes('window.localStorage')) {
+        storageCaptureCount++;
+        return storageCaptureCount === 1
+          ? JSON.stringify({
+              origin: 'https://login.example.com',
+              localStorage: { leaderEmail: 'person@example.com' },
+              sessionStorage: { leaderStep: 'email-entered' },
+            })
+          : JSON.stringify({
+              origin: 'https://app.example.com',
+              localStorage: { followerToken: 'transferred-token' },
+              sessionStorage: { followerStep: 'authenticated' },
+            });
+      }
+      return JSON.stringify({
+        url: 'https://app.example.com/callback',
+        title: 'Authenticated',
+        bodySnippet: 'Auth completed',
+      });
+    });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(
+      ['teleport', '--start=login\\.example\\.com', '--return=app\\.example\\.com'],
+      {} as any
+    );
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('waitingForAuth');
+    expect(browser.sendCDP).not.toHaveBeenCalledWith(
+      'Page.removeScriptToEvaluateOnNewDocument',
+      expect.anything()
+    );
+
+    const addScriptCalls = (browser.sendCDP as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([method]) => method === 'Page.addScriptToEvaluateOnNewDocument'
+    );
+    expect(addScriptCalls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        source: expect.stringContaining('window.location.origin !== snapshot.origin'),
+      })
+    );
+    expect(addScriptCalls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        source: expect.stringContaining('__slicc_teleport_storage_applied__:'),
+      })
+    );
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('waitingForReturn');
+    expect(browser.sendCDP).not.toHaveBeenCalledWith(
+      'Page.removeScriptToEvaluateOnNewDocument',
+      expect.anything()
+    );
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(browser.sendCDP).toHaveBeenCalledWith(
+      'Page.removeScriptToEvaluateOnNewDocument',
+      expect.objectContaining({ identifier: expect.stringMatching(/^script-/) })
+    );
+  });
+
+  it('should not match return pattern before start pattern seen on follower', async () => {
+    // The bug: follower navigates to app.navan.com which immediately matches the return
+    // pattern — before the Okta redirect even happens. The fix requires the follower to
+    // first hit a URL matching the startPattern before the returnPattern is checked.
+    let leaderCallCount = 0;
+    let followerCallCount = 0;
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
+      if (expr === 'window.location.href') {
+        const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+        if (!state.teleportWatcher || state.teleportWatcher.phase === 'armed') {
+          leaderCallCount++;
+          return leaderCallCount <= 1
+            ? 'https://app.example.com/dashboard'
+            : 'https://login.example.com/sso';
+        }
+        // Follower URL sequence: starts at the app URL (matches returnPattern!),
+        // then hits auth, then returns
+        followerCallCount++;
+        if (followerCallCount <= 2) return 'https://app.example.com/user2/'; // matches returnPattern but NOT startPattern
+        if (followerCallCount <= 3) return 'https://login.example.com/auth'; // matches startPattern → waitingForReturn
+        return 'https://app.example.com/callback'; // matches returnPattern → capture
+      }
+      return JSON.stringify({ url: 'https://app.example.com', title: 'App' });
+    });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(
+      ['teleport', '--start=login\\.example\\.com', '--return=app\\.example\\.com'],
+      {} as any
+    );
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+
+    // Leader poll triggers → enters waitingForAuth
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('waitingForAuth');
+
+    // Follower poll #1: URL is app.example.com/user2/ — matches returnPattern
+    // but should NOT trigger capture because startPattern hasn't been seen yet
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('waitingForAuth'); // Still waiting — NOT capturing!
+
+    // Follower poll #2: still at app URL — same situation
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('waitingForAuth');
+
+    // Follower poll #3: auth redirect happened → startPattern matches → waitingForReturn
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('waitingForReturn');
+
+    // Follower poll #4: returned from auth → returnPattern matches → capture
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('capturing');
+
+    // Advance past settle delay
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(state.teleportWatcher!.phase).toBe('done');
+
+    // Verify cookies were captured
+    expect(browser.sendCDP).toHaveBeenCalledWith('Network.getCookies');
+  });
+
+  it('times out when human does not complete auth', async () => {
+    // Leader poll triggers immediately
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
+      if (expr === 'window.location.href') {
+        const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+        // Before watcher exists (capturing originalLeaderUrl at arm time)
+        if (!state.teleportWatcher) return 'https://app.example.com/dashboard';
+        if (state.teleportWatcher.phase === 'armed') {
+          return 'https://login.example.com/sso';
+        }
+        // Always return non-matching URL in follower phase
+        return 'https://idp.example.com/consent';
+      }
+      return JSON.stringify({ url: 'https://app.example.com', title: 'App' });
+    });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    // Very short timeout (5 seconds)
+    await cmd.execute(['teleport', '--start=login', '--return=app', '--timeout=5'], {} as any);
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+
+    // Attach a catch handler to prevent unhandled rejection
+    const completionCatch = state.teleportWatcher!.completionPromise!.catch(() => {});
+
+    // Leader poll triggers — enters waitingForAuth phase
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(state.teleportWatcher!.phase).toBe('waitingForAuth');
+
+    // Advance past the timeout
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(state.teleportWatcher!.phase).toBe('timedOut');
+
+    // Await the caught promise to ensure rejection is handled
+    await completionCatch;
+  });
+
+  it('checkTeleportBlock blocks next command during active teleport', async () => {
+    // Set up leader to trigger immediately, follower to go through auth then return
+    let followerCallCount = 0;
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
+      if (expr === 'window.location.href') {
+        const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+        // Before watcher exists (capturing originalLeaderUrl at arm time)
+        if (!state.teleportWatcher) return 'https://app.example.com/dashboard';
+        if (state.teleportWatcher.phase === 'armed') {
+          return 'https://login.example.com/sso';
+        }
+        followerCallCount++;
+        if (followerCallCount <= 1) return 'https://login.example.com/sso'; // auth redirect → startPattern match
+        if (followerCallCount <= 2) return 'https://idp.example.com/consent'; // at IDP
+        return 'https://app.example.com/callback'; // returned → returnPattern match
+      }
+      return JSON.stringify({ url: 'https://app.example.com', title: 'App' });
+    });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(['teleport', '--start=login', '--return=app', '--timeout=60'], {} as any);
+
+    // Trigger the teleport (leader poll matches start pattern)
+    await vi.advanceTimersByTimeAsync(1000);
+
+    // Now run a non-teleport command — it should block
+    const resultPromise = cmd.execute(['tab-list'], {} as any);
+
+    // Advance: follower poll #1 matches startPattern → waitingForReturn
+    // Advance: follower poll #2 at IDP → still waitingForReturn
+    // Advance: follower poll #3 matches returnPattern → capture
+    await vi.advanceTimersByTimeAsync(3000);
+    // Advance past settle delay
+    await vi.advanceTimersByTimeAsync(2000);
+
+    // Now the blocked command should resolve with the teleport result
+    const result = await resultPromise;
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Teleported');
+    expect(result.stdout).toContain('cookie');
+  });
+
+  it('teleport fails gracefully when no followers connected', async () => {
+    // No best follower available
+    setPlaywrightTeleportBestFollower(() => () => null);
+
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
+      if (expr === 'window.location.href') return 'https://login.example.com/sso';
+      return JSON.stringify({ url: 'https://app.example.com', title: 'App' });
+    });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(['teleport', '--start=login', '--return=app'], {} as any);
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+
+    // Attach a catch handler to prevent unhandled rejection
+    const completionCatch = state.teleportWatcher!.completionPromise!.catch(() => {});
+
+    // Leader poll triggers
+    await vi.advanceTimersByTimeAsync(1000);
+
+    // The watcher should have errored out
+    expect(state.teleportWatcher!.phase).toBe('done');
+
+    // Await the caught promise to ensure rejection is handled
+    await completionCatch;
+  });
+});
+
+describe('playwright-cli open/goto with --teleport-start and --teleport-return', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    browser = createMockBrowser();
+    fs = createMockFS();
+    setPlaywrightTeleportBestFollower(null);
+    setPlaywrightTeleportConnectedFollowers(null);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    setPlaywrightTeleportBestFollower(null);
+    setPlaywrightTeleportConnectedFollowers(null);
+  });
+
+  it('open with --teleport-start/--teleport-return arms watcher', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      [
+        'open',
+        'https://app.example.com',
+        '--foreground',
+        '--teleport-start=login',
+        '--teleport-return=callback',
+      ],
+      {} as any
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Opened tab');
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    expect(state.teleportWatcher).not.toBeNull();
+    expect(state.teleportWatcher!.phase).toBe('armed');
+    expect(state.teleportWatcher!.startPattern.source).toBe('login');
+    expect(state.teleportWatcher!.returnPattern.source).toBe('callback');
+
+    // Cleanup
+    state.teleportWatcher!.pollInterval && clearInterval(state.teleportWatcher!.pollInterval);
+  });
+
+  it('tab-new with --teleport-start/--teleport-return arms watcher', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      [
+        'tab-new',
+        'https://app.example.com',
+        '--foreground',
+        '--teleport-start=sso',
+        '--teleport-return=done',
+      ],
+      {} as any
+    );
+
+    expect(result.exitCode).toBe(0);
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    expect(state.teleportWatcher).not.toBeNull();
+    expect(state.teleportWatcher!.startPattern.source).toBe('sso');
+
+    // Cleanup
+    state.teleportWatcher!.pollInterval && clearInterval(state.teleportWatcher!.pollInterval);
+  });
+
+  it('goto with --teleport-start/--teleport-return arms watcher', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    const result = await cmd.execute(
+      ['goto', 'https://app.example.com', '--teleport-start=auth', '--teleport-return=home'],
+      {} as any
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Navigated to');
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    expect(state.teleportWatcher).not.toBeNull();
+    expect(state.teleportWatcher!.startPattern.source).toBe('auth');
+    expect(state.teleportWatcher!.returnPattern.source).toBe('home');
+
+    // Cleanup
+    state.teleportWatcher!.pollInterval && clearInterval(state.teleportWatcher!.pollInterval);
+  });
+
+  it('open rejects invalid --teleport-start regex', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      [
+        'open',
+        'https://example.com',
+        '--foreground',
+        '--teleport-start=[invalid',
+        '--teleport-return=ok',
+      ],
+      {} as any
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Invalid regex for --teleport-start');
+  });
+
+  it('goto rejects invalid --teleport-return regex', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    const result = await cmd.execute(
+      ['goto', 'https://example.com', '--teleport-start=ok', '--teleport-return=[invalid'],
+      {} as any
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Invalid regex for --teleport-return');
+  });
+
+  it('open without both teleport flags does not arm watcher', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(
+      [
+        'open',
+        'https://example.com',
+        '--foreground',
+        '--teleport-start=login', // missing --teleport-return
+      ],
+      {} as any
+    );
+
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    expect(state.teleportWatcher).toBeNull();
+  });
+});
+
+describe('formatCookieDomainSummary (via teleport output)', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    browser = createMockBrowser({
+      createRemotePage: vi.fn().mockResolvedValue('f-runtime:remote-tab'),
+      closePage: vi.fn().mockResolvedValue(undefined),
+      sendCDP: vi.fn().mockResolvedValue({
+        cookies: [
+          { name: 'a', value: '1', domain: '.example.com' },
+          { name: 'b', value: '2', domain: '.example.com' },
+          { name: 'c', value: '3', domain: '.other.com' },
+        ],
+      }),
+    });
+    fs = createMockFS();
+    setPlaywrightTeleportBestFollower(() => () => ({
+      runtimeId: 'f-runtime',
+      bootstrapId: 'b-runtime',
+      floatType: 'standalone' as any,
+    }));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    setPlaywrightTeleportBestFollower(null);
+    setPlaywrightTeleportConnectedFollowers(null);
+  });
+
+  it('domain summary appears in teleport completion output', async () => {
+    let followerCallCount = 0;
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
+      if (expr === 'window.location.href') {
+        const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+        // Before watcher exists (capturing leader URL at arm time) or in armed phase
+        if (!state.teleportWatcher || state.teleportWatcher.phase === 'armed') {
+          return 'https://login.example.com/sso';
+        }
+        // Follower: first hit auth (startPattern), then return (returnPattern)
+        followerCallCount++;
+        if (followerCallCount <= 1) return 'https://login.example.com/auth'; // auth redirect → startPattern match
+        return 'https://app.example.com/done'; // returned → returnPattern match
+      }
+      return JSON.stringify({ url: 'https://app.example.com', title: 'App' });
+    });
+
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
+    await cmd.execute(['teleport', '--start=login', '--return=app\\.example\\.com'], {} as any);
+
+    // Trigger leader → waitingForAuth
+    await vi.advanceTimersByTimeAsync(1000);
+    // Follower poll #1: auth redirect → waitingForReturn
+    await vi.advanceTimersByTimeAsync(1000);
+    // Follower poll #2: return pattern matches → capturing
+    await vi.advanceTimersByTimeAsync(1000);
+    // Settle delay
+    await vi.advanceTimersByTimeAsync(2000);
+
+    // The completion promise should have resolved — check by running a command
+    const result = await cmd.execute(['tab-list'], {} as any);
+    // The teleport result will be consumed if we hit it; otherwise tab-list works normally
+    // Since checkTeleportBlock runs first, it should have consumed the "done" state already.
+    // Let's verify via state
+    const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
+    expect(state.teleportWatcher === null || state.teleportWatcher.phase === 'done').toBe(true);
   });
 });

@@ -16,8 +16,21 @@ import type {
   BoundingBox,
   AccessibilityNode,
 } from './types.js';
+import type { TrayTargetEntry } from '../scoops/tray-sync-protocol.js';
 import { normalizeAccessibilityText } from './normalize-accessibility-text.js';
 import { createLogger } from '../core/logger.js';
+
+/**
+ * Provider of remote tray targets and transport factory.
+ * Set via `setTrayTargetProvider()` to enable remote target support.
+ */
+export interface TrayTargetProvider {
+  getTargets(): TrayTargetEntry[];
+  createRemoteTransport?(runtimeId: string, localTargetId: string): CDPTransport;
+  removeRemoteTransport?(runtimeId: string, localTargetId: string): void;
+  /** Open a new tab on a remote runtime. Returns the composite targetId. */
+  openRemoteTab?(runtimeId: string, url: string): Promise<string>;
+}
 
 const FALLBACK_CDP_URL = 'ws://localhost:5710/cdp';
 const log = createLogger('browser-api');
@@ -25,7 +38,7 @@ const log = createLogger('browser-api');
 export function getDefaultCdpUrl(
   locationLike: Pick<Location, 'protocol' | 'host'> | null = typeof window !== 'undefined'
     ? window.location
-    : null,
+    : null
 ): string {
   if (!locationLike?.host) return FALLBACK_CDP_URL;
   const protocol = locationLike.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -34,23 +47,20 @@ export function getDefaultCdpUrl(
 
 export class BrowserAPI {
   private client: CDPTransport;
+  private localClient: CDPTransport; // preserved original when using remote transport
   private sessionId: string | null = null;
   private attachedTargetId: string | null = null;
+  private trayTargetProvider: TrayTargetProvider | null = null;
+  private remoteTargetInfo: { runtimeId: string; localTargetId: string } | null = null;
   private readonly handleJavaScriptDialogOpening = async (
-    params: Record<string, unknown>,
+    params: Record<string, unknown>
   ): Promise<void> => {
-    const sessionId = typeof params['sessionId'] === 'string'
-      ? params['sessionId'] as string
-      : this.sessionId;
+    const sessionId =
+      typeof params['sessionId'] === 'string' ? (params['sessionId'] as string) : this.sessionId;
     if (!sessionId) return;
 
     try {
-      await this.client.send(
-        'Page.handleJavaScriptDialog',
-        { accept: false },
-        sessionId,
-        5000,
-      );
+      await this.client.send('Page.handleJavaScriptDialog', { accept: false }, sessionId, 5000);
       log.warn('Auto-dismissed unexpected JavaScript dialog', {
         sessionId,
         type: params['type'],
@@ -67,7 +77,8 @@ export class BrowserAPI {
 
   constructor(client?: CDPTransport) {
     this.client = client ?? new CDPClient();
-    this.client.on('Page.javascriptDialogOpening', this.handleJavaScriptDialogOpening);
+    this.localClient = this.client;
+    this.addDialogListener(this.client);
   }
 
   /**
@@ -93,6 +104,37 @@ export class BrowserAPI {
   }
 
   /**
+   * Set a provider of remote tray targets.
+   * When set, listAllTargets() includes remote targets and attachToPage()
+   * can attach to remote targets using the "{runtimeId}:{localTargetId}" format.
+   */
+  setTrayTargetProvider(provider: TrayTargetProvider | null): void {
+    this.trayTargetProvider = provider;
+  }
+
+  /**
+   * List all pages — local + remote tray targets.
+   * Remote targets have targetId format "{runtimeId}:{localTargetId}".
+   * Deduplicates by excluding registry entries whose tray-wide targetId matches a local page.
+   */
+  async listAllTargets(): Promise<PageInfo[]> {
+    const local = await this.listPages();
+    if (!this.trayTargetProvider) return local;
+
+    const localIds = new Set(local.map((p) => p.targetId));
+    const remoteEntries = this.trayTargetProvider.getTargets();
+    const remote: PageInfo[] = remoteEntries
+      .filter((t) => !localIds.has(t.targetId))
+      .map((t) => ({
+        targetId: t.targetId,
+        title: t.title,
+        url: t.url,
+      }));
+
+    return [...local, ...remote];
+  }
+
+  /**
    * Connect to the CDP proxy.
    * DebuggerClient (extension mode) accepts but ignores these options.
    */
@@ -115,6 +157,67 @@ export class BrowserAPI {
       background: true,
     });
     return result['targetId'] as string;
+  }
+
+  /**
+   * Create a new tab on a remote runtime within the tray.
+   * Requires a tray target provider with openRemoteTab support.
+   * Returns the composite targetId ("{runtimeId}:{localTargetId}").
+   */
+  async createRemotePage(runtimeId: string, url?: string): Promise<string> {
+    if (!this.trayTargetProvider?.openRemoteTab) {
+      throw new Error('Remote tab opening not available (no tray target provider)');
+    }
+    return this.trayTargetProvider.openRemoteTab(runtimeId, url ?? 'about:blank');
+  }
+
+  /**
+   * Close a browser tab/target by its targetId.
+   * Handles remote tray targets by routing through RemoteCDPTransport.
+   */
+  async closePage(targetId: string): Promise<void> {
+    await this.ensureConnected();
+
+    // Check if this is a remote tray target (format: "runtimeId:localTargetId")
+    if (this.trayTargetProvider?.createRemoteTransport && targetId.includes(':')) {
+      const colonIdx = targetId.indexOf(':');
+      const runtimeId = targetId.substring(0, colonIdx);
+      const localTargetId = targetId.substring(colonIdx + 1);
+
+      // Trust the runtimeId:localTargetId format — don't require registry confirmation.
+      {
+        const remoteTransport = this.trayTargetProvider.createRemoteTransport(
+          runtimeId,
+          localTargetId
+        );
+        try {
+          await remoteTransport.send('Target.closeTarget', { targetId: localTargetId });
+        } finally {
+          if (this.trayTargetProvider.removeRemoteTransport) {
+            this.trayTargetProvider.removeRemoteTransport(runtimeId, localTargetId);
+          }
+        }
+
+        // If we were attached to the target being closed, clean up
+        if (this.attachedTargetId === targetId) {
+          if (this.remoteTargetInfo) {
+            this.setClient(this.localClient);
+            this.remoteTargetInfo = null;
+          }
+          this.sessionId = null;
+          this.attachedTargetId = null;
+        }
+        return;
+      }
+    }
+
+    await this.localClient.send('Target.closeTarget', { targetId });
+
+    // Clean up if we were attached to this target
+    if (this.attachedTargetId === targetId) {
+      this.sessionId = null;
+      this.attachedTargetId = null;
+    }
   }
 
   /**
@@ -146,12 +249,44 @@ export class BrowserAPI {
   /**
    * Attach to a specific page target, enabling page-level commands.
    * Returns the CDP session ID for the attached target.
+   *
+   * If the targetId contains a colon (format "{runtimeId}:{localTargetId}"),
+   * it's treated as a remote tray target and a RemoteCDPTransport is used.
    */
   async attachToPage(targetId: string): Promise<string> {
     await this.ensureConnected();
     // Detach from previous target if needed
     if (this.sessionId && this.attachedTargetId !== targetId) {
       await this.detach();
+    }
+
+    // Check if this is a remote tray target (format: "runtimeId:localTargetId")
+    if (this.trayTargetProvider?.createRemoteTransport && targetId.includes(':')) {
+      const colonIdx = targetId.indexOf(':');
+      const runtimeId = targetId.substring(0, colonIdx);
+      const localTargetId = targetId.substring(colonIdx + 1);
+
+      // The runtimeId:localTargetId format is a strong signal this is remote.
+      // Don't require registry confirmation — the target may have just been
+      // created via createRemotePage() and not yet advertised.
+      {
+        const remoteTransport = this.trayTargetProvider.createRemoteTransport(
+          runtimeId,
+          localTargetId
+        );
+        this.setClient(remoteTransport);
+        this.remoteTargetInfo = { runtimeId, localTargetId };
+
+        // Send attachToTarget via the remote transport
+        const result = await this.client.send('Target.attachToTarget', {
+          targetId: localTargetId,
+          flatten: true,
+        });
+        this.sessionId = result['sessionId'] as string;
+        this.attachedTargetId = targetId;
+        await this.client.send('Page.enable', {}, this.sessionId);
+        return this.sessionId;
+      }
     }
 
     const result = await this.client.send('Target.attachToTarget', {
@@ -168,6 +303,7 @@ export class BrowserAPI {
 
   /**
    * Detach from the currently attached target.
+   * If attached to a remote target, restores the local transport.
    */
   async detach(): Promise<void> {
     if (this.sessionId) {
@@ -178,6 +314,17 @@ export class BrowserAPI {
       } catch {
         // Target may already be detached
       }
+
+      // Restore local transport if we were using a remote one
+      if (this.remoteTargetInfo && this.trayTargetProvider?.removeRemoteTransport) {
+        this.trayTargetProvider.removeRemoteTransport(
+          this.remoteTargetInfo.runtimeId,
+          this.remoteTargetInfo.localTargetId
+        );
+        this.setClient(this.localClient);
+        this.remoteTargetInfo = null;
+      }
+
       this.sessionId = null;
       this.attachedTargetId = null;
     }
@@ -230,10 +377,11 @@ export class BrowserAPI {
           const evalResult = await this.client.send(
             'Runtime.evaluate',
             {
-              expression: 'JSON.stringify({ w: window.innerWidth, h: document.documentElement.scrollHeight })',
+              expression:
+                'JSON.stringify({ w: window.innerWidth, h: document.documentElement.scrollHeight })',
               returnByValue: true,
             },
-            this.sessionId!,
+            this.sessionId!
           );
           const val = JSON.parse((evalResult['result'] as { value?: string })?.value ?? '{}');
           cssWidth = val.w ?? 0;
@@ -257,20 +405,14 @@ export class BrowserAPI {
       }
       // No clip/fullPage = viewport screenshot (Chrome's default behavior)
 
-      const result = await this.client.send(
-        'Page.captureScreenshot',
-        params,
-        this.sessionId!,
-      );
+      const result = await this.client.send('Page.captureScreenshot', params, this.sessionId!);
       let base64 = result['data'] as string;
 
       // Post-capture resize via ImageMagick WASM if image exceeds maxWidth.
       // Same engine as image-processor.ts for consistency.
       if (options?.maxWidth) {
         try {
-          const { getMagick } = await import(
-            '../shell/supplemental-commands/magick-wasm.js'
-          );
+          const { getMagick } = await import('../shell/supplemental-commands/magick-wasm.js');
           const magick = await getMagick();
 
           const binaryStr = atob(base64);
@@ -296,7 +438,10 @@ export class BrowserAPI {
             }
           });
         } catch (resizeErr) {
-          console.warn('[browser-api] Screenshot maxWidth resize failed, returning original', resizeErr);
+          console.warn(
+            '[browser-api] Screenshot maxWidth resize failed, returning original',
+            resizeErr
+          );
         }
       }
 
@@ -309,10 +454,7 @@ export class BrowserAPI {
    * Evaluate a JavaScript expression in the attached page.
    * Returns the result value.
    */
-  async evaluate(
-    expression: string,
-    options?: EvaluateOptions,
-  ): Promise<unknown> {
+  async evaluate(expression: string, options?: EvaluateOptions): Promise<unknown> {
     await this.ensureConnected();
     this.ensureAttached();
 
@@ -325,15 +467,14 @@ export class BrowserAPI {
         awaitPromise: options?.awaitPromise ?? true,
         returnByValue: options?.returnByValue ?? true,
       },
-      this.sessionId!,
+      this.sessionId!
     );
 
     const exceptionDetails = result['exceptionDetails'] as
       | { text: string; exception?: { description?: string } }
       | undefined;
     if (exceptionDetails) {
-      const msg =
-        exceptionDetails.exception?.description ?? exceptionDetails.text;
+      const msg = exceptionDetails.exception?.description ?? exceptionDetails.text;
       throw new Error(`Evaluation failed: ${msg}`);
     }
 
@@ -363,12 +504,12 @@ export class BrowserAPI {
     await this.client.send(
       'Input.dispatchMouseEvent',
       { type: 'mousePressed', x, y, button: 'left', clickCount: 1 },
-      this.sessionId!,
+      this.sessionId!
     );
     await this.client.send(
       'Input.dispatchMouseEvent',
       { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 },
-      this.sessionId!,
+      this.sessionId!
     );
   }
 
@@ -383,12 +524,12 @@ export class BrowserAPI {
       await this.client.send(
         'Input.dispatchKeyEvent',
         { type: 'keyDown', text: char },
-        this.sessionId!,
+        this.sessionId!
       );
       await this.client.send(
         'Input.dispatchKeyEvent',
         { type: 'keyUp', text: char },
-        this.sessionId!,
+        this.sessionId!
       );
     }
   }
@@ -396,10 +537,7 @@ export class BrowserAPI {
   /**
    * Wait for a CSS selector to appear in the DOM.
    */
-  async waitForSelector(
-    selector: string,
-    options?: WaitForSelectorOptions,
-  ): Promise<void> {
+  async waitForSelector(selector: string, options?: WaitForSelectorOptions): Promise<void> {
     await this.ensureConnected();
     this.ensureAttached();
 
@@ -408,16 +546,12 @@ export class BrowserAPI {
     const start = Date.now();
 
     while (Date.now() - start < timeout) {
-      const found = await this.evaluate(
-        `!!document.querySelector(${JSON.stringify(selector)})`,
-      );
+      const found = await this.evaluate(`!!document.querySelector(${JSON.stringify(selector)})`);
       if (found) return;
       await new Promise((r) => setTimeout(r, interval));
     }
 
-    throw new Error(
-      `waitForSelector timed out after ${timeout}ms: ${selector}`,
-    );
+    throw new Error(`waitForSelector timed out after ${timeout}ms: ${selector}`);
   }
 
   /**
@@ -429,11 +563,7 @@ export class BrowserAPI {
 
     await this.client.send('Accessibility.enable', {}, this.sessionId!);
 
-    const result = await this.client.send(
-      'Accessibility.getFullAXTree',
-      {},
-      this.sessionId!,
-    );
+    const result = await this.client.send('Accessibility.getFullAXTree', {}, this.sessionId!);
 
     const nodes = result['nodes'] as Array<{
       nodeId: string;
@@ -511,7 +641,7 @@ export class BrowserAPI {
     const resolveResult = await this.client.send(
       'DOM.resolveNode',
       { backendNodeId },
-      this.sessionId!,
+      this.sessionId!
     );
     const object = resolveResult['object'] as { objectId?: string } | undefined;
     if (!object?.objectId) {
@@ -530,7 +660,7 @@ export class BrowserAPI {
         }`,
         returnByValue: true,
       },
-      this.sessionId!,
+      this.sessionId!
     );
 
     const boxValue = (boxResult['result'] as { value?: BoundingBox })?.value;
@@ -542,7 +672,7 @@ export class BrowserAPI {
           objectId: object.objectId,
           functionDeclaration: 'function() { this.click(); }',
         },
-        this.sessionId!,
+        this.sessionId!
       );
       return;
     }
@@ -554,19 +684,22 @@ export class BrowserAPI {
     await this.client.send(
       'Input.dispatchMouseEvent',
       { type: 'mousePressed', x, y, button: 'left', clickCount: 1 },
-      this.sessionId!,
+      this.sessionId!
     );
     await this.client.send(
       'Input.dispatchMouseEvent',
       { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 },
-      this.sessionId!,
+      this.sessionId!
     );
   }
 
   /**
    * Double-click an element by its CDP backend node ID.
    */
-  async dblclickByBackendNodeId(backendNodeId: number, button: 'left' | 'right' | 'middle' = 'left'): Promise<void> {
+  async dblclickByBackendNodeId(
+    backendNodeId: number,
+    button: 'left' | 'right' | 'middle' = 'left'
+  ): Promise<void> {
     await this.ensureConnected();
     this.ensureAttached();
 
@@ -575,22 +708,22 @@ export class BrowserAPI {
     await this.client.send(
       'Input.dispatchMouseEvent',
       { type: 'mousePressed', x, y, button, clickCount: 1 },
-      this.sessionId!,
+      this.sessionId!
     );
     await this.client.send(
       'Input.dispatchMouseEvent',
       { type: 'mouseReleased', x, y, button, clickCount: 1 },
-      this.sessionId!,
+      this.sessionId!
     );
     await this.client.send(
       'Input.dispatchMouseEvent',
       { type: 'mousePressed', x, y, button, clickCount: 2 },
-      this.sessionId!,
+      this.sessionId!
     );
     await this.client.send(
       'Input.dispatchMouseEvent',
       { type: 'mouseReleased', x, y, button, clickCount: 2 },
-      this.sessionId!,
+      this.sessionId!
     );
   }
 
@@ -606,7 +739,7 @@ export class BrowserAPI {
     await this.client.send(
       'Input.dispatchMouseEvent',
       { type: 'mouseMoved', x, y },
-      this.sessionId!,
+      this.sessionId!
     );
   }
 
@@ -627,7 +760,7 @@ export class BrowserAPI {
         arguments: [{ value }],
         returnByValue: true,
       },
-      this.sessionId!,
+      this.sessionId!
     );
   }
 
@@ -636,7 +769,10 @@ export class BrowserAPI {
    * Only clicks if the current state differs from the desired state.
    * Returns the action taken.
    */
-  async setCheckedByBackendNodeId(backendNodeId: number, checked: boolean): Promise<'toggled' | 'already'> {
+  async setCheckedByBackendNodeId(
+    backendNodeId: number,
+    checked: boolean
+  ): Promise<'toggled' | 'already'> {
     await this.ensureConnected();
     this.ensureAttached();
 
@@ -649,7 +785,7 @@ export class BrowserAPI {
         functionDeclaration: `function() { return this.checked; }`,
         returnByValue: true,
       },
-      this.sessionId!,
+      this.sessionId!
     );
     const currentChecked = (stateResult['result'] as { value?: boolean })?.value;
 
@@ -675,17 +811,17 @@ export class BrowserAPI {
     await this.client.send(
       'Input.dispatchMouseEvent',
       { type: 'mousePressed', x: start.x, y: start.y, button: 'left', clickCount: 1 },
-      this.sessionId!,
+      this.sessionId!
     );
     await this.client.send(
       'Input.dispatchMouseEvent',
       { type: 'mouseMoved', x: end.x, y: end.y },
-      this.sessionId!,
+      this.sessionId!
     );
     await this.client.send(
       'Input.dispatchMouseEvent',
       { type: 'mouseReleased', x: end.x, y: end.y, button: 'left', clickCount: 1 },
-      this.sessionId!,
+      this.sessionId!
     );
   }
 
@@ -693,7 +829,10 @@ export class BrowserAPI {
    * Send a raw CDP command on the current session.
    * Used by playwright-cli for cookie operations via the Network domain.
    */
-  async sendCDP(method: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  async sendCDP(
+    method: string,
+    params: Record<string, unknown> = {}
+  ): Promise<Record<string, unknown>> {
     await this.ensureConnected();
     this.ensureAttached();
     return await this.client.send(method, params, this.sessionId!);
@@ -713,7 +852,7 @@ export class BrowserAPI {
     const resolveResult = await this.client.send(
       'DOM.resolveNode',
       { backendNodeId },
-      this.sessionId!,
+      this.sessionId!
     );
     const object = resolveResult['object'] as { objectId?: string } | undefined;
     if (!object?.objectId) {
@@ -740,7 +879,7 @@ export class BrowserAPI {
         }`,
         returnByValue: true,
       },
-      this.sessionId!,
+      this.sessionId!
     );
 
     const boxValue = (boxResult['result'] as { value?: BoundingBox })?.value;
@@ -757,22 +896,51 @@ export class BrowserAPI {
   /**
    * Lazily connect (or reconnect) to the CDP proxy.
    * Resets stale session/target state when reconnecting after a drop.
+   * If the current client is a disconnected remote transport, restores the local transport.
    */
   private async ensureConnected(): Promise<void> {
     if (this.client.state === 'disconnected') {
+      // If we were using a remote transport that got disconnected (follower went away),
+      // restore the local transport and clear stale remote state.
+      if (this.remoteTargetInfo && this.trayTargetProvider?.removeRemoteTransport) {
+        this.trayTargetProvider.removeRemoteTransport(
+          this.remoteTargetInfo.runtimeId,
+          this.remoteTargetInfo.localTargetId
+        );
+        this.setClient(this.localClient);
+        this.remoteTargetInfo = null;
+      }
       // Previous session/target are no longer valid after reconnect
       this.sessionId = null;
       this.attachedTargetId = null;
-      await this.connect();
+      if (this.client.state === 'disconnected') {
+        await this.connect();
+      }
     }
   }
 
   private ensureAttached(): void {
     if (!this.sessionId) {
-      throw new Error(
-        'Not attached to a page. Call attachToPage(targetId) first.',
-      );
+      throw new Error('Not attached to a page. Call attachToPage(targetId) first.');
     }
+  }
+
+  private addDialogListener(client: CDPTransport): void {
+    client.on('Page.javascriptDialogOpening', this.handleJavaScriptDialogOpening);
+  }
+
+  private removeDialogListener(client: CDPTransport): void {
+    client.off('Page.javascriptDialogOpening', this.handleJavaScriptDialogOpening);
+  }
+
+  private setClient(client: CDPTransport): void {
+    if (this.client === client) {
+      return;
+    }
+
+    this.removeDialogListener(this.client);
+    this.client = client;
+    this.addDialogListener(this.client);
   }
 
   /**
@@ -781,11 +949,7 @@ export class BrowserAPI {
   private async boundingBox(selector: string): Promise<BoundingBox | null> {
     await this.client.send('DOM.enable', {}, this.sessionId!);
 
-    const docResult = await this.client.send(
-      'DOM.getDocument',
-      { depth: 0 },
-      this.sessionId!,
-    );
+    const docResult = await this.client.send('DOM.getDocument', { depth: 0 }, this.sessionId!);
     const rootNodeId = (docResult['root'] as { nodeId: number }).nodeId;
 
     let nodeId: number;
@@ -793,7 +957,7 @@ export class BrowserAPI {
       const queryResult = await this.client.send(
         'DOM.querySelector',
         { nodeId: rootNodeId, selector },
-        this.sessionId!,
+        this.sessionId!
       );
       nodeId = queryResult['nodeId'] as number;
     } catch {
@@ -802,11 +966,7 @@ export class BrowserAPI {
 
     if (!nodeId) return null;
 
-    const boxModel = await this.client.send(
-      'DOM.getBoxModel',
-      { nodeId },
-      this.sessionId!,
-    );
+    const boxModel = await this.client.send('DOM.getBoxModel', { nodeId }, this.sessionId!);
     const model = boxModel['model'] as {
       content: number[];
       width: number;

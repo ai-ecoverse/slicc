@@ -240,7 +240,7 @@ export class ChatPanel {
 
   /** Load a set of messages (from external buffer) and render them. */
   loadMessages(messages: ChatMessage[]): void {
-    this.messages = messages.map(m => ({ ...m, isStreaming: false }));
+    this.messages = messages.map((m) => ({ ...m, isStreaming: false }));
     this.renderMessages();
     this.persistSession();
     this.renderModelSelector();
@@ -267,7 +267,7 @@ export class ChatPanel {
 
   /** Remove a queued message from the UI and notify the orchestrator to remove it from DB/queue. */
   private deleteQueuedMessage(messageId: string): void {
-    const idx = this.messages.findIndex(m => m.id === messageId);
+    const idx = this.messages.findIndex((m) => m.id === messageId);
     if (idx === -1) return;
     this.messages.splice(idx, 1);
     const el = this.messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
@@ -289,19 +289,23 @@ export class ChatPanel {
     this.messagesEl.appendChild(this.messagesInner);
     this.container.appendChild(this.messagesEl);
 
-    this.messagesEl.addEventListener('scroll', () => {
-      const { scrollTop, scrollHeight, clientHeight } = this.messagesEl;
-      const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+    this.messagesEl.addEventListener(
+      'scroll',
+      () => {
+        const { scrollTop, scrollHeight, clientHeight } = this.messagesEl;
+        const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
 
-      if (distanceFromBottom <= 250) {
-        this.autoScrollAttached = true;
-        this.hideJumpPill();
-      } else if (scrollTop < this.lastScrollTop) {
-        this.autoScrollAttached = false;
-      }
+        if (distanceFromBottom <= 250) {
+          this.autoScrollAttached = true;
+          this.hideJumpPill();
+        } else if (scrollTop < this.lastScrollTop) {
+          this.autoScrollAttached = false;
+        }
 
-      this.lastScrollTop = scrollTop;
-    }, { passive: true });
+        this.lastScrollTop = scrollTop;
+      },
+      { passive: true }
+    );
 
     // Input area — UXC: centered 800px prompt bar
     this.inputArea = document.createElement('div');
@@ -347,11 +351,15 @@ export class ChatPanel {
     const path2 = document.createElementNS(svgNs, 'path');
     path2.setAttribute('d', 'M19 10v2a7 7 0 0 1-14 0v-2');
     const line1 = document.createElementNS(svgNs, 'line');
-    line1.setAttribute('x1', '12'); line1.setAttribute('y1', '19');
-    line1.setAttribute('x2', '12'); line1.setAttribute('y2', '23');
+    line1.setAttribute('x1', '12');
+    line1.setAttribute('y1', '19');
+    line1.setAttribute('x2', '12');
+    line1.setAttribute('y2', '23');
     const line2 = document.createElementNS(svgNs, 'line');
-    line2.setAttribute('x1', '8'); line2.setAttribute('y1', '23');
-    line2.setAttribute('x2', '16'); line2.setAttribute('y2', '23');
+    line2.setAttribute('x1', '8');
+    line2.setAttribute('y1', '23');
+    line2.setAttribute('x2', '16');
+    line2.setAttribute('y2', '23');
     svg.append(path1, path2, line1, line2);
     this.micBtn.appendChild(svg);
     this.micBtn.dataset.tooltip = 'Voice (Ctrl+Shift+V)';
@@ -616,11 +624,18 @@ export class ChatPanel {
     this.updateMessageEl(messageId);
   }
 
-  private handleToolResult(messageId: string, toolName: string, result: string, isError?: boolean): void {
+  private handleToolResult(
+    messageId: string,
+    toolName: string,
+    result: string,
+    isError?: boolean
+  ): void {
     const msg = this.findMessage(messageId);
     if (!msg || !msg.toolCalls) return;
     // Find the most recent tool call matching this name that has no result yet
-    const tc = [...msg.toolCalls].reverse().find((t) => t.name === toolName && t.result === undefined);
+    const tc = [...msg.toolCalls]
+      .reverse()
+      .find((t) => t.name === toolName && t.result === undefined);
     if (tc) {
       // Strip inline image data from stored result to avoid bloating conversation history.
       // The image is rendered by createToolCallEl from a transient property, not persisted.
@@ -634,12 +649,21 @@ export class ChatPanel {
     this.updateMessageEl(messageId);
   }
 
-  private handleToolUI(messageId: string, toolName: string, requestId: string, html: string, retryCount = 0): void {
+  private handleToolUI(
+    messageId: string,
+    toolName: string,
+    requestId: string,
+    html: string,
+    retryCount = 0
+  ): void {
     const msg = this.findMessage(messageId);
     if (!msg || !msg.toolCalls) {
       // Message/toolCalls might not be added yet - retry
       if (retryCount < 10) {
-        setTimeout(() => this.handleToolUI(messageId, toolName, requestId, html, retryCount + 1), 100);
+        setTimeout(
+          () => this.handleToolUI(messageId, toolName, requestId, html, retryCount + 1),
+          100
+        );
         return;
       }
       log.warn('handleToolUI: message or toolCalls not found after retries', { messageId });
@@ -647,7 +671,9 @@ export class ChatPanel {
     }
 
     // Find the tool call to attach the UI to
-    const tc = [...msg.toolCalls].reverse().find((t) => t.name === toolName && t.result === undefined);
+    const tc = [...msg.toolCalls]
+      .reverse()
+      .find((t) => t.name === toolName && t.result === undefined);
     if (!tc) {
       log.warn('handleToolUI: no matching tool call found', { messageId, toolName });
       return;
@@ -661,7 +687,10 @@ export class ChatPanel {
     if (!wrapper) {
       // DOM element might not be rendered yet - retry
       if (retryCount < 10) {
-        setTimeout(() => this.handleToolUI(messageId, toolName, requestId, html, retryCount + 1), 100);
+        setTimeout(
+          () => this.handleToolUI(messageId, toolName, requestId, html, retryCount + 1),
+          100
+        );
         return;
       }
       log.warn('handleToolUI: wrapper element not found after retries', { messageId });
@@ -680,7 +709,7 @@ export class ChatPanel {
       if (toolCallEl instanceof HTMLDetailsElement) {
         toolCallEl.open = true;
       }
-      
+
       // Create a container for the tool UI
       let uiContainer = toolCallEl.querySelector('.tool-call__ui') as HTMLElement;
       if (!uiContainer) {
@@ -693,7 +722,10 @@ export class ChatPanel {
       createToolUIRenderer(uiContainer, requestId, html);
     } else if (retryCount < 10) {
       // Tool call element might not be rendered yet - retry
-      setTimeout(() => this.handleToolUI(messageId, toolName, requestId, html, retryCount + 1), 100);
+      setTimeout(
+        () => this.handleToolUI(messageId, toolName, requestId, html, retryCount + 1),
+        100
+      );
     } else {
       log.warn('handleToolUI: tool call element not found in DOM after retries', { toolName });
     }
@@ -749,7 +781,7 @@ export class ChatPanel {
       this.micBtn.classList.remove('chat__mic-btn--listening');
       // When a new turn starts, clear the queued badge on only the oldest queued message
       // (it's the one being processed now). Leave the rest queued.
-      const oldestQueued = this.messages.find(m => m.queued);
+      const oldestQueued = this.messages.find((m) => m.queued);
       if (oldestQueued) {
         oldestQueued.queued = false;
         this.updateMessageEl(oldestQueued.id);
@@ -952,7 +984,11 @@ export class ChatPanel {
   }
 
   /** Determine whether to show the sender label for a message */
-  private shouldShowLabel(msg: ChatMessage, prevRole: string | null, prevTimestamp: number): boolean {
+  private shouldShowLabel(
+    msg: ChatMessage,
+    prevRole: string | null,
+    prevTimestamp: number
+  ): boolean {
     // Always show label for lick messages
     if (msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron') return true;
     // Show label if role changed
@@ -1061,9 +1097,16 @@ export class ChatPanel {
     }
 
     // For lick messages in cone view, wrap content in collapsible
-    const isLickInCone = (msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron') && this.sessionId === 'session-cone';
+    const isLickInCone =
+      (msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron') &&
+      this.sessionId === 'session-cone';
     // For scoop messages in cone view, wrap in collapsible
-    const isScoopInCone = msg.source && msg.source !== 'cone' && msg.source !== 'lick' && msg.role === 'assistant' && this.sessionId === 'session-cone';
+    const isScoopInCone =
+      msg.source &&
+      msg.source !== 'cone' &&
+      msg.source !== 'lick' &&
+      msg.role === 'assistant' &&
+      this.sessionId === 'session-cone';
 
     if (isLickInCone || isScoopInCone) {
       // Collapsed by default
@@ -1156,7 +1199,8 @@ export class ChatPanel {
     const el = document.createElement('details');
     el.className = 'lick';
 
-    const channelType = msg.channel === 'webhook' ? 'Webhook' : msg.channel === 'cron' ? 'Cron' : 'Event';
+    const channelType =
+      msg.channel === 'webhook' ? 'Webhook' : msg.channel === 'cron' ? 'Cron' : 'Event';
 
     // Summary shows tongue emoji and type
     const summary = document.createElement('summary');
@@ -1167,8 +1211,11 @@ export class ChatPanel {
     const preview = document.createElement('span');
     preview.className = 'lick__preview';
     // Extract a meaningful preview from the content
-    const contentPreview = msg.content.replace(/\[Webhook Event:.*?\]\n```json\n?/s, '').slice(0, 50);
-    preview.textContent = contentPreview.replace(/\n/g, ' ') + (contentPreview.length >= 50 ? '...' : '');
+    const contentPreview = msg.content
+      .replace(/\[Webhook Event:.*?\]\n```json\n?/s, '')
+      .slice(0, 50);
+    preview.textContent =
+      contentPreview.replace(/\n/g, ' ') + (contentPreview.length >= 50 ? '...' : '');
     summary.appendChild(preview);
 
     el.appendChild(summary);
@@ -1263,7 +1310,11 @@ export class ChatPanel {
           fullImg.src = screenshotUrl;
           w.document.title = 'Screenshot';
           w.document.body.style.margin = '0';
-          w.document.body.style.background = document.documentElement.classList.contains('theme-light') ? '#f0f0f0' : '#141414';
+          w.document.body.style.background = document.documentElement.classList.contains(
+            'theme-light'
+          )
+            ? '#f0f0f0'
+            : '#141414';
           w.document.body.appendChild(fullImg);
         }
       });
@@ -1317,8 +1368,9 @@ export class ChatPanel {
   }
 
   private hydrateInlineSprinklesInEl(contentEl: HTMLElement, msgId: string): void {
-    const instances = hydrateInlineSprinkles(contentEl,
-      (action, data) => this.onInlineSprinkleLick?.(action, data));
+    const instances = hydrateInlineSprinkles(contentEl, (action, data) =>
+      this.onInlineSprinkleLick?.(action, data)
+    );
     if (instances.length) this.inlineSprinkles.set(msgId, instances);
   }
 

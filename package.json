@@ -1,21 +1,51 @@
 {
-  "name": "browser-coding-agent",
+  "name": "sliccy",
   "version": "0.1.0",
   "description": "Browser-based coding agent with thin CLI server",
+  "license": "Apache-2.0",
   "type": "module",
+  "main": "./dist/cli/index.js",
+  "types": "./dist/cli/index.d.ts",
+  "bin": {
+    "slicc": "dist/cli/index.js"
+  },
+  "files": [
+    "dist/cli",
+    "dist/ui",
+    "dist/tray-url-shared*"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ai-ecoverse/slicc"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
-    "dev": "vite",
+    "dev": "npx tsx src/cli/index.ts --dev",
     "build": "npm run build:ui && npm run build:cli",
     "build:ui": "vite build",
-    "build:cli": "tsc -p tsconfig.cli.json",
+    "build:cli": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist/cli', { recursive: true, force: true });\" && tsc -p tsconfig.cli.json",
     "start": "node dist/cli/index.js",
     "start:electron": "node dist/cli/index.js --electron",
     "typecheck": "tsc --noEmit -p tsconfig.cli.json && tsc --noEmit -p tsconfig.json",
     "dev:full": "npx tsx src/cli/index.ts --dev",
     "dev:electron": "npx tsx src/cli/index.ts --dev --electron",
+    "qa:setup": "npm run build:extension && npx tsx src/cli/qa-setup.ts",
+    "qa:leader": "npm run dev:full -- --lead https://slicc-tray-hub-staging.minivelos.workers.dev --profile=leader",
+    "qa:follower": "npm run dev:full -- --profile=follower",
+    "qa:extension": "npm run build:extension && npm run dev:full -- --profile=extension",
     "build:extension": "vite build --config vite.config.extension.ts",
+    "package:release": "node dist/cli/release-package.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
   },
   "dependencies": {
     "@adobe/helix-rum-js": "^2.14.2",
@@ -38,15 +68,27 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@semantic-release/commit-analyzer": "13.0.1",
+    "@semantic-release/exec": "7.1.0",
+    "@semantic-release/github": "12.0.6",
+    "@semantic-release/npm": "13.1.5",
+    "@semantic-release/release-notes-generator": "14.1.0",
     "@types/express": "^5.0.0",
     "@types/jsdom": "^28.0.0",
     "@types/node": "^22.13.0",
     "@types/ws": "^8.5.14",
     "electron": "41.0.0",
+    "eslint": "10.0.3",
+    "eslint-config-prettier": "10.1.8",
     "fake-indexeddb": "6.2.5",
+    "globals": "17.4.0",
     "jsdom": "^28.1.0",
+    "prettier": "3.8.1",
     "puppeteer-core": "^24.39.1",
+    "semantic-release": "25.0.3",
     "typescript": "^5.7.3",
+    "typescript-eslint": "8.57.1",
     "vite": "^6.1.0",
     "vitest": "4.0.18"
   }

@@ -6,7 +6,7 @@ Complete reference for SLICC's shell capabilities, including supplemental comman
 
 ## Overview
 
-SLICC uses `just-bash` (WASM Bash interpreter v2.11.7) as its core shell runtime. This provides 78+ standard Unix commands plus 16+ custom supplemental commands and auto-discovered `.jsh` script commands.
+SLICC uses `just-bash` (WASM Bash interpreter v2.11.7) as its core shell runtime. This provides 78+ standard Unix commands plus 17+ custom supplemental commands and auto-discovered `.jsh` script commands.
 
 **Entry point**: Via the `bash` agent tool. All shell features available to agents.
 
@@ -21,6 +21,7 @@ Custom commands implemented in TypeScript and registered in just-bash.
 | **commands** | `help-command.ts` | List all available commands (built-ins + .jsh) | None |
 | **which** | `which-command.ts` | Resolve a command path | `<command>` — returns `/usr/bin/<name>` or VFS path |
 | **uname** | `uname-command.ts` | Print the current browser user agent | None |
+| **host** | `host-command.ts` | Print the current leader tray status plus `launch_url` and `join_url` (`launch_url` is `https://.../tray/<id>` when this runtime is leader) | None |
 | **oauth-token** | `oauth-token-command.ts` | Get an OAuth access token for a provider | `<providerId>`, `--provider <id>`, `--list`, no args = selected provider; auto-triggers login if needed |
 | **serve** | `serve-command.ts` | Open a VFS app directory in a browser tab | `[--entry <relative-path>] <directory>` — defaults to `index.html`; rejects absolute/traversal entry paths |
 | **open** | `open-command.ts` | Open URL or VFS file in browser tab | `<url\|path>` — serves VFS files via preview SW; `--download` / `-d` forces download; `--view` / `-v` returns image inline for agent vision |
@@ -53,6 +54,13 @@ which node
 
 # Print the current browser user agent
 uname
+
+# Show the current leader tray status, launch URL, and join URL
+host
+
+# In a leader runtime, launch_url is the tray URL itself
+# In non-leader/error runtimes with a saved session, it stays the local app launch URL
+# join_url exposes the tray join capability directly when a session exists
 
 # Open a URL in a browser tab
 open https://example.com
@@ -110,6 +118,7 @@ Browser automation is also exposed as shell commands: `playwright-cli`, `playwri
 - **Default targeting**: `open` / `tab-new` open in the background by default, but if there is no current browser target yet, the first opened tab becomes current so `snapshot` works immediately.
 - **Fresh refs required**: `click`, `fill`, `goto`, `go-back`, `go-forward`, `reload`, and similar state-changing commands invalidate prior snapshot refs. After history navigation or reload, run `snapshot` again before using refs.
 - **Cookie convenience forms**: `cookie-set <name> <value>` and `cookie-delete <name>` use the current page URL when `--domain` and `--path` are omitted.
+- **Teleport restores auth state**: arm it explicitly with `playwright teleport --start=<regex> --return=<regex>` or implicitly with `--teleport-start` / `--teleport-return` on `open`, `tab-new`, or `goto` / `navigate`. When the leader hits `--start`, the intercepted auth URL opens on a follower for the human to finish login; when the follower hits `--return`, teleport restores both cookies and page storage (`localStorage` + `sessionStorage`) back to the leader. For cross-origin SSO flows, teleport hydrates the captured app origin first, then lands on the best matching app URL.
 - **Unexpected dialogs**: attached pages auto-dismiss unexpected JavaScript dialogs so a stray `alert()` or similar modal does not stall automation indefinitely.
 
 ### Common flow

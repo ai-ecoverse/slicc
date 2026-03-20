@@ -6,6 +6,7 @@
  * 2. Create/maintain the offscreen document (agent engine)
  * 3. Relay messages between side panel ↔ offscreen document
  * 4. Proxy chrome.debugger CDP calls for the offscreen document
+ * 5. Host the leader tray WebSocket for the offscreen document
  *
  * Chrome extension API types provided by ./chrome.d.ts
  */
@@ -15,6 +16,11 @@ import type {
   CdpCommandMsg,
   CdpResponseMsg,
   CdpEventMsg,
+  TraySocketCommandMessage,
+  TraySocketErrorMsg,
+  TraySocketMessageMsg,
+  TraySocketOpenMsg,
+  TraySocketOpenedMsg,
   OAuthRequestMsg,
   OAuthResultMsg,
 } from './messages.js';
@@ -40,7 +46,9 @@ async function ensureOffscreen(): Promise<void> {
   offscreenLock = (async () => {
     try {
       if (!chrome.offscreen) {
-        console.error('[slicc-sw] chrome.offscreen API not available — missing "offscreen" permission?');
+        console.error(
+          '[slicc-sw] chrome.offscreen API not available — missing "offscreen" permission?'
+        );
         return;
       }
       const exists = await chrome.offscreen.hasDocument();
@@ -70,7 +78,9 @@ async function ensureOffscreen(): Promise<void> {
 }
 
 // Create offscreen doc on install/startup
-chrome.runtime.onInstalled?.addListener?.(() => { ensureOffscreen(); });
+chrome.runtime.onInstalled?.addListener?.(() => {
+  ensureOffscreen();
+});
 ensureOffscreen();
 
 // ---------------------------------------------------------------------------
@@ -118,6 +128,8 @@ async function addToSliccGroup(tabId: number): Promise<void> {
 const sessionToTab = new Map<string, number>();
 /** Tracks which tab IDs we've attached the debugger to. */
 const attachedTabs = new Set<number>();
+/** Tracks leader tray WebSockets opened on behalf of the offscreen document. */
+const traySockets = new Map<number, WebSocket>();
 
 // ---------------------------------------------------------------------------
 // Message relay
@@ -137,24 +149,28 @@ chrome.runtime.onMessage.addListener(
         const oauthMsg = panelPayload as OAuthRequestMsg;
         handleOAuthRequest(oauthMsg)
           .then((result) => {
-            chrome.runtime.sendMessage({
-              source: 'service-worker' as const,
-              payload: result,
-            }).catch((e) => {
-              console.error('[slicc-sw] Failed to send OAuth result:', e);
-            });
+            chrome.runtime
+              .sendMessage({
+                source: 'service-worker' as const,
+                payload: result,
+              })
+              .catch((e) => {
+                console.error('[slicc-sw] Failed to send OAuth result:', e);
+              });
           })
           .catch((err) => {
-            chrome.runtime.sendMessage({
-              source: 'service-worker' as const,
-              payload: {
-                type: 'oauth-result',
-                providerId: oauthMsg.providerId,
-                error: err instanceof Error ? err.message : String(err),
-              } satisfies OAuthResultMsg,
-            }).catch((e) => {
-              console.error('[slicc-sw] Failed to send OAuth error:', e);
-            });
+            chrome.runtime
+              .sendMessage({
+                source: 'service-worker' as const,
+                payload: {
+                  type: 'oauth-result',
+                  providerId: oauthMsg.providerId,
+                  error: err instanceof Error ? err.message : String(err),
+                } satisfies OAuthResultMsg,
+              })
+              .catch((e) => {
+                console.error('[slicc-sw] Failed to send OAuth error:', e);
+              });
           });
         return false;
       }
@@ -173,45 +189,130 @@ chrome.runtime.onMessage.addListener(
         // The offscreen CDP proxy listens for cdp-response via onMessage, not sendMessage return.
         handleCdpCommand(payload as CdpCommandMsg)
           .then((response) => {
-            chrome.runtime.sendMessage({
-              source: 'service-worker' as const,
-              payload: response,
-            }).catch(() => {});
+            chrome.runtime
+              .sendMessage({
+                source: 'service-worker' as const,
+                payload: response,
+              })
+              .catch(() => {});
           })
           .catch((err) => {
-            chrome.runtime.sendMessage({
-              source: 'service-worker' as const,
-              payload: {
-                type: 'cdp-response',
-                id: (payload as CdpCommandMsg).id,
-                error: err instanceof Error ? err.message : String(err),
-              } satisfies CdpResponseMsg,
-            }).catch(() => {});
+            chrome.runtime
+              .sendMessage({
+                source: 'service-worker' as const,
+                payload: {
+                  type: 'cdp-response',
+                  id: (payload as CdpCommandMsg).id,
+                  error: err instanceof Error ? err.message : String(err),
+                } satisfies CdpResponseMsg,
+              })
+              .catch(() => {});
           });
         return false;
       }
 
-      // Non-CDP offscreen messages reach the side panel directly via
+      if (isTraySocketCommand(payload)) {
+        void handleTraySocketCommand(payload).catch((err) => {
+          void sendServiceWorkerMessage({
+            type: 'tray-socket-error',
+            id: payload.id,
+            error: err instanceof Error ? err.message : String(err),
+          } satisfies TraySocketErrorMsg);
+        });
+        return false;
+      }
+
+      // Other offscreen messages reach the side panel directly via
       // chrome.runtime.sendMessage broadcast — no relay needed.
       return false;
     }
 
     return false;
-  },
+  }
 );
 
 function isExtMsg(msg: unknown): boolean {
+  return typeof msg === 'object' && msg !== null && 'source' in msg && 'payload' in msg;
+}
+
+function isTraySocketCommand(
+  payload: ExtensionMessage['payload']
+): payload is TraySocketCommandMessage {
   return (
-    typeof msg === 'object' &&
-    msg !== null &&
-    'source' in msg &&
-    'payload' in msg
+    payload.type === 'tray-socket-open' ||
+    payload.type === 'tray-socket-send' ||
+    payload.type === 'tray-socket-close'
   );
 }
 
 // Note: No relay functions needed. chrome.runtime.sendMessage broadcasts to
 // all extension contexts (except the sender). Panel ↔ offscreen messages
-// reach each other directly. The service worker only handles CDP proxy commands.
+// reach each other directly. The service worker only handles CDP + tray socket proxy commands.
+
+async function handleTraySocketCommand(command: TraySocketCommandMessage): Promise<void> {
+  switch (command.type) {
+    case 'tray-socket-open':
+      openTraySocket(command);
+      return;
+    case 'tray-socket-send': {
+      const socket = traySockets.get(command.id);
+      if (!socket) {
+        throw new Error(`Tray socket ${command.id} is not open`);
+      }
+      socket.send(command.data);
+      return;
+    }
+    case 'tray-socket-close': {
+      const socket = traySockets.get(command.id);
+      traySockets.delete(command.id);
+      socket?.close(command.code, command.reason);
+      return;
+    }
+  }
+}
+
+function openTraySocket(command: TraySocketOpenMsg): void {
+  traySockets.get(command.id)?.close(1000, 'replaced');
+  const socket = new WebSocket(command.url);
+  traySockets.set(command.id, socket);
+
+  socket.addEventListener('open', () => {
+    void sendServiceWorkerMessage({
+      type: 'tray-socket-opened',
+      id: command.id,
+    } satisfies TraySocketOpenedMsg);
+  });
+  socket.addEventListener('message', (event) => {
+    void sendServiceWorkerMessage({
+      type: 'tray-socket-message',
+      id: command.id,
+      data: typeof event.data === 'string' ? event.data : String(event.data),
+    } satisfies TraySocketMessageMsg);
+  });
+  socket.addEventListener('error', () => {
+    if (traySockets.get(command.id) === socket) {
+      traySockets.delete(command.id);
+    }
+    void sendServiceWorkerMessage({
+      type: 'tray-socket-error',
+      id: command.id,
+      error: 'Tray leader WebSocket failed in extension service worker',
+    } satisfies TraySocketErrorMsg);
+  });
+  socket.addEventListener('close', () => {
+    if (traySockets.get(command.id) === socket) {
+      traySockets.delete(command.id);
+    }
+    void sendServiceWorkerMessage({ type: 'tray-socket-closed', id: command.id });
+  });
+}
+
+async function sendServiceWorkerMessage(payload: ExtensionMessage['payload']): Promise<void> {
+  await chrome.runtime.sendMessage({
+    source: 'service-worker' as const,
+    payload,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // CDP proxy — translate offscreen CDP commands to chrome.debugger calls
@@ -272,7 +373,7 @@ async function cdpGetTargets(): Promise<Record<string, unknown>> {
 }
 
 async function cdpAttachToTarget(
-  params: Record<string, unknown>,
+  params: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
   const targetId = params['targetId'] as string;
   const tabId = parseInt(targetId, 10);
@@ -291,7 +392,7 @@ async function cdpAttachToTarget(
 }
 
 async function cdpDetachFromTarget(
-  params: Record<string, unknown>,
+  params: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
   const sessionId = params['sessionId'] as string;
   const tabId = sessionToTab.get(sessionId);
@@ -310,18 +411,14 @@ async function cdpDetachFromTarget(
   return {};
 }
 
-async function cdpCreateTarget(
-  params: Record<string, unknown>,
-): Promise<Record<string, unknown>> {
+async function cdpCreateTarget(params: Record<string, unknown>): Promise<Record<string, unknown>> {
   const url = (params['url'] as string) ?? 'about:blank';
   const tab = await chrome.tabs.create({ url, active: false });
   await addToSliccGroup(tab.id);
   return { targetId: String(tab.id) };
 }
 
-async function cdpCloseTarget(
-  params: Record<string, unknown>,
-): Promise<Record<string, unknown>> {
+async function cdpCloseTarget(params: Record<string, unknown>): Promise<Record<string, unknown>> {
   const targetId = params['targetId'] as string;
   const tabId = parseInt(targetId, 10);
   if (!Number.isFinite(tabId) || tabId <= 0) {
@@ -346,12 +443,12 @@ async function cdpCloseTarget(
 async function cdpSendCommand(
   method: string,
   params?: Record<string, unknown>,
-  sessionId?: string,
+  sessionId?: string
 ): Promise<Record<string, unknown>> {
   const tabId = sessionId ? sessionToTab.get(sessionId) : undefined;
   if (tabId === undefined) {
     throw new Error(
-      `No tab attached for sessionId: ${sessionId ?? '(none)'}. Attach to a target first.`,
+      `No tab attached for sessionId: ${sessionId ?? '(none)'}. Attach to a target first.`
     );
   }
 
@@ -383,13 +480,15 @@ chrome.debugger.onEvent.addListener(
     };
 
     // Send to offscreen document
-    chrome.runtime.sendMessage({
-      source: 'service-worker' as const,
-      payload: cdpEvent,
-    }).catch(() => {
-      // Offscreen may not be listening
-    });
-  },
+    chrome.runtime
+      .sendMessage({
+        source: 'service-worker' as const,
+        payload: cdpEvent,
+      })
+      .catch(() => {
+        // Offscreen may not be listening
+      });
+  }
 );
 
 // ---------------------------------------------------------------------------
@@ -431,13 +530,11 @@ async function handleOAuthRequest(msg: OAuthRequestMsg): Promise<OAuthResultMsg>
   };
 }
 
-chrome.debugger.onDetach.addListener(
-  (source: { tabId: number }, _reason: string) => {
-    attachedTabs.delete(source.tabId);
-    for (const [sessionId, tabId] of sessionToTab) {
-      if (tabId === source.tabId) {
-        sessionToTab.delete(sessionId);
-      }
+chrome.debugger.onDetach.addListener((source: { tabId: number }, _reason: string) => {
+  attachedTabs.delete(source.tabId);
+  for (const [sessionId, tabId] of sessionToTab) {
+    if (tabId === source.tabId) {
+      sessionToTab.delete(sessionId);
     }
-  },
-);
+  }
+});

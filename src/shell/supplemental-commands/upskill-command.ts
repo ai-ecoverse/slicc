@@ -1,12 +1,16 @@
 import { defineCommand } from 'just-bash';
 import type { Command, CommandContext, SecureFetch } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
+import { VirtualFS as SharedVirtualFS } from '../../fs/index.js';
 import { unzipSync } from 'fflate';
 import { consumeCachedBinaryByUrl } from '../binary-cache.js';
 
 // ClawHub uses a Convex backend - this is the actual API endpoint
 const CLAWHUB_API = 'https://wry-manatee-359.convex.site/api/v1';
 const SKILLS_DIR = '/workspace/skills';
+const GITHUB_GLOBAL_DB = 'slicc-fs-global';
+const GITHUB_TOKEN_PATH = '/workspace/.git/github-token';
+const GITHUB_API_ACCEPT = 'application/vnd.github.v3+json';
 
 interface ClawHubSearchResult {
   slug: string;
@@ -26,6 +30,136 @@ interface GitHubContent {
   path: string;
   type: 'file' | 'dir';
   download_url?: string;
+}
+
+interface GitHubErrorBody {
+  message?: string;
+  documentation_url?: string;
+}
+
+type GitHubFetchResponse = Awaited<ReturnType<SecureFetch>>;
+
+interface GitHubRequestContext {
+  hasToken: boolean;
+  request: (url: string, accept?: string) => Promise<GitHubFetchResponse>;
+}
+
+let cachedGlobalFsPromise: Promise<VirtualFS> | undefined;
+
+function getGlobalFs(): Promise<VirtualFS> {
+  if (!cachedGlobalFsPromise) {
+    cachedGlobalFsPromise = SharedVirtualFS.create({ dbName: GITHUB_GLOBAL_DB });
+  }
+  return cachedGlobalFsPromise;
+}
+
+/** @internal Exported only for test cleanup. */
+export function _resetGlobalFsCache(): void {
+  cachedGlobalFsPromise = undefined;
+}
+
+async function loadConfiguredGitHubToken(): Promise<string | undefined> {
+  try {
+    const globalFs = await getGlobalFs();
+    const token = (await globalFs.readTextFile(GITHUB_TOKEN_PATH)).trim();
+    return token || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function buildGitHubHeaders(
+  token?: string,
+  accept: string = GITHUB_API_ACCEPT
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    Accept: accept,
+    'User-Agent': 'slicc-upskill',
+  };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+async function createGitHubRequestContext(fetch: SecureFetch): Promise<GitHubRequestContext> {
+  const token = await loadConfiguredGitHubToken();
+  return {
+    hasToken: Boolean(token),
+    request: (url: string, accept: string = GITHUB_API_ACCEPT) =>
+      fetch(url, {
+        headers: buildGitHubHeaders(token, accept),
+      }),
+  };
+}
+
+function getHeader(headers: Record<string, string> | undefined, name: string): string | undefined {
+  if (!headers) return undefined;
+  const target = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === target) return value;
+  }
+  return undefined;
+}
+
+function getGitHubErrorDetail(body: string): string | undefined {
+  if (!body) return undefined;
+  try {
+    const parsed = JSON.parse(body) as GitHubErrorBody;
+    if (typeof parsed.message === 'string' && parsed.message.trim()) {
+      return parsed.message.trim();
+    }
+  } catch {
+    // Not JSON — fall back to a trimmed text preview.
+  }
+
+  const trimmed = body.trim();
+  if (!trimmed) return undefined;
+  return trimmed.slice(0, 200);
+}
+
+function formatGitHubFailure(
+  response: GitHubFetchResponse,
+  resourceLabel: string,
+  hasToken: boolean
+): string {
+  const detail = getGitHubErrorDetail(response.body);
+  const detailSuffix = detail ? ` GitHub said: ${detail}` : '';
+  const retryAfter = getHeader(response.headers, 'retry-after');
+  const rateLimitRemaining = getHeader(response.headers, 'x-ratelimit-remaining');
+  const normalizedDetail = detail?.toLowerCase() ?? '';
+  const isRateLimit =
+    response.status === 429 ||
+    rateLimitRemaining === '0' ||
+    normalizedDetail.includes('rate limit');
+
+  if (isRateLimit) {
+    if (hasToken) {
+      return `GitHub rate-limited access to ${resourceLabel} (HTTP ${response.status}). The configured github.token was used, so retry later${retryAfter ? ` after about ${retryAfter} seconds` : ''}.${detailSuffix}`;
+    }
+    return `GitHub rate-limited anonymous access to ${resourceLabel} (HTTP ${response.status}). This often happens on shared VPNs or corporate egress IPs because unauthenticated GitHub API requests are limited per IP. Configure a token with: git config github.token <PAT>, then retry. You can also retry off VPN or later.${detailSuffix}`;
+  }
+
+  if (response.status === 401) {
+    if (hasToken) {
+      return `GitHub rejected the configured github.token while accessing ${resourceLabel} (HTTP 401). Update it with: git config github.token <PAT>, then retry.${detailSuffix}`;
+    }
+    return `GitHub requires authentication to access ${resourceLabel} (HTTP 401). Configure a token with: git config github.token <PAT>, then retry.${detailSuffix}`;
+  }
+
+  if (response.status === 404) {
+    return `GitHub could not find ${resourceLabel} (HTTP 404). Check the repository, path, and permissions.${detailSuffix}`;
+  }
+
+  if (response.status === 403) {
+    if (hasToken) {
+      return `GitHub denied access to ${resourceLabel} (HTTP 403). Check that your github.token can access this repository or retry later if GitHub is throttling requests.${detailSuffix}`;
+    }
+    return `GitHub denied anonymous access to ${resourceLabel} (HTTP 403). If this repo is public on a shared VPN, you may have hit GitHub's shared IP limit; otherwise the repository or path may require authentication. Configure a token with: git config github.token <PAT>, then retry.${detailSuffix}`;
+  }
+
+  const statusDetail = response.statusText ? ` ${response.statusText}` : '';
+  return `GitHub request for ${resourceLabel} failed (HTTP ${response.status}${statusDetail}).${detailSuffix}`;
 }
 
 function upskillHelp(): { stdout: string; stderr: string; exitCode: number } {
@@ -61,6 +195,10 @@ Options:
   --force                  Overwrite existing skills
   -h, --help               Show help
 
+GitHub rate limits:
+  On shared VPNs or corporate IPs, anonymous GitHub access may be rate-limited.
+  Configure a token to avoid shared-IP limits: git config github.token <PAT>
+
 Examples:
   upskill search "browser automation"
   upskill anthropics/skills --list
@@ -84,7 +222,7 @@ async function searchClawHub(
   try {
     const url = `${CLAWHUB_API}/search?q=${encodeURIComponent(query)}`;
     const response = await fetch(url, {
-      headers: { 'Accept': 'application/json' },
+      headers: { Accept: 'application/json' },
     });
 
     if (response.status !== 200) {
@@ -179,12 +317,12 @@ async function installFromClawHub(
     // The response body should be latin1-encoded by the fetch proxy for binary content.
     // Try to get the raw binary from the cache first (bypasses string encoding issues).
     const contentType = downloadResponse.headers['content-type'] || '';
-    
+
     // Try to get cached binary data by URL first (most reliable - bypasses string encoding issues)
     let zipBytes = consumeCachedBinaryByUrl(downloadUrl);
     let badCharIdx = -1;
     let badCharCode = 0;
-    
+
     if (!zipBytes) {
       // Fallback: Convert latin1 string to bytes - each char code maps directly to a byte
       zipBytes = new Uint8Array(downloadResponse.body.length);
@@ -194,7 +332,7 @@ async function installFromClawHub(
           badCharIdx = i;
           badCharCode = code;
         }
-        zipBytes[i] = code & 0xFF; // Mask to byte range
+        zipBytes[i] = code & 0xff; // Mask to byte range
       }
     }
 
@@ -205,7 +343,9 @@ async function installFromClawHub(
     } catch (unzipErr) {
       const msg = unzipErr instanceof Error ? unzipErr.message : String(unzipErr);
       // Debug info
-      const hexPreview = Array.from(zipBytes.slice(0, 20)).map(b => b.toString(16).padStart(2, '0')).join(' ');
+      const hexPreview = Array.from(zipBytes.slice(0, 20))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join(' ');
       const badCharInfo = badCharIdx >= 0 ? `\nBad char at ${badCharIdx}: code ${badCharCode}` : '';
       return {
         stdout: '',
@@ -259,22 +399,19 @@ async function installFromClawHub(
 async function listGitHubSkills(
   owner: string,
   repo: string,
-  fetch: SecureFetch,
+  github: GitHubRequestContext,
   subPath?: string
 ): Promise<{ skills: Array<{ name: string; path: string }>; error?: string }> {
   const skills: Array<{ name: string; path: string }> = [];
 
   async function scanDir(path: string): Promise<void> {
     const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
-    const response = await fetch(url, {
-      headers: {
-        'Accept': 'application/vnd.github.v3+json',
-        'User-Agent': 'slicc-upskill',
-      },
-    });
+    const response = await github.request(url);
 
     if (response.status !== 200) {
-      throw new Error(`GitHub API error: ${response.status}`);
+      throw new Error(
+        formatGitHubFailure(response, `${owner}/${repo}${path ? `/${path}` : ''}`, github.hasToken)
+      );
     }
 
     const contents = JSON.parse(response.body) as GitHubContent[];
@@ -310,7 +447,7 @@ async function installFromGitHub(
   skillPath: string,
   skillName: string,
   fs: VirtualFS,
-  fetch: SecureFetch,
+  github: GitHubRequestContext,
   force: boolean = false
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   try {
@@ -333,17 +470,12 @@ async function installFromGitHub(
 
     // Get directory contents
     const url = `https://api.github.com/repos/${owner}/${repo}/contents/${skillPath}`;
-    const response = await fetch(url, {
-      headers: {
-        'Accept': 'application/vnd.github.v3+json',
-        'User-Agent': 'slicc-upskill',
-      },
-    });
+    const response = await github.request(url);
 
     if (response.status !== 200) {
       return {
         stdout: '',
-        stderr: `upskill: failed to fetch skill from GitHub (HTTP ${response.status})\n`,
+        stderr: `upskill: ${formatGitHubFailure(response, `${owner}/${repo}/${skillPath}`, github.hasToken)}\n`,
         exitCode: 1,
       };
     }
@@ -357,29 +489,41 @@ async function installFromGitHub(
     async function downloadDir(items: GitHubContent[], destBase: string): Promise<void> {
       for (const item of items) {
         if (item.type === 'file' && item.download_url) {
-          const fileResponse = await fetch(item.download_url, {});
-          if (fileResponse.status === 200) {
-            await fs.writeFile(`${destBase}/${item.name}`, fileResponse.body);
+          const fileResponse = await github.request(item.download_url, '*/*');
+          if (fileResponse.status !== 200) {
+            throw new Error(
+              formatGitHubFailure(fileResponse, `${owner}/${repo}/${item.path}`, github.hasToken)
+            );
           }
+          const cached = consumeCachedBinaryByUrl(item.download_url);
+          await fs.writeFile(`${destBase}/${item.name}`, cached ?? fileResponse.body);
         } else if (item.type === 'dir') {
           // Recursively download subdirectory
           const subUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${item.path}`;
-          const subResponse = await fetch(subUrl, {
-            headers: {
-              'Accept': 'application/vnd.github.v3+json',
-              'User-Agent': 'slicc-upskill',
-            },
-          });
-          if (subResponse.status === 200) {
-            const subContents = JSON.parse(subResponse.body) as GitHubContent[];
-            await fs.mkdir(`${destBase}/${item.name}`, { recursive: true });
-            await downloadDir(subContents, `${destBase}/${item.name}`);
+          const subResponse = await github.request(subUrl);
+          if (subResponse.status !== 200) {
+            throw new Error(
+              formatGitHubFailure(subResponse, `${owner}/${repo}/${item.path}`, github.hasToken)
+            );
           }
+          const subContents = JSON.parse(subResponse.body) as GitHubContent[];
+          await fs.mkdir(`${destBase}/${item.name}`, { recursive: true });
+          await downloadDir(subContents, `${destBase}/${item.name}`);
         }
       }
     }
 
-    await downloadDir(contents, destDir);
+    try {
+      await downloadDir(contents, destDir);
+    } catch (downloadErr) {
+      // Clean up partial install so retries don't require --force
+      try {
+        await fs.rm(destDir, { recursive: true });
+      } catch {
+        /* best-effort */
+      }
+      throw downloadErr;
+    }
 
     await refreshSprinklesAfterInstall();
     return {
@@ -443,7 +587,9 @@ async function refreshSprinklesAfterInstall(): Promise<void> {
     if (mgr && typeof (mgr as Record<string, unknown>).openNewAutoOpenSprinkles === 'function') {
       await (mgr as { openNewAutoOpenSprinkles: () => Promise<void> }).openNewAutoOpenSprinkles();
     }
-  } catch { /* best-effort */ }
+  } catch {
+    /* best-effort */
+  }
 }
 
 /**
@@ -566,9 +712,10 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
     const githubRef = parseGitHubRef(sourceRef);
     if (githubRef) {
       const { owner, repo } = githubRef;
+      const github = await createGitHubRequestContext(fetchFn);
 
       // List skills in the repository
-      const result = await listGitHubSkills(owner, repo, fetchFn, subPath);
+      const result = await listGitHubSkills(owner, repo, github, subPath);
 
       if (result.error) {
         return {
@@ -602,9 +749,7 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
       let skillsToInstall = result.skills;
 
       if (selectedSkills.length > 0) {
-        skillsToInstall = result.skills.filter((s) =>
-          selectedSkills.includes(s.name)
-        );
+        skillsToInstall = result.skills.filter((s) => selectedSkills.includes(s.name));
 
         // Check for missing skills
         for (const name of selectedSkills) {
@@ -640,7 +785,7 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
           skill.path,
           skill.name,
           fs,
-          fetchFn,
+          github,
           force
         );
 
@@ -714,7 +859,8 @@ Examples:
 
           if (discovered.length === 0) {
             return {
-              stdout: 'No skills found in /workspace/skills/\n\nInstall skills with: upskill owner/repo --all\n',
+              stdout:
+                'No skills found in /workspace/skills/\n\nInstall skills with: upskill owner/repo --all\n',
               stderr: '',
               exitCode: 0,
             };
@@ -725,9 +871,7 @@ Examples:
           output += '  ────────────────────────────────────────\n';
 
           for (const skill of discovered) {
-            const status = skill.installed
-              ? `installed (v${skill.installedVersion})`
-              : 'available';
+            const status = skill.installed ? `installed (v${skill.installedVersion})` : 'available';
             output += `  ${skill.name.padEnd(20)} ${skill.manifest.version.padEnd(10)} ${status}\n`;
           }
 
@@ -776,7 +920,11 @@ Examples:
           const result = await skills.applySkill(fs, name);
           if (result.success) {
             await refreshSprinklesAfterInstall();
-            return { stdout: `Installed skill "${result.skill}" v${result.version}\n`, stderr: '', exitCode: 0 };
+            return {
+              stdout: `Installed skill "${result.skill}" v${result.version}\n`,
+              stderr: '',
+              exitCode: 0,
+            };
           }
           return { stdout: '', stderr: `skill: ${result.error}\n`, exitCode: 1 };
         }

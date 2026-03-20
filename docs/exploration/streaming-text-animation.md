@@ -19,8 +19,14 @@ New tokens are wrapped in `<span>` elements with a CSS animation:
 
 ```css
 @keyframes token-in {
-  from { opacity: 0; transform: translateY(3px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 .new-token {
   animation: token-in 0.25s ease-out forwards;
@@ -41,6 +47,7 @@ Production UIs use instant `scrollTop = scrollHeight` (not
 used for catch-up when re-engaging after the user scrolled away.
 
 Pattern:
+
 - Gate auto-scroll on proximity: `scrollHeight - scrollTop - clientHeight <= 100px`
 - Use `ResizeObserver` on the message container as the scroll trigger
 - Never force-scroll if the user scrolled up (reading history)
@@ -51,6 +58,7 @@ Two viable strategies:
 
 **A. Streaming markdown parser** — parses tokens incrementally and
 appends DOM nodes without touching existing ones. Libraries:
+
 - `thetarnav/streaming-markdown` — vanilla JS, zero deps
 - `vercel/streamdown` — Vercel's streaming markdown renderer
 - `antgroup/FluidMarkdown` — Ant Group's fluid renderer
@@ -81,12 +89,14 @@ incrementally. Keep `marked` for final render on stream completion
 (to ensure perfect markdown fidelity).
 
 **Candidates:**
+
 - `thetarnav/streaming-markdown` — best fit. Vanilla JS, no framework
   dependency, designed for exactly this use case. Appends to a container
   element, handles partial code blocks and lists gracefully.
 - `vercel/streamdown` — more features but React-oriented.
 
 **Integration sketch:**
+
 ```
 streaming starts → create streaming-markdown parser instance
 token arrives    → feed token to parser (appends DOM nodes)
@@ -106,6 +116,7 @@ During streaming, append each token batch as a `<span class="new-token">`.
 No markdown rendering mid-stream. On completion, replace with `marked`.
 
 **Integration sketch:**
+
 ```
 streaming starts → switch to "raw append" mode
 token arrives    → create <span class="new-token">{token}</span>
@@ -121,6 +132,7 @@ links only appear at the end — noticeable for long responses).
 ### Option C: Animated innerHTML replacement (current + CSS tricks)
 
 Keep `innerHTML =` but use CSS techniques to minimize visual disruption:
+
 - `contain: content` on message container (isolate layout)
 - Avoid layout-triggering properties in the message area
 - Accept that per-token animation isn't possible with this approach
@@ -141,13 +153,13 @@ Keep `innerHTML =` but use CSS techniques to minimize visual disruption:
 
 ## Libraries Reference
 
-| Library | Size | Framework | Approach |
-|---------|------|-----------|----------|
-| [thetarnav/streaming-markdown](https://github.com/thetarnav/streaming-markdown) | ~5KB | Vanilla JS | Incremental DOM append |
-| [vercel/streamdown](https://github.com/vercel/streamdown) | ~10KB | React-oriented | Streaming markdown |
-| [chuanqisun/semidown](https://github.com/chuanqisun/semidown) | ~3KB | Vanilla JS | Lightweight streaming |
-| [antgroup/FluidMarkdown](https://github.com/antgroup/FluidMarkdown) | ~15KB | React | Fluid rendering |
-| [Ephibbs/flowtoken](https://github.com/Ephibbs/flowtoken) | ~8KB | React | Token animation |
+| Library                                                                         | Size  | Framework      | Approach               |
+| ------------------------------------------------------------------------------- | ----- | -------------- | ---------------------- |
+| [thetarnav/streaming-markdown](https://github.com/thetarnav/streaming-markdown) | ~5KB  | Vanilla JS     | Incremental DOM append |
+| [vercel/streamdown](https://github.com/vercel/streamdown)                       | ~10KB | React-oriented | Streaming markdown     |
+| [chuanqisun/semidown](https://github.com/chuanqisun/semidown)                   | ~3KB  | Vanilla JS     | Lightweight streaming  |
+| [antgroup/FluidMarkdown](https://github.com/antgroup/FluidMarkdown)             | ~15KB | React          | Fluid rendering        |
+| [Ephibbs/flowtoken](https://github.com/Ephibbs/flowtoken)                       | ~8KB  | React          | Token animation        |
 
 ## Next Steps
 

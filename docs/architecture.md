@@ -16,6 +16,7 @@
 | UI | `src/ui/` | Chat, Terminal, Files, Memory panels | `main.ts` | `types.test.ts` |
 | CLI / Electron Node Runtime | `src/cli/` | Express server, Chrome launcher, Electron float entrypoint | `index.ts` | `electron-runtime.test.ts` |
 | Extension | `src/extension/` | Chrome Manifest V3 entry point | `service-worker.ts` | N/A |
+| Cloud Tray Hub | `src/worker/` | Cloudflare Worker + Durable Object control-plane skeleton + deployed smoke test | `index.ts` | `index.test.ts`, `deployed.test.ts` |
 | Providers | `src/providers/` | Provider types, OAuth service, auto-discovery, build-time filtering | `types.ts`, `oauth-service.ts`, `index.ts` | `index.test.ts`, `oauth-service.test.ts` |
 | Sprinkles | `src/ui/sprinkle-*.ts` | Composable `.shtml` panels: discovery, rendering, bridge API, picker UI | `sprinkle-manager.ts` | `sprinkle-manager.test.ts` |
 | Defaults | `src/defaults/` | Bundled VFS content: agent instructions, skills, sprinkles | N/A | N/A |
@@ -43,7 +44,9 @@
 | File | Purpose |
 |---|---|
 | `index.ts` | Main CLI entrypoint: launches Chrome by default, or in `--electron` mode launches/relaunches a target Electron app, serves UI, proxies WebSocket CDP traffic, and provides `/api/fetch-proxy` for CORS |
-| `runtime-flags.ts` | Shared CLI/runtime flag parsing for `--dev`, `--serve-only`, `--cdp-port`, `--electron`, `--electron-app`, and `--kill` |
+| `runtime-flags.ts` | Shared CLI/runtime flag parsing for `--dev`, `--serve-only`, `--cdp-port`, `--electron`, `--electron-app`, `--profile`, `--lead`, `--join`, `--log-level`, `--log-dir`, and `--kill` |
+| `chrome-launch.ts` | Chrome/Chrome-for-Testing discovery, QA profile resolution, launch-arg construction, and `.qa/chrome/*` scaffold seeding |
+| `qa-setup.ts` | CLI helper for `npm run qa:setup`; validates Chrome + `dist/extension` and scaffolds the dedicated QA Chrome profiles |
 | `electron-main.ts` | Electron process entry point: spawns CLI server in `--serve-only` mode, creates BrowserWindow, injects overlay, strips host-page CSP |
 | `electron-runtime.ts` | Pure Electron helpers for target app path resolution, overlay URLs/bootstrap scripts, dist paths, and injectable-target filtering |
 | `electron-controller.ts` | Electron app lifecycle management: detect running app processes, enforce `--kill`, launch with remote debugging, and inject/reinject the overlay across navigations |

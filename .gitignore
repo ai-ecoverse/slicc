@@ -5,9 +5,13 @@ dist/
 /workspace/
 coverage/
 .worktrees/
+.wrangler/
+.qa/
+artifacts/
 providers.json
 /providers/
 !/providers/.gitkeep
 !/providers/adobe.ts
 !/providers/adobe-config.json
 .superpowers/
+sliccstart/.node-cache/

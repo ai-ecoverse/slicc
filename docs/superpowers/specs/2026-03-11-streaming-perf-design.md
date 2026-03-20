@@ -47,12 +47,12 @@ Add a fast path `updateStreamingContent(messageId)` that:
 
 The full `createMessageEl` + `replaceWith` path remains for non-streaming updates:
 
-| Event            | Update path                | Scope                     |
-|------------------|----------------------------|---------------------------|
-| Streaming token  | `updateStreamingContent()` | `.msg__content` innerHTML |
-| Tool use start   | `updateMessageEl()`        | Full element rebuild      |
-| Content done     | `updateMessageEl()`        | Full element rebuild      |
-| Turn end         | (no render)                | State cleanup only        |
+| Event           | Update path                | Scope                     |
+| --------------- | -------------------------- | ------------------------- |
+| Streaming token | `updateStreamingContent()` | `.msg__content` innerHTML |
+| Tool use start  | `updateMessageEl()`        | Full element rebuild      |
+| Content done    | `updateMessageEl()`        | Full element rebuild      |
+| Turn end        | (no render)                | State cleanup only        |
 
 ### 3. New state
 

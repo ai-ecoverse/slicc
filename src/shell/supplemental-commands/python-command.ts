@@ -7,17 +7,29 @@ import { PYTHON_RUNNER, getPyodide } from './shared.js';
  * Sync files from VFS (just-bash's IFileSystem) into Pyodide's Emscripten FS.
  * Copies directory trees so Python's os module can see them.
  */
-async function syncVfsToPyodide(fs: IFileSystem, pyodide: PyodideInterface, dirs: string[]): Promise<void> {
+async function syncVfsToPyodide(
+  fs: IFileSystem,
+  pyodide: PyodideInterface,
+  dirs: string[]
+): Promise<void> {
   const FS = pyodide.FS;
 
   function ensurePyDir(path: string): void {
-    try { FS.stat(path); } catch { FS.mkdirTree(path); }
+    try {
+      FS.stat(path);
+    } catch {
+      FS.mkdirTree(path);
+    }
   }
 
   async function syncDir(vfsPath: string): Promise<void> {
     ensurePyDir(vfsPath);
     let entries: string[];
-    try { entries = await fs.readdir(vfsPath); } catch { return; }
+    try {
+      entries = await fs.readdir(vfsPath);
+    } catch {
+      return;
+    }
 
     for (const name of entries) {
       const full = vfsPath === '/' ? `/${name}` : `${vfsPath}/${name}`;
@@ -45,12 +57,20 @@ async function syncVfsToPyodide(fs: IFileSystem, pyodide: PyodideInterface, dirs
  * Sync files from Pyodide's Emscripten FS back to VFS.
  * Writes any files that Python created or modified.
  */
-async function syncPyodideToVfs(fs: IFileSystem, pyodide: PyodideInterface, dirs: string[]): Promise<void> {
+async function syncPyodideToVfs(
+  fs: IFileSystem,
+  pyodide: PyodideInterface,
+  dirs: string[]
+): Promise<void> {
   const FS = pyodide.FS;
 
   async function writeBack(pyPath: string): Promise<void> {
     let entries: string[];
-    try { entries = FS.readdir(pyPath).filter((n: string) => n !== '.' && n !== '..'); } catch { return; }
+    try {
+      entries = FS.readdir(pyPath).filter((n: string) => n !== '.' && n !== '..');
+    } catch {
+      return;
+    }
 
     for (const name of entries) {
       const full = pyPath === '/' ? `/${name}` : `${pyPath}/${name}`;
@@ -114,7 +134,7 @@ export function createPython3LikeCommand(name: 'python3' | 'python'): Command {
     } else if (args.length > 0 && !args[0].startsWith('-')) {
       const scriptArg = args[0];
       const scriptPath = ctx.fs.resolvePath(ctx.cwd, scriptArg);
-      if (!await ctx.fs.exists(scriptPath)) {
+      if (!(await ctx.fs.exists(scriptPath))) {
         return {
           stdout: '',
           stderr: `${name}: can't open file '${scriptArg}': [Errno 2] No such file or directory\n`,
@@ -151,13 +171,19 @@ export function createPython3LikeCommand(name: 'python3' | 'python'): Command {
       // Sync CWD, /tmp, and the script's directory (if running a file).
       const syncDirs = [ctx.cwd, '/tmp'];
       if (filename !== '<stdin>' && filename !== '[eval]') {
-        const scriptDir = filename.includes('/') ? filename.slice(0, filename.lastIndexOf('/')) : ctx.cwd;
+        const scriptDir = filename.includes('/')
+          ? filename.slice(0, filename.lastIndexOf('/'))
+          : ctx.cwd;
         if (!syncDirs.includes(scriptDir)) syncDirs.push(scriptDir);
       }
       await syncVfsToPyodide(ctx.fs, pyodide, syncDirs);
 
       // Set CWD in Pyodide to match the shell
-      try { pyodide.FS.chdir(ctx.cwd); } catch { /* dir may not exist in Pyodide FS */ }
+      try {
+        pyodide.FS.chdir(ctx.cwd);
+      } catch {
+        /* dir may not exist in Pyodide FS */
+      }
 
       pyodide.setStdout({ batched: (msg) => stdoutChunks.push(msg + '\n') });
       pyodide.setStderr({ batched: (msg) => stderrChunks.push(msg + '\n') });

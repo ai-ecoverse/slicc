@@ -9,7 +9,7 @@
  */
 
 import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
-import { Orchestrator } from '../scoops/orchestrator.js';
+import { type Orchestrator } from '../scoops/orchestrator.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('scoops-panel');
@@ -70,8 +70,8 @@ export class ScoopsPanel {
     document.querySelectorAll('.scoop-fixed-tooltip').forEach(t => t.remove());
 
     const allScoops = this.orchestrator.getScoops();
-    const cone = allScoops.find(s => s.isCone);
-    const scoops = allScoops.filter(s => !s.isCone);
+    const cone = allScoops.find((s) => s.isCone);
+    const scoops = allScoops.filter((s) => !s.isCone);
 
     const ns = 'http://www.w3.org/2000/svg';
     const SCOOP_COLORS = ['#e8457a', '#f08c5a', '#9b6dd7', '#42b8a0', '#d4953e'];
@@ -328,7 +328,7 @@ export class ScoopsPanel {
   selectScoopByFolder(folder: string): void {
     if (!this.orchestrator) return;
     const scoops = this.orchestrator.getScoops();
-    const scoop = scoops.find(s => s.folder === folder);
+    const scoop = scoops.find((s) => s.folder === folder);
     if (scoop) {
       this.selectScoop(scoop);
     }
@@ -407,11 +407,13 @@ export class ScoopsPanel {
 
   /** Sanitize a name into a valid folder name */
   private sanitizeFolderName(name: string): string {
-    return name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 50) || 'scoop';
+    return (
+      name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 50) || 'scoop'
+    );
   }
 
   /** Render the panel as an icon-only nav rail (UXC design). */

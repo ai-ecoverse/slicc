@@ -47,10 +47,7 @@ function folderIcon(): SVGSVGElement {
 
 /** S2 file icon — document outline */
 function fileIcon(): SVGSVGElement {
-  return svgFileIcon([
-    'M6 2h5l5 5v9a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z',
-    'M11 2v5h5',
-  ]);
+  return svgFileIcon(['M6 2h5l5 5v9a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z', 'M11 2v5h5']);
 }
 
 /** S2 chevron icon for tree disclosure */
@@ -121,7 +118,10 @@ export class FileBrowserPanel {
     try {
       await this.renderDir('/', tmp, 0);
     } catch (err) {
-      console.warn('[FileBrowser] Refresh failed:', err instanceof Error ? err.message : String(err));
+      console.warn(
+        '[FileBrowser] Refresh failed:',
+        err instanceof Error ? err.message : String(err)
+      );
       return;
     }
     // Compare BEFORE applying selection (selection attrs would defeat the check)
@@ -180,22 +180,29 @@ export class FileBrowserPanel {
     try {
       entries = await this.fs.readDir(path);
     } catch (err) {
-      console.warn('[FileBrowser] readDir failed:', path, err instanceof Error ? err.message : String(err));
+      console.warn(
+        '[FileBrowser] readDir failed:',
+        path,
+        err instanceof Error ? err.message : String(err)
+      );
       return;
     }
 
     // Sort: directories first, then files, alphabetical within each group
-    const dirs = entries.filter(e => e.type === 'directory').sort((a, b) => a.name.localeCompare(b.name));
-    const files = entries.filter(e => e.type === 'file').sort((a, b) => a.name.localeCompare(b.name));
+    const dirs = entries
+      .filter((e) => e.type === 'directory')
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const files = entries
+      .filter((e) => e.type === 'file')
+      .sort((a, b) => a.name.localeCompare(b.name));
 
     for (const entry of [...dirs, ...files]) {
       const fullPath = path === '/' ? '/' + entry.name : path + '/' + entry.name;
       const row = document.createElement('div');
       row.className = 'file-browser__item';
-      row.style.paddingLeft = (12 + depth * 16) + 'px';
-      row.dataset.path = entry.type === 'directory' && !fullPath.endsWith('/')
-        ? fullPath + '/'
-        : fullPath;
+      row.style.paddingLeft = 12 + depth * 16 + 'px';
+      row.dataset.path =
+        entry.type === 'directory' && !fullPath.endsWith('/') ? fullPath + '/' : fullPath;
 
       if (entry.type === 'directory') {
         const isExpanded = this.expandedDirs.has(fullPath);
@@ -266,7 +273,11 @@ export class FileBrowserPanel {
           size.textContent = formatSize(stats.size);
           row.appendChild(size);
         } catch (err) {
-          console.warn('[FileBrowser] stat failed:', fullPath, err instanceof Error ? err.message : String(err));
+          console.warn(
+            '[FileBrowser] stat failed:',
+            fullPath,
+            err instanceof Error ? err.message : String(err)
+          );
         }
 
         // Preview in terminal button
@@ -275,7 +286,9 @@ export class FileBrowserPanel {
         catBtn.style.marginLeft = '8px';
         catBtn.textContent = 'CAT';
         catBtn.title = this.onRunCommand
-          ? isTerminalPreviewableMediaPath(fullPath) ? 'Preview media in terminal' : 'Preview in terminal'
+          ? isTerminalPreviewableMediaPath(fullPath)
+            ? 'Preview media in terminal'
+            : 'Preview in terminal'
           : 'Terminal unavailable';
         catBtn.disabled = !this.onRunCommand;
         catBtn.addEventListener('click', (e) => {
@@ -306,7 +319,8 @@ export class FileBrowserPanel {
         Object.assign(files, subFiles);
       } else {
         const content = await this.fs.readFile(fullPath, { encoding: 'binary' });
-        files[relPath] = content instanceof Uint8Array ? content : new TextEncoder().encode(content as string);
+        files[relPath] =
+          content instanceof Uint8Array ? content : new TextEncoder().encode(content as string);
       }
     }
     return files;
@@ -326,7 +340,11 @@ export class FileBrowserPanel {
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      console.error('[FileBrowser] ZIP download failed:', dirPath, err instanceof Error ? err.message : String(err));
+      console.error(
+        '[FileBrowser] ZIP download failed:',
+        dirPath,
+        err instanceof Error ? err.message : String(err)
+      );
     }
   }
 
@@ -335,14 +353,16 @@ export class FileBrowserPanel {
     if (!this.onRunCommand) return;
     const command = buildPreviewCommand(path);
     void Promise.resolve(this.onRunCommand(command)).catch((err) => {
-      console.error('[FileBrowser] Preview command failed:', path, err instanceof Error ? err.message : String(err));
+      console.error(
+        '[FileBrowser] Preview command failed:',
+        path,
+        err instanceof Error ? err.message : String(err)
+      );
     });
   }
 
   private selectPath(fullPath: string, type: 'file' | 'directory'): void {
-    this.selectedPath = type === 'directory' && !fullPath.endsWith('/')
-      ? fullPath + '/'
-      : fullPath;
+    this.selectedPath = type === 'directory' && !fullPath.endsWith('/') ? fullPath + '/' : fullPath;
     this.applySelection();
     const row = this.bodyEl.querySelector('.file-browser__item--selected') as HTMLElement | null;
     row?.focus();
@@ -372,11 +392,17 @@ export class FileBrowserPanel {
       const collapsed = window.getSelection()?.isCollapsed !== false;
       if (!collapsed) return;
       e.preventDefault();
-      navigator.clipboard.writeText(this.selectedPath).then(() => {
-        this.flashCopyFeedback();
-      }).catch((err) => {
-        console.warn('[FileBrowser] Clipboard write failed:', err instanceof Error ? err.message : String(err));
-      });
+      navigator.clipboard
+        .writeText(this.selectedPath)
+        .then(() => {
+          this.flashCopyFeedback();
+        })
+        .catch((err) => {
+          console.warn(
+            '[FileBrowser] Clipboard write failed:',
+            err instanceof Error ? err.message : String(err)
+          );
+        });
     };
     this.container.addEventListener('keydown', this.keydownHandler);
   }

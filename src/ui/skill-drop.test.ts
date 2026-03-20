@@ -47,7 +47,7 @@ describe('skill-drop helpers', () => {
           { kind: 'string', getAsFile: () => ({ name: 'ignored.skill' }) },
           { kind: 'file', getAsFile: () => ({ name: 'notes.txt' }) },
         ],
-      }),
+      })
     ).toBeNull();
   });
 });

@@ -30,6 +30,22 @@ describe('isExtensionMessage', () => {
     expect(isExtensionMessage(msg)).toBe(true);
   });
 
+  it('returns true for tray socket command envelopes', () => {
+    const msg: ExtensionMessage = {
+      source: 'offscreen',
+      payload: { type: 'tray-socket-open', id: 1, url: 'wss://tray.example.com/controller' },
+    };
+    expect(isExtensionMessage(msg)).toBe(true);
+  });
+
+  it('returns true for tray socket event envelopes', () => {
+    const msg: ExtensionMessage = {
+      source: 'service-worker',
+      payload: { type: 'tray-socket-opened', id: 1 },
+    };
+    expect(isExtensionMessage(msg)).toBe(true);
+  });
+
   it('returns false for null', () => {
     expect(isExtensionMessage(null)).toBe(false);
   });

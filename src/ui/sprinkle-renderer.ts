@@ -54,7 +54,11 @@ export class SprinkleRenderer {
    * Extension mode: render inside a sandbox iframe (CSP-exempt).
    * Bridge communication happens via postMessage.
    */
-  private async renderInSandbox(content: string, sprinkleName: string, fullDoc = false): Promise<void> {
+  private async renderInSandbox(
+    content: string,
+    sprinkleName: string,
+    fullDoc = false
+  ): Promise<void> {
     const iframe = document.createElement('iframe');
     iframe.src = chrome.runtime.getURL('sprinkle-sandbox.html');
     iframe.style.cssText = 'width: 100%; flex: 1; border: none; min-height: 0;';
@@ -67,16 +71,24 @@ export class SprinkleRenderer {
         console.error('[sprinkle-renderer] iframe load timed out after 5s');
         reject(new Error('sprinkle sandbox iframe load timed out'));
       }, 5000);
-      iframe.addEventListener('load', () => {
-        clearTimeout(timer);
-        console.log('[sprinkle-renderer] iframe loaded, contentWindow:', !!iframe.contentWindow);
-        resolve();
-      }, { once: true });
-      iframe.addEventListener('error', (e) => {
-        clearTimeout(timer);
-        console.error('[sprinkle-renderer] iframe error:', e);
-        reject(new Error('sprinkle sandbox iframe failed to load'));
-      }, { once: true });
+      iframe.addEventListener(
+        'load',
+        () => {
+          clearTimeout(timer);
+          console.log('[sprinkle-renderer] iframe loaded, contentWindow:', !!iframe.contentWindow);
+          resolve();
+        },
+        { once: true }
+      );
+      iframe.addEventListener(
+        'error',
+        (e) => {
+          clearTimeout(timer);
+          console.error('[sprinkle-renderer] iframe error:', e);
+          reject(new Error('sprinkle sandbox iframe failed to load'));
+        },
+        { once: true }
+      );
       this.container.appendChild(iframe);
     });
 
@@ -115,12 +127,20 @@ export class SprinkleRenderer {
         this.bridge.open(msg.path, msg.projectRoot ? { projectRoot: msg.projectRoot } : undefined);
       } else if (msg.type === 'sprinkle-readfile') {
         this.bridge.readFile(msg.path).then(
-          (fileContent) => iframe.contentWindow?.postMessage(
-            { type: 'sprinkle-readfile-response', id: msg.id, content: fileContent }, '*',
-          ),
-          (err: unknown) => iframe.contentWindow?.postMessage(
-            { type: 'sprinkle-readfile-response', id: msg.id, error: err instanceof Error ? err.message : String(err) }, '*',
-          ),
+          (fileContent) =>
+            iframe.contentWindow?.postMessage(
+              { type: 'sprinkle-readfile-response', id: msg.id, content: fileContent },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-readfile-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
         );
       }
     };
@@ -141,7 +161,16 @@ export class SprinkleRenderer {
     // Send content to the sandbox for rendering, including saved state + localStorage
     const savedState = this.bridge.getState();
     iframe.contentWindow!.postMessage(
-      { type: 'sprinkle-render', content, name: sprinkleName, themeCSS, savedState, savedStorage, fullDoc }, '*',
+      {
+        type: 'sprinkle-render',
+        content,
+        name: sprinkleName,
+        themeCSS,
+        savedState,
+        savedStorage,
+        fullDoc,
+      },
+      '*'
     );
   }
 
@@ -225,7 +254,8 @@ export class SprinkleRenderer {
     } else {
       const scriptMatch = content.match(/<script\b/i);
       if (scriptMatch) {
-        modified = content.slice(0, scriptMatch.index!) + injection + content.slice(scriptMatch.index!);
+        modified =
+          content.slice(0, scriptMatch.index!) + injection + content.slice(scriptMatch.index!);
       } else {
         // Fallback: inject right after <html> or at the start
         const htmlMatch = content.match(/<html\b[^>]*>/i);
@@ -249,19 +279,28 @@ export class SprinkleRenderer {
       const timer = setTimeout(() => {
         reject(new Error('full-doc iframe load timed out'));
       }, 5000);
-      iframe.addEventListener('load', () => {
-        clearTimeout(timer);
-        // Send init message with name and saved state
-        const savedState = this.bridge.getState();
-        iframe.contentWindow?.postMessage(
-          { type: 'sprinkle-init', name: sprinkleName, savedState }, '*',
-        );
-        resolve();
-      }, { once: true });
-      iframe.addEventListener('error', (e) => {
-        clearTimeout(timer);
-        reject(new Error('full-doc iframe failed to load'));
-      }, { once: true });
+      iframe.addEventListener(
+        'load',
+        () => {
+          clearTimeout(timer);
+          // Send init message with name and saved state
+          const savedState = this.bridge.getState();
+          iframe.contentWindow?.postMessage(
+            { type: 'sprinkle-init', name: sprinkleName, savedState },
+            '*'
+          );
+          resolve();
+        },
+        { once: true }
+      );
+      iframe.addEventListener(
+        'error',
+        (e) => {
+          clearTimeout(timer);
+          reject(new Error('full-doc iframe failed to load'));
+        },
+        { once: true }
+      );
       this.container.appendChild(iframe);
     });
 
@@ -279,12 +318,20 @@ export class SprinkleRenderer {
         this.bridge.close();
       } else if (msg.type === 'sprinkle-readfile') {
         this.bridge.readFile(msg.path).then(
-          (fileContent) => iframe.contentWindow?.postMessage(
-            { type: 'sprinkle-readfile-response', id: msg.id, content: fileContent }, '*',
-          ),
-          (err: unknown) => iframe.contentWindow?.postMessage(
-            { type: 'sprinkle-readfile-response', id: msg.id, error: err instanceof Error ? err.message : String(err) }, '*',
-          ),
+          (fileContent) =>
+            iframe.contentWindow?.postMessage(
+              { type: 'sprinkle-readfile-response', id: msg.id, content: fileContent },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-readfile-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
         );
       }
     };
@@ -339,7 +386,7 @@ export class SprinkleRenderer {
           }
         }
         const hoists = [...onclickFns]
-          .map(fn => `if (typeof ${fn} === 'function') window.${fn} = ${fn};`)
+          .map((fn) => `if (typeof ${fn} === 'function') window.${fn} = ${fn};`)
           .join('\n');
 
         live.textContent =
@@ -414,9 +461,13 @@ export function collectThemeCSS(): string {
           }
         }
       }
-    } catch { /* cross-origin sheet, skip */ }
+    } catch {
+      /* cross-origin sheet, skip */
+    }
   }
-  return fontFaceRules.join('\n')
-    + (cssVars.length > 0 ? `\n:root { ${cssVars.join(' ')} }\n` : '\n')
-    + sprinkleRules.join('\n');
+  return (
+    fontFaceRules.join('\n') +
+    (cssVars.length > 0 ? `\n:root { ${cssVars.join(' ')} }\n` : '\n') +
+    sprinkleRules.join('\n')
+  );
 }
