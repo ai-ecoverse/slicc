@@ -14,7 +14,7 @@ import {
   buildElectronOverlayEntryUrl,
   getElectronOverlayEntryDistPath,
   getElectronServeOrigin,
-  shouldInjectElectronOverlayTarget,
+  selectBestOverlayTargets,
   type ElectronInspectableTarget,
 } from './electron-runtime.js';
 
@@ -323,7 +323,14 @@ export class ElectronOverlayInjector {
       }
 
       const targets = (await response.json()) as ElectronInspectableTarget[];
-      const injectableTargets = targets.filter(shouldInjectElectronOverlayTarget);
+      const pageCount = targets.filter(t => t.type === 'page').length;
+      const injectableTargets = selectBestOverlayTargets(targets);
+      if (injectableTargets.length < pageCount) {
+        console.log(`[electron-float] Selected ${injectableTargets.length}/${pageCount} page targets for overlay injection`);
+        for (const t of injectableTargets) {
+          console.log(`[electron-float]   → ${t.title || '(untitled)'} @ ${t.url.substring(0, 80)}`);
+        }
+      }
       const liveConnectionIds = new Set(
         injectableTargets.map((target) => target.webSocketDebuggerUrl!)
       );
@@ -351,51 +358,122 @@ export class ElectronOverlayInjector {
     }
   }
 
+  /**
+   * Check if the overlay iframe loaded successfully by evaluating a probe script.
+   * Returns true if the iframe element exists and has started loading content.
+   */
+  private async probeOverlayIframeLoaded(
+    ws: WebSocket,
+    send: (method: string, params?: Record<string, unknown>) => number
+  ): Promise<boolean> {
+    return new Promise((resolve) => {
+      const probeId = send('Runtime.evaluate', {
+        expression: `(function() {
+          var host = document.getElementById('slicc-electron-overlay-root');
+          if (!host || !host.shadowRoot) return 'no-host';
+          var sidebar = host.shadowRoot.querySelector('slicc-electron-sidebar');
+          if (!sidebar || !sidebar.shadowRoot) return 'no-sidebar';
+          var iframe = sidebar.shadowRoot.querySelector('iframe');
+          if (!iframe) return 'no-iframe';
+          if (!iframe.src) return 'no-src';
+          return 'ok';
+        })()`,
+        awaitPromise: false,
+        returnByValue: true,
+      });
+
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve(false);
+      }, 3000);
+
+      const onMessage = (data: Buffer | string) => {
+        try {
+          const msg = JSON.parse(data.toString());
+          if (msg.id === probeId) {
+            cleanup();
+            const value = msg.result?.result?.value;
+            resolve(value === 'ok');
+          }
+        } catch { /* ignore */ }
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        ws.off('message', onMessage);
+      };
+
+      ws.on('message', onMessage);
+    });
+  }
+
   private connectToTarget(target: ElectronInspectableTarget): void {
     const targetId = target.webSocketDebuggerUrl!;
     const ws = new WebSocket(targetId);
     this.connections.set(targetId, ws);
 
     let messageId = 1;
-    const send = (method: string, params?: Record<string, unknown>) => {
-      ws.send(JSON.stringify({ id: messageId++, method, params }));
+    const send = (method: string, params?: Record<string, unknown>): number => {
+      const id = messageId++;
+      ws.send(JSON.stringify({ id, method, params }));
+      return id;
     };
 
     const cspBypassedTargets = this.cspBypassedTargets;
-    const needsReload = !cspBypassedTargets.has(target.url);
     const bootstrapScript = this.bootstrapScript;
     let pendingReload = false;
+    let pendingCspEscalation = false;
+    let fetchProxyActive = false;
 
     ws.on('open', () => {
-      console.log(`[electron-float] Connected to target, needsReload=${needsReload}, url=${target.url}`);
-      send('Runtime.enable');
-      send('Page.enable'); // Required for lifecycle events
+      const isWebContent = target.url.startsWith('https://');
+      const alreadyBypassed = cspBypassedTargets.has(target.url);
+      console.log(`[electron-float] Connected to target, web=${isWebContent}, bypassed=${alreadyBypassed}, url=${target.url}`);
 
-      // Set CSP bypass before any navigation (must be set before page loads)
+      send('Runtime.enable');
+      send('Page.enable');
+
+      // Set CSP bypass — affects future resource loads on the current page
       send('Page.setBypassCSP', { enabled: true });
 
-      // For web-based Electron apps (like Discord), intercept at REQUEST stage
-      // and proxy the request ourselves, stripping CSP headers from the response.
-      // This is because Fetch.continueResponse doesn't actually modify headers for security policies.
-      const isWebContent = target.url.startsWith('https://');
-      if (isWebContent) {
-        // Only intercept HTML documents from the main origin
-        const urlOrigin = new URL(target.url).origin;
-        send('Fetch.enable', {
-          patterns: [{ urlPattern: `${urlOrigin}/*`, requestStage: 'Request' }],
-        });
+      if (alreadyBypassed) {
+        // Already reloaded with CSP bypass previously — just inject
+        console.log(`[electron-float] Injecting overlay (CSP already bypassed)...`);
+        send('Runtime.evaluate', { expression: bootstrapScript, awaitPromise: false });
+        return;
       }
 
-      if (needsReload) {
+      // First connection to this target URL: inject overlay immediately, then
+      // check if the iframe loaded. If CSP blocked it, fall back to reload+proxy.
+      console.log(`[electron-float] Injecting overlay (first attempt)...`);
+      send('Runtime.evaluate', { expression: bootstrapScript, awaitPromise: false });
+
+      if (!isWebContent) {
+        // Local content (file://, app protocol) — CSP is not an issue
+        return;
+      }
+
+      // After a short delay, probe whether the overlay iframe loaded.
+      // If CSP blocked it, reload the page so Page.setBypassCSP takes effect.
+      // If that still doesn't work, escalate to the Fetch proxy.
+      setTimeout(async () => {
+        if (ws.readyState !== WebSocket.OPEN) return;
+
+        const loaded = await this.probeOverlayIframeLoaded(ws, send);
+        if (loaded) {
+          console.log(`[electron-float] Overlay iframe loaded successfully — no CSP reload needed`);
+          cspBypassedTargets.add(target.url);
+          return;
+        }
+
+        // Phase 2: Page.setBypassCSP was already set — a simple reload should
+        // make the browser ignore CSP headers on the fresh navigation.
+        console.log(`[electron-float] Overlay iframe blocked by CSP, reloading with bypass: ${target.url}`);
         cspBypassedTargets.add(target.url);
         pendingReload = true;
-        console.log(`[electron-float] Reloading for CSP bypass: ${target.url}`);
+        pendingCspEscalation = true;
         send('Page.reload', { ignoreCache: true });
-        // Overlay will be injected on Page.loadEventFired
-      } else {
-        console.log(`[electron-float] Injecting overlay...`);
-        send('Runtime.evaluate', { expression: bootstrapScript, awaitPromise: false });
-      }
+      }, 1500);
     });
 
     // Handle CDP events: lifecycle events and Fetch interception
@@ -403,15 +481,38 @@ export class ElectronOverlayInjector {
       try {
         const msg = JSON.parse(data.toString());
 
-        // Inject overlay after page load completes (replaces setTimeout)
+        // Inject overlay after page load completes (after CSP-bypass reload)
         if (msg.method === 'Page.loadEventFired' && pendingReload) {
           pendingReload = false;
-          console.log(`[electron-float] Page loaded, injecting overlay...`);
-          if (ws.readyState === WebSocket.OPEN) {
-            send('Runtime.evaluate', { expression: bootstrapScript, awaitPromise: false });
+          console.log(`[electron-float] Page loaded after CSP reload, injecting overlay...`);
+          if (ws.readyState !== WebSocket.OPEN) return;
+          send('Runtime.evaluate', { expression: bootstrapScript, awaitPromise: false });
+
+          // If this was a simple reload (no proxy), check if the iframe loads now.
+          // If it still doesn't, escalate to the Fetch proxy as a last resort.
+          if (pendingCspEscalation) {
+            pendingCspEscalation = false;
+            setTimeout(async () => {
+              if (ws.readyState !== WebSocket.OPEN) return;
+              const loaded = await this.probeOverlayIframeLoaded(ws, send);
+              if (loaded) {
+                console.log(`[electron-float] Overlay iframe loaded after CSP reload — no proxy needed`);
+                return;
+              }
+
+              console.log(`[electron-float] CSP reload insufficient, escalating to Fetch proxy: ${target.url}`);
+              fetchProxyActive = true;
+              const urlOrigin = new URL(target.url).origin;
+              send('Fetch.enable', {
+                patterns: [{ urlPattern: `${urlOrigin}/*`, requestStage: 'Request' }],
+              });
+              pendingReload = true;
+              send('Page.reload', { ignoreCache: true });
+            }, 1500);
           }
         }
-        if (msg.method === 'Fetch.requestPaused') {
+
+        if (msg.method === 'Fetch.requestPaused' && fetchProxyActive) {
           const requestId = msg.params?.requestId;
           if (!requestId) {
             console.warn('[electron-float] Fetch.requestPaused without requestId, skipping');
@@ -448,16 +549,31 @@ export class ElectronOverlayInjector {
             proxyRes.on('data', (chunk: Buffer) => bodyChunks.push(chunk));
             proxyRes.on('end', () => {
               if (ws.readyState !== WebSocket.OPEN) return;
-              
+
               const fullBody = Buffer.concat(bodyChunks);
-              
-              // Build response headers, stripping CSP
+
+              // Build response headers, stripping CSP and hop-by-hop headers
+              // that are invalid in Fetch.fulfillRequest responses
+              const HOP_BY_HOP = new Set([
+                'content-security-policy',
+                'content-security-policy-report-only',
+                'transfer-encoding',
+                'connection',
+                'keep-alive',
+              ]);
               const responseHeaders: Array<{ name: string; value: string }> = [];
               let strippedCSP = false;
               for (const [name, value] of Object.entries(proxyRes.headers)) {
-                if (name.toLowerCase().includes('content-security-policy')) {
+                const lower = name.toLowerCase();
+                if (lower.includes('content-security-policy')) {
                   strippedCSP = true;
-                  continue; // Skip CSP headers entirely
+                  continue;
+                }
+                if (HOP_BY_HOP.has(lower)) continue;
+                // Update content-length to match actual body size
+                if (lower === 'content-length') {
+                  responseHeaders.push({ name, value: String(fullBody.length) });
+                  continue;
                 }
                 if (Array.isArray(value)) {
                   value.forEach(v => responseHeaders.push({ name, value: v }));
@@ -465,11 +581,11 @@ export class ElectronOverlayInjector {
                   responseHeaders.push({ name, value });
                 }
               }
-              
+
               if (strippedCSP) {
                 console.log(`[electron-float] Stripped CSP from: ${url.substring(0, 60)}`);
               }
-              
+
               send('Fetch.fulfillRequest', {
                 requestId,
                 responseCode: proxyRes.statusCode || 200,
@@ -478,7 +594,7 @@ export class ElectronOverlayInjector {
               });
             });
           });
-          
+
           proxyReq.on('error', (err) => {
             console.error(`[electron-float] Proxy request failed for ${url.substring(0, 60)}:`, err.message);
             if (ws.readyState === WebSocket.OPEN) {

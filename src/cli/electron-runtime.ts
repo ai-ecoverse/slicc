@@ -23,6 +23,7 @@ export interface ElectronAppLaunchSpec {
 
 export interface ElectronInspectableTarget {
   type: string;
+  title?: string;
   url: string;
   webSocketDebuggerUrl?: string;
 }
@@ -385,4 +386,76 @@ export function shouldInjectElectronOverlayTarget(target: ElectronInspectableTar
   if (url.startsWith('chrome-extension://')) return false;
 
   return true;
+}
+
+/**
+ * Extract the origin from a URL, or return the URL as-is for non-standard schemes.
+ */
+function safeOrigin(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * Score a target for "primary window" ranking within a group of same-origin pages.
+ * Higher score = more likely the main content window.
+ */
+function scoreOverlayTarget(target: ElectronInspectableTarget): number {
+  let score = 0;
+  const title = target.title ?? '';
+  const url = target.url;
+
+  // Longer, more descriptive titles indicate content windows (e.g.
+  // "Calendar | Adobe | Microsoft Teams" vs generic "Microsoft Teams")
+  score += Math.min(title.length, 120);
+
+  // Penalize URLs with hash fragments that suggest hidden/auxiliary windows
+  // (e.g. Teams uses #deepLink=default&isMinimized=false for background windows)
+  if (url.includes('isMinimized=') || url.includes('deepLink=')) {
+    score -= 200;
+  }
+
+  // Prefer clean URLs without large hash fragments (shell pages often have them)
+  const hashLength = url.includes('#') ? url.length - url.indexOf('#') : 0;
+  score -= Math.min(hashLength, 100);
+
+  return score;
+}
+
+/**
+ * From a list of injectable targets, select the best target per origin.
+ * Multi-window apps (like Teams) expose several page targets for the same origin;
+ * we only want to inject the overlay into the primary content window.
+ */
+export function selectBestOverlayTargets(targets: ElectronInspectableTarget[]): ElectronInspectableTarget[] {
+  const injectable = targets.filter(shouldInjectElectronOverlayTarget);
+
+  // Group by origin
+  const byOrigin = new Map<string, ElectronInspectableTarget[]>();
+  for (const target of injectable) {
+    const origin = safeOrigin(target.url);
+    const group = byOrigin.get(origin);
+    if (group) {
+      group.push(target);
+    } else {
+      byOrigin.set(origin, [target]);
+    }
+  }
+
+  // Pick the best target from each origin group
+  const result: ElectronInspectableTarget[] = [];
+  for (const group of byOrigin.values()) {
+    if (group.length === 1) {
+      result.push(group[0]);
+      continue;
+    }
+    // Sort by score descending and pick the winner
+    group.sort((a, b) => scoreOverlayTarget(b) - scoreOverlayTarget(a));
+    result.push(group[0]);
+  }
+
+  return result;
 }

@@ -21,6 +21,7 @@ import {
   parseElectronFloatFlags,
   PORT_HASH_RANGE,
   resolveElectronAppExecutablePath,
+  selectBestOverlayTargets,
   shouldInjectElectronOverlayTarget,
 } from './electron-runtime.js';
 
@@ -203,6 +204,69 @@ describe('electron-runtime', () => {
         webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/page/2',
       })
     ).toBe(false);
+  });
+
+  describe('selectBestOverlayTargets', () => {
+    it('returns all targets when they have different origins', () => {
+      const targets = [
+        { type: 'page', title: 'Slack', url: 'https://app.slack.com/', webSocketDebuggerUrl: 'ws://1' },
+        { type: 'page', title: 'Discord', url: 'https://discord.com/channels', webSocketDebuggerUrl: 'ws://2' },
+      ];
+      const result = selectBestOverlayTargets(targets);
+      expect(result).toHaveLength(2);
+    });
+
+    it('deduplicates same-origin targets, picking the one with the longest title', () => {
+      // Simulates Teams: 3 pages on same origin, different titles
+      const targets = [
+        { type: 'page', title: 'Microsoft Teams', url: 'https://teams.microsoft.com/v2/', webSocketDebuggerUrl: 'ws://1' },
+        { type: 'page', title: 'Calendar | Calendar | Adobe | trieloff@adobe.com | Microsoft Teams', url: 'https://teams.microsoft.com/v2/', webSocketDebuggerUrl: 'ws://2' },
+        { type: 'page', title: 'Microsoft Teams', url: 'https://teams.microsoft.com/v2/#deepLink=default&isMinimized=false', webSocketDebuggerUrl: 'ws://3' },
+      ];
+      const result = selectBestOverlayTargets(targets);
+      expect(result).toHaveLength(1);
+      expect(result[0].webSocketDebuggerUrl).toBe('ws://2'); // The content window
+    });
+
+    it('penalizes targets with deepLink/isMinimized hash fragments', () => {
+      const targets = [
+        { type: 'page', title: 'Microsoft Teams', url: 'https://teams.microsoft.com/v2/#deepLink=default&isMinimized=false', webSocketDebuggerUrl: 'ws://1' },
+        { type: 'page', title: 'Microsoft Teams', url: 'https://teams.microsoft.com/v2/', webSocketDebuggerUrl: 'ws://2' },
+      ];
+      const result = selectBestOverlayTargets(targets);
+      expect(result).toHaveLength(1);
+      expect(result[0].webSocketDebuggerUrl).toBe('ws://2');
+    });
+
+    it('filters out non-page and internal targets', () => {
+      const targets = [
+        { type: 'page', title: 'App', url: 'https://example.com/', webSocketDebuggerUrl: 'ws://1' },
+        { type: 'service_worker', title: 'SW', url: 'https://example.com/sw.js', webSocketDebuggerUrl: 'ws://2' },
+        { type: 'worker', title: 'Worker', url: 'https://example.com/worker.js', webSocketDebuggerUrl: 'ws://3' },
+        { type: 'page', title: 'DevTools', url: 'devtools://devtools/bundled/inspector.html', webSocketDebuggerUrl: 'ws://4' },
+      ];
+      const result = selectBestOverlayTargets(targets);
+      expect(result).toHaveLength(1);
+      expect(result[0].webSocketDebuggerUrl).toBe('ws://1');
+    });
+
+    it('handles single-window apps unchanged', () => {
+      const targets = [
+        { type: 'page', title: 'Slack', url: 'https://app.slack.com/', webSocketDebuggerUrl: 'ws://1' },
+      ];
+      const result = selectBestOverlayTargets(targets);
+      expect(result).toHaveLength(1);
+      expect(result[0].webSocketDebuggerUrl).toBe('ws://1');
+    });
+
+    it('handles file:// and different-origin targets', () => {
+      const targets = [
+        { type: 'page', title: 'VS Code', url: 'file:///app/workbench.html', webSocketDebuggerUrl: 'ws://1' },
+        { type: 'page', title: 'Settings', url: 'https://vscode-settings.example.com/', webSocketDebuggerUrl: 'ws://2' },
+      ];
+      const result = selectBestOverlayTargets(targets);
+      expect(result).toHaveLength(2);
+    });
   });
 
   describe('dynamic port allocation', () => {
