@@ -239,7 +239,7 @@ export class SprinkleRenderer {
     }
 
     const iframe = document.createElement('iframe');
-    iframe.setAttribute('sandbox', 'allow-scripts');
+    iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
     iframe.style.cssText = 'width: 100%; flex: 1; border: none; min-height: 0;';
     iframe.srcdoc = modified;
     this.iframe = iframe;
@@ -375,16 +375,32 @@ export class SprinkleRenderer {
   }
 }
 
-/** Collect CSS custom properties and sprinkle component rules from the parent page. */
+/** Resolve relative url() references in a CSS rule to absolute URLs. */
+function resolveUrls(cssText: string, baseHref: string): string {
+  return cssText.replace(/url\(\s*['"]?([^'")]+)['"]?\s*\)/g, (_match, url: string) => {
+    if (/^(https?:|data:|blob:)/i.test(url)) return `url('${url}')`;
+    try {
+      return `url('${new URL(url, baseHref).href}')`;
+    } catch {
+      return `url('${url}')`;
+    }
+  });
+}
+
+/** Collect CSS custom properties, @font-face rules, and sprinkle component rules from the parent page. */
 export function collectThemeCSS(): string {
   if (typeof getComputedStyle !== 'function') return '';
   const rootStyles = getComputedStyle(document.documentElement);
   const cssVars: string[] = [];
+  const fontFaceRules: string[] = [];
   const sprinkleRules: string[] = [];
+  const baseHref = location.href;
   for (const sheet of document.styleSheets) {
     try {
       for (const rule of sheet.cssRules) {
-        if (rule instanceof CSSStyleRule) {
+        if (rule instanceof CSSFontFaceRule) {
+          fontFaceRules.push(resolveUrls(rule.cssText, baseHref));
+        } else if (rule instanceof CSSStyleRule) {
           if (rule.selectorText === ':root') {
             for (let i = 0; i < rule.style.length; i++) {
               const prop = rule.style[i];
@@ -400,6 +416,7 @@ export function collectThemeCSS(): string {
       }
     } catch { /* cross-origin sheet, skip */ }
   }
-  return (cssVars.length > 0 ? `:root { ${cssVars.join(' ')} }\n` : '')
+  return fontFaceRules.join('\n')
+    + (cssVars.length > 0 ? `\n:root { ${cssVars.join(' ')} }\n` : '\n')
     + sprinkleRules.join('\n');
 }

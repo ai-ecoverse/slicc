@@ -9,6 +9,10 @@ import type { WasmShell } from '../shell/index.js';
 
 type TerminalViewId = 'terminal' | 'preview';
 
+export interface TerminalPanelOptions {
+  onClearTerminal?: () => void;
+}
+
 export class TerminalPanel {
   private container: HTMLElement;
   private terminalViewEl!: HTMLElement;
@@ -17,9 +21,11 @@ export class TerminalPanel {
   private previewBtn!: HTMLButtonElement;
   private shell: WasmShell | null = null;
   private activeView: TerminalViewId = 'terminal';
+  private onClearTerminal: (() => void) | null;
 
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, options: TerminalPanelOptions = {}) {
     this.container = container;
+    this.onClearTerminal = options.onClearTerminal ?? null;
     this.render();
   }
 
@@ -80,14 +86,27 @@ export class TerminalPanel {
     this.container.innerHTML = '';
     this.container.classList.add('terminal-panel');
 
-    // Header bar with preview toggle
-    const header = document.createElement('div');
-    header.className = 'terminal-panel__header';
-    this.container.appendChild(header);
+    // Panel header — "Terminal" title + actions (clear + preview toggle)
+    const panelHeader = document.createElement('div');
+    panelHeader.className = 'file-browser__header';
+    const headerTitle = document.createElement('span');
+    headerTitle.className = 'file-browser__header-title';
+    headerTitle.textContent = 'Terminal';
+    panelHeader.appendChild(headerTitle);
+
+    if (this.onClearTerminal) {
+      const clearBtn = document.createElement('button');
+      clearBtn.className = 'file-browser__header-btn';
+      clearBtn.dataset.tooltip = 'Clear Terminal';
+      clearBtn.setAttribute('aria-label', 'Clear Terminal');
+      clearBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="m8.249,15.021c-.4,0-.733-.317-.748-.72l-.25-6.5c-.017-.414.307-.763.72-.778.01-.001.021-.001.03-.001.4,0,.733.317.748.72l.25,6.5c.017.414-.307.763-.72.778-.01.001-.021.001-.03.001Z" fill="currentColor"/><path d="m11.751,15.021c-.01,0-.02,0-.03-.001-.413-.016-.736-.364-.72-.778l.25-6.5c.015-.403.348-.72.748-.72.01,0,.02,0,.03.001.413.016.736.364.72.778l-.25,6.5c-.015.403-.348.72-.748.72Z" fill="currentColor"/><path d="m17,4h-3.5v-.75c0-1.24-1.01-2.25-2.25-2.25h-2.5c-1.24,0-2.25,1.01-2.25,2.25v.75h-3.5c-.414,0-.75.336-.75.75s.336.75.75.75h.52l.422,10.342c.048,1.21,1.036,2.158,2.248,2.158h7.619c1.212,0,2.2-.948,2.248-2.158l.422-10.342h.52c.414,0,.75-.336.75-.75s-.336-.75-.75-.75Zm-9-.75c0-.413.337-.75.75-.75h2.5c.413,0,.75.337.75.75v.75h-4v-.75Zm6.56,12.531c-.017.403-.346.719-.75.719h-7.619c-.404,0-.733-.316-.75-.719l-.42-10.281h9.959l-.42,10.281Z" fill="currentColor"/></svg>';
+      clearBtn.addEventListener('click', () => this.onClearTerminal!());
+      panelHeader.appendChild(clearBtn);
+    }
 
     // Preview icon button (eye icon, S2 outline style)
     this.previewBtn = document.createElement('button');
-    this.previewBtn.className = 'terminal-panel__preview-btn';
+    this.previewBtn.className = 'file-browser__header-btn';
     this.previewBtn.setAttribute('aria-label', 'Toggle preview');
     this.previewBtn.dataset.tooltip = 'Preview';
     this.previewBtn.disabled = true;
@@ -116,7 +135,8 @@ export class TerminalPanel {
       if (this.previewBtn.disabled) return;
       this.setActiveView(this.activeView === 'preview' ? 'terminal' : 'preview');
     });
-    header.appendChild(this.previewBtn);
+    panelHeader.appendChild(this.previewBtn);
+    this.container.appendChild(panelHeader);
 
     // Terminal view — direct container, no extra nesting
     this.terminalViewEl = document.createElement('div');
@@ -145,7 +165,7 @@ export class TerminalPanel {
 
   private setActiveView(view: TerminalViewId): void {
     this.activeView = view;
-    this.previewBtn.classList.toggle('terminal-panel__preview-btn--active', view === 'preview');
+    this.previewBtn.classList.toggle('file-browser__header-btn--active', view === 'preview');
     this.terminalViewEl.style.display = view === 'terminal' ? 'flex' : 'none';
     this.previewViewEl.style.display = view === 'preview' ? 'flex' : 'none';
     if (view === 'terminal') {

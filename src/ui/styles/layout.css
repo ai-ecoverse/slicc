@@ -161,8 +161,8 @@
   box-shadow: none !important;
 }
 
-/* Desktop ≥1440px: right panel is always visible, hide its toggle */
-@media (min-width: 1440px) {
+/* Desktop ≥1024px: right panel is always visible, hide its toggle */
+@media (min-width: 1024px) {
   .thread-header__panel-toggle--right { display: none; }
 }
 
@@ -170,8 +170,8 @@
 /* UXC Responsive Breakpoints                                         */
 /* ================================================================== */
 
-/* Laptop: 1024–1439px — hide right panel by default, overlay */
-@media (max-width: 1439px) {
+/* Tablet/small: <1024px — hide right panel by default, overlay */
+@media (max-width: 1023px) {
   .layout__right {
     position: fixed; right: 0; top: var(--s2-header-height);
     bottom: 0; width: 50vw; min-width: 400px;
@@ -188,8 +188,8 @@
   .layout__left { flex: 1; min-width: 0; }
 }
 
-/* Tablet: 768–1023px — hide nav rail by default */
-@media (max-width: 1023px) {
+/* Mobile: <768px — hide nav rail by default */
+@media (max-width: 767px) {
   .layout__scoops {
     position: fixed; left: 0; top: var(--s2-header-height);
     bottom: 0; z-index: 60;

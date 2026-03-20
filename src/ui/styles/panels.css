@@ -21,37 +21,6 @@
   flex: 1; min-height: 0; display: flex; flex-direction: column;
   background: var(--s2-bg-layer-1);
 }
-.terminal-panel__header {
-  position: absolute; top: 6px; right: var(--s2-spacing-200);
-  z-index: 1; display: flex; gap: 4px;
-}
-.terminal-panel__preview-btn {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 24px; height: 24px;
-  border: none; background: transparent;
-  color: var(--s2-content-disabled);
-  border-radius: var(--s2-radius-s);
-  cursor: default;
-  transition: color var(--s2-transition-default), background var(--s2-transition-default);
-}
-.terminal-panel__preview-btn:not(:disabled) {
-  color: var(--s2-content-tertiary); cursor: pointer;
-}
-.terminal-panel__preview-btn:not(:disabled):hover {
-  color: var(--s2-content-default);
-  background: var(--s2-gray-200);
-}
-.terminal-panel__preview-btn--active {
-  color: var(--s2-content-default);
-  background: var(--s2-gray-300);
-}
-.terminal-panel__preview-btn--active:hover {
-  background: var(--s2-gray-300);
-}
-.terminal-panel__preview-btn:focus-visible {
-  outline: 2px solid var(--s2-accent);
-  outline-offset: -2px;
-}
 .terminal-panel__view {
   flex: 1; min-height: 0; overflow: hidden;
   display: flex; flex-direction: column;
@@ -132,6 +101,21 @@
   color: var(--s2-content-default);
 }
 .file-browser__header-btn svg { width: 14px; height: 14px; }
+.file-browser__header-btn--active {
+  color: var(--s2-content-default);
+  background: var(--s2-gray-300);
+}
+.file-browser__header-btn--active:hover {
+  background: var(--s2-gray-300);
+}
+.file-browser__header-btn:disabled {
+  color: var(--s2-content-disabled);
+  cursor: default;
+}
+.file-browser__header-btn:disabled:hover {
+  background: transparent;
+  color: var(--s2-content-disabled);
+}
 
 .file-browser { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .file-browser__body {

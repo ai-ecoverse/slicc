@@ -8,49 +8,24 @@
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
   body {
-    font-family: 'Adobe Clean', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-    background: var(--s2-bg-base, #fff);
-    color: var(--s2-content-default, #292929);
+    font-family: var(--s2-font-family, 'Adobe Clean', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif);
+    background: var(--s2-bg-base, #1a1a1a);
+    color: var(--s2-content-default, #e8e8e8);
     min-height: 100vh;
     overflow-x: hidden;
   }
 
-  /* ── Gradient banner (Figma: subtle gradient bg, fades to white) ── */
-  .banner {
-    position: relative;
-    padding: 40px 24px 32px;
+  /* ── Header — compact, no gradient ── */
+  .header {
+    padding: 32px 24px 24px;
     text-align: center;
-    overflow: hidden;
   }
-  .banner-bg {
-    position: absolute; inset: 0;
-    background: linear-gradient(-1.17deg, #ffcaec 16.77%, #bf8bf4 92.01%, #602dff 131.89%);
-    opacity: 0.25;
-  }
-  .banner-fade {
-    position: absolute; inset: 0;
-    background:
-      linear-gradient(56.42deg, rgba(255,255,255,0) 49.79%, rgba(255,255,255,0.85) 96.09%),
-      linear-gradient(to bottom, rgba(255,255,255,0) 30%, var(--s2-bg-base, #fff) 100%);
-  }
-  .banner-content { position: relative; z-index: 1; }
-
-  /* ── Title (Figma: 40px, black/900 weight, line-height 1.1) ── */
-  .banner-title {
-    font-size: 40px;
-    font-weight: 900;
-    line-height: 1.1;
-    color: var(--s2-content-default, #292929);
+  .header-title {
+    font-size: 28px;
+    font-weight: 800;
+    line-height: 1.2;
+    color: var(--s2-content-default, #e8e8e8);
     letter-spacing: -0.01em;
-  }
-  .banner-sub {
-    font-size: 16px;
-    color: var(--s2-content-secondary, #717171);
-    margin-top: 8px;
-    line-height: 1.5;
-    max-width: 420px;
-    margin-left: auto;
-    margin-right: auto;
   }
 
   /* ── Content area ── */
@@ -63,33 +38,33 @@
 
   /* ── Step heading ── */
   .step-heading {
-    font-size: 20px;
-    font-weight: 800;
-    color: var(--s2-content-default, #292929);
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--s2-content-default, #e8e8e8);
     text-align: center;
     margin-bottom: 4px;
-    line-height: 1.2;
+    line-height: 1.3;
   }
   .step-sub {
     font-size: 14px;
-    color: var(--s2-content-secondary, #717171);
+    color: var(--s2-content-secondary, #a1a1a1);
     text-align: center;
     line-height: 1.5;
   }
 
   /* ── Step visibility ── */
-  .step { display: none; animation: fadeUp 0.4s ease both; width: 100%; }
+  .step { display: none; animation: fadeUp 0.2s ease both; width: 100%; }
   .step.active { display: block; }
   @keyframes fadeUp {
-    from { opacity: 0; transform: translateY(12px); }
+    from { opacity: 0; transform: translateY(8px); }
     to { opacity: 1; transform: translateY(0); }
   }
 
-  /* ── Pills (Figma: suggestion chips — 40px, rounded-12, translucent bg, thin border, sparkle icon) ── */
+  /* ── Pills — text-only, dark theme ── */
   .pills {
     display: flex;
     flex-wrap: wrap;
-    gap: 12px;
+    gap: 10px;
     max-width: 520px;
     margin: 20px auto 0;
     justify-content: center;
@@ -97,52 +72,45 @@
   .pill {
     display: inline-flex;
     align-items: center;
-    height: 40px;
+    height: 38px;
     padding: 0 16px;
-    gap: 8px;
-    border-radius: 12px;
-    background: rgba(255,255,255,0.66);
-    border: 1px solid rgba(0,0,0,0.12);
+    border-radius: 10px;
+    background: var(--s2-bg-elevated, #2c2c2c);
+    border: 1px solid var(--s2-border-subtle, #3a3a3a);
     cursor: pointer;
     font-family: inherit;
-    font-size: 16px;
-    font-weight: 400;
-    line-height: 1.5;
-    color: var(--s2-content-default, #292929);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1;
+    color: var(--s2-content-default, #e8e8e8);
     transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
     user-select: none;
     white-space: nowrap;
   }
   .pill:hover {
-    background: rgba(255,255,255,0.9);
-    border-color: rgba(0,0,0,0.2);
+    background: var(--s2-bg-layer-2, #252525);
+    border-color: var(--s2-border-default, #4a4a4a);
+  }
+  .pill:focus-visible {
+    outline: 2px solid var(--s2-accent, #3562ff);
+    outline-offset: 2px;
   }
   .pill.selected {
-    background: rgba(255,255,255,0.95);
-    border-color: #9a3cf9;
-    box-shadow: 0 0 0 1px #9a3cf9;
-  }
-  /* Gradient sparkle icon in each pill */
-  .pill-icon {
-    width: 16px; height: 16px;
-    flex-shrink: 0;
-    background: linear-gradient(98deg, #9a3cf9 4%, #e743c8 35%, #ed457e 69%, #ff7918 105%);
-    -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M10 1.5l2.1 4.3 4.7.7-3.4 3.3.8 4.7L10 12.2 5.8 14.5l.8-4.7L3.2 6.5l4.7-.7z'/%3E%3C/svg%3E");
-    mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M10 1.5l2.1 4.3 4.7.7-3.4 3.3.8 4.7L10 12.2 5.8 14.5l.8-4.7L3.2 6.5l4.7-.7z'/%3E%3C/svg%3E");
-    -webkit-mask-size: contain;
-    mask-size: contain;
-    -webkit-mask-repeat: no-repeat;
-    mask-repeat: no-repeat;
+    background: var(--s2-bg-layer-2, #252525);
+    border-color: var(--s2-accent, #3562ff);
+    box-shadow: 0 0 0 1px var(--s2-accent, #3562ff);
+    color: var(--s2-content-default, #e8e8e8);
   }
 
   /* ── Navigation ── */
   .nav {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: center;
     max-width: 520px;
     margin: 20px auto 0;
     width: 100%;
+    gap: 8px;
   }
   .nav-back {
     display: inline-flex;
@@ -152,27 +120,17 @@
     border: none;
     font-family: inherit;
     font-size: 13px;
-    font-weight: 600;
-    color: var(--s2-content-secondary, #717171);
+    font-weight: 500;
+    color: var(--s2-content-secondary, #a1a1a1);
     cursor: pointer;
     padding: 6px 10px;
     border-radius: 8px;
-    transition: background 0.15s;
+    transition: background 0.15s, color 0.15s;
+    position: absolute;
+    left: 24px;
   }
-  .nav-back:hover { background: var(--s2-gray-100, #f5f5f5); }
-  .nav-skip {
-    background: none;
-    border: none;
-    font-family: inherit;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--s2-content-secondary, #717171);
-    cursor: pointer;
-    padding: 6px 10px;
-    text-decoration: underline;
-    text-underline-offset: 2px;
-  }
-  .nav-skip:hover { color: var(--s2-content-default); }
+  .nav-back:hover { background: var(--s2-bg-elevated, #2c2c2c); color: var(--s2-content-default, #e8e8e8); }
+  .nav-wrapper { position: relative; max-width: 520px; margin: 20px auto 0; width: 100%; display: flex; justify-content: center; }
 
   /* ── CTA button ── */
   .cta {
@@ -181,105 +139,111 @@
     justify-content: center;
     padding: 10px 28px;
     border-radius: 9999px;
-    background: var(--s2-accent, #3B63FB);
+    background: var(--s2-accent, #3562ff);
     color: #fff;
     border: none;
     font-family: inherit;
     font-size: 14px;
-    font-weight: 700;
+    font-weight: 600;
     cursor: pointer;
     transition: background 0.15s, opacity 0.15s;
   }
-  .cta:hover { background: var(--s2-accent-hover, #2b4ed4); }
-  .cta:disabled { opacity: 0.4; cursor: default; }
+  .cta:hover { background: var(--s2-accent-hover, #4a75ff); }
+  .cta:disabled { opacity: 0.3; cursor: default; }
 
   /* ── Progress dots ── */
   .dots {
     display: flex;
     justify-content: center;
     gap: 6px;
-    margin-top: 24px;
+    margin-top: 28px;
   }
   .dot {
-    width: 8px; height: 8px;
+    width: 6px; height: 6px;
     border-radius: 50%;
-    background: var(--s2-gray-300, #ccc);
-    transition: background 0.2s;
+    background: var(--s2-gray-300, #4a4a4a);
+    transition: background 0.2s, transform 0.2s;
   }
-  .dot.active { background: #9a3cf9; }
-  .dot.done { background: #9a3cf9; opacity: 0.4; }
+  .dot.active { background: var(--s2-accent, #3562ff); transform: scale(1.3); }
+  .dot.done { background: var(--s2-accent, #3562ff); }
 
-  /* ── Prompt bar (Figma: 28px radius, 2px purple border, gradient glow) ── */
+  /* ── Prompt bar — clean, no glow ── */
   .prompt-bar {
-    position: relative;
     margin: 20px auto 0;
     max-width: 520px;
     width: 100%;
   }
-  .prompt-bar-glow {
-    position: absolute; inset: 0;
-    border-radius: 28px;
-    background: linear-gradient(142deg, #9a3cf9 4%, #e743c8 35%, #ed457e 69%, #ff7918 105%);
-    opacity: 0.50;
-    filter: blur(20px);
-    box-shadow: 0px 4px 24px 0px #340349;
-  }
   .prompt-bar-inner {
-    position: relative;
-    background: var(--s2-bg-elevated, #fff);
-    border: 2px solid #9a3cf9;
-    border-radius: 28px;
-    padding: 12px 12px 12px 16px;
+    background: var(--s2-bg-elevated, #2c2c2c);
+    border: 1px solid var(--s2-border-subtle, #3a3a3a);
+    border-radius: 24px;
+    padding: 10px 10px 10px 16px;
     display: flex;
     align-items: center;
     gap: 12px;
+    transition: border-color 0.15s;
+  }
+  .prompt-bar-inner:focus-within {
+    border-color: var(--s2-accent, #3562ff);
   }
   .prompt-bar-inner input {
     flex: 1;
     border: none;
     outline: none;
     font-family: inherit;
-    font-size: 16px;
+    font-size: 15px;
     line-height: 1.5;
-    color: var(--s2-content-default, #292929);
+    color: var(--s2-content-default, #e8e8e8);
     background: transparent;
   }
-  .prompt-bar-inner input::placeholder { color: var(--s2-content-secondary, #717171); }
+  .prompt-bar-inner input::placeholder { color: var(--s2-content-tertiary, #8a8a8a); }
   .send-btn {
-    width: 36px; height: 36px;
+    width: 34px; height: 34px;
     border-radius: 50%;
     border: none;
-    background: var(--s2-accent, #3B63FB);
+    background: var(--s2-accent, #3562ff);
     color: #fff;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    transition: background 0.15s, transform 0.1s;
+    transition: background 0.15s;
   }
-  .send-btn:hover { background: var(--s2-accent-hover, #2b4ed4); transform: scale(1.06); }
-  .send-btn svg { width: 18px; height: 18px; }
+  .send-btn:hover { background: var(--s2-accent-hover, #4a75ff); }
+  .send-btn svg { width: 16px; height: 16px; }
+
+  /* ── Skip — small, below dots ── */
+  .skip-row {
+    text-align: center;
+    margin-top: 16px;
+  }
+  .skip-link {
+    background: none;
+    border: none;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--s2-content-tertiary, #8a8a8a);
+    cursor: pointer;
+    padding: 4px 8px;
+  }
+  .skip-link:hover { color: var(--s2-content-secondary, #a1a1a1); }
 
   /* ── Completion state ── */
   .heading-state {
     text-align: center;
     padding: 40px 0;
-    animation: fadeUp 0.3s ease both;
+    animation: fadeUp 0.2s ease both;
   }
-  .heading-state .step-heading { font-size: 22px; }
+  .heading-state .step-heading { font-size: 18px; }
 </style>
 </head>
 <body>
 
-  <!-- Banner -->
-  <div class="banner" id="banner">
-    <div class="banner-bg"></div>
-    <div class="banner-fade"></div>
-    <div class="banner-content">
-      <div class="banner-title">Welcome</div>
-      <div class="banner-sub">Your browser-native AI agent for code, automation, web browsing, and interactive tools.</div>
-    </div>
+  <!-- Header -->
+  <div class="header" id="banner">
+    <div class="header-title">Welcome to slicc</div>
   </div>
 
   <div class="content">
@@ -287,23 +251,13 @@
     <!-- Step 1: Purpose -->
     <div class="step active" id="s1">
       <div class="step-heading">What brings you here?</div>
-      <div class="step-sub">Let's personalize your experience</div>
       <div class="pills" id="purposePills"></div>
-      <div class="nav">
-        <span></span>
-        <button class="nav-skip" onclick="skip(1)">Skip</button>
-      </div>
     </div>
 
     <!-- Step 2: Role -->
     <div class="step" id="s2">
-      <div class="step-heading">What do you do?</div>
-      <div class="step-sub" id="s2Sub"></div>
+      <div class="step-heading" id="s2Heading">What do you do?</div>
       <div class="pills" id="rolePills"></div>
-      <div class="nav">
-        <button class="nav-back" onclick="back(1)">&larr; Back</button>
-        <button class="nav-skip" onclick="skip(2)">Skip</button>
-      </div>
     </div>
 
     <!-- Step 3: Tasks -->
@@ -311,32 +265,26 @@
       <div class="step-heading">What do you want to tackle?</div>
       <div class="step-sub">Pick as many as you like</div>
       <div class="pills" id="taskPills"></div>
-      <div class="nav">
+      <div class="nav-wrapper">
         <button class="nav-back" onclick="back(2)">&larr; Back</button>
-        <div>
-          <button class="nav-skip" onclick="skip(3)" style="margin-right:8px">Skip</button>
-          <button class="cta" id="taskContinue" disabled onclick="goStep(4)">Continue</button>
-        </div>
+        <button class="cta" id="taskContinue" onclick="goStep(4)">Continue</button>
       </div>
     </div>
 
     <!-- Step 4: Name -->
     <div class="step" id="s4">
-      <div class="step-heading">Almost there</div>
-      <div class="step-sub"></div>
+      <div class="step-heading">What should I call you?</div>
       <div class="prompt-bar">
-        <div class="prompt-bar-glow"></div>
         <div class="prompt-bar-inner">
-          <input type="text" id="nameIn" placeholder="What should I call you?" autofocus
+          <input type="text" id="nameIn" placeholder="Your name" autofocus
             onkeydown="if(event.key==='Enter')finish()">
           <button class="send-btn" onclick="finish()" aria-label="Let's go" data-tooltip="Let's go">
             <svg viewBox="0 0 20 20" fill="currentColor"><path d="M3.1 17.4a.75.75 0 01-.96-1.05L5.68 10 2.14 3.65a.75.75 0 01.96-1.05l14.5 6.75a.75.75 0 010 1.3l-14.5 6.75z"/></svg>
           </button>
         </div>
       </div>
-      <div class="nav">
+      <div class="nav-wrapper">
         <button class="nav-back" onclick="back(3)">&larr; Back</button>
-        <button class="nav-skip" onclick="skip(4)">Skip</button>
       </div>
     </div>
 
@@ -355,6 +303,11 @@
       <div class="dot"></div>
     </div>
 
+    <!-- Skip — below dots, de-emphasized -->
+    <div class="skip-row" id="skipRow">
+      <button class="skip-link" id="skipBtn" onclick="skipStep()">skip this step</button>
+    </div>
+
   </div>
 
 <script>
@@ -371,7 +324,7 @@
 
   var ROLES_BY_PURPOSE = {
     work: {
-      subtitle: "What's your role?",
+      heading: "What's your role?",
       roles: [
         { id: 'developer', label: 'Developer' },
         { id: 'designer', label: 'Designer' },
@@ -383,7 +336,7 @@
       ]
     },
     school: {
-      subtitle: "What are you studying?",
+      heading: "What are you studying?",
       roles: [
         { id: 'student', label: 'Student' },
         { id: 'researcher', label: 'Researcher' },
@@ -393,7 +346,7 @@
       ]
     },
     _default: {
-      subtitle: "What's your background?",
+      heading: "What's your background?",
       roles: [
         { id: 'developer', label: 'Developer' },
         { id: 'designer', label: 'Designer' },
@@ -421,19 +374,12 @@
     { id: 'not-sure', label: 'Not sure yet' },
   ];
 
-  function makeIcon() {
-    var span = document.createElement('span');
-    span.className = 'pill-icon';
-    return span;
-  }
-
   /* ── Build step 1: Purpose pills ── */
   var purposeEl = document.getElementById('purposePills');
   PURPOSES.forEach(function(p) {
     var btn = document.createElement('button');
     btn.className = 'pill';
-    btn.appendChild(makeIcon());
-    btn.appendChild(document.createTextNode(p.label));
+    btn.textContent = p.label;
     btn.dataset.id = p.id;
     btn.onclick = function() {
       profile.purpose = p.id;
@@ -450,8 +396,7 @@
   TASKS.forEach(function(t) {
     var btn = document.createElement('button');
     btn.className = 'pill';
-    btn.appendChild(makeIcon());
-    btn.appendChild(document.createTextNode(t.label));
+    btn.textContent = t.label;
     btn.dataset.id = t.id;
     btn.onclick = function() {
       btn.classList.toggle('selected');
@@ -459,7 +404,6 @@
       taskEl.querySelectorAll('.pill.selected').forEach(function(el) {
         profile.tasks.push(el.dataset.id);
       });
-      taskBtn.disabled = profile.tasks.length === 0;
     };
     taskEl.appendChild(btn);
   });
@@ -468,12 +412,11 @@
     var roleEl = document.getElementById('rolePills');
     roleEl.innerHTML = '';
     var config = ROLES_BY_PURPOSE[profile.purpose] || ROLES_BY_PURPOSE._default;
-    document.getElementById('s2Sub').textContent = config.subtitle;
+    document.getElementById('s2Heading').textContent = config.heading;
     config.roles.forEach(function(r) {
       var btn = document.createElement('button');
       btn.className = 'pill';
-      btn.appendChild(makeIcon());
-      btn.appendChild(document.createTextNode(r.label));
+      btn.textContent = r.label;
       btn.dataset.id = r.id;
       btn.onclick = function() {
         profile.role = r.id;
@@ -494,12 +437,37 @@
     }
   }
 
+  function updateNav(step) {
+    /* Steps 1 & 2 auto-advance, so they show back (step 2 only) via their own nav.
+       Steps 3 & 4 have explicit nav-wrappers. Hide/show skip. */
+    var skipRow = document.getElementById('skipRow');
+    skipRow.style.display = (step <= 4) ? '' : 'none';
+  }
+
   function goStep(n) {
     if (n === 2) buildRolePills();
     document.getElementById('s' + cur).classList.remove('active');
     document.getElementById('s' + n).classList.add('active');
     cur = n;
     updateDots(n);
+    updateNav(n);
+
+    /* Steps 1 & 2: show back button inline */
+    if (n === 1 || n === 2) {
+      var step = document.getElementById('s' + n);
+      var existing = step.querySelector('.nav-wrapper');
+      if (n === 2 && !existing) {
+        var wrap = document.createElement('div');
+        wrap.className = 'nav-wrapper';
+        var backBtn = document.createElement('button');
+        backBtn.className = 'nav-back';
+        backBtn.innerHTML = '&larr; Back';
+        backBtn.onclick = function() { back(1); };
+        wrap.appendChild(backBtn);
+        step.appendChild(wrap);
+      }
+    }
+
     if (n === 4) {
       var nameIn = document.getElementById('nameIn');
       setTimeout(function() { nameIn.focus(); }, 100);
@@ -510,9 +478,9 @@
     goStep(toStep);
   }
 
-  function skip(fromStep) {
-    if (fromStep < 4) {
-      goStep(fromStep + 1);
+  function skipStep() {
+    if (cur < 4) {
+      goStep(cur + 1);
     } else {
       finish();
     }
@@ -526,6 +494,7 @@
     document.getElementById('sDone').classList.add('active');
     document.getElementById('dots').style.display = 'none';
     document.getElementById('banner').style.display = 'none';
+    document.getElementById('skipRow').style.display = 'none';
 
     // Fire lick (panel stays open)
     if (window.slicc) {
