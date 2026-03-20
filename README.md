@@ -1,4 +1,4 @@
-![A screenshot of a macOS desktop](screenshots/full-desktop)
+![A screenshot of a macOS desktop](screenshots/full-desktop.png)
 
 You are looking at a macOS desktop, with four windows running:
 
