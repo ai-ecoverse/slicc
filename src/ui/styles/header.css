@@ -3,11 +3,20 @@
 /* ================================================================== */
 .header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 8px 12px;
+  padding: 8px 16px;
   height: var(--s2-header-height); min-height: var(--s2-header-height);
-  background: var(--s2-bg-layer-1);
+  background: var(--s2-bg-layer-2);
   flex-shrink: 0;
   z-index: 10;
+}
+.header__row {
+  display: flex; align-items: center; width: 100%; gap: 6px;
+}
+.header__brand {
+  display: flex; align-items: center; gap: 6px;
+}
+.header__spacer {
+  flex: 1;
 }
 .header__logo {
   width: 32px; height: 32px;
@@ -55,11 +64,11 @@
   100% { transform: scaleY(1) scaleX(1); }
 }
 .header__title {
-  font-size: 16px;
-  font-weight: 700;
+  font-size: 18px;
+  font-weight: 800;
   color: var(--s2-gray-900);
   line-height: 20px;
-  letter-spacing: 0;
+  letter-spacing: -0.01em;
 }
 .header__actions { display: flex; gap: 8px; align-items: center; }
 .header__separator {
