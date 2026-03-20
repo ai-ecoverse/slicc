@@ -361,13 +361,13 @@
 .chat__stop-btn {
   width: 32px; height: 32px; border: none;
   border-radius: 50%;
-  background: var(--s2-negative); color: #fff;
-  font-size: 10px; cursor: pointer;
+  background: var(--s2-gray-800); color: #fff;
+  font-size: 14px; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
   transition: background var(--s2-transition-default), transform var(--s2-transition-default);
 }
-.chat__stop-btn:hover { background: #c43039; }
+.chat__stop-btn:hover { background: var(--s2-gray-900); }
 .chat__stop-btn:active { transform: scale(0.92); }
 
 /* Mic button — quiet action button style */

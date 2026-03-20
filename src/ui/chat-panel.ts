@@ -319,13 +319,13 @@ export class ChatPanel {
 
     this.sendBtn = document.createElement('button');
     this.sendBtn.className = 'chat__send-btn';
-    this.sendBtn.innerHTML = '<svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M1.5 2.1c-.2-.5.3-1 .8-.8l16 7c.4.2.4.7 0 .9l-16 7c-.5.2-1-.3-.8-.8L3.8 10 1.5 2.1zm3.2 7.15L2.9 16l12.4-5.4H4.7zm0-1.5h10.6L2.9 2.3l1.8 5.45z"/></svg>';
+    this.sendBtn.innerHTML = '<svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M10 1.25C5.167 1.25 1.25 5.167 1.25 10s3.917 8.75 8.75 8.75 8.75-3.918 8.75-8.75S14.833 1.25 10 1.25zm3.527 8.284a.75.75 0 0 1-1.06 0L10.75 7.82v6.172a.75.75 0 0 1-1.5 0V7.812L7.527 9.534a.75.75 0 1 1-1.06-1.06l2.998-2.998a.75.75 0 0 1 1.06-.001l3.002 2.998a.75.75 0 0 1 0 1.061z"/></svg>';
     this.sendBtn.dataset.tooltip = 'Send message';
     this.sendBtn.dataset.tooltipPos = 'top';
 
     this.stopBtn = document.createElement('button');
     this.stopBtn.className = 'chat__stop-btn';
-    this.stopBtn.innerHTML = '&#9632;'; // ■
+    this.stopBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M13.75 4H6.25A2.25 2.25 0 0 0 4 6.25v7.5A2.25 2.25 0 0 0 6.25 16h7.5A2.25 2.25 0 0 0 16 13.75v-7.5A2.25 2.25 0 0 0 13.75 4z"/></svg>';
     this.stopBtn.dataset.tooltip = 'Stop generation';
     this.stopBtn.style.display = 'none';
 
