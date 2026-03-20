@@ -314,13 +314,14 @@ export class ChatPanel {
 
     this.textarea = document.createElement('textarea');
     this.textarea.className = 'chat__textarea';
-    this.textarea.placeholder = 'Ask anything';
+    this.textarea.placeholder = 'What shall we build?';
     this.textarea.rows = 1;
 
     this.sendBtn = document.createElement('button');
     this.sendBtn.className = 'chat__send-btn';
     this.sendBtn.innerHTML = '<svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M1.5 2.1c-.2-.5.3-1 .8-.8l16 7c.4.2.4.7 0 .9l-16 7c-.5.2-1-.3-.8-.8L3.8 10 1.5 2.1zm3.2 7.15L2.9 16l12.4-5.4H4.7zm0-1.5h10.6L2.9 2.3l1.8 5.45z"/></svg>';
     this.sendBtn.dataset.tooltip = 'Send message';
+    this.sendBtn.dataset.tooltipPos = 'top';
 
     this.stopBtn = document.createElement('button');
     this.stopBtn.className = 'chat__stop-btn';
@@ -1122,30 +1123,6 @@ export class ChatPanel {
   private createFeedbackRow(): HTMLElement {
     const row = document.createElement('div');
     row.className = 'msg__feedback';
-
-    const svgNs = 'http://www.w3.org/2000/svg';
-
-    // S2_Icon_ThumbUp_20_N
-    const thumbUpBtn = document.createElement('button');
-    thumbUpBtn.className = 'msg__feedback-btn';
-    thumbUpBtn.dataset.tooltip = 'Good response';
-    thumbUpBtn.setAttribute('aria-label', 'Good response');
-    thumbUpBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M4.5 18.5h-1c-1.24 0-2.25-1.01-2.25-2.25v-5c0-1.24 1.01-2.25 2.25-2.25h1c.41 0 .75.34.75.75v8c0 .41-.34.75-.75.75zm-.25-8h-.75c-.41 0-.75.34-.75.75v5c0 .41.34.75.75.75h.75v-6.5z"/><path d="M15.25 18.5H7c-1.24 0-2.25-1.01-2.25-2.25v-5.38c0-.6.24-1.17.66-1.59l4.22-4.22c.15-.15.34-.24.55-.26l.13-.01c.83 0 1.5.67 1.5 1.5v.01l-.5 2.7h4.44c.6 0 1.16.27 1.54.73.38.46.53 1.06.42 1.65l-1.12 5.5c-.2.96-1.05 1.62-2.04 1.62zm-4.86-12.19l-3.83 3.83c-.13.13-.31.36-.31.73v5.38c0 .41.34.75.75.75h8.25c.33 0 .61-.22.68-.54l1.12-5.5c.04-.2-.01-.39-.14-.55-.13-.15-.31-.41-.66-.41h-5.19c-.24 0-.46-.11-.6-.31-.14-.19-.18-.44-.11-.67l.63-2.84c-.02-.04-.29.07-.59.13z"/></svg>';
-    thumbUpBtn.addEventListener('click', () => {
-      thumbUpBtn.style.color = 'var(--s2-positive)';
-    });
-    row.appendChild(thumbUpBtn);
-
-    // S2_Icon_ThumbDown_20_N
-    const thumbDownBtn = document.createElement('button');
-    thumbDownBtn.className = 'msg__feedback-btn';
-    thumbDownBtn.dataset.tooltip = 'Bad response';
-    thumbDownBtn.setAttribute('aria-label', 'Bad response');
-    thumbDownBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M15.5 1.5h1c1.24 0 2.25 1.01 2.25 2.25v5c0 1.24-1.01 2.25-2.25 2.25h-1c-.41 0-.75-.34-.75-.75v-8c0-.41.34-.75.75-.75zm.25 8h.75c.41 0 .75-.34.75-.75v-5c0-.41-.34-.75-.75-.75h-.75v6.5z"/><path d="M4.75 1.5H13c1.24 0 2.25 1.01 2.25 2.25v5.38c0 .6-.24 1.17-.66 1.59l-4.22 4.22c-.15.15-.34.24-.55.26l-.13.01c-.83 0-1.5-.67-1.5-1.5v-.01l.5-2.7H4.25c-.6 0-1.16-.27-1.54-.73-.38-.46-.53-1.06-.42-1.65l1.12-5.5c.2-.96 1.05-1.62 2.04-1.62zm4.86 12.19l3.83-3.83c.13-.13.31-.36.31-.73V3.75c0-.41-.34-.75-.75-.75H4.75c-.33 0-.61.22-.68.54l-1.12 5.5c-.04.2.01.39.14.55.13.15.31.41.66.41h5.19c.24 0 .46.11.6.31.14.19.18.44.11.67l-.63 2.84c.02.04.29-.07.59-.13z"/></svg>';
-    thumbDownBtn.addEventListener('click', () => {
-      thumbDownBtn.style.color = 'var(--s2-negative)';
-    });
-    row.appendChild(thumbDownBtn);
 
     // Copy Chat — S2_Icon_Copy_20_N (same action as header copy chat)
     const copyBtn = document.createElement('button');

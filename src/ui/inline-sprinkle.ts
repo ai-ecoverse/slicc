@@ -67,7 +67,7 @@ export function mountInlineSprinkle(
 *,*::before,*::after{box-sizing:inherit}
 body{font-family:var(--s2-font-family, sans-serif);font-size:13px;color:var(--s2-content-default)}</style>
 <style>.sprinkle-inline{padding:var(--s2-spacing-100) 0}
-.sprinkle-inline .sprinkle-btn{padding:4px 12px;font-size:12px;height:28px}
+.sprinkle-inline .sprinkle-btn{padding:4px 12px;font-size:12px;height:28px;box-shadow:none;background:var(--s2-bg-elevated)}
 .sprinkle-inline .sprinkle-card{box-shadow:none;margin:0}
 .sprinkle-inline .sprinkle-action-card{margin:0;width:100%}
 .sprinkle-inline .sprinkle-action-card .sprinkle-table{width:100%}
