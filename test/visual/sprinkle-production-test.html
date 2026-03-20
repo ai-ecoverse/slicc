@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en" class="theme-light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sprinkle Production CSS Test</title>
+<style>
+/* Minimal page chrome — real styles injected from index.html at runtime */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: auto !important; overflow: auto !important; }
+body { font-family: 'Adobe Clean', 'Source Sans Pro', -apple-system, BlinkMacSystemFont, sans-serif; padding: 32px; }
+.test-page { max-width: 960px; margin: 0 auto; }
+.test-page > h1 { font-size: 28px; font-weight: 800; margin-bottom: 8px; }
+.test-page > p { color: #717171; margin-bottom: 32px; font-size: 14px; }
+.section { margin-bottom: 48px; }
+.section-title {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.08em; color: #8a8a8a;
+  margin-bottom: 16px; padding-bottom: 8px;
+  border-bottom: 1px solid #e1e1e1;
+}
+.component-row { margin-bottom: 24px; }
+.component-label { font-size: 11px; font-weight: 600; color: #717171; margin-bottom: 8px; font-family: 'Source Code Pro', monospace; }
+.flex-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.flex-col { display: flex; flex-direction: column; gap: 8px; }
+.demo-sidebar { height: 240px; border: 1px solid #e1e1e1; border-radius: 12px; overflow: hidden; }
+.demo-toolbar { border: 1px solid #e1e1e1; border-radius: 12px; overflow: hidden; }
+.demo-tabs { border: 1px solid #e1e1e1; border-radius: 12px; overflow: hidden; }
+.demo-collapsible { border: 1px solid #e1e1e1; border-radius: 12px; overflow: hidden; }
+.theme-toggle { position: fixed; top: 16px; right: 16px; display: flex; gap: 4px; z-index: 200; }
+.theme-toggle button {
+  padding: 6px 12px; border: 1px solid #dadada;
+  border-radius: 9999px; background: #f3f3f3;
+  color: #292929; font-size: 12px; font-weight: 600;
+  cursor: pointer; font-family: inherit;
+}
+.theme-toggle button.active { background: #3b63fb; color: white; border-color: transparent; }
+#status { position: fixed; top: 16px; left: 16px; font-size: 12px; color: #717171; z-index: 200; }
+#status.error { color: #d92361; }
+</style>
+</head>
+<body>
+
+<div id="status">Loading production CSS from index.html...</div>
+
+<div class="theme-toggle">
+  <button onclick="setTheme('light')" class="active">Light</button>
+  <button onclick="setTheme('dark')">Dark</button>
+</div>
+
+<div class="test-page">
+
+<h1>Sprinkle Production CSS Test</h1>
+<p>Live-loaded from <code>index.html</code> — validates the actual production CSS. Compare with <a href="sprinkle-components-v2.html" style="color:#3b63fb">v2 reference</a>.</p>
+
+<!-- TYPOGRAPHY -->
+<div class="section">
+  <div class="section-title">Typography</div>
+  <div class="component-row">
+    <div class="component-label">.sprinkle-heading (18px/700)</div>
+    <h2 class="sprinkle-heading">Page Title Heading</h2>
+  </div>
+  <div class="component-row">
+    <div class="component-label">.sprinkle-heading--m (16px/700)</div>
+    <h3 class="sprinkle-heading sprinkle-heading--m">Section Heading</h3>
+  </div>
+  <div class="component-row">
+    <div class="component-label">.sprinkle-body</div>
+    <p class="sprinkle-body">Body text at 14px Regular with 1.5 line-height.</p>
+  </div>
+  <div class="component-row">
+    <div class="component-label">.sprinkle-detail</div>
+    <p class="sprinkle-detail">Detail text — 12px Medium, #717171</p>
+  </div>
+</div>
+
+<!-- BUTTONS -->
+<div class="section">
+  <div class="section-title">Buttons</div>
+  <div class="component-row">
+    <div class="component-label">.sprinkle-btn variants</div>
+    <div class="flex-row">
+      <button class="sprinkle-btn sprinkle-btn--primary">Primary (pill)</button>
+      <button class="sprinkle-btn sprinkle-btn--secondary">Secondary</button>
+      <button class="sprinkle-btn sprinkle-btn--negative">Negative</button>
+      <button class="sprinkle-btn sprinkle-btn--quiet">Quiet</button>
+      <button class="sprinkle-btn sprinkle-btn--primary" disabled>Disabled</button>
+    </div>
+  </div>
+  <div class="component-row">
+    <div class="component-label">.sprinkle-btn-group</div>
+    <div class="sprinkle-btn-group">
+      <button class="sprinkle-btn sprinkle-btn--secondary">Cancel</button>
+      <button class="sprinkle-btn sprinkle-btn--primary">Publish</button>
+    </div>
+  </div>
+</div>
+
+<!-- BADGES -->
+<div class="section">
+  <div class="section-title">Badges</div>
+  <div class="component-row">
+    <div class="component-label">solid</div>
+    <div class="flex-row">
+      <span class="sprinkle-badge">Neutral</span>
+      <span class="sprinkle-badge sprinkle-badge--positive">Positive</span>
+      <span class="sprinkle-badge sprinkle-badge--negative">Negative</span>
+      <span class="sprinkle-badge sprinkle-badge--notice">Notice</span>
+      <span class="sprinkle-badge sprinkle-badge--informative">Informative</span>
+      <span class="sprinkle-badge sprinkle-badge--accent">Accent</span>
+    </div>
+  </div>
+  <div class="component-row">
+    <div class="component-label">--subtle</div>
+    <div class="flex-row">
+      <span class="sprinkle-badge sprinkle-badge--subtle">Neutral</span>
+      <span class="sprinkle-badge sprinkle-badge--subtle sprinkle-badge--positive">Published</span>
+      <span class="sprinkle-badge sprinkle-badge--subtle sprinkle-badge--negative">Failed</span>
+      <span class="sprinkle-badge sprinkle-badge--subtle sprinkle-badge--notice">Pending</span>
+      <span class="sprinkle-badge sprinkle-badge--subtle sprinkle-badge--informative">In progress</span>
+      <span class="sprinkle-badge sprinkle-badge--subtle sprinkle-badge--accent">Accent</span>
+    </div>
+  </div>
+  <div class="component-row">
+    <div class="component-label">color fills</div>
+    <div class="flex-row">
+      <span class="sprinkle-badge sprinkle-badge--yellow">Yellow</span>
+      <span class="sprinkle-badge sprinkle-badge--purple">Purple</span>
+      <span class="sprinkle-badge sprinkle-badge--cyan">Cyan</span>
+      <span class="sprinkle-badge sprinkle-badge--magenta">Magenta</span>
+      <span class="sprinkle-badge sprinkle-badge--indigo">Indigo</span>
+      <span class="sprinkle-badge sprinkle-badge--gray">Gray</span>
+    </div>
+  </div>
+  <div class="component-row">
+    <div class="component-label">--outline</div>
+    <div class="flex-row">
+      <span class="sprinkle-badge sprinkle-badge--outline">Neutral</span>
+      <span class="sprinkle-badge sprinkle-badge--outline sprinkle-badge--positive">Positive</span>
+      <span class="sprinkle-badge sprinkle-badge--outline sprinkle-badge--negative">Negative</span>
+      <span class="sprinkle-badge sprinkle-badge--outline sprinkle-badge--notice">Notice</span>
+    </div>
+  </div>
+</div>
+
+<!-- CHIPS -->
+<div class="section">
+  <div class="section-title">Chips / Tags</div>
+  <div class="component-row">
+    <div class="component-label">.sprinkle-chip</div>
+    <div class="flex-row">
+      <span class="sprinkle-chip">
+        <svg viewBox="0 0 20 20" fill="none"><path d="M10 3a7 7 0 100 14 7 7 0 000-14zm-1 4h2v5H9V7zm0-2h2v1.5H9V5z" fill="currentColor"/></svg>
+        Best AI image generators
+      </span>
+      <span class="sprinkle-chip">+20</span>
+    </div>
+  </div>
+</div>
+
+<!-- STATUS LIGHTS -->
+<div class="section">
+  <div class="section-title">Status Lights</div>
+  <div class="component-row">
+    <div class="component-label">S (default)</div>
+    <div class="flex-row">
+      <span class="sprinkle-status-light sprinkle-status-light--positive">Pass</span>
+      <span class="sprinkle-status-light sprinkle-status-light--negative">Fail</span>
+      <span class="sprinkle-status-light sprinkle-status-light--notice">Warning</span>
+      <span class="sprinkle-status-light sprinkle-status-light--informative">Info</span>
+    </div>
+  </div>
+  <div class="component-row">
+    <div class="component-label">M (--m)</div>
+    <div class="flex-row">
+      <span class="sprinkle-status-light sprinkle-status-light--m sprinkle-status-light--notice">In progress</span>
+      <span class="sprinkle-status-light sprinkle-status-light--m sprinkle-status-light--informative">New</span>
+      <span class="sprinkle-status-light sprinkle-status-light--m">Draft</span>
+    </div>
+  </div>
+</div>
+
+<!-- TEXT FIELD -->
+<div class="section">
+  <div class="section-title">Text Field</div>
+  <div class="component-row">
+    <input type="text" class="sprinkle-text-field" placeholder="Enter URL..." style="max-width:400px">
+  </div>
+  <div class="component-row">
+    <div class="sprinkle-row" style="max-width:500px">
+      <input type="text" class="sprinkle-text-field" style="flex:1" placeholder="https://example.com">
+      <button class="sprinkle-btn sprinkle-btn--primary">Go</button>
+    </div>
+  </div>
+</div>
+
+<!-- CARDS -->
+<div class="section">
+  <div class="section-title">Cards</div>
+  <div class="component-row">
+    <div class="component-label">.sprinkle-card</div>
+    <div class="sprinkle-card" style="max-width:400px">
+      <h3 class="sprinkle-heading sprinkle-heading--m">Card Title</h3>
+      <p class="sprinkle-body">Card content with 16px radius, 24px padding, #dadada border.</p>
+    </div>
+  </div>
+  <div class="component-row">
+    <div class="component-label">.sprinkle-stat-card</div>
+    <div class="sprinkle-grid" style="max-width:500px">
+      <div class="sprinkle-stat-card"><div class="value">97/100</div><div class="label">LLM visibility</div></div>
+      <div class="sprinkle-stat-card"><div class="value">12</div><div class="label">Passed</div></div>
+      <div class="sprinkle-stat-card"><div class="value">3</div><div class="label">Issues</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- PROGRESS & METER -->
+<div class="section">
+  <div class="section-title">Progress Bar & Meter</div>
+  <div class="component-row" style="max-width:500px">
+    <div class="sprinkle-progress-bar">
+      <div class="sprinkle-progress-bar__header"><span class="label">Upload</span><span class="value">75%</span></div>
+      <div class="sprinkle-progress-bar__track"><div class="fill" style="width:75%"></div></div>
+    </div>
+  </div>
+  <div class="component-row" style="max-width:500px">
+    <div class="flex-col">
+      <div class="sprinkle-progress-bar sprinkle-progress-bar--positive">
+        <div class="sprinkle-progress-bar__header"><span class="label">Positive</span><span class="value">90%</span></div>
+        <div class="sprinkle-progress-bar__track"><div class="fill" style="width:90%"></div></div>
+      </div>
+      <div class="sprinkle-progress-bar sprinkle-progress-bar--notice">
+        <div class="sprinkle-progress-bar__header"><span class="label">Notice</span><span class="value">45%</span></div>
+        <div class="sprinkle-progress-bar__track"><div class="fill" style="width:45%"></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TABLE -->
+<div class="section">
+  <div class="section-title">Table</div>
+  <div class="component-row">
+    <table class="sprinkle-table">
+      <thead><tr><th>Object</th><th>Type</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Adobe Express Marketing Page</td>
+          <td>AEM Sites page</td>
+          <td><span class="sprinkle-badge sprinkle-badge--subtle sprinkle-badge--notice">Waiting for approval</span></td>
+        </tr>
+        <tr>
+          <td>How Creators Are Using AI tools</td>
+          <td>Blog Post</td>
+          <td><span class="sprinkle-badge sprinkle-badge--subtle sprinkle-badge--positive">Published</span></td>
+        </tr>
+        <tr>
+          <td>Compare Express Plans</td>
+          <td>LLM Experience</td>
+          <td><span class="sprinkle-badge sprinkle-badge--subtle sprinkle-badge--positive">Published</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- TASK PLAN -->
+<div class="section">
+  <div class="section-title">Task Plan</div>
+  <div class="component-row">
+    <div class="sprinkle-stack">
+      <div class="sprinkle-task-group">
+        <div class="sprinkle-task-group__header">
+          <div class="sprinkle-task-group__title">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="3" y="3" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M6 10h8M10 6v8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            Create Page: Express
+          </div>
+          <div class="sprinkle-task-group__meta">
+            <span>5 to dos</span>
+            <span class="sprinkle-badge sprinkle-badge--subtle sprinkle-badge--accent">In progress</span>
+          </div>
+        </div>
+        <div class="sprinkle-task-item sprinkle-task-item--done">
+          <span class="sprinkle-task-item__check"></span>
+          Identify audience segments
+        </div>
+        <div class="sprinkle-task-item sprinkle-task-item--done">
+          <span class="sprinkle-task-item__check"></span>
+          Migrate template to EDS
+        </div>
+        <div class="sprinkle-task-item sprinkle-task-item--pending">
+          <span class="sprinkle-task-item__check"></span>
+          Source assets
+        </div>
+        <div class="sprinkle-task-item sprinkle-task-item--pending">
+          <span class="sprinkle-task-item__check"></span>
+          Assemble and personalize page
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ACTION CARD + LIST ITEMS -->
+<div class="section">
+  <div class="section-title">Action Card + List Items</div>
+  <div class="component-row" style="max-width: 600px;">
+    <div class="component-label">Rich card with icon header + list items</div>
+    <div class="sprinkle-action-card">
+      <div class="sprinkle-action-card__header">
+        <div class="sprinkle-action-card__icon sprinkle-action-card__icon--indigo">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 3l1.5 3 3.5.5-2.5 2.5.5 3.5L10 11l-3 1.5.5-3.5L5 6.5l3.5-.5L10 3z" fill="currentColor"/></svg>
+        </div>
+        <div>
+          <div>Off-Site Opportunities</div>
+          <div class="sprinkle-action-card__meta">Adobe Express &middot; adobe.com/express</div>
+        </div>
+        <div class="sprinkle-action-card__header-actions">
+          <a href="#">Details</a>
+        </div>
+      </div>
+      <div class="sprinkle-list-item">
+        <div class="sprinkle-list-item__icon" style="background: #E5F0FE; color: #3B63FB;">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.5"/></svg>
+        </div>
+        <div class="sprinkle-list-item__content">
+          <div class="sprinkle-list-item__title">Publish blog post: "How Creators Are Using AI tools"</div>
+          <div class="sprinkle-list-item__subtitle">Boosts authority and improves LLM answer inclusion</div>
+        </div>
+        <div class="sprinkle-list-item__end">
+          <span class="sprinkle-badge sprinkle-badge--subtle sprinkle-badge--positive">Published</span>
+        </div>
+      </div>
+      <div class="sprinkle-list-item">
+        <div class="sprinkle-list-item__icon" style="background: #FFECCF; color: #D45B00;">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="6"/></svg>
+        </div>
+        <div class="sprinkle-list-item__content">
+          <div class="sprinkle-list-item__title">Seed r/creators: "How are you using AI to scale..."</div>
+          <div class="sprinkle-list-item__subtitle">Drives brand mentions in high-intent AI discussions</div>
+        </div>
+        <div class="sprinkle-list-item__end">
+          <span class="sprinkle-badge sprinkle-badge--subtle sprinkle-badge--notice">Pending moderation</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="component-row" style="max-width: 500px;">
+    <div class="component-label">Minimal action card (inline chat)</div>
+    <div class="sprinkle-action-card">
+      <div class="sprinkle-action-card__header">Deploy to production?
+        <span class="sprinkle-badge sprinkle-badge--subtle sprinkle-badge--notice">staging passed</span>
+      </div>
+      <div class="sprinkle-action-card__body">Branch <strong>main</strong>, commit <code>abc123</code>. All 47 tests passing.</div>
+      <div class="sprinkle-action-card__actions">
+        <button class="sprinkle-btn sprinkle-btn--secondary">Cancel</button>
+        <button class="sprinkle-btn sprinkle-btn--primary">Deploy</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- KV LIST -->
+<div class="section">
+  <div class="section-title">Key-Value List</div>
+  <div class="component-row" style="max-width:400px">
+    <dl class="sprinkle-kv-list">
+      <dt>Word count</dt><dd>1,240</dd>
+      <dt>Reading time</dt><dd>5 min</dd>
+      <dt>Flesch score</dt><dd>72</dd>
+    </dl>
+  </div>
+</div>
+
+<!-- TOOLBAR -->
+<div class="section">
+  <div class="section-title">Toolbar</div>
+  <div class="component-row">
+    <div class="demo-toolbar">
+      <div class="sprinkle-toolbar">
+        <div class="sprinkle-toolbar__start"><button class="sprinkle-btn sprinkle-btn--quiet">Back</button></div>
+        <div class="sprinkle-toolbar__center"><strong>SEO Audit Report</strong></div>
+        <div class="sprinkle-toolbar__end">
+          <button class="sprinkle-btn sprinkle-btn--secondary">Export</button>
+          <button class="sprinkle-btn sprinkle-btn--primary">Fix All</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TABS -->
+<div class="section">
+  <div class="section-title">Tabs</div>
+  <div class="component-row">
+    <div class="demo-tabs">
+      <div class="sprinkle-tabs" id="demo-tabs-bar">
+        <button class="sprinkle-tabs__tab sprinkle-tabs__tab--active" onclick="switchTab(0)">Overview</button>
+        <button class="sprinkle-tabs__tab" onclick="switchTab(1)">Issues</button>
+        <button class="sprinkle-tabs__tab" onclick="switchTab(2)">Passed</button>
+      </div>
+      <div class="sprinkle-tabs__panel sprinkle-tabs__panel--active" style="padding:16px"><p class="sprinkle-body">Overview content.</p></div>
+      <div class="sprinkle-tabs__panel" style="padding:16px"><p class="sprinkle-body">Issues content.</p></div>
+      <div class="sprinkle-tabs__panel" style="padding:16px"><p class="sprinkle-body">Passed content.</p></div>
+    </div>
+  </div>
+</div>
+
+<!-- SIDEBAR -->
+<div class="section">
+  <div class="section-title">Sidebar</div>
+  <div class="component-row">
+    <div class="demo-sidebar">
+      <div class="sprinkle-sidebar" style="height:100%">
+        <nav class="sprinkle-sidebar__nav">
+          <div class="sprinkle-sidebar__nav-label">Pages</div>
+          <div class="sprinkle-sidebar__nav-item sprinkle-sidebar__nav-item--active">Home</div>
+          <div class="sprinkle-sidebar__nav-item">About</div>
+          <div class="sprinkle-sidebar__nav-item">Products</div>
+          <div class="sprinkle-sidebar__nav-label">Settings</div>
+          <div class="sprinkle-sidebar__nav-item">General</div>
+        </nav>
+        <div class="sprinkle-sidebar__main">
+          <h3 class="sprinkle-heading sprinkle-heading--m">Home</h3>
+          <p class="sprinkle-body">Main content area.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- DIALOG -->
+<div class="section">
+  <div class="section-title">Dialog (inline preview)</div>
+  <div class="component-row">
+    <div class="sprinkle-dialog__content" style="position:relative; max-width:440px">
+      <div class="sprinkle-dialog__header">
+        <span class="sprinkle-dialog__title">Confirm Delete</span>
+        <button class="sprinkle-dialog__close">&times;</button>
+      </div>
+      <p class="sprinkle-body">Are you sure you want to delete this page?</p>
+      <div class="sprinkle-dialog__footer">
+        <button class="sprinkle-btn sprinkle-btn--secondary">Cancel</button>
+        <button class="sprinkle-btn sprinkle-btn--negative">Delete</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- COLLAPSIBLE -->
+<div class="section">
+  <div class="section-title">Collapsible</div>
+  <div class="component-row">
+    <div class="demo-collapsible">
+      <div class="sprinkle-collapsible sprinkle-collapsible--open">
+        <button class="sprinkle-collapsible__header" onclick="this.parentElement.classList.toggle('sprinkle-collapsible--open')">
+          <span class="sprinkle-collapsible__chevron"></span>
+          Technical Details
+        </button>
+        <div class="sprinkle-collapsible__body">
+          <p class="sprinkle-body">Expanded content.</p>
+          <div style="margin-top:8px">
+            <span class="sprinkle-badge sprinkle-badge--subtle sprinkle-badge--positive">HTML5</span>
+            <span class="sprinkle-badge sprinkle-badge--subtle sprinkle-badge--informative">CSS3</span>
+          </div>
+        </div>
+      </div>
+      <div class="sprinkle-collapsible">
+        <button class="sprinkle-collapsible__header" onclick="this.parentElement.classList.toggle('sprinkle-collapsible--open')">
+          <span class="sprinkle-collapsible__chevron"></span>
+          Performance (collapsed)
+        </button>
+        <div class="sprinkle-collapsible__body"><p class="sprinkle-body">Hidden.</p></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<script>
+// Fetch index.html and extract all <style> blocks to get production CSS
+fetch('/index.html')
+  .then(r => r.text())
+  .then(html => {
+    var parser = new DOMParser();
+    var doc = parser.parseFromString(html, 'text/html');
+    var styles = doc.querySelectorAll('style');
+    styles.forEach(function(s) {
+      var el = document.createElement('style');
+      el.textContent = s.textContent;
+      document.head.appendChild(el);
+    });
+    // Apply current theme
+    document.body.style.background = 'var(--s2-bg-base)';
+    document.body.style.color = 'var(--s2-content-default)';
+    document.getElementById('status').textContent =
+      'Loaded ' + styles.length + ' style blocks from index.html';
+    setTimeout(function() { document.getElementById('status').style.display = 'none'; }, 3000);
+  })
+  .catch(function(err) {
+    var s = document.getElementById('status');
+    s.textContent = 'Failed to load CSS: ' + err.message + ' — run npm run dev first';
+    s.className = 'error';
+  });
+
+function setTheme(t) {
+  document.documentElement.classList.toggle('theme-light', t === 'light');
+  document.querySelectorAll('.theme-toggle button').forEach(function(b) {
+    b.classList.toggle('active', b.textContent.toLowerCase() === t);
+  });
+}
+function switchTab(i) {
+  document.querySelectorAll('#demo-tabs-bar .sprinkle-tabs__tab').forEach(function(t,j) {
+    t.classList.toggle('sprinkle-tabs__tab--active', j===i);
+  });
+  document.querySelectorAll('.demo-tabs .sprinkle-tabs__panel').forEach(function(p,j) {
+    p.classList.toggle('sprinkle-tabs__panel--active', j===i);
+  });
+}
+</script>
+</body>
+</html>

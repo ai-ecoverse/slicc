@@ -375,7 +375,7 @@ describe('full document rendering', () => {
 
     const iframe = container.querySelector('iframe');
     expect(iframe).toBeTruthy();
-    expect(iframe?.getAttribute('sandbox')).toBe('allow-scripts');
+    expect(iframe?.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin');
     // Should NOT have a .sprinkle-content wrapper
     expect(container.querySelector('.sprinkle-content')).toBeNull();
   });
