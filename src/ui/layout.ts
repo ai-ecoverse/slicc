@@ -27,9 +27,15 @@ import { MemoryPanel } from './memory-panel.js';
 import { ScoopsPanel } from './scoops-panel.js';
 import { ScoopSwitcher } from './scoop-switcher.js';
 import {
+  getApiKey,
+  clearAllSettings,
   getSelectedModelId,
   setSelectedModelId,
+  showProviderSettings,
   getAllAvailableModels,
+  getAccounts,
+  getProviderConfig,
+  removeAccount,
 } from './provider-settings.js';
 import { EXTENSION_TAB_SPECS, setHiddenTabs, type ExtensionTabId } from './tabbed-ui.js';
 import { TabZone } from './tab-zone.js';
@@ -82,6 +88,9 @@ export class Layout {
   // Scoop switcher (extension mode)
   private scoopSwitcher: ScoopSwitcher | null = null;
   private scoopSwitcherEl: HTMLElement | null = null;
+
+  // User avatar element
+  private avatarEl!: HTMLElement;
 
   // Dynamic logo
   private logoSvg: SVGSVGElement | null = null;
@@ -210,6 +219,7 @@ export class Layout {
     this.refreshModels = () => {
       ensureModelSelected();
       this.panels?.chat?.refreshModelSelector();
+      this.refreshAvatar();
     };
 
     const row = document.createElement('div');
@@ -244,7 +254,9 @@ export class Layout {
     spacer.className = 'header__spacer';
     row.appendChild(spacer);
 
-    // Header actions will be added in a follow-up commit
+    // Avatar
+    this.avatarEl = this.buildUserAvatar();
+    row.appendChild(this.avatarEl);
 
     header.appendChild(row);
     parent.appendChild(header);
@@ -394,6 +406,169 @@ export class Layout {
     const minY = Math.min(...allY) - r - 1;
     const maxY = 32; // cone bottom stays fixed
     this.logoSvg.setAttribute('viewBox', `${minX} ${minY} ${maxX - minX} ${maxY - minY}`);
+  }
+
+  /** Get initials from a user name (up to 2 characters). */
+  private getInitials(name: string): string {
+    const parts = name.trim().split(/\s+/);
+    if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    return name.slice(0, 2).toUpperCase();
+  }
+
+  /** Build the user avatar element — 28px circle, three states. */
+  private buildUserAvatar(): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'header__avatar';
+    el.setAttribute('aria-label', 'Account');
+    el.dataset.tooltip = 'Account';
+
+    // Find first account with user info
+    const accounts = getAccounts();
+    const account = accounts.find(a => a.userName || a.userAvatar);
+
+    if (account?.userAvatar) {
+      // Avatar URL
+      const img = document.createElement('img');
+      img.src = account.userAvatar;
+      img.alt = account.userName ?? 'User';
+      img.addEventListener('error', () => {
+        // Fallback to initials on error
+        el.removeChild(img);
+        if (account.userName) {
+          el.classList.add('header__avatar--initials');
+          el.textContent = this.getInitials(account.userName);
+        }
+      });
+      el.appendChild(img);
+    } else if (account?.userName) {
+      // Initials circle
+      el.classList.add('header__avatar--initials');
+      el.textContent = this.getInitials(account.userName);
+    } else {
+      // Placeholder person icon
+      el.classList.add('header__avatar--placeholder');
+      el.innerHTML = '<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M10 10c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v1c0 .55.45 1 1 1h14c.55 0 1-.45 1-1v-1c0-2.66-5.33-4-8-4z"/></svg>';
+    }
+
+    el.addEventListener('click', () => this.showAvatarPopover());
+    return el;
+  }
+
+  /** Refresh the avatar after provider settings change. */
+  private refreshAvatar(): void {
+    if (!this.avatarEl) return;
+    const parent = this.avatarEl.parentElement;
+    if (!parent) return;
+    const newAvatar = this.buildUserAvatar();
+    parent.replaceChild(newAvatar, this.avatarEl);
+    this.avatarEl = newAvatar;
+  }
+
+  /** Show the avatar profile popover. */
+  private showAvatarPopover(): void {
+    // Toggle — if already open, just close it
+    const existing = document.querySelector('.avatar-popover');
+    if (existing) {
+      existing.remove();
+      return;
+    }
+
+    const popover = document.createElement('div');
+    popover.className = 'avatar-popover';
+
+    // Find current account info
+    const accounts = getAccounts();
+    const account = accounts.find(a => a.userName || a.accessToken || a.apiKey);
+
+    if (account) {
+      const userSection = document.createElement('div');
+      userSection.className = 'avatar-popover__user';
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'avatar-popover__name';
+      nameEl.textContent = account.userName || 'Logged in';
+      userSection.appendChild(nameEl);
+
+      const providerEl = document.createElement('div');
+      providerEl.className = 'avatar-popover__provider';
+      providerEl.textContent = getProviderConfig(account.providerId).name;
+      userSection.appendChild(providerEl);
+
+      popover.appendChild(userSection);
+
+      // Sign out
+      const signOutBtn = document.createElement('button');
+      signOutBtn.className = 'avatar-popover__item';
+      signOutBtn.textContent = 'Sign out';
+      signOutBtn.addEventListener('click', () => {
+        removeAccount(account.providerId);
+        popover.remove();
+        this.refreshAvatar();
+        this.refreshModels?.();
+      });
+      popover.appendChild(signOutBtn);
+    }
+
+    // Clear all accounts (danger)
+    if (accounts.length > 0) {
+      const sep = document.createElement('div');
+      sep.className = 'avatar-popover__separator';
+      popover.appendChild(sep);
+
+      const clearAllBtn = document.createElement('button');
+      clearAllBtn.className = 'avatar-popover__item avatar-popover__item--danger';
+      clearAllBtn.textContent = 'Clear all accounts';
+      clearAllBtn.addEventListener('click', () => {
+        clearAllSettings();
+        popover.remove();
+        this.refreshAvatar();
+        this.refreshModels?.();
+      });
+      popover.appendChild(clearAllBtn);
+    }
+
+    // Account settings link
+    const sep2 = document.createElement('div');
+    sep2.className = 'avatar-popover__separator';
+    popover.appendChild(sep2);
+
+    const settingsBtn = document.createElement('button');
+    settingsBtn.className = 'avatar-popover__item';
+    settingsBtn.textContent = 'Account settings\u2026';
+    settingsBtn.addEventListener('click', async () => {
+      popover.remove();
+      if (!getApiKey()) clearAllSettings();
+      const changed = await showProviderSettings();
+      if (changed) {
+        this.refreshAvatar();
+        this.refreshModels?.();
+      }
+    });
+    popover.appendChild(settingsBtn);
+
+    document.body.appendChild(popover);
+
+    // Position below avatar
+    const rect = this.avatarEl.getBoundingClientRect();
+    popover.style.top = `${rect.bottom + 4}px`;
+    popover.style.right = `${window.innerWidth - rect.right}px`;
+
+    // Dismiss on outside click or Escape (avatar clicks handled by toggle in showAvatarPopover)
+    const dismiss = (e: MouseEvent | KeyboardEvent) => {
+      if (e instanceof KeyboardEvent) {
+        if (e.key !== 'Escape') return;
+      } else if (popover.contains(e.target as Node) || this.avatarEl.contains(e.target as Node)) {
+        return;
+      }
+      popover.remove();
+      document.removeEventListener('mousedown', dismiss);
+      document.removeEventListener('keydown', dismiss);
+    };
+    // Delay to avoid immediate dismissal from the click that opened it
+    requestAnimationFrame(() => {
+      document.addEventListener('mousedown', dismiss);
+      document.addEventListener('keydown', dismiss);
+    });
   }
 
   // ── Extension: Tabbed Layout ────────────────────────────────────────

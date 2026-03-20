@@ -55,6 +55,7 @@ export interface Account {
   refreshToken?: string;
   tokenExpiresAt?: number;
   userName?: string;
+  userAvatar?: string;
 }
 
 // Delete legacy keys on first access
@@ -150,12 +151,13 @@ export function getOAuthAccountInfo(providerId: string): {
   token: string;
   expiresAt?: number;
   userName?: string;
+  userAvatar?: string;
   expired: boolean;
 } | null {
   const account = getAccounts().find(a => a.providerId === providerId);
   if (!account?.accessToken) return null;
   const expired = !!account.tokenExpiresAt && Date.now() > account.tokenExpiresAt - 60000;
-  return { token: account.accessToken, expiresAt: account.tokenExpiresAt, userName: account.userName, expired };
+  return { token: account.accessToken, expiresAt: account.tokenExpiresAt, userName: account.userName, userAvatar: account.userAvatar, expired };
 }
 
 // --- Build-time provider defaults from providers.json ---
@@ -280,6 +282,7 @@ export function saveOAuthAccount(opts: {
   refreshToken?: string;
   tokenExpiresAt?: number;
   userName?: string;
+  userAvatar?: string;
   baseUrl?: string;
 }): void {
   const existing = getAccounts().find(a => a.providerId === opts.providerId);
@@ -291,6 +294,7 @@ export function saveOAuthAccount(opts: {
     refreshToken: opts.refreshToken,
     tokenExpiresAt: opts.tokenExpiresAt,
     userName: opts.userName,
+    userAvatar: opts.userAvatar,
     baseUrl: opts.baseUrl ?? existing?.baseUrl,
   });
   saveAccounts(accounts);
