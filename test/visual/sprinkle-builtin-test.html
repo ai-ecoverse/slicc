@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en" class="theme-light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Built-in Sprinkles — Production CSS Test</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: auto !important; overflow: auto !important; }
+body { font-family: 'Adobe Clean', -apple-system, BlinkMacSystemFont, sans-serif; padding: 24px; background: #f3f3f3; }
+.page-header { max-width: 1200px; margin: 0 auto 24px; }
+.page-header h1 { font-size: 24px; font-weight: 800; color: #131313; }
+.page-header p { font-size: 13px; color: #717171; margin-top: 4px; }
+.controls { display: flex; gap: 8px; margin-top: 12px; align-items: center; flex-wrap: wrap; }
+.controls button {
+  padding: 6px 14px; border: 1px solid #dadada; border-radius: 9999px;
+  background: white; color: #292929; font-size: 12px; font-weight: 600;
+  cursor: pointer; font-family: inherit;
+}
+.controls button.active { background: #3b63fb; color: white; border-color: transparent; }
+.controls button.expand-btn { background: #292929; color: white; border-color: transparent; }
+.grid { max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.sprinkle-card {
+  background: white; border: 1px solid #dadada; border-radius: 16px;
+  overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+.sprinkle-card__header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 20px; cursor: pointer; user-select: none;
+  border-bottom: 1px solid #e9e9e9;
+}
+.sprinkle-card__header:hover { background: #f8f8f8; }
+.sprinkle-card__name { font-size: 14px; font-weight: 700; color: #292929; }
+.sprinkle-card__path { font-size: 11px; color: #8f8f8f; font-family: monospace; }
+.sprinkle-card__status { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 6px; }
+.sprinkle-card__status--ok { background: #d7f7e1; color: #079355; }
+.sprinkle-card__status--loading { background: #e5f0fe; color: #3b63fb; }
+.sprinkle-card__status--error { background: #ffe8f0; color: #d92361; }
+.sprinkle-card__chevron { font-size: 10px; color: #8f8f8f; transition: transform 200ms ease; }
+.sprinkle-card--open .sprinkle-card__chevron { transform: rotate(90deg); }
+.sprinkle-card__body { display: none; }
+.sprinkle-card--open .sprinkle-card__body { display: block; }
+.sprinkle-card__body iframe {
+  width: 100%; border: none; display: block;
+  min-height: 500px;
+}
+#status-bar {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  padding: 8px 24px; background: #292929; color: #cfcfcf;
+  font-size: 12px; z-index: 100; display: flex; gap: 16px;
+}
+</style>
+</head>
+<body>
+
+<div class="page-header">
+  <h1>Built-in Sprinkles Test</h1>
+  <p>Each sprinkle loaded with production CSS from <code>index.html</code>. Click to expand. Mock data from the TAVEX pharma page is auto-injected.</p>
+  <div class="controls">
+    <button onclick="setTheme('light')" class="active" data-theme="light">Light</button>
+    <button onclick="setTheme('dark')" data-theme="dark">Dark</button>
+    <span style="width:1px;height:20px;background:#dadada"></span>
+    <button class="expand-btn" onclick="toggleAll()">Expand All</button>
+  </div>
+</div>
+
+<div class="grid" id="grid"></div>
+<div id="status-bar">Loading...</div>
+
+<script>
+var SPRINKLES = [
+  'welcome',
+  'seo-dashboard',
+  'page-editor',
+  'readability',
+  'brand-compliance',
+  'content-tree',
+  'funnels',
+  'performance',
+  'review-workflow',
+  'schema-editor',
+  'tone-voice'
+];
+
+var themeCSS = '';
+var allExpanded = false;
+
+// ============================================================
+// MOCK DATA — Based on https://main--az-sitebuilder--paolomoz.aem.page/tavex/
+// ============================================================
+var TAVEX_URL = 'https://main--az-sitebuilder--paolomoz.aem.page/tavex/';
+var MOCK_DATA = {
+  'welcome': null, // welcome has no data contract
+
+  'seo-dashboard': {
+    pages: [
+      {
+        url: TAVEX_URL, path: '/tavex/', name: 'TAVEX Home', traffic: 12450,
+        title: 'TAVEX (tavexirel) \u2014 For Rheumatoid Arthritis | AstraZeneca',
+        meta: 'TAVEX (tavexirel) is a selective JAK1 inhibitor for moderate-to-severe rheumatoid arthritis in adults who have had an inadequate response to one or more DMARDs.',
+        h1s: ['TAVEX (tavexirel)'],
+        imgs: [
+          { src: '/tavex/media_hero.jpeg', alt: 'Patient consultation' },
+          { src: '/tavex/media_efficacy.jpeg', alt: '' },
+          { src: '/tavex/media_safety.jpeg', alt: 'Safety profile' },
+          { src: '/tavex/media_dosing.jpeg', alt: '' },
+          { src: '/tavex/media_mechanism.jpeg', alt: 'JAK1 mechanism illustration' }
+        ],
+        internalLinks: 4
+      },
+      {
+        url: TAVEX_URL + 'efficacy', path: '/tavex/efficacy', name: 'Efficacy Data', traffic: 5200,
+        title: 'Efficacy Data \u2014 TAVEX (tavexirel)',
+        meta: '',
+        h1s: ['Efficacy'],
+        imgs: [
+          { src: '/tavex/efficacy/chart.png', alt: 'ACR response rates at week 12' }
+        ],
+        internalLinks: 3
+      },
+      {
+        url: TAVEX_URL + 'safety', path: '/tavex/safety', name: 'Safety Profile', traffic: 3800,
+        title: 'Safety Profile \u2014 TAVEX (tavexirel)',
+        meta: 'Review the safety profile and adverse events associated with TAVEX (tavexirel) in clinical trials.',
+        h1s: ['Safety Profile'],
+        imgs: [],
+        internalLinks: 2
+      },
+      {
+        url: TAVEX_URL + 'dosing', path: '/tavex/dosing', name: 'Dosing', traffic: 1900,
+        title: 'Dosing Information',
+        meta: 'Recommended dosing for TAVEX (tavexirel) in adults with moderate-to-severe rheumatoid arthritis.',
+        h1s: [],
+        imgs: [
+          { src: '/tavex/dosing/tablet.png', alt: '' }
+        ],
+        internalLinks: 2
+      }
+    ]
+  },
+
+  'page-editor': {
+    sections: [
+      {
+        id: 's1', type: 'hero-teaser', label: 'Hero',
+        data: {
+          imgSrc: '/tavex/media_hero.jpeg', imgAlt: 'Patient consultation with doctor',
+          heading: 'TAVEX (tavexirel)',
+          body: 'A selective JAK1 inhibitor for adults living with moderate-to-severe rheumatoid arthritis.',
+          ctaText: 'See Efficacy Data', ctaHref: '/tavex/efficacy'
+        }
+      },
+      {
+        id: 's2', type: 'cards-teaser', label: 'Key Areas',
+        data: {
+          cards: [
+            { imgSrc: '/tavex/media_efficacy.jpeg', imgAlt: 'Efficacy data', title: 'Proven Efficacy', body: 'ACR20 response rates demonstrated at Week 12 in pivotal Phase III trials.', linkText: 'View efficacy data', linkHref: '/tavex/efficacy' },
+            { imgSrc: '/tavex/media_safety.jpeg', imgAlt: 'Safety profile', title: 'Safety Profile', body: 'Comprehensive safety data from clinical development program.', linkText: 'Review safety', linkHref: '/tavex/safety' },
+            { imgSrc: '/tavex/media_dosing.jpeg', imgAlt: 'Dosing guide', title: 'Dosing & Administration', body: 'Once-daily oral tablet. No loading dose required.', linkText: 'See dosing', linkHref: '/tavex/dosing' }
+          ]
+        }
+      },
+      {
+        id: 's3', type: 'introduction', label: 'Introduction',
+        data: {
+          heading: 'A New Option in RA Treatment',
+          body: 'TAVEX offers a targeted approach to managing rheumatoid arthritis by selectively inhibiting JAK1, helping to reduce the inflammatory cascade while maintaining a favorable benefit-risk profile.'
+        }
+      },
+      {
+        id: 's4', type: 'columns-teaser', label: 'Mechanism of Action',
+        data: {
+          imgSrc: '/tavex/media_mechanism.jpeg', imgAlt: 'JAK1 mechanism illustration',
+          heading: 'Selective JAK1 Inhibition',
+          body: 'By preferentially targeting JAK1 over other JAK family members, TAVEX modulates key cytokine signaling pathways implicated in RA pathogenesis.',
+          ctaText: 'Learn about mechanism', ctaHref: '/tavex/mechanism-of-action'
+        }
+      },
+      {
+        id: 's5', type: 'accordion', label: 'Important Information',
+        data: {
+          items: [
+            { title: 'Prescribing Information', body: '<p>See full Prescribing Information, including Boxed Warning, at tavex-pi.example.com.</p>' },
+            { title: 'Adverse Events', body: '<p>The most common adverse reactions (\u22655%) are upper respiratory tract infections, nausea, and headache.</p>' },
+            { title: 'References', body: '<p>1. Smith et al. <em>N Engl J Med</em> 2025;392:1234-1245.<br>2. TAVEX Prescribing Information. AstraZeneca 2025.</p>' }
+          ]
+        }
+      }
+    ],
+    blockTypes: ['hero-teaser', 'introduction', 'cards-teaser', 'columns-teaser', 'accordion']
+  },
+
+  'readability': {
+    score: 62,
+    title: 'TAVEX (tavexirel) HCP Page',
+    criteria: [
+      { id: 'grade', label: 'Reading Grade', status: 'fail', value: 'Grade 14.2', target: '8\u201312' },
+      { id: 'passive', label: 'Passive Voice', status: 'warn', value: '18%', target: '<10%' },
+      { id: 'sentence-len', label: 'Avg Sentence Length', status: 'warn', value: '22 words', target: '<20 words' },
+      { id: 'jargon', label: 'Medical Jargon', status: 'pass', value: 'Acceptable for HCP', target: 'Audience-appropriate' },
+      { id: 'structure', label: 'Content Structure', status: 'pass', value: 'Clear hierarchy', target: 'H1 \u2192 H2 \u2192 body' }
+    ],
+    pageContent: [
+      { label: 'Hero', signal: 'red', score: 32, reason: 'Grade 14.2 \u2014 too complex for general audience. Contains dense medical terminology.', heading: 'TAVEX (tavexirel)', text: 'A selective JAK1 inhibitor for adults living with moderate-to-severe rheumatoid arthritis who have had an inadequate response to one or more disease-modifying antirheumatic drugs (DMARDs).' },
+      { label: 'Introduction', signal: 'red', score: 28, reason: 'Grade 16.8 \u2014 very high complexity. Long sentence with multiple subordinate clauses.', heading: 'A New Option in RA Treatment', text: 'TAVEX offers a targeted approach to managing rheumatoid arthritis by selectively inhibiting JAK1, helping to reduce the inflammatory cascade while maintaining a favorable benefit-risk profile.' },
+      { label: 'Cards Teaser', signal: 'green', score: 85, reason: 'Grade 11.5 \u2014 within target range. Short declarative sentences.', text: 'ACR20 response rates demonstrated at Week 12 in pivotal Phase III trials. Comprehensive safety data from clinical development program. Once-daily oral tablet. No loading dose required.' },
+      { label: 'Mechanism of Action', signal: 'red', score: 18, reason: 'Grade 18.1 \u2014 extremely complex. Dense scientific language not suitable for patient audience.', heading: 'Selective JAK1 Inhibition', text: 'By preferentially targeting JAK1 over other JAK family members, TAVEX modulates key cytokine signaling pathways implicated in RA pathogenesis.' },
+      { label: 'Safety / Adverse Events', signal: 'green', score: 78, reason: 'Grade 10.4 \u2014 good readability. Clear, direct language.', text: 'The most common adverse reactions (\u22655%) are upper respiratory tract infections, nausea, and headache. See full Prescribing Information, including Boxed Warning.' }
+    ],
+    content: "TAVEX (tavexirel) is a selective JAK1 inhibitor for adults living with moderate-to-severe rheumatoid arthritis who have had an inadequate response to one or more disease-modifying antirheumatic drugs (DMARDs).\n\nA New Option in RA Treatment\nTAVEX offers a targeted approach to managing rheumatoid arthritis by selectively inhibiting JAK1, helping to reduce the inflammatory cascade while maintaining a favorable benefit-risk profile.\n\nProven Efficacy\nACR20 response rates demonstrated at Week 12 in pivotal Phase III trials.\n\nSafety Profile\nComprehensive safety data from clinical development program.\n\nDosing & Administration\nOnce-daily oral tablet. No loading dose required.\n\nSelective JAK1 Inhibition\nBy preferentially targeting JAK1 over other JAK family members, TAVEX modulates key cytokine signaling pathways implicated in RA pathogenesis.\n\nThe most common adverse reactions (\u22655%) are upper respiratory tract infections, nausea, and headache. See full Prescribing Information, including Boxed Warning."
+  },
+
+  'brand-compliance': {
+    violations: [
+      { id: 'v1', category: 'image', severity: 'warning', element: 'img.efficacy-card',
+        desc: 'Efficacy card image missing descriptive alt text for screen readers',
+        found: 'Missing alt text', expected: 'Descriptive alt text',
+        suggestion: 'Add alt="Efficacy data chart showing ACR20 response rates at Week 12"' },
+      { id: 'v2', category: 'image', severity: 'warning', element: 'img.dosing-card',
+        desc: 'Dosing card image has empty alt attribute — fails WCAG 1.1.1',
+        found: 'Missing alt text', expected: 'Descriptive alt text',
+        suggestion: 'Add alt="TAVEX tablet dosing illustration — once daily oral"' },
+      { id: 'v3', category: 'color', severity: 'info', element: '.hero-teaser h1',
+        desc: 'Hero heading uses off-brand black instead of AstraZeneca brand black',
+        found: '#1B1B1B', expected: '#131313',
+        suggestion: 'Update heading color to AZ brand black #131313' },
+      { id: 'v4', category: 'font', severity: 'critical', element: '.card-body p',
+        desc: 'Body text below WCAG AA minimum — fails accessibility audit',
+        property: 'font-size', found: '13px', expected: '14px',
+        suggestion: 'Increase card body text to at least 14px for WCAG AA compliance' },
+      { id: 'v5', category: 'spacing', severity: 'info', element: '.accordion-item',
+        desc: 'Accordion padding does not follow the 8px brand spacing grid',
+        found: '12px', expected: '16px',
+        suggestion: 'Align accordion padding to brand spacing grid (16px minimum)' },
+      { id: 'v6', category: 'color', severity: 'warning', element: '.cta-button',
+        desc: 'CTA uses generic blue instead of approved AstraZeneca brand color',
+        found: '#2563EB', expected: '#D40E8C',
+        suggestion: 'Replace CTA color with AZ Magenta (#D40E8C) or AZ Blue (#00A6E2)' },
+      { id: 'v7', category: 'font', severity: 'critical', element: '.hero-teaser .body',
+        desc: 'Hero body text uses system font stack instead of Adobe Clean',
+        property: 'font-family', found: 'Helvetica Neue', expected: 'Adobe Clean',
+        suggestion: 'Set font-family to Adobe Clean across all body text elements' }
+    ],
+    rules: {
+      colors: ['#131313', '#D40E8C', '#00A6E2', '#FFFFFF', '#F5F5F5'],
+      fonts: ['Adobe Clean', 'Helvetica Neue', 'sans-serif'],
+      spacing: ['4px', '8px', '16px', '24px', '32px', '48px']
+    }
+  },
+
+  'content-tree': {
+    pages: [
+      { path: '/tavex/', name: 'TAVEX Home', id: 'p1', parent: null, status: 'published' },
+      { path: '/tavex/efficacy', name: 'Efficacy Data', id: 'p2', parent: 'p1', status: 'published' },
+      { path: '/tavex/safety', name: 'Safety Profile', id: 'p3', parent: 'p1', status: 'published' },
+      { path: '/tavex/dosing', name: 'Dosing & Administration', id: 'p4', parent: 'p1', status: 'published' },
+      { path: '/tavex/mechanism-of-action', name: 'Mechanism of Action', id: 'p5', parent: 'p1', status: 'draft' },
+      { path: '/tavex/mechanism-of-action/jak1-pathway', name: 'JAK1 Pathway Detail', id: 'p6', parent: 'p5', status: 'draft' },
+      { path: '/tavex/prescribing-information', name: 'Prescribing Information', id: 'p7', parent: 'p1', status: 'published' },
+      { path: '/tavex/resources', name: 'HCP Resources', id: 'p8', parent: 'p1', status: 'modified' }
+    ]
+  },
+
+  'funnels': {
+    funnels: {
+      'hcp-engagement': {
+        name: 'HCP Engagement Funnel',
+        stages: [
+          { name: 'Landing Page Views', count: 12450, pct: 100, checkpoint: 'page_view', selector: '.hero-teaser' },
+          { name: 'Efficacy Section Scroll', count: 8320, pct: 66.8, checkpoint: 'scroll_depth_50', selector: '.efficacy-section' },
+          { name: 'CTA Click (See Data)', count: 2840, pct: 22.8, checkpoint: 'cta_click', selector: '.btn-efficacy' },
+          { name: 'PI Download', count: 890, pct: 7.1, checkpoint: 'download', selector: 'a[href*="pi.pdf"]' },
+          { name: 'Rep Request', count: 215, pct: 1.7, checkpoint: 'form_submit', selector: '#rep-request-form' }
+        ],
+        dropoffs: [
+          { drop: 33.2, severity: 'amber' },
+          { drop: 44.0, severity: 'red' },
+          { drop: 15.7, severity: 'green' },
+          { drop: 5.4, severity: 'green' }
+        ],
+        analysis: 'Strong top-of-funnel engagement. The biggest drop-off is between Efficacy Section Scroll and CTA Click \u2014 consider making the CTA more prominent or adding an in-page data preview.'
+      },
+      'patient-journey': {
+        name: 'Patient Information Journey',
+        stages: [
+          { name: 'Homepage Visit', count: 8900, pct: 100, checkpoint: 'page_view', selector: 'body' },
+          { name: 'Safety Page', count: 3200, pct: 36, checkpoint: 'navigation', selector: 'a[href*="safety"]' },
+          { name: 'Dosing Page', count: 1850, pct: 20.8, checkpoint: 'navigation', selector: 'a[href*="dosing"]' },
+          { name: 'Find a Doctor CTA', count: 420, pct: 4.7, checkpoint: 'cta_click', selector: '.find-doctor-btn' }
+        ],
+        dropoffs: [
+          { drop: 64.0, severity: 'red' },
+          { drop: 15.2, severity: 'green' },
+          { drop: 16.1, severity: 'green' }
+        ],
+        analysis: 'Patients show high interest in safety information. The jump from Dosing to Find a Doctor is steep \u2014 adding a CTA on the dosing page could improve conversion.'
+      }
+    },
+    currentFunnel: 'hcp-engagement',
+    currentRange: 7
+  },
+
+  'performance': {
+    siteData: {
+      '7d': {
+        summary: { lcp: 2.1, inp: 85, cls: 0.03, traffic: 24500 },
+        pages: [
+          { path: '/tavex/', name: 'TAVEX Home', lcp: 1.8, inp: 72, cls: 0.02, traffic: 12450, attribution: null, regression: null },
+          { path: '/tavex/efficacy', name: 'Efficacy Data', lcp: 2.3, inp: 95, cls: 0.04, traffic: 5200, attribution: null, regression: null },
+          { path: '/tavex/safety', name: 'Safety Profile', lcp: 2.0, inp: 68, cls: 0.01, traffic: 3800, attribution: null, regression: null },
+          { path: '/tavex/dosing', name: 'Dosing', lcp: 1.6, inp: 55, cls: 0.02, traffic: 1900, attribution: null, regression: null },
+          { path: '/tavex/mechanism-of-action', name: 'Mechanism of Action', lcp: 3.8, inp: 120, cls: 0.08, traffic: 1150, attribution: { element: 'img.hero-mechanism', loadTime: 3200 }, regression: { delta: 1.2, since: '2025-03-10' } }
+        ]
+      },
+      '30d': {
+        summary: { lcp: 2.3, inp: 92, cls: 0.04, traffic: 98000 },
+        pages: [
+          { path: '/tavex/', name: 'TAVEX Home', lcp: 2.0, inp: 78, cls: 0.03, traffic: 48200, attribution: null, regression: null },
+          { path: '/tavex/efficacy', name: 'Efficacy Data', lcp: 2.5, inp: 102, cls: 0.05, traffic: 21000, attribution: null, regression: null },
+          { path: '/tavex/safety', name: 'Safety Profile', lcp: 2.2, inp: 74, cls: 0.02, traffic: 15400, attribution: null, regression: null },
+          { path: '/tavex/dosing', name: 'Dosing', lcp: 1.8, inp: 60, cls: 0.03, traffic: 7800, attribution: null, regression: null },
+          { path: '/tavex/mechanism-of-action', name: 'Mechanism of Action', lcp: 4.1, inp: 135, cls: 0.09, traffic: 5600, attribution: { element: 'img.hero-mechanism', loadTime: 3500 }, regression: { delta: 1.5, since: '2025-02-28' } }
+        ]
+      },
+      '90d': {
+        summary: { lcp: 2.5, inp: 98, cls: 0.05, traffic: 285000 },
+        pages: [
+          { path: '/tavex/', name: 'TAVEX Home', lcp: 2.2, inp: 82, cls: 0.04, traffic: 142000, attribution: null, regression: null },
+          { path: '/tavex/efficacy', name: 'Efficacy Data', lcp: 2.7, inp: 108, cls: 0.06, traffic: 62000, attribution: null, regression: null },
+          { path: '/tavex/safety', name: 'Safety Profile', lcp: 2.4, inp: 78, cls: 0.03, traffic: 45000, attribution: null, regression: null },
+          { path: '/tavex/dosing', name: 'Dosing', lcp: 1.9, inp: 62, cls: 0.03, traffic: 22000, attribution: null, regression: null },
+          { path: '/tavex/mechanism-of-action', name: 'Mechanism of Action', lcp: 4.5, inp: 142, cls: 0.10, traffic: 14000, attribution: { element: 'img.hero-mechanism', loadTime: 3800 }, regression: { delta: 2.0, since: '2025-01-15' } }
+        ]
+      }
+    }
+  },
+
+  'review-workflow': {
+    documentContent: "TAVEX (tavexirel) \u2014 For Rheumatoid Arthritis\n\nTAVEX (tavexirel) is a selective JAK1 inhibitor for adults living with moderate-to-severe rheumatoid arthritis who have had an inadequate response to one or more DMARDs.\n\nA New Option in RA Treatment\nTAVEX offers a targeted approach to managing rheumatoid arthritis by selectively inhibiting JAK1.\n\nProven Efficacy\nACR20 response rates demonstrated at Week 12 in pivotal Phase III trials.\n\nSafety Profile\nThe most common adverse reactions (\u22655%) are upper respiratory tract infections, nausea, and headache.\n\nDosing & Administration\nOnce-daily oral tablet. No loading dose required.\n\nSee full Prescribing Information, including Boxed Warning.",
+    stages: [
+      { label: 'Medical', status: 'approved' },
+      { label: 'Legal', status: 'approved' },
+      { label: 'Regulatory', status: 'in-review' },
+      { label: 'Brand', status: 'pending' },
+      { label: 'Final Sign-off', status: 'pending' }
+    ],
+    comments: [
+      { id: 1, line: 3, text: 'Confirm "selective" claim is supported by head-to-head selectivity data in NDA filing.', role: 'medical', author: 'Dr. Chen', status: 'resolved' },
+      { id: 2, line: 6, text: '"Targeted approach" needs citation or should be softened to "mechanism-based approach."', role: 'medical', author: 'Dr. Patel', status: 'open' },
+      { id: 3, line: 8, text: 'ACR20 claim must reference specific trial number (TAVEX-RA-301).', role: 'regulatory', author: 'J. Morris', status: 'open' },
+      { id: 4, line: 10, text: 'Adverse reactions list must match PI Section 6.1 verbatim.', role: 'legal', author: 'S. Williams', status: 'open' },
+      { id: 5, line: 14, text: 'Boxed Warning reference is required per FDA guidance \u2014 confirmed present.', role: 'regulatory', author: 'J. Morris', status: 'resolved' }
+    ]
+  },
+
+  'schema-editor': {
+    schemas: {
+      'MedicalWebPage': {
+        name: 'TAVEX (tavexirel) \u2014 For Rheumatoid Arthritis',
+        about: 'Rheumatoid Arthritis treatment',
+        specialty: 'Rheumatology',
+        lastReviewed: '2025-03-15',
+        description: 'TAVEX (tavexirel) is a selective JAK1 inhibitor for moderate-to-severe rheumatoid arthritis in adults who have had an inadequate response to one or more DMARDs.'
+      },
+      'FAQ': {
+        name: 'TAVEX Frequently Asked Questions',
+        description: 'Common questions about TAVEX (tavexirel) for rheumatoid arthritis.',
+        questions: [
+          { question: 'What is TAVEX used for?', answer: 'TAVEX is indicated for adults with moderate-to-severe rheumatoid arthritis who have had an inadequate response to one or more disease-modifying antirheumatic drugs (DMARDs).' },
+          { question: 'How is TAVEX taken?', answer: 'TAVEX is a once-daily oral tablet. No loading dose is required.' },
+          { question: 'What are the most common side effects?', answer: 'The most common adverse reactions (\u22655%) are upper respiratory tract infections, nausea, and headache.' },
+          { question: 'Is TAVEX a biologic?', answer: 'No, TAVEX is a small-molecule JAK1 inhibitor taken orally, not a biologic.' }
+        ]
+      },
+      'Article': {
+        headline: 'TAVEX Phase III Trial Results Published',
+        author: 'AstraZeneca Medical Affairs',
+        datePublished: '2025-02-15',
+        dateModified: '2025-03-10',
+        image: TAVEX_URL + 'media_hero.jpeg',
+        description: 'Pivotal Phase III trial demonstrates significant ACR20 response rates at Week 12 for TAVEX (tavexirel) in adults with moderate-to-severe rheumatoid arthritis.'
+      }
+    },
+    activeType: 'FAQ'
+  },
+
+  'tone-voice': {
+    content: "TAVEX (tavexirel) is a selective JAK1 inhibitor for adults living with moderate-to-severe rheumatoid arthritis who have had an inadequate response to one or more disease-modifying antirheumatic drugs (DMARDs).\n\nTAVEX offers a targeted approach to managing rheumatoid arthritis by selectively inhibiting JAK1, helping to reduce the inflammatory cascade while maintaining a favorable benefit-risk profile.\n\nACR20 response rates demonstrated at Week 12 in pivotal Phase III trials. Comprehensive safety data from clinical development program. Once-daily oral tablet. No loading dose required.\n\nBy preferentially targeting JAK1 over other JAK family members, TAVEX modulates key cytokine signaling pathways implicated in RA pathogenesis.\n\nThe most common adverse reactions (\u22655%) are upper respiratory tract infections, nausea, and headache. See full Prescribing Information, including Boxed Warning.",
+    rules: {
+      formality: 5,
+      bannedTerms: [
+        { term: 'cure', suggestion: 'treatment option' },
+        { term: 'safe', suggestion: 'well-tolerated' },
+        { term: 'miracle', suggestion: '(remove)' },
+        { term: 'guaranteed', suggestion: 'demonstrated in clinical trials' },
+        { term: 'best', suggestion: 'an effective' },
+        { term: 'no side effects', suggestion: 'favorable benefit-risk profile' }
+      ],
+      requiredTerms: ['See full Prescribing Information', 'Boxed Warning', 'TAVEX (tavexirel)'],
+      readingTarget: { min: 8, max: 12 }
+    },
+    presets: {
+      'pharma-hcp': { label: 'Pharma \u2014 HCP Audience', formality: 5, bannedTerms: [{ term: 'cure', suggestion: 'treatment option' }, { term: 'safe', suggestion: 'well-tolerated' }], requiredTerms: ['See full Prescribing Information', 'Boxed Warning'], readingTarget: { min: 10, max: 16 } },
+      'pharma-patient': { label: 'Pharma \u2014 Patient Audience', formality: 3, bannedTerms: [{ term: 'cure', suggestion: 'may help with' }, { term: 'guaranteed', suggestion: 'may' }], requiredTerms: ['Talk to your doctor', 'See full Prescribing Information'], readingTarget: { min: 6, max: 9 } }
+    },
+    preset: 'pharma-hcp'
+  }
+};
+
+// Step 1: fetch production CSS from index.html
+fetch('/index.html')
+  .then(function(r) { return r.text(); })
+  .then(function(html) {
+    var parser = new DOMParser();
+    var doc = parser.parseFromString(html, 'text/html');
+    var styles = doc.querySelectorAll('style');
+    var cssChunks = [];
+    styles.forEach(function(s) { cssChunks.push(s.textContent); });
+    themeCSS = cssChunks.join('\n');
+    updateStatus('Loaded ' + styles.length + ' style blocks. Building cards...');
+    buildCards();
+  })
+  .catch(function(err) {
+    updateStatus('ERROR: ' + err.message + ' — is Vite running?', true);
+  });
+
+function buildCards() {
+  var grid = document.getElementById('grid');
+  SPRINKLES.forEach(function(name) {
+    var card = document.createElement('div');
+    card.className = 'sprinkle-card';
+    card.id = 'card-' + name;
+    card.innerHTML =
+      '<div class="sprinkle-card__header" onclick="toggleCard(\'' + name + '\')">' +
+        '<div>' +
+          '<div class="sprinkle-card__name">' + name + '</div>' +
+          '<div class="sprinkle-card__path">src/defaults/shared/sprinkles/' + name + '/' + name + '.shtml</div>' +
+        '</div>' +
+        '<div style="display:flex;align-items:center;gap:8px">' +
+          '<span class="sprinkle-card__status sprinkle-card__status--loading" id="status-' + name + '">idle</span>' +
+          '<span class="sprinkle-card__chevron">&#9654;</span>' +
+        '</div>' +
+      '</div>' +
+      '<div class="sprinkle-card__body" id="body-' + name + '"></div>';
+    grid.appendChild(card);
+  });
+  updateStatus('Ready. Click a sprinkle to load it.');
+}
+
+function toggleCard(name) {
+  var card = document.getElementById('card-' + name);
+  var isOpen = card.classList.toggle('sprinkle-card--open');
+  if (isOpen) loadSprinkle(name);
+}
+
+function toggleAll() {
+  allExpanded = !allExpanded;
+  SPRINKLES.forEach(function(name) {
+    var card = document.getElementById('card-' + name);
+    if (allExpanded) {
+      card.classList.add('sprinkle-card--open');
+      loadSprinkle(name);
+    } else {
+      card.classList.remove('sprinkle-card--open');
+    }
+  });
+  document.querySelector('.expand-btn').textContent = allExpanded ? 'Collapse All' : 'Expand All';
+}
+
+function loadSprinkle(name) {
+  var body = document.getElementById('body-' + name);
+  if (body.dataset.loaded) return; // already loaded
+  body.dataset.loaded = '1';
+
+  var statusEl = document.getElementById('status-' + name);
+  statusEl.textContent = 'loading';
+  statusEl.className = 'sprinkle-card__status sprinkle-card__status--loading';
+
+  var path = '/src/defaults/shared/sprinkles/' + name + '/' + name + '.shtml';
+  fetch(path)
+    .then(function(r) {
+      if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+      return r.text();
+    })
+    .then(function(html) {
+      // Only inject theme CSS into the HTML (no scripts — those are injected via eval after load)
+      var injected = injectThemeCSS(html);
+      var iframe = document.createElement('iframe');
+      iframe.style.cssText = 'width:100%;border:none;display:block;min-height:500px;';
+
+      // Auto-resize iframe
+      window.addEventListener('message', function(e) {
+        if (e.source === iframe.contentWindow && e.data && e.data.type === 'sprinkle-height') {
+          iframe.style.height = Math.max(e.data.height, 200) + 'px';
+        }
+      });
+
+      iframe.onload = function() {
+        try {
+          var win = iframe.contentWindow;
+          // Inject bridge via eval (proven to work in sandboxed iframes)
+          win.eval('(function(){var h={};window.slicc=window.bridge={lick:function(e){console.log("[' + name + '] lick:",e);},on:function(e,f){h[e]=h[e]||[];h[e].push(f);},getState:function(){return null;},setState:function(){},emit:function(e,d){(h[e]||[]).forEach(function(f){f(d);});}};})()');
+
+          // Re-run the sprinkle's own scripts so they can register slicc.on('update')
+          var scripts = win.document.querySelectorAll('script');
+          scripts.forEach(function(sc) {
+            if (sc.textContent && sc.textContent.length > 10) {
+              try { win.eval(sc.textContent); } catch(e) { /* sprinkle script errors are ok */ }
+            }
+          });
+
+          // Push mock data after a short delay to let the sprinkle initialize
+          if (MOCK_DATA[name]) {
+            setTimeout(function() {
+              try {
+                win.slicc.emit('update', MOCK_DATA[name]);
+              } catch(e) { console.log('[' + name + '] data push error:', e.message); }
+            }, 100);
+          }
+
+          // Height reporting
+          function reportHeight() {
+            try {
+              var h = win.document.documentElement.scrollHeight;
+              iframe.style.height = Math.max(h, 200) + 'px';
+            } catch(e) {}
+          }
+          reportHeight();
+          try { new ResizeObserver(reportHeight).observe(win.document.body); } catch(e) {}
+        } catch(e) {
+          console.log('[' + name + '] injection error:', e.message);
+        }
+      };
+
+      iframe.srcdoc = injected;
+      body.appendChild(iframe);
+      statusEl.textContent = 'loaded';
+      statusEl.className = 'sprinkle-card__status sprinkle-card__status--ok';
+    })
+    .catch(function(err) {
+      statusEl.textContent = 'error';
+      statusEl.className = 'sprinkle-card__status sprinkle-card__status--error';
+      body.innerHTML = '<div style="padding:20px;color:#d92361;font-size:13px">Failed to load: ' + err.message + '</div>';
+    });
+}
+
+function injectThemeCSS(html) {
+  // Apply current theme class
+  var themeClass = document.documentElement.classList.contains('theme-light') ? 'theme-light' : '';
+  html = html.replace(/<html([^>]*)>/, '<html$1 class="' + themeClass + '">');
+
+  // Inject theme CSS into <head>
+  var themeStyle = '<style id="injected-theme">' + themeCSS + '</style>';
+  var overrides = '<style>html,body{overflow:auto !important;height:auto !important;}</style>';
+
+  if (html.indexOf('</head>') !== -1) {
+    html = html.replace('</head>', themeStyle + overrides + '</head>');
+  } else {
+    html = themeStyle + overrides + html;
+  }
+
+  return html;
+}
+
+function setTheme(t) {
+  document.documentElement.classList.toggle('theme-light', t === 'light');
+  document.querySelectorAll('[data-theme]').forEach(function(b) {
+    b.classList.toggle('active', b.dataset.theme === t);
+  });
+  // Reload all loaded sprinkles with new theme
+  SPRINKLES.forEach(function(name) {
+    var body = document.getElementById('body-' + name);
+    if (body && body.dataset.loaded) {
+      body.dataset.loaded = '';
+      body.innerHTML = '';
+      loadSprinkle(name);
+    }
+  });
+}
+
+function updateStatus(msg, isError) {
+  var bar = document.getElementById('status-bar');
+  bar.textContent = msg;
+  bar.style.background = isError ? '#d92361' : '#292929';
+}
+</script>
+</body>
+</html>
