@@ -1,8 +1,18 @@
 import SwiftUI
 import AppKit
 
+/// Delegate that terminates all launched SLICC processes when the app quits.
+final class SliccstartAppDelegate: NSObject, NSApplicationDelegate {
+    var sliccProcess: SliccProcess?
+
+    func applicationWillTerminate(_ notification: Notification) {
+        sliccProcess?.stopAll()
+    }
+}
+
 @main
 struct SliccstartApp: App {
+    @NSApplicationDelegateAdaptor private var appDelegate: SliccstartAppDelegate
     @State private var bootstrapper = SliccBootstrapper()
     @State private var sliccProcess = SliccProcess()
     @State private var appManagementPermission = AppManagementPermission()
@@ -93,7 +103,10 @@ struct SliccstartApp: App {
                 }
             }
             .frame(width: 340)
-            .task { await initialize() }
+            .task {
+                appDelegate.sliccProcess = sliccProcess
+                await initialize()
+            }
             .onAppear { appManagementPermission.startPolling() }
             .onDisappear {
                 sliccProcess.stopAll()
