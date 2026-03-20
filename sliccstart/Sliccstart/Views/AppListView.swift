@@ -7,6 +7,7 @@ struct AppListView: View {
     let onLaunchStandalone: (AppTarget) -> Void
     let onLaunchElectron: (AppTarget) -> Void
     let onGuidedInstall: (AppTarget) -> Void
+    let onCreateDebugBuild: (AppTarget) -> Void
     let onUpdate: () -> Void
     let onRescan: () -> Void
 
@@ -23,7 +24,8 @@ struct AppListView: View {
                         target: target,
                         isRunning: sliccProcess.isRunning(target),
                         statusDot: .running,
-                        onLaunch: { onLaunchStandalone(target) }
+                        onLaunch: { onLaunchStandalone(target) },
+                        onCreateDebugBuild: nil
                     )
                 }
             }
@@ -31,17 +33,29 @@ struct AppListView: View {
             if !electronApps.isEmpty {
                 SectionHeader("Desktop Apps")
                 ForEach(electronApps) { target in
+                    let statusDot: AppRowStatusDot = {
+                        if target.debugSupport == .disabled {
+                            return .needsDebugBuild
+                        } else if !appManagementPermission.isGranted {
+                            return .needsPermission
+                        }
+                        return .running
+                    }()
+
                     AppRow(
                         target: target,
                         isRunning: sliccProcess.isRunning(target),
-                        statusDot: appManagementPermission.isGranted ? .running : .needsPermission,
+                        statusDot: statusDot,
                         onLaunch: {
-                            if appManagementPermission.isGranted {
+                            if target.debugSupport == .disabled {
+                                onCreateDebugBuild(target)
+                            } else if appManagementPermission.isGranted {
                                 onLaunchElectron(target)
                             } else {
                                 appManagementPermission.openSystemSettings()
                             }
-                        }
+                        },
+                        onCreateDebugBuild: target.debugSupport == .disabled ? { onCreateDebugBuild(target) } : nil
                     )
                 }
             }
@@ -103,6 +117,7 @@ struct SectionHeader: View {
 enum AppRowStatusDot {
     case running
     case needsPermission
+    case needsDebugBuild
 }
 
 struct AppRow: View {
@@ -110,17 +125,38 @@ struct AppRow: View {
     let isRunning: Bool
     let statusDot: AppRowStatusDot
     let onLaunch: () -> Void
+    let onCreateDebugBuild: (() -> Void)?
 
     var body: some View {
         Button { onLaunch() } label: {
             HStack(spacing: 10) {
-                Image(nsImage: target.icon)
-                    .resizable().frame(width: 28, height: 28)
-                Text(target.name)
-                    .font(.system(size: 13))
+                ZStack(alignment: .bottomTrailing) {
+                    Image(nsImage: target.icon)
+                        .resizable().frame(width: 28, height: 28)
+                    if target.isDebugBuild {
+                        Image(systemName: "wrench.fill")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.white)
+                            .padding(2)
+                            .background(Circle().fill(.blue))
+                            .offset(x: 2, y: 2)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(target.name)
+                        .font(.system(size: 13))
+                    if target.isDebugBuild {
+                        Text("Debug Build")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 Spacer()
                 if isRunning {
                     Circle().fill(.green).frame(width: 7, height: 7)
+                } else if statusDot == .needsDebugBuild {
+                    Circle().fill(.red).frame(width: 7, height: 7)
+                        .help("Remote debugging disabled. Click to create a debug build.")
                 } else if statusDot == .needsPermission {
                     Circle().fill(.yellow).frame(width: 7, height: 7)
                         .help("App Management permission required. Click to open System Settings.")

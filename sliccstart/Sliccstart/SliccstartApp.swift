@@ -10,6 +10,10 @@ struct SliccstartApp: App {
     @State private var isReady = false
     @State private var alertMessage: String?
     @State private var showAlert = false
+    @State private var showDebugBuildDialog = false
+    @State private var debugBuildTarget: AppTarget?
+    @State private var isCreatingDebugBuild = false
+    @State private var debugBuildProgress: String = ""
 
     init() {
         NSApplication.shared.setActivationPolicy(.regular)
@@ -25,6 +29,13 @@ struct SliccstartApp: App {
                         isWorking: bootstrapper.isWorking,
                         error: bootstrapper.lastError,
                         onRetry: { Task { await initialize() } }
+                    )
+                } else if isCreatingDebugBuild {
+                    SetupProgressView(
+                        message: debugBuildProgress.isEmpty ? "Creating debug build..." : debugBuildProgress,
+                        isWorking: true,
+                        error: nil,
+                        onRetry: {}
                     )
                 } else {
                     AppListView(
@@ -60,6 +71,10 @@ struct SliccstartApp: App {
                                 showError("Failed: \(error.localizedDescription)")
                             }
                         },
+                        onCreateDebugBuild: { target in
+                            debugBuildTarget = target
+                            showDebugBuildDialog = true
+                        },
                         onUpdate: {
                             Task {
                                 isReady = false
@@ -89,6 +104,22 @@ struct SliccstartApp: App {
             } message: {
                 Text(alertMessage ?? "")
             }
+            .alert("Enable Debug Build", isPresented: $showDebugBuildDialog) {
+                Button("Cancel", role: .cancel) {
+                    debugBuildTarget = nil
+                }
+                Button("Create Debug Build") {
+                    if let target = debugBuildTarget {
+                        Task {
+                            await createDebugBuild(for: target)
+                        }
+                    }
+                }
+            } message: {
+                if let target = debugBuildTarget {
+                    Text("\(target.name) has remote debugging disabled.\n\nCreate a debug build in ~/Applications that enables SLICC to connect?\n\nThis will:\n• Copy the app to ~/Applications/\(target.name) Debug.app\n• Patch Electron fuses\n• Bypass CDP auth checks\n• Ad-hoc sign the result")
+                }
+            }
         }
         .defaultSize(width: 340, height: 100)
         .windowStyle(.titleBar)
@@ -109,6 +140,27 @@ struct SliccstartApp: App {
         }
         targets = AppScanner.scan()
         isReady = true
+    }
+
+    private func createDebugBuild(for target: AppTarget) async {
+        isCreatingDebugBuild = true
+        debugBuildProgress = "Starting..."
+
+        do {
+            _ = try await DebugBuildCreator.createDebugBuild(from: target.path) { progress in
+                Task { @MainActor in
+                    debugBuildProgress = progress
+                }
+            }
+            // Rescan to pick up the new debug build
+            targets = AppScanner.scan()
+            showError("Debug build created!\n\nThe patched version of \(target.name) is now available and will be used automatically.")
+        } catch {
+            showError("Failed to create debug build:\n\n\(error.localizedDescription)")
+        }
+
+        isCreatingDebugBuild = false
+        debugBuildTarget = nil
     }
 
     private func showError(_ message: String) {
