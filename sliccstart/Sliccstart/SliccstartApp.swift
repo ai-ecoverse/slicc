@@ -1,12 +1,17 @@
 import SwiftUI
 import AppKit
+import os
+
+private let log = Logger(subsystem: "com.slicc.sliccstart", category: "App")
 
 /// Delegate that terminates all launched SLICC processes when the app quits.
+/// Owns the SliccProcess instance so it stays alive for the entire app lifetime.
 final class SliccstartAppDelegate: NSObject, NSApplicationDelegate {
-    var sliccProcess: SliccProcess?
+    let sliccProcess = SliccProcess()
 
     func applicationWillTerminate(_ notification: Notification) {
-        sliccProcess?.stopAll()
+        log.info("applicationWillTerminate: stopping all processes")
+        sliccProcess.stopAll()
     }
 }
 
@@ -14,7 +19,6 @@ final class SliccstartAppDelegate: NSObject, NSApplicationDelegate {
 struct SliccstartApp: App {
     @NSApplicationDelegateAdaptor private var appDelegate: SliccstartAppDelegate
     @State private var bootstrapper = SliccBootstrapper()
-    @State private var sliccProcess = SliccProcess()
     @State private var appManagementPermission = AppManagementPermission()
     @State private var targets: [AppTarget] = []
     @State private var isReady = false
@@ -29,6 +33,8 @@ struct SliccstartApp: App {
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
+
+    private var sliccProcess: SliccProcess { appDelegate.sliccProcess }
 
     var body: some Scene {
         WindowGroup {
@@ -53,16 +59,20 @@ struct SliccstartApp: App {
                         sliccProcess: sliccProcess,
                         appManagementPermission: appManagementPermission,
                         onLaunchStandalone: { target in
+                            log.info("onLaunchStandalone: \(target.name, privacy: .public)")
                             do {
                                 try sliccProcess.launchStandalone(target)
                             } catch {
+                                log.error("onLaunchStandalone failed: \(error.localizedDescription, privacy: .public)")
                                 showError(error.localizedDescription)
                             }
                         },
                         onLaunchElectron: { target in
+                            log.info("onLaunchElectron: \(target.name, privacy: .public)")
                             do {
                                 try sliccProcess.launchWithElectronApp(target)
                             } catch {
+                                log.error("onLaunchElectron failed: \(error.localizedDescription, privacy: .public)")
                                 showError(error.localizedDescription)
                             }
                         },
@@ -103,15 +113,9 @@ struct SliccstartApp: App {
                 }
             }
             .frame(width: 340)
-            .task {
-                appDelegate.sliccProcess = sliccProcess
-                await initialize()
-            }
+            .task { await initialize() }
             .onAppear { appManagementPermission.startPolling() }
-            .onDisappear {
-                sliccProcess.stopAll()
-                appManagementPermission.stopPolling()
-            }
+            .onDisappear { appManagementPermission.stopPolling() }
             .alert("Sliccstart", isPresented: $showAlert) {
                 Button("OK") {}
             } message: {

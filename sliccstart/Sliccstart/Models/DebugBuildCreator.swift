@@ -84,13 +84,33 @@ final class DebugBuildCreator {
         return debugAppPath
     }
 
+    /// Resolve a bundled node_modules binary script, falling back to npx for dev mode.
+    /// Returns (executable, arguments-prefix). In bundled mode: (node, [script, ...]).
+    /// In dev mode: (/usr/bin/env, [npx, package, ...]).
+    private static func resolveModuleBin(_ packageName: String, binName: String? = nil) -> (String, [String]) {
+        let bin = binName ?? String(packageName.split(separator: "/").last ?? Substring(packageName))
+
+        // Bundled mode: use node + the script directly from node_modules/.bin/
+        if let nodePath = SliccBootstrapper.bundledNodePath,
+           let sliccDir = SliccBootstrapper.bundledSliccDir {
+            // node_modules/.bin/<name> is a symlink to the actual script
+            let binPath = sliccDir + "/node_modules/.bin/" + bin
+            if FileManager.default.fileExists(atPath: binPath) {
+                return (nodePath, [binPath])
+            }
+        }
+
+        // Dev mode: use npx
+        return ("/usr/bin/env", ["npx", packageName])
+    }
+
     /// Patch Electron fuses to enable remote debugging
     private static func patchFuses(appPath: String) async throws {
-        // Use npx @electron/fuses to flip the fuses
+        let (executable, argsPrefix) = resolveModuleBin("@electron/fuses", binName: "electron-fuses")
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [
-            "npx", "@electron/fuses", "write",
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = argsPrefix + [
+            "write",
             "--app", appPath,
             "EnableNodeCliInspectArguments=on",
             "EnableEmbeddedAsarIntegrityValidation=off",
@@ -129,9 +149,10 @@ final class DebugBuildCreator {
         let extractedPath = "\(tempDir)/extracted"
 
         // Extract asar
+        let (asarExe, asarPrefix) = resolveModuleBin("@electron/asar", binName: "asar")
         let extractProcess = Process()
-        extractProcess.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        extractProcess.arguments = ["npx", "asar", "extract", asarPath, extractedPath]
+        extractProcess.executableURL = URL(fileURLWithPath: asarExe)
+        extractProcess.arguments = asarPrefix + ["extract", asarPath, extractedPath]
         extractProcess.standardOutput = FileHandle.nullDevice
         extractProcess.standardError = FileHandle.nullDevice
 
@@ -147,8 +168,8 @@ final class DebugBuildCreator {
 
         // Repack asar
         let packProcess = Process()
-        packProcess.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        packProcess.arguments = ["npx", "asar", "pack", extractedPath, asarPath]
+        packProcess.executableURL = URL(fileURLWithPath: asarExe)
+        packProcess.arguments = asarPrefix + ["pack", extractedPath, asarPath]
         packProcess.standardOutput = FileHandle.nullDevice
         packProcess.standardError = FileHandle.nullDevice
 

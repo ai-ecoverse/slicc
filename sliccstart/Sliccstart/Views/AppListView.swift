@@ -88,8 +88,10 @@ struct AppListView: View {
 
             Divider()
             HStack {
-                Button("Update") { onUpdate() }
-                    .buttonStyle(.borderless).font(.caption)
+                if !SliccBootstrapper.isBundled {
+                    Button("Update") { onUpdate() }
+                        .buttonStyle(.borderless).font(.caption)
+                }
                 Spacer()
                 Button("Rescan") { onRescan() }
                     .buttonStyle(.borderless).font(.caption)

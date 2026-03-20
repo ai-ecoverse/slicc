@@ -14,3 +14,4 @@ providers.json
 !/providers/adobe.ts
 !/providers/adobe-config.json
 .superpowers/
+sliccstart/.node-cache/

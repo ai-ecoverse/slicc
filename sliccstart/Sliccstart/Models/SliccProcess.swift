@@ -1,26 +1,41 @@
 import Foundation
 import AppKit
+import os
+
+private let log = Logger(subsystem: "com.slicc.sliccstart", category: "SliccProcess")
 
 @Observable
 final class SliccProcess {
     /// All running instances keyed by AppTarget.id
     private var processes: [String: Process] = [:]
+    /// App paths launched via --electron, keyed by AppTarget.id
+    private var launchedAppPaths: [String: String] = [:]
     private(set) var runningTargets: Set<String> = []
 
     var resolvedSliccDir: String { sliccDir }
     private var sliccDir: String {
+        // Priority 1: SLICC_DIR env var (development override)
         if let env = ProcessInfo.processInfo.environment["SLICC_DIR"], !env.isEmpty {
+            log.info("sliccDir: using SLICC_DIR env = \(env, privacy: .public)")
             return env
         }
+        // Priority 2: Bundled inside the .app (production)
+        if let bundled = SliccBootstrapper.bundledSliccDir {
+            log.info("sliccDir: using bundled = \(bundled, privacy: .public)")
+            return bundled
+        }
+        // Priority 3: Walk up from bundle location (development — running from source tree)
         let parentDir = (Bundle.main.bundlePath as NSString).deletingLastPathComponent
         var dir = parentDir
         for _ in 0..<5 {
             if FileManager.default.fileExists(atPath: dir + "/package.json") &&
                FileManager.default.fileExists(atPath: dir + "/src/cli/index.ts") {
+                log.info("sliccDir: found source tree at \(dir, privacy: .public)")
                 return dir
             }
             dir = (dir as NSString).deletingLastPathComponent
         }
+        log.warning("sliccDir: falling back to default \(SliccBootstrapper.defaultSliccDir)")
         return SliccBootstrapper.defaultSliccDir
     }
 
@@ -39,10 +54,11 @@ final class SliccProcess {
 
     func launchStandalone(_ browser: AppTarget) throws {
         if isRunning(browser) {
-            // Already running — no-op
+            log.info("launchStandalone: \(browser.name) already running")
             return
         }
         guard !Self.isPortInUse(Self.browserPort) else { throw LaunchError.portInUse(Self.browserPort) }
+        log.info("launchStandalone: \(browser.name, privacy: .public) on port \(Self.browserPort)")
         try spawn(target: browser, extraArgs: ["--cdp-port=\(Self.browserCdpPort)"], env: [
             "CHROME_PATH": browser.executablePath,
             "PORT": "\(Self.browserPort)",
@@ -53,11 +69,13 @@ final class SliccProcess {
 
     func launchWithElectronApp(_ app: AppTarget) throws {
         if isRunning(app) {
-            // Already running
+            log.info("launchWithElectronApp: \(app.name) already running")
             return
         }
         let (port, cdpPort) = nextElectronPorts()
         guard !Self.isPortInUse(port) else { throw LaunchError.portInUse(port) }
+        log.info("launchWithElectronApp: \(app.name, privacy: .public) on port \(port), cdp \(cdpPort)")
+        launchedAppPaths[app.id] = app.path
         try spawn(target: app, extraArgs: [
             "--electron", app.path,
             "--kill",
@@ -103,37 +121,85 @@ final class SliccProcess {
     // MARK: - Lifecycle
 
     func stop(_ target: AppTarget) {
+        log.info("stop: \(target.name)")
         processes[target.id]?.terminate()
         processes.removeValue(forKey: target.id)
+        terminateLaunchedApp(id: target.id)
         runningTargets.remove(target.id)
     }
 
     func stopAll() {
+        log.info("stopAll: terminating \(self.processes.count) processes")
         for (_, proc) in processes { proc.terminate() }
         processes.removeAll()
+        for (id, _) in launchedAppPaths {
+            terminateLaunchedApp(id: id)
+        }
         runningTargets.removeAll()
+    }
+
+    /// Terminate a launched Electron/WebView2 app by its bundle path.
+    private func terminateLaunchedApp(id: String) {
+        guard let appPath = launchedAppPaths.removeValue(forKey: id) else { return }
+        let appURL = URL(fileURLWithPath: appPath)
+        let running = NSWorkspace.shared.runningApplications.filter { $0.bundleURL == appURL }
+        for app in running {
+            log.info("terminating app: \(app.localizedName ?? appPath, privacy: .public)")
+            app.terminate()
+        }
     }
 
     // MARK: - Private
 
     private func spawn(target: AppTarget, extraArgs: [String], env: [String: String]) throws {
         guard let nodePath = SliccBootstrapper.findNode() else {
+            log.error("spawn: Node.js not found")
             throw LaunchError.nodeNotFound
         }
+        let entryScript = sliccDir + "/dist/cli/index.js"
+        let allArgs = [entryScript] + extraArgs
+        log.info("spawn: \(nodePath, privacy: .public) \(allArgs.joined(separator: " "), privacy: .public)")
+        log.info("spawn: cwd = \(self.sliccDir, privacy: .public)")
+
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: nodePath)
-        proc.arguments = [sliccDir + "/dist/cli/index.js"] + extraArgs
+        proc.arguments = allArgs
         proc.environment = ProcessInfo.processInfo.environment.merging(env) { _, new in new }
         proc.currentDirectoryURL = URL(fileURLWithPath: sliccDir)
-        proc.standardOutput = FileHandle.nullDevice
-        proc.standardError = FileHandle.nullDevice
-        proc.terminationHandler = { [weak self] _ in
+
+        // Capture stdout/stderr and forward to os.log
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        proc.standardOutput = stdoutPipe
+        proc.standardError = stderrPipe
+
+        stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let line = String(data: data, encoding: .utf8) else { return }
+            for l in line.split(separator: "\n", omittingEmptySubsequences: true) {
+                log.info("[node/\(target.name, privacy: .public)] \(l, privacy: .public)")
+            }
+        }
+        stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let line = String(data: data, encoding: .utf8) else { return }
+            for l in line.split(separator: "\n", omittingEmptySubsequences: true) {
+                log.error("[node/\(target.name, privacy: .public)] \(l, privacy: .public)")
+            }
+        }
+
+        proc.terminationHandler = { [weak self] p in
+            log.info("process exited: \(target.name, privacy: .public) code=\(p.terminationStatus)")
+            // Clean up pipe handlers
+            stdoutPipe.fileHandleForReading.readabilityHandler = nil
+            stderrPipe.fileHandleForReading.readabilityHandler = nil
             DispatchQueue.main.async {
                 self?.processes.removeValue(forKey: target.id)
                 self?.runningTargets.remove(target.id)
             }
         }
         try proc.run()
+        log.info("spawn: pid=\(proc.processIdentifier) for \(target.name, privacy: .public)")
         processes[target.id] = proc
         runningTargets.insert(target.id)
     }
