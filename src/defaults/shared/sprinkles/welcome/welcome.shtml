@@ -60,7 +60,7 @@
     to { opacity: 1; transform: translateY(0); }
   }
 
-  /* ── Prompt bar (exact Figma: white card, rounded 16px, shadow, purple glow border) ── */
+  /* ── Prompt bar (Figma: 140px card, gradient glow, 2px purple border) ── */
   .prompt-bar {
     position: relative;
     margin: -24px auto 0;
@@ -69,35 +69,48 @@
   }
   .prompt-bar--inline { margin-top: 20px; }
   .prompt-bar-glow {
-    position: absolute; inset: -3px;
-    border-radius: 19px;
+    position: absolute; inset: 0;
+    border-radius: 28px;
     background: linear-gradient(142deg, #9a3cf9 4%, #e743c8 35%, #ed457e 69%, #ff7918 105%);
-    opacity: 0.18;
-    filter: blur(12px);
+    opacity: 0.20;
+    filter: blur(20px);
+    box-shadow: 0px 4px 24px 0px #340349;
+  }
+  .prompt-bar-border {
+    position: absolute; inset: 0;
+    border-radius: 16px;
+    padding: 2px;
+    background: linear-gradient(142deg, #9a3cf9 4%, #e743c8 35%, #ed457e 69%, #ff7918 105%);
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    mask-composite: exclude;
+    pointer-events: none;
+    z-index: 1;
   }
   .prompt-bar-inner {
     position: relative;
-    background: var(--s2-bg-elevated);
-    border: 1px solid var(--s2-gray-200);
+    background: var(--s2-bg-elevated, #fff);
+    border: none;
     border-radius: 16px;
-    box-shadow: 0 0 1px 0 rgba(0,0,0,0.08), 0 1px 4px 0 rgba(0,0,0,0.04), 0 2px 8px 0 rgba(0,0,0,0.08);
-    padding: 16px 16px 12px;
+    box-shadow: 0px 1px 6px 0px rgba(0,0,0,0.12);
+    padding: 16px;
+    height: 140px;
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    transition: border-color 0.2s;
+    justify-content: space-between;
   }
-  .prompt-bar-inner:focus-within { border-color: var(--s2-accent); }
 
   .prompt-bar-inner input,
   .prompt-bar-inner textarea {
     width: 100%;
     border: none; outline: none;
     font-family: inherit;
-    font-size: 14px; line-height: 20px;
-    color: var(--s2-content-default);
+    font-size: 14px; line-height: 18px;
+    color: var(--s2-content-default, #131313);
     background: transparent;
     resize: none;
+    flex: 1;
   }
   .prompt-bar-inner input::placeholder,
   .prompt-bar-inner textarea::placeholder { color: var(--s2-gray-600); }
@@ -106,14 +119,15 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-shrink: 0;
   }
   .plus-btn {
-    width: 28px; height: 28px;
+    width: 32px; height: 32px;
     border: none; background: none;
     cursor: pointer; padding: 0;
     display: flex; align-items: center; justify-content: center;
     color: var(--s2-gray-600);
-    border-radius: 6px;
+    border-radius: 8px;
     transition: background 0.15s, color 0.15s;
   }
   .plus-btn:hover { background: var(--s2-gray-100); color: var(--s2-gray-800); }
@@ -121,66 +135,91 @@
   .send-btn {
     width: 32px; height: 32px;
     border-radius: 50%; border: none;
-    background: var(--s2-accent);
-    color: var(--s2-gray-25); cursor: pointer;
+    background: #3B63FB;
+    color: #fff; cursor: pointer;
     display: flex; align-items: center; justify-content: center;
     flex-shrink: 0;
     transition: background 0.15s, transform 0.1s;
   }
-  .send-btn:hover { background: var(--s2-accent-hover, #2b4ed4); transform: scale(1.06); }
+  .send-btn:hover { background: #2b4ed4; transform: scale(1.06); }
   .send-btn:disabled { background: var(--s2-gray-300); cursor: default; transform: none; }
-  .send-btn svg { width: 16px; height: 16px; }
+  .send-btn svg { width: 18px; height: 18px; }
 
-  /* ── Quick action pills (exact Figma: 36px height, 18px radius, shadow, icon+bold text) ── */
-  .quick-actions {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 16px;
-    padding: 24px 0 8px;
+  /* ── Quick starts table (Figma "My work" widget style) ── */
+  .qs-widget {
+    background: var(--s2-bg-elevated, #fff);
+    border: 1px solid #dadada;
+    border-radius: 16px;
+    padding: 0 24px;
     max-width: 520px;
-    margin: 0 auto;
+    margin: 24px auto 0;
   }
-  .pill {
+  .qs-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 16px 0 12px;
+  }
+  .qs-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--s2-content-default, #292929);
+  }
+  .qs-viewall {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--s2-content-default, #292929);
+    background: none; border: none;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .qs-viewall:hover { text-decoration: underline; }
+  .qs-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 56px;
+    border-top: 1px solid #e9e9e9;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .qs-row:hover { background: #fafafa; margin: 0 -24px; padding: 0 24px; }
+  .qs-badge {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    height: 36px;
-    padding: 0 24px 0 14px;
-    border-radius: 18px;
-    background: var(--s2-bg-elevated);
-    box-shadow: 0 0 1px 0 rgba(0,0,0,0.08), 0 1px 4px 0 rgba(0,0,0,0.04), 0 2px 8px 0 rgba(0,0,0,0.08);
-    border: none;
-    font-family: inherit;
+    height: 22px;
+    padding: 0 8px;
+    border-radius: 11px;
+    font-size: 12px;
+    font-weight: 700;
+    white-space: nowrap;
+    flex-shrink: 0;
+    min-width: 72px;
+    justify-content: center;
+  }
+  .qs-task {
+    flex: 1;
     font-size: 14px;
     font-weight: 700;
-    color: var(--s2-content-default);
-    cursor: pointer;
-    transition: box-shadow 0.2s, transform 0.12s;
+    color: var(--s2-content-default, #292929);
+    line-height: 1.3;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
-    line-height: 18px;
   }
-  .pill:hover {
-    box-shadow: 0 2px 8px rgba(0,0,0,0.16);
-    transform: translateY(-1px);
+  .qs-desc {
+    font-size: 12px;
+    color: #505050;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 180px;
   }
-  .pill:active { transform: translateY(0); }
-  .pill svg { width: 24px; height: 24px; flex-shrink: 0; }
-  .pill-more {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 36px; height: 36px;
-    border-radius: 18px;
-    background: var(--s2-bg-elevated);
-    box-shadow: 0 0 1px 0 rgba(0,0,0,0.08), 0 1px 4px 0 rgba(0,0,0,0.04), 0 2px 8px 0 rgba(0,0,0,0.08);
-    border: none;
-    cursor: pointer;
-    color: var(--s2-content-secondary);
-    transition: box-shadow 0.2s, transform 0.12s;
+  .qs-arrow {
+    color: #dadada;
+    font-size: 18px;
+    flex-shrink: 0;
   }
-  .pill-more:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.16); transform: translateY(-1px); }
-  .pill-more svg { width: 20px; height: 20px; }
 
   /* ── Section label ── */
   .section-label {
@@ -319,12 +358,13 @@
     <div class="step active" id="s0">
       <div class="prompt-bar">
         <div class="prompt-bar-glow"></div>
+        <div class="prompt-bar-border"></div>
         <div class="prompt-bar-inner">
           <input type="text" id="nameIn" placeholder="What's your name?" autofocus
             onkeydown="if(event.key==='Enter'&&this.value.trim())go(1)">
           <div class="prompt-actions">
             <button class="plus-btn" title="Attach">
-              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="10" y1="4" x2="10" y2="16"/><line x1="4" y1="10" x2="16" y2="10"/></svg>
+              <svg viewBox="0 0 20 20" fill="currentColor"><path d="M16.25 9.25H10.75V3.75C10.75 3.336 10.414 3 10 3C9.586 3 9.25 3.336 9.25 3.75V9.25H3.75C3.336 9.25 3 9.586 3 10C3 10.414 3.336 10.75 3.75 10.75H9.25V16.25C9.25 16.664 9.586 17 10 17C10.414 17 10.75 16.664 10.75 16.25V10.75H16.25C16.664 10.75 17 10.414 17 10C17 9.586 16.664 9.25 16.25 9.25Z"/></svg>
             </button>
             <button class="send-btn" id="nameBtn" disabled onclick="go(1)">
               <svg viewBox="0 0 20 20" fill="currentColor"><path d="M3.1 17.4a.75.75 0 01-.96-1.05L5.68 10 2.14 3.65a.75.75 0 01.96-1.05l14.5 6.75a.75.75 0 010 1.3l-14.5 6.75z"/></svg>
@@ -338,12 +378,13 @@
     <div class="step" id="s1">
       <div class="prompt-bar prompt-bar--inline">
         <div class="prompt-bar-glow"></div>
+        <div class="prompt-bar-border"></div>
         <div class="prompt-bar-inner">
           <textarea id="taskIn" rows="2" placeholder="What do you want to work on?"
             onkeydown="if(event.key==='Enter'&&!event.shiftKey&&this.value.trim()){event.preventDefault();go(3)}"></textarea>
           <div class="prompt-actions">
             <button class="plus-btn" title="Attach">
-              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="10" y1="4" x2="10" y2="16"/><line x1="4" y1="10" x2="16" y2="10"/></svg>
+              <svg viewBox="0 0 20 20" fill="currentColor"><path d="M16.25 9.25H10.75V3.75C10.75 3.336 10.414 3 10 3C9.586 3 9.25 3.336 9.25 3.75V9.25H3.75C3.336 9.25 3 9.586 3 10C3 10.414 3.336 10.75 3.75 10.75H9.25V16.25C9.25 16.664 9.586 17 10 17C10.414 17 10.75 16.664 10.75 16.25V10.75H16.25C16.664 10.75 17 10.414 17 10C17 9.586 16.664 9.25 16.25 9.25Z"/></svg>
             </button>
             <button class="send-btn" onclick="go(3)">
               <svg viewBox="0 0 20 20" fill="currentColor"><path d="M3.1 17.4a.75.75 0 01-.96-1.05L5.68 10 2.14 3.65a.75.75 0 01.96-1.05l14.5 6.75a.75.75 0 010 1.3l-14.5 6.75z"/></svg>
@@ -351,7 +392,7 @@
           </div>
         </div>
       </div>
-      <div class="quick-actions" id="pills"></div>
+      <div class="qs-widget" id="qsTable"></div>
     </div>
 
     <!-- Step 3: Installing -->
@@ -380,24 +421,14 @@
 <script>
   var cur = 0, uname = '', picks = [];
 
-  /* ── S2 Icon SVGs (inline, exact Figma colors) ── */
-  var ICONS = {
-    create: '<svg viewBox="0 0 18 18" fill="none"><path d="M16.2 3.825V14.175C16.2 15.292 15.292 16.2 14.175 16.2H3.825C2.708 16.2 1.8 15.292 1.8 14.175V3.825C1.8 2.708 2.708 1.8 3.825 1.8H14.175C15.292 1.8 16.2 2.708 16.2 3.825ZM14.85 3.825C14.85 3.453 14.547 3.15 14.175 3.15H3.825C3.453 3.15 3.15 3.453 3.15 3.825V14.175C3.15 14.547 3.453 14.85 3.825 14.85H14.175C14.547 14.85 14.85 14.547 14.85 14.175V3.825Z" fill="#7A6AFD"/><path d="M12.387 9C12.387 9.379 12.079 9.687 11.7 9.687H9.687V11.7C9.687 12.079 9.379 12.387 9 12.387C8.621 12.387 8.313 12.079 8.313 11.7V9.687H6.3C5.921 9.687 5.613 9.379 5.613 9C5.613 8.621 5.921 8.313 6.3 8.313H8.313V6.3C8.313 5.921 8.621 5.613 9 5.613C9.379 5.613 9.687 5.921 9.687 6.3V8.313H11.7C12.079 8.313 12.387 8.621 12.387 9Z" fill="#A65CE7"/></svg>',
-    modify: '<svg viewBox="0 0 20 20" fill="none"><path d="M17.781 1.757C16.509 0.716 14.554 0.858 13.331 2.08L3.078 12.334C2.757 12.653 2.519 13.051 2.389 13.484L1.004 18.068C0.924 18.333 0.997 18.62 1.192 18.815C1.334 18.958 1.526 19.035 1.722 19.035C1.794 19.035 1.868 19.024 1.939 19.003L6.521 17.619C6.955 17.489 7.353 17.251 7.672 16.931L18.028 6.575C18.676 5.928 19.021 5.03 18.976 4.115C18.93 3.2 18.494 2.34 17.781 1.757ZM2.845 17.163L3.825 13.917C3.852 13.827 3.892 13.741 3.938 13.66L6.347 16.069C6.266 16.115 6.18 16.155 6.089 16.183L2.845 17.163ZM16.966 5.516C16.812 5.671 9.866 12.616 7.441 15.042L4.966 12.566L14.391 3.141C14.777 2.754 15.287 2.555 15.781 2.555C16.162 2.555 16.533 2.674 16.831 2.917C17.223 3.238 17.452 3.689 17.477 4.189C17.502 4.683 17.316 5.166 16.966 5.516Z" fill="#A65CE7"/></svg>',
-    optimize: '<svg viewBox="0 0 20 20" fill="none"><path d="M1.751 15C1.337 15 1.001 14.664 1.001 14.25V4.25C1.001 3.01 2.011 2 3.251 2H9.751C10.165 2 10.501 2.336 10.501 2.75C10.501 3.164 10.165 3.5 9.751 3.5H3.251C2.838 3.5 2.501 3.837 2.501 4.25V14.25C2.501 14.664 2.165 15 1.751 15Z" fill="#52A119"/><path d="M10 16C9.655 16 9.375 15.72 9.375 15.375V13.125C9.375 12.78 9.655 12.5 10 12.5C10.345 12.5 10.625 12.78 10.625 13.125V15.375C10.625 15.72 10.345 16 10 16Z" fill="#52A119"/><path d="M7.625 16C7.28 16 7 15.72 7 15.375V14.375C7 14.03 7.28 13.75 7.625 13.75C7.97 13.75 8.25 14.03 8.25 14.375V15.375C8.25 15.72 7.97 16 7.625 16Z" fill="#52A119"/><path d="M12.375 16C12.03 16 11.75 15.72 11.75 15.375V11.65C11.75 11.306 12.03 11.025 12.375 11.025C12.72 11.025 13 11.306 13 11.65V15.375C13 15.72 12.72 16 12.375 16Z" fill="#52A119"/><path d="M13.751 19H6.251C5.011 19 4.001 17.99 4.001 16.75V7.25C4.001 6.01 5.011 5 6.251 5H7.159C7.573 5 7.909 5.336 7.909 5.75C7.909 6.164 7.573 6.5 7.159 6.5H6.251C5.838 6.5 5.501 6.837 5.501 7.25V16.75C5.501 17.163 5.838 17.5 6.251 17.5H13.751C14.164 17.5 14.501 17.163 14.501 16.75V9.778C14.501 9.364 14.837 9.028 15.251 9.028C15.665 9.028 16.001 9.364 16.001 9.778V16.75C16.001 17.99 14.991 19 13.751 19Z" fill="#52A119"/><path d="M10.267 9.726C10.138 9.726 10.008 9.693 9.892 9.625C9.61 9.462 9.465 9.136 9.534 8.817L9.738 7.877L9.092 7.166C8.874 6.925 8.836 6.57 8.999 6.287C9.162 6.005 9.491 5.866 9.806 5.929L10.746 6.132L11.458 5.487C11.699 5.268 12.056 5.23 12.337 5.393C12.619 5.556 12.763 5.883 12.695 6.202L12.491 7.14L13.136 7.852C13.355 8.094 13.393 8.449 13.23 8.731C13.067 9.013 12.74 9.153 12.423 9.089L11.483 8.886L10.771 9.532C10.63 9.66 10.449 9.726 10.267 9.726Z" fill="#52A119"/><path d="M14.451 6.499C14.28 6.499 14.108 6.455 13.953 6.366C13.576 6.149 13.384 5.717 13.477 5.292L13.805 3.771L12.759 2.619C12.467 2.294 12.419 1.827 12.635 1.452C12.851 1.076 13.284 0.886 13.706 0.975L15.229 1.305L16.382 0.259C16.705 -0.033 17.173 -0.084 17.55 0.135C17.926 0.353 18.117 0.784 18.024 1.207L17.696 2.729L18.742 3.882C19.033 4.203 19.083 4.672 18.867 5.047C18.651 5.423 18.216 5.613 17.796 5.525L16.272 5.195L15.119 6.241C14.931 6.412 14.692 6.499 14.451 6.499ZM14.925 2.774L15.006 2.862C15.006 2.863 15.006 2.863 15.007 2.864C15.275 3.161 15.384 3.572 15.298 3.961L15.274 4.076L15.363 3.994C15.658 3.726 16.07 3.618 16.458 3.701L16.576 3.726L16.496 3.638C16.226 3.341 16.116 2.93 16.203 2.538L16.227 2.424L16.138 2.505C15.844 2.775 15.432 2.883 15.044 2.799L14.925 2.774Z" fill="#52A119"/></svg>',
-    strategy: '<svg viewBox="0 0 18 18" fill="none"><path d="M9 10.35C9.746 10.35 10.35 9.746 10.35 9C10.35 8.254 9.746 7.65 9 7.65C8.254 7.65 7.65 8.254 7.65 9C7.65 9.746 8.254 10.35 9 10.35Z" fill="#FF4885"/><path d="M9 16.875C4.658 16.875 1.125 13.343 1.125 9C1.125 4.657 4.658 1.125 9 1.125C13.342 1.125 16.875 4.657 16.875 9C16.875 13.343 13.342 16.875 9 16.875ZM9 2.475C5.402 2.475 2.475 5.402 2.475 9C2.475 12.598 5.402 15.525 9 15.525C12.598 15.525 15.525 12.598 15.525 9C15.525 5.402 12.598 2.475 9 2.475Z" fill="#D92361"/><path d="M9 13.5C6.519 13.5 4.5 11.481 4.5 9C4.5 6.519 6.519 4.5 9 4.5C11.481 4.5 13.5 6.519 13.5 9C13.5 11.481 11.481 13.5 9 13.5ZM9 5.85C7.263 5.85 5.85 7.263 5.85 9C5.85 10.737 7.263 12.15 9 12.15C10.737 12.15 12.15 10.737 12.15 9C12.15 7.263 10.737 5.85 9 5.85Z" fill="#D92361"/></svg>',
-    translate: '<svg viewBox="0 0 20 20" fill="none"><path d="M12.25 2.5H7.834V1.75C7.834 1.336 7.498 1 7.084 1C6.67 1 6.334 1.336 6.334 1.75V2.5H1.75C1.336 2.5 1 2.836 1 3.25C1 3.664 1.336 4 1.75 4H9.628C9.171 6.271 7.792 7.876 6.272 8.934C5.793 8.065 5.429 7.174 5.204 6.289C5.103 5.888 4.694 5.641 4.292 5.747C3.891 5.849 3.648 6.257 3.75 6.658C4.009 7.678 4.427 8.703 4.978 9.697C4.185 10.092 3.415 10.357 2.783 10.499C2.378 10.589 2.124 10.99 2.214 11.395C2.292 11.743 2.602 11.981 2.946 11.981C3 11.981 3.055 11.975 3.11 11.962C3.876 11.791 4.815 11.463 5.779 10.966C6.603 12.157 7.609 13.277 8.767 14.25C8.908 14.368 9.079 14.426 9.249 14.426C9.463 14.426 9.675 14.335 9.824 14.158C10.09 13.841 10.049 13.368 9.732 13.102C8.701 12.235 7.805 11.244 7.068 10.196C8.946 8.906 10.67 6.903 11.156 4H12.25C12.664 4 13 3.664 13 3.25C13 2.836 12.664 2.5 12.25 2.5Z" fill="#B622B7"/><path d="M18.941 17.958L14.922 8.458C14.804 8.181 14.532 8 14.231 8C13.93 8 13.658 8.181 13.54 8.458L9.521 17.958C9.359 18.339 9.538 18.779 9.919 18.94C10.303 19.106 10.741 18.924 10.902 18.542L12.183 15.516H16.279L17.559 18.542C17.68 18.828 17.958 19 18.251 19C18.348 19 18.447 18.981 18.542 18.94C18.924 18.779 19.102 18.339 18.941 17.958ZM12.818 14.016L14.231 10.675L15.644 14.016H12.818Z" fill="#6338EE"/></svg>',
-    migrate: '<svg viewBox="0 0 18 18" fill="none"><path d="M5.561 16.94C5.388 16.94 5.215 16.874 5.084 16.742C4.82 16.479 4.82 16.051 5.084 15.788L5.928 14.944C6.192 14.68 6.619 14.681 6.883 14.944C7.146 15.208 7.146 15.636 6.883 15.899L6.038 16.742C5.906 16.874 5.733 16.94 5.561 16.94Z" fill="#7A6AFD"/><path d="M1.726 13.142C1.553 13.142 1.381 13.076 1.249 12.945C0.985 12.681 0.985 12.253 1.249 11.99L2.094 11.146C2.358 10.882 2.785 10.884 3.048 11.146C3.312 11.41 3.312 11.838 3.048 12.101L2.203 12.945C2.072 13.076 1.898 13.142 1.726 13.142Z" fill="#A65CE7"/><path d="M2.248 16.427C2.076 16.427 1.904 16.362 1.772 16.231C1.508 15.967 1.506 15.54 1.769 15.275L4.016 13.017C4.28 12.754 4.707 12.751 4.971 13.014C5.235 13.278 5.237 13.705 4.974 13.969L2.727 16.228C2.595 16.36 2.421 16.427 2.248 16.427Z" fill="#D92361"/><path d="M16.362 1.496C15.789 0.969 14.944 0.787 13.859 0.946C11.767 1.256 10.104 2.394 8.768 3.665C8.433 3.624 8.096 3.599 7.784 3.6C5.096 3.626 2.603 5.084 1.116 7.5C0.841 7.946 0.829 8.506 1.085 8.959C1.339 9.408 1.797 9.675 2.309 9.675H4.831C4.91 10.136 5.127 10.572 5.472 10.917L7.083 12.528C7.431 12.877 7.868 13.089 8.325 13.168V15.672C8.321 16.195 8.588 16.66 9.041 16.915C9.258 17.038 9.5 17.099 9.743 17.099C10.005 17.099 10.268 17.027 10.501 16.884C12.916 15.397 14.374 12.904 14.4 10.216C14.403 9.89 14.377 9.557 14.335 9.224C14.399 9.157 14.474 9.089 14.535 9.022C15.932 7.509 16.75 5.956 17.037 4.272C17.245 3.049 17.011 2.089 16.362 1.496ZM5.211 7.956C5.142 8.056 5.084 8.159 5.033 8.265L5.03 8.271C5.021 8.288 5.017 8.307 5.009 8.325H2.361C2.29 8.325 2.244 8.244 2.281 8.183C3.435 6.304 5.419 5.074 7.523 4.97C7.427 5.08 7.326 5.192 7.234 5.3C6.586 6.066 5.905 6.959 5.211 7.956ZM9.817 15.716C9.756 15.753 9.675 15.708 9.675 15.636V12.995C9.802 12.937 9.927 12.871 10.045 12.788C11.203 11.982 12.179 11.215 13.03 10.467C12.925 12.574 11.712 14.543 9.817 15.716ZM15.706 4.046C15.464 5.464 14.758 6.792 13.544 8.106C12.501 9.236 11.104 10.405 9.273 11.681C8.887 11.951 8.368 11.904 8.038 11.573L6.427 9.962C6.138 9.674 6.065 9.232 6.244 8.86C6.267 8.815 6.29 8.769 6.319 8.727C6.989 7.766 7.644 6.906 8.264 6.172C9.715 4.457 11.537 2.653 14.056 2.282C14.515 2.213 15.128 2.196 15.45 2.492C15.841 2.849 15.778 3.619 15.706 4.046Z" fill="#D92361"/><path d="M13.05 6.075C13.05 6.696 12.546 7.2 11.925 7.2C11.304 7.2 10.8 6.696 10.8 6.075C10.8 5.454 11.304 4.95 11.925 4.95C12.546 4.95 13.05 5.454 13.05 6.075Z" fill="#D92361"/></svg>',
-    more: '<svg viewBox="0 0 20 20" fill="none"><circle cx="4" cy="10" r="1.75" fill="#6e6e6e"/><circle cx="10" cy="10" r="1.75" fill="#6e6e6e"/><circle cx="16" cy="10" r="1.75" fill="#6e6e6e"/></svg>'
-  };
 
-  var PILLS = [
-    { key:'create',   label:'Build app' },
-    { key:'modify',   label:'Edit code' },
-    { key:'optimize', label:'Analyze' },
-    { key:'strategy', label:'Debug' },
-    { key:'translate',label:'Research' },
-    { key:'migrate',  label:'Automate' },
+  var QUICK_STARTS = [
+    { badge:'Research',  bg:'#ACCFFD', color:'#292929', task:'Research a topic',         desc:'Scrape sites, synthesize findings' },
+    { badge:'Automate',  bg:'#FFC15E', color:'#292929', task:'Automate a workflow',      desc:'Browser macros, cron tasks, webhooks' },
+    { badge:'Extract',   bg:'#F7B5FF', color:'#292929', task:'Extract structured data',  desc:'Tables, PDFs, screenshots to JSON' },
+    { badge:'Analyze',   bg:'#BFDFBF', color:'#292929', task:'Audit a website',          desc:'SEO, a11y, performance, content' },
+    { badge:'Build',     bg:'#ACCFFD', color:'#292929', task:'Build an app',             desc:'Scaffold a site or dashboard' },
+    { badge:'Monitor',   bg:'#FFDE2C', color:'#292929', task:'Monitor a page',           desc:'Watch for changes, track metrics' },
   ];
 
   var SKILLS = [
@@ -418,24 +449,26 @@
     { l:'Research a topic',      d:'Scrape sites and summarize findings',      bg:'#a65ce7' },
   ];
 
-  /* ── Build quick action pills ── */
-  var pe = document.getElementById('pills');
-  PILLS.forEach(function(p) {
-    var b = document.createElement('button');
-    b.className = 'pill';
-    b.innerHTML = ICONS[p.key] + '<span>' + p.label + '</span>';
-    b.onclick = function() {
-      document.getElementById('taskIn').value = p.label;
+  /* ── Build quick starts table ── */
+  var qt = document.getElementById('qsTable');
+  var qh = document.createElement('div');
+  qh.className = 'qs-header';
+  qh.innerHTML = '<span class="qs-title">Quick starts</span>';
+  qt.appendChild(qh);
+
+  QUICK_STARTS.forEach(function(q) {
+    var row = document.createElement('div');
+    row.className = 'qs-row';
+    row.innerHTML = '<span class="qs-badge" style="background:'+q.bg+';color:'+q.color+'">'+q.badge+'</span>'
+      + '<span class="qs-task">'+q.task+'</span>'
+      + '<span class="qs-desc">'+q.desc+'</span>'
+      + '<span class="qs-arrow">\u203A</span>';
+    row.onclick = function() {
+      document.getElementById('taskIn').value = q.task;
       document.getElementById('taskIn').focus();
     };
-    pe.appendChild(b);
+    qt.appendChild(row);
   });
-  /* more button */
-  var mb = document.createElement('button');
-  mb.className = 'pill-more';
-  mb.innerHTML = ICONS.more;
-  mb.title = 'More actions';
-  pe.appendChild(mb);
 
   /* ── Name input ── */
   var ni = document.getElementById('nameIn'), nb = document.getElementById('nameBtn');
