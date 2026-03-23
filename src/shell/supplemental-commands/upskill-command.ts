@@ -334,9 +334,12 @@ async function fetchTesslResults(
 /**
  * Search both ClawHub and Tessl registries, interleave results.
  */
+const SEARCH_PAGE_SIZE = 10;
+
 async function searchRegistries(
   query: string,
-  fetch: SecureFetch
+  fetch: SecureFetch,
+  page: number = 1
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const [clawHubResult, tesslResult] = await Promise.allSettled([
     fetchClawHubResults(query, fetch),
@@ -358,33 +361,49 @@ async function searchRegistries(
     };
   }
 
-  // Interleave results alternately from each source by their respective rank order
+  // Merge: lead with up to 3 Tessl results, then interleave
   const merged: UnifiedSearchResult[] = [];
-  let ci = 0;
   let ti = 0;
+  let ci = 0;
+
+  // Lead with Tessl (scored, higher signal)
+  while (ti < tessl.length && ti < 3) {
+    merged.push(tessl[ti++]);
+  }
+
+  // Interleave remaining
   while (ci < clawHub.length || ti < tessl.length) {
     if (ci < clawHub.length) merged.push(clawHub[ci++]);
     if (ti < tessl.length) merged.push(tessl[ti++]);
   }
 
-  const clawHubCount = clawHub.length;
-  const tesslCount = tessl.length;
-  let output = `Search results for "${query}" (${clawHubCount} ClawHub, ${tesslCount} Tessl):\n\n`;
+  const totalResults = merged.length;
+  const totalPages = Math.ceil(totalResults / SEARCH_PAGE_SIZE);
+  const safePage = Math.max(1, Math.min(page, totalPages));
+  const startIdx = (safePage - 1) * SEARCH_PAGE_SIZE;
+  const pageResults = merged.slice(startIdx, startIdx + SEARCH_PAGE_SIZE);
 
-  for (const skill of merged) {
+  let output = `Search results for "${query}" (page ${safePage}/${totalPages}, ${totalResults} total):\n\n`;
+
+  for (const skill of pageResults) {
     const scoreStr = skill.qualityScore != null ? String(skill.qualityScore).padStart(3) : '   ';
     const tag = `[${skill.source}]`;
     const repoStr = skill.sourceRepo ? `  ${skill.sourceRepo}` : '';
     output += `  ${skill.name.padEnd(30)} ${scoreStr} ${tag.padEnd(10)}${repoStr}\n`;
     if (skill.summary) {
-      output += `    ${skill.summary.slice(0, 70)}${skill.summary.length > 70 ? '...' : ''}\n`;
+      output += `    ${skill.summary}\n`;
     }
     output += '\n';
   }
 
+  if (safePage < totalPages) {
+    output += `Showing ${startIdx + 1}-${startIdx + pageResults.length} of ${totalResults}. `;
+    output += `Next page: upskill search ${query} --page ${safePage + 1}\n\n`;
+  }
+
   output += `To install:\n`;
-  if (clawHubCount > 0) output += `  From ClawHub:  upskill clawhub:<slug>\n`;
-  if (tesslCount > 0) output += `  From Tessl:    upskill <owner/repo> --skill <name>\n`;
+  if (clawHub.length > 0) output += `  From ClawHub:  upskill clawhub:<slug>\n`;
+  if (tessl.length > 0) output += `  From Tessl:    upskill <owner/repo> --skill <name>\n`;
 
   return { stdout: output, stderr: '', exitCode: 0 };
 }
@@ -969,14 +988,21 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
     let force = false;
     let sourceRef = '';
     let searchQuery = '';
+    let page = 1;
 
     let i = 0;
     while (i < args.length) {
       const arg = args[i];
 
       if (arg === 'search') {
-        // Collect the search query
-        searchQuery = args.slice(i + 1).join(' ');
+        // Collect the search query (excluding --page flag)
+        const rest = args.slice(i + 1);
+        const pageIdx = rest.indexOf('--page');
+        if (pageIdx >= 0) {
+          page = parseInt(rest[pageIdx + 1], 10) || 1;
+          rest.splice(pageIdx, 2);
+        }
+        searchQuery = rest.join(' ');
         break;
       } else if (arg === 'list') {
         // List local skills
@@ -1055,7 +1081,7 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
 
     // Handle search
     if (searchQuery) {
-      return searchRegistries(searchQuery, fetchFn);
+      return searchRegistries(searchQuery, fetchFn, page);
     }
 
     if (!sourceRef) {
