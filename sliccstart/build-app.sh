@@ -10,6 +10,9 @@ CONTENTS="$APP_DIR/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
 
+# App version — set SLICCSTART_VERSION env var to override (e.g. during release)
+SLICCSTART_VERSION="${SLICCSTART_VERSION:-0.1.0}"
+
 # Node.js version to bundle (LTS 24.x)
 NODE_VERSION="${NODE_VERSION:-24.14.0}"
 NODE_CACHE="$SCRIPT_DIR/.node-cache"
@@ -126,7 +129,7 @@ find "$SLICC_BUNDLE/node_modules" \( \
 # ---------------------------------------------------------------------------
 # 5. Info.plist
 # ---------------------------------------------------------------------------
-cat > "$CONTENTS/Info.plist" << 'PLIST'
+cat > "$CONTENTS/Info.plist" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -146,9 +149,9 @@ cat > "$CONTENTS/Info.plist" << 'PLIST'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>${SLICCSTART_VERSION}</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>${SLICCSTART_VERSION}</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
