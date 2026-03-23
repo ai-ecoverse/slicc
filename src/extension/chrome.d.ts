@@ -100,13 +100,6 @@ interface ChromeAPI {
     launchWebAuthFlow(options: { url: string; interactive: boolean }): Promise<string | undefined>;
     getRedirectURL(path?: string): string;
   };
-  permissions: {
-    contains(permissions: { origins: string[] }): Promise<boolean>;
-    request(permissions: { origins: string[] }): Promise<boolean>;
-    onRemoved: {
-      addListener(callback: (permissions: { origins?: string[] }) => void): void;
-    };
-  };
   offscreen: ChromeOffscreenAPI;
   debugger: ChromeDebuggerAPI;
   tabs: {
