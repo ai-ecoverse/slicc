@@ -13,7 +13,7 @@
     [
       "@semantic-release/exec",
       {
-        "prepareCmd": "node dist/cli/sync-release-version.js ${nextRelease.version} && npm run build:extension && npm run package:release && plutil -replace CFBundleShortVersionString -string ${nextRelease.version} sliccstart/build/Sliccstart.app/Contents/Info.plist && plutil -replace CFBundleVersion -string ${nextRelease.version} sliccstart/build/Sliccstart.app/Contents/Info.plist && if [ -n \"$APPLE_TEAM_ID\" ]; then codesign --force --options runtime --sign \"Developer ID Application: Lars Trieloff ($APPLE_TEAM_ID)\" --timestamp sliccstart/build/Sliccstart.app; else codesign --force --sign - sliccstart/build/Sliccstart.app; fi && mkdir -p sliccstart/build/dmg && cp -R sliccstart/build/Sliccstart.app sliccstart/build/dmg/ && ln -sf /Applications sliccstart/build/dmg/Applications && hdiutil create -volname Sliccstart -srcfolder sliccstart/build/dmg -ov -format UDZO sliccstart/build/Sliccstart.dmg && rm -rf sliccstart/build/dmg && if [ -n \"$APPLE_TEAM_ID\" ]; then codesign --force --sign \"Developer ID Application: Lars Trieloff ($APPLE_TEAM_ID)\" --timestamp sliccstart/build/Sliccstart.dmg; fi && cp sliccstart/build/Sliccstart.dmg artifacts/release/sliccstart-v${nextRelease.version}.dmg && ditto -c -k --keepParent sliccstart/build/Sliccstart.app artifacts/release/Sliccstart-${nextRelease.version}.zip",
+        "prepareCmd": "node dist/cli/sync-release-version.js ${nextRelease.version} && npm run build:extension && npm run package:release && chmod +x sliccstart/sign-and-package.sh && sliccstart/sign-and-package.sh ${nextRelease.version}",
         "publishCmd": "npx wrangler deploy && npx vitest run src/worker/deployed.test.ts"
       }
     ],
