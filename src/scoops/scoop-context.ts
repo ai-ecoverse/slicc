@@ -308,7 +308,7 @@ export class ScoopContext {
 
   /** Get the agent's current in-memory messages (for diagnostics). */
   getAgentMessages(): AgentMessage[] {
-    return this.agent?.state?.messages ? [...this.agent.state.messages] : [];
+    return this.agent?.state?.messages ? structuredClone(this.agent.state.messages) : [];
   }
 
   /** Get the session ID used for agent-sessions DB persistence. */
