@@ -133,13 +133,13 @@ final class ServerCommandTests: XCTestCase {
         XCTAssertEqual(root, "/Applications/Sliccstart.app/Contents/Resources/slicc/dist/ui")
     }
 
-    func testResolveServePortUsesPortEnvironmentDirectly() async throws {
-        let resolvedPort = try await ServerCommand.resolveServePort(from: ["PORT": "5710"]) { _ in
-            XCTFail("PORT override should not call findAvailablePort")
-            return 0
+    func testResolveServePortUsesPortEnvironmentAsPreferredPort() async throws {
+        let resolvedPort = try await ServerCommand.resolveServePort(from: ["PORT": "5710"]) { startingFrom in
+            XCTAssertEqual(startingFrom, 5710)
+            return 5800
         }
 
-        XCTAssertEqual(resolvedPort, 5710)
+        XCTAssertEqual(resolvedPort, 5800)
     }
 
     func testResolveServePortFallsBackToResolverWhenPortEnvironmentMissing() async throws {

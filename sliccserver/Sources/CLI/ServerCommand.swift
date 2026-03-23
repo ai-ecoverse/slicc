@@ -155,6 +155,10 @@ struct ServerCommand: AsyncParsableCommand {
             router: router,
             server: .http1WebSocketUpgrade(
                 webSocketRouter: wsRouter,
+                // Hummingbird's WebSocket frame size is configured at the server-builder level,
+                // not per route. `/cdp` needs large frames for Chrome payloads, while `/licks-ws`
+                // only carries small local JSON messages, so keeping the higher localhost-only
+                // limit here is wasteful but not a security concern.
                 configuration: .init(maxFrameSize: CDPProxy.defaultMaxMessageSize)
             ),
             configuration: .init(
@@ -400,11 +404,8 @@ extension ServerCommand {
         from environment: [String: String],
         resolveAvailablePort: (Int) async throws -> Int = findAvailablePort(startingFrom:)
     ) async throws -> Int {
-        if let explicitPort = preferredServePort(from: environment) {
-            return explicitPort
-        }
-
-        return try await resolveAvailablePort(defaultServePort)
+        let preferredPort = preferredServePort(from: environment) ?? defaultServePort
+        return try await resolveAvailablePort(preferredPort)
     }
 
     static func preferredServePort(from environment: [String: String]) -> Int? {

@@ -17,9 +17,11 @@ actor CDPProxy {
     private let discoverer: @Sendable (Int) async throws -> String
     private let chromeConnector: ChromeSocketConnector
     private let maxMessageSize: Int
+    private let maxBufferSize = 1_000
     private let reconnectDelayNanoseconds: UInt64
     private let sleep: @Sendable (UInt64) async throws -> Void
 
+    private var cdpPort: Int?
     private var cachedCDPPort: Int?
     private var cachedCDPURL: String?
     private var chromeSocket: ChromeSocketHandle?
@@ -56,6 +58,7 @@ actor CDPProxy {
     }
 
     func install(on router: Router<BasicWebSocketRequestContext>, cdpPort: Int) {
+        self.cdpPort = cdpPort
         router.ws("/cdp") { _, _ in
             .upgrade([:])
         } onUpgrade: { inbound, outbound, context in
@@ -69,6 +72,7 @@ actor CDPProxy {
     }
 
     func preWarm(cdpPort: Int) async throws {
+        self.cdpPort = cdpPort
         let cdpURL = try await self.cdpURL(for: cdpPort)
         try await self.ensureChromeConnection(url: cdpURL)
     }
@@ -171,7 +175,7 @@ actor CDPProxy {
                 )
             }
         } else if self.messageBuffer != nil {
-            self.messageBuffer?.append(message)
+            self.appendBufferedMessage(message)
             let logLine = "[cdp-proxy] Client→Chrome (buffered): \(preview)"
             if self.logDedup.shouldLog(logLine) {
                 self.logger.debug("\(logLine)")
@@ -191,6 +195,7 @@ actor CDPProxy {
 
     func prepareClientConnection(for clientID: UUID, cdpPort: Int) async {
         do {
+            self.cdpPort = cdpPort
             let cdpURL = try await self.cdpURL(for: cdpPort)
             try await self.ensureChromeConnection(url: cdpURL)
         } catch {
@@ -226,11 +231,25 @@ actor CDPProxy {
             return cachedCDPURL
         }
 
-        let discoveredURL = try await self.discoverer(port)
+        let discoveredURL = try await Self.cdpURL(for: port, using: self.discoverer)
         self.cachedCDPPort = port
         self.cachedCDPURL = discoveredURL
         self.logger.info("[cdp-proxy] CDP available at: \(discoveredURL)")
         return discoveredURL
+    }
+
+    private func appendBufferedMessage(_ message: ProxyMessage) {
+        guard var buffer = self.messageBuffer else {
+            return
+        }
+
+        if buffer.count >= self.maxBufferSize {
+            self.logger.warning("[cdp-proxy] Message buffer full (\(self.maxBufferSize)), dropping oldest message")
+            buffer.removeFirst()
+        }
+
+        buffer.append(message)
+        self.messageBuffer = buffer
     }
 
     private func flushBufferedMessages(using chromeSocket: ChromeSocketHandle) async throws {
@@ -338,6 +357,13 @@ actor CDPProxy {
         return payload.webSocketDebuggerUrl
     }
 
+    private static func cdpURL(
+        for port: Int,
+        using discoverer: @escaping @Sendable (Int) async throws -> String
+    ) async throws -> String {
+        try await discoverer(port)
+    }
+
     private func handleChromeDisconnect(reason: String, bufferMessage: ProxyMessage? = nil) {
         self.chromeSocket = nil
         self.chromeConnectionID = nil
@@ -348,7 +374,7 @@ actor CDPProxy {
         }
 
         if let bufferMessage {
-            self.messageBuffer?.append(bufferMessage)
+            self.appendBufferedMessage(bufferMessage)
         }
 
         self.scheduleChromeReconnect(reason: reason)
@@ -359,18 +385,19 @@ actor CDPProxy {
             return
         }
 
-        guard let cachedCDPURL else {
-            self.logger.warning("[cdp-proxy] Chrome WS dropped but no cached CDP URL is available for reconnect")
+        guard let cdpPort = self.cdpPort else {
+            self.logger.warning("[cdp-proxy] Chrome WS dropped but no CDP port is available for reconnect")
             return
         }
 
-        self.logger.info("[cdp-proxy] Scheduling Chrome WS reconnect in 1s (\(reason))")
-        self.chromeReconnectTask = Task { [url = cachedCDPURL] in
-            await self.runChromeReconnectLoop(url: url)
+        let delayMs = self.reconnectDelayNanoseconds / 1_000_000
+        self.logger.info("[cdp-proxy] Scheduling Chrome WS reconnect in \(delayMs)ms (\(reason))")
+        self.chromeReconnectTask = Task { [cdpPort] in
+            await self.runChromeReconnectLoop(cdpPort: cdpPort)
         }
     }
 
-    private func runChromeReconnectLoop(url: String) async {
+    private func runChromeReconnectLoop(cdpPort: Int) async {
         defer {
             self.chromeReconnectTask = nil
         }
@@ -378,7 +405,10 @@ actor CDPProxy {
         while !Task.isCancelled {
             do {
                 try await self.sleep(self.reconnectDelayNanoseconds)
-                try await self.ensureChromeConnection(url: url)
+                let freshURL = try await Self.cdpURL(for: cdpPort, using: self.discoverer)
+                self.cachedCDPPort = cdpPort
+                self.cachedCDPURL = freshURL
+                try await self.ensureChromeConnection(url: freshURL)
                 self.logger.info("[cdp-proxy] Chrome WS auto-reconnected")
                 return
             } catch is CancellationError {
