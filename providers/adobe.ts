@@ -319,8 +319,10 @@ async function getValidAccessToken(): Promise<string> {
     console.warn('[adobe] Silent renewal failed:', err instanceof Error ? err.message : String(err));
   }
 
-  // If we still have a token (not yet expired, just close to expiry), use it
-  if (expiresIn > 0) return account.accessToken;
+  // Re-read account — another concurrent call may have renewed it
+  const refreshedAccount = getAdobeAccount();
+  const refreshedExpiresIn = (refreshedAccount?.tokenExpiresAt ?? 0) - Date.now();
+  if (refreshedExpiresIn > 0 && refreshedAccount?.accessToken) return refreshedAccount.accessToken;
 
   throw new Error('Adobe session expired — please log in again');
 }
