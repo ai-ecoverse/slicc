@@ -31,7 +31,7 @@ SLICC runs in a browser and controls the browser it runs in. It combines a shell
 - **Browser-native, not browser-adjacent.** The agent runtime lives in the browser, and the agent can act on the same browser it lives in. A great mix of power and containment. If you don't like what the AI does, close the browser tab and it's over.
 - **A real shell environment.** Many browser agents are constrained by the tools provided to them. SLICC has an almost-too-real shell with commands like `git`, "`node`", `python`, `playwright`, built-in.
 - **UI on the fly.** SLICC can generate rich user interfaces on the fly. These can be small visualizations in a chat response, or full-blown web applications that run in a sidebar, or even a separate tab.
-- **Built around Skills.** Agents don't suffer from missing capabilities, they suffer from skill issues. SLICC has a powerful skills system and a skills marketplace to find and install new skills to support your work.
+- **Built around Skills.** Agents don't suffer from missing capabilities, they suffer from skill issues. SLICC can install native skills into `/workspace/skills`, and it also discovers compatible `.agents` / `.claude` skills read-only across the reachable VFS.
 - **More than a coding panel.** Coding is one strong use case, but SLICC is built for practical browser work too: authenticated web apps, repetitive tab work, content operations, debugging, research, and automation.
 - **Works across runtimes.** Start in the CLI, run as a Chrome extension, connect multiple tray sessions, or attach to Electron apps with the same core model.
 - **Delegates in parallel.** The main agent can spin up isolated sub-agents for task-specific work instead of stuffing everything into one conversation.

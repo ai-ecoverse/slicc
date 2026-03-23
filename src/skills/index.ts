@@ -1,30 +1,38 @@
 /**
  * Skills Engine
- *
+ * 
  * A system for discovering, installing, and managing skills that extend
- * the agent's capabilities. Skills are stored in the virtual filesystem
- * under /workspace/skills/ and can add new files or modify existing ones.
- *
+ * the agent's capabilities. Native install-managed skills live under
+ * /workspace/skills/. Discoverable compatibility skills can also come from
+ * accessible .agents/skills and .claude/skills directories anywhere in the
+ * VFS, but those compatibility roots remain read-only unless copied into the
+ * native skills directory.
+ * 
  * Usage:
  * ```typescript
  * import { discoverSkills, applySkill, uninstallSkill } from '../skills/index.js';
- *
+ * 
  * // Find available skills
  * const skills = await discoverSkills(fs);
- *
+ * 
  * // Install a skill
  * const result = await applySkill(fs, 'my-skill');
- *
+ * 
  * // Uninstall a skill
  * await uninstallSkill(fs, 'my-skill');
  * ```
  */
 
 export { applySkill } from './apply.js';
+export { discoverSkillCandidates, resolveSkillNameCollisions } from './catalog.js';
 export { discoverSkills, getSkillInfo, readSkillInstructions } from './discover.js';
 export { installSkillFromDrop } from './install-from-drop.js';
 export { uninstallSkill } from './uninstall.js';
-export { initSkillsSystem, readState, getAppliedSkills } from './state.js';
+export {
+  initSkillsSystem,
+  readState,
+  getAppliedSkills,
+} from './state.js';
 export {
   readManifest,
   parseManifestContent,
@@ -50,3 +58,8 @@ export type {
   UninstallResult,
   DiscoveredSkill,
 } from './types.js';
+export type {
+  SkillDiscoverySource,
+  DiscoveredSkillCandidate,
+  SkillNameCollision,
+} from './catalog.js';
