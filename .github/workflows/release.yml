@@ -94,6 +94,10 @@ jobs:
             xcrun stapler staple build/Sliccstart.app
           fi
           
+          # Create ZIP for auto-updater (will be renamed with version by semantic-release prepareCmd)
+          echo "Creating ZIP for auto-updater..."
+          ditto -c -k --keepParent build/Sliccstart.app build/Sliccstart-update.zip
+
           # Create DMG
           echo "Creating DMG..."
           mkdir -p build/dmg
