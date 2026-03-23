@@ -466,7 +466,13 @@ const streamAdobe = (
 
       if (isOpenAI) {
         // Route to OpenAI Chat Completions API — append /v1 since the OpenAI SDK adds /chat/completions
-        const proxyModel = { ...model, baseUrl: `${getProxyEndpoint()}/v1`, api: 'openai-completions' as Api };
+        // Set compat to disable features not supported by all OpenAI-compatible providers (e.g., Cerebras)
+        const proxyModel = {
+          ...model,
+          baseUrl: `${getProxyEndpoint()}/v1`,
+          api: 'openai-completions' as Api,
+          compat: { supportsStore: false, supportsUsageInStreaming: false, ...(model as any).compat },
+        };
         const inner = streamOpenAICompletions(proxyModel as any, context, { ...options, apiKey: accessToken } as any);
         for await (const event of inner) stream.push(event as any);
       } else {
@@ -498,7 +504,12 @@ const streamSimpleAdobe = (
 
       if (isOpenAI) {
         // Route to OpenAI Chat Completions API — append /v1 since the OpenAI SDK adds /chat/completions
-        const proxyModel = { ...model, baseUrl: `${getProxyEndpoint()}/v1`, api: 'openai-completions' as Api };
+        const proxyModel = {
+          ...model,
+          baseUrl: `${getProxyEndpoint()}/v1`,
+          api: 'openai-completions' as Api,
+          compat: { supportsStore: false, supportsUsageInStreaming: false, ...(model as any).compat },
+        };
         const inner = streamSimpleOpenAICompletions(proxyModel as any, context, { ...options, apiKey: accessToken } as any);
         for await (const event of inner) stream.push(event as any);
       } else {
