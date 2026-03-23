@@ -5,10 +5,16 @@ import HummingbirdWebSocket
 public struct WebSocketClient: Hashable, Sendable {
     public let id: UUID
     private let sendTextClosure: @Sendable (String) async throws -> Void
+    private let closeClosure: @Sendable () async -> Void
 
-    public init(id: UUID = UUID(), sendText: @escaping @Sendable (String) async throws -> Void) {
+    public init(
+        id: UUID = UUID(),
+        sendText: @escaping @Sendable (String) async throws -> Void,
+        close: @escaping @Sendable () async -> Void = {}
+    ) {
         self.id = id
         self.sendTextClosure = sendText
+        self.closeClosure = close
     }
 
     public static func == (lhs: WebSocketClient, rhs: WebSocketClient) -> Bool { lhs.id == rhs.id }
@@ -19,6 +25,10 @@ public struct WebSocketClient: Hashable, Sendable {
 
     public func send(text: String) async throws {
         try await self.sendTextClosure(text)
+    }
+
+    public func close() async {
+        await self.closeClosure()
     }
 }
 
@@ -186,6 +196,23 @@ public actor LickSystem {
         }
     }
 
+    public func shutdown() async {
+        let clients = Array(self.clients)
+        self.clients.removeAll()
+
+        let pendingRequests = self.pendingRequests
+        self.pendingRequests.removeAll()
+
+        for pending in pendingRequests.values {
+            pending.timeoutTask.cancel()
+            pending.continuation.resume(throwing: LickSystemError.noBrowserConnected)
+        }
+
+        for client in clients {
+            await client.close()
+        }
+    }
+
     private func nextRequestId() -> String {
         self.requestCounter += 1
         return "req_\(self.requestCounter)"
@@ -238,9 +265,14 @@ public enum LickWebSocketRoute {
         router.ws(self.path) { _, _ in
             .upgrade()
         } onUpgrade: { inbound, outbound, context in
-            let client = WebSocketClient {
-                try await outbound.write(.text($0))
-            }
+            let client = WebSocketClient(
+                sendText: {
+                    try await outbound.write(.text($0))
+                },
+                close: {
+                    try? await outbound.close(.goingAway, reason: "Server shutting down")
+                }
+            )
             await lickSystem.addClient(client)
 
             do {
