@@ -153,7 +153,10 @@ struct ServerCommand: AsyncParsableCommand {
 
         let app = Application(
             router: router,
-            server: .http1WebSocketUpgrade(webSocketRouter: wsRouter),
+            server: .http1WebSocketUpgrade(
+                webSocketRouter: wsRouter,
+                configuration: .init(maxFrameSize: CDPProxy.defaultMaxMessageSize)
+            ),
             configuration: .init(
                 address: .hostname("127.0.0.1", port: servePort),
                 serverName: "slicc-server"
