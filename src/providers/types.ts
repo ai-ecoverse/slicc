@@ -12,6 +12,10 @@ export type OAuthLauncher = (authorizeUrl: string) => Promise<string | null>;
 /**
  * Optional model capability overrides.
  * Used by both modelOverrides (static) and getModelIds (dynamic).
+ *
+ * Fields use snake_case to match JSON responses from proxies.
+ * Merged into Model<Api> objects (camelCase) via applyModelMetadata()
+ * in provider-settings.ts. Priority: pi-ai registry < modelOverrides < getModelIds.
  */
 export interface ModelMetadata {
   /** API format: 'anthropic' (default) or 'openai' for OpenAI-compatible backends. */
