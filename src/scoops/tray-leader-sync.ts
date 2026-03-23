@@ -177,7 +177,7 @@ export class LeaderSyncManager {
     this.sendSnapshotToFollower(bootstrapId);
 
     // Send current target registry to the new follower
-    const entries = this.registry.getEntries();
+    const entries = this.getConnectedEntries();
     if (entries.length > 0) {
       sync.send({ type: 'targets.registry', targets: entries });
     }
@@ -403,7 +403,7 @@ export class LeaderSyncManager {
    */
   broadcastTargetRegistry(): void {
     if (this.followers.size === 0) return;
-    const entries = this.registry.getEntries();
+    const entries = this.getConnectedEntries();
     const message: LeaderToFollowerMessage = { type: 'targets.registry', targets: entries };
     for (const follower of this.followers.values()) {
       follower.sync.send(message);
@@ -415,7 +415,15 @@ export class LeaderSyncManager {
    * Used to implement TrayTargetProvider for the leader's BrowserAPI.
    */
   getTargets(): TrayTargetEntry[] {
-    return this.registry.getEntries();
+    return this.getConnectedEntries();
+  }
+
+  private getConnectedEntries(): TrayTargetEntry[] {
+    return this.registry.getEntries().filter((target) => {
+      if (target.runtimeId === 'leader') return true;
+      const bootstrapId = this.runtimeToBootstrap.get(target.runtimeId);
+      return bootstrapId ? this.followers.has(bootstrapId) : false;
+    });
   }
 
   /**

@@ -43,6 +43,20 @@ npm run dev:full -- --prompt "ls /workspace"  # Test any agent command
 
 Console logs from the browser are forwarded to the CLI terminal for debugging.
 
+### CDP Prompt Tool (`tools/slicc-prompt.mjs`)
+
+Submits prompts to a running SLICC instance via CDP and captures the agent's response. Useful for automated testing and debugging without manual UI interaction:
+
+```bash
+node tools/slicc-prompt.mjs "run playwright-cli tab-list"          # Submit prompt, wait for response
+node tools/slicc-prompt.mjs --read-last                            # Read last assistant message
+node tools/slicc-prompt.mjs "open https://example.com" --timeout 60  # Custom timeout (default 120s)
+node tools/slicc-prompt.mjs "hello" --cdp-port 9222                # Custom CDP port (default 9222)
+node tools/slicc-prompt.mjs --clear "test something"               # Clear chat first
+```
+
+Output is JSON: `{ prompt, response, durationMs, success }`. Requires a running SLICC server with Chrome CDP accessible.
+
 **Requires Node >= 22** (LTS). Ports: 5710 (UI), 9222 (Chrome CDP), 9223 (Electron CDP), 24679 (Vite HMR)
 
 ### Parallel Instances
