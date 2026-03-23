@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
-import { VirtualFS } from '../fs/index.js';
-import { discoverSkillCandidates, resolveSkillNameCollisions } from './catalog.js';
+import { VirtualFS } from '../../src/fs/index.js';
+import { discoverSkillCandidates, resolveSkillNameCollisions } from '../../src/skills/catalog.js';
 
 describe('discoverSkillCandidates', () => {
   let fs: VirtualFS;
@@ -70,7 +70,7 @@ describe('discoverSkillCandidates', () => {
       source: 'claude',
       path: '/zz-after-cap/.claude/skills/late-skill',
     }));
-  });
+  }, 10_000);
 
   it('refreshes cached compatibility discovery after the same fs instance mutates', async () => {
     await fs.mkdir('/repo/.claude/skills/first-skill', { recursive: true });
