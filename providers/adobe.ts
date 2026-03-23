@@ -150,20 +150,23 @@ function getAdobeAccount() {
   return getAccounts().find(a => a.providerId === 'adobe');
 }
 
-async function fetchUserProfile(accessToken: string, imsEnv?: string): Promise<string | undefined> {
+async function fetchUserProfile(accessToken: string, imsEnv?: string): Promise<{ name?: string; avatar?: string }> {
   try {
     const res = await fetch(`${imsHost(imsEnv)}/ims/userinfo/v2`, {
       headers: { 'Authorization': `Bearer ${accessToken}` },
     });
     if (res.ok) {
-      const profile = await res.json() as { name?: string; email?: string; displayName?: string };
-      return profile.displayName || profile.name || profile.email;
+      const profile = await res.json() as { name?: string; email?: string; displayName?: string; picture?: string; avatar_url?: string };
+      return {
+        name: profile.displayName || profile.name || profile.email,
+        avatar: profile.picture || profile.avatar_url,
+      };
     }
     console.warn(`[adobe] User profile fetch returned ${res.status}, account will have no display name`);
   } catch (err) {
     console.warn('[adobe] Failed to fetch user profile:', err instanceof Error ? err.message : String(err));
   }
-  return undefined;
+  return {};
 }
 
 /** Extract token from a URL fragment (#access_token=...&expires_in=...) */
@@ -230,13 +233,14 @@ export const config: ProviderConfig = {
       return;
     }
 
-    const userName = await fetchUserProfile(tokenInfo.accessToken, imsEnv);
+    const userProfile = await fetchUserProfile(tokenInfo.accessToken, imsEnv);
 
     saveOAuthAccount({
       providerId: 'adobe',
       accessToken: tokenInfo.accessToken,
       tokenExpiresAt: Date.now() + tokenInfo.expiresIn * 1000,
-      userName,
+      userName: userProfile.name,
+      userAvatar: userProfile.avatar,
     });
 
     onSuccess();

@@ -15,7 +15,11 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
-import type { TrayFsRequest, TrayFsResponse, TrayFsResponseData } from '../../scoops/tray-sync-protocol.js';
+import type {
+  TrayFsRequest,
+  TrayFsResponse,
+  TrayFsResponseData,
+} from '../../scoops/tray-sync-protocol.js';
 import { computeRsyncDiff, type RsyncEntry } from './rsync-diff.js';
 
 // ---------------------------------------------------------------------------
@@ -24,7 +28,7 @@ import { computeRsyncDiff, type RsyncEntry } from './rsync-diff.js';
 
 export type SendFsRequestFn = (
   targetRuntimeId: string,
-  request: TrayFsRequest,
+  request: TrayFsRequest
 ) => Promise<TrayFsResponse[]>;
 
 export interface RsyncCommandOptions {
@@ -167,7 +171,7 @@ Examples:
 // ---------------------------------------------------------------------------
 
 async function walkLocalEntries(vfs: VirtualFS, basePath: string): Promise<RsyncEntry[]> {
-  if (!await vfs.exists(basePath)) return [];
+  if (!(await vfs.exists(basePath))) return [];
   const entries: RsyncEntry[] = [];
   for await (const filePath of vfs.walk(basePath)) {
     const relPath = filePath.slice(basePath.length).replace(/^\//, '');
@@ -185,7 +189,7 @@ async function walkLocalEntries(vfs: VirtualFS, basePath: string): Promise<Rsync
 async function walkRemoteEntries(
   sendFsReq: SendFsRequestFn,
   runtimeId: string,
-  basePath: string,
+  basePath: string
 ): Promise<RsyncEntry[]> {
   // First get all file paths via walk
   const walkResponses = await sendFsReq(runtimeId, { op: 'walk', path: basePath });
@@ -223,7 +227,7 @@ async function walkRemoteEntries(
 async function readRemoteFile(
   sendFsReq: SendFsRequestFn,
   runtimeId: string,
-  path: string,
+  path: string
 ): Promise<string> {
   const responses = await sendFsReq(runtimeId, { op: 'readFile', path, encoding: 'binary' });
   // Reassemble chunks
@@ -240,7 +244,7 @@ async function readRemoteFile(
 async function ensureRemoteDir(
   sendFsReq: SendFsRequestFn,
   runtimeId: string,
-  path: string,
+  path: string
 ): Promise<void> {
   const responses = await sendFsReq(runtimeId, { op: 'mkdir', path, recursive: true });
   if (!responses[0].ok) {
@@ -261,7 +265,7 @@ function dirname(path: string): string {
 async function executePush(
   vfs: VirtualFS,
   sendFsReq: SendFsRequestFn,
-  parsed: ParsedRsyncArgs,
+  parsed: ParsedRsyncArgs
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const lines: string[] = [];
   const { localPath, remotePath, runtimeId, verbose, dryRun } = parsed;
@@ -284,7 +288,9 @@ async function executePush(
   const totalOps = diff.toAdd.length + diff.toUpdate.length + diff.toDelete.length;
 
   if (dryRun) {
-    lines.push(`\n(dry run) ${totalOps} file(s) would be transferred, ${diff.toSkip.length} up to date`);
+    lines.push(
+      `\n(dry run) ${totalOps} file(s) would be transferred, ${diff.toSkip.length} up to date`
+    );
     return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
   }
 
@@ -297,7 +303,7 @@ async function executePush(
     await ensureRemoteDir(sendFsReq, runtimeId, dirname(dstPath));
 
     // Read local file as binary (base64)
-    const data = await vfs.readFile(srcPath, { encoding: 'binary' }) as Uint8Array;
+    const data = (await vfs.readFile(srcPath, { encoding: 'binary' })) as Uint8Array;
     const b64 = uint8ToBase64(data);
     const writeResponses = await sendFsReq(runtimeId, {
       op: 'writeFile',
@@ -334,7 +340,7 @@ async function executePush(
 async function executePull(
   vfs: VirtualFS,
   sendFsReq: SendFsRequestFn,
-  parsed: ParsedRsyncArgs,
+  parsed: ParsedRsyncArgs
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const lines: string[] = [];
   const { localPath, remotePath, runtimeId, verbose, dryRun } = parsed;
@@ -357,7 +363,9 @@ async function executePull(
   const totalOps = diff.toAdd.length + diff.toUpdate.length + diff.toDelete.length;
 
   if (dryRun) {
-    lines.push(`\n(dry run) ${totalOps} file(s) would be transferred, ${diff.toSkip.length} up to date`);
+    lines.push(
+      `\n(dry run) ${totalOps} file(s) would be transferred, ${diff.toSkip.length} up to date`
+    );
     return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
   }
 
@@ -368,7 +376,7 @@ async function executePull(
 
     // Ensure parent dir locally
     const parentDir = dirname(dstPath);
-    if (!await vfs.exists(parentDir)) {
+    if (!(await vfs.exists(parentDir))) {
       await vfs.mkdir(parentDir, { recursive: true });
     }
 

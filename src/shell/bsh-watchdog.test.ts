@@ -115,7 +115,7 @@ describe('BshWatchdog', () => {
     });
 
     // Give time for potential execution
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(executedPaths).toHaveLength(0);
 
     watchdog.stop();
@@ -140,7 +140,7 @@ describe('BshWatchdog', () => {
       frame: { url: 'chrome://extensions' },
     });
 
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(executedPaths).toHaveLength(0);
 
     watchdog.stop();
@@ -162,7 +162,7 @@ describe('BshWatchdog', () => {
       frame: { url: 'https://unrelated.com/page' },
     });
 
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(executedPaths).toHaveLength(0);
 
     watchdog.stop();
@@ -171,7 +171,7 @@ describe('BshWatchdog', () => {
   it('respects @match directives', async () => {
     await vfs.writeFile(
       '/workspace/-.okta.com.bsh',
-      '// @match *://login.okta.com/*\nconsole.log("ok");',
+      '// @match *://login.okta.com/*\nconsole.log("ok");'
     );
 
     const watchdog = new BshWatchdog({
@@ -188,7 +188,7 @@ describe('BshWatchdog', () => {
       frame: { url: 'https://admin.okta.com/dashboard' },
     });
 
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(executedPaths).toHaveLength(0);
 
     // This SHOULD match
@@ -206,7 +206,9 @@ describe('BshWatchdog', () => {
   it('prevents re-entrant execution for same script+URL', async () => {
     let resolveExec: (() => void) | null = null;
     const slowExecutor = vi.fn(async (): Promise<JshResult> => {
-      await new Promise<void>(resolve => { resolveExec = resolve; });
+      await new Promise<void>((resolve) => {
+        resolveExec = resolve;
+      });
       return successResult();
     });
 
@@ -236,14 +238,14 @@ describe('BshWatchdog', () => {
       frame: { url: 'https://login.okta.com/home' },
     });
 
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(slowExecutor).toHaveBeenCalledTimes(1);
 
     // Resolve the first execution
     resolveExec!();
 
     // Now a third navigation should work
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 50));
     transport.emit('Page.frameNavigated', {
       frame: { url: 'https://login.okta.com/home' },
     });
@@ -274,7 +276,7 @@ describe('BshWatchdog', () => {
       frame: { url: 'https://login.okta.com/home' },
     });
 
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(executedPaths).toHaveLength(0);
   });
 

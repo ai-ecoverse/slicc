@@ -1,0 +1,738 @@
+/* ================================================================== */
+/* Sprinkle Components v2 — Redesigned from Figma UXC                 */
+/* ================================================================== */
+.sprinkle-content { padding: var(--s2-spacing-200); }
+
+/* ── Typography (Figma: Title/L=18px/700, Title/M=16px/700, Body/S=14px/400, Detail/S=12px/500) ── */
+.sprinkle-heading {
+  font-size: var(--s2-font-size-300); /* 18px */
+  font-weight: 700; /* Figma: Bold, not ExtraBold */
+  color: var(--s2-gray-900);
+  margin: 0 0 var(--s2-spacing-100);
+  line-height: 1.3;
+  letter-spacing: 0;
+}
+.sprinkle-heading--m {
+  font-size: var(--s2-font-size-200); /* 16px */
+}
+.sprinkle-heading--s {
+  font-size: var(--s2-font-size-100); /* 14px */
+}
+.sprinkle-label {
+  font-size: var(--s2-font-size-50); /* 11px */
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--s2-gray-600);
+  line-height: 1.3;
+  margin: 0;
+}
+.sprinkle-body {
+  font-size: var(--s2-font-size-100); /* 14px */
+  font-weight: 400;
+  color: var(--s2-content-default);
+  line-height: 1.5;
+}
+.sprinkle-detail {
+  font-size: var(--s2-font-size-75); /* 12px */
+  font-weight: 500; /* Figma: Medium */
+  color: var(--s2-gray-600); /* Figma: #717171 */
+  line-height: 1.3;
+}
+
+/* ── Buttons (Figma: 16px radius, translucent white bg, container shadow) ── */
+.sprinkle-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--s2-spacing-75);
+  height: 32px;
+  padding: 0 16px;
+  border: 1px solid var(--s2-gray-200); /* Figma: #e1e1e1 */
+  border-radius: var(--s2-radius-xl); /* 16px — Figma "static white" button */
+  background: rgba(255,255,255,0.85); /* Figma: transparent-white/800 */
+  color: var(--s2-gray-800); /* Figma: #292929 */
+  font-size: var(--s2-font-size-100);
+  font-weight: 700; /* Figma: Bold */
+  font-family: var(--s2-font-family);
+  cursor: default;
+  box-shadow: var(--s2-shadow-container);
+  transition: background var(--s2-transition-default), border-color var(--s2-transition-default), transform var(--s2-transition-default);
+}
+.sprinkle-btn:hover { background: rgba(255,255,255,1); }
+.sprinkle-btn:active { transform: scale(0.98); }
+.sprinkle-btn:focus-visible { outline: 2px solid var(--s2-border-focus); outline-offset: 2px; }
+.sprinkle-btn:disabled, .sprinkle-btn[disabled] { opacity: 0.4; pointer-events: none; }
+/* Primary/Accent — Figma: pill, blue fill */
+.sprinkle-btn--primary {
+  background: var(--s2-accent); color: var(--s2-gray-25); border-color: transparent;
+  border-radius: var(--s2-radius-pill);
+  box-shadow: none;
+}
+.sprinkle-btn--primary:hover { background: var(--s2-accent-hover); }
+.sprinkle-btn--primary:active { background: var(--s2-accent-down); transform: scale(0.98); }
+/* Secondary — Figma: 16px radius, border, white bg */
+.sprinkle-btn--secondary {
+  background: rgba(255,255,255,0.85);
+  border-color: var(--s2-gray-200);
+  color: var(--s2-gray-800);
+}
+.sprinkle-btn--secondary:hover { background: rgba(255,255,255,1); }
+/* Negative — red fill, pill */
+.sprinkle-btn--negative {
+  background: var(--s2-negative); color: var(--s2-gray-25); border-color: transparent;
+  border-radius: var(--s2-radius-pill);
+  box-shadow: none;
+}
+.sprinkle-btn--negative:hover { background: color-mix(in srgb, var(--s2-negative) 85%, #000); }
+/* Quiet — no border, no shadow, no bg */
+.sprinkle-btn--quiet {
+  background: transparent; border-color: transparent; box-shadow: none;
+  color: var(--s2-gray-800);
+}
+.sprinkle-btn--quiet:hover { background: var(--s2-gray-100); }
+.sprinkle-btn-group { display: inline-flex; gap: var(--s2-spacing-100); }
+
+/* ── Badges (Figma: 8px radius, pastel color palette, 12px bold) ── */
+.sprinkle-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 8px; border-radius: 8px;
+  font-size: 12px; font-weight: 700; /* Figma: Bold */
+  line-height: 16px;
+  white-space: nowrap;
+  background: var(--s2-gray-800); color: var(--s2-gray-25);
+}
+/* Semantic solid fills */
+.sprinkle-badge--positive { background: var(--s2-positive); color: var(--s2-gray-25); }
+.sprinkle-badge--negative { background: var(--s2-negative); color: var(--s2-gray-25); }
+.sprinkle-badge--notice { background: var(--s2-notice); color: var(--s2-gray-25); }
+.sprinkle-badge--informative { background: var(--s2-informative); color: var(--s2-gray-25); }
+.sprinkle-badge--accent { background: var(--s2-accent); color: var(--s2-gray-25); }
+/* Subtle fills — Figma pastel backgrounds with dark text */
+.sprinkle-badge--subtle {
+  background: var(--uxc-neutral-subtle-bg); color: var(--s2-gray-700);
+}
+.sprinkle-badge--subtle.sprinkle-badge--positive { background: var(--uxc-positive-subtle-bg); color: var(--uxc-positive-subtle-text); }
+.sprinkle-badge--subtle.sprinkle-badge--negative { background: var(--uxc-negative-subtle-bg); color: var(--uxc-negative-subtle-text); }
+.sprinkle-badge--subtle.sprinkle-badge--notice { background: var(--uxc-notice-subtle-bg); color: var(--uxc-notice-subtle-text); }
+.sprinkle-badge--subtle.sprinkle-badge--informative { background: var(--uxc-accent-subtle-bg); color: var(--uxc-accent-subtle-text); }
+.sprinkle-badge--subtle.sprinkle-badge--accent { background: var(--uxc-accent-subtle-bg); color: var(--uxc-accent-subtle-text); }
+/* Color fills — Figma pastel palette (project badges in table) */
+.sprinkle-badge--yellow { background: var(--uxc-yellow-subtle-bg); color: var(--uxc-yellow-subtle-text); }
+.sprinkle-badge--purple { background: var(--uxc-purple-subtle-bg); color: var(--uxc-purple-subtle-text); }
+.sprinkle-badge--cyan { background: var(--uxc-cyan-subtle-bg); color: var(--uxc-cyan-subtle-text); }
+.sprinkle-badge--magenta { background: var(--uxc-magenta-subtle-bg); color: var(--uxc-magenta-subtle-text); }
+.sprinkle-badge--indigo { background: var(--uxc-indigo-subtle-bg); color: var(--uxc-indigo-subtle-text); }
+.sprinkle-badge--gray { background: var(--uxc-gray-subtle-bg); color: var(--uxc-gray-subtle-text); }
+/* Outline */
+.sprinkle-badge--outline {
+  background: transparent; color: var(--s2-content-secondary);
+  box-shadow: inset 0 0 0 1px var(--s2-border-default);
+}
+.sprinkle-badge--outline.sprinkle-badge--positive { color: var(--s2-positive); box-shadow: inset 0 0 0 1px var(--s2-positive); }
+.sprinkle-badge--outline.sprinkle-badge--negative { color: var(--s2-negative); box-shadow: inset 0 0 0 1px var(--s2-negative); }
+.sprinkle-badge--outline.sprinkle-badge--notice { color: var(--s2-notice); box-shadow: inset 0 0 0 1px var(--s2-notice); }
+.sprinkle-badge--outline.sprinkle-badge--informative { color: var(--s2-informative); box-shadow: inset 0 0 0 1px var(--s2-informative); }
+
+/* ── Chip / Tag (Figma: outline pill with icon) ── */
+.sprinkle-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--s2-gray-200);
+  border-radius: var(--s2-radius-pill);
+  font-size: var(--s2-font-size-75);
+  font-weight: 500;
+  color: var(--s2-gray-800);
+  background: white;
+  cursor: default;
+  transition: background var(--s2-transition-default);
+}
+.sprinkle-chip:hover { background: var(--s2-gray-50); }
+.sprinkle-chip svg { width: 14px; height: 14px; flex-shrink: 0; }
+
+/* ── Status Lights (Figma: S=8px dot, M=10px dot) ── */
+.sprinkle-status-light {
+  display: inline-flex; align-items: center; gap: var(--s2-spacing-75);
+  font-size: var(--s2-font-size-75);
+  color: var(--s2-content-default);
+}
+.sprinkle-status-light::before {
+  content: ''; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--s2-content-tertiary);
+  flex-shrink: 0;
+}
+.sprinkle-status-light--positive::before { background: var(--s2-positive); }
+.sprinkle-status-light--negative::before { background: var(--s2-negative); }
+.sprinkle-status-light--notice::before { background: var(--s2-notice); }
+.sprinkle-status-light--informative::before { background: var(--s2-informative); }
+/* M size — 10px dot, 14px text */
+.sprinkle-status-light--m {
+  font-size: var(--s2-font-size-100);
+  color: var(--s2-gray-600); /* Figma: #717171 */
+}
+.sprinkle-status-light--m::before { width: 10px; height: 10px; }
+
+/* ── Cards (Figma: 16px radius, #dadada border, 3-layer shadow) ── */
+.sprinkle-card {
+  background: var(--s2-gray-25);
+  border: 1px solid var(--s2-gray-300); /* Figma: #dadada */
+  border-radius: var(--s2-radius-xl); /* 16px */
+  padding: var(--s2-spacing-400); /* 24px */
+  box-shadow: var(--s2-shadow-container);
+  transition: box-shadow var(--s2-transition-default);
+}
+.sprinkle-card:hover { box-shadow: var(--s2-shadow-elevated); }
+/* Stat Card — Figma: same card style, centered */
+.sprinkle-stat-card {
+  background: var(--s2-gray-25);
+  border: 1px solid var(--s2-gray-300);
+  border-radius: var(--s2-radius-xl);
+  padding: var(--s2-spacing-200) var(--s2-spacing-300);
+  text-align: center;
+  box-shadow: var(--s2-shadow-container);
+  transition: box-shadow var(--s2-transition-default);
+}
+.sprinkle-stat-card:hover { box-shadow: var(--s2-shadow-elevated); }
+.sprinkle-stat-card .value {
+  font-size: var(--s2-font-size-500);
+  font-weight: 700; /* Figma: Bold */
+  color: var(--s2-content-default);
+  line-height: 1.2;
+}
+.sprinkle-stat-card .label {
+  font-size: var(--s2-font-size-75);
+  font-weight: 500;
+  color: var(--s2-gray-600);
+  margin-top: var(--s2-spacing-50);
+}
+
+/* ── Action Card (Figma: rich card with icon header, list items) ── */
+.sprinkle-action-card {
+  display: flex; flex-direction: column;
+  background: var(--s2-gray-25);
+  border: 1px solid var(--s2-gray-200);
+  border-radius: var(--s2-radius-xl); /* 16px */
+  overflow: hidden;
+  box-shadow: var(--s2-shadow-container);
+}
+.sprinkle-action-card__header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 16px 24px;
+  font-weight: 700; font-size: 16px; /* Figma: Title/M */
+  line-height: 1.3;
+  color: var(--s2-gray-900);
+}
+.sprinkle-action-card__header .sprinkle-badge { margin-left: auto; }
+/* Icon thumbnail in header (Figma: 40px, colored bg, 8px radius) */
+.sprinkle-action-card__icon {
+  width: 40px; height: 40px; min-width: 40px;
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+.sprinkle-action-card__icon--yellow { background: #FFF197; color: #9E6600; }
+.sprinkle-action-card__icon--blue { background: var(--uxc-accent-subtle-bg); color: var(--uxc-accent-subtle-text); }
+.sprinkle-action-card__icon--green { background: var(--uxc-positive-subtle-bg); color: var(--uxc-positive-subtle-text); }
+.sprinkle-action-card__icon--indigo { background: var(--uxc-indigo-subtle-bg); color: #5424DB; }
+/* Header meta (subtitle text) */
+.sprinkle-action-card__meta {
+  font-size: 12px; font-weight: 400;
+  color: var(--s2-gray-600); /* Figma: #717171 */
+  margin-top: 2px;
+}
+/* Action links in header right */
+.sprinkle-action-card__header-actions {
+  display: flex; align-items: center; gap: 12px;
+  margin-left: auto;
+  font-size: 12px; font-weight: 500; color: var(--s2-gray-800);
+}
+.sprinkle-action-card__header-actions a {
+  display: flex; align-items: center; gap: 4px;
+  color: var(--s2-gray-800); text-decoration: none;
+}
+.sprinkle-action-card__body {
+  padding: 0 24px 16px;
+  font-size: 14px; color: var(--s2-gray-700);
+  line-height: 1.5;
+}
+.sprinkle-action-card__actions {
+  display: flex; gap: 8px;
+  justify-content: flex-end;
+  padding: 12px 24px;
+  border-top: 1px solid var(--s2-gray-200);
+}
+
+/* ── List Card Item (Figma: icon + title/subtitle + badge, border-bottom) ── */
+.sprinkle-list-item {
+  display: flex; align-items: center; gap: 16px;
+  padding: 16px 24px;
+  border-top: 1px solid var(--s2-gray-100);
+  min-height: 56px;
+}
+.sprinkle-list-item__icon {
+  width: 40px; height: 40px; min-width: 40px;
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; flex-shrink: 0;
+  background: var(--s2-gray-75);
+}
+.sprinkle-list-item__content { flex: 1; min-width: 0; }
+.sprinkle-list-item__title {
+  font-size: 14px; font-weight: 700; /* Figma: Bold */
+  color: var(--s2-gray-900);
+  line-height: 1.3;
+  display: flex; align-items: center; gap: 6px;
+}
+.sprinkle-list-item__subtitle {
+  font-size: 14px; font-weight: 400;
+  color: var(--s2-gray-600);
+  line-height: 1.5;
+  margin-top: 2px;
+}
+.sprinkle-list-item__end {
+  display: flex; align-items: center; gap: 8px;
+  flex-shrink: 0;
+}
+
+/* ── Table (Figma: #e9e9e9 borders, 8px radius, transparent th bg) ── */
+.sprinkle-table {
+  width: 100%; border-collapse: collapse;
+  font-size: 14px;
+  border: 1px solid var(--s2-gray-100); /* Figma: #e9e9e9 */
+  border-radius: var(--s2-radius-default);
+  overflow: hidden;
+}
+.sprinkle-table th {
+  text-align: left;
+  padding: 7px 16px;
+  background: transparent; /* Figma: no header bg fill */
+  border-bottom: 1px solid var(--s2-gray-100);
+  color: var(--s2-gray-700); /* Figma: #505050 */
+  font-weight: 700; font-size: 14px;
+  line-height: 1.3; height: 32px;
+  box-sizing: border-box;
+}
+.sprinkle-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--s2-gray-100);
+  color: var(--s2-content-default);
+  font-size: 14px; line-height: 1.5;
+  box-sizing: border-box;
+}
+.sprinkle-table tr:last-child td { border-bottom: none; }
+.sprinkle-table tr:hover td { background: var(--s2-gray-50); }
+
+/* ── Task Plan (Figma: collapsible task sections with checkmarks) ── */
+.sprinkle-task-group {
+  background: var(--s2-gray-50); /* Figma: #f8f8f8 */
+  border-radius: var(--s2-radius-default);
+  padding: 16px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.sprinkle-task-group__header {
+  display: flex; align-items: center; justify-content: space-between;
+}
+.sprinkle-task-group__title {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 16px; font-weight: 700;
+  color: var(--s2-gray-1000);
+}
+.sprinkle-task-group__title svg { width: 20px; height: 20px; flex-shrink: 0; }
+.sprinkle-task-group__meta {
+  display: flex; align-items: center; gap: 16px;
+  font-size: 12px; color: var(--s2-gray-600);
+}
+.sprinkle-task-item {
+  display: flex; align-items: center; gap: 8px;
+  height: 24px; padding-left: 4px;
+  font-size: 14px; line-height: 18px;
+}
+.sprinkle-task-item--done { color: var(--s2-gray-600); }
+.sprinkle-task-item--pending { color: var(--s2-gray-800); }
+.sprinkle-task-item__check {
+  width: 16px; height: 16px; flex-shrink: 0;
+  border-radius: 50%; border: 1.5px solid var(--s2-gray-400);
+  display: flex; align-items: center; justify-content: center;
+}
+.sprinkle-task-item--done .sprinkle-task-item__check {
+  background: var(--s2-positive); border-color: var(--s2-positive);
+}
+.sprinkle-task-item--done .sprinkle-task-item__check::after {
+  content: ''; width: 8px; height: 5px;
+  border-left: 1.5px solid white; border-bottom: 1.5px solid white;
+  transform: rotate(-45deg) translateY(-1px);
+}
+
+/* ── Progress Bar ── */
+.sprinkle-progress-bar {
+  display: flex; flex-direction: column; gap: var(--s2-spacing-75);
+  --_bar-color: var(--s2-accent);
+}
+.sprinkle-progress-bar--positive { --_bar-color: var(--s2-positive); }
+.sprinkle-progress-bar--negative { --_bar-color: var(--s2-negative); }
+.sprinkle-progress-bar--notice   { --_bar-color: var(--s2-notice); }
+.sprinkle-progress-bar--informative { --_bar-color: var(--s2-informative); }
+.sprinkle-progress-bar__header {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: var(--s2-font-size-75); color: var(--s2-content-default);
+}
+.sprinkle-progress-bar__header .label { font-weight: 400; }
+.sprinkle-progress-bar__header .value { font-weight: 400; color: var(--s2-gray-600); }
+.sprinkle-progress-bar__track {
+  height: 4px; border-radius: var(--s2-radius-pill);
+  background: var(--s2-gray-200); overflow: hidden;
+  position: relative;
+}
+.sprinkle-progress-bar__track .fill {
+  height: 100%; border-radius: var(--s2-radius-pill);
+  background: var(--fill-color, var(--_bar-color, var(--s2-accent)));
+  transition: width 300ms ease;
+}
+/* Auto-fill via --progress custom property on parent */
+.sprinkle-progress-bar__track::after {
+  content: ''; position: absolute; inset: 0; right: auto;
+  width: var(--progress, var(--value, 0%));
+  border-radius: var(--s2-radius-pill);
+  background: var(--fill-color, var(--_bar-color, var(--s2-accent)));
+  transition: width 300ms ease;
+}
+.sprinkle-progress-bar__track:has(> .fill)::after { display: none; }
+/* Legacy / simple bar (no __track child) — also supports --progress custom prop */
+.sprinkle-progress-bar:not(:has(.sprinkle-progress-bar__track)) {
+  height: 4px; width: 100%; border-radius: var(--s2-radius-pill);
+  background: var(--s2-gray-200); overflow: hidden;
+  flex-direction: row; position: relative;
+}
+.sprinkle-progress-bar:not(:has(.sprinkle-progress-bar__track)) > .fill {
+  height: 100%; border-radius: var(--s2-radius-pill);
+  background: var(--fill-color, var(--_bar-color, var(--s2-accent)));
+  transition: width 300ms ease;
+}
+.sprinkle-progress-bar:not(:has(.sprinkle-progress-bar__track))::after {
+  content: ''; position: absolute; inset: 0; right: auto;
+  width: var(--progress, var(--value, 0%));
+  border-radius: var(--s2-radius-pill);
+  background: var(--fill-color, var(--_bar-color, var(--s2-accent)));
+  transition: width 300ms ease;
+}
+.sprinkle-progress-bar:not(:has(.sprinkle-progress-bar__track)):has(> .fill)::after {
+  display: none;
+}
+
+/* ── Meter ── */
+.sprinkle-meter {
+  display: flex; flex-direction: column; gap: var(--s2-spacing-75);
+  --_meter-color: var(--s2-informative);
+}
+.sprinkle-meter--positive { --_meter-color: var(--s2-positive); }
+.sprinkle-meter--notice   { --_meter-color: var(--s2-notice); }
+.sprinkle-meter--negative { --_meter-color: var(--s2-negative); }
+.sprinkle-meter__header {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: var(--s2-font-size-75); color: var(--s2-content-default);
+}
+.sprinkle-meter__header .label { font-weight: 400; }
+.sprinkle-meter__header .value { font-weight: 400; color: var(--s2-gray-600); }
+.sprinkle-meter__track {
+  height: 4px; border-radius: var(--s2-radius-pill);
+  background: var(--s2-gray-200); overflow: hidden;
+  position: relative;
+}
+.sprinkle-meter__track .fill {
+  height: 100%; border-radius: var(--s2-radius-pill);
+  background: var(--fill-color, var(--_meter-color));
+  transition: width 300ms ease;
+}
+.sprinkle-meter__track::after {
+  content: ''; position: absolute; inset: 0; right: auto;
+  width: var(--progress, var(--value, 0%));
+  border-radius: var(--s2-radius-pill);
+  background: var(--fill-color, var(--_meter-color));
+  transition: width 300ms ease;
+}
+.sprinkle-meter__track:has(> .fill)::after { display: none; }
+/* Legacy / simple meter (no __track child) */
+.sprinkle-meter:not(:has(.sprinkle-meter__track)) {
+  height: 4px; width: 100%; border-radius: var(--s2-radius-pill);
+  background: var(--s2-gray-200); overflow: hidden;
+  flex-direction: row; position: relative;
+}
+.sprinkle-meter:not(:has(.sprinkle-meter__track)) > .fill {
+  height: 100%; border-radius: var(--s2-radius-pill);
+  background: var(--fill-color, var(--_meter-color));
+  transition: width 300ms ease;
+}
+.sprinkle-meter:not(:has(.sprinkle-meter__track))::after {
+  content: ''; position: absolute; inset: 0; right: auto;
+  width: var(--progress, var(--value, 0%));
+  border-radius: var(--s2-radius-pill);
+  background: var(--fill-color, var(--_meter-color));
+  transition: width 300ms ease;
+}
+.sprinkle-meter:not(:has(.sprinkle-meter__track)):has(> .fill)::after { display: none; }
+
+/* ── Key-Value List ── */
+.sprinkle-kv-list { list-style: none; padding: 0; margin: 0; }
+.sprinkle-kv-list li {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: var(--s2-spacing-100) 0;
+  border-bottom: 1px solid var(--s2-border-subtle);
+  font-size: var(--s2-font-size-75);
+}
+.sprinkle-kv-list li:last-child { border-bottom: none; }
+.sprinkle-kv-list .key { color: var(--s2-gray-600); font-weight: 400; }
+.sprinkle-kv-list .value { color: var(--s2-content-default); font-weight: 700; }
+dl.sprinkle-kv-list {
+  display: grid; grid-template-columns: auto 1fr;
+  gap: 0; font-size: var(--s2-font-size-75);
+}
+dl.sprinkle-kv-list dt, dl.sprinkle-kv-list dd {
+  padding: var(--s2-spacing-100) 0;
+  border-bottom: 1px solid var(--s2-border-subtle); margin: 0;
+}
+dl.sprinkle-kv-list dt { color: var(--s2-gray-600); font-weight: 400; padding-right: var(--s2-spacing-300); }
+dl.sprinkle-kv-list dd { color: var(--s2-content-default); font-weight: 700; text-align: right; }
+dl.sprinkle-kv-list dt:last-of-type, dl.sprinkle-kv-list dd:last-of-type { border-bottom: none; }
+
+/* ── Text Field ── */
+.sprinkle-text-field {
+  width: 100%; padding: 7px 12px;
+  font-size: var(--s2-font-size-100); font-family: var(--s2-font-family);
+  color: var(--s2-content-default); background: white;
+  border: 1px solid var(--s2-gray-200); border-radius: var(--s2-radius-default);
+  outline: none; transition: border-color var(--s2-transition-default);
+  box-sizing: border-box;
+}
+.sprinkle-text-field::placeholder { color: var(--s2-gray-600); /* Figma: #717171 */ }
+.sprinkle-text-field:hover { border-color: var(--s2-gray-700); }
+.sprinkle-text-field:focus { border-color: var(--s2-accent); box-shadow: 0 0 0 1px var(--s2-accent); }
+
+/* ── Layout ── */
+.sprinkle-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--s2-spacing-200); }
+.sprinkle-stack { display: flex; flex-direction: column; gap: var(--s2-spacing-200); }
+.sprinkle-row { display: flex; align-items: center; gap: var(--s2-spacing-200); }
+
+/* ── Divider ── */
+.sprinkle-divider { border: none; border-top: 1px solid var(--s2-border-subtle); margin: var(--s2-spacing-200) 0; }
+.sprinkle-divider--medium { border-top-width: 2px; border-top-color: var(--s2-border-default); margin: var(--s2-spacing-300) 0; }
+
+/* ── Empty State ── */
+.sprinkle-empty-state { text-align: center; padding: var(--s2-spacing-500) var(--s2-spacing-300); color: var(--s2-content-tertiary); font-size: var(--s2-font-size-100); }
+
+/* ── Toolbar (Figma: #f8f8f8 bg, border-bottom) ── */
+.sprinkle-toolbar {
+  display: flex; align-items: center; gap: var(--s2-spacing-100);
+  padding: var(--s2-spacing-100) var(--s2-spacing-200);
+  border-bottom: 1px solid var(--s2-gray-200);
+  background: var(--s2-gray-50);
+  min-height: 40px; flex-shrink: 0;
+}
+.sprinkle-toolbar__start { display: flex; align-items: center; gap: var(--s2-spacing-100); }
+.sprinkle-toolbar__center { display: flex; align-items: center; gap: var(--s2-spacing-100); flex: 1; justify-content: center; }
+.sprinkle-toolbar__end { display: flex; align-items: center; gap: var(--s2-spacing-100); margin-left: auto; }
+
+/* ── Tabs ── */
+.sprinkle-tabs {
+  display: flex; gap: 0;
+  border-bottom: 1px solid var(--s2-gray-200);
+  background: var(--s2-gray-50);
+  flex-shrink: 0; overflow-x: auto;
+}
+.sprinkle-tabs__tab {
+  padding: var(--s2-spacing-100) var(--s2-spacing-200);
+  font-size: var(--s2-font-size-100); /* Figma: 14px */
+  font-weight: 500; /* Figma: Medium */
+  color: var(--s2-gray-600);
+  background: none; border: none;
+  border-bottom: 2px solid transparent;
+  cursor: default; white-space: nowrap;
+  transition: color var(--s2-transition-default), border-color var(--s2-transition-default);
+  font-family: var(--s2-font-family);
+}
+.sprinkle-tabs__tab:hover { color: var(--s2-gray-800); }
+.sprinkle-tabs__tab--active {
+  color: var(--s2-gray-900); /* Figma: active tabs are black, not accent */
+  border-bottom-color: var(--s2-gray-900);
+  font-weight: 700;
+}
+.sprinkle-tabs__panel { display: none; flex: 1; min-height: 0; overflow-y: auto; }
+.sprinkle-tabs__panel--active { display: flex; flex-direction: column; }
+
+/* ── Sidebar ── */
+.sprinkle-sidebar { display: flex; gap: 0; min-height: 0; flex: 1; }
+.sprinkle-sidebar__nav {
+  width: 240px; min-width: 240px; overflow-y: auto;
+  border-right: 1px solid var(--s2-gray-200);
+  background: var(--s2-gray-50); padding: var(--s2-spacing-200) 0;
+}
+.sprinkle-sidebar__nav-item {
+  display: flex; align-items: center; gap: var(--s2-spacing-100);
+  padding: var(--s2-spacing-100) var(--s2-spacing-200);
+  font-size: var(--s2-font-size-100);
+  color: var(--s2-gray-700); cursor: default; border-radius: 0;
+  transition: background var(--s2-transition-default);
+}
+.sprinkle-sidebar__nav-item:hover { background: var(--s2-gray-100); }
+.sprinkle-sidebar__nav-item--active {
+  background: var(--s2-gray-800); color: var(--s2-gray-25); /* Figma: selected = #292929 bg, white text */
+  font-weight: 600;
+}
+.sprinkle-sidebar__nav-label {
+  padding: var(--s2-spacing-200) var(--s2-spacing-200) var(--s2-spacing-50);
+  font-size: var(--s2-font-size-50); font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--s2-gray-600);
+}
+.sprinkle-sidebar__main { flex: 1; min-width: 0; overflow-y: auto; padding: var(--s2-spacing-200); }
+
+/* ── Dialog ── */
+.sprinkle-dialog { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 100; }
+.sprinkle-dialog[hidden] { display: none; }
+.sprinkle-dialog__backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.4); backdrop-filter: blur(2px); }
+.sprinkle-dialog__content {
+  position: relative; background: var(--s2-gray-25);
+  border-radius: var(--s2-radius-xl); box-shadow: var(--s2-shadow-elevated);
+  padding: var(--s2-spacing-400);
+  max-width: min(560px, calc(100% - 32px)); max-height: calc(100% - 64px);
+  overflow-y: auto; min-width: 280px;
+}
+.sprinkle-dialog__header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--s2-spacing-300); }
+.sprinkle-dialog__title { font-size: var(--s2-font-size-200); font-weight: 700; color: var(--s2-content-default); }
+.sprinkle-dialog__close {
+  width: 28px; height: 28px; border-radius: var(--s2-radius-pill);
+  border: none; background: none; color: var(--s2-gray-600);
+  cursor: default; display: flex; align-items: center; justify-content: center;
+  font-size: 18px; transition: background var(--s2-transition-default);
+}
+.sprinkle-dialog__close:hover { background: var(--s2-gray-100); }
+.sprinkle-dialog__footer { display: flex; justify-content: flex-end; gap: var(--s2-spacing-100); margin-top: var(--s2-spacing-300); }
+
+/* ── Collapsible ── */
+.sprinkle-collapsible__header {
+  display: flex; align-items: center; gap: var(--s2-spacing-100);
+  padding: var(--s2-spacing-100) var(--s2-spacing-200);
+  cursor: default; font-size: var(--s2-font-size-100); font-weight: 600;
+  color: var(--s2-content-default); background: none; border: none;
+  width: 100%; text-align: left; border-radius: var(--s2-radius-default);
+  transition: background var(--s2-transition-default); font-family: var(--s2-font-family);
+}
+.sprinkle-collapsible__header:hover { background: var(--s2-gray-100); }
+.sprinkle-collapsible__chevron {
+  display: inline-block; width: 16px; height: 16px;
+  transition: transform 200ms ease; flex-shrink: 0;
+}
+.sprinkle-collapsible__chevron::before { content: '\25B6'; font-size: 10px; color: var(--s2-gray-600); }
+.sprinkle-collapsible--open .sprinkle-collapsible__chevron { transform: rotate(90deg); }
+.sprinkle-collapsible__body {
+  display: none;
+  padding: var(--s2-spacing-100) var(--s2-spacing-200) var(--s2-spacing-200) calc(var(--s2-spacing-200) + 16px + var(--s2-spacing-100));
+}
+.sprinkle-collapsible--open .sprinkle-collapsible__body { display: block; }
+
+/* ── Layout: Split Pane (preserved from v1) ── */
+.sprinkle-split {
+  display: flex;
+  gap: 0;
+  min-height: 0;
+  flex: 1;
+}
+.sprinkle-split > * {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+}
+.sprinkle-split > :not(:last-child) {
+  border-right: 1px solid var(--s2-border-default);
+}
+.sprinkle-split--vertical {
+  flex-direction: column;
+}
+.sprinkle-split--vertical > :not(:last-child) {
+  border-right: none;
+  border-bottom: 1px solid var(--s2-border-default);
+}
+
+/* ── Layout: Canvas / SVG Container (preserved from v1) ── */
+.sprinkle-canvas {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border-radius: var(--s2-radius-l);
+  background: var(--s2-bg-layer-1);
+}
+.sprinkle-canvas--16x9 { aspect-ratio: 16 / 9; }
+.sprinkle-canvas--4x3 { aspect-ratio: 4 / 3; }
+.sprinkle-canvas--1x1 { aspect-ratio: 1 / 1; }
+.sprinkle-canvas svg,
+.sprinkle-canvas canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ── Density Tiers ── */
+/* Compact: trees, editors, data-dense panels — tighter spacing, smaller type */
+.sprinkle-density-compact .sprinkle-content { padding: var(--s2-spacing-100); }
+.sprinkle-density-compact .sprinkle-heading { font-size: var(--s2-font-size-100); margin-bottom: var(--s2-spacing-50); }
+.sprinkle-density-compact .sprinkle-heading--m { font-size: 13px; }
+.sprinkle-density-compact .sprinkle-body { font-size: var(--s2-font-size-75); line-height: 1.4; }
+.sprinkle-density-compact .sprinkle-detail { font-size: var(--s2-font-size-50); }
+.sprinkle-density-compact .sprinkle-table th { padding: 5px 12px; font-size: var(--s2-font-size-50); height: 28px; }
+.sprinkle-density-compact .sprinkle-table td { padding: 6px 12px; font-size: var(--s2-font-size-75); }
+.sprinkle-density-compact .sprinkle-btn { height: 26px; font-size: var(--s2-font-size-75); padding: 0 10px; }
+.sprinkle-density-compact .sprinkle-badge { font-size: 10px; padding: 2px 6px; }
+.sprinkle-density-compact .sprinkle-card { padding: var(--s2-spacing-200); }
+.sprinkle-density-compact .sprinkle-list-item { padding: 8px 16px; min-height: 40px; gap: 10px; }
+.sprinkle-density-compact .sprinkle-list-item__icon { width: 28px; height: 28px; min-width: 28px; font-size: 13px; }
+.sprinkle-density-compact .sprinkle-list-item__title { font-size: var(--s2-font-size-75); }
+.sprinkle-density-compact .sprinkle-list-item__subtitle { font-size: 11px; }
+.sprinkle-density-compact .sprinkle-sidebar__nav-item { padding: 6px var(--s2-spacing-200); font-size: var(--s2-font-size-75); }
+.sprinkle-density-compact .sprinkle-text-field { height: 28px; font-size: var(--s2-font-size-75); padding: 4px 8px; }
+.sprinkle-density-compact .sprinkle-tabs__tab { padding: 6px var(--s2-spacing-200); font-size: var(--s2-font-size-75); }
+.sprinkle-density-compact .sprinkle-kv-list li { padding: 6px 0; font-size: var(--s2-font-size-50); }
+.sprinkle-density-compact .sprinkle-chip { padding: 3px 8px; font-size: 11px; }
+
+/* Spacious: content creation, previews — more breathing room */
+.sprinkle-density-spacious .sprinkle-content { padding: var(--s2-spacing-400); }
+.sprinkle-density-spacious .sprinkle-heading { font-size: var(--s2-font-size-500); margin-bottom: var(--s2-spacing-200); }
+.sprinkle-density-spacious .sprinkle-heading--m { font-size: var(--s2-font-size-300); }
+.sprinkle-density-spacious .sprinkle-body { font-size: 15px; line-height: 1.65; }
+.sprinkle-density-spacious .sprinkle-card { padding: var(--s2-spacing-500); }
+.sprinkle-density-spacious .sprinkle-btn { height: 36px; padding: 0 20px; }
+.sprinkle-density-spacious .sprinkle-action-card__body { padding: 0 32px 24px; font-size: 15px; }
+
+/* ── Container Query Responsive Rules ── */
+.sprinkle-panel { container-type: inline-size; }
+
+@container (max-width: 400px) {
+  .sprinkle-sidebar {
+    flex-direction: column;
+  }
+  .sprinkle-sidebar__nav {
+    width: 100%;
+    min-width: 0;
+    max-height: 200px;
+    border-right: none;
+    border-bottom: 1px solid var(--s2-border-default);
+  }
+  .sprinkle-grid {
+    grid-template-columns: 1fr;
+  }
+  .sprinkle-split:not(.sprinkle-split--vertical) {
+    flex-direction: column;
+  }
+  .sprinkle-split:not(.sprinkle-split--vertical) > :not(:last-child) {
+    border-right: none;
+    border-bottom: 1px solid var(--s2-border-default);
+  }
+  .sprinkle-toolbar {
+    flex-wrap: wrap;
+  }
+}
+
+@container (min-width: 600px) {
+  .sprinkle-sidebar__nav {
+    width: 240px;
+    min-width: 240px;
+  }
+  .sprinkle-grid {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+}

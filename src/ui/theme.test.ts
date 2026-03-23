@@ -7,9 +7,13 @@ const mockStorage = {
   setItem: vi.fn((key: string, value: string) => {
     storage.set(key, value);
   }),
-  removeItem: vi.fn((key: string) => { storage.delete(key); }),
+  removeItem: vi.fn((key: string) => {
+    storage.delete(key);
+  }),
   clear: vi.fn(() => storage.clear()),
-  get length() { return storage.size; },
+  get length() {
+    return storage.size;
+  },
   key: vi.fn((_i: number) => null),
 };
 vi.stubGlobal('localStorage', mockStorage);
@@ -21,8 +25,11 @@ const mockClassList = {
   remove: vi.fn((cls: string) => classList.delete(cls)),
   toggle: vi.fn((cls: string, force?: boolean) => {
     if (force === undefined) {
-      if (classList.has(cls)) { classList.delete(cls); }
-      else { classList.add(cls); }
+      if (classList.has(cls)) {
+        classList.delete(cls);
+      } else {
+        classList.add(cls);
+      }
     } else if (force) {
       classList.add(cls);
     } else {
@@ -44,12 +51,7 @@ afterAll(() => {
   vi.unstubAllGlobals();
 });
 
-import {
-  getThemePreference,
-  setThemePreference,
-  applyTheme,
-  initTheme,
-} from './theme.js';
+import { getThemePreference, setThemePreference, applyTheme, initTheme } from './theme.js';
 
 describe('theme', () => {
   beforeEach(() => {
@@ -59,8 +61,8 @@ describe('theme', () => {
   });
 
   describe('getThemePreference', () => {
-    it('defaults to system when nothing stored', () => {
-      expect(getThemePreference()).toBe('system');
+    it('defaults to light when nothing stored', () => {
+      expect(getThemePreference()).toBe('light');
     });
 
     it('returns stored preference', () => {
@@ -68,19 +70,16 @@ describe('theme', () => {
       expect(getThemePreference()).toBe('dark');
     });
 
-    it('returns system for invalid stored value', () => {
+    it('returns light for invalid stored value', () => {
       storage.set('slicc-theme', 'invalid');
-      expect(getThemePreference()).toBe('system');
+      expect(getThemePreference()).toBe('light');
     });
   });
 
   describe('setThemePreference', () => {
     it('stores preference and applies theme', () => {
       setThemePreference('light');
-      expect(mockStorage.setItem).toHaveBeenCalledWith(
-        'slicc-theme',
-        'light',
-      );
+      expect(mockStorage.setItem).toHaveBeenCalledWith('slicc-theme', 'light');
       expect(storage.get('slicc-theme')).toBe('light');
     });
 

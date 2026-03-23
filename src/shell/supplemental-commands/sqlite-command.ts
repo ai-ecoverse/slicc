@@ -36,7 +36,7 @@ export function createSqliteCommand(name: 'sqlite3' | 'sqllite' = 'sqlite3'): Co
       const dbPath = isMemory ? ':memory:' : ctx.fs.resolvePath(ctx.cwd, dbArg);
 
       let dbBytes: Uint8Array | undefined;
-      if (!isMemory && await ctx.fs.exists(dbPath)) {
+      if (!isMemory && (await ctx.fs.exists(dbPath))) {
         dbBytes = await ctx.fs.readFileBuffer(dbPath);
       }
 

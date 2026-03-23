@@ -99,7 +99,7 @@ describe('LickManager Proxy', () => {
         'My Task',
         '0 * * * *',
         'my-scoop',
-        'return true',
+        'return true'
       );
 
       proxyChannel.close();
@@ -285,7 +285,8 @@ describe('LickManager Proxy', () => {
 
   describe('createLickManagerProxy', () => {
     it('createCronTask sends message and resolves with result', async () => {
-      const { createLickManagerProxy, startLickManagerHost } = await import('./lick-manager-proxy.js');
+      const { createLickManagerProxy, startLickManagerHost } =
+        await import('./lick-manager-proxy.js');
 
       const mockEntry = {
         id: 'cron-1',
@@ -318,7 +319,8 @@ describe('LickManager Proxy', () => {
     });
 
     it('deleteCronTask sends message and resolves with boolean', async () => {
-      const { createLickManagerProxy, startLickManagerHost } = await import('./lick-manager-proxy.js');
+      const { createLickManagerProxy, startLickManagerHost } =
+        await import('./lick-manager-proxy.js');
 
       const mockLickManager = {
         createCronTask: vi.fn(),
@@ -347,7 +349,8 @@ describe('LickManager Proxy', () => {
     });
 
     it('error response rejects the promise', async () => {
-      const { createLickManagerProxy, startLickManagerHost } = await import('./lick-manager-proxy.js');
+      const { createLickManagerProxy, startLickManagerHost } =
+        await import('./lick-manager-proxy.js');
 
       const mockLickManager = {
         createCronTask: vi.fn().mockRejectedValue(new Error('Cron validation failed')),
@@ -403,7 +406,8 @@ describe('LickManager Proxy', () => {
     });
 
     it('only resolves on matching response id', async () => {
-      const { createLickManagerProxy, startLickManagerHost } = await import('./lick-manager-proxy.js');
+      const { createLickManagerProxy, startLickManagerHost } =
+        await import('./lick-manager-proxy.js');
 
       const mockLickManager = {
         createCronTask: vi.fn().mockResolvedValue({ id: 'cron-1', name: 'Task' }),

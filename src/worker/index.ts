@@ -27,7 +27,7 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
         code: 'TRAY_CREATE_ENDPOINT_MOVED',
         canonical: 'POST /tray',
       },
-      410,
+      410
     );
   }
 
@@ -36,7 +36,10 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
     const token = tokenMatch[2];
     const parsed = parseCapabilityToken(token);
     if (!parsed) {
-      return jsonResponse({ error: 'Malformed capability token', code: 'MALFORMED_CAPABILITY' }, 400);
+      return jsonResponse(
+        { error: 'Malformed capability token', code: 'MALFORMED_CAPABILITY' },
+        400
+      );
     }
     const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(parsed.trayId));
     const webhookId = tokenMatch[1] === 'webhook' ? tokenMatch[3] : undefined;
@@ -52,9 +55,14 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
     {
       service: 'slicc-tray-hub',
       phase: 1,
-      routes: ['POST /tray', 'GET|POST /join/:token', 'GET|POST /controller/:token', 'POST /webhook/:token/:webhookId'],
+      routes: [
+        'POST /tray',
+        'GET|POST /join/:token',
+        'GET|POST /controller/:token',
+        'POST /webhook/:token/:webhookId',
+      ],
     },
-    200,
+    200
   );
 }
 
@@ -75,7 +83,7 @@ async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
-    }),
+    })
   );
 
   if (initResponse.status >= 400) {
@@ -101,7 +109,7 @@ async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
         },
       },
     },
-    201,
+    201
   );
 }
 

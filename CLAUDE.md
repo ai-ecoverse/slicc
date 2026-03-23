@@ -10,9 +10,10 @@ Keep this root file high-signal and low-churn. Put fast-changing implementation 
 npm run dev:full        # Full dev mode: Vite HMR + Chrome + CDP proxy (port 5710)
 npm run dev:full -- --prompt "mount /tmp"  # Auto-submit prompt (clears history/fs first)
 npm run dev:electron -- /Applications/Slack.app  # Electron attach mode
-npm run dev             # Vite dev server only (no Chrome/CDP)
+npm run dev             # Same as dev:full (Vite HMR + Chrome + CDP proxy)
 npm run build           # Production build (UI via Vite + CLI/Electron via TSC)
 npm run build:extension # Build extension into dist/extension/
+npm run package:release # Package deterministic release artifacts into artifacts/release/
 npm run typecheck       # Typecheck browser + Node targets
 npm run test            # Vitest run (all tests)
 npx vitest run src/fs/virtual-fs.test.ts  # Single test file
@@ -62,7 +63,7 @@ Console logs from the browser are forwarded to the CLI terminal for debugging.
 - **Cone**: Main agent ("sliccy"). Full filesystem access, all tools. Code: `orchestrator.ts`, `RegisteredScoop` with `isCone: true`.
 - **Scoops**: Isolated sub-agents with sandboxed filesystem (`/scoops/{name}/` + `/shared/`), own shell/conversation. Tools: `scoop_scoop`, `feed_scoop`, `drop_scoop`. Code: `scoop-context.ts`, `restricted-fs.ts`.
 - **Licks**: External events triggering scoops (webhooks, cron tasks). Code: `LickManager`, `LickEvent`. Shell: `webhook`, `crontask`.
-- **Floats**: Runtime environments — CLI (`src/cli/`), Extension (`src/extension/`), Electron (`src/cli/electron-main.ts`), Cloud (planned).
+- **Floats**: Runtime environments — CLI (`src/cli/`), Extension (`src/extension/`), Electron (`src/cli/electron-main.ts`), Sliccstart (`sliccstart/` — native macOS launcher), Cloud (planned).
 
 Use ice cream terms over technical jargon (e.g., "feed_scoop" not "delegate_to_scoop").
 
@@ -117,7 +118,7 @@ Virtual Filesystem (src/fs/) → RestrictedFS → Shell (src/shell/) + Git (src/
 
 **Inline Sprinkles** (`src/ui/inline-sprinkle.ts`): Agent ` ```shtml ` code blocks in chat messages are hydrated into sandboxed iframes after streaming completes. Minimal bridge (lick-only, no state) via postMessage. Auto-height via ResizeObserver. CLI mode: direct srcdoc iframe. Extension mode: routes through `sprinkle-sandbox.html` (same CSP-exempt sandbox as panel sprinkles). Lick events route to the cone via `routeLickToScoop` (CLI) or `client.sendSprinkleLick` (extension). CSS: `.msg__inline-sprinkle` container, `.sprinkle-action-card` component.
 
-**Skills** (`src/skills/`, `src/scoops/skills.ts`): SKILL.md files in `/workspace/skills/` auto-load into system prompt. Installation engine supports manifest-based packages with dependency/conflict checking.
+**Skills** (`src/skills/`, `src/scoops/skills.ts`): native `/workspace/skills/` packages auto-load into the system prompt alongside accessible compatibility skills discovered from `.agents/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md` anywhere in the reachable VFS. Only native `/workspace/skills/` entries are install-managed; compatibility roots stay read-only.
 
 ### Data Flow
 
@@ -153,24 +154,39 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 Every change MUST satisfy three gates: **tests**, **docs**, and **verification**.
 
 ### Tests
+
 New pure-logic code MUST have colocated tests (`foo.test.ts`). See `docs/testing.md`.
+
+### Visual Sprinkle Testing
+Static HTML test pages in `test/visual/` for visually verifying sprinkle components and built-in sprinkles. Served by Vite dev server at `http://localhost:5173/test/visual/`.
+
+```bash
+npm run dev   # then open:
+# http://localhost:5173/test/visual/sprinkle-builtin-test.html  — all 11 built-in sprinkles with TAVEX mock data
+# http://localhost:5173/test/visual/sprinkle-production-test.html — component showcase with production CSS
+```
+
+**Architecture**: Test pages fetch production CSS from `/index.html` at runtime via DOMParser, so they always reflect the real theme. Built-in sprinkles load in iframes; the bridge + mock data are injected via `iframe.onload` + `contentWindow.eval()` (inline `<script>` in srcdoc does not execute reliably). Mock data is based on the TAVEX pharma page and covers all 10 data-driven sprinkle DATA CONTRACTs.
 
 ### Documentation
 
-| Tier | File | Update when... |
-|------|------|----------------|
-| **Public** | `README.md` | User-facing changes |
-| **Development** | `CLAUDE.md` | Developer conventions, architecture, build changes |
-| **Agent reference** | `docs/` | Agent-facing tools, commands, patterns |
+| Tier                | File        | Update when...                                     |
+| ------------------- | ----------- | -------------------------------------------------- |
+| **Public**          | `README.md` | User-facing changes                                |
+| **Development**     | `CLAUDE.md` | Developer conventions, architecture, build changes |
+| **Agent reference** | `docs/`     | Agent-facing tools, commands, patterns             |
 
 ### Verification
+
 All four must pass before committing:
+
 ```bash
 npm run typecheck
 npm run test
 npm run build
 npm run build:extension
 ```
+
 **CI**: Same four gates run on every PR via `.github/workflows/ci.yml`.
 
 ### Worker Deploy CI
@@ -178,4 +194,5 @@ npm run build:extension
 Tray-hub deploys use `.github/workflows/worker.yml` for staging and production. Use the repo-level `CLOUDFLARE_API_TOKEN` secret plus `CLOUDFLARE_ACCOUNT_ID` variable, and let `cloudflare/wrangler-action` surface the deployed URL for `src/worker/deployed.test.ts`.
 
 ## Git Integration (src/git/)
+
 isomorphic-git with LightningFS. Auth: `git config github.token <PAT>`. CORS: CLI routes through `/api/fetch-proxy`, extension uses direct fetch.

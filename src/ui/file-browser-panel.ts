@@ -47,10 +47,7 @@ function folderIcon(): SVGSVGElement {
 
 /** S2 file icon — document outline */
 function fileIcon(): SVGSVGElement {
-  return svgFileIcon([
-    'M6 2h5l5 5v9a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z',
-    'M11 2v5h5',
-  ]);
+  return svgFileIcon(['M6 2h5l5 5v9a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z', 'M11 2v5h5']);
 }
 
 /** S2 chevron icon for tree disclosure */
@@ -86,6 +83,7 @@ function buildPreviewCommand(path: string): string {
 
 export interface FileBrowserPanelOptions {
   onRunCommand?: (command: string) => Promise<void> | void;
+  onClearFilesystem?: () => Promise<void> | void;
 }
 
 export class FileBrowserPanel {
@@ -95,12 +93,14 @@ export class FileBrowserPanel {
   private expandedDirs = new Set<string>(['/']);
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
   private onRunCommand: ((command: string) => Promise<void> | void) | null;
+  private onClearFilesystem: (() => Promise<void> | void) | null;
   private selectedPath: string | null = null;
   private keydownHandler: ((e: KeyboardEvent) => void) | null = null;
 
   constructor(container: HTMLElement, options: FileBrowserPanelOptions = {}) {
     this.container = container;
     this.onRunCommand = options.onRunCommand ?? null;
+    this.onClearFilesystem = options.onClearFilesystem ?? null;
     this.render();
   }
 
@@ -118,7 +118,10 @@ export class FileBrowserPanel {
     try {
       await this.renderDir('/', tmp, 0);
     } catch (err) {
-      console.warn('[FileBrowser] Refresh failed:', err instanceof Error ? err.message : String(err));
+      console.warn(
+        '[FileBrowser] Refresh failed:',
+        err instanceof Error ? err.message : String(err)
+      );
       return;
     }
     // Compare BEFORE applying selection (selection attrs would defeat the check)
@@ -141,6 +144,29 @@ export class FileBrowserPanel {
     while (this.container.firstChild) this.container.removeChild(this.container.firstChild);
     this.container.classList.add('file-browser');
 
+    // Header toolbar with title + clear button
+    if (this.onClearFilesystem) {
+      const header = document.createElement('div');
+      header.className = 'file-browser__header';
+      const title = document.createElement('span');
+      title.className = 'file-browser__header-title';
+      title.textContent = 'Files';
+      header.appendChild(title);
+
+      const clearBtn = document.createElement('button');
+      clearBtn.className = 'file-browser__header-btn';
+      clearBtn.setAttribute('aria-label', 'Clear filesystem');
+      clearBtn.dataset.tooltip = 'Clear filesystem';
+      clearBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="m8.249,15.021c-.4,0-.733-.317-.748-.72l-.25-6.5c-.017-.414.307-.763.72-.778.01-.001.021-.001.03-.001.4,0,.733.317.748.72l.25,6.5c.017.414-.307.763-.72.778-.01.001-.021.001-.03.001Z" fill="currentColor"/><path d="m11.751,15.021c-.01,0-.02,0-.03-.001-.413-.016-.736-.364-.72-.778l.25-6.5c.015-.403.348-.72.748-.72.01,0,.02,0,.03.001.413.016.736.364.72.778l-.25,6.5c-.015.403-.348.72-.748.72Z" fill="currentColor"/><path d="m17,4h-3.5v-.75c0-1.24-1.01-2.25-2.25-2.25h-2.5c-1.24,0-2.25,1.01-2.25,2.25v.75h-3.5c-.414,0-.75.336-.75.75s.336.75.75.75h.52l.422,10.342c.048,1.21,1.036,2.158,2.248,2.158h7.619c1.212,0,2.2-.948,2.248-2.158l.422-10.342h.52c.414,0,.75-.336.75-.75s-.336-.75-.75-.75Zm-9-.75c0-.413.337-.75.75-.75h2.5c.413,0,.75.337.75.75v.75h-4v-.75Zm6.56,12.531c-.017.403-.346.719-.75.719h-7.619c-.404,0-.733-.316-.75-.719l-.42-10.281h9.959l-.42,10.281Z" fill="currentColor"/></svg>';
+      clearBtn.addEventListener('click', async () => {
+        await this.onClearFilesystem?.();
+        location.reload();
+      });
+      header.appendChild(clearBtn);
+
+      this.container.appendChild(header);
+    }
+
     this.bodyEl = document.createElement('div');
     this.bodyEl.className = 'file-browser__body';
     this.container.appendChild(this.bodyEl);
@@ -154,22 +180,29 @@ export class FileBrowserPanel {
     try {
       entries = await this.fs.readDir(path);
     } catch (err) {
-      console.warn('[FileBrowser] readDir failed:', path, err instanceof Error ? err.message : String(err));
+      console.warn(
+        '[FileBrowser] readDir failed:',
+        path,
+        err instanceof Error ? err.message : String(err)
+      );
       return;
     }
 
     // Sort: directories first, then files, alphabetical within each group
-    const dirs = entries.filter(e => e.type === 'directory').sort((a, b) => a.name.localeCompare(b.name));
-    const files = entries.filter(e => e.type === 'file').sort((a, b) => a.name.localeCompare(b.name));
+    const dirs = entries
+      .filter((e) => e.type === 'directory')
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const files = entries
+      .filter((e) => e.type === 'file')
+      .sort((a, b) => a.name.localeCompare(b.name));
 
     for (const entry of [...dirs, ...files]) {
       const fullPath = path === '/' ? '/' + entry.name : path + '/' + entry.name;
       const row = document.createElement('div');
       row.className = 'file-browser__item';
-      row.style.paddingLeft = (12 + depth * 16) + 'px';
-      row.dataset.path = entry.type === 'directory' && !fullPath.endsWith('/')
-        ? fullPath + '/'
-        : fullPath;
+      row.style.paddingLeft = 12 + depth * 16 + 'px';
+      row.dataset.path =
+        entry.type === 'directory' && !fullPath.endsWith('/') ? fullPath + '/' : fullPath;
 
       if (entry.type === 'directory') {
         const isExpanded = this.expandedDirs.has(fullPath);
@@ -240,7 +273,11 @@ export class FileBrowserPanel {
           size.textContent = formatSize(stats.size);
           row.appendChild(size);
         } catch (err) {
-          console.warn('[FileBrowser] stat failed:', fullPath, err instanceof Error ? err.message : String(err));
+          console.warn(
+            '[FileBrowser] stat failed:',
+            fullPath,
+            err instanceof Error ? err.message : String(err)
+          );
         }
 
         // Preview in terminal button
@@ -249,7 +286,9 @@ export class FileBrowserPanel {
         catBtn.style.marginLeft = '8px';
         catBtn.textContent = 'CAT';
         catBtn.title = this.onRunCommand
-          ? isTerminalPreviewableMediaPath(fullPath) ? 'Preview media in terminal' : 'Preview in terminal'
+          ? isTerminalPreviewableMediaPath(fullPath)
+            ? 'Preview media in terminal'
+            : 'Preview in terminal'
           : 'Terminal unavailable';
         catBtn.disabled = !this.onRunCommand;
         catBtn.addEventListener('click', (e) => {
@@ -280,7 +319,8 @@ export class FileBrowserPanel {
         Object.assign(files, subFiles);
       } else {
         const content = await this.fs.readFile(fullPath, { encoding: 'binary' });
-        files[relPath] = content instanceof Uint8Array ? content : new TextEncoder().encode(content as string);
+        files[relPath] =
+          content instanceof Uint8Array ? content : new TextEncoder().encode(content as string);
       }
     }
     return files;
@@ -300,7 +340,11 @@ export class FileBrowserPanel {
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      console.error('[FileBrowser] ZIP download failed:', dirPath, err instanceof Error ? err.message : String(err));
+      console.error(
+        '[FileBrowser] ZIP download failed:',
+        dirPath,
+        err instanceof Error ? err.message : String(err)
+      );
     }
   }
 
@@ -309,14 +353,16 @@ export class FileBrowserPanel {
     if (!this.onRunCommand) return;
     const command = buildPreviewCommand(path);
     void Promise.resolve(this.onRunCommand(command)).catch((err) => {
-      console.error('[FileBrowser] Preview command failed:', path, err instanceof Error ? err.message : String(err));
+      console.error(
+        '[FileBrowser] Preview command failed:',
+        path,
+        err instanceof Error ? err.message : String(err)
+      );
     });
   }
 
   private selectPath(fullPath: string, type: 'file' | 'directory'): void {
-    this.selectedPath = type === 'directory' && !fullPath.endsWith('/')
-      ? fullPath + '/'
-      : fullPath;
+    this.selectedPath = type === 'directory' && !fullPath.endsWith('/') ? fullPath + '/' : fullPath;
     this.applySelection();
     const row = this.bodyEl.querySelector('.file-browser__item--selected') as HTMLElement | null;
     row?.focus();
@@ -346,11 +392,17 @@ export class FileBrowserPanel {
       const collapsed = window.getSelection()?.isCollapsed !== false;
       if (!collapsed) return;
       e.preventDefault();
-      navigator.clipboard.writeText(this.selectedPath).then(() => {
-        this.flashCopyFeedback();
-      }).catch((err) => {
-        console.warn('[FileBrowser] Clipboard write failed:', err instanceof Error ? err.message : String(err));
-      });
+      navigator.clipboard
+        .writeText(this.selectedPath)
+        .then(() => {
+          this.flashCopyFeedback();
+        })
+        .catch((err) => {
+          console.warn(
+            '[FileBrowser] Clipboard write failed:',
+            err instanceof Error ? err.message : String(err)
+          );
+        });
     };
     this.container.addEventListener('keydown', this.keydownHandler);
   }

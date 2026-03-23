@@ -153,15 +153,17 @@
 
 | File | Purpose |
 |---|---|
-| `apply.ts` | applySkill: installs a skill from `/workspace/skills/`, validates manifest, executes post-install steps |
-| `discover.ts` | discoverSkills: scans VFS for `SKILL.md` files; getSkillInfo: fetch skill metadata; readSkillInstructions: load skill instructions |
-| `install-from-drop.ts` | installSkillFromDrop: validates and unpacks dropped `.skill` ZIP archives into `/workspace/skills/{name}` |
+| `apply.ts` | applySkill: installs an install-managed native skill from `/workspace/skills/`, validates manifest, executes post-install steps |
+| `discover.ts` | discoverSkills: scans native `/workspace/skills/` plus accessible `.agents/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md` roots in the reachable VFS; getSkillInfo/readSkillInstructions expose the winning discovered skill |
+| `install-from-drop.ts` | installSkillFromDrop: validates and unpacks dropped `.skill` ZIP archives into `/workspace/skills/{name}` as native install-managed skills |
 | `uninstall.ts` | uninstallSkill: removes skill from state, rolls back installed files |
 | `state.ts` | initSkillsSystem: init `.slicc/state.json`; readState/writeState: persistent skill state |
 | `manifest.ts` | parseManifest: YAML parser for `manifest.yaml` (name, version, dependencies, conflicts, files) |
 | `constants.ts` | SKILL_DIR, STATE_FILE, SKILL_MANIFEST constants |
 | `types.ts` | Skill, SkillManifest, AppliedSkill, SkillState interfaces |
 | `index.ts` | Re-exports |
+
+Native `/workspace/skills` entries are the only install-managed skills. Compatibility-discovered `.agents`/`.claude` skills are readable/discoverable inputs only and are not auto-installed into or mutated in place.
 
 ### src/scoops/ — Multi-Agent Orchestration
 

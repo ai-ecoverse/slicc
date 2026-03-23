@@ -30,7 +30,8 @@ declare global {
  */
 function getModeLabel(): 'cli' | 'extension' | 'electron' {
   if (typeof chrome !== 'undefined' && chrome?.runtime?.id) return 'extension';
-  if (typeof document !== 'undefined' && document.documentElement?.dataset?.electronOverlay) return 'electron';
+  if (typeof document !== 'undefined' && document.documentElement?.dataset?.electronOverlay)
+    return 'electron';
   return 'cli';
 }
 
@@ -40,7 +41,8 @@ function getModeLabel(): 'cli' | 'extension' | 'electron' {
  */
 export async function initTelemetry(): Promise<void> {
   if (initialized) return;
-  if (typeof localStorage !== 'undefined' && localStorage.getItem('telemetry-disabled') === 'true') return;
+  if (typeof localStorage !== 'undefined' && localStorage.getItem('telemetry-disabled') === 'true')
+    return;
 
   // Extension mode: require explicit consent before sending any RUM data
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;

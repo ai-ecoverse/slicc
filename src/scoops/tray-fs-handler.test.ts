@@ -185,9 +185,9 @@ describe('tray-fs-handler', () => {
       const data = firstOk(responses);
       expect(data.type).toBe('dirEntries');
       if (data.type === 'dirEntries') {
-        const names = data.entries.map(e => e.name).sort();
+        const names = data.entries.map((e) => e.name).sort();
         expect(names).toEqual(['a.txt', 'b.txt', 'sub']);
-        const subEntry = data.entries.find(e => e.name === 'sub');
+        const subEntry = data.entries.find((e) => e.name === 'sub');
         expect(subEntry?.type).toBe('directory');
       }
     });

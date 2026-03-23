@@ -17,7 +17,10 @@ import { GitCommands } from '../git/git-commands.js';
 import { createSupplementalCommands } from './supplemental-commands.js';
 import type { MediaPreviewItem } from './supplemental-commands.js';
 import type { BrowserAPI } from '../cdp/index.js';
-import { createSkillCommand, createUpskillCommand } from './supplemental-commands/upskill-command.js';
+import {
+  createSkillCommand,
+  createUpskillCommand,
+} from './supplemental-commands/upskill-command.js';
 import { MountCommands } from '../fs/mount-commands.js';
 import { discoverJshCommands } from './jsh-discovery.js';
 import { executeJshFile } from './jsh-executor.js';
@@ -34,14 +37,16 @@ function basename(path: string): string {
 export function isTextContentType(contentType: string): boolean {
   if (!contentType) return true; // Default to text for unknown types
   const ct = contentType.toLowerCase();
-  return ct.startsWith('text/') ||
+  return (
+    ct.startsWith('text/') ||
     ct.includes('json') ||
     ct.includes('xml') ||
     ct.includes('javascript') ||
     ct.includes('ecmascript') ||
     ct.includes('html') ||
     ct.includes('css') ||
-    ct.includes('svg');
+    ct.includes('svg')
+  );
 }
 
 /**
@@ -84,7 +89,10 @@ async function readResponseBody(resp: Response, url?: string): Promise<string> {
  */
 // Multipart form bodies contain latin1-encoded binary file content from curl —
 // convert to raw bytes so fetch() doesn't re-encode as UTF-8.
-function prepareRequestBody(body: string | undefined, headers?: Record<string, string>): BodyInit | undefined {
+function prepareRequestBody(
+  body: string | undefined,
+  headers?: Record<string, string>
+): BodyInit | undefined {
   if (!body) return undefined;
   const ct = headers?.['Content-Type'] ?? headers?.['content-type'] ?? '';
   if (ct.includes('multipart/form-data')) {
@@ -108,7 +116,9 @@ function createProxiedFetch(): SecureFetch {
       });
       const body = await readResponseBody(resp, url);
       const respHeaders: Record<string, string> = {};
-      resp.headers.forEach((v, k) => { respHeaders[k] = v; });
+      resp.headers.forEach((v, k) => {
+        respHeaders[k] = v;
+      });
       return { status: resp.status, statusText: resp.statusText, headers: respHeaders, body, url };
     };
   }
@@ -132,13 +142,19 @@ function createProxiedFetch(): SecureFetch {
     if (resp.status === 502 || resp.status === 400) {
       const errorText = await resp.text();
       let errorMsg = `Proxy error ${resp.status}`;
-      try { errorMsg = JSON.parse(errorText).error ?? errorMsg; } catch { /* not JSON */ }
+      try {
+        errorMsg = JSON.parse(errorText).error ?? errorMsg;
+      } catch {
+        /* not JSON */
+      }
       throw new Error(errorMsg);
     }
 
     const body = await readResponseBody(resp, url);
     const respHeaders: Record<string, string> = {};
-    resp.headers.forEach((v, k) => { respHeaders[k] = v; });
+    resp.headers.forEach((v, k) => {
+      respHeaders[k] = v;
+    });
 
     return { status: resp.status, statusText: resp.statusText, headers: respHeaders, body, url };
   };
@@ -232,15 +248,13 @@ export class WasmShell {
     });
 
     // Wire up /usr/bin virtual directory with all registered command names
-    const customCommandNames = customCommands.map(c => c.name);
+    const customCommandNames = customCommands.map((c) => c.name);
     this.builtinCommandNames = new Set([
       ...getCommandNames(),
       ...getNetworkCommandNames(),
       ...customCommandNames,
     ]);
-    this.vfsAdapter.setRegisteredCommandsFn(() => [
-      ...this.builtinCommandNames,
-    ]);
+    this.vfsAdapter.setRegisteredCommandsFn(() => [...this.builtinCommandNames]);
 
     this.lastEnv = { ...initialEnv };
     this.cwd = initialCwd;
@@ -442,7 +456,10 @@ export class WasmShell {
       const isLight = document.documentElement.classList.contains('theme-light');
       this.terminal.options.theme = isLight ? lightTheme : darkTheme;
     });
-    this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    this.themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class'],
+    });
 
     this.fitAddon = new FitAddon();
     this.terminal.loadAddon(this.fitAddon);
@@ -473,7 +490,9 @@ export class WasmShell {
   }
 
   /** Execute a command programmatically (useful for agent integration). */
-  async executeCommand(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  async executeCommand(
+    command: string
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const result = await this.runCommand(command);
     return {
       stdout: result.stdout,
@@ -486,7 +505,10 @@ export class WasmShell {
    * Execute a .jsh/.bsh script file by VFS path.
    * Uses the same execution engine as JSH commands (JavaScript, not bash).
    */
-  async executeScriptFile(scriptPath: string, args: string[] = []): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  async executeScriptFile(
+    scriptPath: string,
+    args: string[] = []
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     return executeJshFile(scriptPath, args, {
       fs: this.vfsAdapter,
       cwd: this.cwd,
@@ -510,7 +532,9 @@ export class WasmShell {
    * Execute a command and render it in the mounted terminal.
    * Returns the command result for callers that need status.
    */
-  async executeCommandInTerminal(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  async executeCommandInTerminal(
+    command: string
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const trimmed = command.trim();
     if (!trimmed) {
       return { stdout: '', stderr: '', exitCode: 0 };
@@ -587,7 +611,7 @@ export class WasmShell {
 
   private showPrompt(): void {
     if (!this.terminal) return;
-    const shortCwd = this.cwd === '/' ? '/' : this.cwd.split('/').pop() ?? this.cwd;
+    const shortCwd = this.cwd === '/' ? '/' : (this.cwd.split('/').pop() ?? this.cwd);
     this.terminal.write(`\x1b[34m${shortCwd}\x1b[0m \x1b[90m$\x1b[0m `);
   }
 
@@ -600,13 +624,31 @@ export class WasmShell {
       // Handle escape sequences as a whole (arrow keys, Home, End, Delete)
       if (data.startsWith('\x1b[') || data.startsWith('\x1bO')) {
         switch (data) {
-          case '\x1b[A': this.handleHistoryUp(); return;
-          case '\x1b[B': this.handleHistoryDown(); return;
-          case '\x1b[C': this.handleArrowRight(); return;
-          case '\x1b[D': this.handleArrowLeft(); return;
-          case '\x1b[H': case '\x1bOH': case '\x1b[1~': this.handleHome(); return;
-          case '\x1b[F': case '\x1bOF': case '\x1b[4~': this.handleEnd(); return;
-          case '\x1b[3~': this.handleDelete(); return;
+          case '\x1b[A':
+            this.handleHistoryUp();
+            return;
+          case '\x1b[B':
+            this.handleHistoryDown();
+            return;
+          case '\x1b[C':
+            this.handleArrowRight();
+            return;
+          case '\x1b[D':
+            this.handleArrowLeft();
+            return;
+          case '\x1b[H':
+          case '\x1bOH':
+          case '\x1b[1~':
+            this.handleHome();
+            return;
+          case '\x1b[F':
+          case '\x1bOF':
+          case '\x1b[4~':
+            this.handleEnd();
+            return;
+          case '\x1b[3~':
+            this.handleDelete();
+            return;
         }
         return; // Ignore unknown escape sequences
       }
@@ -614,10 +656,18 @@ export class WasmShell {
       // Handle regular characters one at a time (supports paste)
       for (const ch of data) {
         switch (ch) {
-          case '\r': this.handleEnter(); break;
-          case '\x7f': this.handleBackspace(); break;
-          case '\x03': this.handleCtrlC(); break;
-          case '\t': this.handleTab(); break;
+          case '\r':
+            this.handleEnter();
+            break;
+          case '\x7f':
+            this.handleBackspace();
+            break;
+          case '\x03':
+            this.handleCtrlC();
+            break;
+          case '\t':
+            this.handleTab();
+            break;
           default:
             if (ch >= ' ') this.insertChar(ch);
         }
@@ -629,7 +679,7 @@ export class WasmShell {
 
   /** Visual width of the prompt: "cwd $ " */
   private getPromptWidth(): number {
-    const shortCwd = this.cwd === '/' ? '/' : this.cwd.split('/').pop() ?? this.cwd;
+    const shortCwd = this.cwd === '/' ? '/' : (this.cwd.split('/').pop() ?? this.cwd);
     return shortCwd.length + 3;
   }
 
@@ -646,10 +696,14 @@ export class WasmShell {
   /** Move terminal cursor from end-of-content to the position matching cursorPos. */
   private positionTerminalCursor(): void {
     const lines = this.currentLine.split('\n');
-    let targetLine = 0, targetCol = 0, pos = 0;
+    let targetLine = 0,
+      targetCol = 0,
+      pos = 0;
     for (let i = 0; i < lines.length; i++) {
       if (pos + lines[i].length >= this.cursorPos) {
-        targetLine = i; targetCol = this.cursorPos - pos; break;
+        targetLine = i;
+        targetCol = this.cursorPos - pos;
+        break;
       }
       pos += lines[i].length + 1;
     }
@@ -675,8 +729,7 @@ export class WasmShell {
     const multiLine = this.currentLine.includes('\n');
     const oldLine = multiLine ? this.getCursorVisualLine() : 0;
     const after = this.currentLine.slice(this.cursorPos);
-    this.currentLine =
-      this.currentLine.slice(0, this.cursorPos) + ch + after;
+    this.currentLine = this.currentLine.slice(0, this.cursorPos) + ch + after;
     this.cursorPos++;
     if (multiLine) {
       this.redrawInput(oldLine);
@@ -691,8 +744,7 @@ export class WasmShell {
     const multiLine = this.currentLine.includes('\n');
     const oldLine = multiLine ? this.getCursorVisualLine() : 0;
     const after = this.currentLine.slice(this.cursorPos);
-    this.currentLine =
-      this.currentLine.slice(0, this.cursorPos - 1) + after;
+    this.currentLine = this.currentLine.slice(0, this.cursorPos - 1) + after;
     this.cursorPos--;
     if (multiLine) {
       this.redrawInput(oldLine);
@@ -707,8 +759,7 @@ export class WasmShell {
     const multiLine = this.currentLine.includes('\n');
     const oldLine = multiLine ? this.getCursorVisualLine() : 0;
     const after = this.currentLine.slice(this.cursorPos + 1);
-    this.currentLine =
-      this.currentLine.slice(0, this.cursorPos) + after;
+    this.currentLine = this.currentLine.slice(0, this.cursorPos) + after;
     if (multiLine) {
       this.redrawInput(oldLine);
     } else {
@@ -727,9 +778,7 @@ export class WasmShell {
       const before = this.currentLine.slice(0, this.cursorPos);
       const prevLineStart = before.lastIndexOf('\n') + 1;
       const prevLineLen = this.cursorPos - prevLineStart;
-      const visualCol = prevLineStart === 0
-        ? this.getPromptWidth() + prevLineLen
-        : prevLineLen;
+      const visualCol = prevLineStart === 0 ? this.getPromptWidth() + prevLineLen : prevLineLen;
       this.terminal?.write('\x1b[A\r');
       if (visualCol > 0) this.terminal?.write(`\x1b[${visualCol}C`);
     } else {
@@ -822,17 +871,26 @@ export class WasmShell {
         const completion = matches[0];
         const suffix = completion.slice(currentWord.length);
         if (suffix) {
-          this.currentLine = this.currentLine.slice(0, this.cursorPos) + suffix + this.currentLine.slice(this.cursorPos);
+          this.currentLine =
+            this.currentLine.slice(0, this.cursorPos) +
+            suffix +
+            this.currentLine.slice(this.cursorPos);
           this.cursorPos += suffix.length;
           this.terminal.write(suffix);
         }
         // Add trailing slash for dirs, space for everything else
         let trail = ' ';
         if (!isFirstWord) {
-          const dirCheck = await this.bash.exec(`compgen -d -- ${escaped.slice(0, -1)}${suffix}'`, { env: this.lastEnv, cwd: this.cwd });
+          const dirCheck = await this.bash.exec(`compgen -d -- ${escaped.slice(0, -1)}${suffix}'`, {
+            env: this.lastEnv,
+            cwd: this.cwd,
+          });
           if (dirCheck.stdout.trim() === completion) trail = '/';
         }
-        this.currentLine = this.currentLine.slice(0, this.cursorPos) + trail + this.currentLine.slice(this.cursorPos);
+        this.currentLine =
+          this.currentLine.slice(0, this.cursorPos) +
+          trail +
+          this.currentLine.slice(this.cursorPos);
         this.cursorPos += 1;
         this.terminal.write(trail);
       } else {
@@ -843,7 +901,10 @@ export class WasmShell {
         }
         const suffix = prefix.slice(currentWord.length);
         if (suffix) {
-          this.currentLine = this.currentLine.slice(0, this.cursorPos) + suffix + this.currentLine.slice(this.cursorPos);
+          this.currentLine =
+            this.currentLine.slice(0, this.cursorPos) +
+            suffix +
+            this.currentLine.slice(this.cursorPos);
           this.cursorPos += suffix.length;
           this.terminal.write(suffix);
         } else {
@@ -857,7 +918,10 @@ export class WasmShell {
         }
       }
     } catch (err) {
-      console.warn('[Shell] Tab completion failed:', err instanceof Error ? err.message : String(err));
+      console.warn(
+        '[Shell] Tab completion failed:',
+        err instanceof Error ? err.message : String(err)
+      );
     }
   }
 
@@ -878,10 +942,22 @@ export class WasmShell {
     let inDouble = false;
     let escaped = false;
     for (const ch of input) {
-      if (escaped) { escaped = false; continue; }
-      if (ch === '\\' && !inSingle) { escaped = true; continue; }
-      if (ch === "'" && !inDouble) { inSingle = !inSingle; continue; }
-      if (ch === '"' && !inSingle) { inDouble = !inDouble; continue; }
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === '\\' && !inSingle) {
+        escaped = true;
+        continue;
+      }
+      if (ch === "'" && !inDouble) {
+        inSingle = !inSingle;
+        continue;
+      }
+      if (ch === '"' && !inSingle) {
+        inDouble = !inDouble;
+        continue;
+      }
     }
     return inSingle || inDouble;
   }
@@ -903,9 +979,7 @@ export class WasmShell {
     this.cursorPos = 0;
 
     // Accumulate continuation lines
-    const combined = this.continuationBuffer
-      ? this.continuationBuffer + '\n' + line
-      : line;
+    const combined = this.continuationBuffer ? this.continuationBuffer + '\n' + line : line;
 
     if (this.isIncomplete(combined)) {
       this.continuationBuffer = combined;

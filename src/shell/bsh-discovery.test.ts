@@ -23,7 +23,9 @@ describe('extractHostnamePattern', () => {
   });
 
   it('handles deeply nested paths', () => {
-    expect(extractHostnamePattern('/workspace/scripts/auth/-.example.com.bsh')).toBe('*.example.com');
+    expect(extractHostnamePattern('/workspace/scripts/auth/-.example.com.bsh')).toBe(
+      '*.example.com'
+    );
   });
 
   it('returns null for non-.bsh files', () => {
@@ -64,7 +66,7 @@ describe('parseMatchDirectives', () => {
 
   it('only parses within first 10 lines', () => {
     const lines = Array.from({ length: 12 }, (_, i) =>
-      i === 11 ? '// @match *://late.com/*' : `// line ${i}`,
+      i === 11 ? '// @match *://late.com/*' : `// line ${i}`
     );
     expect(parseMatchDirectives(lines.join('\n'))).toEqual([]);
   });
@@ -120,7 +122,9 @@ describe('urlMatchesPattern', () => {
   });
 
   it('matches path prefix with wildcard', () => {
-    expect(urlMatchesPattern('https://example.com/app/page', 'https://example.com/app/*')).toBe(true);
+    expect(urlMatchesPattern('https://example.com/app/page', 'https://example.com/app/*')).toBe(
+      true
+    );
   });
 
   it('rejects non-matching path', () => {
@@ -205,7 +209,10 @@ describe('discoverBshScripts', () => {
   });
 
   it('discovers a .bsh file in /workspace', async () => {
-    await vfs.writeFile('/workspace/-.okta.com.bsh', '// @match *://login.okta.com/*\nconsole.log("hi");');
+    await vfs.writeFile(
+      '/workspace/-.okta.com.bsh',
+      '// @match *://login.okta.com/*\nconsole.log("hi");'
+    );
     const result = await discoverBshScripts(vfs);
     expect(result).toHaveLength(1);
     expect(result[0].path).toBe('/workspace/-.okta.com.bsh');

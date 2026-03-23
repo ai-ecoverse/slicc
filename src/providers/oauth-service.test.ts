@@ -26,7 +26,10 @@ const mockWindow = {
 vi.stubGlobal('window', mockWindow);
 
 // Stub fetch for the server-side polling fallback (returns 204 = no result yet)
-vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ status: 204 })));
+vi.stubGlobal(
+  'fetch',
+  vi.fn(() => Promise.resolve({ status: 204 }))
+);
 
 // Default location: standalone CLI (no polling)
 vi.stubGlobal('location', { pathname: '/', search: '' });
@@ -69,7 +72,7 @@ describe('createOAuthLauncher', () => {
     expect(mockWindow.open).toHaveBeenCalledWith(
       'https://idp.example.com/authorize?client_id=test',
       '_blank',
-      'width=500,height=700,popup=yes',
+      'width=500,height=700,popup=yes'
     );
     expect(result).toBe('http://localhost:5710/auth/callback#access_token=abc123');
   });
@@ -167,9 +170,10 @@ describe('createOAuthLauncher', () => {
     // Second poll: result available
     mockFetch.mockResolvedValueOnce({
       status: 200,
-      json: () => Promise.resolve({
-        redirectUrl: 'http://localhost:5710/auth/callback#token=polled',
-      }),
+      json: () =>
+        Promise.resolve({
+          redirectUrl: 'http://localhost:5710/auth/callback#token=polled',
+        }),
     } as Response);
 
     const launcher = createOAuthLauncher();
@@ -220,9 +224,10 @@ describe('createOAuthLauncher', () => {
     // Second poll: success
     mockFetch.mockResolvedValueOnce({
       status: 200,
-      json: () => Promise.resolve({
-        redirectUrl: 'http://localhost:5710/auth/callback#token=recovered',
-      }),
+      json: () =>
+        Promise.resolve({
+          redirectUrl: 'http://localhost:5710/auth/callback#token=recovered',
+        }),
     } as Response);
 
     const launcher = createOAuthLauncher();

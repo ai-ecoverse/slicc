@@ -20,26 +20,20 @@ describe('computeRsyncDiff', () => {
   });
 
   it('marks all dest files as toDelete when source is empty and --delete is set', () => {
-    const dest: RsyncEntry[] = [
-      { path: 'old.txt', size: 5, mtimeMs: 500 },
-    ];
+    const dest: RsyncEntry[] = [{ path: 'old.txt', size: 5, mtimeMs: 500 }];
     const result = computeRsyncDiff([], dest, { delete: true });
     expect(result.toDelete).toEqual(['old.txt']);
     expect(result.toAdd).toEqual([]);
   });
 
   it('does not delete dest files when --delete is not set', () => {
-    const dest: RsyncEntry[] = [
-      { path: 'old.txt', size: 5, mtimeMs: 500 },
-    ];
+    const dest: RsyncEntry[] = [{ path: 'old.txt', size: 5, mtimeMs: 500 }];
     const result = computeRsyncDiff([], dest);
     expect(result.toDelete).toEqual([]);
   });
 
   it('skips files with same size and mtime', () => {
-    const entries: RsyncEntry[] = [
-      { path: 'same.txt', size: 100, mtimeMs: 3000 },
-    ];
+    const entries: RsyncEntry[] = [{ path: 'same.txt', size: 100, mtimeMs: 3000 }];
     const result = computeRsyncDiff(entries, entries);
     expect(result.toSkip).toEqual(['same.txt']);
     expect(result.toAdd).toEqual([]);
@@ -47,24 +41,16 @@ describe('computeRsyncDiff', () => {
   });
 
   it('marks files for update when size differs', () => {
-    const source: RsyncEntry[] = [
-      { path: 'file.txt', size: 200, mtimeMs: 3000 },
-    ];
-    const dest: RsyncEntry[] = [
-      { path: 'file.txt', size: 100, mtimeMs: 3000 },
-    ];
+    const source: RsyncEntry[] = [{ path: 'file.txt', size: 200, mtimeMs: 3000 }];
+    const dest: RsyncEntry[] = [{ path: 'file.txt', size: 100, mtimeMs: 3000 }];
     const result = computeRsyncDiff(source, dest);
     expect(result.toUpdate).toEqual(['file.txt']);
     expect(result.toSkip).toEqual([]);
   });
 
   it('marks files for update when mtime differs', () => {
-    const source: RsyncEntry[] = [
-      { path: 'file.txt', size: 100, mtimeMs: 5000 },
-    ];
-    const dest: RsyncEntry[] = [
-      { path: 'file.txt', size: 100, mtimeMs: 3000 },
-    ];
+    const source: RsyncEntry[] = [{ path: 'file.txt', size: 100, mtimeMs: 5000 }];
+    const dest: RsyncEntry[] = [{ path: 'file.txt', size: 100, mtimeMs: 3000 }];
     const result = computeRsyncDiff(source, dest);
     expect(result.toUpdate).toEqual(['file.txt']);
   });
@@ -89,9 +75,7 @@ describe('computeRsyncDiff', () => {
   });
 
   it('handles nested paths', () => {
-    const source: RsyncEntry[] = [
-      { path: 'dir/sub/file.txt', size: 10, mtimeMs: 1000 },
-    ];
+    const source: RsyncEntry[] = [{ path: 'dir/sub/file.txt', size: 10, mtimeMs: 1000 }];
     const result = computeRsyncDiff(source, []);
     expect(result.toAdd).toEqual(['dir/sub/file.txt']);
   });

@@ -38,7 +38,9 @@ export function resolveCliBrowserLaunchUrl(options: CliLaunchUrlOptions): string
 
   if (options.join) {
     if (!options.joinUrl) {
-      throw new Error('The --join launch flow requires a tray join URL via --join <url> or --join=<url>.');
+      throw new Error(
+        'The --join launch flow requires a tray join URL via --join <url> or --join=<url>.'
+      );
     }
     return buildTrayJoinLaunchUrl(options.serveOrigin, options.joinUrl);
   }
@@ -47,9 +49,13 @@ export function resolveCliBrowserLaunchUrl(options: CliLaunchUrlOptions): string
     return options.serveOrigin;
   }
 
-  const workerBaseUrl = normalizeTrayWorkerBaseUrl(options.leadWorkerBaseUrl ?? options.envWorkerBaseUrl ?? null);
+  const workerBaseUrl = normalizeTrayWorkerBaseUrl(
+    options.leadWorkerBaseUrl ?? options.envWorkerBaseUrl ?? null
+  );
   if (!workerBaseUrl) {
-    throw new Error('The --lead launch flow requires a tray worker base URL via --lead <url>, --lead=<url>, or WORKER_BASE_URL.');
+    throw new Error(
+      'The --lead launch flow requires a tray worker base URL via --lead <url>, --lead=<url>, or WORKER_BASE_URL.'
+    );
   }
 
   return buildTrayLeadLaunchUrl(options.serveOrigin, workerBaseUrl);

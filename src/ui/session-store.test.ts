@@ -19,9 +19,7 @@ describe('SessionStore', () => {
   it('saves and loads a session', async () => {
     const session: Session = {
       id: 'test-1',
-      messages: [
-        { id: 'm1', role: 'user', content: 'Hello', timestamp: 1000 },
-      ],
+      messages: [{ id: 'm1', role: 'user', content: 'Hello', timestamp: 1000 }],
       createdAt: 1000,
       updatedAt: 1000,
     };
@@ -85,9 +83,7 @@ describe('SessionStore', () => {
   });
 
   it('saveMessages creates a new session if none exists', async () => {
-    const msgs: ChatMessage[] = [
-      { id: 'm1', role: 'user', content: 'Hello', timestamp: 1000 },
-    ];
+    const msgs: ChatMessage[] = [{ id: 'm1', role: 'user', content: 'Hello', timestamp: 1000 }];
     await store.saveMessages('auto-1', msgs);
 
     const loaded = await store.load('auto-1');
@@ -98,9 +94,7 @@ describe('SessionStore', () => {
   it('saveMessages updates existing session', async () => {
     await store.save({ id: 'upd', messages: [], createdAt: 100, updatedAt: 100 });
 
-    const msgs: ChatMessage[] = [
-      { id: 'm1', role: 'user', content: 'Updated', timestamp: 2000 },
-    ];
+    const msgs: ChatMessage[] = [{ id: 'm1', role: 'user', content: 'Updated', timestamp: 2000 }];
     await store.saveMessages('upd', msgs);
 
     const loaded = await store.load('upd');
