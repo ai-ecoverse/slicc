@@ -415,7 +415,11 @@ export class LeaderSyncManager {
    * Used to implement TrayTargetProvider for the leader's BrowserAPI.
    */
   getTargets(): TrayTargetEntry[] {
-    return this.registry.getEntries();
+    return this.registry.getEntries().filter((target) => {
+      if (target.runtimeId === 'leader') return true;
+      const bootstrapId = this.runtimeToBootstrap.get(target.runtimeId);
+      return bootstrapId ? this.followers.has(bootstrapId) : false;
+    });
   }
 
   /**
