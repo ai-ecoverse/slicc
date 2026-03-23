@@ -41,6 +41,7 @@
     "build:extension": "vite build --config vite.config.extension.ts",
     "package:release": "node dist/cli/release-package.js",
     "test": "vitest run",
+    "test:server-integration": "vitest run --config test/server-integration/vitest.config.ts",
     "test:watch": "vitest",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

@@ -6,8 +6,8 @@ launches them with SLICC attached.
 ## Requirements
 
 - macOS 14+
-- Node.js 22+ (LTS)
-- Swift 5.9+ (Command Line Tools or Xcode)
+- Node.js 22+ (LTS, for development bootstrap/build tasks)
+- Swift 5.10+ (Command Line Tools or Xcode)
 
 ## Quick Start
 
@@ -43,7 +43,8 @@ to `~/.slicc/slicc/` and builds it on first run (2-3 minutes).
 
 If run from inside the SLICC repo (e.g., `sliccstart/build/Sliccstart.app`),
 it auto-detects the local checkout and uses it directly — no clone needed.
-You still need to build SLICC first: `npm install && npm run build`
+You still need to build SLICC first: `npm install && npm run build && npm run build:extension`
+and build the native server: `cd sliccserver && swift build`
 
 ## Features
 

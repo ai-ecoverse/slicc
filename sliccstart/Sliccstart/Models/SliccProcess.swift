@@ -6,6 +6,12 @@ private let log = Logger(subsystem: "com.slicc.sliccstart", category: "SliccProc
 
 @Observable
 final class SliccProcess {
+    struct LaunchConfiguration: Equatable {
+        let executablePath: String
+        let arguments: [String]
+        let logLabel: String
+    }
+
     /// All running instances keyed by AppTarget.id
     private var processes: [String: Process] = [:]
     /// App paths launched via --electron, keyed by AppTarget.id
@@ -77,7 +83,7 @@ final class SliccProcess {
         log.info("launchWithElectronApp: \(app.name, privacy: .public) on port \(port), cdp \(cdpPort)")
         launchedAppPaths[app.id] = app.path
         try spawn(target: app, extraArgs: [
-            "--electron", app.path,
+            "--electron-app=\(app.path)",
             "--kill",
             "--cdp-port=\(cdpPort)",
         ], env: ["PORT": "\(port)"])
@@ -146,19 +152,34 @@ final class SliccProcess {
 
     // MARK: - Private
 
-    private func spawn(target: AppTarget, extraArgs: [String], env: [String: String]) throws {
-        guard let nodePath = SliccBootstrapper.findNode() else {
-            log.error("spawn: Node.js not found")
-            throw LaunchError.nodeNotFound
+    static func resolveLaunchConfiguration(
+        sliccDir: String,
+        extraArgs: [String],
+        resourcePath: String? = Bundle.main.resourcePath
+    ) throws -> LaunchConfiguration {
+        if let serverBinary = SliccBootstrapper.findServerBinary(
+            sliccDir: sliccDir,
+            resourcePath: resourcePath
+        ) {
+            return LaunchConfiguration(
+                executablePath: serverBinary,
+                arguments: extraArgs,
+                logLabel: "server"
+            )
         }
-        let entryScript = sliccDir + "/dist/cli/index.js"
-        let allArgs = [entryScript] + extraArgs
-        log.info("spawn: \(nodePath, privacy: .public) \(allArgs.joined(separator: " "), privacy: .public)")
+
+        log.error("resolveLaunchConfiguration: slicc-server binary not found")
+        throw LaunchError.serverBinaryNotFound
+    }
+
+    private func spawn(target: AppTarget, extraArgs: [String], env: [String: String]) throws {
+        let launchConfig = try Self.resolveLaunchConfiguration(sliccDir: sliccDir, extraArgs: extraArgs)
+        log.info("spawn: \(launchConfig.executablePath, privacy: .public) \(launchConfig.arguments.joined(separator: " "), privacy: .public)")
         log.info("spawn: cwd = \(self.sliccDir, privacy: .public)")
 
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: nodePath)
-        proc.arguments = allArgs
+        proc.executableURL = URL(fileURLWithPath: launchConfig.executablePath)
+        proc.arguments = launchConfig.arguments
         proc.environment = ProcessInfo.processInfo.environment.merging(env) { _, new in new }
         proc.currentDirectoryURL = URL(fileURLWithPath: sliccDir)
 
@@ -172,14 +193,14 @@ final class SliccProcess {
             let data = handle.availableData
             guard !data.isEmpty, let line = String(data: data, encoding: .utf8) else { return }
             for l in line.split(separator: "\n", omittingEmptySubsequences: true) {
-                log.info("[node/\(target.name, privacy: .public)] \(l, privacy: .public)")
+                log.info("[\(launchConfig.logLabel, privacy: .public)/\(target.name, privacy: .public)] \(l, privacy: .public)")
             }
         }
         stderrPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             guard !data.isEmpty, let line = String(data: data, encoding: .utf8) else { return }
             for l in line.split(separator: "\n", omittingEmptySubsequences: true) {
-                log.error("[node/\(target.name, privacy: .public)] \(l, privacy: .public)")
+                log.error("[\(launchConfig.logLabel, privacy: .public)/\(target.name, privacy: .public)] \(l, privacy: .public)")
             }
         }
 
@@ -218,11 +239,11 @@ final class SliccProcess {
     }
 
     enum LaunchError: LocalizedError {
-        case nodeNotFound
+        case serverBinaryNotFound
         case portInUse(UInt16)
         var errorDescription: String? {
             switch self {
-            case .nodeNotFound: return "Node.js not found"
+            case .serverBinaryNotFound: return "SLICC server binary not found. Build or bundle slicc-server before launching."
             case .portInUse(let port): return "Port \(port) is already in use."
             }
         }

@@ -23,15 +23,17 @@ final class SliccBootstrapper {
 
     /// Whether the SLICC runtime is bundled inside the .app bundle
     static var isBundled: Bool {
-        guard let resourcePath = Bundle.main.resourcePath else { return false }
-        return FileManager.default.fileExists(atPath: resourcePath + "/slicc/dist/cli/index.js")
+        resolveBundledServerBinaryPath(resourcePath: Bundle.main.resourcePath) != nil
     }
 
     /// Path to the bundled SLICC directory, or nil if not bundled
     static var bundledSliccDir: String? {
-        guard let resourcePath = Bundle.main.resourcePath else { return nil }
-        let path = resourcePath + "/slicc"
-        return FileManager.default.fileExists(atPath: path + "/dist/cli/index.js") ? path : nil
+        resolveBundledSliccDir(resourcePath: Bundle.main.resourcePath)
+    }
+
+    /// Path to the bundled native server binary, or nil if not bundled
+    static var bundledServerBinaryPath: String? {
+        resolveBundledServerBinaryPath(resourcePath: Bundle.main.resourcePath)
     }
 
     /// Path to the bundled Node.js binary, or nil if not bundled
@@ -41,6 +43,7 @@ final class SliccBootstrapper {
         return FileManager.default.fileExists(atPath: path) ? path : nil
     }
 
+    /// Optional Node.js lookup for bootstrap/update development tasks.
     static func findNode() -> String? {
         // Priority 1: Bundled Node.js inside the .app
         if let bundled = bundledNodePath {
@@ -70,17 +73,48 @@ final class SliccBootstrapper {
         return output.isEmpty ? nil : output
     }
 
-    static func checkInstallation(sliccDir: String = defaultSliccDir) -> InstallationStatus {
-        // Bundled mode: everything is inside the .app
-        if isBundled {
-            log.info("checkInstallation: bundled mode — installed")
+    static func findServerBinary(
+        sliccDir: String = defaultSliccDir,
+        resourcePath: String? = Bundle.main.resourcePath
+    ) -> String? {
+        if let bundled = resolveBundledServerBinaryPath(resourcePath: resourcePath) {
+            log.info("findServerBinary: using bundled server at \(bundled)")
+            return bundled
+        }
+
+        let parentDir = (sliccDir as NSString).deletingLastPathComponent
+        let candidates = [
+            sliccDir + "/sliccserver/.build/release/slicc-server",
+            parentDir + "/sliccserver/.build/release/slicc-server",
+            sliccDir + "/sliccserver/.build/debug/slicc-server",
+            parentDir + "/sliccserver/.build/debug/slicc-server",
+        ]
+
+        for candidate in candidates where FileManager.default.fileExists(atPath: candidate) {
+            log.info("findServerBinary: using development server at \(candidate)")
+            return candidate
+        }
+
+        return nil
+    }
+
+    static func checkInstallation(
+        sliccDir: String = defaultSliccDir,
+        resourcePath: String? = Bundle.main.resourcePath
+    ) -> InstallationStatus {
+        // Bundled mode: native server binary is inside the .app
+        if resolveBundledServerBinaryPath(resourcePath: resourcePath) != nil {
+            log.info("checkInstallation: bundled native server present — installed")
             return .installed
         }
+
         // External mode: check the sliccDir
         let fm = FileManager.default
         guard fm.fileExists(atPath: sliccDir + "/package.json") else { return .notInstalled }
-        guard fm.fileExists(atPath: sliccDir + "/dist/cli/index.js") else { return .needsBuild }
-        return .installed
+        if findServerBinary(sliccDir: sliccDir, resourcePath: resourcePath) != nil {
+            return .installed
+        }
+        return .needsBuild
     }
 
     func bootstrap(sliccDir: String = SliccBootstrapper.defaultSliccDir) async throws {
@@ -114,6 +148,9 @@ final class SliccBootstrapper {
         progressMessage = "Building SLICC..."
         try runSync(npmPath, ["run", "build"], cwd: sliccDir)
 
+        progressMessage = "Building native server..."
+        try runSync("/usr/bin/swift", ["build", "-c", "release"], cwd: Self.serverProjectDirectory(sliccDir: sliccDir))
+
         progressMessage = "Ready!"
     }
 
@@ -138,6 +175,9 @@ final class SliccBootstrapper {
 
         progressMessage = "Building..."
         try runSync(npmPath, ["run", "build"], cwd: sliccDir)
+
+        progressMessage = "Building native server..."
+        try runSync("/usr/bin/swift", ["build", "-c", "release"], cwd: Self.serverProjectDirectory(sliccDir: sliccDir))
 
         progressMessage = "Updated!"
     }
@@ -187,9 +227,29 @@ final class SliccBootstrapper {
         case commandFailed(String)
         var errorDescription: String? {
             switch self {
-            case .nodeNotFound: return "Node.js not found. Install from https://nodejs.org"
+            case .nodeNotFound: return "Node.js not found. Install from https://nodejs.org to run development bootstrap/update tasks."
             case .commandFailed(let cmd): return "Command failed: \(cmd)"
             }
         }
+    }
+
+    private static func resolveBundledSliccDir(resourcePath: String?) -> String? {
+        guard let resourcePath else { return nil }
+        let path = resourcePath + "/slicc"
+        return FileManager.default.fileExists(atPath: path) ? path : nil
+    }
+
+    private static func serverProjectDirectory(sliccDir: String) -> String {
+        let repoLocal = sliccDir + "/sliccserver"
+        if FileManager.default.fileExists(atPath: repoLocal) {
+            return repoLocal
+        }
+        return (sliccDir as NSString).deletingLastPathComponent + "/sliccserver"
+    }
+
+    private static func resolveBundledServerBinaryPath(resourcePath: String?) -> String? {
+        guard let resourcePath else { return nil }
+        let path = resourcePath + "/slicc-server"
+        return FileManager.default.fileExists(atPath: path) ? path : nil
     }
 }
