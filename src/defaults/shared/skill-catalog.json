@@ -102,7 +102,7 @@
     {
       "name": "preview-import",
       "displayName": "AEM Preview Import",
-      "description": "Open and verify imported content in the local AEM AEM dev server, comparing with the original page",
+      "description": "Open and verify imported content in the local AEM dev server, comparing with the original page",
       "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "preview-import" },
       "affinity": { "apps": ["aem"], "tasks": ["build-websites"], "role": ["developer"], "purpose": ["work"] }
     },
@@ -116,7 +116,7 @@
     {
       "name": "code-review",
       "displayName": "AEM Code Review",
-      "description": "Review AEM AEM code for quality, performance, accessibility, and best practices — self-review or PR review",
+      "description": "Review AEM code for quality, performance, accessibility, and best practices — self-review or PR review",
       "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "code-review" },
       "affinity": { "apps": ["aem"], "tasks": ["build-websites"], "role": ["developer"], "purpose": ["work"] }
     },
