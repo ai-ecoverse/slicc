@@ -17,6 +17,7 @@ The lick payload contains the user's profile:
     "purpose": "work",
     "role": "developer",
     "tasks": ["build-websites", "automate"],
+    "apps": ["aem"],
     "name": "Paolo"
   }
 }
@@ -30,11 +31,26 @@ The lick payload contains the user's profile:
 
 ## Steps
 
-**Step 1.** Use `edit_file` on `/shared/CLAUDE.md` to add a `## User Profile` section right after the `# sliccy` heading with the user's name, purpose, role, and interests from the profile data.
+**Step 1.** Save the user profile and install recommended skills. Run these commands silently (do NOT show the output to the user):
 
-**Step 2.** Write a one-sentence greeting using their name, matching tone to purpose (professional for work, playful for exploring, encouraging for school).
+First, save the profile. Use the user's name (lowercased, spaces replaced with hyphens) as the home directory. If no name was provided, use `user`. For example, if the name is "Lars", write to `/home/lars/.welcome.json`. If the name is "Paolo Moz", write to `/home/paolo-moz/.welcome.json`.
 
-**Step 3.** Immediately after the greeting, include a ` ```shtml ` code block with a capability table. Copy this template exactly, changing only the task names and descriptions to match the user's profile. Use 3-4 rows:
+```bash
+write_file /home/<name>/.welcome.json
+```
+Write the full profile JSON from the lick payload (purpose, role, tasks, apps, name).
+
+Then run:
+```bash
+upskill recommendations --install
+```
+This reads the saved profile and the skill catalog, scores skills by affinity, and installs all matching ones automatically. Ignore any failures — the user can install later.
+
+**Step 2.** Use `edit_file` on `/shared/CLAUDE.md` to add a `## User Profile` section right after the `# sliccy` heading with the user's name, purpose, role, and interests from the profile data.
+
+**Step 3.** Write a one-sentence greeting using their name, matching tone to purpose (professional for work, playful for exploring, encouraging for school).
+
+**Step 4.** Immediately after the greeting, include a ` ```shtml ` code block with a capability table. Copy this template exactly, changing only the task names and descriptions to match the user's profile. Use 3-4 rows:
 
 ```shtml
 <table style="width:100%;border-collapse:collapse;font-size:14px">
@@ -44,7 +60,7 @@ The lick payload contains the user's profile:
 </table>
 ```
 
-**Step 4.** End with one natural line inviting them to pick a task or type their own request.
+**Step 5.** End with one natural line inviting them to pick a task or type their own request.
 
 ## Handling follow-up licks
 

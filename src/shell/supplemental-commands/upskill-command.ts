@@ -7,6 +7,7 @@ import { consumeCachedBinaryByUrl } from '../binary-cache.js';
 
 // ClawHub uses a Convex backend - this is the actual API endpoint
 const CLAWHUB_API = 'https://wry-manatee-359.convex.site/api/v1';
+const TESSL_API = 'https://api.tessl.io';
 const SKILLS_DIR = '/workspace/skills';
 const GITHUB_GLOBAL_DB = 'slicc-fs-global';
 const GITHUB_TOKEN_PATH = '/workspace/.git/github-token';
@@ -23,6 +24,128 @@ interface ClawHubSearchResult {
 
 interface ClawHubSearchResponse {
   results: ClawHubSearchResult[];
+}
+
+interface TesslSkillAttributes {
+  name: string;
+  description: string;
+  sourceUrl: string;
+  path: string;
+  featured: boolean;
+  scores: {
+    aggregate: number | null;
+    quality: number | null;
+    security: string | null;
+    evalImprovementMultiplier: number | null;
+  };
+}
+
+interface TesslSearchResult {
+  id: string;
+  type: 'skill' | 'tile';
+  attributes: TesslSkillAttributes;
+}
+
+interface TesslSearchResponse {
+  meta: { pagination: { total: number } };
+  data: TesslSearchResult[];
+}
+
+interface UnifiedSearchResult {
+  name: string;
+  displayName: string;
+  summary: string;
+  source: 'clawhub' | 'tessl';
+  qualityScore: number | null;
+  installHint: string;
+  featured?: boolean;
+  sourceRepo?: string;
+}
+
+// ── Skill Catalog types ──
+
+interface CatalogSkillSource {
+  repo: string;
+  path?: string;
+  skill?: string;
+}
+
+interface CatalogSkill {
+  name: string;
+  displayName: string;
+  description: string;
+  source: CatalogSkillSource;
+  affinity: {
+    apps?: string[];
+    tasks?: string[];
+    role?: string[];
+    purpose?: string[];
+  };
+  priority?: number;
+}
+
+interface SkillCatalog {
+  version: number;
+  skills: CatalogSkill[];
+}
+
+interface UserProfile {
+  purpose: string;
+  role: string;
+  tasks: string[];
+  apps: string[];
+  name: string;
+}
+
+interface ScoredSkill {
+  entry: CatalogSkill;
+  score: number;
+  matchReasons: string[];
+}
+
+const AFFINITY_WEIGHTS = { apps: 3, tasks: 2, role: 1, purpose: 1 };
+
+export function scoreSkills(catalog: CatalogSkill[], profile: UserProfile): ScoredSkill[] {
+  return catalog
+    .map((entry) => {
+      let score = 0;
+      const reasons: string[] = [];
+
+      const appMatches = (entry.affinity.apps ?? []).filter((a) => profile.apps.includes(a));
+      if (appMatches.length) {
+        score += appMatches.length * AFFINITY_WEIGHTS.apps;
+        reasons.push(`apps(${appMatches.join(', ')})`);
+      }
+
+      const taskMatches = (entry.affinity.tasks ?? []).filter((t) => profile.tasks.includes(t));
+      if (taskMatches.length) {
+        score += taskMatches.length * AFFINITY_WEIGHTS.tasks;
+        reasons.push(`tasks(${taskMatches.join(', ')})`);
+      }
+
+      if ((entry.affinity.role ?? []).includes(profile.role)) {
+        score += AFFINITY_WEIGHTS.role;
+        reasons.push(`role(${profile.role})`);
+      }
+
+      if ((entry.affinity.purpose ?? []).includes(profile.purpose)) {
+        score += AFFINITY_WEIGHTS.purpose;
+        reasons.push(`purpose(${profile.purpose})`);
+      }
+
+      score *= entry.priority ?? 1.0;
+
+      return { entry, score, matchReasons: reasons };
+    })
+    .filter((s) => s.score > 0)
+    .sort((a, b) => b.score - a.score);
+}
+
+function buildInstallCmd(source: CatalogSkillSource): string {
+  let cmd = `upskill ${source.repo}`;
+  if (source.path) cmd += ` --path ${source.path}`;
+  if (source.skill) cmd += ` --skill ${source.skill}`;
+  return cmd;
 }
 
 interface GitHubContent {
@@ -166,15 +289,16 @@ function upskillHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout: `usage: upskill <command> [options]
 
-Install skills from GitHub repositories or ClawHub registry.
+Install skills from GitHub repositories, ClawHub, or Tessl registry.
 
 Commands:
-  search <query>           Search ClawHub for skills
+  search <query>           Search ClawHub + Tessl for skills
   list                     List locally installed skills
   info <name>              Show details about a local skill
   read <name>              Read the SKILL.md instructions
   <owner/repo>             Install skill(s) from GitHub repository
   <clawhub-url>            Install skill from ClawHub URL
+  tessl:<name>             Install skill from Tessl registry
 
 GitHub Installation:
   upskill owner/repo                     List available skills in repo
@@ -182,10 +306,15 @@ GitHub Installation:
   upskill owner/repo --all               Install all skills from repo
   upskill owner/repo --path subdir       Restrict to subfolder
 
-ClawHub Installation:
-  upskill search "pdf conversion"        Search for skills
+Recommendations:
+  upskill recommendations                Show skills matching your profile
+  upskill recommendations --install      Install all recommended skills
+
+Registry Search:
+  upskill search "pdf conversion"        Search all registries
   upskill https://clawhub.ai/user/skill  Install from ClawHub URL
   upskill clawhub:user/skill             Install from ClawHub shorthand
+  upskill tessl:postgres-pro             Install from Tessl (via GitHub)
 
 Options:
   --skill <name>           Install specific skill (repeatable)
@@ -205,6 +334,7 @@ Examples:
   upskill anthropics/skills --skill pdf --skill xlsx
   upskill adobe/skills --path skills/aem --all
   upskill https://clawhub.ai/arun-8687/tavily-search
+  upskill tessl:postgres-pro
 `,
     stderr: '',
     exitCode: 0,
@@ -212,59 +342,160 @@ Examples:
 }
 
 /**
- * Search ClawHub registry for skills
+ * Search ClawHub registry for skills, returning unified results.
  */
-async function searchClawHub(
+async function fetchClawHubResults(
+  query: string,
+  fetch: SecureFetch
+): Promise<UnifiedSearchResult[]> {
+  const url = `${CLAWHUB_API}/search?q=${encodeURIComponent(query)}`;
+  const response = await fetch(url, {
+    headers: { Accept: 'application/json' },
+  });
+  if (response.status !== 200) throw new Error(`ClawHub returned HTTP ${response.status}`);
+  const data = JSON.parse(response.body) as ClawHubSearchResponse;
+  if (!data.results) return [];
+  return data.results.map((r) => ({
+    name: r.slug,
+    displayName: r.displayName || r.slug,
+    summary: r.summary || '',
+    source: 'clawhub' as const,
+    qualityScore: null,
+    installHint: `upskill clawhub:${r.slug}`,
+  }));
+}
+
+/**
+ * Extract owner/repo from a GitHub URL.
+ */
+function parseGitHubUrl(url: string): { owner: string; repo: string } | null {
+  const match = url.match(/github\.com\/([^\/?#]+)\/([^\/?#]+)/);
+  if (!match) return null;
+  return { owner: match[1], repo: match[2].replace(/\.git$/, '') };
+}
+
+/**
+ * Search Tessl registry for skills, returning unified results.
+ */
+async function fetchTesslResults(
+  query: string,
+  fetch: SecureFetch
+): Promise<UnifiedSearchResult[]> {
+  const url = `${TESSL_API}/experimental/search?q=${encodeURIComponent(query)}&contentType=skills&page%5Bsize%5D=20`;
+  const response = await fetch(url, {
+    headers: { Accept: 'application/json' },
+  });
+  if (response.status !== 200) throw new Error(`Tessl returned HTTP ${response.status}`);
+  const data = JSON.parse(response.body) as TesslSearchResponse;
+  if (!data.data) return [];
+
+  // Filter to skills only (exclude tiles), deduplicate by sourceUrl
+  const seen = new Map<string, UnifiedSearchResult>();
+  for (const item of data.data) {
+    if (item.type !== 'skill') continue;
+    const a = item.attributes;
+    const gh = parseGitHubUrl(a.sourceUrl);
+    const repo = gh ? `${gh.owner}/${gh.repo}` : undefined;
+    const score = a.scores.aggregate != null ? Math.round(a.scores.aggregate * 100) : null;
+    const key = a.sourceUrl || item.id;
+    const existing = seen.get(key);
+    // Keep the highest-scored entry per source repo
+    if (existing && existing.qualityScore != null && score != null && existing.qualityScore >= score) continue;
+    // Derive skill directory from path (parent of SKILL.md)
+    const skillDir = a.path.replace(/\/SKILL\.md$/i, '');
+    const skillId = skillDir.split('/').pop() || a.name;
+    const installHint = gh
+      ? `upskill ${gh.owner}/${gh.repo} --path ${skillDir.split('/').slice(0, -1).join('/') || '.'} --skill ${skillId}`
+      : `upskill tessl:${a.name}`;
+    seen.set(key, {
+      name: a.name,
+      displayName: a.name,
+      summary: a.description || '',
+      source: 'tessl' as const,
+      qualityScore: score,
+      installHint,
+      featured: a.featured,
+      sourceRepo: repo,
+    });
+  }
+  return Array.from(seen.values());
+}
+
+/**
+ * Search both ClawHub and Tessl registries, interleave results.
+ */
+const SEARCH_PAGE_SIZE = 10;
+
+async function searchRegistries(
   query: string,
   fetch: SecureFetch,
-  _limit: number = 10
+  page: number = 1
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  try {
-    const url = `${CLAWHUB_API}/search?q=${encodeURIComponent(query)}`;
-    const response = await fetch(url, {
-      headers: { Accept: 'application/json' },
-    });
+  const [clawHubResult, tesslResult] = await Promise.allSettled([
+    fetchClawHubResults(query, fetch),
+    fetchTesslResults(query, fetch),
+  ]);
 
-    if (response.status !== 200) {
-      return {
-        stdout: '',
-        stderr: `upskill: ClawHub search failed (HTTP ${response.status})\n`,
-        exitCode: 1,
-      };
+  const clawHub = clawHubResult.status === 'fulfilled' ? clawHubResult.value : [];
+  const tessl = tesslResult.status === 'fulfilled' ? tesslResult.value : [];
+
+  if (clawHub.length === 0 && tessl.length === 0) {
+    let stderr = '';
+    if (clawHubResult.status === 'rejected' && tesslResult.status === 'rejected') {
+      stderr = 'upskill: both registries failed to respond\n';
     }
-
-    const data = JSON.parse(response.body) as ClawHubSearchResponse;
-
-    if (!data.results || data.results.length === 0) {
-      return {
-        stdout: `No skills found for "${query}"\n\nTry a different search term or browse https://clawhub.ai\n`,
-        stderr: '',
-        exitCode: 0,
-      };
-    }
-
-    let output = `Search results for "${query}" (${data.results.length} found):\n\n`;
-
-    for (const skill of data.results) {
-      output += `  ${skill.slug.padEnd(35)} ${(skill.displayName || skill.slug).padEnd(25)}\n`;
-      if (skill.summary) {
-        output += `    ${skill.summary.slice(0, 70)}${skill.summary.length > 70 ? '...' : ''}\n`;
-      }
-      output += '\n';
-    }
-
-    output += `\nTo install: upskill clawhub:<slug>\n`;
-    output += `Example: upskill clawhub:${data.results[0]?.slug || 'skill-name'}\n`;
-
-    return { stdout: output, stderr: '', exitCode: 0 };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
     return {
-      stdout: '',
-      stderr: `upskill: search failed: ${msg}\n`,
-      exitCode: 1,
+      stdout: `No skills found for "${query}"\n\nTry a different search term or browse https://clawhub.ai or https://tessl.io/registry\n`,
+      stderr,
+      exitCode: stderr ? 1 : 0,
     };
   }
+
+  // Merge: lead with up to 3 Tessl results, then interleave
+  const merged: UnifiedSearchResult[] = [];
+  let ti = 0;
+  let ci = 0;
+
+  // Lead with Tessl (scored, higher signal)
+  while (ti < tessl.length && ti < 3) {
+    merged.push(tessl[ti++]);
+  }
+
+  // Interleave remaining
+  while (ci < clawHub.length || ti < tessl.length) {
+    if (ci < clawHub.length) merged.push(clawHub[ci++]);
+    if (ti < tessl.length) merged.push(tessl[ti++]);
+  }
+
+  const totalResults = merged.length;
+  const totalPages = Math.ceil(totalResults / SEARCH_PAGE_SIZE);
+  const safePage = Math.max(1, Math.min(page, totalPages));
+  const startIdx = (safePage - 1) * SEARCH_PAGE_SIZE;
+  const pageResults = merged.slice(startIdx, startIdx + SEARCH_PAGE_SIZE);
+
+  let output = `Search results for "${query}" (page ${safePage}/${totalPages}, ${totalResults} total):\n\n`;
+
+  for (const skill of pageResults) {
+    const scoreStr = skill.qualityScore != null ? String(skill.qualityScore).padStart(3) : '   ';
+    const tag = `[${skill.source}]`;
+    const repoStr = skill.sourceRepo ? `  ${skill.sourceRepo}` : '';
+    output += `  ${skill.name.padEnd(30)} ${scoreStr} ${tag.padEnd(10)}${repoStr}\n`;
+    if (skill.summary) {
+      output += `    ${skill.summary}\n`;
+    }
+    output += '\n';
+  }
+
+  if (safePage < totalPages) {
+    output += `Showing ${startIdx + 1}-${startIdx + pageResults.length} of ${totalResults}. `;
+    output += `Next page: upskill search ${query} --page ${safePage + 1}\n\n`;
+  }
+
+  output += `To install:\n`;
+  if (clawHub.length > 0) output += `  From ClawHub:  upskill clawhub:<slug>\n`;
+  if (tessl.length > 0) output += `  From Tessl:    upskill <owner/repo> --skill <name>\n`;
+
+  return { stdout: output, stderr: '', exitCode: 0 };
 }
 
 /**
@@ -274,7 +505,8 @@ async function installFromClawHub(
   slug: string,
   fs: VirtualFS,
   fetch: SecureFetch,
-  force: boolean = false
+  force: boolean = false,
+  registeredCommands?: string[]
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   try {
     // Check if skill already exists
@@ -377,9 +609,12 @@ async function installFromClawHub(
       fileCount++;
     }
 
+    // Check for required bins in SKILL.md frontmatter
+    const binsWarning = checkRequiredBins(files, registeredCommands);
+
     await refreshSprinklesAfterInstall();
     return {
-      stdout: `Installed skill "${slug}" from ClawHub (${fileCount} files)\n`,
+      stdout: `Installed skill "${slug}" from ClawHub (${fileCount} files)\n${binsWarning}`,
       stderr: '',
       exitCode: 0,
     };
@@ -394,14 +629,209 @@ async function installFromClawHub(
 }
 
 /**
- * List skills in a GitHub repository
+ * Parse SKILL.md frontmatter for openclaw/clawdis requires.bins and check availability.
+ */
+function checkRequiredBins(
+  files: Record<string, Uint8Array>,
+  registeredCommands?: string[]
+): string {
+  // Find SKILL.md in the extracted files
+  let skillMdContent: string | undefined;
+  for (const [path, content] of Object.entries(files)) {
+    const basename = path.split('/').pop() || '';
+    if (basename.toLowerCase() === 'skill.md') {
+      skillMdContent = new TextDecoder().decode(content);
+      break;
+    }
+  }
+  if (!skillMdContent) return '';
+
+  // Extract frontmatter
+  const fmMatch = skillMdContent.match(/^---\s*\n([\s\S]*?)\n---/);
+  if (!fmMatch) return '';
+
+  // Look for requires.bins in the metadata JSON block
+  const frontmatter = fmMatch[1];
+  const bins = extractRequiredBins(frontmatter);
+  if (bins.length === 0) return '';
+
+  if (!registeredCommands || registeredCommands.length === 0) {
+    return `  Requires: ${bins.join(', ')}\n`;
+  }
+
+  const available = new Set(registeredCommands);
+  const missing = bins.filter((b) => !available.has(b));
+
+  if (missing.length === 0) {
+    return `  Requires: ${bins.join(', ')} (all available)\n`;
+  }
+
+  return `  Requires: ${bins.join(', ')}\n  Missing: ${missing.join(', ')} -- this skill may not work in the SLICC shell\n`;
+}
+
+/**
+ * Extract bins array from SKILL.md frontmatter metadata block.
+ * Handles both JSON metadata blocks and YAML-ish patterns.
+ */
+function extractRequiredBins(frontmatter: string): string[] {
+  // Try to find a JSON metadata block
+  const metaMatch = frontmatter.match(/metadata:\s*\n\s*(\{[\s\S]*\})/);
+  if (metaMatch) {
+    try {
+      const meta = JSON.parse(metaMatch[1]) as Record<string, unknown>;
+      // Check openclaw.requires.bins or clawdis.requires.bins
+      for (const key of ['openclaw', 'clawdis', 'clawdbot']) {
+        const section = meta[key] as Record<string, unknown> | undefined;
+        if (section?.requires && typeof section.requires === 'object') {
+          const req = section.requires as Record<string, unknown>;
+          if (Array.isArray(req.bins)) {
+            return req.bins.filter((b): b is string => typeof b === 'string');
+          }
+        }
+      }
+    } catch {
+      // JSON parse failed, try regex fallback
+    }
+  }
+
+  // Regex fallback: look for "bins": ["python3", ...] anywhere in frontmatter
+  const binsMatch = frontmatter.match(/"bins"\s*:\s*\[([^\]]*)\]/);
+  if (binsMatch) {
+    return binsMatch[1]
+      .split(',')
+      .map((s) => s.trim().replace(/^["']|["']$/g, ''))
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
+/**
+ * Parse Tessl reference (tessl:name) and resolve to GitHub source.
+ */
+async function resolveTesslRef(
+  name: string,
+  fetch: SecureFetch
+): Promise<{ owner: string; repo: string; skillPath: string; skillName: string } | { error: string }> {
+  const url = `${TESSL_API}/experimental/search?q=${encodeURIComponent(name)}&contentType=skills&page%5Bsize%5D=5`;
+  const response = await fetch(url, {
+    headers: { Accept: 'application/json' },
+  });
+  if (response.status !== 200) {
+    return { error: `Tessl search failed (HTTP ${response.status})` };
+  }
+  const data = JSON.parse(response.body) as TesslSearchResponse;
+  // Find exact name match among skills
+  const match = data.data?.find(
+    (item) => item.type === 'skill' && item.attributes.name === name
+  );
+  if (!match) {
+    return { error: `skill "${name}" not found on Tessl registry` };
+  }
+  const gh = parseGitHubUrl(match.attributes.sourceUrl);
+  if (!gh) {
+    return { error: `skill "${name}" has no GitHub source URL` };
+  }
+  // Derive skill directory path (parent of SKILL.md)
+  const skillDir = match.attributes.path.replace(/\/SKILL\.md$/i, '');
+  return { owner: gh.owner, repo: gh.repo, skillPath: skillDir, skillName: name };
+}
+
+type ZipResult =
+  | { status: 'ok'; files: Record<string, Uint8Array> }
+  | { status: 'not_found' }
+  | { status: 'error'; message: string };
+
+/**
+ * Download and cache a repo ZIP archive from codeload.github.com (not rate-limited).
+ */
+async function fetchRepoZip(
+  owner: string,
+  repo: string,
+  fetch: SecureFetch,
+  branch: string = 'main'
+): Promise<ZipResult> {
+  const url = `https://codeload.github.com/${owner}/${repo}/zip/refs/heads/${branch}`;
+  const response = await fetch(url, {
+    headers: { 'User-Agent': 'slicc-upskill' },
+  });
+  if (response.status === 404) {
+    // Try 'master' branch as fallback
+    if (branch === 'main') {
+      return fetchRepoZip(owner, repo, fetch, 'master');
+    }
+    return { status: 'not_found' };
+  }
+  if (response.status !== 200) {
+    return { status: 'error', message: `codeload returned HTTP ${response.status}` };
+  }
+
+  let zipBytes = consumeCachedBinaryByUrl(url);
+  if (!zipBytes) {
+    zipBytes = new Uint8Array(response.body.length);
+    for (let i = 0; i < response.body.length; i++) {
+      zipBytes[i] = response.body.charCodeAt(i) & 0xff;
+    }
+  }
+
+  try {
+    return { status: 'ok', files: unzipSync(zipBytes) };
+  } catch (e) {
+    return { status: 'error', message: `failed to unzip: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/**
+ * Strip the top-level directory prefix from zip entries (e.g. "repo-main/foo" → "foo").
+ */
+function stripZipPrefix(files: Record<string, Uint8Array>): Record<string, Uint8Array> {
+  const result: Record<string, Uint8Array> = {};
+  for (const [path, content] of Object.entries(files)) {
+    const slashIdx = path.indexOf('/');
+    if (slashIdx < 0) continue; // top-level entry (the directory itself)
+    const stripped = path.slice(slashIdx + 1);
+    if (stripped) result[stripped] = content;
+  }
+  return result;
+}
+
+/**
+ * List skills in a GitHub repository.
+ * Tries the codeload ZIP first (not rate-limited), falls back to the Contents API.
  */
 async function listGitHubSkills(
   owner: string,
   repo: string,
   github: GitHubRequestContext,
-  subPath?: string
+  subPath?: string,
+  fetch?: SecureFetch
 ): Promise<{ skills: Array<{ name: string; path: string }>; error?: string }> {
+  // Try ZIP-based discovery first (no rate limit)
+  if (fetch) {
+    const zip = await fetchRepoZip(owner, repo, fetch);
+    if (zip.status === 'ok') {
+      const files = stripZipPrefix(zip.files);
+      const skills: Array<{ name: string; path: string }> = [];
+      const prefix = subPath ? subPath.replace(/^\/|\/$/g, '') + '/' : '';
+
+      for (const path of Object.keys(files)) {
+        if (!path.startsWith(prefix)) continue;
+        const basename = path.split('/').pop() || '';
+        if (basename === 'SKILL.md') {
+          const skillPath = path.replace(/\/SKILL\.md$/, '');
+          const skillName = skillPath.split('/').pop() || skillPath;
+          skills.push({ name: skillName, path: skillPath });
+        }
+      }
+      return { skills };
+    }
+    if (zip.status === 'not_found') {
+      return { skills: [], error: `repository ${owner}/${repo} not found` };
+    }
+    // zip.status === 'error' — fall through to API
+  }
+
+  // Fallback: Contents API (rate-limited for anonymous users)
   const skills: Array<{ name: string; path: string }> = [];
 
   async function scanDir(path: string): Promise<void> {
@@ -418,12 +848,10 @@ async function listGitHubSkills(
 
     for (const item of contents) {
       if (item.type === 'file' && item.name === 'SKILL.md') {
-        // Found a skill - use parent directory as skill name
         const skillPath = item.path.replace('/SKILL.md', '');
         const skillName = skillPath.split('/').pop() || skillPath;
         skills.push({ name: skillName, path: skillPath });
       } else if (item.type === 'dir') {
-        // Recurse into directories
         await scanDir(item.path);
       }
     }
@@ -439,7 +867,8 @@ async function listGitHubSkills(
 }
 
 /**
- * Install a skill from GitHub repository
+ * Install a skill from GitHub repository.
+ * Tries ZIP-based install first (not rate-limited), falls back to the Contents API.
  */
 async function installFromGitHub(
   owner: string,
@@ -448,7 +877,8 @@ async function installFromGitHub(
   skillName: string,
   fs: VirtualFS,
   github: GitHubRequestContext,
-  force: boolean = false
+  force: boolean = false,
+  fetch?: SecureFetch
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   try {
     // Check if skill already exists
@@ -462,13 +892,56 @@ async function installFromGitHub(
           exitCode: 1,
         };
       }
-      // Remove existing skill
       await fs.rm(destDir, { recursive: true });
     } catch {
       // Doesn't exist, continue
     }
 
-    // Get directory contents
+    // Try ZIP-based install first (no rate limit)
+    if (fetch) {
+      const zip = await fetchRepoZip(owner, repo, fetch);
+      if (zip.status === 'not_found') {
+        return {
+          stdout: '',
+          stderr: `upskill: repository ${owner}/${repo} not found\n`,
+          exitCode: 1,
+        };
+      }
+      if (zip.status === 'ok') {
+        const files = stripZipPrefix(zip.files);
+        const prefix = skillPath.replace(/^\/|\/$/g, '') + '/';
+
+        await fs.mkdir(destDir, { recursive: true });
+        let fileCount = 0;
+
+        for (const [path, content] of Object.entries(files)) {
+          if (!path.startsWith(prefix)) continue;
+          const relativePath = path.slice(prefix.length);
+          if (!relativePath || path.endsWith('/')) continue;
+
+          const filePath = `${destDir}/${relativePath}`;
+          const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
+          if (parentDir !== destDir) {
+            await fs.mkdir(parentDir, { recursive: true });
+          }
+
+          await fs.writeFile(filePath, content);
+          fileCount++;
+        }
+
+        if (fileCount > 0) {
+          await refreshSprinklesAfterInstall();
+          return {
+            stdout: `Installed skill "${skillName}" from ${owner}/${repo}\n`,
+            stderr: '',
+            exitCode: 0,
+          };
+        }
+        // No files found under path — fall through to API
+      }
+    }
+
+    // Fallback: Contents API
     const url = `https://api.github.com/repos/${owner}/${repo}/contents/${skillPath}`;
     const response = await github.request(url);
 
@@ -482,10 +955,8 @@ async function installFromGitHub(
 
     const contents = JSON.parse(response.body) as GitHubContent[];
 
-    // Create skill directory
     await fs.mkdir(destDir, { recursive: true });
 
-    // Download each file
     async function downloadDir(items: GitHubContent[], destBase: string): Promise<void> {
       for (const item of items) {
         if (item.type === 'file' && item.download_url) {
@@ -498,7 +969,6 @@ async function installFromGitHub(
           const cached = consumeCachedBinaryByUrl(item.download_url);
           await fs.writeFile(`${destBase}/${item.name}`, cached ?? fileResponse.body);
         } else if (item.type === 'dir') {
-          // Recursively download subdirectory
           const subUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${item.path}`;
           const subResponse = await github.request(subUrl);
           if (subResponse.status !== 200) {
@@ -516,7 +986,6 @@ async function installFromGitHub(
     try {
       await downloadDir(contents, destDir);
     } catch (downloadErr) {
-      // Clean up partial install so retries don't require --force
       try {
         await fs.rm(destDir, { recursive: true });
       } catch {
@@ -593,6 +1062,129 @@ async function refreshSprinklesAfterInstall(): Promise<void> {
 }
 
 /**
+ * Handle the `upskill recommendations` subcommand.
+ */
+async function handleRecommendations(
+  fs: VirtualFS,
+  fetchFn: SecureFetch,
+  install: boolean
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  // Read user profile — scan /home/*/.welcome.json
+  let profile: UserProfile | null = null;
+  try {
+    const homeDirs = await fs.readDir('/home');
+    for (const entry of homeDirs) {
+      try {
+        const raw = await fs.readTextFile(`/home/${entry.name}/.welcome.json`);
+        profile = JSON.parse(raw) as UserProfile;
+        break;
+      } catch {
+        // no .welcome.json in this dir
+      }
+    }
+  } catch {
+    // /home doesn't exist
+  }
+
+  if (!profile) {
+    return {
+      stdout: '',
+      stderr:
+        'upskill: no user profile found. Complete the welcome onboarding first, or create /home/<name>/.welcome.json manually.\n',
+      exitCode: 1,
+    };
+  }
+
+  // Read skill catalog
+  let catalog: SkillCatalog;
+  try {
+    const raw = await fs.readTextFile('/shared/skill-catalog.json');
+    catalog = JSON.parse(raw) as SkillCatalog;
+  } catch {
+    return {
+      stdout: '',
+      stderr: 'upskill: skill catalog not found at /shared/skill-catalog.json\n',
+      exitCode: 1,
+    };
+  }
+
+  // Get already-installed skills
+  const installed = new Set<string>();
+  try {
+    const skills = await import('../../skills/index.js');
+    const discovered = await skills.discoverSkills(fs);
+    for (const s of discovered) installed.add(s.name);
+  } catch {
+    /* best effort */
+  }
+
+  // Score and filter
+  const scored = scoreSkills(catalog.skills, profile).filter((s) => !installed.has(s.entry.name));
+
+  if (scored.length === 0) {
+    return {
+      stdout: 'No new skill recommendations — all matching skills are already installed.\n',
+      stderr: '',
+      exitCode: 0,
+    };
+  }
+
+  if (install) {
+    // Install all recommended skills
+    let output = '';
+    let errors = '';
+    let successCount = 0;
+
+    for (const rec of scored) {
+      const src = rec.entry.source;
+      const github = await createGitHubRequestContext(fetchFn);
+
+      const [owner, repo] = src.repo.split('/');
+      const listResult = await listGitHubSkills(owner, repo, github, src.path, fetchFn);
+      if (listResult.error) {
+        errors += `upskill: failed to list ${rec.entry.name}: ${listResult.error}\n`;
+        continue;
+      }
+
+      // If a specific skill is named, install just that one; otherwise install all from the path
+      const toInstall = src.skill
+        ? listResult.skills.filter((s) => s.name === src.skill)
+        : listResult.skills;
+
+      for (const skill of toInstall) {
+        const result = await installFromGitHub(owner, repo, skill.path, skill.name, fs, github, false, fetchFn);
+        if (result.exitCode === 0) {
+          output += result.stdout;
+          successCount++;
+        } else {
+          errors += result.stderr;
+        }
+      }
+    }
+
+    if (successCount > 0) {
+      output += `\nInstalled ${successCount} recommended skill(s)\n`;
+    }
+    return { stdout: output, stderr: errors, exitCode: errors ? 1 : 0 };
+  }
+
+  // Display recommendations
+  let output = 'Recommended skills for you:\n\n';
+  let idx = 0;
+  for (const rec of scored) {
+    idx++;
+    const installCmd = buildInstallCmd(rec.entry.source);
+    output += `  ${idx}. ${rec.entry.displayName.padEnd(35)} score: ${Math.round(rec.score)}\n`;
+    output += `     ${rec.entry.description}\n`;
+    output += `     Match: ${rec.matchReasons.join(', ')}\n`;
+    output += `     Install: ${installCmd}\n\n`;
+  }
+
+  output += 'To install all recommended: upskill recommendations --install\n';
+  return { stdout: output, stderr: '', exitCode: 0 };
+}
+
+/**
  * Create the upskill command with access to the virtual filesystem.
  */
 export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Command {
@@ -609,15 +1201,25 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
     let force = false;
     let sourceRef = '';
     let searchQuery = '';
+    let page = 1;
 
     let i = 0;
     while (i < args.length) {
       const arg = args[i];
 
       if (arg === 'search') {
-        // Collect the search query
-        searchQuery = args.slice(i + 1).join(' ');
+        // Collect the search query (excluding --page flag)
+        const rest = args.slice(i + 1);
+        const pageIdx = rest.indexOf('--page');
+        if (pageIdx >= 0) {
+          page = parseInt(rest[pageIdx + 1], 10) || 1;
+          rest.splice(pageIdx, 2);
+        }
+        searchQuery = rest.join(' ');
         break;
+      } else if (arg === 'recommendations') {
+        const installFlag = args.includes('--install');
+        return handleRecommendations(fs, fetchFn, installFlag);
       } else if (arg === 'list') {
         // List local skills
         const skills = await import('../../skills/index.js');
@@ -695,7 +1297,7 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
 
     // Handle search
     if (searchQuery) {
-      return searchClawHub(searchQuery, fetchFn);
+      return searchRegistries(searchQuery, fetchFn, page);
     }
 
     if (!sourceRef) {
@@ -705,7 +1307,22 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
     // Check if it's a ClawHub reference
     const clawHubSlug = parseClawHubRef(sourceRef);
     if (clawHubSlug) {
-      return installFromClawHub(clawHubSlug, fs, fetchFn, force);
+      const registeredCommands = _ctx.getRegisteredCommands?.() ?? [];
+      return installFromClawHub(clawHubSlug, fs, fetchFn, force, registeredCommands);
+    }
+
+    // Check if it's a Tessl reference (tessl:name)
+    if (sourceRef.startsWith('tessl:')) {
+      const tesslName = sourceRef.slice(6);
+      if (!tesslName) {
+        return { stdout: '', stderr: 'upskill: tessl: requires a skill name\n', exitCode: 1 };
+      }
+      const resolved = await resolveTesslRef(tesslName, fetchFn);
+      if ('error' in resolved) {
+        return { stdout: '', stderr: `upskill: ${resolved.error}\n`, exitCode: 1 };
+      }
+      const github = await createGitHubRequestContext(fetchFn);
+      return installFromGitHub(resolved.owner, resolved.repo, resolved.skillPath, resolved.skillName, fs, github, force, fetchFn);
     }
 
     // Check if it's a GitHub reference
@@ -715,7 +1332,7 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
       const github = await createGitHubRequestContext(fetchFn);
 
       // List skills in the repository
-      const result = await listGitHubSkills(owner, repo, github, subPath);
+      const result = await listGitHubSkills(owner, repo, github, subPath, fetchFn);
 
       if (result.error) {
         return {
@@ -786,7 +1403,8 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
           skill.name,
           fs,
           github,
-          force
+          force,
+          fetchFn
         );
 
         if (installResult.exitCode === 0) {
@@ -812,7 +1430,7 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
     // Unknown source format
     return {
       stdout: '',
-      stderr: `upskill: unrecognized source "${sourceRef}"\n\nExpected: owner/repo, https://clawhub.ai/user/skill, or clawhub:user/skill\n`,
+      stderr: `upskill: unrecognized source "${sourceRef}"\n\nExpected: owner/repo, clawhub:<slug>, tessl:<name>, or https://clawhub.ai/user/skill\n`,
       exitCode: 1,
     };
   });
@@ -834,10 +1452,11 @@ Commands:
   install <name>         Install a local skill (apply manifest)
   uninstall <name>       Uninstall a skill
 
-For installing skills from GitHub or ClawHub, use 'upskill':
-  upskill search "query"           Search ClawHub
+For installing skills from registries or GitHub, use 'upskill':
+  upskill search "query"           Search ClawHub + Tessl
   upskill owner/repo --list        List skills in GitHub repo
   upskill owner/repo --all         Install from GitHub
+  upskill tessl:<name>             Install from Tessl registry
 
 Examples:
   skill list
