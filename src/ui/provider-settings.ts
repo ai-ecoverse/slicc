@@ -28,20 +28,6 @@ const getModelDynamic = getModel as (provider: string, modelId: string) => Model
 
 const getModelsDynamic = getModels as (provider: string) => Model<Api>[];
 
-/**
- * Apply ModelMetadata overrides to a model object (mutates).
- * Updates contextWindow, maxTokens, reasoning, and input fields.
- */
-function applyModelMetadata(
-  model: Record<string, any>,
-  metadata: { context_window?: number; max_tokens?: number; reasoning?: boolean; input?: string[] },
-): void {
-  if (metadata.context_window !== undefined) model.contextWindow = metadata.context_window;
-  if (metadata.max_tokens !== undefined) model.maxTokens = metadata.max_tokens;
-  if (metadata.reasoning !== undefined) model.reasoning = metadata.reasoning;
-  if (metadata.input !== undefined) model.input = metadata.input;
-}
-
 function isExtensionRuntime(): boolean {
   return typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 }
@@ -150,64 +136,33 @@ export function getProviderModels(providerId: string): Model<Api>[] {
       }
       const anthropicModels = getModelsDynamic('anthropic');
       const modelMap = new Map(anthropicModels.map((m) => [m.id, m]));
+      const customApi = `${providerId}-anthropic` as Api;
       return modelIds.map((pm) => {
-        // Determine API type from metadata (layer 3) or default to anthropic
-        const apiType = (pm as any).api ?? 'anthropic';
-        const customApi = `${providerId}-${apiType}` as Api;
-
         const base = modelMap.get(pm.id);
-        let model: Record<string, any>;
-
-        if (base) {
-          model = { ...base, api: customApi, provider: providerId };
-        } else {
-          model = {
-            id: pm.id,
-            name: pm.name ?? pm.id,
-            provider: providerId,
-            api: customApi,
-            baseUrl: '',
-            contextWindow: 200000,
-            maxTokens: 16384,
-            input: ['text', 'image'],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            inputCost: 0,
-            outputCost: 0,
-            cacheReadCost: 0,
-            cacheWriteCost: 0,
-            reasoning: true,
-          };
-        }
-
-        // Layer 2: Apply modelOverrides from providerConfig
-        if (providerConfig.modelOverrides?.[pm.id]) {
-          applyModelMetadata(model, providerConfig.modelOverrides[pm.id]);
-        }
-
-        // Layer 3: Apply metadata from pm itself (highest priority)
-        const pmMetadata = {
-          context_window: (pm as any).context_window,
-          max_tokens: (pm as any).max_tokens,
-          reasoning: (pm as any).reasoning,
-          input: (pm as any).input,
-        };
-        applyModelMetadata(model, pmMetadata);
-
-        return model as unknown as Model<Api>;
+        if (base) return { ...base, api: customApi, provider: providerId };
+        return {
+          id: pm.id,
+          name: pm.name ?? pm.id,
+          provider: providerId,
+          api: customApi,
+          baseUrl: '',
+          contextWindow: 200000,
+          maxTokens: 16384,
+          input: ['text', 'image'],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          inputCost: 0,
+          outputCost: 0,
+          cacheReadCost: 0,
+          cacheWriteCost: 0,
+          reasoning: true,
+        } as unknown as Model<Api>;
       });
     }
     if (providerConfig.isOAuth) {
       // OAuth providers use Anthropic models with custom API routing
       const anthropicModels = getModelsDynamic('anthropic');
       const customApi = `${providerId}-anthropic` as Api;
-      return anthropicModels.map((m) => {
-        const model = { ...m, api: customApi, provider: providerId } as Record<string, any>;
-        // Apply modelOverrides if present
-        if (providerConfig.modelOverrides?.[m.id]) {
-          applyModelMetadata(model, providerConfig.modelOverrides[m.id]);
-        }
-        return model as unknown as Model<Api>;
-      });
+      return anthropicModels.map((m) => ({ ...m, api: customApi, provider: providerId }));
     }
     const effectiveProvider = providerId === 'azure-ai-foundry' ? 'anthropic' : providerId;
     return getModelsDynamic(effectiveProvider);
