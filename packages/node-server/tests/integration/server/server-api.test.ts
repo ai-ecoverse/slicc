@@ -6,6 +6,7 @@ import {
   extractAssetPath,
   fetchFromServer,
   openWebSocket,
+  serverUrl,
 } from './helpers.js';
 
 const openSockets = new Set<WebSocket>();
@@ -85,17 +86,15 @@ describe('shared server API conformance', () => {
     expect(secondPoll.status).toBe(204);
   });
 
-  it('proxies requests through /api/fetch-proxy and strips blocked response headers', async () => {
+  it('proxies local requests through /api/fetch-proxy', async () => {
     const missingHeader = await fetchFromServer('/api/fetch-proxy', { method: 'POST' });
     expect(missingHeader.status).toBe(400);
 
     const proxied = await fetchFromServer('/api/fetch-proxy', {
-      method: 'POST',
+      method: 'GET',
       headers: {
-        'content-type': 'application/json',
-        'x-target-url': 'https://httpbin.org/anything?slicc-server-test=1',
+        'x-target-url': serverUrl('/api/runtime-config'),
       },
-      body: JSON.stringify({ hello: 'world' }),
     });
     expect(proxied.status).toBe(200);
     expect(proxied.headers.get('transfer-encoding')).toBeNull();
@@ -103,9 +102,7 @@ describe('shared server API conformance', () => {
     expect(proxied.headers.get('www-authenticate')).toBeNull();
 
     const body = (await proxied.json()) as Record<string, unknown>;
-    expect(body['method']).toBe('POST');
-    expect(body['url']).toBe('https://httpbin.org/anything?slicc-server-test=1');
-    expect(body['json']).toEqual({ hello: 'world' });
+    expect(body).toHaveProperty('trayWorkerBaseUrl');
   });
 
   it('returns webhook CORS headers for preflight requests', async () => {

@@ -1,3 +1,4 @@
+import { expect } from 'vitest';
 import WebSocket, { type RawData } from 'ws';
 
 export type JsonObject = Record<string, unknown>;

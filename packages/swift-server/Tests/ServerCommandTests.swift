@@ -74,4 +74,89 @@ final class ServerCommandTests: XCTestCase {
         XCTAssertTrue(config.join)
         XCTAssertEqual(config.joinURL?.absoluteString, "https://join.example/session")
     }
+
+    func testStaticRootIsCapturedInResolvedConfig() throws {
+        let parsed = try ServerCommand.parseAsRoot(["--static-root", "/tmp/slicc/dist/ui"])
+        let command = try XCTUnwrap(parsed as? ServerCommand)
+        let config = ServerConfig.resolve(
+            from: command,
+            arguments: ["slicc-server", "--static-root", "/tmp/slicc/dist/ui"]
+        )
+
+        XCTAssertEqual(config.staticRoot, "/tmp/slicc/dist/ui")
+    }
+
+    func testRepositoryRootPrefersBundledSliccDirectory() {
+        let root = ServerCommand.repositoryRoot(
+            bundlePath: "/Applications/Sliccstart.app",
+            resourcePath: "/Applications/Sliccstart.app/Contents/Resources",
+            currentDirectoryPath: "/tmp"
+        )
+
+        XCTAssertEqual(root.path, "/Applications/Sliccstart.app/Contents/Resources/slicc")
+    }
+
+    func testRepositoryRootPrefersCurrentDirectoryWhenStaticAssetsExist() throws {
+        let tempDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(
+            at: tempDirectory.appendingPathComponent("dist/ui"),
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: tempDirectory) }
+
+        let root = ServerCommand.repositoryRoot(
+            bundlePath: "/tmp/slicc-server",
+            resourcePath: nil,
+            currentDirectoryPath: tempDirectory.path
+        )
+
+        XCTAssertEqual(root.path, tempDirectory.path)
+    }
+
+    func testResolveStaticRootPrefersExplicitPath() {
+        let root = ServerCommand.resolveStaticRoot(
+            explicitStaticRoot: "/explicit/dist/ui",
+            repositoryRoot: URL(fileURLWithPath: "/repo")
+        )
+
+        XCTAssertEqual(root, "/explicit/dist/ui")
+    }
+
+    func testResolveStaticRootUsesBundledResources() {
+        let root = ServerCommand.resolveStaticRoot(
+            explicitStaticRoot: nil,
+            repositoryRoot: URL(fileURLWithPath: "/repo"),
+            bundlePath: "/Applications/Sliccstart.app",
+            resourcePath: "/Applications/Sliccstart.app/Contents/Resources"
+        )
+
+        XCTAssertEqual(root, "/Applications/Sliccstart.app/Contents/Resources/slicc/dist/ui")
+    }
+
+    func testResolveServePortUsesPortEnvironmentAsPreferredPort() async throws {
+        let resolvedPort = try await ServerCommand.resolveServePort(from: ["PORT": "5710"]) { startingFrom in
+            XCTAssertEqual(startingFrom, 5710)
+            return 5800
+        }
+
+        XCTAssertEqual(resolvedPort, 5800)
+    }
+
+    func testResolveServePortFallsBackToResolverWhenPortEnvironmentMissing() async throws {
+        let resolvedPort = try await ServerCommand.resolveServePort(from: [:]) { startingFrom in
+            XCTAssertEqual(startingFrom, ServerCommand.defaultServePort)
+            return 5800
+        }
+
+        XCTAssertEqual(resolvedPort, 5800)
+    }
+
+    func testResolveServePortFallsBackToResolverWhenPortEnvironmentInvalid() async throws {
+        let resolvedPort = try await ServerCommand.resolveServePort(from: ["PORT": "70000"]) { startingFrom in
+            XCTAssertEqual(startingFrom, ServerCommand.defaultServePort)
+            return 5801
+        }
+
+        XCTAssertEqual(resolvedPort, 5801)
+    }
 }
