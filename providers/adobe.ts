@@ -465,8 +465,8 @@ const streamAdobe = (
       const isOpenAI = String(model.api).includes('openai');
 
       if (isOpenAI) {
-        // Route to OpenAI Chat Completions API
-        const proxyModel = { ...model, baseUrl: getProxyEndpoint(), api: 'openai-completions' as Api };
+        // Route to OpenAI Chat Completions API — append /v1 since the OpenAI SDK adds /chat/completions
+        const proxyModel = { ...model, baseUrl: `${getProxyEndpoint()}/v1`, api: 'openai-completions' as Api };
         const inner = streamOpenAICompletions(proxyModel as any, context, { ...options, apiKey: accessToken } as any);
         for await (const event of inner) stream.push(event as any);
       } else {
@@ -497,8 +497,8 @@ const streamSimpleAdobe = (
       const isOpenAI = String(model.api).includes('openai');
 
       if (isOpenAI) {
-        // Route to OpenAI Chat Completions API
-        const proxyModel = { ...model, baseUrl: getProxyEndpoint(), api: 'openai-completions' as Api };
+        // Route to OpenAI Chat Completions API — append /v1 since the OpenAI SDK adds /chat/completions
+        const proxyModel = { ...model, baseUrl: `${getProxyEndpoint()}/v1`, api: 'openai-completions' as Api };
         const inner = streamSimpleOpenAICompletions(proxyModel as any, context, { ...options, apiKey: accessToken } as any);
         for await (const event of inner) stream.push(event as any);
       } else {
