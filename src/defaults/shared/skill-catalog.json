@@ -4,14 +4,14 @@
     {
       "name": "content-driven-development",
       "displayName": "AEM Content-Driven Development",
-      "description": "Master orchestrator for AEM Edge Delivery development — builds code against real content with author-friendly content models",
+      "description": "Master orchestrator for AEM development — builds code against real content with author-friendly content models",
       "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "content-driven-development" },
       "affinity": { "apps": ["aem"], "tasks": ["build-websites"], "role": ["developer"], "purpose": ["work"] }
     },
     {
       "name": "building-blocks",
       "displayName": "AEM Building Blocks",
-      "description": "Implementation guide for AEM Edge Delivery blocks — handles block development, core functionality, scripts, and styles",
+      "description": "Implementation guide for AEM blocks — handles block development, core functionality, scripts, and styles",
       "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "building-blocks" },
       "affinity": { "apps": ["aem"], "tasks": ["build-websites"], "role": ["developer"], "purpose": ["work"] }
     },
@@ -39,7 +39,7 @@
     {
       "name": "docs-search",
       "displayName": "AEM Docs Search",
-      "description": "Search aem.live documentation and blog posts for EDS features, implementation guidance, and best practices",
+      "description": "Search aem.live documentation and blog posts for AEM features, implementation guidance, and best practices",
       "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "docs-search" },
       "affinity": { "apps": ["aem"], "tasks": ["build-websites", "research"], "role": ["developer", "content-creator"], "purpose": ["work"] }
     },
@@ -67,7 +67,7 @@
     {
       "name": "page-import",
       "displayName": "AEM Page Import",
-      "description": "Orchestrator for importing/migrating webpages into structured AEM Edge Delivery HTML",
+      "description": "Orchestrator for importing/migrating webpages into structured AEM HTML",
       "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "page-import" },
       "affinity": { "apps": ["aem"], "tasks": ["build-websites", "extract-data"], "role": ["developer", "content-creator"], "purpose": ["work"] }
     },
@@ -102,7 +102,7 @@
     {
       "name": "preview-import",
       "displayName": "AEM Preview Import",
-      "description": "Open and verify imported content in the local AEM EDS dev server, comparing with the original page",
+      "description": "Open and verify imported content in the local AEM AEM dev server, comparing with the original page",
       "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "preview-import" },
       "affinity": { "apps": ["aem"], "tasks": ["build-websites"], "role": ["developer"], "purpose": ["work"] }
     },
@@ -116,7 +116,7 @@
     {
       "name": "code-review",
       "displayName": "AEM Code Review",
-      "description": "Review AEM EDS code for quality, performance, accessibility, and best practices — self-review or PR review",
+      "description": "Review AEM AEM code for quality, performance, accessibility, and best practices — self-review or PR review",
       "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "code-review" },
       "affinity": { "apps": ["aem"], "tasks": ["build-websites"], "role": ["developer"], "purpose": ["work"] }
     },
