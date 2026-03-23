@@ -1,0 +1,235 @@
+import Foundation
+import AppKit
+import os
+
+private let log = Logger(subsystem: "com.slicc.sliccstart", category: "SliccProcess")
+
+@Observable
+final class SliccProcess {
+    /// All running instances keyed by AppTarget.id
+    private var processes: [String: Process] = [:]
+    /// App paths launched via --electron, keyed by AppTarget.id
+    private var launchedAppPaths: [String: String] = [:]
+    private(set) var runningTargets: Set<String> = []
+
+    var resolvedSliccDir: String { sliccDir }
+    private var sliccDir: String {
+        // Priority 1: SLICC_DIR env var (development override)
+        if let env = ProcessInfo.processInfo.environment["SLICC_DIR"], !env.isEmpty {
+            log.info("sliccDir: using SLICC_DIR env = \(env, privacy: .public)")
+            return env
+        }
+        // Priority 2: Bundled inside the .app (production)
+        if let bundled = SliccBootstrapper.bundledSliccDir {
+            log.info("sliccDir: using bundled = \(bundled, privacy: .public)")
+            return bundled
+        }
+        // Priority 3: Walk up from bundle location (development — running from source tree)
+        let parentDir = (Bundle.main.bundlePath as NSString).deletingLastPathComponent
+        var dir = parentDir
+        for _ in 0..<5 {
+            if FileManager.default.fileExists(atPath: dir + "/package.json") &&
+               FileManager.default.fileExists(atPath: dir + "/src/cli/index.ts") {
+                log.info("sliccDir: found source tree at \(dir, privacy: .public)")
+                return dir
+            }
+            dir = (dir as NSString).deletingLastPathComponent
+        }
+        log.warning("sliccDir: falling back to default \(SliccBootstrapper.defaultSliccDir)")
+        return SliccBootstrapper.defaultSliccDir
+    }
+
+    /// Port allocation: browser gets 5710, electron apps get 5711, 5712, ...
+    /// CDP ports: browser gets 9222, electron apps get 9223, 9224, ...
+    private static let browserPort: UInt16 = 5710
+    private static let browserCdpPort: UInt16 = 9222
+    private static let electronBasePort: UInt16 = 5711
+    private static let electronBaseCdpPort: UInt16 = 9223
+
+    func isRunning(_ target: AppTarget) -> Bool {
+        runningTargets.contains(target.id)
+    }
+
+    // MARK: - Browser mode
+
+    func launchStandalone(_ browser: AppTarget) throws {
+        if isRunning(browser) {
+            log.info("launchStandalone: \(browser.name) already running")
+            return
+        }
+        guard !Self.isPortInUse(Self.browserPort) else { throw LaunchError.portInUse(Self.browserPort) }
+        log.info("launchStandalone: \(browser.name, privacy: .public) on port \(Self.browserPort)")
+        try spawn(target: browser, extraArgs: ["--cdp-port=\(Self.browserCdpPort)"], env: [
+            "CHROME_PATH": browser.executablePath,
+            "PORT": "\(Self.browserPort)",
+        ])
+    }
+
+    // MARK: - Electron mode (each app gets its own port)
+
+    func launchWithElectronApp(_ app: AppTarget) throws {
+        if isRunning(app) {
+            log.info("launchWithElectronApp: \(app.name) already running")
+            return
+        }
+        let (port, cdpPort) = nextElectronPorts()
+        guard !Self.isPortInUse(port) else { throw LaunchError.portInUse(port) }
+        log.info("launchWithElectronApp: \(app.name, privacy: .public) on port \(port), cdp \(cdpPort)")
+        launchedAppPaths[app.id] = app.path
+        try spawn(target: app, extraArgs: [
+            "--electron", app.path,
+            "--kill",
+            "--cdp-port=\(cdpPort)",
+        ], env: ["PORT": "\(port)"])
+    }
+
+    /// Find the next available port pair for an Electron app.
+    private func nextElectronPorts() -> (port: UInt16, cdpPort: UInt16) {
+        let electronCount = UInt16(processes.count) // offset from base
+        for i: UInt16 in 0...20 {
+            let port = Self.electronBasePort + electronCount + i
+            let cdpPort = Self.electronBaseCdpPort + electronCount + i
+            if !Self.isPortInUse(port) && !Self.isPortInUse(cdpPort) {
+                return (port, cdpPort)
+            }
+        }
+        // Fallback — try anyway
+        let port = Self.electronBasePort + electronCount
+        return (port, Self.electronBaseCdpPort + electronCount)
+    }
+
+    // MARK: - Guided extension install
+
+    func guidedInstallExtension(chromePath: String) throws {
+        let stablePath = NSHomeDirectory() + "/.slicc/extension"
+        let sourcePath = sliccDir + "/dist/extension"
+        let fm = FileManager.default
+
+        if fm.fileExists(atPath: stablePath) {
+            try fm.removeItem(atPath: stablePath)
+        }
+        try fm.copyItem(atPath: sourcePath, toPath: stablePath)
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: chromePath)
+        proc.arguments = ["chrome://extensions"]
+        try proc.run()
+
+        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: stablePath)
+    }
+
+    // MARK: - Lifecycle
+
+    func stop(_ target: AppTarget) {
+        log.info("stop: \(target.name)")
+        processes[target.id]?.terminate()
+        processes.removeValue(forKey: target.id)
+        terminateLaunchedApp(id: target.id)
+        runningTargets.remove(target.id)
+    }
+
+    func stopAll() {
+        log.info("stopAll: terminating \(self.processes.count) processes")
+        for (_, proc) in processes { proc.terminate() }
+        processes.removeAll()
+        for (id, _) in launchedAppPaths {
+            terminateLaunchedApp(id: id)
+        }
+        runningTargets.removeAll()
+    }
+
+    /// Terminate a launched Electron/WebView2 app by its bundle path.
+    private func terminateLaunchedApp(id: String) {
+        guard let appPath = launchedAppPaths.removeValue(forKey: id) else { return }
+        let appURL = URL(fileURLWithPath: appPath)
+        let running = NSWorkspace.shared.runningApplications.filter { $0.bundleURL == appURL }
+        for app in running {
+            log.info("terminating app: \(app.localizedName ?? appPath, privacy: .public)")
+            app.terminate()
+        }
+    }
+
+    // MARK: - Private
+
+    private func spawn(target: AppTarget, extraArgs: [String], env: [String: String]) throws {
+        guard let nodePath = SliccBootstrapper.findNode() else {
+            log.error("spawn: Node.js not found")
+            throw LaunchError.nodeNotFound
+        }
+        let entryScript = sliccDir + "/dist/cli/index.js"
+        let allArgs = [entryScript] + extraArgs
+        log.info("spawn: \(nodePath, privacy: .public) \(allArgs.joined(separator: " "), privacy: .public)")
+        log.info("spawn: cwd = \(self.sliccDir, privacy: .public)")
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: nodePath)
+        proc.arguments = allArgs
+        proc.environment = ProcessInfo.processInfo.environment.merging(env) { _, new in new }
+        proc.currentDirectoryURL = URL(fileURLWithPath: sliccDir)
+
+        // Capture stdout/stderr and forward to os.log
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        proc.standardOutput = stdoutPipe
+        proc.standardError = stderrPipe
+
+        stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let line = String(data: data, encoding: .utf8) else { return }
+            for l in line.split(separator: "\n", omittingEmptySubsequences: true) {
+                log.info("[node/\(target.name, privacy: .public)] \(l, privacy: .public)")
+            }
+        }
+        stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let line = String(data: data, encoding: .utf8) else { return }
+            for l in line.split(separator: "\n", omittingEmptySubsequences: true) {
+                log.error("[node/\(target.name, privacy: .public)] \(l, privacy: .public)")
+            }
+        }
+
+        proc.terminationHandler = { [weak self] p in
+            log.info("process exited: \(target.name, privacy: .public) code=\(p.terminationStatus)")
+            // Clean up pipe handlers
+            stdoutPipe.fileHandleForReading.readabilityHandler = nil
+            stderrPipe.fileHandleForReading.readabilityHandler = nil
+            DispatchQueue.main.async {
+                self?.processes.removeValue(forKey: target.id)
+                self?.runningTargets.remove(target.id)
+            }
+        }
+        try proc.run()
+        log.info("spawn: pid=\(proc.processIdentifier) for \(target.name, privacy: .public)")
+        processes[target.id] = proc
+        runningTargets.insert(target.id)
+    }
+
+    private static func isPortInUse(_ port: UInt16) -> Bool {
+        let sock = socket(AF_INET, SOCK_STREAM, 0)
+        guard sock >= 0 else { return false }
+        defer { close(sock) }
+
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = port.bigEndian
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+
+        let result = withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
+                connect(sock, sockPtr, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        return result == 0
+    }
+
+    enum LaunchError: LocalizedError {
+        case nodeNotFound
+        case portInUse(UInt16)
+        var errorDescription: String? {
+            switch self {
+            case .nodeNotFound: return "Node.js not found"
+            case .portInUse(let port): return "Port \(port) is already in use."
+            }
+        }
+    }
+}

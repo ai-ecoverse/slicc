@@ -379,7 +379,7 @@ export class ScoopSwitcher {
         align-items: center;
         justify-content: center;
         padding: 0 4px;
-        border: 2px solid var(--s2-bg-layer-1, #1a1a2e);
+        border: 2px solid var(--s2-bg-layer-1);
         pointer-events: none;
         line-height: 1;
       }

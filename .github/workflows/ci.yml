@@ -6,7 +6,7 @@ on:
 
 jobs:
   ci:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -26,3 +26,8 @@ jobs:
             echo "::error::CLAUDE.md exceeds 30,000 character limit ($chars chars). Please condense it."
             exit 1
           fi
+      - name: Build Sliccstart
+        run: |
+          cd sliccstart
+          chmod +x build-app.sh
+          ./build-app.sh

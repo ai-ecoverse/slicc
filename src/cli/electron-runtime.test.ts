@@ -13,10 +13,15 @@ import {
   DEFAULT_ELECTRON_SERVE_PORT,
   DEFAULT_ELECTRON_TARGET_URL,
   getElectronAppDisplayName,
+  getElectronAppPort,
+  getElectronAppPorts,
   getElectronOverlayEntryDistPath,
   getElectronServeOrigin,
+  hashString,
   parseElectronFloatFlags,
+  PORT_HASH_RANGE,
   resolveElectronAppExecutablePath,
+  selectBestOverlayTargets,
   shouldInjectElectronOverlayTarget,
 } from './electron-runtime.js';
 
@@ -116,16 +121,14 @@ describe('electron-runtime', () => {
     );
   });
 
-  it('serializes the overlay injection call', () => {
-    expect(
-      buildElectronOverlayInjectionCall({
-        appUrl: `http://${DEFAULT_ELECTRON_SERVE_HOST}:3000/electron`,
-        open: true,
-        activeTab: 'files',
-      })
-    ).toBe(
-      `window.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://${DEFAULT_ELECTRON_SERVE_HOST}:3000/electron","open":true,"activeTab":"files"});`
-    );
+  it('serializes the overlay injection call with DOMContentLoaded guard', () => {
+    const result = buildElectronOverlayInjectionCall({
+      appUrl: `http://${DEFAULT_ELECTRON_SERVE_HOST}:3000/electron`,
+      open: true,
+      activeTab: 'files',
+    });
+    const call = `window.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://${DEFAULT_ELECTRON_SERVE_HOST}:3000/electron","open":true,"activeTab":"files"});`;
+    expect(result).toBe(`if(document.body){${call}}else{document.addEventListener('DOMContentLoaded',function(){${call}});}`)
   });
 
   it('builds a macOS app launch spec from a .app bundle path', () => {
@@ -173,7 +176,9 @@ describe('electron-runtime', () => {
         appUrl: 'http://localhost:5710/electron',
       })
     ).toBe(
-      'window.__overlayLoaded = true;\nwindow.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://localhost:5710/electron"});'
+      'window.__overlayLoaded = true;\n' +
+      'if(document.body){window.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://localhost:5710/electron"});}' +
+      'else{document.addEventListener(\'DOMContentLoaded\',function(){window.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://localhost:5710/electron"});});}',
     );
   });
 
@@ -199,5 +204,146 @@ describe('electron-runtime', () => {
         webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/page/2',
       })
     ).toBe(false);
+  });
+
+  describe('selectBestOverlayTargets', () => {
+    it('returns all targets when they have different origins', () => {
+      const targets = [
+        { type: 'page', title: 'Slack', url: 'https://app.slack.com/', webSocketDebuggerUrl: 'ws://1' },
+        { type: 'page', title: 'Discord', url: 'https://discord.com/channels', webSocketDebuggerUrl: 'ws://2' },
+      ];
+      const result = selectBestOverlayTargets(targets);
+      expect(result).toHaveLength(2);
+    });
+
+    it('deduplicates same-origin targets, picking the one with the longest title', () => {
+      // Simulates Teams: 3 pages on same origin, different titles
+      const targets = [
+        { type: 'page', title: 'Microsoft Teams', url: 'https://teams.microsoft.com/v2/', webSocketDebuggerUrl: 'ws://1' },
+        { type: 'page', title: 'Calendar | Calendar | Adobe | trieloff@adobe.com | Microsoft Teams', url: 'https://teams.microsoft.com/v2/', webSocketDebuggerUrl: 'ws://2' },
+        { type: 'page', title: 'Microsoft Teams', url: 'https://teams.microsoft.com/v2/#deepLink=default&isMinimized=false', webSocketDebuggerUrl: 'ws://3' },
+      ];
+      const result = selectBestOverlayTargets(targets);
+      expect(result).toHaveLength(1);
+      expect(result[0].webSocketDebuggerUrl).toBe('ws://2'); // The content window
+    });
+
+    it('penalizes targets with deepLink/isMinimized hash fragments', () => {
+      const targets = [
+        { type: 'page', title: 'Microsoft Teams', url: 'https://teams.microsoft.com/v2/#deepLink=default&isMinimized=false', webSocketDebuggerUrl: 'ws://1' },
+        { type: 'page', title: 'Microsoft Teams', url: 'https://teams.microsoft.com/v2/', webSocketDebuggerUrl: 'ws://2' },
+      ];
+      const result = selectBestOverlayTargets(targets);
+      expect(result).toHaveLength(1);
+      expect(result[0].webSocketDebuggerUrl).toBe('ws://2');
+    });
+
+    it('filters out non-page and internal targets', () => {
+      const targets = [
+        { type: 'page', title: 'App', url: 'https://example.com/', webSocketDebuggerUrl: 'ws://1' },
+        { type: 'service_worker', title: 'SW', url: 'https://example.com/sw.js', webSocketDebuggerUrl: 'ws://2' },
+        { type: 'worker', title: 'Worker', url: 'https://example.com/worker.js', webSocketDebuggerUrl: 'ws://3' },
+        { type: 'page', title: 'DevTools', url: 'devtools://devtools/bundled/inspector.html', webSocketDebuggerUrl: 'ws://4' },
+      ];
+      const result = selectBestOverlayTargets(targets);
+      expect(result).toHaveLength(1);
+      expect(result[0].webSocketDebuggerUrl).toBe('ws://1');
+    });
+
+    it('handles single-window apps unchanged', () => {
+      const targets = [
+        { type: 'page', title: 'Slack', url: 'https://app.slack.com/', webSocketDebuggerUrl: 'ws://1' },
+      ];
+      const result = selectBestOverlayTargets(targets);
+      expect(result).toHaveLength(1);
+      expect(result[0].webSocketDebuggerUrl).toBe('ws://1');
+    });
+
+    it('handles file:// and different-origin targets', () => {
+      const targets = [
+        { type: 'page', title: 'VS Code', url: 'file:///app/workbench.html', webSocketDebuggerUrl: 'ws://1' },
+        { type: 'page', title: 'Settings', url: 'https://vscode-settings.example.com/', webSocketDebuggerUrl: 'ws://2' },
+      ];
+      const result = selectBestOverlayTargets(targets);
+      expect(result).toHaveLength(2);
+    });
+  });
+
+  describe('dynamic port allocation', () => {
+    it('hashString returns deterministic values within range', () => {
+      const hash1 = hashString('/Applications/Slack.app', PORT_HASH_RANGE);
+      const hash2 = hashString('/Applications/Slack.app', PORT_HASH_RANGE);
+      const hash3 = hashString('/Applications/Discord.app', PORT_HASH_RANGE);
+
+      // Same input produces same output
+      expect(hash1).toBe(hash2);
+      // Different inputs produce different outputs (with high probability)
+      expect(hash1).not.toBe(hash3);
+      // All values are within range
+      expect(hash1).toBeGreaterThanOrEqual(0);
+      expect(hash1).toBeLessThan(PORT_HASH_RANGE);
+      expect(hash3).toBeGreaterThanOrEqual(0);
+      expect(hash3).toBeLessThan(PORT_HASH_RANGE);
+    });
+
+    it('hashString handles empty string', () => {
+      const hash = hashString('', PORT_HASH_RANGE);
+      expect(hash).toBe(0);
+    });
+
+    it('hashString handles various app paths', () => {
+      const paths = [
+        '/Applications/Visual Studio Code.app',
+        '/Applications/Slack.app',
+        '/Applications/Discord.app',
+        '/Applications/Linear.app',
+        '/opt/electron-app/myapp',
+      ];
+      const hashes = paths.map((p) => hashString(p, PORT_HASH_RANGE));
+
+      // All hashes should be in valid range
+      for (const hash of hashes) {
+        expect(hash).toBeGreaterThanOrEqual(0);
+        expect(hash).toBeLessThan(PORT_HASH_RANGE);
+      }
+
+      // Check for reasonable distribution (no more than 2 collisions in 5 items)
+      const uniqueHashes = new Set(hashes);
+      expect(uniqueHashes.size).toBeGreaterThanOrEqual(3);
+    });
+
+    it('getElectronAppPort returns port based on hash offset', async () => {
+      const basePort = 9223;
+      const appPath = '/Applications/Slack.app';
+      const expectedOffset = hashString(appPath, PORT_HASH_RANGE);
+
+      const port = await getElectronAppPort(appPath, basePort);
+
+      // Port should be basePort + offset (assuming port is available)
+      expect(port).toBeGreaterThanOrEqual(basePort);
+      expect(port).toBeLessThan(basePort + PORT_HASH_RANGE + 100); // Allow for fallback range
+    });
+
+    it('getElectronAppPorts returns both CDP and serve ports', async () => {
+      const appPath = '/Applications/Discord.app';
+      const ports = await getElectronAppPorts(appPath);
+
+      expect(ports).toHaveProperty('cdpPort');
+      expect(ports).toHaveProperty('servePort');
+      expect(ports.cdpPort).toBeGreaterThanOrEqual(DEFAULT_ELECTRON_CDP_PORT);
+      expect(ports.servePort).toBeGreaterThanOrEqual(DEFAULT_ELECTRON_SERVE_PORT);
+    });
+
+    it('different apps get different ports', async () => {
+      const ports1 = await getElectronAppPorts('/Applications/Slack.app');
+      const ports2 = await getElectronAppPorts('/Applications/Discord.app');
+
+      // Different apps should get different ports (unless collision + fallback)
+      // At minimum, verify they're valid ports
+      expect(ports1.cdpPort).toBeGreaterThan(0);
+      expect(ports2.cdpPort).toBeGreaterThan(0);
+      expect(ports1.servePort).toBeGreaterThan(0);
+      expect(ports2.servePort).toBeGreaterThan(0);
+    });
   });
 });

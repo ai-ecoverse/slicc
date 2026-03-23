@@ -12,6 +12,7 @@ import {
   ElectronOverlayInjector,
   launchElectronApp,
 } from './electron-controller.js';
+import { getElectronAppPorts } from './electron-runtime.js';
 import {
   buildChromeLaunchArgs,
   ensureQaProfileScaffold,
@@ -326,17 +327,34 @@ const PREFERRED_HMR_PORT = 24679;
 async function main() {
   // Resolve available ports before anything else — serve port must be known
   // before Chrome launches (the launch URL contains it).
-  const SERVE_PORT = await findAvailablePort(PREFERRED_SERVE_PORT);
-  // For Chrome CDP, we pass port 0 to let Chrome pick any available port,
-  // then parse the actual port from its stderr. This avoids race conditions
-  // where Node's port probe succeeds but Chrome still can't bind the port.
-  // Electron mode keeps the preferred port (external CDP, not launched by us).
-  const REQUESTED_CDP_PORT = ELECTRON_MODE ? PREFERRED_CDP_PORT : 0;
-  let CDP_PORT = ELECTRON_MODE ? PREFERRED_CDP_PORT : 0;
+  let SERVE_PORT: number;
+  let CDP_PORT: number;
+  let REQUESTED_CDP_PORT: number;
+  let usingDynamicElectronPorts = false;
+
+  if (ELECTRON_MODE && ELECTRON_APP && !RUNTIME_FLAGS.explicitCdpPort) {
+    // Dynamic port allocation for Electron apps (hash-based with fallback)
+    const ports = await getElectronAppPorts(ELECTRON_APP);
+    CDP_PORT = ports.cdpPort;
+    SERVE_PORT = ports.servePort;
+    REQUESTED_CDP_PORT = CDP_PORT;
+    usingDynamicElectronPorts = true;
+  } else {
+    SERVE_PORT = await findAvailablePort(PREFERRED_SERVE_PORT);
+    // For Chrome CDP, we pass port 0 to let Chrome pick any available port,
+    // then parse the actual port from its stderr. This avoids race conditions
+    // where Node's port probe succeeds but Chrome still can't bind the port.
+    // Electron mode keeps the preferred port (external CDP, not launched by us).
+    REQUESTED_CDP_PORT = ELECTRON_MODE ? PREFERRED_CDP_PORT : 0;
+    CDP_PORT = ELECTRON_MODE ? PREFERRED_CDP_PORT : 0;
+  }
+
   const HMR_PORT = DEV_MODE ? await findAvailablePort(PREFERRED_HMR_PORT) : PREFERRED_HMR_PORT;
   const SERVE_ORIGIN = `http://localhost:${SERVE_PORT}`;
 
-  if (SERVE_PORT !== PREFERRED_SERVE_PORT) {
+  if (usingDynamicElectronPorts) {
+    console.log(`Dynamic port allocation for Electron app: CDP=${CDP_PORT}, serve=${SERVE_PORT}`);
+  } else if (SERVE_PORT !== PREFERRED_SERVE_PORT) {
     console.log(`Port ${PREFERRED_SERVE_PORT} in use, serving on port ${SERVE_PORT}`);
   }
   if (DEV_MODE && HMR_PORT !== PREFERRED_HMR_PORT) {
@@ -381,14 +399,55 @@ async function main() {
       launchedBrowserLabel = displayName;
       pipeChildOutput(child, 'electron-app');
 
+      // Track when app exits - quick exits before CDP connects indicate a problem
+      let cdpConnected = false;
+      let exitCode: number | null = null;
+      let exitResolve: (() => void) | null = null;
+      const exitPromise = new Promise<void>((resolve) => {
+        exitResolve = resolve;
+      });
+
       child.on('exit', (code) => {
+        exitCode = code;
+        exitResolve?.();
         if (shuttingDown) return;
-        console.log(`${displayName} exited with code ${code}`);
-        process.exit(0);
+        if (cdpConnected) {
+          // Normal exit after we connected
+          console.log(`${displayName} exited with code ${code}`);
+          process.exit(0);
+        }
+        // If CDP not yet connected, don't exit - let waitForCDP handle it
       });
 
       console.log(`Waiting for ${displayName} CDP on port ${CDP_PORT}...`);
-      await waitForCDP(CDP_PORT, 40, 500);
+      try {
+        // Race between CDP connection and app exit
+        await Promise.race([
+          waitForCDP(CDP_PORT, 40, 500).then(() => {
+            cdpConnected = true;
+          }),
+          exitPromise.then(() => {
+            if (!cdpConnected) {
+              throw new Error('app-exited');
+            }
+          }),
+        ]);
+      } catch (err) {
+        // Check if app exited quickly (likely due to disabled remote debugging fuse)
+        if (exitCode !== null) {
+          console.error(
+            `\n${displayName} exited with code ${exitCode} before remote debugging was available.`
+          );
+          console.error(
+            'This usually means the app has disabled remote debugging (EnableNodeCliInspectArguments fuse).'
+          );
+          console.error(
+            'Some Electron apps disable this for security. Check if there is a developer/debug build available.\n'
+          );
+          process.exit(1);
+        }
+        throw new Error(`Could not connect to ${displayName} CDP on port ${CDP_PORT}`);
+      }
       console.log(`Connected to ${displayName} on CDP port ${CDP_PORT}`);
 
       // Auto-discover leader's tray join URL when another instance runs on the preferred port.
@@ -502,6 +561,7 @@ async function main() {
     launchedBrowserProcess = spawn(chromePath, chromeArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,
+      env: { ...process.env, GOOGLE_CRASHPAD_DISABLE: '1' },
     });
     launchedBrowserLabel = chromeProfile.displayName;
 

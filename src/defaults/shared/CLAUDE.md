@@ -257,6 +257,10 @@ Skills in native `/workspace/skills/` extend your capabilities, and SLICC also d
 - **The `commands` output** lists discovered scripts under "User scripts (.jsh)"
 - **Top-level `await`**: `.jsh` files are wrapped in an `AsyncFunction` by the executor, so `await` works at the top level. All `fs.*` methods are async — **always `await` them**. Do not use `.then()` because the function body exits before promise chains resolve, causing callbacks to silently produce no output.
 
+## Onboarding
+
+When you receive a `[Sprinkle Event: welcome]` with `onboarding-complete`, read `/workspace/skills/welcome/SKILL.md` and follow its instructions.
+
 ## Memory
 
 When you learn something important:

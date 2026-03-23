@@ -136,6 +136,23 @@ export default tseslint.config(
     },
   },
   {
+    // Electron overlay files - ban innerHTML for Trusted Types compatibility
+    files: ['src/ui/electron-overlay.ts', 'src/ui/electron-overlay-entry.ts'],
+    rules: {
+      'no-restricted-properties': [
+        'error',
+        {
+          property: 'innerHTML',
+          message: 'innerHTML is banned in electron-overlay files due to Trusted Types (VS Code CSP). Use createElement + textContent instead.',
+        },
+        {
+          property: 'outerHTML',
+          message: 'outerHTML is banned in electron-overlay files due to Trusted Types (VS Code CSP). Use createElement + textContent instead.',
+        },
+      ],
+    },
+  },
+  {
     // Ignore patterns
     ignores: [
       'dist/**',

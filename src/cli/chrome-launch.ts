@@ -140,6 +140,8 @@ export function buildChromeLaunchArgs(options: {
     `--remote-debugging-port=${options.cdpPort}`,
     '--no-first-run',
     '--no-default-browser-check',
+    '--disable-crash-reporter',
+    '--disable-background-tracing',
     `--user-data-dir=${options.profile.userDataDir}`,
   ];
 

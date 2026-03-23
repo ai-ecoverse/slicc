@@ -1,4 +1,13 @@
-![slicc - A felt-toy of an anthropomorphized ice cream cone, with pink and mint-green colors for the scoop, googly eyes, an oversized mouth and tongue sticking out](hero-banner.png)
+![A screenshot of a macOS desktop](screenshots/full-desktop.png)
+
+You are looking at a macOS desktop, with four windows running:
+
+1. Google Chrome, running SLICC as a web application. It shows a Welcome page, a hidden tab with meeting preparation notes that were created by the agent, and a terminal, showing that the operating system is of the unlikely `Mozilla/5.0` kind. What?
+2. Slack, the desktop app. Err. Slack the Electron app. It has on overlay injected, showing the ice cream logo asking to join a tray. If you do this, Slack can be remote-controlled by your agent. What the?
+3. Sliccstart, the desktop app. It's an actual macOS app, but one that controls browsers, and browsers that prentend to be native apps alike. What the ice cream?
+4. An image of an antropomorphized ice cream cone made out of felt and googly eyes. It's sticking out its tongue, half in astonishment, half in anticipation. What the ice cream truck?
+
+If this scares, confuses, or excites you, keep reading.
 
 # slicc — Self-Licking Ice Cream Cone
 
@@ -8,13 +17,14 @@
 
 SLICC runs in a browser and controls the browser it runs in. It combines a shell, files, browser automation, and multi-agent delegation so you can do real work from one workspace — coding, web automation, authenticated app tasks, and the weird in-between jobs that do not fit neatly inside a chat panel. SLICC can orchestrate multiple browsers, and even some apps through telepathy, making it a powerful hub for your digital work.
 
-- Launch it from the CLI today (we also have a Chrome extension)
+- Head over to [releases](https://github.com/ai-ecoverse/slicc/releases) and grab the latest `.dmg` file. No Windows or Linux UI yet
+- Or launch it from the CLI today (we also have a Chrome extension)
 - Connect other browser windows or Electron apps
 - Install skills that teach it how to perform challenging tasks
 - Give it practical tools models already know how to use
 - Delegate parallel work so tasks get done faster
 
-> Status: active working prototype. The CLI is the easiest way in today; and we have submitted the extension to Chrome Web Store.
+> Status: active working prototype. The macOS app is the easiest way in today; and we have submitted the extension to Chrome Web Store.
 
 ## Why SLICC is different
 

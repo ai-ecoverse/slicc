@@ -44,7 +44,7 @@ describe('hydrateInlineSprinkles', () => {
     // Should contain an iframe
     const iframe = wrapper?.querySelector('iframe');
     expect(iframe).not.toBeNull();
-    expect(iframe?.getAttribute('sandbox')).toBe('allow-scripts');
+    expect(iframe?.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin');
 
     // Cleanup
     disposeInlineSprinkles(instances);

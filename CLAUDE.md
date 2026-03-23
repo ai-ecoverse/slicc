@@ -63,7 +63,7 @@ Console logs from the browser are forwarded to the CLI terminal for debugging.
 - **Cone**: Main agent ("sliccy"). Full filesystem access, all tools. Code: `orchestrator.ts`, `RegisteredScoop` with `isCone: true`.
 - **Scoops**: Isolated sub-agents with sandboxed filesystem (`/scoops/{name}/` + `/shared/`), own shell/conversation. Tools: `scoop_scoop`, `feed_scoop`, `drop_scoop`. Code: `scoop-context.ts`, `restricted-fs.ts`.
 - **Licks**: External events triggering scoops (webhooks, cron tasks). Code: `LickManager`, `LickEvent`. Shell: `webhook`, `crontask`.
-- **Floats**: Runtime environments — CLI (`src/cli/`), Extension (`src/extension/`), Electron (`src/cli/electron-main.ts`), Cloud (planned).
+- **Floats**: Runtime environments — CLI (`src/cli/`), Extension (`src/extension/`), Electron (`src/cli/electron-main.ts`), Sliccstart (`sliccstart/` — native macOS launcher), Cloud (planned).
 
 Use ice cream terms over technical jargon (e.g., "feed_scoop" not "delegate_to_scoop").
 
@@ -156,6 +156,17 @@ Every change MUST satisfy three gates: **tests**, **docs**, and **verification**
 ### Tests
 
 New pure-logic code MUST have colocated tests (`foo.test.ts`). See `docs/testing.md`.
+
+### Visual Sprinkle Testing
+Static HTML test pages in `test/visual/` for visually verifying sprinkle components and built-in sprinkles. Served by Vite dev server at `http://localhost:5173/test/visual/`.
+
+```bash
+npm run dev   # then open:
+# http://localhost:5173/test/visual/sprinkle-builtin-test.html  — all 11 built-in sprinkles with TAVEX mock data
+# http://localhost:5173/test/visual/sprinkle-production-test.html — component showcase with production CSS
+```
+
+**Architecture**: Test pages fetch production CSS from `/index.html` at runtime via DOMParser, so they always reflect the real theme. Built-in sprinkles load in iframes; the bridge + mock data are injected via `iframe.onload` + `contentWindow.eval()` (inline `<script>` in srcdoc does not execute reliably). Mock data is based on the TAVEX pharma page and covers all 10 data-driven sprinkle DATA CONTRACTs.
 
 ### Documentation
 
