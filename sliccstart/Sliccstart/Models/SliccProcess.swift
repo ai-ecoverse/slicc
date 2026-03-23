@@ -103,7 +103,11 @@ final class SliccProcess {
     static let chromeWebStoreURL = "https://chromewebstore.google.com/detail/slicc/akggccfpkleihhemkkikggopnifgelbk"
 
     func openChromeWebStore() {
-        if let url = URL(string: Self.chromeWebStoreURL) {
+        guard let url = URL(string: Self.chromeWebStoreURL) else { return }
+        // Try to open in Chrome specifically (CWS only works in Chrome)
+        if let chromeURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.google.Chrome") {
+            NSWorkspace.shared.open([url], withApplicationAt: chromeURL, configuration: NSWorkspace.OpenConfiguration())
+        } else {
             NSWorkspace.shared.open(url)
         }
     }
