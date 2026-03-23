@@ -548,6 +548,22 @@ export class Layout {
       popover.appendChild(clearAllBtn);
     }
 
+    // Clear chat
+    const sepChat = document.createElement('div');
+    sepChat.className = 'avatar-popover__separator';
+    popover.appendChild(sepChat);
+
+    const clearChatBtn = document.createElement('button');
+    clearChatBtn.className = 'avatar-popover__item avatar-popover__item--danger';
+    clearChatBtn.textContent = 'Clear chat';
+    clearChatBtn.addEventListener('click', async () => {
+      popover.remove();
+      await this.panels?.chat?.clearSession();
+      await this.onClearChat?.();
+      location.reload();
+    });
+    popover.appendChild(clearChatBtn);
+
     // Account settings link
     const sep2 = document.createElement('div');
     sep2.className = 'avatar-popover__separator';
