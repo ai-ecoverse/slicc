@@ -5,7 +5,7 @@ import {
   setVoiceAutoSend,
   getVoiceLang,
   setVoiceLang,
-} from './voice-input.js';
+} from '../../packages/webapp/src/ui/voice-input.js';
 
 // Mock SpeechRecognition
 class MockSpeechRecognition {

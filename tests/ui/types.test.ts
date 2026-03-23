@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import type { AgentHandle, AgentEvent, ChatMessage, ToolCall, Session } from './types.js';
+import type { AgentHandle, AgentEvent, ChatMessage, ToolCall, Session } from '../../packages/webapp/src/ui/types.js';
 
 describe('UI types', () => {
   it('AgentHandle contract is well-formed', () => {
