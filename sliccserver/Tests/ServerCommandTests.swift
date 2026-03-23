@@ -132,4 +132,31 @@ final class ServerCommandTests: XCTestCase {
 
         XCTAssertEqual(root, "/Applications/Sliccstart.app/Contents/Resources/slicc/dist/ui")
     }
+
+    func testResolveServePortUsesPortEnvironmentAsPreferredPort() async throws {
+        let resolvedPort = try await ServerCommand.resolveServePort(from: ["PORT": "5710"]) { startingFrom in
+            XCTAssertEqual(startingFrom, 5710)
+            return 5800
+        }
+
+        XCTAssertEqual(resolvedPort, 5800)
+    }
+
+    func testResolveServePortFallsBackToResolverWhenPortEnvironmentMissing() async throws {
+        let resolvedPort = try await ServerCommand.resolveServePort(from: [:]) { startingFrom in
+            XCTAssertEqual(startingFrom, ServerCommand.defaultServePort)
+            return 5800
+        }
+
+        XCTAssertEqual(resolvedPort, 5800)
+    }
+
+    func testResolveServePortFallsBackToResolverWhenPortEnvironmentInvalid() async throws {
+        let resolvedPort = try await ServerCommand.resolveServePort(from: ["PORT": "70000"]) { startingFrom in
+            XCTAssertEqual(startingFrom, ServerCommand.defaultServePort)
+            return 5801
+        }
+
+        XCTAssertEqual(resolvedPort, 5801)
+    }
 }
