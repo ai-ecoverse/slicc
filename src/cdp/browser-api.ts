@@ -121,10 +121,15 @@ export class BrowserAPI {
     const local = await this.listPages();
     if (!this.trayTargetProvider) return local;
 
+    const shouldDeduplicateLeaderTargets = !this.remoteTargetInfo;
     const localIds = new Set(local.map((p) => p.targetId));
     const remoteEntries = this.trayTargetProvider.getTargets();
     const remote: PageInfo[] = remoteEntries
-      .filter((t) => !(t.runtimeId === 'leader' && localIds.has(t.localTargetId)))
+      .filter(
+        (t) =>
+          !shouldDeduplicateLeaderTargets ||
+          !(t.runtimeId === 'leader' && localIds.has(t.localTargetId))
+      )
       .map((t) => ({
         targetId: t.targetId,
         title: t.title,

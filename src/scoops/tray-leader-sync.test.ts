@@ -446,6 +446,35 @@ describe('LeaderSyncManager', () => {
       ]);
     });
 
+    it('broadcastTargetRegistry filters out stale remote targets for disconnected followers', () => {
+      const { manager } = createManager();
+      const ch1 = new FakeChannel();
+      const ch2 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+      manager.addFollower('b2', ch2);
+
+      manager.setLocalTargets([{ targetId: 'lt1', title: 'Leader Tab', url: 'https://leader.com' }]);
+      ch1.simulateMessage({
+        type: 'targets.advertise',
+        targets: [{ targetId: 'tab1', title: 'Remote Tab', url: 'https://example.com' }],
+        runtimeId: 'follower-b1',
+      });
+
+      ch2.sent.length = 0;
+      (manager as any).followers.delete('b1');
+
+      manager.broadcastTargetRegistry();
+
+      const sent = ch2.parseSent();
+      expect(sent).toHaveLength(1);
+      expect(sent[0].type).toBe('targets.registry');
+      if (sent[0].type === 'targets.registry') {
+        expect(sent[0].targets).toEqual([
+          expect.objectContaining({ runtimeId: 'leader', localTargetId: 'lt1' }),
+        ]);
+      }
+    });
+
     it('new follower gets current registry on connect', () => {
       const { manager } = createManager();
 
@@ -466,6 +495,34 @@ describe('LeaderSyncManager', () => {
       if (sent[1].type === 'targets.registry') {
         expect(sent[1].targets).toHaveLength(1);
         expect(sent[1].targets[0].runtimeId).toBe('leader');
+      }
+    });
+
+    it('new follower initial registry excludes stale disconnected runtimes', () => {
+      const { manager } = createManager();
+      const ch1 = new FakeChannel();
+      manager.addFollower('b1', ch1);
+
+      manager.setLocalTargets([{ targetId: 'lt1', title: 'Leader Tab', url: 'https://leader.com' }]);
+      ch1.simulateMessage({
+        type: 'targets.advertise',
+        targets: [{ targetId: 'tab1', title: 'Remote Tab', url: 'https://example.com' }],
+        runtimeId: 'follower-b1',
+      });
+
+      (manager as any).followers.delete('b1');
+
+      const ch2 = new FakeChannel();
+      manager.addFollower('b2', ch2);
+
+      const sent = ch2.parseSent();
+      expect(sent).toHaveLength(2);
+      expect(sent[0].type).toBe('snapshot');
+      expect(sent[1].type).toBe('targets.registry');
+      if (sent[1].type === 'targets.registry') {
+        expect(sent[1].targets).toEqual([
+          expect.objectContaining({ runtimeId: 'leader', localTargetId: 'lt1' }),
+        ]);
       }
     });
 
