@@ -184,6 +184,23 @@ actor CDPProxy {
         }
     }
 
+    func shutdown() async {
+        self.chromeConnectionTask?.cancel()
+        self.chromeConnectionTask = nil
+        self.chromeConnectionID = nil
+        self.messageBuffer = nil
+
+        if let chromeSocket = self.chromeSocket {
+            await chromeSocket.close()
+            self.chromeSocket = nil
+        }
+
+        if let activeClient = self.activeClient {
+            await activeClient.close(.goingAway, "Server shutting down")
+            self.activeClient = nil
+        }
+    }
+
     private func cdpURL(for port: Int) async throws -> String {
         if self.cachedCDPPort == port, let cachedCDPURL {
             return cachedCDPURL
@@ -307,9 +324,8 @@ actor CDPProxy {
         onMessage: @escaping @Sendable (ProxyMessage) async -> Void,
         onEvent: @escaping @Sendable (ChromeSocketEvent) async -> Void
     ) async throws -> ChromeSocketHandle {
-        let socketCapture = LockedValue<WebSocket>()
+        let (socketStream, socketContinuation) = AsyncStream<WebSocket>.makeStream()
         let connectFuture = WebSocket.connect(to: url, on: HTTPClient.defaultEventLoopGroup) { socket in
-            socketCapture.set(socket)
             socket.onText { _, text in
                 Task {
                     await onMessage(.text(text))
@@ -331,10 +347,20 @@ actor CDPProxy {
                     }
                 }
             }
+
+            socketContinuation.yield(socket)
+            socketContinuation.finish()
         }
 
-        try await connectFuture.get()
-        guard let socket = socketCapture.get() else {
+        do {
+            try await connectFuture.get()
+        } catch {
+            socketContinuation.finish()
+            throw error
+        }
+
+        var iterator = socketStream.makeAsyncIterator()
+        guard let socket = await iterator.next() else {
             throw CDPProxyError.discoveryFailed("WebSocket upgrade completed without a Chrome socket")
         }
 
@@ -426,25 +452,4 @@ enum CDPProxyError: Error, Sendable, LocalizedError {
 
 private struct CDPVersionPayload: Decodable, Sendable {
     let webSocketDebuggerUrl: String
-}
-
-private final class LockedValue<Value>: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: Value?
-
-    init(_ value: Value? = nil) {
-        self.value = value
-    }
-
-    func set(_ value: Value) {
-        self.lock.lock()
-        self.value = value
-        self.lock.unlock()
-    }
-
-    func get() -> Value? {
-        self.lock.lock()
-        defer { self.lock.unlock() }
-        return self.value
-    }
 }
