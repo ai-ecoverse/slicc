@@ -108,6 +108,7 @@ public actor LickSystem {
     }
 
     private var clients: Set<WebSocketClient> = []
+    private var activeClient: WebSocketClient?
     private var pendingRequests: [String: PendingRequest] = [:]
     private var requestCounter: Int = 0
 
@@ -115,14 +116,18 @@ public actor LickSystem {
 
     public func addClient(_ ws: WebSocketClient) {
         self.clients.insert(ws)
+        self.activeClient = ws
     }
 
     public func removeClient(_ ws: WebSocketClient) {
         self.clients.remove(ws)
+        if self.activeClient?.id == ws.id {
+            self.activeClient = self.clients.first
+        }
     }
 
     public func sendRequest(type: String, data: JSONObject = [:], timeout: TimeInterval = 5) async throws -> JSONValue {
-        guard let client = self.clients.first else {
+        guard let client = self.activeClient else {
             throw LickSystemError.noBrowserConnected
         }
 
@@ -153,8 +158,8 @@ public actor LickSystem {
                 do {
                     try await client.send(text: message)
                 } catch {
-                    self.removeClient(client)
-                    self.failPendingRequest(requestId, error: error)
+                    await self.removeClient(client)
+                    await self.failPendingRequest(requestId, error: error)
                 }
             }
         }
@@ -172,7 +177,7 @@ public actor LickSystem {
                 do {
                     try await client.send(text: message)
                 } catch {
-                    self.removeClient(client)
+                    await self.removeClient(client)
                 }
             }
         }
@@ -199,6 +204,7 @@ public actor LickSystem {
     public func shutdown() async {
         let clients = Array(self.clients)
         self.clients.removeAll()
+        self.activeClient = nil
 
         let pendingRequests = self.pendingRequests
         self.pendingRequests.removeAll()

@@ -84,6 +84,8 @@ final class SliccBootstrapper {
 
         let parentDir = (sliccDir as NSString).deletingLastPathComponent
         let candidates = [
+            sliccDir + "/sliccserver/.build/release/slicc-server",
+            parentDir + "/sliccserver/.build/release/slicc-server",
             sliccDir + "/sliccserver/.build/debug/slicc-server",
             parentDir + "/sliccserver/.build/debug/slicc-server",
         ]
@@ -146,6 +148,9 @@ final class SliccBootstrapper {
         progressMessage = "Building SLICC..."
         try runSync(npmPath, ["run", "build"], cwd: sliccDir)
 
+        progressMessage = "Building native server..."
+        try runSync("/usr/bin/swift", ["build", "-c", "release"], cwd: Self.serverProjectDirectory(sliccDir: sliccDir))
+
         progressMessage = "Ready!"
     }
 
@@ -170,6 +175,9 @@ final class SliccBootstrapper {
 
         progressMessage = "Building..."
         try runSync(npmPath, ["run", "build"], cwd: sliccDir)
+
+        progressMessage = "Building native server..."
+        try runSync("/usr/bin/swift", ["build", "-c", "release"], cwd: Self.serverProjectDirectory(sliccDir: sliccDir))
 
         progressMessage = "Updated!"
     }
@@ -229,6 +237,14 @@ final class SliccBootstrapper {
         guard let resourcePath else { return nil }
         let path = resourcePath + "/slicc"
         return FileManager.default.fileExists(atPath: path) ? path : nil
+    }
+
+    private static func serverProjectDirectory(sliccDir: String) -> String {
+        let repoLocal = sliccDir + "/sliccserver"
+        if FileManager.default.fileExists(atPath: repoLocal) {
+            return repoLocal
+        }
+        return (sliccDir as NSString).deletingLastPathComponent + "/sliccserver"
     }
 
     private static func resolveBundledServerBinaryPath(resourcePath: String?) -> String? {

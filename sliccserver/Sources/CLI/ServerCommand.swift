@@ -56,6 +56,9 @@ struct ServerCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Auto-submit prompt")
     var prompt: String?
 
+    @Option(name: .long, help: "Path to static UI files (dist/ui)")
+    var staticRoot: String?
+
     mutating func run() async throws {
         let config = ServerConfig.resolve(from: self)
         let logLevel = Self.loggerLevel(from: config.logLevel)
@@ -69,7 +72,8 @@ struct ServerCommand: AsyncParsableCommand {
 
         let logger = Logger(label: "slicc.server")
         let fileLogger = FileLogger(label: "slicc.server", configuration: fileLoggerConfiguration)
-        let repositoryRoot = Self.repositoryRoot()
+        let currentDirectoryPath = FileManager.default.currentDirectoryPath
+        let repositoryRoot = Self.repositoryRoot(currentDirectoryPath: currentDirectoryPath)
         let environment = ProcessInfo.processInfo.environment
 
         let servePort = try await findAvailablePort(startingFrom: Self.preferredServePort(from: environment))
@@ -119,7 +123,7 @@ struct ServerCommand: AsyncParsableCommand {
                     launchUrl: launchURL,
                     userDataDir: userDataDir,
                     executablePath: chromeExecutable,
-                    currentDirectoryPath: repositoryRoot.path
+                    currentDirectoryPath: currentDirectoryPath
                 )
             )
             browserProcess = launchedChrome.process
@@ -131,7 +135,7 @@ struct ServerCommand: AsyncParsableCommand {
         let cdpProxy = CDPProxy(logger: Logger(label: "slicc.cdp-proxy"))
         let httpClient = HTTPClient(eventLoopGroupProvider: .singleton)
         let startupLatch = ServerStartupLatch()
-        let staticRoot = repositoryRoot.appendingPathComponent("dist/ui", isDirectory: true).path
+        let staticRoot = Self.resolveStaticRoot(explicitStaticRoot: config.staticRoot, repositoryRoot: repositoryRoot)
 
         let router = Router(context: BasicRequestContext.self)
         router.middlewares.add(RequestLogger<BasicRequestContext>(logger: Logger(label: "slicc.request")))
@@ -256,6 +260,7 @@ struct ServerConfig: Sendable, Equatable {
     let logDir: String?
     let logDirectoryURL: URL?
     let prompt: String?
+    let staticRoot: String?
 
     static func resolve(from command: ServerCommand) -> ServerConfig {
         resolve(from: command, arguments: ProcessInfo.processInfo.arguments)
@@ -272,6 +277,7 @@ struct ServerConfig: Sendable, Equatable {
         let normalizedJoinUrl = normalizedText(command.joinUrl)
         let normalizedLogDir = normalizedText(command.logDir)
         let normalizedPrompt = normalizedText(command.prompt)
+        let normalizedStaticRoot = normalizedText(command.staticRoot)
 
         let positiveCdpPort = command.cdpPort > 0 ? command.cdpPort : defaultCliCdpPort
         let resolvedElectron = command.electron || normalizedElectronApp != nil
@@ -300,7 +306,8 @@ struct ServerConfig: Sendable, Equatable {
             logLevel: normalizedLogLevel(command.logLevel),
             logDir: normalizedLogDir,
             logDirectoryURL: resolvedFileURL(from: normalizedLogDir),
-            prompt: normalizedPrompt
+            prompt: normalizedPrompt,
+            staticRoot: normalizedStaticRoot
         )
     }
 
@@ -370,7 +377,7 @@ private actor ServiceGroupServerController: GracefulShutdownServer {
     }
 }
 
-private extension ServerCommand {
+extension ServerCommand {
     static func loggerLevel(from value: String) -> Logger.Level {
         switch value {
         case "debug":
@@ -393,12 +400,46 @@ private extension ServerCommand {
         return port
     }
 
-    static func repositoryRoot(filePath: String = #filePath) -> URL {
-        URL(fileURLWithPath: filePath)
+    static func repositoryRoot(
+        bundlePath: String = Bundle.main.bundlePath,
+        resourcePath: String? = Bundle.main.resourcePath,
+        currentDirectoryPath: String = FileManager.default.currentDirectoryPath,
+        fileManager: FileManager = .default,
+        filePath: String = #filePath
+    ) -> URL {
+        if bundlePath.hasSuffix(".app"), let resourcePath {
+            return URL(fileURLWithPath: resourcePath, isDirectory: true)
+                .appendingPathComponent("slicc", isDirectory: true)
+        }
+
+        let cwdRoot = URL(fileURLWithPath: currentDirectoryPath, isDirectory: true)
+        let cwdStaticRoot = cwdRoot.appendingPathComponent("dist/ui", isDirectory: true).path
+        if fileManager.fileExists(atPath: cwdStaticRoot) {
+            return cwdRoot
+        }
+
+        return URL(fileURLWithPath: filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
+    }
+
+    static func resolveStaticRoot(
+        explicitStaticRoot: String?,
+        repositoryRoot: URL,
+        bundlePath: String = Bundle.main.bundlePath,
+        resourcePath: String? = Bundle.main.resourcePath
+    ) -> String {
+        if let explicitStaticRoot {
+            return explicitStaticRoot
+        }
+
+        if bundlePath.hasSuffix(".app"), let resourcePath {
+            return resourcePath + "/slicc/dist/ui"
+        }
+
+        return repositoryRoot.appendingPathComponent("dist/ui", isDirectory: true).path
     }
 
     static func resolveBrowserLaunchURL(

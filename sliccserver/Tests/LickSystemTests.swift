@@ -122,4 +122,43 @@ final class LickSystemTests: XCTestCase {
         XCTAssertEqual(try LickSystem.decode(firstMessages[0])["id"], .string("abc123"))
         XCTAssertEqual(try LickSystem.decode(secondMessages[0])["id"], .string("abc123"))
     }
+
+    func testSendRequestUsesMostRecentlyAddedClient() async throws {
+        let lickSystem = LickSystem()
+        let firstRecorder = MessageRecorder()
+        let secondRecorder = MessageRecorder()
+
+        await lickSystem.addClient(WebSocketClient { text in
+            await firstRecorder.append(text)
+        })
+        let activeClient = WebSocketClient { text in
+            await secondRecorder.append(text)
+        }
+        await lickSystem.addClient(activeClient)
+
+        let responseTask = Task {
+            try await lickSystem.sendRequest(type: "tray_status", timeout: 1)
+        }
+
+        let requestText = try await secondRecorder.waitForMessage()
+        let request = try LickSystem.decode(requestText)
+        XCTAssertEqual(request["type"], .string("tray_status"))
+
+        do {
+            _ = try await firstRecorder.waitForMessage(timeout: 0.1)
+            XCTFail("Expected only the active client to receive the request")
+        } catch TestTimeoutError.timedOut {
+            // Expected.
+        }
+
+        let requestId = try XCTUnwrap(request["requestId"]?.stringValue)
+        await lickSystem.handleMessage(text: try LickSystem.encode([
+            "type": .string("response"),
+            "requestId": .string(requestId),
+            "data": .object([:])
+        ]))
+
+        let response = try await responseTask.value
+        XCTAssertEqual(response, .object([:]))
+    }
 }
