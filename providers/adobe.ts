@@ -297,20 +297,108 @@ export const config: ProviderConfig = {
   },
 };
 
-// ── Token access ────────────────────────────────────────────────────
+// ── Token access + silent renewal ────────────────────────────────────
+
+/** Track in-flight renewal to avoid duplicate attempts. */
+let renewalInProgress: Promise<string | null> | null = null;
 
 async function getValidAccessToken(): Promise<string> {
   const account = getAdobeAccount();
   if (!account?.accessToken) throw new Error('Not logged in to Adobe — please log in first');
-  const expired = !account.tokenExpiresAt || Date.now() > account.tokenExpiresAt - 60000;
-  if (expired) throw new Error('Adobe session expired — please log in again');
-  return account.accessToken;
+
+  // Token still valid (with 60s buffer)
+  const expiresIn = (account.tokenExpiresAt ?? 0) - Date.now();
+  if (expiresIn > 60000) return account.accessToken;
+
+  // Token expired or about to expire — try silent renewal
+  console.log('[adobe] Token expired or expiring soon, attempting silent renewal...');
+  try {
+    const newToken = await silentRenewToken();
+    if (newToken) return newToken;
+  } catch (err) {
+    console.warn('[adobe] Silent renewal failed:', err instanceof Error ? err.message : String(err));
+  }
+
+  // Re-read account — another concurrent call may have renewed it
+  const refreshedAccount = getAdobeAccount();
+  const refreshedExpiresIn = (refreshedAccount?.tokenExpiresAt ?? 0) - Date.now();
+  if (refreshedExpiresIn > 0 && refreshedAccount?.accessToken) return refreshedAccount.accessToken;
+
+  throw new Error('Adobe session expired — please log in again');
 }
 
 function isTokenExpired(): boolean {
   const account = getAdobeAccount();
   if (!account?.tokenExpiresAt) return true;
   return Date.now() > account.tokenExpiresAt - 60000;
+}
+
+/**
+ * Silent token renewal — re-authenticates with IMS without user interaction.
+ *
+ * Uses the same OAuthLauncher as normal login (handles CLI popup, extension
+ * chrome.identity, and Electron relay), but appends prompt=none to the
+ * authorize URL so IMS skips the login UI and returns a new token if the
+ * session cookie is still valid.
+ *
+ * Returns the new access token on success, or null if renewal failed.
+ */
+async function silentRenewToken(): Promise<string | null> {
+  // Deduplicate concurrent renewal attempts
+  if (renewalInProgress) return renewalInProgress;
+
+  renewalInProgress = (async () => {
+    try {
+      const proxyEndpoint = getProxyEndpoint();
+      const proxyConfig = await fetchProxyConfig(proxyEndpoint);
+      const clientId = resolveClientId(proxyConfig);
+      const scopes = resolveScopes(proxyConfig);
+      const imsEnv = resolveImsEnvironment(proxyConfig);
+
+      const redirectUri = isExtension
+        ? (adobeConfig.extensionRedirectUri ?? `https://${(chrome as any).runtime.id}.chromiumapp.org/`)
+        : (adobeConfig.redirectUri ?? `${window.location.origin}/auth/callback`);
+
+      const params = new URLSearchParams({
+        client_id: clientId,
+        scope: scopes,
+        response_type: 'token',
+        redirect_uri: redirectUri,
+        prompt: 'none', // Silent — no UI, relies on existing IMS session
+      });
+      const authorizeUrl = `${imsHost(imsEnv)}/ims/authorize/v2?${params}`;
+
+      // Use the same launcher as normal login — handles CLI, extension, and Electron
+      const { createOAuthLauncher } = await import('../src/providers/oauth-service.js');
+      const launcher = createOAuthLauncher();
+      const redirectUrl = await launcher(authorizeUrl);
+
+      if (!redirectUrl) return null;
+
+      const tokenInfo = extractTokenFromUrl(redirectUrl);
+      if (!tokenInfo) return null;
+
+      // Save the renewed token
+      const account = getAdobeAccount();
+      saveOAuthAccount({
+        providerId: 'adobe',
+        accessToken: tokenInfo.accessToken,
+        tokenExpiresAt: Date.now() + tokenInfo.expiresIn * 1000,
+        userName: account?.userName,
+        userAvatar: account?.userAvatar,
+      });
+
+      console.log('[adobe] Token renewed silently');
+      return tokenInfo.accessToken;
+    } catch (err) {
+      console.warn('[adobe] Silent renewal error:', err instanceof Error ? err.message : String(err));
+      return null;
+    } finally {
+      renewalInProgress = null;
+    }
+  })();
+
+  return renewalInProgress;
 }
 
 // ── Stream functions (reuse pi-ai's Anthropic provider) ─────────────
