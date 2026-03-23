@@ -11,6 +11,8 @@
 
 import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/index.js';
+import { discoverSkills } from '../skills/index.js';
+import type { SkillDiscoverySource } from '../skills/index.js';
 
 const log = createLogger('skills');
 
@@ -95,6 +97,25 @@ export interface Skill {
   path: string;
 }
 
+function dedupeSkillsByName<T extends Skill>(skills: T[]): T[] {
+  const winners = new Map<string, T>();
+
+  for (const skill of skills) {
+    if (winners.has(skill.metadata.name)) {
+      log.debug('Skipped shadowed runtime skill', {
+        name: skill.metadata.name,
+        path: skill.path,
+        winnerPath: winners.get(skill.metadata.name)?.path,
+      });
+      continue;
+    }
+
+    winners.set(skill.metadata.name, skill);
+  }
+
+  return Array.from(winners.values());
+}
+
 /**
  * Parse YAML frontmatter from a skill file
  */
@@ -136,36 +157,68 @@ function parseFrontmatter(content: string): { metadata: Partial<SkillMetadata>; 
  * Load skills from a directory in VirtualFS
  */
 export async function loadSkills(fs: VirtualFS, skillsDir: string): Promise<Skill[]> {
+  const discoveredSkills = await loadDiscoveredSkills(fs, skillsDir);
+  const standaloneSkills = await loadStandaloneMarkdownSkills(fs, skillsDir);
+  const nativeDiscoveredSkills = discoveredSkills.filter((skill) => skill.source === 'native');
+  const compatibilityDiscoveredSkills = discoveredSkills.filter((skill) => skill.source !== 'native');
+  const skills = dedupeSkillsByName([
+    ...nativeDiscoveredSkills,
+    ...standaloneSkills,
+    ...compatibilityDiscoveredSkills,
+  ]);
+
+  log.info('Skills loaded', { count: skills.length, dir: skillsDir });
+  return skills;
+}
+
+type LoadedDiscoveredSkill = Skill & { source: SkillDiscoverySource };
+
+async function loadDiscoveredSkills(fs: VirtualFS, skillsDir: string): Promise<LoadedDiscoveredSkill[]> {
+  const discovered = await discoverSkills(fs, skillsDir);
+  const skills: LoadedDiscoveredSkill[] = [];
+
+  for (const discoveredSkill of discovered) {
+    if (!discoveredSkill.skillFilePath) continue;
+
+    try {
+      const text = await fs.readTextFile(discoveredSkill.skillFilePath);
+      const { metadata, body } = parseFrontmatter(text);
+      const name = metadata.name || discoveredSkill.name;
+
+      skills.push({
+        metadata: {
+          name,
+          description: metadata.description || discoveredSkill.manifest.description || '',
+          allowedTools: metadata.allowedTools,
+        },
+        content: body,
+        path: discoveredSkill.skillFilePath,
+        source: discoveredSkill.source,
+      });
+      log.debug('Loaded discovered skill', {
+        name,
+        path: discoveredSkill.skillFilePath,
+        source: discoveredSkill.source,
+      });
+    } catch {
+      log.debug('Failed to load discovered skill', {
+        name: discoveredSkill.name,
+        path: discoveredSkill.skillFilePath,
+      });
+    }
+  }
+
+  return skills;
+}
+
+async function loadStandaloneMarkdownSkills(fs: VirtualFS, skillsDir: string): Promise<Skill[]> {
   const skills: Skill[] = [];
 
   try {
     const entries = await fs.readDir(skillsDir);
 
     for (const entry of entries) {
-      if (entry.type === 'directory') {
-        // Skills can be in subdirectories with SKILL.md
-        const skillPath = `${skillsDir}/${entry.name}/SKILL.md`;
-        try {
-          const content = await fs.readFile(skillPath, { encoding: 'utf-8' });
-          const text = typeof content === 'string' ? content : new TextDecoder().decode(content);
-          const { metadata, body } = parseFrontmatter(text);
-
-          if (metadata.name) {
-            skills.push({
-              metadata: {
-                name: metadata.name,
-                description: metadata.description || '',
-                allowedTools: metadata.allowedTools,
-              },
-              content: body,
-              path: skillPath,
-            });
-            log.debug('Loaded skill', { name: metadata.name, path: skillPath });
-          }
-        } catch {
-          // SKILL.md doesn't exist in this directory
-        }
-      } else if (entry.name.endsWith('.md')) {
+      if (entry.type === 'file' && entry.name.endsWith('.md')) {
         // Skills can also be standalone .md files
         const skillPath = `${skillsDir}/${entry.name}`;
         try {
@@ -185,7 +238,7 @@ export async function loadSkills(fs: VirtualFS, skillsDir: string): Promise<Skil
             content: body,
             path: skillPath,
           });
-          log.debug('Loaded skill', { name, path: skillPath });
+          log.debug('Loaded standalone skill', { name, path: skillPath });
         } catch {
           // Skip unreadable files
         }
@@ -193,10 +246,9 @@ export async function loadSkills(fs: VirtualFS, skillsDir: string): Promise<Skil
     }
   } catch (err) {
     // Skills directory doesn't exist yet
-    log.debug('Skills directory not found', { dir: skillsDir });
+    log.debug('Standalone skills directory not found', { dir: skillsDir });
   }
 
-  log.info('Skills loaded', { count: skills.length, dir: skillsDir });
   return skills;
 }
 

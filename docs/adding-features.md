@@ -681,7 +681,7 @@ Always provide:
 
 **How it works**:
 
-Skills are auto-discovered from `/workspace/skills/` during scoop initialization. Headers shown by default; full content loaded on demand.
+Skills are auto-discovered from native `/workspace/skills/` plus any accessible `.agents/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md` directories anywhere in the reachable VFS during scoop initialization. Headers are shown by default; full content is loaded on demand.
 
 **With executable script**:
 
@@ -701,7 +701,9 @@ console.log(`Processing: ${args.join(', ')}`);
 
 **Discovery**:
 
-During `ScoopContext.init()`, skills are loaded from `/workspace/skills/` (cone) or `/scoops/{folder}/workspace/skills/` (scoop). The agent's system prompt includes skill headers and can request full content via `read_file`.
+During `ScoopContext.init()`, SLICC starts from `/workspace/skills/` (cone) or `/scoops/{folder}/workspace/skills/` (scoop), then also considers any accessible `.agents/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md` roots elsewhere in that runtime's reachable VFS. The agent's system prompt includes discovered skill headers and can request full content via `read_file`.
+
+Only native `/workspace/skills/` entries are install-managed by SLICC. Compatibility-discovered `.agents` and `.claude` skills remain read-only unless you explicitly copy/package them into the native skills directory.
 
 **Test pattern**:
 
