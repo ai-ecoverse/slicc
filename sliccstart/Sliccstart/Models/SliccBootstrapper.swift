@@ -114,9 +114,6 @@ final class SliccBootstrapper {
         progressMessage = "Building SLICC..."
         try runSync(npmPath, ["run", "build"], cwd: sliccDir)
 
-        progressMessage = "Building extension..."
-        try runSync(npmPath, ["run", "build:extension"], cwd: sliccDir)
-
         progressMessage = "Ready!"
     }
 
@@ -141,9 +138,6 @@ final class SliccBootstrapper {
 
         progressMessage = "Building..."
         try runSync(npmPath, ["run", "build"], cwd: sliccDir)
-
-        progressMessage = "Building extension..."
-        try runSync(npmPath, ["run", "build:extension"], cwd: sliccDir)
 
         progressMessage = "Updated!"
     }

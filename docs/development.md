@@ -172,6 +172,8 @@ Use these before relying on CI:
 
 ## Extension Testing Steps
 
+> **End users** install the extension from the [Chrome Web Store](https://chromewebstore.google.com/detail/slicc/akggccfpkleihhemkkikggopnifgelbk). The steps below are for **development** only — loading a local build for testing.
+
 If you want a reusable browser profile instead of re-loading the unpacked extension by hand every time, run `npm run qa:setup` once and use `npm run qa:extension` for subsequent launches.
 
 1. **Build extension bundle**
