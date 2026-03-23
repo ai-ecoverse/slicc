@@ -71,6 +71,111 @@ final class CDPProxyTests: XCTestCase {
         XCTAssertEqual(firstClient.sentTextsSnapshot(), [])
         XCTAssertEqual(secondClient.sentTextsSnapshot(), ["{\"id\":7}"])
     }
+
+    func testChromeCloseReconnectsAndFlushesBufferedMessages() async throws {
+        let reconnectGate = AsyncGate()
+        let harness = ChromeConnectorHarness()
+        let proxy = CDPProxy(
+            logger: Logger(label: "test.cdp-proxy"),
+            discoverer: { _ in "ws://127.0.0.1:9222/devtools/browser/test" },
+            chromeConnector: { url, onMessage, onEvent in
+                try await harness.connect(url: url, onMessage: onMessage, onEvent: onEvent)
+            },
+            reconnectDelayNanoseconds: 0,
+            sleep: { _ in await reconnectGate.wait() }
+        )
+        let client = ClientRecorder()
+
+        try await proxy.preWarm(cdpPort: 9222)
+        await proxy.addClient(client.handle)
+
+        await harness.emitEvent(.closed("code=Optional(messageTooLarge)"))
+        await proxy.receive(.text("{\"id\":24,\"method\":\"Target.getTargets\"}"), from: client.handle.id)
+
+        XCTAssertEqual(harness.connectCountSnapshot(), 1)
+        XCTAssertEqual(harness.sentTextsSnapshot(), [])
+
+        await reconnectGate.open()
+        for _ in 0..<200 {
+            if harness.connectCountSnapshot() >= 2 {
+                break
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        XCTAssertEqual(harness.connectCountSnapshot(), 2)
+        XCTAssertEqual(harness.sentTextsSnapshot(), ["{\"id\":24,\"method\":\"Target.getTargets\"}"])
+    }
+
+    func testChromeReconnectRediscoversCDPURL() async throws {
+        let reconnectGate = AsyncGate()
+        let discoverer = DiscovererHarness(urls: [
+            "ws://127.0.0.1:9222/devtools/browser/first",
+            "ws://127.0.0.1:9222/devtools/browser/second",
+        ])
+        let harness = ChromeConnectorHarness()
+        let proxy = CDPProxy(
+            logger: Logger(label: "test.cdp-proxy"),
+            discoverer: { port in
+                await discoverer.discover(port: port)
+            },
+            chromeConnector: { url, onMessage, onEvent in
+                try await harness.connect(url: url, onMessage: onMessage, onEvent: onEvent)
+            },
+            reconnectDelayNanoseconds: 0,
+            sleep: { _ in await reconnectGate.wait() }
+        )
+        let client = ClientRecorder()
+
+        try await proxy.preWarm(cdpPort: 9222)
+        await proxy.addClient(client.handle)
+
+        await harness.emitEvent(.closed("code=Optional(normalClosure)"))
+        await reconnectGate.open()
+
+        for _ in 0..<200 {
+            if harness.connectCountSnapshot() >= 2 {
+                break
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        XCTAssertEqual(harness.connectedURLsSnapshot(), [
+            "ws://127.0.0.1:9222/devtools/browser/first",
+            "ws://127.0.0.1:9222/devtools/browser/second",
+        ])
+        let discovererCallCount = await discoverer.callCount()
+        XCTAssertEqual(discovererCallCount, 2)
+    }
+
+    func testBufferedMessagesDropOldestWhenBufferReachesLimit() async {
+        let harness = ChromeConnectorHarness(waitForExplicitResume: true)
+        let proxy = CDPProxy(
+            logger: Logger(label: "test.cdp-proxy"),
+            discoverer: { _ in "ws://127.0.0.1:9222/devtools/browser/test" },
+            chromeConnector: { url, onMessage, onEvent in
+                try await harness.connect(url: url, onMessage: onMessage, onEvent: onEvent)
+            }
+        )
+        let client = ClientRecorder()
+
+        await proxy.addClient(client.handle)
+        let prepareTask = Task {
+            await proxy.prepareClientConnection(for: client.handle.id, cdpPort: 9222)
+        }
+
+        for id in 1...1_001 {
+            await proxy.receive(.text("{\"id\":\(id)}"), from: client.handle.id)
+        }
+
+        await harness.resumePendingConnection()
+        await prepareTask.value
+
+        let sentTexts = harness.sentTextsSnapshot()
+        XCTAssertEqual(sentTexts.count, 1_000)
+        XCTAssertEqual(sentTexts.first, "{\"id\":2}")
+        XCTAssertEqual(sentTexts.last, "{\"id\":1001}")
+    }
 }
 
 private final class ClientRecorder: @unchecked Sendable {
@@ -129,9 +234,9 @@ private final class ChromeConnectorHarness: @unchecked Sendable {
     func connect(
         url: String,
         onMessage: @escaping @Sendable (ProxyMessage) async -> Void,
-        onEvent _: @escaping @Sendable (ChromeSocketEvent) async -> Void
+        onEvent: @escaping @Sendable (ChromeSocketEvent) async -> Void
     ) async throws -> ChromeSocketHandle {
-        self.state.recordConnect(url: url, onMessage: onMessage)
+        self.state.recordConnect(url: url, onMessage: onMessage, onEvent: onEvent)
         self.state.setOpen(true)
 
         if let gate {
@@ -160,6 +265,11 @@ private final class ChromeConnectorHarness: @unchecked Sendable {
         await callback?(.text(text))
     }
 
+    func emitEvent(_ event: ChromeSocketEvent) async {
+        let callback = self.eventCallbackSnapshot()
+        await callback?(event)
+    }
+
     func connectCountSnapshot() -> Int {
         self.state.connectCountSnapshot()
     }
@@ -180,6 +290,10 @@ private final class ChromeConnectorHarness: @unchecked Sendable {
         self.state.messageCallbackSnapshot()
     }
 
+    private func eventCallbackSnapshot() -> (@Sendable (ChromeSocketEvent) async -> Void)? {
+        self.state.eventCallbackSnapshot()
+    }
+
     private func isOpenSnapshot() -> Bool {
         self.state.isOpenSnapshot()
     }
@@ -195,13 +309,19 @@ private final class HarnessState: @unchecked Sendable {
     private var connectedURLs: [String] = []
     private var sentTexts: [String] = []
     private var onMessage: (@Sendable (ProxyMessage) async -> Void)?
+    private var onEvent: (@Sendable (ChromeSocketEvent) async -> Void)?
     private var isOpen = true
 
-    func recordConnect(url: String, onMessage: @escaping @Sendable (ProxyMessage) async -> Void) {
+    func recordConnect(
+        url: String,
+        onMessage: @escaping @Sendable (ProxyMessage) async -> Void,
+        onEvent: @escaping @Sendable (ChromeSocketEvent) async -> Void
+    ) {
         self.lock.lock()
         self.connectCount += 1
         self.connectedURLs.append(url)
         self.onMessage = onMessage
+        self.onEvent = onEvent
         self.lock.unlock()
     }
 
@@ -240,6 +360,12 @@ private final class HarnessState: @unchecked Sendable {
         return self.onMessage
     }
 
+    func eventCallbackSnapshot() -> (@Sendable (ChromeSocketEvent) async -> Void)? {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.onEvent
+    }
+
     func isOpenSnapshot() -> Bool {
         self.lock.lock()
         defer { self.lock.unlock() }
@@ -250,6 +376,26 @@ private final class HarnessState: @unchecked Sendable {
         self.lock.lock()
         self.isOpen = isOpen
         self.lock.unlock()
+    }
+}
+
+private actor DiscovererHarness {
+    private let urls: [String]
+    private var nextIndex = 0
+
+    init(urls: [String]) {
+        self.urls = urls
+    }
+
+    func discover(port: Int) -> String {
+        XCTAssertEqual(port, 9222)
+        let index = min(self.nextIndex, self.urls.count - 1)
+        self.nextIndex += 1
+        return self.urls[index]
+    }
+
+    func callCount() -> Int {
+        self.nextIndex
     }
 }
 

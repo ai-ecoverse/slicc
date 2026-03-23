@@ -76,7 +76,7 @@ struct ServerCommand: AsyncParsableCommand {
         let repositoryRoot = Self.repositoryRoot(currentDirectoryPath: currentDirectoryPath)
         let environment = ProcessInfo.processInfo.environment
 
-        let servePort = try await findAvailablePort(startingFrom: Self.preferredServePort(from: environment))
+        let servePort = try await Self.resolveServePort(from: environment)
         var cdpPort = config.serveOnly
             ? config.cdpPort
             : try await findAvailablePort(startingFrom: config.cdpPort)
@@ -153,7 +153,14 @@ struct ServerCommand: AsyncParsableCommand {
 
         let app = Application(
             router: router,
-            server: .http1WebSocketUpgrade(webSocketRouter: wsRouter),
+            server: .http1WebSocketUpgrade(
+                webSocketRouter: wsRouter,
+                // Hummingbird's WebSocket frame size is configured at the server-builder level,
+                // not per route. `/cdp` needs large frames for Chrome payloads, while `/licks-ws`
+                // only carries small local JSON messages, so keeping the higher localhost-only
+                // limit here is wasteful but not a security concern.
+                configuration: .init(maxFrameSize: CDPProxy.defaultMaxMessageSize)
+            ),
             configuration: .init(
                 address: .hostname("127.0.0.1", port: servePort),
                 serverName: "slicc-server"
@@ -378,6 +385,8 @@ private actor ServiceGroupServerController: GracefulShutdownServer {
 }
 
 extension ServerCommand {
+    static let defaultServePort = 5710
+
     static func loggerLevel(from value: String) -> Logger.Level {
         switch value {
         case "debug":
@@ -391,11 +400,19 @@ extension ServerCommand {
         }
     }
 
-    static func preferredServePort(from environment: [String: String]) -> Int {
+    static func resolveServePort(
+        from environment: [String: String],
+        resolveAvailablePort: (Int) async throws -> Int = findAvailablePort(startingFrom:)
+    ) async throws -> Int {
+        let preferredPort = preferredServePort(from: environment) ?? defaultServePort
+        return try await resolveAvailablePort(preferredPort)
+    }
+
+    static func preferredServePort(from environment: [String: String]) -> Int? {
         guard let rawPort = environment["PORT"],
               let port = Int(rawPort.trimmingCharacters(in: .whitespacesAndNewlines)),
-              port > 0 else {
-            return 5710
+              (1...65_535).contains(port) else {
+            return nil
         }
         return port
     }
