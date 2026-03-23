@@ -1639,10 +1639,10 @@ Examples:
           }
 
           const discovered = await skills.getSkillInfo(fs, name);
-          if (discovered && !isInstallManagedSkill(discovered) && discovered.installed) {
+          if (discovered && !isInstallManagedSkill(discovered)) {
             return {
               stdout: '',
-              stderr: formatCompatibilityMutationError('skill', discovered),
+              stderr: `skill: "${name}" is a compatibility skill discovered from ${discovered.sourceRoot} (read-only). Only native /workspace/skills entries can be uninstalled.\n`,
               exitCode: 1,
             };
           }

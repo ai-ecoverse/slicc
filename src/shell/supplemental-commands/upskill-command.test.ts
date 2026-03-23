@@ -102,15 +102,15 @@ describe('skill/upskill command compatibility discovery', () => {
     expect(result.stderr).toContain('/repo/.claude/skills');
   });
 
-  it('skill uninstall keeps the standard not-installed error for compatibility-only skills', async () => {
+  it('skill uninstall refuses compatibility-only skills with a clear message', async () => {
     await fs.mkdir('/repo/.claude/skills/compat-skill', { recursive: true });
     await fs.writeFile('/repo/.claude/skills/compat-skill/SKILL.md', '# Compat Skill');
 
     const result = await createSkillCommand(fs).execute(['uninstall', 'compat-skill'], createMockCtx() as never);
 
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('Skill "compat-skill" is not installed');
-    expect(result.stderr).not.toContain('compatibility-only/read-only');
+    expect(result.stderr).toContain('compatibility skill');
+    expect(result.stderr).toContain('read-only');
   });
 
   it('upskill list uses unified local discovery wording', async () => {
