@@ -100,6 +100,41 @@ describe('ScoopContext session persistence', () => {
     );
   });
 
+  it('persists full agent state, not just current turn event.messages', () => {
+    const mockStore = { load: vi.fn(), save: vi.fn().mockResolvedValue(undefined) } as any;
+    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
+
+    // Set up a mock agent whose state.messages has the full accumulated history
+    const fullHistory = [
+      { role: 'user', content: [{ type: 'text', text: 'first question' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'first answer' }] },
+      { role: 'user', content: [{ type: 'text', text: 'second question' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'second answer' }] },
+    ];
+    const agent = {
+      prompt: vi.fn(),
+      abort: vi.fn(),
+      subscribe: vi.fn(() => () => {}),
+      state: { messages: fullHistory, isStreaming: false },
+    };
+    (ctx as any).agent = agent;
+    (ctx as any).status = 'ready';
+
+    // event.messages only has the current turn (as pi-agent-core emits)
+    const currentTurnOnly = [
+      { role: 'user', content: [{ type: 'text', text: 'second question' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'second answer' }] },
+    ];
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    handler({ type: 'agent_end', messages: currentTurnOnly });
+
+    // Should save the full history from agent.state.messages, not the 2-message event
+    const savedSession = mockStore.save.mock.calls[0][0];
+    expect(savedSession.messages).toBe(fullHistory);
+    expect(savedSession.messages).toHaveLength(4);
+  });
+
   it('preserves original createdAt across saves', () => {
     const originalCreatedAt = 1000000;
     const mockStore = { load: vi.fn(), save: vi.fn().mockResolvedValue(undefined) } as any;

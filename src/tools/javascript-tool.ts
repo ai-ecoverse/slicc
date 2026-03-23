@@ -221,18 +221,6 @@ export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
   function handleFetchProxy(msg: FetchProxyRequest): void {
     (async () => {
       try {
-        const { ensureHostPermission } = await import('../extension/host-permission.js');
-        if (!await ensureHostPermission()) {
-          iframe?.contentWindow?.postMessage(
-            {
-              type: 'fetch_proxy_response',
-              id: msg.id,
-              error: 'Host permission not granted. Grant web access when prompted or configure a provider in settings.',
-            } satisfies FetchProxyResponse,
-            '*',
-          );
-          return;
-        }
         const init: RequestInit = { method: msg.init?.method ?? 'GET', cache: 'no-store' };
         if (msg.init?.headers) init.headers = msg.init.headers;
         if (msg.init?.body && !['GET', 'HEAD'].includes(init.method as string)) {
