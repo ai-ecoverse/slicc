@@ -306,6 +306,16 @@ export class ScoopContext {
     this.agent?.clearMessages();
   }
 
+  /** Get the agent's current in-memory messages (for diagnostics). */
+  getAgentMessages(): AgentMessage[] {
+    return this.agent?.state?.messages ? [...this.agent.state.messages] : [];
+  }
+
+  /** Get the session ID used for agent-sessions DB persistence. */
+  getSessionId(): string {
+    return this.sessionId;
+  }
+
   /** Get the scoop's filesystem */
   getFS(): VirtualFS | RestrictedFS | null {
     return this.fs;
@@ -405,14 +415,17 @@ export class ScoopContext {
       }
 
       case 'agent_end': {
+        // event.messages only contains messages from the current prompt cycle.
+        // For persistence, use the agent's full accumulated state instead.
+        const persistMessages = this.agent?.state?.messages ?? event.messages;
         const messages = event.messages;
 
         // Persist session (fire-and-forget — subscribe callback is sync)
-        if (this.sessionStore && messages.length > 0) {
+        if (this.sessionStore && persistMessages.length > 0) {
           this.sessionStore
             .save({
               id: this.sessionId,
-              messages,
+              messages: persistMessages,
               config: {},
               createdAt: this.sessionCreatedAt || Date.now(),
               updatedAt: Date.now(),
