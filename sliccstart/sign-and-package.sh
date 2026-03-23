@@ -20,6 +20,7 @@ if [ -n "${APPLE_TEAM_ID:-}" ]; then
   echo "Code signing Sliccstart.app with $IDENTITY..."
   # Sign nested executables first, then the outer app
   codesign --force --options runtime --sign "$IDENTITY" --timestamp \
+    --entitlements "$SCRIPT_DIR/node-entitlements.plist" \
     "$APP_DIR/Contents/Resources/node/bin/node"
   codesign --force --options runtime --sign "$IDENTITY" --timestamp "$APP_DIR"
 
