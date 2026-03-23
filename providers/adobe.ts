@@ -193,12 +193,28 @@ export const config: ProviderConfig = {
   isOAuth: true,
 
   getModelIds: () => {
-    // Return models from the most recently fetched proxy config
+    // Prefer the authenticated /v1/models response (has all available models)
+    for (const models of modelsCache.values()) {
+      if (models.length) {
+        const result = models.map(m => ({ id: m.id, name: m.name ?? m.id }));
+        // Persist so models survive page refresh
+        try { localStorage.setItem('slicc-adobe-models', JSON.stringify(result)); } catch {}
+        return result;
+      }
+    }
+    // Fall back to /v1/config response (unauthenticated, may be incomplete)
     for (const config of proxyConfigCache.values()) {
       if (config.models?.length) return config.models;
     }
-    // Default before proxy config is fetched — use alias without date suffix
-    // so pi-ai resolves it from its registry with full model metadata
+    // Fall back to persisted models from a previous session
+    try {
+      const persisted = localStorage.getItem('slicc-adobe-models');
+      if (persisted) {
+        const models = JSON.parse(persisted) as Array<{ id: string; name?: string }>;
+        if (models.length) return models;
+      }
+    } catch {}
+    // Default before any config is fetched
     return [
       { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
     ];
@@ -242,6 +258,12 @@ export const config: ProviderConfig = {
       userName: userProfile.name,
       userAvatar: userProfile.avatar,
     });
+
+    // Fetch the full model list now that we're authenticated.
+    // This populates modelsCache so getModelIds() returns all available models.
+    await getAdobeModels().catch(err =>
+      console.warn('[adobe] Failed to fetch models after login:', err instanceof Error ? err.message : String(err)),
+    );
 
     onSuccess();
   },
