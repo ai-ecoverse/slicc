@@ -271,8 +271,19 @@
       </div>
     </div>
 
-    <!-- Step 4: Name -->
+    <!-- Step 4: Apps -->
     <div class="step" id="s4">
+      <div class="step-heading">What apps do you use most?</div>
+      <div class="step-sub">Pick any that apply</div>
+      <div class="pills" id="appPills"></div>
+      <div class="nav-wrapper">
+        <button class="nav-back" onclick="back(3)">&larr; Back</button>
+        <button class="cta" id="appContinue" onclick="goStep(5)">Continue</button>
+      </div>
+    </div>
+
+    <!-- Step 5: Name -->
+    <div class="step" id="s5">
       <div class="step-heading">What should I call you?</div>
       <div class="prompt-bar">
         <div class="prompt-bar-inner">
@@ -284,7 +295,7 @@
         </div>
       </div>
       <div class="nav-wrapper">
-        <button class="nav-back" onclick="back(3)">&larr; Back</button>
+        <button class="nav-back" onclick="back(4)">&larr; Back</button>
       </div>
     </div>
 
@@ -301,6 +312,7 @@
       <div class="dot"></div>
       <div class="dot"></div>
       <div class="dot"></div>
+      <div class="dot"></div>
     </div>
 
     <!-- Skip — below dots, de-emphasized -->
@@ -312,7 +324,7 @@
 
 <script>
   var cur = 1;
-  var profile = { purpose: '', role: '', roleCustom: '', tasks: [], name: '' };
+  var profile = { purpose: '', role: '', roleCustom: '', tasks: [], apps: [], name: '' };
 
   var PURPOSES = [
     { id: 'work', label: 'Work' },
@@ -374,6 +386,24 @@
     { id: 'not-sure', label: 'Not sure yet' },
   ];
 
+  /* Apps available for installation, with relevance tags */
+  var APPS = [
+    { id: 'aem', label: 'Adobe Experience Manager', relevance: ['build-websites', 'write-content', 'seo', 'content-creator', 'marketer', 'designer'] },
+    { id: 'imessage', label: 'iMessage', relevance: ['personal', 'side-project', 'exploring'] },
+  ];
+
+  function getRelevantApps() {
+    /* Show apps relevant to selected tasks, role, or purpose */
+    var context = profile.tasks.concat([profile.role, profile.purpose]);
+    var scored = APPS.map(function(app) {
+      var score = app.relevance.filter(function(tag) { return context.indexOf(tag) >= 0; }).length;
+      return { app: app, score: score };
+    });
+    /* Show all apps, sorted by relevance */
+    scored.sort(function(a, b) { return b.score - a.score; });
+    return scored.map(function(s) { return s.app; });
+  }
+
   /* ── Build step 1: Purpose pills ── */
   var purposeEl = document.getElementById('purposePills');
   PURPOSES.forEach(function(p) {
@@ -408,6 +438,26 @@
     taskEl.appendChild(btn);
   });
 
+  function buildAppPills() {
+    var appEl = document.getElementById('appPills');
+    appEl.innerHTML = '';
+    var apps = getRelevantApps();
+    apps.forEach(function(a) {
+      var btn = document.createElement('button');
+      btn.className = 'pill';
+      btn.textContent = a.label;
+      btn.dataset.id = a.id;
+      btn.onclick = function() {
+        btn.classList.toggle('selected');
+        profile.apps = [];
+        appEl.querySelectorAll('.pill.selected').forEach(function(el) {
+          profile.apps.push(el.dataset.id);
+        });
+      };
+      appEl.appendChild(btn);
+    });
+  }
+
   function buildRolePills() {
     var roleEl = document.getElementById('rolePills');
     roleEl.innerHTML = '';
@@ -441,11 +491,12 @@
     /* Steps 1 & 2 auto-advance, so they show back (step 2 only) via their own nav.
        Steps 3 & 4 have explicit nav-wrappers. Hide/show skip. */
     var skipRow = document.getElementById('skipRow');
-    skipRow.style.display = (step <= 4) ? '' : 'none';
+    skipRow.style.display = (step <= 5) ? '' : 'none';
   }
 
   function goStep(n) {
     if (n === 2) buildRolePills();
+    if (n === 4) buildAppPills();
     document.getElementById('s' + cur).classList.remove('active');
     document.getElementById('s' + n).classList.add('active');
     cur = n;
@@ -468,7 +519,7 @@
       }
     }
 
-    if (n === 4) {
+    if (n === 5) {
       var nameIn = document.getElementById('nameIn');
       setTimeout(function() { nameIn.focus(); }, 100);
     }
@@ -479,7 +530,7 @@
   }
 
   function skipStep() {
-    if (cur < 4) {
+    if (cur < 5) {
       goStep(cur + 1);
     } else {
       finish();
