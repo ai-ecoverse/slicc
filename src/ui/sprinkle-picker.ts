@@ -30,9 +30,9 @@ export function showSprinklePicker(
   zone: ZoneId,
   options: SprinklePickerOptions
 ): void {
-  // Remove any existing picker
+  // Toggle: if picker is already open, close it and return
   const existing = document.querySelector('.sprinkle-picker');
-  if (existing) existing.remove();
+  if (existing) { existing.remove(); return; }
 
   const { registry, callbacks, getAvailableSprinkles } = options;
 
@@ -52,7 +52,8 @@ export function showSprinklePicker(
 
   const dismiss = () => {
     menu.remove();
-    document.removeEventListener('click', outsideClick);
+    document.removeEventListener('pointerdown', outsideClick, true);
+    document.removeEventListener('keydown', onKey, true);
   };
 
   // Closed built-in panels
@@ -87,14 +88,18 @@ export function showSprinklePicker(
 
   document.body.appendChild(menu);
 
-  // Close on outside click (deferred to avoid catching the triggering click)
-  const outsideClick = (e: MouseEvent) => {
+  // Close on outside click/tap or Escape
+  const outsideClick = (e: Event) => {
     if (!menu.contains(e.target as Node)) {
       dismiss();
     }
   };
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') dismiss();
+  };
   requestAnimationFrame(() => {
-    document.addEventListener('click', outsideClick);
+    document.addEventListener('pointerdown', outsideClick, true);
+    document.addEventListener('keydown', onKey, true);
   });
 }
 
