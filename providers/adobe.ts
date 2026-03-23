@@ -400,40 +400,46 @@ async function silentRenewToken(): Promise<string | null> {
 }
 
 /**
- * CLI mode silent renewal: hidden iframe that loads the authorize URL.
- * IMS redirects back with a new token in the fragment if the session is valid.
+ * CLI mode silent renewal: open a tiny popup with prompt=none.
+ * IMS redirects to /auth/callback which postMessages the token back, then auto-closes.
+ * Same mechanism as normal login, but silent (no IMS UI shown).
  */
 function silentRenewIframe(authorizeUrl: string): Promise<string | null> {
   return new Promise((resolve) => {
-    const iframe = document.createElement('iframe');
-    iframe.style.display = 'none';
+    // Open a tiny popup (IMS needs a real window context for cookies)
+    const popup = window.open(authorizeUrl, '_blank', 'width=1,height=1,left=-100,top=-100');
 
-    const timeout = setTimeout(() => {
-      iframe.remove();
+    let settled = false;
+    const cleanup = () => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener('message', handler);
+      clearTimeout(timer);
+      try { popup?.close(); } catch { /* best-effort */ }
+    };
+
+    const handler = (event: MessageEvent) => {
+      if (event.data?.type !== 'oauth-callback') return;
+      cleanup();
+      if (event.data.error) {
+        resolve(null);
+        return;
+      }
+      resolve(event.data.redirectUrl ?? null);
+    };
+
+    window.addEventListener('message', handler);
+
+    const timer = setTimeout(() => {
+      cleanup();
       resolve(null);
     }, 10000);
 
-    iframe.addEventListener('load', () => {
-      try {
-        // After redirect, the iframe URL contains the token fragment
-        const url = iframe.contentWindow?.location.href;
-        clearTimeout(timeout);
-        iframe.remove();
-        if (url && url.includes('access_token')) {
-          resolve(url);
-        } else {
-          resolve(null);
-        }
-      } catch {
-        // Cross-origin error means IMS redirected to an error page
-        clearTimeout(timeout);
-        iframe.remove();
-        resolve(null);
-      }
-    });
-
-    iframe.src = authorizeUrl;
-    document.body.appendChild(iframe);
+    // If popup was blocked, resolve null immediately
+    if (!popup) {
+      cleanup();
+      resolve(null);
+    }
   });
 }
 
