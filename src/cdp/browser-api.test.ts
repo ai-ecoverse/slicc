@@ -182,6 +182,77 @@ describe('BrowserAPI', () => {
   });
 
   describe('listAllTargets', () => {
+    it('deduplicates leader registry entries that mirror local pages', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        targetInfos: [
+          {
+            targetId: 'tab-1',
+            type: 'page',
+            title: 'Local Page',
+            url: 'https://local.example.com',
+            attached: false,
+          },
+        ],
+      });
+
+      api.setTrayTargetProvider({
+        getTargets: () => [
+          {
+            targetId: 'leader:tab-1',
+            localTargetId: 'tab-1',
+            runtimeId: 'leader',
+            title: 'Local Page',
+            url: 'https://local.example.com',
+            isLocal: false,
+          },
+        ],
+      });
+
+      await expect(api.listAllTargets()).resolves.toEqual([
+        { targetId: 'tab-1', title: 'Local Page', url: 'https://local.example.com' },
+      ]);
+    });
+
+    it('does not deduplicate leader registry entries while attached to a remote target', async () => {
+      const remoteClient = createMockClient();
+
+      api.setTrayTargetProvider({
+        getTargets: () => [
+          {
+            targetId: 'leader:1',
+            localTargetId: '1',
+            runtimeId: 'leader',
+            title: 'Leader Page',
+            url: 'https://leader.example.com',
+            isLocal: false,
+          },
+        ],
+        createRemoteTransport: () => remoteClient as unknown as CDPClient,
+      });
+
+      (remoteClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ sessionId: 'remote-sess' })
+        .mockResolvedValueOnce({})
+        .mockResolvedValueOnce({
+          targetInfos: [
+            {
+              targetId: '1',
+              type: 'page',
+              title: 'Follower Page',
+              url: 'https://follower.example.com',
+              attached: false,
+            },
+          ],
+        });
+
+      await api.attachToPage('follower-1:1');
+
+      await expect(api.listAllTargets()).resolves.toEqual([
+        { targetId: '1', title: 'Follower Page', url: 'https://follower.example.com' },
+        { targetId: 'leader:1', title: 'Leader Page', url: 'https://leader.example.com' },
+      ]);
+    });
+
     it('keeps remote tray targets whose local target ids match a local page', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
         targetInfos: [
