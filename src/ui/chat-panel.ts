@@ -135,9 +135,6 @@ export class ChatPanel {
         isStreaming: false,
       }));
       this.renderMessages();
-      // Re-render model selector now that messages are loaded
-      // (it disables the dropdown when messages exist)
-      this.renderModelSelector();
     }
   }
 
