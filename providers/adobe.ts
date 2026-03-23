@@ -26,6 +26,7 @@ import {
   streamOpenAICompletions,
   streamSimpleOpenAICompletions,
   getModels,
+  getProviders,
 } from '@mariozechner/pi-ai';
 import { AssistantMessageEventStream } from '@mariozechner/pi-ai/dist/utils/event-stream.js';
 import type {
@@ -551,8 +552,11 @@ async function fetchProxyModels(): Promise<Model<Api>[]> {
           proxyMetadataCache.set(pm.id, entry);
         }
 
-        const anthropicModels = getModels('anthropic' as any) as Model<Api>[];
-        const modelMap = new Map(anthropicModels.map(m => [m.id, m]));
+        // Build lookup across all pi-ai providers (Anthropic, Cerebras, OpenAI, etc.)
+        const modelMap = new Map<string, Model<Api>>();
+        for (const p of (getProviders() as string[])) {
+          try { for (const m of (getModels(p as any) as Model<Api>[])) modelMap.set(m.id, m); } catch {}
+        }
         return data.data.map(pm => {
           const base = modelMap.get(pm.id);
           // Determine API type from metadata or default to anthropic

@@ -134,7 +134,7 @@ export function getProviderModels(providerId: string): Model<Api>[] {
     // Providers that use Anthropic's model registry with custom API
     const providerConfig = getProviderConfig(providerId);
     if (providerConfig.getModelIds) {
-      // Provider specifies its own model list — resolve against Anthropic registry
+      // Provider specifies its own model list — resolve against all pi-ai registries
       let modelIds: Array<{ id: string; name?: string }>;
       try {
         modelIds = providerConfig.getModelIds();
@@ -145,8 +145,14 @@ export function getProviderModels(providerId: string): Model<Api>[] {
         });
         return [];
       }
-      const anthropicModels = getModelsDynamic('anthropic');
-      const modelMap = new Map(anthropicModels.map((m) => [m.id, m]));
+      // Build a lookup across all pi-ai providers so we find base models
+      // regardless of their origin (Anthropic, Cerebras, OpenAI, etc.)
+      const modelMap = new Map<string, Model<Api>>();
+      for (const p of (getProviders() as string[])) {
+        try {
+          for (const m of getModelsDynamic(p)) modelMap.set(m.id, m);
+        } catch { /* provider may not have models */ }
+      }
       return modelIds.map((pm) => {
         // Determine API type from metadata: 'openai' or 'anthropic' (default)
         const apiType = (pm as any).api === 'openai' ? 'openai' : 'anthropic';
