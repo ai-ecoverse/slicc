@@ -220,7 +220,7 @@ const log = createLogger('provider-settings');
  * Only populates if no accounts exist yet — never overwrites manual config.
  * The first entry's model becomes the selected model.
  *
- * Copy packages/webapp/providers.example.json to packages/webapp/providers.json and fill in your API keys.
+ * Copy packages/dev-tools/providers.example.json to packages/webapp/providers.json and fill in your API keys.
  */
 export function applyProviderDefaults(defaults: ProviderDefault[] = providerDefaults): void {
   if (defaults.length === 0 || getAccounts().length > 0) return;

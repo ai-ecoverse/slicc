@@ -5,7 +5,7 @@
  * All messages flow through the service worker as a relay.
  */
 
-import type { ScoopTabState } from '../../../packages/webapp/src/scoops/types.js';
+import type { ScoopTabState } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Side Panel → Offscreen (via service worker relay)

@@ -9,7 +9,7 @@
  * - **Proxy** (crontask command): `createLickManagerProxy()` — sends ops, awaits results
  */
 
-import type { LickManager, CronTaskEntry } from '../../../packages/webapp/src/scoops/lick-manager.js';
+import type { LickManager, CronTaskEntry } from './types.js';
 
 const CHANNEL_NAME = 'slicc-lick-manager';
 const TIMEOUT = 5000;

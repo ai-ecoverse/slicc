@@ -1,5 +1,5 @@
 /**
- * NanoClaw Tools - MCP-style tools for messaging and scoop management.
+ * Scoop management tools - MCP-style tools for messaging and scoop management.
  *
  * These provide the same functionality as NanoClaw's IPC-based MCP server,
  * but implemented as direct agent tools.
@@ -9,9 +9,9 @@ import type { ToolDefinition } from '../core/types.js';
 import type { RegisteredScoop } from './types.js';
 import { createLogger } from '../core/logger.js';
 
-const log = createLogger('nanoclaw-tools');
+const log = createLogger('scoop-management-tools');
 
-export interface NanoClawToolsConfig {
+export interface ScoopManagementToolsConfig {
   scoop: RegisteredScoop;
   onSendMessage: (text: string, sender?: string) => void;
   /** Feed a prompt to a specific scoop (cone only). */
@@ -24,9 +24,9 @@ export interface NanoClawToolsConfig {
 }
 
 /**
- * Create NanoClaw-style tools for a scoop context
+ * Create scoop-management tools for a scoop context
  */
-export function createNanoClawTools(config: NanoClawToolsConfig): ToolDefinition[] {
+export function createScoopManagementTools(config: ScoopManagementToolsConfig): ToolDefinition[] {
   const {
     scoop,
     onSendMessage,

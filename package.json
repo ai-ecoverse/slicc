@@ -43,7 +43,7 @@
     "package:release": "node dist/node-server/release-package.js",
     "test": "vitest run --config packages/webapp/vite.config.ts",
     "test-all": "npm run test",
-    "test:server-integration": "vitest run --config test/server-integration/vitest.config.ts",
+    "test:server-integration": "vitest run --config packages/node-server/tests/integration/server/vitest.config.ts",
     "test:watch": "vitest --config packages/webapp/vite.config.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

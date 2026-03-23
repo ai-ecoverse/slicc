@@ -36,7 +36,10 @@ import {
   getSelectedProvider,
 } from '../ui/provider-settings.js';
 import { loadSkills, formatSkillsForPrompt, createDefaultSkills, type Skill } from './skills.js';
-import { createNanoClawTools, type NanoClawToolsConfig } from './nanoclaw-tools.js';
+import {
+  createScoopManagementTools,
+  type ScoopManagementToolsConfig,
+} from './scoop-management-tools.js';
 
 const log = createLogger('scoop-context');
 
@@ -137,8 +140,8 @@ export class ScoopContext {
       // Load skills from VFS
       const skills = await loadSkills(this.fs as VirtualFS, skillsDir);
 
-      // Create NanoClaw tools (send_message, scoop management)
-      const nanoClawToolsConfig: NanoClawToolsConfig = {
+      // Create scoop-management tools (send_message, scoop management)
+      const scoopManagementToolsConfig: ScoopManagementToolsConfig = {
         scoop: this.scoop,
         onSendMessage: this.callbacks.onSendMessage,
         getScoops: this.callbacks.getScoops,
@@ -148,14 +151,14 @@ export class ScoopContext {
         onSetGlobalMemory: this.callbacks.setGlobalMemory,
         getGlobalMemory: this.callbacks.getGlobalMemory,
       };
-      const nanoClawTools = createNanoClawTools(nanoClawToolsConfig);
+      const scoopManagementTools = createScoopManagementTools(scoopManagementToolsConfig);
 
       // Create tools (browser automation and search are now via shell commands through bash)
       const legacyTools = [
         ...createFileTools(this.fs as VirtualFS),
         createBashTool(this.shell),
         createJavaScriptTool(this.fs as VirtualFS),
-        ...nanoClawTools,
+        ...scoopManagementTools,
       ];
       const tools = adaptTools(legacyTools);
 

@@ -350,18 +350,18 @@ describe('my_tool', () => {
 
 ---
 
-## 5. Add a NanoClaw Tool
+## 5. Add a Scoop-Management Tool
 
 **When**: To add a messaging or multi-scoop management tool.
 
 **Files to modify**:
-- Modify: `src/scoops/nanoclaw-tools.ts`
+- Modify: `src/scoops/scoop-management-tools.ts`
 
 **Implementation**:
 
 ```typescript
-// src/scoops/nanoclaw-tools.ts — in createNanoClawTools()
-export function createNanoClawTools(config: NanoClawToolsConfig): ToolDefinition[] {
+// src/scoops/scoop-management-tools.ts — in createScoopManagementTools()
+export function createScoopManagementTools(config: ScoopManagementToolsConfig): ToolDefinition[] {
   const tools: ToolDefinition[] = [];
 
   // ... existing tools (send_message, feed_scoop, etc.) ...
@@ -401,7 +401,7 @@ export function createNanoClawTools(config: NanoClawToolsConfig): ToolDefinition
 **Interface**:
 
 ```typescript
-interface NanoClawToolsConfig {
+interface ScoopManagementToolsConfig {
   scoop: RegisteredScoop;
   onSendMessage: (text: string, sender?: string) => void;
   getScoops: () => RegisteredScoop[];
@@ -441,7 +441,7 @@ export interface ScoopContextCallbacks {
 
 ```typescript
 // src/scoops/orchestrator.ts
-const nanoClawConfig: NanoClawToolsConfig = {
+const scoopManagementConfig: ScoopManagementToolsConfig = {
   // ... existing config ...
   onMySpecialCallback: async (param) => {
     // Implementation
@@ -452,14 +452,14 @@ const nanoClawConfig: NanoClawToolsConfig = {
 **Test pattern**:
 
 ```typescript
-// src/scoops/nanoclaw-tools.test.ts
+// src/scoops/scoop-management-tools.test.ts
 import { describe, it, expect, vi } from 'vitest';
-import { createNanoClawTools } from './nanoclaw-tools.js';
+import { createScoopManagementTools } from './scoop-management-tools.js';
 
 describe('my_special_tool', () => {
   it('should execute correctly', async () => {
     const mockCallback = vi.fn().mockResolvedValue('result');
-    const tools = createNanoClawTools({
+    const tools = createScoopManagementTools({
       scoop: { isCone: true, folder: 'test' },
       onMySpecialCallback: mockCallback,
       // ... other config ...
@@ -473,7 +473,7 @@ describe('my_special_tool', () => {
 });
 ```
 
-**Reference file**: `src/scoops/nanoclaw-tools.ts`
+**Reference file**: `src/scoops/scoop-management-tools.ts`
 
 ---
 
@@ -737,8 +737,8 @@ describe('loadSkills', () => {
 ## 8. Add a Provider
 
 Providers come from three sources:
-- **Pi-ai auto-discovery**: `getProviders()` returns all pi-ai providers automatically — no files needed. Filtered by `packages/webapp/providers.build.json` (`include: ["*"]` = all, `exclude: ["*"]` = none).
-- **Built-in extensions**: `src/providers/built-in/*.ts` — only for providers needing custom `register()` functions (e.g., bedrock-camp). Also filtered by `packages/webapp/providers.build.json`.
+- **Pi-ai auto-discovery**: `getProviders()` returns all pi-ai providers automatically — no files needed. Filtered by `packages/dev-tools/providers.build.json` (`include: ["*"]` = all, `exclude: ["*"]` = none).
+- **Built-in extensions**: `src/providers/built-in/*.ts` — only for providers needing custom `register()` functions (e.g., bedrock-camp). Also filtered by `packages/dev-tools/providers.build.json`.
 - **External**: `packages/webapp/providers/*.ts` (gitignored within the webapp package) — always included, never filtered. For custom OAuth providers, corporate proxies, etc. Some providers (e.g., `adobe.ts`) are explicitly un-gitignored and tracked in version control.
 
 Built-in and external modules export `config: ProviderConfig` and optionally `register(): void`.
@@ -773,7 +773,7 @@ export function register(): void {
 }
 ```
 
-External providers in `packages/webapp/providers/` are always included (never filtered by `packages/webapp/providers.build.json`).
+External providers in `packages/webapp/providers/` are always included (never filtered by `packages/dev-tools/providers.build.json`).
 
 ### 8b. Add an OAuth Provider (Corporate Proxy / SSO)
 

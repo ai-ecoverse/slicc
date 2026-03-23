@@ -50,7 +50,7 @@ The worker provides tray session coordination, capability-token routing, TURN cr
 npx wrangler dev --config packages/cloudflare-worker/wrangler.jsonc
 npx wrangler deploy --env staging --config packages/cloudflare-worker/wrangler.jsonc
 npx wrangler deploy --config packages/cloudflare-worker/wrangler.jsonc
-WORKER_BASE_URL=https://... npx vitest run tests/worker/deployed.test.ts
+cd packages/cloudflare-worker && WORKER_BASE_URL=https://... npm test -- tests/deployed.test.ts
 ```
 
 ### QA flows that use the worker
@@ -70,7 +70,7 @@ These live at the repo root because they coordinate the worker with browser runt
 - Required repo configuration:
   - secret: `CLOUDFLARE_API_TOKEN`
   - variable: `CLOUDFLARE_ACCOUNT_ID`
-- Wrangler surfaces deployed URLs that are used by `tests/worker/deployed.test.ts`.
+- Wrangler surfaces deployed URLs that are used by `packages/cloudflare-worker/tests/deployed.test.ts`.
 
 ## Operational Notes
 

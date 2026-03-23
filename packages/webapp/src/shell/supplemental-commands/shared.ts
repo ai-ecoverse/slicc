@@ -138,6 +138,18 @@ export function formatConsoleArg(value: unknown): string {
   }
 }
 
+export function resolveNodePackageBaseUrl(specifier: string, fallbackRelativePath: string): URL {
+  const resolver = (import.meta as ImportMeta & { resolve?: (value: string) => string }).resolve;
+  if (typeof resolver === 'function') {
+    try {
+      return new URL('./', resolver(specifier));
+    } catch {
+      // Vitest's module runner exposes import.meta.resolve but does not implement it.
+    }
+  }
+  return new URL(fallbackRelativePath, import.meta.url);
+}
+
 export async function getSqlJs(): Promise<SqlJsModule> {
   if (!sqlJsPromise) {
     sqlJsPromise = (async () => {
@@ -145,7 +157,7 @@ export async function getSqlJs(): Promise<SqlJsModule> {
       const initSqlJs = (sqlModule as { default: InitSqlJs }).default;
       const wasmBase =
         typeof window === 'undefined'
-          ? new URL('../../../../../node_modules/sql.js/dist/', import.meta.url).toString()
+          ? resolveNodePackageBaseUrl('sql.js/dist/sql-wasm.js', '../../../../../node_modules/sql.js/dist/').toString()
           : SQLJS_WASM_CDN;
       return initSqlJs({ locateFile: (file) => `${wasmBase}${file}` });
     })();
@@ -161,7 +173,8 @@ export async function getPyodide(): Promise<PyodideInterface> {
       let indexURL: string;
       if (typeof window === 'undefined') {
         indexURL = decodeURIComponent(
-          new URL('../../../../../node_modules/pyodide/', import.meta.url).pathname
+          resolveNodePackageBaseUrl('pyodide/pyodide.mjs', '../../../../../node_modules/pyodide/')
+            .pathname
         );
       } else if (isExtension) {
         indexURL = chrome.runtime.getURL('pyodide/');

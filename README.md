@@ -85,8 +85,8 @@ npm install
 npm start
 ```
 
-- Optionally pre-configure providers: `cp packages/webapp/providers.example.json packages/webapp/providers.json`
-- See [packages/webapp/providers.example.json](packages/webapp/providers.example.json) for the available provider fields.
+- Optionally pre-configure providers: `cp packages/dev-tools/providers.example.json packages/webapp/providers.json`
+- See [packages/dev-tools/providers.example.json](packages/dev-tools/providers.example.json) for the available provider fields.
 - For contributor-focused setup details, see [docs/development.md](docs/development.md).
 
 ### 4. Chrome extension

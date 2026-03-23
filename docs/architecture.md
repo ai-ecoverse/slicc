@@ -16,7 +16,7 @@
 | UI | `src/ui/` | Chat, Terminal, Files, Memory panels | `main.ts` | `types.test.ts` |
 | CLI / Electron Node Runtime | `packages/node-server/src/` | Express server, Chrome launcher, Electron float entrypoint | `index.ts` | `electron-runtime.test.ts` |
 | Extension | `src/extension/` | Chrome Manifest V3 entry point | `service-worker.ts` | N/A |
-| Cloud Tray Hub | `packages/cloudflare-worker/src/` | Cloudflare Worker + Durable Object control-plane skeleton + deployed smoke test | `index.ts` | `tests/worker/index.test.ts`, `tests/worker/deployed.test.ts` |
+| Cloud Tray Hub | `packages/cloudflare-worker/src/` | Cloudflare Worker + Durable Object control-plane skeleton + deployed smoke test | `index.ts` | `packages/cloudflare-worker/tests/index.test.ts`, `packages/cloudflare-worker/tests/deployed.test.ts` |
 | Providers | `src/providers/` | Provider types, OAuth service, auto-discovery, build-time filtering | `types.ts`, `oauth-service.ts`, `index.ts` | `index.test.ts`, `oauth-service.test.ts` |
 | Sprinkles | `src/ui/sprinkle-*.ts` | Composable `.shtml` panels: discovery, rendering, bridge API, picker UI | `sprinkle-manager.ts` | `sprinkle-manager.test.ts` |
 | Defaults | `packages/vfs-root/` | Bundled VFS content: agent instructions, skills, sprinkles | N/A | N/A |
@@ -103,7 +103,7 @@
 | File | Purpose |
 |---|---|
 | `types.ts` | `ProviderConfig` interface (id, name, isOAuth, onOAuthLogin, onOAuthLogout, getModelIds), `OAuthLauncher` type |
-| `index.ts` | Provider auto-discovery: pi-ai providers filtered by `packages/webapp/providers.build.json`, built-in extensions via glob, external `/packages/webapp/providers/*.ts` always included |
+| `index.ts` | Provider auto-discovery: pi-ai providers filtered by `packages/dev-tools/providers.build.json`, built-in extensions via glob, external `/packages/webapp/providers/*.ts` always included |
 | `oauth-service.ts` | Generic `OAuthLauncher` factory: CLI mode (popup → `/auth/callback` → postMessage) and extension mode (service worker → `chrome.identity.launchWebAuthFlow`) |
 | `built-in/bedrock-camp.ts` | AWS Bedrock CAMP provider — custom stream function via `register()` (only built-in that needs a file; pure-config providers use pi-ai auto-discovery) |
 | `built-in/azure-ai-foundry.ts` | Azure AI Foundry provider configuration (Claude on Azure) |
@@ -170,8 +170,8 @@ Native `/workspace/skills` entries are the only install-managed skills. Compatib
 | File | Purpose |
 |---|---|
 | `orchestrator.ts` | Manages scoop contexts, routes messages, handles responses, owns shared VirtualFS |
-| `scoop-context.ts` | Per-scoop agent instance (RestrictedFS, WasmShell, Agent, skills, NanoClaw tools); wires file tools + `bash` + `grep`/`find` + `javascript`, with browser automation via `playwright-cli` shell commands. Overflow recovery preserves ToolCall blocks in assistant messages to maintain API-required tool_use ↔ toolResult pairing |
-| `nanoclaw-tools.ts` | Scoop tools: `send_message`; cone-only tools: `list_scoops`, `scoop_scoop`, `feed_scoop`, `drop_scoop`, `update_global_memory` |
+| `scoop-context.ts` | Per-scoop agent instance (RestrictedFS, WasmShell, Agent, skills, scoop-management tools); wires file tools + `bash` + `grep`/`find` + `javascript`, with browser automation via `playwright-cli` shell commands. Overflow recovery preserves ToolCall blocks in assistant messages to maintain API-required tool_use ↔ toolResult pairing |
+| `scoop-management-tools.ts` | Scoop tools: `send_message`; cone-only tools: `list_scoops`, `scoop_scoop`, `feed_scoop`, `drop_scoop`, `update_global_memory` |
 | `db.ts` | IndexedDB (`slicc-groups` DB v3): scoops, messages, sessions, tasks, state, webhooks, crontasks stores |
 | `lick-manager.ts` | Browser-side lick management (webhooks + crontasks); all state in IndexedDB |
 | `scheduler.ts` | TaskScheduler for internal task scheduling (used by orchestrator) |
@@ -470,7 +470,7 @@ Scoop removal / app clear
 | Manage scoops (create/delete/list) | `src/scoops/orchestrator.ts` |
 | Persist/restore scoop conversation history | `src/scoops/orchestrator.ts` (creates SessionStore, passes to ScoopContext, cleans up on unregister/clear) |
 | Change scoop isolation/filesystem | `src/scoops/scoop-context.ts` |
-| Add NanoClaw tools (messaging, scoop management) | `src/scoops/nanoclaw-tools.ts` |
+| Add scoop-management tools (messaging, scoop management) | `src/scoops/scoop-management-tools.ts` |
 | Change scoop database schema | `src/scoops/db.ts` |
 | Manage webhooks/crontasks | `src/scoops/lick-manager.ts` |
 | Change skill loading | `src/scoops/skills.ts` |

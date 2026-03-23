@@ -108,7 +108,7 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 - **Extension detection**: `typeof chrome !== 'undefined' && !!chrome?.runtime?.id`.
 - **Dual-mode compatibility**: browser features must work in both standalone/CLI and extension runtimes.
 - **Model IDs**: use pi-ai aliases such as `claude-opus-4-6`, not dated snapshot names.
-- **Provider composition**: providers are auto-discovered from pi-ai plus `packages/webapp/src/providers/built-in/`; external provider configs live in `packages/webapp/providers/`, and build-time filtering lives in `packages/webapp/providers.build.json`.
+- **Provider composition**: providers are auto-discovered from pi-ai plus `packages/webapp/src/providers/built-in/`; external provider configs live in `packages/webapp/providers/`, and build-time filtering lives in `packages/dev-tools/providers.build.json`.
 
 ## VFS API Patterns
 

@@ -28,7 +28,7 @@ Build, run, test, and debug SLICC locally.
 | `npx wrangler dev --config packages/cloudflare-worker/wrangler.jsonc` | Run the Cloudflare Worker tray hub locally (if Wrangler is installed/authenticated) | Exercise `packages/cloudflare-worker/src/` against a real Worker runtime |
 | `npx wrangler deploy --env staging --config packages/cloudflare-worker/wrangler.jsonc` | Deploy the staging Cloudflare Worker tray hub using `packages/cloudflare-worker/wrangler.jsonc` | Publish the staging tray hub (`slicc-tray-hub-staging`) used by GitHub Actions |
 | `npx wrangler deploy --config packages/cloudflare-worker/wrangler.jsonc` | Deploy the production Cloudflare Worker tray hub using `packages/cloudflare-worker/wrangler.jsonc` | Publish the production tray hub |
-| `WORKER_BASE_URL=https://... npx vitest run tests/worker/deployed.test.ts` | Run the deployed tray-hub smoke test | Verify the live Worker contract (`POST /tray`, controller attach, leader WebSocket, webhook responses) |
+| `cd packages/cloudflare-worker && WORKER_BASE_URL=https://... npm test -- tests/deployed.test.ts` | Run the deployed tray-hub smoke test | Verify the live Worker contract (`POST /tray`, controller attach, leader WebSocket, webhook responses) |
 
 ## Release Operations
 
@@ -160,7 +160,7 @@ Nothing else is required for CI configuration:
   - skips forked PRs because GitHub does not expose deployment secrets there
   - runs production deploy + smoke test on pushes to `main` that touch the Worker/Wrangler config
   - supports manual dispatch with `target=staging|production`
-  - uses `cloudflare/wrangler-action@v3`, pins Wrangler `3.91.0` (first release with `wrangler.jsonc` support), points Wrangler at `packages/cloudflare-worker/wrangler.jsonc`, and passes its `deployment-url` output into `tests/worker/deployed.test.ts`
+  - uses `cloudflare/wrangler-action@v3`, pins Wrangler `3.91.0` (first release with `wrangler.jsonc` support), points Wrangler at `packages/cloudflare-worker/wrangler.jsonc`, and passes its `deployment-url` output into `packages/cloudflare-worker/tests/deployed.test.ts`
   - retries the deployed smoke test for up to ~90 seconds after deploy so brief `workers.dev` propagation lag does not fail an otherwise healthy rollout
 
 ### Local validation commands
@@ -169,7 +169,7 @@ Use these before relying on CI:
 
 - `npx wrangler deploy --dry-run --env staging --config packages/cloudflare-worker/wrangler.jsonc`
 - `npx wrangler deploy --dry-run --config packages/cloudflare-worker/wrangler.jsonc`
-- `WORKER_BASE_URL=<deployed-worker-url> npx vitest run tests/worker/deployed.test.ts`
+- `cd packages/cloudflare-worker && WORKER_BASE_URL=<deployed-worker-url> npm test -- tests/deployed.test.ts`
 
 ## Extension Testing Steps
 

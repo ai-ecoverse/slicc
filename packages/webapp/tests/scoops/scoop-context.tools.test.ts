@@ -26,7 +26,7 @@ const mocks = vi.hoisted(() => {
     createBashTool: vi.fn(() => ({ name: 'bash' })),
     createSearchTools: vi.fn(() => [{ name: 'grep' }, { name: 'find' }]),
     createJavaScriptTool: vi.fn(() => ({ name: 'javascript' })),
-    createNanoClawTools: vi.fn(() => [{ name: 'send_message' }]),
+    createScoopManagementTools: vi.fn(() => [{ name: 'send_message' }]),
     WasmShell: vi.fn(function () {
       return {};
     }),
@@ -70,8 +70,8 @@ vi.mock('../../src/scoops/skills.js', () => ({
   formatSkillsForPrompt: mocks.formatSkillsForPrompt,
 }));
 
-vi.mock('../../src/scoops/nanoclaw-tools.js', () => ({
-  createNanoClawTools: mocks.createNanoClawTools,
+vi.mock('../../src/scoops/scoop-management-tools.js', () => ({
+  createScoopManagementTools: mocks.createScoopManagementTools,
 }));
 
 const { ScoopContext } = await import('../../src/scoops/scoop-context.js');

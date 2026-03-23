@@ -8,6 +8,7 @@ import {
   ensureWithinRoot,
   isSafeServeEntry,
   resolveServeEntryPath,
+  resolveNodePackageBaseUrl,
 } from '../../../src/shell/supplemental-commands/shared.js';
 
 describe('toPreviewUrl', () => {
@@ -180,6 +181,28 @@ describe('resolveServeEntryPath', () => {
   it('collapses repeated separators in the entry path', () => {
     expect(resolveServeEntryPath('/workspace/my-app', 'pages//about.html')).toBe(
       '/workspace/my-app/pages/about.html'
+    );
+  });
+});
+
+describe('resolveNodePackageBaseUrl', () => {
+  it('resolves the sql.js package directory in node', () => {
+    expect(
+      resolveNodePackageBaseUrl(
+        'sql.js/dist/sql-wasm.js',
+        '../../../../../node_modules/sql.js/dist/'
+      ).toString()
+    ).toContain(
+      '/node_modules/sql.js/dist/'
+    );
+  });
+
+  it('resolves the pyodide package directory in node', () => {
+    expect(
+      resolveNodePackageBaseUrl('pyodide/pyodide.mjs', '../../../../../node_modules/pyodide/')
+        .pathname
+    ).toContain(
+      '/node_modules/pyodide/'
     );
   });
 });

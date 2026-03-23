@@ -12,7 +12,7 @@
  *    webapp package, always included. Used for custom OAuth providers (corporate SSO,
  *    API proxies).
  *
- * 3. Build-time filtering via packages/webapp/providers.build.json — controls which
+ * 3. Build-time filtering via packages/dev-tools/providers.build.json — controls which
  *    pi-ai providers appear in the UI. External providers are never filtered.
  *
  * Each provider module must export a `config: ProviderConfig`.
@@ -30,17 +30,17 @@ interface BuildConfig {
   exclude: string[];
 }
 
-const buildConfigFiles = import.meta.glob('/packages/webapp/providers.build.json', {
+const buildConfigFiles = import.meta.glob('/packages/dev-tools/providers.build.json', {
   eager: true,
   import: 'default',
 }) as Record<string, BuildConfig>;
 
-const buildConfig: BuildConfig = buildConfigFiles['/packages/webapp/providers.build.json'] ?? {
+const buildConfig: BuildConfig = buildConfigFiles['/packages/dev-tools/providers.build.json'] ?? {
   include: ['*'],
   exclude: [],
 };
 
-/** Check if a pi-ai provider should be shown based on packages/webapp/providers.build.json. */
+/** Check if a pi-ai provider should be shown based on packages/dev-tools/providers.build.json. */
 export function shouldIncludeProvider(providerId: string): boolean {
   const { include, exclude } = buildConfig;
   if (exclude.includes('*') || exclude.includes(providerId)) return false;

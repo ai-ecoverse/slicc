@@ -23,7 +23,10 @@ export {
   type Skill,
   type SkillMetadata,
 } from './skills.js';
-export { createNanoClawTools, type NanoClawToolsConfig } from './nanoclaw-tools.js';
+export {
+  createScoopManagementTools,
+  type ScoopManagementToolsConfig,
+} from './scoop-management-tools.js';
 export { Heartbeat, type HeartbeatStatus, type HeartbeatCallbacks } from './heartbeat.js';
 export {
   attachTrayFollower,
