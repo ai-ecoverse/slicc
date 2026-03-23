@@ -262,7 +262,7 @@ async function fetchClawHubResults(
   const response = await fetch(url, {
     headers: { Accept: 'application/json' },
   });
-  if (response.status !== 200) return [];
+  if (response.status !== 200) throw new Error(`ClawHub returned HTTP ${response.status}`);
   const data = JSON.parse(response.body) as ClawHubSearchResponse;
   if (!data.results) return [];
   return data.results.map((r) => ({
@@ -279,7 +279,7 @@ async function fetchClawHubResults(
  * Extract owner/repo from a GitHub URL.
  */
 function parseGitHubUrl(url: string): { owner: string; repo: string } | null {
-  const match = url.match(/github\.com\/([^/]+)\/([^/]+)/);
+  const match = url.match(/github\.com\/([^\/?#]+)\/([^\/?#]+)/);
   if (!match) return null;
   return { owner: match[1], repo: match[2].replace(/\.git$/, '') };
 }
@@ -295,7 +295,7 @@ async function fetchTesslResults(
   const response = await fetch(url, {
     headers: { Accept: 'application/json' },
   });
-  if (response.status !== 200) return [];
+  if (response.status !== 200) throw new Error(`Tessl returned HTTP ${response.status}`);
   const data = JSON.parse(response.body) as TesslSearchResponse;
   if (!data.data) return [];
 
@@ -313,8 +313,9 @@ async function fetchTesslResults(
     if (existing && existing.qualityScore != null && score != null && existing.qualityScore >= score) continue;
     // Derive skill directory from path (parent of SKILL.md)
     const skillDir = a.path.replace(/\/SKILL\.md$/i, '');
+    const skillId = skillDir.split('/').pop() || a.name;
     const installHint = gh
-      ? `upskill ${gh.owner}/${gh.repo} --path ${skillDir.split('/').slice(0, -1).join('/') || '.'} --skill ${a.name}`
+      ? `upskill ${gh.owner}/${gh.repo} --path ${skillDir.split('/').slice(0, -1).join('/') || '.'} --skill ${skillId}`
       : `upskill tessl:${a.name}`;
     seen.set(key, {
       name: a.name,
@@ -528,7 +529,8 @@ function checkRequiredBins(
   // Find SKILL.md in the extracted files
   let skillMdContent: string | undefined;
   for (const [path, content] of Object.entries(files)) {
-    if (path.toLowerCase().endsWith('skill.md') || path.toLowerCase() === 'skill.md') {
+    const basename = path.split('/').pop() || '';
+    if (basename.toLowerCase() === 'skill.md') {
       skillMdContent = new TextDecoder().decode(content);
       break;
     }

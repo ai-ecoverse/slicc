@@ -184,3 +184,135 @@ describe('upskill command GitHub flows', () => {
     expect(result.stderr).toContain('secondary rate limit');
   });
 });
+
+describe('upskill Tessl registry integration', () => {
+  let fs: VirtualFS;
+  let createdFileSystems: VirtualFS[];
+  let dbCounter = 100;
+
+  beforeEach(async () => {
+    createdFileSystems = [];
+    const originalCreate = VirtualFS.create.bind(VirtualFS);
+    vi.spyOn(VirtualFS, 'create').mockImplementation(async (options) => {
+      const instance = await originalCreate(options);
+      createdFileSystems.push(instance);
+      return instance;
+    });
+
+    fs = await VirtualFS.create({ dbName: `upskill-tessl-test-${dbCounter++}`, wipe: true });
+    await VirtualFS.create({ dbName: 'slicc-fs-global', wipe: true });
+  });
+
+  afterEach(async () => {
+    _resetGlobalFsCache();
+    await Promise.allSettled(
+      createdFileSystems.map((instance) =>
+        (instance.getLightningFS() as { _deactivate?: () => Promise<void> })._deactivate?.()
+      )
+    );
+    vi.restoreAllMocks();
+  });
+
+  it('search queries both ClawHub and Tessl registries', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('convex.site')) {
+        return response(200, JSON.stringify({ results: [{ slug: 'pdf-tool', displayName: 'PDF Tool', summary: 'Converts PDFs', version: null, updatedAt: 0 }] }));
+      }
+      if (url.includes('api.tessl.io')) {
+        return response(200, JSON.stringify({
+          meta: { pagination: { total: 1 } },
+          data: [{
+            id: 'tessl-1', type: 'skill',
+            attributes: {
+              name: 'pdf-converter', description: 'Advanced PDF conversion',
+              sourceUrl: 'https://github.com/acme/skills', path: 'skills/pdf-converter/SKILL.md',
+              featured: false, scores: { aggregate: 0.85, quality: null, security: null, evalImprovementMultiplier: null },
+            },
+          }],
+        }));
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['search', 'pdf'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('pdf-tool');
+    expect(result.stdout).toContain('pdf-converter');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports when both registries fail', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('convex.site')) return response(500, 'Internal Server Error');
+      if (url.includes('api.tessl.io')) return response(503, 'Service Unavailable');
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['search', 'anything'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('both registries failed');
+  });
+
+  it('tessl: shorthand resolves skill via Tessl API and installs from GitHub', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      // Tessl resolve endpoint
+      if (url.includes('api.tessl.io') && url.includes('postgres-pro')) {
+        return response(200, JSON.stringify({
+          meta: { pagination: { total: 1 } },
+          data: [{
+            id: 'tessl-pg', type: 'skill',
+            attributes: {
+              name: 'postgres-pro', description: 'PostgreSQL skill',
+              sourceUrl: 'https://github.com/acme/db-skills', path: 'skills/postgres-pro/SKILL.md',
+              featured: true, scores: { aggregate: 0.9, quality: null, security: null, evalImprovementMultiplier: null },
+            },
+          }],
+        }));
+      }
+      // GitHub contents listing
+      if (url.includes('api.github.com') && url.endsWith('/contents/skills/postgres-pro')) {
+        return response(200, JSON.stringify([
+          { name: 'SKILL.md', path: 'skills/postgres-pro/SKILL.md', type: 'file', download_url: 'https://raw.githubusercontent.com/acme/db-skills/main/skills/postgres-pro/SKILL.md' },
+        ]));
+      }
+      // Raw file download
+      if (url.includes('raw.githubusercontent.com') && url.includes('SKILL.md')) {
+        return response(200, '---\nname: postgres-pro\n---\n# PostgreSQL Pro\n');
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['tessl:postgres-pro'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('postgres-pro');
+  });
+
+  it('checkRequiredBins warns about missing binaries', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith('/contents/')) {
+        return response(200, JSON.stringify([{ name: 'alpha', path: 'alpha', type: 'dir' }]));
+      }
+      if (url.endsWith('/contents/alpha')) {
+        return response(200, JSON.stringify([
+          { name: 'SKILL.md', path: 'alpha/SKILL.md', type: 'file', download_url: 'https://raw.githubusercontent.com/octo/skills/main/alpha/SKILL.md' },
+        ]));
+      }
+      if (url.endsWith('/alpha/SKILL.md')) {
+        return response(200, '---\nname: alpha\nrequires:\n  bins:\n    - ffmpeg\n    - magick\n---\n# Alpha\n');
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['octo/skills', '--all'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('alpha');
+  });
+});
