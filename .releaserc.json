@@ -13,7 +13,7 @@
     [
       "@semantic-release/exec",
       {
-        "prepareCmd": "node dist/node-server/sync-release-version.js ${nextRelease.version} && npm run build:extension && npm run package:release && chmod +x sliccstart/sign-and-package.sh && sliccstart/sign-and-package.sh ${nextRelease.version}",
+        "prepareCmd": "node dist/node-server/sync-release-version.js ${nextRelease.version} && npm run build:extension && npm run package:release && chmod +x packages/swift-launcher/sign-and-package.sh && packages/swift-launcher/sign-and-package.sh ${nextRelease.version}",
         "publishCmd": "npx wrangler deploy && npx vitest run src/worker/deployed.test.ts"
       }
     ],
