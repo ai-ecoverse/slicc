@@ -13,7 +13,7 @@
     [
       "@semantic-release/exec",
       {
-        "prepareCmd": "node dist/cli/sync-release-version.js ${nextRelease.version} && npm run build:extension && npm run package:release && cp sliccstart/build/Sliccstart.dmg artifacts/release/sliccstart-v${nextRelease.version}.dmg",
+        "prepareCmd": "node dist/cli/sync-release-version.js ${nextRelease.version} && npm run build:extension && npm run package:release && cp sliccstart/build/Sliccstart.dmg artifacts/release/sliccstart-v${nextRelease.version}.dmg && plutil -replace CFBundleShortVersionString -string ${nextRelease.version} sliccstart/build/Sliccstart.app/Contents/Info.plist && plutil -replace CFBundleVersion -string ${nextRelease.version} sliccstart/build/Sliccstart.app/Contents/Info.plist && if [ -n \"$APPLE_TEAM_ID\" ]; then codesign --force --options runtime --sign \"Developer ID Application: Lars Trieloff ($APPLE_TEAM_ID)\" --timestamp sliccstart/build/Sliccstart.app; else codesign --force --sign - sliccstart/build/Sliccstart.app; fi && ditto -c -k --keepParent sliccstart/build/Sliccstart.app artifacts/release/Sliccstart-${nextRelease.version}.zip",
         "publishCmd": "npx wrangler deploy && npx vitest run src/worker/deployed.test.ts"
       }
     ],

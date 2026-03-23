@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import os
+import AppUpdater
 
 private let log = Logger(subsystem: "com.slicc.sliccstart", category: "App")
 
@@ -28,6 +29,7 @@ struct SliccstartApp: App {
     @State private var debugBuildTarget: AppTarget?
     @State private var isCreatingDebugBuild = false
     @State private var debugBuildProgress: String = ""
+    @StateObject private var appUpdater = AppUpdater(owner: "ai-ecoverse", repo: "slicc", releasePrefix: "Sliccstart")
 
     init() {
         NSApplication.shared.setActivationPolicy(.regular)
@@ -58,6 +60,7 @@ struct SliccstartApp: App {
                         targets: targets,
                         sliccProcess: sliccProcess,
                         appManagementPermission: appManagementPermission,
+                        appUpdater: appUpdater,
                         onLaunchStandalone: { target in
                             log.info("onLaunchStandalone: \(target.name, privacy: .public)")
                             do {
@@ -141,6 +144,13 @@ struct SliccstartApp: App {
         .defaultSize(width: 340, height: 100)
         .windowStyle(.titleBar)
         .windowResizability(.contentSize)
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    appUpdater.check()
+                }
+            }
+        }
     }
 
     private func initialize() async {
@@ -157,6 +167,11 @@ struct SliccstartApp: App {
         }
         targets = AppScanner.scan()
         isReady = true
+
+        // Check for app updates in bundled mode
+        if SliccBootstrapper.isBundled {
+            appUpdater.check()
+        }
     }
 
     private func createDebugBuild(for target: AppTarget) async {

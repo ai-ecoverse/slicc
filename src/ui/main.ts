@@ -79,6 +79,7 @@ import {
 } from '../shell/supplemental-commands/playwright-command.js';
 import { SprinkleManager } from './sprinkle-manager.js';
 import { initTelemetry } from './telemetry.js';
+import { showTelemetryConsent } from './telemetry-consent.js';
 
 const log = createLogger('main');
 

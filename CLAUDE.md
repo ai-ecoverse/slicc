@@ -45,6 +45,17 @@ Console logs from the browser are forwarded to the CLI terminal for debugging.
 
 **Requires Node >= 22** (LTS). Ports: 5710 (UI), 9222 (Chrome CDP), 9223 (Electron CDP), 24679 (Vite HMR)
 
+### Parallel Instances
+
+Multiple standalone SLICC instances can run simultaneously. All ports auto-resolve to avoid conflicts — just override the UI port:
+
+```bash
+PORT=5720 npm run dev:full   # Second instance on port 5720
+PORT=5730 npm run dev:full   # Third instance on port 5730
+```
+
+Each instance gets an isolated Chrome profile (keyed by port), separate CDP port (auto-detected), and separate HMR port. No shared state between instances.
+
 ## Philosophy
 
 1. **The Claw Pattern**: SLICC is a persistent orchestration layer ("claw") on top of LLM agents, running in the browser. Agent engine is [Pi](https://github.com/badlogic/pi-mono) (pi-agent-core, pi-ai).

@@ -203,6 +203,8 @@ function buildNestedBridgeScript(savedState, savedStorage, name) {
 
 // ── Message handler ────────────────────────────────────────────────
 addEventListener('message', function(e) {
+  // Accept messages from parent (extension page) and from our nested child iframe
+  if (e.source !== parent && e.source !== (window.__slicc_childIframe && window.__slicc_childIframe.contentWindow)) return;
   var msg = e.data;
   if (!msg || !msg.type) return;
 

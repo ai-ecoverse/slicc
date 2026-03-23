@@ -1,9 +1,11 @@
 import SwiftUI
+import AppUpdater
 
 struct AppListView: View {
     let targets: [AppTarget]
     @Bindable var sliccProcess: SliccProcess
     @Bindable var appManagementPermission: AppManagementPermission
+    @ObservedObject var appUpdater: AppUpdater
     let onLaunchStandalone: (AppTarget) -> Void
     let onLaunchElectron: (AppTarget) -> Void
     let onGuidedInstall: (AppTarget) -> Void
@@ -88,9 +90,27 @@ struct AppListView: View {
 
             Divider()
             HStack {
-                if !SliccBootstrapper.isBundled {
+                if SliccBootstrapper.isBundled {
+                    if case .downloaded = appUpdater.state {
+                        Button("Restart to Update") {
+                            appUpdater.install()
+                        }
+                        .buttonStyle(.borderless).font(.caption)
+                        .foregroundStyle(.green)
+                    } else {
+                        Button("Check for Updates") {
+                            appUpdater.check()
+                        }
+                        .buttonStyle(.borderless).font(.caption)
+                    }
+                } else {
                     Button("Update") { onUpdate() }
                         .buttonStyle(.borderless).font(.caption)
+                }
+                if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
+                    Text("v\(version)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                 }
                 Spacer()
                 Button("Rescan") { onRescan() }

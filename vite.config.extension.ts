@@ -101,6 +101,7 @@ export default defineConfig(({ mode }) => ({
         }
         copyFileSync(resolve(__dirname, 'sandbox.html'), resolve(outDir, 'sandbox.html'));
         copyFileSync(resolve(__dirname, 'sprinkle-sandbox.html'), resolve(outDir, 'sprinkle-sandbox.html'));
+        copyFileSync(resolve(__dirname, 'tool-ui-sandbox.html'), resolve(outDir, 'tool-ui-sandbox.html'));
         copyFileSync(resolve(__dirname, 'voice-popup.html'), resolve(outDir, 'voice-popup.html'));
         copyFileSync(resolve(__dirname, 'voice-popup.js'), resolve(outDir, 'voice-popup.js'));
 

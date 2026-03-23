@@ -95,21 +95,26 @@ export function resolveQaProfilesRoot(projectRoot: string): string {
   return join(projectRoot, ...QA_PROFILE_ROOT_SEGMENTS);
 }
 
-export function resolveDefaultChromeUserDataDir(tmpDir = process.env['TMPDIR'] ?? '/tmp'): string {
-  return join(tmpDir, DEFAULT_USER_DATA_DIR_NAME);
+export function resolveDefaultChromeUserDataDir(
+  tmpDir = process.env['TMPDIR'] ?? '/tmp',
+  servePort?: number
+): string {
+  const suffix = servePort && servePort !== 5710 ? `-${servePort}` : '';
+  return join(tmpDir, `${DEFAULT_USER_DATA_DIR_NAME}${suffix}`);
 }
 
 export function resolveChromeLaunchProfile(options: {
   projectRoot: string;
   tmpDir?: string | null;
   profile?: string | null;
+  servePort?: number;
 }): ChromeLaunchProfile {
   const profile = normalizeProfileName(options.profile);
   if (!profile) {
     return {
       id: null,
       displayName: 'Chrome',
-      userDataDir: resolveDefaultChromeUserDataDir(options.tmpDir ?? undefined),
+      userDataDir: resolveDefaultChromeUserDataDir(options.tmpDir ?? undefined, options.servePort),
       extensionPath: null,
     };
   }
