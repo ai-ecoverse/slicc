@@ -914,8 +914,19 @@ interface ProviderConfig {
   isOAuth?: boolean;
   onOAuthLogin?: (launcher: OAuthLauncher, onSuccess: () => void) => Promise<void>;
   onOAuthLogout?: () => Promise<void>;
-  /** Return the model IDs this provider supports (resolved against Anthropic registry). */
-  getModelIds?: () => Array<{ id: string; name?: string }>;
+  /** Static per-model capability overrides. */
+  modelOverrides?: Record<string, ModelMetadata>;
+  /** Return model IDs with optional metadata (resolved against Anthropic registry). */
+  getModelIds?: () => Array<{ id: string; name?: string } & ModelMetadata>;
+}
+
+/** Wire format for model capabilities (snake_case, merged into camelCase Model objects). */
+interface ModelMetadata {
+  api?: 'anthropic' | 'openai';    // stream function routing
+  context_window?: number;          // context window in tokens
+  max_tokens?: number;              // max output tokens
+  reasoning?: boolean;              // supports thinking/reasoning
+  input?: string[];                 // input modalities (['text', 'image'])
 }
 
 type OAuthLauncher = (authorizeUrl: string) => Promise<string | null>;
@@ -923,7 +934,11 @@ type OAuthLauncher = (authorizeUrl: string) => Promise<string | null>;
 
 **`requiresBaseUrl` for OAuth providers**: By default, the base URL field is hidden for OAuth providers. Set `requiresBaseUrl: true` to show it — useful for providers where the proxy endpoint is configurable at runtime. The base URL is saved to the account before `onOAuthLogin` is called, so the provider can read it via `getBaseUrlForProvider()`. The `saveOAuthAccount()` function preserves the existing `baseUrl` through re-logins.
 
-**`getModelIds`**: When present, `getProviderModels()` uses this instead of returning all Anthropic models. Each ID is resolved against the Anthropic model registry; unknown IDs get fallback model objects with sensible defaults (`input: ['text', 'image']`, `baseUrl: ''`, etc.). Use this to restrict the model dropdown to models the proxy actually supports.
+**`getModelIds`**: When present, `getProviderModels()` uses this instead of returning all Anthropic models. Each ID is resolved against the Anthropic model registry; unknown IDs get fallback model objects with sensible defaults. Can return optional `ModelMetadata` fields per model — these override pi-ai defaults. Set `api: 'openai'` to route a model through `streamOpenAICompletions` instead of `streamAnthropic`.
+
+**`modelOverrides`**: Static per-model overrides applied to all models for this provider. Useful for config-only providers (like Azure AI Foundry) that can't implement `getModelIds()` but need custom context windows. Example: `modelOverrides: { 'claude-opus-4-6': { context_window: 1000000 } }`.
+
+**Three-layer merge**: Model capabilities resolve as pi-ai registry (defaults) → `modelOverrides` (static overrides) → `getModelIds()` metadata (dynamic, highest priority). Each layer only overrides fields it provides.
 
 **Model ID pitfall**: Use pi-ai alias IDs (e.g., `claude-opus-4-6`) not dated IDs (e.g., `claude-opus-4-6-20250626`). In the browser bundle, `getModel()` returns `undefined` for unknown IDs instead of throwing, and `{ ...undefined }` silently produces `{}`. The alias resolves to a full model from the registry with all required fields.
 
