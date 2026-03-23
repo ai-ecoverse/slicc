@@ -81,8 +81,6 @@ export interface OAuthRequestMsg {
   type: 'oauth-request';
   providerId: string;
   authorizeUrl: string;
-  /** Pass false for silent token renewal (no popup). Defaults to true. */
-  interactive?: boolean;
 }
 
 /** Sprinkle lick event from side panel to offscreen agent. */

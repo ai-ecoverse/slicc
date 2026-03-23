@@ -333,11 +333,13 @@ function isTokenExpired(): boolean {
 
 /**
  * Silent token renewal — re-authenticates with IMS without user interaction.
- * - CLI mode: hidden iframe with prompt=none
- * - Extension mode: chrome.identity.launchWebAuthFlow with interactive=false
  *
- * Returns the new access token on success, or null if renewal failed
- * (IMS session expired, user needs to re-login interactively).
+ * Uses the same OAuthLauncher as normal login (handles CLI popup, extension
+ * chrome.identity, and Electron relay), but appends prompt=none to the
+ * authorize URL so IMS skips the login UI and returns a new token if the
+ * session cookie is still valid.
+ *
+ * Returns the new access token on success, or null if renewal failed.
  */
 async function silentRenewToken(): Promise<string | null> {
   // Deduplicate concurrent renewal attempts
@@ -364,12 +366,10 @@ async function silentRenewToken(): Promise<string | null> {
       });
       const authorizeUrl = `${imsHost(imsEnv)}/ims/authorize/v2?${params}`;
 
-      let redirectUrl: string | null;
-      if (isExtension) {
-        redirectUrl = await silentRenewExtension(authorizeUrl);
-      } else {
-        redirectUrl = await silentRenewIframe(authorizeUrl);
-      }
+      // Use the same launcher as normal login — it handles all runtime modes
+      const { createOAuthLauncher } = await import('../src/providers/oauth-service.js');
+      const launcher = createOAuthLauncher();
+      const redirectUrl = await launcher(authorizeUrl);
 
       if (!redirectUrl) return null;
 
@@ -397,90 +397,6 @@ async function silentRenewToken(): Promise<string | null> {
   })();
 
   return renewalInProgress;
-}
-
-/**
- * CLI mode silent renewal: open a tiny popup with prompt=none.
- * IMS redirects to /auth/callback which postMessages the token back, then auto-closes.
- * Same mechanism as normal login, but silent (no IMS UI shown).
- */
-function silentRenewIframe(authorizeUrl: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    // Open a tiny popup (IMS needs a real window context for cookies)
-    const popup = window.open(authorizeUrl, '_blank', 'width=1,height=1,left=-100,top=-100');
-
-    let settled = false;
-    const cleanup = () => {
-      if (settled) return;
-      settled = true;
-      window.removeEventListener('message', handler);
-      clearTimeout(timer);
-      try { popup?.close(); } catch { /* best-effort */ }
-    };
-
-    const handler = (event: MessageEvent) => {
-      if (event.data?.type !== 'oauth-callback') return;
-      cleanup();
-      if (event.data.error) {
-        resolve(null);
-        return;
-      }
-      resolve(event.data.redirectUrl ?? null);
-    };
-
-    window.addEventListener('message', handler);
-
-    const timer = setTimeout(() => {
-      cleanup();
-      resolve(null);
-    }, 10000);
-
-    // If popup was blocked, resolve null immediately
-    if (!popup) {
-      cleanup();
-      resolve(null);
-    }
-  });
-}
-
-/**
- * Extension mode silent renewal: chrome.identity.launchWebAuthFlow with interactive=false.
- */
-async function silentRenewExtension(authorizeUrl: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    let resolved = false;
-    const cleanup = () => {
-      if (resolved) return;
-      resolved = true;
-      (chrome as any).runtime.onMessage.removeListener(handler);
-      clearTimeout(timer);
-    };
-
-    const handler = (message: any) => {
-      if (message?.source !== 'service-worker') return;
-      if (message?.payload?.type !== 'oauth-result') return;
-      cleanup();
-      if (message.payload.error) {
-        resolve(null);
-        return;
-      }
-      resolve(message.payload.redirectUrl ?? null);
-    };
-
-    (chrome as any).runtime.onMessage.addListener(handler);
-    (chrome as any).runtime.sendMessage({
-      source: 'panel',
-      payload: { type: 'oauth-request', providerId: 'oauth', authorizeUrl, interactive: false },
-    }).catch(() => {
-      cleanup();
-      resolve(null);
-    });
-
-    const timer = setTimeout(() => {
-      cleanup();
-      resolve(null);
-    }, 10000);
-  });
 }
 
 // ── Stream functions (reuse pi-ai's Anthropic provider) ─────────────
