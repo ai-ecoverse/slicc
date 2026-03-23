@@ -518,11 +518,9 @@ export class ChatPanel {
       timestamp: Date.now(),
       queued: isQueued || undefined,
     };
-    const wasEmpty = this.messages.length === 0;
     this.messages.push(msg);
     this.appendMessageEl(msg);
     this.persistSession();
-    if (wasEmpty) this.renderModelSelector();
 
     // Clear input
     this.textarea.value = '';
@@ -767,6 +765,8 @@ export class ChatPanel {
 
   private setStreamingState(streaming: boolean): void {
     this.isStreaming = streaming;
+    // Lock/unlock model selector based on streaming state
+    this.renderModelSelector();
     // Show stop button during streaming, send button otherwise — but keep textarea enabled
     this.stopBtn.style.display = streaming ? 'flex' : 'none';
     this.sendBtn.style.display = streaming ? 'none' : 'flex';
@@ -828,21 +828,22 @@ export class ChatPanel {
       || allModels[0];
     if (!activeModel) return;
 
-    const hasMessages = this.messages.length > 0;
+    // Dropdown is always available except during active streaming
+    const locked = this.isStreaming;
 
     const btn = document.createElement('button');
     btn.className = 'chat__model-btn chat__model-btn--compact';
-    if (hasMessages) btn.classList.add('chat__model-btn--disabled');
+    if (locked) btn.classList.add('chat__model-btn--disabled');
     btn.textContent = activeModel.name;
-    if (!hasMessages) {
+    if (!locked) {
       const chevron = document.createElement('span');
       chevron.className = 'chat__model-chevron';
       chevron.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M4.5 6l3.5 4 3.5-4z"/></svg>';
       btn.appendChild(chevron);
     }
 
-    if (hasMessages) {
-      // Chat started — just show the label, no dropdown
+    if (locked) {
+      // Streaming — just show the label, no dropdown
       el.appendChild(btn);
     } else {
       // Empty chat — allow model switching
