@@ -27,7 +27,12 @@ let package = Package(
         ),
         .testTarget(
             name: "slicc-serverTests",
-            dependencies: ["slicc-server"],
+            dependencies: [
+                "slicc-server",
+                .product(name: "Hummingbird", package: "hummingbird"),
+                .product(name: "HummingbirdTesting", package: "hummingbird"),
+                .product(name: "AsyncHTTPClient", package: "async-http-client"),
+            ],
             path: "Tests"
         ),
     ]
