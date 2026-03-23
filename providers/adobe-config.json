@@ -1,5 +1,5 @@
 {
   "proxyEndpoint": "https://adobe-llm-proxy.paolo-moz.workers.dev",
   "redirectUri": "http://localhost:5710/auth/callback",
-  "extensionRedirectUri": "https://dcebfdclgcnjkpnmhfgoelnkgedglhpo.chromiumapp.org/adobe"
+  "extensionRedirectUri": "https://akggccfpkleihhemkkikggopnifgelbk.chromiumapp.org/adobe"
 }
