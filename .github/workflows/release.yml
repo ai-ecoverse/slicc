@@ -60,41 +60,11 @@ jobs:
           # Store keychain path for later steps
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
 
-      - name: Build and sign Sliccstart
-        env:
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      - name: Build Sliccstart
         run: |
           cd sliccstart
           chmod +x build-app.sh
           ./build-app.sh
-          
-          # Code sign if certificate is available
-          if [ -n "$APPLE_TEAM_ID" ]; then
-            echo "Code signing Sliccstart.app..."
-            codesign --force --options runtime --sign "Developer ID Application: Lars Trieloff ($APPLE_TEAM_ID)" \
-              --timestamp build/Sliccstart.app
-            
-            # Verify signature
-            codesign --verify --verbose build/Sliccstart.app
-            
-            # Create ZIP for notarization
-            ditto -c -k --keepParent build/Sliccstart.app build/Sliccstart.zip
-            
-            # Notarize
-            echo "Submitting for notarization..."
-            xcrun notarytool submit build/Sliccstart.zip \
-              --apple-id "$APPLE_ID" \
-              --team-id "$APPLE_TEAM_ID" \
-              --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-              --wait
-            
-            # Staple the notarization ticket
-            xcrun stapler staple build/Sliccstart.app
-          fi
-          
-          # DMG is created in prepareCmd (after version patching by semantic-release)
 
       - name: Publish release
         env:
@@ -103,6 +73,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           WORKER_BASE_URL: https://slicc-tray-hub.minivelos.workers.dev
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: npx semantic-release
 
       - name: Cleanup keychain
