@@ -474,7 +474,7 @@ const streamAdobe = (
           ...model,
           baseUrl: `${getProxyEndpoint()}/v1`,
           api: 'openai-completions' as Api,
-          compat: { supportsStore: false, supportsDeveloperRole: false, ...(model as any).compat },
+          compat: { ...(model as any).compat, supportsStore: false, supportsDeveloperRole: false },
         };
         const inner = streamOpenAICompletions(proxyModel as any, context, { ...options, apiKey: accessToken } as any);
         for await (const event of inner) stream.push(event as any);
@@ -510,7 +510,7 @@ const streamSimpleAdobe = (
           ...model,
           baseUrl: `${getProxyEndpoint()}/v1`,
           api: 'openai-completions' as Api,
-          compat: { supportsStore: false, supportsDeveloperRole: false, ...(model as any).compat },
+          compat: { ...(model as any).compat, supportsStore: false, supportsDeveloperRole: false },
         };
         const inner = streamSimpleOpenAICompletions(proxyModel as any, context, { ...options, apiKey: accessToken } as any);
         for await (const event of inner) stream.push(event as any);
@@ -567,7 +567,7 @@ async function fetchProxyModels(): Promise<Model<Api>[]> {
           return {
             id: pm.id, name: pm.name ?? pm.id, provider: 'adobe',
             api: customApi, baseUrl: endpoint,
-            contextWindow: 200000, maxTokens: 16384, input: 0,
+            contextWindow: 200000, maxTokens: 16384, input: ['text', 'image'],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             inputCost: 0, outputCost: 0, cacheReadCost: 0, cacheWriteCost: 0, reasoning: true,
           } as unknown as Model<Api>;
