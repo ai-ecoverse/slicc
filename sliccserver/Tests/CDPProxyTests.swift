@@ -1,0 +1,282 @@
+import Logging
+import NIOCore
+import NIOWebSocket
+import XCTest
+@testable import slicc_server
+
+final class CDPProxyTests: XCTestCase {
+    func testPreWarmDiscoversAndReusesChromeConnection() async throws {
+        let harness = ChromeConnectorHarness()
+        let proxy = CDPProxy(
+            logger: Logger(label: "test.cdp-proxy"),
+            discoverer: { port in
+                XCTAssertEqual(port, 9222)
+                return "ws://127.0.0.1:9222/devtools/browser/test"
+            },
+            chromeConnector: { url, onMessage, onEvent in
+                try await harness.connect(url: url, onMessage: onMessage, onEvent: onEvent)
+            }
+        )
+
+        try await proxy.preWarm(cdpPort: 9222)
+        try await proxy.preWarm(cdpPort: 9222)
+
+        XCTAssertEqual(harness.connectCountSnapshot(), 1)
+        XCTAssertEqual(harness.connectedURLsSnapshot(), ["ws://127.0.0.1:9222/devtools/browser/test"])
+    }
+
+    func testBuffersMessagesWhileChromeConnectsAndFlushesAfterOpen() async {
+        let harness = ChromeConnectorHarness(waitForExplicitResume: true)
+        let proxy = CDPProxy(
+            logger: Logger(label: "test.cdp-proxy"),
+            discoverer: { _ in "ws://127.0.0.1:9222/devtools/browser/test" },
+            chromeConnector: { url, onMessage, onEvent in
+                try await harness.connect(url: url, onMessage: onMessage, onEvent: onEvent)
+            }
+        )
+        let client = ClientRecorder()
+
+        await proxy.addClient(client.handle)
+        let prepareTask = Task {
+            await proxy.prepareClientConnection(for: client.handle.id, cdpPort: 9222)
+        }
+
+        await proxy.receive(.text("{\"id\":1}"), from: client.handle.id)
+        XCTAssertEqual(harness.sentTextsSnapshot(), [])
+
+        await harness.resumePendingConnection()
+        await prepareTask.value
+
+        XCTAssertEqual(harness.sentTextsSnapshot(), ["{\"id\":1}"])
+    }
+
+    func testNewClientClosesPreviousAndReceivesChromeMessages() async throws {
+        let harness = ChromeConnectorHarness()
+        let proxy = CDPProxy(
+            logger: Logger(label: "test.cdp-proxy"),
+            discoverer: { _ in "ws://127.0.0.1:9222/devtools/browser/test" },
+            chromeConnector: { url, onMessage, onEvent in
+                try await harness.connect(url: url, onMessage: onMessage, onEvent: onEvent)
+            }
+        )
+        let firstClient = ClientRecorder()
+        let secondClient = ClientRecorder()
+
+        try await proxy.preWarm(cdpPort: 9222)
+        await proxy.addClient(firstClient.handle)
+        await proxy.addClient(secondClient.handle)
+        await harness.emitText("{\"id\":7}")
+
+        XCTAssertEqual(firstClient.closeReasonsSnapshot(), ["Replaced by newer /cdp client"])
+        XCTAssertEqual(firstClient.sentTextsSnapshot(), [])
+        XCTAssertEqual(secondClient.sentTextsSnapshot(), ["{\"id\":7}"])
+    }
+}
+
+private final class ClientRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var sentTexts: [String] = []
+    private var closeReasons: [String] = []
+
+    lazy var handle: ClientHandle = ClientHandle(
+        send: { [weak self] message in
+            guard let self else { return }
+            switch message {
+            case .text(let text):
+                self.recordSentText(text)
+            case .binary:
+                XCTFail("Expected text-only message in test client")
+            }
+        },
+        close: { [weak self] _, reason in
+            self?.recordCloseReason(reason)
+        }
+    )
+
+    func sentTextsSnapshot() -> [String] {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.sentTexts
+    }
+
+    func closeReasonsSnapshot() -> [String] {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.closeReasons
+    }
+
+    private func recordSentText(_ text: String) {
+        self.lock.lock()
+        self.sentTexts.append(text)
+        self.lock.unlock()
+    }
+
+    private func recordCloseReason(_ reason: String?) {
+        self.lock.lock()
+        self.closeReasons.append(reason ?? "")
+        self.lock.unlock()
+    }
+}
+
+private final class ChromeConnectorHarness: @unchecked Sendable {
+    private let gate: AsyncGate?
+    private let state = HarnessState()
+
+    init(waitForExplicitResume: Bool = false) {
+        self.gate = waitForExplicitResume ? AsyncGate() : nil
+    }
+
+    func connect(
+        url: String,
+        onMessage: @escaping @Sendable (ProxyMessage) async -> Void,
+        onEvent _: @escaping @Sendable (ChromeSocketEvent) async -> Void
+    ) async throws -> ChromeSocketHandle {
+        self.state.recordConnect(url: url, onMessage: onMessage)
+        self.state.setOpen(true)
+
+        if let gate {
+            await gate.wait()
+        }
+
+        return ChromeSocketHandle(
+            send: { [weak self] message in
+                self?.recordSend(message)
+            },
+            close: { [weak self] in
+                self?.setOpen(false)
+            },
+            isOpen: { [weak self] in
+                self?.isOpenSnapshot() ?? false
+            }
+        )
+    }
+
+    func resumePendingConnection() async {
+        await self.gate?.open()
+    }
+
+    func emitText(_ text: String) async {
+        let callback = self.messageCallbackSnapshot()
+        await callback?(.text(text))
+    }
+
+    func connectCountSnapshot() -> Int {
+        self.state.connectCountSnapshot()
+    }
+
+    func connectedURLsSnapshot() -> [String] {
+        self.state.connectedURLsSnapshot()
+    }
+
+    func sentTextsSnapshot() -> [String] {
+        self.state.sentTextsSnapshot()
+    }
+
+    private func recordSend(_ message: ProxyMessage) {
+        self.state.recordSend(message)
+    }
+
+    private func messageCallbackSnapshot() -> (@Sendable (ProxyMessage) async -> Void)? {
+        self.state.messageCallbackSnapshot()
+    }
+
+    private func isOpenSnapshot() -> Bool {
+        self.state.isOpenSnapshot()
+    }
+
+    private func setOpen(_ isOpen: Bool) {
+        self.state.setOpen(isOpen)
+    }
+}
+
+private final class HarnessState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var connectCount = 0
+    private var connectedURLs: [String] = []
+    private var sentTexts: [String] = []
+    private var onMessage: (@Sendable (ProxyMessage) async -> Void)?
+    private var isOpen = true
+
+    func recordConnect(url: String, onMessage: @escaping @Sendable (ProxyMessage) async -> Void) {
+        self.lock.lock()
+        self.connectCount += 1
+        self.connectedURLs.append(url)
+        self.onMessage = onMessage
+        self.lock.unlock()
+    }
+
+    func recordSend(_ message: ProxyMessage) {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        switch message {
+        case .text(let text):
+            self.sentTexts.append(text)
+        case .binary(let buffer):
+            self.sentTexts.append("<binary \(buffer.readableBytes)>")
+        }
+    }
+
+    func connectCountSnapshot() -> Int {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.connectCount
+    }
+
+    func connectedURLsSnapshot() -> [String] {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.connectedURLs
+    }
+
+    func sentTextsSnapshot() -> [String] {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.sentTexts
+    }
+
+    func messageCallbackSnapshot() -> (@Sendable (ProxyMessage) async -> Void)? {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.onMessage
+    }
+
+    func isOpenSnapshot() -> Bool {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.isOpen
+    }
+
+    func setOpen(_ isOpen: Bool) {
+        self.lock.lock()
+        self.isOpen = isOpen
+        self.lock.unlock()
+    }
+}
+
+private actor AsyncGate {
+    private var isOpen = false
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        guard !self.isOpen else {
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            self.continuations.append(continuation)
+        }
+    }
+
+    func open() {
+        guard !self.isOpen else {
+            return
+        }
+
+        self.isOpen = true
+        let pendingContinuations = self.continuations
+        self.continuations.removeAll()
+        for continuation in pendingContinuations {
+            continuation.resume()
+        }
+    }
+}
