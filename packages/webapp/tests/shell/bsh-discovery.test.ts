@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { VirtualFS } from '../fs/virtual-fs.js';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
   discoverBshScripts,
   extractHostnamePattern,
@@ -9,7 +9,7 @@ import {
   urlMatchesPattern,
   findMatchingScripts,
   type BshEntry,
-} from './bsh-discovery.js';
+} from '../../src/shell/bsh-discovery.js';
 
 let dbCounter = 0;
 
