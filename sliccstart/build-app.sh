@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SLICC_ROOT="$(dirname "$SCRIPT_DIR")"
+SLICC_SERVER_DIR="$SLICC_ROOT/sliccserver"
 APP_NAME="Sliccstart"
 APP_DIR="$SCRIPT_DIR/build/$APP_NAME.app"
 CONTENTS="$APP_DIR/Contents"
@@ -24,12 +25,21 @@ echo "Building $APP_NAME..."
 cd "$SCRIPT_DIR"
 swift build -c release 2>&1 | tail -3
 
+echo "Building slicc-server..."
+cd "$SLICC_SERVER_DIR"
+swift build -c release 2>&1 | tail -3
+cd "$SCRIPT_DIR"
+
 echo "Assembling $APP_NAME.app..."
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS" "$RESOURCES"
 
 # Copy binary
 cp ".build/release/$APP_NAME" "$MACOS/$APP_NAME"
+
+# Copy native server runtime
+cp "$SLICC_SERVER_DIR/.build/release/slicc-server" "$RESOURCES/slicc-server"
+chmod +x "$RESOURCES/slicc-server"
 
 # ---------------------------------------------------------------------------
 # 2. Icon

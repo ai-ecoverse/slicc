@@ -22,6 +22,7 @@ Build, run, test, and debug SLICC locally.
 | `npm run start:electron -- /Applications/Slack.app` | Run the built Electron attach mode | Smoke-test production Electron output |
 | `npm run typecheck` | Typecheck browser + Node targets | Verify no type errors before committing |
 | `npm run test` | Vitest run (all tests) | Run full test suite; CI validation |
+| `SLICC_TEST_SERVER_URL=http://localhost:5710 npm run test:server-integration` | Run shared server API conformance tests against an externally running Node or Swift server | Validate standalone server HTTP/WebSocket behavior |
 | `npm run test:watch` | Vitest watch mode | Iterate on test changes; TDD workflow |
 | `npx vitest run src/fs/virtual-fs.test.ts` | Run single test file | Debug a specific module |
 | `npx wrangler dev` | Run the Cloudflare Worker tray hub locally (if Wrangler is installed/authenticated) | Exercise `src/worker/` against a real Worker runtime |
@@ -287,6 +288,7 @@ log.error('error message');
 | Command | Purpose |
 |---------|---------|
 | `npm run test` | Run all tests once |
+| `SLICC_TEST_SERVER_URL=http://localhost:5710 npm run test:server-integration` | Run server integration suite against an already running server |
 | `npm run test:watch` | Watch mode; re-run on file change |
 | `npx vitest run src/fs/virtual-fs.test.ts` | Run single file |
 | `npx vitest run src/fs/` | Run all tests in directory |
