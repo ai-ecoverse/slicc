@@ -367,7 +367,9 @@ export class Orchestrator {
     // Telemetry: track chat sends
     const scoop = this.scoops.get(message.chatJid);
     const scoopName = scoop?.isCone ? 'cone' : (scoop?.name ?? 'unknown');
-    trackChatSend(scoopName, localStorage.getItem('selected-model') ?? 'unknown');
+    try {
+      trackChatSend(scoopName, localStorage?.getItem('selected-model') ?? 'unknown');
+    } catch { /* localStorage unavailable in tests */ }
 
     // Store the message
     await db.saveMessage(message);

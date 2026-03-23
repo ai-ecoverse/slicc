@@ -798,8 +798,8 @@ describe('VFS write notification routing', () => {
     await vfs.writeFile('/shared/output.txt', 'hello');
     vfs.currentWriter = undefined;
 
-    // Wait a tick for the async handleMessage
-    await new Promise(r => setTimeout(r, 50));
+    // Wait for the async handleMessage to complete
+    await new Promise(r => setTimeout(r, 200));
 
     // Verify the message was saved to the cone's queue
     const messages = await getMessagesForScoop(cone.jid);
