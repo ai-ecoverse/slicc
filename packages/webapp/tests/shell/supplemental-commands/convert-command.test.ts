@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createConvertCommand } from './convert-command.js';
+import { createConvertCommand } from '../../../src/shell/supplemental-commands/convert-command.js';
 import type { IFileSystem } from 'just-bash';
 
 function createMockCtx(overrides: Partial<{ fs: Partial<IFileSystem>; cwd: string }> = {}) {

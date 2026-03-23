@@ -4,7 +4,7 @@ import {
   buildCanonicalTrayLaunchUrl,
   normalizeTrayWorkerBaseUrl,
   parseTrayJoinUrl,
-} from './tray-url-shared.js';
+} from '../src/tray-url-shared.js';
 
 describe('tray-url-shared', () => {
   it('normalizes tray worker base URLs consistently', () => {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
-import { FileBrowserPanel } from '../../packages/webapp/src/ui/file-browser-panel.js';
+import { FileBrowserPanel } from '../../src/ui/file-browser-panel.js';
 
 function createContainer(): HTMLElement {
   const el = document.createElement('div');

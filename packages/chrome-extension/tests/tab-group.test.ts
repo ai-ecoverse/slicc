@@ -28,7 +28,7 @@ describe('addToSliccGroup', () => {
 
   it('creates a new tab group on first call', async () => {
     const chromeMock = stubChrome();
-    const { addToSliccGroup } = await import('./tab-group.js');
+    const { addToSliccGroup } = await import('../src/tab-group.js');
 
     await addToSliccGroup(10);
 
@@ -43,7 +43,7 @@ describe('addToSliccGroup', () => {
   it('reuses the existing group ID on subsequent calls', async () => {
     const groupMock = vi.fn().mockResolvedValue(42);
     const chromeMock = stubChrome({ group: groupMock });
-    const { addToSliccGroup } = await import('./tab-group.js');
+    const { addToSliccGroup } = await import('../src/tab-group.js');
 
     await addToSliccGroup(10);
     expect(groupMock).toHaveBeenCalledWith({ tabIds: 10 });
@@ -63,7 +63,7 @@ describe('addToSliccGroup', () => {
       .mockResolvedValueOnce(99); // recreate as group 99
     const updateMock = vi.fn().mockResolvedValue(undefined);
     stubChrome({ group: groupMock, tabGroupsUpdate: updateMock });
-    const { addToSliccGroup } = await import('./tab-group.js');
+    const { addToSliccGroup } = await import('../src/tab-group.js');
 
     // First tab — creates group 42
     await addToSliccGroup(10);
@@ -76,14 +76,14 @@ describe('addToSliccGroup', () => {
 
   it('does not throw when chrome.tabs.group fails completely', async () => {
     stubChrome({ group: vi.fn().mockRejectedValue(new Error('API unavailable')) });
-    const { addToSliccGroup } = await import('./tab-group.js');
+    const { addToSliccGroup } = await import('../src/tab-group.js');
 
     await expect(addToSliccGroup(10)).resolves.toBeUndefined();
   });
 
   it('does not throw when chrome.tabGroups.update fails', async () => {
     stubChrome({ tabGroupsUpdate: vi.fn().mockRejectedValue(new Error('no tabGroups')) });
-    const { addToSliccGroup } = await import('./tab-group.js');
+    const { addToSliccGroup } = await import('../src/tab-group.js');
 
     await expect(addToSliccGroup(10)).resolves.toBeUndefined();
   });
@@ -91,7 +91,7 @@ describe('addToSliccGroup', () => {
   it('resets state via _resetGroupState', async () => {
     const groupMock = vi.fn().mockResolvedValue(42);
     stubChrome({ group: groupMock });
-    const { addToSliccGroup, _resetGroupState } = await import('./tab-group.js');
+    const { addToSliccGroup, _resetGroupState } = await import('../src/tab-group.js');
 
     await addToSliccGroup(10);
     expect(groupMock).toHaveBeenLastCalledWith({ tabIds: 10 });

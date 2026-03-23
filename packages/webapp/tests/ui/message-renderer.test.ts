@@ -8,7 +8,7 @@ import {
   renderMessageContent,
   renderToolInput,
   escapeHtml,
-} from './message-renderer.js';
+} from '../../src/ui/message-renderer.js';
 
 describe('escapeHtml', () => {
   it('escapes HTML special characters', () => {

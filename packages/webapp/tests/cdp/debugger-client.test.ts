@@ -37,7 +37,7 @@ describe('DebuggerClient', () => {
   });
 
   it('closes tabs via chrome.tabs.remove and clears session mappings', async () => {
-    const { DebuggerClient } = await import('./debugger-client.js');
+    const { DebuggerClient } = await import('../../src/cdp/debugger-client.js');
     const client = new DebuggerClient();
     await client.connect();
 
@@ -57,7 +57,7 @@ describe('DebuggerClient', () => {
   });
 
   it('adds created tabs to the slicc tab group', async () => {
-    const { DebuggerClient } = await import('./debugger-client.js');
+    const { DebuggerClient } = await import('../../src/cdp/debugger-client.js');
     const client = new DebuggerClient();
     await client.connect();
 

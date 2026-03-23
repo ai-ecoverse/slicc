@@ -1,17 +1,17 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-import { FollowerSyncManager } from './tray-follower-sync.js';
+import { FollowerSyncManager } from '../../src/scoops/tray-follower-sync.js';
 import {
   setFollowerTrayRuntimeStatus,
   getFollowerTrayRuntimeStatus,
-} from './tray-follower-status.js';
-import type { TrayDataChannelLike } from './tray-webrtc.js';
-import type { AgentEvent, ChatMessage } from '../ui/types.js';
+} from '../../src/scoops/tray-follower-status.js';
+import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
+import type { AgentEvent, ChatMessage } from '../../src/ui/types.js';
 import type {
   LeaderToFollowerMessage,
   FollowerToLeaderMessage,
   TrayTargetEntry,
-} from './tray-sync-protocol.js';
+} from '../../src/scoops/tray-sync-protocol.js';
 
 // ---------------------------------------------------------------------------
 // Fake data channel

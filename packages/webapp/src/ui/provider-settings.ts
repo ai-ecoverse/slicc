@@ -11,7 +11,7 @@ import { storeTrayJoinUrl, hasStoredTrayJoinUrl } from '../scoops/tray-runtime-c
 import { getFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import { getThemePreference, setThemePreference } from './theme.js';
 import type { ThemePreference } from './theme.js';
-import type { RefreshTrayRuntimeMsg } from '../extension/messages.js';
+import type { RefreshTrayRuntimeMsg } from '../../../chrome-extension/src/messages.js';
 import {
   getRegisteredProviderConfig,
   getRegisteredProviderIds,
@@ -81,8 +81,8 @@ function _resetLegacyCleanup(): void {
 /** Test-only exports */
 export const __test__ = { _resetLegacyCleanup };
 
-// Provider configs are now loaded dynamically from src/providers/index.ts
-// (built-in providers in src/providers/built-in/ + external providers in /providers/)
+// Provider configs are now loaded dynamically from packages/webapp/src/providers/index.ts
+// (built-in providers in packages/webapp/src/providers/built-in/ + external providers in /packages/webapp/providers/)
 
 // Get all available providers — pi-ai providers (filtered by build config) + registered configs
 export function getAvailableProviders(): string[] {
@@ -196,7 +196,7 @@ export function getOAuthAccountInfo(providerId: string): {
   };
 }
 
-// --- Build-time provider defaults from providers.json ---
+// --- Build-time provider defaults from packages/webapp/providers.json ---
 
 export interface ProviderDefault {
   providerId: string;
@@ -205,22 +205,22 @@ export interface ProviderDefault {
   model?: string;
 }
 
-// Vite resolves this at build time. Returns {} if providers.json doesn't exist.
-const providerFiles = import.meta.glob('/providers.json', {
+// Vite resolves this at build time. Returns {} if packages/webapp/providers.json doesn't exist.
+const providerFiles = import.meta.glob('/packages/webapp/providers.json', {
   eager: true,
   import: 'default',
 }) as Record<string, ProviderDefault[]>;
 
-const providerDefaults: ProviderDefault[] = providerFiles['/providers.json'] ?? [];
+const providerDefaults: ProviderDefault[] = providerFiles['/packages/webapp/providers.json'] ?? [];
 
 const log = createLogger('provider-settings');
 
 /**
- * Auto-configure provider accounts from providers.json (bundled at build time).
+ * Auto-configure provider accounts from packages/webapp/providers.json (bundled at build time).
  * Only populates if no accounts exist yet — never overwrites manual config.
  * The first entry's model becomes the selected model.
  *
- * Copy providers.example.json to providers.json and fill in your API keys.
+ * Copy packages/webapp/providers.example.json to packages/webapp/providers.json and fill in your API keys.
  */
 export function applyProviderDefaults(defaults: ProviderDefault[] = providerDefaults): void {
   if (defaults.length === 0 || getAccounts().length > 0) return;

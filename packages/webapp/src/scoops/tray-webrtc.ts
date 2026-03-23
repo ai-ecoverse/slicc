@@ -3,12 +3,10 @@ import type {
   LeaderToWorkerControlMessage,
   WorkerToLeaderControlMessage,
   FollowerJoinRequestedMessage,
-} from '../worker/tray-signaling.js';
-import type {
   TrayBootstrapStatus,
   TrayIceCandidate,
   TraySessionDescription,
-} from '../worker/tray-signaling.js';
+} from './tray-types.js';
 import {
   attachTrayFollower,
   pollTrayFollowerBootstrap,

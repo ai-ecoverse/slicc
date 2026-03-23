@@ -4,7 +4,7 @@ import {
   createPbcopyCommand,
   createPbpasteCommand,
   createClipboardAutoCommand,
-} from './clipboard-commands.js';
+} from '../../../src/shell/supplemental-commands/clipboard-commands.js';
 
 function createMockCtx(stdin = '') {
   const fs: Partial<IFileSystem> = {

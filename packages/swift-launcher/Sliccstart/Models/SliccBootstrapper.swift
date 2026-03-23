@@ -84,8 +84,8 @@ final class SliccBootstrapper {
 
         let parentDir = (sliccDir as NSString).deletingLastPathComponent
         let candidates = [
-            sliccDir + "/sliccserver/.build/debug/slicc-server",
-            parentDir + "/sliccserver/.build/debug/slicc-server",
+            sliccDir + "/packages/swift-server/.build/debug/slicc-server",
+            parentDir + "/packages/swift-server/.build/debug/slicc-server",
         ]
 
         for candidate in candidates where FileManager.default.fileExists(atPath: candidate) {

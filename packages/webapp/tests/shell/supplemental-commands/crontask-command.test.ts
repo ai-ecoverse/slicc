@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createCrontaskCommand } from './crontask-command.js';
+import { createCrontaskCommand } from '../../../src/shell/supplemental-commands/crontask-command.js';
 
 interface MockLickManager {
   createCronTask: (
@@ -461,7 +461,7 @@ describe('crontask command - Extension mode', () => {
     // Set LickManager on globalThis before creating command
     (globalThis as any).__slicc_lickManager = mockLickManager;
 
-    const { createCrontaskCommand: createCmd } = await import('./crontask-command.js');
+    const { createCrontaskCommand: createCmd } = await import('../../../src/shell/supplemental-commands/crontask-command.js');
     command = createCmd();
   });
 

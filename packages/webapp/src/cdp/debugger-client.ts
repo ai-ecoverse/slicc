@@ -11,9 +11,9 @@ import { createLogger } from '../core/logger.js';
 
 const log = createLogger('cdp:debugger');
 
-// Chrome extension API types provided by src/extension/chrome.d.ts
+// Chrome extension API types provided by packages/chrome-extension/src/chrome.d.ts
 
-import { addToSliccGroup } from '../extension/tab-group.js';
+import { addToSliccGroup } from '../../../chrome-extension/src/tab-group.js';
 
 export class DebuggerClient implements CDPTransport {
   private _state: ConnectionState = 'disconnected';

@@ -2,10 +2,10 @@ import 'fake-indexeddb/auto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Agent } from '@mariozechner/pi-agent-core';
 import { createAssistantMessageEventStream } from '@mariozechner/pi-ai';
-import { adaptTool } from './tool-adapter.js';
+import { adaptTool } from '../../src/core/tool-adapter.js';
 import type { AgentEvent, AgentTool, StreamFn } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage, AssistantMessageEvent, Model } from '@mariozechner/pi-ai';
-import type { ToolDefinition } from './types.js';
+import type { ToolDefinition } from '../../src/core/types.js';
 
 /** Create a dummy Model object for testing. */
 function testModel(): Model<any> {

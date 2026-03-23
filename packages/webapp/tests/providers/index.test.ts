@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import type { ProviderConfig } from './types.js';
+import type { ProviderConfig } from '../../src/providers/types.js';
 
 // ── Test the filtering logic directly ──────────────────────────────
 

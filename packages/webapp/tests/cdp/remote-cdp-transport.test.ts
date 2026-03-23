@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { RemoteCDPTransport, type RemoteCDPSender } from './remote-cdp-transport.js';
+import { RemoteCDPTransport, type RemoteCDPSender } from '../../src/cdp/remote-cdp-transport.js';
 
 // ---------------------------------------------------------------------------
 // Fake sender

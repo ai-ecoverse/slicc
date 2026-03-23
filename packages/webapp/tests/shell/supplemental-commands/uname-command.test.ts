@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IFileSystem } from 'just-bash';
-import { createUnameCommand } from './uname-command.js';
+import { createUnameCommand } from '../../../src/shell/supplemental-commands/uname-command.js';
 
 function createMockCtx() {
   const fs: Partial<IFileSystem> = {

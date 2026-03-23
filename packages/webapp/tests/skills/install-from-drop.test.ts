@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
 import { zipSync } from 'fflate';
-import { VirtualFS } from '../fs/index.js';
+import { VirtualFS } from '../../src/fs/index.js';
 import {
   MAX_SKILL_ARCHIVE_ENTRY_COUNT,
   MAX_SKILL_ARCHIVE_UNCOMPRESSED_SIZE_BYTES,
-} from './constants.js';
-import { installSkillFromDrop } from './install-from-drop.js';
+} from '../../src/skills/constants.js';
+import { installSkillFromDrop } from '../../src/skills/install-from-drop.js';
 
 let dbCounter = 0;
 

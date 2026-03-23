@@ -4,7 +4,7 @@ import {
   DEFAULT_CLI_CDP_PORT,
   DEFAULT_ELECTRON_ATTACH_CDP_PORT,
   parseCliRuntimeFlags,
-} from './runtime-flags.js';
+} from '../src/runtime-flags.js';
 
 describe('parseCliRuntimeFlags', () => {
   it('uses the default CLI runtime flags', () => {

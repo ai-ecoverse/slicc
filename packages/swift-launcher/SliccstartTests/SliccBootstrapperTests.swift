@@ -28,7 +28,7 @@ final class SliccBootstrapperTests: XCTestCase {
 
     func testFindServerBinaryFindsRepoLocalDebugBuild() throws {
         let sliccDir = tempDir.appendingPathComponent("slicc")
-        let binary = sliccDir.appendingPathComponent("sliccserver/.build/debug/slicc-server")
+        let binary = sliccDir.appendingPathComponent("packages/swift-server/.build/debug/slicc-server")
         try createFile(at: binary)
 
         XCTAssertEqual(
@@ -40,7 +40,7 @@ final class SliccBootstrapperTests: XCTestCase {
     func testFindServerBinaryFindsSiblingDebugBuild() throws {
         let workspaceRoot = tempDir.appendingPathComponent("workspace")
         let sliccDir = workspaceRoot.appendingPathComponent("slicc")
-        let binary = workspaceRoot.appendingPathComponent("sliccserver/.build/debug/slicc-server")
+        let binary = workspaceRoot.appendingPathComponent("packages/swift-server/.build/debug/slicc-server")
         try FileManager.default.createDirectory(at: sliccDir, withIntermediateDirectories: true)
         try createFile(at: binary)
 
@@ -62,7 +62,7 @@ final class SliccBootstrapperTests: XCTestCase {
 
     func testResolveLaunchConfigurationPrefersSwiftServer() throws {
         let sliccDir = tempDir.appendingPathComponent("slicc")
-        let binary = sliccDir.appendingPathComponent("sliccserver/.build/debug/slicc-server")
+        let binary = sliccDir.appendingPathComponent("packages/swift-server/.build/debug/slicc-server")
         try createFile(at: binary)
 
         let config = try SliccProcess.resolveLaunchConfiguration(

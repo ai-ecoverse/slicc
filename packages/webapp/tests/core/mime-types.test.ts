@@ -5,7 +5,7 @@ import {
   isTerminalPreviewableMediaPath,
   isTerminalPreviewableMimeType,
   isVideoMimeType,
-} from './mime-types.js';
+} from '../../src/core/mime-types.js';
 
 describe('getMimeType', () => {
   it('returns correct MIME for common web types', () => {

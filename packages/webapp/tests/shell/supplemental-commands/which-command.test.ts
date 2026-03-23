@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { createWhichCommand } from './which-command.js';
+import { createWhichCommand } from '../../../src/shell/supplemental-commands/which-command.js';
 import type { IFileSystem } from 'just-bash';
-import type { VirtualFS } from '../../fs/index.js';
+import type { VirtualFS } from '../../../src/fs/index.js';
 
 function createMockCtx(
   overrides: {

@@ -1,9 +1,9 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { VirtualFS } from '../fs/virtual-fs.js';
-import { BshWatchdog, type BshExecutor } from './bsh-watchdog.js';
-import type { CDPTransport } from '../cdp/transport.js';
-import type { JshResult } from './jsh-executor.js';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { BshWatchdog, type BshExecutor } from '../../src/shell/bsh-watchdog.js';
+import type { CDPTransport } from '../../src/cdp/transport.js';
+import type { JshResult } from '../../src/shell/jsh-executor.js';
 
 let dbCounter = 0;
 

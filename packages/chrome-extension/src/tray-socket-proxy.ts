@@ -1,4 +1,4 @@
-import type { LeaderTrayWebSocket } from '../scoops/tray-leader.js';
+import type { LeaderTrayWebSocket } from '../../../packages/webapp/src/scoops/tray-leader.js';
 import {
   isExtensionMessage,
   type ExtensionMessage,

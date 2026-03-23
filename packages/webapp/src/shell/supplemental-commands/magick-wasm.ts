@@ -77,7 +77,7 @@ export async function getMagick(): Promise<ImageMagickModule> {
           const wasmBase =
             typeof window === 'undefined'
               ? new URL(
-                  '../../../node_modules/@imagemagick/magick-wasm/dist/',
+                  '../../../../../node_modules/@imagemagick/magick-wasm/dist/',
                   import.meta.url
                 ).toString()
               : MAGICK_WASM_CDN;

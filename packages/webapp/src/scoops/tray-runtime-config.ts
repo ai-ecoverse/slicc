@@ -12,7 +12,7 @@ import {
   buildCanonicalTrayLaunchUrl,
   normalizeTrayWorkerBaseUrl,
   parseTrayJoinUrl,
-} from '../../packages/node-server/src/tray-url-shared.js';
+} from '../../../node-server/src/tray-url-shared.js';
 
 export {
   TRAY_LEGACY_LEAD_QUERY_PARAM,

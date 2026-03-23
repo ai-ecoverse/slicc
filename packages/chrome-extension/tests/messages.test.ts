@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { isExtensionMessage, type ExtensionMessage } from './messages.js';
+import { isExtensionMessage, type ExtensionMessage } from '../src/messages.js';
 
 describe('isExtensionMessage', () => {
   it('returns true for valid panel envelope', () => {

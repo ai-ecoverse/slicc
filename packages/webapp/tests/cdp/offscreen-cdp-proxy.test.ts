@@ -34,7 +34,7 @@ const mockChrome = {
 (globalThis as any).chrome = mockChrome;
 
 // Now import after mock is in place
-const { OffscreenCdpProxy } = await import('./offscreen-cdp-proxy.js');
+const { OffscreenCdpProxy } = await import('../../src/cdp/offscreen-cdp-proxy.js');
 
 describe('OffscreenCdpProxy', () => {
   let proxy: InstanceType<typeof OffscreenCdpProxy>;

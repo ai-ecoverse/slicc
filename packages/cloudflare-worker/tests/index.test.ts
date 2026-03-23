@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
-import { handleWorkerRequest } from '../../packages/cloudflare-worker/src/index.js';
+import { handleWorkerRequest } from '../src/index.js';
 import {
   FOLLOWER_ATTACH_RETRY_AFTER_MS,
   TRAY_RECLAIM_TTL_MS,
   type DurableObjectIdLike,
   type DurableObjectStateLike,
   type TrayRecord,
-} from '../../packages/cloudflare-worker/src/shared.js';
-import { SessionTrayDurableObject } from '../../packages/cloudflare-worker/src/session-tray.js';
-import { TRAY_BOOTSTRAP_TIMEOUT_MS } from '../../packages/cloudflare-worker/src/tray-signaling.js';
-import { TURN_CREDENTIAL_TTL_MS } from '../../packages/cloudflare-worker/src/turn-credentials.js';
+} from '../src/shared.js';
+import { SessionTrayDurableObject } from '../src/session-tray.js';
+import { TRAY_BOOTSTRAP_TIMEOUT_MS } from '../src/tray-signaling.js';
+import { TURN_CREDENTIAL_TTL_MS } from '../src/turn-credentials.js';
 
 class FakeStorage {
   private readonly data = new Map<string, unknown>();

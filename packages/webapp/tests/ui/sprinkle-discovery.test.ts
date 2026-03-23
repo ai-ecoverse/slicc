@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { VirtualFS } from '../fs/virtual-fs.js';
-import { discoverSprinkles, extractTitle, extractAutoOpen } from './sprinkle-discovery.js';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { discoverSprinkles, extractTitle, extractAutoOpen } from '../../src/ui/sprinkle-discovery.js';
 
 describe('discoverSprinkles', () => {
   let vfs: VirtualFS;

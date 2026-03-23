@@ -3,7 +3,7 @@ import {
   findDroppedSkillFile,
   findDroppedSkillTransferFile,
   isSkillArchiveName,
-} from './skill-drop.js';
+} from '../../src/ui/skill-drop.js';
 
 describe('skill-drop helpers', () => {
   it('matches .skill archives case-insensitively', () => {

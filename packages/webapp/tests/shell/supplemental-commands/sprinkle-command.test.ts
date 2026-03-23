@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createSprinkleCommand } from './sprinkle-command.js';
-import type { SprinkleManager } from '../../ui/sprinkle-manager.js';
+import { createSprinkleCommand } from '../../../src/shell/supplemental-commands/sprinkle-command.js';
+import type { SprinkleManager } from '../../../src/ui/sprinkle-manager.js';
 
 describe('sprinkle command', () => {
   let mockMgr: Partial<SprinkleManager>;

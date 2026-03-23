@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { MountCommands } from './mount-commands.js';
-import type { VirtualFS } from './virtual-fs.js';
+import { MountCommands } from '../../src/fs/mount-commands.js';
+import type { VirtualFS } from '../../src/fs/virtual-fs.js';
 
 function makeFs(overrides: Partial<VirtualFS> = {}): VirtualFS {
   return {

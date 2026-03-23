@@ -7,8 +7,8 @@
 
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import 'fake-indexeddb/auto';
-import { initDB, saveScoop, getMessagesForScoop, clearAllMessages } from './db.js';
-import type { RegisteredScoop, ChannelMessage } from './types.js';
+import { initDB, saveScoop, getMessagesForScoop, clearAllMessages } from '../../src/scoops/db.js';
+import type { RegisteredScoop, ChannelMessage } from '../../src/scoops/types.js';
 
 // Test helpers — we can't instantiate a full Orchestrator (needs VirtualFS, DOM, etc.)
 // but we CAN test the DB-level routing by simulating what handleMessage does.
@@ -76,7 +76,7 @@ describe('Orchestrator Message Routing (DB-level)', () => {
 
   describe('Message persistence', () => {
     it('messages saved with correct chatJid are retrievable', async () => {
-      const { saveMessage } = await import('./db.js');
+      const { saveMessage } = await import('../../src/scoops/db.js');
       const msg = makeMessage({ chatJid: testScoop.jid, content: 'hello scoop' });
       await saveMessage(msg);
 
@@ -86,7 +86,7 @@ describe('Orchestrator Message Routing (DB-level)', () => {
     });
 
     it('messages for different scoops are isolated', async () => {
-      const { saveMessage } = await import('./db.js');
+      const { saveMessage } = await import('../../src/scoops/db.js');
       await saveMessage(makeMessage({ chatJid: cone.jid, content: 'cone msg' }));
       await saveMessage(makeMessage({ chatJid: testScoop.jid, content: 'scoop msg' }));
 
@@ -101,7 +101,7 @@ describe('Orchestrator Message Routing (DB-level)', () => {
 
   describe('Delegation message routing', () => {
     it('delegation message is saved with scoop chatJid', async () => {
-      const { saveMessage } = await import('./db.js');
+      const { saveMessage } = await import('../../src/scoops/db.js');
       // Simulate what delegateToScoop does
       const delegationMsg = makeMessage({
         id: `delegate-${Date.now()}`,
@@ -121,7 +121,7 @@ describe('Orchestrator Message Routing (DB-level)', () => {
     });
 
     it('delegation message does not appear in cone messages', async () => {
-      const { saveMessage } = await import('./db.js');
+      const { saveMessage } = await import('../../src/scoops/db.js');
       const delegationMsg = makeMessage({
         chatJid: testScoop.jid,
         channel: 'delegation',
@@ -135,7 +135,7 @@ describe('Orchestrator Message Routing (DB-level)', () => {
 
   describe('Completion notification routing', () => {
     it('scoop-notify message is saved with cone chatJid', async () => {
-      const { saveMessage } = await import('./db.js');
+      const { saveMessage } = await import('../../src/scoops/db.js');
       // Simulate what the orchestrator does when a scoop completes
       const notifyMsg = makeMessage({
         id: `scoop-done-${testScoop.jid}-${Date.now()}`,
@@ -155,7 +155,7 @@ describe('Orchestrator Message Routing (DB-level)', () => {
     });
 
     it('scoop-notify does not appear in scoop messages', async () => {
-      const { saveMessage } = await import('./db.js');
+      const { saveMessage } = await import('../../src/scoops/db.js');
       const notifyMsg = makeMessage({
         chatJid: cone.jid,
         channel: 'scoop-notify',
@@ -170,7 +170,7 @@ describe('Orchestrator Message Routing (DB-level)', () => {
 
   describe('Message filtering (getMessagesSince)', () => {
     it('excludes messages from specified sender', async () => {
-      const { saveMessage, getMessagesSince } = await import('./db.js');
+      const { saveMessage, getMessagesSince } = await import('../../src/scoops/db.js');
       const ts = new Date(Date.now() - 5000).toISOString();
 
       await saveMessage(
@@ -195,7 +195,7 @@ describe('Orchestrator Message Routing (DB-level)', () => {
     });
 
     it('does NOT exclude cone messages from scoop queue', async () => {
-      const { saveMessage, getMessagesSince } = await import('./db.js');
+      const { saveMessage, getMessagesSince } = await import('../../src/scoops/db.js');
       const ts = new Date(Date.now() - 5000).toISOString();
 
       await saveMessage(
@@ -215,7 +215,7 @@ describe('Orchestrator Message Routing (DB-level)', () => {
 
   describe('Routing rules', () => {
     it('user messages go to cone only (no @mention routing)', async () => {
-      const { saveMessage } = await import('./db.js');
+      const { saveMessage } = await import('../../src/scoops/db.js');
       // User says "tell @test-scoop to do X" — this goes to the cone
       const userMsg = makeMessage({
         chatJid: cone.jid,
@@ -231,7 +231,7 @@ describe('Orchestrator Message Routing (DB-level)', () => {
     });
 
     it('fromAssistant messages are not @mention-routed', async () => {
-      const { saveMessage } = await import('./db.js');
+      const { saveMessage } = await import('../../src/scoops/db.js');
       // Cone's send_message with @test-scoop — should NOT be duplicated to scoop
       const assistantMsg = makeMessage({
         chatJid: cone.jid,
@@ -247,7 +247,7 @@ describe('Orchestrator Message Routing (DB-level)', () => {
     });
 
     it('scoop-notify messages are not @mention-routed (prevents loops)', async () => {
-      const { saveMessage } = await import('./db.js');
+      const { saveMessage } = await import('../../src/scoops/db.js');
       // Completion notification contains @test-scoop — must NOT loop back
       const notifyMsg = makeMessage({
         chatJid: cone.jid,

@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
-import { VirtualFS } from '../fs/index.js';
-import { uninstallSkill } from './uninstall.js';
-import { initSkillsSystem, recordSkillApplication, readState } from './state.js';
+import { VirtualFS } from '../../src/fs/index.js';
+import { uninstallSkill } from '../../src/skills/uninstall.js';
+import { initSkillsSystem, recordSkillApplication, readState } from '../../src/skills/state.js';
 
 const SKILLS_DIR = '/workspace/skills';
 

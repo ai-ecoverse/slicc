@@ -16,7 +16,7 @@ import {
   getBedrockRegion,
   setBedrockRegion,
   clearBedrockRegion,
-} from './api-key-dialog.js';
+} from '../../src/ui/api-key-dialog.js';
 
 // Mock localStorage
 const storage = new Map<string, string>();

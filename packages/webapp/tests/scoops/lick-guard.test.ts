@@ -6,7 +6,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import 'fake-indexeddb/auto';
-import { LickManager, buildActiveLicksError } from './lick-manager.js';
+import { LickManager, buildActiveLicksError } from '../../src/scoops/lick-manager.js';
 
 // Each test gets a fresh LickManager WITHOUT calling init() to avoid
 // accumulating state in the shared IndexedDB across tests.

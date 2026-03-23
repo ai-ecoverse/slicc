@@ -10,7 +10,7 @@ import {
   createDeterministicZip,
   parseNpmPackFilename,
   sanitizeArtifactName,
-} from './release-package.js';
+} from '../src/release-package.js';
 
 describe('release-package', () => {
   it('sanitizes artifact names for stable filenames', () => {

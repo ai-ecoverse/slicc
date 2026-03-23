@@ -35,7 +35,7 @@ final class SliccProcess {
         var dir = parentDir
         for _ in 0..<5 {
             if FileManager.default.fileExists(atPath: dir + "/package.json") &&
-               FileManager.default.fileExists(atPath: dir + "/src/cli/index.ts") {
+               FileManager.default.fileExists(atPath: dir + "/packages/node-server/src/index.ts") {
                 log.info("sliccDir: found source tree at \(dir, privacy: .public)")
                 return dir
             }

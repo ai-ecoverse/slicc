@@ -43,12 +43,12 @@ const { mockSessionStore } = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock('../ui/session-store.js', () => ({
+vi.mock('../../webapp/src/ui/session-store.js', () => ({
   SessionStore: mockSessionStore,
 }));
 
-const { OffscreenBridge } = await import('./offscreen-bridge.js');
-const { SessionStore } = await import('../ui/session-store.js');
+const { OffscreenBridge } = await import('../src/offscreen-bridge.js');
+const { SessionStore } = await import('../../webapp/src/ui/session-store.js');
 
 describe('OffscreenBridge createCallbacks', () => {
   let bridge: InstanceType<typeof OffscreenBridge>;

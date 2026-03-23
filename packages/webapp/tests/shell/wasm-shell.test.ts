@@ -4,9 +4,9 @@
 
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { BrowserAPI } from '../cdp/index.js';
-import { VirtualFS } from '../fs/index.js';
-import { isTextContentType, WasmShell } from './wasm-shell.js';
+import type { BrowserAPI } from '../../src/cdp/index.js';
+import { VirtualFS } from '../../src/fs/index.js';
+import { isTextContentType, WasmShell } from '../../src/shell/wasm-shell.js';
 
 describe('isTextContentType', () => {
   it('identifies text/* as text', () => {

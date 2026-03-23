@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { CDPClient } from './cdp-client.js';
+import { CDPClient } from '../../src/cdp/cdp-client.js';
 
 // ---------------------------------------------------------------------------
 // Mock WebSocket

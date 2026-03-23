@@ -10,7 +10,7 @@ import {
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { rmSync } from 'node:fs';
-import { stripAnsi, generateLogFilename, cleanupOldLogs, FileLogger } from './file-logger.js';
+import { stripAnsi, generateLogFilename, cleanupOldLogs, FileLogger } from '../src/file-logger.js';
 
 // ---------------------------------------------------------------------------
 // stripAnsi

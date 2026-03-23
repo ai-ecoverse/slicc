@@ -7,24 +7,24 @@
  * Initializes: Orchestrator, VFS, BrowserAPI (via CDP proxy), OffscreenBridge.
  */
 
-import { BrowserAPI, OffscreenCdpProxy } from '../cdp/index.js';
-import { Orchestrator } from '../scoops/index.js';
-import { LeaderTrayManager } from '../scoops/tray-leader.js';
-import { hasStoredTrayJoinUrl, resolveTrayRuntimeConfig } from '../scoops/tray-runtime-config.js';
+import { BrowserAPI, OffscreenCdpProxy } from '../../../packages/webapp/src/cdp/index.js';
+import { Orchestrator } from '../../../packages/webapp/src/scoops/index.js';
+import { LeaderTrayManager } from '../../../packages/webapp/src/scoops/tray-leader.js';
+import { hasStoredTrayJoinUrl, resolveTrayRuntimeConfig } from '../../../packages/webapp/src/scoops/tray-runtime-config.js';
 import {
   FollowerTrayManager,
   LeaderTrayPeerManager,
   startFollowerWithAutoReconnect,
-} from '../scoops/tray-webrtc.js';
+} from '../../../packages/webapp/src/scoops/tray-webrtc.js';
 import { OffscreenBridge } from './offscreen-bridge.js';
 import { ServiceWorkerLeaderTraySocket } from './tray-socket-proxy.js';
-import { createLogger } from '../core/index.js';
+import { createLogger } from '../../../packages/webapp/src/core/index.js';
 import type { ExtensionMessage } from './messages.js';
-import { getApiKey } from '../ui/provider-settings.js';
+import { getApiKey } from '../../../packages/webapp/src/ui/provider-settings.js';
 
 // Auto-discover and register all providers (built-in + external).
-// IMPORTANT: Keep in sync with src/ui/main.ts — both entry points need all providers.
-import '../providers/index.js';
+// IMPORTANT: Keep in sync with packages/webapp/src/ui/main.ts — both entry points need all providers.
+import '../../../packages/webapp/src/providers/index.js';
 
 const log = createLogger('offscreen');
 
@@ -66,7 +66,7 @@ async function init(): Promise<void> {
   console.log('[slicc-offscreen] Orchestrator initialized');
 
   // Initialize lick manager for cron tasks in extension mode
-  const { getLickManager } = await import('../scoops/lick-manager.js');
+  const { getLickManager } = await import('../../../packages/webapp/src/scoops/lick-manager.js');
   const lickManager = getLickManager();
   await lickManager.init();
   orchestrator.setLickManager(lickManager);
@@ -103,7 +103,7 @@ async function init(): Promise<void> {
       const eventLabel = isWebhook ? 'Webhook Event' : isSprinkle ? 'Sprinkle Event' : 'Cron Event';
       const content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
 
-      const channelMsg: import('../scoops/types.js').ChannelMessage = {
+      const channelMsg: import('../../../packages/webapp/src/scoops/types.js').ChannelMessage = {
         id: msgId,
         chatJid: resolvedTarget.jid,
         senderId: channel,

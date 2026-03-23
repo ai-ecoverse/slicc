@@ -190,7 +190,7 @@ function isSliccAppPath(pathname: string): boolean {
     pathname.startsWith('/@') ||
     pathname.startsWith('/__') ||
     pathname.startsWith('/api/') ||
-    pathname.startsWith('/src/') ||
+    pathname.startsWith('/packages/webapp/src/') ||
     pathname.startsWith('/node_modules/') ||
     pathname === '/' ||
     pathname === '/index.html'

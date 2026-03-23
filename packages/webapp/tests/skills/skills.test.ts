@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
-import { VirtualFS } from '../fs/index.js';
+import { VirtualFS } from '../../src/fs/index.js';
 import {
   initSkillsSystem,
   readState,
@@ -11,7 +11,7 @@ import {
   uninstallSkill,
   readManifest,
   SLICC_DIR,
-} from './index.js';
+} from '../../src/skills/index.js';
 
 const SKILLS_DIR = '/workspace/skills';
 

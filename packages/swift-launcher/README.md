@@ -13,7 +13,7 @@ launches them with SLICC attached.
 
 ```bash
 # Build the .app bundle
-cd sliccstart
+cd packages/swift-launcher
 ./build-app.sh
 
 # Strip quarantine (unsigned app)
@@ -31,7 +31,7 @@ cp -r build/Sliccstart.app /Applications/
 ## Development
 
 ```bash
-cd sliccstart
+cd packages/swift-launcher
 swift build           # Build
 swift run Sliccstart  # Run from terminal (no .app bundle)
 ```
@@ -41,10 +41,10 @@ swift run Sliccstart  # Run from terminal (no .app bundle)
 If Sliccstart is run from outside the SLICC repo, it clones the repository
 to `~/.slicc/slicc/` and builds it on first run (2-3 minutes).
 
-If run from inside the SLICC repo (e.g., `sliccstart/build/Sliccstart.app`),
+If run from inside the SLICC repo (e.g., `packages/swift-launcher/build/Sliccstart.app`),
 it auto-detects the local checkout and uses it directly — no clone needed.
 You still need to build SLICC first: `npm install && npm run build && npm run build:extension`
-and build the native server: `cd sliccserver && swift build`
+and build the native server: `cd packages/swift-server && swift build`
 
 ## Features
 
@@ -62,8 +62,8 @@ Sliccstart is a thin GUI. All SLICC intelligence stays in TypeScript:
 
 | Action | What Sliccstart runs |
 |--------|---------------------|
-| Launch browser | `node dist/cli/index.js --cdp-port=9222` with `CHROME_PATH` env (port 5710) |
-| Launch Electron | `node dist/cli/index.js --electron /path/to/app --kill` (port 5711+) |
+| Launch browser | `node dist/node-server/index.js --cdp-port=9222` with `CHROME_PATH` env (port 5710) |
+| Launch Electron | `node dist/node-server/index.js --electron /path/to/app --kill` (port 5711+) |
 | Get extension | Opens Chrome Web Store listing in Chrome |
 | Update | `git pull && npm install && npm run build` |
 

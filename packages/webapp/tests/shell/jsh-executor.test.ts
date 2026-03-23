@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { CommandContext, IFileSystem, FsStat } from 'just-bash';
-import { executeJshFile, executeJsCode } from './jsh-executor.js';
+import { executeJshFile, executeJsCode } from '../../src/shell/jsh-executor.js';
 
 /** Minimal in-memory IFileSystem for tests */
 function createMockFs(files: Record<string, string> = {}): IFileSystem {

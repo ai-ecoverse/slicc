@@ -16,7 +16,7 @@ import type {
   PanelCdpResponseMsg,
   CdpEventMsg,
   ExtensionMessage,
-} from '../extension/messages.js';
+} from '../../../chrome-extension/src/messages.js';
 
 export class PanelCdpProxy implements CDPTransport {
   private _state: ConnectionState = 'disconnected';

@@ -5,7 +5,7 @@
  *
  * Usage:
  *   1. npm run dev:full
- *   2. node test-inline-sprinkles.mjs
+ *   2. node packages/webapp/tests/test-inline-sprinkles.mjs
  */
 
 import puppeteer from 'puppeteer-core';
@@ -94,7 +94,7 @@ async function main() {
   try {
     const result = await page.evaluate(async () => {
       // Dynamically import the inline-sprinkle module
-      const mod = await import('/src/ui/inline-sprinkle.ts');
+      const mod = await import('/packages/webapp/src/ui/inline-sprinkle.ts');
       const wrapper = document.querySelector('[data-msg-id="test-inline-1"] .msg__content');
       if (!wrapper) return { error: 'Test message not found' };
 
@@ -244,7 +244,7 @@ async function main() {
   console.log('\nTest 5: Multiple shtml blocks in one message');
   try {
     const result = await page.evaluate(async () => {
-      const mod = await import('/src/ui/inline-sprinkle.ts');
+      const mod = await import('/packages/webapp/src/ui/inline-sprinkle.ts');
       const messagesEl = document.querySelector('.chat__messages');
 
       const wrapper = document.createElement('div');
@@ -292,7 +292,7 @@ async function main() {
   console.log('\nTest 6: Non-shtml code blocks are left untouched');
   try {
     const result = await page.evaluate(async () => {
-      const mod = await import('/src/ui/inline-sprinkle.ts');
+      const mod = await import('/packages/webapp/src/ui/inline-sprinkle.ts');
       const container = document.createElement('div');
       container.innerHTML = `
         <pre><code class="language-javascript">const x = 1;</code></pre>
@@ -319,7 +319,7 @@ async function main() {
   console.log('\nTest 7: Dispose removes iframes and cleans up');
   try {
     const result = await page.evaluate(async () => {
-      const mod = await import('/src/ui/inline-sprinkle.ts');
+      const mod = await import('/packages/webapp/src/ui/inline-sprinkle.ts');
       const container = document.createElement('div');
       container.innerHTML = `<pre><code class="language-shtml">&lt;p&gt;Disposable&lt;/p&gt;</code></pre>`;
       document.body.appendChild(container);
@@ -353,7 +353,7 @@ async function main() {
   console.log('\nTest 8: iframe auto-height via ResizeObserver');
   try {
     const result = await page.evaluate(async () => {
-      const mod = await import('/src/ui/inline-sprinkle.ts');
+      const mod = await import('/packages/webapp/src/ui/inline-sprinkle.ts');
       const container = document.createElement('div');
       container.style.width = '400px';
       container.innerHTML = `<pre><code class="language-shtml">&lt;div style="height:150px"&gt;Tall content&lt;/div&gt;</code></pre>`;

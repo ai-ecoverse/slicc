@@ -30,7 +30,7 @@ import type { VirtualFS } from '../fs/index.js';
 import { installSkillFromDrop } from '../skills/install-from-drop.js';
 import { findDroppedSkillTransferFile, hasDroppedFiles } from './skill-drop.js';
 // Auto-discover and register all providers (built-in + external).
-// IMPORTANT: This import must also appear in src/extension/offscreen.ts
+// IMPORTANT: This import must also appear in packages/chrome-extension/src/offscreen.ts
 // — the extension agent engine runs in the offscreen document, not in this file.
 import '../providers/index.js';
 import { BrowserAPI } from '../cdp/index.js';

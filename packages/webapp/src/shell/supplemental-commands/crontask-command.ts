@@ -67,13 +67,13 @@ function getExtensionLickManager(): import('../../scoops/lick-manager.js').LickM
 /** Lazy-loaded proxy for when the command runs in the side panel terminal */
 let _lickProxy: Awaited<
   ReturnType<
-    typeof import('../../../packages/chrome-extension/src/lick-manager-proxy.js').createLickManagerProxy
+    typeof import('../../../../chrome-extension/src/lick-manager-proxy.js').createLickManagerProxy
   >
 > | null = null;
 async function getLickProxy() {
   if (_lickProxy) return _lickProxy;
   const { createLickManagerProxy } = await import(
-    '../../../packages/chrome-extension/src/lick-manager-proxy.js'
+    '../../../../chrome-extension/src/lick-manager-proxy.js'
   );
   _lickProxy = createLickManagerProxy();
   return _lickProxy;
@@ -208,7 +208,7 @@ export function createCrontaskCommand(): Command {
               ? extLm.listCronTasks()
               : await (async () => {
                   const { listCronTasksAsync } =
-                    await import('../../../packages/chrome-extension/src/lick-manager-proxy.js');
+                    await import('../../../../chrome-extension/src/lick-manager-proxy.js');
                   return listCronTasksAsync();
                 })();
             if (tasks.length === 0) {

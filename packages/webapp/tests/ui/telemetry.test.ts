@@ -35,7 +35,7 @@ describe('telemetry', () => {
   });
 
   it('initializes and emits navigate checkpoint', async () => {
-    const { initTelemetry } = await import('./telemetry.js');
+    const { initTelemetry } = await import('../../src/ui/telemetry.js');
     await initTelemetry();
     expect(mockSampleRUM).toHaveBeenCalledWith(
       'navigate',
@@ -47,14 +47,14 @@ describe('telemetry', () => {
 
   it('respects telemetry-disabled flag', async () => {
     mockLocalStorage.setItem('telemetry-disabled', 'true');
-    const { initTelemetry, trackChatSend } = await import('./telemetry.js');
+    const { initTelemetry, trackChatSend } = await import('../../src/ui/telemetry.js');
     await initTelemetry();
     trackChatSend('cone', 'claude');
     expect(mockSampleRUM).not.toHaveBeenCalled();
   });
 
   it('trackChatSend emits formsubmit', async () => {
-    const { initTelemetry, trackChatSend } = await import('./telemetry.js');
+    const { initTelemetry, trackChatSend } = await import('../../src/ui/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -66,7 +66,7 @@ describe('telemetry', () => {
   });
 
   it('trackShellCommand emits fill', async () => {
-    const { initTelemetry, trackShellCommand } = await import('./telemetry.js');
+    const { initTelemetry, trackShellCommand } = await import('../../src/ui/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -75,7 +75,7 @@ describe('telemetry', () => {
   });
 
   it('trackSprinkleView emits viewblock', async () => {
-    const { initTelemetry, trackSprinkleView } = await import('./telemetry.js');
+    const { initTelemetry, trackSprinkleView } = await import('../../src/ui/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -84,7 +84,7 @@ describe('telemetry', () => {
   });
 
   it('trackError emits error', async () => {
-    const { initTelemetry, trackError } = await import('./telemetry.js');
+    const { initTelemetry, trackError } = await import('../../src/ui/telemetry.js');
     await initTelemetry();
     mockSampleRUM.mockClear();
 
@@ -93,7 +93,7 @@ describe('telemetry', () => {
   });
 
   it('track functions are no-op before init', async () => {
-    const { trackChatSend, trackShellCommand } = await import('./telemetry.js');
+    const { trackChatSend, trackShellCommand } = await import('../../src/ui/telemetry.js');
     trackChatSend('cone', 'claude');
     trackShellCommand('ls');
     expect(mockSampleRUM).not.toHaveBeenCalled();
@@ -107,18 +107,18 @@ describe('isTelemetryEnabled / setTelemetryEnabled', () => {
   });
 
   it('returns true by default', async () => {
-    const { isTelemetryEnabled } = await import('./telemetry.js');
+    const { isTelemetryEnabled } = await import('../../src/ui/telemetry.js');
     expect(isTelemetryEnabled()).toBe(true);
   });
 
   it('returns false when disabled', async () => {
     mockLocalStorage.setItem('telemetry-disabled', 'true');
-    const { isTelemetryEnabled } = await import('./telemetry.js');
+    const { isTelemetryEnabled } = await import('../../src/ui/telemetry.js');
     expect(isTelemetryEnabled()).toBe(false);
   });
 
   it('setTelemetryEnabled toggles the flag', async () => {
-    const { isTelemetryEnabled, setTelemetryEnabled } = await import('./telemetry.js');
+    const { isTelemetryEnabled, setTelemetryEnabled } = await import('../../src/ui/telemetry.js');
     expect(isTelemetryEnabled()).toBe(true);
 
     setTelemetryEnabled(false);

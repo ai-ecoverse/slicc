@@ -2,7 +2,7 @@
 import { createServer } from 'http';
 import { createServer as createNetServer } from 'net';
 import { spawn, type ChildProcess } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import express, { type Request, type Response, type NextFunction } from 'express';
@@ -962,6 +962,7 @@ async function main() {
   if (DEV_MODE) {
     // Dev mode: use Vite's dev server as middleware for HMR
     const { createServer: createViteServer } = await import('vite');
+    const webappIndexHtml = resolve(process.cwd(), 'packages/webapp/index.html');
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
@@ -972,6 +973,24 @@ async function main() {
       root: process.cwd(),
     });
     app.use(vite.middlewares);
+    app.use(async (req, res, next) => {
+      if (req.method !== 'GET' || !req.headers.accept?.includes('text/html') || req.path.includes('.')) {
+        next();
+        return;
+      }
+
+      try {
+        const template = readFileSync(webappIndexHtml, 'utf-8');
+        const html = await vite.transformIndexHtml(req.originalUrl, template);
+        res.status(200).setHeader('Content-Type', 'text/html');
+        res.end(html);
+      } catch (err: unknown) {
+        if (err instanceof Error) {
+          vite.ssrFixStacktrace(err);
+        }
+        next(err);
+      }
+    });
     console.log(`Vite dev server middleware attached (HMR active on port ${HMR_PORT})`);
   } else {
     // Production mode: serve built static files

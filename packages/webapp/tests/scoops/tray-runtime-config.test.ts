@@ -15,7 +15,7 @@ import {
   resolveTrayWorkerBaseUrl,
   storeTrayJoinUrl,
   type RuntimeConfigStorage,
-} from './tray-runtime-config.js';
+} from '../../src/scoops/tray-runtime-config.js';
 
 class MemoryStorage implements RuntimeConfigStorage {
   private readonly values = new Map<string, string>();

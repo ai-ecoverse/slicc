@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IFileSystem } from 'just-bash';
-import { createSayCommand } from './say-command.js';
+import { createSayCommand } from '../../../src/shell/supplemental-commands/say-command.js';
 
 function createMockCtx() {
   const fs: Partial<IFileSystem> = {

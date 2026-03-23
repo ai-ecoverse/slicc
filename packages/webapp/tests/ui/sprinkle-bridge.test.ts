@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { SprinkleBridge } from './sprinkle-bridge.js';
-import type { LickEvent } from '../scoops/lick-manager.js';
-import type { VirtualFS } from '../fs/index.js';
+import { SprinkleBridge } from '../../src/ui/sprinkle-bridge.js';
+import type { LickEvent } from '../../src/scoops/lick-manager.js';
+import type { VirtualFS } from '../../src/fs/index.js';
 
 describe('SprinkleBridge', () => {
   let bridge: SprinkleBridge;

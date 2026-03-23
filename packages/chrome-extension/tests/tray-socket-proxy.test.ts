@@ -27,7 +27,7 @@ const mockChrome = {
 
 (globalThis as typeof globalThis & { chrome: typeof mockChrome }).chrome = mockChrome;
 
-const { ServiceWorkerLeaderTraySocket } = await import('./tray-socket-proxy.js');
+const { ServiceWorkerLeaderTraySocket } = await import('../src/tray-socket-proxy.js');
 
 function getOpenedSocketId(): number {
   const openMessage = sentMessages.find((message) => {

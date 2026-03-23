@@ -7,7 +7,7 @@
  * callback map instead of temporary onMessage listeners.
  */
 
-import type { SprinkleManager } from '../ui/sprinkle-manager.js';
+import type { SprinkleManager } from '../../../packages/webapp/src/ui/sprinkle-manager.js';
 
 interface Sprinkle {
   name: string;

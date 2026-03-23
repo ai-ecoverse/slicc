@@ -118,7 +118,7 @@ describe('extension service worker tray socket proxy', () => {
     (globalThis as typeof globalThis & { WebSocket: typeof MockWebSocket }).WebSocket =
       MockWebSocket as never;
 
-    await import('./service-worker.js');
+    await import('../src/service-worker.js');
   });
 
   it('hosts the leader tray socket in the service worker and relays frames', async () => {

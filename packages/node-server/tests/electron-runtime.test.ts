@@ -23,7 +23,7 @@ import {
   resolveElectronAppExecutablePath,
   selectBestOverlayTargets,
   shouldInjectElectronOverlayTarget,
-} from '../../packages/node-server/src/electron-runtime.js';
+} from '../src/electron-runtime.js';
 
 describe('electron-runtime', () => {
   it('parses the default Electron float flags', () => {

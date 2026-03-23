@@ -1,7 +1,7 @@
 import { deflateSync } from 'zlib';
 import { describe, expect, it } from 'vitest';
 
-import { computeAverageLuminance, decodePngPixels } from './electron-controller.js';
+import { computeAverageLuminance, decodePngPixels } from '../src/electron-controller.js';
 
 /**
  * Create a minimal valid PNG (8-bit RGBA) with a solid color fill.

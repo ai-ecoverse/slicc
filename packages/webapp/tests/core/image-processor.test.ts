@@ -5,8 +5,8 @@ import {
   isSupportedImageFormat,
   processImageContent,
   MAX_IMAGE_BYTES,
-} from './image-processor.js';
-import type { ImageContent } from './types.js';
+} from '../../src/core/image-processor.js';
+import type { ImageContent } from '../../src/core/types.js';
 
 describe('getImageByteSize', () => {
   it('calculates correct size for known base64 string', () => {

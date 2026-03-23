@@ -4,9 +4,9 @@ import {
   getSharedState,
   setPlaywrightTeleportBestFollower,
   setPlaywrightTeleportConnectedFollowers,
-} from './playwright-command.js';
-import type { BrowserAPI } from '../../cdp/index.js';
-import type { VirtualFS } from '../../fs/index.js';
+} from '../../../src/shell/supplemental-commands/playwright-command.js';
+import type { BrowserAPI } from '../../../src/cdp/index.js';
+import type { VirtualFS } from '../../../src/fs/index.js';
 
 /** Minimal mock BrowserAPI. */
 function createMockBrowser(overrides: Partial<BrowserAPI> = {}): BrowserAPI {

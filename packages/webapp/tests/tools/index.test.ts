@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import * as tools from './index.js';
+import * as tools from '../../src/tools/index.js';
 
 describe('tools/index exports', () => {
   it('keeps the shared tool factories exported', () => {

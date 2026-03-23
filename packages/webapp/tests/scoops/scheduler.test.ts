@@ -4,9 +4,9 @@
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import 'fake-indexeddb/auto';
-import { TaskScheduler } from './scheduler.js';
-import * as db from './db.js';
-import type { ScheduledTask, RegisteredScoop } from './types.js';
+import { TaskScheduler } from '../../src/scoops/scheduler.js';
+import * as db from '../../src/scoops/db.js';
+import type { ScheduledTask, RegisteredScoop } from '../../src/scoops/types.js';
 
 // Mock scoop for testing
 const mockScoop: RegisteredScoop = {

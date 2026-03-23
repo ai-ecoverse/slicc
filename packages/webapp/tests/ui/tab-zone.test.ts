@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { TabZone, type TabZoneTab } from './tab-zone.js';
+import { TabZone, type TabZoneTab } from '../../src/ui/tab-zone.js';
 
 // Mock localStorage
 const storage = new Map<string, string>();

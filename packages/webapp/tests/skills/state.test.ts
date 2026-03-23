@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { VirtualFS } from '../fs/index.js';
+import { VirtualFS } from '../../src/fs/index.js';
 import {
   initSkillsSystem,
   readState,
@@ -9,9 +9,9 @@ import {
   recordSkillApplication,
   removeSkillFromState,
   computeFileHash,
-} from './state.js';
-import type { SkillsState, AppliedSkill } from './types.js';
-import { SLICC_DIR, STATE_FILE, SKILLS_SYSTEM_VERSION } from './constants.js';
+} from '../../src/skills/state.js';
+import type { SkillsState, AppliedSkill } from '../../src/skills/types.js';
+import { SLICC_DIR, STATE_FILE, SKILLS_SYSTEM_VERSION } from '../../src/skills/constants.js';
 
 describe('Skills State Management', () => {
   let vfs: VirtualFS;

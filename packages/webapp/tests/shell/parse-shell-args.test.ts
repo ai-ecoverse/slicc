@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseShellArgs } from './parse-shell-args.js';
+import { parseShellArgs } from '../../src/shell/parse-shell-args.js';
 
 describe('parseShellArgs', () => {
   it('parses simple unquoted args', () => {

@@ -4,7 +4,7 @@ set -euo pipefail
 VERSION="$1"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_DIR="$SCRIPT_DIR/build/Sliccstart.app"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 echo "=== Sliccstart sign-and-package v${VERSION} ==="
 

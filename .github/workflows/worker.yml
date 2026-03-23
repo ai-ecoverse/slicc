@@ -4,8 +4,8 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - 'src/worker/**'
-      - 'wrangler.jsonc'
+      - 'packages/cloudflare-worker/**'
+      - 'tests/worker/**'
       - '.github/workflows/worker.yml'
   workflow_dispatch:
     inputs:
@@ -40,7 +40,7 @@ jobs:
       - run: npm ci
 
       - name: Verify worker unit tests before deploy
-        run: npx vitest run src/worker/index.test.ts
+        run: npx vitest run tests/worker/index.test.ts
 
       - name: Deploy staging worker (attempt 1)
         id: deploy_attempt_1
@@ -50,7 +50,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: 3.91.0
-          command: deploy --env staging
+          command: deploy --env staging --config packages/cloudflare-worker/wrangler.jsonc
 
       - name: Wait before staging deploy retry 2
         if: steps.deploy_attempt_1.outcome == 'failure'
@@ -65,7 +65,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: 3.91.0
-          command: deploy --env staging
+          command: deploy --env staging --config packages/cloudflare-worker/wrangler.jsonc
 
       - name: Wait before staging deploy retry 3
         if: steps.deploy_attempt_1.outcome == 'failure' && steps.deploy_attempt_2.outcome == 'failure'
@@ -80,7 +80,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: 3.91.0
-          command: deploy --env staging
+          command: deploy --env staging --config packages/cloudflare-worker/wrangler.jsonc
 
       - name: Finalize staging deploy metadata
         id: deploy
@@ -119,7 +119,7 @@ jobs:
             exit 1
           fi
           for attempt in 1 2 3 4 5 6; do
-            if npx vitest run src/worker/deployed.test.ts; then
+            if npx vitest run tests/worker/deployed.test.ts; then
               exit 0
             fi
             if [ "$attempt" -eq 6 ]; then
@@ -146,7 +146,7 @@ jobs:
       - run: npm ci
 
       - name: Verify worker unit tests before deploy
-        run: npx vitest run src/worker/index.test.ts
+        run: npx vitest run tests/worker/index.test.ts
 
       - name: Deploy production worker (attempt 1)
         id: deploy_attempt_1
@@ -156,7 +156,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: 3.91.0
-          command: deploy
+          command: deploy --config packages/cloudflare-worker/wrangler.jsonc
 
       - name: Wait before production deploy retry 2
         if: steps.deploy_attempt_1.outcome == 'failure'
@@ -171,7 +171,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: 3.91.0
-          command: deploy
+          command: deploy --config packages/cloudflare-worker/wrangler.jsonc
 
       - name: Wait before production deploy retry 3
         if: steps.deploy_attempt_1.outcome == 'failure' && steps.deploy_attempt_2.outcome == 'failure'
@@ -186,7 +186,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: 3.91.0
-          command: deploy
+          command: deploy --config packages/cloudflare-worker/wrangler.jsonc
 
       - name: Finalize production deploy metadata
         id: deploy
@@ -225,7 +225,7 @@ jobs:
             exit 1
           fi
           for attempt in 1 2 3 4 5 6; do
-            if npx vitest run src/worker/deployed.test.ts; then
+            if npx vitest run tests/worker/deployed.test.ts; then
               exit 0
             fi
             if [ "$attempt" -eq 6 ]; then

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createScreencaptureCommand } from './screencapture-command.js';
+import { createScreencaptureCommand } from '../../../src/shell/supplemental-commands/screencapture-command.js';
 
 function createMockCtx(opts: { cwd?: string } = {}) {
   return {

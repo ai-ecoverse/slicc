@@ -27,7 +27,7 @@ vi.mock('@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js', () =
   },
 }));
 
-import { compactContext, createCompactContext } from './context-compaction.js';
+import { compactContext, createCompactContext } from '../../src/core/context-compaction.js';
 
 /** Helper to create an AgentMessage */
 function createMessage(role: 'user' | 'assistant' | 'toolResult', text: string): AgentMessage {

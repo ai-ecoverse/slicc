@@ -15,7 +15,7 @@ Build, run, test, and debug SLICC locally.
 | `npm run qa:extension` | Rebuild the extension, then launch the CLI with the dedicated extension profile auto-loading `dist/extension` | Extension verification without re-loading unpacked extension by hand |
 | `npm run build` | Production build: Vite UI + TSC CLI/Electron Node target | Pre-deployment validation; final bundle check |
 | `npm run build:ui` | Vite build only into `dist/ui/` | Build UI assets separately |
-| `npm run build:cli` | TSC build only into `dist/cli/` | Build CLI server + Electron attach helpers separately |
+| `npm run build:cli` | TSC build only into `dist/node-server/` | Build CLI server + Electron attach helpers separately |
 | `npm run build:extension` | Chrome extension bundle into `dist/extension/` | Build extension; load in `chrome://extensions` |
 | `npm run package:release` | Package deterministic extension + Node/CLI release artifacts into `artifacts/release/` (after running the build commands) | Prepare CI/local release assets for GitHub Releases and later npm publish wiring |
 | `npm run start` | Run production CLI (requires build first) | Run built production bundle |
@@ -25,10 +25,10 @@ Build, run, test, and debug SLICC locally.
 | `SLICC_TEST_SERVER_URL=http://localhost:5710 npm run test:server-integration` | Run shared server API conformance tests against an externally running Node or Swift server | Validate standalone server HTTP/WebSocket behavior |
 | `npm run test:watch` | Vitest watch mode | Iterate on test changes; TDD workflow |
 | `npx vitest run src/fs/virtual-fs.test.ts` | Run single test file | Debug a specific module |
-| `npx wrangler dev` | Run the Cloudflare Worker tray hub locally (if Wrangler is installed/authenticated) | Exercise `src/worker/` against a real Worker runtime |
-| `npx wrangler deploy --env staging` | Deploy the staging Cloudflare Worker tray hub using `wrangler.jsonc` | Publish the staging tray hub (`slicc-tray-hub-staging`) used by GitHub Actions |
-| `npx wrangler deploy` | Deploy the production Cloudflare Worker tray hub using `wrangler.jsonc` | Publish the production tray hub |
-| `WORKER_BASE_URL=https://... npx vitest run src/worker/deployed.test.ts` | Run the deployed tray-hub smoke test | Verify the live Worker contract (`POST /tray`, controller attach, leader WebSocket, webhook responses) |
+| `npx wrangler dev --config packages/cloudflare-worker/wrangler.jsonc` | Run the Cloudflare Worker tray hub locally (if Wrangler is installed/authenticated) | Exercise `packages/cloudflare-worker/src/` against a real Worker runtime |
+| `npx wrangler deploy --env staging --config packages/cloudflare-worker/wrangler.jsonc` | Deploy the staging Cloudflare Worker tray hub using `packages/cloudflare-worker/wrangler.jsonc` | Publish the staging tray hub (`slicc-tray-hub-staging`) used by GitHub Actions |
+| `npx wrangler deploy --config packages/cloudflare-worker/wrangler.jsonc` | Deploy the production Cloudflare Worker tray hub using `packages/cloudflare-worker/wrangler.jsonc` | Publish the production tray hub |
+| `WORKER_BASE_URL=https://... npx vitest run tests/worker/deployed.test.ts` | Run the deployed tray-hub smoke test | Verify the live Worker contract (`POST /tray`, controller attach, leader WebSocket, webhook responses) |
 
 ## Release Operations
 
@@ -39,7 +39,7 @@ Releases are automated with semantic-release. Maintainers do not cut version tag
 1. Merge or push conventional-commit changes onto `main`, or manually dispatch `.github/workflows/release.yml` against `main`.
 2. The release workflow runs `npm ci`, `npm run typecheck`, `npm run test`, `npm run build`, and `npm run build:extension` before calling `npx semantic-release`.
 3. `.releaserc.json` limits publishing to `main`, so the semantic-release run exits without publishing when invoked from other refs.
-4. During the semantic-release `prepare` step, `@semantic-release/npm` updates `package.json` to the computed release version, `node dist/cli/sync-release-version.js <version>` updates the root `manifest.json`, and `npm run build:extension && npm run package:release` regenerate versioned release assets in `artifacts/release/`.
+4. During the semantic-release `prepare` step, `@semantic-release/npm` updates `package.json` to the computed release version, `node dist/node-server/sync-release-version.js <version>` updates the root `manifest.json`, and `npm run build:extension && npm run package:release` regenerate versioned release assets in `artifacts/release/`.
 5. During publish, semantic-release publishes the `sliccy` npm package via GitHub Actions OIDC trusted publishing and creates a GitHub Release with generated release notes plus the packaged assets from `artifacts/release/`.
 
 ### GitHub Release outputs
@@ -54,7 +54,7 @@ Each published GitHub Release includes semantic-release generated release notes 
 
 `@semantic-release/npm` publishes the root `sliccy` package from `package.json`.
 
-- Published files: `dist/cli/` and `dist/ui/`
+- Published files: `dist/node-server/` and `dist/ui/`
 - CLI entrypoint: `slicc`
 - Node requirement: `>=22`
 
@@ -149,8 +149,8 @@ Add these at the **repository** level instead:
 
 Nothing else is required for CI configuration:
 
-- production deploys use the default Worker name from `wrangler.jsonc`: `slicc-tray-hub`
-- staging deploys use the hardcoded staging Worker name in `wrangler.jsonc`: `slicc-tray-hub-staging`
+- production deploys use the default Worker name from `packages/cloudflare-worker/wrangler.jsonc`: `slicc-tray-hub`
+- staging deploys use the hardcoded staging Worker name in `packages/cloudflare-worker/wrangler.jsonc`: `slicc-tray-hub-staging`
 - the post-deploy smoke test reads the deployed URL from `cloudflare/wrangler-action` output, so GitHub does **not** need a `WORKER_BASE_URL` variable
 
 ### Workflow behavior
@@ -160,16 +160,16 @@ Nothing else is required for CI configuration:
   - skips forked PRs because GitHub does not expose deployment secrets there
   - runs production deploy + smoke test on pushes to `main` that touch the Worker/Wrangler config
   - supports manual dispatch with `target=staging|production`
-  - uses `cloudflare/wrangler-action@v3`, pins Wrangler `3.91.0` (first release with `wrangler.jsonc` support), and passes its `deployment-url` output into `src/worker/deployed.test.ts`
+  - uses `cloudflare/wrangler-action@v3`, pins Wrangler `3.91.0` (first release with `wrangler.jsonc` support), points Wrangler at `packages/cloudflare-worker/wrangler.jsonc`, and passes its `deployment-url` output into `tests/worker/deployed.test.ts`
   - retries the deployed smoke test for up to ~90 seconds after deploy so brief `workers.dev` propagation lag does not fail an otherwise healthy rollout
 
 ### Local validation commands
 
 Use these before relying on CI:
 
-- `npx wrangler deploy --dry-run --env staging`
-- `npx wrangler deploy --dry-run`
-- `WORKER_BASE_URL=<deployed-worker-url> npx vitest run src/worker/deployed.test.ts`
+- `npx wrangler deploy --dry-run --env staging --config packages/cloudflare-worker/wrangler.jsonc`
+- `npx wrangler deploy --dry-run --config packages/cloudflare-worker/wrangler.jsonc`
+- `WORKER_BASE_URL=<deployed-worker-url> npx vitest run tests/worker/deployed.test.ts`
 
 ## Extension Testing Steps
 

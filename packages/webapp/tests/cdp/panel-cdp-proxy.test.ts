@@ -34,7 +34,7 @@ const mockChrome = {
 (globalThis as any).chrome = mockChrome;
 
 // Now import after mock is in place
-const { PanelCdpProxy } = await import('./panel-cdp-proxy.js');
+const { PanelCdpProxy } = await import('../../src/cdp/panel-cdp-proxy.js');
 
 describe('PanelCdpProxy', () => {
   let proxy: InstanceType<typeof PanelCdpProxy>;

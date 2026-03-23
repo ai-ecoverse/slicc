@@ -4,8 +4,8 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import 'fake-indexeddb/auto';
-import { SessionStore } from './session-store.js';
-import type { ChatMessage, Session } from './types.js';
+import { SessionStore } from '../../src/ui/session-store.js';
+import type { ChatMessage, Session } from '../../src/ui/types.js';
 
 describe('SessionStore', () => {
   let store: SessionStore;

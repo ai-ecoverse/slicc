@@ -4,8 +4,8 @@
 
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { VirtualFS } from '../fs/index.js';
-import { VfsAdapter } from './vfs-adapter.js';
+import { VirtualFS } from '../../src/fs/index.js';
+import { VfsAdapter } from '../../src/shell/vfs-adapter.js';
 
 describe('VfsAdapter', () => {
   let vfs: VirtualFS;

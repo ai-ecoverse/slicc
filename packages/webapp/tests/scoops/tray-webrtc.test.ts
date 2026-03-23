@@ -7,19 +7,19 @@ import {
   type TrayDataChannelLike,
   type TrayPeerConnectionLike,
   type FollowerAutoReconnectHandle,
-} from './tray-webrtc.js';
+} from '../../src/scoops/tray-webrtc.js';
 import {
   setFollowerTrayRuntimeStatus,
   getFollowerTrayRuntimeStatus,
-} from './tray-follower-status.js';
-import type { FollowerBootstrapResponse } from '../worker/shared.js';
+} from '../../src/scoops/tray-follower-status.js';
 import type {
+  FollowerBootstrapResponse,
   LeaderToWorkerControlMessage,
   TrayBootstrapEvent,
   TrayBootstrapStatus,
   TrayIceCandidate,
   TraySessionDescription,
-} from '../worker/tray-signaling.js';
+} from '../../src/scoops/tray-types.js';
 
 class FakeDataChannel implements TrayDataChannelLike {
   readyState = 'connecting';

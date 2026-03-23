@@ -3,8 +3,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SLICC_ROOT="$(dirname "$SCRIPT_DIR")"
-SLICC_SERVER_DIR="$SLICC_ROOT/sliccserver"
+SLICC_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+SLICC_SERVER_DIR="$SLICC_ROOT/packages/swift-server"
 APP_NAME="Sliccstart"
 APP_DIR="$SCRIPT_DIR/build/$APP_NAME.app"
 CONTENTS="$APP_DIR/Contents"

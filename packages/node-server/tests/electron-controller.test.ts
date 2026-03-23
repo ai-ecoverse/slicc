@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { findMatchingElectronAppPids } from './electron-controller.js';
+import { findMatchingElectronAppPids } from '../src/electron-controller.js';
 
 describe('findMatchingElectronAppPids', () => {
   it('excludes the current CLI pid while keeping other matching Electron app pids', () => {
@@ -9,7 +9,7 @@ describe('findMatchingElectronAppPids', () => {
         [
           {
             pid: 111,
-            commandLine: 'node dist/cli/index.js --electron /Applications/Slack.app',
+            commandLine: 'node dist/node-server/index.js --electron /Applications/Slack.app',
             executablePath: '/usr/local/bin/node',
           },
           {
@@ -41,17 +41,17 @@ describe('findMatchingElectronAppPids', () => {
           },
           {
             pid: 101,
-            commandLine: 'npx tsx src/cli/index.ts --dev --electron /Applications/Slack.app',
+            commandLine: 'npx tsx packages/node-server/src/index.ts --dev --electron /Applications/Slack.app',
             executablePath: '/usr/local/bin/node',
           },
           {
             pid: 102,
-            commandLine: 'tsx src/cli/index.ts --dev --electron /Applications/Slack.app',
+            commandLine: 'tsx packages/node-server/src/index.ts --dev --electron /Applications/Slack.app',
             executablePath: '/usr/local/bin/node',
           },
           {
             pid: 103,
-            commandLine: 'node dist/cli/index.js --electron /Applications/Slack.app',
+            commandLine: 'node dist/node-server/index.js --electron /Applications/Slack.app',
             executablePath: '/usr/local/bin/node',
           },
           {
@@ -105,12 +105,12 @@ describe('findMatchingElectronAppPids', () => {
         [
           {
             pid: 50,
-            commandLine: 'Node dist/cli/index.js --electron /Applications/Slack.app',
+            commandLine: 'Node dist/node-server/index.js --electron /Applications/Slack.app',
             executablePath: null,
           },
           {
             pid: 51,
-            commandLine: 'NPX tsx src/cli/index.ts --electron /Applications/Slack.app',
+            commandLine: 'NPX tsx packages/node-server/src/index.ts --electron /Applications/Slack.app',
             executablePath: null,
           },
           {

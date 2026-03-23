@@ -256,7 +256,7 @@ Add a "Telemetry" toggle to `src/ui/provider-settings.ts` (or a new general sett
 ### Step 7: Update documentation
 
 - `CLAUDE.md` (project root): Add telemetry module to the architecture overview.
-- `src/defaults/shared/CLAUDE.md`: No change needed (agent does not interact with telemetry).
+- `packages/vfs-root/shared/CLAUDE.md`: No change needed (agent does not interact with telemetry).
 - `README.md`: Add a "Telemetry" section explaining what is collected and how to opt out.
 
 ## Self-Hosting Option
@@ -265,7 +265,7 @@ For deployments that cannot reach `rum.hlx.page` (air-gapped, corporate proxies)
 
 ### CLI mode
 
-Add a proxy route in `src/cli/index.ts`:
+Add a proxy route in `packages/node-server/src/index.ts`:
 
 ```typescript
 import { createProxyMiddleware } from 'http-proxy-middleware';

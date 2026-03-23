@@ -85,7 +85,7 @@ ensureOffscreen();
 
 // ---------------------------------------------------------------------------
 // Tab grouping — inline copy for service worker (SW can't import shared chunks)
-// See src/extension/tab-group.ts for the canonical implementation used by
+// See packages/chrome-extension/src/tab-group.ts for the canonical implementation used by
 // debugger-client.ts in the offscreen document.
 // ---------------------------------------------------------------------------
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveCliBrowserLaunchUrl } from './launch-url.js';
+import { resolveCliBrowserLaunchUrl } from '../src/launch-url.js';
 
 describe('resolveCliBrowserLaunchUrl', () => {
   it('uses the plain serve origin when lead mode is disabled', () => {

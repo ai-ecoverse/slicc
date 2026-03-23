@@ -32,7 +32,7 @@ For architecture philosophy and principles, see the project's `CLAUDE.md` file.
 | Core Agent          | `src/core/`      | `index.ts`          | pi-mono agent loop, streaming, context compaction      |
 | Scoops Orchestrator | `src/scoops/`    | `orchestrator.ts`   | Multi-agent system (cone + scoops), message routing    |
 | UI                  | `src/ui/`        | `main.ts`           | Vanilla TS layout: Chat + Terminal + Browser Preview   |
-| CLI Server          | `src/cli/`       | `index.ts`          | Express + CDP WebSocket proxy, Chrome launcher         |
+| CLI Server          | `packages/node-server/src/` | `index.ts`          | Express + CDP WebSocket proxy, Chrome launcher         |
 | Extension           | `src/extension/` | `service-worker.ts` | Chrome Manifest V3 extension (side panel)              |
 | Sprinkles           | `src/ui/sprinkle-*.ts` | `sprinkle-manager.ts` | Composable `.shtml` panels with agent bridge API  |
 
@@ -55,8 +55,8 @@ SLICC uses ice cream terminology to describe its multi-agent system:
 - **Scoops**: Isolated sub-agents. Each has sandboxed filesystem (`/scoops/{name}/` + `/shared/`), own shell, own conversation. Created via `scoop_scoop`, fed via `feed_scoop`, removed via `drop_scoop`.
 - **Licks**: External events (webhooks, cron tasks) that trigger scoops. Unified under `LickManager` and `LickEvent`. Shell commands: `webhook`, `crontask`. A lick arrives, the scoop reacts — no human in the loop.
 - **Floats**: Runtime environments. Four are tracked:
-  - **CLI float**: Node.js/Express + Chrome. Code: `src/cli/`.
+  - **CLI float**: Node.js/Express + Chrome. Code: `packages/node-server/src/`.
   - **Extension float**: Chrome extension side panel, zero server. Code: `src/extension/`.
-  - **Electron float**: Electron BrowserWindow + injected overlay shell + serve-only CLI reuse. Code: `src/cli/electron-main.ts` + `src/ui/electron-overlay.ts`.
+  - **Electron float**: Electron BrowserWindow + injected overlay shell + serve-only CLI reuse. Code: `packages/node-server/src/electron-main.ts` + `src/ui/electron-overlay.ts`.
   - **Cloud float**: Planned — Cloudflare Containers or E2B sandboxes.
 

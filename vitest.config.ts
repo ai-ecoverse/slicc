@@ -1,0 +1,1 @@
+export { default } from './packages/webapp/vite.config.ts';

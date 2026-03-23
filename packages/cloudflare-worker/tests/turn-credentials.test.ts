@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fetchTURNCredentials } from './turn-credentials.js';
+import { fetchTURNCredentials } from '../src/turn-credentials.js';
 
 describe('turn-credentials', () => {
   it('fetches TURN credentials and prepends a STUN server', async () => {

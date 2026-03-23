@@ -9,7 +9,7 @@ import {
   setElectronOverlayTab,
   shouldSnapElectronOverlayLauncher,
   toggleElectronOverlay,
-} from './overlay-shell-state.js';
+} from '../../src/ui/overlay-shell-state.js';
 
 describe('overlay-shell-state', () => {
   it('creates a closed shell with the chat tab by default', () => {

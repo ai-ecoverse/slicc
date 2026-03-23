@@ -14,6 +14,6 @@
     "jsx": "preserve",
     "types": ["vite/client"]
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["src/cli/**/*.ts"]
+  "include": ["packages/webapp/src/**/*.ts", "packages/chrome-extension/src/**/*.ts"],
+  "exclude": ["packages/node-server/src/**/*.ts"]
 }

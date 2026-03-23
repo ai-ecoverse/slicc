@@ -5,7 +5,7 @@ import {
   resetReconnectAttempts,
   setFollowerLastPingTime,
   type FollowerTrayRuntimeStatus,
-} from './tray-follower-status.js';
+} from '../../src/scoops/tray-follower-status.js';
 
 /** Helper to build a status with sensible defaults for all fields. */
 function makeStatus(overrides: Partial<FollowerTrayRuntimeStatus> = {}): FollowerTrayRuntimeStatus {

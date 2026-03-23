@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { normalizeAccessibilityText } from './normalize-accessibility-text.js';
+import { normalizeAccessibilityText } from '../../src/cdp/normalize-accessibility-text.js';
 
 describe('normalizeAccessibilityText', () => {
   it('returns fallback for nullish values', () => {

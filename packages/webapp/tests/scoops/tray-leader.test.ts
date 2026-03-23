@@ -7,7 +7,7 @@ import {
   type LeaderTraySession,
   type LeaderTraySessionStore,
   type LeaderTrayWebSocket,
-} from './tray-leader.js';
+} from '../../src/scoops/tray-leader.js';
 
 class MemorySessionStore implements LeaderTraySessionStore {
   value: LeaderTraySession | null = null;

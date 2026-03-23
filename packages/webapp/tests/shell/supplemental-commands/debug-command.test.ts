@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { IFileSystem } from 'just-bash';
-import { createDebugCommand } from './debug-command.js';
+import { createDebugCommand } from '../../../src/shell/supplemental-commands/debug-command.js';
 
 function createMockCtx() {
   return {

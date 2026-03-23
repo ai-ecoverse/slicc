@@ -4,7 +4,7 @@ import {
   hydrateInlineSprinkles,
   disposeInlineSprinkles,
   type InlineSprinkleInstance,
-} from './inline-sprinkle.js';
+} from '../../src/ui/inline-sprinkle.js';
 
 // Mock collectThemeCSS — avoid needing a real DOM with stylesheets
 vi.mock('./sprinkle-renderer.js', () => ({

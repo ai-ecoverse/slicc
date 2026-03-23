@@ -3,9 +3,9 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IFileSystem, SecureFetch } from 'just-bash';
 import { zipSync } from 'fflate';
-import { VirtualFS } from '../../fs/index.js';
-import { initSkillsSystem } from '../../skills/index.js';
-import { createSkillCommand, createUpskillCommand, _resetGlobalFsCache, scoreSkills } from './upskill-command.js';
+import { VirtualFS } from '../../../src/fs/index.js';
+import { initSkillsSystem } from '../../../src/skills/index.js';
+import { createSkillCommand, createUpskillCommand, _resetGlobalFsCache, scoreSkills } from '../../../src/shell/supplemental-commands/upskill-command.js';
 
 function createMockCtx() {
   const fs: Partial<IFileSystem> = {

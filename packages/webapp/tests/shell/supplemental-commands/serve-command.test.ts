@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createServeCommand } from './serve-command.js';
+import { createServeCommand } from '../../../src/shell/supplemental-commands/serve-command.js';
 
 function normalizeMockPath(path: string): string {
   const resolved: string[] = [];

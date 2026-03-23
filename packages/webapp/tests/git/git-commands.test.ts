@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import * as isoGit from 'isomorphic-git';
-import { VirtualFS } from '../fs/virtual-fs.js';
-import { GitCommands } from './git-commands.js';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { GitCommands } from '../../src/git/git-commands.js';
 
 describe('GitCommands', () => {
   let vfs: VirtualFS;

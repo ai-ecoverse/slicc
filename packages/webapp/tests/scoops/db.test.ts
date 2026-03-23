@@ -21,8 +21,8 @@ import {
   deleteTask,
   getState,
   setState,
-} from './db.js';
-import type { RegisteredScoop, ChannelMessage, ScheduledTask } from './types.js';
+} from '../../src/scoops/db.js';
+import type { RegisteredScoop, ChannelMessage, ScheduledTask } from '../../src/scoops/types.js';
 
 describe('Scoops Database', () => {
   beforeAll(async () => {

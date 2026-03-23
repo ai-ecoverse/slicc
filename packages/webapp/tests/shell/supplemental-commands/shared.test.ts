@@ -8,7 +8,7 @@ import {
   ensureWithinRoot,
   isSafeServeEntry,
   resolveServeEntryPath,
-} from './shared.js';
+} from '../../../src/shell/supplemental-commands/shared.js';
 
 describe('toPreviewUrl', () => {
   it('returns localhost preview URL in non-extension environment', () => {

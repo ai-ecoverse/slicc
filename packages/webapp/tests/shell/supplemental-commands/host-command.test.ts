@@ -4,8 +4,8 @@ import {
   formatFollowerOutput,
   formatLeaderOutput,
   formatDuration,
-} from './host-command.js';
-import type { FollowerTrayRuntimeStatus } from '../../scoops/tray-follower-status.js';
+} from '../../../src/shell/supplemental-commands/host-command.js';
+import type { FollowerTrayRuntimeStatus } from '../../../src/scoops/tray-follower-status.js';
 
 /** Helper to build a FollowerTrayRuntimeStatus with sensible defaults for the new diagnostic fields. */
 function followerStatus(

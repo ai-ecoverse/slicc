@@ -22,8 +22,8 @@ const TIMEOUT = (flags.timeout || 120) * 1000;
 const prompt = positional.join(' ');
 
 if (!prompt && !flags.readLast) {
-  console.error('Usage: node tools/slicc-prompt.mjs "your prompt" [--script "cmd"] [--clear] [--timeout 120]');
-  console.error('       node tools/slicc-prompt.mjs --read-last');
+  console.error('Usage: node packages/dev-tools/tools/slicc-prompt.mjs "your prompt" [--script "cmd"] [--clear] [--timeout 120]');
+  console.error('       node packages/dev-tools/tools/slicc-prompt.mjs --read-last');
   process.exit(1);
 }
 

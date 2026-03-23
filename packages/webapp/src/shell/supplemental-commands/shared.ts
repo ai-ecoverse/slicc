@@ -145,7 +145,7 @@ export async function getSqlJs(): Promise<SqlJsModule> {
       const initSqlJs = (sqlModule as { default: InitSqlJs }).default;
       const wasmBase =
         typeof window === 'undefined'
-          ? new URL('../../../node_modules/sql.js/dist/', import.meta.url).toString()
+          ? new URL('../../../../../node_modules/sql.js/dist/', import.meta.url).toString()
           : SQLJS_WASM_CDN;
       return initSqlJs({ locateFile: (file) => `${wasmBase}${file}` });
     })();
@@ -161,7 +161,7 @@ export async function getPyodide(): Promise<PyodideInterface> {
       let indexURL: string;
       if (typeof window === 'undefined') {
         indexURL = decodeURIComponent(
-          new URL('../../../node_modules/pyodide/', import.meta.url).pathname
+          new URL('../../../../../node_modules/pyodide/', import.meta.url).pathname
         );
       } else if (isExtension) {
         indexURL = chrome.runtime.getURL('pyodide/');

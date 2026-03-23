@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createWebhookCommand } from './webhook-command.js';
+import { createWebhookCommand } from '../../../src/shell/supplemental-commands/webhook-command.js';
 
 describe('webhook command', () => {
   it('shows help with --help', async () => {

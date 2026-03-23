@@ -29,7 +29,7 @@ const mockChrome = {
 
 (globalThis as any).chrome = mockChrome;
 
-const { OffscreenClient } = await import('./offscreen-client.js');
+const { OffscreenClient } = await import('../../src/ui/offscreen-client.js');
 
 function simulateMessage(source: string, payload: unknown): void {
   for (const listener of messageListeners) {

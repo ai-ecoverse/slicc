@@ -19,8 +19,8 @@ npm run start:electron -- /Applications/Slack.app
 You can also run the CLI directly:
 
 ```bash
-node dist/cli/index.js --electron /Applications/Slack.app
-node dist/cli/index.js --electron-app=/Applications/Slack.app --kill
+node dist/node-server/index.js --electron /Applications/Slack.app
+node dist/node-server/index.js --electron-app=/Applications/Slack.app --kill
 ```
 
 ## Flags

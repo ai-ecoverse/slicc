@@ -4,8 +4,8 @@
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import 'fake-indexeddb/auto';
-import { VirtualFS } from './virtual-fs.js';
-import { RestrictedFS } from './restricted-fs.js';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { RestrictedFS } from '../../src/fs/restricted-fs.js';
 
 describe('RestrictedFS', () => {
   let vfs: VirtualFS;

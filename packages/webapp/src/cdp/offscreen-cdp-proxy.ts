@@ -13,7 +13,7 @@ import type {
   CdpResponseMsg,
   CdpEventMsg,
   ExtensionMessage,
-} from '../extension/messages.js';
+} from '../../../chrome-extension/src/messages.js';
 
 export class OffscreenCdpProxy implements CDPTransport {
   private _state: ConnectionState = 'disconnected';

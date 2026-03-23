@@ -308,14 +308,14 @@ export function buildElectronServerSpawnConfig(
   if (options.dev) {
     return {
       command: (options.platform ?? process.platform) === 'win32' ? 'npx.cmd' : 'npx',
-      args: ['tsx', 'src/cli/index.ts', '--dev', '--serve-only', `--cdp-port=${options.cdpPort}`],
+      args: ['tsx', 'packages/node-server/src/index.ts', '--dev', '--serve-only', `--cdp-port=${options.cdpPort}`],
     };
   }
 
   return {
     command: options.nodePath ?? process.env['npm_node_execpath'] ?? 'node',
     args: [
-      resolve(projectRoot, 'dist/cli/index.js'),
+      resolve(projectRoot, 'dist/node-server/index.js'),
       '--serve-only',
       `--cdp-port=${options.cdpPort}`,
     ],

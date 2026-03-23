@@ -34,10 +34,10 @@ function main(): void {
   const version = process.argv[2];
 
   if (!version) {
-    throw new Error('Usage: node dist/cli/sync-release-version.js <version>');
+    throw new Error('Usage: node dist/node-server/sync-release-version.js <version>');
   }
 
-  writeManifestVersion(resolve(PROJECT_ROOT, 'manifest.json'), version);
+  writeManifestVersion(resolve(PROJECT_ROOT, 'packages/chrome-extension/manifest.json'), version);
   console.log(`Updated manifest.json version to ${version}`);
 }
 

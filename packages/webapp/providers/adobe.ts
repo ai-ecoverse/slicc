@@ -13,12 +13,12 @@
  * Reuses pi-ai's Anthropic stream functions — the IMS access token is passed
  * as the API key (JWT >200 chars triggers Bearer auth in the Anthropic SDK).
  *
- * This file lives in /providers/ and is auto-discovered by the build-time
- * provider system via import.meta.glob. It is safe to commit — no secrets
- * are hardcoded; the proxy endpoint (base URL) must be configured at runtime.
+ * This file lives in packages/webapp/providers/ and is auto-discovered by the
+ * build-time provider system via import.meta.glob. It is safe to commit — no
+ * secrets are hardcoded; the proxy endpoint (base URL) must be configured at runtime.
  */
 
-import type { ProviderConfig, OAuthLauncher } from '../packages/webapp/src/providers/types.js';
+import type { ProviderConfig, OAuthLauncher } from '../src/providers/types.js';
 import {
   registerApiProvider,
   streamAnthropic,
@@ -37,7 +37,7 @@ import {
   saveOAuthAccount,
   getAccounts,
   getBaseUrlForProvider,
-} from '../packages/webapp/src/ui/provider-settings.js';
+} from '../src/ui/provider-settings.js';
 
 // ── Config ──────────────────────────────────────────────────────────
 
@@ -53,12 +53,12 @@ interface AdobeConfig {
   extensionRedirectUri?: string;
 }
 
-const configFiles = import.meta.glob('/providers/adobe-config.json', {
+const configFiles = import.meta.glob('/packages/webapp/providers/adobe-config.json', {
   eager: true,
   import: 'default',
 }) as Record<string, AdobeConfig>;
 
-const adobeConfig: AdobeConfig = configFiles['/providers/adobe-config.json'] ?? {
+const adobeConfig: AdobeConfig = configFiles['/packages/webapp/providers/adobe-config.json'] ?? {
   clientId: '',
   proxyEndpoint: '',
   scopes: 'openid,profile,email',
@@ -369,7 +369,7 @@ async function silentRenewToken(): Promise<string | null> {
       const authorizeUrl = `${imsHost(imsEnv)}/ims/authorize/v2?${params}`;
 
       // Use the same launcher as normal login — handles CLI, extension, and Electron
-      const { createOAuthLauncher } = await import('../packages/webapp/src/providers/oauth-service.js');
+      const { createOAuthLauncher } = await import('../src/providers/oauth-service.js');
       const launcher = createOAuthLauncher();
       const redirectUrl = await launcher(authorizeUrl);
 

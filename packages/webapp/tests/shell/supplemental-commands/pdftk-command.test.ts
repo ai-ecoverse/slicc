@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createPdftkCommand } from './pdftk-command.js';
+import { createPdftkCommand } from '../../../src/shell/supplemental-commands/pdftk-command.js';
 import type { IFileSystem } from 'just-bash';
 
 function createMockCtx(overrides: Partial<{ fs: Partial<IFileSystem>; cwd: string }> = {}) {

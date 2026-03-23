@@ -1,8 +1,8 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { VirtualFS } from '../fs/index.js';
-import { createSearchTools } from './search-tools.js';
-import type { ToolDefinition } from '../core/types.js';
+import { VirtualFS } from '../../src/fs/index.js';
+import { createSearchTools } from '../../src/tools/search-tools.js';
+import type { ToolDefinition } from '../../src/core/types.js';
 
 describe('Search Tools', () => {
   let fs: VirtualFS;
@@ -20,7 +20,7 @@ describe('Search Tools', () => {
     find = tools.find((t) => t.name === 'find')!;
 
     // Set up test files
-    await fs.writeFile('/src/main.ts', 'import { foo } from "./foo";\nconsole.log(foo());\n');
+    await fs.writeFile('/src/main.ts', 'import { foo } from "../../src/tools/foo";\nconsole.log(foo());\n');
     await fs.writeFile('/src/foo.ts', 'export function foo() {\n  return "bar";\n}\n');
     await fs.writeFile('/readme.md', '# Test Project\nThis is a test.\n');
   });

@@ -9,7 +9,7 @@ import {
   isElectronOverlaySetTabMessage,
   resolveUiRuntimeMode,
   shouldUseRuntimeModeTrayDefaults,
-} from './runtime-mode.js';
+} from '../../src/ui/runtime-mode.js';
 
 describe('runtime-mode', () => {
   it('prefers extension mode when chrome runtime is present', () => {

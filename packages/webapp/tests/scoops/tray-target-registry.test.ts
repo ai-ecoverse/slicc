@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { TrayTargetRegistry } from './tray-target-registry.js';
-import type { RemoteTargetInfo } from './tray-sync-protocol.js';
+import { TrayTargetRegistry } from '../../src/scoops/tray-target-registry.js';
+import type { RemoteTargetInfo } from '../../src/scoops/tray-sync-protocol.js';
 
 describe('TrayTargetRegistry', () => {
   it('returns entries with correct targetId format for one runtime', () => {

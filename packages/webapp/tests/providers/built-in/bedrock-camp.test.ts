@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { getApiProvider } from '@mariozechner/pi-ai/dist/api-registry.js';
 
 // The register() call in the built-in module registers 'bedrock-camp-converse'.
-import { register, config } from './bedrock-camp.js';
+import { register, config } from '../../../src/providers/built-in/bedrock-camp.js';
 
 // Call register manually since built-in modules use explicit registration
 register();

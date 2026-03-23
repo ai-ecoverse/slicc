@@ -6,7 +6,7 @@ import {
   pollTrayFollowerBootstrap,
   retryTrayFollowerBootstrap,
   sendTrayFollowerAnswer,
-} from './tray-follower.js';
+} from '../../src/scoops/tray-follower.js';
 
 describe('tray-follower', () => {
   it('posts the follower join request and normalizes wait responses', async () => {

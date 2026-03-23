@@ -51,7 +51,7 @@ afterAll(() => {
   vi.unstubAllGlobals();
 });
 
-import { getThemePreference, setThemePreference, applyTheme, initTheme } from '../../packages/webapp/src/ui/theme.js';
+import { getThemePreference, setThemePreference, applyTheme, initTheme } from '../../src/ui/theme.js';
 
 describe('theme', () => {
   beforeEach(() => {

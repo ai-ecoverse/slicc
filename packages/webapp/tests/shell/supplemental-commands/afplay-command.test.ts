@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IFileSystem } from 'just-bash';
-import { createAfplayCommand, createChimeCommand } from './afplay-command.js';
+import { createAfplayCommand, createChimeCommand } from '../../../src/shell/supplemental-commands/afplay-command.js';
 
 function createMockCtx(readFileBuffer?: (path: string) => Promise<Uint8Array>) {
   const fs: Partial<IFileSystem> = {

@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { cacheBinaryBody, consumeCachedBinary } from './binary-cache.js';
+import { cacheBinaryBody, consumeCachedBinary } from '../../src/shell/binary-cache.js';
 
 describe('binary-cache', () => {
   beforeEach(() => {

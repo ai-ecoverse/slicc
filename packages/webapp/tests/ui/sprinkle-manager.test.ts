@@ -1,8 +1,8 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { VirtualFS } from '../fs/virtual-fs.js';
-import { SprinkleManager } from './sprinkle-manager.js';
-import type { LickEvent } from '../scoops/lick-manager.js';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { SprinkleManager } from '../../src/ui/sprinkle-manager.js';
+import type { LickEvent } from '../../src/scoops/lick-manager.js';
 
 describe('SprinkleManager', () => {
   let vfs: VirtualFS;

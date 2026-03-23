@@ -62,7 +62,7 @@ const { mockGetProviders, mockGetModels, mockGetModel, mockCreateLogger, mockLog
   }
 );
 
-vi.mock('../core/index.js', () => ({
+vi.mock('../../src/core/index.js', () => ({
   getProviders: mockGetProviders,
   getModels: mockGetModels,
   getModel: mockGetModel,
@@ -150,7 +150,7 @@ const { mockGetRegisteredProviderConfig, mockGetRegisteredProviderIds } = vi.hoi
   };
 });
 
-vi.mock('../providers/index.js', () => ({
+vi.mock('../../src/providers/index.js', () => ({
   getRegisteredProviderConfig: mockGetRegisteredProviderConfig,
   getRegisteredProviderIds: mockGetRegisteredProviderIds,
   shouldIncludeProvider: () => true,
@@ -184,8 +184,8 @@ import {
   resolveModelById,
   saveOAuthAccount,
   getOAuthAccountInfo,
-} from './provider-settings.js';
-import type { ProviderDefault } from './provider-settings.js';
+} from '../../src/ui/provider-settings.js';
+import type { ProviderDefault } from '../../src/ui/provider-settings.js';
 
 describe('multi-account storage', () => {
   beforeEach(() => {

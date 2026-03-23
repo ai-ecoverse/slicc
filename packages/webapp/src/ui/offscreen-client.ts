@@ -22,7 +22,7 @@ import type {
   ErrorMsg,
   IncomingMessageMsg,
   ScoopListMsg,
-} from '../extension/messages.js';
+} from '../../../chrome-extension/src/messages.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('offscreen-client');

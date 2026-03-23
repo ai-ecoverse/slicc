@@ -6,7 +6,7 @@ import {
   isExtensionTabId,
   normalizeExtensionTabId,
   setHiddenTabs,
-} from './tabbed-ui.js';
+} from '../../src/ui/tabbed-ui.js';
 
 describe('tabbed-ui', () => {
   it('keeps the extension and overlay tab order in one shared place', () => {

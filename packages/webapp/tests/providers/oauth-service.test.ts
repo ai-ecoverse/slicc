@@ -41,7 +41,7 @@ function fireMessage(data: unknown) {
 }
 
 // Import AFTER stubs are in place (module reads `window` at call time)
-import { createOAuthLauncher } from './oauth-service.js';
+import { createOAuthLauncher } from '../../src/providers/oauth-service.js';
 
 describe('createOAuthLauncher', () => {
   beforeEach(() => {

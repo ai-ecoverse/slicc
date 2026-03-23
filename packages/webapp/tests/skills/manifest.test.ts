@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
-import { VirtualFS } from '../fs/index.js';
+import { VirtualFS } from '../../src/fs/index.js';
 import {
   parseManifestContent,
   readManifest,
   checkDependencies,
   checkConflicts,
-} from './manifest.js';
+} from '../../src/skills/manifest.js';
 
 describe('Manifest', () => {
   let fs: VirtualFS;

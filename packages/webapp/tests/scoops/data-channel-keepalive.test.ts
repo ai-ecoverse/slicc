@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { DataChannelKeepalive } from './data-channel-keepalive.js';
+import { DataChannelKeepalive } from '../../src/scoops/data-channel-keepalive.js';
 
 describe('DataChannelKeepalive', () => {
   beforeEach(() => {

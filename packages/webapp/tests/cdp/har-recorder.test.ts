@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import 'fake-indexeddb/auto';
-import { HarRecorder } from './har-recorder.js';
-import type { CDPTransport } from './transport.js';
-import type { CDPEventListener, ConnectionState, CDPConnectOptions } from './types.js';
-import { VirtualFS } from '../fs/virtual-fs.js';
+import { HarRecorder } from '../../src/cdp/har-recorder.js';
+import type { CDPTransport } from '../../src/cdp/transport.js';
+import type { CDPEventListener, ConnectionState, CDPConnectOptions } from '../../src/cdp/types.js';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
 
 // Mock CDP Transport
 class MockCDPTransport implements CDPTransport {
