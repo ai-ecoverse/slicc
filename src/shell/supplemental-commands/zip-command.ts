@@ -7,7 +7,7 @@ async function addPathToZip(
   ctx: CommandContext,
   fsPath: string,
   zipPath: string,
-  out: Record<string, Uint8Array>,
+  out: Record<string, Uint8Array>
 ): Promise<number> {
   const stat = await ctx.fs.stat(fsPath);
   if (stat.isFile) {

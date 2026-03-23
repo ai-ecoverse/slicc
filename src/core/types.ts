@@ -123,7 +123,7 @@ export interface AgentTool<TDetails = unknown> extends Tool {
     toolCallId: string,
     params: Record<string, any>,
     signal?: AbortSignal,
-    onUpdate?: AgentToolUpdateCallback<TDetails>,
+    onUpdate?: AgentToolUpdateCallback<TDetails>
   ) => Promise<AgentToolResult<TDetails>>;
 }
 
@@ -183,8 +183,20 @@ export type AgentEvent =
   | { type: 'message_update'; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent }
   | { type: 'message_end'; message: AgentMessage }
   | { type: 'tool_execution_start'; toolCallId: string; toolName: string; args: unknown }
-  | { type: 'tool_execution_update'; toolCallId: string; toolName: string; args: unknown; partialResult: unknown }
-  | { type: 'tool_execution_end'; toolCallId: string; toolName: string; result: unknown; isError: boolean };
+  | {
+      type: 'tool_execution_update';
+      toolCallId: string;
+      toolName: string;
+      args: unknown;
+      partialResult: unknown;
+    }
+  | {
+      type: 'tool_execution_end';
+      toolCallId: string;
+      toolName: string;
+      result: unknown;
+      isError: boolean;
+    };
 
 /** Callback for agent events. */
 export type AgentEventListener = (event: AgentEvent) => void;
@@ -192,10 +204,7 @@ export type AgentEventListener = (event: AgentEvent) => void;
 // ─── Agent Loop Config ──────────────────────────────────────────────────────
 
 /** Stream function type — called to get LLM streaming response. */
-export type StreamFn = (
-  context: LlmContext,
-  options: StreamOptions,
-) => AssistantMessageEventStream;
+export type StreamFn = (context: LlmContext, options: StreamOptions) => AssistantMessageEventStream;
 
 /** Options passed to the stream function. */
 export interface StreamOptions {

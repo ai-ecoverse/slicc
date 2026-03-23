@@ -53,18 +53,33 @@ interface CronTaskInfo {
   createdAt: string;
 }
 
+const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+
+/** Get the LickManager from globalThis (set by offscreen.ts in extension mode) */
+function getExtensionLickManager(): import('../../scoops/lick-manager.js').LickManager | null {
+  return (
+    ((globalThis as unknown as Record<string, unknown>).__slicc_lickManager as
+      | import('../../scoops/lick-manager.js').LickManager
+      | null) ?? null
+  );
+}
+
+/** Lazy-loaded proxy for when the command runs in the side panel terminal */
+let _lickProxy: Awaited<
+  ReturnType<typeof import('../../extension/lick-manager-proxy.js').createLickManagerProxy>
+> | null = null;
+async function getLickProxy() {
+  if (_lickProxy) return _lickProxy;
+  const { createLickManagerProxy } = await import('../../extension/lick-manager-proxy.js');
+  _lickProxy = createLickManagerProxy();
+  return _lickProxy;
+}
+
 async function apiCall(
   method: string,
   path: string,
-  body?: unknown,
+  body?: unknown
 ): Promise<{ ok: boolean; status: number; data: unknown }> {
-  const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
-
-  // In extension mode, we don't have a CLI server - crontasks not supported
-  if (isExtension) {
-    throw new Error('Cron tasks are only available in CLI mode (npm run dev:full)');
-  }
-
   const init: RequestInit = {
     method,
     headers: { 'Content-Type': 'application/json' },
@@ -130,6 +145,28 @@ export function createCrontaskCommand(): Command {
             };
           }
 
+          // Extension mode: use LickManager directly or proxy to offscreen
+          if (isExtension) {
+            // Warn about filter limitation in extension mode (CSP blocks dynamic eval)
+            if (filter) {
+              return {
+                stdout: '',
+                stderr: 'crontask: --filter is not supported in extension mode (CSP restriction)\n',
+                exitCode: 1,
+              };
+            }
+            const extLm = getExtensionLickManager();
+            const entry = extLm
+              ? await extLm.createCronTask(name, cron, scoop)
+              : await (await getLickProxy()).createCronTask(name, cron, scoop);
+            let output = `Created cron task "${entry.name}"\n`;
+            output += `ID:       ${entry.id}\n`;
+            output += `Cron:     ${entry.cron}\n`;
+            if (entry.scoop) output += `Scoop:    ${entry.scoop}\n`;
+            if (entry.nextRun) output += `Next run: ${new Date(entry.nextRun).toLocaleString()}\n`;
+            return { stdout: output, stderr: '', exitCode: 0 };
+          }
+
           const { ok, data } = await apiCall('POST', '', { name, cron, filter, scoop });
           if (!ok) {
             return {
@@ -160,6 +197,31 @@ export function createCrontaskCommand(): Command {
         }
 
         case 'list': {
+          // Extension mode: use LickManager directly or proxy to offscreen
+          if (isExtension) {
+            const extLm = getExtensionLickManager();
+            const tasks = extLm
+              ? extLm.listCronTasks()
+              : await (async () => {
+                  const { listCronTasksAsync } =
+                    await import('../../extension/lick-manager-proxy.js');
+                  return listCronTasksAsync();
+                })();
+            if (tasks.length === 0) {
+              return { stdout: 'No active cron tasks\n', stderr: '', exitCode: 0 };
+            }
+            let output = 'Active cron tasks:\n';
+            for (const task of tasks) {
+              output += `  ${task.id}  ${task.name.padEnd(20)}  ${task.cron.padEnd(15)}`;
+              if (task.scoop) output += `  -> ${task.scoop}`;
+              if (task.filter) output += `  [filtered]`;
+              output += `  (${task.status})`;
+              if (task.nextRun) output += `  next: ${new Date(task.nextRun).toLocaleString()}`;
+              output += '\n';
+            }
+            return { stdout: output, stderr: '', exitCode: 0 };
+          }
+
           const { ok, data } = await apiCall('GET', '');
           if (!ok) {
             return {
@@ -209,6 +271,18 @@ export function createCrontaskCommand(): Command {
               stderr: `crontask: ${subcommand} requires an ID\n`,
               exitCode: 1,
             };
+          }
+
+          // Extension mode: use LickManager directly or proxy to offscreen
+          if (isExtension) {
+            const extLm = getExtensionLickManager();
+            const deleted = extLm
+              ? await extLm.deleteCronTask(id)
+              : await (await getLickProxy()).deleteCronTask(id);
+            if (!deleted) {
+              return { stdout: '', stderr: `crontask: task "${id}" not found\n`, exitCode: 1 };
+            }
+            return { stdout: `Deleted cron task "${id}"\n`, stderr: '', exitCode: 0 };
           }
 
           const { ok, status, data } = await apiCall('DELETE', `/${id}`);

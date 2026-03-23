@@ -13,22 +13,30 @@ interface Sprinkle {
   name: string;
   title: string;
   path: string;
+  autoOpen: boolean;
 }
 
 const TIMEOUT = 8000;
 
 /** Pending request callbacks, keyed by request ID. */
-const pendingRequests = new Map<string, {
-  resolve: (value: unknown) => void;
-  reject: (error: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
-}>();
+const pendingRequests = new Map<
+  string,
+  {
+    resolve: (value: unknown) => void;
+    reject: (error: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }
+>();
 
 /**
  * Called by the offscreen bridge when it receives a sprinkle-op-response
  * from the side panel. This must be wired in offscreen-bridge.ts.
  */
-export function handleSprinkleOpResponse(payload: { id: string; result?: unknown; error?: string }): void {
+export function handleSprinkleOpResponse(payload: {
+  id: string;
+  result?: unknown;
+  error?: string;
+}): void {
   const pending = pendingRequests.get(payload.id);
   if (!pending) return;
   pendingRequests.delete(payload.id);
@@ -42,7 +50,6 @@ export function handleSprinkleOpResponse(payload: { id: string; result?: unknown
  * Runs in the offscreen document.
  */
 export function createSprinkleManagerProxy(): SprinkleManager {
-
   function request(op: string, args: Record<string, unknown> = {}): Promise<unknown> {
     const id = `sp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     return new Promise((resolve, reject) => {
@@ -54,14 +61,16 @@ export function createSprinkleManagerProxy(): SprinkleManager {
       pendingRequests.set(id, { resolve, reject, timer });
 
       // Broadcast the request — panel will pick it up via OffscreenClient
-      (chrome as any).runtime.sendMessage({
-        source: 'offscreen',
-        payload: { type: 'sprinkle-op', id, op, ...args },
-      }).catch(() => {
-        pendingRequests.delete(id);
-        clearTimeout(timer);
-        reject(new Error('failed to send sprinkle op'));
-      });
+      (chrome as any).runtime
+        .sendMessage({
+          source: 'offscreen',
+          payload: { type: 'sprinkle-op', id, op, ...args },
+        })
+        .catch(() => {
+          pendingRequests.delete(id);
+          clearTimeout(timer);
+          reject(new Error('failed to send sprinkle op'));
+        });
     });
   }
 
@@ -70,8 +79,8 @@ export function createSprinkleManagerProxy(): SprinkleManager {
 
   return {
     async refresh(): Promise<void> {
-      cachedAvailable = (await request('list') as Sprinkle[]) ?? [];
-      cachedOpened = (await request('opened') as string[]) ?? [];
+      cachedAvailable = ((await request('list')) as Sprinkle[]) ?? [];
+      cachedOpened = ((await request('opened')) as string[]) ?? [];
     },
     async open(name: string, _zone?: string): Promise<void> {
       await request('open', { name });
@@ -87,6 +96,12 @@ export function createSprinkleManagerProxy(): SprinkleManager {
     },
     sendToSprinkle(name: string, data: unknown): void {
       request('send', { name, data }).catch(() => {});
+    },
+    async openNewAutoOpenSprinkles(): Promise<void> {
+      await request('openNewAutoOpen');
+    },
+    async restoreOpenSprinkles(): Promise<void> {
+      // No-op in proxy — side panel handles restore directly
     },
   } as unknown as SprinkleManager;
 }

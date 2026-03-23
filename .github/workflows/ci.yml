@@ -6,7 +6,7 @@ on:
 
 jobs:
   ci:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -18,3 +18,16 @@ jobs:
       - run: npm run test
       - run: npm run build
       - run: npm run build:extension
+      - name: Check CLAUDE.md size
+        run: |
+          chars=$(wc -c < CLAUDE.md)
+          echo "CLAUDE.md is $chars characters"
+          if [ "$chars" -gt 30000 ]; then
+            echo "::error::CLAUDE.md exceeds 30,000 character limit ($chars chars). Please condense it."
+            exit 1
+          fi
+      - name: Build Sliccstart
+        run: |
+          cd sliccstart
+          chmod +x build-app.sh
+          ./build-app.sh

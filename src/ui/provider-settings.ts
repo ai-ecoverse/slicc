@@ -7,8 +7,11 @@
 import { getProviders, getModels, getModel, createLogger } from '../core/index.js';
 import type { Model } from '../core/index.js';
 import type { Api } from '@mariozechner/pi-ai';
+import { storeTrayJoinUrl, hasStoredTrayJoinUrl } from '../scoops/tray-runtime-config.js';
+import { getFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import { getThemePreference, setThemePreference } from './theme.js';
 import type { ThemePreference } from './theme.js';
+import type { RefreshTrayRuntimeMsg } from '../extension/messages.js';
 import {
   getRegisteredProviderConfig,
   getRegisteredProviderIds,
@@ -21,14 +24,13 @@ export type { ProviderConfig } from '../providers/index.js';
 // Dynamic wrappers — pi-ai's getModel/getModels use strict generics
 // that require KnownProvider literals, but provider-settings works
 // with runtime strings from localStorage/user selection.
-const getModelDynamic = getModel as (
-  provider: string,
-  modelId: string
-) => Model<Api>;
+const getModelDynamic = getModel as (provider: string, modelId: string) => Model<Api>;
 
-const getModelsDynamic = getModels as (
-  provider: string
-) => Model<Api>[];
+const getModelsDynamic = getModels as (provider: string) => Model<Api>[];
+
+function isExtensionRuntime(): boolean {
+  return typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+}
 
 // Storage keys
 const ACCOUNTS_KEY = 'slicc_accounts';
@@ -55,6 +57,7 @@ export interface Account {
   refreshToken?: string;
   tokenExpiresAt?: number;
   userName?: string;
+  userAvatar?: string;
 }
 
 // Delete legacy keys on first access
@@ -63,7 +66,11 @@ function cleanLegacyKeys(): void {
   if (_legacyCleaned) return;
   _legacyCleaned = true;
   for (const key of LEGACY_KEYS) {
-    try { localStorage.removeItem(key); } catch { /* noop */ }
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      /* noop */
+    }
   }
 }
 
@@ -87,13 +94,18 @@ export function getAvailableProviders(): string[] {
 
 // Get provider config with fallback for unknown providers
 export function getProviderConfig(providerId: string): ProviderConfig {
-  return getRegisteredProviderConfig(providerId) || {
-    id: providerId,
-    name: providerId.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
-    description: `${providerId} provider`,
-    requiresApiKey: true,
-    requiresBaseUrl: false,
-  };
+  return (
+    getRegisteredProviderConfig(providerId) || {
+      id: providerId,
+      name: providerId
+        .split('-')
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' '),
+      description: `${providerId} provider`,
+      requiresApiKey: true,
+      requiresBaseUrl: false,
+    }
+  );
 }
 
 // Get models for a provider
@@ -102,20 +114,63 @@ export function getProviderModels(providerId: string): Model<Api>[] {
     // Bedrock CAMP uses Amazon Bedrock models with custom API
     if (providerId === 'bedrock-camp') {
       const bedrockModels = getModelsDynamic('amazon-bedrock');
-      return bedrockModels.map(m => ({ ...m, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' }));
+      return bedrockModels.map((m) => ({
+        ...m,
+        api: 'bedrock-camp-converse' as Api,
+        provider: 'bedrock-camp',
+      }));
     }
     // Providers that use Anthropic's model registry with custom API
     const providerConfig = getProviderConfig(providerId);
+    if (providerConfig.getModelIds) {
+      // Provider specifies its own model list — resolve against Anthropic registry
+      let modelIds: Array<{ id: string; name?: string }>;
+      try {
+        modelIds = providerConfig.getModelIds();
+      } catch (err) {
+        log.error('Provider getModelIds callback failed', {
+          providerId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return [];
+      }
+      const anthropicModels = getModelsDynamic('anthropic');
+      const modelMap = new Map(anthropicModels.map((m) => [m.id, m]));
+      const customApi = `${providerId}-anthropic` as Api;
+      return modelIds.map((pm) => {
+        const base = modelMap.get(pm.id);
+        if (base) return { ...base, api: customApi, provider: providerId };
+        return {
+          id: pm.id,
+          name: pm.name ?? pm.id,
+          provider: providerId,
+          api: customApi,
+          baseUrl: '',
+          contextWindow: 200000,
+          maxTokens: 16384,
+          input: ['text', 'image'],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          inputCost: 0,
+          outputCost: 0,
+          cacheReadCost: 0,
+          cacheWriteCost: 0,
+          reasoning: true,
+        } as unknown as Model<Api>;
+      });
+    }
     if (providerConfig.isOAuth) {
       // OAuth providers use Anthropic models with custom API routing
       const anthropicModels = getModelsDynamic('anthropic');
       const customApi = `${providerId}-anthropic` as Api;
-      return anthropicModels.map(m => ({ ...m, api: customApi, provider: providerId }));
+      return anthropicModels.map((m) => ({ ...m, api: customApi, provider: providerId }));
     }
     const effectiveProvider = providerId === 'azure-ai-foundry' ? 'anthropic' : providerId;
     return getModelsDynamic(effectiveProvider);
   } catch (err) {
-    log.error('Failed to load models', { providerId, error: err instanceof Error ? err.message : String(err) });
+    log.error('Failed to load models', {
+      providerId,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return [];
   }
 }
@@ -126,12 +181,19 @@ export function getOAuthAccountInfo(providerId: string): {
   token: string;
   expiresAt?: number;
   userName?: string;
+  userAvatar?: string;
   expired: boolean;
 } | null {
-  const account = getAccounts().find(a => a.providerId === providerId);
+  const account = getAccounts().find((a) => a.providerId === providerId);
   if (!account?.accessToken) return null;
   const expired = !!account.tokenExpiresAt && Date.now() > account.tokenExpiresAt - 60000;
-  return { token: account.accessToken, expiresAt: account.tokenExpiresAt, userName: account.userName, expired };
+  return {
+    token: account.accessToken,
+    expiresAt: account.tokenExpiresAt,
+    userName: account.userName,
+    userAvatar: account.userAvatar,
+    expired,
+  };
 }
 
 // --- Build-time provider defaults from providers.json ---
@@ -160,9 +222,7 @@ const log = createLogger('provider-settings');
  *
  * Copy providers.example.json to providers.json and fill in your API keys.
  */
-export function applyProviderDefaults(
-  defaults: ProviderDefault[] = providerDefaults,
-): void {
+export function applyProviderDefaults(defaults: ProviderDefault[] = providerDefaults): void {
   if (defaults.length === 0 || getAccounts().length > 0) return;
 
   const knownProviders = new Set(getAvailableProviders());
@@ -176,9 +236,7 @@ export function applyProviderDefaults(
     addAccount(entry.providerId, entry.apiKey, entry.baseUrl);
   }
 
-  const first = defaults.find(
-    e => e.providerId && e.apiKey && knownProviders.has(e.providerId),
-  );
+  const first = defaults.find((e) => e.providerId && e.apiKey && knownProviders.has(e.providerId));
   if (first?.model && !localStorage.getItem(MODEL_KEY)) {
     localStorage.setItem(MODEL_KEY, `${first.providerId}:${first.model}`);
   }
@@ -226,7 +284,7 @@ export function getAccounts(): Account[] {
         entry != null &&
         typeof entry === 'object' &&
         typeof entry.providerId === 'string' &&
-        typeof entry.apiKey === 'string',
+        typeof entry.apiKey === 'string'
     );
   } catch {
     return [];
@@ -238,7 +296,7 @@ function saveAccounts(accounts: Account[]): void {
 }
 
 export function addAccount(providerId: string, apiKey: string, baseUrl?: string): void {
-  const accounts = getAccounts().filter(a => a.providerId !== providerId);
+  const accounts = getAccounts().filter((a) => a.providerId !== providerId);
   const entry: Account = { providerId, apiKey };
   if (baseUrl) entry.baseUrl = baseUrl;
   accounts.push(entry);
@@ -246,7 +304,7 @@ export function addAccount(providerId: string, apiKey: string, baseUrl?: string)
 }
 
 export function removeAccount(providerId: string): void {
-  saveAccounts(getAccounts().filter(a => a.providerId !== providerId));
+  saveAccounts(getAccounts().filter((a) => a.providerId !== providerId));
 }
 
 /** Save an OAuth account (used by external providers after token exchange). */
@@ -256,8 +314,11 @@ export function saveOAuthAccount(opts: {
   refreshToken?: string;
   tokenExpiresAt?: number;
   userName?: string;
+  userAvatar?: string;
+  baseUrl?: string;
 }): void {
-  const accounts = getAccounts().filter(a => a.providerId !== opts.providerId);
+  const existing = getAccounts().find((a) => a.providerId === opts.providerId);
+  const accounts = getAccounts().filter((a) => a.providerId !== opts.providerId);
   accounts.push({
     providerId: opts.providerId,
     apiKey: '', // OAuth providers don't use API keys
@@ -265,19 +326,21 @@ export function saveOAuthAccount(opts: {
     refreshToken: opts.refreshToken,
     tokenExpiresAt: opts.tokenExpiresAt,
     userName: opts.userName,
+    userAvatar: opts.userAvatar,
+    baseUrl: opts.baseUrl ?? existing?.baseUrl,
   });
   saveAccounts(accounts);
 }
 
 export function getApiKeyForProvider(providerId: string): string | null {
-  const account = getAccounts().find(a => a.providerId === providerId);
+  const account = getAccounts().find((a) => a.providerId === providerId);
   if (!account) return null;
   // OAuth providers use accessToken instead of apiKey
   return account.accessToken || account.apiKey || null;
 }
 
 export function getBaseUrlForProvider(providerId: string): string | null {
-  return getAccounts().find(a => a.providerId === providerId)?.baseUrl ?? null;
+  return getAccounts().find((a) => a.providerId === providerId)?.baseUrl ?? null;
 }
 
 // --- Selected model (format: "providerId:modelId") ---
@@ -422,21 +485,26 @@ export function resolveModelById(modelId?: string): Model<Api> {
 
   try {
     const providerConfig = getProviderConfig(providerId);
-    const effectiveProvider = providerConfig.isOAuth ? 'anthropic'
-      : providerId === 'azure-ai-foundry' ? 'anthropic'
-      : providerId === 'bedrock-camp' ? 'amazon-bedrock'
-      : providerId;
-    let model = getModelDynamic(effectiveProvider, modelId);
+    const effectiveProvider = providerConfig.isOAuth
+      ? 'anthropic'
+      : providerId === 'azure-ai-foundry'
+        ? 'anthropic'
+        : providerId === 'bedrock-camp'
+          ? 'amazon-bedrock'
+          : providerId;
+    const model = getModelDynamic(effectiveProvider, modelId);
+    if (!model?.id) throw new Error(`Model ${modelId} not found`);
+    let resolved: Model<Api> = model;
 
     if (providerConfig.isOAuth) {
-      model = { ...model, api: `${providerId}-anthropic` as Api, provider: providerId };
+      resolved = { ...resolved, api: `${providerId}-anthropic` as Api, provider: providerId };
     } else if (providerId === 'bedrock-camp') {
-      model = { ...model, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
+      resolved = { ...resolved, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
     }
     if (baseUrl) {
-      model = { ...model, baseUrl };
+      resolved = { ...resolved, baseUrl };
     }
-    return model;
+    return resolved;
   } catch {
     return resolveCurrentModel();
   }
@@ -449,32 +517,43 @@ export function resolveCurrentModel(): Model<Api> {
 
   // Get default model if none selected
   const models = getProviderModels(providerId);
-  const effectiveModelId = modelId || models[0]?.id || 'claude-sonnet-4-20250514';
+  const effectiveModelId = modelId || models[0]?.id || 'claude-sonnet-4-0';
 
   try {
     const providerConfig = getProviderConfig(providerId);
-    const effectiveProvider = providerConfig.isOAuth ? 'anthropic'
-      : providerId === 'azure-ai-foundry' ? 'anthropic'
-      : providerId === 'bedrock-camp' ? 'amazon-bedrock'
-      : providerId;
-    let model = getModelDynamic(effectiveProvider, effectiveModelId);
+    const effectiveProvider = providerConfig.isOAuth
+      ? 'anthropic'
+      : providerId === 'azure-ai-foundry'
+        ? 'anthropic'
+        : providerId === 'bedrock-camp'
+          ? 'amazon-bedrock'
+          : providerId;
+    const model = getModelDynamic(effectiveProvider, effectiveModelId);
+    if (!model?.id)
+      throw new Error(`Model ${effectiveModelId} not found in ${effectiveProvider} registry`);
+    let resolved: Model<Api> = model;
 
     // Override api and provider for custom routing
     if (providerConfig.isOAuth) {
-      model = { ...model, api: `${providerId}-anthropic` as Api, provider: providerId };
+      resolved = { ...resolved, api: `${providerId}-anthropic` as Api, provider: providerId };
     } else if (providerId === 'bedrock-camp') {
-      model = { ...model, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
+      resolved = { ...resolved, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
     }
 
     // Override baseUrl if custom one is set
     if (baseUrl) {
-      model = { ...model, baseUrl };
+      resolved = { ...resolved, baseUrl };
     }
 
-    return model;
+    return resolved;
   } catch {
-    // Fallback to anthropic
-    return getModelDynamic('anthropic', 'claude-sonnet-4-20250514');
+    // Model not in pi-ai registry — try provider's custom model list first
+    const customModel = models.find((m) => m.id === effectiveModelId);
+    if (customModel) {
+      return baseUrl ? { ...customModel, baseUrl } : customModel;
+    }
+    // Last resort fallback
+    return getModelDynamic('anthropic', 'claude-sonnet-4-0');
   }
 }
 
@@ -505,9 +584,7 @@ function svgIcon(paths: string[]): SVGSVGElement {
 }
 
 const ICON_PATHS = {
-  pen: [
-    'M14.3 3.3a1.5 1.5 0 0 1 2.1 0l.3.3a1.5 1.5 0 0 1 0 2.1L7.7 14.8l-3.2.7.7-3.2z',
-  ],
+  pen: ['M14.3 3.3a1.5 1.5 0 0 1 2.1 0l.3.3a1.5 1.5 0 0 1 0 2.1L7.7 14.8l-3.2.7.7-3.2z'],
   trash: [
     'M4 6h12',
     'M8 6V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2',
@@ -515,12 +592,17 @@ const ICON_PATHS = {
   ],
 };
 
+export interface ShowProviderSettingsOptions {
+  /** When true, start with the "Join a tray" form instead of the account form (when no accounts exist). */
+  preferTrayJoin?: boolean;
+}
+
 /**
  * Show the Accounts management dialog.
  * Returns a promise that resolves to `true` if accounts were modified,
  * `false` if the user closed without changes (so callers can skip reload).
  */
-export function showProviderSettings(): Promise<boolean> {
+export function showProviderSettings(options?: ShowProviderSettingsOptions): Promise<boolean> {
   return new Promise((resolve) => {
     const accountsBefore = localStorage.getItem(ACCOUNTS_KEY) ?? '';
 
@@ -531,9 +613,11 @@ export function showProviderSettings(): Promise<boolean> {
     dialog.className = 'dialog';
     dialog.style.cssText = 'max-width: 480px; width: 90vw; padding: 32px;';
 
-    // Decide initial view: list if accounts exist, add-form if empty
+    // Decide initial view: list if accounts exist, tray-join or add-form if empty
     if (getAccounts().length > 0) {
       renderAccountsList();
+    } else if (options?.preferTrayJoin) {
+      renderJoinTrayForm();
     } else {
       renderAccountForm();
     }
@@ -553,10 +637,10 @@ export function showProviderSettings(): Promise<boolean> {
       const currentAccounts = getAccounts();
 
       const iconBtnStyle =
-          'background: transparent; border: 1px solid var(--s2-border-subtle); ' +
-          'color: var(--s2-content-secondary); border-radius: var(--s2-radius-s); ' +
-          'padding: 6px; cursor: pointer; display: flex; align-items: center; ' +
-          'justify-content: center; transition: color 0.15s, border-color 0.15s;';
+        'background: transparent; border: 1px solid var(--s2-border-subtle); ' +
+        'color: var(--s2-content-secondary); border-radius: var(--s2-radius-s); ' +
+        'padding: 6px; cursor: pointer; display: flex; align-items: center; ' +
+        'justify-content: center; transition: color 0.15s, border-color 0.15s;';
 
       if (currentAccounts.length === 0) {
         const empty = document.createElement('div');
@@ -579,12 +663,14 @@ export function showProviderSettings(): Promise<boolean> {
           info.style.cssText = 'flex: 1; min-width: 0;';
 
           const name = document.createElement('div');
-          name.style.cssText = 'font-size: 14px; font-weight: 600; color: var(--s2-content-default);';
+          name.style.cssText =
+            'font-size: 14px; font-weight: 600; color: var(--s2-content-default);';
           name.textContent = config.name;
           info.appendChild(name);
 
           const detail = document.createElement('div');
-          detail.style.cssText = 'font-size: 11px; color: var(--s2-content-disabled); font-family: monospace; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+          detail.style.cssText =
+            'font-size: 11px; color: var(--s2-content-disabled); font-family: monospace; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
           if (account.userName) {
             detail.textContent = account.userName;
           } else if (account.accessToken) {
@@ -600,8 +686,7 @@ export function showProviderSettings(): Promise<boolean> {
           row.appendChild(info);
 
           const actions = document.createElement('div');
-          actions.style.cssText =
-            'display: flex; gap: 4px; margin-left: 12px; flex-shrink: 0;';
+          actions.style.cssText = 'display: flex; gap: 4px; margin-left: 12px; flex-shrink: 0;';
 
           const editBtn = document.createElement('button');
           editBtn.style.cssText = iconBtnStyle;
@@ -665,6 +750,41 @@ export function showProviderSettings(): Promise<boolean> {
 
       dialog.appendChild(btnRow);
 
+      // ── Tray section ────────────────────────────────────────────
+      const traySep = document.createElement('hr');
+      traySep.style.cssText =
+        'border: none; border-top: 1px solid var(--s2-border-subtle); margin: 16px 0;';
+      dialog.appendChild(traySep);
+
+      const trayLabel = document.createElement('div');
+      trayLabel.className = 'dialog__desc';
+      trayLabel.style.cssText = 'font-weight: 600; margin-bottom: 8px;';
+      trayLabel.textContent = 'Tray';
+      dialog.appendChild(trayLabel);
+
+      const followerStatus = getFollowerTrayRuntimeStatus();
+      const isFollowerActive = followerStatus.state !== 'inactive';
+      const hasJoinUrl = hasStoredTrayJoinUrl(window.localStorage);
+
+      if (isFollowerActive || hasJoinUrl) {
+        const trayStatus = document.createElement('div');
+        trayStatus.style.cssText =
+          'font-size: 12px; color: var(--s2-content-secondary); margin-bottom: 8px;';
+        const stateLabel = isFollowerActive ? followerStatus.state : 'configured';
+        trayStatus.textContent = `Follower: ${stateLabel}`;
+        if (followerStatus.error) {
+          trayStatus.textContent += ` — ${followerStatus.error}`;
+          trayStatus.style.color = 'var(--slicc-cone)';
+        }
+        dialog.appendChild(trayStatus);
+      }
+
+      const joinTrayBtn = document.createElement('button');
+      joinTrayBtn.className = 'dialog__btn dialog__btn--secondary';
+      joinTrayBtn.textContent = isFollowerActive || hasJoinUrl ? 'Rejoin tray' : 'Join a tray';
+      joinTrayBtn.addEventListener('click', () => renderJoinTrayForm());
+      dialog.appendChild(joinTrayBtn);
+
       // ── Theme section ───────────────────────────────────────────
       const themeSep = document.createElement('hr');
       themeSep.style.cssText =
@@ -716,9 +836,7 @@ export function showProviderSettings(): Promise<boolean> {
           btn.style.background = active
             ? cs.getPropertyValue('--s2-accent').trim()
             : cs.getPropertyValue('--s2-bg-layer-2').trim();
-          btn.style.color = active
-            ? '#fff'
-            : cs.getPropertyValue('--s2-content-secondary').trim();
+          btn.style.color = active ? '#fff' : cs.getPropertyValue('--s2-content-secondary').trim();
         }
       }
       styleThemeBtns();
@@ -775,7 +893,7 @@ export function showProviderSettings(): Promise<boolean> {
         providerSelect.style.opacity = '0.7';
       } else {
         const providers = getAvailableProviders();
-        const existingProviders = new Set(getAccounts().map(a => a.providerId));
+        const existingProviders = new Set(getAccounts().map((a) => a.providerId));
         const sorted = [...providers].sort((a, b) => {
           const nameA = getProviderConfig(a).name;
           const nameB = getProviderConfig(b).name;
@@ -795,7 +913,8 @@ export function showProviderSettings(): Promise<boolean> {
       // Provider description
       const providerDesc = document.createElement('div');
       providerDesc.className = 'dialog__desc';
-      providerDesc.style.cssText = 'font-size: 12px; color: var(--s2-content-tertiary); margin-bottom: 16px; margin-top: -4px;';
+      providerDesc.style.cssText =
+        'font-size: 12px; color: var(--s2-content-tertiary); margin-bottom: 16px; margin-top: -4px;';
       dialog.appendChild(providerDesc);
 
       // OAuth login section (shown for isOAuth providers)
@@ -810,7 +929,8 @@ export function showProviderSettings(): Promise<boolean> {
 
       const oauthStatus = document.createElement('div');
       oauthStatus.className = 'dialog__desc';
-      oauthStatus.style.cssText = 'font-size: 12px; color: var(--s2-content-secondary); text-align: center;';
+      oauthStatus.style.cssText =
+        'font-size: 12px; color: var(--s2-content-secondary); text-align: center;';
       oauthSection.appendChild(oauthStatus);
 
       // OAuth login handler — calls the provider's onOAuthLogin callback with a generic launcher
@@ -819,13 +939,37 @@ export function showProviderSettings(): Promise<boolean> {
         if (!pid) return;
         const providerConfig = getProviderConfig(pid);
         if (!providerConfig.onOAuthLogin) return;
+        // Validate base URL if required
+        const hadAccountBefore = getAccounts().some((a) => a.providerId === pid);
+        const existingBaseUrl = getBaseUrlForProvider(pid);
+        if (providerConfig.requiresBaseUrl && !baseUrlInput.value.trim() && !existingBaseUrl) {
+          oauthStatus.textContent = 'Base URL is required.';
+          oauthStatus.style.color = 'var(--slicc-cone)';
+          baseUrlInput.focus();
+          return;
+        }
+        // Save baseUrl before login so the provider's onOAuthLogin can read it
+        if (providerConfig.requiresBaseUrl && baseUrlInput.value.trim()) {
+          addAccount(pid, '', baseUrlInput.value.trim());
+        }
         oauthStatus.textContent = 'Opening login window...';
         try {
           const { createOAuthLauncher } = await import('../providers/oauth-service.js');
           const launcher = createOAuthLauncher();
           await providerConfig.onOAuthLogin(launcher, renderAccountsList);
         } catch (err) {
-          log.error('OAuth login failed', { providerId: pid, error: err instanceof Error ? err.message : String(err) });
+          // Clean up pre-login baseUrl placeholder if no account existed before
+          if (!hadAccountBefore) {
+            try {
+              removeAccount(pid);
+            } catch {
+              /* best-effort cleanup */
+            }
+          }
+          log.error('OAuth login failed', {
+            providerId: pid,
+            error: err instanceof Error ? err.message : String(err),
+          });
           oauthStatus.textContent = `Login failed: ${err instanceof Error ? err.message : String(err)}`;
         }
       });
@@ -873,14 +1017,16 @@ export function showProviderSettings(): Promise<boolean> {
 
       const baseUrlDesc = document.createElement('div');
       baseUrlDesc.className = 'dialog__desc';
-      baseUrlDesc.style.cssText = 'font-size: 11px; color: var(--s2-content-secondary); margin-top: -12px; margin-bottom: 16px;';
+      baseUrlDesc.style.cssText =
+        'font-size: 11px; color: var(--s2-content-secondary); margin-top: -12px; margin-bottom: 16px;';
       baseUrlSection.appendChild(baseUrlDesc);
 
       dialog.appendChild(baseUrlSection);
 
       // Error message area
       const errorEl = document.createElement('div');
-      errorEl.style.cssText = 'color: var(--slicc-cone); font-size: 12px; margin-bottom: 8px; display: none;';
+      errorEl.style.cssText =
+        'color: var(--slicc-cone); font-size: 12px; margin-bottom: 8px; display: none;';
       dialog.appendChild(errorEl);
 
       // Save button (created before updateFormFields so it can be toggled)
@@ -899,7 +1045,11 @@ export function showProviderSettings(): Promise<boolean> {
         if (providerConfig.isOAuth) {
           oauthSection.style.display = '';
           apiKeySection.style.display = 'none';
-          baseUrlSection.style.display = 'none';
+          baseUrlSection.style.display = providerConfig.requiresBaseUrl ? '' : 'none';
+          if (providerConfig.requiresBaseUrl) {
+            baseUrlInput.placeholder = providerConfig.baseUrlPlaceholder || 'https://...';
+            baseUrlDesc.textContent = providerConfig.baseUrlDescription || '';
+          }
           oauthLoginBtn.textContent = `Login with ${providerConfig.name}`;
           saveBtn.style.display = 'none';
         } else {
@@ -939,11 +1089,7 @@ export function showProviderSettings(): Promise<boolean> {
           return;
         }
 
-        addAccount(
-          pid,
-          apiKeyInput.value.trim(),
-          baseUrlInput.value.trim() || undefined,
-        );
+        addAccount(pid, apiKeyInput.value.trim(), baseUrlInput.value.trim() || undefined);
 
         renderAccountsList();
       }
@@ -960,7 +1106,16 @@ export function showProviderSettings(): Promise<boolean> {
 
       // Back button (only shown when accounts already exist)
       const hasAccounts = getAccounts().length > 0;
-      if (hasAccounts) {
+      if (!isEdit && !hasAccounts) {
+        const joinBtn = document.createElement('button');
+        joinBtn.className = 'dialog__btn dialog__btn--secondary';
+        joinBtn.style.marginTop = '8px';
+        joinBtn.textContent = 'Join a tray';
+        joinBtn.addEventListener('click', () => {
+          renderJoinTrayForm();
+        });
+        dialog.appendChild(joinBtn);
+      } else if (hasAccounts) {
         const backBtn = document.createElement('button');
         backBtn.className = 'dialog__btn dialog__btn--secondary';
         backBtn.style.marginTop = '8px';
@@ -981,6 +1136,102 @@ export function showProviderSettings(): Promise<boolean> {
           baseUrlInput.focus();
         }
       });
+    }
+
+    function renderJoinTrayForm() {
+      dialog.innerHTML = '';
+
+      const title = document.createElement('div');
+      title.className = 'dialog__title';
+      title.textContent = 'Join a tray';
+      dialog.appendChild(title);
+
+      const desc = document.createElement('div');
+      desc.className = 'dialog__desc';
+      desc.style.marginBottom = '12px';
+      desc.textContent =
+        'Paste the tray join URL shared by the tray leader. It must include a /join/... capability.';
+      dialog.appendChild(desc);
+
+      const trayUrlLabel = document.createElement('div');
+      trayUrlLabel.className = 'dialog__desc';
+      trayUrlLabel.textContent = 'Tray URL:';
+      dialog.appendChild(trayUrlLabel);
+
+      const trayUrlInput = document.createElement('input');
+      trayUrlInput.className = 'dialog__input';
+      trayUrlInput.type = 'text';
+      trayUrlInput.autocomplete = 'off';
+      trayUrlInput.spellcheck = false;
+      trayUrlInput.placeholder = 'https://tray.example.com/base/join/tray-123.capability-token';
+      trayUrlInput.style.marginBottom = '12px';
+      dialog.appendChild(trayUrlInput);
+
+      const errorEl = document.createElement('div');
+      errorEl.style.cssText =
+        'color: var(--slicc-cone); font-size: 12px; margin-bottom: 8px; display: none;';
+      dialog.appendChild(errorEl);
+
+      const statusEl = document.createElement('div');
+      statusEl.style.cssText =
+        'font-size: 12px; color: var(--s2-content-secondary); margin-bottom: 8px; display: none;';
+
+      const joinBtn = document.createElement('button');
+      joinBtn.className = 'dialog__btn';
+      joinBtn.textContent = 'Join tray';
+      joinBtn.addEventListener('click', () => {
+        const stored = storeTrayJoinUrl(window.localStorage, trayUrlInput.value);
+        if (!stored) {
+          errorEl.textContent = 'Enter a valid tray join URL with a /join/... capability.';
+          errorEl.style.display = '';
+          trayUrlInput.focus();
+          return;
+        }
+
+        if (isExtensionRuntime()) {
+          const payload: RefreshTrayRuntimeMsg = { type: 'refresh-tray-runtime' };
+          void chrome.runtime.sendMessage({ source: 'panel' as const, payload }).catch(() => {
+            // Offscreen may not be ready yet; mainExtension will reconnect shortly.
+          });
+        } else {
+          // Trigger follower join in standalone mode without page reload
+          window.dispatchEvent(
+            new CustomEvent('slicc:tray-join', {
+              detail: { joinUrl: stored.joinUrl },
+            })
+          );
+        }
+
+        statusEl.textContent = 'Connecting to tray...';
+        statusEl.style.display = '';
+        statusEl.style.color = 'var(--s2-content-secondary)';
+
+        // Close dialog after brief feedback
+        setTimeout(() => {
+          overlay.remove();
+          resolve(false);
+        }, 800);
+      });
+      dialog.appendChild(joinBtn);
+      dialog.appendChild(statusEl);
+
+      const backBtn = document.createElement('button');
+      backBtn.className = 'dialog__btn dialog__btn--secondary';
+      backBtn.style.marginTop = '8px';
+      backBtn.textContent = 'Back';
+      backBtn.addEventListener('click', () => {
+        renderAccountForm();
+      });
+      dialog.appendChild(backBtn);
+
+      trayUrlInput.addEventListener('input', () => {
+        errorEl.style.display = 'none';
+      });
+      trayUrlInput.addEventListener('keydown', (e: KeyboardEvent) => {
+        if (e.key === 'Enter') joinBtn.click();
+      });
+
+      requestAnimationFrame(() => trayUrlInput.focus());
     }
   });
 }

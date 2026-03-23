@@ -30,15 +30,18 @@ export interface HeartbeatCallbacks {
 }
 
 export class Heartbeat {
-  private scoops = new Map<string, {
-    scoop: RegisteredScoop;
-    lastActivity: Date;
-    lastError?: string;
-    errorCount: number;
-    startTime: Date;
-    isProcessing: boolean;
-    status: HeartbeatStatus['status'];
-  }>();
+  private scoops = new Map<
+    string,
+    {
+      scoop: RegisteredScoop;
+      lastActivity: Date;
+      lastError?: string;
+      errorCount: number;
+      startTime: Date;
+      isProcessing: boolean;
+      status: HeartbeatStatus['status'];
+    }
+  >();
   private callbacks: HeartbeatCallbacks;
   private pollInterval: number | null = null;
   private idleThresholdMs = 5 * 60 * 1000; // 5 minutes
@@ -134,8 +137,7 @@ export class Heartbeat {
 
   /** Get all statuses */
   getAllStatuses(): HeartbeatStatus[] {
-    return Array.from(this.scoops.entries())
-      .map(([jid, data]) => this.buildStatus(jid, data));
+    return Array.from(this.scoops.entries()).map(([jid, data]) => this.buildStatus(jid, data));
   }
 
   /** Check health of all scoops */
@@ -172,20 +174,26 @@ export class Heartbeat {
     }
   }
 
-  private updateStatus(jid: string, data: typeof this.scoops extends Map<string, infer V> ? V : never): void {
+  private updateStatus(
+    jid: string,
+    data: typeof this.scoops extends Map<string, infer V> ? V : never
+  ): void {
     const status = this.buildStatus(jid, data);
     this.callbacks.onStatusChange(jid, status);
   }
 
-  private buildStatus(jid: string, data: {
-    scoop: RegisteredScoop;
-    lastActivity: Date;
-    lastError?: string;
-    errorCount: number;
-    startTime: Date;
-    isProcessing: boolean;
-    status: HeartbeatStatus['status'];
-  }): HeartbeatStatus {
+  private buildStatus(
+    jid: string,
+    data: {
+      scoop: RegisteredScoop;
+      lastActivity: Date;
+      lastError?: string;
+      errorCount: number;
+      startTime: Date;
+      isProcessing: boolean;
+      status: HeartbeatStatus['status'];
+    }
+  ): HeartbeatStatus {
     return {
       scoopJid: jid,
       scoopName: data.scoop.name,

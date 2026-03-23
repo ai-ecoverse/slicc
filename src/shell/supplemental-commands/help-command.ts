@@ -3,13 +3,54 @@ import type { Command } from 'just-bash';
 import { PLAYWRIGHT_COMMAND_NAMES } from './playwright-command.js';
 
 const COMMAND_CATEGORIES = new Map<string, string[]>([
-  ['File operations', ['ls', 'cat', 'head', 'tail', 'wc', 'touch', 'mkdir', 'rm', 'cp', 'mv', 'ln', 'chmod', 'stat', 'readlink']],
+  [
+    'File operations',
+    [
+      'ls',
+      'cat',
+      'head',
+      'tail',
+      'wc',
+      'touch',
+      'mkdir',
+      'rm',
+      'cp',
+      'mv',
+      'ln',
+      'chmod',
+      'stat',
+      'readlink',
+    ],
+  ],
   ['Text processing', ['grep', 'sed', 'awk', 'sort', 'uniq', 'cut', 'tr', 'tee', 'diff']],
   ['Search', ['find', 'rg']],
   ['Navigation & paths', ['pwd', 'basename', 'dirname', 'tree', 'du', 'cd']],
   ['Archives', ['zip', 'unzip', 'pdftk', 'pdf']],
   ['Media', ['convert', 'magick']],
-  ['Environment & shell', ['echo', 'printf', 'env', 'printenv', 'export', 'alias', 'unalias', 'history', 'clear', 'true', 'false', 'bash', 'sh', 'commands', 'which', 'uname', 'oauth-token']],
+  ['Audio', ['say', 'afplay', 'chime']],
+  [
+    'Environment & shell',
+    [
+      'echo',
+      'printf',
+      'env',
+      'printenv',
+      'export',
+      'alias',
+      'unalias',
+      'history',
+      'clear',
+      'true',
+      'false',
+      'bash',
+      'sh',
+      'commands',
+      'which',
+      'uname',
+      'host',
+      'oauth-token',
+    ],
+  ],
   ['Data processing', ['xargs', 'jq', 'base64', 'date']],
   ['Network', ['curl', 'wget', 'html-to-markdown']],
   ['Version control', ['git']],
@@ -28,7 +69,7 @@ function formatHelp(commands: string[], jshCommands: string[] = []): string {
   const uncategorized: string[] = [];
 
   for (const [category, cmds] of COMMAND_CATEGORIES) {
-    const present = cmds.filter(cmd => available.has(cmd));
+    const present = cmds.filter((cmd) => available.has(cmd));
     if (present.length > 0) {
       lines.push(`  ${category}:`);
       lines.push(`    ${present.join(', ')}\n`);
@@ -91,7 +132,7 @@ Note: This is an enhanced version of 'help' that shows all custom commands.
 
     // Get all registered commands
     const commands = ctx.getRegisteredCommands?.() ?? [];
-    const jshCommands = await options.getJshCommands?.() ?? [];
+    const jshCommands = (await options.getJshCommands?.()) ?? [];
     return {
       stdout: formatHelp(commands, jshCommands),
       stderr: '',

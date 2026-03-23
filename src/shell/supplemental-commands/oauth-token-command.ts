@@ -25,15 +25,22 @@ export function createOAuthTokenCommand(): Command {
   return defineCommand('oauth-token', async (args) => {
     // Lazy imports — same pattern as other supplemental commands that
     // import from browser modules.
-    const { getOAuthAccountInfo, getSelectedProvider, getAccounts } = await import('../../ui/provider-settings.js');
-    const { getRegisteredProviderConfig, getRegisteredProviderIds } = await import('../../providers/index.js');
+    const { getOAuthAccountInfo, getSelectedProvider, getAccounts } =
+      await import('../../ui/provider-settings.js');
+    const { getRegisteredProviderConfig, getRegisteredProviderIds } =
+      await import('../../providers/index.js');
 
     if (args.includes('--help') || args.includes('-h')) {
       return { stdout: helpText(), stderr: '', exitCode: 0 };
     }
 
     if (args.includes('--list')) {
-      return listProviders(getAccounts, getRegisteredProviderIds, getRegisteredProviderConfig, getOAuthAccountInfo);
+      return listProviders(
+        getAccounts,
+        getRegisteredProviderIds,
+        getRegisteredProviderConfig,
+        getOAuthAccountInfo
+      );
     }
 
     // Determine provider ID
@@ -55,12 +62,16 @@ export function createOAuthTokenCommand(): Command {
       } else {
         // Find the first available OAuth provider
         const allIds = getRegisteredProviderIds();
-        providerId = allIds.find(id => {
+        providerId = allIds.find((id) => {
           const cfg = getRegisteredProviderConfig(id);
           return cfg?.isOAuth && cfg.onOAuthLogin;
         });
         if (!providerId) {
-          return { stdout: '', stderr: 'oauth-token: no OAuth providers configured\n', exitCode: 1 };
+          return {
+            stdout: '',
+            stderr: 'oauth-token: no OAuth providers configured\n',
+            exitCode: 1,
+          };
         }
       }
     }
@@ -71,7 +82,11 @@ export function createOAuthTokenCommand(): Command {
       return { stdout: '', stderr: `oauth-token: unknown provider "${providerId}"\n`, exitCode: 1 };
     }
     if (!config.isOAuth || !config.onOAuthLogin) {
-      return { stdout: '', stderr: `oauth-token: provider "${providerId}" is not an OAuth provider\n`, exitCode: 1 };
+      return {
+        stdout: '',
+        stderr: `oauth-token: provider "${providerId}" is not an OAuth provider\n`,
+        exitCode: 1,
+      };
     }
 
     // Check for existing valid token
@@ -84,7 +99,9 @@ export function createOAuthTokenCommand(): Command {
     try {
       const { createOAuthLauncher } = await import('../../providers/oauth-service.js');
       const launcher = createOAuthLauncher();
-      await config.onOAuthLogin(launcher, () => { /* onSuccess callback */ });
+      await config.onOAuthLogin(launcher, () => {
+        /* onSuccess callback */
+      });
 
       // Read the newly saved token
       const newInfo = getOAuthAccountInfo(providerId);
@@ -93,7 +110,11 @@ export function createOAuthTokenCommand(): Command {
       }
 
       console.error(`[oauth-token] Provider ${providerId}: login completed but no token was saved`);
-      return { stdout: '', stderr: 'oauth-token: login completed but no token was saved\n', exitCode: 1 };
+      return {
+        stdout: '',
+        stderr: 'oauth-token: login completed but no token was saved\n',
+        exitCode: 1,
+      };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[oauth-token] Provider ${providerId}: login failed:`, msg);
@@ -106,10 +127,12 @@ function listProviders(
   _getAccounts: () => { providerId: string }[],
   getRegisteredProviderIds: () => string[],
   getRegisteredProviderConfig: (id: string) => { isOAuth?: boolean; name: string } | undefined,
-  getOAuthAccountInfo: (id: string) => { token: string; expiresAt?: number; userName?: string; expired: boolean } | null,
+  getOAuthAccountInfo: (
+    id: string
+  ) => { token: string; expiresAt?: number; userName?: string; expired: boolean } | null
 ): { stdout: string; stderr: string; exitCode: number } {
   const allIds = getRegisteredProviderIds();
-  const oauthIds = allIds.filter(id => {
+  const oauthIds = allIds.filter((id) => {
     return getRegisteredProviderConfig(id)?.isOAuth;
   });
 

@@ -7,10 +7,13 @@
  *   sprinkle close <name>          — close a sprinkle
  *   sprinkle refresh               — re-scan VFS for .shtml files
  *   sprinkle send <name> <json>    — push data to a sprinkle (agent -> sprinkle)
+ *   sprinkle chat <html>           — show inline HTML in chat (Tool UI)
+ *   echo "<html>" | sprinkle chat  — show piped HTML in chat
  */
 
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import { showToolUIFromContext } from '../../tools/tool-ui.js';
 import type { SprinkleManager } from '../../ui/sprinkle-manager.js';
 
 function sprinkleHelp(): { stdout: string; stderr: string; exitCode: number } {
@@ -21,7 +24,10 @@ function sprinkleHelp(): { stdout: string; stderr: string; exitCode: number } {
       '  open <name>           Open a sprinkle by name\n' +
       '  close <name>          Close an open sprinkle\n' +
       '  refresh               Re-scan VFS for .shtml files\n' +
-      '  send <name> <json>    Push data to a sprinkle\n',
+      '  send <name> <json>    Push data to a sprinkle\n' +
+      '  chat <html>           Show inline HTML in chat (Tool UI)\n' +
+      '                        Use data-action="name" on buttons for callbacks\n' +
+      '                        Pipe HTML: echo "<div>...</div>" | sprinkle chat\n',
     stderr: '',
     exitCode: 0,
   };
@@ -34,17 +40,51 @@ function getSprinkleManager(): SprinkleManager | null {
 }
 
 export function createSprinkleCommand(): Command {
-  return defineCommand('sprinkle', async (args) => {
+  return defineCommand('sprinkle', async (args, ctx) => {
     if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
       return sprinkleHelp();
+    }
+
+    const sub = args[0];
+
+    // Handle 'chat' subcommand separately - doesn't need sprinkle manager
+    if (sub === 'chat') {
+      // Get HTML from args or stdin
+      let html = args.slice(1).join(' ');
+
+      // Check for piped stdin
+      if (!html && ctx.stdin) {
+        html = ctx.stdin;
+      }
+
+      if (!html) {
+        return { stdout: '', stderr: 'sprinkle chat: HTML content required\n', exitCode: 1 };
+      }
+
+      // Show inline UI in chat
+      const result = await showToolUIFromContext({
+        html,
+        onAction: async (action, data) => {
+          return { action, data };
+        },
+      });
+
+      if (result === null) {
+        return {
+          stdout: '',
+          stderr: 'sprinkle chat: not in tool execution context\n',
+          exitCode: 1,
+        };
+      }
+
+      // Return the action result as JSON
+      return { stdout: JSON.stringify(result) + '\n', stderr: '', exitCode: 0 };
     }
 
     const mgr = getSprinkleManager();
     if (!mgr) {
       return { stdout: '', stderr: 'sprinkle: sprinkle manager not initialized\n', exitCode: 1 };
     }
-
-    const sub = args[0];
 
     switch (sub) {
       case 'list': {
@@ -54,7 +94,7 @@ export function createSprinkleCommand(): Command {
           return { stdout: 'No .shtml sprinkles found.\n', stderr: '', exitCode: 0 };
         }
         const opened = new Set(mgr.opened());
-        const lines = sprinkles.map(p => {
+        const lines = sprinkles.map((p) => {
           const status = opened.has(p.name) ? ' [open]' : '';
           return `  ${p.name}${status}  ${p.title}  (${p.path})`;
         });
@@ -70,7 +110,11 @@ export function createSprinkleCommand(): Command {
           await mgr.open(name);
           return { stdout: `Sprinkle "${name}" opened.\n`, stderr: '', exitCode: 0 };
         } catch (err) {
-          return { stdout: '', stderr: `sprinkle open: ${err instanceof Error ? err.message : String(err)}\n`, exitCode: 1 };
+          return {
+            stdout: '',
+            stderr: `sprinkle open: ${err instanceof Error ? err.message : String(err)}\n`,
+            exitCode: 1,
+          };
         }
       }
 
@@ -86,7 +130,11 @@ export function createSprinkleCommand(): Command {
       case 'refresh': {
         await mgr.refresh();
         const count = mgr.available().length;
-        return { stdout: `Found ${count} sprinkle${count !== 1 ? 's' : ''}.\n`, stderr: '', exitCode: 0 };
+        return {
+          stdout: `Found ${count} sprinkle${count !== 1 ? 's' : ''}.\n`,
+          stderr: '',
+          exitCode: 0,
+        };
       }
 
       case 'send': {

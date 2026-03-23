@@ -5,6 +5,7 @@
 
 import type { VirtualFS } from '../fs/index.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
+import { toPreviewUrl } from '../shell/supplemental-commands/shared.js';
 
 export interface SprinkleBridgeAPI {
   /** Send a lick event to the agent. Accepts {action, data} or a plain action string. */
@@ -19,6 +20,8 @@ export interface SprinkleBridgeAPI {
   setState(data: unknown): void;
   /** Read persisted sprinkle state (null if none saved). */
   getState(): unknown;
+  /** Open a VFS file in a browser tab via the preview service worker. */
+  open(path: string, opts?: { projectRoot?: string }): void;
   /** Close this sprinkle */
   close(): void;
   /** Sprinkle name */
@@ -36,7 +39,7 @@ export class SprinkleBridge {
   constructor(
     fs: VirtualFS,
     lickHandler: (event: LickEvent) => void,
-    closeHandler: (name: string) => void,
+    closeHandler: (name: string) => void
   ) {
     this.fs = fs;
     this.lickHandler = lickHandler;
@@ -62,22 +65,36 @@ export class SprinkleBridge {
       on: (event: string, callback: UpdateCallback) => {
         const key = `${sprinkleName}:${event}`;
         let set = this.listeners.get(key);
-        if (!set) { set = new Set(); this.listeners.set(key, set); }
+        if (!set) {
+          set = new Set();
+          this.listeners.set(key, set);
+        }
         set.add(callback);
       },
       off: (event: string, callback: UpdateCallback) => {
         const key = `${sprinkleName}:${event}`;
         this.listeners.get(key)?.delete(callback);
       },
-      readFile: async (path: string) => await this.fs.readFile(path, { encoding: 'utf-8' }) as string,
+      readFile: async (path: string) =>
+        (await this.fs.readFile(path, { encoding: 'utf-8' })) as string,
       setState: (data: unknown) => {
-        try { localStorage.setItem(`slicc-sprinkle-state:${sprinkleName}`, JSON.stringify(data)); } catch { /* full */ }
+        try {
+          localStorage.setItem(`slicc-sprinkle-state:${sprinkleName}`, JSON.stringify(data));
+        } catch {
+          /* full */
+        }
       },
       getState: (): unknown => {
         try {
           const raw = localStorage.getItem(`slicc-sprinkle-state:${sprinkleName}`);
           return raw ? JSON.parse(raw) : null;
-        } catch { return null; }
+        } catch {
+          return null;
+        }
+      },
+      open: (path: string) => {
+        const url = /^https?:|^chrome-extension:/.test(path) ? path : toPreviewUrl(path);
+        window.open(url, '_blank');
       },
       close: () => this.closeHandler(sprinkleName),
     };
@@ -89,7 +106,11 @@ export class SprinkleBridge {
     const set = this.listeners.get(key);
     if (set) {
       for (const cb of set) {
-        try { cb(data); } catch { /* ignore listener errors */ }
+        try {
+          cb(data);
+        } catch {
+          /* ignore listener errors */
+        }
       }
     }
   }

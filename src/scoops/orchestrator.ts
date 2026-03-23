@@ -9,12 +9,7 @@
  * - Owns a single shared VirtualFS instance
  */
 
-import type {
-  RegisteredScoop,
-  ChannelMessage,
-  ScoopTabState,
-  ScheduledTask,
-} from './types.js';
+import type { RegisteredScoop, ChannelMessage, ScoopTabState, ScheduledTask } from './types.js';
 import * as db from './db.js';
 import { createLogger } from '../core/logger.js';
 import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
@@ -22,9 +17,10 @@ import { TaskScheduler } from './scheduler.js';
 import { VirtualFS } from '../fs/index.js';
 import { RestrictedFS } from '../fs/restricted-fs.js';
 import type { BrowserAPI } from '../cdp/index.js';
-import { createDefaultSharedFiles } from './skills.js';
+import { createDefaultSharedFiles, createDefaultSkills } from './skills.js';
 import { buildActiveLicksError, type LickManager } from './lick-manager.js';
 import { SessionStore } from '../core/session.js';
+import { trackChatSend } from '../ui/telemetry.js';
 
 const log = createLogger('orchestrator');
 
@@ -58,6 +54,10 @@ export interface OrchestratorCallbacks {
   onToolStart?: (scoopJid: string, toolName: string, toolInput: unknown) => void;
   /** Called when a tool finishes executing */
   onToolEnd?: (scoopJid: string, toolName: string, result: string, isError: boolean) => void;
+  /** Called when a tool requests UI interaction */
+  onToolUI?: (scoopJid: string, toolName: string, requestId: string, html: string) => void;
+  /** Called when tool UI interaction is complete */
+  onToolUIDone?: (scoopJid: string, requestId: string) => void;
   /** Called when a message is routed to a scoop (delegation, lick, etc.) */
   onIncomingMessage?: (scoopJid: string, message: ChannelMessage) => void;
 }
@@ -96,7 +96,7 @@ export class Orchestrator {
   constructor(
     container: HTMLElement,
     callbacks: OrchestratorCallbacks,
-    config: AssistantConfig = { name: 'sliccy', triggerPattern: /^@sliccy\b/i },
+    config: AssistantConfig = { name: 'sliccy', triggerPattern: /^@sliccy\b/i }
   ) {
     this.container = container;
     this.callbacks = callbacks;
@@ -158,7 +158,12 @@ export class Orchestrator {
     this.scheduler = new TaskScheduler({
       onTaskRun: async (task, scoop) => {
         log.info('Running scheduled task', { taskId: task.id, scoop: scoop.name });
-        await this.sendPrompt(scoop.jid, `[SCHEDULED TASK]\n\n${task.prompt}`, 'scheduler', 'Scheduled Task');
+        await this.sendPrompt(
+          scoop.jid,
+          `[SCHEDULED TASK]\n\n${task.prompt}`,
+          'scheduler',
+          'Scheduled Task'
+        );
       },
       getScoop: (folder) => {
         for (const s of this.scoops.values()) {
@@ -202,7 +207,8 @@ export class Orchestrator {
 
     try {
       const content = await this.sharedFs.readFile('/shared/CLAUDE.md', { encoding: 'utf-8' });
-      this.globalMemoryCache = typeof content === 'string' ? content : new TextDecoder().decode(content);
+      this.globalMemoryCache =
+        typeof content === 'string' ? content : new TextDecoder().decode(content);
     } catch {
       // No global memory file - this shouldn't happen after createDefaultSharedFiles
       log.warn('Global memory file not found after creating defaults');
@@ -216,7 +222,8 @@ export class Orchestrator {
     if (this.sharedFs) {
       try {
         const content = await this.sharedFs.readFile('/shared/CLAUDE.md', { encoding: 'utf-8' });
-        this.globalMemoryCache = typeof content === 'string' ? content : new TextDecoder().decode(content);
+        this.globalMemoryCache =
+          typeof content === 'string' ? content : new TextDecoder().decode(content);
       } catch {
         // No global memory yet
       }
@@ -278,7 +285,10 @@ export class Orchestrator {
 
     await this.destroyScoopTab(jid);
     this.sessionStore?.delete(jid).catch((err) => {
-      log.warn('Failed to delete agent session', { jid, error: err instanceof Error ? err.message : String(err) });
+      log.warn('Failed to delete agent session', {
+        jid,
+        error: err instanceof Error ? err.message : String(err),
+      });
     });
     await db.deleteScoop(jid);
     this.scoops.delete(jid);
@@ -313,6 +323,11 @@ export class Orchestrator {
     this.sharedFs = await VirtualFS.create({ dbName: 'slicc-fs', wipe: true });
     await this.ensureRootStructure();
     await this.ensureGlobalMemory();
+    await createDefaultSkills(this.sharedFs).catch((err) => {
+      log.warn('Failed to re-seed default skills', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
     log.info('Filesystem reset and defaults re-seeded');
   }
 
@@ -321,7 +336,9 @@ export class Orchestrator {
     await db.clearAllMessages();
     if (this.sessionStore) {
       await this.sessionStore.clearAll().catch((err) => {
-        log.warn('Failed to clear agent sessions', { error: err instanceof Error ? err.message : String(err) });
+        log.warn('Failed to clear agent sessions', {
+          error: err instanceof Error ? err.message : String(err),
+        });
       });
     }
     // Clear in-memory conversation history from all live scoop agents
@@ -346,6 +363,11 @@ export class Orchestrator {
       channel: message.channel,
       contentPreview: message.content.slice(0, 80),
     });
+
+    // Telemetry: track chat sends
+    const scoop = this.scoops.get(message.chatJid);
+    const scoopName = scoop?.isCone ? 'cone' : (scoop?.name ?? 'unknown');
+    trackChatSend(scoopName, localStorage.getItem('selected-model') ?? 'unknown');
 
     // Store the message
     await db.saveMessage(message);
@@ -434,7 +456,13 @@ export class Orchestrator {
       log.warn('Failed to capture filesystem snapshot', { scoopJid, error: err instanceof Error ? err.message : String(err) });
     });
 
-    log.info('Delegating to scoop', { scoopJid, scoopName: scoop.name, promptLength: enrichedPrompt.length, waveId: wave.id });
+    log.info('Delegating to scoop', {
+      scoopJid,
+      scoopName: scoop.name,
+      promptLength: enrichedPrompt.length,
+      waveId: wave.id,
+    });
+
     // Fire-and-forget: don't await the scoop's agent loop.
     // The cone's tool call returns immediately so the cone can finish its turn.
     // The scoop processes in the background; completion notification routes back to cone.
@@ -472,14 +500,23 @@ export class Orchestrator {
     queue.push(message);
     this.messageQueues.set(message.chatJid, queue);
 
-    // Process immediately if tab is ready
-    const tab = this.tabs.get(message.chatJid);
+    // Process immediately if tab is ready; retry init if in error state
+    let tab = this.tabs.get(message.chatJid);
     log.debug('routeToScoop: queued', {
       chatJid: message.chatJid,
       scoopName: scoop.name,
       tabStatus: tab?.status ?? 'no-tab',
       queueLength: queue.length,
     });
+    if (tab?.status === 'error') {
+      log.info('routeToScoop: tab in error state, retrying init', { chatJid: message.chatJid });
+      try {
+        await this.createScoopTab(message.chatJid);
+        tab = this.tabs.get(message.chatJid);
+      } catch {
+        log.warn('routeToScoop: retry init failed', { chatJid: message.chatJid });
+      }
+    }
     if (tab?.status === 'ready') {
       await this.processScoopQueue(message.chatJid);
     }
@@ -573,7 +610,7 @@ export class Orchestrator {
           const responseText = this.scoopResponseBuffer.get(jid);
           this.scoopResponseBuffer.delete(jid);
           if (responseText) {
-            const cone = Array.from(this.scoops.values()).find(s => s.isCone);
+            const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
             if (cone) {
               // Build structured completion report with filesystem diff
               this.generateFilesystemDiff(scoop.folder, jid).then((diffSection) => {
@@ -593,12 +630,22 @@ export class Orchestrator {
                   fromAssistant: false,
                   channel: 'scoop-notify',
                 };
-                log.info('Routing scoop completion to cone', { scoop: scoop.folder, responseLength: responseText.length, hasDiff: !!diffSection });
+                log.info('Routing scoop completion to cone', {
+                scoop: scoop.folder,
+                responseLength: responseText.length,
+                hasDiff: !!diffSection,
+              });
                 return this.handleMessage(notifyMsg);
               }).catch((err) => {
                 const msg = err instanceof Error ? err.message : String(err);
-                log.error('Failed to route scoop completion to cone', { scoop: scoop.folder, error: msg });
-                this.callbacks.onError(cone.jid, `Scoop ${scoop.folder} completed but notification failed: ${msg}`);
+                log.error('Failed to route scoop completion to cone', {
+                  scoop: scoop.folder,
+                  error: msg,
+                });
+                this.callbacks.onError(
+                  cone.jid,
+                  `Scoop ${scoop.folder} completed but notification failed: ${msg}`
+                );
               });
             }
           }
@@ -615,23 +662,35 @@ export class Orchestrator {
       onToolEnd: (toolName, result, isError) => {
         this.callbacks.onToolEnd?.(jid, toolName, result, isError);
       },
+      onToolUI: (toolName, requestId, html) => {
+        this.callbacks.onToolUI?.(jid, toolName, requestId, html);
+      },
+      onToolUIDone: (requestId) => {
+        this.callbacks.onToolUIDone?.(jid, requestId);
+      },
       // NanoClaw tools callbacks
       onSendMessage: (text, sender) => {
         this.callbacks.onSendMessage(jid, `${sender ? `[${sender}] ` : ''}${text}`);
       },
       getScoops: () => this.getScoops(),
-      onFeedScoop: scoop.isCone ? (scoopJid, prompt) => this.delegateToScoop(scoopJid, prompt, scoop.assistantLabel) : undefined,
-      onScoopScoop: scoop.isCone ? async (newScoop) => {
-        const fullScoop: RegisteredScoop = {
-          ...newScoop,
-          jid: `scoop_${newScoop.folder}_${Date.now()}`,
-        };
-        await this.registerScoop(fullScoop);
-        return fullScoop;
-      } : undefined,
-      onDropScoop: scoop.isCone ? async (scoopJid) => {
-        await this.unregisterScoop(scoopJid);
-      } : undefined,
+      onFeedScoop: scoop.isCone
+        ? (scoopJid, prompt) => this.delegateToScoop(scoopJid, prompt, scoop.assistantLabel)
+        : undefined,
+      onScoopScoop: scoop.isCone
+        ? async (newScoop) => {
+            const fullScoop: RegisteredScoop = {
+              ...newScoop,
+              jid: `scoop_${newScoop.folder}_${Date.now()}`,
+            };
+            await this.registerScoop(fullScoop);
+            return fullScoop;
+          }
+        : undefined,
+      onDropScoop: scoop.isCone
+        ? async (scoopJid) => {
+            await this.unregisterScoop(scoopJid);
+          }
+        : undefined,
       getGlobalMemory: () => this.getGlobalMemory(),
       setGlobalMemory: scoop.isCone ? (content) => this.setGlobalMemory(content) : undefined,
       getBrowserAPI: () => this.callbacks.getBrowserAPI(),
@@ -649,6 +708,14 @@ export class Orchestrator {
 
     // Initialize the context
     await context.init();
+
+    // Mark tab as ready so queued messages (lick events, etc.) get processed
+    const initTab = this.tabs.get(jid);
+    if (initTab && initTab.status === 'initializing') {
+      initTab.status = 'ready';
+      this.tabs.set(jid, initTab);
+      this.callbacks.onStatusChange(jid, 'ready');
+    }
 
     log.info('Scoop context created', { jid, contextId });
   }
@@ -693,7 +760,7 @@ export class Orchestrator {
     // Remove from in-memory queue
     const queue = this.messageQueues.get(jid);
     if (queue) {
-      const idx = queue.findIndex(m => m.id === messageId);
+      const idx = queue.findIndex((m) => m.id === messageId);
       if (idx !== -1) queue.splice(idx, 1);
     }
     // Remove from IndexedDB
@@ -803,17 +870,19 @@ export class Orchestrator {
     }
 
     // Format messages
-    const formatted = messages.map((m) => {
-      const date = new Date(m.timestamp);
-      const time = date.toLocaleString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
-      });
-      return `[${time}] ${m.senderName}: ${m.content}`;
-    }).join('\n');
+    const formatted = messages
+      .map((m) => {
+        const date = new Date(m.timestamp);
+        const time = date.toLocaleString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true,
+        });
+        return `[${time}] ${m.senderName}: ${m.content}`;
+      })
+      .join('\n');
 
     // Clear queue and update high-water mark
     this.messageQueues.set(jid, []);

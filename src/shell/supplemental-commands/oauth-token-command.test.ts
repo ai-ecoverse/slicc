@@ -18,7 +18,11 @@ vi.mock('../../providers/oauth-service.js', () => ({
 }));
 
 import { createOAuthTokenCommand } from './oauth-token-command.js';
-import { getOAuthAccountInfo, getSelectedProvider, getAccounts } from '../../ui/provider-settings.js';
+import {
+  getOAuthAccountInfo,
+  getSelectedProvider,
+  getAccounts,
+} from '../../ui/provider-settings.js';
 import { getRegisteredProviderConfig, getRegisteredProviderIds } from '../../providers/index.js';
 import { createOAuthLauncher } from '../../providers/oauth-service.js';
 
@@ -61,11 +65,19 @@ describe('oauth-token command', () => {
 
   it('returns stored valid token immediately', async () => {
     mockGetRegisteredProviderConfig.mockReturnValue({
-      id: 'adobe', name: 'Adobe', description: '', requiresApiKey: false, requiresBaseUrl: false,
-      isOAuth: true, onOAuthLogin: vi.fn(),
+      id: 'adobe',
+      name: 'Adobe',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin: vi.fn(),
     });
     mockGetOAuthAccountInfo.mockReturnValue({
-      token: 'valid-access-token', expiresAt: Date.now() + 3600000, userName: 'karl', expired: false,
+      token: 'valid-access-token',
+      expiresAt: Date.now() + 3600000,
+      userName: 'karl',
+      expired: false,
     });
 
     const cmd = createOAuthTokenCommand();
@@ -78,13 +90,19 @@ describe('oauth-token command', () => {
     const mockOnOAuthLogin = vi.fn(async (_launcher, _onSuccess) => {
       // Simulate login saving a token
       mockGetOAuthAccountInfo.mockReturnValue({
-        token: 'new-token-after-login', expired: false,
+        token: 'new-token-after-login',
+        expired: false,
       });
     });
 
     mockGetRegisteredProviderConfig.mockReturnValue({
-      id: 'adobe', name: 'Adobe', description: '', requiresApiKey: false, requiresBaseUrl: false,
-      isOAuth: true, onOAuthLogin: mockOnOAuthLogin,
+      id: 'adobe',
+      name: 'Adobe',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin: mockOnOAuthLogin,
     });
     mockGetOAuthAccountInfo.mockReturnValue(null); // No token initially
     mockCreateOAuthLauncher.mockReturnValue(vi.fn());
@@ -99,16 +117,24 @@ describe('oauth-token command', () => {
   it('triggers login when token is expired', async () => {
     const mockOnOAuthLogin = vi.fn(async () => {
       mockGetOAuthAccountInfo.mockReturnValue({
-        token: 'refreshed-token', expired: false,
+        token: 'refreshed-token',
+        expired: false,
       });
     });
 
     mockGetRegisteredProviderConfig.mockReturnValue({
-      id: 'adobe', name: 'Adobe', description: '', requiresApiKey: false, requiresBaseUrl: false,
-      isOAuth: true, onOAuthLogin: mockOnOAuthLogin,
+      id: 'adobe',
+      name: 'Adobe',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin: mockOnOAuthLogin,
     });
     mockGetOAuthAccountInfo.mockReturnValue({
-      token: 'old-expired-token', expiresAt: Date.now() - 120000, expired: true,
+      token: 'old-expired-token',
+      expiresAt: Date.now() - 120000,
+      expired: true,
     });
     mockCreateOAuthLauncher.mockReturnValue(vi.fn());
 
@@ -130,7 +156,11 @@ describe('oauth-token command', () => {
 
   it('returns error when provider is not OAuth', async () => {
     mockGetRegisteredProviderConfig.mockReturnValue({
-      id: 'anthropic', name: 'Anthropic', description: '', requiresApiKey: true, requiresBaseUrl: false,
+      id: 'anthropic',
+      name: 'Anthropic',
+      description: '',
+      requiresApiKey: true,
+      requiresBaseUrl: false,
     });
 
     const cmd = createOAuthTokenCommand();
@@ -145,8 +175,13 @@ describe('oauth-token command', () => {
     });
 
     mockGetRegisteredProviderConfig.mockReturnValue({
-      id: 'adobe', name: 'Adobe', description: '', requiresApiKey: false, requiresBaseUrl: false,
-      isOAuth: true, onOAuthLogin: mockOnOAuthLogin,
+      id: 'adobe',
+      name: 'Adobe',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin: mockOnOAuthLogin,
     });
     mockGetOAuthAccountInfo.mockReturnValue(null);
     mockCreateOAuthLauncher.mockReturnValue(vi.fn());
@@ -164,8 +199,13 @@ describe('oauth-token command', () => {
     });
 
     mockGetRegisteredProviderConfig.mockReturnValue({
-      id: 'adobe', name: 'Adobe', description: '', requiresApiKey: false, requiresBaseUrl: false,
-      isOAuth: true, onOAuthLogin: mockOnOAuthLogin,
+      id: 'adobe',
+      name: 'Adobe',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin: mockOnOAuthLogin,
     });
     mockGetOAuthAccountInfo.mockReturnValue(null);
     mockCreateOAuthLauncher.mockReturnValue(vi.fn());
@@ -179,12 +219,36 @@ describe('oauth-token command', () => {
   it('--list shows providers with status', async () => {
     mockGetRegisteredProviderIds.mockReturnValue(['adobe', 'my-corp']);
     mockGetRegisteredProviderConfig.mockImplementation((id) => {
-      if (id === 'adobe') return { id: 'adobe', name: 'Adobe', description: '', requiresApiKey: false, requiresBaseUrl: false, isOAuth: true, onOAuthLogin: vi.fn() };
-      if (id === 'my-corp') return { id: 'my-corp', name: 'My Corp', description: '', requiresApiKey: false, requiresBaseUrl: false, isOAuth: true, onOAuthLogin: vi.fn() };
+      if (id === 'adobe')
+        return {
+          id: 'adobe',
+          name: 'Adobe',
+          description: '',
+          requiresApiKey: false,
+          requiresBaseUrl: false,
+          isOAuth: true,
+          onOAuthLogin: vi.fn(),
+        };
+      if (id === 'my-corp')
+        return {
+          id: 'my-corp',
+          name: 'My Corp',
+          description: '',
+          requiresApiKey: false,
+          requiresBaseUrl: false,
+          isOAuth: true,
+          onOAuthLogin: vi.fn(),
+        };
       return undefined;
     });
     mockGetOAuthAccountInfo.mockImplementation((id) => {
-      if (id === 'adobe') return { token: 'tok', expiresAt: Date.now() + 3600000 * 23, userName: 'karl@example.com', expired: false };
+      if (id === 'adobe')
+        return {
+          token: 'tok',
+          expiresAt: Date.now() + 3600000 * 23,
+          userName: 'karl@example.com',
+          expired: false,
+        };
       return null;
     });
 
@@ -198,11 +262,17 @@ describe('oauth-token command', () => {
 
   it('--provider flag works', async () => {
     mockGetRegisteredProviderConfig.mockReturnValue({
-      id: 'adobe', name: 'Adobe', description: '', requiresApiKey: false, requiresBaseUrl: false,
-      isOAuth: true, onOAuthLogin: vi.fn(),
+      id: 'adobe',
+      name: 'Adobe',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin: vi.fn(),
     });
     mockGetOAuthAccountInfo.mockReturnValue({
-      token: 'flag-token', expired: false,
+      token: 'flag-token',
+      expired: false,
     });
 
     const cmd = createOAuthTokenCommand();
@@ -221,11 +291,17 @@ describe('oauth-token command', () => {
   it('no args uses selected provider', async () => {
     mockGetSelectedProvider.mockReturnValue('adobe');
     mockGetRegisteredProviderConfig.mockReturnValue({
-      id: 'adobe', name: 'Adobe', description: '', requiresApiKey: false, requiresBaseUrl: false,
-      isOAuth: true, onOAuthLogin: vi.fn(),
+      id: 'adobe',
+      name: 'Adobe',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin: vi.fn(),
     });
     mockGetOAuthAccountInfo.mockReturnValue({
-      token: 'selected-provider-token', expired: false,
+      token: 'selected-provider-token',
+      expired: false,
     });
 
     const cmd = createOAuthTokenCommand();
@@ -238,8 +314,24 @@ describe('oauth-token command', () => {
   it('no args falls back to first OAuth provider when selected is not OAuth', async () => {
     mockGetSelectedProvider.mockReturnValue('azure-ai-foundry');
     mockGetRegisteredProviderConfig.mockImplementation((id) => {
-      if (id === 'azure-ai-foundry') return { id: 'azure-ai-foundry', name: 'Azure', description: '', requiresApiKey: true, requiresBaseUrl: true };
-      if (id === 'adobe') return { id: 'adobe', name: 'Adobe', description: '', requiresApiKey: false, requiresBaseUrl: false, isOAuth: true, onOAuthLogin: vi.fn() };
+      if (id === 'azure-ai-foundry')
+        return {
+          id: 'azure-ai-foundry',
+          name: 'Azure',
+          description: '',
+          requiresApiKey: true,
+          requiresBaseUrl: true,
+        };
+      if (id === 'adobe')
+        return {
+          id: 'adobe',
+          name: 'Adobe',
+          description: '',
+          requiresApiKey: false,
+          requiresBaseUrl: false,
+          isOAuth: true,
+          onOAuthLogin: vi.fn(),
+        };
       return undefined;
     });
     mockGetRegisteredProviderIds.mockReturnValue(['azure-ai-foundry', 'adobe']);
@@ -255,7 +347,13 @@ describe('oauth-token command', () => {
 
   it('no args returns error when no OAuth providers exist', async () => {
     mockGetSelectedProvider.mockReturnValue('anthropic');
-    mockGetRegisteredProviderConfig.mockReturnValue({ id: 'anthropic', name: 'Anthropic', description: '', requiresApiKey: true, requiresBaseUrl: false });
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'anthropic',
+      name: 'Anthropic',
+      description: '',
+      requiresApiKey: true,
+      requiresBaseUrl: false,
+    });
     mockGetRegisteredProviderIds.mockReturnValue(['anthropic']);
 
     const cmd = createOAuthTokenCommand();
@@ -267,7 +365,11 @@ describe('oauth-token command', () => {
   it('--list shows no providers when none are OAuth', async () => {
     mockGetRegisteredProviderIds.mockReturnValue(['anthropic']);
     mockGetRegisteredProviderConfig.mockReturnValue({
-      id: 'anthropic', name: 'Anthropic', description: '', requiresApiKey: true, requiresBaseUrl: false,
+      id: 'anthropic',
+      name: 'Anthropic',
+      description: '',
+      requiresApiKey: true,
+      requiresBaseUrl: false,
     });
 
     const cmd = createOAuthTokenCommand();

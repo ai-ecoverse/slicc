@@ -346,7 +346,7 @@ describe('my_tool', () => {
 - Put pure helper coverage in `shared.test.ts`.
 - Prefer focused command-level assertions over large integration fixtures.
 
-**Reference files**: `src/shell/supplemental-commands/playwright-command.ts`, `src/shell/supplemental-commands/serve-command.ts`
+**Reference files**: `src/shell/supplemental-commands/playwright-command.ts`, `src/shell/supplemental-commands/serve-command.ts`, `src/shell/supplemental-commands/sprinkle-command.ts`
 
 ---
 
@@ -737,7 +737,7 @@ describe('loadSkills', () => {
 Providers come from three sources:
 - **Pi-ai auto-discovery**: `getProviders()` returns all pi-ai providers automatically — no files needed. Filtered by `providers.build.json` (`include: ["*"]` = all, `exclude: ["*"]` = none).
 - **Built-in extensions**: `src/providers/built-in/*.ts` — only for providers needing custom `register()` functions (e.g., bedrock-camp). Also filtered by `providers.build.json`.
-- **External**: `providers/*.ts` (project root, gitignored) — always included, never filtered. For custom OAuth providers, corporate proxies, etc.
+- **External**: `providers/*.ts` (project root, mostly gitignored) — always included, never filtered. For custom OAuth providers, corporate proxies, etc. Some providers (e.g., `adobe.ts`) are explicitly un-gitignored and tracked in version control.
 
 Built-in and external modules export `config: ProviderConfig` and optionally `register(): void`.
 
@@ -749,7 +749,7 @@ Built-in and external modules export `config: ProviderConfig` and optionally `re
 
 **Only create a file in `src/providers/built-in/`** if the provider needs a custom `register()` function (e.g., custom stream functions). See `src/providers/built-in/bedrock-camp.ts` for an example.
 
-**For external providers** (gitignored, not in the open-source repo), create `providers/my-provider.ts`:
+**For external providers** (typically gitignored), create `providers/my-provider.ts`:
 
 ```typescript
 // providers/my-provider.ts
@@ -863,7 +863,7 @@ export function register(): void {
 2. `provider-settings.ts` calls `config.onOAuthLogin(launcher, onSuccess)`
 3. The provider builds its authorize URL and calls `launcher(authorizeUrl)`
 4. The generic `OAuthLauncher` (from `src/providers/oauth-service.ts`) handles transport:
-   - **CLI**: Opens popup → IDP login → redirects to `http://localhost:3000/auth/callback` → callback page postMessages the redirect URL back → popup closes
+   - **CLI**: Opens popup → IDP login → redirects to `http://localhost:5710/auth/callback` → callback page postMessages the redirect URL back → popup closes
    - **Extension**: Sends `oauth-request` to service worker → `chrome.identity.launchWebAuthFlow` → returns redirect URL with token in fragment
 5. The provider extracts the token from the redirect URL and calls `saveOAuthAccount()`
 6. `onSuccess()` re-renders the accounts list showing the logged-in state
@@ -879,7 +879,7 @@ export function register(): void {
 
 | Mode | Redirect URI | Registration |
 |------|-------------|-------------|
-| CLI | `http://localhost:3000/auth/callback` | Register with your OAuth provider/IdP |
+| CLI | `http://localhost:5710/auth/callback` | Register with your OAuth provider/IdP |
 | Extension | `https://<extension-id>.chromiumapp.org/` | Register with your OAuth provider/IdP |
 
 **Type**:
@@ -892,16 +892,26 @@ interface ProviderConfig {
   requiresApiKey: boolean;
   apiKeyPlaceholder?: string;
   apiKeyEnvVar?: string;
-  requiresBaseUrl: boolean;
+  requiresBaseUrl: boolean;      // shown for non-OAuth; also shown for OAuth providers when true
   baseUrlPlaceholder?: string;
   baseUrlDescription?: string;
   isOAuth?: boolean;
   onOAuthLogin?: (launcher: OAuthLauncher, onSuccess: () => void) => Promise<void>;
   onOAuthLogout?: () => Promise<void>;
+  /** Return the model IDs this provider supports (resolved against Anthropic registry). */
+  getModelIds?: () => Array<{ id: string; name?: string }>;
 }
 
 type OAuthLauncher = (authorizeUrl: string) => Promise<string | null>;
 ```
+
+**`requiresBaseUrl` for OAuth providers**: By default, the base URL field is hidden for OAuth providers. Set `requiresBaseUrl: true` to show it — useful for providers where the proxy endpoint is configurable at runtime. The base URL is saved to the account before `onOAuthLogin` is called, so the provider can read it via `getBaseUrlForProvider()`. The `saveOAuthAccount()` function preserves the existing `baseUrl` through re-logins.
+
+**`getModelIds`**: When present, `getProviderModels()` uses this instead of returning all Anthropic models. Each ID is resolved against the Anthropic model registry; unknown IDs get fallback model objects with sensible defaults (`input: ['text', 'image']`, `baseUrl: ''`, etc.). Use this to restrict the model dropdown to models the proxy actually supports.
+
+**Model ID pitfall**: Use pi-ai alias IDs (e.g., `claude-opus-4-6`) not dated IDs (e.g., `claude-opus-4-6-20250626`). In the browser bundle, `getModel()` returns `undefined` for unknown IDs instead of throwing, and `{ ...undefined }` silently produces `{}`. The alias resolves to a full model from the registry with all required fields.
+
+**Base URL validation**: When `requiresBaseUrl: true` is set on an OAuth provider and no build-time default exists (empty `proxyEndpoint` in config), the login button validates that a URL was entered. Users cannot proceed without providing a proxy endpoint.
 
 **Test pattern**:
 
@@ -957,6 +967,107 @@ npm run dev:full
 npm run build:extension
 # Then load dist/extension in chrome://extensions
 ```
+
+---
+
+## 14. Add Interactive Tool UI (Approval Dialogs, Forms)
+
+**When**: A shell command or tool needs user interaction before proceeding (e.g., permission approval, file picker, form input). Tool UI solves the "user gesture" problem — browser APIs like `showDirectoryPicker()` require a user click, but agent-driven tool calls have no gesture context.
+
+**Files to modify**:
+- Your command file (e.g., `src/fs/mount-commands.ts`)
+- Import from: `src/tools/tool-ui.ts`
+
+**How it works**:
+
+1. Tool execution sets up a context with `onUpdate` callback (handled automatically by `tool-adapter.ts`)
+2. Shell commands call `showToolUIFromContext()` to render interactive HTML in the chat
+3. User clicks a button → callback runs with user gesture context → can call restricted APIs
+4. Promise resolves with user's action/data
+
+**Implementation** (from mount command):
+
+```typescript
+import { getToolExecutionContext, showToolUIFromContext } from '../tools/tool-ui.js';
+
+async function execute(args: string[]): Promise<ShellResult> {
+  // Check if running in agent context (no user gesture)
+  const toolContext = getToolExecutionContext();
+  
+  if (toolContext) {
+    // Agent-driven: show approval UI
+    const result = await showToolUIFromContext({
+      html: `
+        <div class="tool-ui">
+          <p>The agent wants to access <code>${targetPath}</code></p>
+          <div class="tool-ui__actions">
+            <button class="tool-ui__btn tool-ui__btn--primary" data-action="approve">
+              Approve
+            </button>
+            <button class="tool-ui__btn tool-ui__btn--secondary" data-action="deny">
+              Deny
+            </button>
+          </div>
+        </div>
+      `,
+      onAction: async (action) => {
+        if (action === 'approve') {
+          // Runs with user gesture! Can call showDirectoryPicker(), etc.
+          const handle = await window.showDirectoryPicker();
+          return { approved: true, handle };
+        }
+        return { approved: false };
+      },
+    });
+    
+    if (!result?.approved) {
+      return { stdout: '', stderr: 'User denied', exitCode: 1 };
+    }
+    // Use result.handle...
+  } else {
+    // Terminal/user-driven: has gesture, call API directly
+    const handle = await window.showDirectoryPicker();
+  }
+}
+```
+
+**HTML conventions**:
+
+- Wrap content in `<div class="tool-ui">`
+- Use `data-action="actionName"` on buttons for click handling
+- Use `data-action-data='{"key":"value"}'` for additional data (JSON)
+- Available button classes: `.tool-ui__btn--primary`, `.tool-ui__btn--secondary`
+- Forms: add `data-action="submit"` to form, fields become action data
+
+**Key functions** (`src/tools/tool-ui.ts`):
+
+```typescript
+// Get current tool execution context (null if not in a tool)
+getToolExecutionContext(): ToolExecutionContext | null
+
+// Show UI and wait for user action (returns null if no context)
+showToolUIFromContext(request: {
+  html: string;
+  onAction?: (action: string, data?: unknown) => Promise<unknown> | unknown;
+}): Promise<unknown | null>
+
+// Lower-level: show UI with explicit onUpdate callback
+showToolUI(request: ToolUIRequest, onUpdate: OnUpdateCallback): Promise<unknown>
+```
+
+**Lifecycle**:
+
+1. Tool calls `showToolUIFromContext()` → UI appears in chat (tool call auto-expands)
+2. User clicks button with `data-action` → `onAction` callback fires with gesture context
+3. Callback return value resolves the `showToolUIFromContext()` promise
+4. UI is automatically cleaned up when tool execution ends
+
+**Extension vs CLI mode**:
+
+- CLI mode: HTML rendered directly in DOM with click handlers
+- Extension mode: HTML rendered in CSP-exempt sandbox iframe, actions posted via `postMessage`
+
+Both modes handle `data-action` clicks and form submissions identically.
 
 ---
 

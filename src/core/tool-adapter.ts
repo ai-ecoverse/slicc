@@ -11,6 +11,11 @@ import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { ToolDefinition, ImageContent, TextContent } from './types.js';
 import { processImageContent } from './image-processor.js';
 import { createLogger } from './logger.js';
+import {
+  pushToolExecutionContext,
+  popToolExecutionContext,
+  type ToolExecutionContext,
+} from '../tools/tool-ui.js';
 
 const log = createLogger('tool-adapter');
 
@@ -53,7 +58,9 @@ export function parseToolResultContentRaw(text: string): (TextContent | ImageCon
  * Parse a tool result string, extracting `<img:...>` tags into ImageContent blocks,
  * then validate and resize any images that exceed API limits.
  */
-export async function parseToolResultContent(text: string): Promise<(TextContent | ImageContent)[]> {
+export async function parseToolResultContent(
+  text: string
+): Promise<(TextContent | ImageContent)[]> {
   const raw = parseToolResultContentRaw(text);
 
   // Process each image block through validation/resize
@@ -79,26 +86,39 @@ export function adaptTool(tool: ToolDefinition): AgentTool<any> {
     description: tool.description,
     parameters: tool.inputSchema as any,
     async execute(
-      _toolCallId: string,
+      toolCallId: string,
       params: Record<string, any>,
       _signal?: AbortSignal,
-      _onUpdate?: (partialResult: AgentToolResult<any>) => void,
+      onUpdate?: (partialResult: AgentToolResult<any>) => void
     ): Promise<AgentToolResult<any>> {
-      const result = await tool.execute(params);
-      let content: (TextContent | ImageContent)[];
-      try {
-        content = await parseToolResultContent(result.content);
-      } catch (err) {
-        log.warn('Image processing failed, falling back to raw content', {
-          tool: tool.name,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        content = parseToolResultContentRaw(result.content);
+      // Push execution context so shell commands can show UI if needed
+      let ctx: ToolExecutionContext | undefined;
+      if (onUpdate) {
+        ctx = pushToolExecutionContext({ onUpdate, toolName: tool.name, toolCallId });
       }
-      return {
-        content,
-        details: { isError: result.isError },
-      };
+
+      try {
+        const result = await tool.execute(params);
+        let content: (TextContent | ImageContent)[];
+        try {
+          content = await parseToolResultContent(result.content);
+        } catch (err) {
+          log.warn('Image processing failed, falling back to raw content', {
+            tool: tool.name,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          content = parseToolResultContentRaw(result.content);
+        }
+        return {
+          content,
+          details: { isError: result.isError },
+        };
+      } finally {
+        // Pop execution context
+        if (ctx) {
+          popToolExecutionContext(ctx);
+        }
+      }
     },
   };
 }

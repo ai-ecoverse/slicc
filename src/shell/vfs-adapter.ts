@@ -20,9 +20,18 @@ import type {
 
 // These types are defined in just-bash's fs/interface.d.ts but not re-exported
 // from the package root. Define locally to match IFileSystem's method signatures.
-interface ReadFileOptions { encoding?: BufferEncoding | null }
-interface WriteFileOptions { encoding?: BufferEncoding }
-interface DirentEntry { name: string; isFile: boolean; isDirectory: boolean; isSymbolicLink: boolean }
+interface ReadFileOptions {
+  encoding?: BufferEncoding | null;
+}
+interface WriteFileOptions {
+  encoding?: BufferEncoding;
+}
+interface DirentEntry {
+  name: string;
+  isFile: boolean;
+  isDirectory: boolean;
+  isSymbolicLink: boolean;
+}
 
 export class VfsAdapter implements IFileSystem {
   private registeredCommandsFn: (() => string[]) | null = null;
@@ -43,8 +52,21 @@ export class VfsAdapter implements IFileSystem {
 
   async readFile(path: string, options?: ReadFileOptions | BufferEncoding): Promise<string> {
     const normalized = normalizePath(path);
-    const content = await this.vfs.readFile(normalized, { encoding: 'utf-8' });
-    return content as string;
+    const raw = await this.vfs.readFile(normalized, { encoding: 'binary' });
+    const bytes = raw instanceof Uint8Array ? raw : new TextEncoder().encode(raw as string);
+    // Try UTF-8 first — valid text files decode cleanly.
+    // Binary files (PNG, JPEG, etc.) contain invalid UTF-8 sequences;
+    // fall back to latin1 which maps each byte to a char, preserving all values.
+    try {
+      return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch {
+      // Don't use TextDecoder('iso-8859-1') — browsers treat it as windows-1252
+      // per WHATWG spec, remapping bytes 0x80-0x9F to different codepoints.
+      // String.fromCharCode maps each byte directly to its Unicode codepoint.
+      const chars = new Array(bytes.length);
+      for (let i = 0; i < bytes.length; i++) chars[i] = String.fromCharCode(bytes[i]);
+      return chars.join('');
+    }
   }
 
   async readFileBuffer(path: string): Promise<Uint8Array> {
@@ -57,7 +79,7 @@ export class VfsAdapter implements IFileSystem {
   async writeFile(
     path: string,
     content: FileContent,
-    _options?: WriteFileOptions | BufferEncoding,
+    _options?: WriteFileOptions | BufferEncoding
   ): Promise<void> {
     const normalized = normalizePath(path);
     if (typeof content === 'string') {
@@ -75,7 +97,10 @@ export class VfsAdapter implements IFileSystem {
       // ASCII text (all chars ≤ 0x7F) is identical in both encodings.
       let hasHighCodepoints = false;
       for (let i = 0; i < content.length; i++) {
-        if (content.charCodeAt(i) > 0xFF) { hasHighCodepoints = true; break; }
+        if (content.charCodeAt(i) > 0xff) {
+          hasHighCodepoints = true;
+          break;
+        }
       }
       if (hasHighCodepoints) {
         // Unicode text — encode as proper UTF-8
@@ -96,14 +121,17 @@ export class VfsAdapter implements IFileSystem {
   async appendFile(
     path: string,
     content: FileContent,
-    _options?: WriteFileOptions | BufferEncoding,
+    _options?: WriteFileOptions | BufferEncoding
   ): Promise<void> {
     const normalized = normalizePath(path);
     // Read existing content as binary to avoid encoding corruption
     let existingBytes = new Uint8Array(0);
     try {
       const existing = await this.vfs.readFile(normalized, { encoding: 'binary' });
-      existingBytes = existing instanceof Uint8Array ? new Uint8Array(existing) : new TextEncoder().encode(existing as string);
+      existingBytes =
+        existing instanceof Uint8Array
+          ? new Uint8Array(existing)
+          : new TextEncoder().encode(existing as string);
     } catch (err) {
       // Only treat ENOENT as "file doesn't exist yet" — re-throw other errors
       if (err instanceof FsError && err.code === 'ENOENT') {
@@ -117,7 +145,7 @@ export class VfsAdapter implements IFileSystem {
     if (typeof content === 'string') {
       newBytes = new Uint8Array(content.length);
       for (let i = 0; i < content.length; i++) {
-        newBytes[i] = content.charCodeAt(i) & 0xFF;
+        newBytes[i] = content.charCodeAt(i) & 0xff;
       }
     } else {
       newBytes = content instanceof Uint8Array ? content : new Uint8Array(content);
@@ -134,7 +162,11 @@ export class VfsAdapter implements IFileSystem {
     if (normalized === '/usr' || normalized === '/usr/bin') return true;
     if (normalized.startsWith('/usr/bin/')) {
       const cmdName = normalized.slice('/usr/bin/'.length);
-      return cmdName.length > 0 && !cmdName.includes('/') && this.getVirtualBinCommands().includes(cmdName);
+      return (
+        cmdName.length > 0 &&
+        !cmdName.includes('/') &&
+        this.getVirtualBinCommands().includes(cmdName)
+      );
     }
     return this.vfs.exists(normalized);
   }
@@ -143,13 +175,31 @@ export class VfsAdapter implements IFileSystem {
     const normalized = normalizePath(path);
     // Virtual /usr and /usr/bin directories
     if (normalized === '/usr' || normalized === '/usr/bin') {
-      return { isFile: false, isDirectory: true, isSymbolicLink: false, mode: 0o755, size: 0, mtime: new Date(0) };
+      return {
+        isFile: false,
+        isDirectory: true,
+        isSymbolicLink: false,
+        mode: 0o755,
+        size: 0,
+        mtime: new Date(0),
+      };
     }
     // Virtual /usr/bin/<command> entries
     if (normalized.startsWith('/usr/bin/')) {
       const cmdName = normalized.slice('/usr/bin/'.length);
-      if (cmdName.length > 0 && !cmdName.includes('/') && this.getVirtualBinCommands().includes(cmdName)) {
-        return { isFile: true, isDirectory: false, isSymbolicLink: false, mode: 0o755, size: 0, mtime: new Date(0) };
+      if (
+        cmdName.length > 0 &&
+        !cmdName.includes('/') &&
+        this.getVirtualBinCommands().includes(cmdName)
+      ) {
+        return {
+          isFile: true,
+          isDirectory: false,
+          isSymbolicLink: false,
+          mode: 0o755,
+          size: 0,
+          mtime: new Date(0),
+        };
       }
     }
     const s = await this.vfs.stat(normalized);
@@ -186,9 +236,15 @@ export class VfsAdapter implements IFileSystem {
       return [{ name: 'bin', isFile: false, isDirectory: true, isSymbolicLink: false }];
     }
     if (normalized === '/usr/bin') {
-      return this.getVirtualBinCommands().slice().sort().map(name => ({
-        name, isFile: true, isDirectory: false, isSymbolicLink: false,
-      }));
+      return this.getVirtualBinCommands()
+        .slice()
+        .sort()
+        .map((name) => ({
+          name,
+          isFile: true,
+          isDirectory: false,
+          isSymbolicLink: false,
+        }));
     }
     const entries = await this.vfs.readDir(normalized);
     return entries.map((e) => ({

@@ -78,7 +78,8 @@ export class MemoryPanel {
               ? '/workspace/CLAUDE.md'
               : `/scoops/${scoop.folder}/CLAUDE.md`;
             const content = await fs.readFile(memoryPath, { encoding: 'utf-8' });
-            scoopContent.textContent = typeof content === 'string' ? content : new TextDecoder().decode(content);
+            scoopContent.textContent =
+              typeof content === 'string' ? content : new TextDecoder().decode(content);
           } else {
             scoopContent.textContent = '(filesystem not ready)';
           }

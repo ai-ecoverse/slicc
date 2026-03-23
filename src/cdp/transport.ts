@@ -19,7 +19,7 @@ export interface CDPTransport {
     method: string,
     params?: Record<string, unknown>,
     sessionId?: string,
-    timeout?: number,
+    timeout?: number
   ): Promise<Record<string, unknown>>;
 
   /** Subscribe to a CDP event. */

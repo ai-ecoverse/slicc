@@ -25,7 +25,7 @@ declare module '@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js
   export function shouldCompact(
     contextTokens: number,
     contextWindow: number,
-    settings: CompactionSettings,
+    settings: CompactionSettings
   ): boolean;
 
   export function generateSummary(
@@ -35,6 +35,6 @@ declare module '@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js
     apiKey: string,
     signal?: AbortSignal,
     customInstructions?: string,
-    previousSummary?: string,
+    previousSummary?: string
   ): Promise<string>;
 }

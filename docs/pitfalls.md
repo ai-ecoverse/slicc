@@ -13,13 +13,15 @@ Chrome extension Manifest V3 blocks dynamic code construction on extension pages
 
 **The Solution: Sandbox Iframe**
 
-All dynamic code execution (JavaScript tool, `node -e`) routes through a sandboxed iframe (`sandbox.html`) exempt from extension CSP.
+All dynamic code execution (JavaScript tool, `node -e`) routes through a sandboxed iframe (`sandbox.html`) exempt from extension CSP. Sprinkles and inline widgets use a separate sandbox (`sprinkle-sandbox.html`).
 
 | Component | CLI Behavior | Extension Behavior |
 |-----------|--------------|-------------------|
 | **JavaScript tool** | Inline iframe with IFRAME_HTML string and constructor | Routes through `sandbox.html` via postMessage |
 | **Node command** | Direct constructor usage | Wraps user code, posts to sandbox iframe |
 | **Fetch proxy** | `/api/fetch-proxy` endpoint | Same sandbox iframe postMessage |
+| **Panel sprinkles** | Fragments: direct DOM; Full docs: srcdoc iframe | ALL: routes through `sprinkle-sandbox.html` via postMessage |
+| **Inline sprinkles** | Direct srcdoc iframe | Routes through `sprinkle-sandbox.html` via postMessage |
 
 **Code Pattern: Three-Branch Detection**
 
@@ -202,6 +204,21 @@ Use `chrome.debugger` API to control tabs directly.
 
 **Active Tab Detection**: BrowserAPI includes `active` field (boolean) only in extension mode, identifying the user's currently focused tab for intelligent tool auto-dispatch.
 
+## Leader Tray WebSocket: Extension Mode
+
+**The Problem**
+
+Leader tray bootstrap waits for a `leader.connected` control frame. In extension mode, that WebSocket must not live in the offscreen document.
+
+**The Solution**
+
+Host the real leader tray `WebSocket` in `src/extension/service-worker.ts` and relay frames through `chrome.runtime.sendMessage`. The offscreen document should use `ServiceWorkerLeaderTraySocket` from `src/extension/tray-socket-proxy.ts` as the `LeaderTrayManager` `webSocketFactory`.
+
+| Mode | Leader tray socket owner |
+|------|--------------------------|
+| **CLI** | Direct `WebSocket` in the app runtime |
+| **Extension** | Service worker proxy, not the offscreen document |
+
 ## Fetch Proxy: CORS & CSP
 
 | Mode | Fetch Strategy | CORS Handling |
@@ -376,6 +393,89 @@ if (isExtension) {
 ```
 
 Used throughout codebase to select code paths.
+
+## ToolCall ↔ ToolResult Pairing Must Be Preserved
+
+**The Problem**
+
+The Anthropic API requires every `tool_result` content block to reference a `tool_use` block (via `tool_use_id`) in the **immediately preceding** assistant message. If any code path mutates the message array and breaks this pairing, the API returns: `unexpected tool_use_id found in tool_result blocks`.
+
+**The Rule**
+
+Any code that modifies `AgentMessage[]` must preserve ToolCall blocks in assistant messages. Three code paths mutate messages:
+
+| Path | File | How it handles pairing |
+|---|---|---|
+| **Context compaction** | `context-compaction.ts` | While loop walks cut point backward past `toolResult` messages to include their assistant |
+| **Overflow recovery** | `scoop-context.ts` `recoverFromOverflow()` | When replacing oversized assistant content, preserves `type: 'toolCall'` blocks (only replaces text/image/thinking) |
+| **Image error recovery** | `scoop-context.ts` `recoverFromImageError()` | Filters `type !== 'image'` which naturally preserves ToolCall blocks |
+
+**When adding new message mutation code:**
+- Never replace an assistant message's entire `content` array — filter out large blocks but keep `toolCall` blocks
+- Never remove an assistant message without also removing its subsequent `toolResult` messages
+- Never insert messages between an assistant (with ToolCalls) and its `toolResult` responses
+
+**Key files:**
+- `scoop-context.ts` lines 462-487 (overflow recovery with ToolCall preservation)
+- `context-compaction.ts` lines 85-89 (compaction pair protection)
+- `scoop-context.test.ts` "overflow recovery" tests (7 tests covering ToolCall preservation)
+
+## Service Worker Must Be Self-Contained
+
+**The Problem**
+
+The extension service worker (`src/extension/service-worker.ts`) is built by Rollup as an entry point. If it imports from modules that are shared with other entry points (index.html, offscreen.html), Rollup code-splits them into shared chunks with ES `import` statements. Chrome extension service workers are **not** ES modules — `import` statements cause `Uncaught SyntaxError: Cannot use import statement outside a module` at runtime.
+
+**The Rule**
+
+The service worker must only import **types** (erased at compile time) from other modules. All runtime code must be inlined. If you need to share logic between the service worker and other extension contexts (offscreen, side panel), maintain an inline copy in the service worker and the canonical version in a shared module.
+
+| Import type | Example | Allowed in SW? |
+|---|---|---|
+| Type-only | `import type { Foo } from './messages.js'` | Yes (erased) |
+| Runtime value | `import { bar } from './tab-group.js'` | **No** (causes code split) |
+| Core modules | `import { createLogger } from '../core/logger.js'` | **No** (pulls in dependency tree) |
+
+**Current example**: `addToSliccGroup` has an inline copy in `service-worker.ts` and a canonical version in `tab-group.ts` (imported by `debugger-client.ts` in the offscreen document, which IS an ES module).
+
+## Extension Dual-Shell Context
+
+**The Problem**
+
+In extension mode, there are **two separate WasmShell instances** running in different execution contexts:
+
+| Context | Location | Shell purpose | Window globals |
+|---------|----------|---------------|----------------|
+| **Side panel** | `src/ui/main.ts` (mainExtension) | Terminal tab — user-facing shell | Has Layout, `__slicc_debug_tabs`, DOM |
+| **Offscreen document** | `src/extension/offscreen.ts` | Agent's bash tool — LLM-driven | Has Orchestrator, no DOM/Layout |
+
+These contexts share IndexedDB (VFS, sessions) but **NOT** window globals, DOM, or Layout instances. They communicate via `chrome.runtime` messages routed through the service worker.
+
+**The Pattern: UI-Affecting Shell Commands**
+
+Shell commands that need to affect the side panel UI (e.g., `debug on` toggling tabs) must handle both contexts:
+
+1. **Direct hook** (panel context): check `window.__slicc_*` — if present, call directly
+2. **Message relay** (offscreen context): send `chrome.runtime.sendMessage({ source: 'offscreen', payload: { type: '...', ... } })` → service worker routes to panel → `OffscreenClient` handles in `setupMessageListener()`
+
+```typescript
+// Pattern: try direct hook, fall back to message relay
+const toggle = (window as any).__slicc_debug_tabs;
+if (toggle) {
+  toggle(show); // Running in panel context
+} else {
+  chrome.runtime.sendMessage({ source: 'offscreen', payload: { type: 'debug-tabs', show } });
+}
+```
+
+**Current example**: `debug-command.ts` uses this pattern. Panel registers hook in `main.ts`; `offscreen-client.ts` handles the relay message.
+
+**Related Files**
+- `src/shell/supplemental-commands/debug-command.ts` (dual-context command, tries hook then relay)
+- `src/ui/main.ts` line 187 (registers `__slicc_debug_tabs` hook)
+- `src/ui/offscreen-client.ts` line 235 (relays `debug-tabs` message to hook)
+- `src/ui/layout.ts` `setDebugTabs()` (UI state — adds/removes tabs dynamically)
+- `src/ui/tabbed-ui.ts` `setHiddenTabs()` (persistence — saves to localStorage)
 
 ## Dual-Mode Testing Checklist
 

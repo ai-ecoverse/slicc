@@ -17,10 +17,10 @@ Row selection + Cmd/Ctrl+C. No new buttons, no context menus, no behavior change
 
 ### What Gets Copied
 
-| Item | Copied path |
-|------|-------------|
+| Item   | Copied path                                        |
+| ------ | -------------------------------------------------- |
 | Folder | `/workspace/skills/migrate-page/` (trailing slash) |
-| File | `/workspace/skills/migrate-page/SKILL.md` |
+| File   | `/workspace/skills/migrate-page/SKILL.md`          |
 
 Trailing slash on folders distinguishes them from files and matches shell conventions.
 
@@ -78,10 +78,10 @@ The existing chat copy button (`layout.ts:595`) already uses `navigator.clipboar
 
 ## Files Changed
 
-| File | Change |
-|------|--------|
+| File                           | Change                                                                                                                                                                     |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/ui/file-browser-panel.ts` | Add `selectedPath` state, selection on row click, `keydown` listener, clipboard write, visual feedback, selection re-apply in `refresh()`, listener cleanup in `dispose()` |
-| `index.html` | Add `.file-browser__item--selected` and copy-feedback CSS |
+| `index.html`                   | Add `.file-browser__item--selected` and copy-feedback CSS                                                                                                                  |
 
 ## Testing
 

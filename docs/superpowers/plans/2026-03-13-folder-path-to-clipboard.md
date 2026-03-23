@@ -4,7 +4,7 @@
 
 **Goal:** Let users click a row in the file browser and press Cmd/Ctrl+C to copy its VFS path to the clipboard.
 
-**Architecture:** Add `selectedPath` state directly to `FileBrowserPanel`, a `keydown` listener scoped to the container, selection re-application after DOM refresh (applied *after* the innerHTML comparison to avoid defeating the change-detection optimization), and CSS for the selected/feedback states. Two files touched: `src/ui/file-browser-panel.ts` and `index.html`.
+**Architecture:** Add `selectedPath` state directly to `FileBrowserPanel`, a `keydown` listener scoped to the container, selection re-application after DOM refresh (applied _after_ the innerHTML comparison to avoid defeating the change-detection optimization), and CSS for the selected/feedback states. Two files touched: `src/ui/file-browser-panel.ts` and `index.html`.
 
 **Tech Stack:** Vanilla TypeScript DOM, `navigator.clipboard.writeText()`, Vitest
 
@@ -17,6 +17,7 @@
 ### Task 1: Add selected row and copy-flash CSS
 
 **Files:**
+
 - Modify: `index.html:886` (after existing `.file-browser__item:hover` rule)
 
 - [ ] **Step 1: Add CSS rules for selected state and copy feedback**
@@ -58,9 +59,10 @@ git commit -m "style: add selected row and copy-flash CSS for file browser"
 
 This task adds all the TypeScript changes in one go: `selectedPath` state, `data-path` attribute on rows, selection on click, keydown listener for Cmd/Ctrl+C, clipboard write, visual flash feedback, selection re-application after `refresh()`, and cleanup in `dispose()`.
 
-**Key design decision — innerHTML comparison:** The `refresh()` method compares `tmp.innerHTML === this.bodyEl.innerHTML` to skip unnecessary DOM swaps. Selection-related attributes (`--selected` class, `tabindex`) would cause this comparison to always differ. Solution: run the innerHTML comparison *first* (against the clean rendered tree), do the DOM swap if needed, *then* apply selection decorations unconditionally. This preserves the optimization.
+**Key design decision — innerHTML comparison:** The `refresh()` method compares `tmp.innerHTML === this.bodyEl.innerHTML` to skip unnecessary DOM swaps. Selection-related attributes (`--selected` class, `tabindex`) would cause this comparison to always differ. Solution: run the innerHTML comparison _first_ (against the clean rendered tree), do the DOM swap if needed, _then_ apply selection decorations unconditionally. This preserves the optimization.
 
 **Files:**
+
 - Modify: `src/ui/file-browser-panel.ts`
 
 - [ ] **Step 1: Add state fields**
@@ -77,9 +79,8 @@ private keydownHandler: ((e: KeyboardEvent) => void) | null = null;
 In the `renderDir` method, after line 157 (`row.style.paddingLeft = ...`), add for ALL rows (both directory and file branches):
 
 ```ts
-row.dataset.path = entry.type === 'directory' && !fullPath.endsWith('/')
-  ? fullPath + '/'
-  : fullPath;
+row.dataset.path =
+  entry.type === 'directory' && !fullPath.endsWith('/') ? fullPath + '/' : fullPath;
 ```
 
 - [ ] **Step 3: Add selection on folder row click**
@@ -243,6 +244,7 @@ git commit -m "feat: add row selection and Cmd/Ctrl+C path copy to file browser"
 ### Task 3: Add DOM integration tests for listener lifecycle
 
 **Files:**
+
 - Create: `src/ui/file-browser-panel.test.ts`
 
 The test environment is `node` by default (configured in `vite.config.ts`). `FileBrowserPanel` uses DOM APIs, so this test file needs the `jsdom` environment pragma.

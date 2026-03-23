@@ -93,8 +93,11 @@ function textResponse(text: string): AssistantMessage {
     provider: 'anthropic',
     model: 'claude-opus-4-6',
     usage: {
-      input: 10, output: 5,
-      cacheRead: 0, cacheWrite: 0, totalTokens: 15,
+      input: 10,
+      output: 5,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 15,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: 'stop',
@@ -106,18 +109,23 @@ function textResponse(text: string): AssistantMessage {
 function toolCallResponse(toolName: string, args: Record<string, any>): AssistantMessage {
   return {
     role: 'assistant',
-    content: [{
-      type: 'toolCall',
-      id: `tool_${Date.now()}`,
-      name: toolName,
-      arguments: args,
-    }],
+    content: [
+      {
+        type: 'toolCall',
+        id: `tool_${Date.now()}`,
+        name: toolName,
+        arguments: args,
+      },
+    ],
     api: 'anthropic-messages',
     provider: 'anthropic',
     model: 'claude-opus-4-6',
     usage: {
-      input: 10, output: 5,
-      cacheRead: 0, cacheWrite: 0, totalTokens: 15,
+      input: 10,
+      output: 5,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 15,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: 'toolUse',
@@ -134,8 +142,11 @@ function errorResponse(message: string): AssistantMessage {
     provider: 'anthropic',
     model: 'claude-opus-4-6',
     usage: {
-      input: 0, output: 0,
-      cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: 'error',
@@ -205,9 +216,11 @@ describe('Agent (pi-mono)', () => {
     expect(msgs.length).toBeGreaterThanOrEqual(2);
     expect(msgs[0].role).toBe('user');
     // Find the assistant message
-    const assistantMsg = msgs.find(m => m.role === 'assistant');
+    const assistantMsg = msgs.find((m) => m.role === 'assistant');
     expect(assistantMsg).toBeDefined();
-    expect((assistantMsg as AssistantMessage).content).toEqual([{ type: 'text', text: 'Hello back!' }]);
+    expect((assistantMsg as AssistantMessage).content).toEqual([
+      { type: 'text', text: 'Hello back!' },
+    ]);
   });
 
   it('handles tool use loop', async () => {
@@ -258,8 +271,7 @@ describe('Agent (pi-mono)', () => {
     // Should have received text delta updates
     expect(updateEvents.length).toBeGreaterThan(0);
     const textDeltas = updateEvents.filter(
-      (e) => e.type === 'message_update' &&
-        (e as any).assistantMessageEvent?.type === 'text_delta',
+      (e) => e.type === 'message_update' && (e as any).assistantMessageEvent?.type === 'text_delta'
     );
     expect(textDeltas.length).toBeGreaterThan(0);
   });

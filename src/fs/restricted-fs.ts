@@ -12,7 +12,14 @@
 
 import type FS from '@isomorphic-git/lightning-fs';
 import type { VirtualFS } from './virtual-fs.js';
-import type { FileContent, DirEntry, Stats, ReadFileOptions, MkdirOptions, RmOptions } from './types.js';
+import type {
+  FileContent,
+  DirEntry,
+  Stats,
+  ReadFileOptions,
+  MkdirOptions,
+  RmOptions,
+} from './types.js';
 import { FsError } from './types.js';
 import { normalizePath } from './path-utils.js';
 
@@ -25,7 +32,7 @@ export class RestrictedFS {
   constructor(vfs: VirtualFS, allowedPaths: string[]) {
     this.vfs = vfs;
     // Normalize and ensure trailing slash for prefix matching
-    this.allowedPrefixes = allowedPaths.map(p => {
+    this.allowedPrefixes = allowedPaths.map((p) => {
       const n = normalizePath(p);
       return n.endsWith('/') ? n : n + '/';
     });
@@ -42,22 +49,24 @@ export class RestrictedFS {
   /** Check if a path is within or is a parent of allowed prefixes. */
   private isAllowed(path: string): boolean {
     const normalized = normalizePath(path);
-    return this.allowedPrefixes.some(prefix =>
-      // Path is the allowed dir itself (e.g., /scoops/test-scoop)
-      normalized === prefix.slice(0, -1) ||
-      // Path is inside the allowed dir (e.g., /scoops/test-scoop/file.txt)
-      normalized.startsWith(prefix) ||
-      // Path is a parent of an allowed dir (e.g., /scoops, /)
-      // Needed for cd to walk intermediate directories via stat
-      normalized === '/' || prefix.startsWith(normalized + '/')
+    return this.allowedPrefixes.some(
+      (prefix) =>
+        // Path is the allowed dir itself (e.g., /scoops/test-scoop)
+        normalized === prefix.slice(0, -1) ||
+        // Path is inside the allowed dir (e.g., /scoops/test-scoop/file.txt)
+        normalized.startsWith(prefix) ||
+        // Path is a parent of an allowed dir (e.g., /scoops, /)
+        // Needed for cd to walk intermediate directories via stat
+        normalized === '/' ||
+        prefix.startsWith(normalized + '/')
     );
   }
 
   /** Check if a path is within allowed prefixes (strict — no parent access). */
   private isAllowedStrict(path: string): boolean {
     const normalized = normalizePath(path);
-    return this.allowedPrefixes.some(prefix =>
-      normalized === prefix.slice(0, -1) || normalized.startsWith(prefix)
+    return this.allowedPrefixes.some(
+      (prefix) => normalized === prefix.slice(0, -1) || normalized.startsWith(prefix)
     );
   }
 
@@ -94,7 +103,7 @@ export class RestrictedFS {
     // that lead toward allowed paths
     if (!this.isAllowedStrict(path)) {
       const normalized = normalizePath(path);
-      return entries.filter(e => {
+      return entries.filter((e) => {
         const childPath = normalized === '/' ? `/${e.name}` : `${normalized}/${e.name}`;
         return this.isAllowed(childPath);
       });
@@ -143,7 +152,11 @@ export class RestrictedFS {
     }
   }
 
-  async writeFile(path: string, content: FileContent, options?: { recursive?: boolean }): Promise<void> {
+  async writeFile(
+    path: string,
+    content: FileContent,
+    options?: { recursive?: boolean }
+  ): Promise<void> {
     this.checkWrite(path);
     return this.withWriter(() => this.vfs.writeFile(path, content, options));
   }

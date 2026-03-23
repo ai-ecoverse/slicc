@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Review Workflow</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5;
+  color: var(--s2-gray-900); background: var(--s2-bg-base);
+  display: flex; flex-direction: column; height: 100vh;
+  -webkit-font-smoothing: antialiased;
+
+  --medical-color: #7c3aed; --medical-bg: rgba(124,58,237,0.08);
+  --legal-color: #2563eb; --legal-bg: rgba(37,99,235,0.08);
+  --author-color: var(--s2-gray-600); --author-bg: rgba(0,0,0,0.05);
+
+  --pending-border: var(--s2-notice); --pending-bg: color-mix(in srgb, var(--s2-notice) 6%, transparent);
+  --approved-border: var(--s2-positive); --approved-bg: color-mix(in srgb, var(--s2-positive) 6%, transparent);
+  --rejected-border: var(--s2-negative); --rejected-bg: color-mix(in srgb, var(--s2-negative) 6%, transparent);
+
+  --t: 130ms ease;
+}
+
+/* ---- Content ---- */
+.content-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.content-toolbar { height: 48px; border-bottom: 1px solid var(--s2-gray-200); display: flex; align-items: center; justify-content: space-between; padding: 0 24px; flex-shrink: 0; gap: 16px; }
+.page-title { font-size: 16px; font-weight: 700; white-space: nowrap; }
+.preset-group { display: flex; gap: 4px; overflow-x: auto; }
+.preset { height: 28px; padding: 0 12px; border-radius: var(--s2-radius-pill); border: 1px solid var(--s2-gray-300); background: var(--s2-bg-elevated); color: var(--s2-gray-700); font-size: 12px; font-weight: 500; cursor: pointer; transition: all var(--t); font-family: var(--s2-font-family); white-space: nowrap; }
+.preset:hover { border-color: var(--s2-gray-500); color: var(--s2-gray-900); }
+.preset.active { background: var(--s2-gray-900); border-color: var(--s2-gray-900); color: var(--s2-gray-25); }
+.content-main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+
+/* ======== PIPELINE BAR ======== */
+.pipeline-bar { height: 56px; border-bottom: 1px solid var(--s2-gray-200); background: var(--s2-bg-elevated); display: flex; align-items: center; justify-content: center; gap: 0; padding: 0 32px; flex-shrink: 0; }
+.pipeline-stage { display: flex; align-items: center; gap: 0; cursor: pointer; }
+.pipeline-node { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: var(--s2-radius-pill); transition: all var(--t); }
+.pipeline-node:hover { background: rgba(0,0,0,0.03); }
+.pipeline-circle { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--s2-gray-300); background: transparent; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all var(--t); font-size: 12px; font-weight: 700; color: var(--s2-gray-400); }
+.pipeline-circle svg { width: 14px; height: 14px; }
+.pipeline-stage-label { font-size: 12px; font-weight: 600; color: var(--s2-gray-500); transition: color var(--t); white-space: nowrap; }
+.pipeline-connector { width: 48px; height: 2px; background: var(--s2-gray-300); flex-shrink: 0; transition: background var(--t); }
+
+.pipeline-stage[data-status="complete"] .pipeline-circle { border-color: var(--s2-positive); background: var(--s2-positive); color: var(--s2-gray-25); }
+.pipeline-stage[data-status="complete"] .pipeline-stage-label { color: var(--s2-positive); }
+.pipeline-stage[data-status="complete"] + .pipeline-connector,
+.pipeline-connector.complete { background: var(--s2-positive); }
+.pipeline-stage[data-status="complete"] .pipeline-node { opacity: 0.5; }
+
+.pipeline-stage[data-status="current"] .pipeline-circle { border-color: var(--s2-accent); background: var(--s2-accent); color: var(--s2-gray-25); box-shadow: 0 0 0 3px color-mix(in srgb, var(--s2-accent) 20%, transparent); }
+.pipeline-stage[data-status="current"] .pipeline-stage-label { color: var(--s2-accent); font-weight: 700; }
+
+.pipeline-stage[data-status="upcoming"] .pipeline-circle { border-color: var(--s2-gray-300); background: transparent; }
+.pipeline-stage[data-status="upcoming"] .pipeline-stage-label { color: var(--s2-gray-400); }
+
+/* ======== MAIN SPLIT ======== */
+.review-layout { flex: 1; display: flex; overflow: hidden; }
+
+/* ---- Document Panel ---- */
+.doc-panel { flex: 1; overflow-y: auto; padding: 24px 32px; background: var(--s2-bg-elevated); }
+.doc-line { display: flex; align-items: stretch; min-height: 24px; transition: background var(--t); border-radius: 2px; }
+.doc-line-number { width: 36px; flex-shrink: 0; text-align: right; padding-right: 12px; font-family: var(--s2-font-family-mono); font-size: 11px; color: var(--s2-gray-400); line-height: 24px; user-select: none; }
+.doc-line-border { width: 3px; flex-shrink: 0; border-radius: 2px; margin-right: 12px; transition: background var(--t); }
+.doc-line-text { flex: 1; font-size: 14px; line-height: 24px; color: var(--s2-gray-800); padding: 0 8px 0 0; }
+.doc-line.empty .doc-line-text { min-height: 24px; }
+.doc-line.highlighted { background: color-mix(in srgb, var(--s2-accent) 6%, transparent); }
+.doc-line.highlighted .doc-line-border { background: var(--s2-accent) !important; }
+
+.doc-line[data-status="pending"] .doc-line-border { background: var(--pending-border); }
+.doc-line[data-status="pending"] { background: var(--pending-bg); }
+.doc-line[data-status="approved"] .doc-line-border { background: var(--approved-border); }
+.doc-line[data-status="approved"] { background: var(--approved-bg); }
+.doc-line[data-status="rejected"] .doc-line-border { background: var(--rejected-border); }
+.doc-line[data-status="rejected"] { background: var(--rejected-bg); opacity: 0.7; }
+
+.doc-line.clickable { cursor: pointer; }
+.doc-line.clickable:hover { background: rgba(0,0,0,0.02); }
+.doc-line[data-status="pending"].clickable:hover { background: color-mix(in srgb, var(--s2-notice) 10%, transparent); }
+.doc-line[data-status="approved"].clickable:hover { background: color-mix(in srgb, var(--s2-positive) 10%, transparent); }
+.doc-line[data-status="rejected"].clickable:hover { background: color-mix(in srgb, var(--s2-negative) 10%, transparent); }
+
+/* ---- Review Panel ---- */
+.review-panel { width: 320px; flex-shrink: 0; border-left: 1px solid var(--s2-gray-200); background: var(--s2-bg-layer-1); display: flex; flex-direction: column; overflow: hidden; }
+.review-header { padding: 16px 16px 0; flex-shrink: 0; }
+.review-title { font-size: 13px; font-weight: 700; color: var(--s2-gray-800); margin-bottom: 12px; }
+
+/* Filter tabs */
+.filter-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--s2-gray-200); margin: 0 -16px; padding: 0 16px; }
+.filter-tab { padding: 8px 12px; font-size: 12px; font-weight: 500; color: var(--s2-gray-500); background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; transition: all var(--t); font-family: var(--s2-font-family); white-space: nowrap; }
+.filter-tab:hover { color: var(--s2-gray-700); }
+.filter-tab.active { color: var(--s2-gray-900); border-bottom-color: var(--s2-gray-900); font-weight: 600; }
+.filter-tab .count { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; border-radius: var(--s2-radius-pill); background: var(--s2-gray-100); color: var(--s2-gray-600); font-size: 10px; font-weight: 700; margin-left: 4px; padding: 0 5px; }
+.filter-tab.active .count { background: var(--s2-gray-800); color: var(--s2-gray-25); }
+
+/* Comment cards */
+.review-list { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+.comment-card { background: var(--s2-bg-elevated); border: 1px solid var(--s2-gray-200); border-radius: var(--s2-radius-default); padding: 16px; cursor: pointer; transition: all var(--t); }
+.comment-card:hover { border-color: var(--s2-gray-400); box-shadow: var(--s2-shadow-container); }
+.comment-card.active { border-color: var(--s2-accent); box-shadow: 0 0 0 1px var(--s2-accent); }
+.comment-card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.comment-line-ref { font-family: var(--s2-font-family-mono); font-size: 11px; color: var(--s2-gray-500); }
+.role-badge { display: inline-flex; padding: 2px 8px; border-radius: var(--s2-radius-pill); font-size: 11px; font-weight: 600; }
+.role-badge.medical { background: var(--medical-bg); color: var(--medical-color); }
+.role-badge.legal { background: var(--legal-bg); color: var(--legal-color); }
+.role-badge.author { background: var(--author-bg); color: var(--author-color); }
+.comment-status-dot { width: 8px; height: 8px; border-radius: 50%; margin-left: auto; flex-shrink: 0; }
+.comment-status-dot.pending { background: var(--s2-notice); }
+.comment-status-dot.approved { background: var(--s2-positive); }
+.comment-status-dot.rejected { background: var(--s2-negative); }
+.comment-text { font-size: 13px; color: var(--s2-gray-700); line-height: 1.5; margin-bottom: 10px; }
+.comment-reject-reason { font-size: 12px; color: var(--s2-negative); font-style: italic; margin-bottom: 10px; padding: 6px 8px; background: var(--rejected-bg); border-radius: var(--s2-radius-s); border-left: 2px solid var(--s2-negative); }
+.comment-actions { display: flex; align-items: center; gap: 4px; }
+.action-btn { width: 28px; height: 28px; border-radius: var(--s2-radius-default); border: 1px solid var(--s2-gray-200); background: var(--s2-bg-elevated); color: var(--s2-gray-500); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 13px; transition: all var(--t); }
+.action-btn:hover { border-color: var(--s2-gray-400); color: var(--s2-gray-800); }
+.action-btn.approve:hover { border-color: var(--s2-positive); color: var(--s2-positive); background: color-mix(in srgb, var(--s2-positive) 6%, transparent); }
+.action-btn.reject:hover { border-color: var(--s2-negative); color: var(--s2-negative); background: color-mix(in srgb, var(--s2-negative) 6%, transparent); }
+.action-btn.reply:hover { border-color: var(--s2-accent); color: var(--s2-accent); background: color-mix(in srgb, var(--s2-accent) 6%, transparent); }
+.action-btn.active-approve { border-color: var(--s2-positive); color: var(--s2-gray-25); background: var(--s2-positive); }
+.action-btn.active-reject { border-color: var(--s2-negative); color: var(--s2-gray-25); background: var(--s2-negative); }
+.comment-reply { margin-top: 8px; display: none; }
+.comment-reply.visible { display: flex; gap: 6px; }
+.comment-reply textarea { flex: 1; padding: 6px 8px; border: 1px solid var(--s2-gray-300); border-radius: var(--s2-radius-s); font-size: 12px; font-family: var(--s2-font-family); resize: none; height: 56px; outline: none; transition: border-color var(--t); }
+.comment-reply textarea:focus { border-color: var(--s2-accent); }
+.comment-reply-send { width: 28px; height: 28px; border-radius: var(--s2-radius-default); border: none; background: var(--s2-accent); color: var(--s2-gray-25); cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; align-self: flex-end; transition: background var(--t); }
+.comment-reply-send:hover { background: var(--s2-accent-hover); }
+.comment-readonly { pointer-events: none; opacity: 0.45; }
+.comment-readonly .comment-actions { display: none; }
+
+/* Approve stage button */
+.review-footer { padding: 12px 16px; flex-shrink: 0; border-top: 1px solid var(--s2-gray-200); }
+.btn-approve-stage { width: 100%; height: 36px; border-radius: var(--s2-radius-pill); border: none; background: var(--s2-accent); color: var(--s2-gray-25); font-size: 13px; font-weight: 600; cursor: pointer; transition: all var(--t); font-family: var(--s2-font-family); }
+.btn-approve-stage:hover { background: var(--s2-accent-hover); }
+.btn-approve-stage:active { background: var(--s2-accent-down); }
+.btn-approve-stage:disabled { background: var(--s2-gray-300); color: var(--s2-gray-500); cursor: default; }
+.btn-approve-stage.completed { background: var(--s2-positive); cursor: default; font-size: 14px; font-weight: 700; height: 44px; letter-spacing: 0.02em; }
+
+/* Audit trail */
+.audit-section { border-top: 1px solid var(--s2-gray-200); flex-shrink: 0; }
+.audit-toggle { width: 100%; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; background: none; border: none; cursor: pointer; font-family: var(--s2-font-family); font-size: 12px; font-weight: 600; color: var(--s2-gray-600); transition: color var(--t); }
+.audit-toggle:hover { color: var(--s2-gray-900); }
+.audit-toggle svg { width: 14px; height: 14px; transition: transform var(--t); }
+.audit-toggle.open svg { transform: rotate(180deg); }
+.audit-list { max-height: 0; overflow: hidden; transition: max-height 200ms ease; }
+.audit-list.open { max-height: 200px; overflow-y: auto; }
+.audit-item { padding: 6px 16px; display: flex; gap: 8px; align-items: flex-start; font-size: 11px; color: var(--s2-gray-600); line-height: 1.4; }
+.audit-dot { width: 6px; height: 6px; border-radius: 50%; margin-top: 4px; flex-shrink: 0; }
+.audit-dot.approved { background: var(--s2-positive); }
+.audit-dot.rejected { background: var(--s2-negative); }
+.audit-dot.pending { background: var(--s2-notice); }
+.audit-dot.submitted { background: var(--s2-accent); }
+.audit-text { flex: 1; }
+.audit-time { color: var(--s2-gray-400); white-space: nowrap; flex-shrink: 0; }
+
+/* ---- Empty state ---- */
+.review-empty { padding: 32px 16px; text-align: center; color: var(--s2-gray-400); font-size: 13px; }
+
+/* ---- View states ---- */
+.view-state { display: none; flex-direction: column; height: 100%; }
+.view-state.active { display: flex; }
+.empty-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px 32px; text-align:center; gap:16px; }
+.empty-state h2 { font-size:18px; font-weight:800; color:var(--s2-gray-900); }
+.empty-state p { font-size:13px; color:var(--s2-gray-600); max-width:360px; line-height:1.5; }
+.url-input-row { display:flex; gap:8px; width:100%; max-width:420px; margin-top:8px; }
+.url-input-row input { flex:1; height:36px; padding:0 12px; border:1px solid var(--s2-gray-300); border-radius:var(--s2-radius-default); font-size:13px; font-family:var(--s2-font-family); color:var(--s2-gray-900); background:var(--s2-bg-elevated); outline:none; transition:border-color 130ms ease; }
+.url-input-row input:focus { border-color:var(--s2-accent); }
+.url-input-row input::placeholder { color:var(--s2-gray-400); }
+.url-input-row button { height:36px; padding:0 20px; border:none; border-radius:var(--s2-radius-pill); background:var(--s2-accent); color:var(--s2-gray-25); font-size:13px; font-weight:600; font-family:var(--s2-font-family); cursor:pointer; transition:background 130ms ease; white-space:nowrap; }
+.url-input-row button:hover { background:var(--s2-accent-hover); }
+.loading-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:48px 32px; text-align:center; gap:12px; }
+.loading-spinner { width:32px; height:32px; border:3px solid var(--s2-gray-200); border-top-color:var(--s2-accent); border-radius:50%; animation:spin 0.8s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.loading-state p { font-size:14px; font-weight:600; color:var(--s2-gray-800); }
+.loading-state .loading-detail { font-size:12px; font-weight:400; color:var(--s2-gray-500); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+}
+</style>
+</head>
+<body>
+
+<!-- ======== EMPTY VIEW ======== -->
+<div class="view-state active" id="emptyView">
+  <div class="empty-state">
+    <h2>Review Workflow</h2>
+    <p>Review and approve content with annotations and comments. Enter a page URL below.</p>
+    <div class="url-input-row">
+      <input type="text" id="urlInput" placeholder="https://example.com/page" />
+      <button id="btnStartReview">Start Review</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======== LOADING VIEW ======== -->
+<div class="view-state" id="loadingView">
+  <div class="loading-state">
+    <div class="loading-spinner"></div>
+    <p>Loading review...</p>
+    <span class="loading-detail">Fetching page content and review annotations</span>
+  </div>
+</div>
+
+<!-- ======== MAIN VIEW ======== -->
+<div class="view-state" id="mainView">
+  <div class="content-area">
+    <div class="content-toolbar">
+      <h1 class="page-title">Review & Approval</h1>
+    </div>
+
+    <div class="content-main">
+      <!-- Pipeline bar -->
+      <div class="pipeline-bar" id="pipelineBar"></div>
+
+      <!-- Main review layout -->
+      <div class="review-layout">
+        <div class="doc-panel" id="docPanel"></div>
+        <div class="review-panel">
+          <div class="review-header">
+            <div class="review-title" id="reviewTitle">Comments</div>
+            <div class="filter-tabs" id="filterTabs"></div>
+          </div>
+          <div class="review-list" id="reviewList"></div>
+          <div class="audit-section" id="auditSection">
+            <button class="audit-toggle" id="auditToggle">
+              <span>Audit Trail</span>
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+            </button>
+            <div class="audit-list" id="auditList"></div>
+          </div>
+          <div class="review-footer">
+            <button class="btn-approve-stage" id="btnApproveStage">Approve Stage</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// DATA CONTRACT — push via: sprinkle send review-workflow '<json>'
+// 1. Signal analysis started: {"status":"analyzing","url":"https://example.com"}
+// 2. Push review data:        {"documentContent":"...","stages":[{"label":"Medical","status":"approved",...}],"comments":[{"id":1,"line":3,"text":"...","role":"medical",...}]}
+// 3. No page specified:       {"status":"empty"}
+// ============================================================
+
+// ============================================================
+// DATA
+// ============================================================
+var documentContent = '';
+var docLines = [];
+var presets = {};
+
+// ============================================================
+// STATE
+// ============================================================
+var state = {
+  stages: [],
+  comments: [],
+  activeRole: 'medical',
+  activeFilter: 'all',
+  selectedCommentId: null,
+  auditLog: [],
+  auditOpen: false,
+};
+
+// ============================================================
+// VIEW SWITCHING
+// ============================================================
+function switchView(view) {
+  ['emptyView', 'loadingView', 'mainView'].forEach(function(id) {
+    document.getElementById(id).classList.remove('active');
+  });
+  document.getElementById(view + 'View').classList.add('active');
+}
+
+// ============================================================
+// URL INPUT HANDLER
+// ============================================================
+document.getElementById('btnStartReview').addEventListener('click', function() {
+  var input = document.getElementById('urlInput');
+  var url = input.value.trim();
+  if (!url) return;
+  switchView('loading');
+  slicc.lick({ action: 'start-review', data: { url: url } });
+});
+document.getElementById('urlInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') document.getElementById('btnStartReview').click();
+});
+
+// ============================================================
+// RESTORE STATE OR SHOW EMPTY
+// ============================================================
+var saved = (typeof slicc !== 'undefined' && slicc.getState) ? slicc.getState() : null;
+if (saved && saved.documentContent) {
+  documentContent = saved.documentContent;
+  docLines = documentContent.split('\n');
+  state.stages = saved.stages || [];
+  state.comments = saved.comments || [];
+  state.activeRole = saved.activeRole || 'medical';
+  state.activeFilter = saved.activeFilter || 'all';
+  state.selectedCommentId = saved.selectedCommentId || null;
+  state.auditLog = saved.auditLog || [];
+  state.auditOpen = saved.auditOpen || false;
+  switchView('main');
+} else if (saved && saved.view === 'loading') {
+  switchView('loading');
+} else {
+  switchView('empty');
+}
+
+// ============================================================
+// BRIDGE: listen for updates from slicc
+// ============================================================
+if (typeof slicc !== 'undefined' && slicc.on) {
+  slicc.on('update', function(data) {
+    // Status transitions
+    if (data.status === 'analyzing') {
+      switchView('loading');
+      saveState();
+      return;
+    }
+    if (data.status === 'empty') {
+      switchView('empty');
+      saveState();
+      return;
+    }
+
+    // Full data push — switch to ready
+    if (data.documentContent) {
+      documentContent = data.documentContent;
+      docLines = documentContent.split('\n');
+    }
+    if (data.comments) {
+      state.comments = data.comments;
+    }
+    if (data.stages) {
+      state.stages = data.stages;
+    }
+    if (data.activeRole) {
+      state.activeRole = data.activeRole;
+    }
+    if (data.auditLog) {
+      state.auditLog = data.auditLog;
+    }
+
+    // If we have enough data, switch to main view
+    if (documentContent && state.stages.length && state.comments.length) {
+      state.activeFilter = 'all';
+      state.selectedCommentId = null;
+      switchView('main');
+      render();
+    }
+    saveState();
+  });
+}
+
+function saveState() {
+  if (typeof slicc !== 'undefined' && slicc.setState) {
+    var currentView = document.getElementById('mainView').classList.contains('active') ? 'main'
+      : document.getElementById('loadingView').classList.contains('active') ? 'loading' : 'empty';
+    slicc.setState({
+      documentContent: documentContent,
+      view: currentView,
+      stages: state.stages,
+      comments: state.comments,
+      activeRole: state.activeRole,
+      activeFilter: state.activeFilter,
+      selectedCommentId: state.selectedCommentId,
+      auditLog: state.auditLog,
+      auditOpen: state.auditOpen,
+    });
+  }
+}
+
+// ============================================================
+// RENDER: Pipeline
+// ============================================================
+function renderPipeline() {
+  var bar = document.getElementById('pipelineBar');
+  bar.innerHTML = '';
+  state.stages.forEach(function(stage, i) {
+    var el = document.createElement('div');
+    el.className = 'pipeline-stage';
+    el.dataset.status = stage.status;
+    el.dataset.id = stage.id;
+
+    var node = document.createElement('div');
+    node.className = 'pipeline-node';
+
+    var circle = document.createElement('div');
+    circle.className = 'pipeline-circle';
+    if (stage.status === 'complete') {
+      circle.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-7"/></svg>';
+    } else if (stage.id === 'final') {
+      circle.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-7"/></svg>';
+    } else {
+      var idx = state.stages.indexOf(stage) + 1;
+      circle.textContent = idx;
+    }
+
+    var label = document.createElement('span');
+    label.className = 'pipeline-stage-label';
+    label.textContent = stage.label;
+
+    node.appendChild(circle);
+    node.appendChild(label);
+    el.appendChild(node);
+
+    el.addEventListener('click', function() {
+      if (stage.id === 'final') return;
+      state.activeRole = stage.id;
+      state.selectedCommentId = null;
+      state.activeFilter = 'all';
+      render();
+      saveState();
+    });
+
+    bar.appendChild(el);
+
+    if (i < state.stages.length - 1) {
+      var conn = document.createElement('div');
+      conn.className = 'pipeline-connector';
+      if (stage.status === 'complete') conn.classList.add('complete');
+      bar.appendChild(conn);
+    }
+  });
+}
+
+// ============================================================
+// RENDER: Document
+// ============================================================
+function renderDocument() {
+  var panel = document.getElementById('docPanel');
+  panel.innerHTML = '';
+
+  docLines.forEach(function(text, i) {
+    var lineNum = i + 1;
+    var el = document.createElement('div');
+    el.className = 'doc-line';
+    el.dataset.line = lineNum;
+    if (!text.trim()) el.classList.add('empty');
+
+    var lineComments = state.comments.filter(function(c) { return c.line === lineNum; });
+    if (lineComments.length) {
+      el.classList.add('clickable');
+      var hasPending = lineComments.some(function(c) { return c.status === 'pending'; });
+      var hasRejected = lineComments.some(function(c) { return c.status === 'rejected'; });
+      if (hasPending) el.dataset.status = 'pending';
+      else if (hasRejected) el.dataset.status = 'rejected';
+      else el.dataset.status = 'approved';
+
+      el.addEventListener('click', function() {
+        var first = lineComments[0];
+        state.selectedCommentId = first.id;
+        render();
+        scrollToComment(first.id);
+        saveState();
+      });
+    }
+
+    if (state.selectedCommentId) {
+      var sel = state.comments.find(function(c) { return c.id === state.selectedCommentId; });
+      if (sel && sel.line === lineNum) {
+        el.classList.add('highlighted');
+      }
+    }
+
+    var numEl = document.createElement('div');
+    numEl.className = 'doc-line-number';
+    numEl.textContent = lineNum;
+
+    var borderEl = document.createElement('div');
+    borderEl.className = 'doc-line-border';
+
+    var textEl = document.createElement('div');
+    textEl.className = 'doc-line-text';
+    textEl.textContent = text || '\u00A0';
+
+    el.appendChild(numEl);
+    el.appendChild(borderEl);
+    el.appendChild(textEl);
+    panel.appendChild(el);
+  });
+}
+
+// ============================================================
+// RENDER: Filter Tabs
+// ============================================================
+function getVisibleComments() {
+  return state.comments;
+}
+
+function renderFilterTabs() {
+  var container = document.getElementById('filterTabs');
+  container.innerHTML = '';
+  var visible = getVisibleComments();
+  var counts = { all: visible.length, pending: 0, approved: 0, rejected: 0 };
+  visible.forEach(function(c) { if (counts[c.status] !== undefined) counts[c.status]++; });
+
+  ['all', 'pending', 'approved', 'rejected'].forEach(function(key) {
+    var btn = document.createElement('button');
+    btn.className = 'filter-tab' + (state.activeFilter === key ? ' active' : '');
+    var label = key.charAt(0).toUpperCase() + key.slice(1);
+    btn.innerHTML = label + '<span class="count">' + counts[key] + '</span>';
+    btn.addEventListener('click', function() {
+      state.activeFilter = key;
+      render();
+      saveState();
+    });
+    container.appendChild(btn);
+  });
+
+  document.getElementById('reviewTitle').textContent =
+    state.activeRole === 'final' ? 'All Comments' :
+    state.activeRole === 'author' ? 'All Comments' :
+    (state.stages.find(function(s) { return s.id === state.activeRole; }) || {}).label + ' Comments';
+}
+
+// ============================================================
+// RENDER: Comment Cards
+// ============================================================
+function renderComments() {
+  var list = document.getElementById('reviewList');
+  list.innerHTML = '';
+
+  var visible = getVisibleComments();
+  var filtered = state.activeFilter === 'all' ? visible : visible.filter(function(c) { return c.status === state.activeFilter; });
+
+  if (!filtered.length) {
+    var empty = document.createElement('div');
+    empty.className = 'review-empty';
+    empty.textContent = state.activeFilter === 'all' ? 'No comments yet.' : 'No ' + state.activeFilter + ' comments.';
+    list.appendChild(empty);
+    return;
+  }
+
+  filtered.forEach(function(c) {
+    var card = document.createElement('div');
+    card.className = 'comment-card';
+    if (c.id === state.selectedCommentId) card.classList.add('active');
+
+    var isReadonly = state.activeRole !== c.role && state.activeRole !== 'author' && state.activeRole !== 'final';
+    if (isReadonly) card.classList.add('comment-readonly');
+
+    var header = document.createElement('div');
+    header.className = 'comment-card-header';
+    header.innerHTML =
+      '<span class="comment-line-ref">L' + c.line + '</span>' +
+      '<span class="role-badge ' + c.role + '">' + capitalize(c.role) + '</span>' +
+      '<span class="comment-status-dot ' + c.status + '"></span>';
+
+    var text = document.createElement('div');
+    text.className = 'comment-text';
+    text.textContent = c.text;
+
+    card.appendChild(header);
+    card.appendChild(text);
+
+    if (c.status === 'rejected' && c.rejectReason) {
+      var reason = document.createElement('div');
+      reason.className = 'comment-reject-reason';
+      reason.textContent = c.rejectReason;
+      card.appendChild(reason);
+    }
+
+    if (!isReadonly && state.activeRole !== 'final') {
+      var actions = document.createElement('div');
+      actions.className = 'comment-actions';
+
+      var approveBtn = document.createElement('button');
+      approveBtn.className = 'action-btn approve' + (c.status === 'approved' ? ' active-approve' : '');
+      approveBtn.innerHTML = '\u2713';
+      approveBtn.title = 'Approve';
+      approveBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        c.status = 'approved';
+        addAuditEntry(capitalize(state.activeRole) + ' approved Comment #' + c.id + ' (Line ' + c.line + ')', 'approved');
+        slicc.lick({ action: 'approve', data: { commentId: c.id, line: c.line, role: state.activeRole } });
+        render();
+        saveState();
+      });
+
+      var rejectBtn = document.createElement('button');
+      rejectBtn.className = 'action-btn reject' + (c.status === 'rejected' ? ' active-reject' : '');
+      rejectBtn.innerHTML = '\u2717';
+      rejectBtn.title = 'Reject';
+      rejectBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        c.status = 'rejected';
+        if (!c.rejectReason) c.rejectReason = '';
+        addAuditEntry(capitalize(state.activeRole) + ' rejected Comment #' + c.id + ' (Line ' + c.line + ')', 'rejected');
+        slicc.lick({ action: 'reject', data: { commentId: c.id, line: c.line, role: state.activeRole } });
+        slicc.lick({ action: 'request-changes', data: { commentId: c.id, line: c.line, role: state.activeRole } });
+        render();
+        saveState();
+      });
+
+      var replyBtn = document.createElement('button');
+      replyBtn.className = 'action-btn reply';
+      replyBtn.innerHTML = '\uD83D\uDCAC';
+      replyBtn.title = 'Reply';
+      replyBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var replyArea = card.querySelector('.comment-reply');
+        if (replyArea) replyArea.classList.toggle('visible');
+      });
+
+      actions.appendChild(approveBtn);
+      actions.appendChild(rejectBtn);
+      actions.appendChild(replyBtn);
+      card.appendChild(actions);
+
+      var reply = document.createElement('div');
+      reply.className = 'comment-reply';
+      reply.innerHTML =
+        '<textarea placeholder="Add a comment..."></textarea>' +
+        '<button class="comment-reply-send" title="Send">\u2192</button>';
+      reply.querySelector('.comment-reply-send').addEventListener('click', function(e) {
+        e.stopPropagation();
+        var ta = reply.querySelector('textarea');
+        if (ta.value.trim()) {
+          c.rejectReason = ta.value.trim();
+          addAuditEntry(capitalize(state.activeRole) + ' commented on #' + c.id + ': "' + ta.value.trim().slice(0, 40) + '..."', 'pending');
+          slicc.lick({ action: 'add-comment', data: { commentId: c.id, line: c.line, text: ta.value.trim(), role: state.activeRole } });
+          ta.value = '';
+          reply.classList.remove('visible');
+          render();
+          saveState();
+        }
+      });
+      card.appendChild(reply);
+    }
+
+    card.addEventListener('click', function() {
+      state.selectedCommentId = c.id;
+      render();
+      scrollToLine(c.line);
+      saveState();
+    });
+
+    list.appendChild(card);
+  });
+}
+
+function scrollToComment(id) {
+  setTimeout(function() {
+    var cards = document.querySelectorAll('.comment-card');
+    var visible = getVisibleComments();
+    var filtered = state.activeFilter === 'all' ? visible : visible.filter(function(c) { return c.status === state.activeFilter; });
+    var idx = -1;
+    for (var i = 0; i < filtered.length; i++) { if (filtered[i].id === id) { idx = i; break; } }
+    if (idx >= 0 && cards[idx]) {
+      cards[idx].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, 50);
+}
+
+function scrollToLine(lineNum) {
+  setTimeout(function() {
+    var line = document.querySelector('.doc-line[data-line="' + lineNum + '"]');
+    if (line) line.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, 50);
+}
+
+// ============================================================
+// RENDER: Audit Trail
+// ============================================================
+function renderAudit() {
+  var list = document.getElementById('auditList');
+  list.innerHTML = '';
+  state.auditLog.slice().reverse().forEach(function(entry) {
+    var item = document.createElement('div');
+    item.className = 'audit-item';
+    item.innerHTML =
+      '<div class="audit-dot ' + entry.type + '"></div>' +
+      '<div class="audit-text">' + entry.action + '</div>' +
+      '<div class="audit-time">' + entry.time + '</div>';
+    list.appendChild(item);
+  });
+}
+
+function addAuditEntry(action, type) {
+  state.auditLog.push({ action: action, type: type, time: 'just now' });
+}
+
+// ============================================================
+// RENDER: Approve Stage Button
+// ============================================================
+function renderApproveButton() {
+  var btn = document.getElementById('btnApproveStage');
+  var currentStage = state.stages.find(function(s) { return s.status === 'current'; });
+
+  if (!currentStage || currentStage.id === 'final') {
+    btn.textContent = 'Document Approved';
+    btn.disabled = false;
+    btn.className = 'btn-approve-stage completed';
+    return;
+  }
+
+  var pendingCount = state.comments.filter(function(c) { return c.status === 'pending'; }).length;
+  if (pendingCount > 0) {
+    btn.textContent = 'Approve Stage (' + pendingCount + ' pending)';
+    btn.disabled = false;
+    btn.className = 'btn-approve-stage';
+  } else {
+    btn.textContent = 'Advance to Next Stage';
+    btn.disabled = false;
+    btn.className = 'btn-approve-stage';
+  }
+}
+
+// ============================================================
+// MAIN RENDER
+// ============================================================
+function render() {
+  renderPipeline();
+  renderDocument();
+  renderFilterTabs();
+  renderComments();
+  renderAudit();
+  renderApproveButton();
+}
+
+// ============================================================
+// EVENT HANDLERS
+// ============================================================
+
+// Approve Stage
+document.getElementById('btnApproveStage').addEventListener('click', function() {
+  var currentStage = state.stages.find(function(s) { return s.status === 'current'; });
+  if (!currentStage || currentStage.id === 'final') return;
+
+  var pendingComments = state.comments.filter(function(c) { return c.status === 'pending'; });
+  pendingComments.forEach(function(c) { c.status = 'approved'; });
+
+  if (pendingComments.length) {
+    addAuditEntry(capitalize(currentStage.label) + ' approved ' + pendingComments.length + ' remaining comment(s)', 'approved');
+  }
+
+  var currentIdx = state.stages.indexOf(currentStage);
+  state.stages[currentIdx].status = 'complete';
+  if (currentIdx + 1 < state.stages.length) {
+    state.stages[currentIdx + 1].status = 'current';
+    state.activeRole = state.stages[currentIdx + 1].id;
+    addAuditEntry(capitalize(currentStage.label) + ' stage approved \u2014 advanced to ' + state.stages[currentIdx + 1].label, 'approved');
+  }
+
+  slicc.lick({ action: 'approve', data: { stage: currentStage.id, advancedTo: state.stages[currentIdx + 1] ? state.stages[currentIdx + 1].id : null } });
+  if (state.stages[currentIdx + 1]) {
+    slicc.lick({ action: 'assign-reviewer', data: { stage: state.stages[currentIdx + 1].id, label: state.stages[currentIdx + 1].label } });
+  }
+
+  state.activeFilter = 'all';
+  state.selectedCommentId = null;
+  render();
+  saveState();
+});
+
+// Audit toggle
+document.getElementById('auditToggle').addEventListener('click', function() {
+  state.auditOpen = !state.auditOpen;
+  document.getElementById('auditToggle').classList.toggle('open', state.auditOpen);
+  document.getElementById('auditList').classList.toggle('open', state.auditOpen);
+  saveState();
+});
+
+// ============================================================
+// HELPERS
+// ============================================================
+function capitalize(str) {
+  return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
+// ============================================================
+// INIT
+// ============================================================
+if (document.getElementById('mainView').classList.contains('active')) {
+  render();
+}
+</script>
+</body>
+</html>

@@ -54,7 +54,8 @@ const originalWebSocket = globalThis.WebSocket;
 
 beforeEach(() => {
   MockWebSocket.instances = [];
-  (globalThis as unknown as Record<string, unknown>).WebSocket = MockWebSocket as unknown as typeof WebSocket;
+  (globalThis as unknown as Record<string, unknown>).WebSocket =
+    MockWebSocket as unknown as typeof WebSocket;
 });
 
 afterEach(() => {
@@ -80,12 +81,12 @@ describe('CDPClient', () => {
     it('connects successfully', async () => {
       expect(client.state).toBe('disconnected');
 
-      const connectPromise = client.connect({ url: 'ws://localhost:3000/cdp' });
+      const connectPromise = client.connect({ url: 'ws://localhost:5710/cdp' });
 
       // Simulate server accepting connection
       const ws = MockWebSocket.instances[0];
       expect(ws).toBeDefined();
-      expect(ws.url).toBe('ws://localhost:3000/cdp');
+      expect(ws.url).toBe('ws://localhost:5710/cdp');
       ws.simulateOpen();
 
       await connectPromise;
@@ -93,7 +94,7 @@ describe('CDPClient', () => {
     });
 
     it('rejects on connection error', async () => {
-      const connectPromise = client.connect({ url: 'ws://localhost:3000/cdp' });
+      const connectPromise = client.connect({ url: 'ws://localhost:5710/cdp' });
 
       const ws = MockWebSocket.instances[0];
       ws.simulateError();
@@ -104,7 +105,7 @@ describe('CDPClient', () => {
 
     it('rejects on timeout', async () => {
       const connectPromise = client.connect({
-        url: 'ws://localhost:3000/cdp',
+        url: 'ws://localhost:5710/cdp',
         timeout: 50,
       });
 
@@ -114,13 +115,13 @@ describe('CDPClient', () => {
     });
 
     it('rejects if already connected', async () => {
-      const p = client.connect({ url: 'ws://localhost:3000/cdp' });
+      const p = client.connect({ url: 'ws://localhost:5710/cdp' });
       MockWebSocket.instances[0].simulateOpen();
       await p;
 
-      await expect(
-        client.connect({ url: 'ws://localhost:3000/cdp' }),
-      ).rejects.toThrow('Cannot connect');
+      await expect(client.connect({ url: 'ws://localhost:5710/cdp' })).rejects.toThrow(
+        'Cannot connect'
+      );
     });
   });
 

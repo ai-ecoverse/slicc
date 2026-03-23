@@ -44,7 +44,9 @@ describe('RestrictedFS', () => {
   });
 
   it('prevents path traversal (returns ENOENT)', async () => {
-    await expect(restricted.readFile('/scoops/andy-scoop/../../root-file.txt')).rejects.toThrow('ENOENT');
+    await expect(restricted.readFile('/scoops/andy-scoop/../../root-file.txt')).rejects.toThrow(
+      'ENOENT'
+    );
   });
 
   it('returns false for exists() outside allowed dirs', async () => {
@@ -64,7 +66,9 @@ describe('RestrictedFS', () => {
   });
 
   it('prevents writing outside allowed dirs', async () => {
-    await expect(restricted.writeFile('/scoops/other-scoop/hack.txt', 'hacked')).rejects.toThrow('EACCES');
+    await expect(restricted.writeFile('/scoops/other-scoop/hack.txt', 'hacked')).rejects.toThrow(
+      'EACCES'
+    );
   });
 
   it('allows stat on allowed directory root', async () => {
@@ -112,14 +116,14 @@ describe('RestrictedFS', () => {
   it('readDir on parent dir filters to only allowed children', async () => {
     // /scoops has andy-scoop and other-scoop, but restricted should only show andy-scoop
     const entries = await restricted.readDir('/scoops');
-    const names = entries.map(e => e.name);
+    const names = entries.map((e) => e.name);
     expect(names).toContain('andy-scoop');
     expect(names).not.toContain('other-scoop');
   });
 
   it('readDir on root filters to relevant children', async () => {
     const entries = await restricted.readDir('/');
-    const names = entries.map(e => e.name);
+    const names = entries.map((e) => e.name);
     // /scoops and /shared lead toward allowed paths
     expect(names).toContain('scoops');
     expect(names).toContain('shared');
@@ -185,12 +189,19 @@ describe('RestrictedFS', () => {
   it('rename checks both paths', async () => {
     await restricted.writeFile('/scoops/andy-scoop/rename-src.txt', 'src');
     // Rename within allowed - should work
-    await restricted.rename('/scoops/andy-scoop/rename-src.txt', '/scoops/andy-scoop/rename-dest.txt');
-    const content = await restricted.readFile('/scoops/andy-scoop/rename-dest.txt', { encoding: 'utf-8' });
+    await restricted.rename(
+      '/scoops/andy-scoop/rename-src.txt',
+      '/scoops/andy-scoop/rename-dest.txt'
+    );
+    const content = await restricted.readFile('/scoops/andy-scoop/rename-dest.txt', {
+      encoding: 'utf-8',
+    });
     expect(content).toBe('src');
 
     // Rename to outside - should fail
     await restricted.writeFile('/scoops/andy-scoop/escape.txt', 'escape');
-    await expect(restricted.rename('/scoops/andy-scoop/escape.txt', '/root-escape.txt')).rejects.toThrow('EACCES');
+    await expect(
+      restricted.rename('/scoops/andy-scoop/escape.txt', '/root-escape.txt')
+    ).rejects.toThrow('EACCES');
   });
 });

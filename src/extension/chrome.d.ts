@@ -15,31 +15,27 @@ interface ChromeDebuggerAPI {
   sendCommand(
     target: ChromeDebuggerTarget,
     method: string,
-    params?: Record<string, unknown>,
+    params?: Record<string, unknown>
   ): Promise<Record<string, unknown>>;
   onEvent: {
     addListener(
       callback: (
         source: ChromeDebuggerTarget,
         method: string,
-        params?: Record<string, unknown>,
-      ) => void,
+        params?: Record<string, unknown>
+      ) => void
     ): void;
     removeListener(
       callback: (
         source: ChromeDebuggerTarget,
         method: string,
-        params?: Record<string, unknown>,
-      ) => void,
+        params?: Record<string, unknown>
+      ) => void
     ): void;
   };
   onDetach: {
-    addListener(
-      callback: (source: ChromeDebuggerTarget, reason: string) => void,
-    ): void;
-    removeListener(
-      callback: (source: ChromeDebuggerTarget, reason: string) => void,
-    ): void;
+    addListener(callback: (source: ChromeDebuggerTarget, reason: string) => void): void;
+    removeListener(callback: (source: ChromeDebuggerTarget, reason: string) => void): void;
   };
 }
 
@@ -55,11 +51,7 @@ interface ChromeMessageSender {
 }
 
 interface ChromeOffscreenAPI {
-  createDocument(params: {
-    url: string;
-    reasons: string[];
-    justification: string;
-  }): Promise<void>;
+  createDocument(params: { url: string; reasons: string[]; justification: string }): Promise<void>;
   hasDocument(): Promise<boolean>;
 }
 
@@ -79,15 +71,15 @@ interface ChromeAPI {
         callback: (
           message: any,
           sender: ChromeMessageSender,
-          sendResponse: (response?: unknown) => void,
-        ) => void | boolean,
+          sendResponse: (response?: unknown) => void
+        ) => void | boolean
       ): void;
       removeListener(
         callback: (
           message: any,
           sender: ChromeMessageSender,
-          sendResponse: (response?: unknown) => void,
-        ) => void | boolean,
+          sendResponse: (response?: unknown) => void
+        ) => void | boolean
       ): void;
     };
   };
@@ -105,10 +97,7 @@ interface ChromeAPI {
     remove(windowId: number): Promise<void>;
   };
   identity: {
-    launchWebAuthFlow(options: {
-      url: string;
-      interactive: boolean;
-    }): Promise<string | undefined>;
+    launchWebAuthFlow(options: { url: string; interactive: boolean }): Promise<string | undefined>;
     getRedirectURL(path?: string): string;
   };
   offscreen: ChromeOffscreenAPI;
@@ -117,6 +106,26 @@ interface ChromeAPI {
     query(queryInfo: Record<string, unknown>): Promise<ChromeTab[]>;
     create(properties: { url?: string; active?: boolean }): Promise<{ id: number }>;
     remove(tabId: number): Promise<void>;
+    group(options: { tabIds: number | number[]; groupId?: number }): Promise<number>;
+  };
+  tabGroups: {
+    update(
+      groupId: number,
+      properties: {
+        title?: string;
+        color?:
+          | 'grey'
+          | 'blue'
+          | 'red'
+          | 'yellow'
+          | 'green'
+          | 'pink'
+          | 'purple'
+          | 'cyan'
+          | 'orange';
+        collapsed?: boolean;
+      }
+    ): Promise<void>;
   };
 }
 

@@ -22,17 +22,24 @@ export function createOAuthLauncher(): OAuthLauncher {
  * CLI mode: open a popup to the authorize URL.
  * The OAuth provider redirects to /auth/callback which postMessages the
  * redirect URL back to this window, then auto-closes.
+ *
+ * In Electron overlay mode, window.open opens the system browser so
+ * window.opener is null and postMessage won't work. The callback page
+ * falls back to POSTing the result to the CLI server, and we poll for it.
  */
 async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
   return new Promise<string | null>((resolve) => {
     const popup = window.open(authorizeUrl, '_blank', 'width=500,height=700,popup=yes');
 
     let resolved = false;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+
     const cleanup = () => {
       if (resolved) return;
       resolved = true;
       window.removeEventListener('message', handler);
       clearTimeout(timer);
+      if (pollTimer) clearInterval(pollTimer);
     };
 
     const handler = (event: MessageEvent) => {
@@ -50,10 +57,49 @@ async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
 
     window.addEventListener('message', handler);
 
+    // Poll the server for the OAuth result — Electron overlay only.
+    // In Electron overlay mode, window.open opens the system browser so
+    // window.opener is null and postMessage won't work. The callback page
+    // falls back to POSTing the result to /api/oauth-result, and we poll.
+    // In normal CLI mode, postMessage works so polling is unnecessary.
+    const isElectronOverlay =
+      location.pathname.startsWith('/electron') ||
+      new URLSearchParams(location.search).get('runtime') === 'electron-overlay';
+    if (isElectronOverlay) {
+      pollTimer = setInterval(async () => {
+        if (resolved) return;
+        try {
+          const res = await fetch('/api/oauth-result');
+          if (res.status === 204) return; // no result yet
+          const data = (await res.json()) as { redirectUrl?: string; error?: string };
+          if (resolved) return;
+          cleanup();
+
+          if (data.error) {
+            console.error('[oauth-service] Server relay OAuth error:', data.error);
+            resolve(null);
+            return;
+          }
+
+          resolve(data.redirectUrl ?? null);
+        } catch (err) {
+          // Network error or JSON parse failure — keep polling
+          console.warn(
+            '[oauth-service] Poll failed:',
+            err instanceof Error ? err.message : String(err)
+          );
+        }
+      }, 1000);
+    }
+
     // Timeout after 2 minutes
     const timer = setTimeout(() => {
       cleanup();
-      try { popup?.close(); } catch { /* best-effort */ }
+      try {
+        popup?.close();
+      } catch {
+        /* best-effort */
+      }
       resolve(null);
     }, 120000);
   });
@@ -88,12 +134,14 @@ async function launchOAuthExtension(authorizeUrl: string): Promise<string | null
     };
 
     (chrome as any).runtime.onMessage.addListener(handler);
-    (chrome as any).runtime.sendMessage({
-      source: 'panel',
-      payload: { type: 'oauth-request', providerId: 'oauth', authorizeUrl },
-    }).catch((err: unknown) => {
-      console.error('[oauth-service] Failed to send OAuth request to service worker:', err);
-    });
+    (chrome as any).runtime
+      .sendMessage({
+        source: 'panel',
+        payload: { type: 'oauth-request', providerId: 'oauth', authorizeUrl },
+      })
+      .catch((err: unknown) => {
+        console.error('[oauth-service] Failed to send OAuth request to service worker:', err);
+      });
 
     // Timeout after 2 minutes (same as CLI launcher)
     const timer = setTimeout(() => {

@@ -10,13 +10,17 @@
 | Git | `src/git/` | isomorphic-git wrapper | `git-commands.ts` | N/A |
 | Skills | `src/skills/` | Skill package manager | `apply.ts` | N/A |
 | CDP | `src/cdp/` | Chrome DevTools Protocol | `browser-api.ts` | `browser-api.test.ts` |
-| Tools | `src/tools/` | Tool factories; active scoop surface is file + bash + grep/find + javascript | `bash-tool.ts` | `bash-tool.test.ts` |
+| Tools | `src/tools/` | Tool factories; active scoop surface is file + bash + javascript | `bash-tool.ts` | `bash-tool.test.ts` |
 | Core Agent | `src/core/` | pi-mono agent loop + streaming | `index.ts` | `agent.test.ts` |
 | Scoops Orchestrator | `src/scoops/` | Multi-agent system (cone + scoops) | `orchestrator.ts` | N/A |
 | UI | `src/ui/` | Chat, Terminal, Files, Memory panels | `main.ts` | `types.test.ts` |
 | CLI / Electron Node Runtime | `src/cli/` | Express server, Chrome launcher, Electron float entrypoint | `index.ts` | `electron-runtime.test.ts` |
 | Extension | `src/extension/` | Chrome Manifest V3 entry point | `service-worker.ts` | N/A |
+| Cloud Tray Hub | `src/worker/` | Cloudflare Worker + Durable Object control-plane skeleton + deployed smoke test | `index.ts` | `index.test.ts`, `deployed.test.ts` |
 | Providers | `src/providers/` | Provider types, OAuth service, auto-discovery, build-time filtering | `types.ts`, `oauth-service.ts`, `index.ts` | `index.test.ts`, `oauth-service.test.ts` |
+| Sprinkles | `src/ui/sprinkle-*.ts` | Composable `.shtml` panels: discovery, rendering, bridge API, picker UI | `sprinkle-manager.ts` | `sprinkle-manager.test.ts` |
+| Defaults | `src/defaults/` | Bundled VFS content: agent instructions, skills, sprinkles | N/A | N/A |
+| Types | `src/types/` | Type declarations for external submodules | `pi-coding-agent-compaction.d.ts` | N/A |
 
 ## Source File Tree
 
@@ -25,10 +29,11 @@
 | File | Purpose |
 |---|---|
 | `browser-api.ts` | High-level Playwright-inspired API (listPages, navigate, screenshot, evaluate, click, type, waitForSelector, getAccessibilityTree); used by the `playwright-cli` shell command path and related browser automation commands |
-| `cdp-client.ts` | WebSocket-based CDP client (CLI mode, connects to `ws://localhost:3000/cdp`) |
-| `debugger-client.ts` | Chrome debugger API client (extension mode, uses `chrome.debugger`) |
+| `cdp-client.ts` | WebSocket-based CDP client (CLI mode, connects to `ws://localhost:5710/cdp`) |
+| `debugger-client.ts` | Chrome debugger API client (extension mode, uses `chrome.debugger`); adds agent-created tabs to "slicc" tab group |
 | `har-recorder.ts` | HAR 1.2 recorder for network traffic; saves snapshots to VFS on navigation |
 | `transport.ts` | CDPTransport interface (abstracts CDP/debugger implementations) |
+| `normalize-accessibility-text.ts` | Accessibility tree text normalization utilities |
 | `index.ts` | Re-exports + auto-selects transport based on extension detection |
 | `types.ts` | TargetInfo, PageInfo, EvaluateOptions, AccessibilityNode, etc. |
 | `offscreen-cdp-proxy.ts` | CDPTransport over chrome.runtime messages (offscreen → service worker → chrome.debugger) |
@@ -39,7 +44,10 @@
 | File | Purpose |
 |---|---|
 | `index.ts` | Main CLI entrypoint: launches Chrome by default, or in `--electron` mode launches/relaunches a target Electron app, serves UI, proxies WebSocket CDP traffic, and provides `/api/fetch-proxy` for CORS |
-| `runtime-flags.ts` | Shared CLI/runtime flag parsing for `--dev`, `--serve-only`, `--cdp-port`, `--electron`, `--electron-app`, and `--kill` |
+| `runtime-flags.ts` | Shared CLI/runtime flag parsing for `--dev`, `--serve-only`, `--cdp-port`, `--electron`, `--electron-app`, `--profile`, `--lead`, `--join`, `--log-level`, `--log-dir`, and `--kill` |
+| `chrome-launch.ts` | Chrome/Chrome-for-Testing discovery, QA profile resolution, launch-arg construction, and `.qa/chrome/*` scaffold seeding |
+| `qa-setup.ts` | CLI helper for `npm run qa:setup`; validates Chrome + `dist/extension` and scaffolds the dedicated QA Chrome profiles |
+| `electron-main.ts` | Electron process entry point: spawns CLI server in `--serve-only` mode, creates BrowserWindow, injects overlay, strips host-page CSP |
 | `electron-runtime.ts` | Pure Electron helpers for target app path resolution, overlay URLs/bootstrap scripts, dist paths, and injectable-target filtering |
 | `electron-controller.ts` | Electron app lifecycle management: detect running app processes, enforce `--kill`, launch with remote debugging, and inject/reinject the overlay across navigations |
 
@@ -52,6 +60,7 @@
 | `tool-adapter.ts` | Wraps legacy ToolDefinition as pi-compatible AgentTool |
 | `tool-registry.ts` | Registry of active tools with lookup by name |
 | `context-compaction.ts` | LLM-summarized context compaction (pi-mono aligned) with naive-drop fallback |
+| `image-processor.ts` | Image validation and preprocessing; checks base64 size (5MB), dimensions (8000px max, 1568px optimal), and format before agent processing. Parses PNG/GIF/JPEG headers for dimensions without full decode. Resizes via ImageMagick WASM |
 | `logger.ts` | createLogger factory with level filtering (DEBUG dev, ERROR prod) |
 | `session.ts` | IndexedDB session storage (`agent-sessions` DB) |
 | `mime-types.ts` | MIME type mappings (html, css, js, json, image, etc.) |
@@ -60,11 +69,14 @@
 
 | File | Purpose |
 |---|---|
-| `service-worker.ts` | Manifest V3 service worker; message relay between panel and offscreen + CDP proxy via chrome.debugger |
+| `service-worker.ts` | Manifest V3 service worker; message relay between panel and offscreen + CDP proxy via chrome.debugger + tab grouping |
 | `offscreen.ts` | Agent engine bootstrap in offscreen document (Orchestrator, VFS, Shell, tools) |
 | `offscreen-bridge.ts` | Orchestrator ↔ chrome.runtime message bridge; persists chat to `browser-coding-agent` IndexedDB |
+| `lick-manager-proxy.ts` | BroadcastChannel proxy enabling side panel terminal to manage cron tasks via LickManager running in offscreen |
 | `messages.ts` | Typed message envelopes: PanelToOffscreen, OffscreenToPanel, CdpProxy |
-| `chrome.d.ts` | Typed declarations for chrome.debugger, chrome.tabs, chrome.sidePanel, chrome.offscreen, etc. |
+| `tab-group.ts` | Shared tab grouping helper; adds agent-created tabs to a persistent "slicc" Chrome tab group (used by service worker + debugger client) |
+| `chrome.d.ts` | Typed declarations for chrome.debugger, chrome.tabs, chrome.tabGroups, chrome.sidePanel, chrome.offscreen, etc. |
+| `sprinkle-proxy.ts` | Lightweight proxy relaying sprinkle operations from offscreen document to side panel UI via chrome.runtime messaging |
 
 ### src/fs/ — Virtual Filesystem
 
@@ -90,10 +102,11 @@
 
 | File | Purpose |
 |---|---|
-| `types.ts` | `ProviderConfig` interface (id, name, isOAuth, onOAuthLogin, onOAuthLogout), `OAuthLauncher` type |
+| `types.ts` | `ProviderConfig` interface (id, name, isOAuth, onOAuthLogin, onOAuthLogout, getModelIds), `OAuthLauncher` type |
 | `index.ts` | Provider auto-discovery: pi-ai providers filtered by `providers.build.json`, built-in extensions via glob, external `/providers/*.ts` always included |
 | `oauth-service.ts` | Generic `OAuthLauncher` factory: CLI mode (popup → `/auth/callback` → postMessage) and extension mode (service worker → `chrome.identity.launchWebAuthFlow`) |
 | `built-in/bedrock-camp.ts` | AWS Bedrock CAMP provider — custom stream function via `register()` (only built-in that needs a file; pure-config providers use pi-ai auto-discovery) |
+| `built-in/azure-ai-foundry.ts` | Azure AI Foundry provider configuration (Claude on Azure) |
 
 ### src/shell/ — Shell & Terminal
 
@@ -129,6 +142,12 @@
 | `webhook-command.ts` | `webhook` — manage webhooks for event-driven automation |
 | `which-command.ts` | `which` — resolve command to path (built-ins: `/usr/bin/<name>`, `.jsh` scripts: actual VFS path) |
 | `zip-command.ts` | `zip` — create archives |
+| `serve-command.ts` | `serve` — open a VFS app directory in a browser tab via preview service worker with optional `--entry` override |
+| `oauth-token-command.ts` | `oauth-token` — retrieve OAuth access tokens for configured providers with auto-login |
+| `playwright-command.ts` | `playwright-cli` / `playwright` / `puppeteer` — browser automation shell commands (navigate, snapshot, click, screenshot, cookies, HAR recording) |
+| `sprinkle-command.ts` | `sprinkle` — list, open, close, and refresh `.shtml` sprinkle panels from the agent |
+| `debug-command.ts` | `debug` — toggle Terminal/Memory tabs in extension mode (extension-only, uses dual-context hook+relay pattern) |
+| `magick-wasm.ts` | Shared ImageMagick WASM initialization module for dual-mode (CLI/browser CDN vs extension bundled) image processing |
 
 ### src/skills/ — Skill Package Manager
 
@@ -149,7 +168,7 @@
 | File | Purpose |
 |---|---|
 | `orchestrator.ts` | Manages scoop contexts, routes messages, handles responses, owns shared VirtualFS |
-| `scoop-context.ts` | Per-scoop agent instance (RestrictedFS, WasmShell, Agent, skills, NanoClaw tools); wires file tools + `bash` + `grep`/`find` + `javascript`, with browser automation via `playwright-cli` shell commands |
+| `scoop-context.ts` | Per-scoop agent instance (RestrictedFS, WasmShell, Agent, skills, NanoClaw tools); wires file tools + `bash` + `grep`/`find` + `javascript`, with browser automation via `playwright-cli` shell commands. Overflow recovery preserves ToolCall blocks in assistant messages to maintain API-required tool_use ↔ toolResult pairing |
 | `nanoclaw-tools.ts` | Scoop tools: `send_message`; cone-only tools: `list_scoops`, `scoop_scoop`, `feed_scoop`, `drop_scoop`, `update_global_memory` |
 | `db.ts` | IndexedDB (`slicc-groups` DB v3): scoops, messages, sessions, tasks, state, webhooks, crontasks stores |
 | `lick-manager.ts` | Browser-side lick management (webhooks + crontasks); all state in IndexedDB |
@@ -195,6 +214,16 @@
 | `api-key-dialog.ts` | Dialog for entering API keys |
 | `theme.ts` | Theme toggle (System/Light/Dark) |
 | `types.ts` | AgentHandle, AgentEvent, ChatMessage, ToolCall, UIMessage interfaces |
+| `panel-registry.ts` | Registry of all panels (built-in + SHTML sprinkles) with zone placement and lookup/management methods |
+| `panel-types.ts` | Shared type definitions: ZoneId, PanelDescriptor, PanelRegistryEntry for the panel system |
+| `runtime-mode.ts` | Runtime mode detection (standalone/extension/electron-overlay) and Electron overlay messaging utilities |
+| `tab-zone.ts` | Generic reusable tab bar + content area manager for a single zone |
+| `sprinkle-manager.ts` | Registry of available and open `.shtml` sprinkle panels with placement and lifecycle management |
+| `sprinkle-discovery.ts` | Scans VirtualFS for `.shtml` sprinkle files and builds a map of names to metadata (path, title) |
+| `sprinkle-renderer.ts` | Loads `.shtml` content from VFS and renders into DOM. CLI: direct DOM injection (fragments) or srcdoc iframe (full docs). Extension: ALL content routes through `sprinkle-sandbox.html` (CSP-exempt) |
+| `inline-sprinkle.ts` | Hydrates ` ```shtml ` code blocks in chat into sandboxed iframes. CLI: direct srcdoc. Extension: routes through `sprinkle-sandbox.html` |
+| `sprinkle-bridge.ts` | API available to `.shtml` sprinkle scripts for communicating with the agent via lick events and state persistence |
+| `sprinkle-picker.ts` | Popup menu listing closed panels and unopened sprinkles for opening in a zone |
 | `index.ts` | Re-exports |
 
 ### src/shims/ — Node.js Polyfills
@@ -204,6 +233,22 @@
 | `empty.ts` | Stubs out node:zlib and node:module (just-bash references these) |
 | `buffer-polyfill.ts` | Polyfills Buffer for browser (isomorphic-git requirement) |
 | `http.ts`, `http2.ts`, `https.ts`, `stream.ts` | Node module stubs (imported by dependencies, no-op in browser) |
+
+### src/types/ — Type Declarations
+
+| File | Purpose |
+|---|---|
+| `pi-coding-agent-compaction.d.ts` | Type declarations for pi-coding-agent compaction submodule (estimateTokens, shouldCompact, generateSummary) |
+
+### src/defaults/ — Bundled VFS Content
+
+Default files bundled into the VFS at startup via `import.meta.glob`:
+
+| Path | VFS Target | Purpose |
+|---|---|---|
+| `shared/CLAUDE.md` | `/shared/CLAUDE.md` | Agent system-level instructions (loaded into sliccy's context) |
+| `workspace/skills/` | `/workspace/skills/` | Default skill packages (playwright-cli, sprinkles, etc.) |
+| `shared/sprinkles/` | `/shared/sprinkles/` | Default sprinkle panels (welcome) |
 
 ### src/ — Root
 
@@ -263,6 +308,8 @@ The Chrome extension uses a three-layer design to keep the agent engine alive ac
 - `slicc-groups` DB: Orchestrator routing data (scoops, tasks, webhooks, crontasks)
 
 **CDP Proxy:** Offscreen documents can't call `chrome.debugger` directly. Instead, offscreen sends `CdpProxyMessage` through the service worker, which translates to `chrome.debugger` commands and routes results back.
+
+**Dual Shell Context:** Both the side panel and offscreen document run their own WasmShell instance. The panel shell powers the Terminal tab; the offscreen shell executes agent bash tool calls. They share VFS via IndexedDB but NOT window globals or DOM. Shell commands that affect the panel UI (e.g., `debug on`) must use the dual-context pattern: try `window.__slicc_*` hook first (panel), fall back to `chrome.runtime.sendMessage` relay (offscreen → panel). See `docs/pitfalls.md` "Extension Dual-Shell Context".
 
 ## Data Flow Diagrams
 
@@ -466,6 +513,19 @@ Scoop removal / app clear
 | Change skill uninstall logic | `src/skills/uninstall.ts` |
 | Change skill state persistence | `src/skills/state.ts` |
 | Change manifest parsing | `src/skills/manifest.ts` |
+
+### Sprinkles System
+
+| I need to... | Modify |
+|---|---|
+| Add/change sprinkle discovery | `src/ui/sprinkle-discovery.ts` |
+| Change sprinkle rendering or CSP handling | `src/ui/sprinkle-renderer.ts`, `src/ui/inline-sprinkle.ts`, `sprinkle-sandbox.html` |
+| Change the sprinkle↔agent bridge API | `src/ui/sprinkle-bridge.ts` |
+| Change sprinkle lifecycle/placement | `src/ui/sprinkle-manager.ts` |
+| Add sprinkle picker UI features | `src/ui/sprinkle-picker.ts` |
+| Change extension sprinkle message proxy | `src/extension/sprinkle-proxy.ts` |
+| Change `sprinkle` shell command | `src/shell/supplemental-commands/sprinkle-command.ts` |
+| Add a default sprinkle | `src/defaults/shared/sprinkles/` |
 
 ### Providers
 

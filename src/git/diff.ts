@@ -244,7 +244,10 @@ export function unifiedDiff(opts: UnifiedDiffOptions): string {
  * Compute --stat summary for a single file diff.
  * Returns { insertions, deletions } counts.
  */
-export function diffStat(oldContent: string, newContent: string): { insertions: number; deletions: number } {
+export function diffStat(
+  oldContent: string,
+  newContent: string
+): { insertions: number; deletions: number } {
   if (oldContent === newContent) return { insertions: 0, deletions: 0 };
 
   const oldLines = oldContent.split('\n');

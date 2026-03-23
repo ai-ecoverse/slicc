@@ -17,6 +17,12 @@ declare global {
 
 const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
+/** Detect whether content is a full HTML document (has DOCTYPE or <html> tag). */
+export function isFullDocument(content: string): boolean {
+  const trimmed = content.trimStart().toLowerCase();
+  return trimmed.startsWith('<!doctype') || trimmed.startsWith('<html');
+}
+
 export class SprinkleRenderer {
   private container: HTMLElement;
   private bridge: SprinkleBridgeAPI;
@@ -34,7 +40,11 @@ export class SprinkleRenderer {
     this.dispose();
 
     if (isExtension) {
-      await this.renderInSandbox(content, sprinkleName);
+      // Extension mode: always route through manifest sandbox (CSP-exempt).
+      // Full documents need the fullDoc flag so the sandbox creates a nested iframe.
+      await this.renderInSandbox(content, sprinkleName, isFullDocument(content));
+    } else if (isFullDocument(content)) {
+      await this.renderFullDoc(content, sprinkleName);
     } else {
       this.renderInline(content, sprinkleName);
     }
@@ -44,7 +54,11 @@ export class SprinkleRenderer {
    * Extension mode: render inside a sandbox iframe (CSP-exempt).
    * Bridge communication happens via postMessage.
    */
-  private async renderInSandbox(content: string, sprinkleName: string): Promise<void> {
+  private async renderInSandbox(
+    content: string,
+    sprinkleName: string,
+    fullDoc = false
+  ): Promise<void> {
     const iframe = document.createElement('iframe');
     iframe.src = chrome.runtime.getURL('sprinkle-sandbox.html');
     iframe.style.cssText = 'width: 100%; flex: 1; border: none; min-height: 0;';
@@ -57,16 +71,24 @@ export class SprinkleRenderer {
         console.error('[sprinkle-renderer] iframe load timed out after 5s');
         reject(new Error('sprinkle sandbox iframe load timed out'));
       }, 5000);
-      iframe.addEventListener('load', () => {
-        clearTimeout(timer);
-        console.log('[sprinkle-renderer] iframe loaded, contentWindow:', !!iframe.contentWindow);
-        resolve();
-      }, { once: true });
-      iframe.addEventListener('error', (e) => {
-        clearTimeout(timer);
-        console.error('[sprinkle-renderer] iframe error:', e);
-        reject(new Error('sprinkle sandbox iframe failed to load'));
-      }, { once: true });
+      iframe.addEventListener(
+        'load',
+        () => {
+          clearTimeout(timer);
+          console.log('[sprinkle-renderer] iframe loaded, contentWindow:', !!iframe.contentWindow);
+          resolve();
+        },
+        { once: true }
+      );
+      iframe.addEventListener(
+        'error',
+        (e) => {
+          clearTimeout(timer);
+          console.error('[sprinkle-renderer] iframe error:', e);
+          reject(new Error('sprinkle sandbox iframe failed to load'));
+        },
+        { once: true }
+      );
       this.container.appendChild(iframe);
     });
 
@@ -83,52 +105,72 @@ export class SprinkleRenderer {
         this.bridge.setState(msg.data);
       } else if (msg.type === 'sprinkle-close') {
         this.bridge.close();
+      } else if (msg.type === 'sprinkle-storage-set') {
+        try {
+          localStorage.setItem(`slicc-sprinkle-ls:${sprinkleName}:${msg.key}`, msg.value);
+        } catch (e) {
+          console.warn('[sprinkle-renderer] localStorage setItem failed:', msg.key, e);
+        }
+      } else if (msg.type === 'sprinkle-storage-remove') {
+        try {
+          localStorage.removeItem(`slicc-sprinkle-ls:${sprinkleName}:${msg.key}`);
+        } catch (e) {
+          console.warn('[sprinkle-renderer] localStorage removeItem failed:', msg.key, e);
+        }
+      } else if (msg.type === 'sprinkle-storage-clear') {
+        const prefix = `slicc-sprinkle-ls:${sprinkleName}:`;
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k?.startsWith(prefix)) localStorage.removeItem(k);
+        }
+      } else if (msg.type === 'sprinkle-open') {
+        this.bridge.open(msg.path, msg.projectRoot ? { projectRoot: msg.projectRoot } : undefined);
       } else if (msg.type === 'sprinkle-readfile') {
         this.bridge.readFile(msg.path).then(
-          (fileContent) => iframe.contentWindow?.postMessage(
-            { type: 'sprinkle-readfile-response', id: msg.id, content: fileContent }, '*',
-          ),
-          (err: unknown) => iframe.contentWindow?.postMessage(
-            { type: 'sprinkle-readfile-response', id: msg.id, error: err instanceof Error ? err.message : String(err) }, '*',
-          ),
+          (fileContent) =>
+            iframe.contentWindow?.postMessage(
+              { type: 'sprinkle-readfile-response', id: msg.id, content: fileContent },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-readfile-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
         );
       }
     };
     window.addEventListener('message', this.messageHandler);
 
-    // Collect CSS from parent page to inject into the sandbox iframe:
-    // 1. CSS custom properties (theme tokens like --s2-*, --slicc-*)
-    // 2. Sprinkle component classes (.sprinkle-card, .sprinkle-stack, etc.)
-    const rootStyles = getComputedStyle(document.documentElement);
-    const cssVars: string[] = [];
-    const sprinkleRules: string[] = [];
-    for (const sheet of document.styleSheets) {
-      try {
-        for (const rule of sheet.cssRules) {
-          if (rule instanceof CSSStyleRule) {
-            if (rule.selectorText === ':root') {
-              for (let i = 0; i < rule.style.length; i++) {
-                const prop = rule.style[i];
-                if (prop.startsWith('--')) {
-                  cssVars.push(`${prop}: ${rootStyles.getPropertyValue(prop)};`);
-                }
-              }
-            }
-            // Collect all sprinkle component rules
-            if (rule.selectorText.includes('.sprinkle-') || rule.selectorText.includes('.fill')) {
-              sprinkleRules.push(rule.cssText);
-            }
-          }
-        }
-      } catch { /* cross-origin sheet, skip */ }
-    }
-    const themeCSS = (cssVars.length > 0 ? `:root { ${cssVars.join(' ')} }\n` : '')
-      + sprinkleRules.join('\n');
+    const themeCSS = this.collectThemeCSS();
 
-    // Send content to the sandbox for rendering, including saved state
+    // Collect persisted localStorage entries for this sprinkle
+    const savedStorage: Record<string, string> = {};
+    const lsPrefix = `slicc-sprinkle-ls:${sprinkleName}:`;
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k?.startsWith(lsPrefix)) {
+        savedStorage[k.slice(lsPrefix.length)] = localStorage.getItem(k) ?? '';
+      }
+    }
+
+    // Send content to the sandbox for rendering, including saved state + localStorage
     const savedState = this.bridge.getState();
     iframe.contentWindow!.postMessage(
-      { type: 'sprinkle-render', content, name: sprinkleName, themeCSS, savedState }, '*',
+      {
+        type: 'sprinkle-render',
+        content,
+        name: sprinkleName,
+        themeCSS,
+        savedState,
+        savedStorage,
+        fullDoc,
+      },
+      '*'
     );
   }
 
@@ -137,6 +179,163 @@ export class SprinkleRenderer {
     if (this.iframe?.contentWindow) {
       this.iframe.contentWindow.postMessage({ type: 'sprinkle-update', data }, '*');
     }
+  }
+
+  /** Collect CSS custom properties and sprinkle component rules from the parent page. */
+  private collectThemeCSS(): string {
+    return collectThemeCSS();
+  }
+
+  /** Generate the postMessage bridge script injected into full-document iframes. */
+  private generateBridgeScript(): string {
+    return `(function() {
+  var _updateListeners = new Set();
+  var _sprinkleName = '';
+  var _state = null;
+  var _readFileId = 0;
+  var _readFileCallbacks = {};
+
+  window.addEventListener('message', function(event) {
+    var msg = event.data;
+    if (!msg || !msg.type) return;
+    if (msg.type === 'sprinkle-init') {
+      _sprinkleName = msg.name || '';
+      _state = msg.savedState || null;
+      if (window.slicc) window.slicc.name = _sprinkleName;
+    } else if (msg.type === 'sprinkle-update') {
+      _updateListeners.forEach(function(cb) { try { cb(msg.data); } catch(e) { console.error(e); } });
+    } else if (msg.type === 'sprinkle-readfile-response') {
+      var cb = _readFileCallbacks[msg.id];
+      if (cb) { delete _readFileCallbacks[msg.id]; cb(msg.error, msg.content); }
+    }
+  });
+
+  var api = {
+    lick: function(event) {
+      var action, data;
+      if (typeof event === 'string') { action = event; } else { action = event.action; data = event.data; }
+      parent.postMessage({ type: 'sprinkle-lick', action: action, data: data }, '*');
+    },
+    on: function(event, callback) { if (event === 'update') _updateListeners.add(callback); },
+    off: function(event, callback) { if (event === 'update') _updateListeners.delete(callback); },
+    readFile: function(path) {
+      return new Promise(function(resolve, reject) {
+        var id = ++_readFileId;
+        _readFileCallbacks[id] = function(err, content) { if (err) reject(new Error(err)); else resolve(content); };
+        parent.postMessage({ type: 'sprinkle-readfile', id: id, path: path }, '*');
+      });
+    },
+    setState: function(data) { _state = data; parent.postMessage({ type: 'sprinkle-set-state', data: data }, '*'); },
+    getState: function() { return _state; },
+    close: function() { parent.postMessage({ type: 'sprinkle-close' }, '*'); },
+    name: ''
+  };
+  window.slicc = api;
+  window.bridge = api;
+})();`;
+  }
+
+  /**
+   * Full document mode: render a complete HTML document in an srcdoc iframe.
+   * Works in both CLI and extension mode.
+   */
+  private async renderFullDoc(content: string, sprinkleName: string): Promise<void> {
+    const bridgeScript = `<script>${this.generateBridgeScript()}</script>`;
+    const themeCSS = this.collectThemeCSS();
+    const themeTag = themeCSS ? `<style>${themeCSS}</style>` : '';
+    const injection = bridgeScript + themeTag;
+
+    // Inject bridge script + theme CSS after <head> tag, or before first <script> if no <head>
+    let modified: string;
+    const headMatch = content.match(/<head\b[^>]*>/i);
+    if (headMatch) {
+      const insertPos = headMatch.index! + headMatch[0].length;
+      modified = content.slice(0, insertPos) + injection + content.slice(insertPos);
+    } else {
+      const scriptMatch = content.match(/<script\b/i);
+      if (scriptMatch) {
+        modified =
+          content.slice(0, scriptMatch.index!) + injection + content.slice(scriptMatch.index!);
+      } else {
+        // Fallback: inject right after <html> or at the start
+        const htmlMatch = content.match(/<html\b[^>]*>/i);
+        if (htmlMatch) {
+          const insertPos = htmlMatch.index! + htmlMatch[0].length;
+          modified = content.slice(0, insertPos) + injection + content.slice(insertPos);
+        } else {
+          modified = injection + content;
+        }
+      }
+    }
+
+    const iframe = document.createElement('iframe');
+    iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+    iframe.style.cssText = 'width: 100%; flex: 1; border: none; min-height: 0;';
+    iframe.srcdoc = modified;
+    this.iframe = iframe;
+
+    // Wait for iframe to load
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error('full-doc iframe load timed out'));
+      }, 5000);
+      iframe.addEventListener(
+        'load',
+        () => {
+          clearTimeout(timer);
+          // Send init message with name and saved state
+          const savedState = this.bridge.getState();
+          iframe.contentWindow?.postMessage(
+            { type: 'sprinkle-init', name: sprinkleName, savedState },
+            '*'
+          );
+          resolve();
+        },
+        { once: true }
+      );
+      iframe.addEventListener(
+        'error',
+        (e) => {
+          clearTimeout(timer);
+          reject(new Error('full-doc iframe failed to load'));
+        },
+        { once: true }
+      );
+      this.container.appendChild(iframe);
+    });
+
+    // Listen for messages from the iframe
+    this.messageHandler = (event: MessageEvent) => {
+      if (event.source !== iframe.contentWindow) return;
+      const msg = event.data;
+      if (!msg?.type) return;
+
+      if (msg.type === 'sprinkle-lick') {
+        this.bridge.lick({ action: msg.action, data: msg.data });
+      } else if (msg.type === 'sprinkle-set-state') {
+        this.bridge.setState(msg.data);
+      } else if (msg.type === 'sprinkle-close') {
+        this.bridge.close();
+      } else if (msg.type === 'sprinkle-readfile') {
+        this.bridge.readFile(msg.path).then(
+          (fileContent) =>
+            iframe.contentWindow?.postMessage(
+              { type: 'sprinkle-readfile-response', id: msg.id, content: fileContent },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-readfile-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
+      }
+    };
+    window.addEventListener('message', this.messageHandler);
   }
 
   /**
@@ -187,7 +386,7 @@ export class SprinkleRenderer {
           }
         }
         const hoists = [...onclickFns]
-          .map(fn => `if (typeof ${fn} === 'function') window.${fn} = ${fn};`)
+          .map((fn) => `if (typeof ${fn} === 'function') window.${fn} = ${fn};`)
           .join('\n');
 
         live.textContent =
@@ -221,4 +420,54 @@ export class SprinkleRenderer {
       delete window.__slicc_sprinkles[this.bridge.name];
     }
   }
+}
+
+/** Resolve relative url() references in a CSS rule to absolute URLs. */
+function resolveUrls(cssText: string, baseHref: string): string {
+  return cssText.replace(/url\(\s*['"]?([^'")]+)['"]?\s*\)/g, (_match, url: string) => {
+    if (/^(https?:|data:|blob:)/i.test(url)) return `url('${url}')`;
+    try {
+      return `url('${new URL(url, baseHref).href}')`;
+    } catch {
+      return `url('${url}')`;
+    }
+  });
+}
+
+/** Collect CSS custom properties, @font-face rules, and sprinkle component rules from the parent page. */
+export function collectThemeCSS(): string {
+  if (typeof getComputedStyle !== 'function') return '';
+  const rootStyles = getComputedStyle(document.documentElement);
+  const cssVars: string[] = [];
+  const fontFaceRules: string[] = [];
+  const sprinkleRules: string[] = [];
+  const baseHref = location.href;
+  for (const sheet of document.styleSheets) {
+    try {
+      for (const rule of sheet.cssRules) {
+        if (rule instanceof CSSFontFaceRule) {
+          fontFaceRules.push(resolveUrls(rule.cssText, baseHref));
+        } else if (rule instanceof CSSStyleRule) {
+          if (rule.selectorText === ':root') {
+            for (let i = 0; i < rule.style.length; i++) {
+              const prop = rule.style[i];
+              if (prop.startsWith('--')) {
+                cssVars.push(`${prop}: ${rootStyles.getPropertyValue(prop)};`);
+              }
+            }
+          }
+          if (rule.selectorText.includes('.sprinkle-') || rule.selectorText.includes('.fill')) {
+            sprinkleRules.push(rule.cssText);
+          }
+        }
+      }
+    } catch {
+      /* cross-origin sheet, skip */
+    }
+  }
+  return (
+    fontFaceRules.join('\n') +
+    (cssVars.length > 0 ? `\n:root { ${cssVars.join(' ')} }\n` : '\n') +
+    sprinkleRules.join('\n')
+  );
 }

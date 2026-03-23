@@ -131,8 +131,17 @@ describe('ScoopContext active tool surface', () => {
 
     expect(mocks.createSearchTools).not.toHaveBeenCalled();
 
-    const toolNames = mocks.agentCtorCalls[0].initialState.tools.map((tool: { name: string }) => tool.name);
-    expect(toolNames).toEqual(['read_file', 'write_file', 'edit_file', 'bash', 'javascript', 'send_message']);
+    const toolNames = mocks.agentCtorCalls[0].initialState.tools.map(
+      (tool: { name: string }) => tool.name
+    );
+    expect(toolNames).toEqual([
+      'read_file',
+      'write_file',
+      'edit_file',
+      'bash',
+      'javascript',
+      'send_message',
+    ]);
     expect(toolNames).not.toContain('grep');
     expect(toolNames).not.toContain('find');
   });
@@ -143,7 +152,9 @@ describe('ScoopContext active tool surface', () => {
     await ctx.init();
 
     const systemPrompt = mocks.agentCtorCalls[0].initialState.systemPrompt;
-    expect(systemPrompt).toContain('Use shell commands like `rg`, `grep`, and `find` through the bash tool for search');
+    expect(systemPrompt).toContain(
+      'Use shell commands like `rg`, `grep`, and `find` through the bash tool for search'
+    );
     expect(systemPrompt).not.toContain('Search tools (grep, find)');
   });
 });

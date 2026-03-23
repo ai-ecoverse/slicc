@@ -101,7 +101,7 @@ export class OffscreenClient {
   }
 
   getScoop(jid: string): RegisteredScoop | undefined {
-    return this.scoops.find(s => s.jid === jid);
+    return this.scoops.find((s) => s.jid === jid);
   }
 
   isProcessing(jid: string): boolean {
@@ -112,7 +112,7 @@ export class OffscreenClient {
    *  updates immediately, then sends to offscreen. The real scoop (with a
    *  different JID) replaces the optimistic one when scoop-created arrives. */
   async registerScoop(scoop: RegisteredScoop): Promise<void> {
-    if (!this.scoops.find(s => s.name === scoop.name)) {
+    if (!this.scoops.find((s) => s.name === scoop.name)) {
       this.scoops.push(scoop);
       this.scoopStatuses.set(scoop.jid, 'initializing');
     }
@@ -123,7 +123,7 @@ export class OffscreenClient {
   async unregisterScoop(jid: string): Promise<void> {
     this.send({ type: 'scoop-drop', scoopJid: jid });
     // Optimistically remove
-    this.scoops = this.scoops.filter(s => s.jid !== jid);
+    this.scoops = this.scoops.filter((s) => s.jid !== jid);
     this.scoopStatuses.delete(jid);
   }
 
@@ -225,14 +225,23 @@ export class OffscreenClient {
 
   private setupMessageListener(): void {
     chrome.runtime.onMessage.addListener(
-      (message: unknown, _sender: ChromeMessageSender, _sendResponse: (response?: unknown) => void) => {
+      (
+        message: unknown,
+        _sender: ChromeMessageSender,
+        _sendResponse: (response?: unknown) => void
+      ) => {
         if (!isExtMsg(message)) return false;
         const msg = message as ExtensionMessage;
 
         if (msg.source === 'offscreen') {
           const payload = msg.payload as any;
-          // Route sprinkle-op to the registered handler
-          if (payload?.type === 'sprinkle-op' && this.sprinkleOpHandler) {
+          // Route debug-tabs toggle to the panel's Layout
+          if (payload?.type === 'debug-tabs') {
+            const toggle = (window as any).__slicc_debug_tabs as
+              | ((show: boolean) => void)
+              | undefined;
+            toggle?.(!!payload.show);
+          } else if (payload?.type === 'sprinkle-op' && this.sprinkleOpHandler) {
             this.sprinkleOpHandler(payload);
           } else {
             this.handleOffscreenMessage(msg.payload as OffscreenToPanelMessage | StateSnapshotMsg);
@@ -240,7 +249,7 @@ export class OffscreenClient {
         }
 
         return false;
-      },
+      }
     );
   }
 
@@ -355,8 +364,8 @@ export class OffscreenClient {
   private handleScoopCreated(msg: ScoopCreatedMsg): void {
     const scoop = this.msgScoopToRegistered(msg.scoop);
     // Remove optimistic entry (same name, different JID) and add the real one
-    this.scoops = this.scoops.filter(s => s.name !== scoop.name || s.jid === scoop.jid);
-    if (!this.scoops.find(s => s.jid === scoop.jid)) {
+    this.scoops = this.scoops.filter((s) => s.name !== scoop.name || s.jid === scoop.jid);
+    if (!this.scoops.find((s) => s.jid === scoop.jid)) {
       this.scoops.push(scoop);
     }
     this.scoopStatuses.set(scoop.jid, msg.scoop.status);
@@ -364,7 +373,7 @@ export class OffscreenClient {
   }
 
   private handleScoopList(msg: ScoopListMsg): void {
-    this.scoops = msg.scoops.map(s => this.msgScoopToRegistered(s));
+    this.scoops = msg.scoops.map((s) => this.msgScoopToRegistered(s));
     for (const s of msg.scoops) {
       this.scoopStatuses.set(s.jid, s.status);
     }
@@ -374,7 +383,7 @@ export class OffscreenClient {
   private handleStateSnapshot(msg: StateSnapshotMsg): void {
     log.info('Received state snapshot', { scoopCount: msg.scoops.length });
 
-    this.scoops = msg.scoops.map(s => this.msgScoopToRegistered(s));
+    this.scoops = msg.scoops.map((s) => this.msgScoopToRegistered(s));
     for (const s of msg.scoops) {
       this.scoopStatuses.set(s.jid, s.status);
     }
@@ -429,12 +438,16 @@ export class OffscreenClient {
   }
 
   private send(payload: PanelToOffscreenMessage): void {
-    chrome.runtime.sendMessage({
-      source: 'panel' as const,
-      payload,
-    }).catch((err) => {
-      log.error('Failed to send to offscreen', { error: err instanceof Error ? err.message : String(err) });
-    });
+    chrome.runtime
+      .sendMessage({
+        source: 'panel' as const,
+        payload,
+      })
+      .catch((err) => {
+        log.error('Failed to send to offscreen', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
   }
 }
 
@@ -443,10 +456,5 @@ function uid(): string {
 }
 
 function isExtMsg(msg: unknown): boolean {
-  return (
-    typeof msg === 'object' &&
-    msg !== null &&
-    'source' in msg &&
-    'payload' in msg
-  );
+  return typeof msg === 'object' && msg !== null && 'source' in msg && 'payload' in msg;
 }

@@ -103,9 +103,9 @@ describe('open command', () => {
     expect(result.exitCode).toBe(0);
     // In Node test env (no chrome.runtime), falls back to localhost preview URL
     expect(openSpy).toHaveBeenCalledWith(
-      'http://localhost:3000/preview/workspace/app/index.html',
+      'http://localhost:5710/preview/workspace/app/index.html',
       '_blank',
-      'noopener,noreferrer',
+      'noopener,noreferrer'
     );
     expect(result.stdout).toContain('/workspace/app/index.html');
     expect(result.stdout).toContain('/preview/workspace/app/index.html');
@@ -118,9 +118,9 @@ describe('open command', () => {
 
     expect(result.exitCode).toBe(0);
     expect(openSpy).toHaveBeenCalledWith(
-      'http://localhost:3000/preview/workspace/app',
+      'http://localhost:5710/preview/workspace/app',
       '_blank',
-      'noopener,noreferrer',
+      'noopener,noreferrer'
     );
   });
 
@@ -131,9 +131,9 @@ describe('open command', () => {
 
     expect(result.exitCode).toBe(0);
     expect(openSpy).toHaveBeenCalledWith(
-      'http://localhost:3000/preview/workspace/project/index.html',
+      'http://localhost:5710/preview/workspace/project/index.html',
       '_blank',
-      'noopener,noreferrer',
+      'noopener,noreferrer'
     );
   });
 
@@ -287,7 +287,10 @@ describe('open command', () => {
   it('handles multiple targets', async () => {
     const cmd = createOpenCommand();
     const ctx = createMockCtx();
-    const result = await cmd.execute(['https://example.com', '/workspace/app/index.html'], ctx as any);
+    const result = await cmd.execute(
+      ['https://example.com', '/workspace/app/index.html'],
+      ctx as any
+    );
 
     expect(result.exitCode).toBe(0);
     expect(openSpy).toHaveBeenCalledTimes(2);

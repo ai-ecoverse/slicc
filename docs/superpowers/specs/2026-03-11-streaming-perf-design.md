@@ -47,12 +47,12 @@ Add a fast path `updateStreamingContent(messageId)` that:
 
 The full `createMessageEl` + `replaceWith` path remains for non-streaming updates:
 
-| Event            | Update path                | Scope                     |
-|------------------|----------------------------|---------------------------|
-| Streaming token  | `updateStreamingContent()` | `.msg__content` innerHTML |
-| Tool use start   | `updateMessageEl()`        | Full element rebuild      |
-| Content done     | `updateMessageEl()`        | Full element rebuild      |
-| Turn end         | (no render)                | State cleanup only        |
+| Event           | Update path                | Scope                     |
+| --------------- | -------------------------- | ------------------------- |
+| Streaming token | `updateStreamingContent()` | `.msg__content` innerHTML |
+| Tool use start  | `updateMessageEl()`        | Full element rebuild      |
+| Content done    | `updateMessageEl()`        | Full element rebuild      |
+| Turn end        | (no render)                | State cleanup only        |
 
 ### 3. New state
 
@@ -84,7 +84,7 @@ Only `src/ui/chat-panel.ts` (~30-50 lines modified/added).
 ## Verification
 
 - `npm run typecheck` -- both tsconfig targets
-- `npm run test` -- all 1054 tests pass
+- `npm run test` -- all tests pass
 - `npm run build` -- production build
 - `npm run build:extension` -- extension build
 - Manual testing: build extension, load in Chrome, verify smooth streaming with live markdown, tool calls render correctly, content_done produces clean final render.

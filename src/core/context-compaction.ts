@@ -47,7 +47,9 @@ export interface CompactionConfig {
  * 4. Replaces the older messages with a single summary user message
  * 5. Falls back to naive drop if the LLM call fails
  */
-export function createCompactContext(config: CompactionConfig): (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]> {
+export function createCompactContext(
+  config: CompactionConfig
+): (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]> {
   const contextWindow = config.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
   const reserveTokens = config.reserveTokens ?? DEFAULT_COMPACTION_SETTINGS.reserveTokens;
   const keepRecentTokens = config.keepRecentTokens ?? DEFAULT_COMPACTION_SETTINGS.keepRecentTokens;
@@ -68,7 +70,12 @@ export function createCompactContext(config: CompactionConfig): (messages: Agent
       return messages;
     }
 
-    log.info('Context compaction triggered', { totalTokens, contextWindow, threshold: contextWindow - reserveTokens, messageCount: messages.length });
+    log.info('Context compaction triggered', {
+      totalTokens,
+      contextWindow,
+      threshold: contextWindow - reserveTokens,
+      messageCount: messages.length,
+    });
 
     // Find cut point: walk backward from end to keep ~keepRecentTokens
     let keptTokens = 0;
@@ -97,7 +104,10 @@ export function createCompactContext(config: CompactionConfig): (messages: Agent
     const messagesToSummarize = messages.slice(0, cutIndex);
     const messagesToKeep = messages.slice(cutIndex);
 
-    log.info('Compaction cut point', { summarizing: messagesToSummarize.length, keeping: messagesToKeep.length });
+    log.info('Compaction cut point', {
+      summarizing: messagesToSummarize.length,
+      keeping: messagesToKeep.length,
+    });
 
     // Attempt LLM-powered summarization
     const apiKey = config.getApiKey();
@@ -108,7 +118,7 @@ export function createCompactContext(config: CompactionConfig): (messages: Agent
           config.model,
           reserveTokens,
           apiKey,
-          signal,
+          signal
         );
 
         const summaryMessage: AgentMessage = {
@@ -135,7 +145,12 @@ export function createCompactContext(config: CompactionConfig): (messages: Agent
     // Fallback: naive drop (same as old behavior but without eager truncation)
     const compactedMsg: AgentMessage = {
       role: 'user',
-      content: [{ type: 'text', text: '[Earlier conversation messages were compacted to save context space]' }],
+      content: [
+        {
+          type: 'text',
+          text: '[Earlier conversation messages were compacted to save context space]',
+        },
+      ],
     } as any;
 
     log.info('Naive compaction applied', {
@@ -190,7 +205,12 @@ export async function compactContext(messages: AgentMessage[]): Promise<AgentMes
 
   const compactedMsg: AgentMessage = {
     role: 'user',
-    content: [{ type: 'text', text: '[Earlier conversation messages were compacted to save context space]' }],
+    content: [
+      {
+        type: 'text',
+        text: '[Earlier conversation messages were compacted to save context space]',
+      },
+    ],
   } as any;
 
   const result = [compactedMsg, ...messages.slice(cutIndex)];
