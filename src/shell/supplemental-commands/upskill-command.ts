@@ -629,14 +629,89 @@ async function resolveTesslRef(
 }
 
 /**
- * List skills in a GitHub repository
+ * Download and cache a repo ZIP archive from codeload.github.com (not rate-limited).
+ * Returns the unzipped file entries, or null on failure.
+ */
+async function fetchRepoZip(
+  owner: string,
+  repo: string,
+  fetch: SecureFetch,
+  branch: string = 'main'
+): Promise<Record<string, Uint8Array> | null> {
+  const url = `https://codeload.github.com/${owner}/${repo}/zip/refs/heads/${branch}`;
+  const response = await fetch(url, {
+    headers: { 'User-Agent': 'slicc-upskill' },
+  });
+  if (response.status !== 200) {
+    // Try 'master' branch as fallback
+    if (branch === 'main') {
+      return fetchRepoZip(owner, repo, fetch, 'master');
+    }
+    return null;
+  }
+
+  let zipBytes = consumeCachedBinaryByUrl(url);
+  if (!zipBytes) {
+    zipBytes = new Uint8Array(response.body.length);
+    for (let i = 0; i < response.body.length; i++) {
+      zipBytes[i] = response.body.charCodeAt(i) & 0xff;
+    }
+  }
+
+  try {
+    return unzipSync(zipBytes);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Strip the top-level directory prefix from zip entries (e.g. "repo-main/foo" → "foo").
+ */
+function stripZipPrefix(files: Record<string, Uint8Array>): Record<string, Uint8Array> {
+  const result: Record<string, Uint8Array> = {};
+  for (const [path, content] of Object.entries(files)) {
+    const slashIdx = path.indexOf('/');
+    if (slashIdx < 0) continue; // top-level entry (the directory itself)
+    const stripped = path.slice(slashIdx + 1);
+    if (stripped) result[stripped] = content;
+  }
+  return result;
+}
+
+/**
+ * List skills in a GitHub repository.
+ * Tries the codeload ZIP first (not rate-limited), falls back to the Contents API.
  */
 async function listGitHubSkills(
   owner: string,
   repo: string,
   github: GitHubRequestContext,
-  subPath?: string
+  subPath?: string,
+  fetch?: SecureFetch
 ): Promise<{ skills: Array<{ name: string; path: string }>; error?: string }> {
+  // Try ZIP-based discovery first (no rate limit)
+  if (fetch) {
+    const zip = await fetchRepoZip(owner, repo, fetch);
+    if (zip) {
+      const files = stripZipPrefix(zip);
+      const skills: Array<{ name: string; path: string }> = [];
+      const prefix = subPath ? subPath.replace(/^\/|\/$/g, '') + '/' : '';
+
+      for (const path of Object.keys(files)) {
+        if (!path.startsWith(prefix)) continue;
+        const basename = path.split('/').pop() || '';
+        if (basename === 'SKILL.md') {
+          const skillPath = path.replace(/\/SKILL\.md$/, '');
+          const skillName = skillPath.split('/').pop() || skillPath;
+          skills.push({ name: skillName, path: skillPath });
+        }
+      }
+      return { skills };
+    }
+  }
+
+  // Fallback: Contents API (rate-limited for anonymous users)
   const skills: Array<{ name: string; path: string }> = [];
 
   async function scanDir(path: string): Promise<void> {
@@ -653,12 +728,10 @@ async function listGitHubSkills(
 
     for (const item of contents) {
       if (item.type === 'file' && item.name === 'SKILL.md') {
-        // Found a skill - use parent directory as skill name
         const skillPath = item.path.replace('/SKILL.md', '');
         const skillName = skillPath.split('/').pop() || skillPath;
         skills.push({ name: skillName, path: skillPath });
       } else if (item.type === 'dir') {
-        // Recurse into directories
         await scanDir(item.path);
       }
     }
@@ -674,7 +747,8 @@ async function listGitHubSkills(
 }
 
 /**
- * Install a skill from GitHub repository
+ * Install a skill from GitHub repository.
+ * Tries ZIP-based install first (not rate-limited), falls back to the Contents API.
  */
 async function installFromGitHub(
   owner: string,
@@ -683,7 +757,8 @@ async function installFromGitHub(
   skillName: string,
   fs: VirtualFS,
   github: GitHubRequestContext,
-  force: boolean = false
+  force: boolean = false,
+  fetch?: SecureFetch
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   try {
     // Check if skill already exists
@@ -697,13 +772,49 @@ async function installFromGitHub(
           exitCode: 1,
         };
       }
-      // Remove existing skill
       await fs.rm(destDir, { recursive: true });
     } catch {
       // Doesn't exist, continue
     }
 
-    // Get directory contents
+    // Try ZIP-based install first (no rate limit)
+    if (fetch) {
+      const zip = await fetchRepoZip(owner, repo, fetch);
+      if (zip) {
+        const files = stripZipPrefix(zip);
+        const prefix = skillPath.replace(/^\/|\/$/g, '') + '/';
+
+        await fs.mkdir(destDir, { recursive: true });
+        let fileCount = 0;
+
+        for (const [path, content] of Object.entries(files)) {
+          if (!path.startsWith(prefix)) continue;
+          const relativePath = path.slice(prefix.length);
+          if (!relativePath || path.endsWith('/')) continue;
+
+          const filePath = `${destDir}/${relativePath}`;
+          const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
+          if (parentDir !== destDir) {
+            await fs.mkdir(parentDir, { recursive: true });
+          }
+
+          await fs.writeFile(filePath, content);
+          fileCount++;
+        }
+
+        if (fileCount > 0) {
+          await refreshSprinklesAfterInstall();
+          return {
+            stdout: `Installed skill "${skillName}" from ${owner}/${repo}\n`,
+            stderr: '',
+            exitCode: 0,
+          };
+        }
+        // No files found under path — fall through to API
+      }
+    }
+
+    // Fallback: Contents API
     const url = `https://api.github.com/repos/${owner}/${repo}/contents/${skillPath}`;
     const response = await github.request(url);
 
@@ -717,10 +828,8 @@ async function installFromGitHub(
 
     const contents = JSON.parse(response.body) as GitHubContent[];
 
-    // Create skill directory
     await fs.mkdir(destDir, { recursive: true });
 
-    // Download each file
     async function downloadDir(items: GitHubContent[], destBase: string): Promise<void> {
       for (const item of items) {
         if (item.type === 'file' && item.download_url) {
@@ -733,7 +842,6 @@ async function installFromGitHub(
           const cached = consumeCachedBinaryByUrl(item.download_url);
           await fs.writeFile(`${destBase}/${item.name}`, cached ?? fileResponse.body);
         } else if (item.type === 'dir') {
-          // Recursively download subdirectory
           const subUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${item.path}`;
           const subResponse = await github.request(subUrl);
           if (subResponse.status !== 200) {
@@ -751,7 +859,6 @@ async function installFromGitHub(
     try {
       await downloadDir(contents, destDir);
     } catch (downloadErr) {
-      // Clean up partial install so retries don't require --force
       try {
         await fs.rm(destDir, { recursive: true });
       } catch {
@@ -955,7 +1062,7 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
         return { stdout: '', stderr: `upskill: ${resolved.error}\n`, exitCode: 1 };
       }
       const github = await createGitHubRequestContext(fetchFn);
-      return installFromGitHub(resolved.owner, resolved.repo, resolved.skillPath, resolved.skillName, fs, github, force);
+      return installFromGitHub(resolved.owner, resolved.repo, resolved.skillPath, resolved.skillName, fs, github, force, fetchFn);
     }
 
     // Check if it's a GitHub reference
@@ -965,7 +1072,7 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
       const github = await createGitHubRequestContext(fetchFn);
 
       // List skills in the repository
-      const result = await listGitHubSkills(owner, repo, github, subPath);
+      const result = await listGitHubSkills(owner, repo, github, subPath, fetchFn);
 
       if (result.error) {
         return {
@@ -1036,7 +1143,8 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
           skill.name,
           fs,
           github,
-          force
+          force,
+          fetchFn
         );
 
         if (installResult.exitCode === 0) {

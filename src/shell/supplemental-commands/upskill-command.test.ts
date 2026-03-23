@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IFileSystem, SecureFetch } from 'just-bash';
+import { zipSync } from 'fflate';
 import { VirtualFS } from '../../fs/index.js';
 import { createUpskillCommand, _resetGlobalFsCache } from './upskill-command.js';
 
@@ -72,6 +73,7 @@ describe('upskill command GitHub flows', () => {
     await globalFs.writeFile('/workspace/.git/github-token', 'ghp_test_token');
 
     const fetchMock = vi.fn(async (url: string, options?: { headers?: Record<string, string> }) => {
+      if (url.includes('codeload.github.com')) return response(404, 'Not Found');
       if (url.endsWith('/contents/')) {
         return response(200, JSON.stringify([{ name: 'alpha', path: 'alpha', type: 'dir' }]));
       }
@@ -110,7 +112,10 @@ describe('upskill command GitHub flows', () => {
 
     for (const [url, options] of fetchMock.mock.calls) {
       expect(url).toContain('github');
-      expect(options?.headers?.Authorization).toBe('Bearer ghp_test_token');
+      // Only API requests carry the token; codeload/raw requests go through raw fetch
+      if (url.includes('api.github.com') || url.includes('raw.githubusercontent.com')) {
+        expect(options?.headers?.Authorization).toBe('Bearer ghp_test_token');
+      }
     }
   });
 
@@ -143,6 +148,7 @@ describe('upskill command GitHub flows', () => {
     let alphaRequests = 0;
 
     const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('codeload.github.com')) return response(404, 'Not Found');
       if (url.endsWith('/contents/')) {
         return response(200, JSON.stringify([{ name: 'alpha', path: 'alpha', type: 'dir' }]));
       }
@@ -259,6 +265,7 @@ describe('upskill Tessl registry integration', () => {
 
   it('tessl: shorthand resolves skill via Tessl API and installs from GitHub', async () => {
     const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('codeload.github.com')) return response(404, 'Not Found');
       // Tessl resolve endpoint
       if (url.includes('api.tessl.io') && url.includes('postgres-pro')) {
         return response(200, JSON.stringify({
@@ -295,6 +302,7 @@ describe('upskill Tessl registry integration', () => {
 
   it('checkRequiredBins warns about missing binaries', async () => {
     const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('codeload.github.com')) return response(404, 'Not Found');
       if (url.endsWith('/contents/')) {
         return response(200, JSON.stringify([{ name: 'alpha', path: 'alpha', type: 'dir' }]));
       }
@@ -314,5 +322,47 @@ describe('upskill Tessl registry integration', () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('alpha');
+  });
+
+  it('lists and installs skills via codeload ZIP without GitHub API (no rate limit)', async () => {
+    // Build a fake ZIP with a skill inside
+    const encoder = new TextEncoder();
+    const zipBytes = zipSync({
+      'skills-main/my-skill/SKILL.md': encoder.encode('---\nname: my-skill\n---\n# My Skill\n'),
+      'skills-main/my-skill/helper.js': encoder.encode('console.log("hi");\n'),
+      'skills-main/other/README.md': encoder.encode('# Not a skill\n'),
+    });
+    const zipBody = String.fromCharCode(...zipBytes);
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('codeload.github.com')) {
+        return response(200, zipBody);
+      }
+      // GitHub API should NOT be called — fail if it is
+      if (url.includes('api.github.com')) {
+        return response(403, JSON.stringify({ message: 'rate limited' }), {}, 'Forbidden');
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+
+    // List should work via ZIP
+    const listResult = await cmd.execute(['acme/skills', '--list'], createMockCtx() as any);
+    expect(listResult.exitCode).toBe(0);
+    expect(listResult.stdout).toContain('my-skill');
+    expect(listResult.stdout).not.toContain('other');
+
+    // Install should also work via ZIP
+    const installResult = await cmd.execute(['acme/skills', '--skill', 'my-skill'], createMockCtx() as any);
+    expect(installResult.exitCode).toBe(0);
+    expect(installResult.stdout).toContain('Installed skill "my-skill"');
+    await expect(fs.readTextFile('/workspace/skills/my-skill/SKILL.md')).resolves.toContain('My Skill');
+    await expect(fs.readTextFile('/workspace/skills/my-skill/helper.js')).resolves.toContain('console.log');
+
+    // Verify no GitHub API calls were made
+    for (const [url] of fetchMock.mock.calls) {
+      expect(url).not.toContain('api.github.com');
+    }
   });
 });
