@@ -23,7 +23,10 @@ import {
   registerApiProvider,
   streamAnthropic,
   streamSimpleAnthropic,
+  streamOpenAICompletions,
+  streamSimpleOpenAICompletions,
   getModels,
+  getProviders,
 } from '@mariozechner/pi-ai';
 import { AssistantMessageEventStream } from '@mariozechner/pi-ai/dist/utils/event-stream.js';
 import type {
@@ -33,6 +36,7 @@ import type {
   SimpleStreamOptions,
 } from '@mariozechner/pi-ai';
 import type { AnthropicOptions } from '@mariozechner/pi-ai/dist/providers/anthropic.js';
+import type { OpenAICompletionsOptions } from '@mariozechner/pi-ai/dist/providers/openai-completions.js';
 import {
   saveOAuthAccount,
   getAccounts,
@@ -87,6 +91,20 @@ interface ProxyConfig {
 }
 
 const proxyConfigCache = new Map<string, ProxyConfig>();
+
+// ── Proxy model metadata cache ──────────────────────────────────────
+
+interface ProxyModelEntry {
+  id: string;
+  name?: string;
+  api?: 'anthropic' | 'openai';
+  context_window?: number;
+  max_tokens?: number;
+  reasoning?: boolean;
+  input?: string[];
+}
+
+const proxyMetadataCache = new Map<string, ProxyModelEntry>();
 
 /**
  * Fetch client config from the proxy's /v1/config endpoint (unauthenticated).
@@ -193,10 +211,22 @@ export const config: ProviderConfig = {
   isOAuth: true,
 
   getModelIds: () => {
+    // Helper to propagate metadata from cache
+    const enrichModel = (m: { id: string; name?: string }) => {
+      const entry: any = { id: m.id, name: m.name ?? m.id };
+      const meta = proxyMetadataCache.get(m.id);
+      if (meta?.api) entry.api = meta.api;
+      if (meta?.context_window !== undefined) entry.context_window = meta.context_window;
+      if (meta?.max_tokens !== undefined) entry.max_tokens = meta.max_tokens;
+      if (meta?.reasoning !== undefined) entry.reasoning = meta.reasoning;
+      if (meta?.input) entry.input = meta.input;
+      return entry;
+    };
+
     // Prefer the authenticated /v1/models response (has all available models)
     for (const models of modelsCache.values()) {
       if (models.length) {
-        const result = models.map(m => ({ id: m.id, name: m.name ?? m.id }));
+        const result = models.map(m => enrichModel({ id: m.id, name: m.name ?? m.id }));
         // Persist so models survive page refresh
         try { localStorage.setItem('slicc-adobe-models', JSON.stringify(result)); } catch {}
         return result;
@@ -204,13 +234,13 @@ export const config: ProviderConfig = {
     }
     // Fall back to /v1/config response (unauthenticated, may be incomplete)
     for (const config of proxyConfigCache.values()) {
-      if (config.models?.length) return config.models;
+      if (config.models?.length) return config.models.map(enrichModel);
     }
     // Fall back to persisted models from a previous session
     try {
       const persisted = localStorage.getItem('slicc-adobe-models');
       if (persisted) {
-        const models = JSON.parse(persisted) as Array<{ id: string; name?: string }>;
+        const models = JSON.parse(persisted) as Array<{ id: string; name?: string } & Record<string, any>>;
         if (models.length) return models;
       }
     } catch {}
@@ -427,15 +457,33 @@ function makeErrorOutput(model: Model<Api>, error: unknown) {
 const streamAdobe = (
   model: Model<Api>,
   context: Context,
-  options: AnthropicOptions = {},
+  options: AnthropicOptions | OpenAICompletionsOptions = {},
 ) => {
   const stream = new AssistantMessageEventStream();
   (async () => {
     try {
       const accessToken = await getValidAccessToken();
-      const proxyModel = { ...model, baseUrl: getProxyEndpoint(), api: 'anthropic-messages' as Api };
-      const inner = streamAnthropic(proxyModel as any, context, { ...options, apiKey: accessToken });
-      for await (const event of inner) stream.push(event as any);
+      const isOpenAI = String(model.api).includes('openai');
+
+      if (isOpenAI) {
+        // Route to OpenAI Chat Completions API — append /v1 since the OpenAI SDK adds /chat/completions
+        // pi-ai's detectCompat uses provider/baseUrl to identify non-standard providers,
+        // but ours are overridden (provider='adobe', baseUrl=proxy). Set compat explicitly
+        // to disable features unsupported by OpenAI-compatible backends (Cerebras, etc.)
+        const proxyModel = {
+          ...model,
+          baseUrl: `${getProxyEndpoint()}/v1`,
+          api: 'openai-completions' as Api,
+          compat: { ...(model as any).compat, supportsStore: false, supportsDeveloperRole: false },
+        };
+        const inner = streamOpenAICompletions(proxyModel as any, context, { ...options, apiKey: accessToken } as any);
+        for await (const event of inner) stream.push(event as any);
+      } else {
+        // Route to Anthropic Messages API
+        const proxyModel = { ...model, baseUrl: getProxyEndpoint(), api: 'anthropic-messages' as Api };
+        const inner = streamAnthropic(proxyModel as any, context, { ...options, apiKey: accessToken });
+        for await (const event of inner) stream.push(event as any);
+      }
       stream.end();
     } catch (error) {
       console.error('[adobe] Stream error:', error instanceof Error ? error.message : String(error));
@@ -455,9 +503,23 @@ const streamSimpleAdobe = (
   (async () => {
     try {
       const accessToken = await getValidAccessToken();
-      const proxyModel = { ...model, baseUrl: getProxyEndpoint(), api: 'anthropic-messages' as Api };
-      const inner = streamSimpleAnthropic(proxyModel as any, context, { ...options, apiKey: accessToken } as any);
-      for await (const event of inner) stream.push(event as any);
+      const isOpenAI = String(model.api).includes('openai');
+
+      if (isOpenAI) {
+        const proxyModel = {
+          ...model,
+          baseUrl: `${getProxyEndpoint()}/v1`,
+          api: 'openai-completions' as Api,
+          compat: { ...(model as any).compat, supportsStore: false, supportsDeveloperRole: false },
+        };
+        const inner = streamSimpleOpenAICompletions(proxyModel as any, context, { ...options, apiKey: accessToken } as any);
+        for await (const event of inner) stream.push(event as any);
+      } else {
+        // Route to Anthropic Messages API
+        const proxyModel = { ...model, baseUrl: getProxyEndpoint(), api: 'anthropic-messages' as Api };
+        const inner = streamSimpleAnthropic(proxyModel as any, context, { ...options, apiKey: accessToken } as any);
+        for await (const event of inner) stream.push(event as any);
+      }
       stream.end();
     } catch (error) {
       console.error('[adobe] Stream error:', error instanceof Error ? error.message : String(error));
@@ -478,17 +540,34 @@ async function fetchProxyModels(): Promise<Model<Api>[]> {
       headers: { 'Authorization': `Bearer ${accessToken}` },
     });
     if (res.ok) {
-      const data = await res.json() as { data?: Array<{ id: string; name?: string }> };
+      const data = await res.json() as { data?: Array<any> };
       if (data.data?.length) {
-        const anthropicModels = getModels('anthropic' as any) as Model<Api>[];
-        const modelMap = new Map(anthropicModels.map(m => [m.id, m]));
+        // Store metadata from proxy response for later use in getModelIds()
+        for (const pm of data.data) {
+          const entry: ProxyModelEntry = { id: pm.id, name: pm.name };
+          if (pm.api !== undefined) entry.api = pm.api;
+          if (pm.context_window !== undefined) entry.context_window = pm.context_window;
+          if (pm.max_tokens !== undefined) entry.max_tokens = pm.max_tokens;
+          if (pm.reasoning !== undefined) entry.reasoning = pm.reasoning;
+          if (pm.input !== undefined) entry.input = pm.input;
+          proxyMetadataCache.set(pm.id, entry);
+        }
+
+        // Build lookup across all pi-ai providers (Anthropic, Cerebras, OpenAI, etc.)
+        const modelMap = new Map<string, Model<Api>>();
+        for (const p of (getProviders() as string[])) {
+          try { for (const m of (getModels(p as any) as Model<Api>[])) modelMap.set(m.id, m); } catch {}
+        }
         return data.data.map(pm => {
           const base = modelMap.get(pm.id);
-          if (base) return { ...base, provider: 'adobe', api: 'adobe-anthropic' as Api };
+          // Determine API type from metadata or default to anthropic
+          const apiType = pm.api === 'openai' ? 'openai' : 'anthropic';
+          const customApi = `adobe-${apiType}` as Api;
+          if (base) return { ...base, provider: 'adobe', api: customApi };
           return {
             id: pm.id, name: pm.name ?? pm.id, provider: 'adobe',
-            api: 'adobe-anthropic' as Api, baseUrl: endpoint,
-            contextWindow: 200000, maxTokens: 16384, input: 0,
+            api: customApi, baseUrl: endpoint,
+            contextWindow: 200000, maxTokens: 16384, input: ['text', 'image'],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             inputCost: 0, outputCost: 0, cacheReadCost: 0, cacheWriteCost: 0, reasoning: true,
           } as unknown as Model<Api>;
@@ -521,6 +600,11 @@ export async function getAdobeModels(): Promise<Model<Api>[]> {
 export function register(): void {
   registerApiProvider({
     api: 'adobe-anthropic' as Api,
+    stream: streamAdobe as any,
+    streamSimple: streamSimpleAdobe as any,
+  });
+  registerApiProvider({
+    api: 'adobe-openai' as Api,
     stream: streamAdobe as any,
     streamSimple: streamSimpleAdobe as any,
   });
