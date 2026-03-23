@@ -4,6 +4,7 @@ import { readFile } from 'fs/promises';
 import * as http from 'http';
 import * as https from 'https';
 import { promisify } from 'util';
+import { inflateSync } from 'zlib';
 
 import { WebSocket } from 'ws';
 
@@ -241,6 +242,206 @@ export async function launchElectronApp(options: {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Theme detection — screenshot-based luminance analysis
+// ---------------------------------------------------------------------------
+
+/**
+ * Decode a base64 PNG into raw RGBA pixel data by parsing chunks and inflating.
+ * Returns { width, height, pixels } where pixels is a Buffer of RGBA bytes.
+ */
+export function decodePngPixels(base64Data: string): { width: number; height: number; pixels: Buffer } {
+  const buf = Buffer.from(base64Data, 'base64');
+
+  // Validate PNG signature
+  const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  if (buf.subarray(0, 8).compare(PNG_SIGNATURE) !== 0) {
+    throw new Error('Not a valid PNG');
+  }
+
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = 0;
+  const idatChunks: Buffer[] = [];
+  let offset = 8;
+
+  while (offset < buf.length) {
+    const chunkLength = buf.readUInt32BE(offset);
+    const chunkType = buf.subarray(offset + 4, offset + 8).toString('ascii');
+    const chunkData = buf.subarray(offset + 8, offset + 8 + chunkLength);
+
+    if (chunkType === 'IHDR') {
+      width = chunkData.readUInt32BE(0);
+      height = chunkData.readUInt32BE(4);
+      bitDepth = chunkData[8]!;
+      colorType = chunkData[9]!;
+    } else if (chunkType === 'IDAT') {
+      idatChunks.push(chunkData);
+    } else if (chunkType === 'IEND') {
+      break;
+    }
+
+    offset += 12 + chunkLength; // 4 (length) + 4 (type) + data + 4 (CRC)
+  }
+
+  if (width === 0 || height === 0) throw new Error('Missing IHDR chunk');
+  if (bitDepth !== 8) throw new Error(`Unsupported bit depth: ${bitDepth}`);
+
+  // Only support RGB (2) and RGBA (6) — CDP screenshots are always RGBA
+  const bytesPerPixel = colorType === 6 ? 4 : colorType === 2 ? 3 : 0;
+  if (bytesPerPixel === 0) throw new Error(`Unsupported color type: ${colorType}`);
+
+  const compressed = Buffer.concat(idatChunks);
+  const inflated = inflateSync(compressed);
+
+  // Each row has a 1-byte filter prefix followed by pixel data
+  const rowBytes = width * bytesPerPixel;
+  const pixels = Buffer.alloc(width * height * 4); // Always output RGBA
+
+  let prevRow = Buffer.alloc(rowBytes);
+
+  for (let y = 0; y < height; y++) {
+    const rowStart = y * (1 + rowBytes);
+    const filter = inflated[rowStart]!;
+    const row = Buffer.from(inflated.subarray(rowStart + 1, rowStart + 1 + rowBytes));
+
+    // Apply PNG row filters
+    for (let i = 0; i < rowBytes; i++) {
+      const a = i >= bytesPerPixel ? row[i - bytesPerPixel]! : 0;
+      const b = prevRow[i]!;
+      const c = i >= bytesPerPixel ? prevRow[i - bytesPerPixel]! : 0;
+
+      switch (filter) {
+        case 1: // Sub
+          row[i] = (row[i]! + a) & 0xff;
+          break;
+        case 2: // Up
+          row[i] = (row[i]! + b) & 0xff;
+          break;
+        case 3: // Average
+          row[i] = (row[i]! + ((a + b) >>> 1)) & 0xff;
+          break;
+        case 4: { // Paeth
+          const p = a + b - c;
+          const pa = Math.abs(p - a);
+          const pb = Math.abs(p - b);
+          const pc = Math.abs(p - c);
+          row[i] = (row[i]! + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c)) & 0xff;
+          break;
+        }
+        // case 0: None — no transformation needed
+      }
+    }
+
+    for (let x = 0; x < width; x++) {
+      const srcIdx = x * bytesPerPixel;
+      const dstIdx = (y * width + x) * 4;
+      pixels[dstIdx] = row[srcIdx]!;       // R
+      pixels[dstIdx + 1] = row[srcIdx + 1]!; // G
+      pixels[dstIdx + 2] = row[srcIdx + 2]!; // B
+      pixels[dstIdx + 3] = bytesPerPixel === 4 ? row[srcIdx + 3]! : 255; // A
+    }
+
+    prevRow = row;
+  }
+
+  return { width, height, pixels };
+}
+
+/**
+ * Compute the average perceived luminance (0–255) from RGBA pixel data,
+ * sampling a grid of pixels for performance.
+ */
+export function computeAverageLuminance(
+  pixels: Buffer,
+  width: number,
+  height: number,
+  sampleStep = 4
+): number {
+  let totalLuminance = 0;
+  let sampleCount = 0;
+
+  for (let y = 0; y < height; y += sampleStep) {
+    for (let x = 0; x < width; x += sampleStep) {
+      const idx = (y * width + x) * 4;
+      const r = pixels[idx]!;
+      const g = pixels[idx + 1]!;
+      const b = pixels[idx + 2]!;
+      // ITU-R BT.601 perceived luminance
+      totalLuminance += 0.299 * r + 0.587 * g + 0.114 * b;
+      sampleCount++;
+    }
+  }
+
+  return sampleCount > 0 ? totalLuminance / sampleCount : 128;
+}
+
+/**
+ * Detect whether the target app is using a light or dark theme by taking
+ * a CDP screenshot and analyzing the average luminance.
+ * Returns 'light' or 'dark'.
+ */
+function detectAppThemeFromScreenshot(
+  ws: WebSocket,
+  send: (method: string, params?: Record<string, unknown>) => number
+): Promise<'light' | 'dark'> {
+  return new Promise((resolve) => {
+    // Take a small JPEG screenshot for speed — we only need luminance
+    const screenshotId = send('Page.captureScreenshot', {
+      format: 'png',
+      quality: 30,
+      clip: { x: 0, y: 0, width: 160, height: 120, scale: 0.25 },
+      optimizeForSpeed: true,
+    });
+
+    const timeout = setTimeout(() => {
+      cleanup();
+      console.log('[electron-float] Theme detection timed out, defaulting to dark');
+      resolve('dark');
+    }, 5000);
+
+    const onMessage = (data: Buffer | string) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg.id !== screenshotId) return;
+
+        cleanup();
+
+        const base64 = msg.result?.data;
+        if (!base64) {
+          console.log('[electron-float] Theme detection: no screenshot data, defaulting to dark');
+          resolve('dark');
+          return;
+        }
+
+        try {
+          const { width, height, pixels } = decodePngPixels(base64);
+          const luminance = computeAverageLuminance(pixels, width, height);
+          const theme = luminance > 128 ? 'light' : 'dark';
+          console.log(
+            `[electron-float] Theme detection: luminance=${luminance.toFixed(1)}, theme=${theme} (${width}x${height})`
+          );
+          resolve(theme);
+        } catch (decodeError: unknown) {
+          const message = decodeError instanceof Error ? decodeError.message : String(decodeError);
+          console.error('[electron-float] Theme detection decode failed:', message);
+          resolve('dark');
+        }
+      } catch {
+        /* ignore non-JSON messages */
+      }
+    };
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      ws.off('message', onMessage);
+    };
+
+    ws.on('message', onMessage);
+  });
+}
+
 async function loadElectronOverlayBundleSource(options: {
   dev: boolean;
   servePort: number;
@@ -425,6 +626,15 @@ export class ElectronOverlayInjector {
     let pendingCspEscalation = false;
     let fetchProxyActive = false;
 
+    /**
+     * Build a script that sets the SLICC theme preference in localStorage
+     * to match the target app's detected theme, then runs the bootstrap.
+     */
+    const buildThemedBootstrap = (theme: 'light' | 'dark'): string => {
+      const themeScript = `try{localStorage.setItem('slicc-theme',${JSON.stringify(theme)})}catch(e){}`;
+      return `${themeScript}\n${bootstrapScript}`;
+    };
+
     ws.on('open', () => {
       const isWebContent = target.url.startsWith('https://');
       const alreadyBypassed = cspBypassedTargets.has(target.url);
@@ -437,43 +647,50 @@ export class ElectronOverlayInjector {
       send('Page.setBypassCSP', { enabled: true });
 
       if (alreadyBypassed) {
-        // Already reloaded with CSP bypass previously — just inject
-        console.log(`[electron-float] Injecting overlay (CSP already bypassed)...`);
-        send('Runtime.evaluate', { expression: bootstrapScript, awaitPromise: false });
+        // Already reloaded with CSP bypass previously — detect theme and inject
+        console.log(`[electron-float] Detecting theme and injecting overlay (CSP already bypassed)...`);
+        void detectAppThemeFromScreenshot(ws, send).then((theme) => {
+          if (ws.readyState !== WebSocket.OPEN) return;
+          send('Runtime.evaluate', { expression: buildThemedBootstrap(theme), awaitPromise: false });
+        });
         return;
       }
 
-      // First connection to this target URL: inject overlay immediately, then
-      // check if the iframe loaded. If CSP blocked it, fall back to reload+proxy.
-      console.log(`[electron-float] Injecting overlay (first attempt)...`);
-      send('Runtime.evaluate', { expression: bootstrapScript, awaitPromise: false });
-
-      if (!isWebContent) {
-        // Local content (file://, app protocol) — CSP is not an issue
-        return;
-      }
-
-      // After a short delay, probe whether the overlay iframe loaded.
-      // If CSP blocked it, reload the page so Page.setBypassCSP takes effect.
-      // If that still doesn't work, escalate to the Fetch proxy.
-      setTimeout(async () => {
+      // First connection to this target URL: detect theme, then inject overlay.
+      // After injection, check if the iframe loaded. If CSP blocked it, fall back to reload+proxy.
+      console.log(`[electron-float] Detecting theme before first overlay injection...`);
+      void detectAppThemeFromScreenshot(ws, send).then((theme) => {
         if (ws.readyState !== WebSocket.OPEN) return;
+        console.log(`[electron-float] Injecting overlay (first attempt, theme=${theme})...`);
+        send('Runtime.evaluate', { expression: buildThemedBootstrap(theme), awaitPromise: false });
 
-        const loaded = await this.probeOverlayIframeLoaded(ws, send);
-        if (loaded) {
-          console.log(`[electron-float] Overlay iframe loaded successfully — no CSP reload needed`);
-          cspBypassedTargets.add(target.url);
+        if (!isWebContent) {
+          // Local content (file://, app protocol) — CSP is not an issue
           return;
         }
 
-        // Phase 2: Page.setBypassCSP was already set — a simple reload should
-        // make the browser ignore CSP headers on the fresh navigation.
-        console.log(`[electron-float] Overlay iframe blocked by CSP, reloading with bypass: ${target.url}`);
-        cspBypassedTargets.add(target.url);
-        pendingReload = true;
-        pendingCspEscalation = true;
-        send('Page.reload', { ignoreCache: true });
-      }, 1500);
+        // After a short delay, probe whether the overlay iframe loaded.
+        // If CSP blocked it, reload the page so Page.setBypassCSP takes effect.
+        // If that still doesn't work, escalate to the Fetch proxy.
+        setTimeout(async () => {
+          if (ws.readyState !== WebSocket.OPEN) return;
+
+          const loaded = await this.probeOverlayIframeLoaded(ws, send);
+          if (loaded) {
+            console.log(`[electron-float] Overlay iframe loaded successfully — no CSP reload needed`);
+            cspBypassedTargets.add(target.url);
+            return;
+          }
+
+          // Phase 2: Page.setBypassCSP was already set — a simple reload should
+          // make the browser ignore CSP headers on the fresh navigation.
+          console.log(`[electron-float] Overlay iframe blocked by CSP, reloading with bypass: ${target.url}`);
+          cspBypassedTargets.add(target.url);
+          pendingReload = true;
+          pendingCspEscalation = true;
+          send('Page.reload', { ignoreCache: true });
+        }, 1500);
+      });
     });
 
     // Handle CDP events: lifecycle events and Fetch interception
@@ -484,9 +701,12 @@ export class ElectronOverlayInjector {
         // Inject overlay after page load completes (after CSP-bypass reload)
         if (msg.method === 'Page.loadEventFired' && pendingReload) {
           pendingReload = false;
-          console.log(`[electron-float] Page loaded after CSP reload, injecting overlay...`);
+          console.log(`[electron-float] Page loaded after CSP reload, detecting theme and injecting overlay...`);
           if (ws.readyState !== WebSocket.OPEN) return;
-          send('Runtime.evaluate', { expression: bootstrapScript, awaitPromise: false });
+          void detectAppThemeFromScreenshot(ws, send).then((theme) => {
+            if (ws.readyState !== WebSocket.OPEN) return;
+            send('Runtime.evaluate', { expression: buildThemedBootstrap(theme), awaitPromise: false });
+          });
 
           // If this was a simple reload (no proxy), check if the iframe loads now.
           // If it still doesn't, escalate to the Fetch proxy as a last resort.

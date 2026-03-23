@@ -48,8 +48,9 @@ body {
 .pipeline-stage[data-status="complete"] .pipeline-stage-label { color: var(--s2-positive); }
 .pipeline-stage[data-status="complete"] + .pipeline-connector,
 .pipeline-connector.complete { background: var(--s2-positive); }
+.pipeline-stage[data-status="complete"] .pipeline-node { opacity: 0.5; }
 
-.pipeline-stage[data-status="current"] .pipeline-circle { border-color: var(--s2-accent); background: var(--s2-accent); color: var(--s2-gray-25); }
+.pipeline-stage[data-status="current"] .pipeline-circle { border-color: var(--s2-accent); background: var(--s2-accent); color: var(--s2-gray-25); box-shadow: 0 0 0 3px color-mix(in srgb, var(--s2-accent) 20%, transparent); }
 .pipeline-stage[data-status="current"] .pipeline-stage-label { color: var(--s2-accent); font-weight: 700; }
 
 .pipeline-stage[data-status="upcoming"] .pipeline-circle { border-color: var(--s2-gray-300); background: transparent; }
@@ -125,7 +126,7 @@ body {
 .comment-reply textarea:focus { border-color: var(--s2-accent); }
 .comment-reply-send { width: 28px; height: 28px; border-radius: var(--s2-radius-default); border: none; background: var(--s2-accent); color: var(--s2-gray-25); cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; align-self: flex-end; transition: background var(--t); }
 .comment-reply-send:hover { background: var(--s2-accent-hover); }
-.comment-readonly { pointer-events: none; opacity: 0.5; }
+.comment-readonly { pointer-events: none; opacity: 0.45; }
 .comment-readonly .comment-actions { display: none; }
 
 /* Approve stage button */
@@ -134,7 +135,7 @@ body {
 .btn-approve-stage:hover { background: var(--s2-accent-hover); }
 .btn-approve-stage:active { background: var(--s2-accent-down); }
 .btn-approve-stage:disabled { background: var(--s2-gray-300); color: var(--s2-gray-500); cursor: default; }
-.btn-approve-stage.completed { background: var(--s2-positive); cursor: default; }
+.btn-approve-stage.completed { background: var(--s2-positive); cursor: default; font-size: 14px; font-weight: 700; height: 44px; letter-spacing: 0.02em; }
 
 /* Audit trail */
 .audit-section { border-top: 1px solid var(--s2-gray-200); flex-shrink: 0; }

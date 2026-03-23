@@ -21,6 +21,13 @@ import {
   type InlineSprinkleInstance,
 } from './inline-sprinkle.js';
 import { createToolUIRenderer, disposeToolUIRenderer } from './tool-ui-renderer.js';
+import {
+  getAllAvailableModels,
+  getSelectedModelId,
+  getSelectedProvider,
+  setSelectedModelId,
+  getProviderConfig,
+} from './provider-settings.js';
 
 const log = createLogger('chat-panel');
 
@@ -60,6 +67,7 @@ function renderChatMessageContent(msg: ChatMessage): string {
 export class ChatPanel {
   private container: HTMLElement;
   private messagesEl!: HTMLElement;
+  private messagesInner!: HTMLElement;
   private inputArea!: HTMLElement;
   private textarea!: HTMLTextAreaElement;
   private sendBtn!: HTMLButtonElement;
@@ -86,6 +94,8 @@ export class ChatPanel {
   private streamingRafId: number | null = null;
   private inlineSprinkles = new Map<string, InlineSprinkleInstance[]>();
   public onInlineSprinkleLick?: (action: string, data: unknown) => void;
+  private modelSelectorEl!: HTMLElement;
+  public onModelChange?: (modelId: string) => void;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -233,12 +243,14 @@ export class ChatPanel {
     this.messages = messages.map((m) => ({ ...m, isStreaming: false }));
     this.renderMessages();
     this.persistSession();
+    this.renderModelSelector();
   }
 
   /** Clear all messages from the display (doesn't affect session store). */
   clear(): void {
     this.messages = [];
     this.renderMessages();
+    this.renderModelSelector();
   }
 
   /** Add a user message to the display (for history loading). */
@@ -271,6 +283,10 @@ export class ChatPanel {
     // Messages area
     this.messagesEl = document.createElement('div');
     this.messagesEl.className = 'chat__messages';
+    // UXC: centered 800px content wrapper
+    this.messagesInner = document.createElement('div');
+    this.messagesInner.className = 'chat__messages-inner';
+    this.messagesEl.appendChild(this.messagesInner);
     this.container.appendChild(this.messagesEl);
 
     this.messagesEl.addEventListener(
@@ -291,24 +307,29 @@ export class ChatPanel {
       { passive: true }
     );
 
-    // Input area
+    // Input area — UXC: centered 800px prompt bar
     this.inputArea = document.createElement('div');
     const inputArea = this.inputArea;
     inputArea.className = 'chat__input-area';
 
+    // Inner wrapper for max-width centering
+    const inputAreaInner = document.createElement('div');
+    inputAreaInner.className = 'chat__input-area-inner';
+
     this.textarea = document.createElement('textarea');
     this.textarea.className = 'chat__textarea';
-    this.textarea.placeholder = 'Type a message... (Enter to send)';
+    this.textarea.placeholder = 'What shall we build?';
     this.textarea.rows = 1;
 
     this.sendBtn = document.createElement('button');
     this.sendBtn.className = 'chat__send-btn';
-    this.sendBtn.innerHTML = '&#9654;'; // ▶
+    this.sendBtn.innerHTML = '<svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M10 1.25C5.167 1.25 1.25 5.167 1.25 10s3.917 8.75 8.75 8.75 8.75-3.918 8.75-8.75S14.833 1.25 10 1.25zm3.527 8.284a.75.75 0 0 1-1.06 0L10.75 7.82v6.172a.75.75 0 0 1-1.5 0V7.812L7.527 9.534a.75.75 0 1 1-1.06-1.06l2.998-2.998a.75.75 0 0 1 1.06-.001l3.002 2.998a.75.75 0 0 1 0 1.061z"/></svg>';
     this.sendBtn.dataset.tooltip = 'Send message';
+    this.sendBtn.dataset.tooltipPos = 'top';
 
     this.stopBtn = document.createElement('button');
     this.stopBtn.className = 'chat__stop-btn';
-    this.stopBtn.innerHTML = '&#9632;'; // ■
+    this.stopBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M13.75 4H6.25A2.25 2.25 0 0 0 4 6.25v7.5A2.25 2.25 0 0 0 6.25 16h7.5A2.25 2.25 0 0 0 16 13.75v-7.5A2.25 2.25 0 0 0 13.75 4z"/></svg>';
     this.stopBtn.dataset.tooltip = 'Stop generation';
     this.stopBtn.style.display = 'none';
 
@@ -343,19 +364,38 @@ export class ChatPanel {
     this.micBtn.appendChild(svg);
     this.micBtn.dataset.tooltip = 'Voice (Ctrl+Shift+V)';
 
-    // Input wrapper — textarea + inline actions
+    // Input wrapper — two-row layout per Figma PromptBar
     const inputWrapper = document.createElement('div');
     inputWrapper.className = 'chat__input-wrapper';
+
+    // Top: text input area
     inputWrapper.appendChild(this.textarea);
 
-    const inputActions = document.createElement('div');
-    inputActions.className = 'chat__input-actions';
-    inputActions.appendChild(this.micBtn);
-    inputActions.appendChild(this.sendBtn);
-    inputActions.appendChild(this.stopBtn);
-    inputWrapper.appendChild(inputActions);
+    // Bottom: action bar (+ left, send/stop right)
+    const actionBar = document.createElement('div');
+    actionBar.className = 'chat__action-bar';
 
-    inputArea.appendChild(inputWrapper);
+    const actionBarLeft = document.createElement('div');
+    actionBarLeft.className = 'chat__action-bar-left';
+    actionBarLeft.appendChild(this.micBtn);
+    actionBar.appendChild(actionBarLeft);
+
+    // Model selector — between left actions and send button
+    this.modelSelectorEl = document.createElement('div');
+    this.modelSelectorEl.className = 'chat__model-selector';
+    this.renderModelSelector();
+    actionBar.appendChild(this.modelSelectorEl);
+
+    const actionBarRight = document.createElement('div');
+    actionBarRight.className = 'chat__action-bar-right';
+    actionBarRight.appendChild(this.sendBtn);
+    actionBarRight.appendChild(this.stopBtn);
+    actionBar.appendChild(actionBarRight);
+
+    inputWrapper.appendChild(actionBar);
+
+    inputAreaInner.appendChild(inputWrapper);
+    inputArea.appendChild(inputAreaInner);
     this.container.appendChild(inputArea);
 
     // "New activity" pill — shown when auto-scroll is detached
@@ -478,9 +518,11 @@ export class ChatPanel {
       timestamp: Date.now(),
       queued: isQueued || undefined,
     };
+    const wasEmpty = this.messages.length === 0;
     this.messages.push(msg);
     this.appendMessageEl(msg);
     this.persistSession();
+    if (wasEmpty) this.renderModelSelector();
 
     // Clear input
     this.textarea.value = '';
@@ -758,6 +800,105 @@ export class ChatPanel {
     }
   }
 
+  /** Render the model selector — full list when empty, compact active-only when chat started. */
+  private renderModelSelector(): void {
+    const el = this.modelSelectorEl;
+    if (!el) return;
+    while (el.firstChild) el.removeChild(el.firstChild);
+
+    const groups = getAllAvailableModels();
+    const currentModelId = getSelectedModelId();
+    const currentProvider = getSelectedProvider();
+
+    // Flatten all models with their provider info
+    const allModels: Array<{ providerId: string; id: string; name: string; reasoning?: boolean }> = [];
+    for (const group of groups) {
+      for (const model of group.models) {
+        allModels.push({ providerId: group.providerId, id: model.id, name: model.name, reasoning: (model as { reasoning?: boolean }).reasoning });
+      }
+    }
+
+    // Sort: reasoning first, then alphabetical
+    allModels.sort((a, b) => {
+      if (a.reasoning !== b.reasoning) return a.reasoning ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    const activeModel = allModels.find(m => m.id === currentModelId && m.providerId === currentProvider)
+      || allModels[0];
+    if (!activeModel) return;
+
+    const hasMessages = this.messages.length > 0;
+
+    const btn = document.createElement('button');
+    btn.className = 'chat__model-btn chat__model-btn--compact';
+    if (hasMessages) btn.classList.add('chat__model-btn--disabled');
+    btn.textContent = activeModel.name;
+    if (!hasMessages) {
+      const chevron = document.createElement('span');
+      chevron.className = 'chat__model-chevron';
+      chevron.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M4.5 6l3.5 4 3.5-4z"/></svg>';
+      btn.appendChild(chevron);
+    }
+
+    if (hasMessages) {
+      // Chat started — just show the label, no dropdown
+      el.appendChild(btn);
+    } else {
+      // Empty chat — allow model switching
+      let menuOpen = false;
+      const menu = document.createElement('div');
+      menu.className = 'chat__model-menu';
+
+      const renderMenu = () => {
+        menu.style.display = menuOpen ? 'block' : 'none';
+        while (menu.firstChild) menu.removeChild(menu.firstChild);
+        if (!menuOpen) return;
+        for (const model of allModels) {
+          const item = document.createElement('div');
+          item.className = 'chat__model-menu-item';
+          const isActive = model.id === currentModelId && model.providerId === currentProvider;
+          if (isActive) item.classList.add('chat__model-menu-item--active');
+          const label = document.createElement('span');
+          label.textContent = model.name;
+          item.appendChild(label);
+          if (isActive) {
+            const check = document.createElement('span');
+            check.className = 'chat__model-check';
+            check.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M6.5 12.5l-4-4 1.4-1.4 2.6 2.6 5.6-5.6 1.4 1.4z"/></svg>';
+            item.appendChild(check);
+          }
+          item.addEventListener('click', () => {
+            const val = `${model.providerId}:${model.id}`;
+            setSelectedModelId(val);
+            this.onModelChange?.(val);
+            menuOpen = false;
+            this.renderModelSelector();
+          });
+          menu.appendChild(item);
+        }
+      };
+
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        menuOpen = !menuOpen;
+        renderMenu();
+      });
+
+      const closeMenu = () => { menuOpen = false; renderMenu(); };
+      document.addEventListener('click', closeMenu, { once: true });
+
+      el.appendChild(btn);
+      el.appendChild(menu);
+      renderMenu();
+    }
+  }
+
+  /** Refresh the model selector (call after provider changes). */
+  refreshModelSelector(): void {
+    this.renderModelSelector();
+  }
+
   private findMessage(id: string): ChatMessage | undefined {
     return this.messages.find((m) => m.id === id);
   }
@@ -807,13 +948,19 @@ export class ChatPanel {
 
   private renderMessages(): void {
     this.disposeAllInlineSprinkles();
-    this.messagesEl.innerHTML = '';
+    this.messagesInner.innerHTML = '';
     let prevRole: string | null = null;
     let prevTimestamp = 0;
-    for (const msg of this.messages) {
+    // Find index of the last assistant message for feedback row placement
+    let lastAssistantIdx = -1;
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      if (this.messages[i].role === 'assistant') { lastAssistantIdx = i; break; }
+    }
+    for (let i = 0; i < this.messages.length; i++) {
+      const msg = this.messages[i];
       const showLabel = this.shouldShowLabel(msg, prevRole, prevTimestamp);
-      const el = this.createMessageEl(msg, showLabel);
-      this.messagesEl.appendChild(el);
+      const el = this.createMessageEl(msg, showLabel, i === lastAssistantIdx);
+      this.messagesInner.appendChild(el);
       prevRole = msg.role;
       prevTimestamp = msg.timestamp;
     }
@@ -823,11 +970,16 @@ export class ChatPanel {
   }
 
   private appendMessageEl(msg: ChatMessage): void {
+    // Remove feedback row from the previously-last assistant message
+    const prevFeedback = this.messagesInner.querySelector('.msg__feedback');
+    if (prevFeedback) prevFeedback.remove();
+
     // Determine if label should show based on previous message
     const prev = this.messages.length >= 2 ? this.messages[this.messages.length - 2] : null;
     const showLabel = this.shouldShowLabel(msg, prev?.role ?? null, prev?.timestamp ?? 0);
-    const el = this.createMessageEl(msg, showLabel);
-    this.messagesEl.appendChild(el);
+    const isLastAssistant = msg.role === 'assistant';
+    const el = this.createMessageEl(msg, showLabel, isLastAssistant);
+    this.messagesInner.appendChild(el);
     this.scrollToBottom();
   }
 
@@ -856,13 +1008,22 @@ export class ChatPanel {
       const idx = this.messages.indexOf(msg);
       const prev = idx > 0 ? this.messages[idx - 1] : null;
       const showLabel = this.shouldShowLabel(msg, prev?.role ?? null, prev?.timestamp ?? 0);
-      const newEl = this.createMessageEl(msg, showLabel);
+      // Only show feedback on the last assistant message
+      let isLastAssistant = false;
+      if (msg.role === 'assistant') {
+        let lastIdx = -1;
+        for (let i = this.messages.length - 1; i >= 0; i--) {
+          if (this.messages[i].role === 'assistant') { lastIdx = i; break; }
+        }
+        isLastAssistant = idx === lastIdx;
+      }
+      const newEl = this.createMessageEl(msg, showLabel, isLastAssistant);
       existing.replaceWith(newEl);
     }
     this.scrollToBottom();
   }
 
-  private createMessageEl(msg: ChatMessage, showLabel = true): HTMLElement {
+  private createMessageEl(msg: ChatMessage, showLabel = true, isLastAssistant = false): HTMLElement {
     // Licks (webhook/cron) get their own compact style like tool calls
     const isLick = msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron';
     if (isLick) {
@@ -993,7 +1154,44 @@ export class ChatPanel {
       }
     }
 
+    // UXC: Feedback row only on the last assistant response
+    if (msg.role === 'assistant' && !msg.isStreaming && !msg.queued && hasContent && isLastAssistant) {
+      wrapper.appendChild(this.createFeedbackRow());
+    }
+
     return wrapper;
+  }
+
+  /** Create a UXC feedback row with thumbs up, thumbs down, and copy chat. */
+  private createFeedbackRow(): HTMLElement {
+    const row = document.createElement('div');
+    row.className = 'msg__feedback';
+
+    // Copy Chat — S2_Icon_Copy_20_N (same action as header copy chat)
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'msg__feedback-btn';
+    copyBtn.dataset.tooltip = 'Copy chat';
+    copyBtn.setAttribute('aria-label', 'Copy chat');
+    copyBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="m11.75,18h-7.5c-1.24,0-2.25-1.01-2.25-2.25v-7.5c0-1.24,1.01-2.25,2.25-2.25.41,0,.75.34.75.75s-.34.75-.75.75c-.41,0-.75.34-.75.75v7.5c0,.41.34.75.75.75h7.5c.41,0,.75-.34.75-.75,0-.41.34-.75.75-.75s.75.34.75.75c0,1.24-1.01,2.25-2.25,2.25Z"/><path d="m6.75,5c-.41,0-.75-.34-.75-.75,0-1.24,1.01-2.25,2.25-2.25.41,0,.75.34.75.75s-.34.75-.75.75c-.41,0-.75.34-.75.75,0,.41-.34.75-.75.75Z"/><path d="m13,3.5h-2c-.41,0-.75-.34-.75-.75s.34-.75.75-.75h2c.41,0,.75.34.75.75s-.34.75-.75.75Z"/><path d="m13,14h-2c-.41,0-.75-.34-.75-.75s.34-.75.75-.75h2c.41,0,.75.34.75.75s-.34.75-.75.75Z"/><path d="m15.75,14c-.41,0-.75-.34-.75-.75s.34-.75.75-.75c.41,0,.75-.34.75-.75,0-.41.34-.75.75-.75s.75.34.75.75c0,1.24-1.01,2.25-2.25,2.25Z"/><path d="m17.25,5c-.41,0-.75-.34-.75-.75,0-.41-.34-.75-.75-.75-.41,0-.75-.34-.75-.75s.34-.75.75-.75c1.24,0,2.25,1.01,2.25,2.25,0,.41-.34.75-.75.75Z"/><path d="m17.25,9.75c-.41,0-.75-.34-.75-.75v-2c0-.41.34-.75.75-.75s.75.34.75.75v2c0,.41-.34.75-.75.75Z"/><path d="m6.75,9.75c-.41,0-.75-.34-.75-.75v-2c0-.41.34-.75.75-.75s.75.34.75.75v2c0,.41-.34.75-.75.75Z"/><path d="m8.25,14c-1.24,0-2.25-1.01-2.25-2.25,0-.41.34-.75.75-.75s.75.34.75.75c0,.41.34.75.75.75.41,0,.75.34.75.75s-.34.75-.75.75Z"/></svg>';
+    copyBtn.addEventListener('click', async () => {
+      const messages = this.getMessages();
+      let formatted = '';
+      for (const msg of messages) {
+        const heading = msg.role === 'user' ? 'User' : 'Assistant';
+        formatted += `## ${heading}\n${msg.content}\n\n`;
+        if (msg.toolCalls) {
+          for (const tc of msg.toolCalls) {
+            formatted += `### Tool: ${tc.name}\nInput: ${JSON.stringify(tc.input, null, 2)}\nResult: ${tc.result ?? ''}\n\n`;
+          }
+        }
+      }
+      await navigator.clipboard.writeText(formatted);
+      copyBtn.style.color = 'var(--s2-positive)';
+      setTimeout(() => { copyBtn.style.color = ''; }, 1500);
+    });
+    row.appendChild(copyBtn);
+
+    return row;
   }
 
   /** Create a lick element (webhook/cron event) styled like tool calls */
@@ -1041,7 +1239,7 @@ export class ChatPanel {
     // Summary shows icon and tool name
     const summary = document.createElement('summary');
     summary.className = 'tool-call__header';
-    summary.innerHTML = `<span class="tool-call__icon">${icon}</span> <span class="tool-call__name">${escapeHtml(tc.name)}</span>`;
+    summary.innerHTML = `<span class="tool-call__icon"><svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span> <span class="tool-call__name">${escapeHtml(tc.name)}</span>`;
 
     // Add brief input preview to summary
     if (tc.input !== undefined) {

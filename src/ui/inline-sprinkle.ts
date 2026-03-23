@@ -66,8 +66,8 @@ export function mountInlineSprinkle(
 <style>html,body{margin:0;padding:0;overflow:hidden;background:transparent;box-sizing:border-box}
 *,*::before,*::after{box-sizing:inherit}
 body{font-family:var(--s2-font-family, sans-serif);font-size:13px;color:var(--s2-content-default)}</style>
-<style>.sprinkle-inline{padding:var(--s2-spacing-100)}
-.sprinkle-inline .sprinkle-btn{padding:4px 12px;font-size:12px;height:28px}
+<style>.sprinkle-inline{padding:var(--s2-spacing-100) 0}
+.sprinkle-inline .sprinkle-btn{padding:4px 12px;font-size:12px;height:28px;box-shadow:none;background:var(--s2-bg-elevated)}
 .sprinkle-inline .sprinkle-card{box-shadow:none;margin:0}
 .sprinkle-inline .sprinkle-action-card{margin:0;width:100%}
 .sprinkle-inline .sprinkle-action-card .sprinkle-table{width:100%}
@@ -102,7 +102,7 @@ mark{background:color-mix(in srgb,var(--s2-accent) 25%,transparent);color:inheri
   }
 
   const iframe = document.createElement('iframe');
-  iframe.setAttribute('sandbox', 'allow-scripts');
+  iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
   iframe.style.cssText = 'width:100%;border:none;overflow:hidden;display:block;';
   iframe.srcdoc = srcdoc;
   container.appendChild(iframe);

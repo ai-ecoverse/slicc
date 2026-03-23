@@ -247,7 +247,7 @@ body { font-family: var(--s2-font-family); font-size: 14px; line-height: 1.5; co
   height: 18px;
   border-radius: 50%;
   background: var(--s2-gray-900);
-  border: 2px solid #fff;
+  border: 2px solid var(--s2-gray-25);
   box-shadow: 0 1px 3px rgba(0,0,0,0.2);
   cursor: pointer;
   transition: transform 130ms ease;

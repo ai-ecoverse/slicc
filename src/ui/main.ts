@@ -1,3 +1,17 @@
+// ── CSS imports (order matters for specificity) ──────────────────────
+import './styles/tokens.css';
+import './styles/base.css';
+import './styles/layout.css';
+import './styles/header.css';
+import './styles/chat.css';
+import './styles/tools.css';
+import './styles/markdown.css';
+import './styles/panels.css';
+import './styles/tabs.css';
+import './styles/dialog.css';
+import './styles/sprinkle-components.css';
+import './styles/feedback.css';
+
 /**
  * Main entry point for the Browser Coding Agent UI.
  *
@@ -9,6 +23,7 @@
 import { Layout } from './layout.js';
 import { getApiKey, showProviderSettings, applyProviderDefaults } from './provider-settings.js';
 import { initTheme } from './theme.js';
+import { initTooltips } from './tooltip.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent, ChatMessage } from './types.js';
 import { createLogger } from '../core/index.js';
 import type { VirtualFS } from '../fs/index.js';
@@ -280,7 +295,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     client.selectedScoopJid = scoop.jid;
     layout.panels.memory.setSelectedScoop(scoop.jid);
     layout.setScoopSwitcherSelected?.(scoop.jid);
-    layout.panels.scoops.refreshScoops();
+    layout.panels.scoops.setSelectedJid(scoop.jid);
 
     // switchToContext loads messages from the shared browser-coding-agent IndexedDB
     // (written by the offscreen bridge). No buffer reconciliation needed.
@@ -299,6 +314,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       layout.updateScoopSwitcherStatus?.(scoopJid, status);
 
       if (selectedScoop?.jid === scoopJid) {
+        layout.setAgentProcessing(status === 'processing');
         if (status === 'processing') {
           layout.panels.chat.setProcessing(true);
         } else if (status === 'ready') {
@@ -428,6 +444,13 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     (event: LickEvent) => {
       // Route sprinkle licks to the offscreen orchestrator's cone
       if (event.type === 'sprinkle') {
+        // Mark onboarding complete so welcome sprinkle doesn't reappear
+        if (
+          event.sprinkleName === 'welcome' &&
+          (event.body as any)?.action === 'onboarding-complete'
+        ) {
+          localStorage.setItem('slicc-welcomed', '1');
+        }
         client.sendSprinkleLick(event.sprinkleName!, event.body);
       }
     },
@@ -510,6 +533,19 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   layout.onOpenSprinkle = (name, zone) => sprinkleManager.open(name, zone);
   layout.updateAddButtons();
   await sprinkleManager.restoreOpenSprinkles();
+
+  // Open welcome sprinkle on first run (extension mode)
+  if (
+    !localStorage.getItem('slicc-welcomed') &&
+    sprinkleManager.available().some((p) => p.name === 'welcome')
+  ) {
+    try {
+      await sprinkleManager.open('welcome');
+    } catch (e) {
+      log.warn('Failed to open welcome sprinkle', e);
+    }
+  }
+
   log.info('SprinkleManager initialized (extension mode)');
 
   // Request state from offscreen — retries automatically until ready
@@ -527,6 +563,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 
 async function main(): Promise<void> {
   initTheme();
+  initTooltips();
 
   const app = document.getElementById('app');
   if (!app) throw new Error('#app element not found');
@@ -742,6 +779,7 @@ async function main(): Promise<void> {
       layout.updateScoopSwitcherStatus?.(scoopJid, status);
 
       if (selectedScoop?.jid === scoopJid) {
+        layout.setAgentProcessing(status === 'processing');
         if (status === 'processing') {
           layout.panels.chat.setProcessing(true);
         } else if (status === 'ready') {
@@ -760,11 +798,6 @@ async function main(): Promise<void> {
     },
     getBrowserAPI: () => browser,
     onToolStart: (scoopJid, toolName, toolInput) => {
-      // Switch to terminal tab when agent uses bash
-      if (toolName === 'bash') {
-        layout.openTerminal();
-      }
-
       // Hide infrastructure tools from the chat (their output is shown elsewhere)
       const hiddenTools = new Set(['send_message', 'list_scoops', 'list_tasks']);
       if (hiddenTools.has(toolName)) return;
@@ -1049,6 +1082,15 @@ async function main(): Promise<void> {
 
     log.debug('Lick event', { type: event.type, name: eventName, targetScoop: event.targetScoop });
 
+    // Mark onboarding complete so welcome sprinkle doesn't reappear
+    if (
+      isSprinkle &&
+      event.sprinkleName === 'welcome' &&
+      (event.body as any)?.action === 'onboarding-complete'
+    ) {
+      localStorage.setItem('slicc-welcomed', '1');
+    }
+
     // Determine the target:
     // - Sprinkle licks and untargeted events default to cone
     // - Webhook/cron licks use explicit targetScoop if set
@@ -1151,14 +1193,13 @@ async function main(): Promise<void> {
     layout.onOpenSprinkle = (name, zone) => sprinkleManager!.open(name, zone);
     layout.updateAddButtons();
 
-    // Open welcome sprinkle on first run
+    // Open welcome sprinkle on first run (flag set when onboarding-complete lick fires)
     if (
       !localStorage.getItem('slicc-welcomed') &&
       sprinkleManager.available().some((p) => p.name === 'welcome')
     ) {
       try {
         await sprinkleManager.open('welcome');
-        localStorage.setItem('slicc-welcomed', '1');
       } catch (e) {
         log.warn('Failed to open welcome sprinkle', e);
       }
@@ -1339,8 +1380,9 @@ async function main(): Promise<void> {
     selectedScoop = scoop;
     orchestrator.createScoopTab(scoop.jid);
 
-    // Update memory panel
+    // Update memory panel and scoops panel selection
     layout.panels.memory.setSelectedScoop(scoop.jid);
+    layout.panels.scoops.setSelectedJid(scoop.jid);
 
     // Switch chat context. Load from per-scoop message buffer (has full tool call detail)
     // falling back to SessionStore, then orchestrator DB.
@@ -1732,10 +1774,10 @@ main().catch((err) => {
     const errorDiv = document.createElement('div');
     errorDiv.style.cssText = 'padding: 2rem; text-align: center;';
     const h1 = document.createElement('h1');
-    h1.style.color = '#e94560';
+    h1.style.color = 'var(--s2-negative, #e34850)';
     h1.textContent = 'Failed to start';
     const p = document.createElement('p');
-    p.style.color = '#a0a0b0';
+    p.style.color = 'var(--s2-content-tertiary, #717171)';
     p.textContent = err.message;
     errorDiv.appendChild(h1);
     errorDiv.appendChild(p);
@@ -1743,7 +1785,7 @@ main().catch((err) => {
     const resetBtn = document.createElement('button');
     resetBtn.textContent = 'Reset all data & reload';
     resetBtn.style.cssText =
-      'margin-top: 1rem; padding: 0.5rem 1.5rem; background: #e94560; color: #fff; ' +
+      'margin-top: 1rem; padding: 0.5rem 1.5rem; background: var(--s2-negative, #e34850); color: #fff; ' +
       'border: none; border-radius: 6px; cursor: pointer; font-size: 14px;';
     resetBtn.addEventListener('click', async () => {
       resetBtn.disabled = true;

@@ -3,7 +3,7 @@ import { readFile } from 'fs/promises';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
 
-import { app, BrowserWindow, session } from 'electron';
+import { app, BrowserWindow, nativeTheme, session } from 'electron';
 
 import {
   buildElectronOverlayAppUrl,
@@ -66,7 +66,10 @@ async function loadOverlayBundleSource(): Promise<string> {
 
 async function injectOverlay(window: BrowserWindow): Promise<void> {
   const bundleSource = await loadOverlayBundleSource();
-  await window.webContents.executeJavaScript(bundleSource, true);
+  // Detect the app's effective theme and set SLICC's theme to match
+  const theme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
+  const themeScript = `try{localStorage.setItem('slicc-theme',${JSON.stringify(theme)})}catch(e){}`;
+  await window.webContents.executeJavaScript(`${themeScript}\n${bundleSource}`, true);
   await window.webContents.executeJavaScript(
     buildElectronOverlayInjectionCall({ appUrl: OVERLAY_APP_URL }),
     true
