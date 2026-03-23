@@ -297,20 +297,184 @@ export const config: ProviderConfig = {
   },
 };
 
-// ── Token access ────────────────────────────────────────────────────
+// ── Token access + silent renewal ────────────────────────────────────
+
+/** Track in-flight renewal to avoid duplicate attempts. */
+let renewalInProgress: Promise<string | null> | null = null;
 
 async function getValidAccessToken(): Promise<string> {
   const account = getAdobeAccount();
   if (!account?.accessToken) throw new Error('Not logged in to Adobe — please log in first');
-  const expired = !account.tokenExpiresAt || Date.now() > account.tokenExpiresAt - 60000;
-  if (expired) throw new Error('Adobe session expired — please log in again');
-  return account.accessToken;
+
+  // Token still valid (with 60s buffer)
+  const expiresIn = (account.tokenExpiresAt ?? 0) - Date.now();
+  if (expiresIn > 60000) return account.accessToken;
+
+  // Token expired or about to expire — try silent renewal
+  console.log('[adobe] Token expired or expiring soon, attempting silent renewal...');
+  try {
+    const newToken = await silentRenewToken();
+    if (newToken) return newToken;
+  } catch (err) {
+    console.warn('[adobe] Silent renewal failed:', err instanceof Error ? err.message : String(err));
+  }
+
+  // If we still have a token (not yet expired, just close to expiry), use it
+  if (expiresIn > 0) return account.accessToken;
+
+  throw new Error('Adobe session expired — please log in again');
 }
 
 function isTokenExpired(): boolean {
   const account = getAdobeAccount();
   if (!account?.tokenExpiresAt) return true;
   return Date.now() > account.tokenExpiresAt - 60000;
+}
+
+/**
+ * Silent token renewal — re-authenticates with IMS without user interaction.
+ * - CLI mode: hidden iframe with prompt=none
+ * - Extension mode: chrome.identity.launchWebAuthFlow with interactive=false
+ *
+ * Returns the new access token on success, or null if renewal failed
+ * (IMS session expired, user needs to re-login interactively).
+ */
+async function silentRenewToken(): Promise<string | null> {
+  // Deduplicate concurrent renewal attempts
+  if (renewalInProgress) return renewalInProgress;
+
+  renewalInProgress = (async () => {
+    try {
+      const proxyEndpoint = getProxyEndpoint();
+      const proxyConfig = await fetchProxyConfig(proxyEndpoint);
+      const clientId = resolveClientId(proxyConfig);
+      const scopes = resolveScopes(proxyConfig);
+      const imsEnv = resolveImsEnvironment(proxyConfig);
+
+      const redirectUri = isExtension
+        ? (adobeConfig.extensionRedirectUri ?? `https://${(chrome as any).runtime.id}.chromiumapp.org/`)
+        : (adobeConfig.redirectUri ?? `${window.location.origin}/auth/callback`);
+
+      const params = new URLSearchParams({
+        client_id: clientId,
+        scope: scopes,
+        response_type: 'token',
+        redirect_uri: redirectUri,
+        prompt: 'none', // Silent — no UI, relies on existing IMS session
+      });
+      const authorizeUrl = `${imsHost(imsEnv)}/ims/authorize/v2?${params}`;
+
+      let redirectUrl: string | null;
+      if (isExtension) {
+        redirectUrl = await silentRenewExtension(authorizeUrl);
+      } else {
+        redirectUrl = await silentRenewIframe(authorizeUrl);
+      }
+
+      if (!redirectUrl) return null;
+
+      const tokenInfo = extractTokenFromUrl(redirectUrl);
+      if (!tokenInfo) return null;
+
+      // Save the renewed token
+      const account = getAdobeAccount();
+      saveOAuthAccount({
+        providerId: 'adobe',
+        accessToken: tokenInfo.accessToken,
+        tokenExpiresAt: Date.now() + tokenInfo.expiresIn * 1000,
+        userName: account?.userName,
+        userAvatar: account?.userAvatar,
+      });
+
+      console.log('[adobe] Token renewed silently');
+      return tokenInfo.accessToken;
+    } catch (err) {
+      console.warn('[adobe] Silent renewal error:', err instanceof Error ? err.message : String(err));
+      return null;
+    } finally {
+      renewalInProgress = null;
+    }
+  })();
+
+  return renewalInProgress;
+}
+
+/**
+ * CLI mode silent renewal: hidden iframe that loads the authorize URL.
+ * IMS redirects back with a new token in the fragment if the session is valid.
+ */
+function silentRenewIframe(authorizeUrl: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+
+    const timeout = setTimeout(() => {
+      iframe.remove();
+      resolve(null);
+    }, 10000);
+
+    iframe.addEventListener('load', () => {
+      try {
+        // After redirect, the iframe URL contains the token fragment
+        const url = iframe.contentWindow?.location.href;
+        clearTimeout(timeout);
+        iframe.remove();
+        if (url && url.includes('access_token')) {
+          resolve(url);
+        } else {
+          resolve(null);
+        }
+      } catch {
+        // Cross-origin error means IMS redirected to an error page
+        clearTimeout(timeout);
+        iframe.remove();
+        resolve(null);
+      }
+    });
+
+    iframe.src = authorizeUrl;
+    document.body.appendChild(iframe);
+  });
+}
+
+/**
+ * Extension mode silent renewal: chrome.identity.launchWebAuthFlow with interactive=false.
+ */
+async function silentRenewExtension(authorizeUrl: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    let resolved = false;
+    const cleanup = () => {
+      if (resolved) return;
+      resolved = true;
+      (chrome as any).runtime.onMessage.removeListener(handler);
+      clearTimeout(timer);
+    };
+
+    const handler = (message: any) => {
+      if (message?.source !== 'service-worker') return;
+      if (message?.payload?.type !== 'oauth-result') return;
+      cleanup();
+      if (message.payload.error) {
+        resolve(null);
+        return;
+      }
+      resolve(message.payload.redirectUrl ?? null);
+    };
+
+    (chrome as any).runtime.onMessage.addListener(handler);
+    (chrome as any).runtime.sendMessage({
+      source: 'panel',
+      payload: { type: 'oauth-request', providerId: 'oauth', authorizeUrl, interactive: false },
+    }).catch(() => {
+      cleanup();
+      resolve(null);
+    });
+
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve(null);
+    }, 10000);
+  });
 }
 
 // ── Stream functions (reuse pi-ai's Anthropic provider) ─────────────

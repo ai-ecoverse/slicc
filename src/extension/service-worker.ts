@@ -498,7 +498,7 @@ chrome.debugger.onEvent.addListener(
 async function handleOAuthRequest(msg: OAuthRequestMsg): Promise<OAuthResultMsg> {
   const redirectUrl = await chrome.identity.launchWebAuthFlow({
     url: msg.authorizeUrl,
-    interactive: true,
+    interactive: msg.interactive !== false, // default true, pass false for silent renewal
   });
 
   if (!redirectUrl) {
