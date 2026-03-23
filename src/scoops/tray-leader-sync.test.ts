@@ -425,6 +425,27 @@ describe('LeaderSyncManager', () => {
       }
     });
 
+    it('getTargets filters out stale remote targets for disconnected followers', () => {
+      const { manager } = createManager();
+      const channel = new FakeChannel();
+      manager.addFollower('b1', channel);
+
+      manager.setLocalTargets([{ targetId: 'lt1', title: 'Leader Tab', url: 'https://leader.com' }]);
+      channel.simulateMessage({
+        type: 'targets.advertise',
+        targets: [{ targetId: 'tab1', title: 'Remote Tab', url: 'https://example.com' }],
+        runtimeId: 'follower-b1',
+      });
+
+      // Simulate stale registry/runtime mapping state where the follower has disconnected
+      // but a remote target entry still remains cached.
+      (manager as any).followers.delete('b1');
+
+      expect(manager.getTargets()).toEqual([
+        expect.objectContaining({ runtimeId: 'leader', localTargetId: 'lt1' }),
+      ]);
+    });
+
     it('new follower gets current registry on connect', () => {
       const { manager } = createManager();
 

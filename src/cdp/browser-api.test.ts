@@ -182,6 +182,37 @@ describe('BrowserAPI', () => {
   });
 
   describe('listAllTargets', () => {
+    it('deduplicates leader registry entries that mirror local pages', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        targetInfos: [
+          {
+            targetId: 'tab-1',
+            type: 'page',
+            title: 'Local Page',
+            url: 'https://local.example.com',
+            attached: false,
+          },
+        ],
+      });
+
+      api.setTrayTargetProvider({
+        getTargets: () => [
+          {
+            targetId: 'leader:tab-1',
+            localTargetId: 'tab-1',
+            runtimeId: 'leader',
+            title: 'Local Page',
+            url: 'https://local.example.com',
+            isLocal: false,
+          },
+        ],
+      });
+
+      await expect(api.listAllTargets()).resolves.toEqual([
+        { targetId: 'tab-1', title: 'Local Page', url: 'https://local.example.com' },
+      ]);
+    });
+
     it('keeps remote tray targets whose local target ids match a local page', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
         targetInfos: [
