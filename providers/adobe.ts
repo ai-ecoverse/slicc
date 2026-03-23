@@ -366,10 +366,16 @@ async function silentRenewToken(): Promise<string | null> {
       });
       const authorizeUrl = `${imsHost(imsEnv)}/ims/authorize/v2?${params}`;
 
-      // Use the same launcher as normal login — it handles all runtime modes
-      const { createOAuthLauncher } = await import('../src/providers/oauth-service.js');
-      const launcher = createOAuthLauncher();
-      const redirectUrl = await launcher(authorizeUrl);
+      let redirectUrl: string | null;
+      if (isExtension) {
+        // Extension: use chrome.identity with interactive=false via the existing launcher
+        const { createOAuthLauncher } = await import('../src/providers/oauth-service.js');
+        const launcher = createOAuthLauncher();
+        redirectUrl = await launcher(authorizeUrl);
+      } else {
+        // CLI: hidden iframe → /auth/callback → POST /api/oauth-result → poll
+        redirectUrl = await silentRenewViaIframe(authorizeUrl);
+      }
 
       if (!redirectUrl) return null;
 
@@ -397,6 +403,50 @@ async function silentRenewToken(): Promise<string | null> {
   })();
 
   return renewalInProgress;
+}
+
+/**
+ * CLI mode silent renewal via hidden iframe.
+ *
+ * Flow:
+ * 1. Hidden iframe loads IMS authorize URL with prompt=none
+ * 2. IMS redirects to /auth/callback (if session valid) or error page
+ * 3. Callback page sees no window.opener → POSTs result to /api/oauth-result
+ * 4. We poll /api/oauth-result for the token
+ */
+function silentRenewViaIframe(authorizeUrl: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+
+    const timeout = setTimeout(() => {
+      clearInterval(pollTimer);
+      iframe.remove();
+      resolve(null);
+    }, 10000);
+
+    // Poll the server relay endpoint for the OAuth result
+    const pollTimer = setInterval(async () => {
+      try {
+        const res = await fetch('/api/oauth-result');
+        if (res.status === 204) return; // no result yet
+        const data = await res.json() as { redirectUrl?: string; error?: string };
+        clearTimeout(timeout);
+        clearInterval(pollTimer);
+        iframe.remove();
+        if (data.error || !data.redirectUrl) {
+          resolve(null);
+        } else {
+          resolve(data.redirectUrl);
+        }
+      } catch {
+        // Server not available — keep polling
+      }
+    }, 500);
+
+    iframe.src = authorizeUrl;
+    document.body.appendChild(iframe);
+  });
 }
 
 // ── Stream functions (reuse pi-ai's Anthropic provider) ─────────────
