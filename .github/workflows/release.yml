@@ -94,24 +94,7 @@ jobs:
             xcrun stapler staple build/Sliccstart.app
           fi
           
-          # Create DMG
-          echo "Creating DMG..."
-          mkdir -p build/dmg
-          cp -R build/Sliccstart.app build/dmg/
-          ln -s /Applications build/dmg/Applications
-          hdiutil create -volname "Sliccstart" -srcfolder build/dmg -ov -format UDZO build/Sliccstart.dmg
-          rm -rf build/dmg
-          
-          # Sign and notarize DMG if certificate available
-          if [ -n "$APPLE_TEAM_ID" ]; then
-            codesign --force --sign "Developer ID Application: Lars Trieloff ($APPLE_TEAM_ID)" --timestamp build/Sliccstart.dmg
-            xcrun notarytool submit build/Sliccstart.dmg \
-              --apple-id "$APPLE_ID" \
-              --team-id "$APPLE_TEAM_ID" \
-              --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-              --wait
-            xcrun stapler staple build/Sliccstart.dmg
-          fi
+          # DMG is created in prepareCmd (after version patching by semantic-release)
 
       - name: Publish release
         env:
