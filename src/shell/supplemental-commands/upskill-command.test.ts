@@ -73,7 +73,7 @@ describe('upskill command GitHub flows', () => {
     await globalFs.writeFile('/workspace/.git/github-token', 'ghp_test_token');
 
     const fetchMock = vi.fn(async (url: string, options?: { headers?: Record<string, string> }) => {
-      if (url.includes('codeload.github.com')) return response(404, 'Not Found');
+      if (url.includes('codeload.github.com')) return response(500, 'Simulated failure');
       if (url.endsWith('/contents/')) {
         return response(200, JSON.stringify([{ name: 'alpha', path: 'alpha', type: 'dir' }]));
       }
@@ -148,7 +148,7 @@ describe('upskill command GitHub flows', () => {
     let alphaRequests = 0;
 
     const fetchMock = vi.fn(async (url: string) => {
-      if (url.includes('codeload.github.com')) return response(404, 'Not Found');
+      if (url.includes('codeload.github.com')) return response(500, 'Simulated failure');
       if (url.endsWith('/contents/')) {
         return response(200, JSON.stringify([{ name: 'alpha', path: 'alpha', type: 'dir' }]));
       }
@@ -265,7 +265,7 @@ describe('upskill Tessl registry integration', () => {
 
   it('tessl: shorthand resolves skill via Tessl API and installs from GitHub', async () => {
     const fetchMock = vi.fn(async (url: string) => {
-      if (url.includes('codeload.github.com')) return response(404, 'Not Found');
+      if (url.includes('codeload.github.com')) return response(500, 'Simulated failure');
       // Tessl resolve endpoint
       if (url.includes('api.tessl.io') && url.includes('postgres-pro')) {
         return response(200, JSON.stringify({
@@ -302,7 +302,7 @@ describe('upskill Tessl registry integration', () => {
 
   it('checkRequiredBins warns about missing binaries', async () => {
     const fetchMock = vi.fn(async (url: string) => {
-      if (url.includes('codeload.github.com')) return response(404, 'Not Found');
+      if (url.includes('codeload.github.com')) return response(500, 'Simulated failure');
       if (url.endsWith('/contents/')) {
         return response(200, JSON.stringify([{ name: 'alpha', path: 'alpha', type: 'dir' }]));
       }

@@ -628,26 +628,33 @@ async function resolveTesslRef(
   return { owner: gh.owner, repo: gh.repo, skillPath: skillDir, skillName: name };
 }
 
+type ZipResult =
+  | { status: 'ok'; files: Record<string, Uint8Array> }
+  | { status: 'not_found' }
+  | { status: 'error'; message: string };
+
 /**
  * Download and cache a repo ZIP archive from codeload.github.com (not rate-limited).
- * Returns the unzipped file entries, or null on failure.
  */
 async function fetchRepoZip(
   owner: string,
   repo: string,
   fetch: SecureFetch,
   branch: string = 'main'
-): Promise<Record<string, Uint8Array> | null> {
+): Promise<ZipResult> {
   const url = `https://codeload.github.com/${owner}/${repo}/zip/refs/heads/${branch}`;
   const response = await fetch(url, {
     headers: { 'User-Agent': 'slicc-upskill' },
   });
-  if (response.status !== 200) {
+  if (response.status === 404) {
     // Try 'master' branch as fallback
     if (branch === 'main') {
       return fetchRepoZip(owner, repo, fetch, 'master');
     }
-    return null;
+    return { status: 'not_found' };
+  }
+  if (response.status !== 200) {
+    return { status: 'error', message: `codeload returned HTTP ${response.status}` };
   }
 
   let zipBytes = consumeCachedBinaryByUrl(url);
@@ -659,9 +666,9 @@ async function fetchRepoZip(
   }
 
   try {
-    return unzipSync(zipBytes);
-  } catch {
-    return null;
+    return { status: 'ok', files: unzipSync(zipBytes) };
+  } catch (e) {
+    return { status: 'error', message: `failed to unzip: ${e instanceof Error ? e.message : String(e)}` };
   }
 }
 
@@ -693,8 +700,8 @@ async function listGitHubSkills(
   // Try ZIP-based discovery first (no rate limit)
   if (fetch) {
     const zip = await fetchRepoZip(owner, repo, fetch);
-    if (zip) {
-      const files = stripZipPrefix(zip);
+    if (zip.status === 'ok') {
+      const files = stripZipPrefix(zip.files);
       const skills: Array<{ name: string; path: string }> = [];
       const prefix = subPath ? subPath.replace(/^\/|\/$/g, '') + '/' : '';
 
@@ -709,6 +716,10 @@ async function listGitHubSkills(
       }
       return { skills };
     }
+    if (zip.status === 'not_found') {
+      return { skills: [], error: `repository ${owner}/${repo} not found` };
+    }
+    // zip.status === 'error' — fall through to API
   }
 
   // Fallback: Contents API (rate-limited for anonymous users)
@@ -780,8 +791,15 @@ async function installFromGitHub(
     // Try ZIP-based install first (no rate limit)
     if (fetch) {
       const zip = await fetchRepoZip(owner, repo, fetch);
-      if (zip) {
-        const files = stripZipPrefix(zip);
+      if (zip.status === 'not_found') {
+        return {
+          stdout: '',
+          stderr: `upskill: repository ${owner}/${repo} not found\n`,
+          exitCode: 1,
+        };
+      }
+      if (zip.status === 'ok') {
+        const files = stripZipPrefix(zip.files);
         const prefix = skillPath.replace(/^\/|\/$/g, '') + '/';
 
         await fs.mkdir(destDir, { recursive: true });
