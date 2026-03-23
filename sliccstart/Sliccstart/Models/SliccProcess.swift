@@ -155,8 +155,7 @@ final class SliccProcess {
     static func resolveLaunchConfiguration(
         sliccDir: String,
         extraArgs: [String],
-        resourcePath: String? = Bundle.main.resourcePath,
-        nodePath: String? = nil
+        resourcePath: String? = Bundle.main.resourcePath
     ) throws -> LaunchConfiguration {
         if let serverBinary = SliccBootstrapper.findServerBinary(
             sliccDir: sliccDir,
@@ -169,18 +168,8 @@ final class SliccProcess {
             )
         }
 
-        if let resolvedNodePath = nodePath ?? SliccBootstrapper.findNode(),
-           let entryScript = SliccBootstrapper.legacyNodeEntryScript(sliccDir: sliccDir) {
-            log.warning("resolveLaunchConfiguration: slicc-server missing, falling back to legacy CLI at \(entryScript, privacy: .public)")
-            return LaunchConfiguration(
-                executablePath: resolvedNodePath,
-                arguments: [entryScript] + extraArgs,
-                logLabel: "node"
-            )
-        }
-
-        log.error("resolveLaunchConfiguration: native server and Node.js fallback are both unavailable")
-        throw LaunchError.runtimeNotFound
+        log.error("resolveLaunchConfiguration: slicc-server binary not found")
+        throw LaunchError.serverBinaryNotFound
     }
 
     private func spawn(target: AppTarget, extraArgs: [String], env: [String: String]) throws {
@@ -250,11 +239,11 @@ final class SliccProcess {
     }
 
     enum LaunchError: LocalizedError {
-        case runtimeNotFound
+        case serverBinaryNotFound
         case portInUse(UInt16)
         var errorDescription: String? {
             switch self {
-            case .runtimeNotFound: return "SLICC runtime not found (missing slicc-server binary and Node.js fallback)."
+            case .serverBinaryNotFound: return "SLICC server binary not found. Build or bundle slicc-server before launching."
             case .portInUse(let port): return "Port \(port) is already in use."
             }
         }

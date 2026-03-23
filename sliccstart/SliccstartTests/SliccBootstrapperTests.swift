@@ -50,14 +50,13 @@ final class SliccBootstrapperTests: XCTestCase {
         )
     }
 
-    func testCheckInstallationUsesLegacyNodeFallbackWhenServerIsMissing() throws {
+    func testCheckInstallationNeedsBuildWhenServerIsMissing() throws {
         let sliccDir = tempDir.appendingPathComponent("slicc")
         try createFile(at: sliccDir.appendingPathComponent("package.json"))
-        try createFile(at: sliccDir.appendingPathComponent("dist/cli/index.js"))
 
         XCTAssertEqual(
             SliccBootstrapper.checkInstallation(sliccDir: sliccDir.path, resourcePath: nil),
-            .installed
+            .needsBuild
         )
     }
 
@@ -69,8 +68,7 @@ final class SliccBootstrapperTests: XCTestCase {
         let config = try SliccProcess.resolveLaunchConfiguration(
             sliccDir: sliccDir.path,
             extraArgs: ["--electron-app=/Applications/Test.app", "--kill", "--cdp-port=9223"],
-            resourcePath: nil,
-            nodePath: "/fake/node"
+            resourcePath: nil
         )
 
         XCTAssertEqual(config.executablePath, binary.path)
@@ -78,21 +76,20 @@ final class SliccBootstrapperTests: XCTestCase {
         XCTAssertEqual(config.logLabel, "server")
     }
 
-    func testResolveLaunchConfigurationFallsBackToLegacyNodeCli() throws {
+    func testResolveLaunchConfigurationThrowsWhenServerIsMissing() throws {
         let sliccDir = tempDir.appendingPathComponent("slicc")
-        let legacyEntry = sliccDir.appendingPathComponent("dist/cli/index.js")
-        try createFile(at: legacyEntry)
 
-        let config = try SliccProcess.resolveLaunchConfiguration(
-            sliccDir: sliccDir.path,
-            extraArgs: ["--cdp-port=9222"],
-            resourcePath: nil,
-            nodePath: "/fake/node"
-        )
-
-        XCTAssertEqual(config.executablePath, "/fake/node")
-        XCTAssertEqual(config.arguments, [legacyEntry.path, "--cdp-port=9222"])
-        XCTAssertEqual(config.logLabel, "node")
+        XCTAssertThrowsError(
+            try SliccProcess.resolveLaunchConfiguration(
+                sliccDir: sliccDir.path,
+                extraArgs: ["--cdp-port=9222"],
+                resourcePath: nil
+            )
+        ) { error in
+            guard case SliccProcess.LaunchError.serverBinaryNotFound = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
     }
 
     private func createFile(at url: URL) throws {

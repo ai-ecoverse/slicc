@@ -96,11 +96,6 @@ final class SliccBootstrapper {
         return nil
     }
 
-    static func legacyNodeEntryScript(sliccDir: String = defaultSliccDir) -> String? {
-        let path = sliccDir + "/dist/cli/index.js"
-        return FileManager.default.fileExists(atPath: path) ? path : nil
-    }
-
     static func checkInstallation(
         sliccDir: String = defaultSliccDir,
         resourcePath: String? = Bundle.main.resourcePath
@@ -111,20 +106,10 @@ final class SliccBootstrapper {
             return .installed
         }
 
-        // Backward compatibility: older bundles can still launch via the legacy Node CLI.
-        if let bundledLegacy = bundledLegacyEntryScript(resourcePath: resourcePath) {
-            log.warning("checkInstallation: bundled slicc-server missing, falling back to legacy CLI at \(bundledLegacy)")
-            return .installed
-        }
-
         // External mode: check the sliccDir
         let fm = FileManager.default
         guard fm.fileExists(atPath: sliccDir + "/package.json") else { return .notInstalled }
         if findServerBinary(sliccDir: sliccDir, resourcePath: resourcePath) != nil {
-            return .installed
-        }
-        if let legacyEntry = legacyNodeEntryScript(sliccDir: sliccDir) {
-            log.warning("checkInstallation: native server missing, falling back to legacy CLI at \(legacyEntry)")
             return .installed
         }
         return .needsBuild
@@ -250,10 +235,5 @@ final class SliccBootstrapper {
         guard let resourcePath else { return nil }
         let path = resourcePath + "/slicc-server"
         return FileManager.default.fileExists(atPath: path) ? path : nil
-    }
-
-    private static func bundledLegacyEntryScript(resourcePath: String?) -> String? {
-        guard let sliccDir = resolveBundledSliccDir(resourcePath: resourcePath) else { return nil }
-        return legacyNodeEntryScript(sliccDir: sliccDir)
     }
 }

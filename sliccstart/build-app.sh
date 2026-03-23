@@ -14,10 +14,6 @@ RESOURCES="$CONTENTS/Resources"
 # App version — set SLICCSTART_VERSION env var to override (e.g. during release)
 SLICCSTART_VERSION="${SLICCSTART_VERSION:-0.1.0}"
 
-# Node.js version to bundle (LTS 24.x)
-NODE_VERSION="${NODE_VERSION:-24.14.0}"
-NODE_CACHE="$SCRIPT_DIR/.node-cache"
-
 # ---------------------------------------------------------------------------
 # 1. Compile Swift binary
 # ---------------------------------------------------------------------------
@@ -62,82 +58,14 @@ if [ -f "$ICON_SRC" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Bundle Node.js
+# 3. Bundle SLICC UI assets
 # ---------------------------------------------------------------------------
-echo "Bundling Node.js v${NODE_VERSION}..."
-mkdir -p "$NODE_CACHE" "$RESOURCES/node/bin"
-
-ARCH="$(uname -m)"
-if [ "$ARCH" = "x86_64" ]; then
-  NODE_ARCH="x64"
-else
-  NODE_ARCH="arm64"
-fi
-
-NODE_TARBALL="node-v${NODE_VERSION}-darwin-${NODE_ARCH}.tar.xz"
-NODE_URL="https://nodejs.org/dist/v${NODE_VERSION}/${NODE_TARBALL}"
-
-if [ ! -f "$NODE_CACHE/$NODE_TARBALL" ]; then
-  echo "  Downloading $NODE_TARBALL..."
-  curl -fsSL "$NODE_URL" -o "$NODE_CACHE/$NODE_TARBALL"
-fi
-
-NODE_EXTRACTED="$NODE_CACHE/node-v${NODE_VERSION}-darwin-${NODE_ARCH}"
-if [ ! -d "$NODE_EXTRACTED" ]; then
-  tar -xf "$NODE_CACHE/$NODE_TARBALL" -C "$NODE_CACHE"
-fi
-
-cp "$NODE_EXTRACTED/bin/node" "$RESOURCES/node/bin/node"
-chmod +x "$RESOURCES/node/bin/node"
+echo "Bundling SLICC UI..."
+mkdir -p "$RESOURCES/slicc/dist"
+cp -R "$SLICC_ROOT/dist/ui" "$RESOURCES/slicc/dist/"
 
 # ---------------------------------------------------------------------------
-# 4. Bundle SLICC dist + runtime node_modules
-# ---------------------------------------------------------------------------
-echo "Bundling SLICC runtime..."
-SLICC_BUNDLE="$RESOURCES/slicc"
-mkdir -p "$SLICC_BUNDLE/dist"
-
-# Copy built dist directories
-cp -R "$SLICC_ROOT/dist/cli"       "$SLICC_BUNDLE/dist/"
-cp -R "$SLICC_ROOT/dist/ui"        "$SLICC_BUNDLE/dist/"
-if [ -d "$SLICC_ROOT/dist/extension" ]; then
-  cp -R "$SLICC_ROOT/dist/extension" "$SLICC_BUNDLE/dist/"
-fi
-# Copy top-level dist files (e.g. tray-url-shared.js imported by dist/cli/)
-for f in "$SLICC_ROOT"/dist/*.js; do
-  [ -f "$f" ] && cp "$f" "$SLICC_BUNDLE/dist/"
-done
-
-# Minimal package.json for module resolution
-cat > "$SLICC_BUNDLE/package.json" << 'PKG'
-{"name":"sliccy","version":"0.1.0","type":"module"}
-PKG
-
-# Install only the runtime dependencies the CLI needs
-echo "  Installing runtime node_modules..."
-BUNDLED_NPM="$NODE_EXTRACTED/bin/npm"
-BUNDLED_NODE="$RESOURCES/node/bin/node"
-
-# express and ws are imported by dist/cli at runtime
-# @electron/fuses and @electron/asar are needed by DebugBuildCreator
-(
-  cd "$SLICC_BUNDLE"
-  NODE_PATH="" "$BUNDLED_NODE" "$BUNDLED_NPM" install --omit=dev --no-audit --no-fund \
-    "express@^4.21.2" ws @electron/fuses @electron/asar 2>&1 | tail -3
-)
-
-# Prune docs, types, and test fixtures from node_modules
-echo "  Pruning node_modules..."
-find "$SLICC_BUNDLE/node_modules" \( \
-  -name "*.md" -o -name "*.ts" -o -name "*.map" -o \
-  -name "LICENSE*" -o -name "CHANGELOG*" -o -name "HISTORY*" -o \
-  -name ".eslintrc*" -o -name ".prettierrc*" -o -name "tsconfig.json" -o \
-  -name "Makefile" -o -name ".travis.yml" -o -name ".github" -o \
-  -name "test" -o -name "tests" -o -name "__tests__" -o -name "example" -o -name "examples" \
-\) -exec rm -rf {} + 2>/dev/null || true
-
-# ---------------------------------------------------------------------------
-# 5. Info.plist
+# 4. Info.plist
 # ---------------------------------------------------------------------------
 cat > "$CONTENTS/Info.plist" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -175,7 +103,7 @@ cat > "$CONTENTS/Info.plist" << PLIST
 PLIST
 
 # ---------------------------------------------------------------------------
-# 6. Summary
+# 5. Summary
 # ---------------------------------------------------------------------------
 BUNDLE_SIZE=$(du -sh "$APP_DIR" | cut -f1)
 echo ""
