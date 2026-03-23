@@ -8,7 +8,6 @@ struct AppListView: View {
     @ObservedObject var appUpdater: AppUpdater
     let onLaunchStandalone: (AppTarget) -> Void
     let onLaunchElectron: (AppTarget) -> Void
-    let onGuidedInstall: (AppTarget) -> Void
     let onCreateDebugBuild: (AppTarget) -> Void
     let onUpdate: () -> Void
     let onRescan: () -> Void
@@ -17,7 +16,6 @@ struct AppListView: View {
         VStack(alignment: .leading, spacing: 0) {
             let browsers = targets.filter { $0.type == .chromiumBrowser }
             let electronApps = targets.filter { $0.type == .electronApp }
-            let chromeTarget = targets.first { $0.type == .chromiumBrowser && $0.name.contains("Chrome") }
 
             if !browsers.isEmpty {
                 SectionHeader("Browsers")
@@ -62,29 +60,27 @@ struct AppListView: View {
                 }
             }
 
-            if let chrome = chromeTarget {
-                SectionHeader("Extension")
-                Button { onGuidedInstall(chrome) } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "puzzlepiece.extension")
-                            .font(.system(size: 15))
-                            .frame(width: 28, height: 28)
-                            .foregroundStyle(.orange)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("Install to Chrome")
-                                .font(.system(size: 13))
-                            Text("Guided setup — requires Developer Mode")
-                                .font(.system(size: 10))
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
+            SectionHeader("Extension")
+            Button { sliccProcess.openChromeWebStore() } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "puzzlepiece.extension")
+                        .font(.system(size: 15))
+                        .frame(width: 28, height: 28)
+                        .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Get Extension")
+                            .font(.system(size: 13))
+                        Text("Install from Chrome Web Store")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .contentShape(Rectangle())
+                    Spacer()
                 }
-                .buttonStyle(.plain)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
 
             Spacer(minLength: 0)
 

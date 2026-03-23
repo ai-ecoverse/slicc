@@ -98,24 +98,14 @@ final class SliccProcess {
         return (port, Self.electronBaseCdpPort + electronCount)
     }
 
-    // MARK: - Guided extension install
+    // MARK: - Chrome Web Store
 
-    func guidedInstallExtension(chromePath: String) throws {
-        let stablePath = NSHomeDirectory() + "/.slicc/extension"
-        let sourcePath = sliccDir + "/dist/extension"
-        let fm = FileManager.default
+    static let chromeWebStoreURL = "https://chromewebstore.google.com/detail/slicc/akggccfpkleihhemkkikggopnifgelbk"
 
-        if fm.fileExists(atPath: stablePath) {
-            try fm.removeItem(atPath: stablePath)
+    func openChromeWebStore() {
+        if let url = URL(string: Self.chromeWebStoreURL) {
+            NSWorkspace.shared.open(url)
         }
-        try fm.copyItem(atPath: sourcePath, toPath: stablePath)
-
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: chromePath)
-        proc.arguments = ["chrome://extensions"]
-        try proc.run()
-
-        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: stablePath)
     }
 
     // MARK: - Lifecycle
