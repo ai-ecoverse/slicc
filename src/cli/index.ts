@@ -561,6 +561,7 @@ async function main() {
     launchedBrowserProcess = spawn(chromePath, chromeArgs, {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,
+      env: { ...process.env, GOOGLE_CRASHPAD_DISABLE: '1' },
     });
     launchedBrowserLabel = chromeProfile.displayName;
 
