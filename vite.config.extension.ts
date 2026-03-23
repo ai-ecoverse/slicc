@@ -2,10 +2,10 @@
  * Vite config for the Chrome extension build.
  *
  * Produces dist/extension/ with:
- * - index.html (side panel UI — bundled from src/ui/main.ts)
- * - service-worker.js (built from src/extension/service-worker.ts)
- * - offscreen.html + offscreen entry (built from src/extension/offscreen.ts)
- * - sandbox.html, manifest.json (copied from project root)
+ * - index.html (side panel UI — bundled from packages/webapp/src/ui/main.ts)
+ * - service-worker.js (built from packages/chrome-extension/src/service-worker.ts)
+ * - offscreen.html + offscreen entry (built from packages/chrome-extension/src/offscreen.ts)
+ * - sandbox.html, manifest.json (copied from packages/chrome-extension/)
  */
 
 import { defineConfig } from 'vite';
@@ -17,17 +17,18 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig(({ mode }) => ({
   root: '.',
+  publicDir: 'packages/assets/public',
   define: {
     __DEV__: JSON.stringify(mode !== 'production'),
   },
   resolve: {
     alias: {
-      'node:zlib': resolve(__dirname, 'src/shims/empty.ts'),
-      'node:module': resolve(__dirname, 'src/shims/empty.ts'),
-      'stream': resolve(__dirname, 'src/shims/stream.ts'),
-      'http': resolve(__dirname, 'src/shims/http.ts'),
-      'https': resolve(__dirname, 'src/shims/https.ts'),
-      'http2': resolve(__dirname, 'src/shims/http2.ts'),
+      'node:zlib': resolve(__dirname, 'packages/webapp/src/shims/empty.ts'),
+      'node:module': resolve(__dirname, 'packages/webapp/src/shims/empty.ts'),
+      'stream': resolve(__dirname, 'packages/webapp/src/shims/stream.ts'),
+      'http': resolve(__dirname, 'packages/webapp/src/shims/http.ts'),
+      'https': resolve(__dirname, 'packages/webapp/src/shims/https.ts'),
+      'http2': resolve(__dirname, 'packages/webapp/src/shims/http2.ts'),
       // Deep import into pi-coding-agent's compaction submodule (see vite.config.ts)
       '@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js': resolve(
         __dirname,
@@ -53,9 +54,9 @@ export default defineConfig(({ mode }) => ({
     target: 'esnext',
     rollupOptions: {
       input: {
-        index: resolve(__dirname, 'index.html'),
-        offscreen: resolve(__dirname, 'offscreen.html'),
-        'service-worker': resolve(__dirname, 'src/extension/service-worker.ts'),
+        index: resolve(__dirname, 'packages/webapp/index.html'),
+        offscreen: resolve(__dirname, 'packages/chrome-extension/offscreen.html'),
+        'service-worker': resolve(__dirname, 'packages/chrome-extension/src/service-worker.ts'),
       },
       output: {
         entryFileNames: (chunkInfo) => {
@@ -73,7 +74,7 @@ export default defineConfig(({ mode }) => ({
         // Rollup would code-split LightningFS into a shared chunk, which SWs can't import.
         const esbuild = await import('esbuild');
         await esbuild.build({
-          entryPoints: [resolve(__dirname, 'src/ui/preview-sw.ts')],
+          entryPoints: [resolve(__dirname, 'packages/webapp/src/ui/preview-sw.ts')],
           bundle: true,
           outfile: resolve(__dirname, 'dist/extension/preview-sw.js'),
           format: 'iife',
@@ -90,7 +91,7 @@ export default defineConfig(({ mode }) => ({
         mkdirSync(outDir, { recursive: true });
         // Copy manifest — strip "key" field in dev builds so Chrome assigns a random ID
         // (avoids stale storage from previous installs). Set SLICC_EXT_DEV=1 to enable.
-        const manifestSrc = resolve(__dirname, 'manifest.json');
+        const manifestSrc = resolve(__dirname, 'packages/chrome-extension/manifest.json');
         const manifestDest = resolve(outDir, 'manifest.json');
         if (process.env['SLICC_EXT_DEV']) {
           const manifest = JSON.parse(readFileSync(manifestSrc, 'utf-8'));
@@ -99,14 +100,14 @@ export default defineConfig(({ mode }) => ({
         } else {
           copyFileSync(manifestSrc, manifestDest);
         }
-        copyFileSync(resolve(__dirname, 'sandbox.html'), resolve(outDir, 'sandbox.html'));
-        copyFileSync(resolve(__dirname, 'sprinkle-sandbox.html'), resolve(outDir, 'sprinkle-sandbox.html'));
-        copyFileSync(resolve(__dirname, 'tool-ui-sandbox.html'), resolve(outDir, 'tool-ui-sandbox.html'));
-        copyFileSync(resolve(__dirname, 'voice-popup.html'), resolve(outDir, 'voice-popup.html'));
-        copyFileSync(resolve(__dirname, 'voice-popup.js'), resolve(outDir, 'voice-popup.js'));
+        copyFileSync(resolve(__dirname, 'packages/chrome-extension/sandbox.html'), resolve(outDir, 'sandbox.html'));
+        copyFileSync(resolve(__dirname, 'packages/chrome-extension/sprinkle-sandbox.html'), resolve(outDir, 'sprinkle-sandbox.html'));
+        copyFileSync(resolve(__dirname, 'packages/chrome-extension/tool-ui-sandbox.html'), resolve(outDir, 'tool-ui-sandbox.html'));
+        copyFileSync(resolve(__dirname, 'packages/chrome-extension/voice-popup.html'), resolve(outDir, 'voice-popup.html'));
+        copyFileSync(resolve(__dirname, 'packages/chrome-extension/voice-popup.js'), resolve(outDir, 'voice-popup.js'));
 
         // Copy logo files for extension icons and header
-        const logosSrc = resolve(__dirname, 'logos');
+        const logosSrc = resolve(__dirname, 'packages/assets/logos');
         const logosDest = resolve(outDir, 'logos');
         mkdirSync(logosDest, { recursive: true });
         for (const file of readdirSync(logosSrc)) {
@@ -116,7 +117,7 @@ export default defineConfig(({ mode }) => ({
         }
 
         // Copy fonts if present (Adobe Clean — local dev only, gitignored)
-        const fontsSrc = resolve(__dirname, 'public/fonts');
+        const fontsSrc = resolve(__dirname, 'packages/assets/public/fonts');
         const fontsDest = resolve(outDir, 'fonts');
         try {
           mkdirSync(fontsDest, { recursive: true });
@@ -142,6 +143,9 @@ export default defineConfig(({ mode }) => ({
             resolve(outDir, 'magick.wasm'),
           );
         } catch { /* @imagemagick/magick-wasm not installed */ }
+
+        copyFileSync(resolve(outDir, 'packages/webapp/index.html'), resolve(outDir, 'index.html'));
+        copyFileSync(resolve(outDir, 'packages/chrome-extension/offscreen.html'), resolve(outDir, 'offscreen.html'));
       },
     },
   ],

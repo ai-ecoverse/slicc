@@ -5,6 +5,7 @@ import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+let uiOutDir = resolve(__dirname, 'dist/ui');
 
 export default defineConfig(({ mode }) => ({
   root: '.',
@@ -12,6 +13,9 @@ export default defineConfig(({ mode }) => ({
   plugins: [
     {
       name: 'preview-sw-builder',
+      configResolved(config) {
+        uiOutDir = resolve(config.root, config.build.outDir);
+      },
       configureServer(server) {
         // Dev mode: serve the SW as a fully bundled IIFE via esbuild.
         // SWs can't use ES imports (they don't go through Vite's module resolver).
@@ -86,10 +90,11 @@ export default defineConfig(({ mode }) => ({
         // Production: build the SW as a self-contained IIFE via esbuild.
         // Rollup would code-split LightningFS into a shared chunk, which SWs can't import.
         const esbuild = await import('esbuild');
+        const { copyFileSync } = await import('fs');
         await esbuild.build({
           entryPoints: [resolve(__dirname, 'packages/webapp/src/ui/preview-sw.ts')],
           bundle: true,
-          outfile: resolve(__dirname, 'dist/ui/preview-sw.js'),
+          outfile: resolve(uiOutDir, 'preview-sw.js'),
           format: 'iife',
           target: 'esnext',
           minify: true,
@@ -98,12 +103,13 @@ export default defineConfig(({ mode }) => ({
         await esbuild.build({
           entryPoints: [resolve(__dirname, 'packages/webapp/src/ui/electron-overlay-entry.ts')],
           bundle: true,
-          outfile: resolve(__dirname, 'dist/ui/electron-overlay-entry.js'),
+          outfile: resolve(uiOutDir, 'electron-overlay-entry.js'),
           format: 'iife',
           target: 'esnext',
           minify: true,
           define: { __DEV__: 'false', global: 'globalThis' },
         });
+        copyFileSync(resolve(uiOutDir, 'packages/webapp/index.html'), resolve(uiOutDir, 'index.html'));
       },
     },
   ],
