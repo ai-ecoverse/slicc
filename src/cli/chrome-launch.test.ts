@@ -74,6 +74,8 @@ describe('chrome-launch', () => {
       '--remote-debugging-port=9222',
       '--no-first-run',
       '--no-default-browser-check',
+      '--disable-crash-reporter',
+      '--disable-background-tracing',
       '--user-data-dir=/repo/.qa/chrome/extension',
       '--disable-extensions-except=/repo/dist/extension',
       '--load-extension=/repo/dist/extension',
