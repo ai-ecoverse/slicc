@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { VirtualFS } from '../fs/virtual-fs.js';
-import { discoverJshCommands } from './jsh-discovery.js';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { discoverJshCommands } from '../../src/shell/jsh-discovery.js';
 
 describe('discoverJshCommands', () => {
   let vfs: VirtualFS;
