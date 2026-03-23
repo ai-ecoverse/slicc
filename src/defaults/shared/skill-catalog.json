@@ -121,6 +121,13 @@
       "affinity": { "apps": ["aem"], "tasks": ["build-websites"], "role": ["developer"], "purpose": ["work"] }
     },
     {
+      "name": "aem-cli",
+      "displayName": "AEM CLI",
+      "description": "Shell command for AEM — list, get, put, preview, publish, and upload pages via OAuth-authenticated API calls",
+      "source": { "repo": "ai-ecoverse/skills", "skill": "aem" },
+      "affinity": { "apps": ["aem"], "tasks": ["build-websites", "write-content"], "role": ["developer", "content-creator"], "purpose": ["work"] }
+    },
+    {
       "name": "bluebubbles",
       "displayName": "BlueBubbles iMessage",
       "description": "Send and receive iMessages via BlueBubbles REST API",
