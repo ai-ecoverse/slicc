@@ -4,14 +4,15 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import 'fake-indexeddb/auto';
-import { VirtualFS } from '../fs/virtual-fs.js';
-import { loadSkills, formatSkillsForPrompt } from './skills.js';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { loadSkills, formatSkillsForPrompt } from '../../src/scoops/skills.js';
 
 describe('Skills', () => {
   let vfs: VirtualFS;
+  let dbCounter = 0;
 
   beforeEach(async () => {
-    vfs = await VirtualFS.create({ dbName: 'test-skills', wipe: true });
+    vfs = await VirtualFS.create({ dbName: `test-skills-${dbCounter++}`, wipe: true });
   });
 
   describe('loadSkills', () => {

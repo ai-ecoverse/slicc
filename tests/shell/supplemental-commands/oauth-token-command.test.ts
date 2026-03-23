@@ -2,29 +2,29 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { IFileSystem } from 'just-bash';
 
 // Mock modules before importing the command
-vi.mock('../../ui/provider-settings.js', () => ({
+vi.mock('../../../src/ui/provider-settings.js', () => ({
   getOAuthAccountInfo: vi.fn(),
   getSelectedProvider: vi.fn(),
   getAccounts: vi.fn(() => []),
 }));
 
-vi.mock('../../providers/index.js', () => ({
+vi.mock('../../../src/providers/index.js', () => ({
   getRegisteredProviderConfig: vi.fn(),
   getRegisteredProviderIds: vi.fn(() => []),
 }));
 
-vi.mock('../../providers/oauth-service.js', () => ({
+vi.mock('../../../src/providers/oauth-service.js', () => ({
   createOAuthLauncher: vi.fn(() => vi.fn()),
 }));
 
-import { createOAuthTokenCommand } from './oauth-token-command.js';
+import { createOAuthTokenCommand } from '../../../src/shell/supplemental-commands/oauth-token-command.js';
 import {
   getOAuthAccountInfo,
   getSelectedProvider,
   getAccounts,
-} from '../../ui/provider-settings.js';
-import { getRegisteredProviderConfig, getRegisteredProviderIds } from '../../providers/index.js';
-import { createOAuthLauncher } from '../../providers/oauth-service.js';
+} from '../../../src/ui/provider-settings.js';
+import { getRegisteredProviderConfig, getRegisteredProviderIds } from '../../../src/providers/index.js';
+import { createOAuthLauncher } from '../../../src/providers/oauth-service.js';
 
 const mockGetOAuthAccountInfo = vi.mocked(getOAuthAccountInfo);
 const mockGetSelectedProvider = vi.mocked(getSelectedProvider);

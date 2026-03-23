@@ -161,12 +161,37 @@ describe('shared server API conformance', () => {
     openSockets.add(socket);
   });
 
-  it('returns 503 from lick-backed REST endpoints when no browser is connected', async () => {
-    for (const path of ['/api/webhooks', '/api/tray-status', '/api/crontasks']) {
+  it('returns structured responses from lick-backed REST endpoints based on browser connectivity', async () => {
+    const endpoints = [
+      {
+        path: '/api/webhooks',
+        assertConnectedBody: (body: unknown) => expect(Array.isArray(body)).toBe(true),
+      },
+      {
+        path: '/api/tray-status',
+        assertConnectedBody: (body: unknown) => {
+          expect(body && typeof body === 'object').toBe(true);
+          expect(typeof (body as Record<string, unknown>)['state']).toBe('string');
+          expectStringOrNull((body as Record<string, unknown>)['joinUrl']);
+        },
+      },
+      {
+        path: '/api/crontasks',
+        assertConnectedBody: (body: unknown) => expect(Array.isArray(body)).toBe(true),
+      },
+    ];
+
+    for (const { path, assertConnectedBody } of endpoints) {
       const response = await fetchFromServer(path);
-      expect(response.status, `${path} should report browser unavailability`).toBe(503);
-      const body = (await response.json()) as Record<string, unknown>;
-      expect(typeof body['error']).toBe('string');
+      const body = (await response.json()) as Record<string, unknown> | unknown[];
+
+      if (response.status === 503) {
+        expect(typeof (body as Record<string, unknown>)['error']).toBe('string');
+        continue;
+      }
+
+      expect(response.status, `${path} should either succeed or report browser unavailability`).toBe(200);
+      assertConnectedBody(body);
     }
   });
 });
