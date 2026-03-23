@@ -29,7 +29,11 @@ struct SliccstartApp: App {
     @State private var debugBuildTarget: AppTarget?
     @State private var isCreatingDebugBuild = false
     @State private var debugBuildProgress: String = ""
-    @StateObject private var appUpdater = AppUpdater(owner: "ai-ecoverse", repo: "slicc")
+    @StateObject private var appUpdater: AppUpdater = {
+        let updater = AppUpdater(owner: "ai-ecoverse", repo: "slicc", releasePrefix: "Sliccstart", provider: TolerantReleaseProvider())
+        updater.enableDebugInfo = true
+        return updater
+    }()
 
     init() {
         NSApplication.shared.setActivationPolicy(.regular)
@@ -144,6 +148,13 @@ struct SliccstartApp: App {
         .defaultSize(width: 340, height: 100)
         .windowStyle(.titleBar)
         .windowResizability(.contentSize)
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    appUpdater.check()
+                }
+            }
+        }
     }
 
     private func initialize() async {
