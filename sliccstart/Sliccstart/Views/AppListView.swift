@@ -92,6 +92,11 @@ struct AppListView: View {
                     Button("Update") { onUpdate() }
                         .buttonStyle(.borderless).font(.caption)
                 }
+                if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String {
+                    Text("v\(version)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
                 Spacer()
                 Button("Rescan") { onRescan() }
                     .buttonStyle(.borderless).font(.caption)
