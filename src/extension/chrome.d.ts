@@ -69,14 +69,14 @@ interface ChromeAPI {
     onMessage: {
       addListener(
         callback: (
-          message: any,
+          message: unknown,
           sender: ChromeMessageSender,
           sendResponse: (response?: unknown) => void
         ) => void | boolean
       ): void;
       removeListener(
         callback: (
-          message: any,
+          message: unknown,
           sender: ChromeMessageSender,
           sendResponse: (response?: unknown) => void
         ) => void | boolean
@@ -99,6 +99,13 @@ interface ChromeAPI {
   identity: {
     launchWebAuthFlow(options: { url: string; interactive: boolean }): Promise<string | undefined>;
     getRedirectURL(path?: string): string;
+  };
+  permissions: {
+    contains(permissions: { origins: string[] }): Promise<boolean>;
+    request(permissions: { origins: string[] }): Promise<boolean>;
+    onRemoved: {
+      addListener(callback: (permissions: { origins?: string[] }) => void): void;
+    };
   };
   offscreen: ChromeOffscreenAPI;
   debugger: ChromeDebuggerAPI;
