@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PanelRegistry } from './panel-registry.js';
-import type { PanelDescriptor } from './panel-types.js';
+import { PanelRegistry } from '../../packages/webapp/src/ui/panel-registry.js';
+import type { PanelDescriptor } from '../../packages/webapp/src/ui/panel-types.js';
 
 function makeDescriptor(overrides: Partial<PanelDescriptor> = {}): PanelDescriptor {
   return {
