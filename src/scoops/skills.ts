@@ -19,7 +19,7 @@ const log = createLogger('skills');
 // Load default text files at build time using import.meta.glob
 // The '?raw' query imports file contents as strings
 const defaultTextFiles = import.meta.glob(
-  '/src/defaults/**/*.{md,jsh,shtml,json,txt,css,js,ts,html}',
+  '/packages/vfs-root/**/*.{md,jsh,shtml,json,txt,css,js,ts,html}',
   {
     query: '?raw',
     import: 'default',
@@ -30,7 +30,7 @@ const defaultTextFiles = import.meta.glob(
 // Load default binary files (audio, images, etc.) as base64
 // The '?inline' query gives us a data URL we can decode
 const defaultBinaryFiles = import.meta.glob(
-  '/src/defaults/**/*.{mp3,wav,ogg,png,jpg,jpeg,gif,webp,ico,pdf}',
+  '/packages/vfs-root/**/*.{mp3,wav,ogg,png,jpg,jpeg,gif,webp,ico,pdf}',
   {
     query: '?inline',
     import: 'default',
@@ -279,17 +279,17 @@ ${sections.join('\n')}
 
 /**
  * Create default files in VFS from bundled defaults.
- * Files are loaded from src/defaults/ at build time via import.meta.glob.
+ * Files are loaded from packages/vfs-root/ at build time via import.meta.glob.
  */
 export async function createDefaultSkills(
   fs: VirtualFS,
   skillsDir: string = '/workspace/skills'
 ): Promise<void> {
-  const prefix = '/src/defaults';
+  const prefix = '/packages/vfs-root';
   const defaultFiles = getDefaultFiles();
 
   for (const [importPath, content] of Object.entries(defaultFiles)) {
-    // Convert import path like '/src/defaults/workspace/skills/browser/SKILL.md'
+    // Convert import path like '/packages/vfs-root/workspace/skills/browser/SKILL.md'
     // to VFS path like '/workspace/skills/browser/SKILL.md'
     const vfsPath = importPath.slice(prefix.length);
 
@@ -331,7 +331,7 @@ export async function createDefaultSkills(
  * Create default shared files (like /shared/CLAUDE.md) from bundled defaults.
  */
 export async function createDefaultSharedFiles(fs: VirtualFS): Promise<void> {
-  const prefix = '/src/defaults';
+  const prefix = '/packages/vfs-root';
   const defaultFiles = getDefaultFiles();
 
   for (const [importPath, content] of Object.entries(defaultFiles)) {
