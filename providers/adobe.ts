@@ -467,14 +467,14 @@ const streamAdobe = (
 
       if (isOpenAI) {
         // Route to OpenAI Chat Completions API — append /v1 since the OpenAI SDK adds /chat/completions
-        // Restore original pi-ai provider so detectCompat() in pi-ai recognizes the model
-        // (e.g., Cerebras models need supportsStore=false, supportsDeveloperRole=false)
-        const originalProvider = (model as any)._originalProvider ?? model.provider;
+        // pi-ai's detectCompat uses provider/baseUrl to identify non-standard providers,
+        // but ours are overridden (provider='adobe', baseUrl=proxy). Set compat explicitly
+        // to disable features unsupported by OpenAI-compatible backends (Cerebras, etc.)
         const proxyModel = {
           ...model,
           baseUrl: `${getProxyEndpoint()}/v1`,
           api: 'openai-completions' as Api,
-          provider: originalProvider,
+          compat: { supportsStore: false, supportsDeveloperRole: false, ...(model as any).compat },
         };
         const inner = streamOpenAICompletions(proxyModel as any, context, { ...options, apiKey: accessToken } as any);
         for await (const event of inner) stream.push(event as any);
@@ -506,13 +506,11 @@ const streamSimpleAdobe = (
       const isOpenAI = String(model.api).includes('openai');
 
       if (isOpenAI) {
-        // Route to OpenAI Chat Completions API — append /v1 since the OpenAI SDK adds /chat/completions
-        const originalProvider = (model as any)._originalProvider ?? model.provider;
         const proxyModel = {
           ...model,
           baseUrl: `${getProxyEndpoint()}/v1`,
           api: 'openai-completions' as Api,
-          provider: originalProvider,
+          compat: { supportsStore: false, supportsDeveloperRole: false, ...(model as any).compat },
         };
         const inner = streamSimpleOpenAICompletions(proxyModel as any, context, { ...options, apiKey: accessToken } as any);
         for await (const event of inner) stream.push(event as any);
@@ -565,7 +563,7 @@ async function fetchProxyModels(): Promise<Model<Api>[]> {
           // Determine API type from metadata or default to anthropic
           const apiType = pm.api === 'openai' ? 'openai' : 'anthropic';
           const customApi = `adobe-${apiType}` as Api;
-          if (base) return { ...base, provider: 'adobe', api: customApi, _originalProvider: base.provider };
+          if (base) return { ...base, provider: 'adobe', api: customApi };
           return {
             id: pm.id, name: pm.name ?? pm.id, provider: 'adobe',
             api: customApi, baseUrl: endpoint,
