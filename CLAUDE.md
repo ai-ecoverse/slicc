@@ -16,18 +16,15 @@ This root file is the repo navigation hub. Keep package-specific architecture an
 | `packages/swift-launcher/` | Native macOS SwiftUI launcher app (`Sliccstart`) |
 | `packages/swift-server/` | Native macOS Hummingbird server (`slicc-server`) |
 | `packages/dev-tools/` | Repo-level tooling guidance for build helpers, QA setup, configs, and test utilities |
+| `packages/assets/` | Shared static files (logos, fonts, favicon) used by multiple packages |
 
 ### Other Top-Level Directories
 
 | Path | Purpose |
 | --- | --- |
-| `docs/` | Long-form developer and agent reference docs |
+| `docs/` | Long-form developer and agent reference docs, including screenshots and other docs assets |
 | `tests/` | TypeScript/Vitest and integration tests mirrored by subsystem |
-| `providers/` | External provider configs used by the repo's tooling surface |
-| `tools/` | Standalone repo utilities such as prompt extraction |
-| `public/` | Static assets served by the web build |
 | `dist/` | Generated build output; do not hand-edit |
-| `logos/`, `screenshots/` | Brand and documentation assets |
 
 ## Top-Level Commands
 

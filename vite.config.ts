@@ -1,5 +1,6 @@
 /// <reference types="vitest" />
 import { defineConfig } from 'vite';
+import { configDefaults } from 'vitest/config';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -7,6 +8,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig(({ mode }) => ({
   root: '.',
+  publicDir: 'packages/assets/public',
   plugins: [
     {
       name: 'preview-sw-builder',
@@ -15,10 +17,10 @@ export default defineConfig(({ mode }) => ({
         // SWs can't use ES imports (they don't go through Vite's module resolver).
         let cachedCode: string | null = null;
         let cachedMtime = 0;
-        const swPath = resolve(__dirname, 'src/ui/preview-sw.ts');
+        const swPath = resolve(__dirname, 'packages/webapp/src/ui/preview-sw.ts');
         let cachedOverlayCode: string | null = null;
         let cachedOverlayMtime = 0;
-        const overlayEntryPath = resolve(__dirname, 'src/ui/electron-overlay-entry.ts');
+        const overlayEntryPath = resolve(__dirname, 'packages/webapp/src/ui/electron-overlay-entry.ts');
 
         server.middlewares.use('/preview-sw.js', async (_req, res) => {
           try {
@@ -85,7 +87,7 @@ export default defineConfig(({ mode }) => ({
         // Rollup would code-split LightningFS into a shared chunk, which SWs can't import.
         const esbuild = await import('esbuild');
         await esbuild.build({
-          entryPoints: [resolve(__dirname, 'src/ui/preview-sw.ts')],
+          entryPoints: [resolve(__dirname, 'packages/webapp/src/ui/preview-sw.ts')],
           bundle: true,
           outfile: resolve(__dirname, 'dist/ui/preview-sw.js'),
           format: 'iife',
@@ -94,7 +96,7 @@ export default defineConfig(({ mode }) => ({
           define: { __DEV__: 'false', global: 'globalThis' },
         });
         await esbuild.build({
-          entryPoints: [resolve(__dirname, 'src/ui/electron-overlay-entry.ts')],
+          entryPoints: [resolve(__dirname, 'packages/webapp/src/ui/electron-overlay-entry.ts')],
           bundle: true,
           outfile: resolve(__dirname, 'dist/ui/electron-overlay-entry.js'),
           format: 'iife',
@@ -117,15 +119,15 @@ export default defineConfig(({ mode }) => ({
       // just-bash's browser bundle references node:zlib and node:module for
       // gzip/gunzip commands that aren't functional in browsers anyway.
       // Alias to empty stubs so the bundled JS never tries to fetch them.
-      'node:zlib': resolve(__dirname, 'src/shims/empty.ts'),
-      'node:module': resolve(__dirname, 'src/shims/empty.ts'),
+      'node:zlib': resolve(__dirname, 'packages/webapp/src/shims/empty.ts'),
+      'node:module': resolve(__dirname, 'packages/webapp/src/shims/empty.ts'),
       // @smithy/node-http-handler imports named exports from Node builtins
       // (without node: prefix). Vite's browser-external can't provide named
       // exports, so alias to stubs with the required exports.
-      'stream': resolve(__dirname, 'src/shims/stream.ts'),
-      'http': resolve(__dirname, 'src/shims/http.ts'),
-      'https': resolve(__dirname, 'src/shims/https.ts'),
-      'http2': resolve(__dirname, 'src/shims/http2.ts'),
+      'stream': resolve(__dirname, 'packages/webapp/src/shims/stream.ts'),
+      'http': resolve(__dirname, 'packages/webapp/src/shims/http.ts'),
+      'https': resolve(__dirname, 'packages/webapp/src/shims/https.ts'),
+      'http2': resolve(__dirname, 'packages/webapp/src/shims/http2.ts'),
       // Deep import into pi-coding-agent's compaction submodule — the main entry
       // re-exports 113 Node-only modules that break Vite's browser bundle.
       // The compaction submodule only depends on @mariozechner/pi-ai (browser-safe).
@@ -151,6 +153,9 @@ export default defineConfig(({ mode }) => ({
     outDir: 'dist/ui',
     emptyOutDir: true,
     target: 'esnext',
+    rollupOptions: {
+      input: resolve(__dirname, 'packages/webapp/index.html'),
+    },
     // preview-sw is built separately via esbuild (SWs need self-contained bundles)
   },
   server: {
@@ -159,6 +164,7 @@ export default defineConfig(({ mode }) => ({
   test: {
     globals: true,
     environment: 'node',
-    include: ['tests/**/*.test.ts'],
+    include: ['packages/*/tests/**/*.test.ts'],
+    exclude: [...configDefaults.exclude, 'packages/node-server/tests/integration/**/*.test.ts'],
   },
 }));

@@ -4,15 +4,16 @@
  * Pi-ai providers are auto-discovered via getProviders() — no config files needed.
  * This module handles two additional concerns:
  *
- * 1. Built-in extensions (src/providers/built-in/*.ts) — providers that need custom
+ * 1. Built-in extensions (packages/webapp/src/providers/built-in/*.ts) — providers that need custom
  *    stream functions via register(). Pure config-only providers don't need files here;
  *    they get fallback configs from provider-settings.ts.
  *
- * 2. External providers (/providers/*.ts) — gitignored directory at project root,
- *    always included. Used for custom OAuth providers (corporate SSO, API proxies).
+ * 2. External providers (/packages/webapp/providers/*.ts) — gitignored directory in the
+ *    webapp package, always included. Used for custom OAuth providers (corporate SSO,
+ *    API proxies).
  *
- * 3. Build-time filtering via providers.build.json — controls which pi-ai providers
- *    appear in the UI. External providers are never filtered.
+ * 3. Build-time filtering via packages/webapp/providers.build.json — controls which
+ *    pi-ai providers appear in the UI. External providers are never filtered.
  *
  * Each provider module must export a `config: ProviderConfig`.
  * Modules may also export a `register(): void` function for custom stream functions.
@@ -29,17 +30,17 @@ interface BuildConfig {
   exclude: string[];
 }
 
-const buildConfigFiles = import.meta.glob('/providers.build.json', {
+const buildConfigFiles = import.meta.glob('/packages/webapp/providers.build.json', {
   eager: true,
   import: 'default',
 }) as Record<string, BuildConfig>;
 
-const buildConfig: BuildConfig = buildConfigFiles['/providers.build.json'] ?? {
+const buildConfig: BuildConfig = buildConfigFiles['/packages/webapp/providers.build.json'] ?? {
   include: ['*'],
   exclude: [],
 };
 
-/** Check if a pi-ai provider should be shown based on providers.build.json. */
+/** Check if a pi-ai provider should be shown based on packages/webapp/providers.build.json. */
 export function shouldIncludeProvider(providerId: string): boolean {
   const { include, exclude } = buildConfig;
   if (exclude.includes('*') || exclude.includes(providerId)) return false;
@@ -63,7 +64,7 @@ const builtInModules = import.meta.glob('./built-in/*.ts', {
 
 // ── Discover external providers ─────────────────────────────────────
 
-const externalModules = import.meta.glob('/providers/*.ts', {
+const externalModules = import.meta.glob('/packages/webapp/providers/*.ts', {
   eager: true,
 }) as Record<string, ProviderModule>;
 

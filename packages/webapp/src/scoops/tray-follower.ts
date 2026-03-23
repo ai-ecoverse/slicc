@@ -4,14 +4,12 @@ import type {
   FollowerBootstrapResponse,
   FollowerJoinRequest,
   TrayLeaderSummary,
-} from '../worker/shared.js';
-import type {
   TrayBootstrapEvent,
   TrayBootstrapStatus,
   TrayIceCandidate,
   TraySessionDescription,
   TurnIceServer,
-} from '../worker/tray-signaling.js';
+} from './tray-types.js';
 
 const log = createLogger('tray-follower');
 
