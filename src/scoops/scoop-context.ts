@@ -306,6 +306,16 @@ export class ScoopContext {
     this.agent?.clearMessages();
   }
 
+  /** Get the agent's current in-memory messages (for diagnostics). */
+  getAgentMessages(): AgentMessage[] {
+    return this.agent?.state?.messages ? structuredClone(this.agent.state.messages) : [];
+  }
+
+  /** Get the session ID used for agent-sessions DB persistence. */
+  getSessionId(): string {
+    return this.sessionId;
+  }
+
   /** Get the scoop's filesystem */
   getFS(): VirtualFS | RestrictedFS | null {
     return this.fs;
@@ -407,29 +417,13 @@ export class ScoopContext {
       case 'agent_end': {
         const messages = event.messages;
 
-        // Persist session (fire-and-forget — subscribe callback is sync)
-        if (this.sessionStore && messages.length > 0) {
-          this.sessionStore
-            .save({
-              id: this.sessionId,
-              messages,
-              config: {},
-              createdAt: this.sessionCreatedAt || Date.now(),
-              updatedAt: Date.now(),
-            })
-            .catch((err) => {
-              log.error('Failed to save agent session', {
-                folder: this.scoop.folder,
-                error: err instanceof Error ? err.message : String(err),
-              });
-            });
-        }
-
         if (messages.length > 0) {
           const last = messages[messages.length - 1];
           if (last.role === 'assistant' && (last as AssistantMessage).errorMessage) {
             const errorMsg = (last as AssistantMessage).errorMessage!;
-            // Check for image processing error first, then context overflow
+            // Check for image processing error first, then context overflow.
+            // Skip persistence — recovery will re-prompt and a subsequent
+            // agent_end will save the repaired history.
             if (!this.isRecovering && isImageProcessingError(errorMsg)) {
               this.recoverFromImageError(messages);
               break;
@@ -445,6 +439,27 @@ export class ScoopContext {
             // Successful completion — reset recovery flag
             this.isRecovering = false;
           }
+        }
+
+        // Persist session after recovery checks pass. Use the agent's full
+        // accumulated state, not event.messages (which only contains the
+        // current prompt cycle's messages).
+        const persistMessages = this.agent?.state?.messages ?? event.messages;
+        if (this.sessionStore && persistMessages.length > 0) {
+          this.sessionStore
+            .save({
+              id: this.sessionId,
+              messages: persistMessages,
+              config: {},
+              createdAt: this.sessionCreatedAt || Date.now(),
+              updatedAt: Date.now(),
+            })
+            .catch((err) => {
+              log.error('Failed to save agent session', {
+                folder: this.scoop.folder,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            });
         }
         break;
       }
