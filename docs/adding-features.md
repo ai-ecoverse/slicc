@@ -846,6 +846,20 @@ export const config: ProviderConfig = {
   },
 };
 
+// --- Silent token renewal (optional) ---
+// If your IdP supports prompt=none (silent re-auth via session cookie),
+// you can implement automatic token renewal in getValidAccessToken():
+//
+//   1. Check if token is about to expire (e.g., < 60s remaining)
+//   2. Build an authorize URL with prompt=none appended
+//   3. Call createOAuthLauncher() — it handles CLI popup, extension
+//      chrome.identity, and Electron relay automatically
+//   4. Extract new token from the redirect URL
+//   5. Save via saveOAuthAccount(), return the new token
+//
+// See providers/adobe.ts silentRenewToken() for a working example.
+// If renewal fails, fall back to throwing "session expired".
+
 // Register custom stream function that proxies through the corporate endpoint
 export function register(): void {
   registerApiProvider({
