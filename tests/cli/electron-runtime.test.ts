@@ -23,7 +23,7 @@ import {
   resolveElectronAppExecutablePath,
   selectBestOverlayTargets,
   shouldInjectElectronOverlayTarget,
-} from './electron-runtime.js';
+} from '../../packages/node-server/src/electron-runtime.js';
 
 describe('electron-runtime', () => {
   it('parses the default Electron float flags', () => {
@@ -64,7 +64,7 @@ describe('electron-runtime', () => {
       buildElectronServerSpawnConfig('/repo', { dev: true, cdpPort: 9444, platform: 'darwin' })
     ).toEqual({
       command: 'npx',
-      args: ['tsx', 'src/cli/index.ts', '--dev', '--serve-only', '--cdp-port=9444'],
+      args: ['tsx', 'packages/node-server/src/index.ts', '--dev', '--serve-only', '--cdp-port=9444'],
     });
   });
 
@@ -77,7 +77,7 @@ describe('electron-runtime', () => {
       })
     ).toEqual({
       command: '/custom/node',
-      args: ['/repo/dist/cli/index.js', '--serve-only', '--cdp-port=9555'],
+      args: ['/repo/dist/node-server/index.js', '--serve-only', '--cdp-port=9555'],
     });
   });
 
@@ -93,7 +93,7 @@ describe('electron-runtime', () => {
         })
       ).toEqual({
         command: '/npm/node',
-        args: ['/repo/dist/cli/index.js', '--serve-only', '--cdp-port=9666'],
+        args: ['/repo/dist/node-server/index.js', '--serve-only', '--cdp-port=9666'],
       });
     } finally {
       if (previous === undefined) {
