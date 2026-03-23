@@ -10,8 +10,8 @@ import {
   ScoopContext,
   isImageProcessingError,
   type ScoopContextCallbacks,
-} from './scoop-context.js';
-import type { RegisteredScoop } from './types.js';
+} from '../../src/scoops/scoop-context.js';
+import type { RegisteredScoop } from '../../src/scoops/types.js';
 
 // Minimal scoop registration for testing
 const testScoop: RegisteredScoop = {
@@ -1215,6 +1215,122 @@ describe('ScoopContext image error recovery', () => {
     expect(assistantMsg.content.filter((b: any) => b.type === 'toolCall')).toHaveLength(1);
     expect(assistantMsg.content.find((b: any) => b.type === 'toolCall').id).toBe('toolu_check');
     expect(assistantMsg.content.filter((b: any) => b.type === 'text')).toHaveLength(1);
+  });
+
+  it('preserves multiple ToolCall blocks in a single assistant message during image recovery', () => {
+    const { replaceMessages, mockPrompt } = injectMockAgentWithReplace(ctx, async () => {});
+    mockPrompt.mockResolvedValue(undefined);
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const imageErrorMessage = {
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
+      errorMessage: 'Could not process image: invalid image payload',
+      usage: { input: 100, output: 0 },
+      timestamp: Date.now(),
+    };
+
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'inspect screenshot' }] },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'Checking the screenshot now' },
+          { type: 'image', data: 'huge-image', mimeType: 'image/png' },
+          { type: 'toolCall', id: 'toolu_1', name: 'bash', arguments: { command: 'pwd' } },
+          { type: 'toolCall', id: 'toolu_2', name: 'bash', arguments: { command: 'ls' } },
+        ],
+        stopReason: 'tool_use',
+        usage: { input: 100, output: 100 },
+        timestamp: Date.now(),
+      },
+      imageErrorMessage,
+    ];
+
+    handler({ type: 'agent_end', messages });
+
+    const replacedMessages = replaceMessages.mock.calls[0][0];
+    const assistantMsg = replacedMessages[1];
+    expect(assistantMsg.content.filter((b: any) => b.type === 'image')).toHaveLength(0);
+    expect(assistantMsg.content.filter((b: any) => b.type === 'toolCall')).toHaveLength(2);
+    expect(assistantMsg.content.filter((b: any) => b.type === 'toolCall').map((b: any) => b.id)).toEqual([
+      'toolu_1',
+      'toolu_2',
+    ]);
+  });
+
+  it('preserves assistant ToolCalls when stripping image-only content during image recovery', () => {
+    const { replaceMessages, mockPrompt } = injectMockAgentWithReplace(ctx, async () => {});
+    mockPrompt.mockResolvedValue(undefined);
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const imageErrorMessage = {
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
+      errorMessage: 'image too large for provider',
+      usage: { input: 100, output: 0 },
+      timestamp: Date.now(),
+    };
+
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'use the screenshot' }] },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'image', data: 'only-image', mimeType: 'image/png' },
+          { type: 'toolCall', id: 'toolu_only', name: 'bash', arguments: { command: 'echo ok' } },
+        ],
+        stopReason: 'tool_use',
+        usage: { input: 100, output: 100 },
+        timestamp: Date.now(),
+      },
+      imageErrorMessage,
+    ];
+
+    handler({ type: 'agent_end', messages });
+
+    const replacedMessages = replaceMessages.mock.calls[0][0];
+    const assistantMsg = replacedMessages[1];
+    expect(assistantMsg.content).toEqual([
+      { type: 'toolCall', id: 'toolu_only', name: 'bash', arguments: { command: 'echo ok' } },
+    ]);
+  });
+
+  it('replaces assistant messages that become empty after image stripping', () => {
+    const { replaceMessages, mockPrompt } = injectMockAgentWithReplace(ctx, async () => {});
+    mockPrompt.mockResolvedValue(undefined);
+
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+    const imageErrorMessage = {
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
+      errorMessage: 'invalid image format',
+      usage: { input: 100, output: 0 },
+      timestamp: Date.now(),
+    };
+
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'what is in this image?' }] },
+      {
+        role: 'assistant',
+        content: [{ type: 'image', data: 'assistant-only-image', mimeType: 'image/png' }],
+        stopReason: 'stop',
+        usage: { input: 100, output: 100 },
+        timestamp: Date.now(),
+      },
+      imageErrorMessage,
+    ];
+
+    handler({ type: 'agent_end', messages });
+
+    const replacedMessages = replaceMessages.mock.calls[0][0];
+    const assistantMsg = replacedMessages[1];
+    expect(assistantMsg.content).toHaveLength(1);
+    expect(assistantMsg.content[0].type).toBe('text');
+    expect(assistantMsg.content[0].text).toContain('Image removed');
   });
 
   it('limits recovery to one attempt (prevents infinite loop)', () => {

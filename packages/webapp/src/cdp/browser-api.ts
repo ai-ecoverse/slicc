@@ -115,16 +115,21 @@ export class BrowserAPI {
   /**
    * List all pages — local + remote tray targets.
    * Remote targets have targetId format "{runtimeId}:{localTargetId}".
-   * Deduplicates by excluding registry entries whose tray-wide targetId matches a local page.
+   * Deduplicates leader-owned registry entries when they mirror a local page.
    */
   async listAllTargets(): Promise<PageInfo[]> {
     const local = await this.listPages();
     if (!this.trayTargetProvider) return local;
 
+    const shouldDeduplicateLeaderTargets = !this.remoteTargetInfo;
     const localIds = new Set(local.map((p) => p.targetId));
     const remoteEntries = this.trayTargetProvider.getTargets();
     const remote: PageInfo[] = remoteEntries
-      .filter((t) => !localIds.has(t.targetId))
+      .filter(
+        (t) =>
+          !shouldDeduplicateLeaderTargets ||
+          !(t.runtimeId === 'leader' && localIds.has(t.localTargetId))
+      )
       .map((t) => ({
         targetId: t.targetId,
         title: t.title,
