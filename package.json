@@ -4,15 +4,14 @@
   "description": "Browser-based coding agent with thin CLI server",
   "license": "Apache-2.0",
   "type": "module",
-  "main": "./dist/cli/index.js",
-  "types": "./dist/cli/index.d.ts",
+  "main": "./dist/node-server/index.js",
+  "types": "./dist/node-server/index.d.ts",
   "bin": {
-    "slicc": "dist/cli/index.js"
+    "slicc": "dist/node-server/index.js"
   },
   "files": [
-    "dist/cli",
-    "dist/ui",
-    "dist/tray-url-shared*"
+    "dist/node-server",
+    "dist/ui"
   ],
   "publishConfig": {
     "registry": "https://registry.npmjs.org/"
@@ -25,21 +24,21 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "dev": "npx tsx src/cli/index.ts --dev",
+    "dev": "npx tsx packages/node-server/src/index.ts --dev",
     "build": "npm run build:ui && npm run build:cli",
     "build:ui": "vite build",
-    "build:cli": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist/cli', { recursive: true, force: true });\" && tsc -p tsconfig.cli.json",
-    "start": "node dist/cli/index.js",
-    "start:electron": "node dist/cli/index.js --electron",
+    "build:cli": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist/node-server', { recursive: true, force: true });\" && tsc -p tsconfig.cli.json",
+    "start": "node dist/node-server/index.js",
+    "start:electron": "node dist/node-server/index.js --electron",
     "typecheck": "tsc --noEmit -p tsconfig.cli.json && tsc --noEmit -p tsconfig.json",
-    "dev:full": "npx tsx src/cli/index.ts --dev",
-    "dev:electron": "npx tsx src/cli/index.ts --dev --electron",
-    "qa:setup": "npm run build:extension && npx tsx src/cli/qa-setup.ts",
+    "dev:full": "npx tsx packages/node-server/src/index.ts --dev",
+    "dev:electron": "npx tsx packages/node-server/src/index.ts --dev --electron",
+    "qa:setup": "npm run build:extension && npx tsx packages/node-server/src/qa-setup.ts",
     "qa:leader": "npm run dev:full -- --lead https://slicc-tray-hub-staging.minivelos.workers.dev --profile=leader",
     "qa:follower": "npm run dev:full -- --profile=follower",
     "qa:extension": "npm run build:extension && npm run dev:full -- --profile=extension",
     "build:extension": "vite build --config vite.config.extension.ts",
-    "package:release": "node dist/cli/release-package.js",
+    "package:release": "node dist/node-server/release-package.js",
     "test": "vitest run",
     "test:server-integration": "vitest run --config test/server-integration/vitest.config.ts",
     "test:watch": "vitest",

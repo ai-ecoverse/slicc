@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { RegisteredScoop } from './types.js';
+import type { RegisteredScoop } from '../../src/scoops/types.js';
 
 const mocks = vi.hoisted(() => {
   const agentCtorCalls: any[] = [];
@@ -40,41 +40,41 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock('../core/index.js', () => ({
+vi.mock('../../src/core/index.js', () => ({
   Agent: mocks.MockAgent,
   adaptTools: mocks.adaptTools,
   createLogger: mocks.createLogger,
 }));
 
-vi.mock('../tools/index.js', () => ({
+vi.mock('../../src/tools/index.js', () => ({
   createFileTools: mocks.createFileTools,
   createBashTool: mocks.createBashTool,
   createSearchTools: mocks.createSearchTools,
   createJavaScriptTool: mocks.createJavaScriptTool,
 }));
 
-vi.mock('../shell/index.js', () => ({
+vi.mock('../../src/shell/index.js', () => ({
   WasmShell: mocks.WasmShell,
 }));
 
-vi.mock('../ui/provider-settings.js', () => ({
+vi.mock('../../src/ui/provider-settings.js', () => ({
   getApiKey: mocks.getApiKey,
   getSelectedProvider: mocks.getSelectedProvider,
   resolveCurrentModel: mocks.resolveCurrentModel,
   resolveModelById: mocks.resolveModelById,
 }));
 
-vi.mock('./skills.js', () => ({
+vi.mock('../../src/scoops/skills.js', () => ({
   createDefaultSkills: mocks.createDefaultSkills,
   loadSkills: mocks.loadSkills,
   formatSkillsForPrompt: mocks.formatSkillsForPrompt,
 }));
 
-vi.mock('./nanoclaw-tools.js', () => ({
+vi.mock('../../src/scoops/nanoclaw-tools.js', () => ({
   createNanoClawTools: mocks.createNanoClawTools,
 }));
 
-const { ScoopContext } = await import('./scoop-context.js');
+const { ScoopContext } = await import('../../src/scoops/scoop-context.js');
 
 const testScoop: RegisteredScoop = {
   jid: 'scoop_test_1',

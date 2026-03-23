@@ -2,7 +2,7 @@ import {
   buildCanonicalTrayLaunchUrl,
   normalizeTrayWorkerBaseUrl,
   parseTrayJoinUrl,
-} from '../tray-url-shared.js';
+} from './tray-url-shared.js';
 
 export interface CliLaunchUrlOptions {
   serveOrigin: string;

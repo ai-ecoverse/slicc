@@ -89,7 +89,7 @@ export default tseslint.config(
   },
   {
     // CLI / Node.js files - Node globals only
-    files: ['src/cli/**/*.ts', 'src/worker/**/*.ts', 'vite.config*.ts'],
+    files: ['packages/node-server/src/**/*.ts', 'packages/cloudflare-worker/src/**/*.ts', 'vite.config*.ts'],
     languageOptions: {
       globals: {
         ...globals.node,

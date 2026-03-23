@@ -12,7 +12,7 @@ import {
   parseCdpPortFromStderr,
   resolveChromeLaunchProfile,
   waitForCdpPortFromStderr,
-} from './chrome-launch.js';
+} from '../../packages/node-server/src/chrome-launch.js';
 
 const tempDirs: string[] = [];
 
