@@ -766,7 +766,7 @@ export class ChatPanel {
   private setStreamingState(streaming: boolean): void {
     this.isStreaming = streaming;
     // Lock/unlock model selector based on streaming state
-    this.renderModelSelector();
+    try { this.renderModelSelector(); } catch { /* non-fatal — button states below still apply */ }
     // Show stop button during streaming, send button otherwise — but keep textarea enabled
     this.stopBtn.style.display = streaming ? 'flex' : 'none';
     this.sendBtn.style.display = streaming ? 'none' : 'flex';
