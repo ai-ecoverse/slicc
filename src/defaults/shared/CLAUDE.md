@@ -130,7 +130,7 @@ mount /workspace/myproject
 
 Type `commands` in the terminal to see all available commands. Key commands:
 
-- **skill list/install/uninstall** — Manage skills from /workspace/skills/
+- **skill list/info/read** — Inspect discoverable skills from `/workspace/skills` plus accessible `.agents/skills` / `.claude/skills` roots; `skill install/uninstall` only manage native `/workspace/skills` packages
 - **upskill** — Install skills from GitHub (`upskill owner/repo`) or ClawHub (`upskill clawhub:name`)
 - **webhook/crontask** — Set up licks (external event triggers)
 - **sprinkle** — Manage sprinkles: `sprinkle list`, `sprinkle open <name>`, `sprinkle close <name>`, `sprinkle send <name> '<json>'` (push data), `sprinkle chat '<html>'` (inline chat UI)
@@ -244,7 +244,7 @@ ALL sprinkle work goes through scoops via `feed_scoop`. See Rules 3-5 in the `sp
 
 ## Skills
 
-Skills in `/workspace/skills/` extend your capabilities. Each has a SKILL.md with instructions.
+Skills in native `/workspace/skills/` extend your capabilities, and SLICC also discovers accessible compatibility skills from `.agents/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md` anywhere in the reachable VFS. Only native `/workspace/skills/` entries are install-managed; compatibility-discovered skills stay read-only unless explicitly copied in.
 
 ## .jsh Files (JavaScript Shell Scripts)
 

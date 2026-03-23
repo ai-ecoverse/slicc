@@ -2,6 +2,7 @@ import { defineCommand } from 'just-bash';
 import type { Command, CommandContext, SecureFetch } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import { VirtualFS as SharedVirtualFS } from '../../fs/index.js';
+import type { DiscoveredSkill } from '../../skills/types.js';
 import { unzipSync } from 'fflate';
 import { consumeCachedBinaryByUrl } from '../binary-cache.js';
 
@@ -285,6 +286,94 @@ function formatGitHubFailure(
   return `GitHub request for ${resourceLabel} failed (HTTP ${response.status}${statusDetail}).${detailSuffix}`;
 }
 
+function formatDiscoveryScope(): string {
+  return 'Discovery roots: /workspace/skills plus accessible **/.agents/skills/* and **/.claude/skills/* anywhere in the VFS.\n';
+}
+
+function formatManagementScope(): string {
+  return 'Only native /workspace/skills entries are install-managed; compatibility-discovered .agents/.claude skills remain read-only.\n';
+}
+
+function formatSkillSource(source: DiscoveredSkill['source']): string {
+  switch (source) {
+    case 'native':
+      return 'native';
+    case 'agents':
+      return '.agents';
+    case 'claude':
+      return '.claude';
+  }
+}
+
+function isInstallManagedSkill(skill: DiscoveredSkill): boolean {
+  return skill.source === 'native';
+}
+
+function formatSkillStatus(skill: DiscoveredSkill): string {
+  if (!isInstallManagedSkill(skill)) {
+    if (skill.installed && skill.installedVersion) {
+      return `compatibility (state v${skill.installedVersion})`;
+    }
+    return 'compatibility (read-only)';
+  }
+
+  if (skill.installed && skill.installedVersion) {
+    return `installed (v${skill.installedVersion})`;
+  }
+
+  return 'available';
+}
+
+function formatManagementMode(skill: DiscoveredSkill): string {
+  return isInstallManagedSkill(skill)
+    ? 'install-managed (/workspace/skills)'
+    : 'compatibility-only (read-only)';
+}
+
+function formatDiscoveredSkills(discovered: DiscoveredSkill[], heading: string): string {
+  let output = `${heading}:\n\n`;
+  output += '  NAME                 VERSION    SOURCE    STATUS\n';
+  output += '  ─────────────────────────────────────────────────────────────\n';
+
+  for (const skill of discovered) {
+    output += `  ${skill.name.padEnd(20)} ${skill.manifest.version.padEnd(10)} ${formatSkillSource(skill.source).padEnd(9)} ${formatSkillStatus(skill)}\n`;
+  }
+
+  output += `\n${formatDiscoveryScope()}`;
+  output += formatManagementScope();
+  return output;
+}
+
+function formatSkillInfo(skill: DiscoveredSkill): string {
+  let output = `Skill: ${skill.manifest.skill}\n`;
+  output += `Version: ${skill.manifest.version}\n`;
+  output += `Description: ${skill.manifest.description || '(none)'}\n`;
+  output += `Source: ${formatSkillSource(skill.source)}\n`;
+  output += `Source root: ${skill.sourceRoot}\n`;
+  output += `Management: ${formatManagementMode(skill)}\n`;
+  output += `Status: ${formatSkillStatus(skill)}\n`;
+
+  if (skill.skillFilePath) {
+    output += `Instructions: ${skill.skillFilePath}\n`;
+  }
+
+  if (skill.shadowedPaths?.length) {
+    output += 'Shadowed paths:\n';
+    for (const path of skill.shadowedPaths) {
+      output += `  - ${path}\n`;
+    }
+  }
+
+  return output;
+}
+
+function formatCompatibilityMutationError(
+  commandName: 'skill' | 'upskill',
+  skill: DiscoveredSkill,
+): string {
+  return `${commandName}: "${skill.name}" is discoverable from ${skill.sourceRoot} but remains compatibility-only/read-only. Only native /workspace/skills entries are install-managed.\n`;
+}
+
 function upskillHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout: `usage: upskill <command> [options]
@@ -293,12 +382,14 @@ Install skills from GitHub repositories, ClawHub, or Tessl registry.
 
 Commands:
   search <query>           Search ClawHub + Tessl for skills
-  list                     List locally installed skills
-  info <name>              Show details about a local skill
+  list                     List discoverable local skills
+  info <name>              Show details about a discoverable local skill
   read <name>              Read the SKILL.md instructions
   <owner/repo>             Install skill(s) from GitHub repository
   <clawhub-url>            Install skill from ClawHub URL
   tessl:<name>             Install skill from Tessl registry
+
+${formatDiscoveryScope()}${formatManagementScope()}
 
 GitHub Installation:
   upskill owner/repo                     List available skills in repo
@@ -1227,21 +1318,17 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
 
         if (discovered.length === 0) {
           return {
-            stdout: 'No skills found in /workspace/skills/\n',
+            stdout: `No discoverable local skills found.\n\n${formatDiscoveryScope()}${formatManagementScope()}`,
             stderr: '',
             exitCode: 0,
           };
         }
 
-        let output = 'Installed skills:\n\n';
-        for (const skill of discovered) {
-          output += `  ${skill.name.padEnd(25)} ${skill.manifest.version.padEnd(10)}\n`;
-          if (skill.manifest.description) {
-            output += `    ${skill.manifest.description.slice(0, 60)}${skill.manifest.description.length > 60 ? '...' : ''}\n`;
-          }
-        }
-
-        return { stdout: output, stderr: '', exitCode: 0 };
+        return {
+          stdout: formatDiscoveredSkills(discovered, 'Discoverable local skills'),
+          stderr: '',
+          exitCode: 0,
+        };
       } else if (arg === 'info' || arg === 'read') {
         // Delegate to skills module
         const skillName = args[i + 1];
@@ -1264,10 +1351,7 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
             };
           }
 
-          let output = `Skill: ${skill.manifest.skill}\n`;
-          output += `Version: ${skill.manifest.version}\n`;
-          output += `Description: ${skill.manifest.description || '(none)'}\n`;
-          return { stdout: output, stderr: '', exitCode: 0 };
+          return { stdout: formatSkillInfo(skill), stderr: '', exitCode: 0 };
         } else {
           const instructions = await skills.readSkillInstructions(fs, skillName);
           if (instructions === null) {
@@ -1446,11 +1530,13 @@ export function createSkillCommand(fs: VirtualFS): Command {
         stdout: `usage: skill <command> [options]
 
 Commands:
-  list                   List installed skills
+  list                   List discoverable skills and management status
   info <name>            Show details about a skill
   read <name>            Read the SKILL.md instructions
-  install <name>         Install a local skill (apply manifest)
-  uninstall <name>       Uninstall a skill
+  install <name>         Install a native /workspace/skills skill (apply manifest)
+  uninstall <name>       Uninstall a native /workspace/skills skill
+
+${formatDiscoveryScope()}${formatManagementScope()}
 
 For installing skills from registries or GitHub, use 'upskill':
   upskill search "query"           Search ClawHub + Tessl
@@ -1478,23 +1564,17 @@ Examples:
 
           if (discovered.length === 0) {
             return {
-              stdout:
-                'No skills found in /workspace/skills/\n\nInstall skills with: upskill owner/repo --all\n',
+              stdout: `No discoverable skills found.\n\n${formatDiscoveryScope()}${formatManagementScope()}\nInstall install-managed skills with: upskill owner/repo --all\n`,
               stderr: '',
               exitCode: 0,
             };
           }
 
-          let output = 'Available skills:\n\n';
-          output += '  NAME                 VERSION    STATUS\n';
-          output += '  ────────────────────────────────────────\n';
-
-          for (const skill of discovered) {
-            const status = skill.installed ? `installed (v${skill.installedVersion})` : 'available';
-            output += `  ${skill.name.padEnd(20)} ${skill.manifest.version.padEnd(10)} ${status}\n`;
-          }
-
-          return { stdout: output, stderr: '', exitCode: 0 };
+          return {
+            stdout: formatDiscoveredSkills(discovered, 'Discoverable skills'),
+            stderr: '',
+            exitCode: 0,
+          };
         }
 
         case 'info': {
@@ -1508,12 +1588,7 @@ Examples:
             return { stdout: '', stderr: `skill: "${name}" not found\n`, exitCode: 1 };
           }
 
-          let output = `Skill: ${skill.manifest.skill}\n`;
-          output += `Version: ${skill.manifest.version}\n`;
-          output += `Description: ${skill.manifest.description || '(none)'}\n`;
-          output += `Status: ${skill.installed ? `installed (v${skill.installedVersion})` : 'not installed'}\n`;
-
-          return { stdout: output, stderr: '', exitCode: 0 };
+          return { stdout: formatSkillInfo(skill), stderr: '', exitCode: 0 };
         }
 
         case 'read': {
@@ -1536,6 +1611,15 @@ Examples:
             return { stdout: '', stderr: 'skill: install requires a skill name\n', exitCode: 1 };
           }
 
+          const discovered = await skills.getSkillInfo(fs, name);
+          if (discovered && !isInstallManagedSkill(discovered)) {
+            return {
+              stdout: '',
+              stderr: formatCompatibilityMutationError('skill', discovered),
+              exitCode: 1,
+            };
+          }
+
           const result = await skills.applySkill(fs, name);
           if (result.success) {
             await refreshSprinklesAfterInstall();
@@ -1552,6 +1636,15 @@ Examples:
           const name = args[1];
           if (!name) {
             return { stdout: '', stderr: 'skill: uninstall requires a skill name\n', exitCode: 1 };
+          }
+
+          const discovered = await skills.getSkillInfo(fs, name);
+          if (discovered && !isInstallManagedSkill(discovered)) {
+            return {
+              stdout: '',
+              stderr: `skill: "${name}" is a compatibility skill discovered from ${discovered.sourceRoot} (read-only). Only native /workspace/skills entries can be uninstalled.\n`,
+              exitCode: 1,
+            };
           }
 
           const result = await skills.uninstallSkill(fs, name);

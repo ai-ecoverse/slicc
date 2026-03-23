@@ -4,88 +4,77 @@
 
 import type { VirtualFS } from '../fs/index.js';
 import type { DiscoveredSkill } from './types.js';
-import { MANIFEST_FILE, SKILL_FILE } from './constants.js';
+import { discoverSkillCandidates, resolveSkillNameCollisions } from './catalog.js';
 import { readManifest } from './manifest.js';
 import { readState } from './state.js';
 
 /**
- * Discover all available skills in the /workspace/skills directory.
+ * Discover all available skills from the native skills directory plus
+ * recursively reachable compatibility roots.
  */
-export async function discoverSkills(
-  fs: VirtualFS,
-  skillsDir: string = '/workspace/skills'
-): Promise<DiscoveredSkill[]> {
-  const skillsPath = skillsDir;
-  const discovered: DiscoveredSkill[] = [];
-
+export async function discoverSkills(fs: VirtualFS, skillsDir: string = '/workspace/skills'): Promise<DiscoveredSkill[]> {
   // Get current state to check installation status
   const state = await readState(fs);
-  const installedMap = new Map(state.applied_skills.map((s) => [s.name, s.version]));
+  const installedMap = new Map(
+    state.applied_skills.map((s) => [s.name, s.version]),
+  );
+  const discovered: DiscoveredSkill[] = [];
+  const candidates = await discoverSkillCandidates(fs, skillsDir);
 
-  try {
-    const entries = await fs.readDir(skillsPath);
+  for (const candidate of candidates) {
+    try {
+      if (candidate.hasManifest) {
+        const manifest = await readManifest(fs, candidate.path);
+        const installed = installedMap.has(manifest.skill);
 
-    for (const entry of entries) {
-      if (entry.type !== 'directory') continue;
-
-      const skillDir = `${skillsPath}/${entry.name}`;
-
-      // Check if this looks like a skill (has manifest or SKILL.md)
-      let hasManifest = false;
-      let hasSkillMd = false;
-
-      try {
-        await fs.stat(`${skillDir}/${MANIFEST_FILE}`);
-        hasManifest = true;
-      } catch {
-        // No manifest
+        discovered.push({
+          name: manifest.skill,
+          source: candidate.source,
+          sourceRoot: candidate.sourceRoot,
+          path: candidate.path,
+          skillFilePath: candidate.skillFilePath,
+          manifest,
+          installed,
+          installedVersion: installed
+            ? installedMap.get(manifest.skill)
+            : undefined,
+        });
+        continue;
       }
 
-      try {
-        await fs.stat(`${skillDir}/${SKILL_FILE}`);
-        hasSkillMd = true;
-      } catch {
-        // No SKILL.md
-      }
-
-      if (!hasManifest && !hasSkillMd) continue;
-
-      try {
-        if (hasManifest) {
-          const manifest = await readManifest(fs, skillDir);
-          const installed = installedMap.has(manifest.skill);
-
-          discovered.push({
-            name: manifest.skill,
-            path: skillDir,
-            manifest,
-            installed,
-            installedVersion: installed ? installedMap.get(manifest.skill) : undefined,
-          });
-        } else {
-          // SKILL.md only - create minimal manifest from directory name
-          discovered.push({
-            name: entry.name,
-            path: skillDir,
-            manifest: {
-              skill: entry.name,
-              version: '1.0.0',
-              description: `Skill from ${entry.name}`,
-            },
-            installed: installedMap.has(entry.name),
-            installedVersion: installedMap.get(entry.name),
-          });
-        }
-      } catch (err) {
-        // Skip skills with invalid manifests
-        console.warn(`Skipping invalid skill at ${skillDir}:`, err);
-      }
+      const name = candidate.path.split('/').pop() ?? candidate.path;
+      discovered.push({
+        name,
+        source: candidate.source,
+        sourceRoot: candidate.sourceRoot,
+        path: candidate.path,
+        skillFilePath: candidate.skillFilePath,
+        manifest: {
+          skill: name,
+          version: '1.0.0',
+          description: `Skill from ${name}`,
+        },
+        installed: installedMap.has(name),
+        installedVersion: installedMap.get(name),
+      });
+    } catch (err) {
+      // Skip skills with invalid manifests
+      console.warn(`Skipping invalid skill at ${candidate.path}:`, err);
     }
-  } catch {
-    // Skills directory doesn't exist yet
   }
 
-  return discovered;
+  const { winners, collisions } = resolveSkillNameCollisions(discovered, (skill) => skill.name);
+  const collisionPaths = new Map(
+    collisions.map((collision) => [
+      collision.winner.path,
+      collision.shadowed.map((shadowed) => shadowed.path),
+    ]),
+  );
+
+  return winners.map((skill) => ({
+    ...skill,
+    shadowedPaths: collisionPaths.get(skill.path),
+  }));
 }
 
 /**
@@ -94,7 +83,7 @@ export async function discoverSkills(
 export async function getSkillInfo(
   fs: VirtualFS,
   skillName: string,
-  skillsDir: string = '/workspace/skills'
+  skillsDir: string = '/workspace/skills',
 ): Promise<DiscoveredSkill | null> {
   const skills = await discoverSkills(fs, skillsDir);
   return skills.find((s) => s.name === skillName) || null;
@@ -106,12 +95,13 @@ export async function getSkillInfo(
 export async function readSkillInstructions(
   fs: VirtualFS,
   skillName: string,
-  skillsDir: string = '/workspace/skills'
+  skillsDir: string = '/workspace/skills',
 ): Promise<string | null> {
-  const skillDir = `${skillsDir}/${skillName}`;
+  const skill = await getSkillInfo(fs, skillName, skillsDir);
+  if (!skill?.skillFilePath) return null;
 
   try {
-    return await fs.readTextFile(`${skillDir}/${SKILL_FILE}`);
+    return await fs.readTextFile(skill.skillFilePath);
   } catch {
     return null;
   }
