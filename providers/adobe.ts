@@ -195,12 +195,25 @@ export const config: ProviderConfig = {
   getModelIds: () => {
     // Prefer the authenticated /v1/models response (has all available models)
     for (const models of modelsCache.values()) {
-      if (models.length) return models.map(m => ({ id: m.id, name: m.name ?? m.id }));
+      if (models.length) {
+        const result = models.map(m => ({ id: m.id, name: m.name ?? m.id }));
+        // Persist so models survive page refresh
+        try { localStorage.setItem('slicc-adobe-models', JSON.stringify(result)); } catch {}
+        return result;
+      }
     }
     // Fall back to /v1/config response (unauthenticated, may be incomplete)
     for (const config of proxyConfigCache.values()) {
       if (config.models?.length) return config.models;
     }
+    // Fall back to persisted models from a previous session
+    try {
+      const persisted = localStorage.getItem('slicc-adobe-models');
+      if (persisted) {
+        const models = JSON.parse(persisted) as Array<{ id: string; name?: string }>;
+        if (models.length) return models;
+      }
+    } catch {}
     // Default before any config is fetched
     return [
       { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
