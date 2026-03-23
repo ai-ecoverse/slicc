@@ -471,7 +471,7 @@ const streamAdobe = (
           ...model,
           baseUrl: `${getProxyEndpoint()}/v1`,
           api: 'openai-completions' as Api,
-          compat: { supportsStore: false, supportsUsageInStreaming: false, ...(model as any).compat },
+          compat: { supportsStore: false, supportsUsageInStreaming: false, supportsDeveloperRole: false, ...(model as any).compat },
         };
         const inner = streamOpenAICompletions(proxyModel as any, context, { ...options, apiKey: accessToken } as any);
         for await (const event of inner) stream.push(event as any);
@@ -508,7 +508,7 @@ const streamSimpleAdobe = (
           ...model,
           baseUrl: `${getProxyEndpoint()}/v1`,
           api: 'openai-completions' as Api,
-          compat: { supportsStore: false, supportsUsageInStreaming: false, ...(model as any).compat },
+          compat: { supportsStore: false, supportsUsageInStreaming: false, supportsDeveloperRole: false, ...(model as any).compat },
         };
         const inner = streamSimpleOpenAICompletions(proxyModel as any, context, { ...options, apiKey: accessToken } as any);
         for await (const event of inner) stream.push(event as any);
