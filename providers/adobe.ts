@@ -18,7 +18,7 @@
  * are hardcoded; the proxy endpoint (base URL) must be configured at runtime.
  */
 
-import type { ProviderConfig, OAuthLauncher } from '../src/providers/types.js';
+import type { ProviderConfig, OAuthLauncher } from '../packages/webapp/src/providers/types.js';
 import {
   registerApiProvider,
   streamAnthropic,
@@ -37,7 +37,7 @@ import {
   saveOAuthAccount,
   getAccounts,
   getBaseUrlForProvider,
-} from '../src/ui/provider-settings.js';
+} from '../packages/webapp/src/ui/provider-settings.js';
 
 // ── Config ──────────────────────────────────────────────────────────
 
@@ -369,7 +369,7 @@ async function silentRenewToken(): Promise<string | null> {
       const authorizeUrl = `${imsHost(imsEnv)}/ims/authorize/v2?${params}`;
 
       // Use the same launcher as normal login — handles CLI, extension, and Electron
-      const { createOAuthLauncher } = await import('../src/providers/oauth-service.js');
+      const { createOAuthLauncher } = await import('../packages/webapp/src/providers/oauth-service.js');
       const launcher = createOAuthLauncher();
       const redirectUrl = await launcher(authorizeUrl);
 

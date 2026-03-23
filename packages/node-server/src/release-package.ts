@@ -13,7 +13,7 @@ import { fileURLToPath } from 'url';
 import { deflateRawSync } from 'zlib';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
-const PROJECT_ROOT = resolve(__dirname, '..', '..');
+const PROJECT_ROOT = resolve(__dirname, '..', '..', '..');
 const RELEASE_DIR = resolve(PROJECT_ROOT, 'artifacts', 'release');
 const FIXED_ZIP_DATE = new Date(Date.UTC(1980, 0, 1, 0, 0, 0));
 const ZIP_VERSION = 20;
@@ -250,7 +250,7 @@ function createExtensionArchive(metadata: ExtensionMetadata): string {
 }
 
 function createNpmPackageTarball(): string {
-  requirePath(resolve(PROJECT_ROOT, 'dist', 'cli'), 'CLI build output');
+  requirePath(resolve(PROJECT_ROOT, 'dist', 'node-server'), 'CLI build output');
   requirePath(resolve(PROJECT_ROOT, 'dist', 'ui'), 'UI build output');
 
   const npm = resolveNpmCommand();
@@ -279,7 +279,7 @@ function writeReleaseManifest(manifest: ReleaseManifest): string {
 
 export function packageReleaseArtifacts(): ReleaseManifest {
   const packageJson = readJsonFile<PackageMetadata>(resolve(PROJECT_ROOT, 'package.json'));
-  const extensionManifest = readJsonFile<ExtensionMetadata>(resolve(PROJECT_ROOT, 'manifest.json'));
+  const extensionManifest = readJsonFile<ExtensionMetadata>(resolve(PROJECT_ROOT, 'packages/chrome-extension/manifest.json'));
   assertMatchingVersions(packageJson.version, extensionManifest.version);
 
   rmSync(RELEASE_DIR, { recursive: true, force: true });
