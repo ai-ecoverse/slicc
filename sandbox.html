@@ -2,6 +2,22 @@
 <html>
 <head>
 <script>
+/**
+ * SLICC Code Execution Sandbox
+ *
+ * This is a Chrome manifest-declared sandbox page (CSP-exempt by design).
+ * It runs JavaScript code authored by the user through the AI coding agent,
+ * similar to a browser DevTools console or REPL.
+ *
+ * Security model:
+ * - Code originates from user-directed AI agent actions, NOT from remote servers
+ * - The sandbox communicates with the parent page ONLY via postMessage
+ * - The sandbox can only access the virtual filesystem (VFS) through the bridge
+ * - It has no access to chrome.* APIs, cookies, or browsing data
+ * - Full HTML documents are rendered in a nested iframe with sandbox="allow-scripts"
+ *
+ * This pattern is used by Chrome DevTools, CodePen, and similar developer tools.
+ */
 const pendingVfs = new Map();
 const pendingFetch = new Map();
 let vfsIdCounter = 0;
@@ -75,6 +91,8 @@ function vfsCallBinary(op, args, binaryData) {
 
 // Listen for messages from parent
 addEventListener('message', async (e) => {
+  // Only accept messages from our parent page (the extension side panel or offscreen doc)
+  if (e.source !== parent && e.source !== window) return;
   const msg = e.data;
   if (!msg || !msg.type) return;
 

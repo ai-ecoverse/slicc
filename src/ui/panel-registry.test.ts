@@ -36,8 +36,8 @@ describe('PanelRegistry', () => {
     reg.register(makeDescriptor({ id: 'files', zone: 'drawer' }));
     reg.register(makeDescriptor({ id: 'memory', zone: 'drawer' }));
 
-    expect(reg.getByZone('primary').map(d => d.id)).toEqual(['terminal']);
-    expect(reg.getByZone('drawer').map(d => d.id)).toEqual(['files', 'memory']);
+    expect(reg.getByZone('primary').map((d) => d.id)).toEqual(['terminal']);
+    expect(reg.getByZone('drawer').map((d) => d.id)).toEqual(['files', 'memory']);
   });
 
   it('returns closed panels', () => {
@@ -45,7 +45,7 @@ describe('PanelRegistry', () => {
     reg.register(makeDescriptor({ id: 'terminal', zone: 'primary' }));
     reg.register(makeDescriptor({ id: 'welcome', zone: null }));
 
-    expect(reg.getClosed().map(d => d.id)).toEqual(['welcome']);
+    expect(reg.getClosed().map((d) => d.id)).toEqual(['welcome']);
   });
 
   it('moves a panel to a different zone', () => {
@@ -59,7 +59,7 @@ describe('PanelRegistry', () => {
     const reg = new PanelRegistry();
     reg.register(makeDescriptor({ id: 'terminal', zone: 'primary' }));
     reg.setZone('terminal', null);
-    expect(reg.getClosed().map(d => d.id)).toEqual(['terminal']);
+    expect(reg.getClosed().map((d) => d.id)).toEqual(['terminal']);
   });
 
   it('lists all registered ids', () => {

@@ -1,3 +1,17 @@
+// ── CSS imports (order matters for specificity) ──────────────────────
+import './styles/tokens.css';
+import './styles/base.css';
+import './styles/layout.css';
+import './styles/header.css';
+import './styles/chat.css';
+import './styles/tools.css';
+import './styles/markdown.css';
+import './styles/panels.css';
+import './styles/tabs.css';
+import './styles/dialog.css';
+import './styles/sprinkle-components.css';
+import './styles/feedback.css';
+
 /**
  * Main entry point for the Browser Coding Agent UI.
  *
@@ -9,6 +23,7 @@
 import { Layout } from './layout.js';
 import { getApiKey, showProviderSettings, applyProviderDefaults } from './provider-settings.js';
 import { initTheme } from './theme.js';
+import { initTooltips } from './tooltip.js';
 import type { AgentHandle, AgentEvent as UIAgentEvent, ChatMessage } from './types.js';
 import { createLogger } from '../core/index.js';
 import type { VirtualFS } from '../fs/index.js';
@@ -22,7 +37,11 @@ import { BrowserAPI } from '../cdp/index.js';
 import { Orchestrator } from '../scoops/index.js';
 import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
-import { LeaderTrayManager, createTrayFetch, getLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
+import {
+  LeaderTrayManager,
+  createTrayFetch,
+  getLeaderTrayRuntimeStatus,
+} from '../scoops/tray-leader.js';
 import {
   DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL,
   DEFAULT_STAGING_TRAY_WORKER_BASE_URL,
@@ -32,7 +51,12 @@ import {
   resolveTrayRuntimeConfig,
   TRAY_JOIN_STORAGE_KEY,
 } from '../scoops/tray-runtime-config.js';
-import { FollowerTrayManager, LeaderTrayPeerManager, startFollowerWithAutoReconnect, type FollowerAutoReconnectHandle } from '../scoops/tray-webrtc.js';
+import {
+  FollowerTrayManager,
+  LeaderTrayPeerManager,
+  startFollowerWithAutoReconnect,
+  type FollowerAutoReconnectHandle,
+} from '../scoops/tray-webrtc.js';
 import { LeaderSyncManager } from '../scoops/tray-leader-sync.js';
 import { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
 import {
@@ -44,7 +68,10 @@ import {
   resolveUiRuntimeMode,
   shouldUseRuntimeModeTrayDefaults,
 } from './runtime-mode.js';
-import { setConnectedFollowersGetter, setTrayResetter } from '../shell/supplemental-commands/host-command.js';
+import {
+  setConnectedFollowersGetter,
+  setTrayResetter,
+} from '../shell/supplemental-commands/host-command.js';
 import { setRsyncSendFsRequest } from '../shell/supplemental-commands/rsync-command.js';
 import {
   setPlaywrightTeleportBestFollower,
@@ -52,6 +79,7 @@ import {
 } from '../shell/supplemental-commands/playwright-command.js';
 import { SprinkleManager } from './sprinkle-manager.js';
 import { initTelemetry } from './telemetry.js';
+import { showTelemetryConsent } from './telemetry-consent.js';
 
 const log = createLogger('main');
 
@@ -115,7 +143,7 @@ function createSkillDropToast(): (message: string, kind: SkillDropNoticeKind) =>
 function registerSkillDropInstall(
   fs: VirtualFS,
   onNotice: (message: string, kind: SkillDropNoticeKind) => void,
-  onInstalled: () => Promise<void>,
+  onInstalled: () => Promise<void>
 ): void {
   const overlay = createSkillDropOverlay();
   let dragDepth = 0;
@@ -183,7 +211,7 @@ function registerSkillDropInstall(
       await onInstalled();
       onNotice(
         `Installed "${result.skillName}" to ${result.destinationPath} (${result.fileCount} files). Run "skill install ${result.skillName}" to apply it.`,
-        'success',
+        'success'
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -268,7 +296,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     client.selectedScoopJid = scoop.jid;
     layout.panels.memory.setSelectedScoop(scoop.jid);
     layout.setScoopSwitcherSelected?.(scoop.jid);
-    layout.panels.scoops.refreshScoops();
+    layout.panels.scoops.setSelectedJid(scoop.jid);
 
     // switchToContext loads messages from the shared browser-coding-agent IndexedDB
     // (written by the offscreen bridge). No buffer reconciliation needed.
@@ -287,6 +315,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       layout.updateScoopSwitcherStatus?.(scoopJid, status);
 
       if (selectedScoop?.jid === scoopJid) {
+        layout.setAgentProcessing(status === 'processing');
         if (status === 'processing') {
           layout.panels.chat.setProcessing(true);
         } else if (status === 'ready') {
@@ -305,7 +334,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     },
     onScoopListUpdate: () => {
       // Clean up UI sessions for dropped scoops
-      const currentFolders = new Set(client.getScoops().map(s => s.folder));
+      const currentFolders = new Set(client.getScoops().map((s) => s.folder));
       for (const folder of knownScoopFolders) {
         if (!currentFolders.has(folder)) {
           layout.panels.chat.deleteSessionById(`session-${folder}`);
@@ -319,7 +348,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       // If no scoop selected yet, pick the cone
       if (!selectedScoop) {
         const scoops = client.getScoops();
-        const cone = scoops.find(s => s.isCone);
+        const cone = scoops.find((s) => s.isCone);
         if (cone) {
           selectedScoop = cone;
           client.selectedScoopJid = cone.jid;
@@ -329,9 +358,10 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     },
     onIncomingMessage: (scoopJid, message) => {
       if (selectedScoop?.jid === scoopJid) {
-        const content = message.channel === 'delegation'
-          ? `**[Instructions from sliccy]**\n\n${message.content}`
-          : message.content;
+        const content =
+          message.channel === 'delegation'
+            ? `**[Instructions from sliccy]**\n\n${message.content}`
+            : message.content;
         layout.panels.chat.addUserMessage(content);
       }
     },
@@ -340,24 +370,29 @@ async function mainExtension(app: HTMLElement): Promise<void> {
         log.info('Offscreen engine ready, scoop count:', client.getScoops().length);
 
         if (window.localStorage.getItem(TRAY_JOIN_STORAGE_KEY)) {
-          void chrome.runtime.sendMessage({
-            source: 'panel' as const,
-            payload: { type: 'refresh-tray-runtime' as const },
-          }).catch(() => {
-            // Offscreen may already be syncing runtime state.
-          });
+          void chrome.runtime
+            .sendMessage({
+              source: 'panel' as const,
+              payload: { type: 'refresh-tray-runtime' as const },
+            })
+            .catch(() => {
+              // Offscreen may already be syncing runtime state.
+            });
         }
 
         // Pick the cone (or first scoop) and run full scoop selection.
         // switchToContext inside selectScoop loads from shared IndexedDB.
-        const target = selectedScoop ?? client.getScoops().find(s => s.isCone) ?? client.getScoops()[0];
+        const target =
+          selectedScoop ?? client.getScoops().find((s) => s.isCone) ?? client.getScoops()[0];
         if (target) {
           selectedScoop = target;
           client.selectedScoopJid = target.jid;
           await selectScoop(target);
         }
       } catch (err) {
-        log.error('Failed to initialize on ready', { error: err instanceof Error ? err.message : String(err) });
+        log.error('Failed to initialize on ready', {
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     },
   });
@@ -410,13 +445,21 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     (event: LickEvent) => {
       // Route sprinkle licks to the offscreen orchestrator's cone
       if (event.type === 'sprinkle') {
+        // Mark onboarding complete so welcome sprinkle doesn't reappear
+        if (
+          event.sprinkleName === 'welcome' &&
+          (event.body as any)?.action === 'onboarding-complete'
+        ) {
+          localStorage.setItem('slicc-welcomed', '1');
+        }
         client.sendSprinkleLick(event.sprinkleName!, event.body);
       }
     },
     {
-      addSprinkle: (name, title, element, zone) => layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined),
+      addSprinkle: (name, title, element, zone) =>
+        layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined),
       removeSprinkle: (name) => layout.removeSprinkle(name),
-    },
+    }
   );
   (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
 
@@ -458,15 +501,23 @@ async function mainExtension(app: HTMLElement): Promise<void> {
             break;
         }
         console.log('[main-ext] sprinkle-op response sending', { id, op, result: typeof result });
-        (chrome as any).runtime.sendMessage({
-          source: 'panel',
-          payload: { type: 'sprinkle-op-response', id, result },
-        }).catch(() => {});
+        (chrome as any).runtime
+          .sendMessage({
+            source: 'panel',
+            payload: { type: 'sprinkle-op-response', id, result },
+          })
+          .catch(() => {});
       } catch (err) {
-        (chrome as any).runtime.sendMessage({
-          source: 'panel',
-          payload: { type: 'sprinkle-op-response', id, error: err instanceof Error ? err.message : String(err) },
-        }).catch(() => {});
+        (chrome as any).runtime
+          .sendMessage({
+            source: 'panel',
+            payload: {
+              type: 'sprinkle-op-response',
+              id,
+              error: err instanceof Error ? err.message : String(err),
+            },
+          })
+          .catch(() => {});
       }
     })();
   });
@@ -475,13 +526,27 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   layout.onSprinkleClose = (name) => sprinkleManager.close(name);
   layout.getAvailableSprinkles = () => {
     const opened = new Set(sprinkleManager.opened());
-    return sprinkleManager.available()
-      .filter(p => !opened.has(p.name))
-      .map(p => ({ name: p.name, title: p.title }));
+    return sprinkleManager
+      .available()
+      .filter((p) => !opened.has(p.name))
+      .map((p) => ({ name: p.name, title: p.title }));
   };
   layout.onOpenSprinkle = (name, zone) => sprinkleManager.open(name, zone);
   layout.updateAddButtons();
   await sprinkleManager.restoreOpenSprinkles();
+
+  // Open welcome sprinkle on first run (extension mode)
+  if (
+    !localStorage.getItem('slicc-welcomed') &&
+    sprinkleManager.available().some((p) => p.name === 'welcome')
+  ) {
+    try {
+      await sprinkleManager.open('welcome');
+    } catch (e) {
+      log.warn('Failed to open welcome sprinkle', e);
+    }
+  }
+
   log.info('SprinkleManager initialized (extension mode)');
 
   // Request state from offscreen — retries automatically until ready
@@ -499,15 +564,19 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 
 async function main(): Promise<void> {
   initTheme();
+  initTooltips();
 
   const app = document.getElementById('app');
   if (!app) throw new Error('#app element not found');
 
   // Register preview service worker (serves VFS content at /preview/*)
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/preview-sw.js', { scope: '/preview/' })
+    navigator.serviceWorker
+      .register('/preview-sw.js', { scope: '/preview/' })
       .then(() => log.info('Preview SW registered'))
-      .catch(err => log.error('Preview SW registration failed — preview feature will not work', err));
+      .catch((err) =>
+        log.error('Preview SW registration failed — preview feature will not work', err)
+      );
   }
 
   // Apply providers.json defaults before checking for API key
@@ -519,7 +588,10 @@ async function main(): Promise<void> {
   const hasTrayJoin = hasStoredTrayJoinUrl(window.localStorage);
   if (!apiKey && !hasTrayJoin) {
     // Default to tray-join form when not on the default port (5710 prod, 3000 legacy dev)
-    const isDefaultPort = window.location.port === '5710' || window.location.port === '3000' || window.location.port === '';
+    const isDefaultPort =
+      window.location.port === '5710' ||
+      window.location.port === '3000' ||
+      window.location.port === '';
     await showProviderSettings({ preferTrayJoin: !isDefaultPort });
     apiKey = getApiKey();
   }
@@ -555,7 +627,9 @@ async function main(): Promise<void> {
     window.addEventListener('message', (event: MessageEvent) => {
       if (event.source !== window.parent) return;
       if (!isElectronOverlaySetTabMessage(event.data)) return;
-      layout.setActiveTab(getElectronOverlayInitialTab(`http://localhost/?tab=${event.data.tab ?? ''}`));
+      layout.setActiveTab(
+        getElectronOverlayInitialTab(`http://localhost/?tab=${event.data.tab ?? ''}`)
+      );
     });
   }
   const showSkillDropToast = createSkillDropToast();
@@ -577,7 +651,10 @@ async function main(): Promise<void> {
       try {
         cb(event);
       } catch (err) {
-        log.error('Listener error', { eventType: event.type, error: err instanceof Error ? err.message : String(err) });
+        log.error('Listener error', {
+          eventType: event.type,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
   };
@@ -601,7 +678,10 @@ async function main(): Promise<void> {
   /** Get or create buffer for a scoop. */
   function getBuffer(jid: string): ChatMessage[] {
     let buf = scoopMessageBuffers.get(jid);
-    if (!buf) { buf = []; scoopMessageBuffers.set(jid, buf); }
+    if (!buf) {
+      buf = [];
+      scoopMessageBuffers.set(jid, buf);
+    }
     return buf;
   }
 
@@ -610,7 +690,7 @@ async function main(): Promise<void> {
     const buf = getBuffer(jid);
     let msgId = scoopCurrentMessageId.get(jid);
     if (msgId) {
-      const existing = buf.find(m => m.id === msgId);
+      const existing = buf.find((m) => m.id === msgId);
       if (existing) return existing;
     }
     // Create new assistant message
@@ -619,7 +699,7 @@ async function main(): Promise<void> {
 
     // Determine source based on jid
     const scoops = orchestrator.getScoops();
-    const scoop = scoops.find(s => s.jid === jid);
+    const scoop = scoops.find((s) => s.jid === jid);
     const source = scoop?.isCone ? 'cone' : (scoop?.name ?? 'unknown');
 
     const msg: ChatMessage = {
@@ -641,163 +721,162 @@ async function main(): Promise<void> {
   }
 
   // Initialize the orchestrator (always — no direct agent mode)
-  const orchestrator = new Orchestrator(
-    layout.getIframeContainer(),
-    {
-      onResponse: (scoopJid, text, isPartial) => {
-        // Always buffer
-        const msg = getOrCreateAssistantMsg(scoopJid);
-        if (isPartial) {
-          msg.content += text;
-        } else {
-          msg.content = text;
-          msg.isStreaming = false;
+  const orchestrator = new Orchestrator(layout.getIframeContainer(), {
+    onResponse: (scoopJid, text, isPartial) => {
+      // Always buffer
+      const msg = getOrCreateAssistantMsg(scoopJid);
+      if (isPartial) {
+        msg.content += text;
+      } else {
+        msg.content = text;
+        msg.isStreaming = false;
+      }
+      // Emit to UI if selected
+      if (selectedScoop?.jid === scoopJid) {
+        emitToUI({ type: 'content_delta', messageId: msg.id, text });
+        if (!isPartial) {
+          emitToUI({ type: 'content_done', messageId: msg.id });
         }
-        // Emit to UI if selected
+      }
+    },
+    onResponseDone: (scoopJid) => {
+      // Per-turn: finalize message, clear ID so next turn creates a new one
+      const buf = getBuffer(scoopJid);
+      const msgId = scoopCurrentMessageId.get(scoopJid);
+      if (msgId) {
+        const msg = buf.find((m) => m.id === msgId);
+        if (msg) msg.isStreaming = false;
         if (selectedScoop?.jid === scoopJid) {
-          emitToUI({ type: 'content_delta', messageId: msg.id, text });
-          if (!isPartial) {
-            emitToUI({ type: 'content_done', messageId: msg.id });
-          }
-        }
-      },
-      onResponseDone: (scoopJid) => {
-        // Per-turn: finalize message, clear ID so next turn creates a new one
-        const buf = getBuffer(scoopJid);
-        const msgId = scoopCurrentMessageId.get(scoopJid);
-        if (msgId) {
-          const msg = buf.find(m => m.id === msgId);
-          if (msg) msg.isStreaming = false;
-          if (selectedScoop?.jid === scoopJid) {
-            emitToUI({ type: 'content_done', messageId: msgId });
-          }
-          scoopCurrentMessageId.delete(scoopJid);
-        }
-      },
-      onSendMessage: (targetJid, text) => {
-        log.debug('Send message requested', { targetJid, textLength: text.length });
-        const msgId = `msg-${uid()}`;
-        const msg: ChannelMessage = {
-          id: msgId,
-          chatJid: targetJid,
-          senderId: 'assistant',
-          senderName: 'sliccy',
-          content: text,
-          timestamp: new Date().toISOString(),
-          fromAssistant: true,
-          channel: 'web',
-        };
-        orchestrator.handleMessage(msg);
-        // Buffer as a system-like message for the source scoop
-        const buf = getBuffer(targetJid);
-        buf.push({ id: msgId, role: 'assistant', content: text, timestamp: Date.now() });
-        if (selectedScoop?.jid === targetJid) {
-          emitToUI({ type: 'message_start', messageId: msgId });
-          emitToUI({ type: 'content_delta', messageId: msgId, text });
           emitToUI({ type: 'content_done', messageId: msgId });
         }
-      },
-      onStatusChange: (scoopJid, status) => {
-        layout.panels.scoops.updateScoopStatus(scoopJid, status);
-        layout.updateScoopSwitcherStatus?.(scoopJid, status);
+        scoopCurrentMessageId.delete(scoopJid);
+      }
+    },
+    onSendMessage: (targetJid, text) => {
+      log.debug('Send message requested', { targetJid, textLength: text.length });
+      const msgId = `msg-${uid()}`;
+      const msg: ChannelMessage = {
+        id: msgId,
+        chatJid: targetJid,
+        senderId: 'assistant',
+        senderName: 'sliccy',
+        content: text,
+        timestamp: new Date().toISOString(),
+        fromAssistant: true,
+        channel: 'web',
+      };
+      orchestrator.handleMessage(msg);
+      // Buffer as a system-like message for the source scoop
+      const buf = getBuffer(targetJid);
+      buf.push({ id: msgId, role: 'assistant', content: text, timestamp: Date.now() });
+      if (selectedScoop?.jid === targetJid) {
+        emitToUI({ type: 'message_start', messageId: msgId });
+        emitToUI({ type: 'content_delta', messageId: msgId, text });
+        emitToUI({ type: 'content_done', messageId: msgId });
+      }
+    },
+    onStatusChange: (scoopJid, status) => {
+      layout.panels.scoops.updateScoopStatus(scoopJid, status);
+      layout.updateScoopSwitcherStatus?.(scoopJid, status);
 
-        if (selectedScoop?.jid === scoopJid) {
-          if (status === 'processing') {
-            layout.panels.chat.setProcessing(true);
-          } else if (status === 'ready') {
-            layout.panels.chat.setProcessing(false);
-            const messageId = scoopCurrentMessageId.get(scoopJid) ?? `done-${scoopJid}-${uid()}`;
-            scoopCurrentMessageId.delete(scoopJid);
-            emitToUI({ type: 'turn_end', messageId });
+      if (selectedScoop?.jid === scoopJid) {
+        layout.setAgentProcessing(status === 'processing');
+        if (status === 'processing') {
+          layout.panels.chat.setProcessing(true);
+        } else if (status === 'ready') {
+          layout.panels.chat.setProcessing(false);
+          const messageId = scoopCurrentMessageId.get(scoopJid) ?? `done-${scoopJid}-${uid()}`;
+          scoopCurrentMessageId.delete(scoopJid);
+          emitToUI({ type: 'turn_end', messageId });
+        }
+      }
+    },
+    onError: (scoopJid, error) => {
+      log.error('Scoop error', { scoopJid, error });
+      if (selectedScoop?.jid === scoopJid) {
+        emitToUI({ type: 'error', error });
+      }
+    },
+    getBrowserAPI: () => browser,
+    onToolStart: (scoopJid, toolName, toolInput) => {
+      // Hide infrastructure tools from the chat (their output is shown elsewhere)
+      const hiddenTools = new Set(['send_message', 'list_scoops', 'list_tasks']);
+      if (hiddenTools.has(toolName)) return;
+
+      // Always buffer tool calls
+      const msg = getOrCreateAssistantMsg(scoopJid);
+      if (!msg.toolCalls) msg.toolCalls = [];
+      msg.toolCalls.push({ id: uid(), name: toolName, input: toolInput });
+      // Emit to UI if selected
+      if (selectedScoop?.jid === scoopJid) {
+        emitToUI({ type: 'tool_use_start', messageId: msg.id, toolName, toolInput });
+      }
+    },
+    onToolEnd: (scoopJid, toolName, result, isError) => {
+      const hiddenTools = new Set(['send_message', 'list_scoops', 'list_tasks']);
+      if (hiddenTools.has(toolName)) return;
+
+      // Always buffer tool results
+      const buf = getBuffer(scoopJid);
+      const msgId = scoopCurrentMessageId.get(scoopJid);
+      if (msgId) {
+        const msg = buf.find((m) => m.id === msgId);
+        if (msg?.toolCalls) {
+          const tc = [...msg.toolCalls]
+            .reverse()
+            .find((t) => t.name === toolName && t.result === undefined);
+          if (tc) {
+            tc.result = result;
+            tc.isError = isError;
           }
         }
-      },
-      onError: (scoopJid, error) => {
-        log.error('Scoop error', { scoopJid, error });
-        if (selectedScoop?.jid === scoopJid) {
-          emitToUI({ type: 'error', error });
-        }
-      },
-      getBrowserAPI: () => browser,
-      onToolStart: (scoopJid, toolName, toolInput) => {
-        // Switch to terminal tab when agent uses bash
-        if (toolName === 'bash') {
-          layout.openTerminal();
-        }
-
-        // Hide infrastructure tools from the chat (their output is shown elsewhere)
-        const hiddenTools = new Set(['send_message', 'list_scoops', 'list_tasks']);
-        if (hiddenTools.has(toolName)) return;
-
-        // Always buffer tool calls
-        const msg = getOrCreateAssistantMsg(scoopJid);
-        if (!msg.toolCalls) msg.toolCalls = [];
-        msg.toolCalls.push({ id: uid(), name: toolName, input: toolInput });
-        // Emit to UI if selected
-        if (selectedScoop?.jid === scoopJid) {
-          emitToUI({ type: 'tool_use_start', messageId: msg.id, toolName, toolInput });
-        }
-      },
-      onToolEnd: (scoopJid, toolName, result, isError) => {
-        const hiddenTools = new Set(['send_message', 'list_scoops', 'list_tasks']);
-        if (hiddenTools.has(toolName)) return;
-
-        // Always buffer tool results
-        const buf = getBuffer(scoopJid);
-        const msgId = scoopCurrentMessageId.get(scoopJid);
-        if (msgId) {
-          const msg = buf.find(m => m.id === msgId);
-          if (msg?.toolCalls) {
-            const tc = [...msg.toolCalls].reverse().find(t => t.name === toolName && t.result === undefined);
-            if (tc) { tc.result = result; tc.isError = isError; }
-          }
-        }
-        // Emit to UI if selected
-        if (selectedScoop?.jid === scoopJid && msgId) {
-          emitToUI({ type: 'tool_result', messageId: msgId, toolName, result, isError });
-        }
-      },
-      onToolUI: (scoopJid, toolName, requestId, html) => {
-        // Emit tool UI request to chat panel
-        // Always emit regardless of selection - the chat panel handles missing messages with retries
-        // and this prevents tool UI from hanging when a scoop is not selected
-        const msgId = scoopCurrentMessageId.get(scoopJid);
-        if (msgId) {
-          emitToUI({ type: 'tool_ui', messageId: msgId, toolName, requestId, html });
-        } else {
-          log.warn('Cannot emit tool_ui - no message ID for scoop', { scoopJid, requestId });
-        }
-      },
-      onToolUIDone: (scoopJid, requestId) => {
-        // Always emit to ensure renderers are disposed, regardless of selection
-        const msgId = scoopCurrentMessageId.get(scoopJid);
-        if (msgId) {
-          emitToUI({ type: 'tool_ui_done', messageId: msgId, requestId });
-        }
-      },
-      onIncomingMessage: (scoopJid, message) => {
-        // Buffer incoming messages (delegations, etc.) for display
-        const chatMsg: ChatMessage = {
-          id: message.id,
-          role: 'user',
-          content: message.channel === 'delegation'
+      }
+      // Emit to UI if selected
+      if (selectedScoop?.jid === scoopJid && msgId) {
+        emitToUI({ type: 'tool_result', messageId: msgId, toolName, result, isError });
+      }
+    },
+    onToolUI: (scoopJid, toolName, requestId, html) => {
+      // Emit tool UI request to chat panel
+      // Always emit regardless of selection - the chat panel handles missing messages with retries
+      // and this prevents tool UI from hanging when a scoop is not selected
+      const msgId = scoopCurrentMessageId.get(scoopJid);
+      if (msgId) {
+        emitToUI({ type: 'tool_ui', messageId: msgId, toolName, requestId, html });
+      } else {
+        log.warn('Cannot emit tool_ui - no message ID for scoop', { scoopJid, requestId });
+      }
+    },
+    onToolUIDone: (scoopJid, requestId) => {
+      // Always emit to ensure renderers are disposed, regardless of selection
+      const msgId = scoopCurrentMessageId.get(scoopJid);
+      if (msgId) {
+        emitToUI({ type: 'tool_ui_done', messageId: msgId, requestId });
+      }
+    },
+    onIncomingMessage: (scoopJid, message) => {
+      // Buffer incoming messages (delegations, etc.) for display
+      const chatMsg: ChatMessage = {
+        id: message.id,
+        role: 'user',
+        content:
+          message.channel === 'delegation'
             ? `**[Instructions from sliccy]**\n\n${message.content}`
             : message.content,
-          timestamp: new Date(message.timestamp).getTime(),
-          source: message.channel === 'delegation' ? 'delegation' : undefined,
-          channel: message.channel,
-        };
-        getBuffer(scoopJid).push(chatMsg);
+        timestamp: new Date(message.timestamp).getTime(),
+        source: message.channel === 'delegation' ? 'delegation' : undefined,
+        channel: message.channel,
+      };
+      getBuffer(scoopJid).push(chatMsg);
 
-        // Emit to UI if this scoop is selected
-        if (selectedScoop?.jid === scoopJid) {
-          emitToUI({ type: 'message_start', messageId: message.id });
-          emitToUI({ type: 'content_delta', messageId: message.id, text: chatMsg.content });
-          emitToUI({ type: 'content_done', messageId: message.id });
-        }
-      },
+      // Emit to UI if this scoop is selected
+      if (selectedScoop?.jid === scoopJid) {
+        emitToUI({ type: 'message_start', messageId: message.id });
+        emitToUI({ type: 'content_delta', messageId: message.id, text: chatMsg.content });
+        emitToUI({ type: 'content_done', messageId: message.id });
+      }
     },
-  );
+  });
 
   await orchestrator.init();
   layout.panels.scoops.setOrchestrator(orchestrator);
@@ -843,7 +922,7 @@ async function main(): Promise<void> {
       },
       async () => {
         await layout.panels.fileBrowser.refresh();
-      },
+      }
     );
 
     try {
@@ -885,7 +964,7 @@ async function main(): Promise<void> {
     const urlParams = new URLSearchParams(window.location.search);
     const scoopFolder = urlParams.get('scoop');
     if (scoopFolder) {
-      const urlScoop = allScoops.find(s => s.folder === scoopFolder);
+      const urlScoop = allScoops.find((s) => s.folder === scoopFolder);
       if (urlScoop) {
         selectedScoop = urlScoop;
         log.info('Restored scoop from URL', { folder: scoopFolder });
@@ -927,7 +1006,10 @@ async function main(): Promise<void> {
 
       // Buffer the user message for this scoop
       getBuffer(selectedScoop.jid).push({
-        id: msg.id, role: 'user', content: text, timestamp: Date.now(),
+        id: msg.id,
+        role: 'user',
+        content: text,
+        timestamp: Date.now(),
       });
 
       // Broadcast user message to all followers (leader mode)
@@ -947,7 +1029,9 @@ async function main(): Promise<void> {
         orchestrator.stopScoop(selectedScoop.jid);
         // Clear queued messages from orchestrator so they don't get processed later
         orchestrator.clearQueuedMessages(selectedScoop.jid).catch((err) => {
-          log.error('Failed to clear queued messages on stop', { error: err instanceof Error ? err.message : String(err) });
+          log.error('Failed to clear queued messages on stop', {
+            error: err instanceof Error ? err.message : String(err),
+          });
         });
       }
     },
@@ -959,12 +1043,15 @@ async function main(): Promise<void> {
   layout.panels.chat.setDeleteQueuedMessageCallback((messageId: string) => {
     if (selectedScoop) {
       orchestrator.deleteQueuedMessage(selectedScoop.jid, messageId).catch((err) => {
-        log.error('Failed to delete queued message', { messageId, error: err instanceof Error ? err.message : String(err) });
+        log.error('Failed to delete queued message', {
+          messageId,
+          error: err instanceof Error ? err.message : String(err),
+        });
       });
       // Also remove from the in-memory message buffer so it doesn't reappear on scoop switch
       const buf = scoopMessageBuffers.get(selectedScoop.jid);
       if (buf) {
-        const idx = buf.findIndex(m => m.id === messageId);
+        const idx = buf.findIndex((m) => m.id === messageId);
         if (idx !== -1) buf.splice(idx, 1);
       }
     }
@@ -986,11 +1073,24 @@ async function main(): Promise<void> {
   const routeLickToScoop = (event: LickEvent) => {
     const isWebhook = event.type === 'webhook';
     const isSprinkle = event.type === 'sprinkle';
-    const eventName = isWebhook ? event.webhookName : isSprinkle ? event.sprinkleName : event.cronName;
+    const eventName = isWebhook
+      ? event.webhookName
+      : isSprinkle
+        ? event.sprinkleName
+        : event.cronName;
     const eventId = isWebhook ? event.webhookId : isSprinkle ? event.sprinkleName : event.cronId;
     const channel = event.type;
 
     log.debug('Lick event', { type: event.type, name: eventName, targetScoop: event.targetScoop });
+
+    // Mark onboarding complete so welcome sprinkle doesn't reappear
+    if (
+      isSprinkle &&
+      event.sprinkleName === 'welcome' &&
+      (event.body as any)?.action === 'onboarding-complete'
+    ) {
+      localStorage.setItem('slicc-welcomed', '1');
+    }
 
     // Determine the target:
     // - Sprinkle licks and untargeted events default to cone
@@ -1000,12 +1100,13 @@ async function main(): Promise<void> {
 
     if (isSprinkle || !event.targetScoop) {
       // Sprinkle licks + untargeted cron/webhook events → cone
-      resolvedTarget = scoops.find(s => s.isCone);
+      resolvedTarget = scoops.find((s) => s.isCone);
     } else {
-      resolvedTarget = scoops.find(s =>
-        s.name === event.targetScoop ||
-        s.folder === event.targetScoop ||
-        s.folder === `${event.targetScoop}-scoop`
+      resolvedTarget = scoops.find(
+        (s) =>
+          s.name === event.targetScoop ||
+          s.folder === event.targetScoop ||
+          s.folder === `${event.targetScoop}-scoop`
       );
     }
 
@@ -1035,10 +1136,18 @@ async function main(): Promise<void> {
       });
 
       if (selectedScoop?.jid === resolvedTarget.jid) {
-        layout.panels.chat.addLickMessage(msgId, content, channel as 'webhook' | 'cron' | 'sprinkle');
+        layout.panels.chat.addLickMessage(
+          msgId,
+          content,
+          channel as 'webhook' | 'cron' | 'sprinkle'
+        );
       }
 
-      log.info('Routing lick to scoop', { type: channel, name: eventName, scoopJid: resolvedTarget.jid });
+      log.info('Routing lick to scoop', {
+        type: channel,
+        name: eventName,
+        scoopJid: resolvedTarget.jid,
+      });
       orchestrator.handleMessage(msg);
     } else {
       log.warn('Lick target scoop not found', { targetScoop: event.targetScoop });
@@ -1062,14 +1171,11 @@ async function main(): Promise<void> {
   // ── Sprinkle Manager (SHTML sprinkle panels) ────────────────────────
   let sprinkleManager: SprinkleManager | null = null;
   if (sharedFs) {
-    sprinkleManager = new SprinkleManager(
-      sharedFs,
-      routeLickToScoop,
-      {
-        addSprinkle: (name, title, element, zone) => layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined),
-        removeSprinkle: (name) => layout.removeSprinkle(name),
-      },
-    );
+    sprinkleManager = new SprinkleManager(sharedFs, routeLickToScoop, {
+      addSprinkle: (name, title, element, zone) =>
+        layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined),
+      removeSprinkle: (name) => layout.removeSprinkle(name),
+    });
     // Expose for open command, sprinkle shell command, and E2E/demo scripts
     (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
     if (__DEV__) (window as unknown as Record<string, unknown>).__slicc_orchestrator = orchestrator;
@@ -1080,18 +1186,21 @@ async function main(): Promise<void> {
     // Wire [+] picker: available sprinkles + open callback
     layout.getAvailableSprinkles = () => {
       const opened = new Set(sprinkleManager!.opened());
-      return sprinkleManager!.available()
-        .filter(p => !opened.has(p.name))
-        .map(p => ({ name: p.name, title: p.title }));
+      return sprinkleManager!
+        .available()
+        .filter((p) => !opened.has(p.name))
+        .map((p) => ({ name: p.name, title: p.title }));
     };
     layout.onOpenSprinkle = (name, zone) => sprinkleManager!.open(name, zone);
     layout.updateAddButtons();
 
-    // Open welcome sprinkle on first run
-    if (!localStorage.getItem('slicc-welcomed') && sprinkleManager.available().some(p => p.name === 'welcome')) {
+    // Open welcome sprinkle on first run (flag set when onboarding-complete lick fires)
+    if (
+      !localStorage.getItem('slicc-welcomed') &&
+      sprinkleManager.available().some((p) => p.name === 'welcome')
+    ) {
       try {
         await sprinkleManager.open('welcome');
-        localStorage.setItem('slicc-welcomed', '1');
       } catch (e) {
         log.warn('Failed to open welcome sprinkle', e);
       }
@@ -1112,7 +1221,11 @@ async function main(): Promise<void> {
 
     ws.onmessage = async (event) => {
       try {
-        const data = JSON.parse(event.data) as { type: string; requestId?: string; [key: string]: unknown };
+        const data = JSON.parse(event.data) as {
+          type: string;
+          requestId?: string;
+          [key: string]: unknown;
+        };
 
         // Handle management requests from server
         if (data.requestId) {
@@ -1121,30 +1234,46 @@ async function main(): Promise<void> {
           try {
             switch (data.type) {
               case 'list_webhooks':
-                response = { type: 'response', requestId: data.requestId, data: lickManager.listWebhooks() };
+                response = {
+                  type: 'response',
+                  requestId: data.requestId,
+                  data: lickManager.listWebhooks(),
+                };
                 break;
               case 'create_webhook': {
                 const wh = await lickManager.createWebhook(
                   (data.name as string) || 'default',
                   data.scoop as string | undefined,
-                  data.filter as string | undefined,
+                  data.filter as string | undefined
                 );
                 const traySession = getLeaderTrayRuntimeStatus().session;
                 const webhookUrl = traySession?.webhookUrl
                   ? getTrayWebhookUrl(traySession.webhookUrl, wh.id)
                   : getWebhookUrl(window.location.href, wh.id);
-                response = { type: 'response', requestId: data.requestId, data: { ...wh, url: webhookUrl } };
+                response = {
+                  type: 'response',
+                  requestId: data.requestId,
+                  data: { ...wh, url: webhookUrl },
+                };
                 break;
               }
               case 'delete_webhook': {
                 const ok = await lickManager.deleteWebhook(data.id as string);
                 response = ok
                   ? { type: 'response', requestId: data.requestId, data: { ok: true } }
-                  : { type: 'response', requestId: data.requestId, data: { error: 'Webhook not found' } };
+                  : {
+                      type: 'response',
+                      requestId: data.requestId,
+                      data: { error: 'Webhook not found' },
+                    };
                 break;
               }
               case 'list_crontasks':
-                response = { type: 'response', requestId: data.requestId, data: lickManager.listCronTasks() };
+                response = {
+                  type: 'response',
+                  requestId: data.requestId,
+                  data: lickManager.listCronTasks(),
+                };
                 break;
               case 'create_crontask': {
                 if (!data.name) throw new Error('name is required');
@@ -1153,7 +1282,7 @@ async function main(): Promise<void> {
                   data.name as string,
                   data.cron as string,
                   data.scoop as string | undefined,
-                  data.filter as string | undefined,
+                  data.filter as string | undefined
                 );
                 response = { type: 'response', requestId: data.requestId, data: ct };
                 break;
@@ -1162,7 +1291,11 @@ async function main(): Promise<void> {
                 const ok = await lickManager.deleteCronTask(data.id as string);
                 response = ok
                   ? { type: 'response', requestId: data.requestId, data: { ok: true } }
-                  : { type: 'response', requestId: data.requestId, data: { error: 'Cron task not found' } };
+                  : {
+                      type: 'response',
+                      requestId: data.requestId,
+                      data: { error: 'Cron task not found' },
+                    };
                 break;
               }
               case 'tray_status': {
@@ -1180,10 +1313,18 @@ async function main(): Promise<void> {
                 break;
               }
               default:
-                response = { type: 'response', requestId: data.requestId, error: `Unknown request type: ${data.type}` };
+                response = {
+                  type: 'response',
+                  requestId: data.requestId,
+                  error: `Unknown request type: ${data.type}`,
+                };
             }
           } catch (err) {
-            response = { type: 'response', requestId: data.requestId, error: err instanceof Error ? err.message : String(err) };
+            response = {
+              type: 'response',
+              requestId: data.requestId,
+              error: err instanceof Error ? err.message : String(err),
+            };
           }
 
           ws.send(JSON.stringify(response));
@@ -1195,11 +1336,13 @@ async function main(): Promise<void> {
           lickManager.handleWebhookEvent(
             data.webhookId as string,
             data.headers as Record<string, string>,
-            data.body,
+            data.body
           );
         }
       } catch (err) {
-        log.error('Failed to process lick message', { error: err instanceof Error ? err.message : String(err) });
+        log.error('Failed to process lick message', {
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     };
 
@@ -1238,8 +1381,9 @@ async function main(): Promise<void> {
     selectedScoop = scoop;
     orchestrator.createScoopTab(scoop.jid);
 
-    // Update memory panel
+    // Update memory panel and scoops panel selection
     layout.panels.memory.setSelectedScoop(scoop.jid);
+    layout.panels.scoops.setSelectedJid(scoop.jid);
 
     // Switch chat context. Load from per-scoop message buffer (has full tool call detail)
     // falling back to SessionStore, then orchestrator DB.
@@ -1320,10 +1464,13 @@ async function main(): Promise<void> {
 
   if (runtimeMode === 'standalone' || runtimeMode === 'electron-overlay') {
     const runtimeConfig = await fetchRuntimeConfig();
-    const runtimeDefaultWorkerBaseUrl = shouldUseRuntimeModeTrayDefaults(runtimeMode, runtimeConfig !== null)
-      ? (__DEV__
+    const runtimeDefaultWorkerBaseUrl = shouldUseRuntimeModeTrayDefaults(
+      runtimeMode,
+      runtimeConfig !== null
+    )
+      ? __DEV__
         ? DEFAULT_STAGING_TRAY_WORKER_BASE_URL
-        : DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL)
+        : DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL
       : null;
 
     const trayRuntimeConfig = await resolveTrayRuntimeConfig({
@@ -1357,7 +1504,9 @@ async function main(): Promise<void> {
       return null;
     });
 
-    const wireFollowerSync = (connection: import('../scoops/tray-webrtc.js').FollowerTrayConnection) => {
+    const wireFollowerSync = (
+      connection: import('../scoops/tray-webrtc.js').FollowerTrayConnection
+    ) => {
       // Clean up previous sync if any
       if (followerTargetRefreshInterval) {
         clearInterval(followerTargetRefreshInterval);
@@ -1389,10 +1538,12 @@ async function main(): Promise<void> {
         try {
           const pages = await browser.listPages();
           followerSync.advertiseTargets(
-            pages.map(p => ({ targetId: p.targetId, title: p.title, url: p.url })),
-            runtimeId,
+            pages.map((p) => ({ targetId: p.targetId, title: p.title, url: p.url })),
+            runtimeId
           );
-        } catch { /* ignore errors */ }
+        } catch {
+          /* ignore errors */
+        }
       };
       followerTargetRefreshInterval = setInterval(refreshFollowerTargets, 5000);
       void refreshFollowerTargets();
@@ -1424,7 +1575,7 @@ async function main(): Promise<void> {
           onGaveUp: (lastError) => {
             log.warn('Follower reconnect gave up', { lastError });
           },
-        },
+        }
       );
     };
 
@@ -1434,11 +1585,15 @@ async function main(): Promise<void> {
     }) as EventListener);
 
     // Clean up on page unload
-    window.addEventListener('beforeunload', () => {
-      if (followerTargetRefreshInterval) clearInterval(followerTargetRefreshInterval);
-      activeFollowerSync?.close();
-      activeReconnectHandle?.cancel();
-    }, { once: true });
+    window.addEventListener(
+      'beforeunload',
+      () => {
+        if (followerTargetRefreshInterval) clearInterval(followerTargetRefreshInterval);
+        activeFollowerSync?.close();
+        activeReconnectHandle?.cancel();
+      },
+      { once: true }
+    );
 
     if (trayRuntimeConfig?.joinUrl) {
       startFollowerJoin(trayRuntimeConfig.joinUrl);
@@ -1479,14 +1634,18 @@ async function main(): Promise<void> {
         const refreshLeaderTargets = async () => {
           try {
             const pages = await browser.listPages();
-            leaderSync.setLocalTargets(pages.map(p => ({ targetId: p.targetId, title: p.title, url: p.url })));
-          } catch { /* ignore errors */ }
+            leaderSync.setLocalTargets(
+              pages.map((p) => ({ targetId: p.targetId, title: p.title, url: p.url }))
+            );
+          } catch {
+            /* ignore errors */
+          }
         };
         leaderTargetRefreshInterval = setInterval(refreshLeaderTargets, 5000);
         void refreshLeaderTargets();
 
         trayPeers = new LeaderTrayPeerManager({
-          sendControlMessage: message => leaderTray.sendControlMessage(message),
+          sendControlMessage: (message) => leaderTray.sendControlMessage(message),
           onPeerConnected: (peer, channel) => {
             log.info('Tray follower data channel opened', {
               controllerId: peer.controllerId,
@@ -1513,7 +1672,7 @@ async function main(): Promise<void> {
         workerBaseUrl: trayRuntimeConfig.workerBaseUrl,
         runtime: 'slicc-standalone',
         fetchImpl: createTrayFetch(),
-        onControlMessage: message => {
+        onControlMessage: (message) => {
           if (message.type === 'webhook.event') {
             lickManager.handleWebhookEvent(message.webhookId, message.headers, message.body);
             return;
@@ -1532,7 +1691,11 @@ async function main(): Promise<void> {
         leaderTray.stop();
         await leaderTray.clearSession();
         const session = await leaderTray.start();
-        const trayUrl = buildTrayLaunchUrl(window.location.href, session.workerBaseUrl, session.trayId);
+        const trayUrl = buildTrayLaunchUrl(
+          window.location.href,
+          session.workerBaseUrl,
+          session.trayId
+        );
         if (trayUrl !== window.location.href) {
           window.history.replaceState(window.history.state, '', trayUrl);
         }
@@ -1541,26 +1704,39 @@ async function main(): Promise<void> {
         return getLeaderTrayRuntimeStatus();
       });
 
-      void leaderTray.start()
+      void leaderTray
+        .start()
         .then((session) => {
-          const trayUrl = buildTrayLaunchUrl(window.location.href, session.workerBaseUrl, session.trayId);
+          const trayUrl = buildTrayLaunchUrl(
+            window.location.href,
+            session.workerBaseUrl,
+            session.trayId
+          );
           if (trayUrl !== window.location.href) {
             window.history.replaceState(window.history.state, '', trayUrl);
           }
         })
         .catch((error) => {
-          log.warn('Leader tray join failed', { error: error instanceof Error ? error.message : String(error) });
+          log.warn('Leader tray join failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
         });
-      window.addEventListener('beforeunload', () => {
-        clearInterval(leaderTargetRefreshInterval);
-        leaderSync.stop();
-        trayPeers.stop();
-        leaderTray.stop();
-      }, { once: true });
+      window.addEventListener(
+        'beforeunload',
+        () => {
+          clearInterval(leaderTargetRefreshInterval);
+          leaderSync.stop();
+          trayPeers.stop();
+          leaderTray.stop();
+        },
+        { once: true }
+      );
     }
   }
 
-  log.info('Orchestrator initialized — cone+scoops ready', { scoopCount: orchestrator.getScoops().length });
+  log.info('Orchestrator initialized — cone+scoops ready', {
+    scoopCount: orchestrator.getScoops().length,
+  });
 
   // Check for auto-prompt from URL parameter (for debugging, dev mode only)
   if (typeof __DEV__ !== 'undefined' && __DEV__) {
@@ -1599,10 +1775,10 @@ main().catch((err) => {
     const errorDiv = document.createElement('div');
     errorDiv.style.cssText = 'padding: 2rem; text-align: center;';
     const h1 = document.createElement('h1');
-    h1.style.color = '#e94560';
+    h1.style.color = 'var(--s2-negative, #e34850)';
     h1.textContent = 'Failed to start';
     const p = document.createElement('p');
-    p.style.color = '#a0a0b0';
+    p.style.color = 'var(--s2-content-tertiary, #717171)';
     p.textContent = err.message;
     errorDiv.appendChild(h1);
     errorDiv.appendChild(p);
@@ -1610,19 +1786,23 @@ main().catch((err) => {
     const resetBtn = document.createElement('button');
     resetBtn.textContent = 'Reset all data & reload';
     resetBtn.style.cssText =
-      'margin-top: 1rem; padding: 0.5rem 1.5rem; background: #e94560; color: #fff; ' +
+      'margin-top: 1rem; padding: 0.5rem 1.5rem; background: var(--s2-negative, #e34850); color: #fff; ' +
       'border: none; border-radius: 6px; cursor: pointer; font-size: 14px;';
     resetBtn.addEventListener('click', async () => {
       resetBtn.disabled = true;
       resetBtn.textContent = 'Resetting…';
       const dbs = await indexedDB.databases();
       await Promise.all(
-        dbs.map(db => db.name ? new Promise<void>((res) => {
-          const req = indexedDB.deleteDatabase(db.name!);
-          req.onsuccess = () => res();
-          req.onerror = () => res();
-          req.onblocked = () => res();
-        }) : Promise.resolve())
+        dbs.map((db) =>
+          db.name
+            ? new Promise<void>((res) => {
+                const req = indexedDB.deleteDatabase(db.name!);
+                req.onsuccess = () => res();
+                req.onerror = () => res();
+                req.onblocked = () => res();
+              })
+            : Promise.resolve()
+        )
       );
       location.reload();
     });

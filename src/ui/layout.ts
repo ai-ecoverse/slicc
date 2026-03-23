@@ -28,21 +28,21 @@ import { ScoopsPanel } from './scoops-panel.js';
 import { ScoopSwitcher } from './scoop-switcher.js';
 import {
   getApiKey,
-  getSelectedProvider,
-  getProviderModels,
+  clearAllSettings,
   getSelectedModelId,
   setSelectedModelId,
   showProviderSettings,
   getAllAvailableModels,
+  getAccounts,
   getProviderConfig,
-  clearAllSettings,
+  removeAccount,
 } from './provider-settings.js';
 import { EXTENSION_TAB_SPECS, setHiddenTabs, type ExtensionTabId } from './tabbed-ui.js';
 import { TabZone } from './tab-zone.js';
 import { PanelRegistry } from './panel-registry.js';
 import { showSprinklePicker } from './sprinkle-picker.js';
 import type { ZoneId } from './panel-types.js';
-import type { ChatMessage } from './types.js';
+// ChatMessage import removed — copy chat moved to feedback row
 import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
 
 export interface LayoutPanels {
@@ -63,38 +63,38 @@ export class Layout {
   private scoopsEl!: HTMLElement;
   private leftEl!: HTMLElement;
   private rightEl!: HTMLElement;
-  private scoopsDivider!: HTMLElement;
   private verticalDivider!: HTMLElement;
-  private horizontalDivider!: HTMLElement;
   private terminalContainer!: HTMLElement;
   private iframeContainer!: HTMLElement;
 
-  // Primary zone (top of right column — Terminal + sprinkle tabs)
+  // Thread header (sub-header with scoop name)
+  private threadHeaderEl!: HTMLElement;
+  private threadHeaderName!: HTMLElement;
+
+  // Unified right panel zone (Terminal + Files + Memory + sprinkle tabs)
   private primaryZoneEl!: HTMLElement;
   private primaryZone!: TabZone;
 
-  // Drawer zone (bottom of right column — Files + Memory)
-  private drawerZoneEl!: HTMLElement;
-  private drawerZone!: TabZone;
-
-  private drawerHeightFraction = 0.35;
+  // Keep drawerZone as alias for backward compat
+  private get drawerZone(): TabZone {
+    return this.primaryZone;
+  }
+  private get drawerZoneEl(): HTMLElement {
+    return this.primaryZoneEl;
+  }
 
   // Tabbed-layout elements (extension only)
   private tabContainers = new Map<TabId, HTMLElement>();
   private activeTab: TabId = 'chat';
   /** Pre-created containers for debug tabs (terminal, memory) — always created, tab added on demand. */
   private debugTabContainers: { terminal: HTMLElement; memory: HTMLElement } | null = null;
-  private actionsEl!: HTMLElement;
 
   // Scoop switcher (extension mode)
   private scoopSwitcher: ScoopSwitcher | null = null;
   private scoopSwitcherEl: HTMLElement | null = null;
 
-  // Button references for tab-sensitive visibility
-  private clearChatBtn!: HTMLButtonElement;
-  private copyChatBtn!: HTMLButtonElement;
-  private clearTermBtn!: HTMLButtonElement;
-  private clearFsBtn!: HTMLButtonElement;
+  // User avatar element
+  private avatarEl!: HTMLElement;
 
   // Dynamic logo
   private logoSvg: SVGSVGElement | null = null;
@@ -115,8 +115,7 @@ export class Layout {
   /** Callback to open a sprinkle by name. */
   public onOpenSprinkle?: (name: string, zone?: ZoneId) => Promise<void>;
 
-  private scoopsWidth = 0.15;
-  private leftWidth = 0.45;
+  // Layout uses CSS flex — no manual width fractions needed
 
   constructor(root: HTMLElement, isExtension = false) {
     this.root = root;
@@ -129,7 +128,9 @@ export class Layout {
   }
 
   /** Set the orchestrator on the scoop switcher (extension mode). */
-  setScoopSwitcherOrchestrator?(orchestrator: import('../scoops/orchestrator.js').Orchestrator): void {
+  setScoopSwitcherOrchestrator?(
+    orchestrator: import('../scoops/orchestrator.js').Orchestrator
+  ): void {
     this.scoopSwitcher?.setOrchestrator(orchestrator);
   }
 
@@ -159,13 +160,25 @@ export class Layout {
 
   /** Check if the terminal panel is currently open in a zone. */
   isTerminalOpen(): boolean {
-    return true; // always present in drawer
+    if (this.isExtension) return true;
+    return this.primaryZone.isPinnedTabEnabled('terminal');
   }
 
-  /** Activate the terminal tab in the drawer. */
+  /** Toggle the agent processing indicator on the thread header. */
+  setAgentProcessing(busy: boolean): void {
+    this.threadHeaderEl?.classList.toggle('thread-header--processing', busy);
+  }
+
+  /** Open the terminal tab (enables pinned tab if dimmed). */
   openTerminal(): void {
     if (this.isExtension) return;
-    this.drawerZone.activateTab('terminal');
+    if (!this.primaryZone.isPinnedTabEnabled('terminal')) {
+      this.primaryZone.enablePinnedTab('terminal');
+    }
+    // Don't steal focus from an active sprinkle
+    const active = this.primaryZone.getActiveTabId();
+    if (active && active.startsWith('sprinkle-')) return;
+    this.primaryZone.activateTab('terminal');
   }
 
   /** Show or hide debug tabs (terminal, memory) in extension mode. */
@@ -173,8 +186,18 @@ export class Layout {
     if (!this.isExtension || !this.debugTabContainers) return;
 
     const DEBUG_TABS = [
-      { id: 'terminal' as const, label: 'Terminal', container: this.debugTabContainers.terminal, onActivate: () => this.panels?.terminal?.refit?.() },
-      { id: 'memory' as const, label: 'Memory', container: this.debugTabContainers.memory, onActivate: () => this.panels?.memory?.refresh() },
+      {
+        id: 'terminal' as const,
+        label: 'Terminal',
+        container: this.debugTabContainers.terminal,
+        onActivate: () => this.panels?.terminal?.refit?.(),
+      },
+      {
+        id: 'memory' as const,
+        label: 'Memory',
+        container: this.debugTabContainers.memory,
+        onActivate: () => this.panels?.memory?.refresh(),
+      },
     ];
 
     for (const { id, label, container, onActivate } of DEBUG_TABS) {
@@ -196,245 +219,66 @@ export class Layout {
     const header = document.createElement('div');
     header.className = 'header';
 
-    // ── Provider indicator (shared, created once) ─────────────────
-    const providerIndicator = document.createElement('span');
-    providerIndicator.style.cssText =
-      'font-size: 11px; color: var(--s2-content-tertiary); cursor: pointer; padding: 2px 8px; ' +
-      'background: transparent; border-radius: var(--s2-radius-pill); border: none; ' +
-      'transition: color 130ms ease, background 130ms ease;';
-    providerIndicator.dataset.tooltip = 'Change provider';
-    providerIndicator.addEventListener('click', async () => {
-      const changed = await showProviderSettings();
-      if (changed) location.reload();
-    });
-
-    // ── Model picker (shared, created once) ───────────────────────
-    const modelSelect = document.createElement('select');
-    modelSelect.style.cssText = this.isExtension
-      ? 'background: var(--s2-bg-sunken); color: var(--s2-content-default); border: 1px solid var(--s2-border-subtle); border-radius: var(--s2-radius-default); ' +
-        'padding: 3px 6px; font-size: 11px; cursor: pointer; outline: none; max-width: 140px; font-family: var(--s2-font-family);'
-      : 'background: var(--s2-bg-sunken); color: var(--s2-content-default); border: 1px solid var(--s2-border-subtle); border-radius: var(--s2-radius-default); ' +
-        'padding: 4px 8px; font-size: 12px; cursor: pointer; outline: none; margin-left: 8px; font-family: var(--s2-font-family);';
-
-    const sortModels = (models: { id: string; name: string; reasoning?: boolean }[]) => {
-      return [...models].sort((a, b) => {
-        if (a.reasoning !== b.reasoning) return a.reasoning ? -1 : 1;
-        return a.name.localeCompare(b.name);
-      });
-    };
-
-    const populateModels = () => {
-      const groups = getAllAvailableModels();
+    // ── Auto-select first model if none set ────────────────────────
+    const ensureModelSelected = () => {
       const currentModelId = getSelectedModelId();
-      const currentProvider = getSelectedProvider();
-      providerIndicator.textContent = getProviderConfig(currentProvider).name;
-      while (modelSelect.firstChild) modelSelect.removeChild(modelSelect.firstChild);
-
-      if (groups.length === 0) {
-        const opt = document.createElement('option');
-        opt.value = '';
-        opt.textContent = 'No models';
-        modelSelect.appendChild(opt);
-        return;
-      }
-
-      const useGroups = groups.length > 1;
+      if (currentModelId) return;
+      const groups = getAllAvailableModels();
       for (const group of groups) {
-        const sorted = sortModels(group.models);
-        if (useGroups) {
-          const optgroup = document.createElement('optgroup');
-          optgroup.label = group.providerName;
-          for (const model of sorted) {
-            const opt = document.createElement('option');
-            opt.value = `${group.providerId}:${model.id}`;
-            opt.textContent = model.name;
-            if (model.id === currentModelId && group.providerId === currentProvider) opt.selected = true;
-            optgroup.appendChild(opt);
-          }
-          modelSelect.appendChild(optgroup);
-        } else {
-          for (const model of sorted) {
-            const opt = document.createElement('option');
-            opt.value = `${group.providerId}:${model.id}`;
-            opt.textContent = model.name;
-            if (model.id === currentModelId) opt.selected = true;
-            modelSelect.appendChild(opt);
-          }
+        if (group.models.length > 0) {
+          setSelectedModelId(`${group.providerId}:${group.models[0].id}`);
+          return;
         }
       }
-
-      // Auto-select first model if nothing is explicitly selected in localStorage
-      if (!currentModelId && modelSelect.options.length > 0) {
-        modelSelect.selectedIndex = 0;
-        if (modelSelect.value) setSelectedModelId(modelSelect.value);
-      }
     };
-    populateModels();
-    this.refreshModels = populateModels;
-    modelSelect.addEventListener('change', () => {
-      setSelectedModelId(modelSelect.value);
-      // Update provider indicator
-      const newProvider = getSelectedProvider();
-      providerIndicator.textContent = getProviderConfig(newProvider).name;
-      this.onModelChange?.(modelSelect.value);
-    });
+    ensureModelSelected();
+    this.refreshModels = () => {
+      ensureModelSelected();
+      this.panels?.chat?.refreshModelSelector();
+      this.refreshAvatar();
+    };
+
+    const row = document.createElement('div');
+    row.className = 'header__row';
+
+    const brand = document.createElement('div');
+    brand.className = 'header__brand';
+
+    const logoSize = this.isExtension ? 24 : 28;
+    const logo = this.sliccLogo(logoSize);
+    brand.appendChild(logo);
+
+    const title = document.createElement('div');
+    title.className = 'header__title';
+    title.textContent = 'slicc';
+    brand.appendChild(title);
+
+    row.appendChild(brand);
 
     if (this.isExtension) {
-      // ── Extension: single compact row ───────────────────────────
-      // slicc | scoop dropdown | model dropdown | icons
-      const row = document.createElement('div');
-      row.style.cssText = 'display: flex; align-items: center; width: 100%; gap: 6px;';
-
-      const logo = this.sliccLogo(22);
-      row.appendChild(logo);
-
-      const title = document.createElement('div');
-      title.className = 'header__title';
-      title.textContent = 'slicc';
-      row.appendChild(title);
-
       this.scoopSwitcherEl = document.createElement('div');
       this.scoopSwitcherEl.className = 'scoop-switcher';
       this.scoopSwitcher = new ScoopSwitcher(this.scoopSwitcherEl, {
         onScoopSelect: (scoop) => this.onScoopSelect?.(scoop),
-        onCreateScoop: (name) => { this.panels?.scoops?.createScoop(name); },
-        onDeleteScoop: (jid) => { this.panels?.scoops?.deleteScoop?.(jid); },
+        onCreateScoop: (name) => {
+          this.panels?.scoops?.createScoop(name);
+        },
+        onDeleteScoop: (jid) => {
+          this.panels?.scoops?.deleteScoop?.(jid);
+        },
       });
       row.appendChild(this.scoopSwitcherEl);
-
-      // Model dropdown button
-      const modelDD = document.createElement('div');
-      modelDD.style.cssText = 'position: relative;';
-      const modelBtn = document.createElement('button');
-      modelBtn.style.cssText =
-        'display: flex; align-items: center; gap: 4px; padding: 3px 8px; ' +
-        'border: 1px solid var(--s2-border-subtle); border-radius: var(--s2-radius-default); ' +
-        'background: var(--s2-bg-sunken); color: var(--s2-content-secondary); ' +
-        'font-size: 11px; cursor: pointer; white-space: nowrap; font-family: var(--s2-font-family); ' +
-        'transition: color 130ms ease, background 130ms ease;';
-      modelBtn.textContent = 'Model \u25BE';
-      let modelMenuOpen = false;
-
-      const renderModelMenu = () => {
-        const old = modelDD.querySelector('.model-dd-menu');
-        if (old) old.remove();
-        if (!modelMenuOpen) return;
-
-        const menu = document.createElement('div');
-        menu.className = 'model-dd-menu';
-        menu.style.cssText =
-          'position: absolute; top: 100%; left: 0; margin-top: 4px; min-width: 200px; max-height: 300px; ' +
-          'overflow-y: auto; background: var(--s2-bg-layer-2); border: 1px solid var(--s2-border-default); ' +
-          'border-radius: var(--s2-radius-l); padding: 4px 0; box-shadow: var(--s2-shadow-elevated); z-index: 1000;';
-
-        const groups = getAllAvailableModels();
-        const currentModelId = getSelectedModelId();
-        const currentProvider = getSelectedProvider();
-        const useGroupHeaders = groups.length > 1;
-
-        for (const group of groups) {
-          if (useGroupHeaders) {
-            const groupHeader = document.createElement('div');
-            groupHeader.style.cssText =
-              'padding: 4px 12px; font-size: 10px; color: var(--s2-content-secondary); text-transform: uppercase; ' +
-              'letter-spacing: 0.5px; font-weight: 600;';
-            if (menu.children.length > 0) {
-              groupHeader.style.borderTop = '1px solid var(--s2-border-default)';
-              groupHeader.style.marginTop = '4px';
-              groupHeader.style.paddingTop = '8px';
-            }
-            groupHeader.textContent = group.providerName;
-            menu.appendChild(groupHeader);
-          }
-
-          const sorted = sortModels(group.models);
-          for (const model of sorted) {
-            const isSelected = model.id === currentModelId && group.providerId === currentProvider;
-            const item = document.createElement('div');
-            item.style.cssText =
-              'padding: 6px 12px; cursor: pointer; font-size: 12px; color: var(--s2-content-default); ' +
-              'display: flex; align-items: center; gap: 6px; border-radius: var(--s2-radius-s); ' +
-              'margin: 0 4px; transition: background 130ms ease;';
-            if (isSelected) {
-              item.style.color = 'var(--slicc-cone)';
-              item.style.fontWeight = '700';
-            }
-            item.addEventListener('mouseenter', () => { item.style.background = 'var(--s2-bg-elevated)'; });
-            item.addEventListener('mouseleave', () => { item.style.background = ''; });
-
-            const check = document.createElement('span');
-            check.style.cssText = 'width: 14px; text-align: center; font-size: 10px;';
-            check.textContent = isSelected ? '\u2713' : '';
-            item.appendChild(check);
-
-            const label = document.createElement('span');
-            label.textContent = model.name;
-            item.appendChild(label);
-
-            item.addEventListener('click', () => {
-              setSelectedModelId(`${group.providerId}:${model.id}`);
-              this.onModelChange?.(`${group.providerId}:${model.id}`);
-              modelMenuOpen = false;
-              renderModelMenu();
-            });
-            menu.appendChild(item);
-          }
-        }
-
-        modelDD.appendChild(menu);
-      };
-
-      modelBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        modelMenuOpen = !modelMenuOpen;
-        renderModelMenu();
-      });
-      document.addEventListener('click', () => {
-        if (modelMenuOpen) { modelMenuOpen = false; renderModelMenu(); }
-      });
-
-      modelDD.appendChild(modelBtn);
-      row.appendChild(modelDD);
-
-      const spacer = document.createElement('div');
-      spacer.style.flex = '1';
-      row.appendChild(spacer);
-
-      this.actionsEl = document.createElement('div');
-      this.actionsEl.className = 'header__actions';
-      this.buildButtons();
-      row.appendChild(this.actionsEl);
-
-      header.appendChild(row);
-    } else {
-      // ── Standalone: single row (original layout) ────────────────
-      const leftGroup = document.createElement('div');
-      leftGroup.style.cssText = 'display: flex; align-items: center; gap: 6px;';
-
-      const logo = this.sliccLogo(22);
-      leftGroup.appendChild(logo);
-
-      const title = document.createElement('div');
-      title.className = 'header__title';
-      title.textContent = 'slicc';
-      leftGroup.appendChild(title);
-
-      // Separator between branding and controls
-      const headerSep = document.createElement('div');
-      headerSep.className = 'header__separator';
-      leftGroup.appendChild(headerSep);
-
-      leftGroup.appendChild(providerIndicator);
-      leftGroup.appendChild(modelSelect);
-
-      header.appendChild(leftGroup);
-
-      this.actionsEl = document.createElement('div');
-      this.actionsEl.className = 'header__actions';
-      this.buildButtons();
-      header.appendChild(this.actionsEl);
     }
 
+    const spacer = document.createElement('div');
+    spacer.className = 'header__spacer';
+    row.appendChild(spacer);
+
+    // Avatar
+    this.avatarEl = this.buildUserAvatar();
+    row.appendChild(this.avatarEl);
+
+    header.appendChild(row);
     parent.appendChild(header);
   }
 
@@ -471,7 +315,7 @@ export class Layout {
   /** Fixed scoop radius in SVG units — scoops never shrink. */
   private static readonly SCOOP_R = 5;
   private static readonly SCOOP_SPACING = 8.5; // center-to-center horizontal
-  private static readonly ROW_STEP = 7.5;      // center-to-center vertical
+  private static readonly ROW_STEP = 7.5; // center-to-center vertical
 
   /**
    * Calculate pyramid layout positions for N scoops.
@@ -484,7 +328,7 @@ export class Layout {
 
     // Find bottom row width: smallest w where w*(w+1)/2 >= count
     let w = 1;
-    while (w * (w + 1) / 2 < count) w++;
+    while ((w * (w + 1)) / 2 < count) w++;
 
     // Build rows bottom-up
     const rows: number[] = [];
@@ -522,7 +366,7 @@ export class Layout {
     const group = this.logoSvg.querySelector('.logo-scoops');
     if (!group) return;
 
-    const nonCone = scoops.filter(s => !s.isCone);
+    const nonCone = scoops.filter((s) => !s.isCone);
     const prevCount = this.logoScoopCount;
 
     // Skip redundant calls (same count, no change)
@@ -575,8 +419,8 @@ export class Layout {
     }
 
     // Expand viewBox to fit the growing ice cream — never shrink scoops
-    const allX = positions.map(p => p.cx);
-    const allY = positions.map(p => p.cy);
+    const allX = positions.map((p) => p.cx);
+    const allY = positions.map((p) => p.cy);
     const minX = Math.min(...allX) - r - 1;
     const maxX = Math.max(...allX) + r + 1;
     const minY = Math.min(...allY) - r - 1;
@@ -584,134 +428,168 @@ export class Layout {
     this.logoSvg.setAttribute('viewBox', `${minX} ${minY} ${maxX - minX} ${maxY - minY}`);
   }
 
-  /** Create an S2-style outline SVG icon. */
-  private svgIcon(paths: string[], viewBox = '0 0 20 20'): SVGSVGElement {
-    const svgNs = 'http://www.w3.org/2000/svg';
-    const svg = document.createElementNS(svgNs, 'svg');
-    svg.setAttribute('width', '16');
-    svg.setAttribute('height', '16');
-    svg.setAttribute('viewBox', viewBox);
-    svg.setAttribute('fill', 'none');
-    svg.setAttribute('stroke', 'currentColor');
-    svg.setAttribute('stroke-width', '1.5');
-    svg.setAttribute('stroke-linecap', 'round');
-    svg.setAttribute('stroke-linejoin', 'round');
-    for (const d of paths) {
-      const path = document.createElementNS(svgNs, 'path');
-      path.setAttribute('d', d);
-      svg.appendChild(path);
-    }
-    return svg;
+  /** Get initials from a user name (up to 2 characters). */
+  private getInitials(name: string): string {
+    const parts = name.trim().split(/\s+/);
+    if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    return name.slice(0, 2).toUpperCase();
   }
 
-  /** Create an icon button with custom tooltip. */
-  private iconBtn(icon: SVGSVGElement, tooltip: string): HTMLButtonElement {
-    const btn = document.createElement('button');
-    btn.className = 'header__btn';
-    btn.setAttribute('aria-label', tooltip);
-    btn.dataset.tooltip = tooltip;
-    btn.appendChild(icon);
-    return btn;
-  }
+  /** Build the user avatar element — 28px circle, three states. */
+  private buildUserAvatar(): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'header__avatar';
+    el.setAttribute('aria-label', 'Account');
+    el.dataset.tooltip = 'Account';
 
-  private buildButtons(): void {
-    // SVG icon paths (S2 outline style: 20×20 canvas, 1.5px stroke)
-    const icons = {
-      trash: ['M4 6h12', 'M8 6V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2', 'M6 6v10a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V6'],
-      copy: ['M7 7h9v9H7z', 'M13 7V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h2'],
-      terminal: ['M3 4h14a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z', 'M6 10l2-2', 'M6 10l2 2', 'M11 12h3'],
-      database: ['M10 3c3.87 0 7 1.12 7 2.5S13.87 8 10 8 3 6.88 3 5.5 6.13 3 10 3z', 'M3 5.5v9C3 15.88 6.13 17 10 17s7-1.12 7-2.5v-9', 'M3 10c0 1.38 3.13 2.5 7 2.5s7-1.12 7-2.5'],
-      gear: ['M10 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6z', 'M17.4 10a7.46 7.46 0 0 0-.1-1.3l1.5-1.2-1.5-2.6-1.8.7a7.13 7.13 0 0 0-1.9-1.1L13.2 3h-3l-.4 1.5a7.13 7.13 0 0 0-1.9 1.1l-1.8-.7-1.5 2.6 1.5 1.2a7.46 7.46 0 0 0 0 2.6l-1.5 1.2 1.5 2.6 1.8-.7c.6.5 1.2.8 1.9 1.1l.4 1.5h3l.4-1.5c.7-.3 1.3-.6 1.9-1.1l1.8.7 1.5-2.6-1.5-1.2a7.46 7.46 0 0 0 .1-1.3z'],
-      clearScoops: ['M10 3c3.87 0 7 1.12 7 2.5S13.87 8 10 8 3 6.88 3 5.5 6.13 3 10 3z', 'M3 5.5v9C3 15.88 6.13 17 10 17s7-1.12 7-2.5v-9', 'M7 12l6-4', 'M7 8l6 4'],
-    };
+    // Find first account with user info
+    const accounts = getAccounts();
+    const account = accounts.find((a) => a.userName || a.userAvatar);
 
-    // Clear Chat
-    this.clearChatBtn = this.iconBtn(this.svgIcon(icons.trash), 'Clear Chat');
-    this.clearChatBtn.addEventListener('click', async () => {
-      await this.panels.chat.clearSession();
-      await this.onClearChat?.();
-      location.reload();
-    });
-    this.actionsEl.appendChild(this.clearChatBtn);
-
-    // Copy Chat
-    this.copyChatBtn = this.iconBtn(this.svgIcon(icons.copy), 'Copy Chat');
-    this.copyChatBtn.addEventListener('click', async () => {
-      const messages: ChatMessage[] = this.panels.chat.getMessages();
-      let formatted = '';
-      for (const msg of messages) {
-        const heading = msg.role === 'user' ? 'User' : 'Assistant';
-        formatted += `## ${heading}\n${msg.content}\n\n`;
-        if (msg.toolCalls) {
-          for (const tc of msg.toolCalls) {
-            formatted += `### Tool: ${tc.name}\nInput: ${JSON.stringify(tc.input, null, 2)}\nResult: ${tc.result ?? ''}\n\n`;
-          }
+    if (account?.userAvatar) {
+      // Avatar URL
+      const img = document.createElement('img');
+      img.src = account.userAvatar;
+      img.alt = account.userName ?? 'User';
+      img.addEventListener('error', () => {
+        // Fallback to initials on error
+        el.removeChild(img);
+        if (account.userName) {
+          el.classList.add('header__avatar--initials');
+          el.textContent = this.getInitials(account.userName);
         }
-      }
-      await navigator.clipboard.writeText(formatted);
-      // Brief visual feedback — swap icon color
-      this.copyChatBtn.style.color = 'var(--s2-positive)';
-      setTimeout(() => { this.copyChatBtn.style.color = ''; }, 1500);
-    });
-    this.actionsEl.appendChild(this.copyChatBtn);
-
-    // Terminal: clears terminal and switches to terminal tab
-    this.clearTermBtn = this.iconBtn(this.svgIcon(icons.terminal), 'Clear Terminal');
-    this.clearTermBtn.addEventListener('click', () => {
-      this.panels.terminal.clearTerminal();
-      this.openTerminal();
-    });
-    this.actionsEl.appendChild(this.clearTermBtn);
-
-    // Clear FS
-    this.clearFsBtn = this.iconBtn(this.svgIcon(icons.database), 'Clear Filesystem');
-    this.clearFsBtn.addEventListener('click', async () => {
-      await this.onClearFilesystem?.();
-      location.reload();
-    });
-    this.actionsEl.appendChild(this.clearFsBtn);
-
-    // Clear Scoops DB (dev mode only)
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      const clearScoopsBtn = this.iconBtn(this.svgIcon(icons.clearScoops), 'Clear Scoops DB');
-      clearScoopsBtn.addEventListener('click', async () => {
-        const dbs = await indexedDB.databases();
-        for (const db of dbs) {
-          if (db.name?.startsWith('slicc-fs') || db.name === 'slicc-groups') {
-            indexedDB.deleteDatabase(db.name);
-          }
-        }
-        location.reload();
       });
-      this.actionsEl.appendChild(clearScoopsBtn);
+      el.appendChild(img);
+    } else if (account?.userName) {
+      // Initials circle
+      el.classList.add('header__avatar--initials');
+      el.textContent = this.getInitials(account.userName);
+    } else {
+      // Placeholder person icon
+      el.classList.add('header__avatar--placeholder');
+      el.innerHTML =
+        '<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M10 10c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v1c0 .55.45 1 1 1h14c.55 0 1-.45 1-1v-1c0-2.66-5.33-4-8-4z"/></svg>';
     }
 
-    // Separator before settings
-    const sep = document.createElement('div');
-    sep.className = 'header__separator';
-    this.actionsEl.appendChild(sep);
+    el.addEventListener('click', () => this.showAvatarPopover());
+    return el;
+  }
 
-    // Settings button
-    const settingsBtn = this.iconBtn(this.svgIcon(icons.gear), 'Settings');
-    if (!getApiKey()) {
-      settingsBtn.style.color = 'var(--slicc-cone)'; // highlight unconfigured state
+  /** Refresh the avatar after provider settings change. */
+  private refreshAvatar(): void {
+    if (!this.avatarEl) return;
+    const parent = this.avatarEl.parentElement;
+    if (!parent) return;
+    const newAvatar = this.buildUserAvatar();
+    parent.replaceChild(newAvatar, this.avatarEl);
+    this.avatarEl = newAvatar;
+  }
+
+  /** Show the avatar profile popover. */
+  private showAvatarPopover(): void {
+    // Toggle — if already open, just close it
+    const existing = document.querySelector('.avatar-popover');
+    if (existing) {
+      existing.remove();
+      return;
     }
+
+    const popover = document.createElement('div');
+    popover.className = 'avatar-popover';
+
+    // Find current account info
+    const accounts = getAccounts();
+    const account = accounts.find((a) => a.userName || a.accessToken || a.apiKey);
+
+    if (account) {
+      const userSection = document.createElement('div');
+      userSection.className = 'avatar-popover__user';
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'avatar-popover__name';
+      nameEl.textContent = account.userName || 'Logged in';
+      userSection.appendChild(nameEl);
+
+      const providerEl = document.createElement('div');
+      providerEl.className = 'avatar-popover__provider';
+      providerEl.textContent = getProviderConfig(account.providerId).name;
+      userSection.appendChild(providerEl);
+
+      popover.appendChild(userSection);
+
+      // Sign out
+      const signOutBtn = document.createElement('button');
+      signOutBtn.className = 'avatar-popover__item';
+      signOutBtn.textContent = 'Sign out';
+      signOutBtn.addEventListener('click', () => {
+        removeAccount(account.providerId);
+        popover.remove();
+        this.refreshAvatar();
+        this.refreshModels?.();
+      });
+      popover.appendChild(signOutBtn);
+    }
+
+    // Clear all accounts (danger)
+    if (accounts.length > 0) {
+      const sep = document.createElement('div');
+      sep.className = 'avatar-popover__separator';
+      popover.appendChild(sep);
+
+      const clearAllBtn = document.createElement('button');
+      clearAllBtn.className = 'avatar-popover__item avatar-popover__item--danger';
+      clearAllBtn.textContent = 'Clear all accounts';
+      clearAllBtn.addEventListener('click', () => {
+        clearAllSettings();
+        popover.remove();
+        this.refreshAvatar();
+        this.refreshModels?.();
+      });
+      popover.appendChild(clearAllBtn);
+    }
+
+    // Account settings link
+    const sep2 = document.createElement('div');
+    sep2.className = 'avatar-popover__separator';
+    popover.appendChild(sep2);
+
+    const settingsBtn = document.createElement('button');
+    settingsBtn.className = 'avatar-popover__item';
+    settingsBtn.textContent = 'Account settings\u2026';
     settingsBtn.addEventListener('click', async () => {
+      popover.remove();
       if (!getApiKey()) clearAllSettings();
       const changed = await showProviderSettings();
-      if (changed) location.reload();
+      if (changed) {
+        this.refreshAvatar();
+        this.refreshModels?.();
+      }
     });
-    this.actionsEl.appendChild(settingsBtn);
-  }
+    popover.appendChild(settingsBtn);
 
-  /** Show/hide buttons based on active tab (extension mode only). */
-  private updateButtonVisibility(): void {
-    if (!this.isExtension) return;
-    const t = this.activeTab;
-    this.clearChatBtn.style.display = t === 'chat' ? '' : 'none';
-    this.copyChatBtn.style.display = t === 'chat' ? '' : 'none';
-    this.clearTermBtn.style.display = t === 'terminal' ? '' : 'none';
-    this.clearFsBtn.style.display = t === 'files' ? '' : 'none';
+    document.body.appendChild(popover);
+
+    // Position below avatar
+    const rect = this.avatarEl.getBoundingClientRect();
+    popover.style.top = `${rect.bottom + 4}px`;
+    popover.style.right = `${window.innerWidth - rect.right}px`;
+
+    // Dismiss on outside click or Escape (avatar clicks handled by toggle in showAvatarPopover)
+    const dismiss = (e: MouseEvent | KeyboardEvent) => {
+      if (e instanceof KeyboardEvent) {
+        if (e.key !== 'Escape') return;
+      } else if (popover.contains(e.target as Node) || this.avatarEl.contains(e.target as Node)) {
+        return;
+      }
+      popover.remove();
+      document.removeEventListener('mousedown', dismiss);
+      document.removeEventListener('keydown', dismiss);
+    };
+    // Delay to avoid immediate dismissal from the click that opened it
+    requestAnimationFrame(() => {
+      document.addEventListener('mousedown', dismiss);
+      document.addEventListener('keydown', dismiss);
+    });
   }
 
   // ── Extension: Tabbed Layout ────────────────────────────────────────
@@ -734,19 +612,24 @@ export class Layout {
     content.className = 'tab-content';
     this.root.appendChild(content);
 
-    this.extensionZone = new TabZone(tabBar, content, 'primary', {
-      onTabActivate: (id) => {
-        this.activeTab = id;
-        this.updateButtonVisibility();
-        if (id === 'terminal') this.panels?.terminal?.refit?.();
-        if (id === 'memory') this.panels?.memory?.refresh();
+    this.extensionZone = new TabZone(
+      tabBar,
+      content,
+      'primary',
+      {
+        onTabActivate: (id) => {
+          this.activeTab = id;
+          if (id === 'terminal') this.panels?.terminal?.refit?.();
+          if (id === 'memory') this.panels?.memory?.refresh();
+        },
+        onTabClose: (id) => {
+          const name = id.startsWith('sprinkle-') ? id.slice(9) : id;
+          this.onSprinkleClose?.(name);
+        },
+        onAddClick: () => this.showExtensionPicker(tabBar),
       },
-      onTabClose: (id) => {
-        const name = id.startsWith('sprinkle-') ? id.slice(9) : id;
-        this.onSprinkleClose?.(name);
-      },
-      onAddClick: () => this.showExtensionPicker(tabBar),
-    }, { classPrefix: 'tab-bar' });
+      { classPrefix: 'tab-bar' }
+    );
 
     // Create containers for built-in tabs
     const chatContainer = document.createElement('div');
@@ -763,18 +646,25 @@ export class Layout {
 
     // Add built-in tabs
     for (const { id, label } of EXTENSION_TAB_SPECS) {
-      const container = id === 'chat' ? chatContainer
-        : id === 'terminal' ? terminalContainer
-        : id === 'files' ? filesContainer
-        : memoryContainer;
+      const container =
+        id === 'chat'
+          ? chatContainer
+          : id === 'terminal'
+            ? terminalContainer
+            : id === 'files'
+              ? filesContainer
+              : memoryContainer;
       this.extensionZone.addTab({
         id,
         label,
         closable: false,
         element: container,
-        onActivate: id === 'terminal' ? () => this.panels?.terminal?.refit?.()
-          : id === 'memory' ? () => this.panels?.memory?.refresh()
-          : undefined,
+        onActivate:
+          id === 'terminal'
+            ? () => this.panels?.terminal?.refit?.()
+            : id === 'memory'
+              ? () => this.panels?.memory?.refresh()
+              : undefined,
       });
       // Keep tabContainers in sync for backward compat
       this.tabContainers.set(id, container);
@@ -799,12 +689,17 @@ export class Layout {
     // Create panels in their tab containers
     this.panels = {
       chat: new ChatPanel(chatContainer),
-      terminal: new TerminalPanel(terminalContainer),
+      terminal: new TerminalPanel(terminalContainer, {
+        onClearTerminal: () => {
+          this.panels.terminal.clearTerminal();
+        },
+      }),
       fileBrowser: new FileBrowserPanel(filesContainer, {
         onRunCommand: async (command) => {
           await this.runFileBrowserCommand(command);
           this.extensionZone.activateTab('terminal');
         },
+        onClearFilesystem: () => this.onClearFilesystem?.(),
       }),
       memory: new MemoryPanel(memoryContainer),
       scoops: new ScoopsPanel(this.scoopsEl, {
@@ -814,15 +709,16 @@ export class Layout {
       }),
     };
 
-    this.updateButtonVisibility();
+    // Wire chat panel model selector to layout's onModelChange
+    this.panels.chat.onModelChange = (modelId) => this.onModelChange?.(modelId);
   }
 
   /** Show the [+] picker in extension mode. */
   private showExtensionPicker(anchor: HTMLElement): void {
-    const availableSprinkles = (this.getAvailableSprinkles?.() ?? []);
+    const availableSprinkles = this.getAvailableSprinkles?.() ?? [];
     // In extension mode, all panels are in one zone — filter already-open ones
     const openIds = new Set(this.extensionZone.getTabIds());
-    const available = availableSprinkles.filter(p => !openIds.has(`sprinkle-${p.name}`));
+    const available = availableSprinkles.filter((p) => !openIds.has(`sprinkle-${p.name}`));
 
     if (available.length === 0) return;
 
@@ -855,74 +751,106 @@ export class Layout {
     const layout = document.createElement('div');
     layout.className = 'layout';
 
-    // Scoops panel (leftmost)
+    // Scoops panel (leftmost — icon rail, 58px fixed)
     this.scoopsEl = document.createElement('div');
     this.scoopsEl.className = 'layout__scoops';
     layout.appendChild(this.scoopsEl);
 
-    // Scoops divider
-    this.scoopsDivider = document.createElement('div');
-    this.scoopsDivider.className = 'layout__divider';
-    layout.appendChild(this.scoopsDivider);
-
-    // Left panel (chat)
+    // Left panel (chat) — includes thread header
     this.leftEl = document.createElement('div');
     this.leftEl.className = 'layout__left';
+
+    // Thread header (sub-header with scoop name)
+    this.threadHeaderEl = document.createElement('div');
+    this.threadHeaderEl.className = 'thread-header';
+    const threadHeaderTitle = document.createElement('div');
+    threadHeaderTitle.className = 'thread-header__title';
+    // Chat history icon
+    const threadIcon = document.createElement('span');
+    threadIcon.className = 'thread-header__icon';
+    threadIcon.innerHTML =
+      '<svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h14a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H7l-4 3V5a1 1 0 0 1 1-1z"/><path d="M7 8h6"/><path d="M7 11h3"/></svg>';
+    threadHeaderTitle.appendChild(threadIcon);
+    this.threadHeaderName = document.createElement('span');
+    this.threadHeaderName.className = 'thread-header__name';
+    this.threadHeaderName.textContent = 'sliccy';
+    threadHeaderTitle.appendChild(this.threadHeaderName);
+    this.threadHeaderEl.appendChild(threadHeaderTitle);
+
+    // Right panel toggle button
+    const panelToggle = document.createElement('button');
+    panelToggle.className = 'thread-header__panel-toggle thread-header__panel-toggle--right';
+    panelToggle.dataset.tooltip = 'Toggle panel';
+    panelToggle.setAttribute('aria-label', 'Toggle panel');
+    panelToggle.innerHTML =
+      '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h14a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M12 3v14"/></svg>';
+    panelToggle.addEventListener('click', () => {
+      this.rightEl.classList.toggle('layout__right--open');
+    });
+    // Clear chat button (in thread header, before panel toggle)
+    const clearChatBtn = document.createElement('button');
+    clearChatBtn.className = 'thread-header__panel-toggle';
+    clearChatBtn.dataset.tooltip = 'Clear Chat';
+    clearChatBtn.setAttribute('aria-label', 'Clear Chat');
+    clearChatBtn.innerHTML =
+      '<svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="m8.249,15.021c-.4,0-.733-.317-.748-.72l-.25-6.5c-.017-.414.307-.763.72-.778.01-.001.021-.001.03-.001.4,0,.733.317.748.72l.25,6.5c.017.414-.307.763-.72.778-.01.001-.021.001-.03.001Z" fill="currentColor"/><path d="m11.751,15.021c-.01,0-.02,0-.03-.001-.413-.016-.736-.364-.72-.778l.25-6.5c.015-.403.348-.72.748-.72.01,0,.02,0,.03.001.413.016.736.364.72.778l-.25,6.5c-.015.403-.348.72-.748.72Z" fill="currentColor"/><path d="m17,4h-3.5v-.75c0-1.24-1.01-2.25-2.25-2.25h-2.5c-1.24,0-2.25,1.01-2.25,2.25v.75h-3.5c-.414,0-.75.336-.75.75s.336.75.75.75h.52l.422,10.342c.048,1.21,1.036,2.158,2.248,2.158h7.619c1.212,0,2.2-.948,2.248-2.158l.422-10.342h.52c.414,0,.75-.336.75-.75s-.336-.75-.75-.75Zm-9-.75c0-.413.337-.75.75-.75h2.5c.413,0,.75.337.75.75v.75h-4v-.75Zm6.56,12.531c-.017.403-.346.719-.75.719h-7.619c-.404,0-.733-.316-.75-.719l-.42-10.281h9.959l-.42,10.281Z" fill="currentColor"/></svg>';
+    clearChatBtn.addEventListener('click', async () => {
+      await this.panels.chat.clearSession();
+      await this.onClearChat?.();
+      location.reload();
+    });
+
+    const threadActions = document.createElement('div');
+    threadActions.className = 'thread-header__actions';
+    threadActions.appendChild(clearChatBtn);
+    threadActions.appendChild(panelToggle);
+    this.threadHeaderEl.appendChild(threadActions);
+
+    this.leftEl.appendChild(this.threadHeaderEl);
+
+    // Chat container
+    const chatContainer = document.createElement('div');
+    chatContainer.style.cssText = 'display: flex; flex-direction: column; flex: 1; min-height: 0;';
+    this.leftEl.appendChild(chatContainer);
+
     layout.appendChild(this.leftEl);
 
     // Vertical divider
     this.verticalDivider = document.createElement('div');
-    this.verticalDivider.className = 'layout__divider';
+    this.verticalDivider.className = 'layout__divider layout__divider--vertical';
     layout.appendChild(this.verticalDivider);
 
-    // Right panel
+    // Right panel — unified single zone with pill tabs
     this.rightEl = document.createElement('div');
     this.rightEl.className = 'layout__right';
 
-    // ── Primary zone (Terminal + sprinkle tabs) ──
     this.primaryZoneEl = document.createElement('div');
-    this.primaryZoneEl.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: none;';
+    this.primaryZoneEl.style.cssText =
+      'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1;';
 
     const primaryTabBar = document.createElement('div');
     primaryTabBar.className = 'mini-tabs';
+
+    // Close button for overlay mode (<1440px) — first item in tab bar
+    const rightCloseBtn = document.createElement('button');
+    rightCloseBtn.className = 'thread-header__panel-toggle thread-header__panel-toggle--right';
+    rightCloseBtn.dataset.tooltip = 'Close panel';
+    rightCloseBtn.setAttribute('aria-label', 'Close panel');
+    rightCloseBtn.innerHTML =
+      '<svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v14"/><path d="M3 3h14a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/></svg>';
+    rightCloseBtn.addEventListener('click', () => {
+      this.rightEl.classList.remove('layout__right--open');
+    });
+    primaryTabBar.appendChild(rightCloseBtn);
+
     this.primaryZoneEl.appendChild(primaryTabBar);
 
     const primaryContentArea = document.createElement('div');
-    primaryContentArea.style.cssText = 'flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;';
+    primaryContentArea.style.cssText =
+      'flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;';
     this.primaryZoneEl.appendChild(primaryContentArea);
 
     this.primaryZone = new TabZone(primaryTabBar, primaryContentArea, 'primary', {
-      onTabActivate: (id) => {
-        if (id === 'terminal') this.panels?.terminal?.refit();
-      },
-      onTabClose: (id) => {
-        const name = id.startsWith('sprinkle-') ? id.slice(9) : id;
-        this.onSprinkleClose?.(name);
-      },
-      onAddClick: () => this.showPickerForZone('primary', primaryTabBar),
-    });
-    this.primaryZone.enableAddButton();
-
-    this.rightEl.appendChild(this.primaryZoneEl);
-
-    // ── Horizontal divider ──
-    this.horizontalDivider = document.createElement('div');
-    this.horizontalDivider.className = 'layout__right-divider';
-    this.rightEl.appendChild(this.horizontalDivider);
-
-    // ── Drawer zone (Files + Memory) ──
-    this.drawerZoneEl = document.createElement('div');
-    this.drawerZoneEl.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden;';
-
-    const drawerTabBar = document.createElement('div');
-    drawerTabBar.className = 'mini-tabs';
-    this.drawerZoneEl.appendChild(drawerTabBar);
-
-    const drawerContentArea = document.createElement('div');
-    drawerContentArea.style.cssText = 'flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;';
-    this.drawerZoneEl.appendChild(drawerContentArea);
-
-    this.drawerZone = new TabZone(drawerTabBar, drawerContentArea, 'drawer', {
       onTabActivate: (id) => {
         if (id === 'terminal') this.panels?.terminal?.refit();
         if (id === 'memory') this.panels?.memory?.refresh();
@@ -931,52 +859,71 @@ export class Layout {
         const name = id.startsWith('sprinkle-') ? id.slice(9) : id;
         this.onSprinkleClose?.(name);
       },
-      onAddClick: () => this.showPickerForZone('drawer', drawerTabBar),
+      onAddClick: () => this.showPickerForZone('primary', primaryTabBar),
+      onFullpageToggle: (isFullpage) => {
+        this.leftEl.classList.toggle('layout__left--fullpage-hidden', isFullpage);
+        this.verticalDivider.classList.toggle('layout__divider--fullpage-hidden', isFullpage);
+        this.scoopsEl.classList.toggle('layout__scoops--fullpage-hidden', isFullpage);
+        this.rightEl.classList.toggle('layout__right--fullpage', isFullpage);
+      },
     });
-    this.drawerZone.enableAddButton();
 
-    // Terminal tab
+    // Dev panel containers
     this.terminalContainer = document.createElement('div');
-    this.terminalContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1;';
-    this.drawerZone.addTab({
+    this.terminalContainer.style.cssText =
+      'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1;';
+
+    const fileBrowserContainer = document.createElement('div');
+    fileBrowserContainer.style.cssText =
+      'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1;';
+
+    const memoryContainer = document.createElement('div');
+    memoryContainer.style.cssText =
+      'display: flex; flex-direction: column; min-height: 0; flex: 1;';
+
+    // S2 icon SVGs for pinned tabs (16×16, filled)
+    const iconSvg = (inner: string) =>
+      `<svg width="16" height="16" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">${inner}</svg>`;
+    const codeIcon =
+      '<path d="M5.5 14.5C5.30762 14.5 5.11621 14.4268 4.96973 14.2803L1.21973 10.5303C0.92676 10.2373 0.92676 9.76269 1.21973 9.46972L4.96973 5.71972C5.2627 5.42675 5.73731 5.42675 6.03028 5.71972C6.32325 6.01269 6.32325 6.4873 6.03028 6.78027L2.81055 10L6.03028 13.2197C6.32325 13.5127 6.32325 13.9873 6.03028 14.2803C5.8838 14.4268 5.69238 14.5 5.5 14.5Z" fill="currentColor"/><path d="M14.5 14.5C14.3076 14.5 14.1162 14.4268 13.9697 14.2803C13.6768 13.9873 13.6768 13.5127 13.9697 13.2197L17.1895 9.99999L13.9697 6.78026C13.6768 6.48729 13.6768 6.01268 13.9697 5.71971C14.2627 5.42674 14.7373 5.42674 15.0303 5.71971L18.7803 9.46971C19.0732 9.76268 19.0732 10.2373 18.7803 10.5303L15.0303 14.2803C14.8838 14.4267 14.6924 14.5 14.5 14.5Z" fill="currentColor"/><path d="M8.22852 18C8.16993 18 8.11036 17.9932 8.05176 17.9795C7.64844 17.8818 7.40137 17.4766 7.49805 17.0742L10.998 2.57422C11.0957 2.1709 11.5078 1.92871 11.9033 2.02051C12.3066 2.11817 12.5537 2.52344 12.457 2.92578L8.95703 17.4258C8.87402 17.7695 8.56642 18 8.22852 18Z" fill="currentColor"/>';
+    const dataIcon =
+      '<path d="M18 4.75C18 2.61621 13.9756 1.5 10 1.5C6.02441 1.5 2 2.61621 2 4.75C2 4.81714 2.01538 4.88037 2.02325 4.94556C2.01696 4.98462 2 5.01978 2 5.06055V15C2 17.0615 6.14697 18 10 18C13.853 18 18 17.0615 18 15V5.06055C18 5.01978 17.983 4.98462 17.9767 4.94556C17.9846 4.88037 18 4.81714 18 4.75ZM16.5002 9.99451C16.4084 10.4097 14.2719 11.5 10 11.5C5.72705 11.5 3.59033 10.4092 3.5 10V6.72449C5.02985 7.56665 7.52393 8 10 8C12.4761 8 14.9701 7.56665 16.5001 6.72437L16.5002 9.99451ZM10 3C14.2886 3 16.5 4.22656 16.5 4.75C16.5 5.27344 14.2886 6.5 10 6.5C5.71143 6.5 3.5 5.27344 3.5 4.75C3.5 4.22656 5.71143 3 10 3ZM10 16.5C5.72705 16.5 3.59033 15.4092 3.5 15V11.8464C5.05219 12.6304 7.58337 13 10 13C12.4168 13 14.9482 12.6304 16.5003 11.8463L16.5005 14.9941C16.4097 15.4092 14.273 16.5 10 16.5Z" fill="currentColor"/>';
+    const settingsIcon =
+      '<path d="M10.0039 12.5889C9.11573 12.5889 8.25098 12.1289 7.77588 11.3057C7.06787 10.0781 7.48975 8.50489 8.71582 7.79688C9.30908 7.45313 10.001 7.36329 10.665 7.54004C11.3276 7.71777 11.8814 8.14356 12.2241 8.73731C12.5674 9.33106 12.6582 10.0234 12.481 10.6855C12.3032 11.3486 11.8784 11.9024 11.2842 12.2451C10.8809 12.4785 10.4395 12.5889 10.0039 12.5889ZM9.07471 10.5557C9.36914 11.0645 10.0229 11.2392 10.5342 10.9463C10.7812 10.8037 10.958 10.5732 11.0317 10.2978C11.1055 10.0225 11.0679 9.73436 10.9253 9.48729C10.7822 9.24022 10.5522 9.06346 10.2764 8.98924C10.0015 8.916 9.71337 8.95408 9.46581 9.09569C8.95556 9.39061 8.78027 10.0449 9.07471 10.5557Z" fill="currentColor"/><path d="M6.90674 18.3184C6.56738 18.3184 6.22461 18.2334 5.91455 18.0537L5.09473 17.5811C4.20166 17.0674 3.84473 15.9316 4.28369 14.998L4.86377 13.7646C4.59863 13.4014 4.37402 13.0137 4.19189 12.6035L2.83496 12.4912C1.80615 12.4063 1.00049 11.5313 1.00049 10.5L0.99951 9.55371C0.99951 8.52051 1.80469 7.64453 2.83301 7.55957L4.1875 7.44531C4.2793 7.23633 4.37988 7.03613 4.48926 6.8457C4.59912 6.65429 4.72266 6.46679 4.8584 6.28125L4.27783 5.05176C3.83691 4.11914 4.1914 2.9834 5.08496 2.4668L5.90527 1.99317C6.79785 1.47657 7.95898 1.73438 8.54785 2.58301L9.32519 3.70117C9.76904 3.65137 10.2173 3.65332 10.666 3.70117L11.4414 2.58203C12.0303 1.73242 13.1924 1.47265 14.085 1.98828L14.9048 2.46094C15.7988 2.97656 16.1543 4.11231 15.7153 5.04492L15.1352 6.27734C15.4009 6.6416 15.6255 7.02929 15.8071 7.43847L17.164 7.55077C18.1924 7.63573 18.998 8.51073 18.999 9.54198L18.9995 10.4893C19.0005 11.5205 18.1958 12.3965 17.1675 12.4834L15.812 12.5976C15.7207 12.8066 15.6201 13.0059 15.5093 13.1973C15.3999 13.3867 15.2769 13.5752 15.1411 13.7607L15.7217 14.9902C16.1621 15.9219 15.8081 17.0576 14.915 17.5752L14.0942 18.0498C13.2007 18.5684 12.0405 18.3076 11.4517 17.459L10.6743 16.3408C10.2285 16.3897 9.78028 16.3887 9.3335 16.3418L8.55713 17.4619C8.17334 18.0156 7.54541 18.3184 6.90674 18.3184ZM6.9043 3.22461C6.81934 3.22461 6.73389 3.24609 6.65625 3.29102L5.83545 3.76563C5.61279 3.89454 5.52393 4.17774 5.63428 4.41114L6.41309 6.06153C6.53907 6.32813 6.49707 6.64356 6.30567 6.86817C6.10157 7.10743 5.93262 7.34473 5.78907 7.59376C5.64796 7.83985 5.52393 8.11231 5.42091 8.40333C5.32277 8.68165 5.07081 8.87599 4.77687 8.9004L2.95802 9.05372C2.6963 9.07618 2.49952 9.29005 2.49952 9.55274L2.5005 10.499C2.5005 10.7568 2.70167 10.9756 2.959 10.9971L4.77834 11.1475C5.07229 11.1719 5.32473 11.3662 5.42336 11.6445C5.62209 12.2051 5.92043 12.7207 6.31008 13.1768C6.50197 13.4004 6.54446 13.7168 6.41897 13.9834L5.64114 15.6358C5.53176 15.8692 5.62014 16.1533 5.84378 16.2813L6.66409 16.7549C6.88821 16.8848 7.17825 16.8184 7.32425 16.6074L8.36527 15.1055C8.53275 14.8633 8.82425 14.7363 9.11771 14.7959C9.70609 14.9033 10.3023 14.9043 10.8877 14.7949C11.1773 14.7402 11.4727 14.8613 11.6412 15.1045L12.6831 16.6035C12.8296 16.8135 13.1216 16.8799 13.3438 16.751L14.1641 16.2773C14.3902 16.1465 14.4776 15.8682 14.3653 15.6309L13.5864 13.9805C13.4605 13.7139 13.5025 13.3984 13.6939 13.1738C13.898 12.9336 14.0669 12.6973 14.2095 12.4492L14.21 12.4483C14.3526 12.2012 14.4732 11.9365 14.5786 11.6387C14.6773 11.3604 14.9292 11.166 15.2232 11.1416L17.042 10.9893C17.2984 10.9668 17.4995 10.7481 17.4995 10.4902L17.499 9.54298C17.499 9.28126 17.3018 9.06739 17.0401 9.04493L15.2212 8.89454C14.9273 8.87013 14.6748 8.67579 14.5762 8.39747C14.3784 7.8379 14.0796 7.32227 13.689 6.86524C13.4976 6.64063 13.4551 6.3252 13.5806 6.0586L14.3579 4.40626C14.4678 4.17286 14.3789 3.88868 14.1553 3.75978L13.3355 3.28712C13.1108 3.16017 12.8213 3.2256 12.6743 3.43653L11.6348 4.93653C11.4668 5.17969 11.1758 5.30469 10.8819 5.24708C10.2905 5.1377 9.69435 5.1377 9.11183 5.24708C8.81984 5.29884 8.52638 5.1797 8.35841 4.93751L7.31642 3.43849C7.22023 3.30079 7.06348 3.22461 6.9043 3.22461Z" fill="currentColor"/>';
+
+    // Pinned icon tabs for technical panels — always visible, start dimmed
+    this.primaryZone.addTab({
       id: 'terminal',
       label: 'Terminal',
       closable: false,
       element: this.terminalContainer,
+      pinned: true,
+      icon: iconSvg(codeIcon),
       onActivate: () => this.panels?.terminal?.refit(),
     });
-
-    // Files tab
-    const fileBrowserContainer = document.createElement('div');
-    fileBrowserContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: hidden; flex: 1;';
-    this.drawerZone.addTab({
+    this.primaryZone.addTab({
       id: 'files',
       label: 'Files',
       closable: false,
       element: fileBrowserContainer,
+      pinned: true,
+      icon: iconSvg(dataIcon),
     });
-
-    // Memory tab
-    const memoryContainer = document.createElement('div');
-    memoryContainer.style.cssText = 'display: flex; flex-direction: column; min-height: 0; flex: 1;';
-    this.drawerZone.addTab({
+    this.primaryZone.addTab({
       id: 'memory',
       label: 'Memory',
       closable: false,
       element: memoryContainer,
+      pinned: true,
+      icon: iconSvg(settingsIcon),
       onActivate: () => this.panels?.memory?.refresh(),
     });
 
-    // Restore persisted drawer height
-    const savedDrawerHeight = localStorage.getItem('slicc-drawer-height');
-    if (savedDrawerHeight) this.drawerHeightFraction = parseFloat(savedDrawerHeight) || 0.35;
+    // [+] button after pinned tabs — only shows sprinkles
+    this.primaryZone.enableAddButton();
+    this.primaryZone.enableFullpageButton();
 
-    // Restore persisted primary tab
-    this.primaryZone.restoreActiveTab();
-
-    this.drawerZone.restoreActiveTab();
-
-    this.rightEl.appendChild(this.drawerZoneEl);
+    this.rightEl.appendChild(this.primaryZoneEl);
     layout.appendChild(this.rightEl);
 
     // Hidden container for scoop iframes
@@ -989,49 +936,39 @@ export class Layout {
 
     // Create panels
     this.panels = {
-      chat: new ChatPanel(this.leftEl),
-      terminal: new TerminalPanel(this.terminalContainer),
+      chat: new ChatPanel(chatContainer),
+      terminal: new TerminalPanel(this.terminalContainer, {
+        onClearTerminal: () => {
+          this.panels.terminal.clearTerminal();
+          this.openTerminal();
+        },
+      }),
       fileBrowser: new FileBrowserPanel(fileBrowserContainer, {
         onRunCommand: (command) => {
           void this.runFileBrowserCommand(command);
         },
+        onClearFilesystem: () => this.onClearFilesystem?.(),
       }),
       memory: new MemoryPanel(memoryContainer),
       scoops: new ScoopsPanel(this.scoopsEl, {
-        onScoopSelect: (scoop) => this.onScoopSelect?.(scoop),
+        onScoopSelect: (scoop) => {
+          this.onScoopSelect?.(scoop);
+          // Update thread header name
+          this.threadHeaderName.textContent = scoop.assistantLabel;
+        },
         onSendMessage: () => {},
         onScoopsChanged: (scoops) => this.updateLogoScoops(scoops),
       }),
     };
 
-    this.applySizes();
+    // Wire chat panel model selector to layout's onModelChange
+    this.panels.chat.onModelChange = (modelId) => this.onModelChange?.(modelId);
 
-    this.setupScoopsDrag();
     this.setupVerticalDrag();
-    this.setupHorizontalDrag();
-    window.addEventListener('resize', () => this.applySizes());
+    window.addEventListener('resize', () => {});
   }
 
-  private applySizes(): void {
-    const totalWidth = this.root.clientWidth;
-    const dividerW = 4;
-
-    const scoopsW = Math.round(totalWidth * this.scoopsWidth);
-    const leftW = Math.round(totalWidth * this.leftWidth);
-    const rightW = Math.max(0, totalWidth - scoopsW - leftW - (dividerW * 2));
-
-    this.scoopsEl.style.width = scoopsW + 'px';
-    this.leftEl.style.width = leftW + 'px';
-    this.rightEl.style.width = rightW + 'px';
-
-    const rightH = this.rightEl.clientHeight;
-    const hDividerH = 4;
-    const drawerH = Math.max(28, Math.round(rightH * this.drawerHeightFraction));
-    const primaryH = Math.max(100, rightH - drawerH - hDividerH);
-
-    this.primaryZoneEl.style.height = primaryH + 'px';
-    this.drawerZoneEl.style.height = drawerH + 'px';
-  }
+  // Layout sizes are now handled by CSS flex (no manual sizing needed)
 
   /** Get the iframe container for the orchestrator */
   getIframeContainer(): HTMLElement {
@@ -1045,51 +982,22 @@ export class Layout {
     }
   }
 
-  private setupScoopsDrag(): void {
-    let dragging = false;
-
-    const onMouseMove = (e: MouseEvent) => {
-      if (!dragging) return;
-      const rect = this.root.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      this.scoopsWidth = Math.max(0.1, Math.min(0.3, x / rect.width));
-      this.applySizes();
-    };
-
-    const onMouseUp = () => {
-      dragging = false;
-      this.scoopsDivider.classList.remove('active');
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-    };
-
-    this.scoopsDivider.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      dragging = true;
-      this.scoopsDivider.classList.add('active');
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
-      window.addEventListener('mousemove', onMouseMove);
-      window.addEventListener('mouseup', onMouseUp);
-    });
-  }
-
   private setupVerticalDrag(): void {
+    // The vertical divider between chat and right panel is still draggable
+    // but only on desktop (≥1440px). On smaller screens it's hidden.
+    if (!this.verticalDivider) return;
     let dragging = false;
 
     const onMouseMove = (e: MouseEvent) => {
       if (!dragging) return;
-      const rect = this.root.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const xFraction = x / rect.width;
-      const minLeft = 0.2;
-      const minRight = 0.2;
-      const maxLeft = Math.max(minLeft, 1 - this.scoopsWidth - minRight);
-      const rawLeft = xFraction - this.scoopsWidth;
-      this.leftWidth = Math.max(minLeft, Math.min(maxLeft, rawLeft));
-      this.applySizes();
+      const layoutRect = this.root.querySelector('.layout')?.getBoundingClientRect();
+      if (!layoutRect) return;
+      const navRailW = 58; // fixed
+      const x = e.clientX - layoutRect.left - navRailW;
+      const available = layoutRect.width - navRailW;
+      const fraction = Math.max(0.3, Math.min(0.7, x / available));
+      this.leftEl.style.flex = `${fraction * 100} 0 0`;
+      this.rightEl.style.flex = `${(1 - fraction) * 100} 0 0`;
     };
 
     const onMouseUp = () => {
@@ -1099,6 +1007,7 @@ export class Layout {
       document.body.style.userSelect = '';
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
+      this.panels?.terminal?.refit();
     };
 
     this.verticalDivider.addEventListener('mousedown', (e) => {
@@ -1106,42 +1015,6 @@ export class Layout {
       dragging = true;
       this.verticalDivider.classList.add('active');
       document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
-      window.addEventListener('mousemove', onMouseMove);
-      window.addEventListener('mouseup', onMouseUp);
-    });
-  }
-
-  private setupHorizontalDrag(): void {
-    let dragging = false;
-
-    const onMouseMove = (e: MouseEvent) => {
-      if (!dragging) return;
-      const rect = this.rightEl.getBoundingClientRect();
-      const rightH = rect.height;
-      const y = e.clientY - rect.top;
-      // drawerHeightFraction = fraction from bottom
-      const primaryFraction = y / rightH;
-      this.drawerHeightFraction = Math.max(28 / rightH, Math.min(1 - 100 / rightH, 1 - primaryFraction));
-      this.applySizes();
-    };
-
-    const onMouseUp = () => {
-      dragging = false;
-      this.horizontalDivider.classList.remove('active');
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-      localStorage.setItem('slicc-drawer-height', String(this.drawerHeightFraction));
-      this.panels?.terminal?.refit();
-    };
-
-    this.horizontalDivider.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      dragging = true;
-      this.horizontalDivider.classList.add('active');
-      document.body.style.cursor = 'row-resize';
       document.body.style.userSelect = 'none';
       window.addEventListener('mousemove', onMouseMove);
       window.addEventListener('mouseup', onMouseUp);
@@ -1160,10 +1033,9 @@ export class Layout {
         openSprinkles.add(id.slice(9));
       }
     }
-    const unopenedSprinkles = availableSprinkles.filter(p => !openSprinkles.has(p.name)).length;
+    const unopenedSprinkles = availableSprinkles.filter((p) => !openSprinkles.has(p.name)).length;
     const hasAvailable = closedCount + unopenedSprinkles > 0;
     this.primaryZone?.setAddButtonEnabled(hasAvailable);
-    this.drawerZone?.setAddButtonEnabled(hasAvailable);
   }
 
   /** Show the [+] panel picker for a zone. */
@@ -1175,8 +1047,9 @@ export class Layout {
         openSprinkles.add(id.slice(9)); // strip 'sprinkle-' prefix
       }
     }
-    const availableSprinkles = (this.getAvailableSprinkles?.() ?? [])
-      .filter(p => !openSprinkles.has(p.name));
+    const availableSprinkles = (this.getAvailableSprinkles?.() ?? []).filter(
+      (p) => !openSprinkles.has(p.name)
+    );
 
     showSprinklePicker(anchor, zone, {
       registry: this.registry,
@@ -1197,7 +1070,8 @@ export class Layout {
     const entry = this.registry.get(id);
     if (!entry) return;
 
-    const tabZone = zone === 'primary' ? this.primaryZone : this.drawerZone;
+    // Unified right panel — always use primaryZone
+    const tabZone = this.primaryZone;
     this.registry.setZone(id, zone);
     tabZone.addTab({
       id: entry.descriptor.id,
@@ -1236,13 +1110,14 @@ export class Layout {
       // Auto-switch to the new tab
       this.extensionZone.activateTab(tabId);
     } else {
-      // Standalone mode: add to the requested zone (default: primary)
+      // Standalone mode: unified right panel
       const zone = targetZone ?? 'primary';
-      const tabZone = zone === 'primary' ? this.primaryZone : this.drawerZone;
+      const tabZone = this.primaryZone;
       const tabId = `sprinkle-${name}`;
 
       const container = document.createElement('div');
-      container.style.cssText = 'display: flex; flex-direction: column; min-height: 0; overflow: auto; flex: 1;';
+      container.style.cssText =
+        'display: flex; flex-direction: column; min-height: 0; overflow: auto; flex: 1;';
       container.appendChild(element);
 
       // Register in the panel registry
@@ -1278,10 +1153,7 @@ export class Layout {
       this.dynamicSprinkles.delete(name);
     } else {
       const tabId = `sprinkle-${name}`;
-      const entry = this.registry.get(tabId);
-      const zone = entry?.descriptor.zone;
-      const tabZone = zone === 'drawer' ? this.drawerZone : this.primaryZone;
-      tabZone.removeTab(tabId);
+      this.primaryZone.removeTab(tabId);
       this.registry.unregister(tabId);
       this.dynamicSprinkles.delete(name);
       this.updateAddButtons();

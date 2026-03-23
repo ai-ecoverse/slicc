@@ -6,7 +6,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ScoopContext, isImageProcessingError, type ScoopContextCallbacks } from './scoop-context.js';
+import {
+  ScoopContext,
+  isImageProcessingError,
+  type ScoopContextCallbacks,
+} from './scoop-context.js';
 import type { RegisteredScoop } from './types.js';
 
 // Minimal scoop registration for testing
@@ -44,8 +48,12 @@ function injectMockAgent(ctx: ScoopContext, mockPrompt: (text: string) => Promis
     prompt: mockPrompt,
     abort: vi.fn(),
     subscribe: vi.fn(() => () => {}),
-    followUp: vi.fn((msg: any) => { followUpQueue.push(msg); }),
-    clearAllQueues: vi.fn(() => { followUpQueue.length = 0; }),
+    followUp: vi.fn((msg: any) => {
+      followUpQueue.push(msg);
+    }),
+    clearAllQueues: vi.fn(() => {
+      followUpQueue.length = 0;
+    }),
     state: { isStreaming: false },
     // Expose queue for test inspection
     _followUpQueue: followUpQueue,
@@ -84,10 +92,12 @@ describe('ScoopContext session persistence', () => {
     const messages = [{ role: 'user', content: 'hello', timestamp: Date.now() }];
     handler({ type: 'agent_end', messages });
 
-    expect(mockStore.save).toHaveBeenCalledWith(expect.objectContaining({
-      id: testScoop.jid,
-      messages,
-    }));
+    expect(mockStore.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: testScoop.jid,
+        messages,
+      })
+    );
   });
 
   it('preserves original createdAt across saves', () => {
@@ -100,7 +110,10 @@ describe('ScoopContext session persistence', () => {
     (ctx as any).sessionCreatedAt = originalCreatedAt;
 
     const handler = (ctx as any).handleAgentEvent.bind(ctx);
-    handler({ type: 'agent_end', messages: [{ role: 'user', content: 'hi', timestamp: Date.now() }] });
+    handler({
+      type: 'agent_end',
+      messages: [{ role: 'user', content: 'hi', timestamp: Date.now() }],
+    });
 
     const savedSession = mockStore.save.mock.calls[0][0];
     expect(savedSession.createdAt).toBe(originalCreatedAt);
@@ -114,7 +127,10 @@ describe('ScoopContext session persistence', () => {
 
     const before = Date.now();
     const handler = (ctx as any).handleAgentEvent.bind(ctx);
-    handler({ type: 'agent_end', messages: [{ role: 'user', content: 'hi', timestamp: Date.now() }] });
+    handler({
+      type: 'agent_end',
+      messages: [{ role: 'user', content: 'hi', timestamp: Date.now() }],
+    });
     const after = Date.now();
 
     const savedSession = mockStore.save.mock.calls[0][0];
@@ -134,7 +150,10 @@ describe('ScoopContext session persistence', () => {
   });
 
   it('logs error when save fails (does not throw)', () => {
-    const mockStore = { load: vi.fn(), save: vi.fn().mockRejectedValue(new Error('DB full')) } as any;
+    const mockStore = {
+      load: vi.fn(),
+      save: vi.fn().mockRejectedValue(new Error('DB full')),
+    } as any;
     ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
     injectMockAgent(ctx, async () => {});
 
@@ -157,7 +176,10 @@ describe('ScoopContext session persistence', () => {
   });
 
   it('calls onError when restore fails', () => {
-    const mockStore = { load: vi.fn().mockRejectedValue(new Error('DB corrupt')), save: vi.fn() } as any;
+    const mockStore = {
+      load: vi.fn().mockRejectedValue(new Error('DB corrupt')),
+      save: vi.fn(),
+    } as any;
     ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
 
     // Simulate the restoration error path directly
@@ -174,12 +196,19 @@ describe('ScoopContext session persistence', () => {
 
     return restoreBlock().then((messages) => {
       expect(messages).toEqual([]);
-      expect(callbacks.onError).toHaveBeenCalledWith('Conversation history could not be restored. Starting fresh.');
+      expect(callbacks.onError).toHaveBeenCalledWith(
+        'Conversation history could not be restored. Starting fresh.'
+      );
     });
   });
 
   it('restores sessionCreatedAt from loaded session', () => {
-    const mockStore = { load: vi.fn().mockResolvedValue({ messages: [{ role: 'user', content: 'old' }], createdAt: 42 }), save: vi.fn() } as any;
+    const mockStore = {
+      load: vi
+        .fn()
+        .mockResolvedValue({ messages: [{ role: 'user', content: 'old' }], createdAt: 42 }),
+      save: vi.fn(),
+    } as any;
     ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
 
     // Simulate the restoration path
@@ -226,7 +255,9 @@ describe('ScoopContext prompt queueing', () => {
 
   it('processes a single prompt normally', async () => {
     const prompts: string[] = [];
-    injectMockAgent(ctx, async (text) => { prompts.push(text); });
+    injectMockAgent(ctx, async (text) => {
+      prompts.push(text);
+    });
 
     await ctx.prompt('hello');
 
@@ -240,7 +271,9 @@ describe('ScoopContext prompt queueing', () => {
   it('queues prompts via followUp when already processing', async () => {
     const prompts: string[] = [];
     let resolveFirst: () => void;
-    const firstPromptDone = new Promise<void>((r) => { resolveFirst = r; });
+    const firstPromptDone = new Promise<void>((r) => {
+      resolveFirst = r;
+    });
 
     injectMockAgent(ctx, async (text) => {
       prompts.push(text);
@@ -267,7 +300,9 @@ describe('ScoopContext prompt queueing', () => {
 
   it('stop() clears the queue and aborts', async () => {
     let resolveFirst: () => void;
-    const firstPromptDone = new Promise<void>((r) => { resolveFirst = r; });
+    const firstPromptDone = new Promise<void>((r) => {
+      resolveFirst = r;
+    });
     const prompts: string[] = [];
 
     injectMockAgent(ctx, async (text) => {
@@ -381,7 +416,7 @@ describe('ScoopContext context overflow recovery', () => {
 
   function injectMockAgentWithReplace(
     ctx: ScoopContext,
-    mockPrompt: (text: string) => Promise<void>,
+    mockPrompt: (text: string) => Promise<void>
   ): { replaceMessages: ReturnType<typeof vi.fn>; mockPrompt: ReturnType<typeof vi.fn> } {
     const replaceMessages = vi.fn();
     const promptFn = vi.fn(mockPrompt);
@@ -413,7 +448,13 @@ describe('ScoopContext context overflow recovery', () => {
 
     const messages = [
       { role: 'user', content: [{ type: 'text', text: 'hello' }] },
-      { role: 'assistant', content: [{ type: 'text', text: 'hi' }], stopReason: 'stop', usage: { input: 100, output: 50 }, timestamp: Date.now() },
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'hi' }],
+        stopReason: 'stop',
+        usage: { input: 100, output: 50 },
+        timestamp: Date.now(),
+      },
       overflowMessage,
     ];
 
@@ -477,7 +518,11 @@ describe('ScoopContext context overflow recovery', () => {
 
     const messages = [
       { role: 'user', content: [{ type: 'text', text: 'show image' }] },
-      { role: 'toolResult', toolCallId: 't1', content: [{ type: 'image', data: largeBase64, mimeType: 'image/png' }] },
+      {
+        role: 'toolResult',
+        toolCallId: 't1',
+        content: [{ type: 'image', data: largeBase64, mimeType: 'image/png' }],
+      },
       overflowMessage,
     ];
 
@@ -551,9 +596,12 @@ describe('ScoopContext context overflow recovery', () => {
     const handler = (ctx as any).handleAgentEvent.bind(ctx);
     const largeText = 'x'.repeat(50000);
     const overflowMessage = {
-      role: 'assistant', content: [], stopReason: 'error',
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
       errorMessage: 'prompt is too long: 250000 tokens > 200000 maximum',
-      usage: { input: 250000, output: 0 }, timestamp: Date.now(),
+      usage: { input: 250000, output: 0 },
+      timestamp: Date.now(),
     };
 
     const assistantWithMultipleToolCalls = {
@@ -565,15 +613,37 @@ describe('ScoopContext context overflow recovery', () => {
         { type: 'toolCall', id: 'toolu_3', name: 'bash', arguments: { command: 'ls' } },
       ],
       stopReason: 'tool_use',
-      usage: { input: 100, output: 100 }, timestamp: Date.now(),
+      usage: { input: 100, output: 100 },
+      timestamp: Date.now(),
     };
 
     const messages = [
       { role: 'user', content: [{ type: 'text', text: 'do stuff' }] },
       assistantWithMultipleToolCalls,
-      { role: 'toolResult', toolCallId: 'toolu_1', toolName: 'read_file', content: [{ type: 'text', text: 'a' }], isError: false, timestamp: Date.now() },
-      { role: 'toolResult', toolCallId: 'toolu_2', toolName: 'read_file', content: [{ type: 'text', text: 'b' }], isError: false, timestamp: Date.now() },
-      { role: 'toolResult', toolCallId: 'toolu_3', toolName: 'bash', content: [{ type: 'text', text: 'c' }], isError: false, timestamp: Date.now() },
+      {
+        role: 'toolResult',
+        toolCallId: 'toolu_1',
+        toolName: 'read_file',
+        content: [{ type: 'text', text: 'a' }],
+        isError: false,
+        timestamp: Date.now(),
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'toolu_2',
+        toolName: 'read_file',
+        content: [{ type: 'text', text: 'b' }],
+        isError: false,
+        timestamp: Date.now(),
+      },
+      {
+        role: 'toolResult',
+        toolCallId: 'toolu_3',
+        toolName: 'bash',
+        content: [{ type: 'text', text: 'c' }],
+        isError: false,
+        timestamp: Date.now(),
+      },
       overflowMessage,
     ];
 
@@ -592,9 +662,12 @@ describe('ScoopContext context overflow recovery', () => {
 
     const handler = (ctx as any).handleAgentEvent.bind(ctx);
     const overflowMessage = {
-      role: 'assistant', content: [], stopReason: 'error',
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
       errorMessage: 'prompt is too long: 250000 tokens > 200000 maximum',
-      usage: { input: 250000, output: 0 }, timestamp: Date.now(),
+      usage: { input: 250000, output: 0 },
+      timestamp: Date.now(),
     };
 
     // Assistant with large image + toolCall (image inflates msgSize over threshold)
@@ -606,13 +679,21 @@ describe('ScoopContext context overflow recovery', () => {
         { type: 'toolCall', id: 'toolu_img', name: 'bash', arguments: { command: 'screenshot' } },
       ],
       stopReason: 'tool_use',
-      usage: { input: 100, output: 100 }, timestamp: Date.now(),
+      usage: { input: 100, output: 100 },
+      timestamp: Date.now(),
     };
 
     const messages = [
       { role: 'user', content: [{ type: 'text', text: 'take screenshot' }] },
       assistantMsg,
-      { role: 'toolResult', toolCallId: 'toolu_img', toolName: 'bash', content: [{ type: 'text', text: 'done' }], isError: false, timestamp: Date.now() },
+      {
+        role: 'toolResult',
+        toolCallId: 'toolu_img',
+        toolName: 'bash',
+        content: [{ type: 'text', text: 'done' }],
+        isError: false,
+        timestamp: Date.now(),
+      },
       overflowMessage,
     ];
 
@@ -638,9 +719,12 @@ describe('ScoopContext context overflow recovery', () => {
 
     const handler = (ctx as any).handleAgentEvent.bind(ctx);
     const overflowMessage = {
-      role: 'assistant', content: [], stopReason: 'error',
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
       errorMessage: 'prompt is too long: 250000 tokens > 200000 maximum',
-      usage: { input: 250000, output: 0 }, timestamp: Date.now(),
+      usage: { input: 250000, output: 0 },
+      timestamp: Date.now(),
     };
 
     // Assistant with only a small text + toolCall — NOT oversized
@@ -651,13 +735,21 @@ describe('ScoopContext context overflow recovery', () => {
         { type: 'toolCall', id: 'toolu_small', name: 'bash', arguments: { command: 'ls' } },
       ],
       stopReason: 'tool_use',
-      usage: { input: 100, output: 50 }, timestamp: Date.now(),
+      usage: { input: 100, output: 50 },
+      timestamp: Date.now(),
     };
 
     const messages = [
       { role: 'user', content: [{ type: 'text', text: 'check' }] },
       smallAssistant,
-      { role: 'toolResult', toolCallId: 'toolu_small', toolName: 'bash', content: [{ type: 'text', text: 'file.txt' }], isError: false, timestamp: Date.now() },
+      {
+        role: 'toolResult',
+        toolCallId: 'toolu_small',
+        toolName: 'bash',
+        content: [{ type: 'text', text: 'file.txt' }],
+        isError: false,
+        timestamp: Date.now(),
+      },
       overflowMessage,
     ];
 
@@ -677,9 +769,12 @@ describe('ScoopContext context overflow recovery', () => {
 
     const handler = (ctx as any).handleAgentEvent.bind(ctx);
     const overflowMessage = {
-      role: 'assistant', content: [], stopReason: 'error',
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
       errorMessage: 'prompt is too long: 250000 tokens > 200000 maximum',
-      usage: { input: 250000, output: 0 }, timestamp: Date.now(),
+      usage: { input: 250000, output: 0 },
+      timestamp: Date.now(),
     };
 
     // Oversized assistant with only text — no ToolCalls
@@ -689,7 +784,8 @@ describe('ScoopContext context overflow recovery', () => {
         role: 'assistant',
         content: [{ type: 'text', text: 'x'.repeat(50000) }],
         stopReason: 'stop',
-        usage: { input: 100, output: 50000 }, timestamp: Date.now(),
+        usage: { input: 100, output: 50000 },
+        timestamp: Date.now(),
       },
       overflowMessage,
     ];
@@ -710,9 +806,12 @@ describe('ScoopContext context overflow recovery', () => {
 
     const handler = (ctx as any).handleAgentEvent.bind(ctx);
     const overflowMessage = {
-      role: 'assistant', content: [], stopReason: 'error',
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
       errorMessage: 'prompt is too long: 250000 tokens > 200000 maximum',
-      usage: { input: 250000, output: 0 }, timestamp: Date.now(),
+      usage: { input: 250000, output: 0 },
+      timestamp: Date.now(),
     };
 
     const messages = [
@@ -723,12 +822,16 @@ describe('ScoopContext context overflow recovery', () => {
           { type: 'toolCall', id: 'toolu_big', name: 'read_file', arguments: { path: '/big.ts' } },
         ],
         stopReason: 'tool_use',
-        usage: { input: 100, output: 50 }, timestamp: Date.now(),
+        usage: { input: 100, output: 50 },
+        timestamp: Date.now(),
       },
       {
-        role: 'toolResult', toolCallId: 'toolu_big', toolName: 'read_file',
+        role: 'toolResult',
+        toolCallId: 'toolu_big',
+        toolName: 'read_file',
         content: [{ type: 'text', text: 'x'.repeat(50000) }],
-        isError: false, timestamp: Date.now(),
+        isError: false,
+        timestamp: Date.now(),
       },
       overflowMessage,
     ];
@@ -763,19 +866,19 @@ describe('ScoopContext context overflow recovery', () => {
     };
 
     // First overflow — should trigger recovery
-    handler({ type: 'agent_end', messages: [
-      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
-      overflowMessage,
-    ]});
+    handler({
+      type: 'agent_end',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }, overflowMessage],
+    });
 
     expect(callbacks.onError).not.toHaveBeenCalled();
     expect(replaceMessages).toHaveBeenCalledTimes(1);
 
     // Second overflow (recovery also overflowed) — should surface error
-    handler({ type: 'agent_end', messages: [
-      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
-      overflowMessage,
-    ]});
+    handler({
+      type: 'agent_end',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }, overflowMessage],
+    });
 
     expect(callbacks.onError).toHaveBeenCalledWith(overflowMessage.errorMessage);
   });
@@ -793,10 +896,10 @@ describe('ScoopContext context overflow recovery', () => {
       timestamp: Date.now(),
     };
 
-    handler({ type: 'agent_end', messages: [
-      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
-      errorMessage,
-    ]});
+    handler({
+      type: 'agent_end',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }, errorMessage],
+    });
 
     // Should surface error directly, not attempt recovery
     expect(callbacks.onError).toHaveBeenCalledWith('Internal server error');
@@ -818,25 +921,37 @@ describe('ScoopContext context overflow recovery', () => {
     };
 
     // Trigger recovery
-    handler({ type: 'agent_end', messages: [
-      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
-      overflowMessage,
-    ]});
+    handler({
+      type: 'agent_end',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }, overflowMessage],
+    });
 
     // Simulate successful recovery (agent_end with no error)
-    handler({ type: 'agent_end', messages: [
-      { role: 'user', content: [{ type: 'text', text: 'recovery prompt' }] },
-      { role: 'assistant', content: [{ type: 'text', text: 'recovered' }], stopReason: 'stop', usage: { input: 100, output: 50 }, timestamp: Date.now() },
-    ]});
+    handler({
+      type: 'agent_end',
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'recovery prompt' }] },
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'recovered' }],
+          stopReason: 'stop',
+          usage: { input: 100, output: 50 },
+          timestamp: Date.now(),
+        },
+      ],
+    });
 
     // Flag should be reset — a new overflow should trigger recovery again
     expect((ctx as any).isRecovering).toBe(false);
 
     // Third agent_end with overflow should trigger recovery (flag was reset)
-    handler({ type: 'agent_end', messages: [
-      { role: 'user', content: [{ type: 'text', text: 'hello again' }] },
-      overflowMessage,
-    ]});
+    handler({
+      type: 'agent_end',
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'hello again' }] },
+        overflowMessage,
+      ],
+    });
 
     // Should have triggered recovery again (not surfaced error)
     expect(callbacks.onError).not.toHaveBeenCalled();
@@ -875,7 +990,9 @@ describe('isImageProcessingError', () => {
   });
 
   it('does not match context overflow errors', () => {
-    expect(isImageProcessingError('prompt is too long: 250000 tokens > 200000 maximum')).toBe(false);
+    expect(isImageProcessingError('prompt is too long: 250000 tokens > 200000 maximum')).toBe(
+      false
+    );
   });
 });
 
@@ -890,7 +1007,7 @@ describe('ScoopContext image error recovery', () => {
 
   function injectMockAgentWithReplace(
     ctx: ScoopContext,
-    mockPrompt: (text: string) => Promise<void>,
+    mockPrompt: (text: string) => Promise<void>
   ): { replaceMessages: ReturnType<typeof vi.fn>; mockPrompt: ReturnType<typeof vi.fn> } {
     const replaceMessages = vi.fn();
     const promptFn = vi.fn(mockPrompt);
@@ -922,17 +1039,24 @@ describe('ScoopContext image error recovery', () => {
 
     const messages = [
       { role: 'user', content: [{ type: 'text', text: 'hello' }] },
-      { role: 'toolResult', toolCallId: 't1', content: [
-        { type: 'text', text: 'Screenshot saved' },
-        { type: 'image', data: 'A'.repeat(10000), mimeType: 'image/png' },
-      ]},
+      {
+        role: 'toolResult',
+        toolCallId: 't1',
+        content: [
+          { type: 'text', text: 'Screenshot saved' },
+          { type: 'image', data: 'A'.repeat(10000), mimeType: 'image/png' },
+        ],
+      },
       imageErrorMessage,
     ];
 
     handler({ type: 'agent_end', messages });
 
     expect(callbacks.onError).not.toHaveBeenCalled();
-    expect(callbacks.onResponse).toHaveBeenCalledWith(expect.stringContaining('Image rejected'), false);
+    expect(callbacks.onResponse).toHaveBeenCalledWith(
+      expect.stringContaining('Image rejected'),
+      false
+    );
     expect(replaceMessages).toHaveBeenCalled();
     expect(mockPrompt).toHaveBeenCalledWith(expect.stringContaining('image was rejected'));
   });
@@ -953,10 +1077,14 @@ describe('ScoopContext image error recovery', () => {
 
     const messages = [
       { role: 'user', content: [{ type: 'text', text: 'show me' }] },
-      { role: 'toolResult', toolCallId: 't1', content: [
-        { type: 'text', text: 'Here is the screenshot' },
-        { type: 'image', data: 'huge-image-data', mimeType: 'image/png' },
-      ]},
+      {
+        role: 'toolResult',
+        toolCallId: 't1',
+        content: [
+          { type: 'text', text: 'Here is the screenshot' },
+          { type: 'image', data: 'huge-image-data', mimeType: 'image/png' },
+        ],
+      },
       imageErrorMessage,
     ];
 
@@ -988,9 +1116,11 @@ describe('ScoopContext image error recovery', () => {
 
     const messages = [
       { role: 'user', content: [{ type: 'text', text: 'screenshot' }] },
-      { role: 'toolResult', toolCallId: 't1', content: [
-        { type: 'image', data: 'only-image', mimeType: 'image/png' },
-      ]},
+      {
+        role: 'toolResult',
+        toolCallId: 't1',
+        content: [{ type: 'image', data: 'only-image', mimeType: 'image/png' }],
+      },
       imageErrorMessage,
     ];
 
@@ -1008,9 +1138,12 @@ describe('ScoopContext image error recovery', () => {
 
     const handler = (ctx as any).handleAgentEvent.bind(ctx);
     const imageErrorMessage = {
-      role: 'assistant', content: [], stopReason: 'error',
+      role: 'assistant',
+      content: [],
+      stopReason: 'error',
       errorMessage: 'image exceeds 5 MB maximum',
-      usage: { input: 100, output: 0 }, timestamp: Date.now(),
+      usage: { input: 100, output: 0 },
+      timestamp: Date.now(),
     };
 
     // Assistant message with text + image + toolCall
@@ -1024,9 +1157,17 @@ describe('ScoopContext image error recovery', () => {
           { type: 'toolCall', id: 'toolu_check', name: 'bash', arguments: { command: 'check' } },
         ],
         stopReason: 'tool_use',
-        usage: { input: 100, output: 100 }, timestamp: Date.now(),
+        usage: { input: 100, output: 100 },
+        timestamp: Date.now(),
       },
-      { role: 'toolResult', toolCallId: 'toolu_check', toolName: 'bash', content: [{ type: 'text', text: 'ok' }], isError: false, timestamp: Date.now() },
+      {
+        role: 'toolResult',
+        toolCallId: 'toolu_check',
+        toolName: 'bash',
+        content: [{ type: 'text', text: 'ok' }],
+        isError: false,
+        timestamp: Date.now(),
+      },
       imageErrorMessage,
     ];
 
@@ -1056,19 +1197,19 @@ describe('ScoopContext image error recovery', () => {
     };
 
     // First image error — should trigger recovery
-    handler({ type: 'agent_end', messages: [
-      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
-      imageErrorMessage,
-    ]});
+    handler({
+      type: 'agent_end',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }, imageErrorMessage],
+    });
 
     expect(callbacks.onError).not.toHaveBeenCalled();
     expect(replaceMessages).toHaveBeenCalledTimes(1);
 
     // Second image error (recovery also failed) — should surface error
-    handler({ type: 'agent_end', messages: [
-      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
-      imageErrorMessage,
-    ]});
+    handler({
+      type: 'agent_end',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }, imageErrorMessage],
+    });
 
     expect(callbacks.onError).toHaveBeenCalledWith(imageErrorMessage.errorMessage);
   });
@@ -1088,16 +1229,25 @@ describe('ScoopContext image error recovery', () => {
     };
 
     // Trigger recovery
-    handler({ type: 'agent_end', messages: [
-      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
-      imageErrorMessage,
-    ]});
+    handler({
+      type: 'agent_end',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }, imageErrorMessage],
+    });
 
     // Simulate successful recovery
-    handler({ type: 'agent_end', messages: [
-      { role: 'user', content: [{ type: 'text', text: 'recovery prompt' }] },
-      { role: 'assistant', content: [{ type: 'text', text: 'recovered' }], stopReason: 'stop', usage: { input: 100, output: 50 }, timestamp: Date.now() },
-    ]});
+    handler({
+      type: 'agent_end',
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'recovery prompt' }] },
+        {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'recovered' }],
+          stopReason: 'stop',
+          usage: { input: 100, output: 50 },
+          timestamp: Date.now(),
+        },
+      ],
+    });
 
     expect((ctx as any).isRecovering).toBe(false);
     expect(callbacks.onError).not.toHaveBeenCalled();

@@ -28,7 +28,12 @@ describe('DataChannelKeepalive', () => {
   it('does not fire onDead when pongs arrive in time', () => {
     const sendPing = vi.fn();
     const onDead = vi.fn();
-    const keepalive = new DataChannelKeepalive({ sendPing, onDead, intervalMs: 1000, maxMissed: 3 });
+    const keepalive = new DataChannelKeepalive({
+      sendPing,
+      onDead,
+      intervalMs: 1000,
+      maxMissed: 3,
+    });
     keepalive.start();
 
     // Tick 1: sends ping
@@ -51,7 +56,12 @@ describe('DataChannelKeepalive', () => {
   it('fires onDead after maxMissed consecutive missed pongs', () => {
     const sendPing = vi.fn();
     const onDead = vi.fn();
-    const keepalive = new DataChannelKeepalive({ sendPing, onDead, intervalMs: 1000, maxMissed: 3 });
+    const keepalive = new DataChannelKeepalive({
+      sendPing,
+      onDead,
+      intervalMs: 1000,
+      maxMissed: 3,
+    });
     keepalive.start();
 
     // Tick 1: ping sent, no pong
@@ -75,7 +85,12 @@ describe('DataChannelKeepalive', () => {
   it('resets missed count when a pong arrives', () => {
     const sendPing = vi.fn();
     const onDead = vi.fn();
-    const keepalive = new DataChannelKeepalive({ sendPing, onDead, intervalMs: 1000, maxMissed: 3 });
+    const keepalive = new DataChannelKeepalive({
+      sendPing,
+      onDead,
+      intervalMs: 1000,
+      maxMissed: 3,
+    });
     keepalive.start();
 
     // Miss 2 pongs
@@ -103,7 +118,12 @@ describe('DataChannelKeepalive', () => {
   it('resets missed count when a ping is received from the remote side', () => {
     const sendPing = vi.fn();
     const onDead = vi.fn();
-    const keepalive = new DataChannelKeepalive({ sendPing, onDead, intervalMs: 1000, maxMissed: 3 });
+    const keepalive = new DataChannelKeepalive({
+      sendPing,
+      onDead,
+      intervalMs: 1000,
+      maxMissed: 3,
+    });
     keepalive.start();
 
     // Miss 2 pongs
@@ -137,7 +157,12 @@ describe('DataChannelKeepalive', () => {
   it('stops the interval after declaring dead', () => {
     const sendPing = vi.fn();
     const onDead = vi.fn();
-    const keepalive = new DataChannelKeepalive({ sendPing, onDead, intervalMs: 1000, maxMissed: 2 });
+    const keepalive = new DataChannelKeepalive({
+      sendPing,
+      onDead,
+      intervalMs: 1000,
+      maxMissed: 2,
+    });
     keepalive.start();
 
     // Trigger dead (maxMissed=2)

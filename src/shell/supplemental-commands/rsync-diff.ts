@@ -43,7 +43,7 @@ export interface RsyncDiffResult {
 export function computeRsyncDiff(
   sourceEntries: RsyncEntry[],
   destEntries: RsyncEntry[],
-  options: RsyncDiffOptions = {},
+  options: RsyncDiffOptions = {}
 ): RsyncDiffResult {
   const destMap = new Map<string, RsyncEntry>();
   for (const entry of destEntries) {

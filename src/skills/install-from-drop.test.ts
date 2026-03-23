@@ -15,7 +15,7 @@ function makeArchive(entries: Record<string, string | Uint8Array>): Uint8Array {
     Object.entries(entries).map(([path, content]) => [
       path,
       typeof content === 'string' ? new TextEncoder().encode(content) : content,
-    ]),
+    ])
   );
   return zipSync(encoded);
 }
@@ -49,8 +49,12 @@ describe('installSkillFromDrop', () => {
     expect(result.skillName).toBe('hello');
     expect(result.destinationPath).toBe('/workspace/skills/hello');
     expect(result.fileCount).toBe(3);
-    await expect(fs.readTextFile('/workspace/skills/hello/manifest.yaml')).resolves.toContain('skill: hello');
-    await expect(fs.readTextFile('/workspace/skills/hello/add/hello.txt')).resolves.toBe('Hello drop!\n');
+    await expect(fs.readTextFile('/workspace/skills/hello/manifest.yaml')).resolves.toContain(
+      'skill: hello'
+    );
+    await expect(fs.readTextFile('/workspace/skills/hello/add/hello.txt')).resolves.toBe(
+      'Hello drop!\n'
+    );
   });
 
   it('supports archives wrapped in a top-level folder and ignores side metadata outside it', async () => {
@@ -73,7 +77,7 @@ describe('installSkillFromDrop', () => {
     });
 
     await expect(
-      installSkillFromDrop(fs, makeDroppedFile('huge.skill', archive, 50 * 1024 * 1024 + 1)),
+      installSkillFromDrop(fs, makeDroppedFile('huge.skill', archive, 50 * 1024 * 1024 + 1))
     ).rejects.toThrow('50 MB or smaller');
   });
 
@@ -83,9 +87,9 @@ describe('installSkillFromDrop', () => {
       '../escape.txt': 'nope',
     });
 
-    await expect(
-      installSkillFromDrop(fs, makeDroppedFile('bad.skill', archive)),
-    ).rejects.toThrow('Blocked suspicious path');
+    await expect(installSkillFromDrop(fs, makeDroppedFile('bad.skill', archive))).rejects.toThrow(
+      'Blocked suspicious path'
+    );
   });
 
   it('rejects archives that exceed the extracted-size budget before install', async () => {
@@ -95,7 +99,7 @@ describe('installSkillFromDrop', () => {
     });
 
     await expect(
-      installSkillFromDrop(fs, makeDroppedFile('too-big.skill', archive)),
+      installSkillFromDrop(fs, makeDroppedFile('too-big.skill', archive))
     ).rejects.toThrow('expand to 50 MB or smaller');
 
     await expect(fs.exists('/workspace/skills/too-big')).resolves.toBe(false);
@@ -112,7 +116,7 @@ describe('installSkillFromDrop', () => {
     const archive = makeArchive(entries);
 
     await expect(
-      installSkillFromDrop(fs, makeDroppedFile('too-many.skill', archive)),
+      installSkillFromDrop(fs, makeDroppedFile('too-many.skill', archive))
     ).rejects.toThrow(`at most ${MAX_SKILL_ARCHIVE_ENTRY_COUNT} entries`);
 
     await expect(fs.exists('/workspace/skills/too-many')).resolves.toBe(false);
@@ -120,14 +124,14 @@ describe('installSkillFromDrop', () => {
 
   it('rejects corrupt archives or missing manifests with clear errors', async () => {
     await expect(
-      installSkillFromDrop(fs, makeDroppedFile('broken.skill', new Uint8Array([1, 2, 3]))),
+      installSkillFromDrop(fs, makeDroppedFile('broken.skill', new Uint8Array([1, 2, 3])))
     ).rejects.toThrow('Invalid .skill archive');
 
     const archive = makeArchive({
       'SKILL.md': '# Missing manifest\n',
     });
     await expect(
-      installSkillFromDrop(fs, makeDroppedFile('missing.skill', archive)),
+      installSkillFromDrop(fs, makeDroppedFile('missing.skill', archive))
     ).rejects.toThrow('missing manifest.yaml');
   });
 
@@ -136,7 +140,7 @@ describe('installSkillFromDrop', () => {
       'manifest.yaml': 'skill: bad/name\nversion: 1.0.0\n',
     });
     await expect(
-      installSkillFromDrop(fs, makeDroppedFile('invalid.skill', invalidArchive)),
+      installSkillFromDrop(fs, makeDroppedFile('invalid.skill', invalidArchive))
     ).rejects.toThrow('simple directory name');
 
     await fs.mkdir('/workspace/skills/existing', { recursive: true });
@@ -144,7 +148,7 @@ describe('installSkillFromDrop', () => {
       'manifest.yaml': 'skill: existing\nversion: 1.0.0\n',
     });
     await expect(
-      installSkillFromDrop(fs, makeDroppedFile('existing.skill', existingArchive)),
+      installSkillFromDrop(fs, makeDroppedFile('existing.skill', existingArchive))
     ).rejects.toThrow('already exists');
   });
 
@@ -166,7 +170,7 @@ describe('installSkillFromDrop', () => {
     }) as typeof fs.writeFile;
 
     await expect(
-      installSkillFromDrop(fs, makeDroppedFile('retryable.skill', archive)),
+      installSkillFromDrop(fs, makeDroppedFile('retryable.skill', archive))
     ).rejects.toThrow('simulated write failure');
 
     await expect(fs.exists('/workspace/skills/retryable')).resolves.toBe(false);
@@ -177,6 +181,8 @@ describe('installSkillFromDrop', () => {
     const result = await installSkillFromDrop(fs, makeDroppedFile('retryable.skill', archive));
 
     expect(result.skillName).toBe('retryable');
-    await expect(fs.readTextFile('/workspace/skills/retryable/add/file.txt')).resolves.toBe('hello\n');
+    await expect(fs.readTextFile('/workspace/skills/retryable/add/file.txt')).resolves.toBe(
+      'hello\n'
+    );
   });
 });

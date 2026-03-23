@@ -30,7 +30,8 @@ declare global {
  */
 function getModeLabel(): 'cli' | 'extension' | 'electron' {
   if (typeof chrome !== 'undefined' && chrome?.runtime?.id) return 'extension';
-  if (typeof document !== 'undefined' && document.documentElement?.dataset?.electronOverlay) return 'electron';
+  if (typeof document !== 'undefined' && document.documentElement?.dataset?.electronOverlay)
+    return 'electron';
   return 'cli';
 }
 
@@ -40,12 +41,20 @@ function getModeLabel(): 'cli' | 'extension' | 'electron' {
  */
 export async function initTelemetry(): Promise<void> {
   if (initialized) return;
-  if (typeof localStorage !== 'undefined' && localStorage.getItem('telemetry-disabled') === 'true') return;
+  if (typeof localStorage !== 'undefined' && localStorage.getItem('telemetry-disabled') === 'true')
+    return;
+
+  // Extension mode: require explicit consent before sending any RUM data
+  const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+  if (isExtension) {
+    const consent = localStorage.getItem('telemetry-consent');
+    if (consent !== 'granted') return;
+  }
 
   try {
     // High sampling rate (1-in-10) for beta. Remove for GA (defaults to 1-in-100).
     if (typeof window !== 'undefined') {
-      (window as any).SAMPLE_PAGEVIEWS_AT_RATE = 'high';
+      window.SAMPLE_PAGEVIEWS_AT_RATE = 'high';
     }
 
     const mod = await import('@adobe/helix-rum-js');

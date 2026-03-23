@@ -1,9 +1,6 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
-import {
-  getMimeType,
-  isTerminalPreviewableMimeType,
-} from '../../core/mime-types.js';
+import { getMimeType, isTerminalPreviewableMimeType } from '../../core/mime-types.js';
 
 export interface MediaPreviewItem {
   path: string;

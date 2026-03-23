@@ -11,7 +11,7 @@ const VALID: Set<string> = new Set(['dark', 'light', 'system']);
 export function getThemePreference(): ThemePreference {
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored && VALID.has(stored)) return stored as ThemePreference;
-  return 'system';
+  return 'light';
 }
 
 export function setThemePreference(pref: ThemePreference): void {
@@ -23,9 +23,7 @@ export function applyTheme(): void {
   const pref = getThemePreference();
   let isLight = pref === 'light';
   if (pref === 'system') {
-    isLight =
-      window.matchMedia?.('(prefers-color-scheme: light)').matches ??
-      false;
+    isLight = window.matchMedia?.('(prefers-color-scheme: light)').matches ?? false;
   }
   document.documentElement.classList.toggle('theme-light', isLight);
 }

@@ -1,6 +1,6 @@
 /**
  * Skills Engine Types
- * 
+ *
  * Defines the structure of skills, manifests, and state tracking.
  */
 
@@ -81,12 +81,20 @@ export interface UninstallResult {
 export interface DiscoveredSkill {
   /** Skill name (directory name) */
   name: string;
+  /** Discovery source bucket */
+  source: 'native' | 'agents' | 'claude';
+  /** Root directory that yielded this skill */
+  sourceRoot: string;
   /** Path to skill directory */
   path: string;
+  /** Path to the skill instructions file when available */
+  skillFilePath?: string;
   /** Parsed manifest */
   manifest: SkillManifest;
   /** Whether the skill is currently installed */
   installed: boolean;
   /** Installed version (if installed) */
   installedVersion?: string;
+  /** Lower-precedence paths that were shadowed by this skill name */
+  shadowedPaths?: string[];
 }

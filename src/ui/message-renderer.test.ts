@@ -12,9 +12,7 @@ import {
 
 describe('escapeHtml', () => {
   it('escapes HTML special characters', () => {
-    expect(escapeHtml('<div class="foo">&')).toBe(
-      '&lt;div class=&quot;foo&quot;&gt;&amp;',
-    );
+    expect(escapeHtml('<div class="foo">&')).toBe('&lt;div class=&quot;foo&quot;&gt;&amp;');
   });
 
   it('escapes single quotes', () => {
@@ -64,7 +62,9 @@ describe('renderMessageContent', () => {
   });
 
   it('replaces author-supplied rel tokens on raw HTML links', () => {
-    const html = renderMessageContent('<a href="https://example.com" rel="opener external">Example</a>');
+    const html = renderMessageContent(
+      '<a href="https://example.com" rel="opener external">Example</a>'
+    );
     expect(html).toContain('href="https://example.com"');
     expect(html).toContain('target="_blank"');
     expect(html).toContain('rel="noopener noreferrer"');
@@ -159,7 +159,7 @@ describe('renderMessageContent', () => {
 describe('renderAssistantMessageContent', () => {
   it('renders surfaced assistant errors as dedicated error blocks', () => {
     const html = renderAssistantMessageContent(
-      '**Error:** Bedrock CAMP API error (503): {"message":"Bedrock is unable to process your request."}',
+      '**Error:** Bedrock CAMP API error (503): {"message":"Bedrock is unable to process your request."}'
     );
 
     expect(html).toContain('class="msg__error"');
@@ -170,7 +170,7 @@ describe('renderAssistantMessageContent', () => {
 
   it('preserves normal assistant prose while upgrading appended surfaced errors', () => {
     const html = renderAssistantMessageContent(
-      'Trying again now.\n\n**Error:** Provider timeout after 30s',
+      'Trying again now.\n\n**Error:** Provider timeout after 30s'
     );
 
     expect(html).toContain('<p>Trying again now.</p>');

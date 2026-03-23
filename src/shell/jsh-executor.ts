@@ -1,5 +1,9 @@
 import type { CommandContext } from 'just-bash';
-import { NodeExitError, formatConsoleArg, nodeRuntimeState } from './supplemental-commands/shared.js';
+import {
+  NodeExitError,
+  formatConsoleArg,
+  nodeRuntimeState,
+} from './supplemental-commands/shared.js';
 
 export interface JshResult {
   stdout: string;
@@ -16,9 +20,9 @@ export interface JshResult {
 export async function executeJshFile(
   scriptPath: string,
   args: string[],
-  ctx: CommandContext,
+  ctx: CommandContext
 ): Promise<JshResult> {
-  if (!await ctx.fs.exists(scriptPath)) {
+  if (!(await ctx.fs.exists(scriptPath))) {
     return {
       stdout: '',
       stderr: `jsh: cannot find script '${scriptPath}'\n`,
@@ -39,7 +43,7 @@ export async function executeJshFile(
 export async function executeJsCode(
   code: string,
   argv: string[],
-  ctx: CommandContext,
+  ctx: CommandContext
 ): Promise<JshResult> {
   const stdoutChunks: string[] = [];
   const stderrChunks: string[] = [];
@@ -96,7 +100,9 @@ export async function executeJsCode(
       const resolved = ctx.fs.resolvePath(ctx.cwd, path);
       return ctx.fs.exists(resolved);
     },
-    stat: async (path: string): Promise<{ isDirectory: boolean; isFile: boolean; size: number }> => {
+    stat: async (
+      path: string
+    ): Promise<{ isDirectory: boolean; isFile: boolean; size: number }> => {
       const resolved = ctx.fs.resolvePath(ctx.cwd, path);
       const st = await ctx.fs.stat(resolved);
       return { isDirectory: st.isDirectory, isFile: st.isFile, size: st.size };
@@ -122,7 +128,9 @@ export async function executeJsCode(
 
   // Shell command bridge — lets JSH scripts run shell commands via `exec('ls -la')`
   // This delegates to just-bash's WASM interpreter, NOT Node's child_process.
-  const execBridge = async (command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
+  const execBridge = async (
+    command: string
+  ): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
     if (!ctx.exec) throw new Error('exec is not available in this runtime');
     const result = await ctx.exec(command, { cwd: ctx.cwd });
     return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
@@ -188,7 +196,7 @@ export async function executeJsCode(
         sandbox.dataset.jsTool = 'true';
         sandbox.src = chrome.runtime.getURL('sandbox.html');
         document.body.appendChild(sandbox);
-        await new Promise<void>(resolve => {
+        await new Promise<void>((resolve) => {
           sandbox!.addEventListener('load', () => resolve(), { once: true });
         });
       }
@@ -203,7 +211,9 @@ export async function executeJsCode(
         (async () => {
           try {
             let result: unknown;
-            const resolved = msg.args?.[0] ? ctx.fs.resolvePath(ctx.cwd, msg.args[0]) : msg.args?.[0];
+            const resolved = msg.args?.[0]
+              ? ctx.fs.resolvePath(ctx.cwd, msg.args[0])
+              : msg.args?.[0];
             switch (msg.op) {
               case 'readFile':
                 result = await ctx.fs.readFile(resolved);
@@ -242,7 +252,10 @@ export async function executeJsCode(
             sandbox!.contentWindow!.postMessage({ type: 'vfs_response', id: msg.id, result }, '*');
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
-            sandbox!.contentWindow!.postMessage({ type: 'vfs_response', id: msg.id, error: errMsg }, '*');
+            sandbox!.contentWindow!.postMessage(
+              { type: 'vfs_response', id: msg.id, error: errMsg },
+              '*'
+            );
           }
         })();
       };
@@ -256,10 +269,16 @@ export async function executeJsCode(
         (async () => {
           try {
             const result = await execBridge(msg.command);
-            sandbox!.contentWindow!.postMessage({ type: 'shell_exec_response', id: msg.id, result }, '*');
+            sandbox!.contentWindow!.postMessage(
+              { type: 'shell_exec_response', id: msg.id, result },
+              '*'
+            );
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
-            sandbox!.contentWindow!.postMessage({ type: 'shell_exec_response', id: msg.id, error: errMsg }, '*');
+            sandbox!.contentWindow!.postMessage(
+              { type: 'shell_exec_response', id: msg.id, error: errMsg },
+              '*'
+            );
           }
         })();
       };
@@ -272,6 +291,13 @@ export async function executeJsCode(
         if (!msg || msg.type !== 'fetch_proxy') return;
         (async () => {
           try {
+            const { ensureHostPermission } = await import('../extension/host-permission.js');
+            if (!await ensureHostPermission()) {
+              sandbox!.contentWindow!.postMessage(
+                { type: 'fetch_proxy_response', id: msg.id, error: 'Host permission not granted. Grant web access when prompted or configure a provider in settings.' }, '*',
+              );
+              return;
+            }
             const init: RequestInit = { method: msg.init?.method ?? 'GET', cache: 'no-store' };
             if (msg.init?.headers) init.headers = msg.init.headers;
             if (msg.init?.body && !['GET', 'HEAD'].includes(init.method as string)) {
@@ -280,16 +306,25 @@ export async function executeJsCode(
             const resp = await fetch(msg.url, init);
             const buf = await resp.arrayBuffer();
             const headers: Record<string, string> = {};
-            resp.headers.forEach((v, k) => { headers[k] = v; });
-            sandbox!.contentWindow!.postMessage({
-              type: 'fetch_proxy_response', id: msg.id,
-              status: resp.status, statusText: resp.statusText,
-              headers, body: new Uint8Array(buf),
-            }, '*');
+            resp.headers.forEach((v, k) => {
+              headers[k] = v;
+            });
+            sandbox!.contentWindow!.postMessage(
+              {
+                type: 'fetch_proxy_response',
+                id: msg.id,
+                status: resp.status,
+                statusText: resp.statusText,
+                headers,
+                body: new Uint8Array(buf),
+              },
+              '*'
+            );
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
             sandbox!.contentWindow!.postMessage(
-              { type: 'fetch_proxy_response', id: msg.id, error: errMsg }, '*',
+              { type: 'fetch_proxy_response', id: msg.id, error: errMsg },
+              '*'
             );
           }
         })();
@@ -335,18 +370,20 @@ export async function executeJsCode(
     }
 
     // CLI mode: use AsyncFunction constructor
-    const AsyncFunction = Object.getPrototypeOf(async function () { /* noop */ }).constructor as (
-      new (...args: string[]) => (
-        fs: typeof fsBridge,
-        process: typeof processShim,
-        console: typeof nodeConsole,
-        require: (id: string) => never,
-        module: typeof moduleShim,
-        exports: Record<string, unknown>,
-        __state: Record<string, unknown>,
-        exec: typeof execBridge,
-      ) => Promise<unknown>
-    );
+    const AsyncFunction = Object.getPrototypeOf(async function () {
+      /* noop */
+    }).constructor as new (
+      ...args: string[]
+    ) => (
+      fs: typeof fsBridge,
+      process: typeof processShim,
+      console: typeof nodeConsole,
+      require: (id: string) => never,
+      module: typeof moduleShim,
+      exports: Record<string, unknown>,
+      __state: Record<string, unknown>,
+      exec: typeof execBridge
+    ) => Promise<unknown>;
     const fn = new AsyncFunction(
       'fs',
       'process',
@@ -356,9 +393,18 @@ export async function executeJsCode(
       'exports',
       '__state',
       'exec',
-      `"use strict";\nconst globalThis = __state;\nconst global = __state;\n${code}`,
+      `"use strict";\nconst globalThis = __state;\nconst global = __state;\n${code}`
     );
-    await fn(fsBridge, processShim, nodeConsole, requireShim, moduleShim, moduleShim.exports, nodeRuntimeState, execBridge);
+    await fn(
+      fsBridge,
+      processShim,
+      nodeConsole,
+      requireShim,
+      moduleShim,
+      moduleShim.exports,
+      nodeRuntimeState,
+      execBridge
+    );
     return {
       stdout: stdoutChunks.join(''),
       stderr: stderrChunks.join(''),

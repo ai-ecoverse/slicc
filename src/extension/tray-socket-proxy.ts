@@ -1,5 +1,10 @@
 import type { LeaderTrayWebSocket } from '../scoops/tray-leader.js';
-import { isExtensionMessage, type ExtensionMessage, type TraySocketCommandMessage, type TraySocketEventMessage } from './messages.js';
+import {
+  isExtensionMessage,
+  type ExtensionMessage,
+  type TraySocketCommandMessage,
+  type TraySocketEventMessage,
+} from './messages.js';
 
 type TraySocketEventType = 'open' | 'message' | 'close' | 'error';
 type TraySocketListener = (event: { data?: unknown }) => void;

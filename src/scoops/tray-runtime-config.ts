@@ -1,7 +1,9 @@
 export const TRAY_WORKER_STORAGE_KEY = 'slicc.trayWorkerBaseUrl';
 export const TRAY_JOIN_STORAGE_KEY = 'slicc.trayJoinUrl';
-export const DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL = 'https://slicc-tray-hub.minivelos.workers.dev';
-export const DEFAULT_STAGING_TRAY_WORKER_BASE_URL = 'https://slicc-tray-hub-staging.minivelos.workers.dev';
+export const DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL =
+  'https://slicc-tray-hub.minivelos.workers.dev';
+export const DEFAULT_STAGING_TRAY_WORKER_BASE_URL =
+  'https://slicc-tray-hub-staging.minivelos.workers.dev';
 
 import {
   TRAY_LEGACY_LEAD_QUERY_PARAM,
@@ -56,7 +58,7 @@ export function parseTrayUrlValue(raw: string | null | undefined): TrayUrlConfig
 
     const segments = url.pathname.split('/').filter(Boolean);
     let trayId: string | null = null;
-    let joinUrl: string | null = null;
+    const joinUrl: string | null = null;
     if (segments.length >= 2 && segments.at(-2) === 'tray') {
       trayId = decodeURIComponent(segments.at(-1)!);
       segments.splice(-2, 2);
@@ -78,12 +80,12 @@ export function parseTrayUrlValue(raw: string | null | undefined): TrayUrlConfig
 
 export function parseTrayJoinUrlValue(raw: string | null | undefined): TrayJoinConfig | null {
   const parsed = parseTrayUrlValue(raw);
-  return parsed?.joinUrl ? parsed as TrayJoinConfig : null;
+  return parsed?.joinUrl ? (parsed as TrayJoinConfig) : null;
 }
 
 export function storeTrayJoinUrl(
   storage: RuntimeConfigStorage,
-  raw: string | null | undefined,
+  raw: string | null | undefined
 ): TrayJoinConfig | null {
   const parsed = parseTrayJoinUrlValue(raw);
   if (!parsed) {
@@ -112,7 +114,11 @@ export function buildTrayUrlValue(workerBaseUrl: string, trayId?: string | null)
   return new URL(`tray/${encodeURIComponent(normalizedTrayId)}`, `${normalizedBase}/`).toString();
 }
 
-export function buildTrayLaunchUrl(locationHref: string, workerBaseUrl: string, trayId?: string | null): string {
+export function buildTrayLaunchUrl(
+  locationHref: string,
+  workerBaseUrl: string,
+  trayId?: string | null
+): string {
   return buildCanonicalTrayLaunchUrl(locationHref, buildTrayUrlValue(workerBaseUrl, trayId));
 }
 
@@ -124,7 +130,11 @@ export function buildTrayLeadValue(workerBaseUrl: string, trayId?: string | null
   return buildTrayUrlValue(workerBaseUrl, trayId);
 }
 
-export function buildTrayLeadLaunchUrl(locationHref: string, workerBaseUrl: string, trayId?: string | null): string {
+export function buildTrayLeadLaunchUrl(
+  locationHref: string,
+  workerBaseUrl: string,
+  trayId?: string | null
+): string {
   return buildTrayLaunchUrl(locationHref, workerBaseUrl, trayId);
 }
 
@@ -146,7 +156,9 @@ export async function resolveTrayRuntimeConfig(options: {
     return queryConfig;
   }
 
-  const storedJoinConfig = parseTrayJoinUrlValue(options.storage?.getItem(TRAY_JOIN_STORAGE_KEY) ?? null);
+  const storedJoinConfig = parseTrayJoinUrlValue(
+    options.storage?.getItem(TRAY_JOIN_STORAGE_KEY) ?? null
+  );
   if (storedJoinConfig) {
     if (options.storage) {
       options.storage.setItem(TRAY_WORKER_STORAGE_KEY, storedJoinConfig.workerBaseUrl);
@@ -154,7 +166,9 @@ export async function resolveTrayRuntimeConfig(options: {
     return storedJoinConfig;
   }
 
-  const serverConfig = options.runtimeConfigFetcher ? await readServerTrayConfig(options.runtimeConfigFetcher) : null;
+  const serverConfig = options.runtimeConfigFetcher
+    ? await readServerTrayConfig(options.runtimeConfigFetcher)
+    : null;
 
   // If the server provided a join URL, use it (e.g. Electron overlay joining a tray)
   if (serverConfig?.joinConfig) {
@@ -166,7 +180,9 @@ export async function resolveTrayRuntimeConfig(options: {
   }
 
   const serverBaseUrl = serverConfig?.workerBaseUrl ?? null;
-  const storedBaseUrl = normalizeTrayWorkerBaseUrl(options.storage?.getItem(TRAY_WORKER_STORAGE_KEY) ?? null);
+  const storedBaseUrl = normalizeTrayWorkerBaseUrl(
+    options.storage?.getItem(TRAY_WORKER_STORAGE_KEY) ?? null
+  );
   const envBaseUrl = normalizeTrayWorkerBaseUrl(options.envBaseUrl ?? null);
   const defaultWorkerBaseUrl = normalizeTrayWorkerBaseUrl(options.defaultWorkerBaseUrl ?? null);
 
@@ -190,7 +206,9 @@ export async function resolveTrayWorkerBaseUrl(options: {
   return (await resolveTrayRuntimeConfig(options))?.workerBaseUrl ?? null;
 }
 
-export async function fetchRuntimeConfig(fetchImpl: typeof fetch = fetch): Promise<RuntimeConfigResponse | null> {
+export async function fetchRuntimeConfig(
+  fetchImpl: typeof fetch = fetch
+): Promise<RuntimeConfigResponse | null> {
   try {
     const response = await fetchImpl('/api/runtime-config', { cache: 'no-store' });
     if (!response.ok) {
@@ -229,7 +247,7 @@ interface ServerTrayConfig {
 }
 
 async function readServerTrayConfig(
-  runtimeConfigFetcher: () => Promise<RuntimeConfigResponse | null>,
+  runtimeConfigFetcher: () => Promise<RuntimeConfigResponse | null>
 ): Promise<ServerTrayConfig | null> {
   const config = await runtimeConfigFetcher();
   if (!config) return null;

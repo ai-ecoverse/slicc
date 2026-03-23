@@ -150,7 +150,10 @@ describe('GitCommands', () => {
   it('shares github token across git command instances', async () => {
     await git.execute(['config', 'github.token', 'ghp_shared_token'], '/project');
 
-    const secondFs = await VirtualFS.create({ dbName: `git-test-second-${dbCounter++}`, wipe: true });
+    const secondFs = await VirtualFS.create({
+      dbName: `git-test-second-${dbCounter++}`,
+      wipe: true,
+    });
     const second = new GitCommands({
       fs: secondFs,
       authorName: 'Another User',
@@ -169,14 +172,14 @@ describe('GitCommands', () => {
     try {
       const result = await git.execute(
         ['clone', 'https://github.com/example/repo.git', 'repo', '--no-single-branch'],
-        '/workspace',
+        '/workspace'
       );
 
       expect(result.exitCode).toBe(0);
       expect(cloneSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           singleBranch: false,
-        }),
+        })
       );
     } finally {
       cloneSpy.mockRestore();
@@ -487,13 +490,13 @@ describe('GitCommands', () => {
           expect.objectContaining({
             path: 'branch.main.remote',
             value: 'origin',
-          }),
+          })
         );
         expect(setConfigSpy).toHaveBeenCalledWith(
           expect.objectContaining({
             path: 'branch.main.merge',
             value: 'refs/heads/main',
-          }),
+          })
         );
       } finally {
         pushSpy.mockRestore();
@@ -517,7 +520,7 @@ describe('GitCommands', () => {
       try {
         const result = await git.execute(['push', '--set-upstream', 'origin', 'main'], '/project');
         expect(result.exitCode).toBe(0);
-        expect(result.stdout).toContain("set up to track");
+        expect(result.stdout).toContain('set up to track');
 
         expect(setConfigSpy).toHaveBeenCalledTimes(2);
       } finally {
@@ -730,7 +733,7 @@ describe('GitCommands', () => {
 
       const result = await git.execute(
         ['log', '--author=Nonexistent Author', '--format', '%s'],
-        '/project',
+        '/project'
       );
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toBe('');
@@ -830,10 +833,7 @@ describe('GitCommands', () => {
       await git.execute(['add', 'b.txt'], '/project');
       await git.execute(['commit', '-m', 'modify b'], '/project');
 
-      const result = await git.execute(
-        ['log', '--follow', 'a.txt', '--format', '%s'],
-        '/project',
-      );
+      const result = await git.execute(['log', '--follow', 'a.txt', '--format', '%s'], '/project');
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('modify a');
       // Should not include "modify b" since it only touches b.txt
@@ -852,7 +852,7 @@ describe('GitCommands', () => {
 
       const result = await git.execute(
         ['log', '-n', '1', '--format', '%h %s', '--stat'],
-        '/project',
+        '/project'
       );
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('update');
@@ -1266,7 +1266,10 @@ describe('GitCommands', () => {
       await git.execute(['commit', '-m', 'initial'], '/project');
 
       // No changes - should succeed with --allow-empty
-      const result = await git.execute(['commit', '--allow-empty', '-m', 'empty commit'], '/project');
+      const result = await git.execute(
+        ['commit', '--allow-empty', '-m', 'empty commit'],
+        '/project'
+      );
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('empty commit');
     });
@@ -1677,7 +1680,11 @@ describe('GitCommands', () => {
       expect(result.exitCode).toBe(0);
 
       // Tag should resolve to the first commit
-      const tagOid = await isoGit.resolveRef({ fs: vfs.getLightningFS(), dir: '/project', ref: 'old-tag' });
+      const tagOid = await isoGit.resolveRef({
+        fs: vfs.getLightningFS(),
+        dir: '/project',
+        ref: 'old-tag',
+      });
       expect(tagOid).toBe(firstSha);
     });
 
@@ -1869,7 +1876,10 @@ describe('GitCommands', () => {
     it('--global sets and gets config from global store', async () => {
       await git.execute(['init'], '/project');
 
-      const setResult = await git.execute(['config', '--global', 'user.name', 'Global User'], '/project');
+      const setResult = await git.execute(
+        ['config', '--global', 'user.name', 'Global User'],
+        '/project'
+      );
       expect(setResult.exitCode).toBe(0);
 
       const getResult = await git.execute(['config', '--global', 'user.name'], '/project');

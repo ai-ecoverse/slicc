@@ -63,7 +63,12 @@ class ToolUIRegistry {
   }
 
   /** Register a pending UI request */
-  register(id: string, request: ToolUIRequest, resolve: (result: unknown) => void, reject: (error: Error) => void): void {
+  register(
+    id: string,
+    request: ToolUIRequest,
+    resolve: (result: unknown) => void,
+    reject: (error: Error) => void
+  ): void {
     this.pending.set(id, { request, resolve, reject });
     log.info('Tool UI registered', { id });
   }
@@ -175,7 +180,10 @@ type OnUpdateCallback = (partialResult: any) => void;
  * }, onUpdate);
  * ```
  */
-export async function showToolUI(request: ToolUIRequest, onUpdate?: OnUpdateCallback): Promise<unknown> {
+export async function showToolUI(
+  request: ToolUIRequest,
+  onUpdate?: OnUpdateCallback
+): Promise<unknown> {
   const id = request.id ?? toolUIRegistry.generateId();
 
   // Create promise manually for broader ES target compatibility
@@ -192,11 +200,13 @@ export async function showToolUI(request: ToolUIRequest, onUpdate?: OnUpdateCall
   // Emit via onUpdate so the UI layer can render it
   if (onUpdate) {
     onUpdate({
-      content: [{
-        type: 'tool_ui',
-        requestId: id,
-        html: request.html,
-      } as { type: string; requestId: string; html: string }],
+      content: [
+        {
+          type: 'tool_ui',
+          requestId: id,
+          html: request.html,
+        } as { type: string; requestId: string; html: string },
+      ],
     });
   } else {
     log.warn('showToolUI called without onUpdate callback — UI may not render');
@@ -206,10 +216,12 @@ export async function showToolUI(request: ToolUIRequest, onUpdate?: OnUpdateCall
   return promise.finally(() => {
     if (onUpdate) {
       onUpdate({
-        content: [{
-          type: 'tool_ui_done',
-          requestId: id,
-        } as { type: string; requestId: string }],
+        content: [
+          {
+            type: 'tool_ui_done',
+            requestId: id,
+          } as { type: string; requestId: string },
+        ],
       });
     }
   });
@@ -258,7 +270,9 @@ export function popToolExecutionContext(ctx: ToolExecutionContext): void {
  * Returns null if not in a tool execution context.
  */
 export function getToolExecutionContext(): ToolExecutionContext | null {
-  return executionContextStack.length > 0 ? executionContextStack[executionContextStack.length - 1] : null;
+  return executionContextStack.length > 0
+    ? executionContextStack[executionContextStack.length - 1]
+    : null;
 }
 
 /**
@@ -266,7 +280,9 @@ export function getToolExecutionContext(): ToolExecutionContext | null {
  * For use by shell commands that don't have direct access to onUpdate.
  * Returns null if no execution context is available.
  */
-export async function showToolUIFromContext(request: Omit<ToolUIRequest, 'id'>): Promise<unknown | null> {
+export async function showToolUIFromContext(
+  request: Omit<ToolUIRequest, 'id'>
+): Promise<unknown | null> {
   const ctx = getToolExecutionContext();
   if (!ctx) {
     log.warn('showToolUIFromContext called without execution context');

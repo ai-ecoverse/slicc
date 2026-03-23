@@ -3,9 +3,7 @@ import type { VirtualFS } from '../../fs/index.js';
 import { createCommandsCommand } from './help-command.js';
 import { createConvertCommand } from './convert-command.js';
 import { createHostCommand } from './host-command.js';
-import {
-  createImgcatCommand,
-} from './imgcat-command.js';
+import { createImgcatCommand } from './imgcat-command.js';
 import type { ImgcatCommandOptions } from './imgcat-command.js';
 import { createNodeCommand } from './node-command.js';
 import { createOpenCommand } from './open-command.js';
@@ -24,7 +22,11 @@ import { createRsyncCommand } from './rsync-command.js';
 import { createWhichCommand } from './which-command.js';
 import { createZipCommand } from './zip-command.js';
 import { createScreencaptureCommand } from './screencapture-command.js';
-import { createPbcopyCommand, createPbpasteCommand, createClipboardAutoCommand } from './clipboard-commands.js';
+import {
+  createPbcopyCommand,
+  createPbpasteCommand,
+  createClipboardAutoCommand,
+} from './clipboard-commands.js';
 import { createSayCommand } from './say-command.js';
 import { createAfplayCommand, createChimeCommand } from './afplay-command.js';
 import { createDebugCommand } from './debug-command.js';
@@ -86,7 +88,9 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
 
   if (options.fs) {
     commands.push(
-      ...PLAYWRIGHT_COMMAND_NAMES.map((name) => createPlaywrightCommand(name, options.browserAPI, options.fs!)),
+      ...PLAYWRIGHT_COMMAND_NAMES.map((name) =>
+        createPlaywrightCommand(name, options.browserAPI, options.fs!)
+      )
     );
   }
 

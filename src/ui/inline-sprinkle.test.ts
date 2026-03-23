@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { hydrateInlineSprinkles, disposeInlineSprinkles, type InlineSprinkleInstance } from './inline-sprinkle.js';
+import {
+  hydrateInlineSprinkles,
+  disposeInlineSprinkles,
+  type InlineSprinkleInstance,
+} from './inline-sprinkle.js';
 
 // Mock collectThemeCSS — avoid needing a real DOM with stylesheets
 vi.mock('./sprinkle-renderer.js', () => ({
@@ -40,7 +44,7 @@ describe('hydrateInlineSprinkles', () => {
     // Should contain an iframe
     const iframe = wrapper?.querySelector('iframe');
     expect(iframe).not.toBeNull();
-    expect(iframe?.getAttribute('sandbox')).toBe('allow-scripts');
+    expect(iframe?.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin');
 
     // Cleanup
     disposeInlineSprinkles(instances);
@@ -66,8 +70,7 @@ describe('hydrateInlineSprinkles', () => {
   });
 
   it('does not match non-shtml code blocks', () => {
-    container.innerHTML =
-      '<pre><code class="language-javascript">const x = 1;</code></pre>';
+    container.innerHTML = '<pre><code class="language-javascript">const x = 1;</code></pre>';
 
     const instances = hydrateInlineSprinkles(container, vi.fn());
     expect(instances).toEqual([]);
@@ -80,10 +83,7 @@ describe('disposeInlineSprinkles', () => {
   it('calls dispose on each instance and clears the array', () => {
     const disposeFn1 = vi.fn();
     const disposeFn2 = vi.fn();
-    const instances: InlineSprinkleInstance[] = [
-      { dispose: disposeFn1 },
-      { dispose: disposeFn2 },
-    ];
+    const instances: InlineSprinkleInstance[] = [{ dispose: disposeFn1 }, { dispose: disposeFn2 }];
     disposeInlineSprinkles(instances);
     expect(disposeFn1).toHaveBeenCalledOnce();
     expect(disposeFn2).toHaveBeenCalledOnce();

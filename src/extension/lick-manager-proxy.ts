@@ -53,7 +53,12 @@ export function startLickManagerHost(lickManager: LickManager): void {
 // ─── Proxy (side panel terminal) ────────────────────────────────────────────
 
 interface LickManagerProxyMethods {
-  createCronTask(name: string, cron: string, scoop?: string, filter?: string): Promise<CronTaskEntry>;
+  createCronTask(
+    name: string,
+    cron: string,
+    scoop?: string,
+    filter?: string
+  ): Promise<CronTaskEntry>;
   listCronTasks(): CronTaskEntry[];
   deleteCronTask(id: string): Promise<boolean>;
 }
@@ -89,8 +94,7 @@ export function createLickManagerProxy(): LickManagerProxyMethods {
       // Synchronous signature but we need async — callers must await
       throw new Error('Use listCronTasksAsync instead');
     },
-    deleteCronTask: (id) =>
-      request('deleteCronTask', [id]) as Promise<boolean>,
+    deleteCronTask: (id) => request('deleteCronTask', [id]) as Promise<boolean>,
   };
 }
 

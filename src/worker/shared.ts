@@ -118,7 +118,7 @@ export interface FollowerBootstrapResponse {
 export function createCapabilityToken(trayId: string, bytes = 18): string {
   const data = new Uint8Array(bytes);
   crypto.getRandomValues(data);
-  const secret = Array.from(data, value => value.toString(16).padStart(2, '0')).join('');
+  const secret = Array.from(data, (value) => value.toString(16).padStart(2, '0')).join('');
   return `${trayId}.${secret}`;
 }
 
@@ -142,7 +142,9 @@ export function jsonResponse(payload: unknown, status = 200, headers?: HeadersIn
 
 export function websocketResponse(client: unknown): Response {
   try {
-    return new Response(null, { status: 101, webSocket: client } as ResponseInit & { webSocket: unknown });
+    return new Response(null, { status: 101, webSocket: client } as ResponseInit & {
+      webSocket: unknown;
+    });
   } catch {
     return {
       status: 101,

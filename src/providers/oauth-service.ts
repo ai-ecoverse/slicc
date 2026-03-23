@@ -71,7 +71,7 @@ async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
         try {
           const res = await fetch('/api/oauth-result');
           if (res.status === 204) return; // no result yet
-          const data = await res.json() as { redirectUrl?: string; error?: string };
+          const data = (await res.json()) as { redirectUrl?: string; error?: string };
           if (resolved) return;
           cleanup();
 
@@ -84,7 +84,10 @@ async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
           resolve(data.redirectUrl ?? null);
         } catch (err) {
           // Network error or JSON parse failure — keep polling
-          console.warn('[oauth-service] Poll failed:', err instanceof Error ? err.message : String(err));
+          console.warn(
+            '[oauth-service] Poll failed:',
+            err instanceof Error ? err.message : String(err)
+          );
         }
       }, 1000);
     }
@@ -92,7 +95,11 @@ async function launchOAuthCli(authorizeUrl: string): Promise<string | null> {
     // Timeout after 2 minutes
     const timer = setTimeout(() => {
       cleanup();
-      try { popup?.close(); } catch { /* best-effort */ }
+      try {
+        popup?.close();
+      } catch {
+        /* best-effort */
+      }
       resolve(null);
     }, 120000);
   });
@@ -127,12 +134,14 @@ async function launchOAuthExtension(authorizeUrl: string): Promise<string | null
     };
 
     (chrome as any).runtime.onMessage.addListener(handler);
-    (chrome as any).runtime.sendMessage({
-      source: 'panel',
-      payload: { type: 'oauth-request', providerId: 'oauth', authorizeUrl },
-    }).catch((err: unknown) => {
-      console.error('[oauth-service] Failed to send OAuth request to service worker:', err);
-    });
+    (chrome as any).runtime
+      .sendMessage({
+        source: 'panel',
+        payload: { type: 'oauth-request', providerId: 'oauth', authorizeUrl },
+      })
+      .catch((err: unknown) => {
+        console.error('[oauth-service] Failed to send OAuth request to service worker:', err);
+      });
 
     // Timeout after 2 minutes (same as CLI launcher)
     const timer = setTimeout(() => {

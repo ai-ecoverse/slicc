@@ -97,7 +97,7 @@ export function resolveQaProfilesRoot(projectRoot: string): string {
 
 export function resolveDefaultChromeUserDataDir(
   tmpDir = process.env['TMPDIR'] ?? '/tmp',
-  servePort?: number,
+  servePort?: number
 ): string {
   const suffix = servePort && servePort !== 5710 ? `-${servePort}` : '';
   return join(tmpDir, `${DEFAULT_USER_DATA_DIR_NAME}${suffix}`);
@@ -121,7 +121,7 @@ export function resolveChromeLaunchProfile(options: {
 
   if (!isCliProfileName(profile)) {
     throw new Error(
-      `Unknown Chrome profile "${profile}". Supported values: ${CLI_PROFILE_NAMES.join(', ')}.`,
+      `Unknown Chrome profile "${profile}". Supported values: ${CLI_PROFILE_NAMES.join(', ')}.`
     );
   }
 
@@ -130,7 +130,9 @@ export function resolveChromeLaunchProfile(options: {
     id: profile,
     displayName: definition.displayName,
     userDataDir: join(resolveQaProfilesRoot(options.projectRoot), profile),
-    extensionPath: definition.loadsExtension ? join(options.projectRoot, 'dist', 'extension') : null,
+    extensionPath: definition.loadsExtension
+      ? join(options.projectRoot, 'dist', 'extension')
+      : null,
   };
 }
 
@@ -143,6 +145,8 @@ export function buildChromeLaunchArgs(options: {
     `--remote-debugging-port=${options.cdpPort}`,
     '--no-first-run',
     '--no-default-browser-check',
+    '--disable-crash-reporter',
+    '--disable-background-tracing',
     `--user-data-dir=${options.profile.userDataDir}`,
   ];
 
@@ -157,11 +161,8 @@ export function buildChromeLaunchArgs(options: {
 
 function findPuppeteerChromeForTesting(
   options: Required<
-    Pick<
-      FindChromeExecutableOptions,
-      'platform' | 'homeDir' | 'existsSyncImpl' | 'readdirSyncImpl'
-    >
-  >,
+    Pick<FindChromeExecutableOptions, 'platform' | 'homeDir' | 'existsSyncImpl' | 'readdirSyncImpl'>
+  >
 ): string | null {
   const cacheRoot = join(options.homeDir, '.cache', 'puppeteer', 'chrome');
 
@@ -172,35 +173,37 @@ function findPuppeteerChromeForTesting(
     return null;
   }
 
-  const prefix = options.platform === 'darwin'
-    ? /^mac/i
-    : options.platform === 'linux'
-      ? /^linux/i
-      : options.platform === 'win32'
-        ? /^win/i
-        : null;
+  const prefix =
+    options.platform === 'darwin'
+      ? /^mac/i
+      : options.platform === 'linux'
+        ? /^linux/i
+        : options.platform === 'win32'
+          ? /^win/i
+          : null;
   if (!prefix) return null;
 
-  const executableSuffixes = options.platform === 'darwin'
-    ? [
-      join(
-        'chrome-mac-arm64',
-        'Google Chrome for Testing.app',
-        'Contents',
-        'MacOS',
-        'Google Chrome for Testing',
-      ),
-      join(
-        'chrome-mac-x64',
-        'Google Chrome for Testing.app',
-        'Contents',
-        'MacOS',
-        'Google Chrome for Testing',
-      ),
-    ]
-    : options.platform === 'linux'
-      ? [join('chrome-linux64', 'chrome'), join('chrome-linux', 'chrome')]
-      : [join('chrome-win64', 'chrome.exe'), join('chrome-win32', 'chrome.exe')];
+  const executableSuffixes =
+    options.platform === 'darwin'
+      ? [
+          join(
+            'chrome-mac-arm64',
+            'Google Chrome for Testing.app',
+            'Contents',
+            'MacOS',
+            'Google Chrome for Testing'
+          ),
+          join(
+            'chrome-mac-x64',
+            'Google Chrome for Testing.app',
+            'Contents',
+            'MacOS',
+            'Google Chrome for Testing'
+          ),
+        ]
+      : options.platform === 'linux'
+        ? [join('chrome-linux64', 'chrome'), join('chrome-linux', 'chrome')]
+        : [join('chrome-win64', 'chrome.exe'), join('chrome-win32', 'chrome.exe')];
 
   const sortedEntries = entries
     .filter((entry) => prefix.test(entry))
@@ -226,18 +229,21 @@ function findPuppeteerChromeForTesting(
 function resolveMacAppBundle(
   appPath: string,
   platform: NodeJS.Platform,
-  existsSyncImpl: typeof existsSync,
+  existsSyncImpl: typeof existsSync
 ): string | null {
   if (platform !== 'darwin' || !appPath.endsWith('.app')) return null;
   // Derive the binary name from the bundle name:
   // "Google Chrome.app" → "Google Chrome"
-  const bundleName = appPath.split('/').pop()!.replace(/\.app$/, '');
+  const bundleName = appPath
+    .split('/')
+    .pop()!
+    .replace(/\.app$/, '');
   const candidate = join(appPath, 'Contents', 'MacOS', bundleName);
   return existsSyncImpl(candidate) ? candidate : null;
 }
 
 function findInstalledChrome(
-  options: Required<Pick<FindChromeExecutableOptions, 'env' | 'platform' | 'existsSyncImpl'>>,
+  options: Required<Pick<FindChromeExecutableOptions, 'env' | 'platform' | 'existsSyncImpl'>>
 ): string | null {
   const candidates: Record<string, string[]> = {
     darwin: [
@@ -297,8 +303,8 @@ export function findChromeExecutable(options: FindChromeExecutableOptions = {}):
   });
 
   return executablePreference === 'installed'
-    ? installedChrome ?? chromeForTesting
-    : chromeForTesting ?? installedChrome;
+    ? (installedChrome ?? chromeForTesting)
+    : (chromeForTesting ?? installedChrome);
 }
 
 async function readJsonFile(filePath: string): Promise<JsonObject> {
@@ -360,7 +366,7 @@ function seedPreferences(preferences: JsonObject, definition: CliProfileDefiniti
 
 export async function ensureQaProfileScaffold(projectRoot: string): Promise<ChromeLaunchProfile[]> {
   const profiles = CLI_PROFILE_NAMES.map((profileName) =>
-    resolveChromeLaunchProfile({ projectRoot, profile: profileName }),
+    resolveChromeLaunchProfile({ projectRoot, profile: profileName })
   );
 
   for (const profile of profiles) {
@@ -402,10 +408,7 @@ export function parseCdpPortFromStderr(line: string): number | null {
  * and resolve with the actual CDP port. Rejects after `timeoutMs` if the line
  * never appears (e.g. Chrome failed to start).
  */
-export function waitForCdpPortFromStderr(
-  child: ChildProcess,
-  timeoutMs = 15000,
-): Promise<number> {
+export function waitForCdpPortFromStderr(child: ChildProcess, timeoutMs = 15000): Promise<number> {
   return new Promise((resolve, reject) => {
     if (!child.stderr) {
       reject(new Error('Chrome process has no stderr stream'));

@@ -56,10 +56,11 @@ describe('addToSliccGroup', () => {
   });
 
   it('recreates the group when the previous group was removed by user', async () => {
-    const groupMock = vi.fn()
-      .mockResolvedValueOnce(42)    // first: create group 42
-      .mockRejectedValueOnce(new Error('group not found'))  // reuse 42 fails
-      .mockResolvedValueOnce(99);   // recreate as group 99
+    const groupMock = vi
+      .fn()
+      .mockResolvedValueOnce(42) // first: create group 42
+      .mockRejectedValueOnce(new Error('group not found')) // reuse 42 fails
+      .mockResolvedValueOnce(99); // recreate as group 99
     const updateMock = vi.fn().mockResolvedValue(undefined);
     stubChrome({ group: groupMock, tabGroupsUpdate: updateMock });
     const { addToSliccGroup } = await import('./tab-group.js');

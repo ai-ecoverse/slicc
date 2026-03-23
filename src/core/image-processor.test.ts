@@ -89,31 +89,79 @@ describe('getImageDimensions', () => {
   it('extracts PNG dimensions from IHDR chunk', () => {
     // PNG signature (8 bytes) + IHDR length (4) + "IHDR" (4) + width (4) + height (4) = 24 bytes
     const png = [
-      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
-      0x00, 0x00, 0x00, 0x0D,                           // IHDR chunk length
-      0x49, 0x48, 0x44, 0x52,                           // "IHDR"
-      0x00, 0x00, 0x03, 0x20,                           // width = 800
-      0x00, 0x00, 0x02, 0x58,                           // height = 600
+      0x89,
+      0x50,
+      0x4e,
+      0x47,
+      0x0d,
+      0x0a,
+      0x1a,
+      0x0a, // PNG signature
+      0x00,
+      0x00,
+      0x00,
+      0x0d, // IHDR chunk length
+      0x49,
+      0x48,
+      0x44,
+      0x52, // "IHDR"
+      0x00,
+      0x00,
+      0x03,
+      0x20, // width = 800
+      0x00,
+      0x00,
+      0x02,
+      0x58, // height = 600
     ];
     expect(getImageDimensions(makeBase64(png), 'image/png')).toEqual({ width: 800, height: 600 });
   });
 
   it('extracts large PNG dimensions (> 8000px)', () => {
     const png = [
-      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-      0x00, 0x00, 0x00, 0x0D,
-      0x49, 0x48, 0x44, 0x52,
-      0x00, 0x00, 0x04, 0x00,                           // width = 1024
-      0x00, 0x00, 0x27, 0x10,                           // height = 10000
+      0x89,
+      0x50,
+      0x4e,
+      0x47,
+      0x0d,
+      0x0a,
+      0x1a,
+      0x0a,
+      0x00,
+      0x00,
+      0x00,
+      0x0d,
+      0x49,
+      0x48,
+      0x44,
+      0x52,
+      0x00,
+      0x00,
+      0x04,
+      0x00, // width = 1024
+      0x00,
+      0x00,
+      0x27,
+      0x10, // height = 10000
     ];
-    expect(getImageDimensions(makeBase64(png), 'image/png')).toEqual({ width: 1024, height: 10000 });
+    expect(getImageDimensions(makeBase64(png), 'image/png')).toEqual({
+      width: 1024,
+      height: 10000,
+    });
   });
 
   it('extracts GIF dimensions', () => {
     const gif = [
-      0x47, 0x49, 0x46, 0x38, 0x39, 0x61,             // "GIF89a"
-      0x20, 0x03,                                       // width = 800 (LE)
-      0x58, 0x02,                                       // height = 600 (LE)
+      0x47,
+      0x49,
+      0x46,
+      0x38,
+      0x39,
+      0x61, // "GIF89a"
+      0x20,
+      0x03, // width = 800 (LE)
+      0x58,
+      0x02, // height = 600 (LE)
     ];
     expect(getImageDimensions(makeBase64(gif), 'image/gif')).toEqual({ width: 800, height: 600 });
   });
@@ -121,42 +169,80 @@ describe('getImageDimensions', () => {
   it('extracts JPEG dimensions from SOF0 marker', () => {
     // Minimal JPEG: SOI + SOF0 with dimensions
     const jpeg = [
-      0xFF, 0xD8,                                       // SOI
-      0xFF, 0xC0,                                       // SOF0
-      0x00, 0x11,                                       // length
-      0x08,                                             // precision
-      0x02, 0x58,                                       // height = 600
-      0x03, 0x20,                                       // width = 800
+      0xff,
+      0xd8, // SOI
+      0xff,
+      0xc0, // SOF0
+      0x00,
+      0x11, // length
+      0x08, // precision
+      0x02,
+      0x58, // height = 600
+      0x03,
+      0x20, // width = 800
     ];
     expect(getImageDimensions(makeBase64(jpeg), 'image/jpeg')).toEqual({ width: 800, height: 600 });
   });
 
   it('extracts JPEG dimensions from SOF2 (progressive) marker', () => {
     const jpeg = [
-      0xFF, 0xD8,
-      0xFF, 0xC2,                                       // SOF2 (progressive)
-      0x00, 0x11, 0x08,
-      0x02, 0x58,                                       // height = 600
-      0x03, 0x20,                                       // width = 800
+      0xff,
+      0xd8,
+      0xff,
+      0xc2, // SOF2 (progressive)
+      0x00,
+      0x11,
+      0x08,
+      0x02,
+      0x58, // height = 600
+      0x03,
+      0x20, // width = 800
     ];
     expect(getImageDimensions(makeBase64(jpeg), 'image/jpeg')).toEqual({ width: 800, height: 600 });
   });
 
   it('returns null for JPEG with no SOF marker', () => {
     const jpeg = [
-      0xFF, 0xD8,                                       // SOI
-      0xFF, 0xE0,                                       // APP0 (not SOF)
-      0x00, 0x10, 0x4A, 0x46, 0x49, 0x46,
+      0xff,
+      0xd8, // SOI
+      0xff,
+      0xe0, // APP0 (not SOF)
+      0x00,
+      0x10,
+      0x4a,
+      0x46,
+      0x49,
+      0x46,
     ];
     expect(getImageDimensions(makeBase64(jpeg), 'image/jpeg')).toBeNull();
   });
 
   it('returns null for PNG with zero width', () => {
     const png = [
-      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-      0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-      0x00, 0x00, 0x00, 0x00,                           // width = 0
-      0x00, 0x00, 0x02, 0x58,                           // height = 600
+      0x89,
+      0x50,
+      0x4e,
+      0x47,
+      0x0d,
+      0x0a,
+      0x1a,
+      0x0a,
+      0x00,
+      0x00,
+      0x00,
+      0x0d,
+      0x49,
+      0x48,
+      0x44,
+      0x52,
+      0x00,
+      0x00,
+      0x00,
+      0x00, // width = 0
+      0x00,
+      0x00,
+      0x02,
+      0x58, // height = 600
     ];
     expect(getImageDimensions(makeBase64(png), 'image/png')).toBeNull();
   });
@@ -267,11 +353,30 @@ describe('processImageContent', () => {
     // Regression: full-page screenshots can be under 5MB but exceed 8000px height.
     // Build a minimal PNG header with height = 10000px, padded to look like a small image.
     const pngHeader = [
-      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-      0x00, 0x00, 0x00, 0x0D,
-      0x49, 0x48, 0x44, 0x52,
-      0x00, 0x00, 0x04, 0x00,  // width = 1024
-      0x00, 0x00, 0x27, 0x10,  // height = 10000 (> 8000)
+      0x89,
+      0x50,
+      0x4e,
+      0x47,
+      0x0d,
+      0x0a,
+      0x1a,
+      0x0a,
+      0x00,
+      0x00,
+      0x00,
+      0x0d,
+      0x49,
+      0x48,
+      0x44,
+      0x52,
+      0x00,
+      0x00,
+      0x04,
+      0x00, // width = 1024
+      0x00,
+      0x00,
+      0x27,
+      0x10, // height = 10000 (> 8000)
     ];
     const headerBase64 = btoa(String.fromCharCode(...pngHeader));
     // Pad with valid base64 to make it a reasonable size (but well under 5MB)

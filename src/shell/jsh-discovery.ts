@@ -17,9 +17,7 @@ const PRIORITY_ROOTS = ['/workspace/skills'];
  * command name → VFS path. First occurrence of a basename wins.
  * Priority roots are scanned before the general `/` walk.
  */
-export async function discoverJshCommands(
-  fs: VirtualFS,
-): Promise<Map<string, string>> {
+export async function discoverJshCommands(fs: VirtualFS): Promise<Map<string, string>> {
   const commands = new Map<string, string>();
 
   // Scan priority roots first
@@ -36,11 +34,7 @@ export async function discoverJshCommands(
 }
 
 /** Walk a directory and collect .jsh files into the map (first wins). */
-async function scanDir(
-  fs: VirtualFS,
-  root: string,
-  commands: Map<string, string>,
-): Promise<void> {
+async function scanDir(fs: VirtualFS, root: string, commands: Map<string, string>): Promise<void> {
   for await (const filePath of fs.walk(root)) {
     if (!filePath.endsWith('.jsh')) continue;
     const name = commandName(filePath);

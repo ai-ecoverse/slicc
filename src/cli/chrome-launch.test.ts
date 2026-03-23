@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from 'fs';
+import { type existsSync, type readdirSync } from 'fs';
 import { mkdtemp, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -74,7 +74,7 @@ describe('chrome-launch', () => {
       resolveChromeLaunchProfile({
         projectRoot: '/repo',
         profile: 'mystery',
-      }),
+      })
     ).toThrow(/Unknown Chrome profile/);
   });
 
@@ -89,11 +89,13 @@ describe('chrome-launch', () => {
         cdpPort: 9222,
         launchUrl: 'http://localhost:3000',
         profile,
-      }),
+      })
     ).toEqual([
       '--remote-debugging-port=9222',
       '--no-first-run',
       '--no-default-browser-check',
+      '--disable-crash-reporter',
+      '--disable-background-tracing',
       '--user-data-dir=/repo/.qa/chrome/extension',
       '--disable-extensions-except=/repo/dist/extension',
       '--load-extension=/repo/dist/extension',
@@ -105,16 +107,16 @@ describe('chrome-launch', () => {
     expect(
       findChromeExecutable({
         env: { CHROME_PATH: '/custom/chrome' },
-        existsSyncImpl: (path: Parameters<typeof existsSync>[0]) => String(path) === '/custom/chrome',
+        existsSyncImpl: (path: Parameters<typeof existsSync>[0]) =>
+          String(path) === '/custom/chrome',
         readdirSyncImpl: () => [],
-      }),
+      })
     ).toBe('/custom/chrome');
   });
 
   it('resolves a macOS .app bundle CHROME_PATH to the inner executable', () => {
     const appPath = '/Applications/Google Chrome.app';
-    const binaryPath =
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+    const binaryPath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 
     expect(
       findChromeExecutable({
@@ -123,7 +125,7 @@ describe('chrome-launch', () => {
         existsSyncImpl: (path: Parameters<typeof existsSync>[0]) =>
           String(path) === appPath || String(path) === binaryPath,
         readdirSyncImpl: () => [],
-      }),
+      })
     ).toBe(binaryPath);
   });
 
@@ -134,10 +136,9 @@ describe('chrome-launch', () => {
       findChromeExecutable({
         platform: 'darwin',
         env: { CHROME_PATH: appPath },
-        existsSyncImpl: (path: Parameters<typeof existsSync>[0]) =>
-          String(path) === appPath,
+        existsSyncImpl: (path: Parameters<typeof existsSync>[0]) => String(path) === appPath,
         readdirSyncImpl: () => [],
-      }),
+      })
     ).toBe(appPath);
   });
 
@@ -157,7 +158,7 @@ describe('chrome-launch', () => {
         }) as typeof readdirSync,
         existsSyncImpl: (path: Parameters<typeof existsSync>[0]) =>
           [installedChrome, chromeForTesting].includes(String(path)),
-      }),
+      })
     ).toBe(chromeForTesting);
   });
 
@@ -178,7 +179,7 @@ describe('chrome-launch', () => {
         }) as typeof readdirSync,
         existsSyncImpl: (path: Parameters<typeof existsSync>[0]) =>
           [installedChrome, chromeForTesting].includes(String(path)),
-      }),
+      })
     ).toBe(installedChrome);
   });
 
@@ -195,9 +196,9 @@ describe('chrome-launch', () => {
         existsSyncImpl: (path: Parameters<typeof existsSync>[0]) =>
           String(path) ===
           '/Users/tester/.cache/puppeteer/chrome/mac_arm-131.0.6778.204/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
-      }),
+      })
     ).toBe(
-      '/Users/tester/.cache/puppeteer/chrome/mac_arm-131.0.6778.204/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+      '/Users/tester/.cache/puppeteer/chrome/mac_arm-131.0.6778.204/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing'
     );
   });
 
@@ -215,8 +216,9 @@ describe('chrome-launch', () => {
           expect(String(path)).toBe('/Users/tester/.cache/puppeteer/chrome');
           return ['mac_arm-131.0.6778.204'];
         }) as typeof readdirSync,
-        existsSyncImpl: (path: Parameters<typeof existsSync>[0]) => String(path) === chromeForTesting,
-      }),
+        existsSyncImpl: (path: Parameters<typeof existsSync>[0]) =>
+          String(path) === chromeForTesting,
+      })
     ).toBe(chromeForTesting);
   });
 
@@ -228,20 +230,18 @@ describe('chrome-launch', () => {
     expect(profiles.map((profile) => profile.id)).toEqual(['leader', 'follower', 'extension']);
 
     const localState = JSON.parse(
-      await readFile(join(projectRoot, '.qa', 'chrome', 'leader', 'Local State'), 'utf8'),
+      await readFile(join(projectRoot, '.qa', 'chrome', 'leader', 'Local State'), 'utf8')
     ) as {
       profile?: { info_cache?: { Default?: { name?: string; profile_highlight_color?: number } } };
     };
     expect(localState.profile?.info_cache?.Default?.name).toBe('SLICC QA Leader');
-    expect(typeof localState.profile?.info_cache?.Default?.profile_highlight_color).toBe(
-      'number',
-    );
+    expect(typeof localState.profile?.info_cache?.Default?.profile_highlight_color).toBe('number');
 
     const preferences = JSON.parse(
       await readFile(
         join(projectRoot, '.qa', 'chrome', 'extension', 'Default', 'Preferences'),
-        'utf8',
-      ),
+        'utf8'
+      )
     ) as { profile?: { name?: string } };
     expect(preferences.profile?.name).toBe('SLICC QA Extension');
   });
@@ -250,17 +250,13 @@ describe('chrome-launch', () => {
 describe('parseCdpPortFromStderr', () => {
   it('extracts the port from a standard Chrome DevTools line', () => {
     expect(
-      parseCdpPortFromStderr(
-        'DevTools listening on ws://127.0.0.1:9222/devtools/browser/abc-123',
-      ),
+      parseCdpPortFromStderr('DevTools listening on ws://127.0.0.1:9222/devtools/browser/abc-123')
     ).toBe(9222);
   });
 
   it('extracts a non-default port', () => {
     expect(
-      parseCdpPortFromStderr(
-        'DevTools listening on ws://127.0.0.1:41567/devtools/browser/abc-123',
-      ),
+      parseCdpPortFromStderr('DevTools listening on ws://127.0.0.1:41567/devtools/browser/abc-123')
     ).toBe(41567);
   });
 
@@ -274,9 +270,7 @@ describe('parseCdpPortFromStderr', () => {
 
   it('handles 0.0.0.0 host binding', () => {
     expect(
-      parseCdpPortFromStderr(
-        'DevTools listening on ws://0.0.0.0:9333/devtools/browser/xyz',
-      ),
+      parseCdpPortFromStderr('DevTools listening on ws://0.0.0.0:9333/devtools/browser/xyz')
     ).toBe(9333);
   });
 });
@@ -293,7 +287,7 @@ describe('waitForCdpPortFromStderr', () => {
     // Simulate Chrome printing to stderr
     stderr.emit(
       'data',
-      Buffer.from('DevTools listening on ws://127.0.0.1:44123/devtools/browser/id\n'),
+      Buffer.from('DevTools listening on ws://127.0.0.1:44123/devtools/browser/id\n')
     );
 
     await expect(promise).resolves.toBe(44123);
@@ -310,8 +304,8 @@ describe('waitForCdpPortFromStderr', () => {
     stderr.emit(
       'data',
       Buffer.from(
-        '[WARNING] some noise\nDevTools listening on ws://127.0.0.1:9222/devtools/browser/id\n',
-      ),
+        '[WARNING] some noise\nDevTools listening on ws://127.0.0.1:9222/devtools/browser/id\n'
+      )
     );
 
     await expect(promise).resolves.toBe(9222);

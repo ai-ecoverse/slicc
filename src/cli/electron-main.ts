@@ -3,7 +3,7 @@ import { readFile } from 'fs/promises';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
 
-import { app, BrowserWindow, session } from 'electron';
+import { app, BrowserWindow, nativeTheme, session } from 'electron';
 
 import {
   buildElectronOverlayAppUrl,
@@ -54,7 +54,9 @@ async function loadOverlayBundleSource(): Promise<string> {
   if (FLAGS.dev) {
     const response = await fetch(buildElectronOverlayEntryUrl(SERVE_ORIGIN));
     if (!response.ok) {
-      throw new Error(`Failed to fetch electron overlay entry: ${response.status} ${response.statusText}`);
+      throw new Error(
+        `Failed to fetch electron overlay entry: ${response.status} ${response.statusText}`
+      );
     }
     return await response.text();
   }
@@ -64,10 +66,13 @@ async function loadOverlayBundleSource(): Promise<string> {
 
 async function injectOverlay(window: BrowserWindow): Promise<void> {
   const bundleSource = await loadOverlayBundleSource();
-  await window.webContents.executeJavaScript(bundleSource, true);
+  // Detect the app's effective theme and set SLICC's theme to match
+  const theme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
+  const themeScript = `try{localStorage.setItem('slicc-theme',${JSON.stringify(theme)})}catch(e){}`;
+  await window.webContents.executeJavaScript(`${themeScript}\n${bundleSource}`, true);
   await window.webContents.executeJavaScript(
     buildElectronOverlayInjectionCall({ appUrl: OVERLAY_APP_URL }),
-    true,
+    true
   );
 }
 
@@ -216,7 +221,7 @@ app.on('will-quit', () => {
 });
 
 main().catch((error: unknown) => {
-  const message = error instanceof Error ? error.stack ?? error.message : String(error);
+  const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
   console.error('[electron-float] Fatal error:', message);
   void stopCliServer().finally(() => {
     app.exit(1);

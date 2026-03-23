@@ -39,10 +39,10 @@ interface WebhookInfo {
 async function apiCall(
   method: string,
   path: string,
-  body?: unknown,
+  body?: unknown
 ): Promise<{ ok: boolean; status: number; data: unknown }> {
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
-  
+
   // In extension mode, we don't have a CLI server - webhooks not supported
   if (isExtension) {
     throw new Error('Webhooks are only available in CLI mode (npm run dev:full)');

@@ -21,18 +21,18 @@ function validatePath(filePath: string): { valid: boolean; error?: string } {
   if (filePath.startsWith('/')) {
     return { valid: false, error: `Absolute path not allowed: ${filePath}` };
   }
-  
+
   // Reject paths with .. segments
   const segments = filePath.split('/');
-  if (segments.some(s => s === '..')) {
+  if (segments.some((s) => s === '..')) {
     return { valid: false, error: `Path traversal not allowed: ${filePath}` };
   }
-  
+
   // Reject paths that try to escape via encoded characters
   if (filePath.includes('%2e%2e') || filePath.includes('%2E%2E')) {
     return { valid: false, error: `Encoded path traversal not allowed: ${filePath}` };
   }
-  
+
   return { valid: true };
 }
 
@@ -42,7 +42,7 @@ function validatePath(filePath: string): { valid: boolean; error?: string } {
 async function ensureDir(fs: VirtualFS, dirPath: string): Promise<void> {
   const parts = dirPath.split('/').filter(Boolean);
   let currentPath = '';
-  
+
   for (const part of parts) {
     currentPath += '/' + part;
     try {
@@ -55,7 +55,7 @@ async function ensureDir(fs: VirtualFS, dirPath: string): Promise<void> {
 
 /**
  * Apply a skill from the skills directory.
- * 
+ *
  * @param fs - Virtual filesystem
  * @param skillName - Name of the skill (directory name in skills dir)
  * @param skillsDir - Base directory for skills (default: /workspace/skills)
@@ -63,7 +63,7 @@ async function ensureDir(fs: VirtualFS, dirPath: string): Promise<void> {
 export async function applySkill(
   fs: VirtualFS,
   skillName: string,
-  skillsDir: string = '/workspace/skills',
+  skillsDir: string = '/workspace/skills'
 ): Promise<ApplyResult> {
   const skillDir = `${skillsDir}/${skillName}`;
 
@@ -157,11 +157,11 @@ export async function applySkill(
           if (parentDir) {
             await ensureDir(fs, parentDir);
           }
-          
+
           // Use copyFile for binary-safe copying
           await fs.copyFile(sourcePath, targetPath);
           addedFiles.push(filePath);
-          
+
           // Compute hash from the copied file
           const content = await fs.readTextFile(targetPath);
           fileHashes[filePath] = await computeFileHash(content);
@@ -195,10 +195,10 @@ export async function applySkill(
         try {
           // Read the patch/replacement content
           const patchContent = await fs.readTextFile(patchPath);
-          
+
           // For now, we do simple append-based modifications
           let existingContent = '';
-          
+
           try {
             existingContent = await fs.readTextFile(`/${filePath}`);
           } catch {
@@ -209,7 +209,7 @@ export async function applySkill(
           // "// APPEND_AFTER: <marker>", we insert after that marker
           // Otherwise, we append to the end
           let newContent: string;
-          
+
           if (patchContent.includes('// APPEND_AFTER:')) {
             const lines = patchContent.split('\n');
             const markerLine = lines.find((l: string) => l.includes('// APPEND_AFTER:'));
@@ -221,7 +221,7 @@ export async function applySkill(
             if (marker && existingContent.includes(marker)) {
               const markerIdx = existingContent.indexOf(marker) + marker.length;
               const lineEnd = existingContent.indexOf('\n', markerIdx);
-              
+
               // Handle case where marker is on the last line (no trailing newline)
               if (lineEnd === -1) {
                 // Marker is on the last line with no trailing newline
@@ -238,9 +238,7 @@ export async function applySkill(
             }
           } else {
             // Simple append
-            newContent = existingContent
-              ? existingContent + '\n' + patchContent
-              : patchContent;
+            newContent = existingContent ? existingContent + '\n' + patchContent : patchContent;
           }
 
           await fs.writeFile(`/${filePath}`, newContent);

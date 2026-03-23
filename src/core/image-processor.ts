@@ -11,11 +11,11 @@ import { createLogger } from './logger.js';
 
 const log = createLogger('image-processor');
 
-export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;    // 5MB API limit (on base64 string)
+export const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB API limit (on base64 string)
 /** Max raw bytes that fit within the base64 limit (base64 inflates by 4/3). */
-const MAX_RAW_BYTES = Math.floor(MAX_IMAGE_BYTES * 3 / 4);
-export const OPTIMAL_LONG_EDGE = 1568;              // px — avoids server-side resize
-export const MAX_DIMENSION = 8000;                  // px — hard reject by API
+const MAX_RAW_BYTES = Math.floor((MAX_IMAGE_BYTES * 3) / 4);
+export const OPTIMAL_LONG_EDGE = 1568; // px — avoids server-side resize
+export const MAX_DIMENSION = 8000; // px — hard reject by API
 export const SUPPORTED_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 
 /** Estimate decoded byte size from base64 without full decode. */
@@ -23,7 +23,7 @@ export function getImageByteSize(base64: string): number {
   let padding = 0;
   if (base64.endsWith('==')) padding = 2;
   else if (base64.endsWith('=')) padding = 1;
-  return Math.ceil(base64.length * 3 / 4) - padding;
+  return Math.ceil((base64.length * 3) / 4) - padding;
 }
 
 export function isSupportedImageFormat(mimeType: string): boolean {
@@ -34,16 +34,27 @@ export function isSupportedImageFormat(mimeType: string): boolean {
  * Extract image dimensions from base64 data by parsing format headers.
  * Returns null if dimensions can't be determined (unknown format, corrupt header).
  */
-export function getImageDimensions(base64: string, mimeType: string): { width: number; height: number } | null {
+export function getImageDimensions(
+  base64: string,
+  mimeType: string
+): { width: number; height: number } | null {
   try {
     if (mimeType === 'image/png') {
       // PNG IHDR: width @ bytes 16-19, height @ bytes 20-23 (big-endian uint32)
       // Need first 24 raw bytes = 32 base64 chars
       if (base64.length < 32) return null;
       const raw = atob(base64.slice(0, 32));
-      const w = (raw.charCodeAt(16) << 24) | (raw.charCodeAt(17) << 16) | (raw.charCodeAt(18) << 8) | raw.charCodeAt(19);
-      const h = (raw.charCodeAt(20) << 24) | (raw.charCodeAt(21) << 16) | (raw.charCodeAt(22) << 8) | raw.charCodeAt(23);
-      return (w > 0 && h > 0) ? { width: w, height: h } : null;
+      const w =
+        (raw.charCodeAt(16) << 24) |
+        (raw.charCodeAt(17) << 16) |
+        (raw.charCodeAt(18) << 8) |
+        raw.charCodeAt(19);
+      const h =
+        (raw.charCodeAt(20) << 24) |
+        (raw.charCodeAt(21) << 16) |
+        (raw.charCodeAt(22) << 8) |
+        raw.charCodeAt(23);
+      return w > 0 && h > 0 ? { width: w, height: h } : null;
     }
 
     if (mimeType === 'image/gif') {
@@ -52,7 +63,7 @@ export function getImageDimensions(base64: string, mimeType: string): { width: n
       const raw = atob(base64.slice(0, 16));
       const w = raw.charCodeAt(6) | (raw.charCodeAt(7) << 8);
       const h = raw.charCodeAt(8) | (raw.charCodeAt(9) << 8);
-      return (w > 0 && h > 0) ? { width: w, height: h } : null;
+      return w > 0 && h > 0 ? { width: w, height: h } : null;
     }
 
     if (mimeType === 'image/jpeg') {
@@ -60,12 +71,12 @@ export function getImageDimensions(base64: string, mimeType: string): { width: n
       const scanBytes = Math.min(Math.ceil(65536 / 3) * 4, base64.length);
       const raw = atob(base64.slice(0, scanBytes));
       for (let i = 0; i < raw.length - 8; i++) {
-        if (raw.charCodeAt(i) === 0xFF) {
+        if (raw.charCodeAt(i) === 0xff) {
           const marker = raw.charCodeAt(i + 1);
-          if (marker === 0xC0 || marker === 0xC2) {
+          if (marker === 0xc0 || marker === 0xc2) {
             const h = (raw.charCodeAt(i + 5) << 8) | raw.charCodeAt(i + 6);
             const w = (raw.charCodeAt(i + 7) << 8) | raw.charCodeAt(i + 8);
-            return (w > 0 && h > 0) ? { width: w, height: h } : null;
+            return w > 0 && h > 0 ? { width: w, height: h } : null;
           }
         }
       }
@@ -82,7 +93,9 @@ export function getImageDimensions(base64: string, mimeType: string): { width: n
  * Returns the original or resized ImageContent, or a TextContent placeholder
  * if the image cannot be processed (unsupported format, corrupt data).
  */
-export async function processImageContent(image: ImageContent): Promise<ImageContent | TextContent> {
+export async function processImageContent(
+  image: ImageContent
+): Promise<ImageContent | TextContent> {
   // Check format
   if (!isSupportedImageFormat(image.mimeType)) {
     log.warn('Unsupported image format', { mimeType: image.mimeType });
@@ -99,9 +112,10 @@ export async function processImageContent(image: ImageContent): Promise<ImageCon
   // Check dimensions — API rejects images > 8000px on any side.
   // Parse from header bytes (no full decode needed).
   const dims = getImageDimensions(image.data, image.mimeType);
-  const needsResize = base64Size > MAX_IMAGE_BYTES
-    || (dims !== null && (dims.width > MAX_DIMENSION || dims.height > MAX_DIMENSION))
-    || (dims !== null && Math.max(dims.width, dims.height) > OPTIMAL_LONG_EDGE);
+  const needsResize =
+    base64Size > MAX_IMAGE_BYTES ||
+    (dims !== null && (dims.width > MAX_DIMENSION || dims.height > MAX_DIMENSION)) ||
+    (dims !== null && Math.max(dims.width, dims.height) > OPTIMAL_LONG_EDGE);
 
   if (!needsResize) {
     return image;
@@ -121,7 +135,9 @@ export async function processImageContent(image: ImageContent): Promise<ImageCon
     getMagick = mod.getMagick;
     MIME_TO_MAGICK_FORMAT = mod.MIME_TO_MAGICK_FORMAT;
   } catch (err) {
-    log.error('ImageMagick WASM module unavailable', { error: err instanceof Error ? err.message : String(err) });
+    log.error('ImageMagick WASM module unavailable', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return {
       type: 'text',
       text: `[Image removed: resize service unavailable (ImageMagick WASM could not be loaded)]`,
@@ -132,7 +148,9 @@ export async function processImageContent(image: ImageContent): Promise<ImageCon
   try {
     magick = await getMagick();
   } catch (err) {
-    log.error('ImageMagick WASM initialization failed', { error: err instanceof Error ? err.message : String(err) });
+    log.error('ImageMagick WASM initialization failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return {
       type: 'text',
       text: `[Image removed: resize service unavailable (WASM init failed)]`,
@@ -200,7 +218,7 @@ export async function processImageContent(image: ImageContent): Promise<ImageCon
       log.warn('Image still over 5MB after resize+compress', { size: output.data.length });
       return {
         type: 'text',
-        text: `[Image removed: still ${Math.round(output.data.length / 1024 / 1024 * 10) / 10}MB after resize and compression, exceeds 5MB API limit]`,
+        text: `[Image removed: still ${Math.round((output.data.length / 1024 / 1024) * 10) / 10}MB after resize and compression, exceeds 5MB API limit]`,
       };
     }
 

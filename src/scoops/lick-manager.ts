@@ -1,6 +1,6 @@
 /**
  * Lick Manager - Browser-side management of webhooks and crontasks.
- * 
+ *
  * All state is stored in IndexedDB. The server only forwards raw webhook
  * POSTs to the browser via WebSocket - all filtering and routing happens here.
  */
@@ -166,19 +166,31 @@ export class LickManager {
           event = result as LickEvent;
         }
       } catch (err) {
-        log.error('Webhook filter error', { webhookId, error: err instanceof Error ? err.message : String(err) });
+        log.error('Webhook filter error', {
+          webhookId,
+          error: err instanceof Error ? err.message : String(err),
+        });
         // Continue with original event on filter error
       }
     }
 
-    log.info('Webhook event received', { webhookId, name: webhook.name, targetScoop: webhook.scoop });
+    log.info('Webhook event received', {
+      webhookId,
+      name: webhook.name,
+      targetScoop: webhook.scoop,
+    });
     this.eventHandler?.(event);
   }
 
   // ─── Cron Tasks ───────────────────────────────────────────────────────────
 
   /** Create a new cron task */
-  async createCronTask(name: string, cron: string, scoop?: string, filter?: string): Promise<CronTaskEntry> {
+  async createCronTask(
+    name: string,
+    cron: string,
+    scoop?: string,
+    filter?: string
+  ): Promise<CronTaskEntry> {
     // Validate cron expression
     const nextRun = this.getNextCronTime(cron, new Date());
     if (!nextRun) {
@@ -234,18 +246,21 @@ export class LickManager {
    *  - exact match on folder
    *  - wh.scoop + '-scoop' matches folder (e.g. webhook scoop="click-handler", folder="click-handler-scoop")
    */
-  getLicksForScoop(name: string, folder: string): { webhooks: WebhookEntry[]; cronTasks: CronTaskEntry[] } {
+  getLicksForScoop(
+    name: string,
+    folder: string
+  ): { webhooks: WebhookEntry[]; cronTasks: CronTaskEntry[] } {
     const matches = (scoopField: string | undefined): boolean =>
       scoopField === name || scoopField === folder || `${scoopField}-scoop` === folder;
-    const webhooks = Array.from(this.webhooks.values()).filter(wh => matches(wh.scoop));
-    const cronTasks = Array.from(this.crontasks.values()).filter(ct => matches(ct.scoop));
+    const webhooks = Array.from(this.webhooks.values()).filter((wh) => matches(wh.scoop));
+    const cronTasks = Array.from(this.crontasks.values()).filter((ct) => matches(ct.scoop));
     return { webhooks, cronTasks };
   }
 
   /** Run the cron scheduler - called every minute */
   private async runCronScheduler(): Promise<void> {
     const now = new Date();
-    
+
     for (const task of this.crontasks.values()) {
       if (task.status !== 'active') continue;
       if (!task.nextRun) continue;
@@ -255,7 +270,7 @@ export class LickManager {
 
       // Task is due - run filter and dispatch
       let payload: unknown = { time: now.toISOString() };
-      
+
       if (task.filter) {
         try {
           const filterFn = this.compileFilter(task.filter, false);
@@ -273,7 +288,10 @@ export class LickManager {
             payload = result;
           }
         } catch (err) {
-          log.error('Cron filter error', { id: task.id, error: err instanceof Error ? err.message : String(err) });
+          log.error('Cron filter error', {
+            id: task.id,
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       }
 
@@ -310,19 +328,28 @@ export class LickManager {
   }
 
   /** Compile a filter function */
-  private compileFilter(filterCode: string, isWebhook: boolean): (event: unknown) => boolean | unknown {
+  private compileFilter(
+    filterCode: string,
+    isWebhook: boolean
+  ): (event: unknown) => boolean | unknown {
     try {
       if (isWebhook) {
         // Webhook filter: (event) => ...
-        // eslint-disable-next-line @typescript-eslint/no-implied-eval
-        return new Function('event', `return (${filterCode})(event);`) as (event: unknown) => boolean | unknown;
+        // User-authored webhook/cron filter expression — evaluated in extension sandbox context.
+        // The filterCode string comes from the user's skill/webhook config, not from remote input.
+        // eslint-disable-next-line @typescript-eslint/no-implied-eval -- intentional: user-provided filter code
+        return new Function('event', `return (${filterCode})(event);`) as (
+          event: unknown
+        ) => boolean | unknown;
       } else {
         // Cron filter: () => ...
-        // eslint-disable-next-line @typescript-eslint/no-implied-eval
+        // eslint-disable-next-line @typescript-eslint/no-implied-eval -- intentional: user-provided filter code
         return new Function(`return (${filterCode})();`) as () => boolean | unknown;
       }
     } catch (err) {
-      throw new Error(`Invalid filter function: ${err instanceof Error ? err.message : String(err)}`);
+      throw new Error(
+        `Invalid filter function: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
   }
 
@@ -378,7 +405,7 @@ export class LickManager {
 export function buildActiveLicksError(
   scoopFolder: string,
   webhooks: WebhookEntry[],
-  cronTasks: CronTaskEntry[],
+  cronTasks: CronTaskEntry[]
 ): Error | null {
   if (webhooks.length === 0 && cronTasks.length === 0) return null;
   const parts: string[] = [];
@@ -389,8 +416,8 @@ export function buildActiveLicksError(
     parts.push(`${cronTasks.length} active cron task${cronTasks.length > 1 ? 's' : ''}`);
   }
   const commands = [
-    ...webhooks.map(wh => `  webhook delete ${wh.id}`),
-    ...cronTasks.map(ct => `  crontask delete ${ct.id}`),
+    ...webhooks.map((wh) => `  webhook delete ${wh.id}`),
+    ...cronTasks.map((ct) => `  crontask delete ${ct.id}`),
   ].join('\n');
   return new Error(
     `Cannot remove scoop '${scoopFolder}': it has ${parts.join(' and ')}. Unregister them first:\n${commands}`

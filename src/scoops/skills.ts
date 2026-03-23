@@ -11,27 +11,46 @@
 
 import { createLogger } from '../core/logger.js';
 import type { VirtualFS } from '../fs/index.js';
+import { discoverSkills } from '../skills/index.js';
+import type { SkillDiscoverySource } from '../skills/index.js';
 
 const log = createLogger('skills');
 
 // Load default text files at build time using import.meta.glob
 // The '?raw' query imports file contents as strings
-const defaultTextFiles = import.meta.glob('/src/defaults/**/*.{md,jsh,shtml,json,txt,css,js,ts,html}', { 
-  query: '?raw',
-  import: 'default',
-  eager: true 
-}) as Record<string, string>;
+const defaultTextFiles = import.meta.glob(
+  '/src/defaults/**/*.{md,jsh,shtml,json,txt,css,js,ts,html}',
+  {
+    query: '?raw',
+    import: 'default',
+    eager: true,
+  }
+) as Record<string, string>;
 
 // Load default binary files (audio, images, etc.) as base64
 // The '?inline' query gives us a data URL we can decode
-const defaultBinaryFiles = import.meta.glob('/src/defaults/**/*.{mp3,wav,ogg,png,jpg,jpeg,gif,webp,ico,pdf}', { 
-  query: '?inline',
-  import: 'default',
-  eager: true 
-}) as Record<string, string>;
+const defaultBinaryFiles = import.meta.glob(
+  '/src/defaults/**/*.{mp3,wav,ogg,png,jpg,jpeg,gif,webp,ico,pdf}',
+  {
+    query: '?inline',
+    import: 'default',
+    eager: true,
+  }
+) as Record<string, string>;
 
 // Binary file extensions that need special handling
-const BINARY_EXTENSIONS = new Set(['.mp3', '.wav', '.ogg', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.pdf']);
+const BINARY_EXTENSIONS = new Set([
+  '.mp3',
+  '.wav',
+  '.ogg',
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.ico',
+  '.pdf',
+]);
 
 function isBinaryFile(path: string): boolean {
   const ext = path.slice(path.lastIndexOf('.')).toLowerCase();
@@ -52,17 +71,17 @@ function decodeDataUrl(dataUrl: string): Uint8Array {
 // Combined view of all default files
 function getDefaultFiles(): Record<string, string | Uint8Array> {
   const result: Record<string, string | Uint8Array> = {};
-  
+
   // Add text files as-is
   for (const [path, content] of Object.entries(defaultTextFiles)) {
     result[path] = content;
   }
-  
+
   // Add binary files decoded from data URLs
   for (const [path, dataUrl] of Object.entries(defaultBinaryFiles)) {
     result[path] = decodeDataUrl(dataUrl);
   }
-  
+
   return result;
 }
 
@@ -76,6 +95,25 @@ export interface Skill {
   metadata: SkillMetadata;
   content: string;
   path: string;
+}
+
+function dedupeSkillsByName<T extends Skill>(skills: T[]): T[] {
+  const winners = new Map<string, T>();
+
+  for (const skill of skills) {
+    if (winners.has(skill.metadata.name)) {
+      log.debug('Skipped shadowed runtime skill', {
+        name: skill.metadata.name,
+        path: skill.path,
+        winnerPath: winners.get(skill.metadata.name)?.path,
+      });
+      continue;
+    }
+
+    winners.set(skill.metadata.name, skill);
+  }
+
+  return Array.from(winners.values());
 }
 
 /**
@@ -107,7 +145,7 @@ function parseFrontmatter(content: string): { metadata: Partial<SkillMetadata>; 
         metadata.description = trimmedValue;
         break;
       case 'allowed-tools':
-        metadata.allowedTools = trimmedValue.split(',').map(t => t.trim());
+        metadata.allowedTools = trimmedValue.split(',').map((t) => t.trim());
         break;
     }
   }
@@ -119,36 +157,68 @@ function parseFrontmatter(content: string): { metadata: Partial<SkillMetadata>; 
  * Load skills from a directory in VirtualFS
  */
 export async function loadSkills(fs: VirtualFS, skillsDir: string): Promise<Skill[]> {
+  const discoveredSkills = await loadDiscoveredSkills(fs, skillsDir);
+  const standaloneSkills = await loadStandaloneMarkdownSkills(fs, skillsDir);
+  const nativeDiscoveredSkills = discoveredSkills.filter((skill) => skill.source === 'native');
+  const compatibilityDiscoveredSkills = discoveredSkills.filter((skill) => skill.source !== 'native');
+  const skills = dedupeSkillsByName([
+    ...nativeDiscoveredSkills,
+    ...standaloneSkills,
+    ...compatibilityDiscoveredSkills,
+  ]);
+
+  log.info('Skills loaded', { count: skills.length, dir: skillsDir });
+  return skills;
+}
+
+type LoadedDiscoveredSkill = Skill & { source: SkillDiscoverySource };
+
+async function loadDiscoveredSkills(fs: VirtualFS, skillsDir: string): Promise<LoadedDiscoveredSkill[]> {
+  const discovered = await discoverSkills(fs, skillsDir);
+  const skills: LoadedDiscoveredSkill[] = [];
+
+  for (const discoveredSkill of discovered) {
+    if (!discoveredSkill.skillFilePath) continue;
+
+    try {
+      const text = await fs.readTextFile(discoveredSkill.skillFilePath);
+      const { metadata, body } = parseFrontmatter(text);
+      const name = metadata.name || discoveredSkill.name;
+
+      skills.push({
+        metadata: {
+          name,
+          description: metadata.description || discoveredSkill.manifest.description || '',
+          allowedTools: metadata.allowedTools,
+        },
+        content: body,
+        path: discoveredSkill.skillFilePath,
+        source: discoveredSkill.source,
+      });
+      log.debug('Loaded discovered skill', {
+        name,
+        path: discoveredSkill.skillFilePath,
+        source: discoveredSkill.source,
+      });
+    } catch {
+      log.debug('Failed to load discovered skill', {
+        name: discoveredSkill.name,
+        path: discoveredSkill.skillFilePath,
+      });
+    }
+  }
+
+  return skills;
+}
+
+async function loadStandaloneMarkdownSkills(fs: VirtualFS, skillsDir: string): Promise<Skill[]> {
   const skills: Skill[] = [];
 
   try {
     const entries = await fs.readDir(skillsDir);
 
     for (const entry of entries) {
-      if (entry.type === 'directory') {
-        // Skills can be in subdirectories with SKILL.md
-        const skillPath = `${skillsDir}/${entry.name}/SKILL.md`;
-        try {
-          const content = await fs.readFile(skillPath, { encoding: 'utf-8' });
-          const text = typeof content === 'string' ? content : new TextDecoder().decode(content);
-          const { metadata, body } = parseFrontmatter(text);
-
-          if (metadata.name) {
-            skills.push({
-              metadata: {
-                name: metadata.name,
-                description: metadata.description || '',
-                allowedTools: metadata.allowedTools,
-              },
-              content: body,
-              path: skillPath,
-            });
-            log.debug('Loaded skill', { name: metadata.name, path: skillPath });
-          }
-        } catch {
-          // SKILL.md doesn't exist in this directory
-        }
-      } else if (entry.name.endsWith('.md')) {
+      if (entry.type === 'file' && entry.name.endsWith('.md')) {
         // Skills can also be standalone .md files
         const skillPath = `${skillsDir}/${entry.name}`;
         try {
@@ -168,7 +238,7 @@ export async function loadSkills(fs: VirtualFS, skillsDir: string): Promise<Skil
             content: body,
             path: skillPath,
           });
-          log.debug('Loaded skill', { name, path: skillPath });
+          log.debug('Loaded standalone skill', { name, path: skillPath });
         } catch {
           // Skip unreadable files
         }
@@ -176,10 +246,9 @@ export async function loadSkills(fs: VirtualFS, skillsDir: string): Promise<Skil
     }
   } catch (err) {
     // Skills directory doesn't exist yet
-    log.debug('Skills directory not found', { dir: skillsDir });
+    log.debug('Standalone skills directory not found', { dir: skillsDir });
   }
 
-  log.info('Skills loaded', { count: skills.length, dir: skillsDir });
   return skills;
 }
 
@@ -190,9 +259,9 @@ export async function loadSkills(fs: VirtualFS, skillsDir: string): Promise<Skil
 export function formatSkillsForPrompt(skills: Skill[]): string {
   if (skills.length === 0) return '';
 
-  const sections = skills.map(skill => {
-    const toolsLine = skill.metadata.allowedTools 
-      ? `  Allowed tools: ${skill.metadata.allowedTools.join(', ')}\n` 
+  const sections = skills.map((skill) => {
+    const toolsLine = skill.metadata.allowedTools
+      ? `  Allowed tools: ${skill.metadata.allowedTools.join(', ')}\n`
       : '';
     return `- **${skill.metadata.name}**: ${skill.metadata.description}\n${toolsLine}  Path: ${skill.path}`;
   });
@@ -212,15 +281,18 @@ ${sections.join('\n')}
  * Create default files in VFS from bundled defaults.
  * Files are loaded from src/defaults/ at build time via import.meta.glob.
  */
-export async function createDefaultSkills(fs: VirtualFS, skillsDir: string = '/workspace/skills'): Promise<void> {
+export async function createDefaultSkills(
+  fs: VirtualFS,
+  skillsDir: string = '/workspace/skills'
+): Promise<void> {
   const prefix = '/src/defaults';
   const defaultFiles = getDefaultFiles();
-  
+
   for (const [importPath, content] of Object.entries(defaultFiles)) {
     // Convert import path like '/src/defaults/workspace/skills/browser/SKILL.md'
     // to VFS path like '/workspace/skills/browser/SKILL.md'
     const vfsPath = importPath.slice(prefix.length);
-    
+
     // Copy files under /workspace/skills and /workspace/scripts
     const isSkill = vfsPath.startsWith('/workspace/skills');
     const isScript = vfsPath.startsWith('/workspace/scripts');
@@ -236,7 +308,7 @@ export async function createDefaultSkills(fs: VirtualFS, skillsDir: string = '/w
       const scoopBase = skillsDir.replace('/workspace/skills', '');
       targetPath = scoopBase + vfsPath;
     }
-    
+
     try {
       // Check if file already exists
       await fs.stat(targetPath);
@@ -261,13 +333,13 @@ export async function createDefaultSkills(fs: VirtualFS, skillsDir: string = '/w
 export async function createDefaultSharedFiles(fs: VirtualFS): Promise<void> {
   const prefix = '/src/defaults';
   const defaultFiles = getDefaultFiles();
-  
+
   for (const [importPath, content] of Object.entries(defaultFiles)) {
     const vfsPath = importPath.slice(prefix.length);
-    
+
     // Only copy files that belong under /shared/
     if (!vfsPath.startsWith('/shared/')) continue;
-    
+
     try {
       // Check if file already exists
       await fs.stat(vfsPath);

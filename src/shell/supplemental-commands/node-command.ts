@@ -41,7 +41,7 @@ export function createNodeCommand(): Command {
     } else if (args.length > 0 && !args[0].startsWith('-')) {
       const scriptArg = args[0];
       const scriptPath = ctx.fs.resolvePath(ctx.cwd, scriptArg);
-      if (!await ctx.fs.exists(scriptPath)) {
+      if (!(await ctx.fs.exists(scriptPath))) {
         return {
           stdout: '',
           stderr: `node: cannot find module '${scriptArg}'\n`,
@@ -137,7 +137,9 @@ export function createNodeCommand(): Command {
 
     // Shell command bridge — lets node -e scripts run shell commands via exec('ls -la')
     // Delegates to just-bash's WASM interpreter, NOT Node's child_process.
-    const execBridge = async (command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
+    const execBridge = async (
+      command: string
+    ): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
       if (!ctx.exec) throw new Error('exec is not available in this runtime');
       const result = await ctx.exec(command, { cwd: ctx.cwd });
       return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
@@ -208,7 +210,7 @@ export function createNodeCommand(): Command {
           sandbox.dataset.jsTool = 'true';
           sandbox.src = chrome.runtime.getURL('sandbox.html');
           document.body.appendChild(sandbox);
-          await new Promise<void>(resolve => {
+          await new Promise<void>((resolve) => {
             sandbox!.addEventListener('load', () => resolve(), { once: true });
           });
         }
@@ -223,7 +225,9 @@ export function createNodeCommand(): Command {
           (async () => {
             try {
               let result: unknown;
-              const resolved = msg.args?.[0] ? ctx.fs.resolvePath(ctx.cwd, msg.args[0]) : msg.args?.[0];
+              const resolved = msg.args?.[0]
+                ? ctx.fs.resolvePath(ctx.cwd, msg.args[0])
+                : msg.args?.[0];
               switch (msg.op) {
                 case 'readFile':
                   result = await ctx.fs.readFile(resolved);
@@ -259,10 +263,16 @@ export function createNodeCommand(): Command {
                   result = true;
                   break;
               }
-              sandbox!.contentWindow!.postMessage({ type: 'vfs_response', id: msg.id, result }, '*');
+              sandbox!.contentWindow!.postMessage(
+                { type: 'vfs_response', id: msg.id, result },
+                '*'
+              );
             } catch (err) {
               const errMsg = err instanceof Error ? err.message : String(err);
-              sandbox!.contentWindow!.postMessage({ type: 'vfs_response', id: msg.id, error: errMsg }, '*');
+              sandbox!.contentWindow!.postMessage(
+                { type: 'vfs_response', id: msg.id, error: errMsg },
+                '*'
+              );
             }
           })();
         };
@@ -276,10 +286,16 @@ export function createNodeCommand(): Command {
           (async () => {
             try {
               const result = await execBridge(msg.command);
-              sandbox!.contentWindow!.postMessage({ type: 'shell_exec_response', id: msg.id, result }, '*');
+              sandbox!.contentWindow!.postMessage(
+                { type: 'shell_exec_response', id: msg.id, result },
+                '*'
+              );
             } catch (err) {
               const errMsg = err instanceof Error ? err.message : String(err);
-              sandbox!.contentWindow!.postMessage({ type: 'shell_exec_response', id: msg.id, error: errMsg }, '*');
+              sandbox!.contentWindow!.postMessage(
+                { type: 'shell_exec_response', id: msg.id, error: errMsg },
+                '*'
+              );
             }
           })();
         };
@@ -292,6 +308,13 @@ export function createNodeCommand(): Command {
           if (!msg || msg.type !== 'fetch_proxy') return;
           (async () => {
             try {
+              const { ensureHostPermission } = await import('../../extension/host-permission.js');
+              if (!await ensureHostPermission()) {
+                sandbox!.contentWindow!.postMessage(
+                  { type: 'fetch_proxy_response', id: msg.id, error: 'Host permission not granted. Grant web access when prompted or configure a provider in settings.' }, '*',
+                );
+                return;
+              }
               const init: RequestInit = { method: msg.init?.method ?? 'GET', cache: 'no-store' };
               if (msg.init?.headers) init.headers = msg.init.headers;
               if (msg.init?.body && !['GET', 'HEAD'].includes(init.method as string)) {
@@ -300,16 +323,25 @@ export function createNodeCommand(): Command {
               const resp = await fetch(msg.url, init);
               const buf = await resp.arrayBuffer();
               const headers: Record<string, string> = {};
-              resp.headers.forEach((v, k) => { headers[k] = v; });
-              sandbox!.contentWindow!.postMessage({
-                type: 'fetch_proxy_response', id: msg.id,
-                status: resp.status, statusText: resp.statusText,
-                headers, body: new Uint8Array(buf),
-              }, '*');
+              resp.headers.forEach((v, k) => {
+                headers[k] = v;
+              });
+              sandbox!.contentWindow!.postMessage(
+                {
+                  type: 'fetch_proxy_response',
+                  id: msg.id,
+                  status: resp.status,
+                  statusText: resp.statusText,
+                  headers,
+                  body: new Uint8Array(buf),
+                },
+                '*'
+              );
             } catch (err) {
               const errMsg = err instanceof Error ? err.message : String(err);
               sandbox!.contentWindow!.postMessage(
-                { type: 'fetch_proxy_response', id: msg.id, error: errMsg }, '*',
+                { type: 'fetch_proxy_response', id: msg.id, error: errMsg },
+                '*'
               );
             }
           })();
@@ -354,18 +386,20 @@ export function createNodeCommand(): Command {
         };
       }
 
-      const AsyncFunction = Object.getPrototypeOf(async function () { /* noop */ }).constructor as (
-        new (...args: string[]) => (
-          fs: typeof fsBridge,
-          process: typeof processShim,
-          console: typeof nodeConsole,
-          require: (id: string) => never,
-          module: typeof moduleShim,
-          exports: Record<string, unknown>,
-          __state: Record<string, unknown>,
-          exec: typeof execBridge,
-        ) => Promise<unknown>
-      );
+      const AsyncFunction = Object.getPrototypeOf(async function () {
+        /* noop */
+      }).constructor as new (
+        ...args: string[]
+      ) => (
+        fs: typeof fsBridge,
+        process: typeof processShim,
+        console: typeof nodeConsole,
+        require: (id: string) => never,
+        module: typeof moduleShim,
+        exports: Record<string, unknown>,
+        __state: Record<string, unknown>,
+        exec: typeof execBridge
+      ) => Promise<unknown>;
       const fn = new AsyncFunction(
         'fs',
         'process',
@@ -375,9 +409,18 @@ export function createNodeCommand(): Command {
         'exports',
         '__state',
         'exec',
-        `"use strict";\nconst globalThis = __state;\nconst global = __state;\n${code}`,
+        `"use strict";\nconst globalThis = __state;\nconst global = __state;\n${code}`
       );
-      await fn(fsBridge, processShim, nodeConsole, requireShim, moduleShim, moduleShim.exports, nodeRuntimeState, execBridge);
+      await fn(
+        fsBridge,
+        processShim,
+        nodeConsole,
+        requireShim,
+        moduleShim,
+        moduleShim.exports,
+        nodeRuntimeState,
+        execBridge
+      );
       return {
         stdout: stdoutChunks.join(''),
         stderr: stderrChunks.join(''),
