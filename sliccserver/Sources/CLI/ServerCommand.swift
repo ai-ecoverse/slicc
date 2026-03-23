@@ -1,5 +1,10 @@
 import ArgumentParser
+import AsyncHTTPClient
 import Foundation
+import Hummingbird
+import HummingbirdWebSocket
+import Logging
+import ServiceLifecycle
 
 @main
 @available(macOS 10.15, *)
@@ -50,6 +55,181 @@ struct ServerCommand: AsyncParsableCommand {
 
     @Option(name: .long, help: "Auto-submit prompt")
     var prompt: String?
+
+    mutating func run() async throws {
+        let config = ServerConfig.resolve(from: self)
+        let logLevel = Self.loggerLevel(from: config.logLevel)
+        let logDirectory = config.logDirectoryURL ?? FileLogger.defaultLogDirectory
+        let fileLoggerConfiguration = FileLoggerConfiguration(
+            logDirectory: logDirectory,
+            logLevel: logLevel
+        )
+
+        SliccLogging.bootstrap(logLevel: logLevel, logDirectory: logDirectory)
+
+        let logger = Logger(label: "slicc.server")
+        let fileLogger = FileLogger(label: "slicc.server", configuration: fileLoggerConfiguration)
+        let repositoryRoot = Self.repositoryRoot()
+        let environment = ProcessInfo.processInfo.environment
+
+        let servePort = try await findAvailablePort(startingFrom: Self.preferredServePort(from: environment))
+        var cdpPort = config.serveOnly
+            ? config.cdpPort
+            : try await findAvailablePort(startingFrom: config.cdpPort)
+
+        let serveOrigin = "http://localhost:\(servePort)"
+
+        var browserProcess: Process?
+        var browserLabel = config.electron ? "Electron" : "Chrome"
+        var overlayInjector: ElectronOverlayInjector?
+
+        if config.electron, !config.serveOnly {
+            guard let electronApp = config.electronApp else {
+                throw ValidationError(
+                    "Electron mode requires an app path. Pass --electron <path> or --electron-app=<path>."
+                )
+            }
+
+            let electronLauncher = ElectronLauncher(logger: Logger(label: "slicc.browser.electron-launcher"))
+            let launchedElectron = try await electronLauncher.launch(
+                appPath: electronApp,
+                cdpPort: cdpPort,
+                kill: config.kill
+            )
+            browserProcess = launchedElectron.process
+            browserLabel = launchedElectron.displayName
+            cdpPort = launchedElectron.cdpPort
+        } else if !config.serveOnly {
+            let chromeLauncher = ChromeLauncher(logger: Logger(label: "slicc.chrome-launcher"))
+            let chromeExecutable = chromeLauncher.findChromeExecutable()
+            let launchURL = try Self.resolveBrowserLaunchURL(
+                serveOrigin: serveOrigin,
+                config: config,
+                environment: environment
+            )
+            let userDataDir = chromeLauncher.resolveUserDataDir(
+                tmpDir: environment["TMPDIR"],
+                servePort: servePort
+            )
+
+            let launchedChrome = try await chromeLauncher.launch(
+                config: ChromeLaunchConfig(
+                    projectRoot: repositoryRoot.path,
+                    cdpPort: cdpPort,
+                    launchUrl: launchURL,
+                    userDataDir: userDataDir,
+                    executablePath: chromeExecutable,
+                    currentDirectoryPath: repositoryRoot.path
+                )
+            )
+            browserProcess = launchedChrome.process
+            browserLabel = "Chrome"
+            cdpPort = launchedChrome.cdpPort
+        }
+
+        let lickSystem = LickSystem()
+        let cdpProxy = CDPProxy(logger: Logger(label: "slicc.cdp-proxy"))
+        let httpClient = HTTPClient(eventLoopGroupProvider: .singleton)
+        let startupLatch = ServerStartupLatch()
+        let staticRoot = repositoryRoot.appendingPathComponent("dist/ui", isDirectory: true).path
+
+        let router = Router(context: BasicRequestContext.self)
+        router.middlewares.add(RequestLogger<BasicRequestContext>(logger: Logger(label: "slicc.request")))
+        router.middlewares.add(
+            StaticFileMiddleware<BasicRequestContext>(
+                staticRoot: staticRoot,
+                logger: Logger(label: "slicc.static-files")
+            )
+        )
+        registerAPIRoutes(router: router, lickSystem: lickSystem, config: config, httpClient: httpClient)
+
+        let wsRouter = Router(context: BasicWebSocketRequestContext.self)
+        await cdpProxy.install(on: wsRouter, cdpPort: cdpPort)
+        LickWebSocketRoute.register(on: wsRouter, lickSystem: lickSystem)
+
+        let app = Application(
+            router: router,
+            server: .http1WebSocketUpgrade(webSocketRouter: wsRouter),
+            configuration: .init(
+                address: .hostname("127.0.0.1", port: servePort),
+                serverName: "slicc-server"
+            ),
+            onServerRunning: { _ in
+                await startupLatch.signalStarted()
+            },
+            logger: logger
+        )
+
+        let serviceGroup = ServiceGroup(services: [app], logger: logger)
+        let serverController = ServiceGroupServerController(serviceGroup: serviceGroup)
+        let shutdownHandler = GracefulShutdownHandler()
+
+        let appTask = Task {
+            try await serviceGroup.run()
+        }
+
+        do {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    await startupLatch.waitUntilStarted()
+                }
+                group.addTask {
+                    try await appTask.value
+                }
+                _ = try await group.next()
+                group.cancelAll()
+            }
+
+            do {
+                try await cdpProxy.preWarm(cdpPort: cdpPort)
+            } catch {
+                logger.warning("CDP proxy pre-warm failed", metadata: ["error": .string(error.localizedDescription)])
+            }
+
+            let consoleForwarder: ConsoleForwarder?
+            if config.electron {
+                let injector = ElectronOverlayInjector(
+                    cdpPort: cdpPort,
+                    servePort: servePort,
+                    projectRoot: repositoryRoot,
+                    logger: Logger(label: "slicc.browser.electron-overlay")
+                )
+                injector.start()
+                overlayInjector = injector
+                consoleForwarder = nil
+            } else {
+                let forwarder = ConsoleForwarder(logger: Logger(label: "slicc.browser.console-forwarder"))
+                await forwarder.start(cdpPort: cdpPort, pageUrl: String(servePort))
+                consoleForwarder = forwarder
+            }
+
+            await shutdownHandler.install(
+                context: ShutdownContext(
+                    browserProcess: browserProcess,
+                    browserLabel: browserLabel,
+                    cdpPort: cdpPort,
+                    fileLogger: fileLogger,
+                    overlayInjector: overlayInjector,
+                    cdpProxy: cdpProxy,
+                    clientSockets: lickSystem,
+                    server: serverController
+                )
+            )
+
+            print("Serving UI at \(serveOrigin)")
+            print("CDP proxy at ws://localhost:\(servePort)/cdp")
+
+            try await appTask.value
+            await consoleForwarder?.stop()
+            overlayInjector?.stop()
+            try await httpClient.shutdown()
+        } catch {
+            appTask.cancel()
+            overlayInjector?.stop()
+            try? await httpClient.shutdown()
+            throw error
+        }
+    }
 }
 
 struct ServerConfig: Sendable, Equatable {
@@ -151,5 +331,208 @@ struct ServerConfig: Sendable, Equatable {
 
         let expandedPath = NSString(string: value).expandingTildeInPath
         return URL(fileURLWithPath: expandedPath).standardizedFileURL
+    }
+}
+
+@available(macOS 14, *)
+private actor ServerStartupLatch {
+    private var started = false
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+
+    func signalStarted() {
+        guard !started else { return }
+        started = true
+        let continuations = self.continuations
+        self.continuations.removeAll()
+        for continuation in continuations {
+            continuation.resume()
+        }
+    }
+
+    func waitUntilStarted() async {
+        guard !started else { return }
+        await withCheckedContinuation { continuation in
+            self.continuations.append(continuation)
+        }
+    }
+}
+
+@available(macOS 14, *)
+private actor ServiceGroupServerController: GracefulShutdownServer {
+    private let serviceGroup: ServiceGroup
+
+    init(serviceGroup: ServiceGroup) {
+        self.serviceGroup = serviceGroup
+    }
+
+    func stop() async {
+        await serviceGroup.triggerGracefulShutdown()
+    }
+}
+
+private extension ServerCommand {
+    static func loggerLevel(from value: String) -> Logger.Level {
+        switch value {
+        case "debug":
+            .debug
+        case "warn":
+            .warning
+        case "error":
+            .error
+        default:
+            .info
+        }
+    }
+
+    static func preferredServePort(from environment: [String: String]) -> Int {
+        guard let rawPort = environment["PORT"],
+              let port = Int(rawPort.trimmingCharacters(in: .whitespacesAndNewlines)),
+              port > 0 else {
+            return 5710
+        }
+        return port
+    }
+
+    static func repositoryRoot(filePath: String = #filePath) -> URL {
+        URL(fileURLWithPath: filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    static func resolveBrowserLaunchURL(
+        serveOrigin: String,
+        config: ServerConfig,
+        environment: [String: String]
+    ) throws -> String {
+        if config.lead && config.join {
+            throw ValidationError("The --lead and --join launch flows are mutually exclusive.")
+        }
+
+        var launchURL = serveOrigin
+        if config.join {
+            guard let joinURL = config.joinUrl else {
+                throw ValidationError(
+                    "The --join launch flow requires a tray join URL via --join <url> or --join=<url>."
+                )
+            }
+            launchURL = try buildTrayJoinLaunchURL(locationHref: serveOrigin, joinURL: joinURL)
+        } else if config.lead {
+            guard let workerBaseURL = normalizeTrayWorkerBaseURL(
+                config.leadWorkerBaseUrl ?? environment["WORKER_BASE_URL"]
+            ) else {
+                throw ValidationError(
+                    "The --lead launch flow requires a tray worker base URL via --lead <url>, --lead=<url>, or WORKER_BASE_URL."
+                )
+            }
+            launchURL = try buildCanonicalTrayLaunchURL(locationHref: serveOrigin, trayValue: workerBaseURL)
+        }
+
+        guard let prompt = config.prompt else {
+            return launchURL
+        }
+        return try appendQueryItem(urlString: launchURL, name: "prompt", value: prompt)
+    }
+
+    static func buildTrayJoinLaunchURL(locationHref: String, joinURL: String) throws -> String {
+        guard let parsedJoinURL = parseTrayJoinURL(joinURL) else {
+            throw ValidationError("Invalid tray join URL: \(joinURL)")
+        }
+        return try buildCanonicalTrayLaunchURL(locationHref: locationHref, trayValue: parsedJoinURL.joinURL)
+    }
+
+    static func parseTrayJoinURL(_ raw: String?) -> ParsedTrayJoinURL? {
+        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty,
+              var components = URLComponents(string: raw) else {
+            return nil
+        }
+
+        components.query = nil
+        components.fragment = nil
+
+        let normalizedJoinURL = components.string ?? raw
+        let segments = components.path.split(separator: "/").map(String.init)
+        guard segments.count >= 2, segments[segments.count - 2] == "join" else {
+            return nil
+        }
+
+        let token = segments.last?.removingPercentEncoding ?? segments.last ?? ""
+        let tokenParts = token.split(separator: ".", omittingEmptySubsequences: false)
+        guard tokenParts.count == 2,
+              !tokenParts[0].isEmpty,
+              !tokenParts[1].isEmpty else {
+            return nil
+        }
+
+        return ParsedTrayJoinURL(joinURL: normalizedJoinURL)
+    }
+
+    static func normalizeTrayWorkerBaseURL(_ raw: String?) -> String? {
+        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty,
+              var components = URLComponents(string: raw),
+              components.scheme != nil,
+              components.host != nil else {
+            return nil
+        }
+
+        components.query = nil
+        components.fragment = nil
+
+        if components.path != "/" {
+            let trimmedPath = components.path.replacingOccurrences(
+                of: #"/+$"#,
+                with: "",
+                options: .regularExpression
+            )
+            components.path = trimmedPath.isEmpty ? "/" : trimmedPath
+        }
+
+        guard var normalized = components.string else {
+            return nil
+        }
+        if normalized.hasSuffix("/") {
+            normalized.removeLast()
+        }
+        return normalized
+    }
+
+    static func buildCanonicalTrayLaunchURL(locationHref: String, trayValue: String) throws -> String {
+        guard var components = URLComponents(string: locationHref) else {
+            throw ValidationError("Invalid launch URL: \(locationHref)")
+        }
+
+        var queryItems = components.queryItems ?? []
+        queryItems.removeAll {
+            $0.name == "trayWorkerUrl" || $0.name == "lead" || $0.name == "tray"
+        }
+        queryItems.append(URLQueryItem(name: "tray", value: trayValue))
+        components.queryItems = queryItems.isEmpty ? nil : queryItems
+
+        guard let url = components.url else {
+            throw ValidationError("Invalid launch URL: \(locationHref)")
+        }
+        return url.absoluteString
+    }
+
+    static func appendQueryItem(urlString: String, name: String, value: String) throws -> String {
+        guard var components = URLComponents(string: urlString) else {
+            throw ValidationError("Invalid launch URL: \(urlString)")
+        }
+
+        var queryItems = components.queryItems ?? []
+        queryItems.append(URLQueryItem(name: name, value: value))
+        components.queryItems = queryItems
+
+        guard let url = components.url else {
+            throw ValidationError("Invalid launch URL: \(urlString)")
+        }
+        return url.absoluteString
+    }
+
+    struct ParsedTrayJoinURL {
+        let joinURL: String
     }
 }
