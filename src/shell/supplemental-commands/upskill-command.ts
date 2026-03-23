@@ -62,6 +62,94 @@ interface UnifiedSearchResult {
   sourceRepo?: string;
 }
 
+// ── Skill Catalog types ──
+
+interface CatalogSkillSource {
+  repo: string;
+  path?: string;
+  skill?: string;
+  flags?: string;
+}
+
+interface CatalogSkill {
+  name: string;
+  displayName: string;
+  description: string;
+  source: CatalogSkillSource;
+  affinity: {
+    apps?: string[];
+    tasks?: string[];
+    role?: string[];
+    purpose?: string[];
+  };
+  priority?: number;
+}
+
+interface SkillCatalog {
+  version: number;
+  skills: CatalogSkill[];
+}
+
+interface UserProfile {
+  purpose: string;
+  role: string;
+  tasks: string[];
+  apps: string[];
+  name: string;
+}
+
+interface ScoredSkill {
+  entry: CatalogSkill;
+  score: number;
+  matchReasons: string[];
+}
+
+const AFFINITY_WEIGHTS = { apps: 3, tasks: 2, role: 1, purpose: 1 };
+
+export function scoreSkills(catalog: CatalogSkill[], profile: UserProfile): ScoredSkill[] {
+  return catalog
+    .map((entry) => {
+      let score = 0;
+      const reasons: string[] = [];
+
+      const appMatches = (entry.affinity.apps ?? []).filter((a) => profile.apps.includes(a));
+      if (appMatches.length) {
+        score += appMatches.length * AFFINITY_WEIGHTS.apps;
+        reasons.push(`apps(${appMatches.join(', ')})`);
+      }
+
+      const taskMatches = (entry.affinity.tasks ?? []).filter((t) => profile.tasks.includes(t));
+      if (taskMatches.length) {
+        score += taskMatches.length * AFFINITY_WEIGHTS.tasks;
+        reasons.push(`tasks(${taskMatches.join(', ')})`);
+      }
+
+      if ((entry.affinity.role ?? []).includes(profile.role)) {
+        score += AFFINITY_WEIGHTS.role;
+        reasons.push(`role(${profile.role})`);
+      }
+
+      if ((entry.affinity.purpose ?? []).includes(profile.purpose)) {
+        score += AFFINITY_WEIGHTS.purpose;
+        reasons.push(`purpose(${profile.purpose})`);
+      }
+
+      score *= entry.priority ?? 1.0;
+
+      return { entry, score, matchReasons: reasons };
+    })
+    .filter((s) => s.score > 0)
+    .sort((a, b) => b.score - a.score);
+}
+
+function buildInstallCmd(source: CatalogSkillSource): string {
+  let cmd = `upskill ${source.repo}`;
+  if (source.path) cmd += ` --path ${source.path}`;
+  if (source.skill) cmd += ` --skill ${source.skill}`;
+  if (source.flags) cmd += ` ${source.flags}`;
+  return cmd;
+}
+
 interface GitHubContent {
   name: string;
   path: string;
@@ -220,7 +308,11 @@ GitHub Installation:
   upskill owner/repo --all               Install all skills from repo
   upskill owner/repo --path subdir       Restrict to subfolder
 
-Registry Installation:
+Recommendations:
+  upskill recommendations                Show skills matching your profile
+  upskill recommendations --install      Install all recommended skills
+
+Registry Search:
   upskill search "pdf conversion"        Search all registries
   upskill https://clawhub.ai/user/skill  Install from ClawHub URL
   upskill clawhub:user/skill             Install from ClawHub shorthand
@@ -972,6 +1064,138 @@ async function refreshSprinklesAfterInstall(): Promise<void> {
 }
 
 /**
+ * Handle the `upskill recommendations` subcommand.
+ */
+async function handleRecommendations(
+  fs: VirtualFS,
+  fetchFn: SecureFetch,
+  install: boolean
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  // Read user profile
+  let profile: UserProfile | null = null;
+  try {
+    const raw = await fs.readTextFile('/home/user/.welcome.json');
+    profile = JSON.parse(raw) as UserProfile;
+  } catch {
+    // not found
+  }
+
+  if (!profile) {
+    return {
+      stdout: '',
+      stderr:
+        'upskill: no user profile found. Complete the welcome onboarding first, or create /home/user/.welcome.json manually.\n',
+      exitCode: 1,
+    };
+  }
+
+  // Read skill catalog
+  let catalog: SkillCatalog;
+  try {
+    const raw = await fs.readTextFile('/shared/skill-catalog.json');
+    catalog = JSON.parse(raw) as SkillCatalog;
+  } catch {
+    return {
+      stdout: '',
+      stderr: 'upskill: skill catalog not found at /shared/skill-catalog.json\n',
+      exitCode: 1,
+    };
+  }
+
+  // Get already-installed skills
+  const installed = new Set<string>();
+  try {
+    const skills = await import('../../skills/index.js');
+    const discovered = await skills.discoverSkills(fs);
+    for (const s of discovered) installed.add(s.name);
+  } catch {
+    /* best effort */
+  }
+
+  // Score and filter
+  const scored = scoreSkills(catalog.skills, profile).filter((s) => !installed.has(s.entry.name));
+
+  if (scored.length === 0) {
+    return {
+      stdout: 'No new skill recommendations — all matching skills are already installed.\n',
+      stderr: '',
+      exitCode: 0,
+    };
+  }
+
+  if (install) {
+    // Install all recommended skills
+    let output = '';
+    let errors = '';
+    let successCount = 0;
+
+    for (const rec of scored) {
+      const src = rec.entry.source;
+      const github = await createGitHubRequestContext(fetchFn);
+
+      if (src.path && src.flags?.includes('--all')) {
+        // Multi-skill install (e.g. AEM)
+        const listResult = await listGitHubSkills(src.repo.split('/')[0], src.repo.split('/')[1], github, src.path, fetchFn);
+        if (listResult.error) {
+          errors += `upskill: failed to list ${rec.entry.name}: ${listResult.error}\n`;
+          continue;
+        }
+        for (const skill of listResult.skills) {
+          const result = await installFromGitHub(
+            src.repo.split('/')[0], src.repo.split('/')[1],
+            skill.path, skill.name, fs, github, false, fetchFn
+          );
+          if (result.exitCode === 0) {
+            output += result.stdout;
+            successCount++;
+          } else {
+            errors += result.stderr;
+          }
+        }
+      } else if (src.skill) {
+        // Single skill install
+        const [owner, repo] = src.repo.split('/');
+        const listResult = await listGitHubSkills(owner, repo, github, undefined, fetchFn);
+        if (listResult.error) {
+          errors += `upskill: failed to list ${rec.entry.name}: ${listResult.error}\n`;
+          continue;
+        }
+        const match = listResult.skills.find((s) => s.name === src.skill);
+        if (match) {
+          const result = await installFromGitHub(owner, repo, match.path, match.name, fs, github, false, fetchFn);
+          if (result.exitCode === 0) {
+            output += result.stdout;
+            successCount++;
+          } else {
+            errors += result.stderr;
+          }
+        }
+      }
+    }
+
+    if (successCount > 0) {
+      output += `\nInstalled ${successCount} recommended skill(s)\n`;
+    }
+    return { stdout: output, stderr: errors, exitCode: errors ? 1 : 0 };
+  }
+
+  // Display recommendations
+  let output = 'Recommended skills for you:\n\n';
+  let idx = 0;
+  for (const rec of scored) {
+    idx++;
+    const installCmd = buildInstallCmd(rec.entry.source);
+    output += `  ${idx}. ${rec.entry.displayName.padEnd(35)} score: ${Math.round(rec.score)}\n`;
+    output += `     ${rec.entry.description}\n`;
+    output += `     Match: ${rec.matchReasons.join(', ')}\n`;
+    output += `     Install: ${installCmd}\n\n`;
+  }
+
+  output += 'To install all recommended: upskill recommendations --install\n';
+  return { stdout: output, stderr: '', exitCode: 0 };
+}
+
+/**
  * Create the upskill command with access to the virtual filesystem.
  */
 export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Command {
@@ -1004,6 +1228,9 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
         }
         searchQuery = rest.join(' ');
         break;
+      } else if (arg === 'recommendations') {
+        const installFlag = args.includes('--install');
+        return handleRecommendations(fs, fetchFn, installFlag);
       } else if (arg === 'list') {
         // List local skills
         const skills = await import('../../skills/index.js');

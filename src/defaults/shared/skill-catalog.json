@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "skills": [
+    {
+      "name": "aem",
+      "displayName": "AEM Edge Delivery Services",
+      "description": "Read, write, preview, and publish AEM EDS pages via shell commands and browser automation",
+      "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "flags": "--all" },
+      "affinity": { "apps": ["aem"], "tasks": ["build-websites", "write-content", "seo"], "role": ["developer", "content-creator", "marketer", "designer"], "purpose": ["work"] }
+    },
+    {
+      "name": "bluebubbles",
+      "displayName": "BlueBubbles iMessage",
+      "description": "Send and receive iMessages via BlueBubbles REST API",
+      "source": { "repo": "ai-ecoverse/skills", "skill": "bluebubbles" },
+      "affinity": { "apps": ["imessage"], "purpose": ["personal", "side-project", "exploring"] }
+    },
+    {
+      "name": "skill-creator",
+      "displayName": "Skill Creator",
+      "description": "Create, improve, and measure SLICC skills with guided workflows and evals",
+      "source": { "repo": "anthropics/skills", "skill": "skill-creator" },
+      "affinity": { "role": ["developer", "founder", "student", "researcher"], "purpose": ["work", "side-project", "personal", "exploring"] },
+      "priority": 0.8
+    },
+    {
+      "name": "web-artifacts-builder",
+      "displayName": "Web Artifacts Builder",
+      "description": "Build and preview interactive web apps, landing pages, and prototypes",
+      "source": { "repo": "anthropics/skills", "skill": "web-artifacts-builder" },
+      "affinity": { "tasks": ["build-websites", "browser-automation"], "role": ["developer", "designer"] }
+    },
+    {
+      "name": "doc-coauthoring",
+      "displayName": "Document Co-authoring",
+      "description": "Collaborative long-form document writing with structure, tone, and style guidance",
+      "source": { "repo": "anthropics/skills", "skill": "doc-coauthoring" },
+      "affinity": { "tasks": ["write-content"], "role": ["content-creator", "marketer", "researcher"] }
+    },
+    {
+      "name": "xlsx",
+      "displayName": "Excel / XLSX",
+      "description": "Read, write, and manipulate Excel spreadsheets for data analysis and reporting",
+      "source": { "repo": "anthropics/skills", "skill": "xlsx" },
+      "affinity": { "tasks": ["extract-data", "research"], "role": ["researcher", "product-pm", "marketer"] }
+    }
+  ]
+}

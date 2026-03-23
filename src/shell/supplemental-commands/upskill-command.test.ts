@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IFileSystem, SecureFetch } from 'just-bash';
 import { zipSync } from 'fflate';
 import { VirtualFS } from '../../fs/index.js';
-import { createUpskillCommand, _resetGlobalFsCache } from './upskill-command.js';
+import { createUpskillCommand, _resetGlobalFsCache, scoreSkills } from './upskill-command.js';
 
 function createMockCtx() {
   const fs: Partial<IFileSystem> = {
@@ -364,5 +364,149 @@ describe('upskill Tessl registry integration', () => {
     for (const [url] of fetchMock.mock.calls) {
       expect(url).not.toContain('api.github.com');
     }
+  });
+});
+
+describe('scoreSkills', () => {
+  const catalog = [
+    {
+      name: 'aem',
+      displayName: 'AEM',
+      description: 'AEM skill',
+      source: { repo: 'adobe/skills', path: 'skills/aem', flags: '--all' },
+      affinity: { apps: ['aem'], tasks: ['build-websites', 'seo'], role: ['developer'], purpose: ['work'] },
+    },
+    {
+      name: 'bluebubbles',
+      displayName: 'BlueBubbles',
+      description: 'iMessage',
+      source: { repo: 'ai-ecoverse/skills', skill: 'bluebubbles' },
+      affinity: { apps: ['imessage'], purpose: ['personal'] },
+    },
+    {
+      name: 'skill-creator',
+      displayName: 'Skill Creator',
+      description: 'Create skills',
+      source: { repo: 'anthropics/skills', skill: 'skill-creator' },
+      affinity: { role: ['developer'], purpose: ['work', 'side-project'] },
+      priority: 0.8,
+    },
+    {
+      name: 'xlsx',
+      displayName: 'XLSX',
+      description: 'Spreadsheets',
+      source: { repo: 'anthropics/skills', skill: 'xlsx' },
+      affinity: { tasks: ['extract-data'], role: ['researcher'] },
+    },
+  ];
+
+  it('scores skills by affinity weights (apps=3, tasks=2, role=1, purpose=1)', () => {
+    const profile = { purpose: 'work', role: 'developer', tasks: ['build-websites'], apps: ['aem'], name: 'Test' };
+    const scored = scoreSkills(catalog, profile);
+
+    // AEM: apps(aem)=3 + tasks(build-websites)=2 + role(developer)=1 + purpose(work)=1 = 7
+    expect(scored[0].entry.name).toBe('aem');
+    expect(scored[0].score).toBe(7);
+    expect(scored[0].matchReasons).toContain('apps(aem)');
+  });
+
+  it('applies priority multiplier', () => {
+    const profile = { purpose: 'work', role: 'developer', tasks: [], apps: [], name: 'Test' };
+    const scored = scoreSkills(catalog, profile);
+
+    const skillCreator = scored.find((s) => s.entry.name === 'skill-creator');
+    // role(developer)=1 + purpose(work)=1 = 2, * 0.8 priority = 1.6
+    expect(skillCreator).toBeDefined();
+    expect(skillCreator!.score).toBeCloseTo(1.6);
+  });
+
+  it('excludes skills with zero score', () => {
+    const profile = { purpose: 'school', role: 'student', tasks: ['research'], apps: [], name: 'Test' };
+    const scored = scoreSkills(catalog, profile);
+
+    // AEM and bluebubbles should not match
+    expect(scored.find((s) => s.entry.name === 'aem')).toBeUndefined();
+    expect(scored.find((s) => s.entry.name === 'bluebubbles')).toBeUndefined();
+  });
+
+  it('sorts by score descending', () => {
+    const profile = { purpose: 'work', role: 'developer', tasks: ['build-websites', 'extract-data'], apps: ['aem'], name: 'Test' };
+    const scored = scoreSkills(catalog, profile);
+
+    for (let i = 1; i < scored.length; i++) {
+      expect(scored[i - 1].score).toBeGreaterThanOrEqual(scored[i].score);
+    }
+  });
+
+  it('returns empty array when no skills match', () => {
+    const profile = { purpose: 'school', role: 'student', tasks: [], apps: [], name: 'Test' };
+    const scored = scoreSkills(catalog, profile);
+    expect(scored).toHaveLength(0);
+  });
+});
+
+describe('upskill recommendations subcommand', () => {
+  let fs: VirtualFS;
+  let createdFileSystems: VirtualFS[];
+  let dbCounter = 200;
+
+  beforeEach(async () => {
+    createdFileSystems = [];
+    const originalCreate = VirtualFS.create.bind(VirtualFS);
+    vi.spyOn(VirtualFS, 'create').mockImplementation(async (options) => {
+      const instance = await originalCreate(options);
+      createdFileSystems.push(instance);
+      return instance;
+    });
+
+    fs = await VirtualFS.create({ dbName: `upskill-rec-test-${dbCounter++}`, wipe: true });
+    await VirtualFS.create({ dbName: 'slicc-fs-global', wipe: true });
+  });
+
+  afterEach(async () => {
+    _resetGlobalFsCache();
+    await Promise.allSettled(
+      createdFileSystems.map((instance) =>
+        (instance.getLightningFS() as { _deactivate?: () => Promise<void> })._deactivate?.()
+      )
+    );
+    vi.restoreAllMocks();
+  });
+
+  it('returns error when no profile exists', async () => {
+    const fetchMock = vi.fn();
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['recommendations'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('no user profile found');
+  });
+
+  it('lists recommendations when profile and catalog exist', async () => {
+    // Write profile
+    await fs.mkdir('/home/user', { recursive: true });
+    await fs.writeFile('/home/user/.welcome.json', JSON.stringify({
+      purpose: 'work', role: 'developer', tasks: ['build-websites'], apps: ['aem'], name: 'Test',
+    }));
+
+    // Write catalog
+    await fs.mkdir('/shared', { recursive: true });
+    await fs.writeFile('/shared/skill-catalog.json', JSON.stringify({
+      version: 1,
+      skills: [{
+        name: 'aem', displayName: 'AEM', description: 'AEM skill',
+        source: { repo: 'adobe/skills', path: 'skills/aem', flags: '--all' },
+        affinity: { apps: ['aem'], tasks: ['build-websites'], role: ['developer'], purpose: ['work'] },
+      }],
+    }));
+
+    const fetchMock = vi.fn();
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['recommendations'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('AEM');
+    expect(result.stdout).toContain('score: 7');
+    expect(result.stdout).toContain('upskill recommendations --install');
   });
 });

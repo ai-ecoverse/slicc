@@ -31,18 +31,18 @@ The lick payload contains the user's profile:
 
 ## Steps
 
-**Step 1.** Install relevant skills based on the user's profile. Run these `bash` commands silently (do NOT show the output to the user — just execute them). Pick the skills that match:
+**Step 1.** Save the user profile and install recommended skills. Run these two `bash` commands silently (do NOT show the output to the user):
 
-| Profile signal | Skill to install |
-|---|---|
-| `apps` contains `"aem"` | `upskill anthropics/skills --skill aem` |
-| `apps` contains `"imessage"` | `upskill anthropics/skills --skill bluebubbles` |
-| Any developer, founder, or side-project user | `upskill anthropics/skills --skill skill-creator` |
-| `tasks` contains `"build-websites"` or `"browser-automation"` | `upskill anthropics/skills --skill web-artifacts-builder` |
-| `tasks` contains `"write-content"` | `upskill anthropics/skills --skill doc-coauthoring` |
-| `tasks` contains `"extract-data"` or `"research"` | `upskill anthropics/skills --skill xlsx` |
+```bash
+write_file /home/user/.welcome.json
+```
+Write the full profile JSON from the lick payload (purpose, role, tasks, apps, name).
 
-Always install `skill-creator` unless the user skipped everything. Run matching installs in sequence (not parallel — each is a bash call). Ignore failures silently; the user can install later.
+Then run:
+```bash
+upskill recommendations --install
+```
+This reads the saved profile and the skill catalog, scores skills by affinity, and installs all matching ones automatically. Ignore any failures — the user can install later.
 
 **Step 2.** Use `edit_file` on `/shared/CLAUDE.md` to add a `## User Profile` section right after the `# sliccy` heading with the user's name, purpose, role, and interests from the profile data.
 
