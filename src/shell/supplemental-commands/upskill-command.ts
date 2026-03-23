@@ -68,7 +68,6 @@ interface CatalogSkillSource {
   repo: string;
   path?: string;
   skill?: string;
-  flags?: string;
 }
 
 interface CatalogSkill {
@@ -146,7 +145,6 @@ function buildInstallCmd(source: CatalogSkillSource): string {
   let cmd = `upskill ${source.repo}`;
   if (source.path) cmd += ` --path ${source.path}`;
   if (source.skill) cmd += ` --skill ${source.skill}`;
-  if (source.flags) cmd += ` ${source.flags}`;
   return cmd;
 }
 
@@ -1071,20 +1069,28 @@ async function handleRecommendations(
   fetchFn: SecureFetch,
   install: boolean
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  // Read user profile
+  // Read user profile — scan /home/*/.welcome.json
   let profile: UserProfile | null = null;
   try {
-    const raw = await fs.readTextFile('/home/user/.welcome.json');
-    profile = JSON.parse(raw) as UserProfile;
+    const homeDirs = await fs.readDir('/home');
+    for (const entry of homeDirs) {
+      try {
+        const raw = await fs.readTextFile(`/home/${entry.name}/.welcome.json`);
+        profile = JSON.parse(raw) as UserProfile;
+        break;
+      } catch {
+        // no .welcome.json in this dir
+      }
+    }
   } catch {
-    // not found
+    // /home doesn't exist
   }
 
   if (!profile) {
     return {
       stdout: '',
       stderr:
-        'upskill: no user profile found. Complete the welcome onboarding first, or create /home/user/.welcome.json manually.\n',
+        'upskill: no user profile found. Complete the welcome onboarding first, or create /home/<name>/.welcome.json manually.\n',
       exitCode: 1,
     };
   }
@@ -1133,42 +1139,25 @@ async function handleRecommendations(
       const src = rec.entry.source;
       const github = await createGitHubRequestContext(fetchFn);
 
-      if (src.path && src.flags?.includes('--all')) {
-        // Multi-skill install (e.g. AEM)
-        const listResult = await listGitHubSkills(src.repo.split('/')[0], src.repo.split('/')[1], github, src.path, fetchFn);
-        if (listResult.error) {
-          errors += `upskill: failed to list ${rec.entry.name}: ${listResult.error}\n`;
-          continue;
-        }
-        for (const skill of listResult.skills) {
-          const result = await installFromGitHub(
-            src.repo.split('/')[0], src.repo.split('/')[1],
-            skill.path, skill.name, fs, github, false, fetchFn
-          );
-          if (result.exitCode === 0) {
-            output += result.stdout;
-            successCount++;
-          } else {
-            errors += result.stderr;
-          }
-        }
-      } else if (src.skill) {
-        // Single skill install
-        const [owner, repo] = src.repo.split('/');
-        const listResult = await listGitHubSkills(owner, repo, github, undefined, fetchFn);
-        if (listResult.error) {
-          errors += `upskill: failed to list ${rec.entry.name}: ${listResult.error}\n`;
-          continue;
-        }
-        const match = listResult.skills.find((s) => s.name === src.skill);
-        if (match) {
-          const result = await installFromGitHub(owner, repo, match.path, match.name, fs, github, false, fetchFn);
-          if (result.exitCode === 0) {
-            output += result.stdout;
-            successCount++;
-          } else {
-            errors += result.stderr;
-          }
+      const [owner, repo] = src.repo.split('/');
+      const listResult = await listGitHubSkills(owner, repo, github, src.path, fetchFn);
+      if (listResult.error) {
+        errors += `upskill: failed to list ${rec.entry.name}: ${listResult.error}\n`;
+        continue;
+      }
+
+      // If a specific skill is named, install just that one; otherwise install all from the path
+      const toInstall = src.skill
+        ? listResult.skills.filter((s) => s.name === src.skill)
+        : listResult.skills;
+
+      for (const skill of toInstall) {
+        const result = await installFromGitHub(owner, repo, skill.path, skill.name, fs, github, false, fetchFn);
+        if (result.exitCode === 0) {
+          output += result.stdout;
+          successCount++;
+        } else {
+          errors += result.stderr;
         }
       }
     }

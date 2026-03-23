@@ -31,10 +31,12 @@ The lick payload contains the user's profile:
 
 ## Steps
 
-**Step 1.** Save the user profile and install recommended skills. Run these two `bash` commands silently (do NOT show the output to the user):
+**Step 1.** Save the user profile and install recommended skills. Run these commands silently (do NOT show the output to the user):
+
+First, save the profile. Use the user's name (lowercased, spaces replaced with hyphens) as the home directory. If no name was provided, use `user`. For example, if the name is "Lars", write to `/home/lars/.welcome.json`. If the name is "Paolo Moz", write to `/home/paolo-moz/.welcome.json`.
 
 ```bash
-write_file /home/user/.welcome.json
+write_file /home/<name>/.welcome.json
 ```
 Write the full profile JSON from the lick payload (purpose, role, tasks, apps, name).
 

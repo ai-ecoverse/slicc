@@ -373,7 +373,7 @@ describe('scoreSkills', () => {
       name: 'aem',
       displayName: 'AEM',
       description: 'AEM skill',
-      source: { repo: 'adobe/skills', path: 'skills/aem', flags: '--all' },
+      source: { repo: 'adobe/skills', path: 'skills/aem', skill: 'aem' },
       affinity: { apps: ['aem'], tasks: ['build-websites', 'seo'], role: ['developer'], purpose: ['work'] },
     },
     {
@@ -483,9 +483,9 @@ describe('upskill recommendations subcommand', () => {
   });
 
   it('lists recommendations when profile and catalog exist', async () => {
-    // Write profile
-    await fs.mkdir('/home/user', { recursive: true });
-    await fs.writeFile('/home/user/.welcome.json', JSON.stringify({
+    // Write profile under user's name
+    await fs.mkdir('/home/test', { recursive: true });
+    await fs.writeFile('/home/test/.welcome.json', JSON.stringify({
       purpose: 'work', role: 'developer', tasks: ['build-websites'], apps: ['aem'], name: 'Test',
     }));
 
@@ -495,7 +495,7 @@ describe('upskill recommendations subcommand', () => {
       version: 1,
       skills: [{
         name: 'aem', displayName: 'AEM', description: 'AEM skill',
-        source: { repo: 'adobe/skills', path: 'skills/aem', flags: '--all' },
+        source: { repo: 'adobe/skills', path: 'skills/aem', skill: 'aem' },
         affinity: { apps: ['aem'], tasks: ['build-websites'], role: ['developer'], purpose: ['work'] },
       }],
     }));
