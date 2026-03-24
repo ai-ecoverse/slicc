@@ -286,23 +286,24 @@ async function autoSaveSnapshot(
   targetId: string
 ): Promise<string | null> {
   try {
-    await browser.attachToPage(targetId);
-    const pageInfo = await browser.evaluate(
-      `JSON.stringify({ url: location.href, title: document.title })`
-    );
-    const { url, title } = JSON.parse(pageInfo as string);
-    const tree = await browser.getAccessibilityTree();
-    const refToSelector = new Map<string, string>();
-    const refToBackendNodeId = new Map<string, number>();
-    const counter = { value: 0 };
-    const snapshotLines = renderNode(tree, refToSelector, refToBackendNodeId, counter);
-    const content = snapshotLines.join('\n');
-    const output = [`Page URL: ${url}`, `Page Title: ${title}`, '', content].join('\n');
+    return await browser.withTab(targetId, async () => {
+      const pageInfo = await browser.evaluate(
+        `JSON.stringify({ url: location.href, title: document.title })`
+      );
+      const { url, title } = JSON.parse(pageInfo as string);
+      const tree = await browser.getAccessibilityTree();
+      const refToSelector = new Map<string, string>();
+      const refToBackendNodeId = new Map<string, number>();
+      const counter = { value: 0 };
+      const snapshotLines = renderNode(tree, refToSelector, refToBackendNodeId, counter);
+      const content = snapshotLines.join('\n');
+      const output = [`Page URL: ${url}`, `Page Title: ${title}`, '', content].join('\n');
 
-    const ts = filenameSafeTimestamp(new Date());
-    const path = `/.playwright/snapshots/page-${ts}.yml`;
-    await vfs.writeFile(path, output);
-    return path;
+      const ts = filenameSafeTimestamp(new Date());
+      const path = `/.playwright/snapshots/page-${ts}.yml`;
+      await vfs.writeFile(path, output);
+      return path;
+    });
   } catch {
     return null;
   }
@@ -2883,6 +2884,26 @@ export function createPlaywrightCommand(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       result = { stdout: '', stderr: `Error: ${msg}\n`, exitCode: 1 };
+    }
+
+    // Post-command: session logging + auto-snapshot
+    const targetId = flags['tab'] ?? null;
+    let snapshotPath: string | null = null;
+
+    if (AUTO_SNAPSHOT_COMMANDS.has(subcommand) && result.exitCode === 0 && targetId) {
+      snapshotPath = await autoSaveSnapshot(browser, fs, state, targetId);
+    }
+
+    try {
+      await logSession(fs, state, {
+        command: subcommand,
+        args: subArgs,
+        result,
+        snapshotPath,
+        targetId,
+      });
+    } catch {
+      // Session logging is best-effort — never fail the command
     }
 
     return result;
