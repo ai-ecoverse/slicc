@@ -550,13 +550,13 @@ final class ElectronOverlayInjector: @unchecked Sendable {
             "id": 1,
             "method": "Runtime.evaluate",
             "params": [
-                "expression": "!!window.__SLICC_ELECTRON_OVERLAY__",
+                "expression": "!!document.getElementById('slicc-electron-overlay-root')",
                 "returnByValue": true
             ]
         ], over: socket)
 
         let response = try await waitForResponseValue(id: 1, over: socket)
-        // If the overlay global exists, no injection needed
+        // If the overlay root element exists in the DOM, no injection needed
         if let value = response as? Bool, value {
             return false
         }
