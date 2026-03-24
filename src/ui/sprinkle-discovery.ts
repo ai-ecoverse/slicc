@@ -54,7 +54,7 @@ async function scanDir(
     if (!sprinkles.has(name)) {
       let content: string;
       try {
-        content = (await fs.readFile(filePath, { encoding: 'utf-8' })) as string;
+        content = ((await fs.readFile(filePath, { encoding: 'utf-8' })) as string) ?? '';
       } catch {
         content = '';
       }
