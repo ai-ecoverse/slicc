@@ -1,0 +1,879 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sliccy Logo Editor</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      display: flex;
+      min-height: 100vh;
+      transition: background-color 0.3s, color 0.3s;
+    }
+    body.light { background: #f5f5f5; color: #333; }
+    body.dark { background: #1a1a1a; color: #eee; }
+    
+    .controls {
+      width: 320px;
+      padding: 20px;
+      overflow-y: auto;
+      border-right: 1px solid #ccc;
+    }
+    body.dark .controls { border-color: #444; }
+    
+    .preview {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    
+    .logo-variants {
+      display: flex;
+      gap: 20px;
+      align-items: flex-start;
+    }
+    .logo-variant {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .logo-variant-label {
+      font-size: 0.85em;
+      margin-bottom: 8px;
+      opacity: 0.7;
+    }
+    .logo-container {
+      width: 300px;
+      height: 300px;
+      position: relative;
+      border: 1px dashed #ccc;
+    }
+    body.dark .logo-container {
+      border-color: #444;
+    }
+    .logo-container svg {
+      width: 100%;
+      height: 100%;
+    }
+
+    h1 { font-size: 1.4em; margin-bottom: 20px; }
+    h2 { font-size: 1em; margin: 20px 0 10px; border-bottom: 1px solid #ccc; padding-bottom: 5px; }
+    body.dark h2 { border-color: #444; }
+    
+    .control-group { margin-bottom: 15px; }
+    label { display: block; margin-bottom: 5px; font-size: 0.9em; }
+    input[type="range"] { width: 100%; }
+    input[type="number"] { width: 60px; padding: 4px; }
+    select {
+      width: 100%;
+      padding: 6px;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+      background: #fff;
+      color: #333;
+      font-size: 0.9em;
+    }
+    body.dark select {
+      background: #333;
+      color: #eee;
+      border-color: #555;
+    }
+    
+    .toggle-btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.9em;
+      margin-right: 8px;
+    }
+    body.light .toggle-btn { background: #333; color: #fff; }
+    body.dark .toggle-btn { background: #fff; color: #333; }
+    
+    .value-display {
+      font-size: 0.85em;
+      color: #666;
+      margin-left: 8px;
+    }
+    body.dark .value-display { color: #aaa; }
+
+    /* Eye animations */
+    @keyframes eyeroll {
+      0%, 100% { transform: translate(0, 0); }
+      25% { transform: translate(-15px, -10px); }
+      50% { transform: translate(0, -15px); }
+      75% { transform: translate(15px, -10px); }
+    }
+
+    .pupil-animated {
+      animation-iteration-count: infinite;
+      animation-timing-function: ease-in-out;
+    }
+  </style>
+</head>
+<body class="light">
+  <div class="controls">
+    <h1>🍦 Sliccy Logo Editor</h1>
+    
+    <div class="control-group">
+      <label>Color Mode:</label>
+      <select id="color-mode">
+        <option value="mono-light">Monochrome Light</option>
+        <option value="mono-dark">Monochrome Dark</option>
+        <option value="color">Color</option>
+      </select>
+    </div>
+    
+    <h2>Scoops</h2>
+    <div class="control-group">
+      <label>Number of Scoops: <span class="value-display" id="scoop-count-val">5</span></label>
+      <input type="range" id="scoop-count" min="0" max="10" value="5">
+    </div>
+    
+    <h2>Scoop Stacking</h2>
+    <div class="control-group">
+      <label>Vertical Offset per Scoop: <span class="value-display" id="scoop-offset-val">95</span></label>
+      <input type="range" id="scoop-offset" min="50" max="200" value="95">
+    </div>
+    <div class="control-group">
+      <label>Scale per Additional Scoop: <span class="value-display" id="scoop-scale-val">0.95</span></label>
+      <input type="range" id="scoop-scale" min="0.5" max="1" step="0.01" value="0.95">
+    </div>
+
+    <h2>Mid-Range Adjustments (1-9 Scoops)</h2>
+    <div class="control-group">
+      <label>Mid-Range Scale Factor: <span class="value-display" id="midrange-scale-val">1.0</span></label>
+      <input type="range" id="midrange-scale" min="0.8" max="1.2" step="0.01" value="1.0">
+    </div>
+    <div class="control-group">
+      <label>Mid-Range Y Offset: <span class="value-display" id="midrange-y-val">0</span></label>
+      <input type="range" id="midrange-y" min="-200" max="200" value="0">
+    </div>
+    <div class="control-group">
+      <label>Horizontal Wobble: <span class="value-display" id="scoop-wobble-val">14</span></label>
+      <input type="range" id="scoop-wobble" min="0" max="50" value="14">
+    </div>
+    <div class="control-group">
+      <label>Angular Wobble (°): <span class="value-display" id="angular-wobble-val">8</span></label>
+      <input type="range" id="angular-wobble" min="0" max="30" value="8">
+    </div>
+    <div class="control-group">
+      <button class="toggle-btn" id="randomize-wobble">🎲 Randomize Wobble</button>
+    </div>
+    <div class="control-group">
+      <label>Cone Push-Down per Scoop: <span class="value-display" id="cone-push-val">-21</span></label>
+      <input type="range" id="cone-push" min="-100" max="0" value="-21">
+    </div>
+
+    <h2>Eye Animations</h2>
+    <div class="control-group">
+      <label>
+        <input type="checkbox" id="eye-animate"> Enable Eye Animations
+      </label>
+    </div>
+    <div class="control-group">
+      <label>Eyeroll Speed (s): <span class="value-display" id="eyeroll-speed-val">3</span></label>
+      <input type="range" id="eyeroll-speed" min="0.5" max="10" step="0.5" value="3">
+    </div>
+    <div class="control-group">
+      <label>Eye Distance: <span class="value-display" id="eye-distance-val">1.0</span></label>
+      <input type="range" id="eye-distance" min="0.5" max="1.5" step="0.05" value="1.0">
+    </div>
+    <div class="control-group">
+      <label>Eye Size: <span class="value-display" id="eye-size-val">1.0</span></label>
+      <input type="range" id="eye-size" min="0.5" max="2" step="0.05" value="1.0">
+    </div>
+    <div class="control-group">
+      <label>Eye Angle (°): <span class="value-display" id="eye-angle-val">0</span></label>
+      <input type="range" id="eye-angle" min="-45" max="45" value="0">
+    </div>
+
+    <h2>Scoop Colors</h2>
+    <div id="color-controls-info" style="font-size: 0.85em; opacity: 0.7; margin-bottom: 10px;">
+      Only visible in Color mode
+    </div>
+    <div id="color-controls"></div>
+
+    <h2>Export</h2>
+    <div class="control-group">
+      <button class="toggle-btn" id="generate-variants">Generate All Variants</button>
+    </div>
+    <div id="export-status" style="font-size: 0.85em; margin-top: 10px;"></div>
+  </div>
+  
+  <div class="preview">
+    <div class="logo-variants">
+      <div class="logo-variant">
+        <div class="logo-variant-label">No Scoops</div>
+        <div class="logo-container" id="logo-container-0"></div>
+      </div>
+      <div class="logo-variant">
+        <div class="logo-variant-label" id="label-user">5 Scoops</div>
+        <div class="logo-container" id="logo-container-user"></div>
+      </div>
+      <div class="logo-variant">
+        <div class="logo-variant-label">10 Scoops</div>
+        <div class="logo-container" id="logo-container-10"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+let svgDoc = null;
+let scoopTemplate = null;
+let coneTemplate = null;
+let wobbleSeeds = []; // Random seeds for consistent wobble per scoop
+
+// Ice cream color palette with base colors and darker outline colors
+const scoopColors = [
+  { base: '#FFB6C1', dark: '#E89AAB', name: 'Strawberry' },      // Pink
+  { base: '#98FB98', dark: '#7FD87F', name: 'Mint' },             // Mint green
+  { base: '#87CEEB', dark: '#6BB6D8', name: 'Blueberry' },        // Sky blue
+  { base: '#DDA0DD', dark: '#C77DC7', name: 'Grape' },            // Plum
+  { base: '#F0E68C', dark: '#D4C970', name: 'Vanilla' },          // Khaki
+  { base: '#FFD700', dark: '#E6C200', name: 'Mango' },            // Gold
+  { base: '#FFA07A', dark: '#E88A64', name: 'Peach' },            // Light salmon
+  { base: '#DEB887', dark: '#C8A277', name: 'Caramel' },          // Burlywood
+  { base: '#F08080', dark: '#D86A6A', name: 'Cherry' },           // Light coral
+  { base: '#E0BBE4', dark: '#C9A5CD', name: 'Lavender' }          // Lavender
+];
+
+// Cone colors
+const coneColors = {
+  base: '#D2691E',      // Golden brown (chocolate)
+  crosshatch: '#E8A75C', // Lighter brown
+  outline: '#8B4513'     // Saddle brown (darker)
+};
+
+// Generate random wobble seeds for scoops
+function regenerateWobbleSeeds(count) {
+  wobbleSeeds = [];
+  for (let i = 0; i < count; i++) {
+    wobbleSeeds.push({
+      x: Math.random() * 2 - 1,  // -1 to 1
+      angle: Math.random() * 2 - 1  // -1 to 1
+    });
+  }
+}
+
+async function loadSVG() {
+  const response = await fetch('Sliccy Logo.svg');
+  const text = await response.text();
+  const parser = new DOMParser();
+  svgDoc = parser.parseFromString(text, 'image/svg+xml');
+
+  scoopTemplate = {
+    outline: svgDoc.getElementById('Scoop_Outline').cloneNode(true),
+    rightEye: svgDoc.getElementById('Right_Eye').cloneNode(true),
+    leftEye: svgDoc.getElementById('Left_Eye').cloneNode(true)
+  };
+  coneTemplate = svgDoc.getElementById('Cone').cloneNode(true);
+
+  generateColorControls();
+  render();
+}
+
+function generateColorControls() {
+  const container = document.getElementById('color-controls');
+  container.innerHTML = '';
+  const count = parseInt(document.getElementById('scoop-count').value);
+  const colorMode = document.getElementById('color-mode').value;
+
+  // Only show color pickers in color mode
+  if (colorMode !== 'color') {
+    return;
+  }
+
+  for (let i = 0; i < count; i++) {
+    const div = document.createElement('div');
+    div.className = 'control-group';
+    const colorData = scoopColors[i % scoopColors.length];
+    div.innerHTML = `
+      <label>Scoop ${i + 1} (${colorData.name}):</label>
+      <input type="color" id="scoop-color-${i}" value="${colorData.base}">
+    `;
+    container.appendChild(div);
+    document.getElementById(`scoop-color-${i}`).addEventListener('input', render);
+  }
+}
+
+function renderLogo(container, count, params) {
+  const { offset, scaleDecay, wobble, angularWobble, conePush, colorMode, midrangeScale, midrangeY } = params;
+
+  // Linear interpolation based on scoop count (0-10)
+  // For 0 scoops: baseY = -175, scale = 1.25
+  // For 10 scoops: baseY = 512, scale = 1.1
+  const t = count / 10;
+  let baseY = -175 + t * (512 - (-175));  // -175 to 512
+  let overallScale = 1.25 + t * (1.1 - 1.25);  // 1.25 to 1.1
+
+  // Apply mid-range adjustments for 1-9 scoops using calibrated curves
+  if (count >= 1 && count <= 9) {
+    // Scale factor: interpolate from 0.9 (at 1-2) to 1.0 (at 7-9)
+    // Using piecewise linear: 0.9 at 1-2, 0.95 at 5, 1.0 at 7+
+    let scaleFactor;
+    if (count <= 2) {
+      scaleFactor = 0.9;
+    } else if (count <= 5) {
+      // Linear from 0.9 to 0.95 between scoops 2 and 5
+      scaleFactor = 0.9 + (count - 2) * (0.95 - 0.9) / (5 - 2);
+    } else {
+      // Linear from 0.95 to 1.0 between scoops 5 and 7
+      scaleFactor = 0.95 + Math.min(count - 5, 2) * (1.0 - 0.95) / (7 - 5);
+    }
+
+    // Y offset: peaks at 120 (scoops 2-5), then decreases to 50 (scoop 9)
+    // 1: 100, 2-5: 120, 7: 110, 8: 80, 9: 50
+    let yOffset;
+    if (count === 1) {
+      yOffset = 100;
+    } else if (count <= 5) {
+      yOffset = 120;
+    } else if (count === 6) {
+      yOffset = 115; // interpolate between 120 and 110
+    } else if (count === 7) {
+      yOffset = 110;
+    } else if (count === 8) {
+      yOffset = 80;
+    } else { // count === 9
+      yOffset = 50;
+    }
+
+    overallScale *= scaleFactor * midrangeScale;
+    baseY += yOffset + midrangeY;
+  }
+
+  // Ensure we have enough wobble seeds
+  while (wobbleSeeds.length < count) {
+    wobbleSeeds.push({
+      x: Math.random() * 2 - 1,
+      angle: Math.random() * 2 - 1
+    });
+  }
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  // Use square viewBox (1024x1024) and center the content horizontally
+  const viewBoxWidth = 1024;
+  const viewBoxHeight = 1024;
+  const contentWidth = 576.75;
+  const xOffset = (viewBoxWidth - contentWidth) / 2;
+  svg.setAttribute('viewBox', `0 0 ${viewBoxWidth} ${viewBoxHeight}`);
+  svg.setAttribute('width', '100%');
+  svg.setAttribute('height', '100%');
+
+  const mainGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  const conePushTotal = (count - 1) * conePush;
+  const totalHeight = 887.3 + (count - 1) * offset + conePushTotal;
+  const scaleFactor = Math.min(1, 900 / totalHeight) * overallScale;
+  const translateY = (viewBoxHeight - totalHeight * scaleFactor) / 2 + baseY;
+  const translateX = xOffset + (contentWidth - contentWidth * scaleFactor) / 2;
+  mainGroup.setAttribute('transform', `translate(${translateX}, ${translateY}) scale(${scaleFactor})`);
+
+  // Add cone (pushed down by additional scoops)
+  const coneGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  coneGroup.setAttribute('transform', `translate(0, ${conePushTotal})`);
+  const cone = coneTemplate.cloneNode(true);
+  applyConeColors(cone, colorMode);
+  coneGroup.appendChild(cone);
+
+  // If no scoops, add eyes to the cone
+  if (count === 0) {
+    const rightEye = scoopTemplate.rightEye.cloneNode(true);
+    const leftEye = scoopTemplate.leftEye.cloneNode(true);
+    applyEyeColors(rightEye, leftEye, colorMode);
+    applyEyeTransforms(rightEye, leftEye, params);
+    coneGroup.appendChild(rightEye);
+    coneGroup.appendChild(leftEye);
+  }
+  mainGroup.appendChild(coneGroup);
+
+  // Add scoops from bottom to top
+  for (let i = 0; i < count; i++) {
+    const scoopGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    // Each scoop is pushed down by the weight of scoops above it
+    const scoopsAbove = (count - 1) - i;
+    const pushDown = scoopsAbove * conePush;
+    const scoopY = -i * offset + pushDown;
+    // Random wobble (bottom scoop stays centered)
+    const scoopX = i > 0 ? wobbleSeeds[i].x * wobble : 0;
+    const scoopAngle = i > 0 ? wobbleSeeds[i].angle * angularWobble : 0;
+    const scoopScale = Math.pow(scaleDecay, i);
+    const centerX = 288;
+    const centerY = 250;
+
+    scoopGroup.setAttribute('transform',
+      `translate(${centerX + scoopX}, ${centerY + scoopY}) rotate(${scoopAngle}) scale(${scoopScale}) translate(${-centerX}, ${-centerY})`);
+
+    const outline = scoopTemplate.outline.cloneNode(true);
+    applyScoopColors(outline, i, colorMode, svg);
+    scoopGroup.appendChild(outline);
+
+    // Only add eyes to top scoop
+    if (i === count - 1) {
+      const rightEye = scoopTemplate.rightEye.cloneNode(true);
+      const leftEye = scoopTemplate.leftEye.cloneNode(true);
+      applyEyeColors(rightEye, leftEye, colorMode);
+      applyEyeTransforms(rightEye, leftEye, params);
+      scoopGroup.appendChild(rightEye);
+      scoopGroup.appendChild(leftEye);
+    }
+
+    mainGroup.appendChild(scoopGroup);
+  }
+
+  svg.appendChild(mainGroup);
+  container.innerHTML = '';
+  container.appendChild(svg);
+}
+
+function applyConeColors(cone, colorMode) {
+  if (colorMode === 'mono-light') {
+    // White cone with black outlines
+    cone.querySelectorAll('[style*="fill"]').forEach(e => {
+      if (e.id === 'Cone_Bottom' || e.id === 'Cone_Top') {
+        e.style.fill = '#fff';
+      } else {
+        // Waffle cross-hatch
+        e.style.fill = '#000';
+      }
+    });
+    cone.querySelectorAll('path:not([style*="fill"]), rect:not([style*="fill"])').forEach(e => {
+      e.style.fill = '#000';
+    });
+    cone.querySelectorAll('[style*="stroke"]').forEach(e => {
+      e.style.stroke = '#000';
+    });
+  } else if (colorMode === 'mono-dark') {
+    // Dark gray cone with white outlines
+    cone.querySelectorAll('[style*="fill"]').forEach(e => {
+      if (e.id === 'Cone_Bottom' || e.id === 'Cone_Top') {
+        e.style.fill = '#222';
+      } else {
+        // Waffle cross-hatch
+        e.style.fill = '#fff';
+      }
+    });
+    cone.querySelectorAll('path:not([style*="fill"]), rect:not([style*="fill"])').forEach(e => {
+      e.style.fill = '#fff';
+    });
+    cone.querySelectorAll('[style*="stroke"]').forEach(e => {
+      e.style.stroke = '#fff';
+    });
+  } else {
+    // Color mode
+    cone.querySelectorAll('[style*="fill"]').forEach(e => {
+      if (e.id === 'Cone_Bottom' || e.id === 'Cone_Top') {
+        e.style.fill = coneColors.base;
+      } else {
+        // Waffle cross-hatch
+        e.style.fill = coneColors.crosshatch;
+      }
+    });
+    cone.querySelectorAll('path:not([style*="fill"]), rect:not([style*="fill"])').forEach(e => {
+      e.style.fill = coneColors.crosshatch;
+    });
+    cone.querySelectorAll('[style*="stroke"]').forEach(e => {
+      e.style.stroke = coneColors.outline;
+    });
+  }
+}
+
+function darkenColor(hex, percent = 20) {
+  // Convert hex to RGB
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+
+  // Darken by percentage
+  const newR = Math.max(0, Math.floor(r * (1 - percent / 100)));
+  const newG = Math.max(0, Math.floor(g * (1 - percent / 100)));
+  const newB = Math.max(0, Math.floor(b * (1 - percent / 100)));
+
+  // Convert back to hex
+  return `#${newR.toString(16).padStart(2, '0')}${newG.toString(16).padStart(2, '0')}${newB.toString(16).padStart(2, '0')}`;
+}
+
+function applyScoopColors(outline, scoopIndex, colorMode, svgRoot) {
+  if (colorMode === 'mono-light') {
+    outline.style.fill = '#fff';
+    outline.style.stroke = '#000';
+  } else if (colorMode === 'mono-dark') {
+    outline.style.fill = '#222';
+    outline.style.stroke = '#fff';
+  } else {
+    // Color mode - use custom color or default palette
+    const colorInput = document.getElementById(`scoop-color-${scoopIndex}`);
+    const baseColor = colorInput ? colorInput.value : scoopColors[scoopIndex % scoopColors.length].base;
+    const darkColor = scoopColors[scoopIndex % scoopColors.length].dark;
+
+    // Create outline color - darker than the dark gradient stop
+    const outlineColor = darkenColor(darkColor, 20);
+
+    // Create gradient in the SVG defs
+    const gradientId = `scoop-gradient-${scoopIndex}`;
+
+    let defs = svgRoot.querySelector('defs');
+    if (!defs) {
+      defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+      svgRoot.insertBefore(defs, svgRoot.firstChild);
+    }
+
+    // Remove old gradient if it exists
+    const oldGradient = defs.querySelector(`#${gradientId}`);
+    if (oldGradient) {
+      oldGradient.remove();
+    }
+
+    const gradient = document.createElementNS('http://www.w3.org/2000/svg', 'linearGradient');
+    gradient.setAttribute('id', gradientId);
+    gradient.setAttribute('x1', '0%');
+    gradient.setAttribute('y1', '0%');
+    gradient.setAttribute('x2', '100%');
+    gradient.setAttribute('y2', '100%');
+
+    const stop1 = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
+    stop1.setAttribute('offset', '0%');
+    stop1.setAttribute('style', `stop-color:${baseColor};stop-opacity:1`);
+
+    const stop2 = document.createElementNS('http://www.w3.org/2000/svg', 'stop');
+    stop2.setAttribute('offset', '100%');
+    stop2.setAttribute('style', `stop-color:${darkColor};stop-opacity:1`);
+
+    gradient.appendChild(stop1);
+    gradient.appendChild(stop2);
+    defs.appendChild(gradient);
+
+    outline.style.fill = `url(#${gradientId})`;
+    outline.style.stroke = outlineColor;
+  }
+}
+
+function applyEyeColors(rightEye, leftEye, colorMode) {
+  [rightEye, leftEye].forEach(eye => {
+    const outline = eye.querySelector('circle');
+    const pupil = eye.querySelector('path');
+
+    if (colorMode === 'mono-light') {
+      if (outline) {
+        outline.style.fill = '#fff';
+        outline.style.stroke = '#000';
+      }
+      if (pupil) pupil.style.fill = '#000';
+    } else if (colorMode === 'mono-dark') {
+      if (outline) {
+        outline.style.fill = '#000';
+        outline.style.stroke = '#fff';
+      }
+      if (pupil) pupil.style.fill = '#fff';
+    } else {
+      // Color mode
+      if (outline) {
+        outline.style.fill = '#fff';
+        outline.style.stroke = '#000';
+      }
+      if (pupil) pupil.style.fill = '#000';
+    }
+  });
+}
+
+function applyEyeTransforms(rightEye, leftEye, params) {
+  const { eyeAnimate, eyerollSpeed, eyeDistance, eyeSize, eyeAngle } = params;
+
+  // Get original eye positions from SVG
+  // Right eye center: 383.4, 216.12
+  // Left eye center: 175.1, 250.34
+  const rightEyeCenterX = 383.4;
+  const rightEyeCenterY = 216.12;
+  const leftEyeCenterX = 175.1;
+  const leftEyeCenterY = 250.34;
+  const eyeCenterX = (rightEyeCenterX + leftEyeCenterX) / 2;
+  const eyeCenterY = (rightEyeCenterY + leftEyeCenterY) / 2;
+
+  // Apply transforms to both eyes
+  [rightEye, leftEye].forEach((eye, idx) => {
+    const isRight = idx === 0;
+    const centerX = isRight ? rightEyeCenterX : leftEyeCenterX;
+    const centerY = isRight ? rightEyeCenterY : leftEyeCenterY;
+
+    // Build transform string for the whole eye group
+    let transforms = [];
+
+    // Eye distance: move eyes apart/together from center point
+    if (eyeDistance !== 1.0) {
+      const dx = (centerX - eyeCenterX) * (eyeDistance - 1);
+      const dy = (centerY - eyeCenterY) * (eyeDistance - 1);
+      transforms.push(`translate(${dx}, ${dy})`);
+    }
+
+    // Eye size: scale from eye center
+    if (eyeSize !== 1.0) {
+      transforms.push(`translate(${centerX}, ${centerY}) scale(${eyeSize}) translate(${-centerX}, ${-centerY})`);
+    }
+
+    // Eye angle: rotate from eye center
+    if (eyeAngle !== 0) {
+      transforms.push(`translate(${centerX}, ${centerY}) rotate(${eyeAngle}) translate(${-centerX}, ${-centerY})`);
+    }
+
+    if (transforms.length > 0) {
+      eye.setAttribute('transform', transforms.join(' '));
+    }
+
+    // Apply animation to the pupil only using the correct ID
+    const pupilId = isRight ? 'Right_Pupil' : 'Left_Pupil';
+    const pupil = eye.querySelector(`#${pupilId}`);
+    if (pupil && eyeAnimate) {
+      pupil.classList.add('pupil-animated');
+      pupil.style.animation = `eyeroll ${eyerollSpeed}s ease-in-out infinite`;
+    } else if (pupil) {
+      pupil.classList.remove('pupil-animated');
+      pupil.style.animation = '';
+    }
+  });
+}
+
+function render() {
+  const userCount = parseInt(document.getElementById('scoop-count').value);
+  const colorMode = document.getElementById('color-mode').value;
+
+  // Update body class based on color mode
+  document.body.classList.remove('light', 'dark');
+  if (colorMode === 'mono-dark') {
+    document.body.classList.add('dark');
+  } else {
+    document.body.classList.add('light');
+  }
+
+  const params = {
+    offset: parseInt(document.getElementById('scoop-offset').value),
+    scaleDecay: parseFloat(document.getElementById('scoop-scale').value),
+    wobble: parseInt(document.getElementById('scoop-wobble').value),
+    angularWobble: parseInt(document.getElementById('angular-wobble').value),
+    conePush: parseInt(document.getElementById('cone-push').value),
+    midrangeScale: parseFloat(document.getElementById('midrange-scale').value),
+    midrangeY: parseInt(document.getElementById('midrange-y').value),
+    eyeAnimate: document.getElementById('eye-animate').checked,
+    eyerollSpeed: parseFloat(document.getElementById('eyeroll-speed').value),
+    eyeDistance: parseFloat(document.getElementById('eye-distance').value),
+    eyeSize: parseFloat(document.getElementById('eye-size').value),
+    eyeAngle: parseFloat(document.getElementById('eye-angle').value),
+    colorMode: colorMode
+  };
+
+  // Update label
+  document.getElementById('label-user').textContent = `${userCount} Scoop${userCount !== 1 ? 's' : ''}`;
+
+  // Render all three variants
+  renderLogo(document.getElementById('logo-container-0'), 0, params);
+  renderLogo(document.getElementById('logo-container-user'), userCount, params);
+  renderLogo(document.getElementById('logo-container-10'), 10, params);
+}
+
+
+
+// Generate SVG string from container
+function getSVGString(container) {
+  const svg = container.querySelector('svg');
+  if (!svg) return null;
+
+  const serializer = new XMLSerializer();
+  let svgString = serializer.serializeToString(svg);
+
+  // Add XML declaration
+  svgString = '<?xml version="1.0" encoding="UTF-8"?>\n' + svgString;
+
+  return svgString;
+}
+
+// Convert SVG to PNG (square)
+function svgToPNG(svgString, size) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0, size, size);
+      canvas.toBlob(blob => {
+        resolve(blob);
+      }, 'image/png');
+    };
+
+    img.onerror = reject;
+
+    const blob = new Blob([svgString], { type: 'image/svg+xml' });
+    const url = URL.createObjectURL(blob);
+    img.src = url;
+  });
+}
+
+// Download a file
+function downloadFile(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// Generate all variants
+async function generateAllVariants() {
+  const statusEl = document.getElementById('export-status');
+  statusEl.textContent = 'Generating variants...';
+
+  const modes = ['mono-light', 'mono-dark', 'color'];
+  const scoopCounts = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+  const pngSizes = [16, 32, 48, 128];
+
+  // Save current state
+  const originalMode = document.getElementById('color-mode').value;
+  const originalCount = parseInt(document.getElementById('scoop-count').value);
+
+  // Create temporary container for rendering
+  const tempContainer = document.createElement('div');
+  tempContainer.style.position = 'absolute';
+  tempContainer.style.left = '-9999px';
+  tempContainer.style.width = '300px';
+  tempContainer.style.height = '300px';
+  document.body.appendChild(tempContainer);
+
+  let totalFiles = 0;
+
+  try {
+    // Generate SVG variants (3 modes × 11 scoop counts = 33 files)
+    for (const mode of modes) {
+      for (const count of scoopCounts) {
+        statusEl.textContent = `Generating SVG: ${mode}, ${count} scoops...`;
+
+        // Set mode and count
+        document.getElementById('color-mode').value = mode;
+        document.getElementById('scoop-count').value = count;
+        generateColorControls();
+
+        // Get current params
+        const params = {
+          offset: parseInt(document.getElementById('scoop-offset').value),
+          scaleDecay: parseFloat(document.getElementById('scoop-scale').value),
+          wobble: parseInt(document.getElementById('scoop-wobble').value),
+          angularWobble: parseInt(document.getElementById('angular-wobble').value),
+          conePush: parseInt(document.getElementById('cone-push').value),
+          midrangeScale: parseFloat(document.getElementById('midrange-scale').value),
+          midrangeY: parseInt(document.getElementById('midrange-y').value),
+          eyeAnimate: false, // No animation in exports
+          eyerollSpeed: parseFloat(document.getElementById('eyeroll-speed').value),
+          eyeDistance: parseFloat(document.getElementById('eye-distance').value),
+          eyeSize: parseFloat(document.getElementById('eye-size').value),
+          eyeAngle: parseFloat(document.getElementById('eye-angle').value),
+          colorMode: mode
+        };
+
+        // Render to temp container
+        renderLogo(tempContainer, count, params);
+
+        // Get SVG string
+        const svgString = getSVGString(tempContainer);
+        if (svgString) {
+          const blob = new Blob([svgString], { type: 'image/svg+xml' });
+          const filename = `sliccy-${mode}-${count}scoops.svg`;
+          downloadFile(blob, filename);
+          totalFiles++;
+
+          // Small delay to avoid overwhelming the browser
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+    }
+
+    // Generate PNG variants (only from color mode, 11 counts × 4 sizes = 44 files)
+    document.getElementById('color-mode').value = 'color';
+    generateColorControls();
+
+    for (const count of scoopCounts) {
+      for (const size of pngSizes) {
+        statusEl.textContent = `Generating PNG: ${count} scoops, ${size}x${size}...`;
+
+        const params = {
+          offset: parseInt(document.getElementById('scoop-offset').value),
+          scaleDecay: parseFloat(document.getElementById('scoop-scale').value),
+          wobble: parseInt(document.getElementById('scoop-wobble').value),
+          angularWobble: parseInt(document.getElementById('angular-wobble').value),
+          conePush: parseInt(document.getElementById('cone-push').value),
+          midrangeScale: parseFloat(document.getElementById('midrange-scale').value),
+          midrangeY: parseInt(document.getElementById('midrange-y').value),
+          eyeAnimate: false,
+          eyerollSpeed: parseFloat(document.getElementById('eyeroll-speed').value),
+          eyeDistance: parseFloat(document.getElementById('eye-distance').value),
+          eyeSize: parseFloat(document.getElementById('eye-size').value),
+          eyeAngle: parseFloat(document.getElementById('eye-angle').value),
+          colorMode: 'color'
+        };
+
+        renderLogo(tempContainer, count, params);
+
+        const svgString = getSVGString(tempContainer);
+        if (svgString) {
+          const pngBlob = await svgToPNG(svgString, size);
+          const filename = `sliccy-color-${count}scoops-${size}x${size}.png`;
+          downloadFile(pngBlob, filename);
+          totalFiles++;
+
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+    }
+
+    statusEl.textContent = `✅ Generated ${totalFiles} files! (33 SVGs + 44 PNGs)`;
+
+  } catch (error) {
+    statusEl.textContent = `❌ Error: ${error.message}`;
+    console.error(error);
+  } finally {
+    // Restore original state
+    document.getElementById('color-mode').value = originalMode;
+    document.getElementById('scoop-count').value = originalCount;
+    generateColorControls();
+    render();
+
+    // Remove temp container
+    document.body.removeChild(tempContainer);
+  }
+}
+
+// Event listeners
+document.getElementById('color-mode').addEventListener('change', () => {
+  generateColorControls();
+  render();
+});
+
+['scoop-count', 'scoop-offset', 'scoop-scale', 'scoop-wobble', 'angular-wobble', 'cone-push', 'midrange-scale', 'midrange-y', 'eyeroll-speed', 'eye-distance', 'eye-size', 'eye-angle'].forEach(id => {
+  const el = document.getElementById(id);
+  el.addEventListener('input', () => {
+    document.getElementById(id + '-val').textContent = el.value;
+    if (id === 'scoop-count') generateColorControls();
+    render();
+  });
+});
+
+document.getElementById('eye-animate').addEventListener('change', render);
+
+document.getElementById('randomize-wobble').addEventListener('click', () => {
+  wobbleSeeds = [];
+  render();
+});
+
+document.getElementById('generate-variants').addEventListener('click', generateAllVariants);
+
+loadSVG();
+</script>
+</body>
+</html>
+
