@@ -964,15 +964,16 @@ async function main() {
     const { createServer: createViteServer } = await import('vite');
     const webappIndexHtml = resolve(process.cwd(), 'packages/webapp/index.html');
     const vite = await createViteServer({
-      configFile: resolve(process.cwd(), 'packages/webapp/vite.config.ts'),
       server: {
         middlewareMode: true,
         hmr: {
           port: HMR_PORT, // Use a separate port for HMR WebSocket to avoid conflicting with /cdp
         },
       },
+      appType: 'custom', // We handle index.html serving ourselves via the handler below
+      root: process.cwd(),
     });
-    // Serve index.html BEFORE Vite middleware so Vite only handles JS/CSS/HMR.
+    app.use(vite.middlewares);
     app.use(async (req, res, next) => {
       if (req.method !== 'GET' || !req.headers.accept?.includes('text/html') || req.path.includes('.')) {
         next();
@@ -991,7 +992,6 @@ async function main() {
         next(err);
       }
     });
-    app.use(vite.middlewares);
     console.log(`Vite dev server middleware attached (HMR active on port ${HMR_PORT})`);
   } else {
     // Production mode: serve built static files
