@@ -38,9 +38,9 @@ cp "$SLICC_SERVER_DIR/.build/release/slicc-server" "$RESOURCES/slicc-server"
 chmod +x "$RESOURCES/slicc-server"
 
 # ---------------------------------------------------------------------------
-# 2. Icon
+# 2. Icon — built from Icon Composer .icon source in packages/assets/logos/
 # ---------------------------------------------------------------------------
-ICON_SRC="$SCRIPT_DIR/sliccstart-icon.png"
+ICON_SRC="$SLICC_ROOT/packages/assets/logos/macos-icon-iOS-Default-1024x1024@1x.png"
 if [ -f "$ICON_SRC" ]; then
   ICONSET="$RESOURCES/AppIcon.iconset"
   mkdir -p "$ICONSET"
