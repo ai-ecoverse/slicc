@@ -18,10 +18,10 @@ import { EXTENSION_TAB_SPECS, normalizeExtensionTabId, type ExtensionTabId } fro
 // Light variant: white fill + dark strokes (shows on dark backgrounds — appears as light icon).
 // The ?raw suffix tells Vite to import as string; the esbuild standalone build
 // uses a plugin to resolve ?raw to the .svg with text loader.
-// Dark-on-light: black strokes on white fill — for dark host backgrounds.
-// Light-on-dark: white strokes on dark fill — for light host backgrounds.
-import sliccyLogoDarkOnLight from '../../../assets/logos/sliccy-mono-light-1scoops.svg?raw';
-import sliccyLogoLightOnDark from '../../../assets/logos/sliccy-mono-dark-1scoops.svg?raw';
+// "dark" SVG = dark fill + white outlines → visible on dark backgrounds.
+// "light" SVG = white fill + black outlines → visible on light backgrounds.
+import sliccyDarkSvg from '../../../assets/logos/sliccy-mono-dark-1scoops.svg?raw';
+import sliccyLightSvg from '../../../assets/logos/sliccy-mono-light-1scoops.svg?raw';
 
 export const ELECTRON_OVERLAY_HOST_ID = 'slicc-electron-overlay-root';
 export const ELECTRON_OVERLAY_TAG_NAME = 'slicc-electron-overlay';
@@ -200,11 +200,11 @@ class SliccElectronLauncherElement extends HTMLElement {
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3), 0 0 0 2px var(--s2-accent);
       }
       .logo-icon { width: 32px; height: 32px; pointer-events: none; }
-      /* Dark host: show dark-on-light logo (black strokes, white fill) */
+      /* Dark host: dark SVG (dark fill, white outlines) */
       .logo-for-dark { display: block; }
       .logo-for-light { display: none; }
       @media (prefers-color-scheme: light) {
-        /* Light host: show light-on-dark logo (white strokes, dark fill) */
+        /* Light host: light SVG (white fill, black outlines) */
         .logo-for-dark { display: none; }
         .logo-for-light { display: block; }
       }
@@ -217,12 +217,12 @@ class SliccElectronLauncherElement extends HTMLElement {
 
     const forDark = doc.createElement('div');
     forDark.className = 'logo-icon logo-for-dark';
-    forDark.innerHTML = stripXmlDeclaration(sliccyLogoDarkOnLight);
+    forDark.innerHTML = stripXmlDeclaration(sliccyDarkSvg);
     forDark.setAttribute('aria-hidden', 'true');
 
     const forLight = doc.createElement('div');
     forLight.className = 'logo-icon logo-for-light';
-    forLight.innerHTML = stripXmlDeclaration(sliccyLogoLightOnDark);
+    forLight.innerHTML = stripXmlDeclaration(sliccyLightSvg);
     forLight.setAttribute('aria-hidden', 'true');
 
     button.appendChild(forDark);
@@ -413,8 +413,6 @@ class SliccElectronSidebarElement extends HTMLElement {
       :host([open]) .sidebar { transform: translateX(0); }
       .header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px 12px; border-bottom: 1px solid var(--s2-border-subtle); background: color-mix(in srgb, var(--s2-bg-layer-1) 92%, transparent); }
       .header__brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
-      .header__logo { width: 34px; height: 34px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: linear-gradient(180deg, rgba(239, 112, 0, 0.9), rgba(239, 112, 0, 0.7)); color: #fff; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18); }
-      .header__logo svg { width: 18px; height: 18px; fill: currentColor; }
       .header__title { font-size: 15px; font-weight: 700; letter-spacing: 0.01em; }
       .header__subtitle { font-size: 11px; color: var(--s2-content-secondary); }
       .header__close { appearance: none; border: 1px solid var(--s2-border-subtle); background: var(--s2-bg-layer-2); color: var(--s2-content-default); width: 32px; height: 32px; border-radius: 50%; cursor: pointer; font-size: 18px; line-height: 1; }
@@ -449,10 +447,6 @@ class SliccElectronSidebarElement extends HTMLElement {
     const brand = doc.createElement('div');
     brand.className = 'header__brand';
 
-    const logo = doc.createElement('span');
-    logo.className = 'header__logo';
-    logo.innerHTML = stripXmlDeclaration(sliccyLogoDarkOnLight);
-    brand.appendChild(logo);
 
     const titleContainer = doc.createElement('div');
     const title = doc.createElement('div');
