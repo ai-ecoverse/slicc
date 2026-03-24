@@ -16,7 +16,7 @@ export default defineConfig({
   use: {
     baseURL: 'http://localhost:5780',
   },
+  fullyParallel: true,
   timeout: 30_000,
   retries: 0,
-  workers: 1,
 });
