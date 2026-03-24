@@ -8,11 +8,11 @@ final class AppScanner {
         return "\(home)/Applications"
     }
 
-    static func scan() -> [AppTarget] {
+    static func scan(hasAppManagementPermission: Bool = true) -> [AppTarget] {
         var targets: [AppTarget] = []
         var debugBuilds: [String: AppTarget] = [:] // originalPath -> debugTarget
 
-        // First scan ~/Applications for debug builds
+        // First scan ~/Applications for debug builds (user-owned, no TCC prompt)
         let fm = FileManager.default
         if let userApps = try? fm.contentsOfDirectory(atPath: userApplicationsDir) {
             for item in userApps where item.hasSuffix(" Debug.app") {
@@ -50,6 +50,15 @@ final class AppScanner {
                 isDebugBuild: false,
                 originalAppPath: nil
             ))
+        }
+
+        // Skip scanning inside /Applications app bundles when we don't have
+        // App Management permission — each fileExists call into an app's
+        // Contents/Frameworks/ triggers a separate macOS TCC notification.
+        guard hasAppManagementPermission else {
+            return targets.sorted {
+                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
         }
 
         // Scan /Applications for CDP-compatible desktop apps (Electron, WebView2)
