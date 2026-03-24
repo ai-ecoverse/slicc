@@ -42,6 +42,25 @@ export async function waitForSW(page: Page): Promise<void> {
 }
 
 /**
+ * Install a BroadcastChannel responder that immediately replies with ENOENT
+ * for any preview-vfs-read request. Without this, the SW's BroadcastChannel
+ * fallback waits 5s before timing out on every 404 — adding ~5s per missing file.
+ */
+export async function installVfsFallbackResponder(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const bc = new BroadcastChannel('preview-vfs');
+    bc.onmessage = (event: MessageEvent) => {
+      if (event.data?.type !== 'preview-vfs-read') return;
+      bc.postMessage({
+        type: 'preview-vfs-response',
+        id: event.data.id,
+        error: 'ENOENT',
+      });
+    };
+  });
+}
+
+/**
  * Seed files into LightningFS IndexedDB (database 'slicc-fs').
  * The preview SW reads from this same database.
  * Must be called after the page has loaded (needs a page context to evaluate JS).

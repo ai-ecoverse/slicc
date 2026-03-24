@@ -1,12 +1,15 @@
 // packages/webapp/tests/e2e/preview-serve.test.ts
 import { test, expect } from '@playwright/test';
-import { seedVFS, waitForSW } from './helpers.js';
+import { installVfsFallbackResponder, seedVFS, waitForSW } from './helpers.js';
 
 test.describe('preview service worker', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/');
+    await waitForSW(page);
+  });
+
   test.describe('basic /preview/* serving', () => {
     test('serves HTML with text/html content-type', async ({ page }) => {
-      await page.goto('/');
-      await waitForSW(page);
       await seedVFS(page, {
         '/workspace/site/index.html': '<!DOCTYPE html><h1>Hello</h1>',
       });
@@ -20,8 +23,6 @@ test.describe('preview service worker', () => {
     });
 
     test('serves CSS and JS with correct MIME types', async ({ page }) => {
-      await page.goto('/');
-      await waitForSW(page);
       await seedVFS(page, {
         '/workspace/site/index.html': '<h1>Host</h1>',
         '/workspace/site/styles.css': 'body { color: red; }',
@@ -57,14 +58,13 @@ test.describe('preview service worker', () => {
     });
 
     test('returns 404 for missing VFS paths', async ({ page }) => {
-      await page.goto('/');
-      await waitForSW(page);
       await seedVFS(page, {
         '/workspace/site/index.html': '<h1>Host</h1>',
       });
 
       // Navigate into /preview/ scope so the SW handles the 404
       await page.goto('/preview/workspace/site/index.html');
+      await installVfsFallbackResponder(page);
 
       const result = await page.evaluate(async () => {
         const resp = await fetch('/preview/workspace/nonexistent.html');
@@ -76,8 +76,6 @@ test.describe('preview service worker', () => {
 
   test.describe('project serve mode (?projectRoot=)', () => {
     test('resolves root-relative CSS against project root', async ({ page }) => {
-      await page.goto('/');
-      await waitForSW(page);
       await seedVFS(page, {
         '/shared/app/index.html':
           '<link rel="stylesheet" href="/styles/main.css"><h1>Project</h1>',
@@ -102,8 +100,6 @@ test.describe('preview service worker', () => {
     });
 
     test('resolves root-relative JS against project root', async ({ page }) => {
-      await page.goto('/');
-      await waitForSW(page);
       await seedVFS(page, {
         '/shared/app/index.html': '<script src="/scripts/app.js"></script>',
         '/shared/app/scripts/app.js': 'console.log("loaded")',
@@ -127,8 +123,6 @@ test.describe('preview service worker', () => {
     });
 
     test('returns 404 for missing root-relative resource', async ({ page }) => {
-      await page.goto('/');
-      await waitForSW(page);
       await seedVFS(page, {
         '/shared/app/index.html': '<h1>App</h1>',
       });
@@ -136,6 +130,7 @@ test.describe('preview service worker', () => {
       await page.goto(
         '/preview/shared/app/index.html?projectRoot=/shared/app'
       );
+      await installVfsFallbackResponder(page);
 
       const result = await page.evaluate(async () => {
         const resp = await fetch('/missing/file.css');
@@ -147,8 +142,6 @@ test.describe('preview service worker', () => {
 
   test.describe('isSliccAppPath exclusions', () => {
     test('does not intercept /@vite/ paths', async ({ page }) => {
-      await page.goto('/');
-      await waitForSW(page);
       await seedVFS(page, {
         '/shared/app/index.html': '<h1>App</h1>',
         // Seed a file at the path the SW would resolve if isSliccAppPath failed
@@ -171,8 +164,6 @@ test.describe('preview service worker', () => {
     });
 
     test('does not intercept /api/ paths', async ({ page }) => {
-      await page.goto('/');
-      await waitForSW(page);
       await seedVFS(page, {
         '/shared/app/index.html': '<h1>App</h1>',
         '/shared/app/api/runtime-config': '{"hijacked": true}',
@@ -197,8 +188,6 @@ test.describe('preview service worker', () => {
     });
 
     test('does not intercept / root path', async ({ page }) => {
-      await page.goto('/');
-      await waitForSW(page);
       await seedVFS(page, {
         '/shared/app/index.html': '<h1>Fake Root</h1>',
       });
@@ -217,8 +206,6 @@ test.describe('preview service worker', () => {
 
   test.describe('cross-origin passthrough', () => {
     test('does not intercept cross-origin requests', async ({ page }) => {
-      await page.goto('/');
-      await waitForSW(page);
       await seedVFS(page, {
         '/shared/app/index.html': '<h1>App</h1>',
       });
