@@ -1372,8 +1372,7 @@ describe('playwright-cli cookie commands', () => {
       ],
     });
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['cookie-get', 'session'], {} as any);
+    const result = await cmd.execute(['cookie-get', 'session', '--tab', 'tab-1'], {} as any);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('session=abc123');
     expect(result.stdout).not.toContain('other');
@@ -1382,8 +1381,7 @@ describe('playwright-cli cookie commands', () => {
   it('cookie-get fails when not found', async () => {
     (browser.sendCDP as ReturnType<typeof vi.fn>).mockResolvedValue({ cookies: [] });
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['cookie-get', 'missing'], {} as any);
+    const result = await cmd.execute(['cookie-get', 'missing', '--tab', 'tab-1'], {} as any);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('not found');
   });
@@ -1404,9 +1402,8 @@ describe('playwright-cli cookie commands', () => {
       })
     );
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
     const result = await cmd.execute(
-      ['cookie-set', 'name', 'value', '--domain=.example.com', '--secure', '--httpOnly'],
+      ['cookie-set', 'name', 'value', '--domain=.example.com', '--secure', '--httpOnly', '--tab', 'tab-1'],
       {} as any
     );
     expect(result.exitCode).toBe(0);
@@ -1432,8 +1429,7 @@ describe('playwright-cli cookie commands', () => {
       })
     );
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['cookie-set', 'name', 'value'], {} as any);
+    const result = await cmd.execute(['cookie-set', 'name', 'value', '--tab', 'tab-1'], {} as any);
 
     expect(result.exitCode).toBe(0);
     expect(browser.sendCDP).toHaveBeenCalledWith('Network.setCookie', {
