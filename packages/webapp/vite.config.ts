@@ -122,6 +122,10 @@ export default defineConfig(({ mode }) => ({
     globals: true,
     environment: 'node',
     include: ['packages/*/tests/**/*.test.ts'],
-    exclude: [...configDefaults.exclude, 'packages/node-server/tests/integration/**/*.test.ts'],
+    exclude: [
+      ...configDefaults.exclude,
+      'packages/node-server/tests/integration/**/*.test.ts',
+      'packages/*/tests/e2e/**/*.test.ts',
+    ],
   },
 }));
