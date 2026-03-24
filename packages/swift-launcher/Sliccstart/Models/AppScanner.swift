@@ -56,6 +56,7 @@ final class AppScanner {
         // App Management permission — each fileExists call into an app's
         // Contents/Frameworks/ triggers a separate macOS TCC notification.
         guard hasAppManagementPermission else {
+            targets.append(contentsOf: debugBuilds.values)
             return targets.sorted {
                 $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
             }
