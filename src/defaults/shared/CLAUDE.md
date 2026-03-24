@@ -56,19 +56,24 @@ Drop a scoop when:
 - It is running a **recurring or long-running task** (e.g. watching a feed, handling webhooks)
 - Work is **still in progress** — dropping mid-task loses all context
 
-## Browser Tab Hygiene
+## Browser Tab Handling
 
-**Close tabs when you're done with them.** Tabs accumulate fast — every `playwright-cli open` or `tab-new` call opens a persistent tab that stays open unless you close it.
+**Every playwright command that operates on a tab requires `--tab=<targetId>`.** There is no implicit "current tab". Always specify which tab you're operating on.
+
+**Workflow:**
+1. `playwright-cli tab-list` — lists tabs with their targetIds. The user's active tab is marked `(active)`.
+2. `playwright-cli tab-new <url>` — opens a new tab, returns the targetId in output. Capture it!
+3. Use `--tab=<targetId>` on all subsequent commands: `playwright-cli screenshot --tab=<id>`, `playwright-cli click --tab=<id> e5`, etc.
+
+**Close tabs when you're done with them.** Tabs accumulate fast — every `open` or `tab-new` opens a persistent tab.
 
 Rules:
 
-- **Close research/scraping tabs** immediately after extracting the data you need. Use `playwright-cli close` for the current tab or `playwright-cli tab-close <index>` for a specific tab.
+- **Close research/scraping tabs** immediately after extracting data: `playwright-cli tab-close --tab=<id>`
 - **Never leave more than ~5 tabs open** beyond the user's own tabs and any app tabs you're actively serving.
-- **Scoops must close their own tabs** when finished. Include this instruction in every scoop brief that involves browser use: _"Close each tab with `playwright-cli close` or `playwright-cli tab-close <index>` as soon as you've extracted what you need."_
-- **Audit tabs periodically**: if you notice tab count growing, run `playwright-cli tab-list` and close stale ones with `playwright-cli tab-close <index>`.
+- **Scoops must close their own tabs** when finished. Include this instruction in every scoop brief that involves browser use: _"Close each tab with `playwright-cli tab-close --tab=<id>` as soon as you've extracted what you need."_
+- **Audit tabs periodically**: run `playwright-cli tab-list` and close stale ones with `playwright-cli tab-close --tab=<id>`.
 - The **preview/serve tab** for a delivered app can stay open — that's intentional. Everything else is transient.
-
-To close the current tab: `playwright-cli close`. To close a specific tab: `playwright-cli tab-close <index>`.
 
 ## What You Can Do
 
@@ -83,9 +88,9 @@ To close the current tab: `playwright-cli close`. To close a specific tab: `play
 **What you CAN see:**
 
 - **`open --view <path>`** (or `-v`) — reads an image from VFS and returns it so you can see it. Works with PNG, JPEG, GIF, WebP, SVG.
-- **`playwright-cli screenshot`** + **`open --view <path>`** — take a screenshot of the current browser tab to file, then view it. Example: `playwright-cli screenshot --filename=/tmp/shot.png && open --view /tmp/shot.png`
+- **`playwright-cli screenshot --tab=<id>`** + **`open --view <path>`** — take a screenshot of a browser tab to file, then view it. Example: `playwright-cli screenshot --tab=<id> --filename=/tmp/shot.png && open --view /tmp/shot.png`
 - **`screencapture`** — capture the user's actual screen (desktop, window, or tab) via browser screen sharing API. Use `screencapture --view screenshot.png` to capture and see what's on their screen. The user will be prompted to select what to share.
-- **`playwright-cli snapshot`** — returns an accessibility tree (text). Use this to verify page content without vision, or as a required step before `screenshot`.
+- **`playwright-cli snapshot --tab=<id>`** — returns an accessibility tree (text). Use this to verify page content without vision, or as a required step before `screenshot`.
 
 **What only the human sees:**
 
@@ -96,20 +101,23 @@ To close the current tab: `playwright-cli close`. To close a specific tab: `play
 **Workflow to verify a page you created:**
 
 1. `serve /workspace/app` — opens the app directory in a tab (human can see it)
-2. `playwright-cli tab-list` — find the tab by matching the preview URL from step 1
-3. `playwright-cli tab-select <index>` — target that tab
-4. `playwright-cli snapshot` — required before screenshot; also gives you text content
-5. `playwright-cli screenshot --filename=/tmp/shot.png` — save screenshot to file
-6. `open --view /tmp/shot.png` — now you can see it
+2. `playwright-cli tab-list` — find the tab by matching the preview URL. Note the targetId.
+3. `playwright-cli snapshot --tab=<id>` — required before screenshot; also gives you text content
+4. `playwright-cli screenshot --tab=<id> --filename=/tmp/shot.png` — save screenshot to file
+5. `open --view /tmp/shot.png` — now you can see it
 
-**Understanding `tab-list` markers:**
+**Understanding `tab-list` output:**
 
-- `→` = playwright's current target (the tab your commands operate on)
-- `*` = the user's active/focused tab in Chrome
-- These can differ! If the user switches tabs in Chrome, `*` moves but `→` stays. Use `tab-select` to follow the user's active tab when needed.
+```
+[E9A3F...] https://example.com "Example Page" (active)
+[B7C2D...] https://docs.google.com "Google Docs"
+```
+
+- `(active)` = the user's active/focused tab in Chrome
+- The `[...]` is the targetId — use it with `--tab=<id>` on all commands
 
 **Remote targets (tray mode):**
-When connected to a tray, `playwright-cli tab-list` shows browser tabs from all connected SLICC instances. Remote targets appear with a `[remote:runtimeId]` annotation. Use `playwright-cli tab-select <index>` to target a remote tab, then use the usual commands (`snapshot`, `screenshot`, `click`, `fill`, etc.) — CDP commands are routed transparently over the tray data channel to the runtime that owns the tab. To open a new tab on a specific remote runtime, use `playwright-cli open <url> --runtime=<runtimeId>` or `playwright-cli tab-new <url> --runtime=<runtimeId>`.
+When connected to a tray, `playwright-cli tab-list` shows browser tabs from all connected SLICC instances. Remote targets appear with their composite targetId (`runtimeId:localId`). Use `--tab=<compositeId>` to target a remote tab, then use the usual commands (`snapshot`, `screenshot`, `click`, `fill`, etc.) — CDP commands are routed transparently over the tray data channel. To open a new tab on a specific remote runtime, use `playwright-cli open <url> --runtime=<runtimeId>` or `playwright-cli tab-new <url> --runtime=<runtimeId>`.
 
 **Do NOT:**
 
@@ -146,7 +154,7 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **say** — Text-to-speech using Web Speech API. `say hello world`, `say -v Samantha hello` (voice selection), `say -r 1.5 fast speech` (rate 0.1-10), `say --list` (list voices).
 - **afplay** — Play audio files using Web Audio API. `afplay /path/to/audio.mp3`, `afplay -v 0.5 file.wav` (volume 0-1), `afplay -r 1.5 file.mp3` (rate 0.25-4).
 - **chime** — Play a notification chime sound. Alias for `afplay /shared/sounds/chime.mp3`.
-- **playwright-cli** — Browser automation (built-in, no SKILL.md lookup needed). Key subcommands: `tab-list`, `tab-select <index>`, `snapshot`, `screenshot [--filename=<path>]`, `open <url> [--runtime=<id>]`, `click <ref>`, `fill <ref> "text"`, `close`. Use `--runtime` with `open`/`tab-new` to open a tab on a remote tray runtime. Run `playwright-cli --help` for full list.
+- **playwright-cli** — Browser automation (built-in, no SKILL.md lookup needed). All tab commands require `--tab=<targetId>`. Key subcommands: `tab-list`, `tab-new <url>`, `snapshot --tab=<id>`, `screenshot --tab=<id> [--filename=<path>]`, `open <url> [--runtime=<id>]`, `click --tab=<id> <ref>`, `fill --tab=<id> <ref> "text"`, `tab-close --tab=<id>`. Use `--runtime` with `open`/`tab-new` to open a tab on a remote tray runtime. Run `playwright-cli --help` for full list.
 - **rsync** — Sync files between local VFS and a remote tray runtime. Push: `rsync /local runtime-id:/remote`. Pull: `rsync runtime-id:/remote /local`. Flags: `--dry-run` (preview), `--delete` (remove dest files not in source), `--verbose` (per-file detail). Requires an active tray connection.
 - **teleport** — Teleport browser cookies from a remote tray runtime to the local browser. Enables seamless authentication transfer between SLICC instances in a tray. Usage: `teleport` (auto-select best follower), `teleport <runtime-id>` (target specific runtime), `teleport --list` (show available runtimes), `teleport --url <url>` (open URL on follower for interactive auth). When `--url` is provided, the follower opens a browser tab for the human to complete login; cookies are captured after auth completion (hostname redirect) or a 2-minute timeout. Page reloads by default after applying cookies; use `--no-reload` to skip.
 
@@ -196,7 +204,7 @@ This is a sandboxed browser-based VFS environment. Many standard tools (e.g. `py
 Key things that work differently:
 
 - **Serving files**: Use `serve /path/to/app-dir` for app directories or `open /path/to/file` for single files — both use the preview service worker. No HTTP server needed. The output includes the preview URL.
-- **Serving + screenshotting**: `serve` and `open` already open the tab. Do NOT use `playwright-cli open` with the same URL — that opens a duplicate tab. Instead, use `playwright-cli tab-list` to find the tab they created (match by URL from the output), then `playwright-cli tab-select <index>` to target it for screenshots/snapshots. **Never manually construct preview URLs** — always use the URL from the command output.
+- **Serving + screenshotting**: `serve` and `open` already open the tab. Do NOT use `playwright-cli open` with the same URL — that opens a duplicate tab. Instead, use `playwright-cli tab-list` to find the tab they created (match by URL), note the targetId, then use `--tab=<id>` for screenshots/snapshots. **Never manually construct preview URLs** — always use the URL from the command output.
 - **No long-running servers**: You can't start background daemons. The `serve` and `open` commands handle previewing.
 - **No package managers**: No `apt`, `npm install`, `pip install`. Use what's already available or write `.jsh` scripts.
 
