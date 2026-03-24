@@ -1421,9 +1421,7 @@ Commands:
        [--teleport-start=<regex>] [--teleport-return=<regex>] [--timeout=<s>]
                          Open new tab (default: background). --runtime opens on a remote tray runtime.
                          Supports teleport flags.
-  tab-select <index>     Switch to tab by index
-  tab-close [index]      Close tab (default: current)
-  close                  Close current tab
+  tab-close --tab=<id>   Close tab by targetId
   record [url] [--filter=<js-expr>]
                          Open tab with HAR recording enabled
   stop-recording <id>    Stop recording and save HAR
