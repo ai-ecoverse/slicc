@@ -905,7 +905,7 @@ function readPersistedElectronOverlayCorner(
 ): ElectronOverlayLauncherCorner {
   try {
     return normalizeElectronOverlayLauncherCorner(
-      view?.sessionStorage.getItem(ELECTRON_OVERLAY_LAUNCHER_SESSION_STORAGE_KEY)
+      view?.localStorage.getItem(ELECTRON_OVERLAY_LAUNCHER_SESSION_STORAGE_KEY)
     );
   } catch {
     return normalizeElectronOverlayLauncherCorner(null);
@@ -917,9 +917,9 @@ function persistElectronOverlayCorner(
   corner: ElectronOverlayLauncherCorner
 ): void {
   try {
-    view?.sessionStorage.setItem(ELECTRON_OVERLAY_LAUNCHER_SESSION_STORAGE_KEY, corner);
+    view?.localStorage.setItem(ELECTRON_OVERLAY_LAUNCHER_SESSION_STORAGE_KEY, corner);
   } catch {
-    // Some target pages may not expose sessionStorage during reinjection.
+    // Some target pages may not expose localStorage during reinjection.
   }
 }
 
