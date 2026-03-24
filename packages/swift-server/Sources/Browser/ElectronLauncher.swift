@@ -267,7 +267,13 @@ final class ElectronLauncher {
 
     private static func waitForProcessExit(_ process: Process) async -> Int32 {
         while process.isRunning {
-            try? await Task.sleep(nanoseconds: 100_000_000)
+            do {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            } catch {
+                // Cancellation — stop polling. Can't read terminationStatus
+                // while the process is still running (NSTask throws).
+                return -1
+            }
         }
         return process.terminationStatus
     }
@@ -390,6 +396,11 @@ final class ElectronOverlayInjector: @unchecked Sendable {
 
     func start() {
         guard stateQueue.sync(execute: { pollTask == nil }) else { return }
+        logger.info("Starting overlay injector polling loop", metadata: [
+            "cdpPort": .stringConvertible(cdpPort),
+            "servePort": .stringConvertible(servePort),
+            "projectRoot": .string(projectRoot.path)
+        ])
         pollTask = Task { [weak self] in
             guard let self else { return }
             await self.runPollingLoop()
@@ -406,6 +417,7 @@ final class ElectronOverlayInjector: @unchecked Sendable {
     }
 
     private func runPollingLoop() async {
+        logger.info("Overlay polling loop started")
         while !Task.isCancelled {
             do {
                 try await syncTargets()

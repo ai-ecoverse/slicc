@@ -180,16 +180,10 @@ struct ServerCommand: AsyncParsableCommand {
         }
 
         do {
-            try await withThrowingTaskGroup(of: Void.self) { group in
-                group.addTask {
-                    await startupLatch.waitUntilStarted()
-                }
-                group.addTask {
-                    try await appTask.value
-                }
-                _ = try await group.next()
-                group.cancelAll()
-            }
+            // Wait only for the startup latch. Don't add appTask to the group —
+            // withThrowingTaskGroup implicitly awaits all children, and appTask
+            // runs forever, which would block everything after this point.
+            await startupLatch.waitUntilStarted()
 
             do {
                 try await cdpProxy.preWarm(cdpPort: cdpPort)
