@@ -267,7 +267,13 @@ final class ElectronLauncher {
 
     private static func waitForProcessExit(_ process: Process) async -> Int32 {
         while process.isRunning {
-            try? await Task.sleep(nanoseconds: 100_000_000)
+            do {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            } catch {
+                // Cancellation — stop polling. Can't read terminationStatus
+                // while the process is still running (NSTask throws).
+                return -1
+            }
         }
         return process.terminationStatus
     }
@@ -370,7 +376,6 @@ final class ElectronOverlayInjector: @unchecked Sendable {
     private let session: URLSession
     private let logger: Logger
     private let stateQueue = DispatchQueue(label: "slicc.browser.electron-overlay-injector")
-    private var injectedTargets = Set<String>()
     private var inFlightTargets = Set<String>()
     private var pollTask: Task<Void, Never>?
 
@@ -390,6 +395,11 @@ final class ElectronOverlayInjector: @unchecked Sendable {
 
     func start() {
         guard stateQueue.sync(execute: { pollTask == nil }) else { return }
+        logger.info("Starting overlay injector polling loop", metadata: [
+            "cdpPort": .stringConvertible(cdpPort),
+            "servePort": .stringConvertible(servePort),
+            "projectRoot": .string(projectRoot.path)
+        ])
         pollTask = Task { [weak self] in
             guard let self else { return }
             await self.runPollingLoop()
@@ -400,12 +410,12 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         stateQueue.sync {
             pollTask?.cancel()
             pollTask = nil
-            injectedTargets.removeAll()
             inFlightTargets.removeAll()
         }
     }
 
     private func runPollingLoop() async {
+        logger.info("Overlay polling loop started")
         while !Task.isCancelled {
             do {
                 try await syncTargets()
@@ -427,36 +437,36 @@ final class ElectronOverlayInjector: @unchecked Sendable {
 
         let targets = try JSONDecoder().decode([ElectronInspectableTarget].self, from: data)
         let selectedTargets = selectBestOverlayTargets(targets)
+        logger.debug("syncTargets", metadata: [
+            "totalTargets": .stringConvertible(targets.count),
+            "selectedTargets": .stringConvertible(selectedTargets.count)
+        ])
         let liveTargetIDs = Set(selectedTargets.compactMap(\.webSocketDebuggerURL))
 
         stateQueue.sync {
-            injectedTargets = injectedTargets.intersection(liveTargetIDs)
             inFlightTargets = inFlightTargets.intersection(liveTargetIDs)
         }
 
         for target in selectedTargets {
             guard let targetID = target.webSocketDebuggerURL else { continue }
-            let shouldInject = stateQueue.sync { () -> Bool in
-                guard !injectedTargets.contains(targetID), !inFlightTargets.contains(targetID) else {
-                    return false
-                }
-                inFlightTargets.insert(targetID)
-                return true
-            }
-            guard shouldInject else { continue }
+            let isInFlight = stateQueue.sync { inFlightTargets.contains(targetID) }
+            guard !isInFlight else { continue }
+
+            stateQueue.sync { inFlightTargets.insert(targetID) }
 
             Task { [weak self] in
                 guard let self else { return }
                 defer {
-                    _ = self.stateQueue.sync {
-                        self.inFlightTargets.remove(targetID)
-                    }
+                    _ = self.stateQueue.sync { self.inFlightTargets.remove(targetID) }
                 }
                 do {
+                    // Probe whether the overlay is already present before injecting.
+                    let needsInjection = try await self.probeOverlayMissing(target: target)
+                    guard needsInjection else { return }
+
+                    self.logger.info("Injecting overlay", metadata: ["target": .string(target.url)])
                     try await self.injectOverlay(into: target, script: bootstrapScript)
-                    _ = self.stateQueue.sync {
-                        self.injectedTargets.insert(targetID)
-                    }
+                    self.logger.info("Overlay injection succeeded", metadata: ["target": .string(target.url)])
                 } catch {
                     self.logger.error("Electron overlay injection failed", metadata: [
                         "target": .string(target.url),
@@ -525,6 +535,31 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         """
     }
 
+    private func probeOverlayMissing(target: ElectronInspectableTarget) async throws -> Bool {
+        guard let debuggerURL = target.webSocketDebuggerURL,
+              let url = URL(string: debuggerURL) else { return false }
+
+        let socket = session.webSocketTask(with: url)
+        socket.resume()
+        defer { socket.cancel(with: .goingAway, reason: nil) }
+
+        try await send(message: [
+            "id": 1,
+            "method": "Runtime.evaluate",
+            "params": [
+                "expression": "!!document.getElementById('slicc-electron-overlay-root')",
+                "returnByValue": true
+            ]
+        ], over: socket)
+
+        let response = try await waitForResponseValue(id: 1, over: socket)
+        // If the overlay root element exists in the DOM, no injection needed
+        if let value = response as? Bool, value {
+            return false
+        }
+        return true
+    }
+
     private func injectOverlay(into target: ElectronInspectableTarget, script: String) async throws {
         guard let debuggerURL = target.webSocketDebuggerURL,
               let url = URL(string: debuggerURL) else {
@@ -535,16 +570,67 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         socket.resume()
         defer { socket.cancel(with: .goingAway, reason: nil) }
 
-        try await send(message: ["id": 1, "method": "Runtime.enable"], over: socket)
-        try await send(message: ["id": 2, "method": "Page.enable"], over: socket)
         try await send(message: [
-            "id": 3,
+            "id": 1,
             "method": "Runtime.evaluate",
             "params": [
                 "expression": script,
                 "awaitPromise": false
             ]
         ], over: socket)
+
+        // Wait for Chrome to process the evaluate before closing the socket.
+        try await waitForResponse(id: 1, over: socket)
+    }
+
+    private func waitForResponseValue(id: Int, over socket: URLSessionWebSocketTask, timeout: UInt64 = 5_000_000_000) async throws -> Any? {
+        try await withThrowingTaskGroup(of: Any?.self) { group in
+            group.addTask {
+                while true {
+                    let message = try await socket.receive()
+                    if case .string(let text) = message,
+                       let data = text.data(using: .utf8),
+                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let responseId = json["id"] as? Int,
+                       responseId == id {
+                        if let result = json["result"] as? [String: Any],
+                           let innerResult = result["result"] as? [String: Any] {
+                            return innerResult["value"]
+                        }
+                        return nil
+                    }
+                }
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: timeout)
+                return nil
+            }
+            let result = try await group.next() ?? nil
+            group.cancelAll()
+            return result
+        }
+    }
+
+    private func waitForResponse(id: Int, over socket: URLSessionWebSocketTask, timeout: UInt64 = 5_000_000_000) async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                while true {
+                    let message = try await socket.receive()
+                    if case .string(let text) = message,
+                       let data = text.data(using: .utf8),
+                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let responseId = json["id"] as? Int,
+                       responseId == id {
+                        return
+                    }
+                }
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: timeout)
+            }
+            _ = try await group.next()
+            group.cancelAll()
+        }
     }
 
     private func send(message: [String: Any], over socket: URLSessionWebSocketTask) async throws {

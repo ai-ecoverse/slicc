@@ -180,15 +180,23 @@ struct ServerCommand: AsyncParsableCommand {
         }
 
         do {
-            try await withThrowingTaskGroup(of: Void.self) { group in
-                group.addTask {
-                    await startupLatch.waitUntilStarted()
-                }
-                group.addTask {
+            // Race the startup latch against appTask failure. If the server
+            // fails before onServerRunning fires (e.g. bind error), we need
+            // to surface that instead of hanging on the latch forever.
+            // A separate Task watches appTask and signals the latch on failure.
+            let startupFailure = StartupFailureBox()
+            let errorObserver = Task { [startupLatch] in
+                do {
                     try await appTask.value
+                } catch {
+                    await startupFailure.set(error)
+                    await startupLatch.signalStarted()
                 }
-                _ = try await group.next()
-                group.cancelAll()
+            }
+            await startupLatch.waitUntilStarted()
+            errorObserver.cancel()
+            if let error = await startupFailure.get() {
+                throw error
             }
 
             do {
@@ -349,6 +357,13 @@ struct ServerConfig: Sendable, Equatable {
 }
 
 @available(macOS 14, *)
+private actor StartupFailureBox {
+    private var error: Error?
+    func set(_ error: Error) { self.error = error }
+    func get() -> Error? { error }
+}
+
+@available(macOS 14, *)
 private actor ServerStartupLatch {
     private var started = false
     private var continuations: [CheckedContinuation<Void, Never>] = []
@@ -435,11 +450,14 @@ extension ServerCommand {
             return cwdRoot
         }
 
+        // filePath = packages/swift-server/Sources/CLI/ServerCommand.swift
+        // Need 5 levels up to reach the repo root.
         return URL(fileURLWithPath: filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
+            .deletingLastPathComponent()  // CLI/
+            .deletingLastPathComponent()  // Sources/
+            .deletingLastPathComponent()  // swift-server/
+            .deletingLastPathComponent()  // packages/
+            .deletingLastPathComponent()  // repo root
     }
 
     static func resolveStaticRoot(
