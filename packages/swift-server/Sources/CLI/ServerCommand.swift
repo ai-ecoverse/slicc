@@ -429,11 +429,14 @@ extension ServerCommand {
             return cwdRoot
         }
 
+        // filePath = packages/swift-server/Sources/CLI/ServerCommand.swift
+        // Need 5 levels up to reach the repo root.
         return URL(fileURLWithPath: filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
+            .deletingLastPathComponent()  // CLI/
+            .deletingLastPathComponent()  // Sources/
+            .deletingLastPathComponent()  // swift-server/
+            .deletingLastPathComponent()  // packages/
+            .deletingLastPathComponent()  // repo root
     }
 
     static func resolveStaticRoot(
