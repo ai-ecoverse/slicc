@@ -420,7 +420,7 @@ class SliccElectronLauncherElement extends HTMLElement {
 }
 
 class SliccElectronSidebarElement extends HTMLElement {
-  static observedAttributes = ['open', 'active-tab', 'app-url'];
+  static observedAttributes = ['open', 'active-tab', 'app-url', 'corner'];
 
   private tabButtons = new Map<ExtensionTabId, HTMLButtonElement>();
   private iframe: HTMLIFrameElement | null = null;
@@ -460,6 +460,30 @@ class SliccElectronSidebarElement extends HTMLElement {
         transition: transform var(--s2-transition-default); backdrop-filter: blur(16px);
       }
       :host([open]) .sidebar { transform: translateX(0); }
+
+      /* Slide from left */
+      :host([corner="left"]),
+      :host([corner="top-left"]),
+      :host([corner="bottom-left"]) {
+        & .sidebar { right: auto; left: 12px; transform: translateX(calc(-100% - 28px)); }
+      }
+      :host([open][corner="left"]) .sidebar,
+      :host([open][corner="top-left"]) .sidebar,
+      :host([open][corner="bottom-left"]) .sidebar { transform: translateX(0); }
+
+      /* Slide from top — stays on right side */
+      :host([corner="top"]) .sidebar {
+        top: 12px; bottom: auto; height: calc(100vh - 24px);
+        transform: translateY(calc(-100% - 28px));
+      }
+      :host([open][corner="top"]) .sidebar { transform: translateY(0); }
+
+      /* Slide from bottom — stays on right side */
+      :host([corner="bottom"]) .sidebar {
+        top: auto; bottom: 12px; height: calc(100vh - 24px);
+        transform: translateY(calc(100% + 28px));
+      }
+      :host([open][corner="bottom"]) .sidebar { transform: translateY(0); }
       .header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px 12px; border-bottom: 1px solid var(--s2-border-subtle); background: color-mix(in srgb, var(--s2-bg-layer-1) 92%, transparent); }
       .header__brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
       .header__title { font-size: 15px; font-weight: 700; letter-spacing: 0.01em; }
@@ -800,6 +824,7 @@ export class SliccElectronOverlayElement extends HTMLElement {
     launcher.toggleAttribute('open', this.state.open);
     launcher.setAttribute('corner', this.state.corner);
     sidebar.toggleAttribute('open', this.state.open);
+    sidebar.setAttribute('corner', this.state.corner);
     sidebar.setAttribute('active-tab', this.state.activeTab);
     if (this.appUrlValue) {
       sidebar.setAttribute('app-url', this.appUrlValue);
