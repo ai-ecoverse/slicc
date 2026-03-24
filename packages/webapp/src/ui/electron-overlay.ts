@@ -26,6 +26,7 @@ import sliccyLightSvg from '../../../assets/logos/sliccy-mono-light-1scoops.svg?
 
 export const ELECTRON_OVERLAY_HOST_ID = 'slicc-electron-overlay-root';
 export const ELECTRON_OVERLAY_TAG_NAME = 'slicc-electron-overlay';
+export const ELECTRON_OVERLAY_TOGGLE_SHORTCUT_KEY = ';';
 
 const ELECTRON_OVERLAY_LAUNCHER_TAG_NAME = 'slicc-electron-launcher';
 const ELECTRON_OVERLAY_SIDEBAR_TAG_NAME = 'slicc-electron-sidebar';
@@ -768,6 +769,18 @@ export class SliccElectronOverlayElement extends HTMLElement {
   }
 
   private onKeyDown = (event: KeyboardEvent): void => {
+    if (
+      event.key === ELECTRON_OVERLAY_TOGGLE_SHORTCUT_KEY &&
+      (event.metaKey || event.ctrlKey) &&
+      !event.shiftKey &&
+      !event.altKey
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.toggle();
+      return;
+    }
+
     if (event.key !== 'Escape' || !this.state.open) return;
     this.hideSidebar();
   };
