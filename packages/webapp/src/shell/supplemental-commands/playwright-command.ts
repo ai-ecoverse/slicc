@@ -1,0 +1,2911 @@
+/**
+ * playwright-cli — Playwright-compatible CLI for browser automation.
+ *
+ * Registered as `playwright-cli`, `playwright`, and `puppeteer`.
+ * Uses BrowserAPI + VirtualFS injected from the shell options.
+ */
+
+import { defineCommand } from 'just-bash';
+import type { Command } from 'just-bash';
+import type { BrowserAPI, PageInfo } from '../../cdp/index.js';
+import { HarRecorder } from '../../cdp/index.js';
+import { normalizeAccessibilityText } from '../../cdp/normalize-accessibility-text.js';
+import type { AccessibilityNode } from '../../cdp/types.js';
+import { createLogger } from '../../core/logger.js';
+import { FsError, type VirtualFS } from '../../fs/index.js';
+import type { FloatType } from '../../scoops/tray-leader-sync.js';
+const log = createLogger('playwright-teleport');
+
+// ---------------------------------------------------------------------------
+// Teleport watcher types and module-level getters
+// ---------------------------------------------------------------------------
+
+export type GetBestFollowerFn = () => {
+  runtimeId: string;
+  bootstrapId: string;
+  floatType: FloatType;
+} | null;
+export type GetConnectedFollowersFn = () => {
+  runtimeId: string;
+  runtime?: string;
+  connectedAt?: string;
+  lastActivity?: number;
+  floatType?: FloatType;
+}[];
+
+let getBestFollowerGetter: (() => GetBestFollowerFn | null) | null = null;
+let getConnectedFollowersGetter: (() => GetConnectedFollowersFn | null) | null = null;
+
+export function setPlaywrightTeleportBestFollower(
+  getter: (() => GetBestFollowerFn | null) | null
+): void {
+  getBestFollowerGetter = getter;
+}
+
+export function setPlaywrightTeleportConnectedFollowers(
+  getter: (() => GetConnectedFollowersFn | null) | null
+): void {
+  getConnectedFollowersGetter = getter;
+}
+
+/** Teleport watcher state machine phases. */
+export type TeleportPhase =
+  | 'armed'
+  | 'teleporting'
+  | 'waitingForAuth'
+  | 'waitingForReturn'
+  | 'capturing'
+  | 'done'
+  | 'timedOut';
+
+/** Teleport watcher that monitors leader tab navigation and triggers auth-state teleport. */
+export interface TeleportWatcher {
+  startPattern: RegExp;
+  returnPattern: RegExp;
+  timeoutMs: number;
+  runtimeId?: string;
+  /** URL to open on the follower when start pattern triggers. If unset, uses the leader tab's current URL. */
+  teleportUrl?: string;
+  phase: TeleportPhase;
+  /** The leader tab being monitored. */
+  leaderTargetId?: string;
+  /** The composite targetId of the follower tab (runtimeId:localTargetId). */
+  followerTargetId?: string;
+  /** The leader tab's URL before the SSO redirect, for navigation after auth-state injection. */
+  originalLeaderUrl?: string;
+  /** Promise that resolves/rejects when the teleport cycle completes. */
+  completionPromise?: Promise<string>;
+  resolveBlock?: (result: string) => void;
+  rejectBlock?: (err: Error) => void;
+  /** Interval for polling leader tab URL. */
+  pollInterval?: ReturnType<typeof setInterval>;
+  /** Timeout timer for the entire teleport cycle. */
+  timeoutTimer?: ReturnType<typeof setTimeout>;
+  /** CDP event listener cleanup function. */
+  cleanupListener?: () => void;
+  /** Cleanup function for the follower storage replay script. */
+  removeFollowerStorageScript?: (() => Promise<void>) | null;
+  /** Dedup key for callback/error diagnostics while polling the follower. */
+  lastFollowerDiagnosticKey?: string;
+  /** Last follower URL observed during teleport polling. */
+  lastFollowerUrl?: string;
+}
+
+/** Per-tab snapshot: accessibility tree with element refs. */
+interface TabSnapshot {
+  url: string;
+  title: string;
+  refToSelector: Map<string, string>;
+  refToBackendNodeId: Map<string, number>;
+  content: string;
+  timestamp: number;
+}
+
+/** Decode base64 string to Uint8Array. */
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+/** Shared state across invocations (persists for the lifetime of the shell). */
+interface PlaywrightState {
+  /** Per-tab snapshots keyed by targetId */
+  snapshots: Map<string, TabSnapshot>;
+  /** App tab ID to exclude */
+  appTabId: string | null;
+  /** HAR recorder instance (created lazily) */
+  harRecorder: HarRecorder | null;
+  /** Whether /.playwright/ directories have been created */
+  sessionDirsCreated: boolean;
+  /** Active teleport watchers keyed by targetId. */
+  teleportWatchers: Map<string, TeleportWatcher>;
+}
+
+export const PLAYWRIGHT_COMMAND_NAMES = ['playwright-cli', 'playwright', 'puppeteer'] as const;
+
+const sharedStateByBrowser = new WeakMap<BrowserAPI, WeakMap<VirtualFS, PlaywrightState>>();
+
+/** Commands that invalidate ref snapshots because page state may have changed. */
+const SNAPSHOT_INVALIDATING_COMMANDS = new Set([
+  'click',
+  'dblclick',
+  'fill',
+  'type',
+  'press',
+  'goto',
+  'navigate',
+  'go-back',
+  'go-forward',
+  'reload',
+  'select',
+  'check',
+  'uncheck',
+  'drag',
+  'dialog-accept',
+  'dialog-dismiss',
+]);
+
+/** Commands that can safely auto-save a fresh accessibility snapshot after success. */
+const AUTO_SNAPSHOT_COMMANDS = new Set([
+  'click',
+  'dblclick',
+  'fill',
+  'type',
+  'press',
+  'goto',
+  'navigate',
+  'select',
+  'check',
+  'uncheck',
+  'drag',
+  'dialog-accept',
+  'dialog-dismiss',
+]);
+
+/** Format an ISO timestamp to be safe for filenames (replace : with -). */
+function filenameSafeTimestamp(date: Date): string {
+  return date.toISOString().replace(/:/g, '-');
+}
+
+function parseNonNegativeInteger(value: string): number | null {
+  if (!/^[0-9]+$/.test(value)) return null;
+  return Number(value);
+}
+
+export function getSharedState(browser: BrowserAPI, fs: VirtualFS): PlaywrightState {
+  let statesByFs = sharedStateByBrowser.get(browser);
+  if (!statesByFs) {
+    statesByFs = new WeakMap();
+    sharedStateByBrowser.set(browser, statesByFs);
+  }
+
+  let state = statesByFs.get(fs);
+  if (!state) {
+    state = {
+      snapshots: new Map(),
+      appTabId: null,
+      harRecorder: null,
+      sessionDirsCreated: false,
+      teleportWatchers: new Map(),
+    };
+    statesByFs.set(fs, state);
+  }
+
+  return state;
+}
+
+function isAlreadyExistsError(err: unknown): boolean {
+  if (err instanceof FsError) return err.code === 'EEXIST';
+  if (typeof err === 'object' && err !== null && 'code' in err) {
+    return (err as { code?: unknown }).code === 'EEXIST';
+  }
+  return err instanceof Error && err.message.includes('EEXIST');
+}
+
+/** Fallback for React-controlled inputs: uses native value setter + dispatches input/change events. */
+const REACT_FILL_FALLBACK_FUNCTION = `function(text) {
+  const el = this;
+  const tag = el.tagName;
+  const proto = tag === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+  const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+  if (nativeSetter) {
+    nativeSetter.call(el, text);
+  } else {
+    el.value = text;
+  }
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+}`;
+
+/** Read back the current value of an input/textarea/contenteditable. */
+const READ_INPUT_VALUE_FUNCTION = `function() {
+  const el = this;
+  if (el.isContentEditable) return el.textContent || '';
+  return el.value ?? '';
+}`;
+
+const CLEAR_FOCUSABLE_ELEMENT_FUNCTION = `function() {
+  const el = this;
+  if (!(el instanceof HTMLElement)) return false;
+  el.focus();
+  const emitInput = () => el.dispatchEvent(new Event('input', { bubbles: true }));
+  if (el.isContentEditable) {
+    el.textContent = '';
+    const selection = window.getSelection();
+    if (selection) {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    emitInput();
+    return true;
+  }
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || 'value' in el) {
+    el.value = '';
+    emitInput();
+    return true;
+  }
+  return false;
+}`;
+
+async function getCurrentPageLocation(
+  browser: BrowserAPI
+): Promise<{ href: string; hostname: string; pathname: string }> {
+  const raw = await browser.evaluate(
+    `JSON.stringify({ href: location.href, hostname: location.hostname, pathname: location.pathname })`
+  );
+  return JSON.parse(raw as string) as { href: string; hostname: string; pathname: string };
+}
+
+/** Ensure /.playwright/ directories exist. */
+async function ensureSessionDirs(vfs: VirtualFS, state: PlaywrightState): Promise<void> {
+  if (state.sessionDirsCreated) return;
+  for (const dir of ['/.playwright', '/.playwright/snapshots', '/.playwright/screenshots']) {
+    try {
+      await vfs.mkdir(dir, { recursive: true });
+    } catch (err) {
+      if (!isAlreadyExistsError(err)) {
+        throw err;
+      }
+    }
+  }
+  state.sessionDirsCreated = true;
+}
+
+/** Take a snapshot and save it to /.playwright/snapshots/. Does NOT update in-memory state. Returns the file path. */
+async function autoSaveSnapshot(
+  browser: BrowserAPI,
+  vfs: VirtualFS,
+  state: PlaywrightState,
+  targetId: string
+): Promise<string | null> {
+  try {
+    return await browser.withTab(targetId, async () => {
+      const pageInfo = await browser.evaluate(
+        `JSON.stringify({ url: location.href, title: document.title })`
+      );
+      const { url, title } = JSON.parse(pageInfo as string);
+      const tree = await browser.getAccessibilityTree();
+      const refToSelector = new Map<string, string>();
+      const refToBackendNodeId = new Map<string, number>();
+      const counter = { value: 0 };
+      const snapshotLines = renderNode(tree, refToSelector, refToBackendNodeId, counter);
+      const content = snapshotLines.join('\n');
+      const output = [`Page URL: ${url}`, `Page Title: ${title}`, '', content].join('\n');
+
+      const ts = filenameSafeTimestamp(new Date());
+      const path = `/.playwright/snapshots/page-${ts}.yml`;
+      await vfs.writeFile(path, output);
+      return path;
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** Append a session log entry to /.playwright/session.md. */
+async function logSession(
+  vfs: VirtualFS,
+  state: PlaywrightState,
+  opts: {
+    command: string;
+    args: string[];
+    result: CmdResult;
+    snapshotPath: string | null;
+    tabUrl?: string;
+    targetId?: string | null;
+  }
+): Promise<void> {
+  await ensureSessionDirs(vfs, state);
+  const ts = new Date().toISOString();
+  const cmdLine = `playwright-cli ${opts.command}${opts.args.length ? ' ' + opts.args.join(' ') : ''}`;
+  const resultSummary =
+    opts.result.exitCode === 0
+      ? opts.result.stdout.trim() || 'OK'
+      : `Error: ${opts.result.stderr.trim()}`;
+
+  const lines = [`### ${cmdLine}`, `- **Time**: ${ts}`];
+  if (opts.tabUrl || opts.targetId) {
+    const tabInfo = opts.tabUrl
+      ? `${opts.tabUrl}${opts.targetId ? ` (targetId: ${opts.targetId})` : ''}`
+      : `targetId: ${opts.targetId}`;
+    lines.push(`- **Tab**: ${tabInfo}`);
+  }
+  lines.push(`- **Result**: ${resultSummary}`);
+  if (opts.snapshotPath) {
+    lines.push('', `[Snapshot](${opts.snapshotPath})`);
+  }
+  lines.push('---', '');
+
+  const entry = lines.join('\n') + '\n';
+  const sessionPath = '/.playwright/session.md';
+  let existing = '';
+  try {
+    const content = await vfs.readFile(sessionPath);
+    existing =
+      typeof content === 'string' ? content : new TextDecoder().decode(content as Uint8Array);
+  } catch {
+    // File doesn't exist yet
+  }
+  await vfs.writeFile(sessionPath, existing + entry);
+}
+
+function escapeYaml(str: string): string {
+  return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+}
+
+function escapeCssAttr(str: string): string {
+  return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function renderNode(
+  node: AccessibilityNode,
+  refToSelector: Map<string, string>,
+  refToBackendNodeId: Map<string, number>,
+  counter: { value: number },
+  indent: string = ''
+): string[] {
+  const lines: string[] = [];
+  const role = normalizeAccessibilityText(node.role, 'unknown').toLowerCase();
+  const name = normalizeAccessibilityText(node.name);
+  const value = normalizeAccessibilityText(node.value);
+
+  const skipRoles = ['none', 'presentation', 'generic', 'rootwebarea'];
+  const needsRef =
+    !skipRoles.includes(role) &&
+    (name ||
+      role === 'textbox' ||
+      role === 'button' ||
+      role === 'link' ||
+      role === 'checkbox' ||
+      role === 'radio');
+
+  let ref = '';
+  if (needsRef) {
+    ref = `e${++counter.value}`;
+
+    // Store backendNodeId for reliable ref-based clicking
+    if (node.backendNodeId) {
+      refToBackendNodeId.set(ref, node.backendNodeId);
+    }
+
+    const escapedName = escapeCssAttr(name);
+    let selector = '';
+    if (role === 'button' && name) {
+      selector = `button[aria-label="${escapedName}"], button[title="${escapedName}"]`;
+    } else if (role === 'link' && name) {
+      selector = `a[aria-label="${escapedName}"], a[title="${escapedName}"]`;
+    } else if (role === 'textbox') {
+      if (name) {
+        selector = `input[aria-label="${escapedName}"], textarea[aria-label="${escapedName}"], [contenteditable][aria-label="${escapedName}"], input[placeholder="${escapedName}"], textarea[placeholder="${escapedName}"], [contenteditable][placeholder="${escapedName}"], input[title="${escapedName}"], textarea[title="${escapedName}"], [contenteditable][title="${escapedName}"]`;
+      } else {
+        selector = `input, textarea, [contenteditable]`;
+      }
+    } else if (role === 'checkbox') {
+      selector = `input[type="checkbox"]`;
+    } else if (role === 'radio') {
+      selector = `input[type="radio"]`;
+    } else if (name) {
+      selector = `[aria-label="${escapedName}"], [title="${escapedName}"]`;
+    } else {
+      selector = `[role="${role}"]`;
+    }
+    refToSelector.set(ref, selector);
+  }
+
+  let line = `${indent}- ${role}`;
+  if (name) line += ` "${escapeYaml(name)}"`;
+  if (ref) line += ` [ref=${ref}]`;
+  if (value) line += `: "${escapeYaml(value)}"`;
+  lines.push(line);
+
+  if (node.children) {
+    for (const child of node.children) {
+      lines.push(...renderNode(child, refToSelector, refToBackendNodeId, counter, indent + '  '));
+    }
+  }
+  return lines;
+}
+
+async function resolveAppTabId(browser: BrowserAPI, state: PlaywrightState): Promise<void> {
+  if (state.appTabId) return;
+  const pages = await browser.listPages();
+  // Use current origin when in browser, fall back to default port for tests/Node
+  const appOrigin =
+    typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5710';
+  const appTab = pages.find((p) => p.url.startsWith(appOrigin) && !p.url.includes('/preview/'));
+  if (appTab) state.appTabId = appTab.targetId;
+}
+
+function isAppTab(state: PlaywrightState, targetId: string): boolean {
+  return targetId === state.appTabId;
+}
+
+function isChromeInternalUiTarget(page: PageInfo): boolean {
+  const url = page.url.trim();
+  const title = page.title.trim();
+
+  return (
+    title === 'Omnibox Popup' ||
+    url.startsWith('chrome://') ||
+    url.startsWith('chrome-search://') ||
+    url.startsWith('chrome-untrusted://') ||
+    url.startsWith('devtools://') ||
+    (url.length === 0 && /popup$/i.test(title))
+  );
+}
+
+function isActionablePage(state: PlaywrightState, page: PageInfo): boolean {
+  return !isAppTab(state, page.targetId) && !isChromeInternalUiTarget(page);
+}
+
+async function getActionablePages(
+  browser: BrowserAPI,
+  state: PlaywrightState
+): Promise<PageInfo[]> {
+  await resolveAppTabId(browser, state);
+  // Use listAllTargets when available (includes remote tray targets)
+  const pages =
+    typeof browser.listAllTargets === 'function'
+      ? await browser.listAllTargets()
+      : await browser.listPages();
+  return pages.filter((page) => isActionablePage(state, page));
+}
+
+async function takeSnapshot(
+  browser: BrowserAPI,
+  state: PlaywrightState,
+  targetId: string
+): Promise<{ snapshot: TabSnapshot; output: string }> {
+  await browser.attachToPage(targetId);
+  const pageInfo = await browser.evaluate(
+    `JSON.stringify({ url: location.href, title: document.title })`
+  );
+  const { url, title } = JSON.parse(pageInfo as string);
+  const tree = await browser.getAccessibilityTree();
+  const refToSelector = new Map<string, string>();
+  const refToBackendNodeId = new Map<string, number>();
+  const counter = { value: 0 };
+  const snapshotLines = renderNode(tree, refToSelector, refToBackendNodeId, counter);
+  const content = snapshotLines.join('\n');
+  const snapshot: TabSnapshot = {
+    url,
+    title,
+    refToSelector,
+    refToBackendNodeId,
+    content,
+    timestamp: Date.now(),
+  };
+  state.snapshots.set(targetId, snapshot);
+
+  const output = [`Page URL: ${url}`, `Page Title: ${title}`, '', content].join('\n');
+  return { snapshot, output };
+}
+
+// ---------------------------------------------------------------------------
+// Teleport helpers
+// ---------------------------------------------------------------------------
+
+/** Format a per-domain cookie count summary. */
+function formatCookieDomainSummary(cookies: Array<{ domain?: string }>): string {
+  const counts = new Map<string, number>();
+  for (const c of cookies) {
+    const d = c.domain ?? 'unknown';
+    counts.set(d, (counts.get(d) ?? 0) + 1);
+  }
+  const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  return sorted.map(([domain, count]) => `${count} ${domain}`).join(', ');
+}
+
+interface TeleportStorageSnapshot {
+  origin: string;
+  localStorage: Record<string, string>;
+  sessionStorage: Record<string, string>;
+}
+
+const EMPTY_TELEPORT_STORAGE: TeleportStorageSnapshot = {
+  origin: '',
+  localStorage: {},
+  sessionStorage: {},
+};
+
+interface TeleportPageDiagnostics {
+  url: string;
+  title: string;
+  bodySnippet: string;
+}
+
+function countTeleportStorageEntries(snapshot: TeleportStorageSnapshot): number {
+  return Object.keys(snapshot.localStorage).length + Object.keys(snapshot.sessionStorage).length;
+}
+
+function tryGetTeleportUrlOrigin(url?: string): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+function buildTeleportStorageHydrationUrl(origin: string): string {
+  try {
+    return new URL('/favicon.ico', origin).toString();
+  } catch {
+    return origin;
+  }
+}
+
+function chooseTeleportLeaderLandingUrl(
+  storageOrigin: string,
+  originalLeaderUrl?: string,
+  finalUrl?: string
+): string | undefined {
+  const originalOrigin = tryGetTeleportUrlOrigin(originalLeaderUrl);
+  if (originalLeaderUrl && originalOrigin === storageOrigin) return originalLeaderUrl;
+
+  const finalOrigin = tryGetTeleportUrlOrigin(finalUrl);
+  if (finalUrl && finalOrigin === storageOrigin) return finalUrl;
+
+  if (storageOrigin) return storageOrigin;
+  return originalLeaderUrl ?? finalUrl;
+}
+
+async function captureTeleportStorageSnapshot(
+  browser: BrowserAPI,
+  label: 'leader' | 'follower'
+): Promise<TeleportStorageSnapshot> {
+  const raw = await browser.evaluate(`(() => {
+    const collect = (storage) => {
+      const items = {};
+      for (let i = 0; i < storage.length; i++) {
+        const key = storage.key(i);
+        if (key !== null) items[key] = storage.getItem(key) ?? '';
+      }
+      return items;
+    };
+    return JSON.stringify({
+      origin: window.location.origin,
+      localStorage: collect(window.localStorage),
+      sessionStorage: collect(window.sessionStorage),
+    });
+  })()`);
+
+  if (typeof raw !== 'string' || raw.length === 0) {
+    log.warn('Teleport storage capture returned non-string result', { label, type: typeof raw });
+    return EMPTY_TELEPORT_STORAGE;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<TeleportStorageSnapshot>;
+    return {
+      origin: typeof parsed.origin === 'string' ? parsed.origin : '',
+      localStorage: parsed.localStorage ?? {},
+      sessionStorage: parsed.sessionStorage ?? {},
+    };
+  } catch (err) {
+    log.warn('Could not parse teleport storage snapshot', { label, error: String(err) });
+    return EMPTY_TELEPORT_STORAGE;
+  }
+}
+
+function buildTeleportStorageInitScript(snapshot: TeleportStorageSnapshot): string {
+  const serialized = JSON.stringify(snapshot);
+  return `(() => {
+    const snapshot = ${serialized};
+    if (!snapshot.origin || window.location.origin !== snapshot.origin) return;
+    const markerKey = '__slicc_teleport_storage_applied__:' + snapshot.origin;
+    try {
+      if (window.sessionStorage.getItem(markerKey) === '1') return;
+    } catch {}
+    const apply = (storage, values) => {
+      try { storage.clear(); } catch {}
+      for (const [key, value] of Object.entries(values || {})) {
+        storage.setItem(key, String(value));
+      }
+    };
+    apply(window.localStorage, snapshot.localStorage || {});
+    apply(window.sessionStorage, snapshot.sessionStorage || {});
+    try { window.sessionStorage.setItem(markerKey, '1'); } catch {}
+  })();`;
+}
+
+function buildTeleportStorageApplyScript(snapshot: TeleportStorageSnapshot): string {
+  const serialized = JSON.stringify(snapshot);
+  return `(() => {
+    const snapshot = ${serialized};
+    if (!snapshot.origin || globalThis.location.origin !== snapshot.origin) {
+      throw new Error('Teleport storage origin mismatch');
+    }
+    const apply = (storage, values) => {
+      try { storage.clear(); } catch {}
+      for (const [key, value] of Object.entries(values || {})) {
+        storage.setItem(key, String(value));
+      }
+    };
+    apply(localStorage, snapshot.localStorage || {});
+    apply(sessionStorage, snapshot.sessionStorage || {});
+    return JSON.stringify({
+      origin: globalThis.location.origin,
+      localStorageCount: Object.keys(snapshot.localStorage || {}).length,
+      sessionStorageCount: Object.keys(snapshot.sessionStorage || {}).length,
+    });
+  })();`;
+}
+
+async function applyTeleportStorageSnapshot(
+  browser: BrowserAPI,
+  snapshot: TeleportStorageSnapshot,
+  target: 'leader' | 'follower'
+): Promise<void> {
+  const totalEntries = countTeleportStorageEntries(snapshot);
+  if (totalEntries === 0) return;
+
+  const raw = await browser.evaluate(buildTeleportStorageApplyScript(snapshot));
+  log.info('Applied teleport storage snapshot on current page', {
+    target,
+    totalEntries,
+    resultType: typeof raw,
+  });
+  log.debug('Applied teleport storage snapshot details', {
+    target,
+    origin: snapshot.origin || '(unknown)',
+    totalEntries,
+    resultType: typeof raw,
+  });
+}
+
+async function installTeleportStorageInitScript(
+  browser: BrowserAPI,
+  snapshot: TeleportStorageSnapshot,
+  targetId: string,
+  target: 'leader' | 'follower'
+): Promise<(() => Promise<void>) | null> {
+  const totalEntries = countTeleportStorageEntries(snapshot);
+  if (totalEntries === 0) return null;
+
+  const result = await browser.sendCDP('Page.addScriptToEvaluateOnNewDocument', {
+    source: buildTeleportStorageInitScript(snapshot),
+  });
+  const identifier = typeof result['identifier'] === 'string' ? result['identifier'] : null;
+
+  log.info('Installed teleport storage init script', {
+    target,
+    totalEntries,
+    hasIdentifier: !!identifier,
+  });
+  log.debug('Installed teleport storage init script details', {
+    target,
+    origin: snapshot.origin || '(unknown)',
+    localStorageCount: Object.keys(snapshot.localStorage).length,
+    sessionStorageCount: Object.keys(snapshot.sessionStorage).length,
+    hasIdentifier: !!identifier,
+  });
+
+  if (!identifier) return null;
+  return async () => {
+    try {
+      await browser.attachToPage(targetId);
+      await browser.sendCDP('Page.removeScriptToEvaluateOnNewDocument', { identifier });
+    } catch (err) {
+      log.warn('Failed to remove teleport storage init script', { target, error: String(err) });
+    }
+  };
+}
+
+async function captureTeleportPageDiagnostics(
+  browser: BrowserAPI
+): Promise<TeleportPageDiagnostics> {
+  const raw = await browser.evaluate(`(() => JSON.stringify({
+    url: window.location.href,
+    title: document.title || '',
+    bodySnippet: document.body?.innerText?.replace(/\s+/g, ' ').trim().slice(0, 500) || '(empty)',
+  }))()`);
+
+  if (typeof raw !== 'string' || raw.length === 0) {
+    return { url: '', title: '', bodySnippet: '(unavailable)' };
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<TeleportPageDiagnostics>;
+    return {
+      url: typeof parsed.url === 'string' ? parsed.url : '',
+      title: typeof parsed.title === 'string' ? parsed.title : '',
+      bodySnippet:
+        typeof parsed.bodySnippet === 'string' && parsed.bodySnippet.length > 0
+          ? parsed.bodySnippet
+          : '(empty)',
+    };
+  } catch {
+    return { url: '', title: '', bodySnippet: '(unparseable)' };
+  }
+}
+
+function shouldCaptureTeleportDiagnostics(href: string): boolean {
+  return /callback|authorize\/resume|error/i.test(href);
+}
+
+async function logFollowerTeleportDiagnosticsOnce(
+  browser: BrowserAPI,
+  watcher: TeleportWatcher,
+  reason: string
+): Promise<void> {
+  try {
+    const diagnostics = await captureTeleportPageDiagnostics(browser);
+    const key = `${reason}:${diagnostics.url}:${diagnostics.title}`;
+    if (watcher.lastFollowerDiagnosticKey === key) return;
+    watcher.lastFollowerDiagnosticKey = key;
+    log.debug('Teleport follower diagnostics', {
+      reason,
+      url: diagnostics.url,
+      title: diagnostics.title,
+      bodySnippet: diagnostics.bodySnippet,
+    });
+  } catch (err) {
+    log.warn('Could not capture teleport follower diagnostics', { reason, error: String(err) });
+  }
+}
+
+async function removeFollowerTeleportStorageScript(
+  watcher: TeleportWatcher,
+  reason: string
+): Promise<void> {
+  const remove = watcher.removeFollowerStorageScript;
+  if (!remove) return;
+  watcher.removeFollowerStorageScript = null;
+  try {
+    await remove();
+    log.info('Removed follower teleport storage init script', { reason });
+  } catch (err) {
+    log.warn('Failed to remove follower teleport storage init script', {
+      reason,
+      error: String(err),
+    });
+  }
+}
+
+async function handleTeleportTimeout(browser: BrowserAPI, watcher: TeleportWatcher): Promise<void> {
+  log.warn('Teleport timed out', {
+    timeoutMs: watcher.timeoutMs,
+    phase: watcher.phase,
+  });
+  log.debug('Teleport timeout details', {
+    timeoutMs: watcher.timeoutMs,
+    phase: watcher.phase,
+    followerTargetId: watcher.followerTargetId,
+  });
+  watcher.phase = 'timedOut';
+
+  if (watcher.followerTargetId) {
+    try {
+      await browser.attachToPage(watcher.followerTargetId);
+      await logFollowerTeleportDiagnosticsOnce(browser, watcher, 'timeout');
+    } catch (err) {
+      log.warn('Could not attach to follower for timeout diagnostics', { error: String(err) });
+    }
+    await removeFollowerTeleportStorageScript(watcher, 'timeout');
+  }
+
+  cleanupTeleportWatcher(watcher);
+  if (watcher.followerTargetId) {
+    try {
+      await browser.closePage(watcher.followerTargetId);
+    } catch (err) {
+      log.warn('Failed to close follower tab after timeout', { error: String(err) });
+    }
+  }
+  watcher.rejectBlock?.(
+    new Error(
+      `Teleport timed out after ${Math.round(watcher.timeoutMs / 1000)}s — human did not complete auth`
+    )
+  );
+}
+
+/** Clean up all timers and listeners on a teleport watcher. */
+function cleanupTeleportWatcher(watcher: TeleportWatcher): void {
+  log.info('Cleaning up teleport watcher', {
+    phase: watcher.phase,
+    hadPoll: !!watcher.pollInterval,
+    hadTimeout: !!watcher.timeoutTimer,
+    hadListener: !!watcher.cleanupListener,
+  });
+  if (watcher.pollInterval) {
+    clearInterval(watcher.pollInterval);
+    watcher.pollInterval = undefined;
+  }
+  if (watcher.timeoutTimer) {
+    clearTimeout(watcher.timeoutTimer);
+    watcher.timeoutTimer = undefined;
+  }
+  if (watcher.cleanupListener) {
+    watcher.cleanupListener();
+    watcher.cleanupListener = undefined;
+  }
+}
+
+/**
+ * Arm a teleport watcher on the current leader tab.
+ * Starts monitoring navigation via polling + CDP events.
+ */
+function armTeleportWatcher(
+  browser: BrowserAPI,
+  state: PlaywrightState,
+  startPattern: RegExp,
+  returnPattern: RegExp,
+  timeoutMs: number,
+  runtimeId?: string,
+  originalUrl?: string,
+  leaderTargetId?: string
+): TeleportWatcher {
+  log.info('Arming teleport watcher', {
+    timeoutMs,
+    runtimeSelection: runtimeId ? 'explicit' : 'auto',
+  });
+  log.debug('Arming teleport watcher details', {
+    startPattern: startPattern.source,
+    returnPattern: returnPattern.source,
+    timeoutMs,
+    runtimeId: runtimeId ?? 'auto',
+    originalUrl,
+  });
+
+  const watcher: TeleportWatcher = {
+    startPattern,
+    returnPattern,
+    timeoutMs,
+    runtimeId,
+    phase: 'armed',
+    leaderTargetId,
+    originalLeaderUrl: originalUrl,
+  };
+
+  // Create a completion promise that blocks the current/next command.
+  // Attach a no-op catch to prevent unhandled rejection warnings when the
+  // watcher times out or errors without anyone awaiting the promise.
+  watcher.completionPromise = new Promise<string>((resolve, reject) => {
+    watcher.resolveBlock = resolve;
+    watcher.rejectBlock = reject;
+  });
+  watcher.completionPromise.catch(() => {
+    /* swallow unhandled rejections */
+  });
+
+  // Start polling the leader tab URL for start pattern match
+  watcher.pollInterval = setInterval(async () => {
+    if (watcher.phase !== 'armed') return;
+    const targetId = watcher.leaderTargetId;
+    if (!targetId) return;
+
+    try {
+      await browser.attachToPage(targetId);
+      const raw = await browser.evaluate('window.location.href');
+      const href = typeof raw === 'string' ? raw : String(raw);
+      log.debug('Polling leader tab URL', { targetId, href, startPattern: startPattern.source });
+      if (startPattern.test(href)) {
+        log.info('Teleport start pattern matched on leader');
+        log.debug('Teleport start pattern matched on leader details', {
+          targetId,
+          href,
+          startPattern: startPattern.source,
+        });
+        triggerTeleport(browser, state, watcher, href);
+      }
+    } catch (err) {
+      log.warn('Error polling leader tab URL', { targetId, error: String(err) });
+    }
+  }, 1000);
+
+  if (leaderTargetId) {
+    state.teleportWatchers.set(leaderTargetId, watcher);
+  }
+  return watcher;
+}
+
+/**
+ * Trigger the teleport flow: open the current URL on a follower,
+ * monitor the follower for returnPattern, capture cookies, inject on leader.
+ */
+async function triggerTeleport(
+  browser: BrowserAPI,
+  state: PlaywrightState,
+  watcher: TeleportWatcher,
+  triggerUrl: string
+): Promise<void> {
+  if (watcher.phase !== 'armed') return;
+  watcher.phase = 'teleporting';
+  log.info('Teleport triggered');
+  log.debug('Teleport trigger details', { triggerUrl });
+
+  // Stop polling the leader
+  if (watcher.pollInterval) {
+    clearInterval(watcher.pollInterval);
+    watcher.pollInterval = undefined;
+  }
+
+  try {
+    // 1. Capture cookies from leader tab (before switching transport)
+    let leaderCookies: Array<Record<string, unknown>> = [];
+    let leaderStorage = EMPTY_TELEPORT_STORAGE;
+    try {
+      const cookieResult = await browser.sendCDP('Network.getCookies', {});
+      leaderCookies = (cookieResult['cookies'] as Array<Record<string, unknown>>) ?? [];
+      log.info('Captured leader cookies for follower', { count: leaderCookies.length });
+    } catch (err) {
+      log.warn('Could not capture leader cookies', { error: String(err) });
+    }
+    try {
+      leaderStorage = await captureTeleportStorageSnapshot(browser, 'leader');
+      log.info('Captured leader storage for follower', {
+        totalEntries: countTeleportStorageEntries(leaderStorage),
+        localStorageCount: Object.keys(leaderStorage.localStorage).length,
+        sessionStorageCount: Object.keys(leaderStorage.sessionStorage).length,
+      });
+      log.debug('Captured leader storage for follower details', {
+        origin: leaderStorage.origin || '(unknown)',
+        localStorageCount: Object.keys(leaderStorage.localStorage).length,
+        sessionStorageCount: Object.keys(leaderStorage.sessionStorage).length,
+      });
+    } catch (err) {
+      log.warn('Could not capture leader storage', { error: String(err) });
+    }
+
+    // 2. Select follower
+    let runtimeId = watcher.runtimeId;
+    if (!runtimeId) {
+      const getBestFollower = getBestFollowerGetter?.();
+      if (!getBestFollower)
+        throw new Error('No follower selection available — not connected to a tray');
+      const best = getBestFollower();
+      if (!best) throw new Error('No followers connected to teleport to');
+      runtimeId = best.runtimeId;
+    }
+    log.info('Selected follower for teleport');
+    log.debug('Selected follower for teleport details', { runtimeId });
+
+    // 3. Open about:blank on the follower (we navigate manually after injecting cookies)
+    const rawTargetId = await browser.createRemotePage(runtimeId, 'about:blank');
+    // Ensure composite runtimeId:localTargetId format for attachToPage() to detect as remote
+    const followerTargetId = rawTargetId.includes(':')
+      ? rawTargetId
+      : `${runtimeId}:${rawTargetId}`;
+    watcher.followerTargetId = followerTargetId;
+    log.info('Opened follower tab for teleport');
+    log.debug('Opened follower tab for teleport details', { followerTargetId });
+
+    // 4. Attach to the follower tab (auto-swaps to RemoteCDPTransport)
+    await browser.attachToPage(followerTargetId);
+    log.info('Attached to follower tab for teleport');
+    log.debug('Attached to follower tab for teleport details', { followerTargetId });
+
+    // Enable Page events on the follower
+    await browser.sendCDP('Page.enable');
+
+    // 5. Inject leader cookies into follower before navigating
+    if (leaderCookies.length > 0) {
+      try {
+        await browser.sendCDP('Network.setCookies', { cookies: leaderCookies });
+        log.info('Injected leader cookies into follower', { count: leaderCookies.length });
+      } catch (err) {
+        log.warn('Could not inject leader cookies into follower', { error: String(err) });
+      }
+    }
+
+    // 6. Navigate follower directly to the intercepted auth/IdP URL so the human
+    // can continue the in-progress flow without re-entering the earlier step.
+    const followerUrl = triggerUrl;
+    watcher.removeFollowerStorageScript = await installTeleportStorageInitScript(
+      browser,
+      leaderStorage,
+      followerTargetId,
+      'follower'
+    );
+    log.info('Navigating follower to intercepted auth URL');
+    log.debug('Navigating follower to intercepted auth URL details', {
+      url: followerUrl,
+      originalLeaderUrl: watcher.originalLeaderUrl,
+      triggerUrl,
+      storageOrigin: leaderStorage.origin || '(unknown)',
+    });
+    await browser.sendCDP('Page.navigate', { url: followerUrl });
+
+    // 4. Start timeout timer
+    log.info('Starting teleport timeout timer', { timeoutMs: watcher.timeoutMs });
+    watcher.timeoutTimer = setTimeout(() => {
+      if (
+        watcher.phase === 'teleporting' ||
+        watcher.phase === 'waitingForAuth' ||
+        watcher.phase === 'waitingForReturn'
+      ) {
+        void handleTeleportTimeout(browser, watcher);
+      }
+    }, watcher.timeoutMs);
+
+    // 5. Monitor follower tab: first wait for auth redirect (startPattern), then watch for return
+    watcher.phase = 'waitingForAuth';
+    log.info('Teleport waiting for follower auth redirect');
+    log.debug('Teleport waiting for follower auth redirect details', {
+      startPattern: watcher.startPattern.source,
+    });
+    watcher.pollInterval = setInterval(async () => {
+      if (watcher.phase !== 'waitingForAuth' && watcher.phase !== 'waitingForReturn') return;
+      try {
+        await browser.attachToPage(followerTargetId);
+        const raw = await browser.evaluate('window.location.href');
+        const href = typeof raw === 'string' ? raw : String(raw);
+        if (!href) return;
+        if (watcher.lastFollowerUrl !== href) {
+          watcher.lastFollowerUrl = href;
+          log.debug('Follower teleport navigation', { href, phase: watcher.phase });
+        }
+
+        if (watcher.phase === 'waitingForAuth') {
+          // Phase 1: waiting for follower to redirect to auth (e.g. Okta)
+          if (watcher.startPattern.test(href)) {
+            watcher.phase = 'waitingForReturn';
+            log.info('Follower reached auth provider; waiting for return pattern');
+            log.debug('Follower reached auth provider details', {
+              href,
+              startPattern: watcher.startPattern.source,
+            });
+          } else {
+            log.debug('Waiting for auth redirect on follower', {
+              href,
+              startPattern: watcher.startPattern.source,
+            });
+          }
+          return; // Don't check return pattern yet
+        }
+
+        // Phase 2: waiting for return from auth
+        log.debug('Polling follower tab URL for return', {
+          href,
+          returnPattern: watcher.returnPattern.source,
+        });
+        if (shouldCaptureTeleportDiagnostics(href)) {
+          await logFollowerTeleportDiagnosticsOnce(browser, watcher, 'waiting-for-return');
+        }
+        if (watcher.returnPattern.test(href)) {
+          log.info('Follower return pattern matched after auth');
+          log.debug('Follower return pattern matched after auth details', {
+            href,
+            returnPattern: watcher.returnPattern.source,
+          });
+          captureCookiesAndComplete(browser, state, watcher, runtimeId!);
+        }
+      } catch (err) {
+        log.warn('Error polling follower tab URL', { error: String(err) });
+      }
+    }, 1000);
+  } catch (err) {
+    log.error('Teleport trigger failed', { error: String(err) });
+    await removeFollowerTeleportStorageScript(watcher, 'trigger-error');
+    watcher.phase = 'done';
+    cleanupTeleportWatcher(watcher);
+    watcher.rejectBlock?.(err instanceof Error ? err : new Error(String(err)));
+  }
+}
+
+/**
+ * Capture cookies + app state from the follower, inject into the leader, navigate leader to the final URL.
+ */
+async function captureCookiesAndComplete(
+  browser: BrowserAPI,
+  state: PlaywrightState,
+  watcher: TeleportWatcher,
+  runtimeId: string
+): Promise<void> {
+  if (watcher.phase !== 'teleporting' && watcher.phase !== 'waitingForReturn') return;
+  watcher.phase = 'capturing';
+  log.info('Capturing auth state from follower');
+  log.debug('Capturing auth state from follower details', {
+    followerTargetId: watcher.followerTargetId,
+    runtimeId,
+  });
+
+  // Stop polling and timeout
+  if (watcher.pollInterval) {
+    clearInterval(watcher.pollInterval);
+    watcher.pollInterval = undefined;
+  }
+  if (watcher.timeoutTimer) {
+    clearTimeout(watcher.timeoutTimer);
+    watcher.timeoutTimer = undefined;
+  }
+
+  try {
+    // 1. Wait for redirect chain to settle
+    log.info('Waiting for redirect chain to settle (2s)');
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+
+    // 2. Attach to follower and capture final URL + cookies
+    await browser.attachToPage(watcher.followerTargetId!);
+    let finalUrl: string | undefined;
+    try {
+      const raw = await browser.evaluate('window.location.href');
+      finalUrl = typeof raw === 'string' ? raw : String(raw);
+      log.debug('Captured final URL from follower', { finalUrl });
+    } catch (err) {
+      log.warn('Could not read follower URL (may be mid-navigation)', { error: String(err) });
+    }
+
+    // Log follower page content for debugging auth flow errors
+    try {
+      const bodyText = await browser.evaluate(
+        'document.body?.innerText?.substring(0, 500) || "(empty)"'
+      );
+      log.debug('Follower page content at capture time', { bodyText });
+    } catch (err) {
+      log.warn('Could not read follower page content', { error: String(err) });
+    }
+
+    const cookieResult = await browser.sendCDP('Network.getCookies');
+    const cookies = (cookieResult['cookies'] as Array<Record<string, unknown>>) ?? [];
+    const domainSummary =
+      cookies.length > 0
+        ? formatCookieDomainSummary(cookies as Array<{ domain?: string }>)
+        : 'none';
+    log.info('Captured cookies from follower', { count: cookies.length });
+    log.debug('Captured cookies from follower details', {
+      count: cookies.length,
+      domains: domainSummary,
+    });
+
+    let followerStorage = EMPTY_TELEPORT_STORAGE;
+    try {
+      followerStorage = await captureTeleportStorageSnapshot(browser, 'follower');
+      log.info('Captured follower storage for leader', {
+        totalEntries: countTeleportStorageEntries(followerStorage),
+        localStorageCount: Object.keys(followerStorage.localStorage).length,
+        sessionStorageCount: Object.keys(followerStorage.sessionStorage).length,
+      });
+      log.debug('Captured follower storage for leader details', {
+        origin: followerStorage.origin || '(unknown)',
+        localStorageCount: Object.keys(followerStorage.localStorage).length,
+        sessionStorageCount: Object.keys(followerStorage.sessionStorage).length,
+      });
+    } catch (err) {
+      log.warn('Could not capture follower storage', { error: String(err) });
+    }
+    const followerStorageEntries = countTeleportStorageEntries(followerStorage);
+
+    await logFollowerTeleportDiagnosticsOnce(browser, watcher, 'capture');
+    await removeFollowerTeleportStorageScript(watcher, 'capture');
+
+    // 3. Close follower tab
+    try {
+      await browser.closePage(watcher.followerTargetId!);
+      log.info('Closed follower tab after teleport');
+      log.debug('Closed follower tab after teleport details', {
+        followerTargetId: watcher.followerTargetId,
+      });
+    } catch (err) {
+      log.warn('Failed to close follower tab', { error: String(err) });
+    }
+
+    // 4. Switch back to the leader tab and inject cookies + app state.
+    // For cross-origin SSO handoffs, hydrate the captured app origin first so
+    // SPA auth caches are materialized on the right origin before landing.
+    const leaderTargetId = watcher.leaderTargetId;
+    const leaderStorageOrigin = followerStorage.origin || '';
+    const landingUrl = chooseTeleportLeaderLandingUrl(
+      leaderStorageOrigin,
+      watcher.originalLeaderUrl,
+      finalUrl
+    );
+    const originalLeaderOrigin = tryGetTeleportUrlOrigin(watcher.originalLeaderUrl);
+    const shouldHydrateLeaderOrigin =
+      !!leaderStorageOrigin && originalLeaderOrigin !== leaderStorageOrigin;
+    const hydrationUrl = shouldHydrateLeaderOrigin
+      ? buildTeleportStorageHydrationUrl(leaderStorageOrigin)
+      : null;
+    if (leaderTargetId) {
+      await browser.attachToPage(leaderTargetId);
+      if (cookies.length > 0) {
+        await browser.sendCDP('Network.setCookies', { cookies });
+        log.info('Injected cookies into leader tab', { count: cookies.length });
+        log.debug('Injected cookies into leader tab details', {
+          count: cookies.length,
+          leaderTargetId,
+        });
+      }
+      if (shouldHydrateLeaderOrigin && hydrationUrl) {
+        log.info('Hydrating leader storage origin before landing', {
+          storageEntries: followerStorageEntries,
+        });
+        log.debug('Hydrating leader storage origin before landing details', {
+          hydrationUrl,
+          landingUrl,
+          originalLeaderUrl: watcher.originalLeaderUrl,
+          finalUrl,
+          leaderTargetId,
+          storageOrigin: leaderStorageOrigin,
+          storageEntries: followerStorageEntries,
+        });
+        try {
+          await browser.navigate(hydrationUrl);
+          await applyTeleportStorageSnapshot(browser, followerStorage, 'leader');
+          if (landingUrl && landingUrl !== hydrationUrl) {
+            await browser.navigate(landingUrl);
+          }
+        } catch (err) {
+          log.warn('Direct leader origin hydration failed, falling back to init-script replay', {
+            error: String(err),
+          });
+          log.debug('Direct leader origin hydration fallback details', {
+            hydrationUrl,
+            landingUrl,
+            error: String(err),
+          });
+          const removeLeaderStorageScript = await installTeleportStorageInitScript(
+            browser,
+            followerStorage,
+            leaderTargetId,
+            'leader'
+          );
+          try {
+            if (landingUrl) {
+              await browser.navigate(landingUrl);
+            }
+          } finally {
+            await removeLeaderStorageScript?.();
+          }
+        }
+      } else {
+        const removeLeaderStorageScript = await installTeleportStorageInitScript(
+          browser,
+          followerStorage,
+          leaderTargetId,
+          'leader'
+        );
+        // Keep the replay script installed through the actual navigation/load so auth-state
+        // restoration is not a best-effort race against navigation returning.
+        try {
+          if (landingUrl) {
+            log.info('Navigating leader after auth-state injection', {
+              hasLandingUrl: true,
+              storageEntries: followerStorageEntries,
+            });
+            log.debug('Navigating leader after auth-state injection details', {
+              landingUrl,
+              originalLeaderUrl: watcher.originalLeaderUrl,
+              finalUrl,
+              leaderTargetId,
+              storageOrigin: followerStorage.origin || '(unknown)',
+              storageEntries: followerStorageEntries,
+            });
+            await browser.navigate(landingUrl);
+          }
+        } finally {
+          await removeLeaderStorageScript?.();
+        }
+      }
+    } else {
+      log.warn('No leader tab available for auth-state injection');
+    }
+
+    // 5. Complete
+    watcher.phase = 'done';
+    cleanupTeleportWatcher(watcher);
+    const domainNote =
+      cookies.length > 0
+        ? ` (${formatCookieDomainSummary(cookies as Array<{ domain?: string }>)})`
+        : '';
+    const storageNote =
+      followerStorageEntries > 0
+        ? ` + ${followerStorageEntries} storage entr${followerStorageEntries === 1 ? 'y' : 'ies'}`
+        : '';
+    const landedNote = landingUrl ? ` (navigated to ${landingUrl})` : '';
+    const resultMsg = `Teleported ${cookies.length} cookie(s)${domainNote}${storageNote} from ${runtimeId}${landedNote}`;
+    log.info('Teleport completed successfully', {
+      cookieCount: cookies.length,
+      storageEntries: followerStorageEntries,
+      landed: !!landingUrl,
+    });
+    log.debug('Teleport completed successfully details', { result: resultMsg });
+    watcher.resolveBlock?.(resultMsg);
+  } catch (err) {
+    log.error('Teleport auth-state capture failed', { error: String(err) });
+    await removeFollowerTeleportStorageScript(watcher, 'capture-error');
+    watcher.phase = 'done';
+    cleanupTeleportWatcher(watcher);
+    watcher.rejectBlock?.(err instanceof Error ? err : new Error(String(err)));
+  }
+}
+
+/**
+ * Check if a teleport watcher has been triggered and needs to block.
+ * Returns a result string if blocked, null if not blocking.
+ */
+async function checkTeleportBlock(state: PlaywrightState, targetId: string): Promise<string | null> {
+  const watcher = state.teleportWatchers.get(targetId);
+  if (!watcher) return null;
+  if (watcher.phase === 'done' || watcher.phase === 'timedOut') {
+    log.info('Clearing completed teleport watcher', { phase: watcher.phase, targetId });
+    state.teleportWatchers.delete(targetId);
+    return null;
+  }
+  if (
+    watcher.phase === 'teleporting' ||
+    watcher.phase === 'waitingForAuth' ||
+    watcher.phase === 'waitingForReturn' ||
+    watcher.phase === 'capturing'
+  ) {
+    log.info('Blocking command — teleport in progress', { phase: watcher.phase, targetId });
+    // Block until the teleport completes
+    try {
+      const result = await watcher.completionPromise!;
+      log.info('Teleport block resolved');
+      log.debug('Teleport block resolved details', { result });
+      state.teleportWatchers.delete(targetId);
+      return result;
+    } catch (err) {
+      log.warn('Teleport block rejected', { error: String(err), targetId });
+      state.teleportWatchers.delete(targetId);
+      throw err;
+    }
+  }
+  return null;
+}
+
+function formatHelp(commandName: string): string {
+  const aliases = PLAYWRIGHT_COMMAND_NAMES.filter((name) => name !== commandName);
+  return `Usage: ${commandName} <command> [args...]
+
+Commands:
+  open [url|/vfs/path] [--foreground|--fg] [--runtime=<id>]
+       [--teleport-start=<regex>] [--teleport-return=<regex>] [--timeout=<s>]
+                         Open a new tab (default: background). VFS paths are served via preview service worker.
+                         Use --runtime to open the tab on a remote tray runtime (e.g. --runtime=follower-abc).
+                         Use --teleport-start/--teleport-return to arm auth-state teleport.
+  goto|navigate <url> [--teleport-start=<regex>] [--teleport-return=<regex>]
+                         Navigate current tab to URL. Supports teleport flags.
+  teleport --start <regex> --return <regex> [--timeout=<s>] [--runtime=<id>]
+                         Arm a teleport watcher on the current tab. Triggers when the
+                         leader tab URL matches --start, opens the URL on a follower
+                         for human auth, then restores cookies + page storage when the
+                         follower URL matches --return.
+  teleport --off         Disarm the active teleport watcher.
+  teleport --list        List available follower runtimes for teleport.
+  click <ref>            Click element by ref (e.g. e5)
+  type <text>            Type text into focused element
+  fill <ref> <text>      Fill an input by ref with text
+  snapshot               Print accessibility tree with refs
+  screenshot [--filename=path] [--max-width=N] [--fullPage=true]
+                         Take screenshot. --max-width downscales the image
+                         if wider than N pixels (e.g. --max-width=1024).
+  eval <expression>      Evaluate JavaScript in tab
+  dblclick <ref> [btn]   Double-click element by ref
+  hover <ref>            Hover over element by ref
+  select <ref> <val>     Select value in <select> element
+  check <ref>            Check a checkbox/radio
+  uncheck <ref>          Uncheck a checkbox/radio
+  drag <start> <end>     Drag from one element to another
+  eval-file <path> [--output=<path>]
+                         Evaluate a JS file in the page. Reads the file from
+                         VFS, evaluates in browser context. With --output,
+                         saves the result to file instead of printing to stdout.
+  press <key>            Press a keyboard key (e.g. Enter, Tab)
+  resize <w> <h>         Resize viewport to width x height
+  dialog-accept [text]   Accept a JavaScript dialog
+  dialog-dismiss         Dismiss a JavaScript dialog
+  go-back                Navigate back
+  go-forward             Navigate forward
+  reload                 Reload current tab
+  tab-list               List open tabs
+  tab-new [url] [--foreground|--fg] [--runtime=<id>]
+       [--teleport-start=<regex>] [--teleport-return=<regex>] [--timeout=<s>]
+                         Open new tab (default: background). --runtime opens on a remote tray runtime.
+                         Supports teleport flags.
+  tab-close --tab=<id>   Close tab by targetId
+  record [url] [--filter=<js-expr>]
+                         Open tab with HAR recording enabled
+  stop-recording <id>    Stop recording and save HAR
+  cookie-list            List all cookies
+  cookie-get <name>      Get cookie by name
+  cookie-set <name> <value> [flags]
+                         Set a cookie (--domain, --path, --secure, --httpOnly, --expires)
+  cookie-delete <name>   Delete a cookie (--domain, --path)
+  cookie-clear           Clear all cookies
+  localstorage-list      List all localStorage entries
+  localstorage-get <key> Get localStorage value
+  localstorage-set <key> <value>
+                         Set localStorage value
+  localstorage-delete <key>
+                         Delete localStorage entry
+  localstorage-clear     Clear all localStorage
+  sessionstorage-list    List all sessionStorage entries
+  sessionstorage-get <key>
+                         Get sessionStorage value
+  sessionstorage-set <key> <value>
+                         Set sessionStorage value
+  sessionstorage-delete <key>
+                         Delete sessionStorage entry
+  sessionstorage-clear   Clear all sessionStorage
+  help                   Show this help message
+
+Aliases: ${aliases.join(', ')}`;
+}
+
+/** Parse --key=value flags from args, returning remaining positional args + flags. */
+function parseFlags(args: string[]): { positional: string[]; flags: Record<string, string> } {
+  const positional: string[] = [];
+  const flags: Record<string, string> = {};
+  for (const arg of args) {
+    if (arg.startsWith('--') && arg.includes('=')) {
+      const eq = arg.indexOf('=');
+      flags[arg.slice(2, eq)] = arg.slice(eq + 1);
+    } else if (arg.startsWith('--')) {
+      flags[arg.slice(2)] = 'true';
+    } else {
+      positional.push(arg);
+    }
+  }
+  return { positional, flags };
+}
+
+type CmdResult = { stdout: string; stderr: string; exitCode: number };
+
+/** Parse and validate the --tab <targetId> flag. Returns targetId or error message. */
+function requireTab(flags: Record<string, string>): { targetId: string } | { error: string } {
+  const tabId = flags['tab'];
+  if (!tabId) {
+    return { error: 'Error: --tab <targetId> is required. Run \'playwright-cli tab-list\' to get tab IDs.\n' };
+  }
+  return { targetId: tabId };
+}
+
+export function createPlaywrightCommand(
+  name: string,
+  browser: BrowserAPI | null | undefined,
+  fs: VirtualFS
+): Command {
+  const helpText = formatHelp(name);
+  const state = browser ? getSharedState(browser, fs) : null;
+
+  return defineCommand(name, async (args): Promise<CmdResult> => {
+    if (args.length === 0 || args[0] === 'help' || args[0] === '--help' || args[0] === '-h') {
+      return { stdout: helpText + '\n', stderr: '', exitCode: 0 };
+    }
+
+    if (!browser || !state) {
+      return {
+        stdout: '',
+        stderr: `${name}: browser APIs are unavailable in this environment\n`,
+        exitCode: 1,
+      };
+    }
+
+    const subcommand = args[0];
+    const subArgs = args.slice(1);
+    const { positional, flags } = parseFlags(subArgs);
+
+    // Note: Per-tab teleport blocking is now handled within command handlers
+    // via requireTab() -> browser.withTab() serialization
+
+    let result: CmdResult;
+    try {
+      switch (subcommand) {
+        case 'teleport': {
+          // --list: list available follower runtimes
+          if (flags['list'] === 'true') {
+            log.info('Listing available follower runtimes');
+            const getFollowers = getConnectedFollowersGetter?.();
+            if (!getFollowers) {
+              result = { stdout: '', stderr: 'teleport: not connected to a tray\n', exitCode: 1 };
+              break;
+            }
+            const followers = getFollowers();
+            if (followers.length === 0) {
+              result = { stdout: 'No followers connected to the tray.\n', stderr: '', exitCode: 0 };
+              break;
+            }
+            const lines = ['Available runtimes for teleport:'];
+            for (const f of followers) {
+              const parts = [f.runtimeId];
+              if (f.floatType) parts.push(`[${f.floatType}]`);
+              if (f.runtime) parts.push(`(${f.runtime})`);
+              if (f.lastActivity) {
+                const ago = Math.round((Date.now() - f.lastActivity) / 1000);
+                parts.push(`active ${ago}s ago`);
+              }
+              lines.push(`  ${parts.join(' ')}`);
+            }
+            result = { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+            break;
+          }
+
+          // --off: disarm (requires --tab)
+          if (flags['off'] === 'true') {
+            const tab = requireTab(flags);
+            if ('error' in tab) {
+              result = { stdout: '', stderr: tab.error, exitCode: 1 };
+              break;
+            }
+            log.info('Disarming teleport watcher via --off', { targetId: tab.targetId });
+            const watcher = state.teleportWatchers.get(tab.targetId);
+            if (watcher) {
+              cleanupTeleportWatcher(watcher);
+              state.teleportWatchers.delete(tab.targetId);
+            }
+            result = { stdout: 'Teleport watcher disarmed\n', stderr: '', exitCode: 0 };
+            break;
+          }
+
+          // Arm teleport watcher (requires --tab)
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+
+          const startPatternStr = flags['start'] || flags['teleport-start'];
+          const returnPatternStr = flags['return'] || flags['teleport-return'];
+          if (!startPatternStr || !returnPatternStr) {
+            result = {
+              stdout: '',
+              stderr: 'teleport requires --start <regex> and --return <regex>\n',
+              exitCode: 1,
+            };
+            break;
+          }
+          let startPattern: RegExp;
+          let returnPattern: RegExp;
+          try {
+            startPattern = new RegExp(startPatternStr);
+          } catch {
+            result = {
+              stdout: '',
+              stderr: `Invalid regex for --start: ${startPatternStr}\n`,
+              exitCode: 1,
+            };
+            break;
+          }
+          try {
+            returnPattern = new RegExp(returnPatternStr);
+          } catch {
+            result = {
+              stdout: '',
+              stderr: `Invalid regex for --return: ${returnPatternStr}\n`,
+              exitCode: 1,
+            };
+            break;
+          }
+          const timeoutSec = flags['timeout'] ? parseInt(flags['timeout'], 10) : 300;
+          if (isNaN(timeoutSec) || timeoutSec <= 0) {
+            result = { stdout: '', stderr: '--timeout must be a positive number\n', exitCode: 1 };
+            break;
+          }
+          const runtimeId = flags['runtime'];
+
+          // Disarm any existing watcher on this tab
+          const existingWatcher = state.teleportWatchers.get(tab.targetId);
+          if (existingWatcher) {
+            log.info('Disarming existing teleport watcher before re-arming', { targetId: tab.targetId });
+            cleanupTeleportWatcher(existingWatcher);
+            state.teleportWatchers.delete(tab.targetId);
+          }
+
+          // Capture the leader's current URL before the SSO redirect for post-teleport navigation
+          let leaderUrl: string | undefined;
+          try {
+            await browser.attachToPage(tab.targetId);
+            const raw = await browser.evaluate('window.location.href');
+            leaderUrl = typeof raw === 'string' ? raw : String(raw);
+          } catch {
+            /* best-effort */
+          }
+
+          log.info('Arming teleport via explicit subcommand', {
+            targetId: tab.targetId,
+            timeoutSec,
+            runtimeSelection: runtimeId ? 'explicit' : 'auto',
+          });
+          log.debug('Arming teleport via explicit subcommand details', {
+            targetId: tab.targetId,
+            startPattern: startPatternStr,
+            returnPattern: returnPatternStr,
+            timeoutSec,
+            runtimeId: runtimeId ?? 'auto',
+            leaderUrl,
+          });
+          armTeleportWatcher(
+            browser,
+            state,
+            startPattern,
+            returnPattern,
+            timeoutSec * 1000,
+            runtimeId,
+            leaderUrl,
+            tab.targetId
+          );
+          result = {
+            stdout: `Teleport armed on tab ${tab.targetId}. Will trigger when URL matches ${startPatternStr}\n`,
+            stderr: '',
+            exitCode: 0,
+          };
+          break;
+        }
+
+        case 'open':
+        case 'tab-new': {
+          const url = positional[0] || 'about:blank';
+          const runtimeFlag = flags['runtime'];
+          await resolveAppTabId(browser, state);
+
+          let targetId: string;
+          if (runtimeFlag) {
+            // Open a tab on a remote runtime within the tray
+            targetId = await browser.createRemotePage(runtimeFlag, url);
+          } else {
+            targetId = await browser.createPage(url);
+          }
+
+          // Arm teleport watcher if --teleport-start and --teleport-return are set
+          const teleStartStr = flags['teleport-start'];
+          const teleReturnStr = flags['teleport-return'];
+          if (teleStartStr && teleReturnStr) {
+            log.info('Arming teleport via open/tab-new flags');
+            log.debug('Arming teleport via open/tab-new flags details', {
+              targetId,
+              startPattern: teleStartStr,
+              returnPattern: teleReturnStr,
+            });
+            let teleStart: RegExp;
+            let teleReturn: RegExp;
+            try {
+              teleStart = new RegExp(teleStartStr);
+            } catch {
+              result = {
+                stdout: '',
+                stderr: `Invalid regex for --teleport-start: ${teleStartStr}\n`,
+                exitCode: 1,
+              };
+              break;
+            }
+            try {
+              teleReturn = new RegExp(teleReturnStr);
+            } catch {
+              result = {
+                stdout: '',
+                stderr: `Invalid regex for --teleport-return: ${teleReturnStr}\n`,
+                exitCode: 1,
+              };
+              break;
+            }
+            const teleTimeout = flags['timeout'] ? parseInt(flags['timeout'], 10) : 300;
+            const existingWatcher = state.teleportWatchers.get(targetId);
+            if (existingWatcher) {
+              cleanupTeleportWatcher(existingWatcher);
+              state.teleportWatchers.delete(targetId);
+            }
+            armTeleportWatcher(
+              browser,
+              state,
+              teleStart,
+              teleReturn,
+              teleTimeout * 1000,
+              flags['teleport-runtime'],
+              url,
+              targetId
+            );
+          }
+
+          result = {
+            stdout: `Opened ${url} in new tab [targetId: ${targetId}]\n`,
+            stderr: '',
+            exitCode: 0,
+          };
+          break;
+        }
+
+        case 'goto':
+        case 'navigate': {
+          if (positional.length === 0) {
+            result = { stdout: '', stderr: 'goto requires a URL\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const data = await browser.withTab(tab.targetId, async () => {
+            await browser.navigate(positional[0]);
+            return true;
+          });
+          state.snapshots.delete(tab.targetId);
+
+          // Arm teleport watcher if --teleport-start and --teleport-return are set
+          const teleStartStr = flags['teleport-start'];
+          const teleReturnStr = flags['teleport-return'];
+          if (teleStartStr && teleReturnStr) {
+            log.info('Arming teleport via goto/navigate flags');
+            log.debug('Arming teleport via goto/navigate flags details', {
+              targetId: tab.targetId,
+              startPattern: teleStartStr,
+              returnPattern: teleReturnStr,
+            });
+            let teleStart: RegExp;
+            let teleReturn: RegExp;
+            try {
+              teleStart = new RegExp(teleStartStr);
+            } catch {
+              result = {
+                stdout: '',
+                stderr: `Invalid regex for --teleport-start: ${teleStartStr}\n`,
+                exitCode: 1,
+              };
+              break;
+            }
+            try {
+              teleReturn = new RegExp(teleReturnStr);
+            } catch {
+              result = {
+                stdout: '',
+                stderr: `Invalid regex for --teleport-return: ${teleReturnStr}\n`,
+                exitCode: 1,
+              };
+              break;
+            }
+            const teleTimeout = flags['timeout'] ? parseInt(flags['timeout'], 10) : 300;
+            const existingWatcher = state.teleportWatchers.get(tab.targetId);
+            if (existingWatcher) {
+              cleanupTeleportWatcher(existingWatcher);
+              state.teleportWatchers.delete(tab.targetId);
+            }
+            armTeleportWatcher(
+              browser,
+              state,
+              teleStart,
+              teleReturn,
+              teleTimeout * 1000,
+              flags['teleport-runtime'],
+              positional[0],
+              tab.targetId
+            );
+          }
+
+          result = { stdout: `Navigated to ${positional[0]}\n`, stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'snapshot': {
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const { output } = await browser.withTab(tab.targetId, async () => {
+            return await takeSnapshot(browser, state, tab.targetId);
+          });
+          if (flags['filename']) {
+            await fs.writeFile(flags['filename'], output);
+            result = {
+              stdout: `Snapshot saved to ${flags['filename']}\n`,
+              stderr: '',
+              exitCode: 0,
+            };
+            break;
+          }
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'screenshot': {
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const output = await browser.withTab(tab.targetId, async () => {
+            // Ref-based screenshot
+            let clip: { x: number; y: number; width: number; height: number } | undefined;
+            if (positional[0] && positional[0].startsWith('e')) {
+              const snapshot = state.snapshots.get(tab.targetId);
+              if (!snapshot) {
+                throw new Error('No snapshot available. Run "snapshot" first.');
+              }
+
+              // Prefer backendNodeId for reliable element resolution
+              const backendNodeId = snapshot.refToBackendNodeId.get(positional[0]);
+              if (backendNodeId) {
+                const transport = browser.getTransport();
+                const sessionId = browser.getSessionId();
+                await transport.send('DOM.enable', {}, sessionId!);
+                await transport.send('Runtime.enable', {}, sessionId!);
+                const resolveResult = await transport.send(
+                  'DOM.resolveNode',
+                  { backendNodeId },
+                  sessionId!
+                );
+                const obj = resolveResult['object'] as { objectId?: string } | undefined;
+                if (obj?.objectId) {
+                  const boxResult = await transport.send(
+                    'Runtime.callFunctionOn',
+                    {
+                      objectId: obj.objectId,
+                      functionDeclaration: `function() {
+                      this.scrollIntoView({ block: 'center' });
+                      const r = this.getBoundingClientRect();
+                      return { x: r.x + window.scrollX, y: r.y + window.scrollY, width: r.width, height: r.height };
+                    }`,
+                      returnByValue: true,
+                    },
+                    sessionId!
+                  );
+                  const boxValue = (
+                    boxResult['result'] as {
+                      value?: { x: number; y: number; width: number; height: number };
+                    }
+                  )?.value;
+                  if (boxValue) {
+                    clip = boxValue;
+                  }
+                }
+              } else {
+                // Fall back to CSS selector
+                const selector = snapshot.refToSelector.get(positional[0]);
+                if (!selector) {
+                  throw new Error(`Unknown ref "${positional[0]}"`);
+                }
+                const rectJson = await browser.evaluate(
+                  `(function() {
+                    const el = document.querySelector(${JSON.stringify(selector.split(',')[0].trim())});
+                    if (!el) return null;
+                    el.scrollIntoView({ block: 'center' });
+                    const r = el.getBoundingClientRect();
+                    return JSON.stringify({ x: r.x + window.scrollX, y: r.y + window.scrollY, width: r.width, height: r.height });
+                  })()`
+                );
+                if (rectJson) {
+                  clip = JSON.parse(rectJson as string);
+                }
+              }
+            }
+
+            const maxWidth = flags['max-width'] ? parseInt(flags['max-width'], 10) : undefined;
+            const base64 = await browser.screenshot({
+              fullPage: flags['fullPage'] === 'true',
+              ...(clip ? { clip } : {}),
+              ...(maxWidth ? { maxWidth } : {}),
+            });
+            const savePath = flags['filename'] || `/tmp/screenshot-${Date.now()}.png`;
+            const bytes = base64ToBytes(base64);
+            await fs.writeFile(savePath, bytes);
+            // Archive screenshot to /.playwright/screenshots/
+            try {
+              await ensureSessionDirs(fs, state);
+              const archivePath = `/.playwright/screenshots/screenshot-${filenameSafeTimestamp(new Date())}.png`;
+              await fs.writeFile(archivePath, bytes);
+            } catch {
+              // Best-effort
+            }
+            const sizeKB = Math.round(bytes.length / 1024);
+            return `Screenshot saved to ${savePath} (${sizeKB} KB)`;
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'click': {
+          if (positional.length === 0) {
+            result = { stdout: '', stderr: 'click requires a ref (e.g. e5)\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const ref = positional[0];
+          const output = await browser.withTab(tab.targetId, async () => {
+            const snapshot = state.snapshots.get(tab.targetId);
+            if (!snapshot) {
+              throw new Error('No snapshot available. Run "snapshot" first.');
+            }
+
+            // Prefer backendNodeId for reliable clicking
+            const backendNodeId = snapshot.refToBackendNodeId.get(ref);
+            if (backendNodeId) {
+              await browser.clickByBackendNodeId(backendNodeId);
+              state.snapshots.delete(tab.targetId);
+              return `Clicked ${ref}`;
+            }
+
+            // Fall back to CSS selector
+            const selector = snapshot.refToSelector.get(ref);
+            if (!selector) {
+              throw new Error(`Unknown ref "${ref}". Available: ${[...snapshot.refToSelector.keys()].slice(0, 10).join(', ')}...`);
+            }
+            await browser.click(selector);
+            state.snapshots.delete(tab.targetId);
+            return `Clicked ${ref}`;
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'type': {
+          if (positional.length === 0) {
+            result = { stdout: '', stderr: 'type requires text\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const text = positional.join(' ');
+          await browser.withTab(tab.targetId, async () => {
+            await browser.type(text);
+          });
+          result = { stdout: `Typed: ${text}\n`, stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'fill': {
+          if (positional.length < 2) {
+            result = { stdout: '', stderr: 'fill requires <ref> <text>\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const ref = positional[0];
+          const fillText = positional.slice(1).join(' ');
+          const output = await browser.withTab(tab.targetId, async () => {
+            const snapshot = state.snapshots.get(tab.targetId);
+            if (!snapshot) {
+              throw new Error('No snapshot available. Run "snapshot" first.');
+            }
+
+            // Prefer backendNodeId for reliable element targeting
+            const backendNodeId = snapshot.refToBackendNodeId.get(ref);
+            if (backendNodeId) {
+              // Click to focus, then clear and type
+              await browser.clickByBackendNodeId(backendNodeId);
+              // Clear via DOM using resolved node
+              const transport = browser.getTransport();
+              const sessionId = browser.getSessionId();
+              await transport.send('DOM.enable', {}, sessionId!);
+              await transport.send('Runtime.enable', {}, sessionId!);
+              const resolveResult = await transport.send(
+                'DOM.resolveNode',
+                { backendNodeId },
+                sessionId!
+              );
+              const obj = resolveResult['object'] as { objectId?: string } | undefined;
+              if (obj?.objectId) {
+                await transport.send(
+                  'Runtime.callFunctionOn',
+                  {
+                    objectId: obj.objectId,
+                    functionDeclaration: CLEAR_FOCUSABLE_ELEMENT_FUNCTION,
+                    returnByValue: true,
+                  },
+                  sessionId!
+                );
+              }
+              await browser.type(fillText);
+              // Verify value and use native setter fallback for React-controlled inputs
+              if (obj?.objectId) {
+                const readResult = await transport.send(
+                  'Runtime.callFunctionOn',
+                  {
+                    objectId: obj.objectId,
+                    functionDeclaration: READ_INPUT_VALUE_FUNCTION,
+                    returnByValue: true,
+                  },
+                  sessionId!
+                );
+                const currentValue = (readResult['result'] as { value?: string })?.value ?? '';
+                if (currentValue !== fillText) {
+                  await transport.send(
+                    'Runtime.callFunctionOn',
+                    {
+                      objectId: obj.objectId,
+                      functionDeclaration: REACT_FILL_FALLBACK_FUNCTION,
+                      arguments: [{ value: fillText }],
+                      returnByValue: true,
+                    },
+                    sessionId!
+                  );
+                }
+              }
+              state.snapshots.delete(tab.targetId);
+              return `Filled ${ref} with: ${fillText}`;
+            }
+
+            // Fall back to CSS selector
+            const selector = snapshot.refToSelector.get(ref);
+            if (!selector) {
+              throw new Error(`Unknown ref "${ref}"`);
+            }
+            await browser.click(selector);
+            await browser.evaluate(
+              `(function() {
+                const el = document.querySelector(${JSON.stringify(selector)});
+                if (el) {
+                  return (${CLEAR_FOCUSABLE_ELEMENT_FUNCTION}).call(el);
+                }
+                return false;
+              })()`
+            );
+            await browser.type(fillText);
+            // Verify value and use native setter fallback for React-controlled inputs
+            {
+              const currentValue = (await browser.evaluate(
+                `(function() {
+                  const el = document.querySelector(${JSON.stringify(selector.split(',')[0].trim())});
+                  if (!el) return '';
+                  return (${READ_INPUT_VALUE_FUNCTION}).call(el);
+                })()`
+              )) as string;
+              if (currentValue !== fillText) {
+                await browser.evaluate(
+                  `(function() {
+                    const el = document.querySelector(${JSON.stringify(selector.split(',')[0].trim())});
+                    if (!el) return;
+                    (${REACT_FILL_FALLBACK_FUNCTION}).call(el, ${JSON.stringify(fillText)});
+                  })()`
+                );
+              }
+            }
+            state.snapshots.delete(tab.targetId);
+            return `Filled ${ref} with: ${fillText}`;
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'eval': {
+          if (positional.length === 0) {
+            result = { stdout: '', stderr: 'eval requires an expression\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const expression = positional.join(' ');
+          const output = await browser.withTab(tab.targetId, async () => {
+            const evalResult = await browser.evaluate(expression);
+            return typeof evalResult === 'string' ? evalResult : JSON.stringify(evalResult, null, 2);
+          });
+          result = { stdout: (output ?? 'undefined') + '\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'eval-file': {
+          if (positional.length === 0) {
+            result = { stdout: '', stderr: 'eval-file requires a file path\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const scriptPath = positional[0];
+          const outputPath = flags['output'];
+
+          let scriptContent: string;
+          try {
+            scriptContent = await fs.readTextFile(scriptPath);
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            result = {
+              stdout: '',
+              stderr: `eval-file: cannot read ${scriptPath}: ${msg}\n`,
+              exitCode: 1,
+            };
+            break;
+          }
+
+          const fileOutput = await browser.withTab(tab.targetId, async () => {
+            const fileEvalResult = await browser.evaluate(scriptContent);
+            return typeof fileEvalResult === 'string'
+              ? fileEvalResult
+              : JSON.stringify(fileEvalResult, null, 2);
+          });
+
+          if (outputPath) {
+            const outputContent = fileOutput ?? 'null';
+            await fs.writeFile(outputPath, outputContent);
+            const sizeKB = Math.round(new TextEncoder().encode(outputContent).length / 1024);
+            result = {
+              stdout: `Result saved to ${outputPath} (${sizeKB} KB)\n`,
+              stderr: '',
+              exitCode: 0,
+            };
+          } else {
+            result = { stdout: (fileOutput ?? 'undefined') + '\n', stderr: '', exitCode: 0 };
+          }
+          break;
+        }
+
+        case 'press': {
+          if (positional.length === 0) {
+            result = { stdout: '', stderr: 'press requires a key name\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const key = positional[0];
+          await browser.withTab(tab.targetId, async () => {
+            // Use CDP Input.dispatchKeyEvent
+            const transport = browser.getTransport();
+            const sessionId = browser.getSessionId();
+            await transport.send('Input.dispatchKeyEvent', { type: 'keyDown', key }, sessionId!);
+            await transport.send('Input.dispatchKeyEvent', { type: 'keyUp', key }, sessionId!);
+          });
+          result = { stdout: `Pressed ${key}\n`, stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'go-back': {
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          await browser.withTab(tab.targetId, async () => {
+            await browser.evaluate('history.back()');
+          });
+          state.snapshots.delete(tab.targetId);
+          result = { stdout: 'Navigated back\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'go-forward': {
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          await browser.withTab(tab.targetId, async () => {
+            await browser.evaluate('history.forward()');
+          });
+          state.snapshots.delete(tab.targetId);
+          result = { stdout: 'Navigated forward\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'reload': {
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          await browser.withTab(tab.targetId, async () => {
+            await browser.sendCDP('Page.reload');
+          });
+          result = { stdout: 'Reloaded\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'tab-list': {
+          const pages = await getActionablePages(browser, state);
+          if (pages.length === 0) {
+            result = { stdout: 'No tabs open\n', stderr: '', exitCode: 0 };
+            break;
+          }
+          const lines = pages.map((p) => {
+            const isActive = !!p.active;
+            const isRemote = p.targetId.includes(':');
+            const activeMarker = isActive ? ' (active)' : '';
+            const remoteSuffix = isRemote
+              ? ` [remote:${p.targetId.substring(0, p.targetId.indexOf(':'))}]`
+              : '';
+            return `[${p.targetId}] ${p.url} "${p.title}"${activeMarker}${remoteSuffix}`;
+          });
+          result = { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'tab-close':
+        case 'close': {
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          await browser.closePage(tab.targetId);
+          state.snapshots.delete(tab.targetId);
+          state.teleportWatchers.delete(tab.targetId);
+          result = { stdout: `Closed tab ${tab.targetId}\n`, stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'dblclick': {
+          if (positional.length === 0) {
+            result = { stdout: '', stderr: 'dblclick requires a ref (e.g. e5)\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const ref = positional[0];
+          const button = (positional[1] || 'left') as 'left' | 'right' | 'middle';
+          const output = await browser.withTab(tab.targetId, async () => {
+            const snapshot = state.snapshots.get(tab.targetId);
+            if (!snapshot) {
+              throw new Error('No snapshot available. Run "snapshot" first.');
+            }
+            const backendNodeId = snapshot.refToBackendNodeId.get(ref);
+            if (!backendNodeId) {
+              throw new Error(`Unknown ref "${ref}"`);
+            }
+            await browser.dblclickByBackendNodeId(backendNodeId, button);
+            state.snapshots.delete(tab.targetId);
+            return `Double-clicked ${ref}`;
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'hover': {
+          if (positional.length === 0) {
+            result = { stdout: '', stderr: 'hover requires a ref (e.g. e5)\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const ref = positional[0];
+          const output = await browser.withTab(tab.targetId, async () => {
+            const snapshot = state.snapshots.get(tab.targetId);
+            if (!snapshot) {
+              throw new Error('No snapshot available. Run "snapshot" first.');
+            }
+            const backendNodeId = snapshot.refToBackendNodeId.get(ref);
+            if (!backendNodeId) {
+              throw new Error(`Unknown ref "${ref}"`);
+            }
+            await browser.hoverByBackendNodeId(backendNodeId);
+            return `Hovered ${ref}`;
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'select': {
+          if (positional.length < 2) {
+            result = { stdout: '', stderr: 'select requires <ref> <value>\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const ref = positional[0];
+          const value = positional.slice(1).join(' ');
+          const output = await browser.withTab(tab.targetId, async () => {
+            const snapshot = state.snapshots.get(tab.targetId);
+            if (!snapshot) {
+              throw new Error('No snapshot available. Run "snapshot" first.');
+            }
+            const backendNodeId = snapshot.refToBackendNodeId.get(ref);
+            if (!backendNodeId) {
+              throw new Error(`Unknown ref "${ref}"`);
+            }
+            await browser.selectByBackendNodeId(backendNodeId, value);
+            state.snapshots.delete(tab.targetId);
+            return `Selected "${value}" on ${ref}`;
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'check': {
+          if (positional.length === 0) {
+            result = { stdout: '', stderr: 'check requires a ref (e.g. e5)\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const ref = positional[0];
+          const output = await browser.withTab(tab.targetId, async () => {
+            const snapshot = state.snapshots.get(tab.targetId);
+            if (!snapshot) {
+              throw new Error('No snapshot available. Run "snapshot" first.');
+            }
+            const backendNodeId = snapshot.refToBackendNodeId.get(ref);
+            if (!backendNodeId) {
+              throw new Error(`Unknown ref "${ref}"`);
+            }
+            const action = await browser.setCheckedByBackendNodeId(backendNodeId, true);
+            if (action === 'toggled') state.snapshots.delete(tab.targetId);
+            return action === 'already' ? `${ref} already checked` : `Checked ${ref}`;
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'uncheck': {
+          if (positional.length === 0) {
+            result = { stdout: '', stderr: 'uncheck requires a ref (e.g. e5)\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const ref = positional[0];
+          const output = await browser.withTab(tab.targetId, async () => {
+            const snapshot = state.snapshots.get(tab.targetId);
+            if (!snapshot) {
+              throw new Error('No snapshot available. Run "snapshot" first.');
+            }
+            const backendNodeId = snapshot.refToBackendNodeId.get(ref);
+            if (!backendNodeId) {
+              throw new Error(`Unknown ref "${ref}"`);
+            }
+            const action = await browser.setCheckedByBackendNodeId(backendNodeId, false);
+            if (action === 'toggled') state.snapshots.delete(tab.targetId);
+            return action === 'already' ? `${ref} already unchecked` : `Unchecked ${ref}`;
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'drag': {
+          if (positional.length < 2) {
+            result = { stdout: '', stderr: 'drag requires <startRef> <endRef>\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const startRef = positional[0];
+          const endRef = positional[1];
+          const output = await browser.withTab(tab.targetId, async () => {
+            const snapshot = state.snapshots.get(tab.targetId);
+            if (!snapshot) {
+              throw new Error('No snapshot available. Run "snapshot" first.');
+            }
+            const startNode = snapshot.refToBackendNodeId.get(startRef);
+            const endNode = snapshot.refToBackendNodeId.get(endRef);
+            if (!startNode) {
+              throw new Error(`Unknown ref "${startRef}"`);
+            }
+            if (!endNode) {
+              throw new Error(`Unknown ref "${endRef}"`);
+            }
+            await browser.dragByBackendNodeIds(startNode, endNode);
+            state.snapshots.delete(tab.targetId);
+            return `Dragged ${startRef} to ${endRef}`;
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'resize': {
+          if (positional.length < 2) {
+            result = { stdout: '', stderr: 'resize requires <width> <height>\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const w = parseInt(positional[0], 10);
+          const h = parseInt(positional[1], 10);
+          if (isNaN(w) || isNaN(h) || w <= 0 || h <= 0) {
+            result = {
+              stdout: '',
+              stderr: 'resize requires positive integer width and height\n',
+              exitCode: 1,
+            };
+            break;
+          }
+          await browser.withTab(tab.targetId, async () => {
+            const transport = browser.getTransport();
+            const sessionId = browser.getSessionId();
+            await transport.send(
+              'Emulation.setDeviceMetricsOverride',
+              {
+                width: w,
+                height: h,
+                deviceScaleFactor: 1,
+                mobile: false,
+              },
+              sessionId!
+            );
+          });
+          state.snapshots.delete(tab.targetId);
+          result = { stdout: `Resized viewport to ${w}x${h}\n`, stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'dialog-accept': {
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const promptText = positional.length > 0 ? positional.join(' ') : undefined;
+          await browser.withTab(tab.targetId, async () => {
+            const transport = browser.getTransport();
+            const sessionId = browser.getSessionId();
+            await transport.send('Page.enable', {}, sessionId!);
+            await transport.send(
+              'Page.handleJavaScriptDialog',
+              {
+                accept: true,
+                ...(promptText !== undefined ? { promptText } : {}),
+              },
+              sessionId!
+            );
+          });
+          result = {
+            stdout: `Accepted dialog${promptText ? ` with "${promptText}"` : ''}\n`,
+            stderr: '',
+            exitCode: 0,
+          };
+          break;
+        }
+
+        case 'dialog-dismiss': {
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          await browser.withTab(tab.targetId, async () => {
+            const transport = browser.getTransport();
+            const sessionId = browser.getSessionId();
+            await transport.send('Page.enable', {}, sessionId!);
+            await transport.send('Page.handleJavaScriptDialog', { accept: false }, sessionId!);
+          });
+          result = { stdout: 'Dismissed dialog\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        // --- Cookie commands (via CDP Network domain) ---
+
+        case 'cookie-list': {
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const output = await browser.withTab(tab.targetId, async () => {
+            const cdpCookies = await browser.sendCDP('Network.getCookies');
+            const cookies = (cdpCookies['cookies'] as Array<Record<string, unknown>>) ?? [];
+            if (cookies.length === 0) {
+              return 'No cookies';
+            }
+            const lines = cookies.map(
+              (c) =>
+                `${c['name']}=${c['value']}\tDomain=${c['domain']}\tPath=${c['path']}\tSecure=${c['secure']}\tHttpOnly=${c['httpOnly']}\tExpires=${c['expires']}`
+            );
+            return lines.join('\n');
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'cookie-get': {
+          if (positional.length === 0) {
+            result = { stdout: '', stderr: 'cookie-get requires a cookie name\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const cookieName = positional[0];
+          const output = await browser.withTab(tab.targetId, async () => {
+            const cdpGetCookies = await browser.sendCDP('Network.getCookies');
+            const cookies = (cdpGetCookies['cookies'] as Array<Record<string, unknown>>) ?? [];
+            const matched = cookies.filter((c) => c['name'] === cookieName);
+            if (matched.length === 0) {
+              throw new Error(`Cookie "${cookieName}" not found`);
+            }
+            const lines = matched.map(
+              (c) =>
+                `${c['name']}=${c['value']}\tDomain=${c['domain']}\tPath=${c['path']}\tSecure=${c['secure']}\tHttpOnly=${c['httpOnly']}\tExpires=${c['expires']}`
+            );
+            return lines.join('\n');
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'cookie-set': {
+          if (positional.length < 2) {
+            result = { stdout: '', stderr: 'cookie-set requires <name> <value>\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          await browser.withTab(tab.targetId, async () => {
+            const pageLocation = await getCurrentPageLocation(browser);
+            const params: Record<string, unknown> = {
+              name: positional[0],
+              value: positional[1],
+            };
+            if (flags['domain']) params['domain'] = flags['domain'];
+            if (flags['path']) params['path'] = flags['path'];
+            if (flags['secure'] === 'true') params['secure'] = true;
+            if (flags['httpOnly'] === 'true') params['httpOnly'] = true;
+            if (flags['expires']) params['expires'] = parseFloat(flags['expires']);
+            if (!params['domain'] && !params['path']) {
+              params['url'] = pageLocation.href;
+            }
+            await browser.sendCDP('Network.setCookie', params);
+          });
+          result = { stdout: `Cookie "${positional[0]}" set\n`, stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'cookie-delete': {
+          if (positional.length === 0) {
+            result = { stdout: '', stderr: 'cookie-delete requires a cookie name\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          await browser.withTab(tab.targetId, async () => {
+            const delParams: Record<string, unknown> = { name: positional[0] };
+            if (flags['domain']) delParams['domain'] = flags['domain'];
+            if (flags['path']) delParams['path'] = flags['path'];
+            if (!delParams['domain'] && !delParams['path']) {
+              const pageLocation = await getCurrentPageLocation(browser);
+              delParams['url'] = pageLocation.href;
+            }
+            await browser.sendCDP('Network.deleteCookies', delParams);
+          });
+          result = { stdout: `Cookie "${positional[0]}" deleted\n`, stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'cookie-clear': {
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          await browser.withTab(tab.targetId, async () => {
+            await browser.sendCDP('Network.clearBrowserCookies');
+          });
+          result = { stdout: 'All cookies cleared\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        // --- localStorage commands (via evaluate) ---
+
+        case 'localstorage-list': {
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const output = await browser.withTab(tab.targetId, async () => {
+            const raw = (await browser.evaluate(
+              'JSON.stringify(Object.entries(localStorage))'
+            )) as string;
+            const entries = JSON.parse(raw) as [string, string][];
+            if (entries.length === 0) {
+              return 'No localStorage entries';
+            }
+            const lines = entries.map(([k, v]) => `${k}=${v}`);
+            return lines.join('\n');
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'localstorage-get': {
+          if (positional.length === 0) {
+            result = { stdout: '', stderr: 'localstorage-get requires a key\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const output = await browser.withTab(tab.targetId, async () => {
+            const val = await browser.evaluate(
+              `localStorage.getItem(${JSON.stringify(positional[0])})`
+            );
+            if (val === null) {
+              throw new Error(`Key "${positional[0]}" not found in localStorage`);
+            }
+            return val;
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'localstorage-set': {
+          if (positional.length < 2) {
+            result = {
+              stdout: '',
+              stderr: 'localstorage-set requires <key> <value>\n',
+              exitCode: 1,
+            };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          await browser.withTab(tab.targetId, async () => {
+            await browser.evaluate(
+              `localStorage.setItem(${JSON.stringify(positional[0])}, ${JSON.stringify(positional.slice(1).join(' '))})`
+            );
+          });
+          result = { stdout: `localStorage "${positional[0]}" set\n`, stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'localstorage-delete': {
+          if (positional.length === 0) {
+            result = { stdout: '', stderr: 'localstorage-delete requires a key\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          await browser.withTab(tab.targetId, async () => {
+            await browser.evaluate(`localStorage.removeItem(${JSON.stringify(positional[0])})`);
+          });
+          result = { stdout: `localStorage "${positional[0]}" deleted\n`, stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'localstorage-clear': {
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          await browser.withTab(tab.targetId, async () => {
+            await browser.evaluate('localStorage.clear()');
+          });
+          result = { stdout: 'localStorage cleared\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        // --- sessionStorage commands (via evaluate) ---
+
+        case 'sessionstorage-list': {
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const output = await browser.withTab(tab.targetId, async () => {
+            const raw = (await browser.evaluate(
+              'JSON.stringify(Object.entries(sessionStorage))'
+            )) as string;
+            const entries = JSON.parse(raw) as [string, string][];
+            if (entries.length === 0) {
+              return 'No sessionStorage entries';
+            }
+            const lines = entries.map(([k, v]) => `${k}=${v}`);
+            return lines.join('\n');
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'sessionstorage-get': {
+          if (positional.length === 0) {
+            result = { stdout: '', stderr: 'sessionstorage-get requires a key\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const output = await browser.withTab(tab.targetId, async () => {
+            const val = await browser.evaluate(
+              `sessionStorage.getItem(${JSON.stringify(positional[0])})`
+            );
+            if (val === null) {
+              throw new Error(`Key "${positional[0]}" not found in sessionStorage`);
+            }
+            return val;
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'sessionstorage-set': {
+          if (positional.length < 2) {
+            result = {
+              stdout: '',
+              stderr: 'sessionstorage-set requires <key> <value>\n',
+              exitCode: 1,
+            };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          await browser.withTab(tab.targetId, async () => {
+            await browser.evaluate(
+              `sessionStorage.setItem(${JSON.stringify(positional[0])}, ${JSON.stringify(positional.slice(1).join(' '))})`
+            );
+          });
+          result = { stdout: `sessionStorage "${positional[0]}" set\n`, stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'sessionstorage-delete': {
+          if (positional.length === 0) {
+            result = { stdout: '', stderr: 'sessionstorage-delete requires a key\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          await browser.withTab(tab.targetId, async () => {
+            await browser.evaluate(`sessionStorage.removeItem(${JSON.stringify(positional[0])})`);
+          });
+          result = {
+            stdout: `sessionStorage "${positional[0]}" deleted\n`,
+            stderr: '',
+            exitCode: 0,
+          };
+          break;
+        }
+
+        case 'sessionstorage-clear': {
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          await browser.withTab(tab.targetId, async () => {
+            await browser.evaluate('sessionStorage.clear()');
+          });
+          result = { stdout: 'sessionStorage cleared\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'record': {
+          const url = positional[0] || 'about:blank';
+          const filterCode = flags['filter'];
+          await resolveAppTabId(browser, state);
+          const newTargetId = await browser.createPage(url);
+          const transport = browser.getTransport();
+          const attachResult = await transport.send('Target.attachToTarget', {
+            targetId: newTargetId,
+            flatten: true,
+          });
+          const sessionId = attachResult['sessionId'] as string;
+          if (!state.harRecorder) {
+            state.harRecorder = new HarRecorder(transport, fs);
+          }
+          const recordingId = await state.harRecorder.startRecording(
+            newTargetId,
+            sessionId,
+            filterCode
+          );
+          result = {
+            stdout: `Recording started (targetId: ${newTargetId}, recordingId: ${recordingId}) at ${url}\nHAR saved to /recordings/${recordingId}/\n`,
+            stderr: '',
+            exitCode: 0,
+          };
+          break;
+        }
+
+        case 'stop-recording': {
+          if (positional.length === 0) {
+            result = { stdout: '', stderr: 'stop-recording requires a recordingId\n', exitCode: 1 };
+            break;
+          }
+          const recordingId = positional[0];
+          if (!state.harRecorder) {
+            result = { stdout: '', stderr: `Recording not found: ${recordingId}\n`, exitCode: 1 };
+            break;
+          }
+          const recordingsPath = await state.harRecorder.stopRecording(recordingId);
+          result = {
+            stdout: `Recording stopped. HAR files saved to ${recordingsPath}\n`,
+            stderr: '',
+            exitCode: 0,
+          };
+          break;
+        }
+
+        default:
+          result = {
+            stdout: '',
+            stderr: `Unknown command: ${subcommand}\nRun "playwright-cli help" for usage.\n`,
+            exitCode: 1,
+          };
+          break;
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      result = { stdout: '', stderr: `Error: ${msg}\n`, exitCode: 1 };
+    }
+
+    // Post-command: session logging + auto-snapshot
+    const targetId = flags['tab'] ?? null;
+    let snapshotPath: string | null = null;
+
+    if (AUTO_SNAPSHOT_COMMANDS.has(subcommand) && result.exitCode === 0 && targetId) {
+      snapshotPath = await autoSaveSnapshot(browser, fs, state, targetId);
+    }
+
+    try {
+      await logSession(fs, state, {
+        command: subcommand,
+        args: subArgs,
+        result,
+        snapshotPath,
+        targetId,
+      });
+    } catch {
+      // Session logging is best-effort — never fail the command
+    }
+
+    return result;
+  });
+}

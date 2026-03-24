@@ -118,12 +118,12 @@ describe('my-command', () => {
 **When**: To ship executable scripts as part of a skill (e.g., a custom build tool, data processor).
 
 **Files to create**:
-- Create: `src/defaults/workspace/skills/my-skill/my-script.jsh`
+- Create: `packages/vfs-root/workspace/skills/my-skill/my-script.jsh`
 
 **Implementation**:
 
 ```javascript
-// src/defaults/workspace/skills/my-skill/my-script.jsh
+// packages/vfs-root/workspace/skills/my-skill/my-script.jsh
 // The script has access to:
 // - process: { argv, env, cwd(), exit(code), stdout.write(), stderr.write() }
 // - console: { log, info, warn, error }
@@ -331,7 +331,7 @@ describe('my_tool', () => {
 - Modify: `src/shell/supplemental-commands/playwright-command.ts`
 - Modify: `src/shell/supplemental-commands/serve-command.ts`
 - Modify: `src/shell/supplemental-commands/shared.ts` (shared preview/path helpers)
-- Update guidance if needed: `src/defaults/workspace/skills/playwright-cli/SKILL.md`
+- Update guidance if needed: `packages/vfs-root/workspace/skills/playwright-cli/SKILL.md`
 
 **Implementation**:
 
@@ -350,18 +350,18 @@ describe('my_tool', () => {
 
 ---
 
-## 5. Add a NanoClaw Tool
+## 5. Add a Scoop-Management Tool
 
 **When**: To add a messaging or multi-scoop management tool.
 
 **Files to modify**:
-- Modify: `src/scoops/nanoclaw-tools.ts`
+- Modify: `src/scoops/scoop-management-tools.ts`
 
 **Implementation**:
 
 ```typescript
-// src/scoops/nanoclaw-tools.ts — in createNanoClawTools()
-export function createNanoClawTools(config: NanoClawToolsConfig): ToolDefinition[] {
+// src/scoops/scoop-management-tools.ts — in createScoopManagementTools()
+export function createScoopManagementTools(config: ScoopManagementToolsConfig): ToolDefinition[] {
   const tools: ToolDefinition[] = [];
 
   // ... existing tools (send_message, feed_scoop, etc.) ...
@@ -401,7 +401,7 @@ export function createNanoClawTools(config: NanoClawToolsConfig): ToolDefinition
 **Interface**:
 
 ```typescript
-interface NanoClawToolsConfig {
+interface ScoopManagementToolsConfig {
   scoop: RegisteredScoop;
   onSendMessage: (text: string, sender?: string) => void;
   getScoops: () => RegisteredScoop[];
@@ -441,7 +441,7 @@ export interface ScoopContextCallbacks {
 
 ```typescript
 // src/scoops/orchestrator.ts
-const nanoClawConfig: NanoClawToolsConfig = {
+const scoopManagementConfig: ScoopManagementToolsConfig = {
   // ... existing config ...
   onMySpecialCallback: async (param) => {
     // Implementation
@@ -452,14 +452,14 @@ const nanoClawConfig: NanoClawToolsConfig = {
 **Test pattern**:
 
 ```typescript
-// src/scoops/nanoclaw-tools.test.ts
+// src/scoops/scoop-management-tools.test.ts
 import { describe, it, expect, vi } from 'vitest';
-import { createNanoClawTools } from './nanoclaw-tools.js';
+import { createScoopManagementTools } from './scoop-management-tools.js';
 
 describe('my_special_tool', () => {
   it('should execute correctly', async () => {
     const mockCallback = vi.fn().mockResolvedValue('result');
-    const tools = createNanoClawTools({
+    const tools = createScoopManagementTools({
       scoop: { isCone: true, folder: 'test' },
       onMySpecialCallback: mockCallback,
       // ... other config ...
@@ -473,7 +473,7 @@ describe('my_special_tool', () => {
 });
 ```
 
-**Reference file**: `src/scoops/nanoclaw-tools.ts`
+**Reference file**: `src/scoops/scoop-management-tools.ts`
 
 ---
 
@@ -642,8 +642,8 @@ describe('MyPanel', () => {
 **When**: To ship reusable agent instructions as a markdown file.
 
 **Files to create**:
-- Create: `src/defaults/workspace/skills/my-skill/SKILL.md`
-- Optional: `src/defaults/workspace/skills/my-skill/helper.jsh` (executable script)
+- Create: `packages/vfs-root/workspace/skills/my-skill/SKILL.md`
+- Optional: `packages/vfs-root/workspace/skills/my-skill/helper.jsh` (executable script)
 
 **Implementation**:
 
@@ -686,7 +686,7 @@ Skills are auto-discovered from native `/workspace/skills/` plus any accessible 
 **With executable script**:
 
 ```bash
-# src/defaults/workspace/skills/my-skill/SKILL.md
+# packages/vfs-root/workspace/skills/my-skill/SKILL.md
 ## Command: my-skill-cmd
 
 Run `my-skill-cmd arg1` to process files:
@@ -694,7 +694,7 @@ Run `my-skill-cmd arg1` to process files:
 ```
 
 ```javascript
-// src/defaults/workspace/skills/my-skill/my-skill-cmd.jsh
+// packages/vfs-root/workspace/skills/my-skill/my-skill-cmd.jsh
 const args = process.argv.slice(2);
 console.log(`Processing: ${args.join(', ')}`);
 ```
@@ -730,16 +730,16 @@ describe('loadSkills', () => {
 });
 ```
 
-**Reference file**: `src/scoops/skills.ts`, `src/defaults/workspace/skills/`
+**Reference file**: `src/scoops/skills.ts`, `packages/vfs-root/workspace/skills/`
 
 ---
 
 ## 8. Add a Provider
 
 Providers come from three sources:
-- **Pi-ai auto-discovery**: `getProviders()` returns all pi-ai providers automatically — no files needed. Filtered by `providers.build.json` (`include: ["*"]` = all, `exclude: ["*"]` = none).
-- **Built-in extensions**: `src/providers/built-in/*.ts` — only for providers needing custom `register()` functions (e.g., bedrock-camp). Also filtered by `providers.build.json`.
-- **External**: `providers/*.ts` (project root, mostly gitignored) — always included, never filtered. For custom OAuth providers, corporate proxies, etc. Some providers (e.g., `adobe.ts`) are explicitly un-gitignored and tracked in version control.
+- **Pi-ai auto-discovery**: `getProviders()` returns all pi-ai providers automatically — no files needed. Filtered by `packages/dev-tools/providers.build.json` (`include: ["*"]` = all, `exclude: ["*"]` = none).
+- **Built-in extensions**: `src/providers/built-in/*.ts` — only for providers needing custom `register()` functions (e.g., bedrock-camp). Also filtered by `packages/dev-tools/providers.build.json`.
+- **External**: `packages/webapp/providers/*.ts` (gitignored within the webapp package) — always included, never filtered. For custom OAuth providers, corporate proxies, etc. Some providers (e.g., `adobe.ts`) are explicitly un-gitignored and tracked in version control.
 
 Built-in and external modules export `config: ProviderConfig` and optionally `register(): void`.
 
@@ -751,10 +751,10 @@ Built-in and external modules export `config: ProviderConfig` and optionally `re
 
 **Only create a file in `src/providers/built-in/`** if the provider needs a custom `register()` function (e.g., custom stream functions). See `src/providers/built-in/bedrock-camp.ts` for an example.
 
-**For external providers** (typically gitignored), create `providers/my-provider.ts`:
+**For external providers** (typically gitignored), create `packages/webapp/providers/my-provider.ts`:
 
 ```typescript
-// providers/my-provider.ts
+// packages/webapp/providers/my-provider.ts
 import type { ProviderConfig } from '../src/providers/types.js';
 
 export const config: ProviderConfig = {
@@ -773,20 +773,20 @@ export function register(): void {
 }
 ```
 
-External providers in `providers/` are always included (never filtered by `providers.build.json`).
+External providers in `packages/webapp/providers/` are always included (never filtered by `packages/dev-tools/providers.build.json`).
 
 ### 8b. Add an OAuth Provider (Corporate Proxy / SSO)
 
 **When**: To support a provider that authenticates via OAuth (implicit grant or PKCE) — typically a corporate LLM proxy behind SSO.
 
 **Files to create**:
-- `providers/my-corp.ts` (external, gitignored)
-- `providers/my-corp-config.json` (optional, for client ID / endpoints)
+- `packages/webapp/providers/my-corp.ts` (external, gitignored)
+- `packages/webapp/providers/my-corp-config.json` (optional, for client ID / endpoints)
 
 **Implementation**:
 
 ```typescript
-// providers/my-corp.ts
+// packages/webapp/providers/my-corp.ts
 import type { ProviderConfig, OAuthLauncher } from '../src/providers/types.js';
 import { registerApiProvider, streamAnthropic } from '@mariozechner/pi-ai';
 import type { Api, Model, Context } from '@mariozechner/pi-ai';
@@ -795,10 +795,10 @@ import { saveOAuthAccount, getAccounts } from '../src/ui/provider-settings.js';
 const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
 
 // Load config from a gitignored JSON file
-const configFiles = import.meta.glob('/providers/my-corp-config.json', {
+const configFiles = import.meta.glob('/packages/webapp/providers/my-corp-config.json', {
   eager: true, import: 'default',
 }) as Record<string, { clientId: string; proxyEndpoint: string; redirectUri?: string; extensionRedirectUri?: string }>;
-const corpConfig = configFiles['/providers/my-corp-config.json'] ?? { clientId: '', proxyEndpoint: '' };
+const corpConfig = configFiles['/packages/webapp/providers/my-corp-config.json'] ?? { clientId: '', proxyEndpoint: '' };
 
 export const config: ProviderConfig = {
   id: 'my-corp',
@@ -857,7 +857,7 @@ export const config: ProviderConfig = {
 //   4. Extract new token from the redirect URL
 //   5. Save via saveOAuthAccount(), return the new token
 //
-// See providers/adobe.ts silentRenewToken() for a working example.
+// See packages/webapp/providers/adobe.ts silentRenewToken() for a working example.
 // If renewal fails, fall back to throwing "session expired".
 
 // Register custom stream function that proxies through the corporate endpoint
@@ -888,7 +888,7 @@ export function register(): void {
 - `src/providers/types.ts` — `ProviderConfig` (with `onOAuthLogin`, `onOAuthLogout`), `OAuthLauncher` type
 - `src/providers/oauth-service.ts` — `createOAuthLauncher()` factory (CLI popup vs extension chrome.identity)
 - `src/ui/provider-settings.ts` — Calls `config.onOAuthLogin(launcher, onSuccess)` when login button clicked
-- `src/cli/index.ts` — `/auth/callback` route (reads query params + fragment, postMessages to opener)
+- `packages/node-server/src/index.ts` — `/auth/callback` route (reads query params + fragment, postMessages to opener)
 - `src/extension/service-worker.ts` — `handleOAuthRequest()` (generic `chrome.identity.launchWebAuthFlow`)
 
 **Dual-mode redirect URIs**:

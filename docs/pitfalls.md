@@ -233,14 +233,14 @@ Host the real leader tray `WebSocket` in `src/extension/service-worker.ts` and r
 **The Problem**
 
 The codebase has two independent TypeScript builds:
-- **Browser bundle** (`tsconfig.json`): Everything except `src/cli/`
-- **CLI server** (`tsconfig.cli.json`): Only `src/cli/`
+- **Browser bundle** (`tsconfig.json`): Everything under `src/`
+- **CLI server** (`tsconfig.cli.json`): Only `packages/node-server/src/`
 
 Cross-importing breaks the build.
 
 | Violation | Problem |
 |-----------|---------|
-| Browser code imports `src/cli/` | CLI-only modules not bundled; runtime import error |
+| Browser code imports `packages/node-server/src/` | CLI-only modules not bundled; runtime import error |
 | CLI code imports `src/ui/`, `src/extension/` | Browser-only code (DOM, chrome.debugger) not available in Node |
 
 **How to Check**: `npm run typecheck` runs both configs. Fix: move shared code to `src/shared/` or duplicate type definitions.
@@ -263,10 +263,10 @@ Just-bash references Node builtins (`node:zlib`, `node:module`) that don't exist
 
 **The Solution**
 
-Add aliases in `vite.config.ts`:
+Add aliases in `packages/webapp/vite.config.ts`:
 
 ```typescript
-// vite.config.ts lines 78–86
+// packages/webapp/vite.config.ts
 resolve: {
   alias: {
     'node:zlib': resolve(__dirname, 'src/shims/empty.ts'),
@@ -279,7 +279,7 @@ resolve: {
 
 If a new npm dependency imports Node builtins:
 1. Create a stub file in `src/shims/` exporting required symbols
-2. Add alias in `vite.config.ts`
+2. Add alias in `packages/webapp/vite.config.ts`
 3. Test in both CLI and extension modes
 
 **Example**: `@smithy/node-http-handler` imports `stream`, `http`, `https`, `http2` (stubbed at `src/shims/{stream,http,https,http2}.ts`).
@@ -349,15 +349,14 @@ Build preview-sw.ts as a self-contained IIFE via esbuild (not Rollup).
 
 | Mode | Build | Output |
 |------|-------|--------|
-| **Dev** | Vite plugin `preview-sw-builder` (esbuild on-demand) | Served at `/preview-sw.js` |
-| **Prod** | `vite.config.ts` `closeBundle` hook (esbuild bundle) | Written to `dist/ui/preview-sw.js` |
+| **Prod** | `packages/webapp/vite.config.ts` `closeBundle` hook (esbuild bundle) | Written to `dist/ui/preview-sw.js` |
 
-Both use `format: 'iife'` to avoid code-splitting.
+Use `format: 'iife'` to avoid code-splitting.
 
 **When Modifying preview-sw.ts**
 1. Test in dev mode (`npm run dev:full`)
 2. Verify prod build includes bundle (`npm run build`, check `dist/ui/preview-sw.js` for LightningFS code)
-3. Update **both** hooks if adding imports
+3. Update the production bundle hook if adding imports
 
 ## Logging: createLogger Not console.*
 

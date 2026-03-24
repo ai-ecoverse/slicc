@@ -16,11 +16,11 @@
 
 | File                                                            | Action | Responsibility                                                                                                                  |
 | --------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| `src/defaults/shared/migrate-config.json`                       | Create | Default workspace config with `adobe/aem-boilerplate` repo and `currentMigration: null`                                         |
-| `src/defaults/shared/sprinkles/migrate-page/migrate-page.shtml` | Create | Sprinkle UI: 4 states (ready, migrating, done, error), bridge API integration, state recovery                                   |
-| `src/defaults/workspace/skills/migrate-page/SKILL.md`           | Modify | Add "Sprinkle Trigger" section (carve-out + lick handling) and `sprinkle send` / config-write commands at each phase transition |
+| `packages/vfs-root/shared/migrate-config.json`                       | Create | Default workspace config with `adobe/aem-boilerplate` repo and `currentMigration: null`                                         |
+| `packages/vfs-root/shared/sprinkles/migrate-page/migrate-page.shtml` | Create | Sprinkle UI: 4 states (ready, migrating, done, error), bridge API integration, state recovery                                   |
+| `packages/vfs-root/workspace/skills/migrate-page/SKILL.md`           | Modify | Add "Sprinkle Trigger" section (carve-out + lick handling) and `sprinkle send` / config-write commands at each phase transition |
 
-No TypeScript source changes needed. The `import.meta.glob('/src/defaults/**/*')` in `src/scoops/skills.ts` auto-discovers all files under `src/defaults/`.
+No TypeScript source changes needed. The `import.meta.glob('/packages/vfs-root/**/*')` in `src/scoops/skills.ts` auto-discovers all files under `packages/vfs-root/`.
 
 ---
 
@@ -30,7 +30,7 @@ No TypeScript source changes needed. The `import.meta.glob('/src/defaults/**/*')
 
 **Files:**
 
-- Create: `src/defaults/shared/migrate-config.json`
+- Create: `packages/vfs-root/shared/migrate-config.json`
 
 - [ ] **Step 1: Create the config file**
 
@@ -43,13 +43,13 @@ No TypeScript source changes needed. The `import.meta.glob('/src/defaults/**/*')
 
 - [ ] **Step 2: Verify the file is valid JSON**
 
-Run: `node -e "JSON.parse(require('fs').readFileSync('src/defaults/shared/migrate-config.json', 'utf8')); console.log('OK')"`
+Run: `node -e "JSON.parse(require('fs').readFileSync('packages/vfs-root/shared/migrate-config.json', 'utf8')); console.log('OK')"`
 Expected: `OK`
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add src/defaults/shared/migrate-config.json
+git add packages/vfs-root/shared/migrate-config.json
 git commit -m "feat(migrate): add default workspace config"
 ```
 
@@ -59,11 +59,11 @@ git commit -m "feat(migrate): add default workspace config"
 
 **Files:**
 
-- Create: `src/defaults/shared/sprinkles/migrate-page/migrate-page.shtml`
+- Create: `packages/vfs-root/shared/sprinkles/migrate-page/migrate-page.shtml`
 
 **Reference:**
 
-- Existing sprinkle: `src/defaults/shared/sprinkles/welcome/welcome.shtml`
+- Existing sprinkle: `packages/vfs-root/shared/sprinkles/welcome/welcome.shtml`
 - Bridge API: `slicc.lick()`, `slicc.readFile()`, `slicc.on('update')`, `slicc.getState()`, `slicc.setState()`, `slicc.close()`
 - Component classes: `.sprinkle-stack`, `.sprinkle-card`, `.sprinkle-btn`, `.sprinkle-btn--primary`, `.sprinkle-progress-bar`, `.sprinkle-status-light`, `.sprinkle-badge`, `.sprinkle-heading`, `.sprinkle-body`, `.sprinkle-detail`, `.sprinkle-row`, `.sprinkle-btn-group`
 - Design rule: No emoji in headings/labels. Use badges, status lights, and semantic color.
@@ -344,7 +344,7 @@ Appended as a `<script>` block after the HTML. Handles state transitions, bridge
 - [ ] **Step 3: Verify the build includes the new sprinkle**
 
 Run: `npm run build 2>&1 | tail -5`
-Expected: Build succeeds (exit 0). The `import.meta.glob('/src/defaults/**/*')` auto-discovers the file.
+Expected: Build succeeds (exit 0). The `import.meta.glob('/packages/vfs-root/**/*')` auto-discovers the file.
 
 Run: `npm run build:extension 2>&1 | tail -5`
 Expected: Build succeeds (exit 0).
@@ -357,7 +357,7 @@ Expected: Existing tests still pass. (New sprinkle doesn't break discovery — i
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/defaults/shared/sprinkles/migrate-page/migrate-page.shtml
+git add packages/vfs-root/shared/sprinkles/migrate-page/migrate-page.shtml
 git commit -m "feat(migrate): add migrate-page sprinkle with 4-state UI"
 ```
 
@@ -367,7 +367,7 @@ git commit -m "feat(migrate): add migrate-page sprinkle with 4-state UI"
 
 **Files:**
 
-- Modify: `src/defaults/workspace/skills/migrate-page/SKILL.md` (insert after line 23, before "## Four Phases")
+- Modify: `packages/vfs-root/workspace/skills/migrate-page/SKILL.md` (insert after line 23, before "## Four Phases")
 
 - [ ] **Step 1: Add the Sprinkle Trigger section**
 
@@ -450,13 +450,13 @@ write_file /shared/migrate-config.json
 
 - [ ] **Step 2: Verify SKILL.md is well-formed**
 
-Run: `head -80 src/defaults/workspace/skills/migrate-page/SKILL.md`
+Run: `head -80 packages/vfs-root/workspace/skills/migrate-page/SKILL.md`
 Expected: Frontmatter intact, "Sprinkle Trigger" section appears between "Triggers" and "Four Phases".
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add src/defaults/workspace/skills/migrate-page/SKILL.md
+git add packages/vfs-root/workspace/skills/migrate-page/SKILL.md
 git commit -m "feat(migrate): add sprinkle trigger and progress reporting to SKILL.md"
 ````
 
@@ -477,7 +477,7 @@ Expected: All tests pass.
 - [ ] **Step 3: Run production build**
 
 Run: `npm run build`
-Expected: Build succeeds. The new files in `src/defaults/shared/` are included via `import.meta.glob`.
+Expected: Build succeeds. The new files in `packages/vfs-root/shared/` are included via `import.meta.glob`.
 
 - [ ] **Step 4: Run extension build**
 

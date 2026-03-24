@@ -14,12 +14,12 @@
 | Core Agent | `src/core/` | pi-mono agent loop + streaming | `index.ts` | `agent.test.ts` |
 | Scoops Orchestrator | `src/scoops/` | Multi-agent system (cone + scoops) | `orchestrator.ts` | N/A |
 | UI | `src/ui/` | Chat, Terminal, Files, Memory panels | `main.ts` | `types.test.ts` |
-| CLI / Electron Node Runtime | `src/cli/` | Express server, Chrome launcher, Electron float entrypoint | `index.ts` | `electron-runtime.test.ts` |
+| CLI / Electron Node Runtime | `packages/node-server/src/` | Express server, Chrome launcher, Electron float entrypoint | `index.ts` | `electron-runtime.test.ts` |
 | Extension | `src/extension/` | Chrome Manifest V3 entry point | `service-worker.ts` | N/A |
-| Cloud Tray Hub | `src/worker/` | Cloudflare Worker + Durable Object control-plane skeleton + deployed smoke test | `index.ts` | `index.test.ts`, `deployed.test.ts` |
+| Cloud Tray Hub | `packages/cloudflare-worker/src/` | Cloudflare Worker + Durable Object control-plane skeleton + deployed smoke test | `index.ts` | `packages/cloudflare-worker/tests/index.test.ts`, `packages/cloudflare-worker/tests/deployed.test.ts` |
 | Providers | `src/providers/` | Provider types, OAuth service, auto-discovery, build-time filtering | `types.ts`, `oauth-service.ts`, `index.ts` | `index.test.ts`, `oauth-service.test.ts` |
 | Sprinkles | `src/ui/sprinkle-*.ts` | Composable `.shtml` panels: discovery, rendering, bridge API, picker UI | `sprinkle-manager.ts` | `sprinkle-manager.test.ts` |
-| Defaults | `src/defaults/` | Bundled VFS content: agent instructions, skills, sprinkles | N/A | N/A |
+| Defaults | `packages/vfs-root/` | Bundled VFS content: agent instructions, skills, sprinkles | N/A | N/A |
 | Types | `src/types/` | Type declarations for external submodules | `pi-coding-agent-compaction.d.ts` | N/A |
 
 ## Source File Tree
@@ -39,7 +39,7 @@
 | `offscreen-cdp-proxy.ts` | CDPTransport over chrome.runtime messages (offscreen → service worker → chrome.debugger) |
 | `panel-cdp-proxy.ts` | CDPTransport for side panel terminal (panel → offscreen → service worker → chrome.debugger) |
 
-### src/cli/ — CLI + Electron Runtimes
+### packages/node-server/src/ — CLI + Electron Runtimes
 
 | File | Purpose |
 |---|---|
@@ -103,7 +103,7 @@
 | File | Purpose |
 |---|---|
 | `types.ts` | `ProviderConfig` interface (id, name, isOAuth, onOAuthLogin, onOAuthLogout, getModelIds, modelOverrides), `ModelMetadata` interface (api, context_window, max_tokens, reasoning, input — snake_case wire format), `OAuthLauncher` type |
-| `index.ts` | Provider auto-discovery: pi-ai providers filtered by `providers.build.json`, built-in extensions via glob, external `/providers/*.ts` always included |
+| `index.ts` | Provider auto-discovery: pi-ai providers filtered by `packages/dev-tools/providers.build.json`, built-in extensions via glob, external `/packages/webapp/providers/*.ts` always included |
 | `oauth-service.ts` | Generic `OAuthLauncher` factory: CLI mode (popup → `/auth/callback` → postMessage) and extension mode (service worker → `chrome.identity.launchWebAuthFlow`) |
 | `built-in/bedrock-camp.ts` | AWS Bedrock CAMP provider — custom stream function via `register()` (only built-in that needs a file; pure-config providers use pi-ai auto-discovery) |
 | `built-in/azure-ai-foundry.ts` | Azure AI Foundry provider configuration (Claude on Azure) |
@@ -170,8 +170,8 @@ Native `/workspace/skills` entries are the only install-managed skills. Compatib
 | File | Purpose |
 |---|---|
 | `orchestrator.ts` | Manages scoop contexts, routes messages, handles responses, owns shared VirtualFS |
-| `scoop-context.ts` | Per-scoop agent instance (RestrictedFS, WasmShell, Agent, skills, NanoClaw tools); wires file tools + `bash` + `grep`/`find` + `javascript`, with browser automation via `playwright-cli` shell commands. Overflow recovery preserves ToolCall blocks in assistant messages to maintain API-required tool_use ↔ toolResult pairing |
-| `nanoclaw-tools.ts` | Scoop tools: `send_message`; cone-only tools: `list_scoops`, `scoop_scoop`, `feed_scoop`, `drop_scoop`, `update_global_memory` |
+| `scoop-context.ts` | Per-scoop agent instance (RestrictedFS, WasmShell, Agent, skills, scoop-management tools); wires file tools + `bash` + `grep`/`find` + `javascript`, with browser automation via `playwright-cli` shell commands. Overflow recovery preserves ToolCall blocks in assistant messages to maintain API-required tool_use ↔ toolResult pairing |
+| `scoop-management-tools.ts` | Scoop tools: `send_message`; cone-only tools: `list_scoops`, `scoop_scoop`, `feed_scoop`, `drop_scoop`, `update_global_memory` |
 | `db.ts` | IndexedDB (`slicc-groups` DB v3): scoops, messages, sessions, tasks, state, webhooks, crontasks stores |
 | `lick-manager.ts` | Browser-side lick management (webhooks + crontasks); all state in IndexedDB |
 | `scheduler.ts` | TaskScheduler for internal task scheduling (used by orchestrator) |
@@ -242,7 +242,7 @@ Native `/workspace/skills` entries are the only install-managed skills. Compatib
 |---|---|
 | `pi-coding-agent-compaction.d.ts` | Type declarations for pi-coding-agent compaction submodule (estimateTokens, shouldCompact, generateSummary) |
 
-### src/defaults/ — Bundled VFS Content
+### packages/vfs-root/ — Bundled VFS Content
 
 Default files bundled into the VFS at startup via `import.meta.glob`:
 
@@ -262,14 +262,14 @@ Default files bundled into the VFS at startup via `import.meta.glob`:
 
 | Target | tsconfig | Input | Output | Module Resolution |
 |---|---|---|---|---|
-| Browser bundle | `tsconfig.json` | `src/` except `src/cli/` | `dist/ui/` (via Vite) | bundler |
-| CLI + Electron Node target | `tsconfig.cli.json` | `src/cli/` | `dist/cli/` (via TSC) | NodeNext |
+| Browser bundle | `packages/webapp/vite.config.ts` + `tsconfig.json` | `packages/webapp/` | `dist/ui/` (via Vite) | bundler |
+| CLI + Electron Node target | `tsconfig.cli.json` | `packages/node-server/src/` | `dist/node-server/` (via TSC) | NodeNext |
 | Extension | `vite.config.extension.ts` | Browser bundle + extension entries | `dist/extension/` | bundler |
 
 ### Special Build Artifacts
 
-- **preview-sw.ts**: Built as standalone IIFE via esbuild (not rollup). Dev: Vite plugin bundles on-the-fly. Prod: `closeBundle` hook writes bundle.
-- **electron-overlay-entry.ts**: Built as standalone IIFE alongside `dist/ui/electron-overlay-entry.js`. Dev: Vite plugin serves it at `/electron-overlay-entry.js`. Prod: `closeBundle` writes the bundle for Electron reinjection.
+- **preview-sw.ts**: Built as standalone IIFE via esbuild (not rollup) from `packages/webapp/vite.config.ts` during the production webapp build.
+- **electron-overlay-entry.ts**: Built as standalone IIFE alongside `dist/ui/electron-overlay-entry.js` from `packages/webapp/vite.config.ts` for Electron reinjection.
 - **Extension assets**: Pyodide (~13MB), ImageMagick WASM, `sandbox.html`, `voice-popup.html`, `offscreen.html` copied to `dist/extension/` by `vite.config.extension.ts`. The `offscreen.html` entry point runs the agent orchestrator in an unrestricted context separate from the side panel.
 - **Node shims**: `src/shims/` provide no-op implementations for Node modules (just-bash references them).
 
@@ -470,7 +470,7 @@ Scoop removal / app clear
 | Manage scoops (create/delete/list) | `src/scoops/orchestrator.ts` |
 | Persist/restore scoop conversation history | `src/scoops/orchestrator.ts` (creates SessionStore, passes to ScoopContext, cleans up on unregister/clear) |
 | Change scoop isolation/filesystem | `src/scoops/scoop-context.ts` |
-| Add NanoClaw tools (messaging, scoop management) | `src/scoops/nanoclaw-tools.ts` |
+| Add scoop-management tools (messaging, scoop management) | `src/scoops/scoop-management-tools.ts` |
 | Change scoop database schema | `src/scoops/db.ts` |
 | Manage webhooks/crontasks | `src/scoops/lick-manager.ts` |
 | Change skill loading | `src/scoops/skills.ts` |
@@ -493,10 +493,10 @@ Scoop removal / app clear
 
 | I need to... | Modify |
 |---|---|
-| Add an API endpoint | `src/cli/index.ts` |
-| Change Chrome launch options | `src/cli/index.ts` |
-| Change WebSocket proxy behavior | `src/cli/index.ts` |
-| Change request logging | `src/cli/index.ts` |
+| Add an API endpoint | `packages/node-server/src/index.ts` |
+| Change Chrome launch options | `packages/node-server/src/index.ts` |
+| Change WebSocket proxy behavior | `packages/node-server/src/index.ts` |
+| Change request logging | `packages/node-server/src/index.ts` |
 
 ### Extension Manifest
 
@@ -527,18 +527,18 @@ Scoop removal / app clear
 | Add sprinkle picker UI features | `src/ui/sprinkle-picker.ts` |
 | Change extension sprinkle message proxy | `src/extension/sprinkle-proxy.ts` |
 | Change `sprinkle` shell command | `src/shell/supplemental-commands/sprinkle-command.ts` |
-| Add a default sprinkle | `src/defaults/shared/sprinkles/` |
+| Add a default sprinkle | `packages/vfs-root/shared/sprinkles/` |
 
 ### Providers
 
 | I need to... | Modify |
 |---|---|
 | Add an API-key provider (built-in, with custom stream) | `src/providers/built-in/<provider>.ts` (exports `config: ProviderConfig` + `register()`; pure-config providers need no file — pi-ai auto-discovers them) |
-| Add an external/custom provider | `providers/<provider>.ts` (root, gitignored, auto-discovered) |
+| Add an external/custom provider | `packages/webapp/providers/<provider>.ts` (gitignored in the webapp package, auto-discovered) |
 | Add an OAuth provider | Same as above, but set `isOAuth: true` + `onOAuthLogin`/`onOAuthLogout` on the config |
 | Change the OAuth transport (popup, chrome.identity) | `src/providers/oauth-service.ts` |
 | Override model capabilities (context window, max tokens) | `modelOverrides` on `ProviderConfig` (static) or return metadata fields from `getModelIds()` (dynamic). Three-layer merge: pi-ai → modelOverrides → getModelIds |
 | Add OpenAI-compatible model support | Return `api: 'openai'` in `getModelIds()` metadata — stream routing switches to `streamOpenAICompletions` automatically |
 | Change provider types (ProviderConfig, OAuthLauncher, ModelMetadata) | `src/providers/types.ts` |
-| Change OAuth callback page (CLI mode) | `src/cli/index.ts` (`/auth/callback` route) |
+| Change OAuth callback page (CLI mode) | `packages/node-server/src/index.ts` (`/auth/callback` route) |
 | Change provider settings UI / model resolution | `src/ui/provider-settings.ts` |

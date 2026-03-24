@@ -61,11 +61,11 @@ Local unpacked builds now produce the same extension ID
 ### Task 2: Update Adobe IMS redirect URI
 
 **Files:**
-- Modify: `providers/adobe-config.json:4` (the `extensionRedirectUri` field)
+- Modify: `packages/webapp/providers/adobe-config.json:4` (the `extensionRedirectUri` field)
 
 - [ ] **Step 1: Update the redirect URI**
 
-In `providers/adobe-config.json`, change line 4:
+In `packages/webapp/providers/adobe-config.json`, change line 4:
 
 Old:
 ```json
@@ -79,7 +79,7 @@ New:
 
 - [ ] **Step 2: Verify the fallback in adobe.ts is consistent**
 
-Read `providers/adobe.ts:231-233`. The fallback constructs the redirect URI dynamically:
+Read `packages/webapp/providers/adobe.ts:231-233`. The fallback constructs the redirect URI dynamically:
 ```typescript
 const redirectUri = isExtension
   ? (adobeConfig.extensionRedirectUri ?? `https://${(chrome as any).runtime.id}.chromiumapp.org/`)
@@ -99,7 +99,7 @@ Expected: All four pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add providers/adobe-config.json
+git add packages/webapp/providers/adobe-config.json
 git commit -m "fix: update Adobe IMS redirect URI for CWS extension ID
 
 The extension is now published to the Chrome Web Store with ID
@@ -112,9 +112,9 @@ to match."
 ### Task 3: Simplify Sliccstart extension installation to CWS
 
 **Files:**
-- Modify: `sliccstart/Sliccstart/Models/SliccProcess.swift:101-119`
-- Modify: `sliccstart/Sliccstart/Views/AppListView.swift:11,65-87`
-- Modify: `sliccstart/Sliccstart/SliccstartApp.swift:86-100`
+- Modify: `packages/swift-launcher/Sliccstart/Models/SliccProcess.swift:101-119`
+- Modify: `packages/swift-launcher/Sliccstart/Views/AppListView.swift:11,65-87`
+- Modify: `packages/swift-launcher/Sliccstart/SliccstartApp.swift:86-100`
 
 - [ ] **Step 1: Replace `guidedInstallExtension` with `openChromeWebStore` in SliccProcess.swift**
 
@@ -245,7 +245,7 @@ CWS is now the distribution path — local extension builds are only needed for 
 - [ ] **Step 5: Verify Swift builds**
 
 ```bash
-cd sliccstart && swift build 2>&1 | tail -5
+cd packages/swift-launcher && swift build 2>&1 | tail -5
 ```
 
 Expected: Build succeeds with no errors.
@@ -253,7 +253,7 @@ Expected: Build succeeds with no errors.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add sliccstart/
+git add packages/swift-launcher/
 git commit -m "feat(sliccstart): replace Load Unpacked flow with Chrome Web Store link
 
 The extension is now on the Chrome Web Store. Replace the manual

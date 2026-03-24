@@ -1,6 +1,6 @@
 # Tools Reference
 
-Complete reference for the tool modules and active agent tool surface in SLICC. `src/tools/` contains file, bash, browser, search, and javascript tool factories, but the current scoop/cone surface wired in `src/scoops/scoop-context.ts` is: `read_file`, `write_file`, `edit_file`, `bash`, `javascript`, and NanoClaw tools. Browser automation and search for active scoop agents now run through shell commands via `bash` (`playwright-cli` / `playwright` / `puppeteer`, plus shell-native `rg` / `grep` / `find`).
+Complete reference for the tool modules and active agent tool surface in SLICC. `src/tools/` contains file, bash, browser, search, and javascript tool factories, but the current scoop/cone surface wired in `src/scoops/scoop-context.ts` is: `read_file`, `write_file`, `edit_file`, `bash`, `javascript`, and scoop-management tools. Browser automation and search for active scoop agents now run through shell commands via `bash` (`playwright-cli` / `playwright` / `puppeteer`, plus shell-native `rg` / `grep` / `find`).
 
 ---
 
@@ -384,11 +384,11 @@ rg "createBashTool" /workspace/src --type ts
 
 ---
 
-## NanoClaw Tools (Multi-Scoop)
+## Scoop Management Tools (Multi-Scoop)
 
-NanoClaw tools are MCP-style tools for messaging and scoop management.
+These tools are MCP-style tools for messaging and scoop management.
 
-**File**: `src/scoops/nanoclaw-tools.ts`
+**File**: `src/scoops/scoop-management-tools.ts`
 
 ### send_message
 
@@ -483,12 +483,12 @@ Cone-only. Update the shared global memory file (`/shared/CLAUDE.md`).
 | write_file | ✓ | ✓ (restricted) | Active in `ScoopContext` |
 | edit_file | ✓ | ✓ (restricted) | Active in `ScoopContext` |
 | javascript | ✓ | ✓ | Active in `ScoopContext` |
-| **send_message** | ✓ | ✓ | NanoClaw tool |
-| **list_scoops** | ✓ | ✗ | Cone-only NanoClaw tool |
-| **scoop_scoop** | ✓ | ✗ | Cone-only NanoClaw tool |
-| **feed_scoop** | ✓ | ✗ | Cone-only NanoClaw tool |
-| **drop_scoop** | ✓ | ✗ | Cone-only NanoClaw tool |
-| **update_global_memory** | ✓ | ✗ | Cone-only NanoClaw tool |
+| **send_message** | ✓ | ✓ | Scoop-management tool |
+| **list_scoops** | ✓ | ✗ | Cone-only scoop-management tool |
+| **scoop_scoop** | ✓ | ✗ | Cone-only scoop-management tool |
+| **feed_scoop** | ✓ | ✗ | Cone-only scoop-management tool |
+| **drop_scoop** | ✓ | ✗ | Cone-only scoop-management tool |
+| **update_global_memory** | ✓ | ✗ | Cone-only scoop-management tool |
 
 ---
 
@@ -576,4 +576,4 @@ Both modes share the same unified VirtualFS and tool interfaces.
 - **AgentTool**: `src/core/types.ts` (lines 120–128)
 - **Tool adapter**: `src/core/tool-adapter.ts`
 - **Context compaction**: `src/core/context-compaction.ts`
-- **All tools**: `src/tools/*.ts`, `src/scoops/nanoclaw-tools.ts`
+- **All tools**: `src/tools/*.ts`, `src/scoops/scoop-management-tools.ts`
