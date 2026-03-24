@@ -1,61 +1,76 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This root file is the repo navigation hub. Keep package-specific architecture and implementation detail in the nearest package `CLAUDE.md`, and keep fast-changing how-to material in `docs/`.
 
-Keep this root file high-signal and low-churn. Put fast-changing implementation detail in `docs/architecture.md`, `docs/development.md`, `docs/shell-reference.md`, or feature-local docs instead of expanding this file.
+## Module Map
 
-## Build and Development Commands
+### Packages
 
-```bash
-npm run dev:full        # Full dev mode: Vite HMR + Chrome + CDP proxy (port 5710)
-npm run dev:full -- --prompt "mount /tmp"  # Auto-submit prompt (clears history/fs first)
-npm run dev:electron -- /Applications/Slack.app  # Electron attach mode
-npm run dev             # Same as dev:full (Vite HMR + Chrome + CDP proxy)
-npm run build           # Production build (UI via Vite + CLI/Electron via TSC)
-npm run build:extension # Build extension into dist/extension/
-npm run package:release # Package deterministic release artifacts into artifacts/release/
-npm run typecheck       # Typecheck browser + Node targets
-npm run test            # Vitest run (all tests)
-npx vitest run src/fs/virtual-fs.test.ts  # Single test file
-```
+| Path | Purpose |
+| --- | --- |
+| `packages/webapp/` | Browser app core: UI, VFS, shell, CDP, tools, providers, skills, scoops |
+| `packages/chrome-extension/` | Manifest V3 extension entry points, HTML shells, and message bridges |
+| `packages/cloudflare-worker/` | Tray hub worker for session coordination, signaling, and TURN credentials |
+| `packages/node-server/` | Node.js CLI/Electron server: Chrome launch, CDP proxy, dev serving |
+| `packages/vfs-root/` | Default VFS content copied into the app on init/reset |
+| `packages/swift-launcher/` | Native macOS SwiftUI launcher app (`Sliccstart`) |
+| `packages/swift-server/` | Native macOS Hummingbird server (`slicc-server`) |
+| `packages/dev-tools/` | Repo-level tooling guidance for build helpers, QA setup, configs, and test utilities |
+| `packages/assets/` | Shared static files (logos, fonts, favicon) used by multiple packages |
 
-### Tray / QA / Worker Commands
+### Other Top-Level Directories
 
-```bash
-npm run qa:setup        # Build dist/extension and scaffold dedicated leader/follower/extension Chrome QA profiles
-npm run qa:leader       # Launch CLI dev mode with the isolated leader Chrome profile, auto-connected to staging tray hub
-npm run qa:follower     # Launch CLI dev mode with the isolated follower Chrome profile
-npm run qa:extension    # Rebuild/load the unpacked extension in the isolated extension Chrome profile
-npx wrangler dev        # Run the Cloudflare Worker tray hub locally (requires Wrangler)
-npx wrangler deploy --env staging  # Deploy the staging tray hub
-npx wrangler deploy     # Deploy the Cloudflare Worker tray hub
-WORKER_BASE_URL=https://... npx vitest run src/worker/deployed.test.ts  # Smoke-test a deployed tray hub
-```
+| Path | Purpose |
+| --- | --- |
+| `docs/` | Long-form developer and agent reference docs, including screenshots and other docs assets |
+| `tests/` | TypeScript/Vitest and integration tests mirrored by subsystem |
+| `dist/` | Generated build output; do not hand-edit |
 
-### Automated Testing with `--prompt`
-
-The `--prompt` flag auto-submits a prompt when the UI loads, clearing chat history and filesystem first. Useful for testing agent flows without manual interaction:
+## Top-Level Commands
 
 ```bash
-npm run dev:full -- --prompt "mount /tmp"     # Test mount approval UI
-npm run dev:full -- --prompt "ls /workspace"  # Test any agent command
+npm run build           # Production build (UI + CLI/Electron)
+npm run test            # Vitest run
+npm run typecheck       # Browser + Node typecheck
+npm run build:extension # Chrome extension build into dist/extension/
 ```
 
-Console logs from the browser are forwarded to the CLI terminal for debugging.
+For runtime-specific commands, use the nearest guide:
 
-### CDP Prompt Tool (`tools/slicc-prompt.mjs`)
+- [`packages/webapp/CLAUDE.md`](packages/webapp/CLAUDE.md)
+- [`packages/chrome-extension/CLAUDE.md`](packages/chrome-extension/CLAUDE.md)
+- [`packages/cloudflare-worker/CLAUDE.md`](packages/cloudflare-worker/CLAUDE.md)
+- [`packages/node-server/CLAUDE.md`](packages/node-server/CLAUDE.md)
+- [`packages/vfs-root/CLAUDE.md`](packages/vfs-root/CLAUDE.md)
+- [`packages/swift-launcher/CLAUDE.md`](packages/swift-launcher/CLAUDE.md)
+- [`packages/swift-server/CLAUDE.md`](packages/swift-server/CLAUDE.md)
+- [`packages/dev-tools/CLAUDE.md`](packages/dev-tools/CLAUDE.md)
+- [`docs/CLAUDE.md`](docs/CLAUDE.md)
 
-Submits prompts to a running SLICC instance via CDP and captures the agent's response. Useful for automated testing and debugging without manual UI interaction:
+## Cross-Cutting Principles
 
-```bash
-node tools/slicc-prompt.mjs "run playwright-cli tab-list"          # Submit prompt, wait for response
-node tools/slicc-prompt.mjs --read-last                            # Read last assistant message
-node tools/slicc-prompt.mjs "open https://example.com" --timeout 60  # Custom timeout (default 120s)
-node tools/slicc-prompt.mjs "hello" --cdp-port 9222                # Custom CDP port (default 9222)
-node tools/slicc-prompt.mjs --clear "test something"               # Clear chat first
-```
+### Philosophy
 
-Output is JSON: `{ prompt, response, durationMs, success }`. Requires a running SLICC server with Chrome CDP accessible.
+1. **The Claw Pattern**: SLICC is a persistent orchestration layer over LLM agents, centered in the browser.
+2. **Agents Love the CLI**: Prefer shell commands and composable command surfaces over bespoke tools.
+3. **The Browser is the OS**: Keep state client-side and use server code only for work browsers cannot do themselves.
+
+### Ice Cream Vocabulary
+
+- **Cone**: the main agent.
+- **Scoops**: isolated sub-agents with sandboxed filesystems.
+- **Licks**: external events such as webhooks or cron tasks.
+- **Floats**: runtime environments such as CLI, extension, Electron, and cloud.
+
+Use the ice cream terms in code review comments and docs when they match the domain.
+
+## Git Conventions
+
+- Keep commits focused and package-local when possible.
+- Do not hand-edit generated output in `dist/`.
+- Webapp git behavior is implemented with `isomorphic-git` over LightningFS.
+- Auth uses `git config github.token <PAT>`.
+- Network behavior differs by runtime: CLI routes git/fetch traffic through `/api/fetch-proxy`; the extension uses direct fetch.
 
 **Requires Node >= 22** (LTS). Ports: 5710 (UI), 9222 (Chrome CDP), 9223 (Electron CDP), 24679 (Vite HMR)
 
@@ -125,7 +140,7 @@ Virtual Filesystem (src/fs/) → RestrictedFS → Shell (src/shell/) + Git (src/
 
 **Shell** (`src/shell/`): WasmShell wraps just-bash 2.11.7 (WASM). 78+ commands including `git`, `node -e`, `python3 -c`, `playwright-cli`, `open`, `serve`, `sqlite3`, `convert`, `pdftk`, `skill`, `upskill`, `webhook`, `crontask`, `mount`, `oauth-token`, `debug`. Any `*.jsh` file on VFS is auto-discovered as a command. Extension CSP workaround: dynamic code routes through `sandbox.html`. **Two shell contexts in extension mode**: side panel has its own WasmShell (mounted in terminal tab), offscreen document has the agent's WasmShell (runs bash tool calls). Commands that affect the UI must handle both — use `window.__slicc_*` hooks for direct calls (panel) and `chrome.runtime.sendMessage` relay for offscreen→panel communication.
 
-**CDP** (`src/cdp/`): `CDPTransport` interface with WebSocket (CLI) and `chrome.debugger` (extension) implementations. `BrowserAPI` provides Playwright-style API (listPages, navigate, screenshot, evaluate, click, etc.). Screenshots normalize DPR to 1. `BrowserAPI.withTab(targetId, fn)` serializes all tab operations via a promise-based mutex — ensures concurrent scoops can't interleave CDP attachments. All playwright commands require explicit `--tab=<targetId>` (no implicit current tab).
+**CDP** (`src/cdp/`): `CDPTransport` interface with WebSocket (CLI) and `chrome.debugger` (extension) implementations. `BrowserAPI` provides Playwright-style API (listPages, navigate, screenshot, evaluate, click, etc.). Screenshots normalize DPR to 1.
 
 **Tools** (`src/tools/`): Active tool surface: `read_file`, `write_file`, `edit_file`, `bash`, `javascript`, plus NanoClaw tools (`send_message`, cone-only: `list_scoops`, `scoop_scoop`, `feed_scoop`, `drop_scoop`, `update_global_memory`). Browser automation goes through shell commands via `bash`.
 
@@ -176,34 +191,25 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 
 ## Change Requirements
 
-Every change MUST satisfy three gates: **tests**, **docs**, and **verification**.
+Every change must satisfy **tests**, **docs**, and **verification**.
 
 ### Tests
 
-New pure-logic code MUST have colocated tests (`foo.test.ts`). See `docs/testing.md`.
-
-### Visual Sprinkle Testing
-Static HTML test pages in `test/visual/` for visually verifying sprinkle components and built-in sprinkles. Served by Vite dev server at `http://localhost:5173/test/visual/`.
-
-```bash
-npm run dev   # then open:
-# http://localhost:5173/test/visual/sprinkle-builtin-test.html  — all 11 built-in sprinkles with TAVEX mock data
-# http://localhost:5173/test/visual/sprinkle-production-test.html — component showcase with production CSS
-```
-
-**Architecture**: Test pages fetch production CSS from `/index.html` at runtime via DOMParser, so they always reflect the real theme. Built-in sprinkles load in iframes; the bridge + mock data are injected via `iframe.onload` + `contentWindow.eval()` (inline `<script>` in srcdoc does not execute reliably). Mock data is based on the TAVEX pharma page and covers all 10 data-driven sprinkle DATA CONTRACTs.
+- Add or update tests for behavior changes.
+- TypeScript tests live in `tests/`, mirrored by subsystem.
+- See `docs/testing.md` for patterns and command selection.
 
 ### Documentation
 
-| Tier                | File        | Update when...                                     |
-| ------------------- | ----------- | -------------------------------------------------- |
-| **Public**          | `README.md` | User-facing changes                                |
-| **Development**     | `CLAUDE.md` | Developer conventions, architecture, build changes |
-| **Agent reference** | `docs/`     | Agent-facing tools, commands, patterns             |
+| Tier | File | Update when... |
+| --- | --- | --- |
+| Public | `README.md` | User-facing behavior changes |
+| Development | `CLAUDE.md` files | Developer conventions, package architecture, build workflows |
+| Agent reference | `docs/` | Detailed tools, commands, and patterns |
 
 ### Verification
 
-All four must pass before committing:
+These are the repo's CI gates and the default full verification pass before commit:
 
 ```bash
 npm run typecheck
@@ -212,12 +218,4 @@ npm run build
 npm run build:extension
 ```
 
-**CI**: Same four gates run on every PR via `.github/workflows/ci.yml`.
-
-### Worker Deploy CI
-
-Tray-hub deploys use `.github/workflows/worker.yml` for staging and production. Use the repo-level `CLOUDFLARE_API_TOKEN` secret plus `CLOUDFLARE_ACCOUNT_ID` variable, and let `cloudflare/wrangler-action` surface the deployed URL for `src/worker/deployed.test.ts`.
-
-## Git Integration (src/git/)
-
-isomorphic-git with LightningFS. Auth: `git config github.token <PAT>`. CORS: CLI routes through `/api/fetch-proxy`, extension uses direct fetch.
+CI runs the same four gates in `.github/workflows/ci.yml`.

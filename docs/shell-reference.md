@@ -137,7 +137,7 @@ playwright-cli cookie-set theme dark
 - `/.playwright/snapshots/` — saved accessibility snapshots for state-changing commands that auto-snapshot
 - `/.playwright/screenshots/` — saved screenshots
 
-Use the skill doc at `src/defaults/workspace/skills/playwright-cli/SKILL.md` for the full command list and operating guidance.
+Use the skill doc at `packages/vfs-root/workspace/skills/playwright-cli/SKILL.md` for the full command list and operating guidance.
 
 ---
 

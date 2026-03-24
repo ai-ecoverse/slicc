@@ -9,10 +9,10 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "outDir": "dist",
-    "rootDir": "src",
+    "outDir": "dist/node-server",
+    "rootDir": "packages/node-server/src",
     "declaration": true
   },
-  "include": ["src/cli/**/*.ts", "src/tray-url-shared.ts"],
-  "exclude": ["src/cli/**/*.test.ts"]
+  "include": ["packages/node-server/src/**/*.ts"],
+  "exclude": ["packages/node-server/src/**/*.test.ts"]
 }

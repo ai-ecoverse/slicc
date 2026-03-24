@@ -7,7 +7,7 @@ A one-click migration trigger for the slicc extension. The user navigates to any
 Three existing systems combine:
 
 1. **Sprinkles** — Interactive `.shtml` panels in the VFS that communicate with agents via `slicc.lick()` (sprinkle → cone) and `sprinkle send` (cone → sprinkle). Work in both CLI and extension modes.
-2. **Migration skills** — `migrate-page`, `migrate-block`, `migrate-header`, `dismiss-overlays` — already bundled as default skills in `src/defaults/workspace/skills/`. Orchestrate a 4-phase flow: extraction → decomposition → block generation → assembly.
+2. **Migration skills** — `migrate-page`, `migrate-block`, `migrate-header`, `dismiss-overlays` — already bundled as default skills in `packages/vfs-root/workspace/skills/`. Orchestrate a 4-phase flow: extraction → decomposition → block generation → assembly.
 3. **Extension active tab detection** — `playwright-cli tab-list` returns `PageInfo` with an `active: true` field in extension mode, identifying the user's focused tab.
 
 Today, migration is triggered by typing in chat: "Migrate https://example.com/ — use owner/repo". This sprinkle replaces that with a single button click.
@@ -28,7 +28,7 @@ No new bridge APIs, no new message types, no new extension plumbing.
 ## Sprinkle UI
 
 File: `/shared/sprinkles/migrate-page/migrate-page.shtml`
-Source: `src/defaults/shared/sprinkles/migrate-page/migrate-page.shtml` (follows the same pattern as the welcome sprinkle — priority discovery root).
+Source: `packages/vfs-root/shared/sprinkles/migrate-page/migrate-page.shtml` (follows the same pattern as the welcome sprinkle — priority discovery root).
 
 ### Opening the sprinkle
 
@@ -105,7 +105,7 @@ Set to `null` on completion or error.
 - Cone reads on migration to get the repo for git clone + branch creation
 - Cone writes `currentMigration` at each phase transition (authoritative progress source — survives panel close)
 - Cone writes `repo` when the user requests a repo change in chat
-- Bundled via `src/defaults/shared/migrate-config.json` → extracted to VFS on first run
+- Bundled via `packages/vfs-root/shared/migrate-config.json` → extracted to VFS on first run
 
 ## Data Flow
 
@@ -157,14 +157,14 @@ Cone sends `{phase: "done", previewUrl: "..."}`. Sprinkle transitions to Done st
 
 | File                                                            | Purpose                                                              |
 | --------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `src/defaults/shared/sprinkles/migrate-page/migrate-page.shtml` | The sprinkle (HTML + JS for 4 states: ready, migrating, done, error) |
-| `src/defaults/shared/migrate-config.json`                       | Default workspace config with `adobe/aem-boilerplate`                |
+| `packages/vfs-root/shared/sprinkles/migrate-page/migrate-page.shtml` | The sprinkle (HTML + JS for 4 states: ready, migrating, done, error) |
+| `packages/vfs-root/shared/migrate-config.json`                       | Default workspace config with `adobe/aem-boilerplate`                |
 
 ### Modified files
 
 | File                                                  | Change                                                                                                                                                                                                                                                                                                                            |
 | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/defaults/workspace/skills/migrate-page/SKILL.md` | Add "Sprinkle Trigger" section: (1) carve-out overriding Rules 2/5 to authorize cone-direct lick handling and `sprinkle send`; (2) instructions to detect active tab, read config, start migration; (3) `sprinkle send` commands at each phase transition; (4) `write_file` to update `currentMigration` in config at each phase. |
+| `packages/vfs-root/workspace/skills/migrate-page/SKILL.md` | Add "Sprinkle Trigger" section: (1) carve-out overriding Rules 2/5 to authorize cone-direct lick handling and `sprinkle send`; (2) instructions to detect active tab, read config, start migration; (3) `sprinkle send` commands at each phase transition; (4) `write_file` to update `currentMigration` in config at each phase. |
 
 ### No changes needed
 

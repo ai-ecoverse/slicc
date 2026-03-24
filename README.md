@@ -1,4 +1,4 @@
-![A screenshot of a macOS desktop](screenshots/full-desktop.png)
+![A screenshot of a macOS desktop](docs/screenshots/full-desktop.png)
 
 You are looking at a macOS desktop, with four windows running:
 
@@ -85,8 +85,8 @@ npm install
 npm start
 ```
 
-- Optionally pre-configure providers: `cp providers.example.json providers.json`
-- See [providers.example.json](providers.example.json) for the available provider fields.
+- Optionally pre-configure providers: `cp packages/dev-tools/providers.example.json packages/webapp/providers.json`
+- See [packages/dev-tools/providers.example.json](packages/dev-tools/providers.example.json) for the available provider fields.
 - For contributor-focused setup details, see [docs/development.md](docs/development.md).
 
 ### 4. Chrome extension

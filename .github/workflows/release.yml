@@ -62,7 +62,7 @@ jobs:
 
       - name: Build Sliccstart
         run: |
-          cd sliccstart
+          cd packages/swift-launcher
           chmod +x build-app.sh
           ./build-app.sh
 

@@ -1,0 +1,8 @@
+{
+  "name": "@slicc/chrome-extension",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  }
+}
