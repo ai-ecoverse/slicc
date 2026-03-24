@@ -50,8 +50,12 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: 3.91.0
-          command: deploy --env staging --config packages/cloudflare-worker/wrangler.jsonc
-
+          workingDirectory: packages/cloudflare-worker
+          command: deploy --env staging
+          secrets: |
+            CLOUDFLARE_TURN_API_TOKEN
+        env:
+          CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
       - name: Wait before staging deploy retry 2
         if: steps.deploy_attempt_1.outcome == 'failure'
         run: sleep 20
@@ -65,8 +69,12 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: 3.91.0
-          command: deploy --env staging --config packages/cloudflare-worker/wrangler.jsonc
-
+          workingDirectory: packages/cloudflare-worker
+          command: deploy --env staging
+          secrets: |
+            CLOUDFLARE_TURN_API_TOKEN
+        env:
+          CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
       - name: Wait before staging deploy retry 3
         if: steps.deploy_attempt_1.outcome == 'failure' && steps.deploy_attempt_2.outcome == 'failure'
         run: sleep 40
@@ -80,8 +88,12 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: 3.91.0
-          command: deploy --env staging --config packages/cloudflare-worker/wrangler.jsonc
-
+          workingDirectory: packages/cloudflare-worker
+          command: deploy --env staging
+          secrets: |
+            CLOUDFLARE_TURN_API_TOKEN
+        env:
+          CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
       - name: Finalize staging deploy metadata
         id: deploy
         env:
@@ -156,8 +168,12 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: 3.91.0
-          command: deploy --config packages/cloudflare-worker/wrangler.jsonc
-
+          workingDirectory: packages/cloudflare-worker
+          command: deploy
+          secrets: |
+            CLOUDFLARE_TURN_API_TOKEN
+        env:
+          CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
       - name: Wait before production deploy retry 2
         if: steps.deploy_attempt_1.outcome == 'failure'
         run: sleep 20
@@ -171,8 +187,12 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: 3.91.0
-          command: deploy --config packages/cloudflare-worker/wrangler.jsonc
-
+          workingDirectory: packages/cloudflare-worker
+          command: deploy
+          secrets: |
+            CLOUDFLARE_TURN_API_TOKEN
+        env:
+          CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
       - name: Wait before production deploy retry 3
         if: steps.deploy_attempt_1.outcome == 'failure' && steps.deploy_attempt_2.outcome == 'failure'
         run: sleep 40
@@ -186,8 +206,12 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: 3.91.0
-          command: deploy --config packages/cloudflare-worker/wrangler.jsonc
-
+          workingDirectory: packages/cloudflare-worker
+          command: deploy
+          secrets: |
+            CLOUDFLARE_TURN_API_TOKEN
+        env:
+          CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
       - name: Finalize production deploy metadata
         id: deploy
         env:
