@@ -40,6 +40,20 @@ export default defineConfig(({ mode }) => ({
           target: 'esnext',
           minify: true,
           define: { __DEV__: 'false', global: 'globalThis' },
+          plugins: [{
+            name: 'raw-svg',
+            setup(build) {
+              // Strip ?raw suffix and load .svg files as text (matches Vite's ?raw behavior).
+              build.onResolve({ filter: /\.svg\?raw$/ }, (args) => ({
+                path: resolve(args.resolveDir, args.path.replace('?raw', '')),
+                namespace: 'raw-svg',
+              }));
+              build.onLoad({ filter: /.*/, namespace: 'raw-svg' }, async (args) => {
+                const { readFile } = await import('fs/promises');
+                return { contents: await readFile(args.path, 'utf8'), loader: 'text' };
+              });
+            },
+          }],
         });
 
         copyFileSync(resolve(__dirname, '../assets/logos/favicon.png'), resolve(uiOutDir, 'favicon.png'));

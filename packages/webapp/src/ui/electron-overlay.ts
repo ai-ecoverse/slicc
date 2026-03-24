@@ -13,6 +13,14 @@ import {
 import { ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE } from './runtime-mode.js';
 import { EXTENSION_TAB_SPECS, normalizeExtensionTabId, type ExtensionTabId } from './tabbed-ui.js';
 
+// Monochrome Sliccy logos inlined at build time.
+// Dark variant: dark fill + white strokes (shows on light backgrounds).
+// Light variant: white fill + dark strokes (shows on dark backgrounds — appears as light icon).
+// The ?raw suffix tells Vite to import as string; the esbuild standalone build
+// uses a plugin to resolve ?raw to the .svg with text loader.
+import sliccyMonoDarkSvg from '../../../assets/logos/sliccy-mono-dark-0scoops.svg?raw';
+import sliccyMonoLightSvg from '../../../assets/logos/sliccy-mono-light-0scoops.svg?raw';
+
 export const ELECTRON_OVERLAY_HOST_ID = 'slicc-electron-overlay-root';
 export const ELECTRON_OVERLAY_TAG_NAME = 'slicc-electron-overlay';
 
@@ -48,33 +56,10 @@ function createStyle(doc: Document, css: string): HTMLStyleElement {
 }
 
 /**
- * Create an SVG element with the cone icon.
+ * Strip the XML declaration from an SVG string so it can be injected as innerHTML.
  */
-function createConeIconSvg(doc: Document): SVGSVGElement {
-  const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('aria-hidden', 'true');
-
-  // Two scoops (circles)
-  const circles = [
-    { cx: '9', cy: '7.2', r: '4.1' },
-    { cx: '15.2', cy: '8.1', r: '4' },
-  ];
-
-  for (const { cx, cy, r } of circles) {
-    const circle = doc.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    circle.setAttribute('cx', cx);
-    circle.setAttribute('cy', cy);
-    circle.setAttribute('r', r);
-    svg.appendChild(circle);
-  }
-
-  // Cone tip (path)
-  const path = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', 'M9.8 12.4h5.1L12.4 21z');
-  svg.appendChild(path);
-
-  return svg;
+function stripXmlDeclaration(svg: string): string {
+  return svg.replace(/<\?xml[^?]*\?>\s*/i, '');
 }
 
 const BASE_TOKENS = `
@@ -181,40 +166,65 @@ class SliccElectronLauncherElement extends HTMLElement {
       *, *::before, *::after { box-sizing: border-box; }
       button {
         width: 44px; height: 44px; position: relative;
-        border: 1px solid rgba(255, 255, 255, 0.62);
+        border: none;
         border-radius: var(--s2-radius-pill);
-        background: radial-gradient(circle at 30% 28%, rgba(255, 255, 255, 0.34), transparent 34%),
-          linear-gradient(160deg, #ffb15c 0%, color-mix(in srgb, var(--slicc-cone) 92%, #ffb15c) 34%, #a34b00 72%, #38220f 100%);
-        color: #fff;
-        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18) inset, 0 0 0 4px rgba(0, 0, 0, 0.28), 0 12px 30px rgba(0, 0, 0, 0.4), 0 2px 10px rgba(0, 0, 0, 0.24);
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(0, 0, 0, 0.08);
         cursor: grab;
         display: inline-flex; align-items: center; justify-content: center;
-        transition: transform var(--s2-transition-default), background var(--s2-transition-default), border-color var(--s2-transition-default), box-shadow var(--s2-transition-default);
+        transition: transform var(--s2-transition-default), box-shadow var(--s2-transition-default);
         backdrop-filter: blur(12px) saturate(1.05);
         touch-action: none; user-select: none; -webkit-user-select: none;
+        padding: 0; overflow: hidden;
       }
-      button::before {
-        content: ''; position: absolute; inset: -5px; border-radius: inherit;
-        border: 1px solid rgba(255, 255, 255, 0.32); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18); pointer-events: none;
+      @media (prefers-color-scheme: dark) {
+        button {
+          background: rgba(34, 34, 34, 0.92);
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.12);
+        }
       }
       :host([dragging]) button { cursor: grabbing; }
       button:hover {
-        transform: translateY(-1px); border-color: rgba(255, 255, 255, 0.78);
-        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.24) inset, 0 0 0 4px rgba(0, 0, 0, 0.34), 0 16px 34px rgba(0, 0, 0, 0.44), 0 0 18px color-mix(in srgb, var(--slicc-cone) 40%, transparent);
+        transform: translateY(-1px);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.12);
+      }
+      @media (prefers-color-scheme: dark) {
+        button:hover {
+          box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.18);
+        }
       }
       button:active { transform: scale(0.96); }
       button[aria-pressed="true"] {
-        border-color: rgba(255, 255, 255, 0.84);
-        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.24) inset, 0 0 0 4px rgba(0, 0, 0, 0.36), 0 16px 38px rgba(0, 0, 0, 0.46), 0 0 22px color-mix(in srgb, var(--slicc-cone) 52%, transparent);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3), 0 0 0 2px var(--s2-accent);
       }
-      svg { width: 20px; height: 20px; fill: currentColor; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55)); }
+      .logo-icon { width: 32px; height: 32px; pointer-events: none; }
+      /* Dark mode: show light logo (light strokes on dark circle) */
+      .logo-dark { display: none; }
+      .logo-light { display: block; }
+      @media (prefers-color-scheme: light) {
+        /* Light mode: show dark logo (dark strokes on light circle) */
+        .logo-dark { display: block; }
+        .logo-light { display: none; }
+      }
     `));
 
-    // Create button with SVG icon
+    // Create button with Sliccy logo — both variants embedded, CSS toggles visibility.
     const button = doc.createElement('button');
     button.type = 'button';
     button.setAttribute('aria-label', 'Toggle SLICC overlay');
-    button.appendChild(createConeIconSvg(doc));
+
+    const lightIcon = doc.createElement('div');
+    lightIcon.className = 'logo-icon logo-light';
+    lightIcon.innerHTML = stripXmlDeclaration(sliccyMonoLightSvg);
+    lightIcon.setAttribute('aria-hidden', 'true');
+
+    const darkIcon = doc.createElement('div');
+    darkIcon.className = 'logo-icon logo-dark';
+    darkIcon.innerHTML = stripXmlDeclaration(sliccyMonoDarkSvg);
+    darkIcon.setAttribute('aria-hidden', 'true');
+
+    button.appendChild(lightIcon);
+    button.appendChild(darkIcon);
     root.appendChild(button);
 
     this.button = button;
@@ -439,7 +449,7 @@ class SliccElectronSidebarElement extends HTMLElement {
 
     const logo = doc.createElement('span');
     logo.className = 'header__logo';
-    logo.appendChild(createConeIconSvg(doc));
+    logo.innerHTML = stripXmlDeclaration(sliccyMonoDarkSvg);
     brand.appendChild(logo);
 
     const titleContainer = doc.createElement('div');
