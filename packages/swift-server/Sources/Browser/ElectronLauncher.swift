@@ -376,7 +376,6 @@ final class ElectronOverlayInjector: @unchecked Sendable {
     private let session: URLSession
     private let logger: Logger
     private let stateQueue = DispatchQueue(label: "slicc.browser.electron-overlay-injector")
-    private var injectedTargets = Set<String>()
     private var inFlightTargets = Set<String>()
     private var pollTask: Task<Void, Never>?
 
@@ -411,7 +410,6 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         stateQueue.sync {
             pollTask?.cancel()
             pollTask = nil
-            injectedTargets.removeAll()
             inFlightTargets.removeAll()
         }
     }
@@ -446,7 +444,6 @@ final class ElectronOverlayInjector: @unchecked Sendable {
         let liveTargetIDs = Set(selectedTargets.compactMap(\.webSocketDebuggerURL))
 
         stateQueue.sync {
-            injectedTargets = injectedTargets.intersection(liveTargetIDs)
             inFlightTargets = inFlightTargets.intersection(liveTargetIDs)
         }
 
@@ -587,35 +584,52 @@ final class ElectronOverlayInjector: @unchecked Sendable {
     }
 
     private func waitForResponseValue(id: Int, over socket: URLSessionWebSocketTask, timeout: UInt64 = 5_000_000_000) async throws -> Any? {
-        let deadline = DispatchTime.now().uptimeNanoseconds + timeout
-        while DispatchTime.now().uptimeNanoseconds < deadline {
-            let message = try await socket.receive()
-            if case .string(let text) = message,
-               let data = text.data(using: .utf8),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let responseId = json["id"] as? Int,
-               responseId == id {
-                if let result = json["result"] as? [String: Any],
-                   let innerResult = result["result"] as? [String: Any] {
-                    return innerResult["value"]
+        try await withThrowingTaskGroup(of: Any?.self) { group in
+            group.addTask {
+                while true {
+                    let message = try await socket.receive()
+                    if case .string(let text) = message,
+                       let data = text.data(using: .utf8),
+                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let responseId = json["id"] as? Int,
+                       responseId == id {
+                        if let result = json["result"] as? [String: Any],
+                           let innerResult = result["result"] as? [String: Any] {
+                            return innerResult["value"]
+                        }
+                        return nil
+                    }
                 }
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: timeout)
                 return nil
             }
+            let result = try await group.next() ?? nil
+            group.cancelAll()
+            return result
         }
-        return nil
     }
 
     private func waitForResponse(id: Int, over socket: URLSessionWebSocketTask, timeout: UInt64 = 5_000_000_000) async throws {
-        let deadline = DispatchTime.now().uptimeNanoseconds + timeout
-        while DispatchTime.now().uptimeNanoseconds < deadline {
-            let message = try await socket.receive()
-            if case .string(let text) = message,
-               let data = text.data(using: .utf8),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let responseId = json["id"] as? Int,
-               responseId == id {
-                return
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                while true {
+                    let message = try await socket.receive()
+                    if case .string(let text) = message,
+                       let data = text.data(using: .utf8),
+                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let responseId = json["id"] as? Int,
+                       responseId == id {
+                        return
+                    }
+                }
             }
+            group.addTask {
+                try await Task.sleep(nanoseconds: timeout)
+            }
+            _ = try await group.next()
+            group.cancelAll()
         }
     }
 

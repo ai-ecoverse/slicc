@@ -180,10 +180,24 @@ struct ServerCommand: AsyncParsableCommand {
         }
 
         do {
-            // Wait only for the startup latch. Don't add appTask to the group —
-            // withThrowingTaskGroup implicitly awaits all children, and appTask
-            // runs forever, which would block everything after this point.
+            // Race the startup latch against appTask failure. If the server
+            // fails before onServerRunning fires (e.g. bind error), we need
+            // to surface that instead of hanging on the latch forever.
+            // A separate Task watches appTask and signals the latch on failure.
+            let startupFailure = StartupFailureBox()
+            let errorObserver = Task { [startupLatch] in
+                do {
+                    try await appTask.value
+                } catch {
+                    await startupFailure.set(error)
+                    await startupLatch.signalStarted()
+                }
+            }
             await startupLatch.waitUntilStarted()
+            errorObserver.cancel()
+            if let error = await startupFailure.get() {
+                throw error
+            }
 
             do {
                 try await cdpProxy.preWarm(cdpPort: cdpPort)
@@ -340,6 +354,13 @@ struct ServerConfig: Sendable, Equatable {
         let expandedPath = NSString(string: value).expandingTildeInPath
         return URL(fileURLWithPath: expandedPath).standardizedFileURL
     }
+}
+
+@available(macOS 14, *)
+private actor StartupFailureBox {
+    private var error: Error?
+    func set(_ error: Error) { self.error = error }
+    func get() -> Error? { error }
 }
 
 @available(macOS 14, *)
