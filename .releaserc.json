@@ -14,7 +14,7 @@
       "@semantic-release/exec",
       {
         "prepareCmd": "node dist/node-server/sync-release-version.js ${nextRelease.version} && npm run build:extension && npm run package:release && chmod +x packages/swift-launcher/sign-and-package.sh && packages/swift-launcher/sign-and-package.sh ${nextRelease.version}",
-        "publishCmd": "npx wrangler deploy && npx vitest run packages/cloudflare-worker/tests/deployed.test.ts"
+        "publishCmd": "echo \"$CLOUDFLARE_TURN_API_TOKEN\" | npx wrangler secret put CLOUDFLARE_TURN_API_TOKEN --config packages/cloudflare-worker/wrangler.jsonc && npx wrangler deploy --config packages/cloudflare-worker/wrangler.jsonc && npx vitest run packages/cloudflare-worker/tests/deployed.test.ts"
       }
     ],
     [
