@@ -102,7 +102,7 @@
 
 | File | Purpose |
 |---|---|
-| `types.ts` | `ProviderConfig` interface (id, name, isOAuth, onOAuthLogin, onOAuthLogout, getModelIds), `OAuthLauncher` type |
+| `types.ts` | `ProviderConfig` interface (id, name, isOAuth, onOAuthLogin, onOAuthLogout, getModelIds, modelOverrides), `ModelMetadata` interface (api, context_window, max_tokens, reasoning, input — snake_case wire format), `OAuthLauncher` type |
 | `index.ts` | Provider auto-discovery: pi-ai providers filtered by `packages/dev-tools/providers.build.json`, built-in extensions via glob, external `/packages/webapp/providers/*.ts` always included |
 | `oauth-service.ts` | Generic `OAuthLauncher` factory: CLI mode (popup → `/auth/callback` → postMessage) and extension mode (service worker → `chrome.identity.launchWebAuthFlow`) |
 | `built-in/bedrock-camp.ts` | AWS Bedrock CAMP provider — custom stream function via `register()` (only built-in that needs a file; pure-config providers use pi-ai auto-discovery) |
@@ -537,6 +537,8 @@ Scoop removal / app clear
 | Add an external/custom provider | `packages/webapp/providers/<provider>.ts` (gitignored in the webapp package, auto-discovered) |
 | Add an OAuth provider | Same as above, but set `isOAuth: true` + `onOAuthLogin`/`onOAuthLogout` on the config |
 | Change the OAuth transport (popup, chrome.identity) | `src/providers/oauth-service.ts` |
-| Change provider types (ProviderConfig, OAuthLauncher) | `src/providers/types.ts` |
+| Override model capabilities (context window, max tokens) | `modelOverrides` on `ProviderConfig` (static) or return metadata fields from `getModelIds()` (dynamic). Three-layer merge: pi-ai → modelOverrides → getModelIds |
+| Add OpenAI-compatible model support | Return `api: 'openai'` in `getModelIds()` metadata — stream routing switches to `streamOpenAICompletions` automatically |
+| Change provider types (ProviderConfig, OAuthLauncher, ModelMetadata) | `src/providers/types.ts` |
 | Change OAuth callback page (CLI mode) | `packages/node-server/src/index.ts` (`/auth/callback` route) |
-| Change provider settings UI | `src/ui/provider-settings.ts` |
+| Change provider settings UI / model resolution | `src/ui/provider-settings.ts` |

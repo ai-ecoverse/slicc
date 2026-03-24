@@ -184,3 +184,47 @@ describe('provider config shape', () => {
     expect(successCalled).toBe(false);
   });
 });
+
+describe('provider config model metadata', () => {
+  it('ProviderConfig supports modelOverrides field', () => {
+    const config: ProviderConfig = {
+      id: 'test-provider',
+      name: 'Test',
+      description: '',
+      requiresApiKey: true,
+      requiresBaseUrl: false,
+      modelOverrides: {
+        'claude-opus-4-6': { context_window: 1000000, max_tokens: 32768 },
+        'zai-glm-4.7': { api: 'openai', context_window: 131072, reasoning: true },
+      },
+    };
+    expect(config.modelOverrides?.['claude-opus-4-6']?.context_window).toBe(1000000);
+    expect(config.modelOverrides?.['zai-glm-4.7']?.api).toBe('openai');
+  });
+
+  it('getModelIds supports metadata fields', () => {
+    const config: ProviderConfig = {
+      id: 'test-provider',
+      name: 'Test',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getModelIds: () => [
+        { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', context_window: 1000000 },
+        {
+          id: 'zai-glm-4.7',
+          name: 'GLM 4.7',
+          api: 'openai' as const,
+          context_window: 131072,
+          max_tokens: 40960,
+          reasoning: true,
+          input: ['text'],
+        },
+      ],
+    };
+    const models = config.getModelIds!();
+    expect(models[0].context_window).toBe(1000000);
+    expect(models[1].api).toBe('openai');
+    expect(models[1].input).toEqual(['text']);
+  });
+});

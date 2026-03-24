@@ -1072,3 +1072,160 @@ describe('getProviderModels with getModelIds', () => {
     expect(models[0].provider).toBe('custom-oauth');
   });
 });
+
+describe('model metadata overrides', () => {
+  beforeEach(() => {
+    storage.clear();
+    mockGetProviders.mockReturnValue(['anthropic']);
+    mockGetModels.mockImplementation((providerId: string) => {
+      if (providerId === 'anthropic') {
+        return [
+          { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', contextWindow: 200000, maxTokens: 16384, reasoning: true },
+          { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', contextWindow: 200000, maxTokens: 16384, reasoning: true },
+        ];
+      }
+      return [];
+    });
+  });
+
+  it('getModelIds metadata overrides pi-ai defaults for known models', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getModelIds: () => [
+        { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', context_window: 1000000, max_tokens: 128000 },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    expect(models).toHaveLength(1);
+    expect(models[0].contextWindow).toBe(1000000);
+    expect((models[0] as any).maxTokens).toBe(128000);
+  });
+
+  it('getModelIds metadata creates correct model for unknown IDs with api field', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getModelIds: () => [
+        { id: 'zai-glm-4.7', name: 'GLM 4.7', api: 'openai', context_window: 131072, max_tokens: 40960, reasoning: true, input: ['text'] },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    expect(models).toHaveLength(1);
+    expect(models[0].id).toBe('zai-glm-4.7');
+    expect(models[0].contextWindow).toBe(131072);
+    expect((models[0] as any).maxTokens).toBe(40960);
+    expect(models[0].reasoning).toBe(true);
+  });
+
+  it('api field determines model.api for stream routing', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getModelIds: () => [
+        { id: 'zai-glm-4.7', name: 'GLM 4.7', api: 'openai' },
+        { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    const glm = models.find(m => m.id === 'zai-glm-4.7')!;
+    const opus = models.find(m => m.id === 'claude-opus-4-6')!;
+    expect(String(glm.api)).toContain('openai');
+    expect(String(opus.api)).toContain('anthropic');
+  });
+
+  it('modelOverrides applies to OAuth provider models', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('custom-oauth', {
+      id: 'custom-oauth',
+      name: 'Custom OAuth',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      modelOverrides: {
+        'claude-opus-4-6': { context_window: 500000 },
+      },
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('custom-oauth');
+    const opus = models.find(m => m.id === 'claude-opus-4-6');
+    expect(opus).toBeDefined();
+    expect(opus!.contextWindow).toBe(500000);
+    // Unaffected model keeps defaults
+    const sonnet = models.find(m => m.id === 'claude-sonnet-4-6');
+    expect(sonnet!.contextWindow).toBe(200000);
+  });
+
+  it('getModelIds metadata takes priority over modelOverrides', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      modelOverrides: {
+        'claude-opus-4-6': { context_window: 500000 },
+      },
+      getModelIds: () => [
+        { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', context_window: 1000000 },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    // getModelIds (layer 3) wins over modelOverrides (layer 2)
+    expect(models[0].contextWindow).toBe(1000000);
+  });
+
+  it('models without api field default to anthropic routing', () => {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('test-proxy', {
+      id: 'test-proxy',
+      name: 'Test Proxy',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      getModelIds: () => [
+        { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+
+    const models = getProviderModels('test-proxy');
+    expect(String(models[0].api)).toContain('anthropic');
+    expect(String(models[0].api)).not.toContain('openai');
+  });
+});

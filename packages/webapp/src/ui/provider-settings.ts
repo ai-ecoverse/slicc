@@ -108,6 +108,17 @@ export function getProviderConfig(providerId: string): ProviderConfig {
   );
 }
 
+/** Apply ModelMetadata overrides to a model object (mutates in place). */
+function applyModelMetadata(
+  model: Record<string, any>,
+  metadata: { context_window?: number; max_tokens?: number; reasoning?: boolean; input?: string[] },
+): void {
+  if (metadata.context_window !== undefined) model.contextWindow = metadata.context_window;
+  if (metadata.max_tokens !== undefined) model.maxTokens = metadata.max_tokens;
+  if (metadata.reasoning !== undefined) model.reasoning = metadata.reasoning;
+  if (metadata.input !== undefined) model.input = metadata.input;
+}
+
 // Get models for a provider
 export function getProviderModels(providerId: string): Model<Api>[] {
   try {
@@ -123,7 +134,7 @@ export function getProviderModels(providerId: string): Model<Api>[] {
     // Providers that use Anthropic's model registry with custom API
     const providerConfig = getProviderConfig(providerId);
     if (providerConfig.getModelIds) {
-      // Provider specifies its own model list — resolve against Anthropic registry
+      // Provider specifies its own model list — resolve against all pi-ai registries
       let modelIds: Array<{ id: string; name?: string }>;
       try {
         modelIds = providerConfig.getModelIds();
@@ -134,35 +145,56 @@ export function getProviderModels(providerId: string): Model<Api>[] {
         });
         return [];
       }
-      const anthropicModels = getModelsDynamic('anthropic');
-      const modelMap = new Map(anthropicModels.map((m) => [m.id, m]));
-      const customApi = `${providerId}-anthropic` as Api;
+      // Build a lookup across all pi-ai providers so we find base models
+      // regardless of their origin (Anthropic, Cerebras, OpenAI, etc.)
+      const modelMap = new Map<string, Model<Api>>();
+      for (const p of (getProviders() as string[])) {
+        try {
+          for (const m of getModelsDynamic(p)) modelMap.set(m.id, m);
+        } catch { /* provider may not have models */ }
+      }
       return modelIds.map((pm) => {
+        // Determine API type from metadata: 'openai' or 'anthropic' (default)
+        const apiType = (pm as any).api === 'openai' ? 'openai' : 'anthropic';
+        const customApi = `${providerId}-${apiType}` as Api;
         const base = modelMap.get(pm.id);
-        if (base) return { ...base, api: customApi, provider: providerId };
-        return {
-          id: pm.id,
-          name: pm.name ?? pm.id,
-          provider: providerId,
-          api: customApi,
-          baseUrl: '',
-          contextWindow: 200000,
-          maxTokens: 16384,
-          input: ['text', 'image'],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          inputCost: 0,
-          outputCost: 0,
-          cacheReadCost: 0,
-          cacheWriteCost: 0,
-          reasoning: true,
-        } as unknown as Model<Api>;
+        const model: Record<string, any> = base
+          ? { ...base, api: customApi, provider: providerId }
+          : {
+              id: pm.id,
+              name: pm.name ?? pm.id,
+              provider: providerId,
+              api: customApi,
+              baseUrl: '',
+              contextWindow: 200000,
+              maxTokens: 16384,
+              input: ['text', 'image'],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              inputCost: 0,
+              outputCost: 0,
+              cacheReadCost: 0,
+              cacheWriteCost: 0,
+              reasoning: true,
+            };
+
+        // Apply modelOverrides (layer 2) then getModelIds metadata (layer 3)
+        const overrides = providerConfig.modelOverrides?.[pm.id];
+        if (overrides) applyModelMetadata(model, overrides);
+        applyModelMetadata(model, pm as any);
+
+        return model as unknown as Model<Api>;
       });
     }
     if (providerConfig.isOAuth) {
       // OAuth providers use Anthropic models with custom API routing
       const anthropicModels = getModelsDynamic('anthropic');
       const customApi = `${providerId}-anthropic` as Api;
-      return anthropicModels.map((m) => ({ ...m, api: customApi, provider: providerId }));
+      return anthropicModels.map((m) => {
+        const model: Record<string, any> = { ...m, api: customApi, provider: providerId };
+        const overrides = providerConfig.modelOverrides?.[m.id];
+        if (overrides) applyModelMetadata(model, overrides);
+        return model as unknown as Model<Api>;
+      });
     }
     const effectiveProvider = providerId === 'azure-ai-foundry' ? 'anthropic' : providerId;
     return getModelsDynamic(effectiveProvider);
