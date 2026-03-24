@@ -67,7 +67,7 @@ export interface TeleportWatcher {
   /** URL to open on the follower when start pattern triggers. If unset, uses the leader tab's current URL. */
   teleportUrl?: string;
   phase: TeleportPhase;
-  /** The leader tab being monitored. Falls back to state.currentTarget if unset. */
+  /** The leader tab being monitored. */
   leaderTargetId?: string;
   /** The composite targetId of the follower tab (runtimeId:localTargetId). */
   followerTargetId?: string;
@@ -113,8 +113,6 @@ function base64ToBytes(base64: string): Uint8Array {
 
 /** Shared state across invocations (persists for the lifetime of the shell). */
 interface PlaywrightState {
-  /** Currently active targetId (the "current tab") */
-  currentTarget: string | null;
   /** Per-tab snapshots keyed by targetId */
   snapshots: Map<string, TabSnapshot>;
   /** App tab ID to exclude */
@@ -123,8 +121,8 @@ interface PlaywrightState {
   harRecorder: HarRecorder | null;
   /** Whether /.playwright/ directories have been created */
   sessionDirsCreated: boolean;
-  /** Active teleport watcher (auto-disarms after one cycle). */
-  teleportWatcher: TeleportWatcher | null;
+  /** Active teleport watchers keyed by targetId. */
+  teleportWatchers: Map<string, TeleportWatcher>;
 }
 
 export const PLAYWRIGHT_COMMAND_NAMES = ['playwright-cli', 'playwright', 'puppeteer'] as const;
@@ -188,12 +186,11 @@ export function getSharedState(browser: BrowserAPI, fs: VirtualFS): PlaywrightSt
   let state = statesByFs.get(fs);
   if (!state) {
     state = {
-      currentTarget: null,
       snapshots: new Map(),
       appTabId: null,
       harRecorder: null,
       sessionDirsCreated: false,
-      teleportWatcher: null,
+      teleportWatchers: new Map(),
     };
     statesByFs.set(fs, state);
   }
@@ -289,23 +286,24 @@ async function autoSaveSnapshot(
   targetId: string
 ): Promise<string | null> {
   try {
-    await browser.attachToPage(targetId);
-    const pageInfo = await browser.evaluate(
-      `JSON.stringify({ url: location.href, title: document.title })`
-    );
-    const { url, title } = JSON.parse(pageInfo as string);
-    const tree = await browser.getAccessibilityTree();
-    const refToSelector = new Map<string, string>();
-    const refToBackendNodeId = new Map<string, number>();
-    const counter = { value: 0 };
-    const snapshotLines = renderNode(tree, refToSelector, refToBackendNodeId, counter);
-    const content = snapshotLines.join('\n');
-    const output = [`Page URL: ${url}`, `Page Title: ${title}`, '', content].join('\n');
+    return await browser.withTab(targetId, async () => {
+      const pageInfo = await browser.evaluate(
+        `JSON.stringify({ url: location.href, title: document.title })`
+      );
+      const { url, title } = JSON.parse(pageInfo as string);
+      const tree = await browser.getAccessibilityTree();
+      const refToSelector = new Map<string, string>();
+      const refToBackendNodeId = new Map<string, number>();
+      const counter = { value: 0 };
+      const snapshotLines = renderNode(tree, refToSelector, refToBackendNodeId, counter);
+      const content = snapshotLines.join('\n');
+      const output = [`Page URL: ${url}`, `Page Title: ${title}`, '', content].join('\n');
 
-    const ts = filenameSafeTimestamp(new Date());
-    const path = `/.playwright/snapshots/page-${ts}.yml`;
-    await vfs.writeFile(path, output);
-    return path;
+      const ts = filenameSafeTimestamp(new Date());
+      const path = `/.playwright/snapshots/page-${ts}.yml`;
+      await vfs.writeFile(path, output);
+      return path;
+    });
   } catch {
     return null;
   }
@@ -478,32 +476,6 @@ async function getActionablePages(
       ? await browser.listAllTargets()
       : await browser.listPages();
   return pages.filter((page) => isActionablePage(state, page));
-}
-
-/** Ensure we have a current target; auto-selects the active tab if needed. */
-async function ensureTarget(browser: BrowserAPI, state: PlaywrightState): Promise<string | null> {
-  const pages = await getActionablePages(browser, state);
-  if (pages.length === 0) {
-    state.currentTarget = null;
-    return null;
-  }
-
-  if (state.currentTarget && pages.some((p) => p.targetId === state.currentTarget)) {
-    return state.currentTarget;
-  }
-
-  state.currentTarget = null;
-  const active = pages.find((p) => p.active);
-  if (active) {
-    state.currentTarget = active.targetId;
-    return active.targetId;
-  }
-  const first = pages[0];
-  if (first) {
-    state.currentTarget = first.targetId;
-    return first.targetId;
-  }
-  return null;
 }
 
 async function takeSnapshot(
@@ -888,7 +860,8 @@ function armTeleportWatcher(
   returnPattern: RegExp,
   timeoutMs: number,
   runtimeId?: string,
-  originalUrl?: string
+  originalUrl?: string,
+  leaderTargetId?: string
 ): TeleportWatcher {
   log.info('Arming teleport watcher', {
     timeoutMs,
@@ -908,6 +881,7 @@ function armTeleportWatcher(
     timeoutMs,
     runtimeId,
     phase: 'armed',
+    leaderTargetId,
     originalLeaderUrl: originalUrl,
   };
 
@@ -925,28 +899,31 @@ function armTeleportWatcher(
   // Start polling the leader tab URL for start pattern match
   watcher.pollInterval = setInterval(async () => {
     if (watcher.phase !== 'armed') return;
-    const targetId = state.currentTarget;
+    const targetId = watcher.leaderTargetId;
     if (!targetId) return;
 
     try {
       await browser.attachToPage(targetId);
       const raw = await browser.evaluate('window.location.href');
       const href = typeof raw === 'string' ? raw : String(raw);
-      log.debug('Polling leader tab URL', { href, startPattern: startPattern.source });
+      log.debug('Polling leader tab URL', { targetId, href, startPattern: startPattern.source });
       if (startPattern.test(href)) {
         log.info('Teleport start pattern matched on leader');
         log.debug('Teleport start pattern matched on leader details', {
+          targetId,
           href,
           startPattern: startPattern.source,
         });
         triggerTeleport(browser, state, watcher, href);
       }
     } catch (err) {
-      log.warn('Error polling leader tab URL', { error: String(err) });
+      log.warn('Error polling leader tab URL', { targetId, error: String(err) });
     }
   }, 1000);
 
-  state.teleportWatcher = watcher;
+  if (leaderTargetId) {
+    state.teleportWatchers.set(leaderTargetId, watcher);
+  }
   return watcher;
 }
 
@@ -1234,7 +1211,7 @@ async function captureCookiesAndComplete(
     // 4. Switch back to the leader tab and inject cookies + app state.
     // For cross-origin SSO handoffs, hydrate the captured app origin first so
     // SPA auth caches are materialized on the right origin before landing.
-    const leaderTargetId = state.currentTarget;
+    const leaderTargetId = watcher.leaderTargetId;
     const leaderStorageOrigin = followerStorage.origin || '';
     const landingUrl = chooseTeleportLeaderLandingUrl(
       leaderStorageOrigin,
@@ -1365,12 +1342,12 @@ async function captureCookiesAndComplete(
  * Check if a teleport watcher has been triggered and needs to block.
  * Returns a result string if blocked, null if not blocking.
  */
-async function checkTeleportBlock(state: PlaywrightState): Promise<string | null> {
-  const watcher = state.teleportWatcher;
+async function checkTeleportBlock(state: PlaywrightState, targetId: string): Promise<string | null> {
+  const watcher = state.teleportWatchers.get(targetId);
   if (!watcher) return null;
   if (watcher.phase === 'done' || watcher.phase === 'timedOut') {
-    log.info('Clearing completed teleport watcher', { phase: watcher.phase });
-    state.teleportWatcher = null;
+    log.info('Clearing completed teleport watcher', { phase: watcher.phase, targetId });
+    state.teleportWatchers.delete(targetId);
     return null;
   }
   if (
@@ -1379,17 +1356,17 @@ async function checkTeleportBlock(state: PlaywrightState): Promise<string | null
     watcher.phase === 'waitingForReturn' ||
     watcher.phase === 'capturing'
   ) {
-    log.info('Blocking command — teleport in progress', { phase: watcher.phase });
+    log.info('Blocking command — teleport in progress', { phase: watcher.phase, targetId });
     // Block until the teleport completes
     try {
       const result = await watcher.completionPromise!;
       log.info('Teleport block resolved');
       log.debug('Teleport block resolved details', { result });
-      state.teleportWatcher = null;
+      state.teleportWatchers.delete(targetId);
       return result;
     } catch (err) {
-      log.warn('Teleport block rejected', { error: String(err) });
-      state.teleportWatcher = null;
+      log.warn('Teleport block rejected', { error: String(err), targetId });
+      state.teleportWatchers.delete(targetId);
       throw err;
     }
   }
@@ -1445,9 +1422,7 @@ Commands:
        [--teleport-start=<regex>] [--teleport-return=<regex>] [--timeout=<s>]
                          Open new tab (default: background). --runtime opens on a remote tray runtime.
                          Supports teleport flags.
-  tab-select <index>     Switch to tab by index
-  tab-close [index]      Close tab (default: current)
-  close                  Close current tab
+  tab-close --tab=<id>   Close tab by targetId
   record [url] [--filter=<js-expr>]
                          Open tab with HAR recording enabled
   stop-recording <id>    Stop recording and save HAR
@@ -1496,6 +1471,15 @@ function parseFlags(args: string[]): { positional: string[]; flags: Record<strin
 
 type CmdResult = { stdout: string; stderr: string; exitCode: number };
 
+/** Parse and validate the --tab <targetId> flag. Returns targetId or error message. */
+function requireTab(flags: Record<string, string>): { targetId: string } | { error: string } {
+  const tabId = flags['tab'];
+  if (!tabId) {
+    return { error: 'Error: --tab <targetId> is required. Run \'playwright-cli tab-list\' to get tab IDs.\n' };
+  }
+  return { targetId: tabId };
+}
+
 export function createPlaywrightCommand(
   name: string,
   browser: BrowserAPI | null | undefined,
@@ -1521,34 +1505,13 @@ export function createPlaywrightCommand(
     const subArgs = args.slice(1);
     const { positional, flags } = parseFlags(subArgs);
 
-    // Check if a teleport watcher has been triggered and needs to block
-    if (subcommand !== 'teleport') {
-      try {
-        const teleportResult = await checkTeleportBlock(state);
-        if (teleportResult) {
-          return { stdout: teleportResult + '\n', stderr: '', exitCode: 0 };
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return { stdout: '', stderr: `Teleport error: ${msg}\n`, exitCode: 1 };
-      }
-    }
+    // Note: Per-tab teleport blocking is now handled within command handlers
+    // via requireTab() -> browser.withTab() serialization
 
     let result: CmdResult;
     try {
       switch (subcommand) {
         case 'teleport': {
-          // --off: disarm
-          if (flags['off'] === 'true') {
-            log.info('Disarming teleport watcher via --off');
-            if (state.teleportWatcher) {
-              cleanupTeleportWatcher(state.teleportWatcher);
-              state.teleportWatcher = null;
-            }
-            result = { stdout: 'Teleport watcher disarmed\n', stderr: '', exitCode: 0 };
-            break;
-          }
-
           // --list: list available follower runtimes
           if (flags['list'] === 'true') {
             log.info('Listing available follower runtimes');
@@ -1577,7 +1540,30 @@ export function createPlaywrightCommand(
             break;
           }
 
-          // Arm teleport watcher
+          // --off: disarm (requires --tab)
+          if (flags['off'] === 'true') {
+            const tab = requireTab(flags);
+            if ('error' in tab) {
+              result = { stdout: '', stderr: tab.error, exitCode: 1 };
+              break;
+            }
+            log.info('Disarming teleport watcher via --off', { targetId: tab.targetId });
+            const watcher = state.teleportWatchers.get(tab.targetId);
+            if (watcher) {
+              cleanupTeleportWatcher(watcher);
+              state.teleportWatchers.delete(tab.targetId);
+            }
+            result = { stdout: 'Teleport watcher disarmed\n', stderr: '', exitCode: 0 };
+            break;
+          }
+
+          // Arm teleport watcher (requires --tab)
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+
           const startPatternStr = flags['start'] || flags['teleport-start'];
           const returnPatternStr = flags['return'] || flags['teleport-return'];
           if (!startPatternStr || !returnPatternStr) {
@@ -1617,31 +1603,31 @@ export function createPlaywrightCommand(
           }
           const runtimeId = flags['runtime'];
 
-          // Disarm any existing watcher
-          if (state.teleportWatcher) {
-            log.info('Disarming existing teleport watcher before re-arming');
-            cleanupTeleportWatcher(state.teleportWatcher);
-            state.teleportWatcher = null;
+          // Disarm any existing watcher on this tab
+          const existingWatcher = state.teleportWatchers.get(tab.targetId);
+          if (existingWatcher) {
+            log.info('Disarming existing teleport watcher before re-arming', { targetId: tab.targetId });
+            cleanupTeleportWatcher(existingWatcher);
+            state.teleportWatchers.delete(tab.targetId);
           }
 
           // Capture the leader's current URL before the SSO redirect for post-teleport navigation
           let leaderUrl: string | undefined;
           try {
-            const targetId = state.currentTarget;
-            if (targetId) {
-              await browser.attachToPage(targetId);
-              const raw = await browser.evaluate('window.location.href');
-              leaderUrl = typeof raw === 'string' ? raw : String(raw);
-            }
+            await browser.attachToPage(tab.targetId);
+            const raw = await browser.evaluate('window.location.href');
+            leaderUrl = typeof raw === 'string' ? raw : String(raw);
           } catch {
             /* best-effort */
           }
 
           log.info('Arming teleport via explicit subcommand', {
+            targetId: tab.targetId,
             timeoutSec,
             runtimeSelection: runtimeId ? 'explicit' : 'auto',
           });
           log.debug('Arming teleport via explicit subcommand details', {
+            targetId: tab.targetId,
             startPattern: startPatternStr,
             returnPattern: returnPatternStr,
             timeoutSec,
@@ -1655,10 +1641,11 @@ export function createPlaywrightCommand(
             returnPattern,
             timeoutSec * 1000,
             runtimeId,
-            leaderUrl
+            leaderUrl,
+            tab.targetId
           );
           result = {
-            stdout: `Teleport armed on current tab. Will trigger when URL matches ${startPatternStr}\n`,
+            stdout: `Teleport armed on tab ${tab.targetId}. Will trigger when URL matches ${startPatternStr}\n`,
             stderr: '',
             exitCode: 0,
           };
@@ -1668,10 +1655,7 @@ export function createPlaywrightCommand(
         case 'open':
         case 'tab-new': {
           const url = positional[0] || 'about:blank';
-          const foreground = flags['foreground'] === 'true' || flags['fg'] === 'true';
           const runtimeFlag = flags['runtime'];
-
-          const previousTarget = await ensureTarget(browser, state);
           await resolveAppTabId(browser, state);
 
           let targetId: string;
@@ -1681,9 +1665,6 @@ export function createPlaywrightCommand(
           } else {
             targetId = await browser.createPage(url);
           }
-          if (foreground || !previousTarget) {
-            state.currentTarget = targetId;
-          }
 
           // Arm teleport watcher if --teleport-start and --teleport-return are set
           const teleStartStr = flags['teleport-start'];
@@ -1691,6 +1672,7 @@ export function createPlaywrightCommand(
           if (teleStartStr && teleReturnStr) {
             log.info('Arming teleport via open/tab-new flags');
             log.debug('Arming teleport via open/tab-new flags details', {
+              targetId,
               startPattern: teleStartStr,
               returnPattern: teleReturnStr,
             });
@@ -1717,9 +1699,10 @@ export function createPlaywrightCommand(
               break;
             }
             const teleTimeout = flags['timeout'] ? parseInt(flags['timeout'], 10) : 300;
-            if (state.teleportWatcher) {
-              cleanupTeleportWatcher(state.teleportWatcher);
-              state.teleportWatcher = null;
+            const existingWatcher = state.teleportWatchers.get(targetId);
+            if (existingWatcher) {
+              cleanupTeleportWatcher(existingWatcher);
+              state.teleportWatchers.delete(targetId);
             }
             armTeleportWatcher(
               browser,
@@ -1728,12 +1711,13 @@ export function createPlaywrightCommand(
               teleReturn,
               teleTimeout * 1000,
               flags['teleport-runtime'],
-              url
+              url,
+              targetId
             );
           }
 
           result = {
-            stdout: `Opened tab (targetId: ${targetId}) at ${url}\n`,
+            stdout: `Opened ${url} in new tab [targetId: ${targetId}]\n`,
             stderr: '',
             exitCode: 0,
           };
@@ -1746,14 +1730,16 @@ export function createPlaywrightCommand(
             result = { stdout: '', stderr: 'goto requires a URL\n', exitCode: 1 };
             break;
           }
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          await browser.attachToPage(targetId);
-          await browser.navigate(positional[0]);
-          state.snapshots.delete(targetId);
+          const data = await browser.withTab(tab.targetId, async () => {
+            await browser.navigate(positional[0]);
+            return true;
+          });
+          state.snapshots.delete(tab.targetId);
 
           // Arm teleport watcher if --teleport-start and --teleport-return are set
           const teleStartStr = flags['teleport-start'];
@@ -1761,6 +1747,7 @@ export function createPlaywrightCommand(
           if (teleStartStr && teleReturnStr) {
             log.info('Arming teleport via goto/navigate flags');
             log.debug('Arming teleport via goto/navigate flags details', {
+              targetId: tab.targetId,
               startPattern: teleStartStr,
               returnPattern: teleReturnStr,
             });
@@ -1787,9 +1774,10 @@ export function createPlaywrightCommand(
               break;
             }
             const teleTimeout = flags['timeout'] ? parseInt(flags['timeout'], 10) : 300;
-            if (state.teleportWatcher) {
-              cleanupTeleportWatcher(state.teleportWatcher);
-              state.teleportWatcher = null;
+            const existingWatcher = state.teleportWatchers.get(tab.targetId);
+            if (existingWatcher) {
+              cleanupTeleportWatcher(existingWatcher);
+              state.teleportWatchers.delete(tab.targetId);
             }
             armTeleportWatcher(
               browser,
@@ -1798,7 +1786,8 @@ export function createPlaywrightCommand(
               teleReturn,
               teleTimeout * 1000,
               flags['teleport-runtime'],
-              positional[0]
+              positional[0],
+              tab.targetId
             );
           }
 
@@ -1807,12 +1796,14 @@ export function createPlaywrightCommand(
         }
 
         case 'snapshot': {
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          const { output } = await takeSnapshot(browser, state, targetId);
+          const { output } = await browser.withTab(tab.targetId, async () => {
+            return await takeSnapshot(browser, state, tab.targetId);
+          });
           if (flags['filename']) {
             await fs.writeFile(flags['filename'], output);
             result = {
@@ -1827,28 +1818,181 @@ export function createPlaywrightCommand(
         }
 
         case 'screenshot': {
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          // Ref-based screenshot
-          let clip: { x: number; y: number; width: number; height: number } | undefined;
-          if (positional[0] && positional[0].startsWith('e')) {
-            const snapshot = state.snapshots.get(targetId);
-            if (!snapshot) {
-              result = {
-                stdout: '',
-                stderr: 'No snapshot available. Run "snapshot" first.\n',
-                exitCode: 1,
-              };
-              break;
-            }
-            await browser.attachToPage(targetId);
+          const output = await browser.withTab(tab.targetId, async () => {
+            // Ref-based screenshot
+            let clip: { x: number; y: number; width: number; height: number } | undefined;
+            if (positional[0] && positional[0].startsWith('e')) {
+              const snapshot = state.snapshots.get(tab.targetId);
+              if (!snapshot) {
+                throw new Error('No snapshot available. Run "snapshot" first.');
+              }
 
-            // Prefer backendNodeId for reliable element resolution
-            const backendNodeId = snapshot.refToBackendNodeId.get(positional[0]);
+              // Prefer backendNodeId for reliable element resolution
+              const backendNodeId = snapshot.refToBackendNodeId.get(positional[0]);
+              if (backendNodeId) {
+                const transport = browser.getTransport();
+                const sessionId = browser.getSessionId();
+                await transport.send('DOM.enable', {}, sessionId!);
+                await transport.send('Runtime.enable', {}, sessionId!);
+                const resolveResult = await transport.send(
+                  'DOM.resolveNode',
+                  { backendNodeId },
+                  sessionId!
+                );
+                const obj = resolveResult['object'] as { objectId?: string } | undefined;
+                if (obj?.objectId) {
+                  const boxResult = await transport.send(
+                    'Runtime.callFunctionOn',
+                    {
+                      objectId: obj.objectId,
+                      functionDeclaration: `function() {
+                      this.scrollIntoView({ block: 'center' });
+                      const r = this.getBoundingClientRect();
+                      return { x: r.x + window.scrollX, y: r.y + window.scrollY, width: r.width, height: r.height };
+                    }`,
+                      returnByValue: true,
+                    },
+                    sessionId!
+                  );
+                  const boxValue = (
+                    boxResult['result'] as {
+                      value?: { x: number; y: number; width: number; height: number };
+                    }
+                  )?.value;
+                  if (boxValue) {
+                    clip = boxValue;
+                  }
+                }
+              } else {
+                // Fall back to CSS selector
+                const selector = snapshot.refToSelector.get(positional[0]);
+                if (!selector) {
+                  throw new Error(`Unknown ref "${positional[0]}"`);
+                }
+                const rectJson = await browser.evaluate(
+                  `(function() {
+                    const el = document.querySelector(${JSON.stringify(selector.split(',')[0].trim())});
+                    if (!el) return null;
+                    el.scrollIntoView({ block: 'center' });
+                    const r = el.getBoundingClientRect();
+                    return JSON.stringify({ x: r.x + window.scrollX, y: r.y + window.scrollY, width: r.width, height: r.height });
+                  })()`
+                );
+                if (rectJson) {
+                  clip = JSON.parse(rectJson as string);
+                }
+              }
+            }
+
+            const maxWidth = flags['max-width'] ? parseInt(flags['max-width'], 10) : undefined;
+            const base64 = await browser.screenshot({
+              fullPage: flags['fullPage'] === 'true',
+              ...(clip ? { clip } : {}),
+              ...(maxWidth ? { maxWidth } : {}),
+            });
+            const savePath = flags['filename'] || `/tmp/screenshot-${Date.now()}.png`;
+            const bytes = base64ToBytes(base64);
+            await fs.writeFile(savePath, bytes);
+            // Archive screenshot to /.playwright/screenshots/
+            try {
+              await ensureSessionDirs(fs, state);
+              const archivePath = `/.playwright/screenshots/screenshot-${filenameSafeTimestamp(new Date())}.png`;
+              await fs.writeFile(archivePath, bytes);
+            } catch {
+              // Best-effort
+            }
+            const sizeKB = Math.round(bytes.length / 1024);
+            return `Screenshot saved to ${savePath} (${sizeKB} KB)`;
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'click': {
+          if (positional.length === 0) {
+            result = { stdout: '', stderr: 'click requires a ref (e.g. e5)\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const ref = positional[0];
+          const output = await browser.withTab(tab.targetId, async () => {
+            const snapshot = state.snapshots.get(tab.targetId);
+            if (!snapshot) {
+              throw new Error('No snapshot available. Run "snapshot" first.');
+            }
+
+            // Prefer backendNodeId for reliable clicking
+            const backendNodeId = snapshot.refToBackendNodeId.get(ref);
             if (backendNodeId) {
+              await browser.clickByBackendNodeId(backendNodeId);
+              state.snapshots.delete(tab.targetId);
+              return `Clicked ${ref}`;
+            }
+
+            // Fall back to CSS selector
+            const selector = snapshot.refToSelector.get(ref);
+            if (!selector) {
+              throw new Error(`Unknown ref "${ref}". Available: ${[...snapshot.refToSelector.keys()].slice(0, 10).join(', ')}...`);
+            }
+            await browser.click(selector);
+            state.snapshots.delete(tab.targetId);
+            return `Clicked ${ref}`;
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'type': {
+          if (positional.length === 0) {
+            result = { stdout: '', stderr: 'type requires text\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const text = positional.join(' ');
+          await browser.withTab(tab.targetId, async () => {
+            await browser.type(text);
+          });
+          result = { stdout: `Typed: ${text}\n`, stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'fill': {
+          if (positional.length < 2) {
+            result = { stdout: '', stderr: 'fill requires <ref> <text>\n', exitCode: 1 };
+            break;
+          }
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const ref = positional[0];
+          const fillText = positional.slice(1).join(' ');
+          const output = await browser.withTab(tab.targetId, async () => {
+            const snapshot = state.snapshots.get(tab.targetId);
+            if (!snapshot) {
+              throw new Error('No snapshot available. Run "snapshot" first.');
+            }
+
+            // Prefer backendNodeId for reliable element targeting
+            const backendNodeId = snapshot.refToBackendNodeId.get(ref);
+            if (backendNodeId) {
+              // Click to focus, then clear and type
+              await browser.clickByBackendNodeId(backendNodeId);
+              // Clear via DOM using resolved node
               const transport = browser.getTransport();
               const sessionId = browser.getSessionId();
               await transport.send('DOM.enable', {}, sessionId!);
@@ -1860,260 +2004,85 @@ export function createPlaywrightCommand(
               );
               const obj = resolveResult['object'] as { objectId?: string } | undefined;
               if (obj?.objectId) {
-                const boxResult = await transport.send(
-                  'Runtime.callFunctionOn',
-                  {
-                    objectId: obj.objectId,
-                    functionDeclaration: `function() {
-                    this.scrollIntoView({ block: 'center' });
-                    const r = this.getBoundingClientRect();
-                    return { x: r.x + window.scrollX, y: r.y + window.scrollY, width: r.width, height: r.height };
-                  }`,
-                    returnByValue: true,
-                  },
-                  sessionId!
-                );
-                const boxValue = (
-                  boxResult['result'] as {
-                    value?: { x: number; y: number; width: number; height: number };
-                  }
-                )?.value;
-                if (boxValue) {
-                  clip = boxValue;
-                }
-              }
-            } else {
-              // Fall back to CSS selector
-              const selector = snapshot.refToSelector.get(positional[0]);
-              if (!selector) {
-                result = { stdout: '', stderr: `Unknown ref "${positional[0]}"\n`, exitCode: 1 };
-                break;
-              }
-              const rectJson = await browser.evaluate(
-                `(function() {
-                  const el = document.querySelector(${JSON.stringify(selector.split(',')[0].trim())});
-                  if (!el) return null;
-                  el.scrollIntoView({ block: 'center' });
-                  const r = el.getBoundingClientRect();
-                  return JSON.stringify({ x: r.x + window.scrollX, y: r.y + window.scrollY, width: r.width, height: r.height });
-                })()`
-              );
-              if (rectJson) {
-                clip = JSON.parse(rectJson as string);
-              }
-            }
-          }
-
-          await browser.attachToPage(targetId);
-          const maxWidth = flags['max-width'] ? parseInt(flags['max-width'], 10) : undefined;
-          const base64 = await browser.screenshot({
-            fullPage: flags['fullPage'] === 'true',
-            ...(clip ? { clip } : {}),
-            ...(maxWidth ? { maxWidth } : {}),
-          });
-          const savePath = flags['filename'] || `/tmp/screenshot-${Date.now()}.png`;
-          const bytes = base64ToBytes(base64);
-          await fs.writeFile(savePath, bytes);
-          // Archive screenshot to /.playwright/screenshots/
-          try {
-            await ensureSessionDirs(fs, state);
-            const archivePath = `/.playwright/screenshots/screenshot-${filenameSafeTimestamp(new Date())}.png`;
-            await fs.writeFile(archivePath, bytes);
-          } catch {
-            // Best-effort
-          }
-          const sizeKB = Math.round(bytes.length / 1024);
-          result = {
-            stdout: `Screenshot saved to ${savePath} (${sizeKB} KB)\n`,
-            stderr: '',
-            exitCode: 0,
-          };
-          break;
-        }
-
-        case 'click': {
-          if (positional.length === 0) {
-            result = { stdout: '', stderr: 'click requires a ref (e.g. e5)\n', exitCode: 1 };
-            break;
-          }
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
-            break;
-          }
-          const ref = positional[0];
-          const snapshot = state.snapshots.get(targetId);
-          if (!snapshot) {
-            result = {
-              stdout: '',
-              stderr: 'No snapshot available. Run "snapshot" first.\n',
-              exitCode: 1,
-            };
-            break;
-          }
-          await browser.attachToPage(targetId);
-
-          // Prefer backendNodeId for reliable clicking
-          const backendNodeId = snapshot.refToBackendNodeId.get(ref);
-          if (backendNodeId) {
-            await browser.clickByBackendNodeId(backendNodeId);
-            state.snapshots.delete(targetId);
-            result = { stdout: `Clicked ${ref}\n`, stderr: '', exitCode: 0 };
-            break;
-          }
-
-          // Fall back to CSS selector
-          const selector = snapshot.refToSelector.get(ref);
-          if (!selector) {
-            result = {
-              stdout: '',
-              stderr: `Unknown ref "${ref}". Available: ${[...snapshot.refToSelector.keys()].slice(0, 10).join(', ')}...\n`,
-              exitCode: 1,
-            };
-            break;
-          }
-          await browser.click(selector);
-          state.snapshots.delete(targetId);
-          result = { stdout: `Clicked ${ref}\n`, stderr: '', exitCode: 0 };
-          break;
-        }
-
-        case 'type': {
-          if (positional.length === 0) {
-            result = { stdout: '', stderr: 'type requires text\n', exitCode: 1 };
-            break;
-          }
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
-            break;
-          }
-          await browser.attachToPage(targetId);
-          const text = positional.join(' ');
-          await browser.type(text);
-          result = { stdout: `Typed: ${text}\n`, stderr: '', exitCode: 0 };
-          break;
-        }
-
-        case 'fill': {
-          if (positional.length < 2) {
-            result = { stdout: '', stderr: 'fill requires <ref> <text>\n', exitCode: 1 };
-            break;
-          }
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
-            break;
-          }
-          const ref = positional[0];
-          const snapshot = state.snapshots.get(targetId);
-          if (!snapshot) {
-            result = {
-              stdout: '',
-              stderr: 'No snapshot available. Run "snapshot" first.\n',
-              exitCode: 1,
-            };
-            break;
-          }
-          await browser.attachToPage(targetId);
-          const fillText = positional.slice(1).join(' ');
-
-          // Prefer backendNodeId for reliable element targeting
-          const backendNodeId = snapshot.refToBackendNodeId.get(ref);
-          if (backendNodeId) {
-            // Click to focus, then clear and type
-            await browser.clickByBackendNodeId(backendNodeId);
-            // Clear via DOM using resolved node
-            const transport = browser.getTransport();
-            const sessionId = browser.getSessionId();
-            await transport.send('DOM.enable', {}, sessionId!);
-            await transport.send('Runtime.enable', {}, sessionId!);
-            const resolveResult = await transport.send(
-              'DOM.resolveNode',
-              { backendNodeId },
-              sessionId!
-            );
-            const obj = resolveResult['object'] as { objectId?: string } | undefined;
-            if (obj?.objectId) {
-              await transport.send(
-                'Runtime.callFunctionOn',
-                {
-                  objectId: obj.objectId,
-                  functionDeclaration: CLEAR_FOCUSABLE_ELEMENT_FUNCTION,
-                  returnByValue: true,
-                },
-                sessionId!
-              );
-            }
-            await browser.type(fillText);
-            // Verify value and use native setter fallback for React-controlled inputs
-            if (obj?.objectId) {
-              const readResult = await transport.send(
-                'Runtime.callFunctionOn',
-                {
-                  objectId: obj.objectId,
-                  functionDeclaration: READ_INPUT_VALUE_FUNCTION,
-                  returnByValue: true,
-                },
-                sessionId!
-              );
-              const currentValue = (readResult['result'] as { value?: string })?.value ?? '';
-              if (currentValue !== fillText) {
                 await transport.send(
                   'Runtime.callFunctionOn',
                   {
                     objectId: obj.objectId,
-                    functionDeclaration: REACT_FILL_FALLBACK_FUNCTION,
-                    arguments: [{ value: fillText }],
+                    functionDeclaration: CLEAR_FOCUSABLE_ELEMENT_FUNCTION,
                     returnByValue: true,
                   },
                   sessionId!
                 );
               }
-            }
-            state.snapshots.delete(targetId);
-            result = { stdout: `Filled ${ref} with: ${fillText}\n`, stderr: '', exitCode: 0 };
-            break;
-          }
-
-          // Fall back to CSS selector
-          const selector = snapshot.refToSelector.get(ref);
-          if (!selector) {
-            result = { stdout: '', stderr: `Unknown ref "${ref}"\n`, exitCode: 1 };
-            break;
-          }
-          await browser.click(selector);
-          await browser.evaluate(
-            `(function() {
-              const el = document.querySelector(${JSON.stringify(selector)});
-              if (el) {
-                return (${CLEAR_FOCUSABLE_ELEMENT_FUNCTION}).call(el);
+              await browser.type(fillText);
+              // Verify value and use native setter fallback for React-controlled inputs
+              if (obj?.objectId) {
+                const readResult = await transport.send(
+                  'Runtime.callFunctionOn',
+                  {
+                    objectId: obj.objectId,
+                    functionDeclaration: READ_INPUT_VALUE_FUNCTION,
+                    returnByValue: true,
+                  },
+                  sessionId!
+                );
+                const currentValue = (readResult['result'] as { value?: string })?.value ?? '';
+                if (currentValue !== fillText) {
+                  await transport.send(
+                    'Runtime.callFunctionOn',
+                    {
+                      objectId: obj.objectId,
+                      functionDeclaration: REACT_FILL_FALLBACK_FUNCTION,
+                      arguments: [{ value: fillText }],
+                      returnByValue: true,
+                    },
+                    sessionId!
+                  );
+                }
               }
-              return false;
-            })()`
-          );
-          await browser.type(fillText);
-          // Verify value and use native setter fallback for React-controlled inputs
-          {
-            const currentValue = (await browser.evaluate(
+              state.snapshots.delete(tab.targetId);
+              return `Filled ${ref} with: ${fillText}`;
+            }
+
+            // Fall back to CSS selector
+            const selector = snapshot.refToSelector.get(ref);
+            if (!selector) {
+              throw new Error(`Unknown ref "${ref}"`);
+            }
+            await browser.click(selector);
+            await browser.evaluate(
               `(function() {
-                const el = document.querySelector(${JSON.stringify(selector.split(',')[0].trim())});
-                if (!el) return '';
-                return (${READ_INPUT_VALUE_FUNCTION}).call(el);
+                const el = document.querySelector(${JSON.stringify(selector)});
+                if (el) {
+                  return (${CLEAR_FOCUSABLE_ELEMENT_FUNCTION}).call(el);
+                }
+                return false;
               })()`
-            )) as string;
-            if (currentValue !== fillText) {
-              await browser.evaluate(
+            );
+            await browser.type(fillText);
+            // Verify value and use native setter fallback for React-controlled inputs
+            {
+              const currentValue = (await browser.evaluate(
                 `(function() {
                   const el = document.querySelector(${JSON.stringify(selector.split(',')[0].trim())});
-                  if (!el) return;
-                  (${REACT_FILL_FALLBACK_FUNCTION}).call(el, ${JSON.stringify(fillText)});
+                  if (!el) return '';
+                  return (${READ_INPUT_VALUE_FUNCTION}).call(el);
                 })()`
-              );
+              )) as string;
+              if (currentValue !== fillText) {
+                await browser.evaluate(
+                  `(function() {
+                    const el = document.querySelector(${JSON.stringify(selector.split(',')[0].trim())});
+                    if (!el) return;
+                    (${REACT_FILL_FALLBACK_FUNCTION}).call(el, ${JSON.stringify(fillText)});
+                  })()`
+                );
+              }
             }
-          }
-          state.snapshots.delete(targetId);
-          result = { stdout: `Filled ${ref} with: ${fillText}\n`, stderr: '', exitCode: 0 };
+            state.snapshots.delete(tab.targetId);
+            return `Filled ${ref} with: ${fillText}`;
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
           break;
         }
 
@@ -2122,16 +2091,16 @@ export function createPlaywrightCommand(
             result = { stdout: '', stderr: 'eval requires an expression\n', exitCode: 1 };
             break;
           }
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          await browser.attachToPage(targetId);
           const expression = positional.join(' ');
-          const evalResult = await browser.evaluate(expression);
-          const output =
-            typeof evalResult === 'string' ? evalResult : JSON.stringify(evalResult, null, 2);
+          const output = await browser.withTab(tab.targetId, async () => {
+            const evalResult = await browser.evaluate(expression);
+            return typeof evalResult === 'string' ? evalResult : JSON.stringify(evalResult, null, 2);
+          });
           result = { stdout: (output ?? 'undefined') + '\n', stderr: '', exitCode: 0 };
           break;
         }
@@ -2141,9 +2110,9 @@ export function createPlaywrightCommand(
             result = { stdout: '', stderr: 'eval-file requires a file path\n', exitCode: 1 };
             break;
           }
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
           const scriptPath = positional[0];
@@ -2162,12 +2131,12 @@ export function createPlaywrightCommand(
             break;
           }
 
-          await browser.attachToPage(targetId);
-          const fileEvalResult = await browser.evaluate(scriptContent);
-          const fileOutput =
-            typeof fileEvalResult === 'string'
+          const fileOutput = await browser.withTab(tab.targetId, async () => {
+            const fileEvalResult = await browser.evaluate(scriptContent);
+            return typeof fileEvalResult === 'string'
               ? fileEvalResult
               : JSON.stringify(fileEvalResult, null, 2);
+          });
 
           if (outputPath) {
             const outputContent = fileOutput ?? 'null';
@@ -2189,56 +2158,60 @@ export function createPlaywrightCommand(
             result = { stdout: '', stderr: 'press requires a key name\n', exitCode: 1 };
             break;
           }
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          await browser.attachToPage(targetId);
           const key = positional[0];
-          // Use CDP Input.dispatchKeyEvent
-          const transport = browser.getTransport();
-          const sessionId = browser.getSessionId();
-          await transport.send('Input.dispatchKeyEvent', { type: 'keyDown', key }, sessionId!);
-          await transport.send('Input.dispatchKeyEvent', { type: 'keyUp', key }, sessionId!);
+          await browser.withTab(tab.targetId, async () => {
+            // Use CDP Input.dispatchKeyEvent
+            const transport = browser.getTransport();
+            const sessionId = browser.getSessionId();
+            await transport.send('Input.dispatchKeyEvent', { type: 'keyDown', key }, sessionId!);
+            await transport.send('Input.dispatchKeyEvent', { type: 'keyUp', key }, sessionId!);
+          });
           result = { stdout: `Pressed ${key}\n`, stderr: '', exitCode: 0 };
           break;
         }
 
         case 'go-back': {
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          await browser.attachToPage(targetId);
-          await browser.evaluate('history.back()');
-          state.snapshots.delete(targetId);
+          await browser.withTab(tab.targetId, async () => {
+            await browser.evaluate('history.back()');
+          });
+          state.snapshots.delete(tab.targetId);
           result = { stdout: 'Navigated back\n', stderr: '', exitCode: 0 };
           break;
         }
 
         case 'go-forward': {
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          await browser.attachToPage(targetId);
-          await browser.evaluate('history.forward()');
-          state.snapshots.delete(targetId);
+          await browser.withTab(tab.targetId, async () => {
+            await browser.evaluate('history.forward()');
+          });
+          state.snapshots.delete(tab.targetId);
           result = { stdout: 'Navigated forward\n', stderr: '', exitCode: 0 };
           break;
         }
 
         case 'reload': {
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          await browser.attachToPage(targetId);
-          await browser.sendCDP('Page.reload');
+          await browser.withTab(tab.targetId, async () => {
+            await browser.sendCDP('Page.reload');
+          });
           result = { stdout: 'Reloaded\n', stderr: '', exitCode: 0 };
           break;
         }
@@ -2249,79 +2222,30 @@ export function createPlaywrightCommand(
             result = { stdout: 'No tabs open\n', stderr: '', exitCode: 0 };
             break;
           }
-          const lines = pages.map((p, i) => {
-            const isCurrent = p.targetId === state.currentTarget;
+          const lines = pages.map((p) => {
             const isActive = !!p.active;
             const isRemote = p.targetId.includes(':');
-            const marker = isCurrent ? '→ ' : isActive ? '* ' : '  ';
+            const activeMarker = isActive ? ' (active)' : '';
             const remoteSuffix = isRemote
               ? ` [remote:${p.targetId.substring(0, p.targetId.indexOf(':'))}]`
               : '';
-            return `${marker}${i}: ${p.title} (${p.url})${remoteSuffix}`;
+            return `[${p.targetId}] ${p.url} "${p.title}"${activeMarker}${remoteSuffix}`;
           });
           result = { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
           break;
         }
 
-        case 'tab-select': {
-          if (positional.length === 0) {
-            result = { stdout: '', stderr: 'tab-select requires an index\n', exitCode: 1 };
-            break;
-          }
-          const index = parseInt(positional[0], 10);
-          const pages = await getActionablePages(browser, state);
-          if (index < 0 || index >= pages.length) {
-            result = {
-              stdout: '',
-              stderr: `Tab index ${index} out of range (0-${pages.length - 1})\n`,
-              exitCode: 1,
-            };
-            break;
-          }
-          state.currentTarget = pages[index].targetId;
-          result = {
-            stdout: `Switched to tab ${index}: ${pages[index].title}\n`,
-            stderr: '',
-            exitCode: 0,
-          };
-          break;
-        }
-
         case 'tab-close':
         case 'close': {
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab to close.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          // If index is given, close that tab instead
-          if (positional.length > 0) {
-            const index = parseNonNegativeInteger(positional[0]);
-            if (index === null) {
-              result = {
-                stdout: '',
-                stderr: `Invalid tab index "${positional[0]}"\n`,
-                exitCode: 1,
-              };
-              break;
-            }
-            const pages = await getActionablePages(browser, state);
-            if (index < 0 || index >= pages.length) {
-              result = { stdout: '', stderr: `Tab index ${index} out of range\n`, exitCode: 1 };
-              break;
-            }
-            const closeTarget = pages[index].targetId;
-            await browser.closePage(closeTarget);
-            state.snapshots.delete(closeTarget);
-            if (state.currentTarget === closeTarget) state.currentTarget = null;
-            result = { stdout: `Closed tab ${index}\n`, stderr: '', exitCode: 0 };
-            break;
-          }
-          // Close current tab
-          await browser.closePage(targetId);
-          state.snapshots.delete(targetId);
-          state.currentTarget = null;
-          result = { stdout: 'Closed current tab\n', stderr: '', exitCode: 0 };
+          await browser.closePage(tab.targetId);
+          state.snapshots.delete(tab.targetId);
+          state.teleportWatchers.delete(tab.targetId);
+          result = { stdout: `Closed tab ${tab.targetId}\n`, stderr: '', exitCode: 0 };
           break;
         }
 
@@ -2330,31 +2254,27 @@ export function createPlaywrightCommand(
             result = { stdout: '', stderr: 'dblclick requires a ref (e.g. e5)\n', exitCode: 1 };
             break;
           }
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
           const ref = positional[0];
           const button = (positional[1] || 'left') as 'left' | 'right' | 'middle';
-          const snapshot = state.snapshots.get(targetId);
-          if (!snapshot) {
-            result = {
-              stdout: '',
-              stderr: 'No snapshot available. Run "snapshot" first.\n',
-              exitCode: 1,
-            };
-            break;
-          }
-          await browser.attachToPage(targetId);
-          const backendNodeId = snapshot.refToBackendNodeId.get(ref);
-          if (!backendNodeId) {
-            result = { stdout: '', stderr: `Unknown ref "${ref}"\n`, exitCode: 1 };
-            break;
-          }
-          await browser.dblclickByBackendNodeId(backendNodeId, button);
-          state.snapshots.delete(targetId);
-          result = { stdout: `Double-clicked ${ref}\n`, stderr: '', exitCode: 0 };
+          const output = await browser.withTab(tab.targetId, async () => {
+            const snapshot = state.snapshots.get(tab.targetId);
+            if (!snapshot) {
+              throw new Error('No snapshot available. Run "snapshot" first.');
+            }
+            const backendNodeId = snapshot.refToBackendNodeId.get(ref);
+            if (!backendNodeId) {
+              throw new Error(`Unknown ref "${ref}"`);
+            }
+            await browser.dblclickByBackendNodeId(backendNodeId, button);
+            state.snapshots.delete(tab.targetId);
+            return `Double-clicked ${ref}`;
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
           break;
         }
 
@@ -2363,29 +2283,25 @@ export function createPlaywrightCommand(
             result = { stdout: '', stderr: 'hover requires a ref (e.g. e5)\n', exitCode: 1 };
             break;
           }
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
           const ref = positional[0];
-          const snapshot = state.snapshots.get(targetId);
-          if (!snapshot) {
-            result = {
-              stdout: '',
-              stderr: 'No snapshot available. Run "snapshot" first.\n',
-              exitCode: 1,
-            };
-            break;
-          }
-          await browser.attachToPage(targetId);
-          const backendNodeId = snapshot.refToBackendNodeId.get(ref);
-          if (!backendNodeId) {
-            result = { stdout: '', stderr: `Unknown ref "${ref}"\n`, exitCode: 1 };
-            break;
-          }
-          await browser.hoverByBackendNodeId(backendNodeId);
-          result = { stdout: `Hovered ${ref}\n`, stderr: '', exitCode: 0 };
+          const output = await browser.withTab(tab.targetId, async () => {
+            const snapshot = state.snapshots.get(tab.targetId);
+            if (!snapshot) {
+              throw new Error('No snapshot available. Run "snapshot" first.');
+            }
+            const backendNodeId = snapshot.refToBackendNodeId.get(ref);
+            if (!backendNodeId) {
+              throw new Error(`Unknown ref "${ref}"`);
+            }
+            await browser.hoverByBackendNodeId(backendNodeId);
+            return `Hovered ${ref}`;
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
           break;
         }
 
@@ -2394,31 +2310,27 @@ export function createPlaywrightCommand(
             result = { stdout: '', stderr: 'select requires <ref> <value>\n', exitCode: 1 };
             break;
           }
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
           const ref = positional[0];
           const value = positional.slice(1).join(' ');
-          const snapshot = state.snapshots.get(targetId);
-          if (!snapshot) {
-            result = {
-              stdout: '',
-              stderr: 'No snapshot available. Run "snapshot" first.\n',
-              exitCode: 1,
-            };
-            break;
-          }
-          await browser.attachToPage(targetId);
-          const backendNodeId = snapshot.refToBackendNodeId.get(ref);
-          if (!backendNodeId) {
-            result = { stdout: '', stderr: `Unknown ref "${ref}"\n`, exitCode: 1 };
-            break;
-          }
-          await browser.selectByBackendNodeId(backendNodeId, value);
-          state.snapshots.delete(targetId);
-          result = { stdout: `Selected "${value}" on ${ref}\n`, stderr: '', exitCode: 0 };
+          const output = await browser.withTab(tab.targetId, async () => {
+            const snapshot = state.snapshots.get(tab.targetId);
+            if (!snapshot) {
+              throw new Error('No snapshot available. Run "snapshot" first.');
+            }
+            const backendNodeId = snapshot.refToBackendNodeId.get(ref);
+            if (!backendNodeId) {
+              throw new Error(`Unknown ref "${ref}"`);
+            }
+            await browser.selectByBackendNodeId(backendNodeId, value);
+            state.snapshots.delete(tab.targetId);
+            return `Selected "${value}" on ${ref}`;
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
           break;
         }
 
@@ -2427,34 +2339,26 @@ export function createPlaywrightCommand(
             result = { stdout: '', stderr: 'check requires a ref (e.g. e5)\n', exitCode: 1 };
             break;
           }
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
           const ref = positional[0];
-          const snapshot = state.snapshots.get(targetId);
-          if (!snapshot) {
-            result = {
-              stdout: '',
-              stderr: 'No snapshot available. Run "snapshot" first.\n',
-              exitCode: 1,
-            };
-            break;
-          }
-          await browser.attachToPage(targetId);
-          const backendNodeId = snapshot.refToBackendNodeId.get(ref);
-          if (!backendNodeId) {
-            result = { stdout: '', stderr: `Unknown ref "${ref}"\n`, exitCode: 1 };
-            break;
-          }
-          const action = await browser.setCheckedByBackendNodeId(backendNodeId, true);
-          if (action === 'toggled') state.snapshots.delete(targetId);
-          result = {
-            stdout: action === 'already' ? `${ref} already checked\n` : `Checked ${ref}\n`,
-            stderr: '',
-            exitCode: 0,
-          };
+          const output = await browser.withTab(tab.targetId, async () => {
+            const snapshot = state.snapshots.get(tab.targetId);
+            if (!snapshot) {
+              throw new Error('No snapshot available. Run "snapshot" first.');
+            }
+            const backendNodeId = snapshot.refToBackendNodeId.get(ref);
+            if (!backendNodeId) {
+              throw new Error(`Unknown ref "${ref}"`);
+            }
+            const action = await browser.setCheckedByBackendNodeId(backendNodeId, true);
+            if (action === 'toggled') state.snapshots.delete(tab.targetId);
+            return action === 'already' ? `${ref} already checked` : `Checked ${ref}`;
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
           break;
         }
 
@@ -2463,34 +2367,26 @@ export function createPlaywrightCommand(
             result = { stdout: '', stderr: 'uncheck requires a ref (e.g. e5)\n', exitCode: 1 };
             break;
           }
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
           const ref = positional[0];
-          const snapshot = state.snapshots.get(targetId);
-          if (!snapshot) {
-            result = {
-              stdout: '',
-              stderr: 'No snapshot available. Run "snapshot" first.\n',
-              exitCode: 1,
-            };
-            break;
-          }
-          await browser.attachToPage(targetId);
-          const backendNodeId = snapshot.refToBackendNodeId.get(ref);
-          if (!backendNodeId) {
-            result = { stdout: '', stderr: `Unknown ref "${ref}"\n`, exitCode: 1 };
-            break;
-          }
-          const action = await browser.setCheckedByBackendNodeId(backendNodeId, false);
-          if (action === 'toggled') state.snapshots.delete(targetId);
-          result = {
-            stdout: action === 'already' ? `${ref} already unchecked\n` : `Unchecked ${ref}\n`,
-            stderr: '',
-            exitCode: 0,
-          };
+          const output = await browser.withTab(tab.targetId, async () => {
+            const snapshot = state.snapshots.get(tab.targetId);
+            if (!snapshot) {
+              throw new Error('No snapshot available. Run "snapshot" first.');
+            }
+            const backendNodeId = snapshot.refToBackendNodeId.get(ref);
+            if (!backendNodeId) {
+              throw new Error(`Unknown ref "${ref}"`);
+            }
+            const action = await browser.setCheckedByBackendNodeId(backendNodeId, false);
+            if (action === 'toggled') state.snapshots.delete(tab.targetId);
+            return action === 'already' ? `${ref} already unchecked` : `Unchecked ${ref}`;
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
           break;
         }
 
@@ -2499,36 +2395,31 @@ export function createPlaywrightCommand(
             result = { stdout: '', stderr: 'drag requires <startRef> <endRef>\n', exitCode: 1 };
             break;
           }
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
           const startRef = positional[0];
           const endRef = positional[1];
-          const snapshot = state.snapshots.get(targetId);
-          if (!snapshot) {
-            result = {
-              stdout: '',
-              stderr: 'No snapshot available. Run "snapshot" first.\n',
-              exitCode: 1,
-            };
-            break;
-          }
-          await browser.attachToPage(targetId);
-          const startNode = snapshot.refToBackendNodeId.get(startRef);
-          const endNode = snapshot.refToBackendNodeId.get(endRef);
-          if (!startNode) {
-            result = { stdout: '', stderr: `Unknown ref "${startRef}"\n`, exitCode: 1 };
-            break;
-          }
-          if (!endNode) {
-            result = { stdout: '', stderr: `Unknown ref "${endRef}"\n`, exitCode: 1 };
-            break;
-          }
-          await browser.dragByBackendNodeIds(startNode, endNode);
-          state.snapshots.delete(targetId);
-          result = { stdout: `Dragged ${startRef} to ${endRef}\n`, stderr: '', exitCode: 0 };
+          const output = await browser.withTab(tab.targetId, async () => {
+            const snapshot = state.snapshots.get(tab.targetId);
+            if (!snapshot) {
+              throw new Error('No snapshot available. Run "snapshot" first.');
+            }
+            const startNode = snapshot.refToBackendNodeId.get(startRef);
+            const endNode = snapshot.refToBackendNodeId.get(endRef);
+            if (!startNode) {
+              throw new Error(`Unknown ref "${startRef}"`);
+            }
+            if (!endNode) {
+              throw new Error(`Unknown ref "${endRef}"`);
+            }
+            await browser.dragByBackendNodeIds(startNode, endNode);
+            state.snapshots.delete(tab.targetId);
+            return `Dragged ${startRef} to ${endRef}`;
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
           break;
         }
 
@@ -2537,9 +2428,9 @@ export function createPlaywrightCommand(
             result = { stdout: '', stderr: 'resize requires <width> <height>\n', exitCode: 1 };
             break;
           }
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
           const w = parseInt(positional[0], 10);
@@ -2552,43 +2443,45 @@ export function createPlaywrightCommand(
             };
             break;
           }
-          await browser.attachToPage(targetId);
-          const transport = browser.getTransport();
-          const sessionId = browser.getSessionId();
-          await transport.send(
-            'Emulation.setDeviceMetricsOverride',
-            {
-              width: w,
-              height: h,
-              deviceScaleFactor: 1,
-              mobile: false,
-            },
-            sessionId!
-          );
-          state.snapshots.delete(targetId);
+          await browser.withTab(tab.targetId, async () => {
+            const transport = browser.getTransport();
+            const sessionId = browser.getSessionId();
+            await transport.send(
+              'Emulation.setDeviceMetricsOverride',
+              {
+                width: w,
+                height: h,
+                deviceScaleFactor: 1,
+                mobile: false,
+              },
+              sessionId!
+            );
+          });
+          state.snapshots.delete(tab.targetId);
           result = { stdout: `Resized viewport to ${w}x${h}\n`, stderr: '', exitCode: 0 };
           break;
         }
 
         case 'dialog-accept': {
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          await browser.attachToPage(targetId);
-          const transport = browser.getTransport();
-          const sessionId = browser.getSessionId();
-          await transport.send('Page.enable', {}, sessionId!);
           const promptText = positional.length > 0 ? positional.join(' ') : undefined;
-          await transport.send(
-            'Page.handleJavaScriptDialog',
-            {
-              accept: true,
-              ...(promptText !== undefined ? { promptText } : {}),
-            },
-            sessionId!
-          );
+          await browser.withTab(tab.targetId, async () => {
+            const transport = browser.getTransport();
+            const sessionId = browser.getSessionId();
+            await transport.send('Page.enable', {}, sessionId!);
+            await transport.send(
+              'Page.handleJavaScriptDialog',
+              {
+                accept: true,
+                ...(promptText !== undefined ? { promptText } : {}),
+              },
+              sessionId!
+            );
+          });
           result = {
             stdout: `Accepted dialog${promptText ? ` with "${promptText}"` : ''}\n`,
             stderr: '',
@@ -2598,16 +2491,17 @@ export function createPlaywrightCommand(
         }
 
         case 'dialog-dismiss': {
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          await browser.attachToPage(targetId);
-          const transport = browser.getTransport();
-          const sessionId = browser.getSessionId();
-          await transport.send('Page.enable', {}, sessionId!);
-          await transport.send('Page.handleJavaScriptDialog', { accept: false }, sessionId!);
+          await browser.withTab(tab.targetId, async () => {
+            const transport = browser.getTransport();
+            const sessionId = browser.getSessionId();
+            await transport.send('Page.enable', {}, sessionId!);
+            await transport.send('Page.handleJavaScriptDialog', { accept: false }, sessionId!);
+          });
           result = { stdout: 'Dismissed dialog\n', stderr: '', exitCode: 0 };
           break;
         }
@@ -2615,23 +2509,24 @@ export function createPlaywrightCommand(
         // --- Cookie commands (via CDP Network domain) ---
 
         case 'cookie-list': {
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          await browser.attachToPage(targetId);
-          const cdpCookies = await browser.sendCDP('Network.getCookies');
-          const cookies = (cdpCookies['cookies'] as Array<Record<string, unknown>>) ?? [];
-          if (cookies.length === 0) {
-            result = { stdout: 'No cookies\n', stderr: '', exitCode: 0 };
-            break;
-          }
-          const lines = cookies.map(
-            (c) =>
-              `${c['name']}=${c['value']}\tDomain=${c['domain']}\tPath=${c['path']}\tSecure=${c['secure']}\tHttpOnly=${c['httpOnly']}\tExpires=${c['expires']}`
-          );
-          result = { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+          const output = await browser.withTab(tab.targetId, async () => {
+            const cdpCookies = await browser.sendCDP('Network.getCookies');
+            const cookies = (cdpCookies['cookies'] as Array<Record<string, unknown>>) ?? [];
+            if (cookies.length === 0) {
+              return 'No cookies';
+            }
+            const lines = cookies.map(
+              (c) =>
+                `${c['name']}=${c['value']}\tDomain=${c['domain']}\tPath=${c['path']}\tSecure=${c['secure']}\tHttpOnly=${c['httpOnly']}\tExpires=${c['expires']}`
+            );
+            return lines.join('\n');
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
           break;
         }
 
@@ -2640,25 +2535,26 @@ export function createPlaywrightCommand(
             result = { stdout: '', stderr: 'cookie-get requires a cookie name\n', exitCode: 1 };
             break;
           }
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          await browser.attachToPage(targetId);
           const cookieName = positional[0];
-          const cdpGetCookies = await browser.sendCDP('Network.getCookies');
-          const cookies = (cdpGetCookies['cookies'] as Array<Record<string, unknown>>) ?? [];
-          const matched = cookies.filter((c) => c['name'] === cookieName);
-          if (matched.length === 0) {
-            result = { stdout: '', stderr: `Cookie "${cookieName}" not found\n`, exitCode: 1 };
-            break;
-          }
-          const lines = matched.map(
-            (c) =>
-              `${c['name']}=${c['value']}\tDomain=${c['domain']}\tPath=${c['path']}\tSecure=${c['secure']}\tHttpOnly=${c['httpOnly']}\tExpires=${c['expires']}`
-          );
-          result = { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+          const output = await browser.withTab(tab.targetId, async () => {
+            const cdpGetCookies = await browser.sendCDP('Network.getCookies');
+            const cookies = (cdpGetCookies['cookies'] as Array<Record<string, unknown>>) ?? [];
+            const matched = cookies.filter((c) => c['name'] === cookieName);
+            if (matched.length === 0) {
+              throw new Error(`Cookie "${cookieName}" not found`);
+            }
+            const lines = matched.map(
+              (c) =>
+                `${c['name']}=${c['value']}\tDomain=${c['domain']}\tPath=${c['path']}\tSecure=${c['secure']}\tHttpOnly=${c['httpOnly']}\tExpires=${c['expires']}`
+            );
+            return lines.join('\n');
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
           break;
         }
 
@@ -2667,26 +2563,27 @@ export function createPlaywrightCommand(
             result = { stdout: '', stderr: 'cookie-set requires <name> <value>\n', exitCode: 1 };
             break;
           }
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          await browser.attachToPage(targetId);
-          const pageLocation = await getCurrentPageLocation(browser);
-          const params: Record<string, unknown> = {
-            name: positional[0],
-            value: positional[1],
-          };
-          if (flags['domain']) params['domain'] = flags['domain'];
-          if (flags['path']) params['path'] = flags['path'];
-          if (flags['secure'] === 'true') params['secure'] = true;
-          if (flags['httpOnly'] === 'true') params['httpOnly'] = true;
-          if (flags['expires']) params['expires'] = parseFloat(flags['expires']);
-          if (!params['domain'] && !params['path']) {
-            params['url'] = pageLocation.href;
-          }
-          await browser.sendCDP('Network.setCookie', params);
+          await browser.withTab(tab.targetId, async () => {
+            const pageLocation = await getCurrentPageLocation(browser);
+            const params: Record<string, unknown> = {
+              name: positional[0],
+              value: positional[1],
+            };
+            if (flags['domain']) params['domain'] = flags['domain'];
+            if (flags['path']) params['path'] = flags['path'];
+            if (flags['secure'] === 'true') params['secure'] = true;
+            if (flags['httpOnly'] === 'true') params['httpOnly'] = true;
+            if (flags['expires']) params['expires'] = parseFloat(flags['expires']);
+            if (!params['domain'] && !params['path']) {
+              params['url'] = pageLocation.href;
+            }
+            await browser.sendCDP('Network.setCookie', params);
+          });
           result = { stdout: `Cookie "${positional[0]}" set\n`, stderr: '', exitCode: 0 };
           break;
         }
@@ -2696,32 +2593,34 @@ export function createPlaywrightCommand(
             result = { stdout: '', stderr: 'cookie-delete requires a cookie name\n', exitCode: 1 };
             break;
           }
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          await browser.attachToPage(targetId);
-          const delParams: Record<string, unknown> = { name: positional[0] };
-          if (flags['domain']) delParams['domain'] = flags['domain'];
-          if (flags['path']) delParams['path'] = flags['path'];
-          if (!delParams['domain'] && !delParams['path']) {
-            const pageLocation = await getCurrentPageLocation(browser);
-            delParams['url'] = pageLocation.href;
-          }
-          await browser.sendCDP('Network.deleteCookies', delParams);
+          await browser.withTab(tab.targetId, async () => {
+            const delParams: Record<string, unknown> = { name: positional[0] };
+            if (flags['domain']) delParams['domain'] = flags['domain'];
+            if (flags['path']) delParams['path'] = flags['path'];
+            if (!delParams['domain'] && !delParams['path']) {
+              const pageLocation = await getCurrentPageLocation(browser);
+              delParams['url'] = pageLocation.href;
+            }
+            await browser.sendCDP('Network.deleteCookies', delParams);
+          });
           result = { stdout: `Cookie "${positional[0]}" deleted\n`, stderr: '', exitCode: 0 };
           break;
         }
 
         case 'cookie-clear': {
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          await browser.attachToPage(targetId);
-          await browser.sendCDP('Network.clearBrowserCookies');
+          await browser.withTab(tab.targetId, async () => {
+            await browser.sendCDP('Network.clearBrowserCookies');
+          });
           result = { stdout: 'All cookies cleared\n', stderr: '', exitCode: 0 };
           break;
         }
@@ -2729,22 +2628,23 @@ export function createPlaywrightCommand(
         // --- localStorage commands (via evaluate) ---
 
         case 'localstorage-list': {
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          await browser.attachToPage(targetId);
-          const raw = (await browser.evaluate(
-            'JSON.stringify(Object.entries(localStorage))'
-          )) as string;
-          const entries = JSON.parse(raw) as [string, string][];
-          if (entries.length === 0) {
-            result = { stdout: 'No localStorage entries\n', stderr: '', exitCode: 0 };
-            break;
-          }
-          const lines = entries.map(([k, v]) => `${k}=${v}`);
-          result = { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+          const output = await browser.withTab(tab.targetId, async () => {
+            const raw = (await browser.evaluate(
+              'JSON.stringify(Object.entries(localStorage))'
+            )) as string;
+            const entries = JSON.parse(raw) as [string, string][];
+            if (entries.length === 0) {
+              return 'No localStorage entries';
+            }
+            const lines = entries.map(([k, v]) => `${k}=${v}`);
+            return lines.join('\n');
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
           break;
         }
 
@@ -2753,24 +2653,21 @@ export function createPlaywrightCommand(
             result = { stdout: '', stderr: 'localstorage-get requires a key\n', exitCode: 1 };
             break;
           }
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          await browser.attachToPage(targetId);
-          const val = await browser.evaluate(
-            `localStorage.getItem(${JSON.stringify(positional[0])})`
-          );
-          if (val === null) {
-            result = {
-              stdout: '',
-              stderr: `Key "${positional[0]}" not found in localStorage\n`,
-              exitCode: 1,
-            };
-            break;
-          }
-          result = { stdout: val + '\n', stderr: '', exitCode: 0 };
+          const output = await browser.withTab(tab.targetId, async () => {
+            const val = await browser.evaluate(
+              `localStorage.getItem(${JSON.stringify(positional[0])})`
+            );
+            if (val === null) {
+              throw new Error(`Key "${positional[0]}" not found in localStorage`);
+            }
+            return val;
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
           break;
         }
 
@@ -2783,15 +2680,16 @@ export function createPlaywrightCommand(
             };
             break;
           }
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          await browser.attachToPage(targetId);
-          await browser.evaluate(
-            `localStorage.setItem(${JSON.stringify(positional[0])}, ${JSON.stringify(positional.slice(1).join(' '))})`
-          );
+          await browser.withTab(tab.targetId, async () => {
+            await browser.evaluate(
+              `localStorage.setItem(${JSON.stringify(positional[0])}, ${JSON.stringify(positional.slice(1).join(' '))})`
+            );
+          });
           result = { stdout: `localStorage "${positional[0]}" set\n`, stderr: '', exitCode: 0 };
           break;
         }
@@ -2801,25 +2699,27 @@ export function createPlaywrightCommand(
             result = { stdout: '', stderr: 'localstorage-delete requires a key\n', exitCode: 1 };
             break;
           }
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          await browser.attachToPage(targetId);
-          await browser.evaluate(`localStorage.removeItem(${JSON.stringify(positional[0])})`);
+          await browser.withTab(tab.targetId, async () => {
+            await browser.evaluate(`localStorage.removeItem(${JSON.stringify(positional[0])})`);
+          });
           result = { stdout: `localStorage "${positional[0]}" deleted\n`, stderr: '', exitCode: 0 };
           break;
         }
 
         case 'localstorage-clear': {
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          await browser.attachToPage(targetId);
-          await browser.evaluate('localStorage.clear()');
+          await browser.withTab(tab.targetId, async () => {
+            await browser.evaluate('localStorage.clear()');
+          });
           result = { stdout: 'localStorage cleared\n', stderr: '', exitCode: 0 };
           break;
         }
@@ -2827,22 +2727,23 @@ export function createPlaywrightCommand(
         // --- sessionStorage commands (via evaluate) ---
 
         case 'sessionstorage-list': {
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          await browser.attachToPage(targetId);
-          const raw = (await browser.evaluate(
-            'JSON.stringify(Object.entries(sessionStorage))'
-          )) as string;
-          const entries = JSON.parse(raw) as [string, string][];
-          if (entries.length === 0) {
-            result = { stdout: 'No sessionStorage entries\n', stderr: '', exitCode: 0 };
-            break;
-          }
-          const lines = entries.map(([k, v]) => `${k}=${v}`);
-          result = { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+          const output = await browser.withTab(tab.targetId, async () => {
+            const raw = (await browser.evaluate(
+              'JSON.stringify(Object.entries(sessionStorage))'
+            )) as string;
+            const entries = JSON.parse(raw) as [string, string][];
+            if (entries.length === 0) {
+              return 'No sessionStorage entries';
+            }
+            const lines = entries.map(([k, v]) => `${k}=${v}`);
+            return lines.join('\n');
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
           break;
         }
 
@@ -2851,24 +2752,21 @@ export function createPlaywrightCommand(
             result = { stdout: '', stderr: 'sessionstorage-get requires a key\n', exitCode: 1 };
             break;
           }
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          await browser.attachToPage(targetId);
-          const val = await browser.evaluate(
-            `sessionStorage.getItem(${JSON.stringify(positional[0])})`
-          );
-          if (val === null) {
-            result = {
-              stdout: '',
-              stderr: `Key "${positional[0]}" not found in sessionStorage\n`,
-              exitCode: 1,
-            };
-            break;
-          }
-          result = { stdout: val + '\n', stderr: '', exitCode: 0 };
+          const output = await browser.withTab(tab.targetId, async () => {
+            const val = await browser.evaluate(
+              `sessionStorage.getItem(${JSON.stringify(positional[0])})`
+            );
+            if (val === null) {
+              throw new Error(`Key "${positional[0]}" not found in sessionStorage`);
+            }
+            return val;
+          });
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
           break;
         }
 
@@ -2881,15 +2779,16 @@ export function createPlaywrightCommand(
             };
             break;
           }
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          await browser.attachToPage(targetId);
-          await browser.evaluate(
-            `sessionStorage.setItem(${JSON.stringify(positional[0])}, ${JSON.stringify(positional.slice(1).join(' '))})`
-          );
+          await browser.withTab(tab.targetId, async () => {
+            await browser.evaluate(
+              `sessionStorage.setItem(${JSON.stringify(positional[0])}, ${JSON.stringify(positional.slice(1).join(' '))})`
+            );
+          });
           result = { stdout: `sessionStorage "${positional[0]}" set\n`, stderr: '', exitCode: 0 };
           break;
         }
@@ -2899,13 +2798,14 @@ export function createPlaywrightCommand(
             result = { stdout: '', stderr: 'sessionstorage-delete requires a key\n', exitCode: 1 };
             break;
           }
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          await browser.attachToPage(targetId);
-          await browser.evaluate(`sessionStorage.removeItem(${JSON.stringify(positional[0])})`);
+          await browser.withTab(tab.targetId, async () => {
+            await browser.evaluate(`sessionStorage.removeItem(${JSON.stringify(positional[0])})`);
+          });
           result = {
             stdout: `sessionStorage "${positional[0]}" deleted\n`,
             stderr: '',
@@ -2915,13 +2815,14 @@ export function createPlaywrightCommand(
         }
 
         case 'sessionstorage-clear': {
-          const targetId = await ensureTarget(browser, state);
-          if (!targetId) {
-            result = { stdout: '', stderr: 'No tab available. Use "open" first.\n', exitCode: 1 };
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
-          await browser.attachToPage(targetId);
-          await browser.evaluate('sessionStorage.clear()');
+          await browser.withTab(tab.targetId, async () => {
+            await browser.evaluate('sessionStorage.clear()');
+          });
           result = { stdout: 'sessionStorage cleared\n', stderr: '', exitCode: 0 };
           break;
         }
@@ -2945,7 +2846,6 @@ export function createPlaywrightCommand(
             sessionId,
             filterCode
           );
-          state.currentTarget = newTargetId;
           result = {
             stdout: `Recording started (targetId: ${newTargetId}, recordingId: ${recordingId}) at ${url}\nHAR saved to /recordings/${recordingId}/\n`,
             stderr: '',
@@ -2986,41 +2886,24 @@ export function createPlaywrightCommand(
       result = { stdout: '', stderr: `Error: ${msg}\n`, exitCode: 1 };
     }
 
-    if (
-      result.exitCode === 0 &&
-      state.currentTarget &&
-      SNAPSHOT_INVALIDATING_COMMANDS.has(subcommand)
-    ) {
-      state.snapshots.delete(state.currentTarget);
+    // Post-command: session logging + auto-snapshot
+    const targetId = flags['tab'] ?? null;
+    let snapshotPath: string | null = null;
+
+    if (AUTO_SNAPSHOT_COMMANDS.has(subcommand) && result.exitCode === 0 && targetId) {
+      snapshotPath = await autoSaveSnapshot(browser, fs, state, targetId);
     }
 
-    // Session history logging (best-effort, never fails the command)
     try {
-      // Get current tab info for the log entry
-      let tabUrl: string | undefined;
-      const targetId = state.currentTarget;
-      if (targetId) {
-        const snap = state.snapshots.get(targetId);
-        if (snap) tabUrl = snap.url;
-      }
-
-      // Auto-snapshot for state-changing commands (only on success)
-      let snapshotPath: string | null = null;
-      if (AUTO_SNAPSHOT_COMMANDS.has(subcommand) && result.exitCode === 0 && state.currentTarget) {
-        snapshotPath = await autoSaveSnapshot(browser, fs, state, state.currentTarget);
-      }
-
-      // Log the session entry
       await logSession(fs, state, {
         command: subcommand,
         args: subArgs,
         result,
         snapshotPath,
-        tabUrl,
         targetId,
       });
     } catch {
-      // Session logging is best-effort
+      // Session logging is best-effort — never fail the command
     }
 
     return result;

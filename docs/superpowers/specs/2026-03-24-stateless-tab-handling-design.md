@@ -25,15 +25,13 @@ Use CDP `targetId` directly — already unique, stable, and what `BrowserAPI` us
 
 ### Command Categories
 
-**38 commands require `--tab <targetId>`** (all that currently call `ensureTarget()`):
+**36 commands require `--tab <targetId>`** (all that currently call `ensureTarget()`):
 
 **Navigation:** `goto`/`navigate`, `go-back`, `go-forward`, `reload`
 
 **Inspection:** `screenshot`, `snapshot`, `eval`, `eval-file`
 
-**Interaction:** `click`, `dblclick`, `hover`, `type`, `fill`, `select`, `check`, `uncheck`, `press`, `drag`, `scroll`, `resize`
-
-**Wait:** `wait-for`
+**Interaction:** `click`, `dblclick`, `hover`, `type`, `fill`, `select`, `check`, `uncheck`, `press`, `drag`, `resize`
 
 **Dialogs:** `dialog-accept`, `dialog-dismiss`
 

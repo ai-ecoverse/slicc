@@ -135,13 +135,11 @@ export function createServeCommand(browserAPI?: BrowserAPI, vfs?: VirtualFS): Co
 
     // Use BrowserAPI.createPage() when available — this integrates with
     // playwright-cli's tab tracking so the scoop can immediately use
-    // screenshot/eval/snapshot on the served tab without tab-list + tab-select.
+    // Create a tab for the served directory. Use --tab <targetId> with playwright-cli commands.
     if (browserAPI && vfs) {
       const targetId = await browserAPI.createPage(previewUrl);
-      const pwState = getSharedState(browserAPI, vfs);
-      pwState.currentTarget = targetId;
       return {
-        stdout: `serving ${fullDirectory} → ${previewUrl} (targetId: ${targetId})\n`,
+        stdout: `serving ${fullDirectory} → ${previewUrl} (targetId: ${targetId})\nUse: playwright-cli <command> --tab ${targetId}\n`,
         stderr: '',
         exitCode: 0,
       };
