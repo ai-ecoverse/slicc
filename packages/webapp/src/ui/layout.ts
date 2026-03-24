@@ -291,7 +291,7 @@ export class Layout {
     const img = document.createElement('img');
     img.width = size;
     img.height = size;
-    img.src = '/logos/sliccy-color-0scoops-48x48.png';
+    img.src = '/logos/sliccy-color-0scoops-128x128.png';
     img.alt = 'slicc';
     img.classList.add('header__logo');
     img.style.objectFit = 'contain';
@@ -357,7 +357,7 @@ export class Layout {
     // Update header logo image
     const clamped = Math.min(Math.max(nonCone.length, 0), 10);
     if (this.logoImg) {
-      this.logoImg.src = `/logos/sliccy-color-${clamped}scoops-48x48.png`;
+      this.logoImg.src = `/logos/sliccy-color-${clamped}scoops-128x128.png`;
     }
 
     // Update browser favicon and extension icon to match scoop count
