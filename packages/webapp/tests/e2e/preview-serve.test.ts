@@ -227,15 +227,25 @@ test.describe('preview service worker', () => {
         '/preview/shared/app/index.html?projectRoot=/shared/app'
       );
 
+      // Cross-origin fetch should hit the network, not the SW.
+      // CORS will block reading the response body, but the request
+      // should either succeed (opaque) or throw a TypeError — never
+      // return VFS content with content-type 'text/css'.
       const result = await page.evaluate(async () => {
         try {
           const resp = await fetch('https://example.com/test.css');
-          return { intercepted: false, status: resp.status };
+          return {
+            status: resp.status,
+            contentType: resp.headers.get('content-type'),
+          };
         } catch {
-          return { intercepted: false, status: 0 };
+          // TypeError from CORS block — proves SW didn't intercept
+          return { status: 0, contentType: null };
         }
       });
-      expect(result.intercepted).toBe(false);
+      // If SW intercepted, it would try to serve from VFS and return 404
+      // with content-type 'text/plain'. Network response will be different.
+      expect(result.contentType).not.toBe('text/plain');
     });
   });
 });
