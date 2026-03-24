@@ -13,7 +13,7 @@ import { fileURLToPath } from 'url';
 import { deflateRawSync } from 'zlib';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
-const PROJECT_ROOT = resolve(__dirname, '..', '..', '..');
+const PROJECT_ROOT = resolve(__dirname, '..', '..');
 const RELEASE_DIR = resolve(PROJECT_ROOT, 'artifacts', 'release');
 const FIXED_ZIP_DATE = new Date(Date.UTC(1980, 0, 1, 0, 0, 0));
 const ZIP_VERSION = 20;

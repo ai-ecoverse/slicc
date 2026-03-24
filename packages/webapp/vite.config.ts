@@ -44,7 +44,12 @@ export default defineConfig(({ mode }) => ({
 
         copyFileSync(resolve(__dirname, '../assets/logos/favicon.png'), resolve(uiOutDir, 'favicon.png'));
         // Vite preserves the nested HTML path when the repo root is the Vite root.
-        copyFileSync(resolve(uiOutDir, 'packages/webapp/index.html'), resolve(uiOutDir, 'index.html'));
+        // In some Vite versions the HTML lands directly at outDir root — only copy if nested.
+        const { existsSync } = await import('fs');
+        const nestedHtml = resolve(uiOutDir, 'packages/webapp/index.html');
+        if (existsSync(nestedHtml)) {
+          copyFileSync(nestedHtml, resolve(uiOutDir, 'index.html'));
+        }
       },
     },
   ],
