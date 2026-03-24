@@ -97,7 +97,8 @@ export class Layout {
   private avatarEl!: HTMLElement;
 
   // Dynamic logo
-  private logoSvg: SVGSVGElement | null = null;
+  private logoSvg: SVGSVGElement | null = null; // kept for API compat (unused)
+  private logoImg: HTMLImageElement | null = null;
   private logoScoopCount = -1; // -1 = initial load, skip animation
 
   public panels!: LayoutPanels;
@@ -285,31 +286,17 @@ export class Layout {
   /** Scoop brand palette — cycles for scoops beyond 5. */
   private static readonly SCOOP_COLORS = ['#f000a0', '#00f0f0', '#90f000', '#15d675', '#e68619'];
 
-  /** Create the SLICC ice cream cone SVG logo (transparent bg, dynamic scoops). */
-  private sliccLogo(size = 22): SVGSVGElement {
-    const ns = 'http://www.w3.org/2000/svg';
-    const svg = document.createElementNS(ns, 'svg');
-    svg.setAttribute('width', String(size));
-    svg.setAttribute('height', String(size));
-    svg.setAttribute('viewBox', '0 0 32 32');
-    svg.setAttribute('fill', 'none');
-    svg.setAttribute('overflow', 'visible');
-    svg.classList.add('header__logo');
-
-    // Cone (orange triangle) — always present
-    const cone = document.createElementNS(ns, 'path');
-    cone.setAttribute('d', 'M10 20l6 11 6-11z');
-    cone.setAttribute('fill', '#f07000');
-    cone.classList.add('logo-cone');
-    svg.appendChild(cone);
-
-    // Scoops container group — dynamically populated
-    const scoopsGroup = document.createElementNS(ns, 'g');
-    scoopsGroup.classList.add('logo-scoops');
-    svg.appendChild(scoopsGroup);
-
-    this.logoSvg = svg;
-    return svg;
+  /** Create the SLICC logo as an <img> using the new Sliccy variants. */
+  private sliccLogo(size = 22): HTMLImageElement {
+    const img = document.createElement('img');
+    img.width = size;
+    img.height = size;
+    img.src = '/logos/sliccy-color-0scoops-128x128.png';
+    img.alt = 'slicc';
+    img.classList.add('header__logo');
+    img.style.objectFit = 'contain';
+    this.logoImg = img;
+    return img;
   }
 
   /** Fixed scoop radius in SVG units — scoops never shrink. */
@@ -358,14 +345,8 @@ export class Layout {
     return positions;
   }
 
-  /** Update the logo to reflect current scoops. Animates new scoops. */
+  /** Update the logo to reflect current scoop count. */
   updateLogoScoops(scoops: RegisteredScoop[]): void {
-    if (!this.logoSvg) return;
-
-    const ns = 'http://www.w3.org/2000/svg';
-    const group = this.logoSvg.querySelector('.logo-scoops');
-    if (!group) return;
-
     const nonCone = scoops.filter((s) => !s.isCone);
     const prevCount = this.logoScoopCount;
 
@@ -373,62 +354,41 @@ export class Layout {
     if (prevCount === nonCone.length && prevCount >= 0) return;
     this.logoScoopCount = nonCone.length;
 
-    // Clear existing scoops
-    while (group.firstChild) group.removeChild(group.firstChild);
-
-    if (nonCone.length === 0) {
-      this.logoSvg.setAttribute('viewBox', '0 0 32 32');
-      return;
+    // Update header logo image
+    const clamped = Math.min(Math.max(nonCone.length, 0), 10);
+    if (this.logoImg) {
+      this.logoImg.src = `/logos/sliccy-color-${clamped}scoops-128x128.png`;
     }
 
-    // Animate when count grew after initial load (prevCount -1 = first render, skip)
-    const isNewScoop = prevCount >= 0 && nonCone.length > prevCount;
-    const positions = this.pyramidLayout(nonCone.length);
-    const r = Layout.SCOOP_R;
-
-    for (let i = 0; i < nonCone.length; i++) {
-      const pos = positions[i];
-      const circle = document.createElementNS(ns, 'circle');
-      circle.setAttribute('cx', String(pos.cx));
-      circle.setAttribute('cy', String(pos.cy));
-      circle.setAttribute('r', String(r));
-      circle.setAttribute('fill', Layout.SCOOP_COLORS[i % Layout.SCOOP_COLORS.length]);
-
-      if (isNewScoop) {
-        if (i >= prevCount) {
-          // New scoop: drop in from above
-          circle.classList.add('logo-scoop-enter');
-        } else {
-          // Existing scoops: wiggle as the new one lands
-          circle.classList.add('logo-scoop-wiggle');
-        }
-      }
-
-      group.appendChild(circle);
-    }
-
-    // Squash the cone when a new scoop lands
-    if (isNewScoop) {
-      const cone = this.logoSvg.querySelector('.logo-cone');
-      if (cone) {
-        cone.classList.remove('logo-cone-squash');
-        // Force reflow to restart animation
-        void (cone as SVGGraphicsElement).getBBox();
-        cone.classList.add('logo-cone-squash');
-      }
-    }
-
-    // Expand viewBox to fit the growing ice cream — never shrink scoops
-    const allX = positions.map((p) => p.cx);
-    const allY = positions.map((p) => p.cy);
-    const minX = Math.min(...allX) - r - 1;
-    const maxX = Math.max(...allX) + r + 1;
-    const minY = Math.min(...allY) - r - 1;
-    const maxY = 32; // cone bottom stays fixed
-    this.logoSvg.setAttribute('viewBox', `${minX} ${minY} ${maxX - minX} ${maxY - minY}`);
+    // Update browser favicon and extension icon to match scoop count
+    this.updateFaviconForScoops(nonCone.length);
   }
 
   /** Get initials from a user name (up to 2 characters). */
+  /** Update browser favicon and extension toolbar icon to reflect scoop count. */
+  private updateFaviconForScoops(scoopCount: number): void {
+    const clamped = Math.min(Math.max(scoopCount, 0), 10);
+
+    // Update browser tab favicon
+    const link = document.querySelector('link[rel="icon"]') as HTMLLinkElement | null;
+    if (link) {
+      link.href = `/logos/sliccy-color-${clamped}scoops-32x32.png`;
+    }
+
+    // Update extension toolbar icon (if in extension mode)
+    const chromeAny = typeof chrome !== 'undefined' ? (chrome as any) : null;
+    if (chromeAny?.action?.setIcon) {
+      chromeAny.action.setIcon({
+        path: {
+          16: `logos/sliccy-color-${clamped}scoops-16x16.png`,
+          32: `logos/sliccy-color-${clamped}scoops-32x32.png`,
+          48: `logos/sliccy-color-${clamped}scoops-48x48.png`,
+          128: `logos/sliccy-color-${clamped}scoops-128x128.png`,
+        },
+      }).catch(() => { /* best-effort */ });
+    }
+  }
+
   private getInitials(name: string): string {
     const parts = name.trim().split(/\s+/);
     if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();

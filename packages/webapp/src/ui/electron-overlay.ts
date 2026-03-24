@@ -1,5 +1,6 @@
 import {
   createElectronOverlayShellState,
+  isEdgePosition,
   normalizeElectronOverlayLauncherCorner,
   resolveElectronOverlayLauncherCorner,
   setElectronOverlayCorner,
@@ -12,6 +13,16 @@ import {
 } from './overlay-shell-state.js';
 import { ELECTRON_OVERLAY_SET_TAB_MESSAGE_TYPE } from './runtime-mode.js';
 import { EXTENSION_TAB_SPECS, normalizeExtensionTabId, type ExtensionTabId } from './tabbed-ui.js';
+
+// Monochrome Sliccy logos inlined at build time.
+// Dark variant: dark fill + white strokes (shows on light backgrounds).
+// Light variant: white fill + dark strokes (shows on dark backgrounds — appears as light icon).
+// The ?raw suffix tells Vite to import as string; the esbuild standalone build
+// uses a plugin to resolve ?raw to the .svg with text loader.
+// "dark" SVG = dark fill + white outlines → visible on dark backgrounds.
+// "light" SVG = white fill + black outlines → visible on light backgrounds.
+import sliccyDarkSvg from '../../../assets/logos/sliccy-mono-dark-1scoops.svg?raw';
+import sliccyLightSvg from '../../../assets/logos/sliccy-mono-light-1scoops.svg?raw';
 
 export const ELECTRON_OVERLAY_HOST_ID = 'slicc-electron-overlay-root';
 export const ELECTRON_OVERLAY_TAG_NAME = 'slicc-electron-overlay';
@@ -48,33 +59,10 @@ function createStyle(doc: Document, css: string): HTMLStyleElement {
 }
 
 /**
- * Create an SVG element with the cone icon.
+ * Strip the XML declaration from an SVG string so it can be injected as innerHTML.
  */
-function createConeIconSvg(doc: Document): SVGSVGElement {
-  const svg = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('aria-hidden', 'true');
-
-  // Two scoops (circles)
-  const circles = [
-    { cx: '9', cy: '7.2', r: '4.1' },
-    { cx: '15.2', cy: '8.1', r: '4' },
-  ];
-
-  for (const { cx, cy, r } of circles) {
-    const circle = doc.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    circle.setAttribute('cx', cx);
-    circle.setAttribute('cy', cy);
-    circle.setAttribute('r', r);
-    svg.appendChild(circle);
-  }
-
-  // Cone tip (path)
-  const path = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', 'M9.8 12.4h5.1L12.4 21z');
-  svg.appendChild(path);
-
-  return svg;
+function stripXmlDeclaration(svg: string): string {
+  return svg.replace(/<\?xml[^?]*\?>\s*/i, '');
 }
 
 const BASE_TOKENS = `
@@ -173,48 +161,121 @@ class SliccElectronLauncherElement extends HTMLElement {
         font-family: var(--s2-font-family);
         transition: top var(--s2-transition-default), right var(--s2-transition-default), bottom var(--s2-transition-default), left var(--s2-transition-default);
       }
+      /* Corner positions */
       :host([corner="top-left"]) { top: ${offset}px; right: auto; bottom: auto; left: ${offset}px; }
       :host([corner="top-right"]) { top: ${offset}px; right: ${offset}px; bottom: auto; left: auto; }
       :host([corner="bottom-left"]) { top: auto; right: auto; bottom: ${offset}px; left: ${offset}px; }
       :host([corner="bottom-right"]) { top: auto; right: ${offset}px; bottom: ${offset}px; left: auto; }
-      :host([dragging]) { transition: none; }
+      /* Edge midpoint positions — flush against edge */
+      :host([corner="top"]) { top: 0; left: 50%; right: auto; bottom: auto; transform: translateX(-50%); }
+      :host([corner="bottom"]) { bottom: 0; left: 50%; right: auto; top: auto; transform: translateX(-50%); }
+      :host([corner="left"]) { left: 0; top: 50%; right: auto; bottom: auto; transform: translateY(-50%); }
+      :host([corner="right"]) { right: 0; top: 50%; left: auto; bottom: auto; transform: translateY(-50%); }
+      :host([dragging]) { transition: none; transform: none; }
       *, *::before, *::after { box-sizing: border-box; }
+
+      /* === Button base (circle mode for corners) === */
       button {
         width: 44px; height: 44px; position: relative;
-        border: 1px solid rgba(255, 255, 255, 0.62);
+        border: none;
         border-radius: var(--s2-radius-pill);
-        background: radial-gradient(circle at 30% 28%, rgba(255, 255, 255, 0.34), transparent 34%),
-          linear-gradient(160deg, #ffb15c 0%, color-mix(in srgb, var(--slicc-cone) 92%, #ffb15c) 34%, #a34b00 72%, #38220f 100%);
-        color: #fff;
-        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18) inset, 0 0 0 4px rgba(0, 0, 0, 0.28), 0 12px 30px rgba(0, 0, 0, 0.4), 0 2px 10px rgba(0, 0, 0, 0.24);
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(0, 0, 0, 0.08);
         cursor: grab;
-        display: inline-flex; align-items: center; justify-content: center;
-        transition: transform var(--s2-transition-default), background var(--s2-transition-default), border-color var(--s2-transition-default), box-shadow var(--s2-transition-default);
+        display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+        transition: transform var(--s2-transition-default), box-shadow var(--s2-transition-default);
         backdrop-filter: blur(12px) saturate(1.05);
         touch-action: none; user-select: none; -webkit-user-select: none;
+        padding: 0; overflow: hidden;
       }
-      button::before {
-        content: ''; position: absolute; inset: -5px; border-radius: inherit;
-        border: 1px solid rgba(255, 255, 255, 0.32); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18); pointer-events: none;
+      @media (prefers-color-scheme: dark) {
+        button {
+          background: rgba(34, 34, 34, 0.92);
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.12);
+        }
       }
       :host([dragging]) button { cursor: grabbing; }
       button:hover {
-        transform: translateY(-1px); border-color: rgba(255, 255, 255, 0.78);
-        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.24) inset, 0 0 0 4px rgba(0, 0, 0, 0.34), 0 16px 34px rgba(0, 0, 0, 0.44), 0 0 18px color-mix(in srgb, var(--slicc-cone) 40%, transparent);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.12);
+      }
+      @media (prefers-color-scheme: dark) {
+        button:hover {
+          box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.18);
+        }
       }
       button:active { transform: scale(0.96); }
       button[aria-pressed="true"] {
-        border-color: rgba(255, 255, 255, 0.84);
-        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.24) inset, 0 0 0 4px rgba(0, 0, 0, 0.36), 0 16px 38px rgba(0, 0, 0, 0.46), 0 0 22px color-mix(in srgb, var(--slicc-cone) 52%, transparent);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3), 0 0 0 2px var(--s2-accent);
       }
-      svg { width: 20px; height: 20px; fill: currentColor; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55)); }
+
+      /* === Tab mode (edge midpoints) === */
+      .tab-label { display: none; font-family: var(--s2-font-family); font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap; }
+      :host([corner="top"]) button,
+      :host([corner="bottom"]) button,
+      :host([corner="left"]) button,
+      :host([corner="right"]) button {
+        width: auto; height: auto;
+        border-radius: 0;
+        padding: 6px 12px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+      }
+      :host([corner="top"]) button,
+      :host([corner="bottom"]) button { flex-direction: row; }
+      :host([corner="left"]) button,
+      :host([corner="right"]) button { flex-direction: column; padding: 10px 6px; }
+      :host([corner="left"]) .tab-label,
+      :host([corner="right"]) .tab-label { writing-mode: vertical-lr; }
+      :host([corner="right"]) .tab-label { rotate: 180deg; }
+
+      /* Rounded corners — only the two not touching the edge */
+      :host([corner="top"]) button { border-radius: 0 0 10px 10px; }
+      :host([corner="bottom"]) button { border-radius: 10px 10px 0 0; }
+      :host([corner="left"]) button { border-radius: 0 10px 10px 0; }
+      :host([corner="right"]) button { border-radius: 10px 0 0 10px; }
+
+      :host([corner="top"]) .tab-label,
+      :host([corner="bottom"]) .tab-label,
+      :host([corner="left"]) .tab-label,
+      :host([corner="right"]) .tab-label { display: block; }
+
+      :host([corner="top"]) .logo-icon,
+      :host([corner="bottom"]) .logo-icon,
+      :host([corner="left"]) .logo-icon,
+      :host([corner="right"]) .logo-icon { width: 22px; height: 22px; }
+
+      .logo-icon { width: 32px; height: 32px; pointer-events: none; }
+      /* Dark host: dark SVG (dark fill, white outlines) */
+      .logo-for-dark { display: block; }
+      .logo-for-light { display: none; }
+      @media (prefers-color-scheme: light) {
+        /* Light host: light SVG (white fill, black outlines) */
+        .logo-for-dark { display: none; }
+        .logo-for-light { display: block; }
+      }
     `));
 
-    // Create button with SVG icon
+    // Create button with Sliccy logo — both variants embedded, CSS toggles visibility.
     const button = doc.createElement('button');
     button.type = 'button';
     button.setAttribute('aria-label', 'Toggle SLICC overlay');
-    button.appendChild(createConeIconSvg(doc));
+
+    const forDark = doc.createElement('div');
+    forDark.className = 'logo-icon logo-for-dark';
+    forDark.innerHTML = stripXmlDeclaration(sliccyDarkSvg);
+    forDark.setAttribute('aria-hidden', 'true');
+
+    const forLight = doc.createElement('div');
+    forLight.className = 'logo-icon logo-for-light';
+    forLight.innerHTML = stripXmlDeclaration(sliccyLightSvg);
+    forLight.setAttribute('aria-hidden', 'true');
+
+    const tabLabel = doc.createElement('span');
+    tabLabel.className = 'tab-label';
+    tabLabel.textContent = 'SLICC';
+
+    button.appendChild(forDark);
+    button.appendChild(forLight);
+    button.appendChild(tabLabel);
     root.appendChild(button);
 
     this.button = button;
@@ -359,7 +420,7 @@ class SliccElectronLauncherElement extends HTMLElement {
 }
 
 class SliccElectronSidebarElement extends HTMLElement {
-  static observedAttributes = ['open', 'active-tab', 'app-url'];
+  static observedAttributes = ['open', 'active-tab', 'app-url', 'corner'];
 
   private tabButtons = new Map<ExtensionTabId, HTMLButtonElement>();
   private iframe: HTMLIFrameElement | null = null;
@@ -399,10 +460,32 @@ class SliccElectronSidebarElement extends HTMLElement {
         transition: transform var(--s2-transition-default); backdrop-filter: blur(16px);
       }
       :host([open]) .sidebar { transform: translateX(0); }
+
+      /* Slide from left */
+      :host([corner="left"]),
+      :host([corner="top-left"]),
+      :host([corner="bottom-left"]) {
+        & .sidebar { right: auto; left: 12px; transform: translateX(calc(-100% - 28px)); }
+      }
+      :host([open][corner="left"]) .sidebar,
+      :host([open][corner="top-left"]) .sidebar,
+      :host([open][corner="bottom-left"]) .sidebar { transform: translateX(0); }
+
+      /* Slide from top — stays on right side */
+      :host([corner="top"]) .sidebar {
+        top: 12px; bottom: auto; height: calc(100vh - 24px);
+        transform: translateY(calc(-100% - 28px));
+      }
+      :host([open][corner="top"]) .sidebar { transform: translateY(0); }
+
+      /* Slide from bottom — stays on right side */
+      :host([corner="bottom"]) .sidebar {
+        top: auto; bottom: 12px; height: calc(100vh - 24px);
+        transform: translateY(calc(100% + 28px));
+      }
+      :host([open][corner="bottom"]) .sidebar { transform: translateY(0); }
       .header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px 12px; border-bottom: 1px solid var(--s2-border-subtle); background: color-mix(in srgb, var(--s2-bg-layer-1) 92%, transparent); }
       .header__brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
-      .header__logo { width: 34px; height: 34px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: linear-gradient(180deg, rgba(239, 112, 0, 0.9), rgba(239, 112, 0, 0.7)); color: #fff; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18); }
-      .header__logo svg { width: 18px; height: 18px; fill: currentColor; }
       .header__title { font-size: 15px; font-weight: 700; letter-spacing: 0.01em; }
       .header__subtitle { font-size: 11px; color: var(--s2-content-secondary); }
       .header__close { appearance: none; border: 1px solid var(--s2-border-subtle); background: var(--s2-bg-layer-2); color: var(--s2-content-default); width: 32px; height: 32px; border-radius: 50%; cursor: pointer; font-size: 18px; line-height: 1; }
@@ -437,10 +520,6 @@ class SliccElectronSidebarElement extends HTMLElement {
     const brand = doc.createElement('div');
     brand.className = 'header__brand';
 
-    const logo = doc.createElement('span');
-    logo.className = 'header__logo';
-    logo.appendChild(createConeIconSvg(doc));
-    brand.appendChild(logo);
 
     const titleContainer = doc.createElement('div');
     const title = doc.createElement('div');
@@ -745,6 +824,7 @@ export class SliccElectronOverlayElement extends HTMLElement {
     launcher.toggleAttribute('open', this.state.open);
     launcher.setAttribute('corner', this.state.corner);
     sidebar.toggleAttribute('open', this.state.open);
+    sidebar.setAttribute('corner', this.state.corner);
     sidebar.setAttribute('active-tab', this.state.activeTab);
     if (this.appUrlValue) {
       sidebar.setAttribute('app-url', this.appUrlValue);
@@ -825,7 +905,7 @@ function readPersistedElectronOverlayCorner(
 ): ElectronOverlayLauncherCorner {
   try {
     return normalizeElectronOverlayLauncherCorner(
-      view?.sessionStorage.getItem(ELECTRON_OVERLAY_LAUNCHER_SESSION_STORAGE_KEY)
+      view?.localStorage.getItem(ELECTRON_OVERLAY_LAUNCHER_SESSION_STORAGE_KEY)
     );
   } catch {
     return normalizeElectronOverlayLauncherCorner(null);
@@ -837,9 +917,9 @@ function persistElectronOverlayCorner(
   corner: ElectronOverlayLauncherCorner
 ): void {
   try {
-    view?.sessionStorage.setItem(ELECTRON_OVERLAY_LAUNCHER_SESSION_STORAGE_KEY, corner);
+    view?.localStorage.setItem(ELECTRON_OVERLAY_LAUNCHER_SESSION_STORAGE_KEY, corner);
   } catch {
-    // Some target pages may not expose sessionStorage during reinjection.
+    // Some target pages may not expose localStorage during reinjection.
   }
 }
 
