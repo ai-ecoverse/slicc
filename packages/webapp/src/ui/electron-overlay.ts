@@ -18,8 +18,10 @@ import { EXTENSION_TAB_SPECS, normalizeExtensionTabId, type ExtensionTabId } fro
 // Light variant: white fill + dark strokes (shows on dark backgrounds — appears as light icon).
 // The ?raw suffix tells Vite to import as string; the esbuild standalone build
 // uses a plugin to resolve ?raw to the .svg with text loader.
-import sliccyMonoDarkSvg from '../../../assets/logos/sliccy-mono-dark-0scoops.svg?raw';
-import sliccyMonoLightSvg from '../../../assets/logos/sliccy-mono-light-0scoops.svg?raw';
+// Dark-on-light: black strokes on white fill — for dark host backgrounds.
+// Light-on-dark: white strokes on dark fill — for light host backgrounds.
+import sliccyLogoDarkOnLight from '../../../assets/logos/sliccy-mono-light-1scoops.svg?raw';
+import sliccyLogoLightOnDark from '../../../assets/logos/sliccy-mono-dark-1scoops.svg?raw';
 
 export const ELECTRON_OVERLAY_HOST_ID = 'slicc-electron-overlay-root';
 export const ELECTRON_OVERLAY_TAG_NAME = 'slicc-electron-overlay';
@@ -198,13 +200,13 @@ class SliccElectronLauncherElement extends HTMLElement {
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3), 0 0 0 2px var(--s2-accent);
       }
       .logo-icon { width: 32px; height: 32px; pointer-events: none; }
-      /* Dark mode: show light logo (light strokes on dark circle) */
-      .logo-dark { display: none; }
-      .logo-light { display: block; }
+      /* Dark host: show dark-on-light logo (black strokes, white fill) */
+      .logo-for-dark { display: block; }
+      .logo-for-light { display: none; }
       @media (prefers-color-scheme: light) {
-        /* Light mode: show dark logo (dark strokes on light circle) */
-        .logo-dark { display: block; }
-        .logo-light { display: none; }
+        /* Light host: show light-on-dark logo (white strokes, dark fill) */
+        .logo-for-dark { display: none; }
+        .logo-for-light { display: block; }
       }
     `));
 
@@ -213,18 +215,18 @@ class SliccElectronLauncherElement extends HTMLElement {
     button.type = 'button';
     button.setAttribute('aria-label', 'Toggle SLICC overlay');
 
-    const lightIcon = doc.createElement('div');
-    lightIcon.className = 'logo-icon logo-light';
-    lightIcon.innerHTML = stripXmlDeclaration(sliccyMonoLightSvg);
-    lightIcon.setAttribute('aria-hidden', 'true');
+    const forDark = doc.createElement('div');
+    forDark.className = 'logo-icon logo-for-dark';
+    forDark.innerHTML = stripXmlDeclaration(sliccyLogoDarkOnLight);
+    forDark.setAttribute('aria-hidden', 'true');
 
-    const darkIcon = doc.createElement('div');
-    darkIcon.className = 'logo-icon logo-dark';
-    darkIcon.innerHTML = stripXmlDeclaration(sliccyMonoDarkSvg);
-    darkIcon.setAttribute('aria-hidden', 'true');
+    const forLight = doc.createElement('div');
+    forLight.className = 'logo-icon logo-for-light';
+    forLight.innerHTML = stripXmlDeclaration(sliccyLogoLightOnDark);
+    forLight.setAttribute('aria-hidden', 'true');
 
-    button.appendChild(lightIcon);
-    button.appendChild(darkIcon);
+    button.appendChild(forDark);
+    button.appendChild(forLight);
     root.appendChild(button);
 
     this.button = button;
@@ -449,7 +451,7 @@ class SliccElectronSidebarElement extends HTMLElement {
 
     const logo = doc.createElement('span');
     logo.className = 'header__logo';
-    logo.innerHTML = stripXmlDeclaration(sliccyMonoDarkSvg);
+    logo.innerHTML = stripXmlDeclaration(sliccyLogoDarkOnLight);
     brand.appendChild(logo);
 
     const titleContainer = doc.createElement('div');
