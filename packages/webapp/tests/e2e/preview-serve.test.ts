@@ -23,9 +23,13 @@ test.describe('preview service worker', () => {
       await page.goto('/');
       await waitForSW(page);
       await seedVFS(page, {
+        '/workspace/site/index.html': '<h1>Host</h1>',
         '/workspace/site/styles.css': 'body { color: red; }',
         '/workspace/site/app.js': 'console.log("ok")',
       });
+
+      // Navigate into /preview/ scope so the SW intercepts sub-fetches
+      await page.goto('/preview/workspace/site/index.html');
 
       const css = await page.evaluate(async () => {
         const resp = await fetch('/preview/workspace/site/styles.css');
@@ -55,6 +59,12 @@ test.describe('preview service worker', () => {
     test('returns 404 for missing VFS paths', async ({ page }) => {
       await page.goto('/');
       await waitForSW(page);
+      await seedVFS(page, {
+        '/workspace/site/index.html': '<h1>Host</h1>',
+      });
+
+      // Navigate into /preview/ scope so the SW handles the 404
+      await page.goto('/preview/workspace/site/index.html');
 
       const result = await page.evaluate(async () => {
         const resp = await fetch('/preview/workspace/nonexistent.html');
@@ -141,17 +151,23 @@ test.describe('preview service worker', () => {
       await waitForSW(page);
       await seedVFS(page, {
         '/shared/app/index.html': '<h1>App</h1>',
+        // Seed a file at the path the SW would resolve if isSliccAppPath failed
+        '/shared/app/@vite/client': 'HIJACKED_BY_VFS',
       });
 
       await page.goto(
         '/preview/shared/app/index.html?projectRoot=/shared/app'
       );
 
+      // If isSliccAppPath works, the SW skips this request and the server
+      // returns the SPA fallback (HTML). If it fails, the SW would serve
+      // 'HIJACKED_BY_VFS' from VFS.
       const result = await page.evaluate(async () => {
         const resp = await fetch('/@vite/client');
-        return resp.status;
+        return resp.text();
       });
-      expect(result).not.toBe(200);
+      expect(result).not.toContain('HIJACKED_BY_VFS');
+      expect(result).toContain('<div id="app">');
     });
 
     test('does not intercept /api/ paths', async ({ page }) => {
