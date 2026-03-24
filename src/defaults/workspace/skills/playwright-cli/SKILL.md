@@ -149,6 +149,33 @@ playwright-cli record [url] [--filter=<js-expr>]  # Open tab with network record
 playwright-cli stop-recording <recordingId>        # Stop and save HAR
 ```
 
+## Multi-Agent Tab Behavior
+
+**All agents (cone + scoops) share the same tab namespace.** There is no tab isolation.
+
+- `tab-list` shows **every** tab from every agent — yours, the cone's, other scoops'. The list can be noisy.
+- Any agent can `eval`, `snapshot`, or `close` any tab — there are no ownership checks.
+- Tab counts fluctuate as other agents open and close tabs concurrently.
+
+**Best practices for scoops:**
+
+1. **Track your own tab IDs.** When you open a tab, capture the targetId and store it. Don't rely on `tab-list` to find your tabs later — other agents' tabs will be mixed in.
+   ```bash
+   # Open and capture the ID
+   playwright-cli tab-new https://example.com
+   # Output: Opened https://example.com in new tab [targetId: ABC123...]
+   # Use ABC123 for all subsequent commands on this tab
+   ```
+
+2. **Only close tabs you opened.** Don't close unfamiliar tabs — they belong to other agents or the user.
+
+3. **Handle "tab not found" gracefully.** Another agent might close a tab between your `tab-list` and your command. If you get `Error: No tab with id`, the tab is gone — move on.
+
+4. **Don't depend on tab count or ordering.** Other agents are opening/closing tabs concurrently. Use targetIds, not positional logic.
+
+5. **Clean up when done.** Close all tabs you opened before finishing. Include this in every scoop brief:
+   _"Close each tab with `playwright-cli tab-close --tab=<id>` when done."_
+
 ## Tips
 
 - **Refs change after every interaction** — always re-snapshot before clicking or filling.

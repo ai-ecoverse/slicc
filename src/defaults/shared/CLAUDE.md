@@ -65,14 +65,19 @@ Drop a scoop when:
 2. `playwright-cli tab-new <url>` — opens a new tab, returns the targetId in output. Capture it!
 3. Use `--tab=<targetId>` on all subsequent commands: `playwright-cli screenshot --tab=<id>`, `playwright-cli click --tab=<id> e5`, etc.
 
+**All agents share the same tabs.** `tab-list` shows every tab from every agent — yours, scoops', the user's. There is no tab isolation. Any agent can eval, snapshot, or close any tab.
+
+**Track your own tabs by ID.** Don't rely on `tab-list` to find your tabs — capture the targetId from `tab-new` and use it throughout. Other agents' tabs will be in the list too.
+
 **Close tabs when you're done with them.** Tabs accumulate fast — every `open` or `tab-new` opens a persistent tab.
 
 Rules:
 
 - **Close research/scraping tabs** immediately after extracting data: `playwright-cli tab-close --tab=<id>`
 - **Never leave more than ~5 tabs open** beyond the user's own tabs and any app tabs you're actively serving.
-- **Scoops must close their own tabs** when finished. Include this instruction in every scoop brief that involves browser use: _"Close each tab with `playwright-cli tab-close --tab=<id>` as soon as you've extracted what you need."_
-- **Audit tabs periodically**: run `playwright-cli tab-list` and close stale ones with `playwright-cli tab-close --tab=<id>`.
+- **Only close tabs you opened.** Don't close unfamiliar tabs — they belong to other agents or the user. Handle "tab not found" errors gracefully (another agent may have closed it).
+- **Scoops must close their own tabs** when finished. Include this instruction in every scoop brief that involves browser use: _"Track your tab IDs from tab-new. Close each tab with `playwright-cli tab-close --tab=<id>` when done. Don't close tabs you didn't open."_
+- **Audit tabs periodically**: run `playwright-cli tab-list` and close stale ones you recognize with `playwright-cli tab-close --tab=<id>`.
 - The **preview/serve tab** for a delivered app can stay open — that's intentional. Everything else is transient.
 
 ## What You Can Do
