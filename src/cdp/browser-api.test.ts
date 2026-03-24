@@ -704,4 +704,194 @@ describe('BrowserAPI', () => {
       expect(tree.children![0].description).toBe('["composer"]');
     });
   });
+
+  describe('withTab mutex', () => {
+    it('serializes two concurrent withTab calls with different targetIds', async () => {
+      const order: string[] = [];
+      const timings: Array<{ operation: string; start: number; end: number }> = [];
+
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        if (method === 'Target.attachToTarget') {
+          // Simulate a slow attach to expose race conditions
+          await new Promise((r) => setTimeout(r, 10));
+        }
+        if (method === 'Page.enable') {
+          // Simulate page enable
+          await new Promise((r) => setTimeout(r, 5));
+        }
+        return { sessionId: `sess-${order.length + 1}` };
+      });
+
+      // Fire two concurrent withTab calls
+      const op1Start = Date.now();
+      const p1 = api
+        .withTab('target-1', async (sessionId) => {
+          order.push('op1-start');
+          timings.push({ operation: 'op1', start: Date.now() - op1Start, end: -1 });
+          await new Promise((r) => setTimeout(r, 20));
+          order.push('op1-end');
+          const idx = timings.findIndex((t) => t.operation === 'op1');
+          timings[idx].end = Date.now() - op1Start;
+          return `result-1-${sessionId}`;
+        })
+        .catch((err) => {
+          throw err;
+        });
+
+      // Let p1 start
+      await new Promise((r) => setTimeout(r, 5));
+
+      const op2Start = Date.now();
+      const p2 = api
+        .withTab('target-2', async (sessionId) => {
+          order.push('op2-start');
+          timings.push({ operation: 'op2', start: Date.now() - op2Start, end: -1 });
+          await new Promise((r) => setTimeout(r, 15));
+          order.push('op2-end');
+          const idx = timings.findIndex((t) => t.operation === 'op2');
+          timings[idx].end = Date.now() - op2Start;
+          return `result-2-${sessionId}`;
+        })
+        .catch((err) => {
+          throw err;
+        });
+
+      const [r1, r2] = await Promise.all([p1, p2]);
+      expect(r1).toContain('result-1-');
+      expect(r2).toContain('result-2-');
+
+      // Verify strict serialization: op1 fully completes before op2 starts
+      expect(order).toEqual(['op1-start', 'op1-end', 'op2-start', 'op2-end']);
+
+      // Timing check: op2 should start well after op1 ends
+      const op1Timing = timings.find((t) => t.operation === 'op1')!;
+      const op2Timing = timings.find((t) => t.operation === 'op2')!;
+      expect(op2Timing.start).toBeGreaterThan(op1Timing.end + 5); // op2 starts after op1 ends
+    });
+
+    it('recovers from errors in withTab and releases lock for next operation', async () => {
+      const executionOrder: string[] = [];
+
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+        if (method === 'Target.attachToTarget') {
+          return { sessionId: 'sess-ok' };
+        }
+        if (method === 'Page.enable') {
+          return {};
+        }
+        return {};
+      });
+
+      // First call throws an error
+      const p1 = api
+        .withTab('target-1', async () => {
+          executionOrder.push('op1-start');
+          await new Promise((r) => setTimeout(r, 10));
+          executionOrder.push('op1-error');
+          throw new Error('Intentional error in op1');
+        })
+        .catch((err) => {
+          executionOrder.push('op1-caught');
+          return `error-caught: ${err.message}`;
+        });
+
+      // Let p1 start and fail
+      await new Promise((r) => setTimeout(r, 5));
+
+      // Second call should proceed normally after the first completes
+      const p2 = api
+        .withTab('target-2', async () => {
+          executionOrder.push('op2-start');
+          await new Promise((r) => setTimeout(r, 5));
+          executionOrder.push('op2-end');
+          return 'op2-success';
+        })
+        .catch((err) => {
+          throw err;
+        });
+
+      const [r1, r2] = await Promise.all([p1, p2]);
+      expect(r1).toBe('error-caught: Intentional error in op1');
+      expect(r2).toBe('op2-success');
+
+      // Verify op2 only starts after op1 fully completes (error handled)
+      expect(executionOrder).toEqual(['op1-start', 'op1-error', 'op1-caught', 'op2-start', 'op2-end']);
+    });
+
+    it('passes the correct sessionId to the callback', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ sessionId: 'sess-abc' })
+        .mockResolvedValueOnce({}); // Page.enable
+
+      const receivedSessionId = await api.withTab('target-1', async (sessionId) => {
+        return sessionId;
+      });
+
+      expect(receivedSessionId).toBe('sess-abc');
+    });
+
+    it('calls attachToPage with the correct targetId', async () => {
+      const attachSpy = vi.spyOn(api, 'attachToPage').mockResolvedValueOnce('sess-123');
+
+      await api.withTab('target-xyz', async (sessionId) => {
+        return sessionId;
+      });
+
+      expect(attachSpy).toHaveBeenCalledWith('target-xyz');
+      attachSpy.mockRestore();
+    });
+
+    it('allows return value from callback to propagate', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ sessionId: 'sess-1' });
+
+      const result = await api.withTab('target-1', async () => {
+        return { custom: 'data', nested: { value: 42 } };
+      });
+
+      expect(result).toEqual({ custom: 'data', nested: { value: 42 } });
+    });
+
+    it('handles three concurrent calls in order', async () => {
+      const order: string[] = [];
+
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        await new Promise((r) => setTimeout(r, 5));
+        return { sessionId: 'sess-ok' };
+      });
+
+      const p1 = api
+        .withTab('target-1', async () => {
+          order.push('1-start');
+          await new Promise((r) => setTimeout(r, 10));
+          order.push('1-end');
+        })
+        .catch(() => {});
+
+      // Stagger the start times
+      await new Promise((r) => setTimeout(r, 5));
+
+      const p2 = api
+        .withTab('target-2', async () => {
+          order.push('2-start');
+          await new Promise((r) => setTimeout(r, 10));
+          order.push('2-end');
+        })
+        .catch(() => {});
+
+      await new Promise((r) => setTimeout(r, 5));
+
+      const p3 = api
+        .withTab('target-3', async () => {
+          order.push('3-start');
+          await new Promise((r) => setTimeout(r, 10));
+          order.push('3-end');
+        })
+        .catch(() => {});
+
+      await Promise.all([p1, p2, p3]);
+
+      // All three must execute in strict FIFO order
+      expect(order).toEqual(['1-start', '1-end', '2-start', '2-end', '3-start', '3-end']);
+    });
+  });
 });

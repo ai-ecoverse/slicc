@@ -52,6 +52,7 @@ export class BrowserAPI {
   private attachedTargetId: string | null = null;
   private trayTargetProvider: TrayTargetProvider | null = null;
   private remoteTargetInfo: { runtimeId: string; localTargetId: string } | null = null;
+  private _tabLock: Promise<void> = Promise.resolve();
   private readonly handleJavaScriptDialogOpening = async (
     params: Record<string, unknown>
   ): Promise<void> => {
@@ -101,6 +102,27 @@ export class BrowserAPI {
    */
   getAttachedTargetId(): string | null {
     return this.attachedTargetId;
+  }
+
+  /**
+   * Execute an operation on a specific tab with exclusive access.
+   * Serializes all tab operations — only one tab can be attached at a time.
+   * Handles local and remote (tray) targets transparently.
+   */
+  async withTab<T>(targetId: string, fn: (sessionId: string) => Promise<T>): Promise<T> {
+    let release: () => void;
+    const next = new Promise<void>((r) => {
+      release = r;
+    });
+    const prev = this._tabLock;
+    this._tabLock = next;
+    await prev;
+    try {
+      const sessionId = await this.attachToPage(targetId);
+      return await fn(sessionId);
+    } finally {
+      release!();
+    }
   }
 
   /**
