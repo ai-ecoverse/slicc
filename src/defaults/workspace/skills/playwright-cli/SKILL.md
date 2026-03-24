@@ -167,7 +167,7 @@ playwright-cli stop-recording <recordingId>        # Stop and save HAR
    # Use ABC123 for all subsequent commands on this tab
    ```
 
-2. **Only close tabs you opened.** Don't close unfamiliar tabs — they belong to other agents or the user.
+2. **NEVER close tabs you didn't open.** Tabs you don't recognize belong to the **user** or other agents. User tabs are off-limits unless the user explicitly asks you to close them. Only close tabs whose targetId you captured from your own `tab-new` / `open` calls.
 
 3. **Handle "tab not found" gracefully.** Another agent might close a tab between your `tab-list` and your command. If you get `Error: No tab with id`, the tab is gone — move on.
 

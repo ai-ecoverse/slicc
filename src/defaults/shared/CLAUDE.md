@@ -73,11 +73,12 @@ Drop a scoop when:
 
 Rules:
 
+- **NEVER close tabs you didn't create.** Tabs in `tab-list` that you don't recognize belong to the user or other agents. Only close tabs whose targetId you captured from your own `tab-new` / `open` calls. User tabs are off-limits unless the user explicitly asks you to close them.
 - **Close research/scraping tabs** immediately after extracting data: `playwright-cli tab-close --tab=<id>`
-- **Never leave more than ~5 tabs open** beyond the user's own tabs and any app tabs you're actively serving.
-- **Only close tabs you opened.** Don't close unfamiliar tabs — they belong to other agents or the user. Handle "tab not found" errors gracefully (another agent may have closed it).
-- **Scoops must close their own tabs** when finished. Include this instruction in every scoop brief that involves browser use: _"Track your tab IDs from tab-new. Close each tab with `playwright-cli tab-close --tab=<id>` when done. Don't close tabs you didn't open."_
-- **Audit tabs periodically**: run `playwright-cli tab-list` and close stale ones you recognize with `playwright-cli tab-close --tab=<id>`.
+- **Never leave more than ~5 of your own tabs open** beyond any app tabs you're actively serving.
+- Handle "tab not found" errors gracefully — another agent may have closed it first.
+- **Scoops must close their own tabs** when finished. Include this instruction in every scoop brief that involves browser use: _"Track your tab IDs from tab-new. Close each tab with `playwright-cli tab-close --tab=<id>` when done. NEVER close tabs you didn't open — they belong to the user or other agents."_
+- **Audit your own tabs periodically**: if you notice your tabs accumulating, close the ones you no longer need.
 - The **preview/serve tab** for a delivered app can stay open — that's intentional. Everything else is transient.
 
 ## What You Can Do
