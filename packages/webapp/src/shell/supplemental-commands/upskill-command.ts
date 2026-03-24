@@ -396,6 +396,8 @@ GitHub Installation:
   upskill owner/repo --skill name        Install specific skill
   upskill owner/repo --all               Install all skills from repo
   upskill owner/repo --path subdir       Restrict to subfolder
+  upskill owner/repo@branch              Install from a specific branch
+  upskill owner/repo --branch name       Same, using flag syntax
 
 Recommendations:
   upskill recommendations                Show skills matching your profile
@@ -411,6 +413,7 @@ Options:
   --skill <name>           Install specific skill (repeatable)
   --all                    Install all skills from source
   --path <subfolder>       Only discover skills under this subfolder
+  --branch, -b <name>      Install from a specific branch (default: main)
   --list                   List available skills without installing
   --force                  Overwrite existing skills
   -h, --help               Show help
@@ -424,6 +427,7 @@ Examples:
   upskill anthropics/skills --list
   upskill anthropics/skills --skill pdf --skill xlsx
   upskill adobe/skills --path skills/aem --all
+  upskill aemcoder/skills@fix/stateless-tab-targeting --all
   upskill https://clawhub.ai/arun-8687/tavily-search
   upskill tessl:postgres-pro
 `,
@@ -895,11 +899,12 @@ async function listGitHubSkills(
   repo: string,
   github: GitHubRequestContext,
   subPath?: string,
-  fetch?: SecureFetch
+  fetch?: SecureFetch,
+  branch?: string
 ): Promise<{ skills: Array<{ name: string; path: string }>; error?: string }> {
   // Try ZIP-based discovery first (no rate limit)
   if (fetch) {
-    const zip = await fetchRepoZip(owner, repo, fetch);
+    const zip = await fetchRepoZip(owner, repo, fetch, branch);
     if (zip.status === 'ok') {
       const files = stripZipPrefix(zip.files);
       const skills: Array<{ name: string; path: string }> = [];
@@ -969,7 +974,8 @@ async function installFromGitHub(
   fs: VirtualFS,
   github: GitHubRequestContext,
   force: boolean = false,
-  fetch?: SecureFetch
+  fetch?: SecureFetch,
+  branch?: string
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   try {
     // Check if skill already exists
@@ -990,7 +996,7 @@ async function installFromGitHub(
 
     // Try ZIP-based install first (no rate limit)
     if (fetch) {
-      const zip = await fetchRepoZip(owner, repo, fetch);
+      const zip = await fetchRepoZip(owner, repo, fetch, branch);
       if (zip.status === 'not_found') {
         return {
           stdout: '',
@@ -1130,11 +1136,11 @@ function parseClawHubRef(ref: string): string | null {
 /**
  * Parse GitHub repo reference
  */
-function parseGitHubRef(ref: string): { owner: string; repo: string } | null {
-  // Handle owner/repo format
-  const match = ref.match(/^([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_.-]+)$/);
+function parseGitHubRef(ref: string): { owner: string; repo: string; branch?: string } | null {
+  // Handle owner/repo or owner/repo@branch format
+  const match = ref.match(/^([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_.-]+)(?:@([a-zA-Z0-9_./\-]+))?$/);
   if (match) {
-    return { owner: match[1], repo: match[2] };
+    return { owner: match[1], repo: match[2], branch: match[3] };
   }
   return null;
 }
@@ -1291,6 +1297,7 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
     let installAll = false;
     let force = false;
     let sourceRef = '';
+    let branch: string | undefined;
     let searchQuery = '';
     let page = 1;
 
@@ -1373,6 +1380,8 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
         installAll = true;
       } else if (arg === '--force') {
         force = true;
+      } else if (arg === '--branch' || arg === '-b') {
+        branch = args[++i];
       } else if (!arg.startsWith('-')) {
         sourceRef = arg;
       }
@@ -1413,10 +1422,12 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
     const githubRef = parseGitHubRef(sourceRef);
     if (githubRef) {
       const { owner, repo } = githubRef;
+      // --branch flag takes precedence over @branch in the ref
+      const effectiveBranch = branch ?? githubRef.branch;
       const github = await createGitHubRequestContext(fetchFn);
 
       // List skills in the repository
-      const result = await listGitHubSkills(owner, repo, github, subPath, fetchFn);
+      const result = await listGitHubSkills(owner, repo, github, subPath, fetchFn, effectiveBranch);
 
       if (result.error) {
         return {
@@ -1488,7 +1499,8 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
           fs,
           github,
           force,
-          fetchFn
+          fetchFn,
+          effectiveBranch
         );
 
         if (installResult.exitCode === 0) {
