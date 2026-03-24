@@ -373,6 +373,9 @@ export class Layout {
     if (prevCount === nonCone.length && prevCount >= 0) return;
     this.logoScoopCount = nonCone.length;
 
+    // Update browser favicon and extension icon to match scoop count
+    this.updateFaviconForScoops(nonCone.length);
+
     // Clear existing scoops
     while (group.firstChild) group.removeChild(group.firstChild);
 
@@ -429,6 +432,30 @@ export class Layout {
   }
 
   /** Get initials from a user name (up to 2 characters). */
+  /** Update browser favicon and extension toolbar icon to reflect scoop count. */
+  private updateFaviconForScoops(scoopCount: number): void {
+    const clamped = Math.min(Math.max(scoopCount, 0), 10);
+
+    // Update browser tab favicon
+    const link = document.querySelector('link[rel="icon"]') as HTMLLinkElement | null;
+    if (link) {
+      link.href = `/logos/sliccy-color-${clamped}scoops-32x32.png`;
+    }
+
+    // Update extension toolbar icon (if in extension mode)
+    const chromeAny = typeof chrome !== 'undefined' ? (chrome as any) : null;
+    if (chromeAny?.action?.setIcon) {
+      chromeAny.action.setIcon({
+        path: {
+          16: `logos/sliccy-color-${clamped}scoops-16x16.png`,
+          32: `logos/sliccy-color-${clamped}scoops-32x32.png`,
+          48: `logos/sliccy-color-${clamped}scoops-48x48.png`,
+          128: `logos/sliccy-color-${clamped}scoops-128x128.png`,
+        },
+      }).catch(() => { /* best-effort */ });
+    }
+  }
+
   private getInitials(name: string): string {
     const parts = name.trim().split(/\s+/);
     if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
