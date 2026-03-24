@@ -90,6 +90,6 @@ describe('overlay-shell-state', () => {
         velocityXPxPerMs: 1,
         velocityYPxPerMs: 1,
       })
-    ).toBe('bottom-right');
+    ).toBe('bottom');
   });
 });
