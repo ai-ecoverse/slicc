@@ -1,5 +1,6 @@
 import {
   createElectronOverlayShellState,
+  isEdgePosition,
   normalizeElectronOverlayLauncherCorner,
   resolveElectronOverlayLauncherCorner,
   setElectronOverlayCorner,
@@ -160,12 +161,20 @@ class SliccElectronLauncherElement extends HTMLElement {
         font-family: var(--s2-font-family);
         transition: top var(--s2-transition-default), right var(--s2-transition-default), bottom var(--s2-transition-default), left var(--s2-transition-default);
       }
+      /* Corner positions */
       :host([corner="top-left"]) { top: ${offset}px; right: auto; bottom: auto; left: ${offset}px; }
       :host([corner="top-right"]) { top: ${offset}px; right: ${offset}px; bottom: auto; left: auto; }
       :host([corner="bottom-left"]) { top: auto; right: auto; bottom: ${offset}px; left: ${offset}px; }
       :host([corner="bottom-right"]) { top: auto; right: ${offset}px; bottom: ${offset}px; left: auto; }
-      :host([dragging]) { transition: none; }
+      /* Edge midpoint positions — flush against edge */
+      :host([corner="top"]) { top: 0; left: 50%; right: auto; bottom: auto; transform: translateX(-50%); }
+      :host([corner="bottom"]) { bottom: 0; left: 50%; right: auto; top: auto; transform: translateX(-50%); }
+      :host([corner="left"]) { left: 0; top: 50%; right: auto; bottom: auto; transform: translateY(-50%); }
+      :host([corner="right"]) { right: 0; top: 50%; left: auto; bottom: auto; transform: translateY(-50%); }
+      :host([dragging]) { transition: none; transform: none; }
       *, *::before, *::after { box-sizing: border-box; }
+
+      /* === Button base (circle mode for corners) === */
       button {
         width: 44px; height: 44px; position: relative;
         border: none;
@@ -173,7 +182,7 @@ class SliccElectronLauncherElement extends HTMLElement {
         background: rgba(255, 255, 255, 0.92);
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2), 0 0 0 1px rgba(0, 0, 0, 0.08);
         cursor: grab;
-        display: inline-flex; align-items: center; justify-content: center;
+        display: inline-flex; align-items: center; justify-content: center; gap: 6px;
         transition: transform var(--s2-transition-default), box-shadow var(--s2-transition-default);
         backdrop-filter: blur(12px) saturate(1.05);
         touch-action: none; user-select: none; -webkit-user-select: none;
@@ -187,7 +196,6 @@ class SliccElectronLauncherElement extends HTMLElement {
       }
       :host([dragging]) button { cursor: grabbing; }
       button:hover {
-        transform: translateY(-1px);
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.12);
       }
       @media (prefers-color-scheme: dark) {
@@ -199,6 +207,42 @@ class SliccElectronLauncherElement extends HTMLElement {
       button[aria-pressed="true"] {
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3), 0 0 0 2px var(--s2-accent);
       }
+
+      /* === Tab mode (edge midpoints) === */
+      .tab-label { display: none; font-family: var(--s2-font-family); font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap; }
+      :host([corner="top"]) button,
+      :host([corner="bottom"]) button,
+      :host([corner="left"]) button,
+      :host([corner="right"]) button {
+        width: auto; height: auto;
+        border-radius: 0;
+        padding: 6px 12px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+      }
+      :host([corner="top"]) button,
+      :host([corner="bottom"]) button { flex-direction: row; }
+      :host([corner="left"]) button,
+      :host([corner="right"]) button { flex-direction: column; padding: 10px 6px; }
+      :host([corner="left"]) .tab-label,
+      :host([corner="right"]) .tab-label { writing-mode: vertical-lr; }
+      :host([corner="right"]) .tab-label { rotate: 180deg; }
+
+      /* Rounded corners — only the two not touching the edge */
+      :host([corner="top"]) button { border-radius: 0 0 10px 10px; }
+      :host([corner="bottom"]) button { border-radius: 10px 10px 0 0; }
+      :host([corner="left"]) button { border-radius: 0 10px 10px 0; }
+      :host([corner="right"]) button { border-radius: 10px 0 0 10px; }
+
+      :host([corner="top"]) .tab-label,
+      :host([corner="bottom"]) .tab-label,
+      :host([corner="left"]) .tab-label,
+      :host([corner="right"]) .tab-label { display: block; }
+
+      :host([corner="top"]) .logo-icon,
+      :host([corner="bottom"]) .logo-icon,
+      :host([corner="left"]) .logo-icon,
+      :host([corner="right"]) .logo-icon { width: 22px; height: 22px; }
+
       .logo-icon { width: 32px; height: 32px; pointer-events: none; }
       /* Dark host: dark SVG (dark fill, white outlines) */
       .logo-for-dark { display: block; }
@@ -225,8 +269,13 @@ class SliccElectronLauncherElement extends HTMLElement {
     forLight.innerHTML = stripXmlDeclaration(sliccyLightSvg);
     forLight.setAttribute('aria-hidden', 'true');
 
+    const tabLabel = doc.createElement('span');
+    tabLabel.className = 'tab-label';
+    tabLabel.textContent = 'SLICC';
+
     button.appendChild(forDark);
     button.appendChild(forLight);
+    button.appendChild(tabLabel);
     root.appendChild(button);
 
     this.button = button;
