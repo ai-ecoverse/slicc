@@ -22,9 +22,9 @@
     "default_title": "slicc"
   },
   "icons": {
-    "16": "logos/sliccy-color-0scoops-16x16.png",
-    "32": "logos/sliccy-color-0scoops-32x32.png",
-    "48": "logos/sliccy-color-0scoops-48x48.png",
-    "128": "logos/sliccy-color-0scoops-128x128.png"
+    "16": "logos/sliccy-color-1scoops-16x16.png",
+    "32": "logos/sliccy-color-1scoops-32x32.png",
+    "48": "logos/sliccy-color-1scoops-48x48.png",
+    "128": "logos/sliccy-color-1scoops-128x128.png"
   }
 }
