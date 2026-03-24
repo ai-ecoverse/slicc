@@ -970,6 +970,7 @@ async function main() {
           port: HMR_PORT, // Use a separate port for HMR WebSocket to avoid conflicting with /cdp
         },
       },
+      appType: 'custom', // We handle index.html serving ourselves via the handler below
       root: process.cwd(),
     });
     app.use(vite.middlewares);
