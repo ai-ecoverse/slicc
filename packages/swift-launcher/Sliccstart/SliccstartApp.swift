@@ -96,11 +96,11 @@ struct SliccstartApp: App {
                                     bootstrapper.lastError = error.localizedDescription
                                     bootstrapper.progressMessage = error.localizedDescription
                                 }
-                                targets = AppScanner.scan()
+                                targets = AppScanner.scan(hasAppManagementPermission: appManagementPermission.isGranted)
                                 isReady = true
                             }
                         },
-                        onRescan: { targets = AppScanner.scan() }
+                        onRescan: { targets = AppScanner.scan(hasAppManagementPermission: appManagementPermission.isGranted) }
                     )
                 }
             }
@@ -108,6 +108,12 @@ struct SliccstartApp: App {
             .task { await initialize() }
             .onAppear { appManagementPermission.startPolling() }
             .onDisappear { appManagementPermission.stopPolling() }
+            .onChange(of: appManagementPermission.isGranted) {
+                // Re-scan when permission is granted so Electron apps appear
+                if isReady {
+                    targets = AppScanner.scan(hasAppManagementPermission: appManagementPermission.isGranted)
+                }
+            }
             .alert("Sliccstart", isPresented: $showAlert) {
                 Button("OK") {}
             } message: {
@@ -154,7 +160,7 @@ struct SliccstartApp: App {
                 return
             }
         }
-        targets = AppScanner.scan()
+        targets = AppScanner.scan(hasAppManagementPermission: appManagementPermission.isGranted)
         isReady = true
 
         // Check for app updates in bundled mode
@@ -174,7 +180,7 @@ struct SliccstartApp: App {
                 }
             }
             // Rescan to pick up the new debug build
-            targets = AppScanner.scan()
+            targets = AppScanner.scan(hasAppManagementPermission: appManagementPermission.isGranted)
             showError("Debug build created!\n\nThe patched version of \(target.name) is now available and will be used automatically.")
         } catch {
             showError("Failed to create debug build:\n\n\(error.localizedDescription)")
