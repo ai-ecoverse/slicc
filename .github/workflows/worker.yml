@@ -40,7 +40,6 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: 3.91.0
           workingDirectory: packages/cloudflare-worker
           command: deploy
           secrets: |
@@ -59,7 +58,6 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: 3.91.0
           workingDirectory: packages/cloudflare-worker
           command: deploy
           secrets: |
@@ -78,7 +76,6 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: 3.91.0
           workingDirectory: packages/cloudflare-worker
           command: deploy
           secrets: |
