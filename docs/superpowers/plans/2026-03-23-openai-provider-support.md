@@ -15,6 +15,7 @@
 ### Task 1: Add ModelMetadata type and modelOverrides to ProviderConfig
 
 **Files:**
+
 - Modify: `packages/webapp/src/providers/types.ts`
 - Test: `packages/webapp/tests/providers/index.test.ts`
 
@@ -49,7 +50,15 @@ describe('provider config model metadata', () => {
       requiresBaseUrl: false,
       getModelIds: () => [
         { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', context_window: 1000000 },
-        { id: 'zai-glm-4.7', name: 'GLM 4.7', api: 'openai' as const, context_window: 131072, max_tokens: 40960, reasoning: true, input: ['text'] },
+        {
+          id: 'zai-glm-4.7',
+          name: 'GLM 4.7',
+          api: 'openai' as const,
+          context_window: 131072,
+          max_tokens: 40960,
+          reasoning: true,
+          input: ['text'],
+        },
       ],
     };
     const models = config.getModelIds!();
@@ -89,6 +98,7 @@ export interface ModelMetadata {
 ```
 
 Add to `ProviderConfig`:
+
 ```typescript
   /**
    * Optional: override model capabilities for specific model IDs.
@@ -99,6 +109,7 @@ Add to `ProviderConfig`:
 ```
 
 Update `getModelIds` return type:
+
 ```typescript
   getModelIds?: () => Array<{ id: string; name?: string } & ModelMetadata>;
 ```
@@ -126,6 +137,7 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 ### Task 2: Apply model metadata overrides in getProviderModels
 
 **Files:**
+
 - Modify: `packages/webapp/src/ui/provider-settings.ts:112-160` (the `getProviderModels` function)
 - Test: `packages/webapp/tests/ui/provider-settings.test.ts`
 
@@ -141,7 +153,13 @@ describe('model metadata overrides', () => {
     mockGetModels.mockImplementation((providerId: string) => {
       if (providerId === 'anthropic') {
         return [
-          { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', contextWindow: 200000, maxTokens: 16384, reasoning: true },
+          {
+            id: 'claude-opus-4-6',
+            name: 'Claude Opus 4.6',
+            contextWindow: 200000,
+            maxTokens: 16384,
+            reasoning: true,
+          },
         ];
       }
       return [];
@@ -158,7 +176,12 @@ describe('model metadata overrides', () => {
       requiresBaseUrl: false,
       isOAuth: true,
       getModelIds: () => [
-        { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', context_window: 1000000, max_tokens: 32768 },
+        {
+          id: 'claude-opus-4-6',
+          name: 'Claude Opus 4.6',
+          context_window: 1000000,
+          max_tokens: 32768,
+        },
       ],
     });
 
@@ -176,7 +199,15 @@ describe('model metadata overrides', () => {
       requiresApiKey: false,
       requiresBaseUrl: false,
       getModelIds: () => [
-        { id: 'zai-glm-4.7', name: 'GLM 4.7', api: 'openai' as const, context_window: 131072, max_tokens: 40960, reasoning: true, input: ['text'] },
+        {
+          id: 'zai-glm-4.7',
+          name: 'GLM 4.7',
+          api: 'openai' as const,
+          context_window: 131072,
+          max_tokens: 40960,
+          reasoning: true,
+          input: ['text'],
+        },
       ],
     });
 
@@ -202,7 +233,7 @@ describe('model metadata overrides', () => {
     });
 
     const models = getProviderModels('custom-azure');
-    const opus = models.find(m => m.id === 'claude-opus-4-6');
+    const opus = models.find((m) => m.id === 'claude-opus-4-6');
     expect(opus).toBeDefined();
     expect(opus!.contextWindow).toBe(500000);
   });
@@ -275,57 +306,59 @@ function applyModelMetadata(
 In the `getModelIds` branch, update the mapping:
 
 ```typescript
-      return modelIds.map((pm) => {
-        const base = modelMap.get(pm.id);
-        // Determine API type: use metadata api field, or default to anthropic
-        const apiType = pm.api ?? 'anthropic';
-        const customApi = apiType === 'openai'
-          ? `${providerId}-openai` as Api
-          : `${providerId}-anthropic` as Api;
+return modelIds.map((pm) => {
+  const base = modelMap.get(pm.id);
+  // Determine API type: use metadata api field, or default to anthropic
+  const apiType = pm.api ?? 'anthropic';
+  const customApi =
+    apiType === 'openai' ? (`${providerId}-openai` as Api) : (`${providerId}-anthropic` as Api);
 
-        let model: Record<string, any>;
-        if (base) {
-          model = { ...base, api: customApi, provider: providerId };
-        } else {
-          model = {
-            id: pm.id,
-            name: pm.name ?? pm.id,
-            provider: providerId,
-            api: customApi,
-            baseUrl: '',
-            contextWindow: 200000,
-            maxTokens: 16384,
-            input: ['text', 'image'],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            inputCost: 0, outputCost: 0, cacheReadCost: 0, cacheWriteCost: 0,
-            reasoning: true,
-          };
-        }
+  let model: Record<string, any>;
+  if (base) {
+    model = { ...base, api: customApi, provider: providerId };
+  } else {
+    model = {
+      id: pm.id,
+      name: pm.name ?? pm.id,
+      provider: providerId,
+      api: customApi,
+      baseUrl: '',
+      contextWindow: 200000,
+      maxTokens: 16384,
+      input: ['text', 'image'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      inputCost: 0,
+      outputCost: 0,
+      cacheReadCost: 0,
+      cacheWriteCost: 0,
+      reasoning: true,
+    };
+  }
 
-        // Layer 2: Apply modelOverrides from ProviderConfig (if any)
-        const overrides = providerConfig.modelOverrides?.[pm.id];
-        if (overrides) applyModelMetadata(model, overrides);
+  // Layer 2: Apply modelOverrides from ProviderConfig (if any)
+  const overrides = providerConfig.modelOverrides?.[pm.id];
+  if (overrides) applyModelMetadata(model, overrides);
 
-        // Layer 3: Apply getModelIds metadata (highest priority)
-        applyModelMetadata(model, pm);
+  // Layer 3: Apply getModelIds metadata (highest priority)
+  applyModelMetadata(model, pm);
 
-        return model as unknown as Model<Api>;
-      });
+  return model as unknown as Model<Api>;
+});
 ```
 
 Also apply `modelOverrides` in the `isOAuth` branch (lines 161-166) for providers that don't use `getModelIds`:
 
 ```typescript
-    if (providerConfig.isOAuth) {
-      const anthropicModels = getModelsDynamic('anthropic');
-      const customApi = `${providerId}-anthropic` as Api;
-      return anthropicModels.map((m) => {
-        const model: Record<string, any> = { ...m, api: customApi, provider: providerId };
-        const overrides = providerConfig.modelOverrides?.[m.id];
-        if (overrides) applyModelMetadata(model, overrides);
-        return model as unknown as Model<Api>;
-      });
-    }
+if (providerConfig.isOAuth) {
+  const anthropicModels = getModelsDynamic('anthropic');
+  const customApi = `${providerId}-anthropic` as Api;
+  return anthropicModels.map((m) => {
+    const model: Record<string, any> = { ...m, api: customApi, provider: providerId };
+    const overrides = providerConfig.modelOverrides?.[m.id];
+    if (overrides) applyModelMetadata(model, overrides);
+    return model as unknown as Model<Api>;
+  });
+}
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -357,6 +390,7 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 ### Task 3: Add OpenAI stream routing in Adobe provider
 
 **Files:**
+
 - Modify: `packages/webapp/providers/adobe.ts:339-381` (streamAdobe and streamSimpleAdobe functions)
 - Modify: `packages/webapp/providers/adobe.ts:385-418` (fetchProxyModels — propagate metadata)
 - Modify: `packages/webapp/providers/adobe.ts:195-221` (getModelIds — propagate metadata)
@@ -382,22 +416,33 @@ interface ProxyModelEntry {
 ```
 
 In `fetchProxyModels`, update the type of `data.data`:
+
 ```typescript
-const data = await res.json() as { data?: ProxyModelEntry[] };
+const data = (await res.json()) as { data?: ProxyModelEntry[] };
 ```
 
 Store the metadata on each model object returned:
+
 ```typescript
-return data.data.map(pm => {
+return data.data.map((pm) => {
   const base = modelMap.get(pm.id);
   const model: Record<string, any> = base
     ? { ...base, provider: 'adobe', api: 'adobe-anthropic' as Api }
     : {
-        id: pm.id, name: pm.name ?? pm.id, provider: 'adobe',
-        api: 'adobe-anthropic' as Api, baseUrl: endpoint,
-        contextWindow: 200000, maxTokens: 16384, input: ['text', 'image'],
+        id: pm.id,
+        name: pm.name ?? pm.id,
+        provider: 'adobe',
+        api: 'adobe-anthropic' as Api,
+        baseUrl: endpoint,
+        contextWindow: 200000,
+        maxTokens: 16384,
+        input: ['text', 'image'],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        inputCost: 0, outputCost: 0, cacheReadCost: 0, cacheWriteCost: 0, reasoning: true,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        reasoning: true,
       };
   // Store metadata from proxy (will be used by provider-settings)
   if (pm.api) (model as any)._proxyApi = pm.api;
@@ -412,6 +457,7 @@ In `config.getModelIds` (line ~195), propagate proxy metadata:
 The `modelsCache` stores `Model<Api>[]` from `fetchProxyModels`. The `getModelIds` function returns `{ id, name }[]`. Update it to also return metadata fields.
 
 In `getModelIds`:
+
 ```typescript
   getModelIds: () => {
     // Prefer the authenticated /v1/models response (has all available models)
@@ -446,6 +492,7 @@ const proxyMetadataCache = new Map<string, ProxyModelEntry>();
 ```
 
 In `fetchProxyModels`, after parsing:
+
 ```typescript
 if (data.data?.length) {
   for (const pm of data.data) {
@@ -456,6 +503,7 @@ if (data.data?.length) {
 ```
 
 In `getModelIds`, include metadata from cache:
+
 ```typescript
 const entry: any = { id: m.id, name: m.name ?? m.id };
 const meta = proxyMetadataCache.get(m.id);
@@ -472,6 +520,7 @@ return entry;
 In `packages/webapp/providers/adobe.ts`, update `streamAdobe` and `streamSimpleAdobe` to check the model's API type and route accordingly.
 
 Add import at the top:
+
 ```typescript
 import {
   registerApiProvider,
@@ -484,12 +533,9 @@ import {
 ```
 
 Update `streamAdobe` (~line 339):
+
 ```typescript
-const streamAdobe = (
-  model: Model<Api>,
-  context: Context,
-  options: AnthropicOptions = {},
-) => {
+const streamAdobe = (model: Model<Api>, context: Context, options: AnthropicOptions = {}) => {
   const stream = new AssistantMessageEventStream();
   (async () => {
     try {
@@ -503,20 +549,23 @@ const streamAdobe = (
         const inner = streamOpenAICompletions(
           { ...proxyModel, api: 'openai-chat' as Api } as any,
           context,
-          { ...options, apiKey: accessToken } as any,
+          { ...options, apiKey: accessToken } as any
         );
         for await (const event of inner) stream.push(event as any);
       } else {
         const inner = streamAnthropic(
           { ...proxyModel, api: 'anthropic-messages' as Api } as any,
           context,
-          { ...options, apiKey: accessToken },
+          { ...options, apiKey: accessToken }
         );
         for await (const event of inner) stream.push(event as any);
       }
       stream.end();
     } catch (error) {
-      console.error('[adobe] Stream error:', error instanceof Error ? error.message : String(error));
+      console.error(
+        '[adobe] Stream error:',
+        error instanceof Error ? error.message : String(error)
+      );
       stream.push(makeErrorOutput(model, error) as any);
       stream.end();
     }
@@ -573,6 +622,7 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 ### Task 4: Final verification and documentation
 
 **Files:**
+
 - Modify: `CLAUDE.md` (add note about provider model metadata)
 
 - [ ] **Step 1: Run all build gates**

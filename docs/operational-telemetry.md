@@ -30,7 +30,8 @@ Create a single telemetry module at `packages/webapp/src/ui/telemetry.ts` that w
 ```typescript
 // packages/webapp/src/ui/telemetry.ts
 
-let sampleRUM: ((checkpoint: string, data?: { source?: string; target?: string }) => void) | null = null;
+let sampleRUM: ((checkpoint: string, data?: { source?: string; target?: string }) => void) | null =
+  null;
 
 /**
  * Initialize operational telemetry. Call once from main.ts.
@@ -51,10 +52,7 @@ export async function initTelemetry(): Promise<void> {
 /**
  * Record a custom checkpoint. Safe to call before init (becomes a no-op).
  */
-export function checkpoint(
-  name: string,
-  data?: { source?: string; target?: string },
-): void {
+export function checkpoint(name: string, data?: { source?: string; target?: string }): void {
   sampleRUM?.(name, data);
 }
 
@@ -122,15 +120,15 @@ SLICC uses helix-rum-js's supported checkpoint types with SLICC-specific semanti
 
 ### Checkpoint mapping
 
-| RUM Checkpoint | SLICC Meaning | Source | Target | Location |
-|---|---|---|---|---|
-| `navigate` | Page load | referrer | `cli`/`extension`/`electron` | `main.ts` — init |
-| `formsubmit` | User chat message | Scoop name | Model ID | `orchestrator.ts` — `handleMessage()` |
-| `fill` | Shell command | Command name | (omitted) | `wasm-shell.ts` — `runCommand()` |
-| `viewblock` | Sprinkle displayed | Sprinkle name | (omitted) | `sprinkle-manager.ts` — `open()` |
-| `viewmedia` | Image viewed | Context (`chat`/`preview`) | (omitted) | Image display code |
-| `error` | Error occurred | Error type (`js`/`llm`/`tool`) | Details | Error handlers |
-| `signup` | Settings opened | Trigger (`button`/`shortcut`) | (omitted) | `provider-settings.ts` |
+| RUM Checkpoint | SLICC Meaning      | Source                         | Target                       | Location                              |
+| -------------- | ------------------ | ------------------------------ | ---------------------------- | ------------------------------------- |
+| `navigate`     | Page load          | referrer                       | `cli`/`extension`/`electron` | `main.ts` — init                      |
+| `formsubmit`   | User chat message  | Scoop name                     | Model ID                     | `orchestrator.ts` — `handleMessage()` |
+| `fill`         | Shell command      | Command name                   | (omitted)                    | `wasm-shell.ts` — `runCommand()`      |
+| `viewblock`    | Sprinkle displayed | Sprinkle name                  | (omitted)                    | `sprinkle-manager.ts` — `open()`      |
+| `viewmedia`    | Image viewed       | Context (`chat`/`preview`)     | (omitted)                    | Image display code                    |
+| `error`        | Error occurred     | Error type (`js`/`llm`/`tool`) | Details                      | Error handlers                        |
+| `signup`       | Settings opened    | Trigger (`button`/`shortcut`)  | (omitted)                    | `provider-settings.ts`                |
 
 ### Auto-instrumented (from enhancer)
 
@@ -141,11 +139,11 @@ These work out of the box with no custom code:
 
 ## Sampling Strategy
 
-| Phase | Rate | Config |
-|---|---|---|
-| Beta / dogfooding | 1-in-1 (100%) | `window.RUM_GENERATION = 'slicc-beta'; window.RUM_SAMPLE_RATE = 1;` |
-| General availability | 1-in-100 (default) | Remove `RUM_SAMPLE_RATE` override |
-| Debugging | 1-in-1 (100%) | Append `?optel=on` to URL |
+| Phase                | Rate               | Config                                                              |
+| -------------------- | ------------------ | ------------------------------------------------------------------- |
+| Beta / dogfooding    | 1-in-1 (100%)      | `window.RUM_GENERATION = 'slicc-beta'; window.RUM_SAMPLE_RATE = 1;` |
+| General availability | 1-in-100 (default) | Remove `RUM_SAMPLE_RATE` override                                   |
+| Debugging            | 1-in-1 (100%)      | Append `?optel=on` to URL                                           |
 
 The `?optel=on` query parameter forces 100% sampling for the current pageview. This is built into helix-rum-js and requires no custom code. Useful for verifying telemetry works during development.
 
@@ -202,6 +200,7 @@ npm install @adobe/helix-rum-js
 ### Step 2: Create telemetry module
 
 Create `packages/webapp/src/ui/telemetry.ts` with:
+
 - `initTelemetry()` -- async init, loads the module, emits initial `navigate` checkpoint
 - `checkpoint(name, data?)` -- safe wrapper, no-op before init or when disabled
 - `sanitizePath(path)` -- path sanitization utility
@@ -223,19 +222,19 @@ initTelemetry().catch(() => {});
 
 Instrument the following files (minimal diff per file -- one import + one function call):
 
-| File | Checkpoint | Where |
-|---|---|---|
-| `packages/webapp/src/scoops/orchestrator.ts` | `chat:send` | `handleMessage()`, after routing |
-| `packages/webapp/src/scoops/scoop-context.ts` | `chat:response` | `agent_end` event callback |
-| `packages/webapp/src/core/tool-registry.ts` | `tool:execute` | `executeTool()`, before dispatch |
-| `packages/webapp/src/scoops/orchestrator.ts` | `scoop:create` | `createScoop()` |
-| `packages/webapp/src/scoops/orchestrator.ts` | `scoop:delegate` | `delegateToScoop()` |
-| `packages/webapp/src/shell/wasm-shell.ts` | `shell:command` | Command dispatch |
-| `packages/webapp/src/ui/voice-input.ts` | `voice:input` | Recognition result handler |
-| `packages/webapp/src/ui/provider-settings.ts` | `provider:switch` | Settings save |
-| `packages/webapp/src/tools/file-tools.ts` | `file:operation` | Tool execute functions |
-| `packages/webapp/src/skills/apply.ts` | `skill:install` | After successful install |
-| `packages/webapp/src/scoops/scoop-context.ts` | `error:agent`, `error:overflow` | Error/overflow handlers |
+| File                                          | Checkpoint                      | Where                            |
+| --------------------------------------------- | ------------------------------- | -------------------------------- |
+| `packages/webapp/src/scoops/orchestrator.ts`  | `chat:send`                     | `handleMessage()`, after routing |
+| `packages/webapp/src/scoops/scoop-context.ts` | `chat:response`                 | `agent_end` event callback       |
+| `packages/webapp/src/core/tool-registry.ts`   | `tool:execute`                  | `executeTool()`, before dispatch |
+| `packages/webapp/src/scoops/orchestrator.ts`  | `scoop:create`                  | `createScoop()`                  |
+| `packages/webapp/src/scoops/orchestrator.ts`  | `scoop:delegate`                | `delegateToScoop()`              |
+| `packages/webapp/src/shell/wasm-shell.ts`     | `shell:command`                 | Command dispatch                 |
+| `packages/webapp/src/ui/voice-input.ts`       | `voice:input`                   | Recognition result handler       |
+| `packages/webapp/src/ui/provider-settings.ts` | `provider:switch`               | Settings save                    |
+| `packages/webapp/src/tools/file-tools.ts`     | `file:operation`                | Tool execute functions           |
+| `packages/webapp/src/skills/apply.ts`         | `skill:install`                 | After successful install         |
+| `packages/webapp/src/scoops/scoop-context.ts` | `error:agent`, `error:overflow` | Error/overflow handlers          |
 
 ### Step 5: Extension CSP and bundling
 
@@ -270,11 +269,14 @@ Add a proxy route in `packages/node-server/src/index.ts`:
 ```typescript
 import { createProxyMiddleware } from 'http-proxy-middleware';
 
-app.use('/.rum', createProxyMiddleware({
-  target: 'https://rum.hlx.page',
-  changeOrigin: true,
-  pathRewrite: { '^/\\.rum': '' },
-}));
+app.use(
+  '/.rum',
+  createProxyMiddleware({
+    target: 'https://rum.hlx.page',
+    changeOrigin: true,
+    pathRewrite: { '^/\\.rum': '' },
+  })
+);
 ```
 
 Then in `telemetry.ts`:
@@ -327,9 +329,12 @@ describe('telemetry', () => {
     const { initTelemetry } = await import('./telemetry.js');
     await initTelemetry();
     const { sampleRUM } = await import('@adobe/helix-rum-js');
-    expect(sampleRUM).toHaveBeenCalledWith('navigate', expect.objectContaining({
-      target: expect.stringMatching(/^(cli|extension|electron)$/),
-    }));
+    expect(sampleRUM).toHaveBeenCalledWith(
+      'navigate',
+      expect.objectContaining({
+        target: expect.stringMatching(/^(cli|extension|electron)$/),
+      })
+    );
   });
 
   it('respects telemetry-disabled flag', async () => {

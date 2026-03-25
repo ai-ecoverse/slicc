@@ -4,7 +4,10 @@ import { join } from 'path';
 
 import { describe, expect, it } from 'vitest';
 
-import { updateManifestVersionContents, writeManifestVersion } from '../src/sync-release-version.js';
+import {
+  updateManifestVersionContents,
+  writeManifestVersion,
+} from '../src/sync-release-version.js';
 
 describe('sync-release-version', () => {
   it('updates manifest version JSON content', () => {

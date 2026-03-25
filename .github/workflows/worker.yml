@@ -1,12 +1,6 @@
-name: Worker
+name: Worker Production Deploy
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - 'packages/cloudflare-worker/**'
-      - 'packages/cloudflare-worker/tests/**'
-      - '.github/workflows/worker.yml'
   workflow_dispatch:
     inputs:
       target:
@@ -14,137 +8,16 @@ on:
         required: true
         type: choice
         options:
-          - staging
           - production
-        default: staging
+        default: production
 
 permissions:
   contents: read
 
 jobs:
-  deploy-staging:
-    name: Deploy staging + smoke test
-    if: |
-      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false) ||
-      (github.event_name == 'workflow_dispatch' && inputs.target == 'staging')
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - run: npm ci
-
-      - name: Verify worker unit tests before deploy
-        run: cd packages/cloudflare-worker && npm test -- tests/index.test.ts
-
-      - name: Deploy staging worker (attempt 1)
-        id: deploy_attempt_1
-        continue-on-error: true
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: 3.91.0
-          workingDirectory: packages/cloudflare-worker
-          command: deploy --env staging
-          secrets: |
-            CLOUDFLARE_TURN_API_TOKEN
-        env:
-          CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
-      - name: Wait before staging deploy retry 2
-        if: steps.deploy_attempt_1.outcome == 'failure'
-        run: sleep 20
-
-      - name: Deploy staging worker (attempt 2)
-        id: deploy_attempt_2
-        if: steps.deploy_attempt_1.outcome == 'failure'
-        continue-on-error: true
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: 3.91.0
-          workingDirectory: packages/cloudflare-worker
-          command: deploy --env staging
-          secrets: |
-            CLOUDFLARE_TURN_API_TOKEN
-        env:
-          CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
-      - name: Wait before staging deploy retry 3
-        if: steps.deploy_attempt_1.outcome == 'failure' && steps.deploy_attempt_2.outcome == 'failure'
-        run: sleep 40
-
-      - name: Deploy staging worker (attempt 3)
-        id: deploy_attempt_3
-        if: steps.deploy_attempt_1.outcome == 'failure' && steps.deploy_attempt_2.outcome == 'failure'
-        continue-on-error: true
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: 3.91.0
-          workingDirectory: packages/cloudflare-worker
-          command: deploy --env staging
-          secrets: |
-            CLOUDFLARE_TURN_API_TOKEN
-        env:
-          CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
-      - name: Finalize staging deploy metadata
-        id: deploy
-        env:
-          DEPLOYMENT_URL_1: ${{ steps.deploy_attempt_1.outputs.deployment-url }}
-          DEPLOYMENT_URL_2: ${{ steps.deploy_attempt_2.outputs.deployment-url }}
-          DEPLOYMENT_URL_3: ${{ steps.deploy_attempt_3.outputs.deployment-url }}
-          DEPLOY_OUTCOME_1: ${{ steps.deploy_attempt_1.outcome }}
-          DEPLOY_OUTCOME_2: ${{ steps.deploy_attempt_2.outcome }}
-          DEPLOY_OUTCOME_3: ${{ steps.deploy_attempt_3.outcome }}
-        run: |
-          DEPLOYMENT_URL="${DEPLOYMENT_URL_1:-}"
-          SUCCESSFUL_ATTEMPT=1
-          if [ -z "$DEPLOYMENT_URL" ]; then
-            DEPLOYMENT_URL="${DEPLOYMENT_URL_2:-}"
-            SUCCESSFUL_ATTEMPT=2
-          fi
-          if [ -z "$DEPLOYMENT_URL" ]; then
-            DEPLOYMENT_URL="${DEPLOYMENT_URL_3:-}"
-            SUCCESSFUL_ATTEMPT=3
-          fi
-          if [ -z "$DEPLOYMENT_URL" ]; then
-            echo "Cloudflare staging deploy failed after 3 attempts"
-            echo "Attempt outcomes: 1=${DEPLOY_OUTCOME_1:-not-run}, 2=${DEPLOY_OUTCOME_2:-not-run}, 3=${DEPLOY_OUTCOME_3:-not-run}"
-            exit 1
-          fi
-          echo "Cloudflare staging deploy succeeded on attempt ${SUCCESSFUL_ATTEMPT}: ${DEPLOYMENT_URL}"
-          echo "deployment-url=${DEPLOYMENT_URL}" >> "$GITHUB_OUTPUT"
-
-      - name: Run deployed smoke test against staging
-        env:
-          WORKER_BASE_URL: ${{ steps.deploy.outputs.deployment-url }}
-        run: |
-          if [ -z "$WORKER_BASE_URL" ]; then
-            echo "Missing deployment URL from cloudflare/wrangler-action output"
-            exit 1
-          fi
-          for attempt in 1 2 3 4 5 6; do
-            if (cd packages/cloudflare-worker && npm test -- tests/deployed.test.ts); then
-              exit 0
-            fi
-            if [ "$attempt" -eq 6 ]; then
-              echo "Deployed smoke test failed after ${attempt} attempts"
-              exit 1
-            fi
-            echo "Deployed smoke test failed on attempt ${attempt}; waiting for workers.dev propagation before retrying..."
-            sleep 15
-          done
-
   deploy-production:
-    name: Deploy production + smoke test (manual only)
-    if: github.event_name == 'workflow_dispatch' && inputs.target == 'production' && github.ref == 'refs/heads/main'
+    name: Deploy production + smoke test
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -158,7 +31,7 @@ jobs:
       - run: npm ci
 
       - name: Verify worker unit tests before deploy
-        run: cd packages/cloudflare-worker && npm test -- tests/index.test.ts
+        run: npx vitest run --project cloudflare-worker packages/cloudflare-worker/tests/index.test.ts
 
       - name: Deploy production worker (attempt 1)
         id: deploy_attempt_1
@@ -249,7 +122,7 @@ jobs:
             exit 1
           fi
           for attempt in 1 2 3 4 5 6; do
-            if (cd packages/cloudflare-worker && npm test -- tests/deployed.test.ts); then
+            if npx vitest run --project cloudflare-worker packages/cloudflare-worker/tests/deployed.test.ts; then
               exit 0
             fi
             if [ "$attempt" -eq 6 ]; then

@@ -11,9 +11,13 @@ const hint = document.getElementById('hint');
 function send(msg) {
   try {
     chrome.runtime.sendMessage(msg, () => {
-      if (chrome.runtime.lastError) { /* no receiver */ }
+      if (chrome.runtime.lastError) {
+        /* no receiver */
+      }
     });
-  } catch { /* context invalidated */ }
+  } catch {
+    /* context invalidated */
+  }
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -47,8 +51,9 @@ async function startRecognition() {
   } catch (err) {
     showError('Mic denied');
     send({
-      source: 'voice-popup', type: 'speech-error',
-      error: (err && err.name === 'NotFoundError') ? 'audio-capture' : 'not-allowed',
+      source: 'voice-popup',
+      type: 'speech-error',
+      error: err && err.name === 'NotFoundError' ? 'audio-capture' : 'not-allowed',
       fatal: true,
     });
     setTimeout(() => window.close(), 1500);
@@ -93,7 +98,11 @@ async function startRecognition() {
     if (shouldBeListening) {
       setTimeout(() => {
         if (shouldBeListening && recognition) {
-          try { recognition.start(); } catch { stopAndClose(); }
+          try {
+            recognition.start();
+          } catch {
+            stopAndClose();
+          }
         }
       }, 100);
     } else {
@@ -124,7 +133,9 @@ function showError(text) {
 function stopAndClose() {
   shouldBeListening = false;
   if (recognition) {
-    try { recognition.stop(); } catch {}
+    try {
+      recognition.stop();
+    } catch {}
     recognition = null;
   }
   send({ source: 'voice-popup', type: 'speech-end' });
@@ -133,6 +144,10 @@ function stopAndClose() {
 
 window.addEventListener('beforeunload', () => {
   shouldBeListening = false;
-  if (recognition) { try { recognition.stop(); } catch {} }
+  if (recognition) {
+    try {
+      recognition.stop();
+    } catch {}
+  }
   send({ source: 'voice-popup', type: 'speech-end' });
 });

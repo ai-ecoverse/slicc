@@ -23,8 +23,15 @@ const RESET = '\x1b[0m';
 let passed = 0;
 let failed = 0;
 
-function ok(msg) { passed++; console.log(`  ${GREEN}✓${RESET} ${msg}`); }
-function fail(msg, err) { failed++; console.log(`  ${RED}✗${RESET} ${msg}`); if (err) console.log(`    ${DIM}${err}${RESET}`); }
+function ok(msg) {
+  passed++;
+  console.log(`  ${GREEN}✓${RESET} ${msg}`);
+}
+function fail(msg, err) {
+  failed++;
+  console.log(`  ${RED}✗${RESET} ${msg}`);
+  if (err) console.log(`    ${DIM}${err}${RESET}`);
+}
 
 async function main() {
   console.log(`\n${YELLOW}Connecting to Chrome on ${CDP_URL}...${RESET}`);
@@ -39,7 +46,7 @@ async function main() {
   }
 
   const pages = await browser.pages();
-  let page = pages.find(p => p.url().startsWith(APP_URL));
+  let page = pages.find((p) => p.url().startsWith(APP_URL));
   if (!page) {
     page = await browser.newPage();
     await page.goto(APP_URL, { waitUntil: 'networkidle2', timeout: 15000 });
@@ -106,7 +113,9 @@ async function main() {
       return {
         instanceCount: instances.length,
         hasIframe: !!wrapper.querySelector('.msg__inline-sprinkle iframe'),
-        iframeSandbox: wrapper.querySelector('.msg__inline-sprinkle iframe')?.getAttribute('sandbox'),
+        iframeSandbox: wrapper
+          .querySelector('.msg__inline-sprinkle iframe')
+          ?.getAttribute('sandbox'),
         noCodeBlock: !wrapper.querySelector('code.language-shtml'),
         hasWrapper: !!wrapper.querySelector('.msg__inline-sprinkle'),
       };
@@ -115,7 +124,8 @@ async function main() {
     if (result.error) {
       fail('Hydration failed', result.error);
     } else {
-      if (result.instanceCount === 1) ok(`Created ${result.instanceCount} inline sprinkle instance`);
+      if (result.instanceCount === 1)
+        ok(`Created ${result.instanceCount} inline sprinkle instance`);
       else fail(`Expected 1 instance, got ${result.instanceCount}`);
 
       if (result.hasIframe) ok('iframe was created inside .msg__inline-sprinkle');
@@ -138,11 +148,15 @@ async function main() {
   console.log('\nTest 3: iframe srcdoc renders the shtml content');
   try {
     // Wait for iframe to load
-    await page.waitForSelector('[data-msg-id="test-inline-1"] .msg__inline-sprinkle iframe', { timeout: 3000 });
-    await new Promise(r => setTimeout(r, 500)); // give iframe time to render
+    await page.waitForSelector('[data-msg-id="test-inline-1"] .msg__inline-sprinkle iframe', {
+      timeout: 3000,
+    });
+    await new Promise((r) => setTimeout(r, 500)); // give iframe time to render
 
     const result = await page.evaluate(() => {
-      const iframe = document.querySelector('[data-msg-id="test-inline-1"] .msg__inline-sprinkle iframe');
+      const iframe = document.querySelector(
+        '[data-msg-id="test-inline-1"] .msg__inline-sprinkle iframe'
+      );
       if (!iframe) return { error: 'No iframe found' };
 
       // Check srcdoc contains the expected content
@@ -196,7 +210,9 @@ async function main() {
         window.addEventListener('message', handler);
 
         // Find the iframe and simulate a click on its button
-        const iframe = document.querySelector('[data-msg-id="test-inline-1"] .msg__inline-sprinkle iframe');
+        const iframe = document.querySelector(
+          '[data-msg-id="test-inline-1"] .msg__inline-sprinkle iframe'
+        );
         if (!iframe?.contentWindow) {
           resolve({ error: 'No iframe contentWindow' });
           return;
@@ -208,11 +224,14 @@ async function main() {
         iframe.contentWindow.postMessage({ type: 'test-click' }, '*');
 
         // Directly test the bridge by simulating what the button onclick would do
-        window.postMessage({
-          type: 'inline-sprinkle-lick',
-          action: 'test-action',
-          data: { env: 'prod' },
-        }, '*');
+        window.postMessage(
+          {
+            type: 'inline-sprinkle-lick',
+            action: 'test-action',
+            data: { env: 'prod' },
+          },
+          '*'
+        );
 
         setTimeout(() => {
           window.removeEventListener('message', handler);
@@ -273,7 +292,8 @@ async function main() {
       };
     });
 
-    if (result.instanceCount === 2) ok(`Created ${result.instanceCount} instances for 2 shtml blocks`);
+    if (result.instanceCount === 2)
+      ok(`Created ${result.instanceCount} instances for 2 shtml blocks`);
     else fail(`Expected 2 instances, got ${result.instanceCount}`);
 
     if (result.iframeCount === 2) ok(`${result.iframeCount} iframes rendered`);
@@ -364,7 +384,7 @@ async function main() {
       if (!iframe) return { error: 'No iframe' };
 
       // Wait for the iframe to load and report height
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise((r) => setTimeout(r, 1000));
 
       const height = iframe.style.height;
       mod.disposeInlineSprinkles(instances);
@@ -393,14 +413,16 @@ async function main() {
 
   // ── Summary ──
   console.log(`\n${'─'.repeat(50)}`);
-  console.log(`  ${GREEN}${passed} passed${RESET}  ${failed > 0 ? RED : ''}${failed} failed${RESET}`);
+  console.log(
+    `  ${GREEN}${passed} passed${RESET}  ${failed > 0 ? RED : ''}${failed} failed${RESET}`
+  );
   console.log(`${'─'.repeat(50)}\n`);
 
   browser.disconnect();
   process.exit(failed > 0 ? 1 : 0);
 }
 
-main().catch(e => {
+main().catch((e) => {
   console.error(`${RED}Fatal error:${RESET}`, e.message);
   process.exit(1);
 });

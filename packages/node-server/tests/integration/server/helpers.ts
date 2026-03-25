@@ -5,7 +5,10 @@ export type JsonObject = Record<string, unknown>;
 
 const DEFAULT_BASE_URL = 'http://localhost:5710';
 
-export const BASE_URL = (process.env['SLICC_TEST_SERVER_URL'] ?? DEFAULT_BASE_URL).replace(/\/$/, '');
+export const BASE_URL = (process.env['SLICC_TEST_SERVER_URL'] ?? DEFAULT_BASE_URL).replace(
+  /\/$/,
+  ''
+);
 
 export function serverUrl(path: string): string {
   return new URL(path, `${BASE_URL}/`).toString();
@@ -63,7 +66,10 @@ export async function openWebSocket(
         return Promise.resolve(queue.shift()!);
       }
       return new Promise((res, rej) => {
-        const timeout = setTimeout(() => rej(new Error('Timed out waiting for WebSocket message')), 10_000);
+        const timeout = setTimeout(
+          () => rej(new Error('Timed out waiting for WebSocket message')),
+          10_000
+        );
         waiters.push((message) => {
           clearTimeout(timeout);
           res(message);

@@ -61,6 +61,7 @@ Drop a scoop when:
 **Every playwright command that operates on a tab requires `--tab=<targetId>`.** There is no implicit "current tab". Always specify which tab you're operating on.
 
 **Workflow:**
+
 1. `playwright-cli tab-list` — lists tabs with their targetIds. The user's active tab is marked `(active)`.
 2. `playwright-cli tab-new <url>` — opens a new tab, returns the targetId in output. Capture it!
 3. Use `--tab=<targetId>` on all subsequent commands: `playwright-cli screenshot --tab=<id>`, `playwright-cli click --tab=<id> e5`, etc.

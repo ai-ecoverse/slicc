@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { parseToolResultContentRaw, parseToolResultContent, adaptTool } from '../../src/core/tool-adapter.js';
+import {
+  parseToolResultContentRaw,
+  parseToolResultContent,
+  adaptTool,
+} from '../../src/core/tool-adapter.js';
 import type { ToolDefinition } from '../../src/core/types.js';
 
 describe('parseToolResultContentRaw', () => {

@@ -1,8 +1,5 @@
 import { createLogger } from '../core/logger.js';
-import type {
-  LeaderToWorkerControlMessage,
-  WorkerToLeaderControlMessage,
-} from './tray-types.js';
+import type { LeaderToWorkerControlMessage, WorkerToLeaderControlMessage } from './tray-types.js';
 import * as db from './db.js';
 import { buildTrayWorkerUrl } from './tray-runtime-config.js';
 

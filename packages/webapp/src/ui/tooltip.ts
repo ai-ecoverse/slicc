@@ -8,7 +8,7 @@
  */
 
 const DELAY = 300; // ms before showing
-const GAP = 6;     // px between trigger and tooltip
+const GAP = 6; // px between trigger and tooltip
 
 let el: HTMLDivElement | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -73,23 +73,34 @@ function show(target: HTMLElement): void {
 }
 
 function hide(): void {
-  if (timer) { clearTimeout(timer); timer = null; }
+  if (timer) {
+    clearTimeout(timer);
+    timer = null;
+  }
   el?.classList.remove('s2-tooltip--visible');
 }
 
 /** Call once to install global tooltip listeners. */
 export function initTooltips(): void {
-  document.addEventListener('pointerenter', (e) => {
-    const target = (e.target as HTMLElement).closest?.('[data-tooltip]') as HTMLElement | null;
-    if (!target) return;
-    hide();
-    timer = setTimeout(() => show(target), DELAY);
-  }, true);
+  document.addEventListener(
+    'pointerenter',
+    (e) => {
+      const target = (e.target as HTMLElement).closest?.('[data-tooltip]') as HTMLElement | null;
+      if (!target) return;
+      hide();
+      timer = setTimeout(() => show(target), DELAY);
+    },
+    true
+  );
 
-  document.addEventListener('pointerleave', (e) => {
-    const target = (e.target as HTMLElement).closest?.('[data-tooltip]') as HTMLElement | null;
-    if (target) hide();
-  }, true);
+  document.addEventListener(
+    'pointerleave',
+    (e) => {
+      const target = (e.target as HTMLElement).closest?.('[data-tooltip]') as HTMLElement | null;
+      if (target) hide();
+    },
+    true
+  );
 
   document.addEventListener('pointerdown', hide, true);
 }
