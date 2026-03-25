@@ -540,7 +540,7 @@ async function main() {
 
     if (chromeProfile.extensionPath && !existsSync(chromeProfile.extensionPath)) {
       console.error(
-        `Extension profile requires ${chromeProfile.extensionPath}. Run \`npm run qa:setup\` or \`npm run build:extension\` first.`
+        `Extension profile requires ${chromeProfile.extensionPath}. Run \`npm run build -w @slicc/chrome-extension\` first.`
       );
       process.exit(1);
     }
