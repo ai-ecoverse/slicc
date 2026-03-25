@@ -19,7 +19,7 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Lint and format check
-        run: prettier --check . && eslint .
+        run: npx prettier --check . && npx eslint .
       - name: Check CLAUDE.md size
         run: |
           chars=$(wc -c < CLAUDE.md)
