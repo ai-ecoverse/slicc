@@ -100,16 +100,21 @@ export class ScoopContext {
   private sessionCreatedAt: number = 0;
   private isRecovering: 'overflow' | 'image' | false = false;
 
+  private skillsFs: VirtualFS | null = null;
+  private skillsDir: string = '/workspace/skills';
+
   constructor(
     scoop: RegisteredScoop,
     callbacks: ScoopContextCallbacks,
     fs: VirtualFS | RestrictedFS,
-    sessionStore?: SessionStore
+    sessionStore?: SessionStore,
+    skillsFs?: VirtualFS
   ) {
     this.scoop = scoop;
     this.callbacks = callbacks;
     this.fs = fs;
     this.sessionStore = sessionStore ?? null;
+    this.skillsFs = skillsFs ?? null;
     this.sessionId = scoop.jid;
   }
 
@@ -131,14 +136,19 @@ export class ScoopContext {
       this.shell = new WasmShell({ fs: this.fs as VirtualFS, cwd, browserAPI: browser });
       log.info('WasmShell initialized', { folder: this.scoop.folder });
 
-      // Create default skills if needed
-      const skillsDir = this.scoop.isCone
+      // Always load skills from the cone's directory.
+      // Use the unrestricted skillsFs when available (required for scoops
+      // whose RestrictedFS cannot reach /workspace/skills/).
+      this.skillsDir = '/workspace/skills';
+      const effectiveSkillsFs = (this.skillsFs ?? this.fs) as VirtualFS;
+
+      // Seed bundled defaults for scripts (and skills as fallback)
+      const seedDir = this.scoop.isCone
         ? '/workspace/skills'
         : `/scoops/${this.scoop.folder}/workspace/skills`;
-      await createDefaultSkills(this.fs as VirtualFS, skillsDir);
+      await createDefaultSkills(this.fs as VirtualFS, seedDir);
 
-      // Load skills from VFS
-      const skills = await loadSkills(this.fs as VirtualFS, skillsDir);
+      const skills = await loadSkills(effectiveSkillsFs, this.skillsDir);
 
       // Create scoop-management tools (send_message, scoop management)
       const scoopManagementToolsConfig: ScoopManagementToolsConfig = {
@@ -335,6 +345,36 @@ export class ScoopContext {
     const model = resolveCurrentModel();
     this.agent.setModel(model);
     log.info('Model updated on running agent', { folder: this.scoop.folder, model: model.id });
+  }
+
+  /** Hot-reload skills from VFS and update the agent's system prompt. */
+  async reloadSkills(): Promise<void> {
+    if (!this.agent) return;
+
+    const effectiveSkillsFs = (this.skillsFs ?? this.fs) as VirtualFS;
+    const skills = await loadSkills(effectiveSkillsFs, this.skillsDir);
+
+    // Re-read memories for prompt rebuild
+    let scoopMemory = '';
+    const memoryPath = this.scoop.isCone
+      ? '/workspace/CLAUDE.md'
+      : `/scoops/${this.scoop.folder}/CLAUDE.md`;
+    try {
+      const content = await this.fs!.readFile(memoryPath, { encoding: 'utf-8' });
+      scoopMemory = typeof content === 'string'
+        ? content
+        : new TextDecoder().decode(content);
+    } catch { /* no memory file -- expected for fresh scoops */ }
+
+    const globalMemory = await this.callbacks.getGlobalMemory();
+
+    const newPrompt = this.buildSystemPrompt(globalMemory, scoopMemory, skills);
+    this.agent.setSystemPrompt(newPrompt);
+
+    log.info('Skills reloaded', {
+      folder: this.scoop.folder,
+      skillCount: skills.length,
+    });
   }
 
   /** Cleanup */
