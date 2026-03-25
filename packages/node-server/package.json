@@ -6,5 +6,10 @@
     "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('../../dist/node-server', { recursive: true, force: true });\" && tsc -p ../../tsconfig.cli.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p ../../tsconfig.cli.json"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/ws": "^8.5.14",
+    "electron": "41.0.4"
   }
 }
