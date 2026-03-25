@@ -1,7 +1,6 @@
 export const TRAY_WORKER_STORAGE_KEY = 'slicc.trayWorkerBaseUrl';
 export const TRAY_JOIN_STORAGE_KEY = 'slicc.trayJoinUrl';
-export const DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL =
-  'https://www.sliccy.ai';
+export const DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL = 'https://www.sliccy.ai';
 export const DEFAULT_STAGING_TRAY_WORKER_BASE_URL =
   'https://slicc-tray-hub-staging.minivelos.workers.dev';
 
