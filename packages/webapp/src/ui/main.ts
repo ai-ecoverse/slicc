@@ -461,6 +461,13 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     }
   );
   (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
+  (window as unknown as Record<string, unknown>).__slicc_reloadSkills = () => {
+    chrome.runtime.sendMessage({
+      source: 'panel',
+      payload: { type: 'reload-skills' },
+    });
+    return Promise.resolve();
+  };
 
   // Register handler so the offscreen proxy can relay sprinkle operations here.
   // Routed through the OffscreenClient's existing onMessage listener to ensure delivery.
