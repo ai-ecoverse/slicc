@@ -122,7 +122,13 @@ describe('Model metadata survives renewal', () => {
     // Simulates what getModelIds returns from localStorage after enrichModel persisted the data
     const models = [
       { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', context_window: 1000000 },
-      { id: 'zai-glm-4.7', name: 'GLM 4.7', api: 'openai', context_window: 131072, max_tokens: 40960 },
+      {
+        id: 'zai-glm-4.7',
+        name: 'GLM 4.7',
+        api: 'openai',
+        context_window: 131072,
+        max_tokens: 40960,
+      },
     ];
     localStorage.setItem('slicc-adobe-models', JSON.stringify(models));
 
