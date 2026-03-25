@@ -920,8 +920,9 @@ export class Layout {
         },
       }),
       fileBrowser: new FileBrowserPanel(fileBrowserContainer, {
-        onRunCommand: (command) => {
-          void this.runFileBrowserCommand(command);
+        onRunCommand: async (command) => {
+          await this.runFileBrowserCommand(command);
+          this.openTerminal();
         },
         onClearFilesystem: () => this.onClearFilesystem?.(),
       }),
