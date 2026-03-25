@@ -103,7 +103,7 @@ Each instance gets an isolated Chrome profile (keyed by port), separate CDP port
 - **Cone**: Main agent ("sliccy"). Full filesystem access, all tools. Code: `orchestrator.ts`, `RegisteredScoop` with `isCone: true`.
 - **Scoops**: Isolated sub-agents with sandboxed filesystem (`/scoops/{name}/` + `/shared/`), own shell/conversation. Tools: `scoop_scoop`, `feed_scoop`, `drop_scoop`. Code: `scoop-context.ts`, `restricted-fs.ts`.
 - **Licks**: External events triggering scoops (webhooks, cron tasks). Code: `LickManager`, `LickEvent`. Shell: `webhook`, `crontask`.
-- **Floats**: Runtime environments — CLI (`src/cli/`), Extension (`src/extension/`), Electron (`src/cli/electron-main.ts`), Sliccstart (`sliccstart/` — native macOS launcher), Cloud (planned).
+- **Floats**: Runtime environments — CLI (`packages/node-server/src/cli/`), Extension (`packages/chrome-extension/src/`), Electron (`packages/node-server/src/cli/electron-main.ts`), Sliccstart (`packages/swift-launcher/` — native macOS launcher), Cloud (planned).
 
 Use ice cream terms over technical jargon (e.g., "feed_scoop" not "delegate_to_scoop").
 
@@ -120,45 +120,45 @@ Browser-based AI coding agent running as Chrome extension (side panel), standalo
 ### Layer Stack
 
 ```
-Virtual Filesystem (src/fs/) → RestrictedFS → Shell (src/shell/) + Git (src/git/)
-  → CDP (src/cdp/) → Tools (src/tools/) → Core Agent (src/core/)
-    → Scoops Orchestrator (src/scoops/) → UI (src/ui/)
-      → CLI/Electron (src/cli/) | Extension (src/extension/)
+Virtual Filesystem (packages/webapp/src/fs/) → RestrictedFS → Shell (packages/webapp/src/shell/) + Git (packages/webapp/src/git/)
+  → CDP (packages/webapp/src/cdp/) → Tools (packages/webapp/src/tools/) → Core Agent (packages/webapp/src/core/)
+    → Scoops Orchestrator (packages/webapp/src/scoops/) → UI (packages/webapp/src/ui/)
+      → CLI/Electron (packages/node-server/src/cli/) | Extension (packages/chrome-extension/src/)
 ```
 
 ### Build Targets
 
-- **Browser bundle** (tsconfig.json): Everything except src/cli/. Bundled by Vite.
-- **CLI/Electron** (tsconfig.cli.json): Only src/cli/. Compiled by TSC to dist/cli/.
-- **Extension** (vite.config.extension.ts): Browser bundle + extension entry points + bundled Pyodide.
+- **Browser bundle** (tsconfig.json): Everything except `packages/node-server/src/cli/`. Bundled by Vite.
+- **CLI/Electron** (tsconfig.cli.json): Only `packages/node-server/src/cli/`. Compiled by TSC to dist/cli/.
+- **Extension** (packages/chrome-extension/vite.config.ts): Browser bundle + extension entry points + bundled Pyodide.
 
 ### Key Subsystems
 
-**Orchestrator** (`src/scoops/orchestrator.ts`): Creates/destroys scoops, routes messages, manages VFS. Cone delegates via `feed_scoop` — scoops get complete self-contained prompts (no access to cone's conversation).
+**Orchestrator** (`packages/webapp/src/scoops/orchestrator.ts`): Creates/destroys scoops, routes messages, manages VFS. Cone delegates via `feed_scoop` — scoops get complete self-contained prompts (no access to cone's conversation).
 
-**VirtualFS** (`src/fs/`): POSIX-like async FS backed by LightningFS (IndexedDB). `RestrictedFS` wraps it with path ACLs for scoops. `FsError` carries POSIX error codes.
+**VirtualFS** (`packages/webapp/src/fs/`): POSIX-like async FS backed by LightningFS (IndexedDB). `RestrictedFS` wraps it with path ACLs for scoops. `FsError` carries POSIX error codes.
 
-**Shell** (`src/shell/`): WasmShell wraps just-bash 2.11.7 (WASM). 78+ commands including `git`, `node -e`, `python3 -c`, `playwright-cli`, `open`, `serve`, `sqlite3`, `convert`, `pdftk`, `skill`, `upskill`, `webhook`, `crontask`, `mount`, `oauth-token`, `debug`. Any `*.jsh` file on VFS is auto-discovered as a command. Extension CSP workaround: dynamic code routes through `sandbox.html`. **Two shell contexts in extension mode**: side panel has its own WasmShell (mounted in terminal tab), offscreen document has the agent's WasmShell (runs bash tool calls). Commands that affect the UI must handle both — use `window.__slicc_*` hooks for direct calls (panel) and `chrome.runtime.sendMessage` relay for offscreen→panel communication.
+**Shell** (`packages/webapp/src/shell/`): WasmShell wraps just-bash 2.11.7 (WASM). 78+ commands including `git`, `node -e`, `python3 -c`, `playwright-cli`, `open`, `serve`, `sqlite3`, `convert`, `pdftk`, `skill`, `upskill`, `webhook`, `crontask`, `mount`, `oauth-token`, `debug`. Any `*.jsh` file on VFS is auto-discovered as a command. Extension CSP workaround: dynamic code routes through `sandbox.html`. **Two shell contexts in extension mode**: side panel has its own WasmShell (mounted in terminal tab), offscreen document has the agent's WasmShell (runs bash tool calls). Commands that affect the UI must handle both — use `window.__slicc_*` hooks for direct calls (panel) and `chrome.runtime.sendMessage` relay for offscreen→panel communication.
 
-**CDP** (`src/cdp/`): `CDPTransport` interface with WebSocket (CLI) and `chrome.debugger` (extension) implementations. `BrowserAPI` provides Playwright-style API (listPages, navigate, screenshot, evaluate, click, etc.). Screenshots normalize DPR to 1.
+**CDP** (`packages/webapp/src/cdp/`): `CDPTransport` interface with WebSocket (CLI) and `chrome.debugger` (extension) implementations. `BrowserAPI` provides Playwright-style API (listPages, navigate, screenshot, evaluate, click, etc.). Screenshots normalize DPR to 1.
 
-**Tools** (`src/tools/`): Active tool surface: `read_file`, `write_file`, `edit_file`, `bash`, `javascript`, plus NanoClaw tools (`send_message`, cone-only: `list_scoops`, `scoop_scoop`, `feed_scoop`, `drop_scoop`, `update_global_memory`). Browser automation goes through shell commands via `bash`.
+**Tools** (`packages/webapp/src/tools/`): Active tool surface: `read_file`, `write_file`, `edit_file`, `bash`, `javascript`, plus NanoClaw tools (`send_message`, cone-only: `list_scoops`, `scoop_scoop`, `feed_scoop`, `drop_scoop`, `update_global_memory`). Browser automation goes through shell commands via `bash`.
 
-**Core Agent** (`src/core/`): Uses pi-agent-core for agent loop, pi-ai for LLM streaming. `tool-adapter.ts` bridges legacy ToolDefinition to pi-compatible AgentTool. `SessionStore` persists conversations to IndexedDB.
+**Core Agent** (`packages/webapp/src/core/`): Uses pi-agent-core for agent loop, pi-ai for LLM streaming. `tool-adapter.ts` bridges legacy ToolDefinition to pi-compatible AgentTool. `SessionStore` persists conversations to IndexedDB.
 
-**Context Compaction** (`src/core/context-compaction.ts`): LLM-summarized compaction at ~183K tokens. Images auto-resized before LLM (5MB base64 limit). Overflow recovery replaces oversized messages (>40K chars) with placeholders.
+**Context Compaction** (`packages/webapp/src/core/context-compaction.ts`): LLM-summarized compaction at ~183K tokens. Images auto-resized before LLM (5MB base64 limit). Overflow recovery replaces oversized messages (>40K chars) with placeholders.
 
-**UI** (`src/ui/`): Vanilla TypeScript, no framework. Extension mode: compact tabbed interface (Chat + Files visible by default; Terminal + Memory hidden — toggle with `debug on`). Standalone: resizable split layout with all panels visible. `main.ts` delegates to `mainExtension()` (OffscreenClient) or bootstraps Orchestrator directly. Tab bar is fully dynamic — `TabZone.addTab()`/`removeTab()` adds/removes tabs at runtime (used by sprinkle panels and the `debug` command).
+**UI** (`packages/webapp/src/ui/`): Vanilla TypeScript, no framework. Extension mode: compact tabbed interface (Chat + Files visible by default; Terminal + Memory hidden — toggle with `debug on`). Standalone: resizable split layout with all panels visible. `main.ts` delegates to `mainExtension()` (OffscreenClient) or bootstraps Orchestrator directly. Tab bar is fully dynamic — `TabZone.addTab()`/`removeTab()` adds/removes tabs at runtime (used by sprinkle panels and the `debug` command).
 
-**Extension** (`src/extension/`): Service worker relays messages + proxies chrome.debugger. Offscreen document runs agent engine (survives side panel close). Chat persistence: `browser-coding-agent` IndexedDB is single source of truth. **Key architecture detail**: the extension has two separate execution contexts with independent shell instances — the side panel (UI, terminal shell, Layout) and the offscreen document (agent engine, bash tool shell, Orchestrator). They share IndexedDB but NOT window globals. Communication is via `chrome.runtime` messages routed through the service worker. See `docs/architecture.md` "Extension Three-Layer Architecture".
+**Extension** (`packages/chrome-extension/src/`): Service worker relays messages + proxies chrome.debugger. Offscreen document runs agent engine (survives side panel close). Chat persistence: `browser-coding-agent` IndexedDB is single source of truth. **Key architecture detail**: the extension has two separate execution contexts with independent shell instances — the side panel (UI, terminal shell, Layout) and the offscreen document (agent engine, bash tool shell, Orchestrator). They share IndexedDB but NOT window globals. Communication is via `chrome.runtime` messages routed through the service worker. See `docs/architecture.md` "Extension Three-Layer Architecture".
 
-**Preview SW** (`src/ui/preview-sw.ts`): Intercepts `/preview/*` requests, serves VFS content. Built as IIFE via esbuild (not rollup — avoids code-splitting issues in SWs).
+**Preview SW** (`packages/webapp/src/ui/preview-sw.ts`): Intercepts `/preview/*` requests, serves VFS content. Built as IIFE via esbuild (not rollup — avoids code-splitting issues in SWs).
 
-**Sprinkle Rendering** (`src/ui/sprinkle-renderer.ts`): Renders `.shtml` files as interactive UI panels. CLI mode: fragments injected into DOM directly, full documents rendered via srcdoc iframe. Extension mode: ALL content routes through `sprinkle-sandbox.html` (CSP-exempt manifest sandbox) — fragments rendered in sandbox body, full documents via nested srcdoc iframe inside sandbox. See the sprinkles skill (`src/defaults/workspace/skills/sprinkles/`) for rendering modes, bridge API, and style guide.
+**Sprinkle Rendering** (`packages/webapp/src/ui/sprinkle-renderer.ts`): Renders `.shtml` files as interactive UI panels. CLI mode: fragments injected into DOM directly, full documents rendered via srcdoc iframe. Extension mode: ALL content routes through `sprinkle-sandbox.html` (CSP-exempt manifest sandbox) — fragments rendered in sandbox body, full documents via nested srcdoc iframe inside sandbox. See the sprinkles skill (`packages/vfs-root/workspace/skills/sprinkles/`) for rendering modes, bridge API, and style guide.
 
-**Inline Sprinkles** (`src/ui/inline-sprinkle.ts`): Agent ` ```shtml ` code blocks in chat messages are hydrated into sandboxed iframes after streaming completes. Minimal bridge (lick-only, no state) via postMessage. Auto-height via ResizeObserver. CLI mode: direct srcdoc iframe. Extension mode: routes through `sprinkle-sandbox.html` (same CSP-exempt sandbox as panel sprinkles). Lick events route to the cone via `routeLickToScoop` (CLI) or `client.sendSprinkleLick` (extension). CSS: `.msg__inline-sprinkle` container, `.sprinkle-action-card` component.
+**Inline Sprinkles** (`packages/webapp/src/ui/inline-sprinkle.ts`): Agent ` ```shtml ` code blocks in chat messages are hydrated into sandboxed iframes after streaming completes. Minimal bridge (lick-only, no state) via postMessage. Auto-height via ResizeObserver. CLI mode: direct srcdoc iframe. Extension mode: routes through `sprinkle-sandbox.html` (same CSP-exempt sandbox as panel sprinkles). Lick events route to the cone via `routeLickToScoop` (CLI) or `client.sendSprinkleLick` (extension). CSS: `.msg__inline-sprinkle` container, `.sprinkle-action-card` component.
 
-**Skills** (`src/skills/`, `src/scoops/skills.ts`): native `/workspace/skills/` packages auto-load into the system prompt alongside accessible compatibility skills discovered from `.agents/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md` anywhere in the reachable VFS. Only native `/workspace/skills/` entries are install-managed; compatibility roots stay read-only.
+**Skills** (`packages/webapp/src/skills/`, `packages/webapp/src/scoops/skills.ts`): native `/workspace/skills/` packages auto-load into the system prompt alongside accessible compatibility skills discovered from `.agents/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md` anywhere in the reachable VFS. Only native `/workspace/skills/` entries are install-managed; compatibility roots stay read-only.
 
 ### Data Flow
 
@@ -170,24 +170,24 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 
 ### Tray / Teleport Addendum
 
-- Tray hub code lives in `src/worker/` with config in `wrangler.jsonc`; treat it as coordination infrastructure, not canonical session storage.
+- Tray hub code lives in `packages/cloudflare-worker/src/` with config in `wrangler.jsonc`; treat it as coordination infrastructure, not canonical session storage.
 - When a tray is connected, remote browser targets are exposed through federated target routing; keep CDP local to the runtime that owns the page.
 - Teleport is part of the browser/shell workflow: `playwright teleport --start=<regex> --return=<regex>` and equivalent flags on `open`, `tab-new`, and navigation commands.
 - Any `*.bsh` file is a browser-navigation helper. Keep detailed behavior in docs rather than growing this root guide.
 
 ## Key Conventions
 
-- **Two type systems**: Legacy ToolDefinition (src/tools/) and pi-compatible AgentTool (src/core/). Bridged by `tool-adapter.ts`.
+- **Two type systems**: Legacy ToolDefinition (`packages/webapp/src/tools/`) and pi-compatible AgentTool (`packages/webapp/src/core/`). Bridged by `tool-adapter.ts`.
 - **Colocated tests**: `foo.test.ts` next to `foo.ts`. Vitest, globals: true, environment: node. Use `fake-indexeddb/auto` for VFS tests.
-- **Logging**: `createLogger('namespace')` from `src/core/logger.ts`. DEBUG in dev, ERROR in prod.
+- **Logging**: `createLogger('namespace')` from `packages/webapp/src/core/logger.ts`. DEBUG in dev, ERROR in prod.
 - **Extension detection**: `typeof chrome !== 'undefined' && !!chrome?.runtime?.id`
 - **Dual-mode compatibility**: Features MUST work in both CLI and extension. Extension CSP blocks eval/CDN — use `sandbox.html` for dynamic code, `sprinkle-sandbox.html` for sprinkles/inline widgets, `chrome.runtime.getURL()` for bundled assets.
 - **Extension `window.open()` returns `null`**: Fire-and-forget; don't treat null as failure.
 - **Model ID aliases**: Use pi-ai aliases (e.g., `claude-opus-4-6`) not dated snapshot IDs.
-- **Provider composition**: Auto-discovered from pi-ai. External providers: drop `.ts` in root `providers/`. OAuth via `createOAuthLauncher()` in `src/providers/oauth-service.ts`. Registration runs in both `main.ts` and `offscreen.ts`. Providers can override model capabilities via `modelOverrides` (static) or `getModelIds()` metadata (dynamic). Three-layer merge: pi-ai → modelOverrides → getModelIds. OpenAI-compatible models route through `streamOpenAICompletions` when `api: 'openai'` is set in metadata.
-- **Two CLAUDE.md files**: This one (project root) is for Claude Code. `src/defaults/shared/CLAUDE.md` is for the agent (bundled to `/shared/CLAUDE.md`).
-- **Default VFS content**: `src/defaults/` bundled into VFS via `import.meta.glob`.
-- **Preview URLs**: Use `toPreviewUrl(vfsPath)` from `src/shell/supplemental-commands/shared.ts`.
+- **Provider composition**: Auto-discovered from pi-ai. External providers: drop `.ts` in `packages/webapp/providers/`. OAuth via `createOAuthLauncher()` in `packages/webapp/src/providers/oauth-service.ts`. Registration runs in both `main.ts` and `offscreen.ts`. Providers can override model capabilities via `modelOverrides` (static) or `getModelIds()` metadata (dynamic). Three-layer merge: pi-ai → modelOverrides → getModelIds. OpenAI-compatible models route through `streamOpenAICompletions` when `api: 'openai'` is set in metadata.
+- **Two CLAUDE.md files**: This one (project root) is for Claude Code. `packages/vfs-root/shared/CLAUDE.md` is for the agent (bundled to `/shared/CLAUDE.md`).
+- **Default VFS content**: `packages/vfs-root/` bundled into VFS via `import.meta.glob`.
+- **Preview URLs**: Use `toPreviewUrl(vfsPath)` from `packages/webapp/src/shell/supplemental-commands/shared.ts`.
 
 ## Change Requirements
 
