@@ -357,13 +357,13 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 ### Task 3: Add OpenAI stream routing in Adobe provider
 
 **Files:**
-- Modify: `providers/adobe.ts:339-381` (streamAdobe and streamSimpleAdobe functions)
-- Modify: `providers/adobe.ts:385-418` (fetchProxyModels — propagate metadata)
-- Modify: `providers/adobe.ts:195-221` (getModelIds — propagate metadata)
+- Modify: `packages/webapp/providers/adobe.ts:339-381` (streamAdobe and streamSimpleAdobe functions)
+- Modify: `packages/webapp/providers/adobe.ts:385-418` (fetchProxyModels — propagate metadata)
+- Modify: `packages/webapp/providers/adobe.ts:195-221` (getModelIds — propagate metadata)
 
 - [ ] **Step 1: Update fetchProxyModels to parse and propagate metadata**
 
-In `providers/adobe.ts`, update `fetchProxyModels()` (line ~385) to parse new optional fields from `/v1/models` response and store them:
+In `packages/webapp/providers/adobe.ts`, update `fetchProxyModels()` (line ~385) to parse new optional fields from `/v1/models` response and store them:
 
 The `/v1/models` response may now include: `api`, `context_window`, `max_tokens`, `reasoning`, `input`.
 
@@ -469,7 +469,7 @@ return entry;
 
 - [ ] **Step 3: Add OpenAI stream routing**
 
-In `providers/adobe.ts`, update `streamAdobe` and `streamSimpleAdobe` to check the model's API type and route accordingly.
+In `packages/webapp/providers/adobe.ts`, update `streamAdobe` and `streamSimpleAdobe` to check the model's API type and route accordingly.
 
 Add import at the top:
 ```typescript
@@ -557,7 +557,7 @@ Expected: All four pass.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add providers/adobe.ts
+git add packages/webapp/providers/adobe.ts
 git commit -m "feat(adobe): add OpenAI stream routing and proxy metadata propagation
 
 Adobe provider now routes to streamOpenAICompletions for models

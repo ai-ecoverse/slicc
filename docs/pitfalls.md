@@ -39,7 +39,7 @@ if (isExtensionMode) {
 
 | Aspect | Details |
 |--------|---------|
-| **Sandbox file** | `sandbox.html` (project root, copied to `dist/extension/` by vite config) |
+| **Sandbox file** | `packages/chrome-extension/sandbox.html` (copied to `dist/extension/` by vite config) |
 | **Exec pattern** | Parent page sends `{ type: 'exec', id, code }`, sandbox posts back `{ type: 'exec_result', id, result, logs, error }` |
 | **VFS bridge** | Sandbox iframe uses same postMessage pattern for VFS operations (readFile, writeFile, etc.) |
 | **Shared iframe** | JavaScript tool and node command share the same sandbox iframe (find via `document.querySelector('iframe[data-js-tool]')`) |
@@ -48,7 +48,7 @@ if (isExtensionMode) {
 **Related Files**
 - `packages/webapp/src/tools/javascript-tool.ts` lines 248–270 (dual-mode iframe setup)
 - `packages/webapp/src/shell/supplemental-commands/node-command.ts` lines 145–221 (extension routing)
-- `sandbox.html` (entry point, must load in extension via `chrome.runtime.getURL()`)
+- `packages/chrome-extension/sandbox.html` (entry point, must load in extension via `chrome.runtime.getURL()`)
 
 ## WASM & Bundled Assets in Extension Mode
 

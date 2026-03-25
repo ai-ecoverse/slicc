@@ -111,7 +111,7 @@ This means:
 
 ### 3. Stream Function Routing in Adobe Provider
 
-In `providers/adobe.ts`, the stream functions check the model's API type:
+In `packages/webapp/providers/adobe.ts`, the stream functions check the model's API type:
 
 **Current:** All models → `streamAnthropic()`
 
@@ -141,7 +141,7 @@ The proxy accepts requests in whichever format the model's `api` field indicates
 - For unknown model IDs, use override/metadata fields instead of hardcoded defaults
 - Store `api` type on the model object for stream function routing
 
-### File: `providers/adobe.ts`
+### File: `packages/webapp/providers/adobe.ts`
 
 **In `streamAdobe()` and `streamSimpleAdobe()`:**
 
