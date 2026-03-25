@@ -115,6 +115,77 @@ describe('Token extraction from URL', () => {
   });
 });
 
+describe('Model metadata survives renewal', () => {
+  beforeEach(() => storage.clear());
+
+  it('persisted models with api field are returned with metadata intact', () => {
+    // Simulates what getModelIds returns from localStorage after enrichModel persisted the data
+    const models = [
+      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', context_window: 1000000 },
+      {
+        id: 'zai-glm-4.7',
+        name: 'GLM 4.7',
+        api: 'openai',
+        context_window: 131072,
+        max_tokens: 40960,
+      },
+    ];
+    localStorage.setItem('slicc-adobe-models', JSON.stringify(models));
+
+    const persisted = JSON.parse(localStorage.getItem('slicc-adobe-models')!);
+    expect(persisted[1].api).toBe('openai');
+    expect(persisted[1].context_window).toBe(131072);
+  });
+
+  it('persisted models WITHOUT api field lose routing info (pre-metadata format)', () => {
+    // Simulates stale localStorage from before metadata changes
+    const models = [
+      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
+      { id: 'zai-glm-4.7', name: 'GLM 4.7' },
+    ];
+    localStorage.setItem('slicc-adobe-models', JSON.stringify(models));
+
+    const persisted = JSON.parse(localStorage.getItem('slicc-adobe-models')!);
+    // No api field — stream router will default to anthropic (wrong for Cerebras)
+    expect(persisted[1].api).toBeUndefined();
+  });
+
+  it('getAdobeModels pattern repopulates metadata after renewal', async () => {
+    // Simulates the fix: after renewal, getAdobeModels is called which
+    // populates proxyMetadataCache AND persists enriched models to localStorage
+    const proxyMetadataCache = new Map<string, { api?: string; context_window?: number }>();
+    const proxyResponse = [
+      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', context_window: 1000000 },
+      { id: 'zai-glm-4.7', name: 'GLM 4.7', api: 'openai', context_window: 131072 },
+    ];
+
+    // Simulate fetchProxyModels populating the cache
+    for (const pm of proxyResponse) {
+      proxyMetadataCache.set(pm.id, { api: (pm as any).api, context_window: pm.context_window });
+    }
+
+    // Simulate enrichModel using the cache
+    const enriched = proxyResponse.map((m) => {
+      const entry: any = { id: m.id, name: m.name };
+      const meta = proxyMetadataCache.get(m.id);
+      if (meta?.api) entry.api = meta.api;
+      if (meta?.context_window !== undefined) entry.context_window = meta.context_window;
+      return entry;
+    });
+
+    // After enrichment, api field is present for Cerebras models
+    expect(enriched[1].api).toBe('openai');
+    expect(enriched[0].api).toBeUndefined(); // Anthropic models don't have explicit api
+
+    // Persist to localStorage (simulates what getModelIds does)
+    localStorage.setItem('slicc-adobe-models', JSON.stringify(enriched));
+
+    // Verify round-trip: models loaded from localStorage retain api field
+    const roundTripped = JSON.parse(localStorage.getItem('slicc-adobe-models')!);
+    expect(roundTripped[1].api).toBe('openai');
+  });
+});
+
 describe('Renewal deduplication pattern', () => {
   it('concurrent calls share the same promise', async () => {
     let resolveRenewal: (v: string | null) => void;

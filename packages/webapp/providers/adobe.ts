@@ -451,6 +451,17 @@ async function silentRenewToken(): Promise<string | null> {
       });
 
       console.log('[adobe] Token renewed silently');
+
+      // Refresh model list to repopulate proxyMetadataCache (needed for
+      // OpenAI-compatible model routing). Without this, getModelIds() falls
+      // back to stale localStorage data that may lack the 'api' field.
+      await getAdobeModels().catch((err) =>
+        console.warn(
+          '[adobe] Failed to refresh models after silent renewal:',
+          err instanceof Error ? err.message : String(err)
+        )
+      );
+
       return tokenInfo.accessToken;
     } catch (err) {
       console.warn(
