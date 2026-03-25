@@ -919,9 +919,8 @@ async function main() {
       headers['accept-encoding'] = 'identity';
       if (Object.keys(headers).length > 0) fetchInit.headers = headers;
       if (rawBody.length > 0 && !['GET', 'HEAD'].includes(req.method)) {
-        // Buffer extends Uint8Array (valid BodyInit at runtime) but TS can't
-        // prove the backing ArrayBuffer is non-shared, so double-cast is needed.
-        fetchInit.body = rawBody as unknown as BodyInit;
+        // Buffer extends Uint8Array which is a valid fetch body at runtime.
+        fetchInit.body = rawBody as unknown as RequestInit['body'];
       }
 
       const upstream = await fetch(targetUrl, fetchInit);
