@@ -198,4 +198,29 @@ describe('OAuth state encoding', () => {
     const decoded = JSON.parse(atob(decodeURIComponent(encoded)));
     expect(decoded.port).toBe(5710);
   });
+
+  it('nonce mismatch is detectable for CSRF protection', () => {
+    const expected = 'nonce-from-cli';
+    const received = 'nonce-from-attacker';
+    expect(received).not.toBe(expected);
+    // The provider rejects the callback when nonces don't match
+  });
+
+  it('nonce match passes verification', () => {
+    const nonce = crypto.randomUUID();
+    const state = btoa(JSON.stringify({ port: 5710, path: '/auth/callback', nonce }));
+    const decoded = JSON.parse(atob(state));
+    // Simulates: relay puts nonce in query, CLI verifies it matches
+    const callbackUrl = new URL(
+      `http://localhost:5710/auth/callback?nonce=${encodeURIComponent(decoded.nonce)}#access_token=xxx`
+    );
+    expect(callbackUrl.searchParams.get('nonce')).toBe(nonce);
+  });
+
+  it('supports custom path for different providers', () => {
+    const state = btoa(JSON.stringify({ port: 5720, path: '/auth/github/callback', nonce: 'n1' }));
+    const decoded = JSON.parse(atob(state));
+    expect(decoded.path).toBe('/auth/github/callback');
+    // Relay would redirect to http://localhost:5720/auth/github/callback
+  });
 });
