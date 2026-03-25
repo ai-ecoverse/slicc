@@ -630,6 +630,20 @@ async function main(): Promise<void> {
         getElectronOverlayInitialTab(`http://localhost/?tab=${event.data.tab ?? ''}`)
       );
     });
+
+    window.addEventListener('keydown', (event: KeyboardEvent) => {
+      if (
+        event.code === 'Semicolon' &&
+        (event.metaKey || event.ctrlKey) &&
+        !event.shiftKey &&
+        !event.altKey &&
+        !event.repeat
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        window.parent.postMessage({ type: 'slicc-electron-overlay:toggle' }, '*');
+      }
+    }, true);
   }
   const showSkillDropToast = createSkillDropToast();
 
