@@ -38,9 +38,13 @@ A manual `workflow_dispatch` GitHub Actions workflow that downloads an extension
 1. **Checkout** — needed for `build/publish-chrome.js`.
 2. **Setup Node 22** — script uses native `fetch`, no `npm install` required.
 3. **Resolve release** — if `version` input is empty, query latest release via `gh release view --json tagName`. Otherwise use the provided tag.
-4. **Download extension zip** — `gh release download <tag> --pattern '*-extension-*.zip' --dir /tmp/cws`.
-5. **Publish** — `node build/publish-chrome.js /tmp/cws/*.zip [--force]` with `CWS_CLIENT_ID`, `CWS_CLIENT_SECRET`, `CWS_REFRESH_TOKEN` as env vars.
-6. **Summary** — annotate the workflow run with the version published and a link to the CWS developer dashboard.
+4. **Download extension zip** — `gh release download <tag> --pattern '*-extension-*.zip' --dir /tmp/cws`. The release pipeline produces files named `slicc-extension-v{version}.zip` (via `sanitizeArtifactName` in `release-package.ts`).
+5. **Publish** — invoke the script with the force flag mapped from the workflow input:
+   ```
+   node build/publish-chrome.js /tmp/cws/*.zip ${{ inputs.force_replace_pending_review == true && '--force' || '' }}
+   ```
+   Env vars: `CWS_CLIENT_ID`, `CWS_CLIENT_SECRET`, `CWS_REFRESH_TOKEN`.
+6. **Summary** — write version published and CWS developer dashboard link to `$GITHUB_STEP_SUMMARY`.
 
 ### Runner
 
@@ -90,6 +94,7 @@ V2 (`chromewebstore.googleapis.com/v2/`). V1 is deprecated and scheduled for rem
 
 | Scenario                               | Behavior                                                                                         |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| No releases exist                      | Workflow fails: `gh release view` exits non-zero, step fails                                     |
 | No extension zip in release assets     | Workflow fails: "no extension zip found for release vX.Y.Z"                                      |
 | Invalid or expired refresh token       | Script fails with Google OAuth error                                                             |
 | Version pending review, no `--force`   | Script fails: "Version pending review. Re-run with force_replace_pending_review enabled..."      |
