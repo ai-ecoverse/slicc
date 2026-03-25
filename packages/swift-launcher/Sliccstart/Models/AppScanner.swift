@@ -52,10 +52,28 @@ final class AppScanner {
             ))
         }
 
-        // Skip scanning inside /Applications app bundles when we don't have
-        // App Management permission — each fileExists call into an app's
-        // Contents/Frameworks/ triggers a separate macOS TCC notification.
+        // Without App Management permission we can't peek inside app bundles
+        // (each fileExists on Contents/Frameworks/ triggers a TCC prompt).
+        // Instead, discover known Electron apps by bundle ID — no TCC needed.
         guard hasAppManagementPermission else {
+            for (bundleId, displayName) in AppTarget.knownElectronApps {
+                guard let url = NSWorkspace.shared.urlForApplication(
+                    withBundleIdentifier: bundleId
+                ) else { continue }
+                let appPath = url.path
+                // Skip if a debug build already covers this app
+                if debugBuilds[appPath] != nil { continue }
+                let name = appName(fromPath: appPath)
+                let icon = NSWorkspace.shared.icon(forFile: appPath)
+                targets.append(AppTarget(
+                    id: appPath, name: displayName, path: appPath,
+                    executablePath: executablePath(forApp: appPath, name: name),
+                    type: .electronApp, icon: icon,
+                    debugSupport: .unknown,
+                    isDebugBuild: false,
+                    originalAppPath: nil
+                ))
+            }
             targets.append(contentsOf: debugBuilds.values)
             return targets.sorted {
                 $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
