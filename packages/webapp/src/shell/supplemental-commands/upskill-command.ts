@@ -708,6 +708,7 @@ async function installFromClawHub(
     const binsWarning = checkRequiredBins(files, registeredCommands);
 
     await refreshSprinklesAfterInstall();
+    await reloadSkillsAfterInstall();
     return {
       stdout: `Installed skill "${slug}" from ClawHub (${fileCount} files)\n${binsWarning}`,
       stderr: '',
@@ -1031,6 +1032,7 @@ async function installFromGitHub(
 
         if (fileCount > 0) {
           await refreshSprinklesAfterInstall();
+          await reloadSkillsAfterInstall();
           return {
             stdout: `Installed skill "${skillName}" from ${owner}/${repo}\n`,
             stderr: '',
@@ -1097,6 +1099,7 @@ async function installFromGitHub(
     }
 
     await refreshSprinklesAfterInstall();
+    await reloadSkillsAfterInstall();
     return {
       stdout: `Installed skill "${skillName}" from ${owner}/${repo}\n`,
       stderr: '',
@@ -1136,6 +1139,27 @@ function parseClawHubRef(ref: string): string | null {
   }
 
   return null;
+}
+
+/** After a successful install, reload skills on all active agent contexts. */
+async function reloadSkillsAfterInstall(): Promise<void> {
+  try {
+    // CLI mode: direct window hook
+    if (typeof window !== 'undefined') {
+      const hook = (window as unknown as Record<string, unknown>).__slicc_reloadSkills;
+      if (typeof hook === 'function') {
+        await (hook as () => Promise<void>)();
+        return;
+      }
+    }
+    // Extension mode: send message to offscreen document
+    if (typeof chrome !== 'undefined' && chrome?.runtime?.sendMessage) {
+      chrome.runtime.sendMessage({
+        source: 'panel',
+        payload: { type: 'reload-skills' },
+      });
+    }
+  } catch { /* best-effort */ }
 }
 
 /**
@@ -1523,6 +1547,7 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
       if (successCount > 0) {
         output += `\nInstalled ${successCount} skill(s)\n`;
         await refreshSprinklesAfterInstall();
+        await reloadSkillsAfterInstall();
       }
 
       return {
@@ -1644,6 +1669,7 @@ Examples:
           const result = await skills.applySkill(fs, name);
           if (result.success) {
             await refreshSprinklesAfterInstall();
+            await reloadSkillsAfterInstall();
             return {
               stdout: `Installed skill "${result.skill}" v${result.version}\n`,
               stderr: '',

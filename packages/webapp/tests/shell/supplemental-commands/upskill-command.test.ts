@@ -464,6 +464,39 @@ describe('upskill Tessl registry integration', () => {
       expect(url).not.toContain('api.github.com');
     }
   });
+
+  it('calls __slicc_reloadSkills hook after successful install', async () => {
+    const reloadSpy = vi.fn().mockResolvedValue(undefined);
+    (globalThis as unknown as Record<string, unknown>).window = {
+      __slicc_reloadSkills: reloadSpy,
+    };
+
+    const encoder = new TextEncoder();
+    const zipBytes = zipSync({
+      'skills-main/reload-skill/SKILL.md': encoder.encode(
+        '---\nname: reload-skill\n---\n# Reload Skill\n',
+      ),
+    });
+    const zipBody = String.fromCharCode(...zipBytes);
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('codeload.github.com')) {
+        return response(200, zipBody);
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(
+      ['acme/skills', '--skill', 'reload-skill'],
+      createMockCtx() as never,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(reloadSpy).toHaveBeenCalled();
+
+    delete (globalThis as unknown as Record<string, unknown>).window;
+  });
 });
 
 describe('scoreSkills', () => {
