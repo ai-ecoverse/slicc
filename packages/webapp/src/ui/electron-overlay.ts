@@ -26,6 +26,9 @@ import sliccyLightSvg from '../../../assets/logos/sliccy-mono-light-1scoops.svg?
 
 export const ELECTRON_OVERLAY_HOST_ID = 'slicc-electron-overlay-root';
 export const ELECTRON_OVERLAY_TAG_NAME = 'slicc-electron-overlay';
+export const ELECTRON_OVERLAY_TOGGLE_SHORTCUT_CODE = 'Semicolon';
+export const ELECTRON_OVERLAY_TOGGLE_SHORTCUT_DISPLAY_KEY = ';';
+export const ELECTRON_OVERLAY_TOGGLE_MESSAGE_TYPE = 'slicc-electron-overlay:toggle';
 
 const ELECTRON_OVERLAY_LAUNCHER_TAG_NAME = 'slicc-electron-launcher';
 const ELECTRON_OVERLAY_SIDEBAR_TAG_NAME = 'slicc-electron-sidebar';
@@ -257,7 +260,10 @@ class SliccElectronLauncherElement extends HTMLElement {
     // Create button with Sliccy logo — both variants embedded, CSS toggles visibility.
     const button = doc.createElement('button');
     button.type = 'button';
+    const isMac = navigator.platform?.startsWith('Mac') || navigator.userAgent?.includes('Mac');
+    const shortcutLabel = `${isMac ? '\u2318' : 'Ctrl+'}${ELECTRON_OVERLAY_TOGGLE_SHORTCUT_DISPLAY_KEY}`;
     button.setAttribute('aria-label', 'Toggle SLICC overlay');
+    button.title = `Toggle SLICC (${shortcutLabel})`;
 
     const forDark = doc.createElement('div');
     forDark.className = 'logo-icon logo-for-dark';
@@ -673,10 +679,12 @@ export class SliccElectronOverlayElement extends HTMLElement {
     this.syncChildren();
     persistElectronOverlayCorner(this.ownerDocument.defaultView, this.state.corner);
     this.ownerDocument.addEventListener('keydown', this.onKeyDown, true);
+    this.ownerDocument.defaultView?.addEventListener('message', this.onMessage);
   }
 
   disconnectedCallback(): void {
     this.ownerDocument.removeEventListener('keydown', this.onKeyDown, true);
+    this.ownerDocument.defaultView?.removeEventListener('message', this.onMessage);
   }
 
   attributeChangedCallback(): void {
@@ -768,8 +776,32 @@ export class SliccElectronOverlayElement extends HTMLElement {
   }
 
   private onKeyDown = (event: KeyboardEvent): void => {
+    if (
+      (event.key === ELECTRON_OVERLAY_TOGGLE_SHORTCUT_DISPLAY_KEY || event.code === ELECTRON_OVERLAY_TOGGLE_SHORTCUT_CODE) &&
+      (event.metaKey || event.ctrlKey) &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.repeat
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.toggle();
+      return;
+    }
+
     if (event.key !== 'Escape' || !this.state.open) return;
     this.hideSidebar();
+  };
+
+  private onMessage = (event: MessageEvent): void => {
+    if (
+      event.data &&
+      typeof event.data === 'object' &&
+      'type' in event.data &&
+      (event.data as Record<string, unknown>).type === ELECTRON_OVERLAY_TOGGLE_MESSAGE_TYPE
+    ) {
+      this.toggle();
+    }
   };
 
   private render(): void {
