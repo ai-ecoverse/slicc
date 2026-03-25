@@ -20,18 +20,18 @@ A manual `workflow_dispatch` GitHub Actions workflow that downloads an extension
 
 `workflow_dispatch` with two inputs:
 
-| Input                         | Type    | Default | Description                                                              |
-| ----------------------------- | ------- | ------- | ------------------------------------------------------------------------ |
-| `version`                     | string  | `""`    | Release tag (e.g. `v0.3.2`). Empty string resolves to the latest release |
-| `force_replace_pending_review`| boolean | `false` | Cancel any pending CWS review before uploading                           |
+| Input                          | Type    | Default | Description                                                              |
+| ------------------------------ | ------- | ------- | ------------------------------------------------------------------------ |
+| `version`                      | string  | `""`    | Release tag (e.g. `v0.3.2`). Empty string resolves to the latest release |
+| `force_replace_pending_review` | boolean | `false` | Cancel any pending CWS review before uploading                           |
 
 ### Secrets
 
-| Secret             | Purpose                        |
-| ------------------ | ------------------------------ |
-| `CWS_CLIENT_ID`   | Google OAuth client ID         |
-| `CWS_CLIENT_SECRET`| Google OAuth client secret    |
-| `CWS_REFRESH_TOKEN`| Google OAuth refresh token    |
+| Secret              | Purpose                    |
+| ------------------- | -------------------------- |
+| `CWS_CLIENT_ID`     | Google OAuth client ID     |
+| `CWS_CLIENT_SECRET` | Google OAuth client secret |
+| `CWS_REFRESH_TOKEN` | Google OAuth refresh token |
 
 ### Job steps
 
@@ -67,10 +67,10 @@ node build/publish-chrome.js <zip-path> [--force]
 
 | Variable            | Required | Default                            |
 | ------------------- | -------- | ---------------------------------- |
-| `CWS_CLIENT_ID`    | yes      | —                                  |
-| `CWS_CLIENT_SECRET`| yes      | —                                  |
-| `CWS_REFRESH_TOKEN`| yes      | —                                  |
-| `CWS_EXTENSION_ID` | no       | `akggccfpkleihhemkkikggopnifgelbk` |
+| `CWS_CLIENT_ID`     | yes      | —                                  |
+| `CWS_CLIENT_SECRET` | yes      | —                                  |
+| `CWS_REFRESH_TOKEN` | yes      | —                                  |
+| `CWS_EXTENSION_ID`  | no       | `akggccfpkleihhemkkikggopnifgelbk` |
 
 ### Steps
 
@@ -92,15 +92,15 @@ V2 (`chromewebstore.googleapis.com/v2/`). V1 is deprecated and scheduled for rem
 
 ## Error handling
 
-| Scenario                               | Behavior                                                                                         |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| No releases exist                      | Workflow fails: `gh release view` exits non-zero, step fails                                     |
-| No extension zip in release assets     | Workflow fails: "no extension zip found for release vX.Y.Z"                                      |
-| Invalid or expired refresh token       | Script fails with Google OAuth error                                                             |
-| Version pending review, no `--force`   | Script fails: "Version pending review. Re-run with force_replace_pending_review enabled..."      |
-| Version pending review, with `--force` | Cancel submission, then upload and publish                                                       |
-| Upload fails                           | Script fails with CWS `uploadState` and `itemError` detail                                      |
-| Publish fails                          | Script fails with CWS `status` and `statusDetail`                                               |
+| Scenario                               | Behavior                                                                                    |
+| -------------------------------------- | ------------------------------------------------------------------------------------------- |
+| No releases exist                      | Workflow fails: `gh release view` exits non-zero, step fails                                |
+| No extension zip in release assets     | Workflow fails: "no extension zip found for release vX.Y.Z"                                 |
+| Invalid or expired refresh token       | Script fails with Google OAuth error                                                        |
+| Version pending review, no `--force`   | Script fails: "Version pending review. Re-run with force_replace_pending_review enabled..." |
+| Version pending review, with `--force` | Cancel submission, then upload and publish                                                  |
+| Upload fails                           | Script fails with CWS `uploadState` and `itemError` detail                                  |
+| Publish fails                          | Script fails with CWS `status` and `statusDetail`                                           |
 
 ## Out of scope
 
@@ -111,7 +111,7 @@ V2 (`chromewebstore.googleapis.com/v2/`). V1 is deprecated and scheduled for rem
 
 ## Files changed
 
-| File                                  | Change   |
-| ------------------------------------- | -------- |
-| `.github/workflows/publish-chrome.yml`| new      |
-| `build/publish-chrome.js`             | new      |
+| File                                   | Change |
+| -------------------------------------- | ------ |
+| `.github/workflows/publish-chrome.yml` | new    |
+| `build/publish-chrome.js`              | new    |

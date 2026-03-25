@@ -15,6 +15,7 @@
 ### Task 1: Create the publish script
 
 **Files:**
+
 - Create: `build/publish-chrome.js`
 
 - [ ] **Step 1: Create `build/` directory if needed and scaffold the script with argument parsing and env var validation**
@@ -119,18 +120,15 @@ async function cancelSubmission(extensionId, token) {
 async function upload(extensionId, zipPath, token) {
   const zipData = readFileSync(zipPath);
 
-  const response = await fetch(
-    `${CWS_API_BASE}/publishers/default/items/${extensionId}`,
-    {
-      method: 'PUT',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/zip',
-        'x-goog-api-version': '2',
-      },
-      body: zipData,
-    }
-  );
+  const response = await fetch(`${CWS_API_BASE}/publishers/default/items/${extensionId}`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/zip',
+      'x-goog-api-version': '2',
+    },
+    body: zipData,
+  });
 
   if (!response.ok) {
     const text = await response.text();
@@ -148,16 +146,13 @@ async function upload(extensionId, zipPath, token) {
 }
 
 async function publish(extensionId, token) {
-  const response = await fetch(
-    `${CWS_API_BASE}/publishers/default/items/${extensionId}:publish`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-    }
-  );
+  const response = await fetch(`${CWS_API_BASE}/publishers/default/items/${extensionId}:publish`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+  });
 
   if (!response.ok) {
     const text = await response.text();
@@ -225,6 +220,7 @@ git commit -m "feat: add CWS publish script (build/publish-chrome.js)"
 ### Task 2: Create the workflow
 
 **Files:**
+
 - Create: `.github/workflows/publish-chrome.yml`
 
 - [ ] **Step 1: Write the workflow file**
