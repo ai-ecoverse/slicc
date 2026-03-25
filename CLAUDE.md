@@ -103,7 +103,7 @@ Each instance gets an isolated Chrome profile (keyed by port), separate CDP port
 - **Cone**: Main agent ("sliccy"). Full filesystem access, all tools. Code: `orchestrator.ts`, `RegisteredScoop` with `isCone: true`.
 - **Scoops**: Isolated sub-agents with sandboxed filesystem (`/scoops/{name}/` + `/shared/`), own shell/conversation. Tools: `scoop_scoop`, `feed_scoop`, `drop_scoop`. Code: `scoop-context.ts`, `restricted-fs.ts`.
 - **Licks**: External events triggering scoops (webhooks, cron tasks). Code: `LickManager`, `LickEvent`. Shell: `webhook`, `crontask`.
-- **Floats**: Runtime environments — CLI (`packages/node-server/src/cli/`), Extension (`packages/chrome-extension/src/`), Electron (`packages/node-server/src/cli/electron-main.ts`), Sliccstart (`packages/swift-launcher/` — native macOS launcher), Cloud (planned).
+- **Floats**: Runtime environments — CLI (`packages/node-server/src/`), Extension (`packages/chrome-extension/src/`), Electron (`packages/node-server/src/electron-main.ts`), Sliccstart (`packages/swift-launcher/` — native macOS launcher), Cloud (planned).
 
 Use ice cream terms over technical jargon (e.g., "feed_scoop" not "delegate_to_scoop").
 
@@ -123,13 +123,13 @@ Browser-based AI coding agent running as Chrome extension (side panel), standalo
 Virtual Filesystem (packages/webapp/src/fs/) → RestrictedFS → Shell (packages/webapp/src/shell/) + Git (packages/webapp/src/git/)
   → CDP (packages/webapp/src/cdp/) → Tools (packages/webapp/src/tools/) → Core Agent (packages/webapp/src/core/)
     → Scoops Orchestrator (packages/webapp/src/scoops/) → UI (packages/webapp/src/ui/)
-      → CLI/Electron (packages/node-server/src/cli/) | Extension (packages/chrome-extension/src/)
+      → CLI/Electron (packages/node-server/src/) | Extension (packages/chrome-extension/src/)
 ```
 
 ### Build Targets
 
-- **Browser bundle** (tsconfig.json): Everything except `packages/node-server/src/cli/`. Bundled by Vite.
-- **CLI/Electron** (tsconfig.cli.json): Only `packages/node-server/src/cli/`. Compiled by TSC to dist/cli/.
+- **Browser bundle** (tsconfig.json): Everything except `packages/node-server/src/`. Bundled by Vite.
+- **CLI/Electron** (tsconfig.cli.json): Only `packages/node-server/src/`. Compiled by TSC to dist/cli/.
 - **Extension** (packages/chrome-extension/vite.config.ts): Browser bundle + extension entry points + bundled Pyodide.
 
 ### Key Subsystems
