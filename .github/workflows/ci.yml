@@ -84,6 +84,7 @@ jobs:
 
   cloudflare-worker:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
@@ -95,6 +96,93 @@ jobs:
         run: tsc --noEmit -p tsconfig.worker.json
       - name: Test
         run: npx vitest run --project cloudflare-worker
+
+      # Deploy to staging on PRs (not forks) and pushes to main
+      - name: Deploy staging worker (attempt 1)
+        id: deploy_attempt_1
+        if: |
+          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false) ||
+          github.event_name == 'push'
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: 3.91.0
+          workingDirectory: packages/cloudflare-worker
+          command: deploy --env staging
+          secrets: |
+            CLOUDFLARE_TURN_API_TOKEN
+        env:
+          CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
+      - name: Wait before staging deploy retry 2
+        if: steps.deploy_attempt_1.outcome == 'failure'
+        run: sleep 20
+      - name: Deploy staging worker (attempt 2)
+        id: deploy_attempt_2
+        if: steps.deploy_attempt_1.outcome == 'failure'
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: 3.91.0
+          workingDirectory: packages/cloudflare-worker
+          command: deploy --env staging
+          secrets: |
+            CLOUDFLARE_TURN_API_TOKEN
+        env:
+          CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
+      - name: Wait before staging deploy retry 3
+        if: steps.deploy_attempt_1.outcome == 'failure' && steps.deploy_attempt_2.outcome == 'failure'
+        run: sleep 40
+      - name: Deploy staging worker (attempt 3)
+        id: deploy_attempt_3
+        if: steps.deploy_attempt_1.outcome == 'failure' && steps.deploy_attempt_2.outcome == 'failure'
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: 3.91.0
+          workingDirectory: packages/cloudflare-worker
+          command: deploy --env staging
+          secrets: |
+            CLOUDFLARE_TURN_API_TOKEN
+        env:
+          CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
+      - name: Finalize staging deploy
+        id: deploy
+        if: steps.deploy_attempt_1.outcome == 'success' || steps.deploy_attempt_2.outcome == 'success' || steps.deploy_attempt_3.outcome == 'success'
+        env:
+          DEPLOYMENT_URL_1: ${{ steps.deploy_attempt_1.outputs.deployment-url }}
+          DEPLOYMENT_URL_2: ${{ steps.deploy_attempt_2.outputs.deployment-url }}
+          DEPLOYMENT_URL_3: ${{ steps.deploy_attempt_3.outputs.deployment-url }}
+        run: |
+          DEPLOYMENT_URL="${DEPLOYMENT_URL_1:-}"
+          if [ -z "$DEPLOYMENT_URL" ]; then DEPLOYMENT_URL="${DEPLOYMENT_URL_2:-}"; fi
+          if [ -z "$DEPLOYMENT_URL" ]; then DEPLOYMENT_URL="${DEPLOYMENT_URL_3:-}"; fi
+          if [ -z "$DEPLOYMENT_URL" ]; then
+            echo "::error::Staging deploy failed after 3 attempts"
+            exit 1
+          fi
+          echo "deployment-url=${DEPLOYMENT_URL}" >> "$GITHUB_OUTPUT"
+      - name: Smoke test staging
+        if: steps.deploy.outcome == 'success'
+        env:
+          WORKER_BASE_URL: ${{ steps.deploy.outputs.deployment-url }}
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            if npx vitest run --project cloudflare-worker packages/cloudflare-worker/tests/deployed.test.ts; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 6 ]; then
+              echo "Deployed smoke test failed after ${attempt} attempts"
+              exit 1
+            fi
+            echo "Smoke test attempt ${attempt} failed; waiting for propagation..."
+            sleep 15
+          done
 
   swift-server:
     runs-on: macos-latest
