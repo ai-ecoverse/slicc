@@ -151,7 +151,7 @@ async function main() {
   if (status.publicationState === 'ITEM_PENDING_REVIEW') {
     if (!force) {
       console.error(
-        'Version pending review. Re-run with force_replace_pending_review enabled to cancel and re-submit.'
+        'Version pending review. Re-run the workflow with force_replace_pending_review checked to cancel and re-submit.'
       );
       process.exit(1);
     }

@@ -38,6 +38,10 @@ jobs:
           else
             TAG=$(gh release view --json tagName -q '.tagName')
           fi
+          if [ -z "$TAG" ]; then
+            echo "::error::No release found"
+            exit 1
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Resolved release: $TAG"
 
@@ -58,8 +62,9 @@ jobs:
           CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
           CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
         run: |
-          node build/publish-chrome.js /tmp/cws/*.zip \
-            ${{ inputs.force_replace_pending_review == true && '--force' || '' }}
+          ARGS=""
+          [ "${{ inputs.force_replace_pending_review }}" = "true" ] && ARGS="--force"
+          node build/publish-chrome.js /tmp/cws/*.zip $ARGS
 
       - name: Summary
         if: success()
