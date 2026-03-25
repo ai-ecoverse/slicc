@@ -11,7 +11,10 @@ export default defineWorkspace([
       globals: true,
       environment: 'node',
       include: ['packages/webapp/tests/**/*.test.ts'],
-      exclude: ['packages/webapp/tests/integration/**/*.test.ts'],
+      exclude: [
+        'packages/webapp/tests/integration/**/*.test.ts',
+        'packages/webapp/tests/e2e/**/*.test.ts',
+      ],
     },
     resolve: {
       alias: {
