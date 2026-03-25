@@ -85,7 +85,7 @@ type ShellResult = {
 **Test pattern**:
 
 ```typescript
-// packages/webapp/src/shell/supplemental-commands/my-command.test.ts
+// packages/webapp/tests/shell/supplemental-commands/my-command.test.ts
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createMyCommand } from './my-command.js';
 import { FakeVirtualFS } from '../../fs/fake-virtual-fs.js';
@@ -181,7 +181,7 @@ Execution modes:
 JSH scripts cannot be unit-tested in Node because they rely on extension mode detection. Test the logic separately:
 
 ```typescript
-// packages/webapp/src/shell/supplemental-commands/my-command.test.ts
+// packages/webapp/tests/shell/supplemental-commands/my-command.test.ts
 import { describe, it, expect } from 'vitest';
 import { executeJshFile } from '../jsh-executor.js';
 import { FakeVirtualFS } from '../../fs/fake-virtual-fs.js';
@@ -305,7 +305,7 @@ const legacyTools = [
 **Test pattern**:
 
 ```typescript
-// packages/webapp/src/tools/my-tool.test.ts
+// packages/webapp/tests/tools/my-tool.test.ts
 import { describe, it, expect } from 'vitest';
 import { createMyTool } from './my-tool.js';
 
@@ -342,7 +342,7 @@ describe('my_tool', () => {
 
 **Test pattern**:
 
-- Add colocated tests next to the command you changed (for example `playwright-command.test.ts` or `serve-command.test.ts`).
+- Add tests in `packages/webapp/tests/` mirroring the command's `src/` path (for example `tests/shell/supplemental-commands/playwright-command.test.ts`).
 - Put pure helper coverage in `shared.test.ts`.
 - Prefer focused command-level assertions over large integration fixtures.
 
@@ -452,7 +452,7 @@ const scoopManagementConfig: ScoopManagementToolsConfig = {
 **Test pattern**:
 
 ```typescript
-// packages/webapp/src/scoops/scoop-management-tools.test.ts
+// packages/webapp/tests/scoops/scoop-management-tools.test.ts
 import { describe, it, expect, vi } from 'vitest';
 import { createScoopManagementTools } from './scoop-management-tools.js';
 
@@ -621,7 +621,7 @@ this.panels.myPanel = new MyPanel(myPanelContainer);
 Panel tests are DOM-heavy; test interactions and state manually in extension/standalone mode rather than in vitest:
 
 ```typescript
-// packages/webapp/src/ui/my-panel.test.ts — only test non-DOM logic
+// packages/webapp/tests/ui/my-panel.test.ts — only test non-DOM logic
 import { describe, it, expect, vi } from 'vitest';
 
 describe('MyPanel', () => {
@@ -710,7 +710,7 @@ Only native `/workspace/skills/` entries are install-managed by SLICC. Compatibi
 Skills are narrative instructions; test by verifying they load correctly:
 
 ```typescript
-// packages/webapp/src/scoops/skills.test.ts
+// packages/webapp/tests/scoops/skills.test.ts
 import { describe, it, expect } from 'vitest';
 import { loadSkills } from './skills.js';
 import { VirtualFS } from '../fs/index.js';
@@ -969,7 +969,7 @@ describe('my-corp provider', () => {
 When adding a feature:
 
 - [ ] Core logic implemented with error handling
-- [ ] Test file colocated (`feature.test.ts` next to `feature.ts`)
+- [ ] Test file in `packages/*/tests/` mirroring the `src/` structure
 - [ ] Pure-logic tests added (avoid DOM/chrome.* testing in vitest unless necessary)
 - [ ] Extension mode compatibility verified (CSP, chrome.runtime.getURL, sandbox iframe if needed)
 - [ ] Dual-mode tested (CLI + extension)

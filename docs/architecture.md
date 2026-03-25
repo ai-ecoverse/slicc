@@ -2,7 +2,7 @@
 
 ## Layer Stack Table
 
-| Layer | Directory | Responsibility | Key File | Test File |
+| Layer | Directory | Responsibility | Key File | Test File (in `packages/*/tests/`) |
 |---|---|---|---|---|
 | Shims | `packages/webapp/src/shims/` | Node.js polyfills for browser bundle | `empty.ts`, `buffer-polyfill.ts` | N/A |
 | Virtual Filesystem | `packages/webapp/src/fs/` | POSIX-like FS (LightningFS/IndexedDB) | `virtual-fs.ts` | `virtual-fs.test.ts` |

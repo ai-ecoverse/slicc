@@ -5,7 +5,7 @@ Test patterns, conventions, and best practices for SLICC.
 ## Framework and Setup
 
 - **Framework**: Vitest with `globals: true`, `environment: node`
-- **Convention**: `foo.test.ts` colocated next to `foo.ts`
+- **Convention**: `foo.test.ts` in `packages/*/tests/` mirroring the `src/` structure
 - **Test count**: 1513 tests across 84 files
 - **Import fake-indexeddb** when VirtualFS is used: `import 'fake-indexeddb/auto'`
 
@@ -327,43 +327,33 @@ For skipped categories, ensure **manual verification in both CLI and extension m
 |---------|---------|
 | `npm run test` | Run all tests once; fail fast on first error |
 | `npm run test:watch` | Watch mode; re-run affected tests on file change |
-| `npx vitest run packages/webapp/src/fs/virtual-fs.test.ts` | Run single test file |
-| `npx vitest run packages/webapp/src/fs/` | Run all tests in directory |
+| `npx vitest run packages/webapp/tests/fs/virtual-fs.test.ts` | Run single test file |
+| `npx vitest run packages/webapp/tests/fs/` | Run all tests in directory |
 | `npx vitest run --reporter=verbose` | Verbose output with full stack traces |
 | `npx vitest run --reporter=dot` | Minimal output (one `.` per test) |
 
 ## Test File Organization
 
+Tests live in `packages/*/tests/` mirroring the `src/` structure:
+
 ```
-packages/webapp/src/fs/
-  virtual-fs.ts
-  virtual-fs.test.ts        ← colocated
-  restricted-fs.ts
-  restricted-fs.test.ts     ← colocated
-  types.ts
-  (no test: exported types)
+packages/webapp/tests/fs/
+  virtual-fs.test.ts
+  restricted-fs.test.ts
 
-packages/webapp/src/tools/
-  bash-tool.ts
-  bash-tool.test.ts         ← colocated
-  file-tools.ts
-  file-tools.test.ts        ← colocated
-  javascript-tool.ts
-  javascript-tool.test.ts   ← colocated
-  search-tools.ts
-  search-tools.test.ts      ← colocated
+packages/webapp/tests/tools/
+  bash-tool.test.ts
+  file-tools.test.ts
+  javascript-tool.test.ts
+  search-tools.test.ts
 
-packages/webapp/src/shell/supplemental-commands/
-  which-command.ts
-  which-command.test.ts     ← colocated
-  skill-command.ts
-  skill-command.test.ts     ← colocated
+packages/webapp/tests/shell/supplemental-commands/
+  which-command.test.ts
+  skill-command.test.ts
 
-packages/webapp/src/core/
-  context-compaction.ts
-  context-compaction.test.ts ← colocated
-  logger.ts
-  logger.test.ts            ← colocated
+packages/webapp/tests/core/
+  context-compaction.test.ts
+  logger.test.ts
 ```
 
 ## Test Data Fixtures
@@ -393,7 +383,7 @@ describe('File operations', () => {
 
 Run a single test with verbose output:
 ```bash
-npx vitest run --reporter=verbose packages/webapp/src/fs/virtual-fs.test.ts
+npx vitest run --reporter=verbose packages/webapp/tests/fs/virtual-fs.test.ts
 ```
 
 Add `console.log()` in test code — output appears in terminal:
@@ -407,7 +397,7 @@ it('does something', async () => {
 
 Watch mode for rapid iteration:
 ```bash
-npx vitest watch packages/webapp/src/fs/virtual-fs.test.ts
+npx vitest watch packages/webapp/tests/fs/virtual-fs.test.ts
 ```
 Make changes to test or source → Vitest re-runs automatically.
 

@@ -351,7 +351,7 @@ Expected: Build succeeds (exit 0).
 
 - [ ] **Step 4: Verify the sprinkle is discoverable**
 
-Run: `npx vitest run packages/webapp/src/ui/sprinkle-discovery.test.ts 2>&1 | tail -10`
+Run: `npx vitest run packages/webapp/tests/ui/sprinkle-discovery.test.ts 2>&1 | tail -10`
 Expected: Existing tests still pass. (New sprinkle doesn't break discovery — it just adds a new `.shtml` file to the VFS.)
 
 - [ ] **Step 5: Commit**

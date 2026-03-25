@@ -4,7 +4,7 @@
 
 **Goal:** Let users click a row in the file browser and press Cmd/Ctrl+C to copy its VFS path to the clipboard.
 
-**Architecture:** Add `selectedPath` state directly to `FileBrowserPanel`, a `keydown` listener scoped to the container, selection re-application after DOM refresh (applied _after_ the innerHTML comparison to avoid defeating the change-detection optimization), and CSS for the selected/feedback states. Two files touched: `packages/webapp/src/ui/file-browser-panel.ts` and `index.html`.
+**Architecture:** Add `selectedPath` state directly to `FileBrowserPanel`, a `keydown` listener scoped to the container, selection re-application after DOM refresh (applied _after_ the innerHTML comparison to avoid defeating the change-detection optimization), and CSS for the selected/feedback states. Two files touched: `packages/webapp/src/ui/file-browser-panel.ts` and `packages/webapp/index.html`.
 
 **Tech Stack:** Vanilla TypeScript DOM, `navigator.clipboard.writeText()`, Vitest
 
@@ -18,7 +18,7 @@
 
 **Files:**
 
-- Modify: `index.html:886` (after existing `.file-browser__item:hover` rule)
+- Modify: `packages/webapp/index.html:886` (after existing `.file-browser__item:hover` rule)
 
 - [ ] **Step 1: Add CSS rules for selected state and copy feedback**
 
@@ -47,7 +47,7 @@ Expected: clean (CSS-only change, no TS impact)
 - [ ] **Step 3: Commit**
 
 ```bash
-git add index.html
+git add packages/webapp/index.html
 git commit -m "style: add selected row and copy-flash CSS for file browser"
 ```
 
@@ -245,7 +245,7 @@ git commit -m "feat: add row selection and Cmd/Ctrl+C path copy to file browser"
 
 **Files:**
 
-- Create: `packages/webapp/src/ui/file-browser-panel.test.ts`
+- Create: `packages/webapp/tests/ui/file-browser-panel.test.ts`
 
 The test environment is `node` by default (configured in `vite.config.ts`). `FileBrowserPanel` uses DOM APIs, so this test file needs the `jsdom` environment pragma.
 
@@ -284,13 +284,13 @@ describe('FileBrowserPanel', () => {
 
 - [ ] **Step 2: Run tests — verify they pass**
 
-Run: `npx vitest run packages/webapp/src/ui/file-browser-panel.test.ts`
+Run: `npx vitest run packages/webapp/tests/ui/file-browser-panel.test.ts`
 Expected: PASS (2 tests)
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add packages/webapp/src/ui/file-browser-panel.test.ts
+git add packages/webapp/tests/ui/file-browser-panel.test.ts
 git commit -m "test: add listener lifecycle tests for file browser panel"
 ```
 

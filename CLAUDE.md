@@ -178,7 +178,7 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 ## Key Conventions
 
 - **Two type systems**: Legacy ToolDefinition (`packages/webapp/src/tools/`) and pi-compatible AgentTool (`packages/webapp/src/core/`). Bridged by `tool-adapter.ts`.
-- **Colocated tests**: `foo.test.ts` next to `foo.ts`. Vitest, globals: true, environment: node. Use `fake-indexeddb/auto` for VFS tests.
+- **Tests**: `packages/*/tests/` mirrors the `src/` structure. Vitest, globals: true, environment: node. Use `fake-indexeddb/auto` for VFS tests.
 - **Logging**: `createLogger('namespace')` from `packages/webapp/src/core/logger.ts`. DEBUG in dev, ERROR in prod.
 - **Extension detection**: `typeof chrome !== 'undefined' && !!chrome?.runtime?.id`
 - **Dual-mode compatibility**: Features MUST work in both CLI and extension. Extension CSP blocks eval/CDN — use `sandbox.html` for dynamic code, `sprinkle-sandbox.html` for sprinkles/inline widgets, `chrome.runtime.getURL()` for bundled assets.
@@ -196,7 +196,7 @@ Every change must satisfy **tests**, **docs**, and **verification**.
 ### Tests
 
 - Add or update tests for behavior changes.
-- TypeScript tests live in `tests/`, mirrored by subsystem.
+- TypeScript tests live in `packages/*/tests/`, mirrored by subsystem.
 - See `docs/testing.md` for patterns and command selection.
 
 ### Documentation

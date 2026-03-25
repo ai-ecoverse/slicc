@@ -145,7 +145,7 @@ Each playwright command uses `browser.withTab(targetId, async (session) => { ...
 
 ### Concurrency Tests
 
-Mutex tests live in `packages/webapp/src/cdp/browser-api.test.ts`:
+Mutex tests live in `packages/webapp/tests/cdp/browser-api.test.ts`:
 - Two concurrent `withTab()` calls with different targetIds serialize correctly
 - The second call waits for the first to complete before attaching
 - If the first call throws, the second still proceeds (mutex releases in `finally`)
@@ -208,7 +208,7 @@ No change to snapshot caching mechanism needed — explicit `--tab` naturally sc
 
 - Add `withTab(targetId, fn)` promise-based mutex method
 - Keep `attachToPage()` as internal (called by `withTab()`)
-- Add `withTab` tests in `packages/webapp/src/cdp/browser-api.test.ts`
+- Add `withTab` tests in `packages/webapp/tests/cdp/browser-api.test.ts`
 
 ### File: `packages/vfs-root/shared/CLAUDE.md`
 
@@ -238,14 +238,14 @@ Key instructions:
 - Use `tab-list` to find the active tab (marked `(active)`)
 - Element refs (e5, e12) are valid until the next snapshot of that tab
 
-### File: `packages/webapp/src/shell/supplemental-commands/playwright-command.test.ts`
+### File: `packages/webapp/tests/shell/supplemental-commands/playwright-command.test.ts`
 
 - Update all existing tests to use `--tab <targetId>` syntax
 - Remove tests for index-based selection and implicit current tab
 - Add tests for: missing `--tab` error, invalid tab ID error, `tab-new` returns targetId
 - Add tests for teleport scoped to tab (only blocks same-tab commands)
 
-### File: `packages/webapp/src/cdp/browser-api.test.ts`
+### File: `packages/webapp/tests/cdp/browser-api.test.ts`
 
 - Add tests for `withTab()` mutex serialization
 - Test concurrent calls serialize correctly

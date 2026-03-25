@@ -16,11 +16,11 @@
 
 **Files:**
 - Modify: `packages/webapp/src/providers/types.ts`
-- Test: `packages/webapp/src/providers/index.test.ts`
+- Test: `packages/webapp/tests/providers/index.test.ts`
 
 - [ ] **Step 1: Write failing test for ModelMetadata and modelOverrides**
 
-Add to `packages/webapp/src/providers/index.test.ts`:
+Add to `packages/webapp/tests/providers/index.test.ts`:
 
 ```typescript
 describe('provider config model metadata', () => {
@@ -62,7 +62,7 @@ describe('provider config model metadata', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npx vitest run packages/webapp/src/providers/index.test.ts`
+Run: `npx vitest run packages/webapp/tests/providers/index.test.ts`
 Expected: TypeScript errors — `modelOverrides` and metadata fields not on types yet.
 
 - [ ] **Step 3: Implement ModelMetadata and update ProviderConfig**
@@ -105,13 +105,13 @@ Update `getModelIds` return type:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `npx vitest run packages/webapp/src/providers/index.test.ts`
+Run: `npx vitest run packages/webapp/tests/providers/index.test.ts`
 Expected: All tests pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add packages/webapp/src/providers/types.ts packages/webapp/src/providers/index.test.ts
+git add packages/webapp/src/providers/types.ts packages/webapp/tests/providers/index.test.ts
 git commit -m "feat: add ModelMetadata type and modelOverrides to ProviderConfig
 
 Enables providers to override model capabilities (context window,
@@ -127,11 +127,11 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 
 **Files:**
 - Modify: `packages/webapp/src/ui/provider-settings.ts:112-160` (the `getProviderModels` function)
-- Test: `packages/webapp/src/ui/provider-settings.test.ts`
+- Test: `packages/webapp/tests/ui/provider-settings.test.ts`
 
 - [ ] **Step 1: Write failing tests for model metadata overrides**
 
-Add to `packages/webapp/src/ui/provider-settings.test.ts`. These tests need to work within the existing mock structure. Add a new `describe` block:
+Add to `packages/webapp/tests/ui/provider-settings.test.ts`. These tests need to work within the existing mock structure. Add a new `describe` block:
 
 ```typescript
 describe('model metadata overrides', () => {
@@ -250,7 +250,7 @@ Note: The test mocking structure must match the existing `provider-settings.test
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `npx vitest run packages/webapp/src/ui/provider-settings.test.ts`
+Run: `npx vitest run packages/webapp/tests/ui/provider-settings.test.ts`
 Expected: Failures — metadata fields not applied yet.
 
 - [ ] **Step 3: Implement metadata merge in getProviderModels**
@@ -330,7 +330,7 @@ Also apply `modelOverrides` in the `isOAuth` branch (lines 161-166) for provider
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `npx vitest run packages/webapp/src/ui/provider-settings.test.ts`
+Run: `npx vitest run packages/webapp/tests/ui/provider-settings.test.ts`
 Expected: All tests pass (existing + new).
 
 - [ ] **Step 5: Run full test suite**
@@ -341,7 +341,7 @@ Expected: All tests pass.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add packages/webapp/src/ui/provider-settings.ts packages/webapp/src/ui/provider-settings.test.ts
+git add packages/webapp/src/ui/provider-settings.ts packages/webapp/tests/ui/provider-settings.test.ts
 git commit -m "feat: apply model metadata overrides in getProviderModels
 
 Three-layer merge: pi-ai registry → modelOverrides → getModelIds.
@@ -588,7 +588,7 @@ Expected: All four pass.
 In the "Key Conventions" section, update the "Provider composition" bullet to mention model metadata:
 
 ```
-- **Provider composition**: Auto-discovered from pi-ai. External providers: drop `.ts` in root `providers/`. OAuth via `createOAuthLauncher()` in `packages/webapp/src/providers/oauth-service.ts`. Registration runs in both `main.ts` and `offscreen.ts`. Providers can override model capabilities via `modelOverrides` (static) or `getModelIds()` metadata (dynamic). Three-layer merge: pi-ai → modelOverrides → getModelIds.
+- **Provider composition**: Auto-discovered from pi-ai. External providers: drop `.ts` in `packages/webapp/providers/`. OAuth via `createOAuthLauncher()` in `packages/webapp/src/providers/oauth-service.ts`. Registration runs in both `main.ts` and `offscreen.ts`. Providers can override model capabilities via `modelOverrides` (static) or `getModelIds()` metadata (dynamic). Three-layer merge: pi-ai → modelOverrides → getModelIds.
 ```
 
 - [ ] **Step 3: Commit**

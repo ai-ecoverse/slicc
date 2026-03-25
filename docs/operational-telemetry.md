@@ -310,7 +310,7 @@ Telemetry is fire-and-forget with no return values, making it awkward to unit te
 - **No integration tests**: Do not test that real beacons reach `rum.hlx.page`. That is the library's responsibility.
 
 ```typescript
-// packages/webapp/src/ui/telemetry.test.ts
+// packages/webapp/tests/ui/telemetry.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@adobe/helix-rum-js', () => ({

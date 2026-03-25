@@ -16,13 +16,13 @@
 
 **Files:**
 - Modify: `packages/webapp/src/cdp/browser-api.ts`
-- Modify: `packages/webapp/src/cdp/browser-api.test.ts`
+- Modify: `packages/webapp/tests/cdp/browser-api.test.ts`
 
 This is the foundational change — all other tasks depend on it.
 
 - [ ] **Step 1: Write failing tests for withTab mutex**
 
-Add to `packages/webapp/src/cdp/browser-api.test.ts`:
+Add to `packages/webapp/tests/cdp/browser-api.test.ts`:
 
 ```typescript
 describe('withTab mutex', () => {
@@ -76,7 +76,7 @@ Note: The test setup needs to handle BrowserAPI constructor requirements. Read t
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `npx vitest run packages/webapp/src/cdp/browser-api.test.ts`
+Run: `npx vitest run packages/webapp/tests/cdp/browser-api.test.ts`
 Expected: Fail — `withTab` method doesn't exist yet.
 
 - [ ] **Step 3: Implement withTab mutex**
@@ -108,13 +108,13 @@ In `packages/webapp/src/cdp/browser-api.ts`, add to the `BrowserAPI` class:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `npx vitest run packages/webapp/src/cdp/browser-api.test.ts`
+Run: `npx vitest run packages/webapp/tests/cdp/browser-api.test.ts`
 Expected: All pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add packages/webapp/src/cdp/browser-api.ts packages/webapp/src/cdp/browser-api.test.ts
+git add packages/webapp/src/cdp/browser-api.ts packages/webapp/tests/cdp/browser-api.test.ts
 git commit -m "feat(cdp): add withTab() mutex for serialized tab operations
 
 Ensures concurrent scoops can't interleave CDP attachments.
@@ -215,7 +215,7 @@ The agent needs to parse this to capture the targetId.
 
 - [ ] **Step 6: Verify build compiles**
 
-Run: `npx vitest run packages/webapp/src/shell/supplemental-commands/playwright-command.test.ts`
+Run: `npx vitest run packages/webapp/tests/shell/supplemental-commands/playwright-command.test.ts`
 
 This will have compilation errors if any code still references `currentTarget` or `ensureTarget()`. That's expected — Task 3 will fix the command handlers. For now, focus on removing the state and adding the utility. The build might not compile yet.
 
@@ -301,7 +301,7 @@ Expected: Pass.
 
 - [ ] **Step 11: Run tests**
 
-Run: `npx vitest run packages/webapp/src/shell/supplemental-commands/playwright-command.test.ts`
+Run: `npx vitest run packages/webapp/tests/shell/supplemental-commands/playwright-command.test.ts`
 
 Many existing tests will fail because they use the old implicit-tab pattern. That's expected — Task 4 fixes the tests.
 
@@ -323,8 +323,8 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 ### Task 4: Update tests for new `--tab` interface
 
 **Files:**
-- Modify: `packages/webapp/src/shell/supplemental-commands/playwright-command.test.ts`
-- Modify: `packages/webapp/src/cdp/browser-api.test.ts` (if mutex tests need adjustment)
+- Modify: `packages/webapp/tests/shell/supplemental-commands/playwright-command.test.ts`
+- Modify: `packages/webapp/tests/cdp/browser-api.test.ts` (if mutex tests need adjustment)
 
 - [ ] **Step 1: Read the existing test file** to understand the mock pattern
 
@@ -364,7 +364,7 @@ Expected: All pass.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add packages/webapp/src/shell/supplemental-commands/playwright-command.test.ts packages/webapp/src/cdp/browser-api.test.ts
+git add packages/webapp/tests/shell/supplemental-commands/playwright-command.test.ts packages/webapp/tests/cdp/browser-api.test.ts
 git commit -m "test: update playwright tests for explicit --tab interface
 
 All tests now pass --tab <targetId>. Adds tests for missing --tab
