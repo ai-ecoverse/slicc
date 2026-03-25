@@ -107,6 +107,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Build webapp (dependency)
+        run: npm run build -w @slicc/webapp
       - name: Build swift-server (dependency)
         run: cd packages/swift-server && swift build -c release
       - name: Build
