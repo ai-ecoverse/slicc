@@ -15,14 +15,14 @@
 ### Task 1: Add `withTab()` mutex to BrowserAPI
 
 **Files:**
-- Modify: `src/cdp/browser-api.ts`
-- Modify: `src/cdp/browser-api.test.ts`
+- Modify: `packages/webapp/src/cdp/browser-api.ts`
+- Modify: `packages/webapp/src/cdp/browser-api.test.ts`
 
 This is the foundational change — all other tasks depend on it.
 
 - [ ] **Step 1: Write failing tests for withTab mutex**
 
-Add to `src/cdp/browser-api.test.ts`:
+Add to `packages/webapp/src/cdp/browser-api.test.ts`:
 
 ```typescript
 describe('withTab mutex', () => {
@@ -76,12 +76,12 @@ Note: The test setup needs to handle BrowserAPI constructor requirements. Read t
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `npx vitest run src/cdp/browser-api.test.ts`
+Run: `npx vitest run packages/webapp/src/cdp/browser-api.test.ts`
 Expected: Fail — `withTab` method doesn't exist yet.
 
 - [ ] **Step 3: Implement withTab mutex**
 
-In `src/cdp/browser-api.ts`, add to the `BrowserAPI` class:
+In `packages/webapp/src/cdp/browser-api.ts`, add to the `BrowserAPI` class:
 
 ```typescript
   private _tabLock: Promise<void> = Promise.resolve();
@@ -108,13 +108,13 @@ In `src/cdp/browser-api.ts`, add to the `BrowserAPI` class:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `npx vitest run src/cdp/browser-api.test.ts`
+Run: `npx vitest run packages/webapp/src/cdp/browser-api.test.ts`
 Expected: All pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/cdp/browser-api.ts src/cdp/browser-api.test.ts
+git add packages/webapp/src/cdp/browser-api.ts packages/webapp/src/cdp/browser-api.test.ts
 git commit -m "feat(cdp): add withTab() mutex for serialized tab operations
 
 Ensures concurrent scoops can't interleave CDP attachments.
@@ -128,7 +128,7 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 ### Task 2: Add `--tab` parsing utility and remove `currentTarget` / `ensureTarget`
 
 **Files:**
-- Modify: `src/shell/supplemental-commands/playwright-command.ts`
+- Modify: `packages/webapp/src/shell/supplemental-commands/playwright-command.ts`
 
 This task adds the `--tab` parsing, removes `currentTarget` from `PlaywrightState`, removes `ensureTarget()`, and removes `tab-select`. No command handlers are updated yet — that's Task 3.
 
@@ -215,14 +215,14 @@ The agent needs to parse this to capture the targetId.
 
 - [ ] **Step 6: Verify build compiles**
 
-Run: `npx vitest run src/shell/supplemental-commands/playwright-command.test.ts`
+Run: `npx vitest run packages/webapp/src/shell/supplemental-commands/playwright-command.test.ts`
 
 This will have compilation errors if any code still references `currentTarget` or `ensureTarget()`. That's expected — Task 3 will fix the command handlers. For now, focus on removing the state and adding the utility. The build might not compile yet.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/shell/supplemental-commands/playwright-command.ts
+git add packages/webapp/src/shell/supplemental-commands/playwright-command.ts
 git commit -m "refactor: remove currentTarget/ensureTarget, add requireTab utility
 
 Removes implicit tab state from PlaywrightState. Adds requireTab()
@@ -238,7 +238,7 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 ### Task 3: Migrate all 36 command handlers to use `--tab` + `withTab()`
 
 **Files:**
-- Modify: `src/shell/supplemental-commands/playwright-command.ts`
+- Modify: `packages/webapp/src/shell/supplemental-commands/playwright-command.ts`
 
 This is the bulk of the work — updating every `ensureTarget()` call to use `requireTab()` + `browser.withTab()`. The pattern is mechanical for each command:
 
@@ -289,7 +289,7 @@ Change `checkTeleportBlock(state)` to `checkTeleportBlock(state, targetId)` — 
 
 Run:
 ```bash
-grep -n 'currentTarget\|ensureTarget' src/shell/supplemental-commands/playwright-command.ts
+grep -n 'currentTarget\|ensureTarget' packages/webapp/src/shell/supplemental-commands/playwright-command.ts
 ```
 Expected: No matches.
 
@@ -301,14 +301,14 @@ Expected: Pass.
 
 - [ ] **Step 11: Run tests**
 
-Run: `npx vitest run src/shell/supplemental-commands/playwright-command.test.ts`
+Run: `npx vitest run packages/webapp/src/shell/supplemental-commands/playwright-command.test.ts`
 
 Many existing tests will fail because they use the old implicit-tab pattern. That's expected — Task 4 fixes the tests.
 
 - [ ] **Step 12: Commit**
 
 ```bash
-git add src/shell/supplemental-commands/playwright-command.ts
+git add packages/webapp/src/shell/supplemental-commands/playwright-command.ts
 git commit -m "refactor: migrate all 36 playwright commands to explicit --tab
 
 Every command that operates on a tab now requires --tab <targetId>
@@ -323,8 +323,8 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 ### Task 4: Update tests for new `--tab` interface
 
 **Files:**
-- Modify: `src/shell/supplemental-commands/playwright-command.test.ts`
-- Modify: `src/cdp/browser-api.test.ts` (if mutex tests need adjustment)
+- Modify: `packages/webapp/src/shell/supplemental-commands/playwright-command.test.ts`
+- Modify: `packages/webapp/src/cdp/browser-api.test.ts` (if mutex tests need adjustment)
 
 - [ ] **Step 1: Read the existing test file** to understand the mock pattern
 
@@ -364,7 +364,7 @@ Expected: All pass.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/shell/supplemental-commands/playwright-command.test.ts src/cdp/browser-api.test.ts
+git add packages/webapp/src/shell/supplemental-commands/playwright-command.test.ts packages/webapp/src/cdp/browser-api.test.ts
 git commit -m "test: update playwright tests for explicit --tab interface
 
 All tests now pass --tab <targetId>. Adds tests for missing --tab
@@ -378,8 +378,8 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 ### Task 5: Add tab grouping for agent-created tabs
 
 **Files:**
-- Modify: `src/cdp/browser-api.ts`
-- Modify: `src/shell/supplemental-commands/playwright-command.ts`
+- Modify: `packages/webapp/src/cdp/browser-api.ts`
+- Modify: `packages/webapp/src/shell/supplemental-commands/playwright-command.ts`
 
 - [ ] **Step 1: Add `groupNewTab()` to BrowserAPI**
 
@@ -430,7 +430,7 @@ npm run typecheck && npm run test && npm run build && npm run build:extension
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/cdp/browser-api.ts src/shell/supplemental-commands/playwright-command.ts
+git add packages/webapp/src/cdp/browser-api.ts packages/webapp/src/shell/supplemental-commands/playwright-command.ts
 git commit -m "feat: add agent-created tabs to slicc tab group
 
 New tabs created via playwright-cli tab-new/open now join the
@@ -445,13 +445,13 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 ### Task 6: Update agent system prompt and skills
 
 **Files:**
-- Modify: `src/defaults/shared/CLAUDE.md`
-- Modify: Any skills in `src/defaults/workspace/skills/` that use playwright commands
+- Modify: `packages/vfs-root/shared/CLAUDE.md`
+- Modify: Any skills in `packages/vfs-root/workspace/skills/` that use playwright commands
 
 - [ ] **Step 1: Search for all playwright-cli references in agent docs and skills**
 
 ```bash
-grep -rn 'playwright-cli\|playwright ' src/defaults/shared/CLAUDE.md src/defaults/workspace/skills/
+grep -rn 'playwright-cli\|playwright ' packages/vfs-root/shared/CLAUDE.md packages/vfs-root/workspace/skills/
 ```
 
 - [ ] **Step 2: Update CLAUDE.md**
@@ -474,7 +474,7 @@ npm run typecheck && npm run test && npm run build && npm run build:extension
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/defaults/
+git add packages/vfs-root/
 git commit -m "docs: update agent prompt and skills for --tab interface
 
 All playwright-cli examples now use explicit --tab <targetId>.
@@ -500,7 +500,7 @@ npm run typecheck && npm run test && npm run build && npm run build:extension
 - [ ] **Step 2: Verify no references to old patterns remain**
 
 ```bash
-grep -rn 'currentTarget\|ensureTarget\|tab-select' src/shell/supplemental-commands/playwright-command.ts
+grep -rn 'currentTarget\|ensureTarget\|tab-select' packages/webapp/src/shell/supplemental-commands/playwright-command.ts
 ```
 
 Expected: No matches.

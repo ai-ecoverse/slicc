@@ -145,7 +145,7 @@ Each playwright command uses `browser.withTab(targetId, async (session) => { ...
 
 ### Concurrency Tests
 
-Mutex tests live in `src/cdp/browser-api.test.ts`:
+Mutex tests live in `packages/webapp/src/cdp/browser-api.test.ts`:
 - Two concurrent `withTab()` calls with different targetIds serialize correctly
 - The second call waits for the first to complete before attaching
 - If the first call throws, the second still proceeds (mutex releases in `finally`)
@@ -189,7 +189,7 @@ No change to snapshot caching mechanism needed — explicit `--tab` naturally sc
 
 ## Changes
 
-### File: `src/shell/supplemental-commands/playwright-command.ts`
+### File: `packages/webapp/src/shell/supplemental-commands/playwright-command.ts`
 
 - Remove `currentTarget` from `PlaywrightState`
 - Remove `ensureTarget()` function
@@ -204,13 +204,13 @@ No change to snapshot caching mechanism needed — explicit `--tab` naturally sc
 - Update `checkTeleportBlock()` to check only the target tab's watcher
 - Add error messages for missing `--tab` and invalid tab IDs
 
-### File: `src/cdp/browser-api.ts`
+### File: `packages/webapp/src/cdp/browser-api.ts`
 
 - Add `withTab(targetId, fn)` promise-based mutex method
 - Keep `attachToPage()` as internal (called by `withTab()`)
-- Add `withTab` tests in `src/cdp/browser-api.test.ts`
+- Add `withTab` tests in `packages/webapp/src/cdp/browser-api.test.ts`
 
-### File: `src/defaults/shared/CLAUDE.md`
+### File: `packages/vfs-root/shared/CLAUDE.md`
 
 Update agent instructions for the new tab handling pattern:
 
@@ -238,20 +238,20 @@ Key instructions:
 - Use `tab-list` to find the active tab (marked `(active)`)
 - Element refs (e5, e12) are valid until the next snapshot of that tab
 
-### File: `src/shell/supplemental-commands/playwright-command.test.ts`
+### File: `packages/webapp/src/shell/supplemental-commands/playwright-command.test.ts`
 
 - Update all existing tests to use `--tab <targetId>` syntax
 - Remove tests for index-based selection and implicit current tab
 - Add tests for: missing `--tab` error, invalid tab ID error, `tab-new` returns targetId
 - Add tests for teleport scoped to tab (only blocks same-tab commands)
 
-### File: `src/cdp/browser-api.test.ts`
+### File: `packages/webapp/src/cdp/browser-api.test.ts`
 
 - Add tests for `withTab()` mutex serialization
 - Test concurrent calls serialize correctly
 - Test error in first call doesn't block second
 
-### Files: Agent skills in `src/defaults/workspace/skills/`
+### Files: Agent skills in `packages/vfs-root/workspace/skills/`
 
 - Update any skills that use playwright commands to use `--tab` syntax
 - Search for `playwright-cli` in all skill files and update
@@ -277,8 +277,8 @@ This is a **breaking change** to the playwright command interface.
 - `tab-select` command (removed)
 
 **Migration path:**
-- Update `src/defaults/shared/CLAUDE.md` (agent system prompt)
-- Update all skills in `src/defaults/workspace/skills/`
+- Update `packages/vfs-root/shared/CLAUDE.md` (agent system prompt)
+- Update all skills in `packages/vfs-root/workspace/skills/`
 - Old syntax produces helpful error messages pointing to the new syntax
 - No deprecation period — clean break
 
@@ -287,10 +287,10 @@ This is a **breaking change** to the playwright command interface.
 ### Current Gap
 
 `BrowserAPI.createPage()` creates tabs via CDP `Target.createTarget`. In extension mode, this bypasses Chrome's tab grouping hooks — agent-created tabs are NOT added to the "slicc" tab group. Tab grouping currently only works when:
-- The debugger client opens a tab (`src/cdp/debugger-client.ts:250`)
-- The service worker opens a tab (`src/extension/service-worker.ts:417`)
+- The debugger client opens a tab (`packages/webapp/src/cdp/debugger-client.ts:250`)
+- The service worker opens a tab (`packages/chrome-extension/src/service-worker.ts:417`)
 
-Both use `addToSliccGroup(tabId)` from `src/extension/tab-group.ts`. But the playwright command path (`tab-new` / `open` → `BrowserAPI.createPage()`) does not.
+Both use `addToSliccGroup(tabId)` from `packages/chrome-extension/src/tab-group.ts`. But the playwright command path (`tab-new` / `open` → `BrowserAPI.createPage()`) does not.
 
 ### Fix
 
@@ -308,9 +308,9 @@ After `createPage()` returns a CDP `targetId`, resolve it to a Chrome `tabId` an
 
 ### Files
 
-- Modify: `src/cdp/browser-api.ts` — add `groupNewTab()` or post-create hook
-- Modify: `src/shell/supplemental-commands/playwright-command.ts` — call grouping after `tab-new` / `open`
-- Use: `src/extension/tab-group.ts` — existing `addToSliccGroup()` (no changes needed)
+- Modify: `packages/webapp/src/cdp/browser-api.ts` — add `groupNewTab()` or post-create hook
+- Modify: `packages/webapp/src/shell/supplemental-commands/playwright-command.ts` — call grouping after `tab-new` / `open`
+- Use: `packages/chrome-extension/src/tab-group.ts` — existing `addToSliccGroup()` (no changes needed)
 
 ## Out of Scope
 

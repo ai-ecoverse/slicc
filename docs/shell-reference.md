@@ -561,8 +561,8 @@ crontask add "cleanup" "0 3 * * 0" cleaner-scoop "Remove old files from /tmp"
 ## References
 
 - **just-bash**: https://github.com/jotaen/just-bash
-- **Supplemental commands**: `src/shell/supplemental-commands/`
-- **JSH executor**: `src/shell/jsh-executor.ts`
-- **Binary cache**: `src/shell/binary-cache.ts`
-- **Argument parser**: `src/shell/parse-shell-args.ts`
-- **Discovery**: `src/shell/jsh-discovery.ts`
+- **Supplemental commands**: `packages/webapp/src/shell/supplemental-commands/`
+- **JSH executor**: `packages/webapp/src/shell/jsh-executor.ts`
+- **Binary cache**: `packages/webapp/src/shell/binary-cache.ts`
+- **Argument parser**: `packages/webapp/src/shell/parse-shell-args.ts`
+- **Discovery**: `packages/webapp/src/shell/jsh-discovery.ts`

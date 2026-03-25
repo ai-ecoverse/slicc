@@ -96,7 +96,7 @@ Providers that implement `getModelIds()` (like Adobe) return metadata per model 
 
 #### Merge Priority
 
-In `src/ui/provider-settings.ts`, `getProviderModels()` resolves model capabilities:
+In `packages/webapp/src/ui/provider-settings.ts`, `getProviderModels()` resolves model capabilities:
 
 1. **Pi-ai registry** — base defaults for known model IDs
 2. **`modelOverrides`** from ProviderConfig — static overrides, applied to any model
@@ -131,7 +131,7 @@ The proxy accepts requests in whichever format the model's `api` field indicates
 
 ## Changes
 
-### File: `src/ui/provider-settings.ts`
+### File: `packages/webapp/src/ui/provider-settings.ts`
 
 **In `getProviderModels()`** — implement the three-layer merge:
 
@@ -154,7 +154,7 @@ The proxy accepts requests in whichever format the model's `api` field indicates
 - Parse and propagate the new optional fields from `/v1/models` response
 - Return them in the `getModelIds()` result so `provider-settings.ts` can use them
 
-### File: `src/providers/types.ts`
+### File: `packages/webapp/src/providers/types.ts`
 
 - Add `ModelMetadata` type for shared override fields:
   ```typescript

@@ -16,12 +16,12 @@
 
 **Files:**
 
-- Modify: `src/ui/chat-panel.ts:68-78` (add new private fields after existing state)
-- Modify: `src/ui/chat-panel.ts` (add flushPendingDelta and cancelPendingDelta methods)
+- Modify: `packages/webapp/src/ui/chat-panel.ts:68-78` (add new private fields after existing state)
+- Modify: `packages/webapp/src/ui/chat-panel.ts` (add flushPendingDelta and cancelPendingDelta methods)
 
 - [ ] **Step 1: Add two new private fields to ChatPanel**
 
-In `src/ui/chat-panel.ts`, add after line 78 (after `onDeleteQueuedMessage`):
+In `packages/webapp/src/ui/chat-panel.ts`, add after line 78 (after `onDeleteQueuedMessage`):
 
 ```typescript
 private pendingDeltaText = '';
@@ -69,7 +69,7 @@ Expected: PASS (new methods are private and not yet called, new fields initializ
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/ui/chat-panel.ts
+git add packages/webapp/src/ui/chat-panel.ts
 git commit -m "feat: add rAF batching state and flush/cancel helpers"
 ```
 
@@ -77,7 +77,7 @@ git commit -m "feat: add rAF batching state and flush/cancel helpers"
 
 **Files:**
 
-- Modify: `src/ui/chat-panel.ts` (add `updateStreamingContent` method)
+- Modify: `packages/webapp/src/ui/chat-panel.ts` (add `updateStreamingContent` method)
 
 - [ ] **Step 1: Add `updateStreamingContent()` method**
 
@@ -114,7 +114,7 @@ Expected: PASS
 - [ ] **Step 3: Commit**
 
 ```bash
-git add src/ui/chat-panel.ts
+git add packages/webapp/src/ui/chat-panel.ts
 git commit -m "feat: add targeted streaming content update method"
 ```
 
@@ -122,7 +122,7 @@ git commit -m "feat: add targeted streaming content update method"
 
 **Files:**
 
-- Modify: `src/ui/chat-panel.ts:527-532` (replace `handleContentDelta` body)
+- Modify: `packages/webapp/src/ui/chat-panel.ts:527-532` (replace `handleContentDelta` body)
 
 - [ ] **Step 1: Replace `handleContentDelta` implementation**
 
@@ -154,7 +154,7 @@ Expected: All tests passing (ChatPanel is DOM-dependent, not covered by Node tes
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/ui/chat-panel.ts
+git add packages/webapp/src/ui/chat-panel.ts
 git commit -m "feat: wire rAF batching into handleContentDelta"
 ```
 
@@ -162,9 +162,9 @@ git commit -m "feat: wire rAF batching into handleContentDelta"
 
 **Files:**
 
-- Modify: `src/ui/chat-panel.ts:534-539` (handleContentDone)
-- Modify: `src/ui/chat-panel.ts:133-159` (switchToContext)
-- Modify: `src/ui/chat-panel.ts:967-976` (dispose)
+- Modify: `packages/webapp/src/ui/chat-panel.ts:534-539` (handleContentDone)
+- Modify: `packages/webapp/src/ui/chat-panel.ts:133-159` (switchToContext)
+- Modify: `packages/webapp/src/ui/chat-panel.ts:967-976` (dispose)
 
 - [ ] **Step 1: Update `handleContentDone` to flush before final render**
 
@@ -223,7 +223,7 @@ Expected: All tests passing
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/ui/chat-panel.ts
+git add packages/webapp/src/ui/chat-panel.ts
 git commit -m "feat: flush/cancel pending deltas on content_done, context switch, dispose"
 ```
 

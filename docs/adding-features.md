@@ -9,15 +9,15 @@ Agent-first, implementation-focused guide to extending SLICC. Each guide shows e
 **When**: To register a new bash command (e.g., `convert`, `webhook`, `crontask`).
 
 **Files to modify**:
-- Create: `src/shell/supplemental-commands/my-command.ts`
-- Modify: `src/shell/supplemental-commands/index.ts`
+- Create: `packages/webapp/src/shell/supplemental-commands/my-command.ts`
+- Modify: `packages/webapp/src/shell/supplemental-commands/index.ts`
 
 **Implementation**:
 
 Define a command using just-bash's `defineCommand`:
 
 ```typescript
-// src/shell/supplemental-commands/my-command.ts
+// packages/webapp/src/shell/supplemental-commands/my-command.ts
 import { defineCommand } from 'just-bash';
 import type { Command, CommandContext } from 'just-bash';
 
@@ -49,7 +49,7 @@ export function createMyCommand(): Command {
 Register in `createSupplementalCommands()`:
 
 ```typescript
-// src/shell/supplemental-commands/index.ts
+// packages/webapp/src/shell/supplemental-commands/index.ts
 import { createMyCommand } from './my-command.js';
 
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
@@ -85,7 +85,7 @@ type ShellResult = {
 **Test pattern**:
 
 ```typescript
-// src/shell/supplemental-commands/my-command.test.ts
+// packages/webapp/src/shell/supplemental-commands/my-command.test.ts
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createMyCommand } from './my-command.js';
 import { FakeVirtualFS } from '../../fs/fake-virtual-fs.js';
@@ -109,7 +109,7 @@ describe('my-command', () => {
 });
 ```
 
-**Reference file**: `src/shell/supplemental-commands/which-command.ts`
+**Reference file**: `packages/webapp/src/shell/supplemental-commands/which-command.ts`
 
 ---
 
@@ -181,7 +181,7 @@ Execution modes:
 JSH scripts cannot be unit-tested in Node because they rely on extension mode detection. Test the logic separately:
 
 ```typescript
-// src/shell/supplemental-commands/my-command.test.ts
+// packages/webapp/src/shell/supplemental-commands/my-command.test.ts
 import { describe, it, expect } from 'vitest';
 import { executeJshFile } from '../jsh-executor.js';
 import { FakeVirtualFS } from '../../fs/fake-virtual-fs.js';
@@ -203,7 +203,7 @@ describe('my-script.jsh', () => {
 });
 ```
 
-**Reference file**: `src/shell/jsh-executor.ts`, `src/shell/supplemental-commands/node-command.ts`
+**Reference file**: `packages/webapp/src/shell/jsh-executor.ts`, `packages/webapp/src/shell/supplemental-commands/node-command.ts`
 
 ---
 
@@ -212,13 +212,13 @@ describe('my-script.jsh', () => {
 **When**: To add a tool available to the agent (e.g., a new `read_database` tool).
 
 **Files to create/modify**:
-- Create: `src/tools/my-tool.ts`
-- Modify: `src/scoops/scoop-context.ts` (wiring)
+- Create: `packages/webapp/src/tools/my-tool.ts`
+- Modify: `packages/webapp/src/scoops/scoop-context.ts` (wiring)
 
 **Implementation**:
 
 ```typescript
-// src/tools/my-tool.ts
+// packages/webapp/src/tools/my-tool.ts
 import type { ToolDefinition, ToolResult } from '../core/types.js';
 import { createLogger } from '../core/logger.js';
 
@@ -295,7 +295,7 @@ interface ToolResult {
 **Wire into ScoopContext**:
 
 ```typescript
-// src/scoops/scoop-context.ts — in the init() method
+// packages/webapp/src/scoops/scoop-context.ts — in the init() method
 const legacyTools = [
   // ... existing tools ...
   createMyTool(dependency),
@@ -305,7 +305,7 @@ const legacyTools = [
 **Test pattern**:
 
 ```typescript
-// src/tools/my-tool.test.ts
+// packages/webapp/src/tools/my-tool.test.ts
 import { describe, it, expect } from 'vitest';
 import { createMyTool } from './my-tool.js';
 
@@ -319,7 +319,7 @@ describe('my_tool', () => {
 });
 ```
 
-**Reference file**: `src/tools/bash-tool.ts`, `src/tools/file-tools.ts`
+**Reference file**: `packages/webapp/src/tools/bash-tool.ts`, `packages/webapp/src/tools/file-tools.ts`
 
 ---
 
@@ -328,9 +328,9 @@ describe('my_tool', () => {
 **When**: To add or change browser automation behavior, tab workflows, or preview-serving commands.
 
 **Files to modify**:
-- Modify: `src/shell/supplemental-commands/playwright-command.ts`
-- Modify: `src/shell/supplemental-commands/serve-command.ts`
-- Modify: `src/shell/supplemental-commands/shared.ts` (shared preview/path helpers)
+- Modify: `packages/webapp/src/shell/supplemental-commands/playwright-command.ts`
+- Modify: `packages/webapp/src/shell/supplemental-commands/serve-command.ts`
+- Modify: `packages/webapp/src/shell/supplemental-commands/shared.ts` (shared preview/path helpers)
 - Update guidance if needed: `packages/vfs-root/workspace/skills/playwright-cli/SKILL.md`
 
 **Implementation**:
@@ -346,7 +346,7 @@ describe('my_tool', () => {
 - Put pure helper coverage in `shared.test.ts`.
 - Prefer focused command-level assertions over large integration fixtures.
 
-**Reference files**: `src/shell/supplemental-commands/playwright-command.ts`, `src/shell/supplemental-commands/serve-command.ts`, `src/shell/supplemental-commands/sprinkle-command.ts`
+**Reference files**: `packages/webapp/src/shell/supplemental-commands/playwright-command.ts`, `packages/webapp/src/shell/supplemental-commands/serve-command.ts`, `packages/webapp/src/shell/supplemental-commands/sprinkle-command.ts`
 
 ---
 
@@ -355,12 +355,12 @@ describe('my_tool', () => {
 **When**: To add a messaging or multi-scoop management tool.
 
 **Files to modify**:
-- Modify: `src/scoops/scoop-management-tools.ts`
+- Modify: `packages/webapp/src/scoops/scoop-management-tools.ts`
 
 **Implementation**:
 
 ```typescript
-// src/scoops/scoop-management-tools.ts — in createScoopManagementTools()
+// packages/webapp/src/scoops/scoop-management-tools.ts — in createScoopManagementTools()
 export function createScoopManagementTools(config: ScoopManagementToolsConfig): ToolDefinition[] {
   const tools: ToolDefinition[] = [];
 
@@ -430,7 +430,7 @@ interface RegisteredScoop {
 **Add callback to ScoopContextCallbacks**:
 
 ```typescript
-// src/scoops/scoop-context.ts
+// packages/webapp/src/scoops/scoop-context.ts
 export interface ScoopContextCallbacks {
   // ... existing callbacks ...
   onMySpecialCallback?: (param: string) => Promise<string>;
@@ -440,7 +440,7 @@ export interface ScoopContextCallbacks {
 **Wire in Orchestrator**:
 
 ```typescript
-// src/scoops/orchestrator.ts
+// packages/webapp/src/scoops/orchestrator.ts
 const scoopManagementConfig: ScoopManagementToolsConfig = {
   // ... existing config ...
   onMySpecialCallback: async (param) => {
@@ -452,7 +452,7 @@ const scoopManagementConfig: ScoopManagementToolsConfig = {
 **Test pattern**:
 
 ```typescript
-// src/scoops/scoop-management-tools.test.ts
+// packages/webapp/src/scoops/scoop-management-tools.test.ts
 import { describe, it, expect, vi } from 'vitest';
 import { createScoopManagementTools } from './scoop-management-tools.js';
 
@@ -473,7 +473,7 @@ describe('my_special_tool', () => {
 });
 ```
 
-**Reference file**: `src/scoops/scoop-management-tools.ts`
+**Reference file**: `packages/webapp/src/scoops/scoop-management-tools.ts`
 
 ---
 
@@ -482,13 +482,13 @@ describe('my_special_tool', () => {
 **When**: To add a new tab or section in the UI (e.g., a settings panel, network monitor).
 
 **Files to create/modify**:
-- Create: `src/ui/my-panel.ts`
-- Modify: `src/ui/layout.ts`, `src/ui/main.ts`
+- Create: `packages/webapp/src/ui/my-panel.ts`
+- Modify: `packages/webapp/src/ui/layout.ts`, `packages/webapp/src/ui/main.ts`
 
 **Implementation**:
 
 ```typescript
-// src/ui/my-panel.ts
+// packages/webapp/src/ui/my-panel.ts
 export class MyPanel {
   private container: HTMLElement;
   private contentEl!: HTMLElement;
@@ -539,7 +539,7 @@ export class MyPanel {
 **Wire into Layout** (Standalone mode):
 
 ```typescript
-// src/ui/layout.ts
+// packages/webapp/src/ui/layout.ts
 import { MyPanel } from './my-panel.js';
 
 export interface LayoutPanels {
@@ -576,7 +576,7 @@ export class Layout {
 **Wire into Layout** (Extension/Tabbed mode):
 
 ```typescript
-// src/ui/layout.ts — in createTabbedLayout()
+// packages/webapp/src/ui/layout.ts — in createTabbedLayout()
 const tabIds: TabId[] = ['chat', 'terminal', 'files', 'memory', 'myPanel'];
 
 // Create tab button and container
@@ -594,7 +594,7 @@ this.panels.myPanel = new MyPanel(myPanelContainer);
 **CSS**:
 
 ```css
-/* src/ui/styles.css */
+/* packages/webapp/src/ui/styles.css */
 .my-panel {
   display: flex;
   flex-direction: column;
@@ -621,7 +621,7 @@ this.panels.myPanel = new MyPanel(myPanelContainer);
 Panel tests are DOM-heavy; test interactions and state manually in extension/standalone mode rather than in vitest:
 
 ```typescript
-// src/ui/my-panel.test.ts — only test non-DOM logic
+// packages/webapp/src/ui/my-panel.test.ts — only test non-DOM logic
 import { describe, it, expect, vi } from 'vitest';
 
 describe('MyPanel', () => {
@@ -633,7 +633,7 @@ describe('MyPanel', () => {
 });
 ```
 
-**Reference file**: `src/ui/memory-panel.ts`, `src/ui/layout.ts`
+**Reference file**: `packages/webapp/src/ui/memory-panel.ts`, `packages/webapp/src/ui/layout.ts`
 
 ---
 
@@ -710,7 +710,7 @@ Only native `/workspace/skills/` entries are install-managed by SLICC. Compatibi
 Skills are narrative instructions; test by verifying they load correctly:
 
 ```typescript
-// src/scoops/skills.test.ts
+// packages/webapp/src/scoops/skills.test.ts
 import { describe, it, expect } from 'vitest';
 import { loadSkills } from './skills.js';
 import { VirtualFS } from '../fs/index.js';
@@ -730,7 +730,7 @@ describe('loadSkills', () => {
 });
 ```
 
-**Reference file**: `src/scoops/skills.ts`, `packages/vfs-root/workspace/skills/`
+**Reference file**: `packages/webapp/src/scoops/skills.ts`, `packages/vfs-root/workspace/skills/`
 
 ---
 
@@ -738,7 +738,7 @@ describe('loadSkills', () => {
 
 Providers come from three sources:
 - **Pi-ai auto-discovery**: `getProviders()` returns all pi-ai providers automatically — no files needed. Filtered by `packages/dev-tools/providers.build.json` (`include: ["*"]` = all, `exclude: ["*"]` = none).
-- **Built-in extensions**: `src/providers/built-in/*.ts` — only for providers needing custom `register()` functions (e.g., bedrock-camp). Also filtered by `packages/dev-tools/providers.build.json`.
+- **Built-in extensions**: `packages/webapp/src/providers/built-in/*.ts` — only for providers needing custom `register()` functions (e.g., bedrock-camp). Also filtered by `packages/dev-tools/providers.build.json`.
 - **External**: `packages/webapp/providers/*.ts` (gitignored within the webapp package) — always included, never filtered. For custom OAuth providers, corporate proxies, etc. Some providers (e.g., `adobe.ts`) are explicitly un-gitignored and tracked in version control.
 
 Built-in and external modules export `config: ProviderConfig` and optionally `register(): void`.
@@ -749,7 +749,7 @@ Built-in and external modules export `config: ProviderConfig` and optionally `re
 
 **Most providers need no files at all.** Pi-ai auto-discovers its providers via `getProviders()`, and `provider-settings.ts` generates a fallback config (display name derived from ID, `requiresApiKey: true`, `requiresBaseUrl: false`). The provider appears in the Settings UI automatically.
 
-**Only create a file in `src/providers/built-in/`** if the provider needs a custom `register()` function (e.g., custom stream functions). See `src/providers/built-in/bedrock-camp.ts` for an example.
+**Only create a file in `packages/webapp/src/providers/built-in/`** if the provider needs a custom `register()` function (e.g., custom stream functions). See `packages/webapp/src/providers/built-in/bedrock-camp.ts` for an example.
 
 **For external providers** (typically gitignored), create `packages/webapp/providers/my-provider.ts`:
 
@@ -878,18 +878,18 @@ export function register(): void {
 1. User clicks "Login with My Corp" in the Settings dialog
 2. `provider-settings.ts` calls `config.onOAuthLogin(launcher, onSuccess)`
 3. The provider builds its authorize URL and calls `launcher(authorizeUrl)`
-4. The generic `OAuthLauncher` (from `src/providers/oauth-service.ts`) handles transport:
+4. The generic `OAuthLauncher` (from `packages/webapp/src/providers/oauth-service.ts`) handles transport:
    - **CLI**: Opens popup → IDP login → redirects to `http://localhost:5710/auth/callback` → callback page postMessages the redirect URL back → popup closes
    - **Extension**: Sends `oauth-request` to service worker → `chrome.identity.launchWebAuthFlow` → returns redirect URL with token in fragment
 5. The provider extracts the token from the redirect URL and calls `saveOAuthAccount()`
 6. `onSuccess()` re-renders the accounts list showing the logged-in state
 
 **Key files**:
-- `src/providers/types.ts` — `ProviderConfig` (with `onOAuthLogin`, `onOAuthLogout`), `OAuthLauncher` type
-- `src/providers/oauth-service.ts` — `createOAuthLauncher()` factory (CLI popup vs extension chrome.identity)
-- `src/ui/provider-settings.ts` — Calls `config.onOAuthLogin(launcher, onSuccess)` when login button clicked
+- `packages/webapp/src/providers/types.ts` — `ProviderConfig` (with `onOAuthLogin`, `onOAuthLogout`), `OAuthLauncher` type
+- `packages/webapp/src/providers/oauth-service.ts` — `createOAuthLauncher()` factory (CLI popup vs extension chrome.identity)
+- `packages/webapp/src/ui/provider-settings.ts` — Calls `config.onOAuthLogin(launcher, onSuccess)` when login button clicked
 - `packages/node-server/src/index.ts` — `/auth/callback` route (reads query params + fragment, postMessages to opener)
-- `src/extension/service-worker.ts` — `handleOAuthRequest()` (generic `chrome.identity.launchWebAuthFlow`)
+- `packages/chrome-extension/src/service-worker.ts` — `handleOAuthRequest()` (generic `chrome.identity.launchWebAuthFlow`)
 
 **Dual-mode redirect URIs**:
 
@@ -960,7 +960,7 @@ describe('my-corp provider', () => {
 });
 ```
 
-**Reference files**: `src/providers/oauth-service.ts`, `src/providers/types.ts`, `src/ui/provider-settings.ts`
+**Reference files**: `packages/webapp/src/providers/oauth-service.ts`, `packages/webapp/src/providers/types.ts`, `packages/webapp/src/ui/provider-settings.ts`
 
 ---
 
@@ -1006,8 +1006,8 @@ npm run build:extension
 **When**: A shell command or tool needs user interaction before proceeding (e.g., permission approval, file picker, form input). Tool UI solves the "user gesture" problem — browser APIs like `showDirectoryPicker()` require a user click, but agent-driven tool calls have no gesture context.
 
 **Files to modify**:
-- Your command file (e.g., `src/fs/mount-commands.ts`)
-- Import from: `src/tools/tool-ui.ts`
+- Your command file (e.g., `packages/webapp/src/fs/mount-commands.ts`)
+- Import from: `packages/webapp/src/tools/tool-ui.ts`
 
 **How it works**:
 
@@ -1070,7 +1070,7 @@ async function execute(args: string[]): Promise<ShellResult> {
 - Available button classes: `.tool-ui__btn--primary`, `.tool-ui__btn--secondary`
 - Forms: add `data-action="submit"` to form, fields become action data
 
-**Key functions** (`src/tools/tool-ui.ts`):
+**Key functions** (`packages/webapp/src/tools/tool-ui.ts`):
 
 ```typescript
 // Get current tool execution context (null if not in a tool)
@@ -1106,7 +1106,7 @@ Both modes handle `data-action` clicks and form submissions identically.
 
 **Error handling**: Wrap async operations in try/catch. Return `{ content: errorMsg, isError: true }` for tools.
 
-**Logging**: Import `createLogger('namespace')` from `src/core/logger.js`. Logs are filtered by level (DEBUG in dev, ERROR in prod).
+**Logging**: Import `createLogger('namespace')` from `packages/webapp/src/core/logger.js`. Logs are filtered by level (DEBUG in dev, ERROR in prod).
 
 **VFS access**: All core layers have access to VirtualFS. Scoops get RestrictedFS (path-based ACL).
 

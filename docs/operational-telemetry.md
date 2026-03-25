@@ -25,10 +25,10 @@ SLICC is a browser-based AI coding agent used across three deployment modes (CLI
 
 ### Module structure
 
-Create a single telemetry module at `src/ui/telemetry.ts` that wraps all RUM interactions. Every other module imports checkpoint functions from here -- no direct `sampleRUM` calls scattered through the codebase.
+Create a single telemetry module at `packages/webapp/src/ui/telemetry.ts` that wraps all RUM interactions. Every other module imports checkpoint functions from here -- no direct `sampleRUM` calls scattered through the codebase.
 
 ```typescript
-// src/ui/telemetry.ts
+// packages/webapp/src/ui/telemetry.ts
 
 let sampleRUM: ((checkpoint: string, data?: { source?: string; target?: string }) => void) | null = null;
 
@@ -71,7 +71,7 @@ Straightforward. The UI runs in a regular Chrome tab served from `localhost:5710
 
 **Preferred**: ES module import via npm (`@adobe/helix-rum-js`). This avoids an external script tag and works with Vite's bundler. The enhancer script is auto-loaded by the core at runtime from `rum.hlx.page`.
 
-In `src/ui/main.ts`, at the end of the `main()` function:
+In `packages/webapp/src/ui/main.ts`, at the end of the `main()` function:
 
 ```typescript
 import { initTelemetry } from './telemetry.js';
@@ -149,7 +149,7 @@ These work out of the box with no custom code:
 
 The `?optel=on` query parameter forces 100% sampling for the current pageview. This is built into helix-rum-js and requires no custom code. Useful for verifying telemetry works during development.
 
-In `src/ui/telemetry.ts`:
+In `packages/webapp/src/ui/telemetry.ts`:
 
 ```typescript
 export async function initTelemetry(): Promise<void> {
@@ -201,7 +201,7 @@ npm install @adobe/helix-rum-js
 
 ### Step 2: Create telemetry module
 
-Create `src/ui/telemetry.ts` with:
+Create `packages/webapp/src/ui/telemetry.ts` with:
 - `initTelemetry()` -- async init, loads the module, emits initial `navigate` checkpoint
 - `checkpoint(name, data?)` -- safe wrapper, no-op before init or when disabled
 - `sanitizePath(path)` -- path sanitization utility
@@ -225,17 +225,17 @@ Instrument the following files (minimal diff per file -- one import + one functi
 
 | File | Checkpoint | Where |
 |---|---|---|
-| `src/scoops/orchestrator.ts` | `chat:send` | `handleMessage()`, after routing |
-| `src/scoops/scoop-context.ts` | `chat:response` | `agent_end` event callback |
-| `src/core/tool-registry.ts` | `tool:execute` | `executeTool()`, before dispatch |
-| `src/scoops/orchestrator.ts` | `scoop:create` | `createScoop()` |
-| `src/scoops/orchestrator.ts` | `scoop:delegate` | `delegateToScoop()` |
-| `src/shell/wasm-shell.ts` | `shell:command` | Command dispatch |
-| `src/ui/voice-input.ts` | `voice:input` | Recognition result handler |
-| `src/ui/provider-settings.ts` | `provider:switch` | Settings save |
-| `src/tools/file-tools.ts` | `file:operation` | Tool execute functions |
-| `src/skills/apply.ts` | `skill:install` | After successful install |
-| `src/scoops/scoop-context.ts` | `error:agent`, `error:overflow` | Error/overflow handlers |
+| `packages/webapp/src/scoops/orchestrator.ts` | `chat:send` | `handleMessage()`, after routing |
+| `packages/webapp/src/scoops/scoop-context.ts` | `chat:response` | `agent_end` event callback |
+| `packages/webapp/src/core/tool-registry.ts` | `tool:execute` | `executeTool()`, before dispatch |
+| `packages/webapp/src/scoops/orchestrator.ts` | `scoop:create` | `createScoop()` |
+| `packages/webapp/src/scoops/orchestrator.ts` | `scoop:delegate` | `delegateToScoop()` |
+| `packages/webapp/src/shell/wasm-shell.ts` | `shell:command` | Command dispatch |
+| `packages/webapp/src/ui/voice-input.ts` | `voice:input` | Recognition result handler |
+| `packages/webapp/src/ui/provider-settings.ts` | `provider:switch` | Settings save |
+| `packages/webapp/src/tools/file-tools.ts` | `file:operation` | Tool execute functions |
+| `packages/webapp/src/skills/apply.ts` | `skill:install` | After successful install |
+| `packages/webapp/src/scoops/scoop-context.ts` | `error:agent`, `error:overflow` | Error/overflow handlers |
 
 ### Step 5: Extension CSP and bundling
 
@@ -251,7 +251,7 @@ No `manifest.json` CSP change needed if self-hosting. The `host_permissions: ["<
 
 ### Step 6: Settings UI toggle
 
-Add a "Telemetry" toggle to `src/ui/provider-settings.ts` (or a new general settings section). The toggle writes `telemetry-disabled` to `localStorage`. Changes take effect on next page load (not retroactive for the current session).
+Add a "Telemetry" toggle to `packages/webapp/src/ui/provider-settings.ts` (or a new general settings section). The toggle writes `telemetry-disabled` to `localStorage`. Changes take effect on next page load (not retroactive for the current session).
 
 ### Step 7: Update documentation
 
@@ -310,7 +310,7 @@ Telemetry is fire-and-forget with no return values, making it awkward to unit te
 - **No integration tests**: Do not test that real beacons reach `rum.hlx.page`. That is the library's responsibility.
 
 ```typescript
-// src/ui/telemetry.test.ts
+// packages/webapp/src/ui/telemetry.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('@adobe/helix-rum-js', () => ({

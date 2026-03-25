@@ -24,7 +24,7 @@ Build, run, test, and debug SLICC locally.
 | `npm run test` | Vitest run (all tests) | Run full test suite; CI validation |
 | `SLICC_TEST_SERVER_URL=http://localhost:5710 npm run test:server-integration` | Run shared server API conformance tests against an externally running Node or Swift server | Validate standalone server HTTP/WebSocket behavior |
 | `npm run test:watch` | Vitest watch mode | Iterate on test changes; TDD workflow |
-| `npx vitest run src/fs/virtual-fs.test.ts` | Run single test file | Debug a specific module |
+| `npx vitest run packages/webapp/src/fs/virtual-fs.test.ts` | Run single test file | Debug a specific module |
 | `npx wrangler dev --config packages/cloudflare-worker/wrangler.jsonc` | Run the Cloudflare Worker tray hub locally (if Wrangler is installed/authenticated) | Exercise `packages/cloudflare-worker/src/` against a real Worker runtime |
 | `npx wrangler deploy --env staging --config packages/cloudflare-worker/wrangler.jsonc` | Deploy the staging Cloudflare Worker tray hub using `packages/cloudflare-worker/wrangler.jsonc` | Publish the staging tray hub (`slicc-tray-hub-staging`) used by GitHub Actions |
 | `npx wrangler deploy --config packages/cloudflare-worker/wrangler.jsonc` | Deploy the production Cloudflare Worker tray hub using `packages/cloudflare-worker/wrangler.jsonc` | Publish the production tray hub |
@@ -247,7 +247,7 @@ Browser console output is forwarded to CLI stdout via CDP console forwarder. Che
 Insert `console.log()` in browser code:
 
 ```typescript
-// src/ui/chat-panel.ts
+// packages/webapp/src/ui/chat-panel.ts
 console.log('User message:', text);
 ```
 
@@ -290,8 +290,8 @@ log.error('error message');
 | `npm run test` | Run all tests once |
 | `SLICC_TEST_SERVER_URL=http://localhost:5710 npm run test:server-integration` | Run server integration suite against an already running server |
 | `npm run test:watch` | Watch mode; re-run on file change |
-| `npx vitest run src/fs/virtual-fs.test.ts` | Run single file |
-| `npx vitest run src/fs/` | Run all tests in directory |
+| `npx vitest run packages/webapp/src/fs/virtual-fs.test.ts` | Run single file |
+| `npx vitest run packages/webapp/src/fs/` | Run all tests in directory |
 | `npx vitest run --reporter=verbose` | Verbose test output |
 
 ## Multi-Mode Compatibility Checklist
@@ -353,7 +353,7 @@ Acceptable to skip tests:
 ## File Structure Reference
 
 ```
-src/
+packages/webapp/src/
   fs/              Virtual filesystem + RestrictedFS
   shell/           WASM Bash + xterm.js terminal
   cdp/             Chrome DevTools Protocol client
@@ -362,14 +362,22 @@ src/
   git/             Git commands via isomorphic-git
   scoops/          Cone/scoop orchestrator
   ui/              Chat, terminal, file browser UI
-  cli/             Express server + Chrome launcher
-  extension/       Chrome Manifest V3 extension files
-  worker/          Cloudflare Worker + Durable Object tray hub
-  shims/           Node module shims for browser bundle
-  defaults/        Bundled default skills, sprinkles, and workspace
   skills/          Skill installation engine
-  types/           Type declarations for external submodules
   providers/       Provider types, OAuth service, auto-discovery
+  shims/           Node module shims for browser bundle
+  types/           Type declarations for external submodules
+
+packages/node-server/src/
+  cli/             Express server + Chrome launcher
+
+packages/chrome-extension/src/
+                   Chrome Manifest V3 extension files
+
+packages/cloudflare-worker/src/
+                   Cloudflare Worker + Durable Object tray hub
+
+packages/vfs-root/
+                   Bundled default skills, sprinkles, and workspace
 
 docs/
   development.md   This file

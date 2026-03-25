@@ -327,15 +327,15 @@ For skipped categories, ensure **manual verification in both CLI and extension m
 |---------|---------|
 | `npm run test` | Run all tests once; fail fast on first error |
 | `npm run test:watch` | Watch mode; re-run affected tests on file change |
-| `npx vitest run src/fs/virtual-fs.test.ts` | Run single test file |
-| `npx vitest run src/fs/` | Run all tests in directory |
+| `npx vitest run packages/webapp/src/fs/virtual-fs.test.ts` | Run single test file |
+| `npx vitest run packages/webapp/src/fs/` | Run all tests in directory |
 | `npx vitest run --reporter=verbose` | Verbose output with full stack traces |
 | `npx vitest run --reporter=dot` | Minimal output (one `.` per test) |
 
 ## Test File Organization
 
 ```
-src/fs/
+packages/webapp/src/fs/
   virtual-fs.ts
   virtual-fs.test.ts        ← colocated
   restricted-fs.ts
@@ -343,7 +343,7 @@ src/fs/
   types.ts
   (no test: exported types)
 
-src/tools/
+packages/webapp/src/tools/
   bash-tool.ts
   bash-tool.test.ts         ← colocated
   file-tools.ts
@@ -353,13 +353,13 @@ src/tools/
   search-tools.ts
   search-tools.test.ts      ← colocated
 
-src/shell/supplemental-commands/
+packages/webapp/src/shell/supplemental-commands/
   which-command.ts
   which-command.test.ts     ← colocated
   skill-command.ts
   skill-command.test.ts     ← colocated
 
-src/core/
+packages/webapp/src/core/
   context-compaction.ts
   context-compaction.test.ts ← colocated
   logger.ts
@@ -393,7 +393,7 @@ describe('File operations', () => {
 
 Run a single test with verbose output:
 ```bash
-npx vitest run --reporter=verbose src/fs/virtual-fs.test.ts
+npx vitest run --reporter=verbose packages/webapp/src/fs/virtual-fs.test.ts
 ```
 
 Add `console.log()` in test code — output appears in terminal:
@@ -407,7 +407,7 @@ it('does something', async () => {
 
 Watch mode for rapid iteration:
 ```bash
-npx vitest watch src/fs/virtual-fs.test.ts
+npx vitest watch packages/webapp/src/fs/virtual-fs.test.ts
 ```
 Make changes to test or source → Vitest re-runs automatically.
 

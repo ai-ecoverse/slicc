@@ -46,8 +46,8 @@ if (isExtensionMode) {
 | **Wait for load** | In extension mode, must await sandbox iframe `load` event before posting messages |
 
 **Related Files**
-- `src/tools/javascript-tool.ts` lines 248–270 (dual-mode iframe setup)
-- `src/shell/supplemental-commands/node-command.ts` lines 145–221 (extension routing)
+- `packages/webapp/src/tools/javascript-tool.ts` lines 248–270 (dual-mode iframe setup)
+- `packages/webapp/src/shell/supplemental-commands/node-command.ts` lines 145–221 (extension routing)
 - `sandbox.html` (entry point, must load in extension via `chrome.runtime.getURL()`)
 
 ## WASM & Bundled Assets in Extension Mode
@@ -71,7 +71,7 @@ File: `vite.config.extension.ts` `closeBundle` hook must:
 
 ## JavaScript Tool: Dual-Mode Pattern
 
-**CLI Mode** (`src/tools/javascript-tool.ts` lines 262–270)
+**CLI Mode** (`packages/webapp/src/tools/javascript-tool.ts` lines 262–270)
 
 ```typescript
 iframe.sandbox.add('allow-scripts');
@@ -84,7 +84,7 @@ doc.close();
 iframeReady = Promise.resolve(iframe);  // Synchronous
 ```
 
-**Extension Mode** (`src/tools/javascript-tool.ts` lines 250–260)
+**Extension Mode** (`packages/webapp/src/tools/javascript-tool.ts` lines 250–260)
 
 ```typescript
 iframeReady = new Promise<HTMLIFrameElement>((resolve) => {
@@ -100,7 +100,7 @@ Key difference: extension mode must **wait for load event** before posting messa
 
 ## Node Command: Three-Branch Path
 
-**File**: `src/shell/supplemental-commands/node-command.ts`
+**File**: `packages/webapp/src/shell/supplemental-commands/node-command.ts`
 
 | Branch | Condition | Behavior |
 |--------|-----------|----------|
@@ -111,7 +111,7 @@ The extension branch (lines 145–228) rebuilds the node shimmed environment ins
 
 ## RestrictedFS Path Behavior
 
-**File**: `src/fs/restricted-fs.ts`
+**File**: `packages/webapp/src/fs/restricted-fs.ts`
 
 | Operation | Outside Allowed Path | Inside Allowed Path |
 |-----------|---------------------|-------------------|
@@ -153,11 +153,11 @@ All paths in VirtualFS must follow these rules:
 | **Normalized** | `/a/b/c` | `/a//b/c` (double slash), `/a/b/./c` (dot-slash) |
 | **No symlinks** | All paths real | Symlinks not supported; read underlying target |
 
-**Normalization**: Use `normalizePath(path)` from `src/fs/path-utils.ts` before any VFS operation.
+**Normalization**: Use `normalizePath(path)` from `packages/webapp/src/fs/path-utils.ts` before any VFS operation.
 
 ## Voice Input: Extension Workaround
 
-**File**: `src/ui/voice-input.ts`
+**File**: `packages/webapp/src/ui/voice-input.ts`
 
 **The Problem**
 
@@ -182,7 +182,7 @@ Fallback to a popup window (`voice-popup.html`) for the one-time mic permission 
 
 ## CDP Transport: Extension Mode
 
-**File**: `src/cdp/debugger-client.ts`
+**File**: `packages/webapp/src/cdp/debugger-client.ts`
 
 **The Problem**
 
@@ -212,7 +212,7 @@ Leader tray bootstrap waits for a `leader.connected` control frame. In extension
 
 **The Solution**
 
-Host the real leader tray `WebSocket` in `src/extension/service-worker.ts` and relay frames through `chrome.runtime.sendMessage`. The offscreen document should use `ServiceWorkerLeaderTraySocket` from `src/extension/tray-socket-proxy.ts` as the `LeaderTrayManager` `webSocketFactory`.
+Host the real leader tray `WebSocket` in `packages/chrome-extension/src/service-worker.ts` and relay frames through `chrome.runtime.sendMessage`. The offscreen document should use `ServiceWorkerLeaderTraySocket` from `packages/chrome-extension/src/tray-socket-proxy.ts` as the `LeaderTrayManager` `webSocketFactory`.
 
 | Mode | Leader tray socket owner |
 |------|--------------------------|
@@ -233,7 +233,7 @@ Host the real leader tray `WebSocket` in `src/extension/service-worker.ts` and r
 **The Problem**
 
 The codebase has two independent TypeScript builds:
-- **Browser bundle** (`tsconfig.json`): Everything under `src/`
+- **Browser bundle** (`tsconfig.json`): Everything under `packages/webapp/src/`
 - **CLI server** (`tsconfig.cli.json`): Only `packages/node-server/src/`
 
 Cross-importing breaks the build.
@@ -241,9 +241,9 @@ Cross-importing breaks the build.
 | Violation | Problem |
 |-----------|---------|
 | Browser code imports `packages/node-server/src/` | CLI-only modules not bundled; runtime import error |
-| CLI code imports `src/ui/`, `src/extension/` | Browser-only code (DOM, chrome.debugger) not available in Node |
+| CLI code imports `packages/webapp/src/ui/`, `packages/chrome-extension/src/` | Browser-only code (DOM, chrome.debugger) not available in Node |
 
-**How to Check**: `npm run typecheck` runs both configs. Fix: move shared code to `src/shared/` or duplicate type definitions.
+**How to Check**: `npm run typecheck` runs both configs. Fix: move shared code to `packages/webapp/src/shared/` or duplicate type definitions.
 
 ## Node Version: >= 22 Required
 
@@ -278,11 +278,11 @@ resolve: {
 **When Adding New Deps**
 
 If a new npm dependency imports Node builtins:
-1. Create a stub file in `src/shims/` exporting required symbols
+1. Create a stub file in `packages/webapp/src/shims/` exporting required symbols
 2. Add alias in `packages/webapp/vite.config.ts`
 3. Test in both CLI and extension modes
 
-**Example**: `@smithy/node-http-handler` imports `stream`, `http`, `https`, `http2` (stubbed at `src/shims/{stream,http,https,http2}.ts`).
+**Example**: `@smithy/node-http-handler` imports `stream`, `http`, `https`, `http2` (stubbed at `packages/webapp/src/shims/{stream,http,https,http2}.ts`).
 
 ## IndexedDB Database Names
 
@@ -315,7 +315,7 @@ const vfs = new VirtualFS(`slicc-fs-test-${Date.now()}`);
 
 ## Scoop Lifecycle
 
-**File**: `src/scoops/orchestrator.ts`
+**File**: `packages/webapp/src/scoops/orchestrator.ts`
 
 | Operation | Effect |
 |-----------|--------|
@@ -333,11 +333,11 @@ Scoops have a **sequential message queue**:
 - No dropped messages
 - Applies to cone and all scoops
 
-**Related**: Context compaction replaces old messages with an LLM-generated summary when context approaches the token limit (see `src/core/context-compaction.ts`). Falls back to naive message dropping if the summarization call fails.
+**Related**: Context compaction replaces old messages with an LLM-generated summary when context approaches the token limit (see `packages/webapp/src/core/context-compaction.ts`). Falls back to naive message dropping if the summarization call fails.
 
 ## Preview Service Worker: Build Strategy
 
-**File**: `src/ui/preview-sw.ts`
+**File**: `packages/webapp/src/ui/preview-sw.ts`
 
 **The Problem**
 
@@ -366,7 +366,7 @@ Use `format: 'iife'` to avoid code-splitting.
 
 **The Solution**
 
-Use `createLogger()` from `src/core/logger.ts`:
+Use `createLogger()` from `packages/webapp/src/core/logger.ts`:
 
 ```typescript
 import { createLogger } from '../core/logger.js';
@@ -423,7 +423,7 @@ Any code that modifies `AgentMessage[]` must preserve ToolCall blocks in assista
 
 **The Problem**
 
-The extension service worker (`src/extension/service-worker.ts`) is built by Rollup as an entry point. If it imports from modules that are shared with other entry points (index.html, offscreen.html), Rollup code-splits them into shared chunks with ES `import` statements. Chrome extension service workers are **not** ES modules — `import` statements cause `Uncaught SyntaxError: Cannot use import statement outside a module` at runtime.
+The extension service worker (`packages/chrome-extension/src/service-worker.ts`) is built by Rollup as an entry point. If it imports from modules that are shared with other entry points (index.html, offscreen.html), Rollup code-splits them into shared chunks with ES `import` statements. Chrome extension service workers are **not** ES modules — `import` statements cause `Uncaught SyntaxError: Cannot use import statement outside a module` at runtime.
 
 **The Rule**
 
@@ -445,8 +445,8 @@ In extension mode, there are **two separate WasmShell instances** running in dif
 
 | Context | Location | Shell purpose | Window globals |
 |---------|----------|---------------|----------------|
-| **Side panel** | `src/ui/main.ts` (mainExtension) | Terminal tab — user-facing shell | Has Layout, `__slicc_debug_tabs`, DOM |
-| **Offscreen document** | `src/extension/offscreen.ts` | Agent's bash tool — LLM-driven | Has Orchestrator, no DOM/Layout |
+| **Side panel** | `packages/webapp/src/ui/main.ts` (mainExtension) | Terminal tab — user-facing shell | Has Layout, `__slicc_debug_tabs`, DOM |
+| **Offscreen document** | `packages/chrome-extension/src/offscreen.ts` | Agent's bash tool — LLM-driven | Has Orchestrator, no DOM/Layout |
 
 These contexts share IndexedDB (VFS, sessions) but **NOT** window globals, DOM, or Layout instances. They communicate via `chrome.runtime` messages routed through the service worker.
 
@@ -470,11 +470,11 @@ if (toggle) {
 **Current example**: `debug-command.ts` uses this pattern. Panel registers hook in `main.ts`; `offscreen-client.ts` handles the relay message.
 
 **Related Files**
-- `src/shell/supplemental-commands/debug-command.ts` (dual-context command, tries hook then relay)
-- `src/ui/main.ts` line 187 (registers `__slicc_debug_tabs` hook)
-- `src/ui/offscreen-client.ts` line 235 (relays `debug-tabs` message to hook)
-- `src/ui/layout.ts` `setDebugTabs()` (UI state — adds/removes tabs dynamically)
-- `src/ui/tabbed-ui.ts` `setHiddenTabs()` (persistence — saves to localStorage)
+- `packages/webapp/src/shell/supplemental-commands/debug-command.ts` (dual-context command, tries hook then relay)
+- `packages/webapp/src/ui/main.ts` line 187 (registers `__slicc_debug_tabs` hook)
+- `packages/webapp/src/ui/offscreen-client.ts` line 235 (relays `debug-tabs` message to hook)
+- `packages/webapp/src/ui/layout.ts` `setDebugTabs()` (UI state — adds/removes tabs dynamically)
+- `packages/webapp/src/ui/tabbed-ui.ts` `setHiddenTabs()` (persistence — saves to localStorage)
 
 ## Dual-Mode Testing Checklist
 

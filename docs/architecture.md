@@ -4,27 +4,27 @@
 
 | Layer | Directory | Responsibility | Key File | Test File |
 |---|---|---|---|---|
-| Shims | `src/shims/` | Node.js polyfills for browser bundle | `empty.ts`, `buffer-polyfill.ts` | N/A |
-| Virtual Filesystem | `src/fs/` | POSIX-like FS (LightningFS/IndexedDB) | `virtual-fs.ts` | `virtual-fs.test.ts` |
-| Shell | `src/shell/` | just-bash WASM + xterm terminal | `wasm-shell.ts` | `wasm-shell.test.ts` |
-| Git | `src/git/` | isomorphic-git wrapper | `git-commands.ts` | N/A |
-| Skills | `src/skills/` | Skill package manager | `apply.ts` | N/A |
-| CDP | `src/cdp/` | Chrome DevTools Protocol | `browser-api.ts` | `browser-api.test.ts` |
-| Tools | `src/tools/` | Tool factories; active scoop surface is file + bash + javascript | `bash-tool.ts` | `bash-tool.test.ts` |
-| Core Agent | `src/core/` | pi-mono agent loop + streaming | `index.ts` | `agent.test.ts` |
-| Scoops Orchestrator | `src/scoops/` | Multi-agent system (cone + scoops) | `orchestrator.ts` | N/A |
-| UI | `src/ui/` | Chat, Terminal, Files, Memory panels | `main.ts` | `types.test.ts` |
+| Shims | `packages/webapp/src/shims/` | Node.js polyfills for browser bundle | `empty.ts`, `buffer-polyfill.ts` | N/A |
+| Virtual Filesystem | `packages/webapp/src/fs/` | POSIX-like FS (LightningFS/IndexedDB) | `virtual-fs.ts` | `virtual-fs.test.ts` |
+| Shell | `packages/webapp/src/shell/` | just-bash WASM + xterm terminal | `wasm-shell.ts` | `wasm-shell.test.ts` |
+| Git | `packages/webapp/src/git/` | isomorphic-git wrapper | `git-commands.ts` | N/A |
+| Skills | `packages/webapp/src/skills/` | Skill package manager | `apply.ts` | N/A |
+| CDP | `packages/webapp/src/cdp/` | Chrome DevTools Protocol | `browser-api.ts` | `browser-api.test.ts` |
+| Tools | `packages/webapp/src/tools/` | Tool factories; active scoop surface is file + bash + javascript | `bash-tool.ts` | `bash-tool.test.ts` |
+| Core Agent | `packages/webapp/src/core/` | pi-mono agent loop + streaming | `index.ts` | `agent.test.ts` |
+| Scoops Orchestrator | `packages/webapp/src/scoops/` | Multi-agent system (cone + scoops) | `orchestrator.ts` | N/A |
+| UI | `packages/webapp/src/ui/` | Chat, Terminal, Files, Memory panels | `main.ts` | `types.test.ts` |
 | CLI / Electron Node Runtime | `packages/node-server/src/` | Express server, Chrome launcher, Electron float entrypoint | `index.ts` | `electron-runtime.test.ts` |
-| Extension | `src/extension/` | Chrome Manifest V3 entry point | `service-worker.ts` | N/A |
+| Extension | `packages/chrome-extension/src/` | Chrome Manifest V3 entry point | `service-worker.ts` | N/A |
 | Cloud Tray Hub | `packages/cloudflare-worker/src/` | Cloudflare Worker + Durable Object control-plane skeleton + deployed smoke test | `index.ts` | `packages/cloudflare-worker/tests/index.test.ts`, `packages/cloudflare-worker/tests/deployed.test.ts` |
-| Providers | `src/providers/` | Provider types, OAuth service, auto-discovery, build-time filtering | `types.ts`, `oauth-service.ts`, `index.ts` | `index.test.ts`, `oauth-service.test.ts` |
-| Sprinkles | `src/ui/sprinkle-*.ts` | Composable `.shtml` panels: discovery, rendering, bridge API, picker UI | `sprinkle-manager.ts` | `sprinkle-manager.test.ts` |
+| Providers | `packages/webapp/src/providers/` | Provider types, OAuth service, auto-discovery, build-time filtering | `types.ts`, `oauth-service.ts`, `index.ts` | `index.test.ts`, `oauth-service.test.ts` |
+| Sprinkles | `packages/webapp/src/ui/sprinkle-*.ts` | Composable `.shtml` panels: discovery, rendering, bridge API, picker UI | `sprinkle-manager.ts` | `sprinkle-manager.test.ts` |
 | Defaults | `packages/vfs-root/` | Bundled VFS content: agent instructions, skills, sprinkles | N/A | N/A |
-| Types | `src/types/` | Type declarations for external submodules | `pi-coding-agent-compaction.d.ts` | N/A |
+| Types | `packages/webapp/src/types/` | Type declarations for external submodules | `pi-coding-agent-compaction.d.ts` | N/A |
 
 ## Source File Tree
 
-### src/cdp/ — Chrome DevTools Protocol
+### packages/webapp/src/cdp/ — Chrome DevTools Protocol
 
 | File | Purpose |
 |---|---|
@@ -51,7 +51,7 @@
 | `electron-runtime.ts` | Pure Electron helpers for target app path resolution, overlay URLs/bootstrap scripts, dist paths, and injectable-target filtering |
 | `electron-controller.ts` | Electron app lifecycle management: detect running app processes, enforce `--kill`, launch with remote debugging, and inject/reinject the overlay across navigations |
 
-### src/core/ — Agent Core
+### packages/webapp/src/core/ — Agent Core
 
 | File | Purpose |
 |---|---|
@@ -65,7 +65,7 @@
 | `session.ts` | IndexedDB session storage (`agent-sessions` DB) |
 | `mime-types.ts` | MIME type mappings (html, css, js, json, image, etc.) |
 
-### src/extension/ — Chrome Extension
+### packages/chrome-extension/src/ — Chrome Extension
 
 | File | Purpose |
 |---|---|
@@ -78,7 +78,7 @@
 | `chrome.d.ts` | Typed declarations for chrome.debugger, chrome.tabs, chrome.tabGroups, chrome.sidePanel, chrome.offscreen, etc. |
 | `sprinkle-proxy.ts` | Lightweight proxy relaying sprinkle operations from offscreen document to side panel UI via chrome.runtime messaging |
 
-### src/fs/ — Virtual Filesystem
+### packages/webapp/src/fs/ — Virtual Filesystem
 
 | File | Purpose |
 |---|---|
@@ -89,7 +89,7 @@
 | `mount-commands.ts` | `mount` command for File System Access API |
 | `index.ts` | Re-exports |
 
-### src/git/ — Git Integration
+### packages/webapp/src/git/ — Git Integration
 
 | File | Purpose |
 |---|---|
@@ -98,7 +98,7 @@
 | `diff.ts` | Unified diff + stat formatting utilities |
 | `index.ts` | GitCommands factory |
 
-### src/providers/ — API Providers
+### packages/webapp/src/providers/ — API Providers
 
 | File | Purpose |
 |---|---|
@@ -108,7 +108,7 @@
 | `built-in/bedrock-camp.ts` | AWS Bedrock CAMP provider — custom stream function via `register()` (only built-in that needs a file; pure-config providers use pi-ai auto-discovery) |
 | `built-in/azure-ai-foundry.ts` | Azure AI Foundry provider configuration (Claude on Azure) |
 
-### src/shell/ — Shell & Terminal
+### packages/webapp/src/shell/ — Shell & Terminal
 
 | File | Purpose |
 |---|---|
@@ -121,7 +121,7 @@
 | `parse-shell-args.ts` | Shell-like argument parser (double/single quotes, backslash escapes) |
 | `supplemental-commands.ts` | Re-exports all supplemental command factories |
 
-### src/shell/supplemental-commands/ — Custom Shell Commands
+### packages/webapp/src/shell/supplemental-commands/ — Custom Shell Commands
 
 | File | Purpose |
 |---|---|
@@ -149,7 +149,7 @@
 | `debug-command.ts` | `debug` — toggle Terminal/Memory tabs in extension mode (extension-only, uses dual-context hook+relay pattern) |
 | `magick-wasm.ts` | Shared ImageMagick WASM initialization module for dual-mode (CLI/browser CDN vs extension bundled) image processing |
 
-### src/skills/ — Skill Package Manager
+### packages/webapp/src/skills/ — Skill Package Manager
 
 | File | Purpose |
 |---|---|
@@ -165,7 +165,7 @@
 
 Native `/workspace/skills` entries are the only install-managed skills. Compatibility-discovered `.agents`/`.claude` skills are readable/discoverable inputs only and are not auto-installed into or mutated in place.
 
-### src/scoops/ — Multi-Agent Orchestration
+### packages/webapp/src/scoops/ — Multi-Agent Orchestration
 
 | File | Purpose |
 |---|---|
@@ -180,7 +180,7 @@ Native `/workspace/skills` entries are the only install-managed skills. Compatib
 | `types.ts` | RegisteredScoop, ChannelMessage, ScoopTabState, ScheduledTask, WebhookEntry, CronTaskEntry |
 | `index.ts` | Re-exports |
 
-### src/tools/ — Agent Tools
+### packages/webapp/src/tools/ — Agent Tools
 
 | File | Purpose |
 |---|---|
@@ -190,7 +190,7 @@ Native `/workspace/skills` entries are the only install-managed skills. Compatib
 | `search-tools.ts` | `grep` and `find` tool factories for recursive VirtualFS search (not part of the active ScoopContext surface) |
 | `index.ts` | Tool factory functions (createBashTool, createFileTools, createSearchTools, createJavaScriptTool) |
 
-### src/ui/ — User Interface
+### packages/webapp/src/ui/ — User Interface
 
 | File | Purpose |
 |---|---|
@@ -228,7 +228,7 @@ Native `/workspace/skills` entries are the only install-managed skills. Compatib
 | `sprinkle-picker.ts` | Popup menu listing closed panels and unopened sprinkles for opening in a zone |
 | `index.ts` | Re-exports |
 
-### src/shims/ — Node.js Polyfills
+### packages/webapp/src/shims/ — Node.js Polyfills
 
 | File | Purpose |
 |---|---|
@@ -236,7 +236,7 @@ Native `/workspace/skills` entries are the only install-managed skills. Compatib
 | `buffer-polyfill.ts` | Polyfills Buffer for browser (isomorphic-git requirement) |
 | `http.ts`, `http2.ts`, `https.ts`, `stream.ts` | Node module stubs (imported by dependencies, no-op in browser) |
 
-### src/types/ — Type Declarations
+### packages/webapp/src/types/ — Type Declarations
 
 | File | Purpose |
 |---|---|
@@ -252,7 +252,7 @@ Default files bundled into the VFS at startup via `import.meta.glob`:
 | `workspace/skills/` | `/workspace/skills/` | Default skill packages (playwright-cli, sprinkles, etc.) |
 | `shared/sprinkles/` | `/shared/sprinkles/` | Default sprinkle panels (welcome) |
 
-### src/ — Root
+### packages/webapp/src/ — Root
 
 | File | Purpose |
 |---|---|
@@ -271,7 +271,7 @@ Default files bundled into the VFS at startup via `import.meta.glob`:
 - **preview-sw.ts**: Built as standalone IIFE via esbuild (not rollup) from `packages/webapp/vite.config.ts` during the production webapp build.
 - **electron-overlay-entry.ts**: Built as standalone IIFE alongside `dist/ui/electron-overlay-entry.js` from `packages/webapp/vite.config.ts` for Electron reinjection.
 - **Extension assets**: Pyodide (~13MB), ImageMagick WASM, `sandbox.html`, `voice-popup.html`, `offscreen.html` copied to `dist/extension/` by `vite.config.extension.ts`. The `offscreen.html` entry point runs the agent orchestrator in an unrestricted context separate from the side panel.
-- **Node shims**: `src/shims/` provide no-op implementations for Node modules (just-bash references them).
+- **Node shims**: `packages/webapp/src/shims/` provide no-op implementations for Node modules (just-bash references them).
 
 ## Extension Three-Layer Architecture
 
@@ -409,85 +409,85 @@ Scoop removal / app clear
 
 | I need to... | Modify |
 |---|---|
-| Add a POSIX filesystem method | `src/fs/virtual-fs.ts` |
-| Change path normalization logic | `src/fs/path-utils.ts` |
-| Restrict file access by path (scoops) | `src/fs/restricted-fs.ts` |
-| Change file types/interfaces | `src/fs/types.ts` |
+| Add a POSIX filesystem method | `packages/webapp/src/fs/virtual-fs.ts` |
+| Change path normalization logic | `packages/webapp/src/fs/path-utils.ts` |
+| Restrict file access by path (scoops) | `packages/webapp/src/fs/restricted-fs.ts` |
+| Change file types/interfaces | `packages/webapp/src/fs/types.ts` |
 
 ### Shell & Terminal Changes
 
 | I need to... | Modify |
 |---|---|
-| Add a bash command | `src/shell/supplemental-commands/<name>-command.ts` + register in `index.ts` |
-| Change terminal behavior (xterm) | `src/shell/wasm-shell.ts` |
-| Change binary handling | `src/shell/binary-cache.ts` |
-| Support new `.jsh` script globals | `src/shell/jsh-executor.ts` |
-| Change shell argument parsing | `src/shell/parse-shell-args.ts` |
+| Add a bash command | `packages/webapp/src/shell/supplemental-commands/<name>-command.ts` + register in `index.ts` |
+| Change terminal behavior (xterm) | `packages/webapp/src/shell/wasm-shell.ts` |
+| Change binary handling | `packages/webapp/src/shell/binary-cache.ts` |
+| Support new `.jsh` script globals | `packages/webapp/src/shell/jsh-executor.ts` |
+| Change shell argument parsing | `packages/webapp/src/shell/parse-shell-args.ts` |
 
 ### Git Integration
 
 | I need to... | Modify |
 |---|---|
-| Add a git command | `src/git/git-commands.ts` |
-| Change CORS proxy handling | `src/git/git-http.ts` |
-| Add diff formatting | `src/git/diff.ts` |
+| Add a git command | `packages/webapp/src/git/git-commands.ts` |
+| Change CORS proxy handling | `packages/webapp/src/git/git-http.ts` |
+| Add diff formatting | `packages/webapp/src/git/diff.ts` |
 
 ### Browser Automation (CDP)
 
 | I need to... | Modify |
 |---|---|
-| Add a browser action (screenshot, click, etc.) | `src/cdp/browser-api.ts` |
-| Change CDP transport (CLI vs extension) | `src/cdp/transport.ts`, `cdp-client.ts`, `debugger-client.ts` |
-| Add HAR recording features | `src/cdp/har-recorder.ts` |
-| Change target/page types | `src/cdp/types.ts` |
+| Add a browser action (screenshot, click, etc.) | `packages/webapp/src/cdp/browser-api.ts` |
+| Change CDP transport (CLI vs extension) | `packages/webapp/src/cdp/transport.ts`, `cdp-client.ts`, `debugger-client.ts` |
+| Add HAR recording features | `packages/webapp/src/cdp/har-recorder.ts` |
+| Change target/page types | `packages/webapp/src/cdp/types.ts` |
 
 ### Agent Tools
 
 | I need to... | Modify |
 |---|---|
-| Add a new agent tool | `src/tools/<name>-tool.ts` + register in `index.ts` |
-| Change bash tool behavior | `src/tools/bash-tool.ts` |
-| Change file tool behavior | `src/tools/file-tools.ts` |
-| Change browser automation shell behavior | `src/shell/supplemental-commands/playwright-command.ts` and `src/shell/supplemental-commands/serve-command.ts` |
-| Change grep/find tool behavior | `src/tools/search-tools.ts` |
-| Change tool input/output format | `src/core/types.ts` (ToolDefinition, ToolResult) |
-| Adapt tools to pi-agent-core | `src/core/tool-adapter.ts` |
+| Add a new agent tool | `packages/webapp/src/tools/<name>-tool.ts` + register in `index.ts` |
+| Change bash tool behavior | `packages/webapp/src/tools/bash-tool.ts` |
+| Change file tool behavior | `packages/webapp/src/tools/file-tools.ts` |
+| Change browser automation shell behavior | `packages/webapp/src/shell/supplemental-commands/playwright-command.ts` and `packages/webapp/src/shell/supplemental-commands/serve-command.ts` |
+| Change grep/find tool behavior | `packages/webapp/src/tools/search-tools.ts` |
+| Change tool input/output format | `packages/webapp/src/core/types.ts` (ToolDefinition, ToolResult) |
+| Adapt tools to pi-agent-core | `packages/webapp/src/core/tool-adapter.ts` |
 
 ### Core Agent & Streaming
 
 | I need to... | Modify |
 |---|---|
-| Change token limit / context compaction strategy | `src/core/context-compaction.ts` |
-| Change logging format/level | `src/core/logger.ts` |
-| Change agent conversation history persistence | `src/core/session.ts` (SessionStore: load/save/delete/clearAll per-scoop `AgentMessage[]` in `agent-sessions` DB) + `src/scoops/scoop-context.ts` (restore on init, save on agent_end) + `src/scoops/orchestrator.ts` (create/pass/cleanup SessionStore) |
-| Change MIME type detection | `src/core/mime-types.ts` |
-| Register new tools | `src/core/tool-registry.ts` |
+| Change token limit / context compaction strategy | `packages/webapp/src/core/context-compaction.ts` |
+| Change logging format/level | `packages/webapp/src/core/logger.ts` |
+| Change agent conversation history persistence | `packages/webapp/src/core/session.ts` (SessionStore: load/save/delete/clearAll per-scoop `AgentMessage[]` in `agent-sessions` DB) + `packages/webapp/src/scoops/scoop-context.ts` (restore on init, save on agent_end) + `packages/webapp/src/scoops/orchestrator.ts` (create/pass/cleanup SessionStore) |
+| Change MIME type detection | `packages/webapp/src/core/mime-types.ts` |
+| Register new tools | `packages/webapp/src/core/tool-registry.ts` |
 
 ### Multi-Agent System
 
 | I need to... | Modify |
 |---|---|
-| Manage scoops (create/delete/list) | `src/scoops/orchestrator.ts` |
-| Persist/restore scoop conversation history | `src/scoops/orchestrator.ts` (creates SessionStore, passes to ScoopContext, cleans up on unregister/clear) |
-| Change scoop isolation/filesystem | `src/scoops/scoop-context.ts` |
-| Add scoop-management tools (messaging, scoop management) | `src/scoops/scoop-management-tools.ts` |
-| Change scoop database schema | `src/scoops/db.ts` |
-| Manage webhooks/crontasks | `src/scoops/lick-manager.ts` |
-| Change skill loading | `src/scoops/skills.ts` |
-| Change types (RegisteredScoop, etc.) | `src/scoops/types.ts` |
+| Manage scoops (create/delete/list) | `packages/webapp/src/scoops/orchestrator.ts` |
+| Persist/restore scoop conversation history | `packages/webapp/src/scoops/orchestrator.ts` (creates SessionStore, passes to ScoopContext, cleans up on unregister/clear) |
+| Change scoop isolation/filesystem | `packages/webapp/src/scoops/scoop-context.ts` |
+| Add scoop-management tools (messaging, scoop management) | `packages/webapp/src/scoops/scoop-management-tools.ts` |
+| Change scoop database schema | `packages/webapp/src/scoops/db.ts` |
+| Manage webhooks/crontasks | `packages/webapp/src/scoops/lick-manager.ts` |
+| Change skill loading | `packages/webapp/src/scoops/skills.ts` |
+| Change types (RegisteredScoop, etc.) | `packages/webapp/src/scoops/types.ts` |
 
 ### UI & Layout
 
 | I need to... | Modify |
 |---|---|
-| Add a new UI panel | `src/ui/<panel>-panel.ts` + integrate in `layout.ts` + `main.ts` |
-| Change layout (split vs tabbed) | `src/ui/layout.ts` |
-| Change message rendering (HTML format) | `src/ui/message-renderer.ts` |
-| Add voice input features | `src/ui/voice-input.ts` |
-| Change preview service worker | `src/ui/preview-sw.ts` |
-| Change provider/model selection | `src/ui/provider-settings.ts` |
-| Change theme handling | `src/ui/theme.ts` |
-| Change session storage | `src/ui/session-store.ts` |
+| Add a new UI panel | `packages/webapp/src/ui/<panel>-panel.ts` + integrate in `layout.ts` + `main.ts` |
+| Change layout (split vs tabbed) | `packages/webapp/src/ui/layout.ts` |
+| Change message rendering (HTML format) | `packages/webapp/src/ui/message-renderer.ts` |
+| Add voice input features | `packages/webapp/src/ui/voice-input.ts` |
+| Change preview service worker | `packages/webapp/src/ui/preview-sw.ts` |
+| Change provider/model selection | `packages/webapp/src/ui/provider-settings.ts` |
+| Change theme handling | `packages/webapp/src/ui/theme.ts` |
+| Change session storage | `packages/webapp/src/ui/session-store.ts` |
 
 ### CLI Server
 
@@ -502,43 +502,43 @@ Scoop removal / app clear
 
 | I need to... | Modify |
 |---|---|
-| Change extension behavior | `src/extension/service-worker.ts` |
-| Add Chrome API types | `src/extension/chrome.d.ts` |
+| Change extension behavior | `packages/chrome-extension/src/service-worker.ts` |
+| Add Chrome API types | `packages/chrome-extension/src/chrome.d.ts` |
 | Build extension | `vite.config.extension.ts` |
 
 ### Skills & Package Management
 
 | I need to... | Modify |
 |---|---|
-| Change skill installation logic | `src/skills/apply.ts`, `src/skills/install-from-drop.ts` |
-| Change skill discovery | `src/skills/discover.ts` |
-| Change skill uninstall logic | `src/skills/uninstall.ts` |
-| Change skill state persistence | `src/skills/state.ts` |
-| Change manifest parsing | `src/skills/manifest.ts` |
+| Change skill installation logic | `packages/webapp/src/skills/apply.ts`, `packages/webapp/src/skills/install-from-drop.ts` |
+| Change skill discovery | `packages/webapp/src/skills/discover.ts` |
+| Change skill uninstall logic | `packages/webapp/src/skills/uninstall.ts` |
+| Change skill state persistence | `packages/webapp/src/skills/state.ts` |
+| Change manifest parsing | `packages/webapp/src/skills/manifest.ts` |
 
 ### Sprinkles System
 
 | I need to... | Modify |
 |---|---|
-| Add/change sprinkle discovery | `src/ui/sprinkle-discovery.ts` |
-| Change sprinkle rendering or CSP handling | `src/ui/sprinkle-renderer.ts`, `src/ui/inline-sprinkle.ts`, `sprinkle-sandbox.html` |
-| Change the sprinkle↔agent bridge API | `src/ui/sprinkle-bridge.ts` |
-| Change sprinkle lifecycle/placement | `src/ui/sprinkle-manager.ts` |
-| Add sprinkle picker UI features | `src/ui/sprinkle-picker.ts` |
-| Change extension sprinkle message proxy | `src/extension/sprinkle-proxy.ts` |
-| Change `sprinkle` shell command | `src/shell/supplemental-commands/sprinkle-command.ts` |
+| Add/change sprinkle discovery | `packages/webapp/src/ui/sprinkle-discovery.ts` |
+| Change sprinkle rendering or CSP handling | `packages/webapp/src/ui/sprinkle-renderer.ts`, `packages/webapp/src/ui/inline-sprinkle.ts`, `sprinkle-sandbox.html` |
+| Change the sprinkle↔agent bridge API | `packages/webapp/src/ui/sprinkle-bridge.ts` |
+| Change sprinkle lifecycle/placement | `packages/webapp/src/ui/sprinkle-manager.ts` |
+| Add sprinkle picker UI features | `packages/webapp/src/ui/sprinkle-picker.ts` |
+| Change extension sprinkle message proxy | `packages/chrome-extension/src/sprinkle-proxy.ts` |
+| Change `sprinkle` shell command | `packages/webapp/src/shell/supplemental-commands/sprinkle-command.ts` |
 | Add a default sprinkle | `packages/vfs-root/shared/sprinkles/` |
 
 ### Providers
 
 | I need to... | Modify |
 |---|---|
-| Add an API-key provider (built-in, with custom stream) | `src/providers/built-in/<provider>.ts` (exports `config: ProviderConfig` + `register()`; pure-config providers need no file — pi-ai auto-discovers them) |
+| Add an API-key provider (built-in, with custom stream) | `packages/webapp/src/providers/built-in/<provider>.ts` (exports `config: ProviderConfig` + `register()`; pure-config providers need no file — pi-ai auto-discovers them) |
 | Add an external/custom provider | `packages/webapp/providers/<provider>.ts` (gitignored in the webapp package, auto-discovered) |
 | Add an OAuth provider | Same as above, but set `isOAuth: true` + `onOAuthLogin`/`onOAuthLogout` on the config |
-| Change the OAuth transport (popup, chrome.identity) | `src/providers/oauth-service.ts` |
+| Change the OAuth transport (popup, chrome.identity) | `packages/webapp/src/providers/oauth-service.ts` |
 | Override model capabilities (context window, max tokens) | `modelOverrides` on `ProviderConfig` (static) or return metadata fields from `getModelIds()` (dynamic). Three-layer merge: pi-ai → modelOverrides → getModelIds |
 | Add OpenAI-compatible model support | Return `api: 'openai'` in `getModelIds()` metadata — stream routing switches to `streamOpenAICompletions` automatically |
-| Change provider types (ProviderConfig, OAuthLauncher, ModelMetadata) | `src/providers/types.ts` |
+| Change provider types (ProviderConfig, OAuthLauncher, ModelMetadata) | `packages/webapp/src/providers/types.ts` |
 | Change OAuth callback page (CLI mode) | `packages/node-server/src/index.ts` (`/auth/callback` route) |
-| Change provider settings UI / model resolution | `src/ui/provider-settings.ts` |
+| Change provider settings UI / model resolution | `packages/webapp/src/ui/provider-settings.ts` |
