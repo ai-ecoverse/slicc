@@ -25,6 +25,7 @@
   flex: 1; min-height: 0; overflow: hidden;
   display: flex; flex-direction: column;
   background: var(--s2-bg-sunken);
+  padding-bottom: 5px;
 }
 .terminal-panel__mount { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 .terminal-panel__terminal-host {
