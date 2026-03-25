@@ -157,7 +157,10 @@ export async function getSqlJs(): Promise<SqlJsModule> {
       const initSqlJs = (sqlModule as { default: InitSqlJs }).default;
       const wasmBase =
         typeof window === 'undefined'
-          ? resolveNodePackageBaseUrl('sql.js/dist/sql-wasm.js', '../../../../../node_modules/sql.js/dist/').toString()
+          ? resolveNodePackageBaseUrl(
+              'sql.js/dist/sql-wasm.js',
+              '../../../../../node_modules/sql.js/dist/'
+            ).toString()
           : SQLJS_WASM_CDN;
       return initSqlJs({ locateFile: (file) => `${wasmBase}${file}` });
     })();

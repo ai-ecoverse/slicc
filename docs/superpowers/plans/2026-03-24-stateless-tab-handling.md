@@ -15,6 +15,7 @@
 ### Task 1: Add `withTab()` mutex to BrowserAPI
 
 **Files:**
+
 - Modify: `packages/webapp/src/cdp/browser-api.ts`
 - Modify: `packages/webapp/tests/cdp/browser-api.test.ts`
 
@@ -37,7 +38,7 @@ describe('withTab mutex', () => {
 
     const p1 = browser.withTab('tab-A', async () => {
       order.push('op-A-start');
-      await new Promise(r => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 50));
       order.push('op-A-end');
       return 'result-A';
     });
@@ -52,8 +53,12 @@ describe('withTab mutex', () => {
     expect(r2).toBe('result-B');
     // A must complete entirely before B starts
     expect(order).toEqual([
-      'attach-tab-A', 'op-A-start', 'op-A-end',
-      'attach-tab-B', 'op-B-start', 'op-B-end',
+      'attach-tab-A',
+      'op-A-start',
+      'op-A-end',
+      'attach-tab-B',
+      'op-B-start',
+      'op-B-end',
     ]);
   });
 
@@ -61,9 +66,11 @@ describe('withTab mutex', () => {
     const browser = new BrowserAPI(/* mock transport */);
     vi.spyOn(browser, 'attachToPage').mockResolvedValue('session');
 
-    await expect(browser.withTab('tab-A', async () => {
-      throw new Error('boom');
-    })).rejects.toThrow('boom');
+    await expect(
+      browser.withTab('tab-A', async () => {
+        throw new Error('boom');
+      })
+    ).rejects.toThrow('boom');
 
     // Second call should proceed (mutex released)
     const result = await browser.withTab('tab-B', async () => 'ok');
@@ -128,6 +135,7 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 ### Task 2: Add `--tab` parsing utility and remove `currentTarget` / `ensureTarget`
 
 **Files:**
+
 - Modify: `packages/webapp/src/shell/supplemental-commands/playwright-command.ts`
 
 This task adds the `--tab` parsing, removes `currentTarget` from `PlaywrightState`, removes `ensureTarget()`, and removes `tab-select`. No command handlers are updated yet — that's Task 3.
@@ -144,17 +152,21 @@ Add a new function near `ensureTarget()`:
 async function requireTab(
   browser: BrowserAPI,
   state: PlaywrightState,
-  flags: Record<string, string>,
+  flags: Record<string, string>
 ): Promise<string> {
   const tabId = flags['tab'];
   if (!tabId) {
-    return { error: 'Error: --tab <targetId> is required. Run \'playwright-cli tab-list\' to get tab IDs.\n' };
+    return {
+      error: "Error: --tab <targetId> is required. Run 'playwright-cli tab-list' to get tab IDs.\n",
+    };
   }
   // Verify the tab exists
   const pages = await getActionablePages(browser, state);
-  const found = pages.find(p => p.targetId === tabId);
+  const found = pages.find((p) => p.targetId === tabId);
   if (!found) {
-    return { error: `Error: Tab ${tabId} not found. Run 'playwright-cli tab-list' to see available tabs.\n` };
+    return {
+      error: `Error: Tab ${tabId} not found. Run 'playwright-cli tab-list' to see available tabs.\n`,
+    };
   }
   return { targetId: tabId };
 }
@@ -165,6 +177,7 @@ Return type is `{ targetId: string } | { error: string }` to allow callers to re
 - [ ] **Step 2: Remove `currentTarget` from PlaywrightState**
 
 Change the interface:
+
 ```typescript
 interface PlaywrightState {
   // currentTarget: string | null;  ← REMOVED
@@ -172,7 +185,7 @@ interface PlaywrightState {
   appTabId: string | null;
   harRecorder: HarRecorder | null;
   sessionDirsCreated: boolean;
-  teleportWatchers: Map<string, TeleportWatcher>;  // Changed from single watcher
+  teleportWatchers: Map<string, TeleportWatcher>; // Changed from single watcher
 }
 ```
 
@@ -238,11 +251,13 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 ### Task 3: Migrate all 36 command handlers to use `--tab` + `withTab()`
 
 **Files:**
+
 - Modify: `packages/webapp/src/shell/supplemental-commands/playwright-command.ts`
 
 This is the bulk of the work — updating every `ensureTarget()` call to use `requireTab()` + `browser.withTab()`. The pattern is mechanical for each command:
 
 **Before:**
+
 ```typescript
 case 'screenshot': {
   const targetId = await ensureTarget(browser, state);
@@ -254,6 +269,7 @@ case 'screenshot': {
 ```
 
 **After:**
+
 ```typescript
 case 'screenshot': {
   const tab = await requireTab(browser, state, flags);
@@ -288,15 +304,19 @@ Change `checkTeleportBlock(state)` to `checkTeleportBlock(state, targetId)` — 
 - [ ] **Step 10: Verify the build compiles and all references to `currentTarget` / `ensureTarget` are gone**
 
 Run:
+
 ```bash
 grep -n 'currentTarget\|ensureTarget' packages/webapp/src/shell/supplemental-commands/playwright-command.ts
 ```
+
 Expected: No matches.
 
 Run:
+
 ```bash
 npm run typecheck
 ```
+
 Expected: Pass.
 
 - [ ] **Step 11: Run tests**
@@ -323,6 +343,7 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 ### Task 4: Update tests for new `--tab` interface
 
 **Files:**
+
 - Modify: `packages/webapp/tests/shell/supplemental-commands/playwright-command.test.ts`
 - Modify: `packages/webapp/tests/cdp/browser-api.test.ts` (if mutex tests need adjustment)
 
@@ -378,6 +399,7 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 ### Task 5: Add tab grouping for agent-created tabs
 
 **Files:**
+
 - Modify: `packages/webapp/src/cdp/browser-api.ts`
 - Modify: `packages/webapp/src/shell/supplemental-commands/playwright-command.ts`
 
@@ -445,6 +467,7 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 ### Task 6: Update agent system prompt and skills
 
 **Files:**
+
 - Modify: `packages/vfs-root/shared/CLAUDE.md`
 - Modify: Any skills in `packages/vfs-root/workspace/skills/` that use playwright commands
 
@@ -457,6 +480,7 @@ grep -rn 'playwright-cli\|playwright ' packages/vfs-root/shared/CLAUDE.md packag
 - [ ] **Step 2: Update CLAUDE.md**
 
 Update all playwright command examples to use `--tab <targetId>`. Show the new workflow:
+
 1. `tab-list` to find tabs (shows targetIds + active marker)
 2. `tab-new <url>` returns targetId
 3. All operations use `--tab <id>`
@@ -488,6 +512,7 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
 ### Task 7: Final verification and documentation
 
 **Files:**
+
 - Modify: `CLAUDE.md` (project root)
 - Modify: `docs/architecture.md`
 

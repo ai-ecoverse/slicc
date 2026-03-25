@@ -168,13 +168,16 @@ describe('ScoopContext active tool surface', () => {
     ] as any);
     mocks.formatSkillsForPrompt.mockImplementationOnce(
       ((skills: Array<{ path: string }>) =>
-        `AVAILABLE SKILLS\n${skills.map((skill) => `Path: ${skill.path}`).join('\n')}`) as any,
+        `AVAILABLE SKILLS\n${skills.map((skill) => `Path: ${skill.path}`).join('\n')}`) as any
     );
 
     const ctx = new ScoopContext(testScoop, createMockCallbacks(), createMockFs() as any);
     await ctx.init();
 
-    expect(mocks.loadSkills).toHaveBeenCalledWith(expect.anything(), '/scoops/test-scoop/workspace/skills');
+    expect(mocks.loadSkills).toHaveBeenCalledWith(
+      expect.anything(),
+      '/scoops/test-scoop/workspace/skills'
+    );
     const systemPrompt = mocks.agentCtorCalls[0].initialState.systemPrompt;
     expect(systemPrompt).toContain('/repo/.claude/skills/compat-skill/SKILL.md');
   });
@@ -189,7 +192,7 @@ describe('ScoopContext active tool surface', () => {
     ] as any);
     mocks.formatSkillsForPrompt.mockImplementationOnce(
       ((skills: Array<{ path: string }>) =>
-        `AVAILABLE SKILLS\n${skills.map((skill) => `Path: ${skill.path}`).join('\n')}`) as any,
+        `AVAILABLE SKILLS\n${skills.map((skill) => `Path: ${skill.path}`).join('\n')}`) as any
     );
 
     const cone: RegisteredScoop = { ...testScoop, isCone: true, folder: '' };

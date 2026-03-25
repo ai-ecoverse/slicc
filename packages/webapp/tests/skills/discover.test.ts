@@ -93,7 +93,7 @@ description: An installed skill`
     await fs.mkdir('/repo/.agents/skills/agent-skill', { recursive: true });
     await fs.writeFile(
       '/repo/.agents/skills/agent-skill/SKILL.md',
-      '# Agent Skill\n\nCompatibility instructions.',
+      '# Agent Skill\n\nCompatibility instructions.'
     );
 
     const skills = await discoverSkills(fs);

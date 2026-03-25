@@ -38,12 +38,15 @@ First, save the profile. Use the user's name (lowercased, spaces replaced with h
 ```bash
 write_file /home/<name>/.welcome.json
 ```
+
 Write the full profile JSON from the lick payload (purpose, role, tasks, apps, name).
 
 Then run:
+
 ```bash
 upskill recommendations --install
 ```
+
 This reads the saved profile and the skill catalog, scores skills by affinity, and installs all matching ones automatically. Ignore any failures — the user can install later.
 
 **Step 2.** Use `edit_file` on `/shared/CLAUDE.md` to add a `## User Profile` section right after the `# sliccy` heading with the user's name, purpose, role, and interests from the profile data.

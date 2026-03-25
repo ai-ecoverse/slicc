@@ -10,7 +10,10 @@
 import { BrowserAPI, OffscreenCdpProxy } from '../../../packages/webapp/src/cdp/index.js';
 import { Orchestrator } from '../../../packages/webapp/src/scoops/index.js';
 import { LeaderTrayManager } from '../../../packages/webapp/src/scoops/tray-leader.js';
-import { hasStoredTrayJoinUrl, resolveTrayRuntimeConfig } from '../../../packages/webapp/src/scoops/tray-runtime-config.js';
+import {
+  hasStoredTrayJoinUrl,
+  resolveTrayRuntimeConfig,
+} from '../../../packages/webapp/src/scoops/tray-runtime-config.js';
 import {
   FollowerTrayManager,
   LeaderTrayPeerManager,

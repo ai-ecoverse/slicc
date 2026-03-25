@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import 'fake-indexeddb/auto';
-import { parseRsyncArgs, createRsyncCommand, type SendFsRequestFn } from '../../../src/shell/supplemental-commands/rsync-command.js';
+import {
+  parseRsyncArgs,
+  createRsyncCommand,
+  type SendFsRequestFn,
+} from '../../../src/shell/supplemental-commands/rsync-command.js';
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
 import type { TrayFsRequest, TrayFsResponse } from '../../../src/scoops/tray-sync-protocol.js';
 

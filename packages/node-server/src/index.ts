@@ -975,7 +975,11 @@ async function main() {
     });
     app.use(vite.middlewares);
     app.use(async (req, res, next) => {
-      if (req.method !== 'GET' || !req.headers.accept?.includes('text/html') || req.path.includes('.')) {
+      if (
+        req.method !== 'GET' ||
+        !req.headers.accept?.includes('text/html') ||
+        req.path.includes('.')
+      ) {
         next();
         return;
       }

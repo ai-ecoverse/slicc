@@ -323,13 +323,15 @@ export class ChatPanel {
 
     this.sendBtn = document.createElement('button');
     this.sendBtn.className = 'chat__send-btn';
-    this.sendBtn.innerHTML = '<svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M10 1.25C5.167 1.25 1.25 5.167 1.25 10s3.917 8.75 8.75 8.75 8.75-3.918 8.75-8.75S14.833 1.25 10 1.25zm3.527 8.284a.75.75 0 0 1-1.06 0L10.75 7.82v6.172a.75.75 0 0 1-1.5 0V7.812L7.527 9.534a.75.75 0 1 1-1.06-1.06l2.998-2.998a.75.75 0 0 1 1.06-.001l3.002 2.998a.75.75 0 0 1 0 1.061z"/></svg>';
+    this.sendBtn.innerHTML =
+      '<svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M10 1.25C5.167 1.25 1.25 5.167 1.25 10s3.917 8.75 8.75 8.75 8.75-3.918 8.75-8.75S14.833 1.25 10 1.25zm3.527 8.284a.75.75 0 0 1-1.06 0L10.75 7.82v6.172a.75.75 0 0 1-1.5 0V7.812L7.527 9.534a.75.75 0 1 1-1.06-1.06l2.998-2.998a.75.75 0 0 1 1.06-.001l3.002 2.998a.75.75 0 0 1 0 1.061z"/></svg>';
     this.sendBtn.dataset.tooltip = 'Send message';
     this.sendBtn.dataset.tooltipPos = 'top';
 
     this.stopBtn = document.createElement('button');
     this.stopBtn.className = 'chat__stop-btn';
-    this.stopBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M13.75 4H6.25A2.25 2.25 0 0 0 4 6.25v7.5A2.25 2.25 0 0 0 6.25 16h7.5A2.25 2.25 0 0 0 16 13.75v-7.5A2.25 2.25 0 0 0 13.75 4z"/></svg>';
+    this.stopBtn.innerHTML =
+      '<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="M13.75 4H6.25A2.25 2.25 0 0 0 4 6.25v7.5A2.25 2.25 0 0 0 6.25 16h7.5A2.25 2.25 0 0 0 16 13.75v-7.5A2.25 2.25 0 0 0 13.75 4z"/></svg>';
     this.stopBtn.dataset.tooltip = 'Stop generation';
     this.stopBtn.style.display = 'none';
 
@@ -766,7 +768,11 @@ export class ChatPanel {
   private setStreamingState(streaming: boolean): void {
     this.isStreaming = streaming;
     // Lock/unlock model selector based on streaming state
-    try { this.renderModelSelector(); } catch { /* non-fatal — button states below still apply */ }
+    try {
+      this.renderModelSelector();
+    } catch {
+      /* non-fatal — button states below still apply */
+    }
     // Show stop button during streaming, send button otherwise — but keep textarea enabled
     this.stopBtn.style.display = streaming ? 'flex' : 'none';
     this.sendBtn.style.display = streaming ? 'none' : 'flex';
@@ -811,10 +817,16 @@ export class ChatPanel {
     const currentProvider = getSelectedProvider();
 
     // Flatten all models with their provider info
-    const allModels: Array<{ providerId: string; id: string; name: string; reasoning?: boolean }> = [];
+    const allModels: Array<{ providerId: string; id: string; name: string; reasoning?: boolean }> =
+      [];
     for (const group of groups) {
       for (const model of group.models) {
-        allModels.push({ providerId: group.providerId, id: model.id, name: model.name, reasoning: (model as { reasoning?: boolean }).reasoning });
+        allModels.push({
+          providerId: group.providerId,
+          id: model.id,
+          name: model.name,
+          reasoning: (model as { reasoning?: boolean }).reasoning,
+        });
       }
     }
 
@@ -824,8 +836,9 @@ export class ChatPanel {
       return a.name.localeCompare(b.name);
     });
 
-    const activeModel = allModels.find(m => m.id === currentModelId && m.providerId === currentProvider)
-      || allModels[0];
+    const activeModel =
+      allModels.find((m) => m.id === currentModelId && m.providerId === currentProvider) ||
+      allModels[0];
     if (!activeModel) return;
 
     // Dropdown is always available except during active streaming
@@ -838,7 +851,8 @@ export class ChatPanel {
     if (!locked) {
       const chevron = document.createElement('span');
       chevron.className = 'chat__model-chevron';
-      chevron.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M4.5 6l3.5 4 3.5-4z"/></svg>';
+      chevron.innerHTML =
+        '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M4.5 6l3.5 4 3.5-4z"/></svg>';
       btn.appendChild(chevron);
     }
 
@@ -866,7 +880,8 @@ export class ChatPanel {
           if (isActive) {
             const check = document.createElement('span');
             check.className = 'chat__model-check';
-            check.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M6.5 12.5l-4-4 1.4-1.4 2.6 2.6 5.6-5.6 1.4 1.4z"/></svg>';
+            check.innerHTML =
+              '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M6.5 12.5l-4-4 1.4-1.4 2.6 2.6 5.6-5.6 1.4 1.4z"/></svg>';
             item.appendChild(check);
           }
           item.addEventListener('click', () => {
@@ -886,7 +901,10 @@ export class ChatPanel {
         renderMenu();
       });
 
-      const closeMenu = () => { menuOpen = false; renderMenu(); };
+      const closeMenu = () => {
+        menuOpen = false;
+        renderMenu();
+      };
       document.addEventListener('click', closeMenu, { once: true });
 
       el.appendChild(btn);
@@ -955,7 +973,10 @@ export class ChatPanel {
     // Find index of the last assistant message for feedback row placement
     let lastAssistantIdx = -1;
     for (let i = this.messages.length - 1; i >= 0; i--) {
-      if (this.messages[i].role === 'assistant') { lastAssistantIdx = i; break; }
+      if (this.messages[i].role === 'assistant') {
+        lastAssistantIdx = i;
+        break;
+      }
     }
     for (let i = 0; i < this.messages.length; i++) {
       const msg = this.messages[i];
@@ -1014,7 +1035,10 @@ export class ChatPanel {
       if (msg.role === 'assistant') {
         let lastIdx = -1;
         for (let i = this.messages.length - 1; i >= 0; i--) {
-          if (this.messages[i].role === 'assistant') { lastIdx = i; break; }
+          if (this.messages[i].role === 'assistant') {
+            lastIdx = i;
+            break;
+          }
         }
         isLastAssistant = idx === lastIdx;
       }
@@ -1024,7 +1048,11 @@ export class ChatPanel {
     this.scrollToBottom();
   }
 
-  private createMessageEl(msg: ChatMessage, showLabel = true, isLastAssistant = false): HTMLElement {
+  private createMessageEl(
+    msg: ChatMessage,
+    showLabel = true,
+    isLastAssistant = false
+  ): HTMLElement {
     // Licks (webhook/cron) get their own compact style like tool calls
     const isLick = msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron';
     if (isLick) {
@@ -1156,7 +1184,13 @@ export class ChatPanel {
     }
 
     // UXC: Feedback row only on the last assistant response
-    if (msg.role === 'assistant' && !msg.isStreaming && !msg.queued && hasContent && isLastAssistant) {
+    if (
+      msg.role === 'assistant' &&
+      !msg.isStreaming &&
+      !msg.queued &&
+      hasContent &&
+      isLastAssistant
+    ) {
       wrapper.appendChild(this.createFeedbackRow());
     }
 
@@ -1173,7 +1207,8 @@ export class ChatPanel {
     copyBtn.className = 'msg__feedback-btn';
     copyBtn.dataset.tooltip = 'Copy chat';
     copyBtn.setAttribute('aria-label', 'Copy chat');
-    copyBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="m11.75,18h-7.5c-1.24,0-2.25-1.01-2.25-2.25v-7.5c0-1.24,1.01-2.25,2.25-2.25.41,0,.75.34.75.75s-.34.75-.75.75c-.41,0-.75.34-.75.75v7.5c0,.41.34.75.75.75h7.5c.41,0,.75-.34.75-.75,0-.41.34-.75.75-.75s.75.34.75.75c0,1.24-1.01,2.25-2.25,2.25Z"/><path d="m6.75,5c-.41,0-.75-.34-.75-.75,0-1.24,1.01-2.25,2.25-2.25.41,0,.75.34.75.75s-.34.75-.75.75c-.41,0-.75.34-.75.75,0,.41-.34.75-.75.75Z"/><path d="m13,3.5h-2c-.41,0-.75-.34-.75-.75s.34-.75.75-.75h2c.41,0,.75.34.75.75s-.34.75-.75.75Z"/><path d="m13,14h-2c-.41,0-.75-.34-.75-.75s.34-.75.75-.75h2c.41,0,.75.34.75.75s-.34.75-.75.75Z"/><path d="m15.75,14c-.41,0-.75-.34-.75-.75s.34-.75.75-.75c.41,0,.75-.34.75-.75,0-.41.34-.75.75-.75s.75.34.75.75c0,1.24-1.01,2.25-2.25,2.25Z"/><path d="m17.25,5c-.41,0-.75-.34-.75-.75,0-.41-.34-.75-.75-.75-.41,0-.75-.34-.75-.75s.34-.75.75-.75c1.24,0,2.25,1.01,2.25,2.25,0,.41-.34.75-.75.75Z"/><path d="m17.25,9.75c-.41,0-.75-.34-.75-.75v-2c0-.41.34-.75.75-.75s.75.34.75.75v2c0,.41-.34.75-.75.75Z"/><path d="m6.75,9.75c-.41,0-.75-.34-.75-.75v-2c0-.41.34-.75.75-.75s.75.34.75.75v2c0,.41-.34.75-.75.75Z"/><path d="m8.25,14c-1.24,0-2.25-1.01-2.25-2.25,0-.41.34-.75.75-.75s.75.34.75.75c0,.41.34.75.75.75.41,0,.75.34.75.75s-.34.75-.75.75Z"/></svg>';
+    copyBtn.innerHTML =
+      '<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor"><path d="m11.75,18h-7.5c-1.24,0-2.25-1.01-2.25-2.25v-7.5c0-1.24,1.01-2.25,2.25-2.25.41,0,.75.34.75.75s-.34.75-.75.75c-.41,0-.75.34-.75.75v7.5c0,.41.34.75.75.75h7.5c.41,0,.75-.34.75-.75,0-.41.34-.75.75-.75s.75.34.75.75c0,1.24-1.01,2.25-2.25,2.25Z"/><path d="m6.75,5c-.41,0-.75-.34-.75-.75,0-1.24,1.01-2.25,2.25-2.25.41,0,.75.34.75.75s-.34.75-.75.75c-.41,0-.75.34-.75.75,0,.41-.34.75-.75.75Z"/><path d="m13,3.5h-2c-.41,0-.75-.34-.75-.75s.34-.75.75-.75h2c.41,0,.75.34.75.75s-.34.75-.75.75Z"/><path d="m13,14h-2c-.41,0-.75-.34-.75-.75s.34-.75.75-.75h2c.41,0,.75.34.75.75s-.34.75-.75.75Z"/><path d="m15.75,14c-.41,0-.75-.34-.75-.75s.34-.75.75-.75c.41,0,.75-.34.75-.75,0-.41.34-.75.75-.75s.75.34.75.75c0,1.24-1.01,2.25-2.25,2.25Z"/><path d="m17.25,5c-.41,0-.75-.34-.75-.75,0-.41-.34-.75-.75-.75-.41,0-.75-.34-.75-.75s.34-.75.75-.75c1.24,0,2.25,1.01,2.25,2.25,0,.41-.34.75-.75.75Z"/><path d="m17.25,9.75c-.41,0-.75-.34-.75-.75v-2c0-.41.34-.75.75-.75s.75.34.75.75v2c0,.41-.34.75-.75.75Z"/><path d="m6.75,9.75c-.41,0-.75-.34-.75-.75v-2c0-.41.34-.75.75-.75s.75.34.75.75v2c0,.41-.34.75-.75.75Z"/><path d="m8.25,14c-1.24,0-2.25-1.01-2.25-2.25,0-.41.34-.75.75-.75s.75.34.75.75c0,.41.34.75.75.75.41,0,.75.34.75.75s-.34.75-.75.75Z"/></svg>';
     copyBtn.addEventListener('click', async () => {
       const messages = this.getMessages();
       let formatted = '';
@@ -1188,7 +1223,9 @@ export class ChatPanel {
       }
       await navigator.clipboard.writeText(formatted);
       copyBtn.style.color = 'var(--s2-positive)';
-      setTimeout(() => { copyBtn.style.color = ''; }, 1500);
+      setTimeout(() => {
+        copyBtn.style.color = '';
+      }, 1500);
     });
     row.appendChild(copyBtn);
 

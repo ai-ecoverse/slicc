@@ -279,7 +279,9 @@ function writeReleaseManifest(manifest: ReleaseManifest): string {
 
 export function packageReleaseArtifacts(): ReleaseManifest {
   const packageJson = readJsonFile<PackageMetadata>(resolve(PROJECT_ROOT, 'package.json'));
-  const extensionManifest = readJsonFile<ExtensionMetadata>(resolve(PROJECT_ROOT, 'packages/chrome-extension/manifest.json'));
+  const extensionManifest = readJsonFile<ExtensionMetadata>(
+    resolve(PROJECT_ROOT, 'packages/chrome-extension/manifest.json')
+  );
   assertMatchingVersions(packageJson.version, extensionManifest.version);
 
   rmSync(RELEASE_DIR, { recursive: true, force: true });

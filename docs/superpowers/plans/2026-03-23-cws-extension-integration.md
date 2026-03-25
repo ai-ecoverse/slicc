@@ -15,6 +15,7 @@
 ### Task 1: Update manifest.json key for CWS extension ID
 
 **Files:**
+
 - Modify: `manifest.json:5` (the `"key"` field)
 
 - [ ] **Step 1: Replace the manifest key**
@@ -26,6 +27,7 @@ In `manifest.json`, replace the current `"key"` value with the CWS public key (r
 ```
 
 The old key was:
+
 ```
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAs9C5LGAbvS34z/jAkmkd0E77Pw7+1vSjvieWsRvegpwrkHw6Kv4jbn+r6mImbCASgErQ7i+uaGfGlFXmm3w5ZsrU949Kht1PZxu2/z1os8X2xZ2D3h0DQq6FFpo6HAJKi+lcWjP7pd1OPt6uMLnhe72a5ZDBS+lkjhR4biKEKo/WuVHj55Y58yn644MtB7P7BzQUJtNvE5cG+u1gPbQ2YHLAEK4ou9INOOWUm30fKneL+jRfS7RtUzCNFElAPVB7vN8EvEgIJcIzG6ncaIIy6+O/7B0MMQN8O33bEeFxZ4epoffJ+k4suAWoPxAsXmOWvv6ROHhGhZuSV2q4WycELQIDAQAB
 ```
@@ -33,6 +35,7 @@ MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAs9C5LGAbvS34z/jAkmkd0E77Pw7+1vSjvieW
 - [ ] **Step 2: Verify the key produces the correct ID**
 
 Run:
+
 ```bash
 node -e "
 const crypto = require('crypto');
@@ -61,6 +64,7 @@ Local unpacked builds now produce the same extension ID
 ### Task 2: Update Adobe IMS redirect URI
 
 **Files:**
+
 - Modify: `packages/webapp/providers/adobe-config.json:4` (the `extensionRedirectUri` field)
 
 - [ ] **Step 1: Update the redirect URI**
@@ -68,11 +72,13 @@ Local unpacked builds now produce the same extension ID
 In `packages/webapp/providers/adobe-config.json`, change line 4:
 
 Old:
+
 ```json
 "extensionRedirectUri": "https://dcebfdclgcnjkpnmhfgoelnkgedglhpo.chromiumapp.org/adobe"
 ```
 
 New:
+
 ```json
 "extensionRedirectUri": "https://akggccfpkleihhemkkikggopnifgelbk.chromiumapp.org/adobe"
 ```
@@ -80,6 +86,7 @@ New:
 - [ ] **Step 2: Verify the fallback in adobe.ts is consistent**
 
 Read `packages/webapp/providers/adobe.ts:231-233`. The fallback constructs the redirect URI dynamically:
+
 ```typescript
 const redirectUri = isExtension
   ? (adobeConfig.extensionRedirectUri ?? `https://${(chrome as any).runtime.id}.chromiumapp.org/`)
@@ -112,6 +119,7 @@ to match."
 ### Task 3: Simplify Sliccstart extension installation to CWS
 
 **Files:**
+
 - Modify: `packages/swift-launcher/Sliccstart/Models/SliccProcess.swift:101-119`
 - Modify: `packages/swift-launcher/Sliccstart/Views/AppListView.swift:11,65-87`
 - Modify: `packages/swift-launcher/Sliccstart/SliccstartApp.swift:86-100`
@@ -133,6 +141,7 @@ func openChromeWebStore() {
 ```
 
 This removes:
+
 - The `chromePath` parameter (no longer needed)
 - The `~/.slicc/extension/` copy logic
 - The `chrome://extensions` process launch
@@ -141,12 +150,14 @@ This removes:
 - [ ] **Step 2: Update AppListView.swift**
 
 Remove the `onGuidedInstall` callback parameter (line 11):
+
 ```swift
 // DELETE this line:
 let onGuidedInstall: (AppTarget) -> Void
 ```
 
 Update the Extension section (lines 65-87). Replace:
+
 ```swift
 if let chrome = chromeTarget {
     SectionHeader("Extension")
@@ -174,6 +185,7 @@ if let chrome = chromeTarget {
 ```
 
 With:
+
 ```swift
 SectionHeader("Extension")
 Button { sliccProcess.openChromeWebStore() } label: {
@@ -199,6 +211,7 @@ Button { sliccProcess.openChromeWebStore() } label: {
 ```
 
 Key changes:
+
 - No longer gated on `if let chrome = chromeTarget` — the CWS link works regardless
 - Calls `sliccProcess.openChromeWebStore()` directly instead of the callback
 - Label: "Get Extension" / "Install from Chrome Web Store"
@@ -206,6 +219,7 @@ Key changes:
 - [ ] **Step 3: Update SliccstartApp.swift**
 
 Remove the `onGuidedInstall` callback (lines 86-100) from the `AppListView(...)` constructor call. Delete:
+
 ```swift
 onGuidedInstall: { target in
     do {
@@ -229,12 +243,14 @@ The `AppListView` call no longer takes `onGuidedInstall`.
 - [ ] **Step 4: Remove `build:extension` from SliccBootstrapper.swift**
 
 In `bootstrap()` method, delete lines 117-118:
+
 ```swift
 progressMessage = "Building extension..."
 try runSync(npmPath, ["run", "build:extension"], cwd: sliccDir)
 ```
 
 In `update()` method, delete lines 145-146:
+
 ```swift
 progressMessage = "Building extension..."
 try runSync(npmPath, ["run", "build:extension"], cwd: sliccDir)

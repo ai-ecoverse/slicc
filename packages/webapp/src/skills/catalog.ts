@@ -42,17 +42,20 @@ const compatibilityCacheHooksInstalled = new WeakSet<object>();
 
 export async function discoverSkillCandidates(
   fs: VirtualFS,
-  nativeSkillsDir: string = WORKSPACE_SKILLS_PATH,
+  nativeSkillsDir: string = WORKSPACE_SKILLS_PATH
 ): Promise<DiscoveredSkillCandidate[]> {
   const nativeCandidates = await discoverNativeSkillCandidates(fs, nativeSkillsDir);
   const compatibilityCandidates = await getCompatibilitySkillCandidates(fs);
 
-  return [...DISCOVERY_ORDER.flatMap((source) => {
-    const candidates = source === 'native'
-      ? nativeCandidates
-      : compatibilityCandidates.filter((candidate) => candidate.source === source);
-    return candidates.sort((a, b) => a.path.localeCompare(b.path));
-  })];
+  return [
+    ...DISCOVERY_ORDER.flatMap((source) => {
+      const candidates =
+        source === 'native'
+          ? nativeCandidates
+          : compatibilityCandidates.filter((candidate) => candidate.source === source);
+      return candidates.sort((a, b) => a.path.localeCompare(b.path));
+    }),
+  ];
 }
 
 async function getCompatibilitySkillCandidates(fs: VirtualFS): Promise<DiscoveredSkillCandidate[]> {
@@ -71,7 +74,7 @@ async function getCompatibilitySkillCandidates(fs: VirtualFS): Promise<Discovere
 
 export function resolveSkillNameCollisions<T>(
   entries: readonly T[],
-  getName: (entry: T) => string,
+  getName: (entry: T) => string
 ): { winners: T[]; collisions: SkillNameCollision<T>[] } {
   const winners = new Map<string, T>();
   const collisions = new Map<string, SkillNameCollision<T>>();
@@ -100,7 +103,7 @@ export function resolveSkillNameCollisions<T>(
 
 async function discoverNativeSkillCandidates(
   fs: VirtualFS,
-  nativeSkillsDir: string,
+  nativeSkillsDir: string
 ): Promise<DiscoveredSkillCandidate[]> {
   const entries = await readSortedDir(fs, nativeSkillsDir);
   const discovered: DiscoveredSkillCandidate[] = [];
@@ -128,7 +131,9 @@ async function discoverNativeSkillCandidates(
   return discovered;
 }
 
-async function discoverCompatibilitySkillCandidates(fs: VirtualFS): Promise<DiscoveredSkillCandidate[]> {
+async function discoverCompatibilitySkillCandidates(
+  fs: VirtualFS
+): Promise<DiscoveredSkillCandidate[]> {
   const discovered: DiscoveredSkillCandidate[] = [];
   const seenPaths = new Set<string>();
   const queue = ['/'];
@@ -140,9 +145,7 @@ async function discoverCompatibilitySkillCandidates(fs: VirtualFS): Promise<Disc
     for (const entry of entries) {
       if (entry.type !== 'directory') continue;
 
-      const childPath = currentPath === '/'
-        ? `/${entry.name}`
-        : `${currentPath}/${entry.name}`;
+      const childPath = currentPath === '/' ? `/${entry.name}` : `${currentPath}/${entry.name}`;
 
       const source = COMPATIBILITY_DIRECTORY_SOURCES.get(entry.name);
       if (source) {
@@ -154,7 +157,7 @@ async function discoverCompatibilitySkillCandidates(fs: VirtualFS): Promise<Disc
 
           const skillPath = `${skillRoot}/${skillEntry.name}`;
           const skillFilePath = `${skillPath}/${SKILL_FILE}`;
-          if (!await pathExists(fs, skillFilePath) || seenPaths.has(skillPath)) continue;
+          if (!(await pathExists(fs, skillFilePath)) || seenPaths.has(skillPath)) continue;
 
           seenPaths.add(skillPath);
           discovered.push({
@@ -210,7 +213,10 @@ async function pathExists(fs: VirtualFS, path: string): Promise<boolean> {
   }
 }
 
-async function readSortedDir(fs: VirtualFS, path: string): Promise<Array<{ name: string; type: 'file' | 'directory' }>> {
+async function readSortedDir(
+  fs: VirtualFS,
+  path: string
+): Promise<Array<{ name: string; type: 'file' | 'directory' }>> {
   try {
     const entries = await fs.readDir(path);
     return [...entries].sort((a, b) => a.name.localeCompare(b.name));

@@ -40,7 +40,10 @@ chmodSync(serverDest, 0o755);
 // ---------------------------------------------------------------------------
 // 2. Icon
 // ---------------------------------------------------------------------------
-const iconSrc = resolve(__dirname, '../../packages/assets/logos/macos-icon-iOS-Default-1024x1024@1x.png');
+const iconSrc = resolve(
+  __dirname,
+  '../../packages/assets/logos/macos-icon-iOS-Default-1024x1024@1x.png'
+);
 if (!existsSync(iconSrc)) {
   console.error(`ERROR: Icon source not found: ${iconSrc}`);
   process.exit(1);
@@ -128,4 +131,3 @@ console.log(`Built: ${appDir} (${bundleSize})`);
 console.log('');
 console.log(`To install: cp -r ${appDir} /Applications/`);
 console.log(`Or just double-click: open ${appDir}`);
-

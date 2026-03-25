@@ -187,7 +187,10 @@ describe('shared server API conformance', () => {
         continue;
       }
 
-      expect(response.status, `${path} should either succeed or report browser unavailability`).toBe(200);
+      expect(
+        response.status,
+        `${path} should either succeed or report browser unavailability`
+      ).toBe(200);
       assertConnectedBody(body);
     }
   });

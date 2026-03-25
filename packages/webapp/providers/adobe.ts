@@ -29,12 +29,7 @@ import {
   getProviders,
 } from '@mariozechner/pi-ai';
 import { AssistantMessageEventStream } from '@mariozechner/pi-ai/dist/utils/event-stream.js';
-import type {
-  Api,
-  Model,
-  Context,
-  SimpleStreamOptions,
-} from '@mariozechner/pi-ai';
+import type { Api, Model, Context, SimpleStreamOptions } from '@mariozechner/pi-ai';
 import type { AnthropicOptions } from '@mariozechner/pi-ai/dist/providers/anthropic.js';
 import type { OpenAICompletionsOptions } from '@mariozechner/pi-ai/dist/providers/openai-completions.js';
 import {
@@ -117,13 +112,18 @@ async function fetchProxyConfig(proxyEndpoint: string): Promise<ProxyConfig> {
   try {
     const res = await fetch(`${proxyEndpoint}/v1/config`);
     if (res.ok) {
-      const config = await res.json() as ProxyConfig;
+      const config = (await res.json()) as ProxyConfig;
       proxyConfigCache.set(proxyEndpoint, config);
       return config;
     }
-    console.warn(`[adobe] Proxy /v1/config returned ${res.status}, falling back to build-time config`);
+    console.warn(
+      `[adobe] Proxy /v1/config returned ${res.status}, falling back to build-time config`
+    );
   } catch (err) {
-    console.warn('[adobe] Failed to fetch proxy config:', err instanceof Error ? err.message : String(err));
+    console.warn(
+      '[adobe] Failed to fetch proxy config:',
+      err instanceof Error ? err.message : String(err)
+    );
   }
   const empty: ProxyConfig = {};
   proxyConfigCache.set(proxyEndpoint, empty);
@@ -133,7 +133,10 @@ async function fetchProxyConfig(proxyEndpoint: string): Promise<ProxyConfig> {
 /** Resolve the IMS client ID. Fetched config takes precedence over build-time config. */
 function resolveClientId(proxyConfig: ProxyConfig): string {
   const clientId = proxyConfig.clientId || adobeConfig.clientId;
-  if (!clientId) throw new Error('Could not determine IMS client ID — proxy /v1/config did not return one and adobe-config.json is empty');
+  if (!clientId)
+    throw new Error(
+      'Could not determine IMS client ID — proxy /v1/config did not return one and adobe-config.json is empty'
+    );
   return clientId;
 }
 
@@ -165,24 +168,38 @@ const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?
 // ── Shared helpers ──────────────────────────────────────────────────
 
 function getAdobeAccount() {
-  return getAccounts().find(a => a.providerId === 'adobe');
+  return getAccounts().find((a) => a.providerId === 'adobe');
 }
 
-async function fetchUserProfile(accessToken: string, imsEnv?: string): Promise<{ name?: string; avatar?: string }> {
+async function fetchUserProfile(
+  accessToken: string,
+  imsEnv?: string
+): Promise<{ name?: string; avatar?: string }> {
   try {
     const res = await fetch(`${imsHost(imsEnv)}/ims/userinfo/v2`, {
-      headers: { 'Authorization': `Bearer ${accessToken}` },
+      headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (res.ok) {
-      const profile = await res.json() as { name?: string; email?: string; displayName?: string; picture?: string; avatar_url?: string };
+      const profile = (await res.json()) as {
+        name?: string;
+        email?: string;
+        displayName?: string;
+        picture?: string;
+        avatar_url?: string;
+      };
       return {
         name: profile.displayName || profile.name || profile.email,
         avatar: profile.picture || profile.avatar_url,
       };
     }
-    console.warn(`[adobe] User profile fetch returned ${res.status}, account will have no display name`);
+    console.warn(
+      `[adobe] User profile fetch returned ${res.status}, account will have no display name`
+    );
   } catch (err) {
-    console.warn('[adobe] Failed to fetch user profile:', err instanceof Error ? err.message : String(err));
+    console.warn(
+      '[adobe] Failed to fetch user profile:',
+      err instanceof Error ? err.message : String(err)
+    );
   }
   return {};
 }
@@ -226,9 +243,11 @@ export const config: ProviderConfig = {
     // Prefer the authenticated /v1/models response (has all available models)
     for (const models of modelsCache.values()) {
       if (models.length) {
-        const result = models.map(m => enrichModel({ id: m.id, name: m.name ?? m.id }));
+        const result = models.map((m) => enrichModel({ id: m.id, name: m.name ?? m.id }));
         // Persist so models survive page refresh
-        try { localStorage.setItem('slicc-adobe-models', JSON.stringify(result)); } catch {}
+        try {
+          localStorage.setItem('slicc-adobe-models', JSON.stringify(result));
+        } catch {}
         return result;
       }
     }
@@ -240,14 +259,14 @@ export const config: ProviderConfig = {
     try {
       const persisted = localStorage.getItem('slicc-adobe-models');
       if (persisted) {
-        const models = JSON.parse(persisted) as Array<{ id: string; name?: string } & Record<string, any>>;
+        const models = JSON.parse(persisted) as Array<
+          { id: string; name?: string } & Record<string, any>
+        >;
         if (models.length) return models;
       }
     } catch {}
     // Default before any config is fetched
-    return [
-      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
-    ];
+    return [{ id: 'claude-opus-4-6', name: 'Claude Opus 4.6' }];
   },
 
   onOAuthLogin: async (launcher: OAuthLauncher, onSuccess: () => void) => {
@@ -259,7 +278,8 @@ export const config: ProviderConfig = {
     const imsEnv = resolveImsEnvironment(proxyConfig);
 
     const redirectUri = isExtension
-      ? (adobeConfig.extensionRedirectUri ?? `https://${(chrome as any).runtime.id}.chromiumapp.org/`)
+      ? (adobeConfig.extensionRedirectUri ??
+        `https://${(chrome as any).runtime.id}.chromiumapp.org/`)
       : (adobeConfig.redirectUri ?? `${window.location.origin}/auth/callback`);
 
     const params = new URLSearchParams({
@@ -291,8 +311,11 @@ export const config: ProviderConfig = {
 
     // Fetch the full model list now that we're authenticated.
     // This populates modelsCache so getModelIds() returns all available models.
-    await getAdobeModels().catch(err =>
-      console.warn('[adobe] Failed to fetch models after login:', err instanceof Error ? err.message : String(err)),
+    await getAdobeModels().catch((err) =>
+      console.warn(
+        '[adobe] Failed to fetch models after login:',
+        err instanceof Error ? err.message : String(err)
+      )
     );
 
     onSuccess();
@@ -316,11 +339,16 @@ export const config: ProviderConfig = {
             }),
           });
           if (!revRes.ok) {
-            console.warn(`[adobe] Token revocation returned ${revRes.status}, token may still be valid server-side`);
+            console.warn(
+              `[adobe] Token revocation returned ${revRes.status}, token may still be valid server-side`
+            );
           }
         }
       } catch (err) {
-        console.warn('[adobe] Failed to revoke token:', err instanceof Error ? err.message : String(err));
+        console.warn(
+          '[adobe] Failed to revoke token:',
+          err instanceof Error ? err.message : String(err)
+        );
       }
     }
     saveOAuthAccount({ providerId: 'adobe', accessToken: '' });
@@ -346,7 +374,10 @@ async function getValidAccessToken(): Promise<string> {
     const newToken = await silentRenewToken();
     if (newToken) return newToken;
   } catch (err) {
-    console.warn('[adobe] Silent renewal failed:', err instanceof Error ? err.message : String(err));
+    console.warn(
+      '[adobe] Silent renewal failed:',
+      err instanceof Error ? err.message : String(err)
+    );
   }
 
   // Re-read account — another concurrent call may have renewed it
@@ -386,7 +417,8 @@ async function silentRenewToken(): Promise<string | null> {
       const imsEnv = resolveImsEnvironment(proxyConfig);
 
       const redirectUri = isExtension
-        ? (adobeConfig.extensionRedirectUri ?? `https://${(chrome as any).runtime.id}.chromiumapp.org/`)
+        ? (adobeConfig.extensionRedirectUri ??
+          `https://${(chrome as any).runtime.id}.chromiumapp.org/`)
         : (adobeConfig.redirectUri ?? `${window.location.origin}/auth/callback`);
 
       const params = new URLSearchParams({
@@ -421,7 +453,10 @@ async function silentRenewToken(): Promise<string | null> {
       console.log('[adobe] Token renewed silently');
       return tokenInfo.accessToken;
     } catch (err) {
-      console.warn('[adobe] Silent renewal error:', err instanceof Error ? err.message : String(err));
+      console.warn(
+        '[adobe] Silent renewal error:',
+        err instanceof Error ? err.message : String(err)
+      );
       return null;
     } finally {
       renewalInProgress = null;
@@ -444,7 +479,11 @@ function makeErrorOutput(model: Model<Api>, error: unknown) {
       provider: 'adobe',
       model: model.id,
       usage: {
-        input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       },
       stopReason: 'error' as const,
@@ -457,7 +496,7 @@ function makeErrorOutput(model: Model<Api>, error: unknown) {
 const streamAdobe = (
   model: Model<Api>,
   context: Context,
-  options: AnthropicOptions | OpenAICompletionsOptions = {},
+  options: AnthropicOptions | OpenAICompletionsOptions = {}
 ) => {
   const stream = new AssistantMessageEventStream();
   (async () => {
@@ -476,17 +515,30 @@ const streamAdobe = (
           api: 'openai-completions' as Api,
           compat: { ...(model as any).compat, supportsStore: false, supportsDeveloperRole: false },
         };
-        const inner = streamOpenAICompletions(proxyModel as any, context, { ...options, apiKey: accessToken } as any);
+        const inner = streamOpenAICompletions(proxyModel as any, context, {
+          ...options,
+          apiKey: accessToken,
+        } as any);
         for await (const event of inner) stream.push(event as any);
       } else {
         // Route to Anthropic Messages API
-        const proxyModel = { ...model, baseUrl: getProxyEndpoint(), api: 'anthropic-messages' as Api };
-        const inner = streamAnthropic(proxyModel as any, context, { ...options, apiKey: accessToken });
+        const proxyModel = {
+          ...model,
+          baseUrl: getProxyEndpoint(),
+          api: 'anthropic-messages' as Api,
+        };
+        const inner = streamAnthropic(proxyModel as any, context, {
+          ...options,
+          apiKey: accessToken,
+        });
         for await (const event of inner) stream.push(event as any);
       }
       stream.end();
     } catch (error) {
-      console.error('[adobe] Stream error:', error instanceof Error ? error.message : String(error));
+      console.error(
+        '[adobe] Stream error:',
+        error instanceof Error ? error.message : String(error)
+      );
       stream.push(makeErrorOutput(model, error) as any);
       stream.end();
     }
@@ -494,11 +546,7 @@ const streamAdobe = (
   return stream;
 };
 
-const streamSimpleAdobe = (
-  model: Model<Api>,
-  context: Context,
-  options?: SimpleStreamOptions,
-) => {
+const streamSimpleAdobe = (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => {
   const stream = new AssistantMessageEventStream();
   (async () => {
     try {
@@ -512,17 +560,30 @@ const streamSimpleAdobe = (
           api: 'openai-completions' as Api,
           compat: { ...(model as any).compat, supportsStore: false, supportsDeveloperRole: false },
         };
-        const inner = streamSimpleOpenAICompletions(proxyModel as any, context, { ...options, apiKey: accessToken } as any);
+        const inner = streamSimpleOpenAICompletions(proxyModel as any, context, {
+          ...options,
+          apiKey: accessToken,
+        } as any);
         for await (const event of inner) stream.push(event as any);
       } else {
         // Route to Anthropic Messages API
-        const proxyModel = { ...model, baseUrl: getProxyEndpoint(), api: 'anthropic-messages' as Api };
-        const inner = streamSimpleAnthropic(proxyModel as any, context, { ...options, apiKey: accessToken } as any);
+        const proxyModel = {
+          ...model,
+          baseUrl: getProxyEndpoint(),
+          api: 'anthropic-messages' as Api,
+        };
+        const inner = streamSimpleAnthropic(proxyModel as any, context, {
+          ...options,
+          apiKey: accessToken,
+        } as any);
         for await (const event of inner) stream.push(event as any);
       }
       stream.end();
     } catch (error) {
-      console.error('[adobe] Stream error:', error instanceof Error ? error.message : String(error));
+      console.error(
+        '[adobe] Stream error:',
+        error instanceof Error ? error.message : String(error)
+      );
       stream.push(makeErrorOutput(model, error) as any);
       stream.end();
     }
@@ -537,10 +598,10 @@ async function fetchProxyModels(): Promise<Model<Api>[]> {
     const accessToken = await getValidAccessToken();
     const endpoint = getProxyEndpoint();
     const res = await fetch(`${endpoint}/v1/models`, {
-      headers: { 'Authorization': `Bearer ${accessToken}` },
+      headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (res.ok) {
-      const data = await res.json() as { data?: Array<any> };
+      const data = (await res.json()) as { data?: Array<any> };
       if (data.data?.length) {
         // Store metadata from proxy response for later use in getModelIds()
         for (const pm of data.data) {
@@ -555,33 +616,49 @@ async function fetchProxyModels(): Promise<Model<Api>[]> {
 
         // Build lookup across all pi-ai providers (Anthropic, Cerebras, OpenAI, etc.)
         const modelMap = new Map<string, Model<Api>>();
-        for (const p of (getProviders() as string[])) {
-          try { for (const m of (getModels(p as any) as Model<Api>[])) modelMap.set(m.id, m); } catch {}
+        for (const p of getProviders() as string[]) {
+          try {
+            for (const m of getModels(p as any) as Model<Api>[]) modelMap.set(m.id, m);
+          } catch {}
         }
-        return data.data.map(pm => {
+        return data.data.map((pm) => {
           const base = modelMap.get(pm.id);
           // Determine API type from metadata or default to anthropic
           const apiType = pm.api === 'openai' ? 'openai' : 'anthropic';
           const customApi = `adobe-${apiType}` as Api;
           if (base) return { ...base, provider: 'adobe', api: customApi };
           return {
-            id: pm.id, name: pm.name ?? pm.id, provider: 'adobe',
-            api: customApi, baseUrl: endpoint,
-            contextWindow: 200000, maxTokens: 16384, input: ['text', 'image'],
+            id: pm.id,
+            name: pm.name ?? pm.id,
+            provider: 'adobe',
+            api: customApi,
+            baseUrl: endpoint,
+            contextWindow: 200000,
+            maxTokens: 16384,
+            input: ['text', 'image'],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            inputCost: 0, outputCost: 0, cacheReadCost: 0, cacheWriteCost: 0, reasoning: true,
+            inputCost: 0,
+            outputCost: 0,
+            cacheReadCost: 0,
+            cacheWriteCost: 0,
+            reasoning: true,
           } as unknown as Model<Api>;
         });
       }
     } else {
-      console.warn(`[adobe] Proxy /v1/models returned ${res.status}, falling back to Anthropic models`);
+      console.warn(
+        `[adobe] Proxy /v1/models returned ${res.status}, falling back to Anthropic models`
+      );
     }
   } catch (err) {
-    console.warn('[adobe] Failed to fetch proxy models:', err instanceof Error ? err.message : String(err));
+    console.warn(
+      '[adobe] Failed to fetch proxy models:',
+      err instanceof Error ? err.message : String(err)
+    );
   }
 
   const anthropicModels = getModels('anthropic' as any) as Model<Api>[];
-  return anthropicModels.map(m => ({ ...m, provider: 'adobe', api: 'adobe-anthropic' as Api }));
+  return anthropicModels.map((m) => ({ ...m, provider: 'adobe', api: 'adobe-anthropic' as Api }));
 }
 
 const modelsCache = new Map<string, Model<Api>[]>();

@@ -815,7 +815,13 @@ describe('BrowserAPI', () => {
       expect(r2).toBe('op2-success');
 
       // Verify op2 only starts after op1 fully completes (error handled)
-      expect(executionOrder).toEqual(['op1-start', 'op1-error', 'op1-caught', 'op2-start', 'op2-end']);
+      expect(executionOrder).toEqual([
+        'op1-start',
+        'op1-error',
+        'op1-caught',
+        'op2-start',
+        'op2-end',
+      ]);
     });
 
     it('passes the correct sessionId to the callback', async () => {

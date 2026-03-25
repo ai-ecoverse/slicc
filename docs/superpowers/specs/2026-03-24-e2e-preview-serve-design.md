@@ -59,9 +59,7 @@ Inject `lightning-fs.min.js` via `page.addScriptTag()` (pre-built UMD browser bu
 ```ts
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const LFS_SCRIPT = require.resolve(
-  '@isomorphic-git/lightning-fs/dist/lightning-fs.min.js'
-);
+const LFS_SCRIPT = require.resolve('@isomorphic-git/lightning-fs/dist/lightning-fs.min.js');
 
 export async function seedVFS(page: Page, files: Record<string, string>) {
   await page.addScriptTag({ path: LFS_SCRIPT });
@@ -71,7 +69,11 @@ export async function seedVFS(page: Page, files: Record<string, string>) {
       const parts = filePath.split('/').filter(Boolean);
       for (let i = 1; i < parts.length; i++) {
         const dir = '/' + parts.slice(0, i).join('/');
-        try { await fs.mkdir(dir); } catch { /* exists */ }
+        try {
+          await fs.mkdir(dir);
+        } catch {
+          /* exists */
+        }
       }
       await fs.writeFile(filePath, content);
     }
@@ -94,7 +96,7 @@ export async function waitForSW(page: Page): Promise<void> {
 }
 ```
 
-Note: `navigator.serviceWorker.ready` cannot be used here because it waits for a SW controlling the *current page*. The preview SW is registered with `scope: '/preview/'`, so it doesn't control `/`. Instead we poll `getRegistration('/preview/')` until the SW is active.
+Note: `navigator.serviceWorker.ready` cannot be used here because it waits for a SW controlling the _current page_. The preview SW is registered with `scope: '/preview/'`, so it doesn't control `/`. Instead we poll `getRegistration('/preview/')` until the SW is active.
 
 ### Test sequence per test
 
@@ -108,23 +110,27 @@ Tests use Playwright's `baseURL` for all navigation (e.g., `page.goto('/')` reso
 ### Test scenarios
 
 **Group 1 — Basic `/preview/*` serving (3 tests):**
+
 - HTML served with `text/html` content-type
 - CSS/JS served with correct MIME types
 - Missing paths return 404
 
 **Group 2 — Project serve mode (3 tests):**
 The serve command appends `?projectRoot=<dir>` to the preview URL before opening a tab. The SW reads this on the first `/preview/` request and stores it. All subsequent root-relative fetches (e.g., `/styles/main.css`) resolve against the stored root.
+
 - Fetch `/styles/main.css` after navigating with `?projectRoot=/shared/app` — verify content and `text/css` content-type
 - Fetch `/scripts/app.js` in project mode — verify content and `application/javascript` content-type
 - Fetch `/missing/file.css` in project mode — verify 404
 
 **Group 3 — `isSliccAppPath` exclusions (3 tests):**
 When `projectRoot` is set, `isSliccAppPath()` prevents the SW from intercepting Slicc's own paths. These tests seed VFS files that would match if intercepted, then verify the SW lets them through to the real server.
+
 - `/@vite/client` — not intercepted (returns server 404 in production, not VFS content)
 - `/api/runtime-config` — not intercepted (returns real JSON from Express, not VFS content)
 - `/` — not intercepted (returns the Slicc app HTML with `<div id="app">`, not project content)
 
 **Group 4 — Cross-origin passthrough (1 test):**
+
 - External URLs pass through to network, not served from VFS
 
 ### Sub-resource assertion pattern

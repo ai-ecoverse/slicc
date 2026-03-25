@@ -22,7 +22,9 @@ const TIMEOUT = (flags.timeout || 120) * 1000;
 const prompt = positional.join(' ');
 
 if (!prompt && !flags.readLast) {
-  console.error('Usage: node packages/dev-tools/tools/slicc-prompt.mjs "your prompt" [--script "cmd"] [--clear] [--timeout 120]');
+  console.error(
+    'Usage: node packages/dev-tools/tools/slicc-prompt.mjs "your prompt" [--script "cmd"] [--clear] [--timeout 120]'
+  );
   console.error('       node packages/dev-tools/tools/slicc-prompt.mjs --read-last');
   process.exit(1);
 }
@@ -46,7 +48,11 @@ function getJson(url) {
         try {
           resolve(JSON.parse(body));
         } catch (error) {
-          reject(new Error(`Failed to parse JSON from ${url}: ${error instanceof Error ? error.message : String(error)}`));
+          reject(
+            new Error(
+              `Failed to parse JSON from ${url}: ${error instanceof Error ? error.message : String(error)}`
+            )
+          );
         }
       });
     });
@@ -58,7 +64,8 @@ async function getPageTarget(cdpPort, serverPort) {
   const targets = await getJson(`http://127.0.0.1:${cdpPort}/json/list`);
   const needles = [`localhost:${serverPort}`, `127.0.0.1:${serverPort}`, 'localhost', '127.0.0.1'];
   const target = targets.find(
-    (entry) => entry.type === 'page' && needles.some((needle) => String(entry.url || '').includes(needle))
+    (entry) =>
+      entry.type === 'page' && needles.some((needle) => String(entry.url || '').includes(needle))
   );
   if (!target?.webSocketDebuggerUrl) {
     throw new Error(`No page target found for localhost:${serverPort} on CDP port ${cdpPort}`);
@@ -119,7 +126,8 @@ async function connectCDP(wsUrl) {
         returnByValue: true,
       });
       if (result.exceptionDetails) {
-        const description = result.result?.description || result.exceptionDetails.text || 'Runtime.evaluate failed';
+        const description =
+          result.result?.description || result.exceptionDetails.text || 'Runtime.evaluate failed';
         throw new Error(description);
       }
       return result.result?.value;
@@ -134,7 +142,9 @@ async function waitForChatReady(cdp, timeoutMs = 15000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
     try {
-      const ready = await cdp.evaluate(`(() => !!document.querySelector('textarea.chat__textarea'))()`);
+      const ready = await cdp.evaluate(
+        `(() => !!document.querySelector('textarea.chat__textarea'))()`
+      );
       if (ready) return;
     } catch {
       // Navigation can temporarily destroy the execution context.

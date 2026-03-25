@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { computeRsyncDiff, type RsyncEntry } from '../../../src/shell/supplemental-commands/rsync-diff.js';
+import {
+  computeRsyncDiff,
+  type RsyncEntry,
+} from '../../../src/shell/supplemental-commands/rsync-diff.js';
 
 describe('computeRsyncDiff', () => {
   it('returns empty result for two empty lists', () => {

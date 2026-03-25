@@ -13,7 +13,9 @@ vi.stubGlobal('localStorage', {
   getItem: (k: string) => storage.get(k) ?? null,
   setItem: (k: string, v: string) => storage.set(k, v),
   removeItem: (k: string) => storage.delete(k),
-  get length() { return storage.size; },
+  get length() {
+    return storage.size;
+  },
   key: (i: number) => [...storage.keys()][i] ?? null,
   clear: () => storage.clear(),
 });
@@ -92,7 +94,8 @@ describe('Token extraction from URL', () => {
   }
 
   it('extracts token from redirect URL fragment', () => {
-    const url = 'https://example.com/callback#access_token=abc123&expires_in=3600&token_type=bearer';
+    const url =
+      'https://example.com/callback#access_token=abc123&expires_in=3600&token_type=bearer';
     const result = extractTokenFromUrl(url);
     expect(result).toEqual({ accessToken: 'abc123', expiresIn: 3600 });
   });
@@ -161,7 +164,7 @@ describe('Renewal deduplication pattern', () => {
         try {
           callCount++;
           // Simulate async work (network call)
-          await new Promise(r => setTimeout(r, 10));
+          await new Promise((r) => setTimeout(r, 10));
           return 'token-' + callCount;
         } finally {
           renewalInProgress = null;

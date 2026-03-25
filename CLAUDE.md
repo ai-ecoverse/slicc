@@ -6,25 +6,25 @@ This root file is the repo navigation hub. Keep package-specific architecture an
 
 ### Packages
 
-| Path | Purpose |
-| --- | --- |
-| `packages/webapp/` | Browser app core: UI, VFS, shell, CDP, tools, providers, skills, scoops |
-| `packages/chrome-extension/` | Manifest V3 extension entry points, HTML shells, and message bridges |
-| `packages/cloudflare-worker/` | Tray hub worker for session coordination, signaling, and TURN credentials |
-| `packages/node-server/` | Node.js CLI/Electron server: Chrome launch, CDP proxy, dev serving |
-| `packages/vfs-root/` | Default VFS content copied into the app on init/reset |
-| `packages/swift-launcher/` | Native macOS SwiftUI launcher app (`Sliccstart`) |
-| `packages/swift-server/` | Native macOS Hummingbird server (`slicc-server`) |
-| `packages/dev-tools/` | Repo-level tooling guidance for build helpers, QA setup, configs, and test utilities |
-| `packages/assets/` | Shared static files (logos, fonts, favicon) used by multiple packages |
+| Path                          | Purpose                                                                              |
+| ----------------------------- | ------------------------------------------------------------------------------------ |
+| `packages/webapp/`            | Browser app core: UI, VFS, shell, CDP, tools, providers, skills, scoops              |
+| `packages/chrome-extension/`  | Manifest V3 extension entry points, HTML shells, and message bridges                 |
+| `packages/cloudflare-worker/` | Tray hub worker for session coordination, signaling, and TURN credentials            |
+| `packages/node-server/`       | Node.js CLI/Electron server: Chrome launch, CDP proxy, dev serving                   |
+| `packages/vfs-root/`          | Default VFS content copied into the app on init/reset                                |
+| `packages/swift-launcher/`    | Native macOS SwiftUI launcher app (`Sliccstart`)                                     |
+| `packages/swift-server/`      | Native macOS Hummingbird server (`slicc-server`)                                     |
+| `packages/dev-tools/`         | Repo-level tooling guidance for build helpers, QA setup, configs, and test utilities |
+| `packages/assets/`            | Shared static files (logos, fonts, favicon) used by multiple packages                |
 
 ### Other Top-Level Directories
 
-| Path | Purpose |
-| --- | --- |
-| `docs/` | Long-form developer and agent reference docs, including screenshots and other docs assets |
-| `packages/*/tests/` | Per-package TypeScript/Vitest tests mirrored by subsystem |
-| `dist/` | Generated build output; do not hand-edit |
+| Path                | Purpose                                                                                   |
+| ------------------- | ----------------------------------------------------------------------------------------- |
+| `docs/`             | Long-form developer and agent reference docs, including screenshots and other docs assets |
+| `packages/*/tests/` | Per-package TypeScript/Vitest tests mirrored by subsystem                                 |
+| `dist/`             | Generated build output; do not hand-edit                                                  |
 
 ## Top-Level Commands
 
@@ -201,11 +201,11 @@ Every change must satisfy **tests**, **docs**, and **verification**.
 
 ### Documentation
 
-| Tier | File | Update when... |
-| --- | --- | --- |
-| Public | `README.md` | User-facing behavior changes |
-| Development | `CLAUDE.md` files | Developer conventions, package architecture, build workflows |
-| Agent reference | `docs/` | Detailed tools, commands, and patterns |
+| Tier            | File              | Update when...                                               |
+| --------------- | ----------------- | ------------------------------------------------------------ |
+| Public          | `README.md`       | User-facing behavior changes                                 |
+| Development     | `CLAUDE.md` files | Developer conventions, package architecture, build workflows |
+| Agent reference | `docs/`           | Detailed tools, commands, and patterns                       |
 
 ### Verification
 

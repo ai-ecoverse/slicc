@@ -89,7 +89,11 @@ export default tseslint.config(
   },
   {
     // CLI / Node.js files - Node globals only
-    files: ['packages/node-server/src/**/*.ts', 'packages/cloudflare-worker/src/**/*.ts', 'vite.config*.ts'],
+    files: [
+      'packages/node-server/src/**/*.ts',
+      'packages/cloudflare-worker/src/**/*.ts',
+      'vite.config*.ts',
+    ],
     languageOptions: {
       globals: {
         ...globals.node,
@@ -98,7 +102,18 @@ export default tseslint.config(
   },
   {
     // Browser UI files - Browser globals only
-    files: ['packages/webapp/src/ui/**/*.ts', 'packages/webapp/src/cdp/**/*.ts', 'packages/webapp/src/core/**/*.ts', 'packages/webapp/src/fs/**/*.ts', 'packages/webapp/src/git/**/*.ts', 'packages/webapp/src/providers/**/*.ts', 'packages/webapp/src/scoops/**/*.ts', 'packages/webapp/src/shell/**/*.ts', 'packages/webapp/src/skills/**/*.ts', 'packages/webapp/src/tools/**/*.ts'],
+    files: [
+      'packages/webapp/src/ui/**/*.ts',
+      'packages/webapp/src/cdp/**/*.ts',
+      'packages/webapp/src/core/**/*.ts',
+      'packages/webapp/src/fs/**/*.ts',
+      'packages/webapp/src/git/**/*.ts',
+      'packages/webapp/src/providers/**/*.ts',
+      'packages/webapp/src/scoops/**/*.ts',
+      'packages/webapp/src/shell/**/*.ts',
+      'packages/webapp/src/skills/**/*.ts',
+      'packages/webapp/src/tools/**/*.ts',
+    ],
     languageOptions: {
       globals: {
         ...globals.browser,
@@ -129,7 +144,8 @@ export default tseslint.config(
         'warn',
         {
           argsIgnorePattern: '^_',
-          varsIgnorePattern: '^_|^(leader|follower|channel|transport|shell|fs|scoop|context|orchestrator|api|client|manager|recorder|proxy|bridge|handler|worker|session|store|panel|zone|dialog|renderer|entry|watcher)$',
+          varsIgnorePattern:
+            '^_|^(leader|follower|channel|transport|shell|fs|scoop|context|orchestrator|api|client|manager|recorder|proxy|bridge|handler|worker|session|store|panel|zone|dialog|renderer|entry|watcher)$',
           caughtErrorsIgnorePattern: '^_',
         },
       ],
@@ -137,29 +153,28 @@ export default tseslint.config(
   },
   {
     // Electron overlay files - ban innerHTML for Trusted Types compatibility
-    files: ['packages/webapp/src/ui/electron-overlay.ts', 'packages/webapp/src/ui/electron-overlay-entry.ts'],
+    files: [
+      'packages/webapp/src/ui/electron-overlay.ts',
+      'packages/webapp/src/ui/electron-overlay-entry.ts',
+    ],
     rules: {
       'no-restricted-properties': [
         'error',
         {
           property: 'innerHTML',
-          message: 'innerHTML is banned in electron-overlay files due to Trusted Types (VS Code CSP). Use createElement + textContent instead.',
+          message:
+            'innerHTML is banned in electron-overlay files due to Trusted Types (VS Code CSP). Use createElement + textContent instead.',
         },
         {
           property: 'outerHTML',
-          message: 'outerHTML is banned in electron-overlay files due to Trusted Types (VS Code CSP). Use createElement + textContent instead.',
+          message:
+            'outerHTML is banned in electron-overlay files due to Trusted Types (VS Code CSP). Use createElement + textContent instead.',
         },
       ],
     },
   },
   {
     // Ignore patterns
-    ignores: [
-      'dist/**',
-      'node_modules/**',
-      'artifacts/**',
-      '*.min.js',
-      'packages/assets/fonts/**',
-    ],
+    ignores: ['dist/**', 'node_modules/**', 'artifacts/**', '*.min.js', 'packages/assets/fonts/**'],
   }
 );

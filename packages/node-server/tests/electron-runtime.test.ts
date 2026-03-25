@@ -64,7 +64,13 @@ describe('electron-runtime', () => {
       buildElectronServerSpawnConfig('/repo', { dev: true, cdpPort: 9444, platform: 'darwin' })
     ).toEqual({
       command: 'npx',
-      args: ['tsx', 'packages/node-server/src/index.ts', '--dev', '--serve-only', '--cdp-port=9444'],
+      args: [
+        'tsx',
+        'packages/node-server/src/index.ts',
+        '--dev',
+        '--serve-only',
+        '--cdp-port=9444',
+      ],
     });
   });
 
@@ -128,7 +134,9 @@ describe('electron-runtime', () => {
       activeTab: 'files',
     });
     const call = `window.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://${DEFAULT_ELECTRON_SERVE_HOST}:3000/electron","open":true,"activeTab":"files"});`;
-    expect(result).toBe(`if(document.body){${call}}else{document.addEventListener('DOMContentLoaded',function(){${call}});}`)
+    expect(result).toBe(
+      `if(document.body){${call}}else{document.addEventListener('DOMContentLoaded',function(){${call}});}`
+    );
   });
 
   it('builds a macOS app launch spec from a .app bundle path', () => {
@@ -177,8 +185,8 @@ describe('electron-runtime', () => {
       })
     ).toBe(
       'window.__overlayLoaded = true;\n' +
-      'if(document.body){window.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://localhost:5710/electron"});}' +
-      'else{document.addEventListener(\'DOMContentLoaded\',function(){window.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://localhost:5710/electron"});});}',
+        'if(document.body){window.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://localhost:5710/electron"});}' +
+        'else{document.addEventListener(\'DOMContentLoaded\',function(){window.__SLICC_ELECTRON_OVERLAY__?.inject({"appUrl":"http://localhost:5710/electron"});});}'
     );
   });
 
@@ -209,8 +217,18 @@ describe('electron-runtime', () => {
   describe('selectBestOverlayTargets', () => {
     it('returns all targets when they have different origins', () => {
       const targets = [
-        { type: 'page', title: 'Slack', url: 'https://app.slack.com/', webSocketDebuggerUrl: 'ws://1' },
-        { type: 'page', title: 'Discord', url: 'https://discord.com/channels', webSocketDebuggerUrl: 'ws://2' },
+        {
+          type: 'page',
+          title: 'Slack',
+          url: 'https://app.slack.com/',
+          webSocketDebuggerUrl: 'ws://1',
+        },
+        {
+          type: 'page',
+          title: 'Discord',
+          url: 'https://discord.com/channels',
+          webSocketDebuggerUrl: 'ws://2',
+        },
       ];
       const result = selectBestOverlayTargets(targets);
       expect(result).toHaveLength(2);
@@ -219,9 +237,24 @@ describe('electron-runtime', () => {
     it('deduplicates same-origin targets, picking the one with the longest title', () => {
       // Simulates Teams: 3 pages on same origin, different titles
       const targets = [
-        { type: 'page', title: 'Microsoft Teams', url: 'https://teams.microsoft.com/v2/', webSocketDebuggerUrl: 'ws://1' },
-        { type: 'page', title: 'Calendar | Calendar | Adobe | trieloff@adobe.com | Microsoft Teams', url: 'https://teams.microsoft.com/v2/', webSocketDebuggerUrl: 'ws://2' },
-        { type: 'page', title: 'Microsoft Teams', url: 'https://teams.microsoft.com/v2/#deepLink=default&isMinimized=false', webSocketDebuggerUrl: 'ws://3' },
+        {
+          type: 'page',
+          title: 'Microsoft Teams',
+          url: 'https://teams.microsoft.com/v2/',
+          webSocketDebuggerUrl: 'ws://1',
+        },
+        {
+          type: 'page',
+          title: 'Calendar | Calendar | Adobe | trieloff@adobe.com | Microsoft Teams',
+          url: 'https://teams.microsoft.com/v2/',
+          webSocketDebuggerUrl: 'ws://2',
+        },
+        {
+          type: 'page',
+          title: 'Microsoft Teams',
+          url: 'https://teams.microsoft.com/v2/#deepLink=default&isMinimized=false',
+          webSocketDebuggerUrl: 'ws://3',
+        },
       ];
       const result = selectBestOverlayTargets(targets);
       expect(result).toHaveLength(1);
@@ -230,8 +263,18 @@ describe('electron-runtime', () => {
 
     it('penalizes targets with deepLink/isMinimized hash fragments', () => {
       const targets = [
-        { type: 'page', title: 'Microsoft Teams', url: 'https://teams.microsoft.com/v2/#deepLink=default&isMinimized=false', webSocketDebuggerUrl: 'ws://1' },
-        { type: 'page', title: 'Microsoft Teams', url: 'https://teams.microsoft.com/v2/', webSocketDebuggerUrl: 'ws://2' },
+        {
+          type: 'page',
+          title: 'Microsoft Teams',
+          url: 'https://teams.microsoft.com/v2/#deepLink=default&isMinimized=false',
+          webSocketDebuggerUrl: 'ws://1',
+        },
+        {
+          type: 'page',
+          title: 'Microsoft Teams',
+          url: 'https://teams.microsoft.com/v2/',
+          webSocketDebuggerUrl: 'ws://2',
+        },
       ];
       const result = selectBestOverlayTargets(targets);
       expect(result).toHaveLength(1);
@@ -241,9 +284,24 @@ describe('electron-runtime', () => {
     it('filters out non-page and internal targets', () => {
       const targets = [
         { type: 'page', title: 'App', url: 'https://example.com/', webSocketDebuggerUrl: 'ws://1' },
-        { type: 'service_worker', title: 'SW', url: 'https://example.com/sw.js', webSocketDebuggerUrl: 'ws://2' },
-        { type: 'worker', title: 'Worker', url: 'https://example.com/worker.js', webSocketDebuggerUrl: 'ws://3' },
-        { type: 'page', title: 'DevTools', url: 'devtools://devtools/bundled/inspector.html', webSocketDebuggerUrl: 'ws://4' },
+        {
+          type: 'service_worker',
+          title: 'SW',
+          url: 'https://example.com/sw.js',
+          webSocketDebuggerUrl: 'ws://2',
+        },
+        {
+          type: 'worker',
+          title: 'Worker',
+          url: 'https://example.com/worker.js',
+          webSocketDebuggerUrl: 'ws://3',
+        },
+        {
+          type: 'page',
+          title: 'DevTools',
+          url: 'devtools://devtools/bundled/inspector.html',
+          webSocketDebuggerUrl: 'ws://4',
+        },
       ];
       const result = selectBestOverlayTargets(targets);
       expect(result).toHaveLength(1);
@@ -252,7 +310,12 @@ describe('electron-runtime', () => {
 
     it('handles single-window apps unchanged', () => {
       const targets = [
-        { type: 'page', title: 'Slack', url: 'https://app.slack.com/', webSocketDebuggerUrl: 'ws://1' },
+        {
+          type: 'page',
+          title: 'Slack',
+          url: 'https://app.slack.com/',
+          webSocketDebuggerUrl: 'ws://1',
+        },
       ];
       const result = selectBestOverlayTargets(targets);
       expect(result).toHaveLength(1);
@@ -261,8 +324,18 @@ describe('electron-runtime', () => {
 
     it('handles file:// and different-origin targets', () => {
       const targets = [
-        { type: 'page', title: 'VS Code', url: 'file:///app/workbench.html', webSocketDebuggerUrl: 'ws://1' },
-        { type: 'page', title: 'Settings', url: 'https://vscode-settings.example.com/', webSocketDebuggerUrl: 'ws://2' },
+        {
+          type: 'page',
+          title: 'VS Code',
+          url: 'file:///app/workbench.html',
+          webSocketDebuggerUrl: 'ws://1',
+        },
+        {
+          type: 'page',
+          title: 'Settings',
+          url: 'https://vscode-settings.example.com/',
+          webSocketDebuggerUrl: 'ws://2',
+        },
       ];
       const result = selectBestOverlayTargets(targets);
       expect(result).toHaveLength(2);

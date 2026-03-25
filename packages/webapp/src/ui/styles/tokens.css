@@ -4,22 +4,30 @@
 @font-face {
   font-family: 'Adobe Clean';
   src: url('/fonts/AdobeClean-Regular.otf') format('opentype');
-  font-weight: 400; font-style: normal; font-display: swap;
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
 }
 @font-face {
   font-family: 'Adobe Clean';
   src: url('/fonts/AdobeClean-Medium.otf') format('opentype');
-  font-weight: 500; font-style: normal; font-display: swap;
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
 }
 @font-face {
   font-family: 'Adobe Clean';
   src: url('/fonts/AdobeClean-Bold.otf') format('opentype');
-  font-weight: 700; font-style: normal; font-display: swap;
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
 }
 @font-face {
   font-family: 'Adobe Clean';
   src: url('/fonts/AdobeClean-ExtraBold.otf') format('opentype');
-  font-weight: 800; font-style: normal; font-display: swap;
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
 }
 
 /* ================================================================== */
@@ -28,97 +36,99 @@
 /* ================================================================== */
 :root {
   /* ── S2 Gray Scale (Dark Theme — inverted) ───────────────── */
-  --s2-gray-25:   #1a1a1a;
-  --s2-gray-50:   #1e1e1e;
-  --s2-gray-75:   #252525;
-  --s2-gray-100:  #2c2c2c;
-  --s2-gray-200:  #3a3a3a;
-  --s2-gray-300:  #4a4a4a;
-  --s2-gray-400:  #5a5a5a;
-  --s2-gray-500:  #6e6e6e;
-  --s2-gray-600:  #8a8a8a;
-  --s2-gray-700:  #a1a1a1;
-  --s2-gray-800:  #cfcfcf;
-  --s2-gray-900:  #e8e8e8;
+  --s2-gray-25: #1a1a1a;
+  --s2-gray-50: #1e1e1e;
+  --s2-gray-75: #252525;
+  --s2-gray-100: #2c2c2c;
+  --s2-gray-200: #3a3a3a;
+  --s2-gray-300: #4a4a4a;
+  --s2-gray-400: #5a5a5a;
+  --s2-gray-500: #6e6e6e;
+  --s2-gray-600: #8a8a8a;
+  --s2-gray-700: #a1a1a1;
+  --s2-gray-800: #cfcfcf;
+  --s2-gray-900: #e8e8e8;
   --s2-gray-1000: #ffffff;
 
   /* ── S2 Semantic Backgrounds (Dark) ──────────────────────── */
-  --s2-bg-base:       var(--s2-gray-25);
-  --s2-bg-layer-1:    var(--s2-gray-50);
-  --s2-bg-layer-2:    var(--s2-gray-75);
-  --s2-bg-elevated:   var(--s2-gray-100);
-  --s2-bg-sunken:     #141414;
+  --s2-bg-base: var(--s2-gray-25);
+  --s2-bg-layer-1: var(--s2-gray-50);
+  --s2-bg-layer-2: var(--s2-gray-75);
+  --s2-bg-elevated: var(--s2-gray-100);
+  --s2-bg-sunken: #141414;
 
   /* ── S2 Content Colors (Dark) ────────────────────────────── */
-  --s2-content-default:   var(--s2-gray-900);
+  --s2-content-default: var(--s2-gray-900);
   --s2-content-secondary: var(--s2-gray-700);
-  --s2-content-tertiary:  var(--s2-gray-600);
-  --s2-content-disabled:  var(--s2-gray-400);
+  --s2-content-tertiary: var(--s2-gray-600);
+  --s2-content-disabled: var(--s2-gray-400);
 
   /* ── SLICC Brand Colors ──────────────────────────────────── */
-  --slicc-cone:         #ef7000;
-  --slicc-scoop-blue:   #3562ff;
+  --slicc-cone: #ef7000;
+  --slicc-scoop-blue: #3562ff;
   --slicc-scoop-purple: #a962e8;
-  --slicc-scoop-teal:   #2db9be;
-  --slicc-accent:       #15d675;
+  --slicc-scoop-teal: #2db9be;
+  --slicc-accent: #15d675;
 
   /* ── S2 Accent (mapped to SLICC brand blue) ─────────────── */
-  --s2-accent:          var(--slicc-scoop-blue);
-  --s2-accent-hover:    #4a75ff;
-  --s2-accent-down:     #2a52e0;
+  --s2-accent: var(--slicc-scoop-blue);
+  --s2-accent-hover: #4a75ff;
+  --s2-accent-down: #2a52e0;
 
   /* ── S2 Semantic Colors ──────────────────────────────────── */
-  --s2-negative:        #e34850;
-  --s2-positive:        #2d9d78;
-  --s2-informative:     var(--slicc-scoop-blue);
-  --s2-notice:          #e68619;
+  --s2-negative: #e34850;
+  --s2-positive: #2d9d78;
+  --s2-informative: var(--slicc-scoop-blue);
+  --s2-notice: #e68619;
 
   /* ── S2 Border Colors ────────────────────────────────────── */
-  --s2-border-default:  var(--s2-gray-300);
-  --s2-border-subtle:   var(--s2-gray-200);
-  --s2-border-focus:    var(--s2-accent);
+  --s2-border-default: var(--s2-gray-300);
+  --s2-border-subtle: var(--s2-gray-200);
+  --s2-border-focus: var(--s2-accent);
 
   /* ── S2 Typography ───────────────────────────────────────── */
-  --s2-font-family:     'Adobe Clean', 'Source Sans Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --s2-font-mono:       'Source Code Pro', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --s2-font-family:
+    'Adobe Clean', 'Source Sans Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    sans-serif;
+  --s2-font-mono: 'Source Code Pro', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
 
   /* Font sizes */
-  --s2-font-size-50:   11px;
-  --s2-font-size-75:   12px;
-  --s2-font-size-100:  14px;
-  --s2-font-size-200:  16px;
-  --s2-font-size-300:  18px;
-  --s2-font-size-400:  20px;
-  --s2-font-size-500:  22px;
-  --s2-font-size-600:  25px;
+  --s2-font-size-50: 11px;
+  --s2-font-size-75: 12px;
+  --s2-font-size-100: 14px;
+  --s2-font-size-200: 16px;
+  --s2-font-size-300: 18px;
+  --s2-font-size-400: 20px;
+  --s2-font-size-500: 22px;
+  --s2-font-size-600: 25px;
 
   /* Line heights */
-  --s2-line-height-50:  14px;
-  --s2-line-height-75:  16px;
+  --s2-line-height-50: 14px;
+  --s2-line-height-75: 16px;
   --s2-line-height-100: 18px;
   --s2-line-height-200: 20px;
   --s2-line-height-300: 22px;
 
   /* ── S2 Spacing ──────────────────────────────────────────── */
-  --s2-spacing-50:   4px;
-  --s2-spacing-75:   6px;
-  --s2-spacing-100:  8px;
-  --s2-spacing-200:  12px;
-  --s2-spacing-300:  16px;
-  --s2-spacing-400:  24px;
-  --s2-spacing-500:  32px;
-  --s2-spacing-600:  40px;
+  --s2-spacing-50: 4px;
+  --s2-spacing-75: 6px;
+  --s2-spacing-100: 8px;
+  --s2-spacing-200: 12px;
+  --s2-spacing-300: 16px;
+  --s2-spacing-400: 24px;
+  --s2-spacing-500: 32px;
+  --s2-spacing-600: 40px;
 
   /* ── S2 Radii ────────────────────────────────────────────── */
-  --s2-radius-s:       4px;
+  --s2-radius-s: 4px;
   --s2-radius-default: 8px;
-  --s2-radius-l:       12px;
-  --s2-radius-xl:      16px;
-  --s2-radius-pill:    9999px;
+  --s2-radius-l: 12px;
+  --s2-radius-xl: 16px;
+  --s2-radius-pill: 9999px;
 
   /* ── S2 Shadows (Dark) ───────────────────────────────────── */
-  --s2-shadow-elevated: 0 4px 16px rgba(0,0,0,0.4), 0 1px 4px rgba(0,0,0,0.3);
-  --s2-shadow-container: 0 1px 4px rgba(0,0,0,0.2);
+  --s2-shadow-elevated: 0 4px 16px rgba(0, 0, 0, 0.4), 0 1px 4px rgba(0, 0, 0, 0.3);
+  --s2-shadow-container: 0 1px 4px rgba(0, 0, 0, 0.2);
 
   /* ── S2 Transitions ──────────────────────────────────────── */
   --s2-transition-default: 130ms ease;
@@ -128,7 +138,7 @@
 
   /* ── UXC Subtle Fills (from Figma Alias/background/) ──── */
   --uxc-yellow-subtle-bg: #fff197;
-  --uxc-yellow-subtle-text: #9E6600;
+  --uxc-yellow-subtle-text: #9e6600;
   --uxc-purple-subtle-bg: #f4ebfc;
   --uxc-purple-subtle-text: #9a47e2;
   --uxc-cyan-subtle-bg: #d9f4fd;
@@ -147,7 +157,7 @@
   --uxc-negative-subtle-text: #d92361;
   --uxc-accent-subtle-bg: #e5f0fe;
   --uxc-accent-subtle-text: #3b63fb;
-  --uxc-neutral-subtle-bg: #F3F3F3;
+  --uxc-neutral-subtle-bg: #f3f3f3;
 
   /* ── UXC Layout ────────────────────────────────────────── */
   --uxc-nav-rail-width: 58px;
@@ -156,7 +166,12 @@
 
   /* ── SLICC Personality ───────────────────────────────── */
   --slicc-warm-bg: color-mix(in oklch, var(--s2-gray-50) 94%, var(--slicc-cone) 6%);
-  --slicc-brand-gradient: linear-gradient(90deg, var(--slicc-cone) 0%, var(--slicc-scoop-blue) 50%, var(--slicc-scoop-purple) 100%);
+  --slicc-brand-gradient: linear-gradient(
+    90deg,
+    var(--slicc-cone) 0%,
+    var(--slicc-scoop-blue) 50%,
+    var(--slicc-scoop-purple) 100%
+  );
 }
 
 /* ================================================================== */
@@ -165,45 +180,59 @@
 /* ================================================================== */
 :root.theme-light {
   /* ── S2 Gray Scale (Light Theme — from Figma UXC) ─────────── */
-  --s2-gray-25:   #ffffff;
-  --s2-gray-50:   #F8F8F8;
-  --s2-gray-75:   #F3F3F3;
-  --s2-gray-100:  #E9E9E9;
-  --s2-gray-200:  #e1e1e1;
-  --s2-gray-300:  #dadada;
-  --s2-gray-400:  #c6c6c6;
-  --s2-gray-500:  #8f8f8f;
-  --s2-gray-600:  #717171;
-  --s2-gray-700:  #505050;
-  --s2-gray-800:  #292929;
-  --s2-gray-900:  #131313;
+  --s2-gray-25: #ffffff;
+  --s2-gray-50: #f8f8f8;
+  --s2-gray-75: #f3f3f3;
+  --s2-gray-100: #e9e9e9;
+  --s2-gray-200: #e1e1e1;
+  --s2-gray-300: #dadada;
+  --s2-gray-400: #c6c6c6;
+  --s2-gray-500: #8f8f8f;
+  --s2-gray-600: #717171;
+  --s2-gray-700: #505050;
+  --s2-gray-800: #292929;
+  --s2-gray-900: #131313;
   --s2-gray-1000: #000000;
 
   /* ── S2 Semantic Backgrounds (Light — Figma UXC) ──────────── */
-  --s2-bg-sunken:     #F3F3F3;
+  --s2-bg-sunken: #f3f3f3;
 
   /* ── S2 Accent (from Figma: Palette/blue/900) ──────────────── */
-  --s2-accent:          #3b63fb;
-  --s2-accent-hover:    #2b54db;
-  --s2-accent-down:     #1e44c4;
+  --s2-accent: #3b63fb;
+  --s2-accent-hover: #2b54db;
+  --s2-accent-down: #1e44c4;
 
   /* ── S2 Semantic Colors (Light — from Figma UXC) ──────────── */
-  --s2-negative:        #d92361;
-  --s2-positive:        #05834e;
-  --s2-notice:          #d45b00;
+  --s2-negative: #d92361;
+  --s2-positive: #05834e;
+  --s2-notice: #d45b00;
 
   /* ── S2 Shadows (Light — from Figma UXC) ─────────────────── */
-  --s2-shadow-elevated: 0 4px 12px rgba(0,0,0,0.08), 0 2px 6px rgba(0,0,0,0.04), 0 0px 2px rgba(0,0,0,0.12);
-  --s2-shadow-container: 0 2px 8px rgba(0,0,0,0.08), 0 1px 4px rgba(0,0,0,0.04), 0 0px 1px rgba(0,0,0,0.08);
+  --s2-shadow-elevated:
+    0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.04), 0 0px 2px rgba(0, 0, 0, 0.12);
+  --s2-shadow-container:
+    0 2px 8px rgba(0, 0, 0, 0.08), 0 1px 4px rgba(0, 0, 0, 0.04), 0 0px 1px rgba(0, 0, 0, 0.08);
 }
 
 /* Syntax tokens — light theme overrides */
-.theme-light .tok-keyword { color: #8839ef; }
-.theme-light .tok-string  { color: #40a02b; }
-.theme-light .tok-number  { color: #d05d1a; }
-.theme-light .tok-comment { color: var(--s2-gray-500); }
-.theme-light .tok-punct   { color: #1e66f5; }
-.theme-light .tok-fn      { color: #2b6cb0; }
+.theme-light .tok-keyword {
+  color: #8839ef;
+}
+.theme-light .tok-string {
+  color: #40a02b;
+}
+.theme-light .tok-number {
+  color: #d05d1a;
+}
+.theme-light .tok-comment {
+  color: var(--s2-gray-500);
+}
+.theme-light .tok-punct {
+  color: #1e66f5;
+}
+.theme-light .tok-fn {
+  color: #2b6cb0;
+}
 
 /* Tooltip inverts in light mode */
 .theme-light .s2-tooltip {
@@ -212,5 +241,9 @@
 }
 
 /* Scrollbar lighter */
-.theme-light ::-webkit-scrollbar-thumb { background: var(--s2-gray-300); }
-.theme-light ::-webkit-scrollbar-thumb:hover { background: var(--s2-gray-400); }
+.theme-light ::-webkit-scrollbar-thumb {
+  background: var(--s2-gray-300);
+}
+.theme-light ::-webkit-scrollbar-thumb:hover {
+  background: var(--s2-gray-400);
+}

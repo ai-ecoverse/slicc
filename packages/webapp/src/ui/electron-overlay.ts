@@ -151,7 +151,10 @@ class SliccElectronLauncherElement extends HTMLElement {
     const offset = ELECTRON_OVERLAY_LAUNCHER_OFFSET_PX;
 
     // Create style
-    root.appendChild(createStyle(doc, `
+    root.appendChild(
+      createStyle(
+        doc,
+        `
       ${BASE_TOKENS}
       :host {
         all: initial;
@@ -255,7 +258,9 @@ class SliccElectronLauncherElement extends HTMLElement {
         .logo-for-dark { display: none; }
         .logo-for-light { display: block; }
       }
-    `));
+    `
+      )
+    );
 
     // Create button with Sliccy logo — both variants embedded, CSS toggles visibility.
     const button = doc.createElement('button');
@@ -450,7 +455,10 @@ class SliccElectronSidebarElement extends HTMLElement {
     const activeTab = normalizeExtensionTabId(this.getAttribute('active-tab'));
 
     // Create style
-    root.appendChild(createStyle(doc, `
+    root.appendChild(
+      createStyle(
+        doc,
+        `
       ${BASE_TOKENS}
       :host { all: initial; position: fixed; inset: 0; display: block; pointer-events: none; font-family: var(--s2-font-family); }
       :host([open]) { pointer-events: auto; }
@@ -502,7 +510,9 @@ class SliccElectronSidebarElement extends HTMLElement {
       iframe { border: 0; width: 100%; height: 100%; display: block; background: var(--s2-bg-base); }
       .empty-state { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; text-align: center; color: var(--s2-content-secondary); font-size: 13px; line-height: 1.5; }
       .empty-state[hidden] { display: none; }
-    `));
+    `
+      )
+    );
 
     // Create backdrop
     const backdrop = doc.createElement('div');
@@ -525,7 +535,6 @@ class SliccElectronSidebarElement extends HTMLElement {
 
     const brand = doc.createElement('div');
     brand.className = 'header__brand';
-
 
     const titleContainer = doc.createElement('div');
     const title = doc.createElement('div');
@@ -777,7 +786,8 @@ export class SliccElectronOverlayElement extends HTMLElement {
 
   private onKeyDown = (event: KeyboardEvent): void => {
     if (
-      (event.key === ELECTRON_OVERLAY_TOGGLE_SHORTCUT_DISPLAY_KEY || event.code === ELECTRON_OVERLAY_TOGGLE_SHORTCUT_CODE) &&
+      (event.key === ELECTRON_OVERLAY_TOGGLE_SHORTCUT_DISPLAY_KEY ||
+        event.code === ELECTRON_OVERLAY_TOGGLE_SHORTCUT_CODE) &&
       (event.metaKey || event.ctrlKey) &&
       !event.shiftKey &&
       !event.altKey &&
@@ -809,7 +819,10 @@ export class SliccElectronOverlayElement extends HTMLElement {
     const doc = this.ownerDocument;
 
     // Create style
-    root.appendChild(createStyle(doc, `
+    root.appendChild(
+      createStyle(
+        doc,
+        `
       ${BASE_TOKENS}
       :host {
         all: initial;
@@ -820,10 +833,14 @@ export class SliccElectronOverlayElement extends HTMLElement {
         z-index: 2147483647;
         contain: layout style paint;
       }
-    `));
+    `
+      )
+    );
 
     // Create launcher
-    const launcher = doc.createElement(ELECTRON_OVERLAY_LAUNCHER_TAG_NAME) as SliccElectronLauncherElement;
+    const launcher = doc.createElement(
+      ELECTRON_OVERLAY_LAUNCHER_TAG_NAME
+    ) as SliccElectronLauncherElement;
     launcher.addEventListener('slicc-overlay-toggle', () => this.toggle());
     launcher.addEventListener('slicc-overlay-move', (event: Event) => {
       const corner = (event as CustomEvent<{ corner?: string }>).detail?.corner;
@@ -832,7 +849,9 @@ export class SliccElectronOverlayElement extends HTMLElement {
     root.appendChild(launcher);
 
     // Create sidebar
-    const sidebar = doc.createElement(ELECTRON_OVERLAY_SIDEBAR_TAG_NAME) as SliccElectronSidebarElement;
+    const sidebar = doc.createElement(
+      ELECTRON_OVERLAY_SIDEBAR_TAG_NAME
+    ) as SliccElectronSidebarElement;
     sidebar.addEventListener('slicc-overlay-close', () => this.hideSidebar());
     sidebar.addEventListener('slicc-overlay-select-tab', (event: Event) => {
       const tab = (event as CustomEvent<{ tab?: string }>).detail?.tab;

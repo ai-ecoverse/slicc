@@ -46,7 +46,7 @@ export function hashString(str: string, max: number): number {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
+    hash = (hash << 5) - hash + char;
     hash = hash & hash; // Convert to 32-bit integer
   }
   return Math.abs(hash) % max;
@@ -122,7 +122,9 @@ export async function getElectronAppPort(appPath: string, basePort: number): Pro
 /**
  * Get both CDP and serve ports for an Electron app.
  */
-export async function getElectronAppPorts(appPath: string): Promise<{ cdpPort: number; servePort: number }> {
+export async function getElectronAppPorts(
+  appPath: string
+): Promise<{ cdpPort: number; servePort: number }> {
   const cdpPort = await getElectronAppPort(appPath, DEFAULT_ELECTRON_CDP_PORT);
   const servePort = await getElectronAppPort(appPath, DEFAULT_ELECTRON_SERVE_PORT);
   return { cdpPort, servePort };
@@ -163,14 +165,7 @@ export function resolveElectronAppExecutablePath(
     // Scan MacOS directory for the main executable
     // Many Electron apps use "Electron" as the executable name
     // Prefer known main executable names, filter out helper processes
-    const helperPatterns = [
-      /helper/i,
-      /crash/i,
-      /gpu/i,
-      /renderer/i,
-      /plugin/i,
-      /utility/i,
-    ];
+    const helperPatterns = [/helper/i, /crash/i, /gpu/i, /renderer/i, /plugin/i, /utility/i];
     try {
       const entries = readdirSync(macOSDir);
 
@@ -308,7 +303,13 @@ export function buildElectronServerSpawnConfig(
   if (options.dev) {
     return {
       command: (options.platform ?? process.platform) === 'win32' ? 'npx.cmd' : 'npx',
-      args: ['tsx', 'packages/node-server/src/index.ts', '--dev', '--serve-only', `--cdp-port=${options.cdpPort}`],
+      args: [
+        'tsx',
+        'packages/node-server/src/index.ts',
+        '--dev',
+        '--serve-only',
+        `--cdp-port=${options.cdpPort}`,
+      ],
     };
   }
 
@@ -430,7 +431,9 @@ function scoreOverlayTarget(target: ElectronInspectableTarget): number {
  * Multi-window apps (like Teams) expose several page targets for the same origin;
  * we only want to inject the overlay into the primary content window.
  */
-export function selectBestOverlayTargets(targets: ElectronInspectableTarget[]): ElectronInspectableTarget[] {
+export function selectBestOverlayTargets(
+  targets: ElectronInspectableTarget[]
+): ElectronInspectableTarget[] {
   const injectable = targets.filter(shouldInjectElectronOverlayTarget);
 
   // Group by origin

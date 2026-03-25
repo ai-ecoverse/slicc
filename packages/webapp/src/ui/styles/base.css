@@ -1,8 +1,18 @@
 /* ================================================================== */
 /* Reset & Base                                                       */
 /* ================================================================== */
-*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { height: 100%; overflow: hidden; }
+*,
+*::before,
+*::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
 body {
   font-family: var(--s2-font-family);
   background: var(--s2-bg-base);
@@ -10,7 +20,11 @@ body {
   font-size: var(--s2-font-size-100);
   line-height: 1.5;
 }
-#app { height: 100%; display: flex; flex-direction: column; }
+#app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
 
 /* S2 focus ring */
 :focus-visible {
@@ -19,7 +33,17 @@ body {
 }
 
 /* S2 scrollbar styling */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--s2-gray-300); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--s2-gray-400); }
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--s2-gray-300);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--s2-gray-400);
+}

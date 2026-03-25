@@ -1254,10 +1254,9 @@ describe('ScoopContext image error recovery', () => {
     const assistantMsg = replacedMessages[1];
     expect(assistantMsg.content.filter((b: any) => b.type === 'image')).toHaveLength(0);
     expect(assistantMsg.content.filter((b: any) => b.type === 'toolCall')).toHaveLength(2);
-    expect(assistantMsg.content.filter((b: any) => b.type === 'toolCall').map((b: any) => b.id)).toEqual([
-      'toolu_1',
-      'toolu_2',
-    ]);
+    expect(
+      assistantMsg.content.filter((b: any) => b.type === 'toolCall').map((b: any) => b.id)
+    ).toEqual(['toolu_1', 'toolu_2']);
   });
 
   it('preserves assistant ToolCalls when stripping image-only content during image recovery', () => {

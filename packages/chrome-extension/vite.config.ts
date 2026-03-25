@@ -26,18 +26,18 @@ export default defineConfig(({ mode }) => ({
     alias: {
       'node:zlib': resolve(__dirname, '../webapp/src/shims/empty.ts'),
       'node:module': resolve(__dirname, '../webapp/src/shims/empty.ts'),
-      'stream': resolve(__dirname, '../webapp/src/shims/stream.ts'),
-      'http': resolve(__dirname, '../webapp/src/shims/http.ts'),
-      'https': resolve(__dirname, '../webapp/src/shims/https.ts'),
-      'http2': resolve(__dirname, '../webapp/src/shims/http2.ts'),
+      stream: resolve(__dirname, '../webapp/src/shims/stream.ts'),
+      http: resolve(__dirname, '../webapp/src/shims/http.ts'),
+      https: resolve(__dirname, '../webapp/src/shims/https.ts'),
+      http2: resolve(__dirname, '../webapp/src/shims/http2.ts'),
       // Deep import into pi-coding-agent's compaction submodule (see vite.config.ts)
       '@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js': resolve(
         repoRoot,
-        'node_modules/@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js',
+        'node_modules/@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js'
       ),
       '@mariozechner/pi-ai/dist/utils/overflow.js': resolve(
         repoRoot,
-        'node_modules/@mariozechner/pi-ai/dist/utils/overflow.js',
+        'node_modules/@mariozechner/pi-ai/dist/utils/overflow.js'
       ),
     },
   },
@@ -102,8 +102,14 @@ export default defineConfig(({ mode }) => ({
           copyFileSync(manifestSrc, manifestDest);
         }
         copyFileSync(resolve(__dirname, 'sandbox.html'), resolve(outDir, 'sandbox.html'));
-        copyFileSync(resolve(__dirname, 'sprinkle-sandbox.html'), resolve(outDir, 'sprinkle-sandbox.html'));
-        copyFileSync(resolve(__dirname, 'tool-ui-sandbox.html'), resolve(outDir, 'tool-ui-sandbox.html'));
+        copyFileSync(
+          resolve(__dirname, 'sprinkle-sandbox.html'),
+          resolve(outDir, 'sprinkle-sandbox.html')
+        );
+        copyFileSync(
+          resolve(__dirname, 'tool-ui-sandbox.html'),
+          resolve(outDir, 'tool-ui-sandbox.html')
+        );
         copyFileSync(resolve(__dirname, 'voice-popup.html'), resolve(outDir, 'voice-popup.html'));
         copyFileSync(resolve(__dirname, 'voice-popup.js'), resolve(outDir, 'voice-popup.js'));
 
@@ -113,7 +119,11 @@ export default defineConfig(({ mode }) => ({
         mkdirSync(logosDest, { recursive: true });
         for (const file of readdirSync(logosSrc)) {
           if (file.endsWith('.png') || file.endsWith('.ico')) {
-            try { copyFileSync(resolve(logosSrc, file), resolve(logosDest, file)); } catch { /* skip */ }
+            try {
+              copyFileSync(resolve(logosSrc, file), resolve(logosDest, file));
+            } catch {
+              /* skip */
+            }
           }
         }
 
@@ -124,29 +134,50 @@ export default defineConfig(({ mode }) => ({
           mkdirSync(fontsDest, { recursive: true });
           for (const file of readdirSync(fontsSrc)) {
             if (file.endsWith('.otf') || file.endsWith('.woff2')) {
-              try { copyFileSync(resolve(fontsSrc, file), resolve(fontsDest, file)); } catch { /* skip */ }
+              try {
+                copyFileSync(resolve(fontsSrc, file), resolve(fontsDest, file));
+              } catch {
+                /* skip */
+              }
             }
           }
-        } catch { /* fonts dir doesn't exist — fine, fallback fonts will be used */ }
+        } catch {
+          /* fonts dir doesn't exist — fine, fallback fonts will be used */
+        }
 
         // Bundle Pyodide for extension (both main page and sandbox CSP block CDN scripts)
         const pyodideSrc = resolve(repoRoot, 'node_modules/pyodide');
         const pyodideDest = resolve(outDir, 'pyodide');
         mkdirSync(pyodideDest, { recursive: true });
-        for (const file of ['pyodide.asm.js', 'pyodide.asm.wasm', 'pyodide.js', 'pyodide-lock.json', 'python_stdlib.zip']) {
-          try { copyFileSync(resolve(pyodideSrc, file), resolve(pyodideDest, file)); } catch { /* optional file */ }
+        for (const file of [
+          'pyodide.asm.js',
+          'pyodide.asm.wasm',
+          'pyodide.js',
+          'pyodide-lock.json',
+          'python_stdlib.zip',
+        ]) {
+          try {
+            copyFileSync(resolve(pyodideSrc, file), resolve(pyodideDest, file));
+          } catch {
+            /* optional file */
+          }
         }
 
         // Bundle ImageMagick WASM for extension (CDN blocked by extension CSP)
         try {
           copyFileSync(
             resolve(repoRoot, 'node_modules/@imagemagick/magick-wasm/dist/magick.wasm'),
-            resolve(outDir, 'magick.wasm'),
+            resolve(outDir, 'magick.wasm')
           );
-        } catch { /* @imagemagick/magick-wasm not installed */ }
+        } catch {
+          /* @imagemagick/magick-wasm not installed */
+        }
 
         copyFileSync(resolve(outDir, 'packages/webapp/index.html'), resolve(outDir, 'index.html'));
-        copyFileSync(resolve(outDir, 'packages/chrome-extension/offscreen.html'), resolve(outDir, 'offscreen.html'));
+        copyFileSync(
+          resolve(outDir, 'packages/chrome-extension/offscreen.html'),
+          resolve(outDir, 'offscreen.html')
+        );
       },
     },
   ],

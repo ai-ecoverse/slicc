@@ -155,15 +155,15 @@ Cone sends `{phase: "done", previewUrl: "..."}`. Sprinkle transitions to Done st
 
 ### New files
 
-| File                                                            | Purpose                                                              |
-| --------------------------------------------------------------- | -------------------------------------------------------------------- |
+| File                                                                 | Purpose                                                              |
+| -------------------------------------------------------------------- | -------------------------------------------------------------------- |
 | `packages/vfs-root/shared/sprinkles/migrate-page/migrate-page.shtml` | The sprinkle (HTML + JS for 4 states: ready, migrating, done, error) |
 | `packages/vfs-root/shared/migrate-config.json`                       | Default workspace config with `adobe/aem-boilerplate`                |
 
 ### Modified files
 
-| File                                                  | Change                                                                                                                                                                                                                                                                                                                            |
-| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| File                                                       | Change                                                                                                                                                                                                                                                                                                                            |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `packages/vfs-root/workspace/skills/migrate-page/SKILL.md` | Add "Sprinkle Trigger" section: (1) carve-out overriding Rules 2/5 to authorize cone-direct lick handling and `sprinkle send`; (2) instructions to detect active tab, read config, start migration; (3) `sprinkle send` commands at each phase transition; (4) `write_file` to update `currentMigration` in config at each phase. |
 
 ### No changes needed

@@ -14,8 +14,8 @@
 
 ## File Structure
 
-| File                                                            | Action | Responsibility                                                                                                                  |
-| --------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| File                                                                 | Action | Responsibility                                                                                                                  |
+| -------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------- |
 | `packages/vfs-root/shared/migrate-config.json`                       | Create | Default workspace config with `adobe/aem-boilerplate` repo and `currentMigration: null`                                         |
 | `packages/vfs-root/shared/sprinkles/migrate-page/migrate-page.shtml` | Create | Sprinkle UI: 4 states (ready, migrating, done, error), bridge API integration, state recovery                                   |
 | `packages/vfs-root/workspace/skills/migrate-page/SKILL.md`           | Modify | Add "Sprinkle Trigger" section (carve-out + lick handling) and `sprinkle send` / config-write commands at each phase transition |
