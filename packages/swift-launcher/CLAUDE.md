@@ -51,6 +51,6 @@ Use this path when an Electron app disables remote debugging in production build
 
 ## Packaging Notes
 
-- `npm run build` compiles Swift and assembles the `.app` bundle for manual testing.
+- `npm run build` assembles the `.app` bundle for manual testing from already-built artifacts.
 - `sign-and-package.sh` is the packaging path for distributable artifacts.
-- When running from inside the repo, the launcher expects the webapp and extension artifacts to already be built and the Swift server to be available.
+- When running from inside the repo, the launcher expects the webapp and extension artifacts (`dist/ui`) and the Swift server binary (`packages/swift-server/.build/release/slicc-server`) to already be built by the root-level tooling.
