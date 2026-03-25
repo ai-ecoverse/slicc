@@ -4,6 +4,9 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-03-11",
   "workers_dev": true,
+  "routes": [
+    { "pattern": "www.sliccy.ai/*", "zone_name": "sliccy.ai" }
+  ],
   "vars": {
     "CLOUDFLARE_TURN_KEY_ID": "6c2201a0453bd6695ecb24a00b2b6ed1"
   },
