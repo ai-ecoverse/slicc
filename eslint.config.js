@@ -175,6 +175,6 @@ export default tseslint.config(
   },
   {
     // Ignore patterns
-    ignores: ['dist/**', 'node_modules/**', 'artifacts/**', '*.min.js', 'packages/assets/fonts/**'],
+    ignores: ['**/dist/**', 'node_modules/**', 'artifacts/**', '*.min.js', 'packages/assets/fonts/**'],
   }
 );
