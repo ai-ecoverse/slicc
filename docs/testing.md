@@ -326,7 +326,6 @@ For skipped categories, ensure **manual verification in both CLI and extension m
 | Command | Purpose |
 |---------|---------|
 | `npm run test` | Run all tests once; fail fast on first error |
-| `npm run test:watch` | Watch mode; re-run affected tests on file change |
 | `npx vitest run packages/webapp/tests/fs/virtual-fs.test.ts` | Run single test file |
 | `npx vitest run packages/webapp/tests/fs/` | Run all tests in directory |
 | `npx vitest run --reporter=verbose` | Verbose output with full stack traces |

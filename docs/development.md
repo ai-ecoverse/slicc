@@ -9,10 +9,7 @@ Build, run, test, and debug SLICC locally.
 | `npm run dev:full` | Full dev mode: Vite HMR + Chrome + CDP proxy (port 5710) | Interactive development; live reload; test browser features |
 | `npm run dev:electron -- /Applications/Slack.app` | Launch the main CLI in Electron attach mode against an Electron app | Electron overlay/runtime work |
 | `npm run dev` | Vite dev server only (no Chrome/CDP) | Quick UI iteration without launching browser |
-| `npm run qa:setup` | Build the extension and scaffold dedicated `leader` / `follower` / `extension` Chrome QA profiles | First-time manual verification setup; reset profile colors/state |
-| `npm run qa:leader` | Launch the CLI with the dedicated leader Chrome profile, auto-connected to the staging tray hub | Manual tray-leader verification; `host` should show `status: leader` |
-| `npm run qa:follower` | Launch the CLI with the dedicated follower Chrome profile | Manual follower-join verification with isolated browser state |
-| `npm run qa:extension` | Rebuild the extension, then launch the CLI with the dedicated extension profile auto-loading `dist/extension` | Extension verification without re-loading unpacked extension by hand |
+| `npm run start:extension` | Rebuild the extension, then launch the CLI with the dedicated extension profile auto-loading `dist/extension` | Extension verification without re-loading unpacked extension by hand |
 | `npm run build` | Production build: Vite UI + TSC CLI/Electron Node target | Pre-deployment validation; final bundle check |
 | `npm run build:ui` | Vite build only into `dist/ui/` | Build UI assets separately |
 | `npm run build:cli` | TSC build only into `dist/node-server/` | Build CLI server + Electron attach helpers separately |
@@ -24,7 +21,6 @@ Build, run, test, and debug SLICC locally.
 | `npm run test` | Vitest run (all tests) | Run full test suite; CI validation |
 | `SLICC_TEST_SERVER_URL=http://localhost:5710 npm run test:server-integration` | Run shared server API conformance tests against an externally running Node or Swift server | Validate standalone server HTTP/WebSocket behavior |
 | `npm run test:e2e` | Playwright e2e tests for preview SW (requires `npm run build` first) | Validate preview serving and project serve mode in a real browser |
-| `npm run test:watch` | Vitest watch mode | Iterate on test changes; TDD workflow |
 | `npx vitest run packages/webapp/tests/fs/virtual-fs.test.ts` | Run single test file | Debug a specific module |
 | `npx wrangler dev --config packages/cloudflare-worker/wrangler.jsonc` | Run the Cloudflare Worker tray hub locally (if Wrangler is installed/authenticated) | Exercise `packages/cloudflare-worker/src/` against a real Worker runtime |
 | `npx wrangler deploy --env staging --config packages/cloudflare-worker/wrangler.jsonc` | Deploy the staging Cloudflare Worker tray hub using `packages/cloudflare-worker/wrangler.jsonc` | Publish the staging tray hub (`slicc-tray-hub-staging`) used by GitHub Actions |
@@ -99,7 +95,7 @@ When `WORKER_BASE_URL` is set for the CLI/Electron server, the standalone browse
 
 1. **Edit** — Change source code in `packages/*/src/`
 2. **Typecheck** — Run `npm run typecheck` (browser + Node targets)
-3. **Test** — Run `npm run test` (or `npm run test:watch` for rapid iteration)
+3. **Test** — Run `npm run test`
 4. **Build** — Run all four build gates: `npm run typecheck`, `npm run test`, `npm run build`, `npm run build:extension`
 5. **Verify manually** — Test in the relevant runtimes; include Electron mode when touching float/runtime code (see checklist below)
 
@@ -118,9 +114,7 @@ Manual verification in the relevant runtimes:
   - Launch Chrome automatically
   - Navigate to http://localhost:5710
   - Interact with UI; check functionality
-- [ ] Feature works with QA Chrome profiles when browser isolation matters (`npm run qa:setup`, then `qa:leader` / `qa:follower` / `qa:extension`)
-  - Dedicated profile colors are visible
-  - Leader/follower state stays isolated between windows
+- [ ] Feature works with extension profile (`npm run start:extension`)
   - Extension profile auto-loads `dist/extension`
 - [ ] Feature works in extension mode (load `dist/extension/` unpacked in `chrome://extensions`)
   - Load `dist/extension/` as unpacked extension
@@ -176,7 +170,7 @@ Use these before relying on CI:
 
 > **End users** install the extension from the [Chrome Web Store](https://chromewebstore.google.com/detail/slicc/akggccfpkleihhemkkikggopnifgelbk). The steps below are for **development** only — loading a local build for testing.
 
-If you want a reusable browser profile instead of re-loading the unpacked extension by hand every time, run `npm run qa:setup` once and use `npm run qa:extension` for subsequent launches.
+If you want a reusable browser profile instead of re-loading the unpacked extension by hand every time, use `npm run start:extension`.
 
 1. **Build extension bundle**
    ```bash
@@ -291,7 +285,6 @@ log.error('error message');
 | `npm run test` | Run all tests once |
 | `SLICC_TEST_SERVER_URL=http://localhost:5710 npm run test:server-integration` | Run server integration suite against an already running server |
 | `npm run test:e2e` | Playwright e2e tests for preview SW (requires build) |
-| `npm run test:watch` | Watch mode; re-run on file change |
 | `npx vitest run packages/webapp/tests/fs/virtual-fs.test.ts` | Run single file |
 | `npx vitest run packages/webapp/tests/fs/` | Run all tests in directory |
 | `npx vitest run --reporter=verbose` | Verbose test output |

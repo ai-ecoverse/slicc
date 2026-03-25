@@ -41,10 +41,8 @@
     "test": "vitest run",
     "test:server-integration": "vitest run --config packages/node-server/tests/integration/server/vitest.config.ts",
     "test:e2e": "npx playwright test --config packages/webapp/tests/e2e/playwright.config.ts",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix",
+    "start:extension": "npm run build -w @slicc/chrome-extension && npm run dev -- --profile=extension",
+    "lint": "prettier --write . && eslint . --fix",
     "package:release": "node dist/node-server/release-package.js"
   },
   "dependencies": {

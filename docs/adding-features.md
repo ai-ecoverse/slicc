@@ -988,9 +988,6 @@ npm run typecheck
 # Run tests
 npm run test
 
-# Watch mode for TDD
-npm run test:watch
-
 # Standalone dev
 npm run dev:full
 
