@@ -29,6 +29,7 @@ This root file is the repo navigation hub. Keep package-specific architecture an
 ## Top-Level Commands
 
 ```bash
+npm install             # Install dependencies (first time)
 npm run build           # Production build (UI + CLI/Electron)
 npm run test            # Vitest run
 npm run typecheck       # Browser + Node typecheck
@@ -79,8 +80,8 @@ Use the ice cream terms in code review comments and docs when they match the dom
 Multiple standalone SLICC instances can run simultaneously. All ports auto-resolve to avoid conflicts — just override the UI port:
 
 ```bash
-PORT=5720 npm run dev:full   # Second instance on port 5720
-PORT=5730 npm run dev:full   # Third instance on port 5730
+PORT=5720 npm run dev   # Second instance on port 5720
+PORT=5730 npm run dev   # Third instance on port 5730
 ```
 
 Each instance gets an isolated Chrome profile (keyed by port), separate CDP port (auto-detected), and separate HMR port. No shared state between instances.

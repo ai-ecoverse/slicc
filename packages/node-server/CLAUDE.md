@@ -9,9 +9,8 @@ This file covers the Node.js CLI/Electron float in `packages/node-server/`.
 ## Main Commands
 
 ```bash
-npm run dev:full
-npm run dev:electron -- /Applications/Slack.app
 npm run dev
+npm run dev:electron -- /Applications/Slack.app
 npm run build
 npm run package:release
 ```
@@ -29,8 +28,8 @@ npm run package:release
 The `--prompt` flag auto-submits a prompt when the UI loads and is the quickest way to smoke-test common flows.
 
 ```bash
-npm run dev:full -- --prompt "mount /tmp"
-npm run dev:full -- --prompt "ls /workspace"
+npm run dev -- --prompt "mount /tmp"
+npm run dev -- --prompt "ls /workspace"
 ```
 
 Use it for repeatable dev and QA flows without manual typing.
@@ -49,8 +48,8 @@ The runtime auto-resolves port conflicts when needed.
 Multiple standalone instances can run at once. Override the served UI port and let the runtime resolve the rest:
 
 ```bash
-PORT=5720 npm run dev:full
-PORT=5730 npm run dev:full
+PORT=5720 npm run dev
+PORT=5730 npm run dev
 ```
 
 Each instance gets its own browser profile, CDP port, and HMR port.
