@@ -174,7 +174,7 @@ describe('ScoopContext active tool surface', () => {
     const ctx = new ScoopContext(testScoop, createMockCallbacks(), createMockFs() as any);
     await ctx.init();
 
-    expect(mocks.loadSkills).toHaveBeenCalledWith(expect.anything(), '/scoops/test-scoop/workspace/skills');
+    expect(mocks.loadSkills).toHaveBeenCalledWith(expect.anything(), '/workspace/skills');
     const systemPrompt = mocks.agentCtorCalls[0].initialState.systemPrompt;
     expect(systemPrompt).toContain('/repo/.claude/skills/compat-skill/SKILL.md');
   });

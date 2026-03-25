@@ -563,7 +563,13 @@ export class Orchestrator {
       getBrowserAPI: () => this.callbacks.getBrowserAPI(),
     };
 
-    const context = new ScoopContext(scoop, contextCallbacks, fs, this.sessionStore ?? undefined);
+    const context = new ScoopContext(
+      scoop,
+      contextCallbacks,
+      fs,
+      this.sessionStore ?? undefined,
+      this.sharedFs ?? undefined
+    );
 
     this.contexts.set(jid, context);
     this.tabs.set(jid, {
@@ -793,6 +799,26 @@ export class Orchestrator {
       context.updateModel();
     }
     log.info('Model updated on all active contexts', { contextCount: this.contexts.size });
+  }
+
+  /** Reload skills on all active scoop contexts (cone + scoops). */
+  async reloadAllSkills(): Promise<void> {
+    const promises: Promise<void>[] = [];
+    for (const [jid, context] of this.contexts) {
+      const tab = this.tabs.get(jid);
+      if (tab?.status === 'ready' || tab?.status === 'processing') {
+        promises.push(
+          context.reloadSkills().catch((err) => {
+            log.warn('Failed to reload skills for scoop', {
+              jid,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          })
+        );
+      }
+    }
+    await Promise.all(promises);
+    log.info('Skills reloaded across all contexts', { count: promises.length });
   }
 
   /** Stop a specific scoop */
