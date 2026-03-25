@@ -23,7 +23,7 @@ This root file is the repo navigation hub. Keep package-specific architecture an
 | Path | Purpose |
 | --- | --- |
 | `docs/` | Long-form developer and agent reference docs, including screenshots and other docs assets |
-| `tests/` | TypeScript/Vitest and integration tests mirrored by subsystem |
+| `packages/*/tests/` | Per-package TypeScript/Vitest tests mirrored by subsystem |
 | `dist/` | Generated build output; do not hand-edit |
 
 ## Top-Level Commands
@@ -129,7 +129,7 @@ Virtual Filesystem (packages/webapp/src/fs/) → RestrictedFS → Shell (package
 ### Build Targets
 
 - **Browser bundle** (tsconfig.json): Everything except `packages/node-server/src/`. Bundled by Vite.
-- **CLI/Electron** (tsconfig.cli.json): Only `packages/node-server/src/`. Compiled by TSC to dist/cli/.
+- **CLI/Electron** (tsconfig.cli.json): Only `packages/node-server/src/`. Compiled by TSC to dist/node-server/.
 - **Extension** (packages/chrome-extension/vite.config.ts): Browser bundle + extension entry points + bundled Pyodide.
 
 ### Key Subsystems

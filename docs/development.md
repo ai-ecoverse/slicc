@@ -367,8 +367,7 @@ packages/webapp/src/
   shims/           Node module shims for browser bundle
   types/           Type declarations for external submodules
 
-packages/node-server/src/
-  cli/             Express server + Chrome launcher
+packages/node-server/src/   Express server + Chrome launcher
 
 packages/chrome-extension/src/
                    Chrome Manifest V3 extension files
@@ -392,6 +391,6 @@ docs/
 
 dist/
   ui/              Production browser bundle (Vite output)
-  cli/             Production CLI server + Electron entrypoint (TSC output)
+  node-server/     Production CLI server + Electron entrypoint (TSC output)
   extension/       Production extension bundle
 ```

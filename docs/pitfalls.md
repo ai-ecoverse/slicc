@@ -233,7 +233,7 @@ Host the real leader tray `WebSocket` in `packages/chrome-extension/src/service-
 **The Problem**
 
 The codebase has two independent TypeScript builds:
-- **Browser bundle** (`tsconfig.json`): Everything under `packages/webapp/src/`
+- **Browser bundle** (`tsconfig.json`): Everything under `packages/webapp/src/` and `packages/chrome-extension/src/`
 - **CLI server** (`tsconfig.cli.json`): Only `packages/node-server/src/`
 
 Cross-importing breaks the build.
