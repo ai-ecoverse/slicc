@@ -48,7 +48,7 @@
   "dependencies": {
     "@adobe/helix-rum-js": "^2.14.2",
     "@cantoo/pdf-lib": "^2.6.1",
-    "@imagemagick/magick-wasm": "^0.0.38",
+    "@imagemagick/magick-wasm": "^0.0.39",
     "@isomorphic-git/lightning-fs": "4.6.2",
     "@mariozechner/pi-agent-core": "^0.55.4",
     "@mariozechner/pi-ai": "^0.55.4",
