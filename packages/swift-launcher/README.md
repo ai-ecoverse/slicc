@@ -14,6 +14,7 @@ launches them with SLICC attached.
 ### Prerequisites
 
 Before building the launcher, ensure these are built from the repo root:
+
 - `npm run build -w @slicc/webapp` (produces `dist/ui`)
 - `cd packages/swift-server && swift build -c release` (produces the server binary)
 
