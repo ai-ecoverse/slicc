@@ -7,6 +7,47 @@ on:
     branches: [main]
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      webapp: ${{ steps.filter.outputs.webapp }}
+      vfs-root: ${{ steps.filter.outputs.vfs-root }}
+      assets: ${{ steps.filter.outputs.assets }}
+      node-server: ${{ steps.filter.outputs.node-server }}
+      extension: ${{ steps.filter.outputs.extension }}
+      cloudflare-worker: ${{ steps.filter.outputs.cloudflare-worker }}
+      swift-server: ${{ steps.filter.outputs.swift-server }}
+      swift-launcher: ${{ steps.filter.outputs.swift-launcher }}
+      root-config: ${{ steps.filter.outputs.root-config }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        id: filter
+        with:
+          filters: |
+            webapp:
+              - 'packages/webapp/**'
+            vfs-root:
+              - 'packages/vfs-root/**'
+            assets:
+              - 'packages/assets/**'
+            node-server:
+              - 'packages/node-server/**'
+            extension:
+              - 'packages/chrome-extension/**'
+            cloudflare-worker:
+              - 'packages/cloudflare-worker/**'
+            swift-server:
+              - 'packages/swift-server/**'
+            swift-launcher:
+              - 'packages/swift-launcher/**'
+            root-config:
+              - 'package.json'
+              - 'package-lock.json'
+              - 'tsconfig*.json'
+              - 'vitest*.config.*'
+              - '.github/workflows/ci.yml'
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -27,6 +68,12 @@ jobs:
           fi
 
   webapp:
+    needs: changes
+    if: >-
+      needs.changes.outputs.webapp == 'true' ||
+      needs.changes.outputs.vfs-root == 'true' ||
+      needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -49,6 +96,10 @@ jobs:
           npm run test:e2e
 
   node-server:
+    needs: changes
+    if: >-
+      needs.changes.outputs.node-server == 'true' ||
+      needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -65,6 +116,13 @@ jobs:
         run: npm run build -w @slicc/node-server
 
   chrome-extension:
+    needs: changes
+    if: >-
+      needs.changes.outputs.extension == 'true' ||
+      needs.changes.outputs.webapp == 'true' ||
+      needs.changes.outputs.vfs-root == 'true' ||
+      needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -81,6 +139,10 @@ jobs:
         run: npm run build -w @slicc/chrome-extension
 
   cloudflare-worker:
+    needs: changes
+    if: >-
+      needs.changes.outputs.cloudflare-worker == 'true' ||
+      needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -180,6 +242,9 @@ jobs:
           done
 
   swift-server:
+    needs: changes
+    if: >-
+      needs.changes.outputs.swift-server == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -189,6 +254,14 @@ jobs:
         run: cd packages/swift-server && swift test
 
   swift-launcher:
+    needs: changes
+    if: >-
+      needs.changes.outputs.swift-launcher == 'true' ||
+      needs.changes.outputs.swift-server == 'true' ||
+      needs.changes.outputs.webapp == 'true' ||
+      needs.changes.outputs.vfs-root == 'true' ||
+      needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.root-config == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -208,7 +281,7 @@ jobs:
   ci:
     if: always()
     needs:
-      [lint, webapp, node-server, chrome-extension, cloudflare-worker, swift-launcher, swift-server]
+      [changes, lint, webapp, node-server, chrome-extension, cloudflare-worker, swift-launcher, swift-server]
     runs-on: ubuntu-latest
     steps:
       - name: Check job results
