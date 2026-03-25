@@ -311,6 +311,8 @@ jobs:
     if: github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    permissions:
+      actions: read
     steps:
       - name: Wait for active release
         env:
