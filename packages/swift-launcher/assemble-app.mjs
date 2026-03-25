@@ -40,35 +40,37 @@ chmodSync(serverDest, 0o755);
 // ---------------------------------------------------------------------------
 // 2. Icon
 // ---------------------------------------------------------------------------
-const iconSrc = resolve(__dirname, 'sliccstart-icon.png');
-if (existsSync(iconSrc)) {
-  const iconset = resolve(resources, 'AppIcon.iconset');
-  mkdirSync(iconset, { recursive: true });
+const iconSrc = resolve(__dirname, '../../packages/assets/logos/macos-icon-iOS-Default-1024x1024@1x.png');
+if (!existsSync(iconSrc)) {
+  console.error(`ERROR: Icon source not found: ${iconSrc}`);
+  process.exit(1);
+}
+const iconset = resolve(resources, 'AppIcon.iconset');
+mkdirSync(iconset, { recursive: true });
 
-  const sizes = [
-    [1024, 'icon_512x512@2x.png'],
-    [512, 'icon_512x512.png'],
-    [512, 'icon_256x256@2x.png'],
-    [256, 'icon_256x256.png'],
-    [256, 'icon_128x128@2x.png'],
-    [128, 'icon_128x128.png'],
-    [64, 'icon_32x32@2x.png'],
-    [32, 'icon_32x32.png'],
-    [32, 'icon_16x16@2x.png'],
-    [16, 'icon_16x16.png'],
-  ];
+const sizes = [
+  [1024, 'icon_512x512@2x.png'],
+  [512, 'icon_512x512.png'],
+  [512, 'icon_256x256@2x.png'],
+  [256, 'icon_256x256.png'],
+  [256, 'icon_128x128@2x.png'],
+  [128, 'icon_128x128.png'],
+  [64, 'icon_32x32@2x.png'],
+  [32, 'icon_32x32.png'],
+  [32, 'icon_16x16@2x.png'],
+  [16, 'icon_16x16.png'],
+];
 
-  for (const [size, name] of sizes) {
-    execSync(`sips -z ${size} ${size} "${iconSrc}" --out "${resolve(iconset, name)}"`, {
-      stdio: 'ignore',
-    });
-  }
-
-  execSync(`iconutil -c icns "${iconset}" -o "${resolve(resources, 'AppIcon.icns')}"`, {
+for (const [size, name] of sizes) {
+  execSync(`sips -z ${size} ${size} "${iconSrc}" --out "${resolve(iconset, name)}"`, {
     stdio: 'ignore',
   });
-  rmSync(iconset, { recursive: true, force: true });
 }
+
+execSync(`iconutil -c icns "${iconset}" -o "${resolve(resources, 'AppIcon.icns')}"`, {
+  stdio: 'ignore',
+});
+rmSync(iconset, { recursive: true, force: true });
 
 // ---------------------------------------------------------------------------
 // 3. Bundle SLICC UI assets
