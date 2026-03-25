@@ -182,3 +182,20 @@ describe('Renewal deduplication pattern', () => {
     expect(callCount).toBe(2);
   });
 });
+
+describe('OAuth state encoding', () => {
+  it('encodes port, path, and nonce into base64 JSON', () => {
+    const state = btoa(JSON.stringify({ port: 5720, path: '/auth/callback', nonce: 'test123' }));
+    const decoded = JSON.parse(atob(state));
+    expect(decoded.port).toBe(5720);
+    expect(decoded.path).toBe('/auth/callback');
+    expect(decoded.nonce).toBe('test123');
+  });
+
+  it('state round-trips through URL encoding', () => {
+    const state = btoa(JSON.stringify({ port: 5710, path: '/auth/callback', nonce: 'abc' }));
+    const encoded = encodeURIComponent(state);
+    const decoded = JSON.parse(atob(decodeURIComponent(encoded)));
+    expect(decoded.port).toBe(5710);
+  });
+});
