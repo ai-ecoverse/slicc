@@ -307,12 +307,14 @@ describe('BrowserAPI', () => {
       await api.attachToPage('target-1');
 
       // Second attach (should NOT detach first — avoids Chrome focus steal)
-      (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({ sessionId: 'sess-2' }); // direct attach, no detach
+      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ sessionId: 'sess-2' }); // direct attach, no detach
       await api.attachToPage('target-2');
 
       // Verify detach was NOT called
-      expect(mockClient.send).not.toHaveBeenCalledWith('Target.detachFromTarget', expect.anything());
+      expect(mockClient.send).not.toHaveBeenCalledWith(
+        'Target.detachFromTarget',
+        expect.anything()
+      );
     });
 
     it('detach is a no-op when not attached', async () => {
