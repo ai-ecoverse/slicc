@@ -73,15 +73,15 @@ The existing chat copy button (`layout.ts:595`) already uses `navigator.clipboar
 
 ### Scope
 
-- **In scope**: File browser panel (`src/ui/file-browser-panel.ts`), styles in `index.html`
+- **In scope**: File browser panel (`packages/webapp/src/ui/file-browser-panel.ts`), styles in `packages/webapp/index.html`
 - **Out of scope**: Drag-and-drop to chat/terminal (potential future enhancement), multi-selection, right-click context menus
 
 ## Files Changed
 
 | File                           | Change                                                                                                                                                                     |
 | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/ui/file-browser-panel.ts` | Add `selectedPath` state, selection on row click, `keydown` listener, clipboard write, visual feedback, selection re-apply in `refresh()`, listener cleanup in `dispose()` |
-| `index.html`                   | Add `.file-browser__item--selected` and copy-feedback CSS                                                                                                                  |
+| `packages/webapp/src/ui/file-browser-panel.ts` | Add `selectedPath` state, selection on row click, `keydown` listener, clipboard write, visual feedback, selection re-apply in `refresh()`, listener cleanup in `dispose()` |
+| `packages/webapp/index.html`   | Add `.file-browser__item--selected` and copy-feedback CSS                                                                                                                  |
 
 ## Testing
 

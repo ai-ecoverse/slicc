@@ -9,7 +9,7 @@ This file covers the repo's developer-tooling surface.
 ## Key Tooling Areas
 
 - **Prompt/build helpers**: `packages/dev-tools/tools/slicc-prompt.mjs`
-- **Build configs**: `packages/webapp/vite.config.ts`, `vite.config.extension.ts`, `eslint.config.js`
+- **Build configs**: `packages/webapp/vite.config.ts`, `packages/chrome-extension/vite.config.ts`, `eslint.config.js`
 - **QA setup**: `packages/node-server/src/qa-setup.ts` plus the root `npm run qa:*` scripts
 - **Visual/integration helpers**: `tests/test-inline-sprinkles.mjs` and related targeted test utilities
 

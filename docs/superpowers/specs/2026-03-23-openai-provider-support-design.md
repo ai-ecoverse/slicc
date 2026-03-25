@@ -96,7 +96,7 @@ Providers that implement `getModelIds()` (like Adobe) return metadata per model 
 
 #### Merge Priority
 
-In `src/ui/provider-settings.ts`, `getProviderModels()` resolves model capabilities:
+In `packages/webapp/src/ui/provider-settings.ts`, `getProviderModels()` resolves model capabilities:
 
 1. **Pi-ai registry** — base defaults for known model IDs
 2. **`modelOverrides`** from ProviderConfig — static overrides, applied to any model
@@ -111,7 +111,7 @@ This means:
 
 ### 3. Stream Function Routing in Adobe Provider
 
-In `providers/adobe.ts`, the stream functions check the model's API type:
+In `packages/webapp/providers/adobe.ts`, the stream functions check the model's API type:
 
 **Current:** All models → `streamAnthropic()`
 
@@ -131,7 +131,7 @@ The proxy accepts requests in whichever format the model's `api` field indicates
 
 ## Changes
 
-### File: `src/ui/provider-settings.ts`
+### File: `packages/webapp/src/ui/provider-settings.ts`
 
 **In `getProviderModels()`** — implement the three-layer merge:
 
@@ -141,7 +141,7 @@ The proxy accepts requests in whichever format the model's `api` field indicates
 - For unknown model IDs, use override/metadata fields instead of hardcoded defaults
 - Store `api` type on the model object for stream function routing
 
-### File: `providers/adobe.ts`
+### File: `packages/webapp/providers/adobe.ts`
 
 **In `streamAdobe()` and `streamSimpleAdobe()`:**
 
@@ -154,7 +154,7 @@ The proxy accepts requests in whichever format the model's `api` field indicates
 - Parse and propagate the new optional fields from `/v1/models` response
 - Return them in the `getModelIds()` result so `provider-settings.ts` can use them
 
-### File: `src/providers/types.ts`
+### File: `packages/webapp/src/providers/types.ts`
 
 - Add `ModelMetadata` type for shared override fields:
   ```typescript

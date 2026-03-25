@@ -25,21 +25,21 @@ For architecture philosophy and principles, see the project's `CLAUDE.md` file.
 
 | Layer               | Directory        | Key File            | Purpose                                                |
 | ------------------- | ---------------- | ------------------- | ------------------------------------------------------ |
-| Virtual Filesystem  | `src/fs/`        | `virtual-fs.ts`     | POSIX-like FS backed by LightningFS (IndexedDB)        |
-| Shell               | `src/shell/`     | `wasm-shell.ts`     | just-bash WASM interpreter + xterm.js terminal         |
-| CDP                 | `src/cdp/`       | `browser-api.ts`    | Chrome DevTools Protocol client (Playwright-style API) |
-| Tools               | `src/tools/`     | `bash-tool.ts`      | Tool factories; active scoop surface is file + bash + javascript |
-| Core Agent          | `src/core/`      | `index.ts`          | pi-mono agent loop, streaming, context compaction      |
-| Scoops Orchestrator | `src/scoops/`    | `orchestrator.ts`   | Multi-agent system (cone + scoops), message routing    |
-| UI                  | `src/ui/`        | `main.ts`           | Vanilla TS layout: Chat + Terminal + Browser Preview   |
+| Virtual Filesystem  | `packages/webapp/src/fs/`        | `virtual-fs.ts`     | POSIX-like FS backed by LightningFS (IndexedDB)        |
+| Shell               | `packages/webapp/src/shell/`     | `wasm-shell.ts`     | just-bash WASM interpreter + xterm.js terminal         |
+| CDP                 | `packages/webapp/src/cdp/`       | `browser-api.ts`    | Chrome DevTools Protocol client (Playwright-style API) |
+| Tools               | `packages/webapp/src/tools/`     | `bash-tool.ts`      | Tool factories; active scoop surface is file + bash + javascript |
+| Core Agent          | `packages/webapp/src/core/`      | `index.ts`          | pi-mono agent loop, streaming, context compaction      |
+| Scoops Orchestrator | `packages/webapp/src/scoops/`    | `orchestrator.ts`   | Multi-agent system (cone + scoops), message routing    |
+| UI                  | `packages/webapp/src/ui/`        | `main.ts`           | Vanilla TS layout: Chat + Terminal + Browser Preview   |
 | CLI Server          | `packages/node-server/src/` | `index.ts`          | Express + CDP WebSocket proxy, Chrome launcher         |
-| Extension           | `src/extension/` | `service-worker.ts` | Chrome Manifest V3 extension (side panel)              |
-| Sprinkles           | `src/ui/sprinkle-*.ts` | `sprinkle-manager.ts` | Composable `.shtml` panels with agent bridge API  |
+| Extension           | `packages/chrome-extension/src/` | `service-worker.ts` | Chrome Manifest V3 extension (side panel)              |
+| Sprinkles           | `packages/webapp/src/ui/sprinkle-*.ts` | `sprinkle-manager.ts` | Composable `.shtml` panels with agent bridge API  |
 
 
 ## Active Scoop Tool Surface
 
-The active tool surface wired in `src/scoops/scoop-context.ts` is:
+The active tool surface wired in `packages/webapp/src/scoops/scoop-context.ts` is:
 
 - File tools: `read_file`, `write_file`, `edit_file`
 - Execution tools: `bash`, `javascript`
@@ -56,7 +56,7 @@ SLICC uses ice cream terminology to describe its multi-agent system:
 - **Licks**: External events (webhooks, cron tasks) that trigger scoops. Unified under `LickManager` and `LickEvent`. Shell commands: `webhook`, `crontask`. A lick arrives, the scoop reacts — no human in the loop.
 - **Floats**: Runtime environments. Four are tracked:
   - **CLI float**: Node.js/Express + Chrome. Code: `packages/node-server/src/`.
-  - **Extension float**: Chrome extension side panel, zero server. Code: `src/extension/`.
-  - **Electron float**: Electron BrowserWindow + injected overlay shell + serve-only CLI reuse. Code: `packages/node-server/src/electron-main.ts` + `src/ui/electron-overlay.ts`.
+  - **Extension float**: Chrome extension side panel, zero server. Code: `packages/chrome-extension/src/`.
+  - **Electron float**: Electron BrowserWindow + injected overlay shell + serve-only CLI reuse. Code: `packages/node-server/src/electron-main.ts` + `packages/webapp/src/ui/electron-overlay.ts`.
   - **Cloud float**: Planned — Cloudflare Containers or E2B sandboxes.
 

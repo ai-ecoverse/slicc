@@ -18,7 +18,7 @@ LLM streaming in the slicc chat feels sluggish. Every token delta triggers a ful
 
 ## Design
 
-Apply the pi-web-ui pattern to slicc's vanilla TypeScript ChatPanel. Two targeted changes in `src/ui/chat-panel.ts`.
+Apply the pi-web-ui pattern to slicc's vanilla TypeScript ChatPanel. Two targeted changes in `packages/webapp/src/ui/chat-panel.ts`.
 
 ### 1. rAF-batched delta accumulation
 
@@ -79,7 +79,7 @@ Cancel any pending rAF and flush remaining text in:
 
 ## Files changed
 
-Only `src/ui/chat-panel.ts` (~30-50 lines modified/added).
+Only `packages/webapp/src/ui/chat-panel.ts` (~30-50 lines modified/added).
 
 ## Verification
 

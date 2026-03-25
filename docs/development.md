@@ -25,7 +25,7 @@ Build, run, test, and debug SLICC locally.
 | `SLICC_TEST_SERVER_URL=http://localhost:5710 npm run test:server-integration` | Run shared server API conformance tests against an externally running Node or Swift server | Validate standalone server HTTP/WebSocket behavior |
 | `npm run test:e2e` | Playwright e2e tests for preview SW (requires `npm run build` first) | Validate preview serving and project serve mode in a real browser |
 | `npm run test:watch` | Vitest watch mode | Iterate on test changes; TDD workflow |
-| `npx vitest run src/fs/virtual-fs.test.ts` | Run single test file | Debug a specific module |
+| `npx vitest run packages/webapp/tests/fs/virtual-fs.test.ts` | Run single test file | Debug a specific module |
 | `npx wrangler dev --config packages/cloudflare-worker/wrangler.jsonc` | Run the Cloudflare Worker tray hub locally (if Wrangler is installed/authenticated) | Exercise `packages/cloudflare-worker/src/` against a real Worker runtime |
 | `npx wrangler deploy --env staging --config packages/cloudflare-worker/wrangler.jsonc` | Deploy the staging Cloudflare Worker tray hub using `packages/cloudflare-worker/wrangler.jsonc` | Publish the staging tray hub (`slicc-tray-hub-staging`) used by GitHub Actions |
 | `npx wrangler deploy --config packages/cloudflare-worker/wrangler.jsonc` | Deploy the production Cloudflare Worker tray hub using `packages/cloudflare-worker/wrangler.jsonc` | Publish the production tray hub |
@@ -97,7 +97,7 @@ When `WORKER_BASE_URL` is set for the CLI/Electron server, the standalone browse
 
 ## Development Cycle
 
-1. **Edit** — Change source code in `src/`
+1. **Edit** — Change source code in `packages/*/src/`
 2. **Typecheck** — Run `npm run typecheck` (browser + Node targets)
 3. **Test** — Run `npm run test` (or `npm run test:watch` for rapid iteration)
 4. **Build** — Run all four build gates: `npm run typecheck`, `npm run test`, `npm run build`, `npm run build:extension`
@@ -201,7 +201,7 @@ If you want a reusable browser profile instead of re-loading the unpacked extens
    - Take screenshots if needed
 
 5. **Iterate**
-   - Make code changes in `src/`
+   - Make code changes in `packages/*/src/`
    - Run `npm run build:extension` again
    - Refresh extension in `chrome://extensions` (circular arrow icon)
    - Side panel auto-reloads
@@ -248,7 +248,7 @@ Browser console output is forwarded to CLI stdout via CDP console forwarder. Che
 Insert `console.log()` in browser code:
 
 ```typescript
-// src/ui/chat-panel.ts
+// packages/webapp/src/ui/chat-panel.ts
 console.log('User message:', text);
 ```
 
@@ -292,8 +292,8 @@ log.error('error message');
 | `SLICC_TEST_SERVER_URL=http://localhost:5710 npm run test:server-integration` | Run server integration suite against an already running server |
 | `npm run test:e2e` | Playwright e2e tests for preview SW (requires build) |
 | `npm run test:watch` | Watch mode; re-run on file change |
-| `npx vitest run src/fs/virtual-fs.test.ts` | Run single file |
-| `npx vitest run src/fs/` | Run all tests in directory |
+| `npx vitest run packages/webapp/tests/fs/virtual-fs.test.ts` | Run single file |
+| `npx vitest run packages/webapp/tests/fs/` | Run all tests in directory |
 | `npx vitest run --reporter=verbose` | Verbose test output |
 
 ## Multi-Mode Compatibility Checklist
@@ -333,7 +333,7 @@ if (isExtension) {
 
 ## Working with Tests
 
-New pure-logic code MUST have colocated tests. Test file location: `foo.test.ts` next to `foo.ts`.
+New pure-logic code MUST have tests. Test file location: `foo.test.ts` in `packages/*/tests/` mirroring the `src/` structure.
 
 Test setup uses `fake-indexeddb/auto` for VirtualFS:
 ```typescript
@@ -355,7 +355,7 @@ Acceptable to skip tests:
 ## File Structure Reference
 
 ```
-src/
+packages/webapp/src/
   fs/              Virtual filesystem + RestrictedFS
   shell/           WASM Bash + xterm.js terminal
   cdp/             Chrome DevTools Protocol client
@@ -364,14 +364,21 @@ src/
   git/             Git commands via isomorphic-git
   scoops/          Cone/scoop orchestrator
   ui/              Chat, terminal, file browser UI
-  cli/             Express server + Chrome launcher
-  extension/       Chrome Manifest V3 extension files
-  worker/          Cloudflare Worker + Durable Object tray hub
-  shims/           Node module shims for browser bundle
-  defaults/        Bundled default skills, sprinkles, and workspace
   skills/          Skill installation engine
-  types/           Type declarations for external submodules
   providers/       Provider types, OAuth service, auto-discovery
+  shims/           Node module shims for browser bundle
+  types/           Type declarations for external submodules
+
+packages/node-server/src/   Express server + Chrome launcher
+
+packages/chrome-extension/src/
+                   Chrome Manifest V3 extension files
+
+packages/cloudflare-worker/src/
+                   Cloudflare Worker + Durable Object tray hub
+
+packages/vfs-root/
+                   Bundled default skills, sprinkles, and workspace
 
 docs/
   development.md   This file
@@ -386,6 +393,6 @@ docs/
 
 dist/
   ui/              Production browser bundle (Vite output)
-  cli/             Production CLI server + Electron entrypoint (TSC output)
+  node-server/     Production CLI server + Electron entrypoint (TSC output)
   extension/       Production extension bundle
 ```

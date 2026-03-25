@@ -1,6 +1,6 @@
 # Tools Reference
 
-Complete reference for the tool modules and active agent tool surface in SLICC. `src/tools/` contains file, bash, browser, search, and javascript tool factories, but the current scoop/cone surface wired in `src/scoops/scoop-context.ts` is: `read_file`, `write_file`, `edit_file`, `bash`, `javascript`, and scoop-management tools. Browser automation and search for active scoop agents now run through shell commands via `bash` (`playwright-cli` / `playwright` / `puppeteer`, plus shell-native `rg` / `grep` / `find`).
+Complete reference for the tool modules and active agent tool surface in SLICC. `packages/webapp/src/tools/` contains file, bash, browser, search, and javascript tool factories, but the current scoop/cone surface wired in `packages/webapp/src/scoops/scoop-context.ts` is: `read_file`, `write_file`, `edit_file`, `bash`, `javascript`, and scoop-management tools. Browser automation and search for active scoop agents now run through shell commands via `bash` (`playwright-cli` / `playwright` / `puppeteer`, plus shell-native `rg` / `grep` / `find`).
 
 ---
 
@@ -8,7 +8,7 @@ Complete reference for the tool modules and active agent tool surface in SLICC. 
 
 ### ToolDefinition Interface
 
-Legacy tool interface (src/tools/):
+Legacy tool interface (packages/webapp/src/tools/):
 
 ```typescript
 interface ToolDefinition {
@@ -33,7 +33,7 @@ interface ToolResult {
 
 ### AgentTool Interface (pi-compatible)
 
-Modern agent tool interface (src/core/types.ts):
+Modern agent tool interface (packages/webapp/src/core/types.ts):
 
 ```typescript
 interface AgentTool<TDetails = unknown> extends Tool {
@@ -68,7 +68,7 @@ interface ImageContent {
 The `tool-adapter.ts` converts `ToolDefinition` → `AgentTool`:
 
 ```typescript
-// src/core/tool-adapter.ts
+// packages/webapp/src/core/tool-adapter.ts
 export function adaptTools(tools: ToolDefinition[]): AgentTool[] {
   return tools.map(tool => ({
     name: tool.name,
@@ -92,7 +92,7 @@ export function adaptTools(tools: ToolDefinition[]): AgentTool[] {
 
 ### bash
 
-**File**: `src/tools/bash-tool.ts`
+**File**: `packages/webapp/src/tools/bash-tool.ts`
 
 Execute shell commands in a full Unix-like environment (just-bash 2.11.7).
 
@@ -154,7 +154,7 @@ python3 -c "print([i**2 for i in range(5)])"
 
 ### read_file
 
-**File**: `src/tools/file-tools.ts`
+**File**: `packages/webapp/src/tools/file-tools.ts`
 
 Read file contents from the virtual filesystem (VirtualFS for cone, RestrictedFS for scoops).
 
@@ -184,7 +184,7 @@ Read file contents from the virtual filesystem (VirtualFS for cone, RestrictedFS
 
 ### write_file
 
-**File**: `src/tools/file-tools.ts`
+**File**: `packages/webapp/src/tools/file-tools.ts`
 
 Write or create a file in the virtual filesystem. Creates parent directories automatically.
 
@@ -211,7 +211,7 @@ Write or create a file in the virtual filesystem. Creates parent directories aut
 
 ### edit_file
 
-**File**: `src/tools/file-tools.ts`
+**File**: `packages/webapp/src/tools/file-tools.ts`
 
 Apply a string replacement edit to an existing file.
 
@@ -244,9 +244,9 @@ Apply a string replacement edit to an existing file.
 
 ### grep (module factory, not active in ScoopContext)
 
-**File**: `src/tools/search-tools.ts`
+**File**: `packages/webapp/src/tools/search-tools.ts`
 
-Search file contents recursively in VirtualFS using a JavaScript regular expression. This factory remains in `src/tools/search-tools.ts` for module-level use and tests, but active scoop/cone agents search through `bash` instead.
+Search file contents recursively in VirtualFS using a JavaScript regular expression. This factory remains in `packages/webapp/src/tools/search-tools.ts` for module-level use and tests, but active scoop/cone agents search through `bash` instead.
 
 | Property | Value |
 |----------|-------|
@@ -279,9 +279,9 @@ Search file contents recursively in VirtualFS using a JavaScript regular express
 
 ### find (module factory, not active in ScoopContext)
 
-**File**: `src/tools/search-tools.ts`
+**File**: `packages/webapp/src/tools/search-tools.ts`
 
-List files and directories recursively in VirtualFS using simple glob matching. This factory remains in `src/tools/search-tools.ts` for module-level use and tests, but active scoop/cone agents search through `bash` instead.
+List files and directories recursively in VirtualFS using simple glob matching. This factory remains in `packages/webapp/src/tools/search-tools.ts` for module-level use and tests, but active scoop/cone agents search through `bash` instead.
 
 | Property | Value |
 |----------|-------|
@@ -311,7 +311,7 @@ List files and directories recursively in VirtualFS using simple glob matching. 
 
 ### javascript
 
-**File**: `src/tools/javascript-tool.ts`
+**File**: `packages/webapp/src/tools/javascript-tool.ts`
 
 Execute JavaScript code in an isolated sandbox with VFS access.
 
@@ -388,7 +388,7 @@ rg "createBashTool" /workspace/src --type ts
 
 These tools are MCP-style tools for messaging and scoop management.
 
-**File**: `src/scoops/scoop-management-tools.ts`
+**File**: `packages/webapp/src/scoops/scoop-management-tools.ts`
 
 ### send_message
 
@@ -494,7 +494,7 @@ Cone-only. Update the shared global memory file (`/shared/CLAUDE.md`).
 
 ## Context Compaction
 
-LLM-summarized context compaction (`src/core/context-compaction.ts`), aligned with pi-mono's strategy.
+LLM-summarized context compaction (`packages/webapp/src/core/context-compaction.ts`), aligned with pi-mono's strategy.
 
 **How it works**: When context approaches the token limit, an LLM call generates a structured summary of older messages, which replaces them as a single user message. This preserves the conversation prefix (Anthropic cache-friendly) and keeps recent messages intact.
 
@@ -572,8 +572,8 @@ Both modes share the same unified VirtualFS and tool interfaces.
 
 ## References
 
-- **ToolDefinition**: `src/core/types.ts` (lines 273–278)
-- **AgentTool**: `src/core/types.ts` (lines 120–128)
-- **Tool adapter**: `src/core/tool-adapter.ts`
-- **Context compaction**: `src/core/context-compaction.ts`
-- **All tools**: `src/tools/*.ts`, `src/scoops/scoop-management-tools.ts`
+- **ToolDefinition**: `packages/webapp/src/core/types.ts` (lines 273–278)
+- **AgentTool**: `packages/webapp/src/core/types.ts` (lines 120–128)
+- **Tool adapter**: `packages/webapp/src/core/tool-adapter.ts`
+- **Context compaction**: `packages/webapp/src/core/context-compaction.ts`
+- **All tools**: `packages/webapp/src/tools/*.ts`, `packages/webapp/src/scoops/scoop-management-tools.ts`

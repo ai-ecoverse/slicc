@@ -15,7 +15,7 @@ import type { Model } from '@mariozechner/pi-ai';
 // Deep import to the compaction submodule — the main entry re-exports 113 Node-only
 // modules that would break Vite's browser bundle. The compaction submodule itself
 // only depends on @mariozechner/pi-ai (already a browser-safe dependency).
-// Types are declared in src/types/pi-coding-agent-compaction.d.ts.
+// Types are declared in packages/webapp/src/types/pi-coding-agent-compaction.d.ts.
 import {
   generateSummary,
   estimateTokens,

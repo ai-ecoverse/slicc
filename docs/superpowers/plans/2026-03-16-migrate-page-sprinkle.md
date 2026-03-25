@@ -20,7 +20,7 @@
 | `packages/vfs-root/shared/sprinkles/migrate-page/migrate-page.shtml` | Create | Sprinkle UI: 4 states (ready, migrating, done, error), bridge API integration, state recovery                                   |
 | `packages/vfs-root/workspace/skills/migrate-page/SKILL.md`           | Modify | Add "Sprinkle Trigger" section (carve-out + lick handling) and `sprinkle send` / config-write commands at each phase transition |
 
-No TypeScript source changes needed. The `import.meta.glob('/packages/vfs-root/**/*')` in `src/scoops/skills.ts` auto-discovers all files under `packages/vfs-root/`.
+No TypeScript source changes needed. The `import.meta.glob('/packages/vfs-root/**/*')` in `packages/webapp/src/scoops/skills.ts` auto-discovers all files under `packages/vfs-root/`.
 
 ---
 
@@ -351,7 +351,7 @@ Expected: Build succeeds (exit 0).
 
 - [ ] **Step 4: Verify the sprinkle is discoverable**
 
-Run: `npx vitest run src/ui/sprinkle-discovery.test.ts 2>&1 | tail -10`
+Run: `npx vitest run packages/webapp/tests/ui/sprinkle-discovery.test.ts 2>&1 | tail -10`
 Expected: Existing tests still pass. (New sprinkle doesn't break discovery — it just adds a new `.shtml` file to the VFS.)
 
 - [ ] **Step 5: Commit**

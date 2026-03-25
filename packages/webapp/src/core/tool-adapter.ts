@@ -1,7 +1,7 @@
 /**
  * Tool adapter — wraps legacy ToolDefinition as pi-compatible AgentTool.
  *
- * The existing tools in src/tools/ return ToolDefinition objects with a
+ * The existing tools in packages/webapp/src/tools/ return ToolDefinition objects with a
  * simple execute(input) → ToolResult API. This adapter converts them to
  * AgentTool objects with the pi-compatible execute signature:
  *   execute(toolCallId, params, signal?, onUpdate?) → AgentToolResult
