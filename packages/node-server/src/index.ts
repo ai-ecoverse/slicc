@@ -963,6 +963,7 @@ async function main() {
     const { createServer: createViteServer } = await import('vite');
     const webappIndexHtml = resolve(process.cwd(), 'packages/webapp/index.html');
     const vite = await createViteServer({
+      configFile: resolve(process.cwd(), 'packages/webapp/vite.config.ts'),
       server: {
         middlewareMode: true,
         hmr: {
