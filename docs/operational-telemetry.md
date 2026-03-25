@@ -94,7 +94,7 @@ The extension has specific CSP constraints defined in `manifest.json`:
 
 This blocks loading the enhancer script from `rum.hlx.page` at runtime. Two options:
 
-**Option A -- Self-host (recommended)**: Bundle the enhancer into `dist/extension/` at build time. Set `window.RUM_BASE = chrome.runtime.getURL('/')` so the core loads the enhancer from the extension's own origin. The beacon endpoint still points to `rum.hlx.page` (allowed by `host_permissions: ["<all_urls>"]` which covers `connect-src`). Add the enhancer copy to `vite.config.extension.ts`'s `closeBundle` hook.
+**Option A -- Self-host (recommended)**: Bundle the enhancer into `dist/extension/` at build time. Set `window.RUM_BASE = chrome.runtime.getURL('/')` so the core loads the enhancer from the extension's own origin. The beacon endpoint still points to `rum.hlx.page` (allowed by `host_permissions: ["<all_urls>"]` which covers `connect-src`). Add the enhancer copy to `packages/chrome-extension/vite.config.ts`'s `closeBundle` hook.
 
 **Option B -- CSP allowlist**: Add `rum.hlx.page` to `script-src`:
 
@@ -239,7 +239,7 @@ Instrument the following files (minimal diff per file -- one import + one functi
 
 ### Step 5: Extension CSP and bundling
 
-In `vite.config.extension.ts`, add to the `closeBundle` hook:
+In `packages/chrome-extension/vite.config.ts`, add to the `closeBundle` hook:
 
 ```typescript
 // Copy helix-rum-enhancer to dist/extension/ for self-hosted loading

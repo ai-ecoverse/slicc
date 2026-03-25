@@ -264,13 +264,13 @@ Default files bundled into the VFS at startup via `import.meta.glob`:
 |---|---|---|---|---|
 | Browser bundle | `packages/webapp/vite.config.ts` + `tsconfig.json` | `packages/webapp/` | `dist/ui/` (via Vite) | bundler |
 | CLI + Electron Node target | `tsconfig.cli.json` | `packages/node-server/src/` | `dist/node-server/` (via TSC) | NodeNext |
-| Extension | `vite.config.extension.ts` | Browser bundle + extension entries | `dist/extension/` | bundler |
+| Extension | `packages/chrome-extension/vite.config.ts` | Browser bundle + extension entries | `dist/extension/` | bundler |
 
 ### Special Build Artifacts
 
 - **preview-sw.ts**: Built as standalone IIFE via esbuild (not rollup) from `packages/webapp/vite.config.ts` during the production webapp build.
 - **electron-overlay-entry.ts**: Built as standalone IIFE alongside `dist/ui/electron-overlay-entry.js` from `packages/webapp/vite.config.ts` for Electron reinjection.
-- **Extension assets**: Pyodide (~13MB), ImageMagick WASM, `sandbox.html`, `voice-popup.html`, `offscreen.html` copied to `dist/extension/` by `vite.config.extension.ts`. The `offscreen.html` entry point runs the agent orchestrator in an unrestricted context separate from the side panel.
+- **Extension assets**: Pyodide (~13MB), ImageMagick WASM, `sandbox.html`, `voice-popup.html`, `offscreen.html` copied to `dist/extension/` by `packages/chrome-extension/vite.config.ts`. The `offscreen.html` entry point runs the agent orchestrator in an unrestricted context separate from the side panel.
 - **Node shims**: `packages/webapp/src/shims/` provide no-op implementations for Node modules (just-bash references them).
 
 ## Extension Three-Layer Architecture
@@ -504,7 +504,7 @@ Scoop removal / app clear
 |---|---|
 | Change extension behavior | `packages/chrome-extension/src/service-worker.ts` |
 | Add Chrome API types | `packages/chrome-extension/src/chrome.d.ts` |
-| Build extension | `vite.config.extension.ts` |
+| Build extension | `packages/chrome-extension/vite.config.ts` |
 
 ### Skills & Package Management
 

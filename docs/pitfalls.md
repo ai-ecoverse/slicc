@@ -64,7 +64,7 @@ Extension CSP also blocks CDN fetches and dynamic asset loading. ImageMagick WAS
 
 **Build Integration**
 
-File: `vite.config.extension.ts` `closeBundle` hook must:
+File: `packages/chrome-extension/vite.config.ts` `closeBundle` hook must:
 1. Copy Pyodide from node_modules (~13MB) to `dist/extension/pyodide/`
 2. Bundle ImageMagick WASM to `dist/extension/magick.wasm`
 3. Ensure manifest `web_accessible_resources` includes all assets
