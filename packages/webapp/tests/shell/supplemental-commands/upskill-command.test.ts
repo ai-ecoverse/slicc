@@ -467,9 +467,13 @@ describe('upskill Tessl registry integration', () => {
 
   it('calls __slicc_reloadSkills hook after successful install', async () => {
     const reloadSpy = vi.fn().mockResolvedValue(undefined);
-    (globalThis as unknown as Record<string, unknown>).window = {
-      __slicc_reloadSkills: reloadSpy,
-    };
+    // reloadSkillsAfterInstall checks `typeof window !== 'undefined'` then
+    // reads window.__slicc_reloadSkills. In Node/vitest window is globalThis.
+    Object.defineProperty(globalThis, '__slicc_reloadSkills', {
+      value: reloadSpy,
+      writable: true,
+      configurable: true,
+    });
 
     const encoder = new TextEncoder();
     const zipBytes = zipSync({
@@ -495,7 +499,7 @@ describe('upskill Tessl registry integration', () => {
     expect(result.exitCode).toBe(0);
     expect(reloadSpy).toHaveBeenCalled();
 
-    delete (globalThis as unknown as Record<string, unknown>).window;
+    delete (globalThis as Record<string, unknown>).__slicc_reloadSkills;
   });
 });
 

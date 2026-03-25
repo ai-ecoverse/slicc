@@ -707,8 +707,7 @@ async function installFromClawHub(
     // Check for required bins in SKILL.md frontmatter
     const binsWarning = checkRequiredBins(files, registeredCommands);
 
-    await refreshSprinklesAfterInstall();
-    await reloadSkillsAfterInstall();
+    await runPostInstallHooks();
     return {
       stdout: `Installed skill "${slug}" from ClawHub (${fileCount} files)\n${binsWarning}`,
       stderr: '',
@@ -1098,8 +1097,7 @@ async function installFromGitHub(
       throw downloadErr;
     }
 
-    await refreshSprinklesAfterInstall();
-    await reloadSkillsAfterInstall();
+    await runPostInstallHooks();
     return {
       stdout: `Installed skill "${skillName}" from ${owner}/${repo}\n`,
       stderr: '',
@@ -1141,16 +1139,21 @@ function parseClawHubRef(ref: string): string | null {
   return null;
 }
 
+/** Run all post-install hooks: refresh sprinkles + reload skills. */
+async function runPostInstallHooks(): Promise<void> {
+  await refreshSprinklesAfterInstall();
+  await reloadSkillsAfterInstall();
+}
+
 /** After a successful install, reload skills on all active agent contexts. */
 async function reloadSkillsAfterInstall(): Promise<void> {
   try {
-    // CLI mode: direct window hook
-    if (typeof window !== 'undefined') {
-      const hook = (window as unknown as Record<string, unknown>).__slicc_reloadSkills;
-      if (typeof hook === 'function') {
-        await (hook as () => Promise<void>)();
-        return;
-      }
+    // CLI mode: direct window hook (check both window and globalThis for testability)
+    const global = typeof window !== 'undefined' ? window : globalThis;
+    const hook = (global as unknown as Record<string, unknown>).__slicc_reloadSkills;
+    if (typeof hook === 'function') {
+      await (hook as () => Promise<void>)();
+      return;
     }
     // Extension mode: send message to offscreen document
     if (typeof chrome !== 'undefined' && chrome?.runtime?.sendMessage) {
