@@ -80,7 +80,7 @@
     "@types/node": "^22.13.0",
     "@types/ws": "^8.5.14",
     "electron": "41.0.4",
-    "eslint": "10.0.3",
+    "eslint": "10.1.0",
     "eslint-config-prettier": "10.1.8",
     "fake-indexeddb": "6.2.5",
     "globals": "17.4.0",
