@@ -84,6 +84,7 @@
     "eslint-config-prettier": "10.1.8",
     "fake-indexeddb": "6.2.5",
     "globals": "17.4.0",
+    "husky": "9.1.7",
     "jsdom": "^28.1.0",
     "lint-staged": "16.4.0",
     "prettier": "3.8.1",
@@ -95,10 +96,10 @@
     "vitest": "4.0.18"
   },
   "lint-staged": {
-    "*.{ts,js,mjs}": [
+    "**/*.{ts,js,mjs}": [
       "eslint --fix"
     ],
-    "*.{ts,js,mjs,json,md,css,html,yaml,yml}": [
+    "**/*.{ts,js,mjs,json,md,css,html,yaml,yml}": [
       "prettier --write"
     ]
   }
