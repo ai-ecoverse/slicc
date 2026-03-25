@@ -242,8 +242,9 @@ jobs:
           done
 
   swift-server:
-    needs: changes
+    needs: [changes, lint]
     if: >-
+      needs.lint.result == 'success' &&
       needs.changes.outputs.swift-server == 'true'
     runs-on: macos-latest
     steps:
@@ -254,14 +255,15 @@ jobs:
         run: cd packages/swift-server && swift test
 
   swift-launcher:
-    needs: changes
+    needs: [changes, lint]
     if: >-
-      needs.changes.outputs.swift-launcher == 'true' ||
+      needs.lint.result == 'success' &&
+      (needs.changes.outputs.swift-launcher == 'true' ||
       needs.changes.outputs.swift-server == 'true' ||
       needs.changes.outputs.webapp == 'true' ||
       needs.changes.outputs.vfs-root == 'true' ||
       needs.changes.outputs.assets == 'true' ||
-      needs.changes.outputs.root-config == 'true'
+      needs.changes.outputs.root-config == 'true')
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -281,7 +283,16 @@ jobs:
   ci:
     if: always()
     needs:
-      [changes, lint, webapp, node-server, chrome-extension, cloudflare-worker, swift-launcher, swift-server]
+      [
+        changes,
+        lint,
+        webapp,
+        node-server,
+        chrome-extension,
+        cloudflare-worker,
+        swift-launcher,
+        swift-server,
+      ]
     runs-on: ubuntu-latest
     steps:
       - name: Check job results
