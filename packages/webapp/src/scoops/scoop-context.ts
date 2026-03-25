@@ -136,18 +136,17 @@ export class ScoopContext {
       this.shell = new WasmShell({ fs: this.fs as VirtualFS, cwd, browserAPI: browser });
       log.info('WasmShell initialized', { folder: this.scoop.folder });
 
-      // Always load skills from the cone's directory.
-      // Use the unrestricted skillsFs when available (required for scoops
-      // whose RestrictedFS cannot reach /workspace/skills/).
+      // Always load skills from the cone's /workspace/skills/ directory.
+      // Scoops now have read access to /workspace/ via RestrictedFS ACL,
+      // so no per-scoop skill copying is needed.
       this.skillsDir = '/workspace/skills';
+
+      // Seed bundled defaults only for the cone
+      if (this.scoop.isCone) {
+        await createDefaultSkills(this.fs as VirtualFS, this.skillsDir);
+      }
+
       const effectiveSkillsFs = (this.skillsFs ?? this.fs) as VirtualFS;
-
-      // Seed bundled defaults for scripts (and skills as fallback)
-      const seedDir = this.scoop.isCone
-        ? '/workspace/skills'
-        : `/scoops/${this.scoop.folder}/workspace/skills`;
-      await createDefaultSkills(this.fs as VirtualFS, seedDir);
-
       const skills = await loadSkills(effectiveSkillsFs, this.skillsDir);
 
       // Create scoop-management tools (send_message, scoop management)
