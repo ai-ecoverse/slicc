@@ -1,6 +1,4 @@
-/// <reference types="vitest" />
 import { defineConfig } from 'vite';
-import { configDefaults } from 'vitest/config';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -197,14 +195,5 @@ export default defineConfig(({ mode }) => ({
     },
     // preview-sw and electron-overlay-entry are built separately via esbuild.
   },
-  test: {
-    globals: true,
-    environment: 'node',
-    include: ['packages/*/tests/**/*.test.ts'],
-    exclude: [
-      ...configDefaults.exclude,
-      'packages/node-server/tests/integration/**/*.test.ts',
-      'packages/*/tests/e2e/**/*.test.ts',
-    ],
-  },
+
 }));
