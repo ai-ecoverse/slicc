@@ -14,7 +14,7 @@ launches them with SLICC attached.
 ```bash
 # Build the .app bundle
 cd packages/swift-launcher
-./build-app.sh
+npm run build
 
 # Strip quarantine (unsigned app)
 xattr -cr build/Sliccstart.app

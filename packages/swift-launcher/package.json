@@ -1,0 +1,9 @@
+{
+  "name": "@slicc/swift-launcher",
+  "private": true,
+  "scripts": {
+    "build": "swift build -c release && node assemble-app.mjs",
+    "test": "swift test"
+  }
+}
+
