@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -19,11 +20,24 @@ jobs:
     permissions:
       contents: write
       id-token: write
+      statuses: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      # Post a "pending" commit status to signal that a release is in progress.
+      # When added as a required status check, this will pause the merge queue
+      # until the release completes.
+      - name: Lock merge queue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api "repos/${{ github.repository }}/statuses/${{ github.sha }}" \
+            -f state=pending \
+            -f context=release \
+            -f description="Release in progress — merge queue paused"
 
       - uses: actions/setup-node@v4
         with:
@@ -77,3 +91,20 @@ jobs:
           if [ -n "$KEYCHAIN_PATH" ]; then
             security delete-keychain "$KEYCHAIN_PATH" || true
           fi
+
+      - name: Unlock merge queue
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            STATE=success
+            DESC="Release completed"
+          else
+            STATE=error
+            DESC="Release failed or was cancelled"
+          fi
+          gh api "repos/${{ github.repository }}/statuses/${{ github.sha }}" \
+            -f state="$STATE" \
+            -f context=release \
+            -f description="$DESC"
