@@ -922,7 +922,8 @@ async function listGitHubSkills(
       return { skills };
     }
     if (zip.status === 'not_found') {
-      return { skills: [], error: `repository ${owner}/${repo} not found` };
+      const target = branch ? `branch "${branch}" in ${owner}/${repo}` : `repository ${owner}/${repo}`;
+      return { skills: [], error: `${target} not found` };
     }
     // zip.status === 'error' — fall through to API
   }
@@ -931,7 +932,8 @@ async function listGitHubSkills(
   const skills: Array<{ name: string; path: string }> = [];
 
   async function scanDir(path: string): Promise<void> {
-    const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
+    const base = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
+    const url = branch ? `${base}?ref=${encodeURIComponent(branch)}` : base;
     const response = await github.request(url);
 
     if (response.status !== 200) {
@@ -998,9 +1000,10 @@ async function installFromGitHub(
     if (fetch) {
       const zip = await fetchRepoZip(owner, repo, fetch, branch);
       if (zip.status === 'not_found') {
+        const target = branch ? `branch "${branch}" in ${owner}/${repo}` : `repository ${owner}/${repo}`;
         return {
           stdout: '',
-          stderr: `upskill: repository ${owner}/${repo} not found\n`,
+          stderr: `upskill: ${target} not found\n`,
           exitCode: 1,
         };
       }
@@ -1039,7 +1042,8 @@ async function installFromGitHub(
     }
 
     // Fallback: Contents API
-    const url = `https://api.github.com/repos/${owner}/${repo}/contents/${skillPath}`;
+    const base = `https://api.github.com/repos/${owner}/${repo}/contents/${skillPath}`;
+    const url = branch ? `${base}?ref=${encodeURIComponent(branch)}` : base;
     const response = await github.request(url);
 
     if (response.status !== 200) {
@@ -1066,7 +1070,8 @@ async function installFromGitHub(
           const cached = consumeCachedBinaryByUrl(item.download_url);
           await fs.writeFile(`${destBase}/${item.name}`, cached ?? fileResponse.body);
         } else if (item.type === 'dir') {
-          const subUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${item.path}`;
+          const subBase = `https://api.github.com/repos/${owner}/${repo}/contents/${item.path}`;
+          const subUrl = branch ? `${subBase}?ref=${encodeURIComponent(branch)}` : subBase;
           const subResponse = await github.request(subUrl);
           if (subResponse.status !== 200) {
             throw new Error(
@@ -1381,6 +1386,10 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
       } else if (arg === '--force') {
         force = true;
       } else if (arg === '--branch' || arg === '-b') {
+        const val = args[i + 1];
+        if (!val || val.startsWith('-')) {
+          return { stdout: '', stderr: 'upskill: --branch requires a value\n', exitCode: 1 };
+        }
         branch = args[++i];
       } else if (!arg.startsWith('-')) {
         sourceRef = arg;
