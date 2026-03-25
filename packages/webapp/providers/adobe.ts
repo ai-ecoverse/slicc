@@ -315,8 +315,12 @@ export const config: ProviderConfig = {
           console.error('[adobe] OAuth nonce mismatch — possible CSRF');
           return;
         }
-      } catch {
+      } catch (err) {
         // URL parse failure — continue (backwards compat with old localhost flow)
+        console.warn(
+          '[adobe] Nonce check skipped (URL parse failed):',
+          err instanceof Error ? err.message : String(err)
+        );
       }
     }
 
@@ -486,8 +490,12 @@ async function silentRenewToken(): Promise<string | null> {
             console.error('[adobe] OAuth nonce mismatch — possible CSRF');
             return null;
           }
-        } catch {
+        } catch (err) {
           // URL parse failure — continue (backwards compat with old localhost flow)
+          console.warn(
+            '[adobe] Nonce check skipped (URL parse failed):',
+            err instanceof Error ? err.message : String(err)
+          );
         }
       }
 
