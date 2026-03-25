@@ -1,13 +1,102 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
   merge_group:
     branches: [main]
 
 jobs:
-  ci:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - name: Check CLAUDE.md size
+        run: |
+          chars=$(wc -c < CLAUDE.md)
+          if [ "$chars" -gt 30000 ]; then
+            echo "::error::CLAUDE.md exceeds 30,000 character limit ($chars chars). Please condense it."
+            exit 1
+          fi
+
+  webapp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f  # v6.3.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: tsc --noEmit -p tsconfig.json
+      - name: Test
+        run: npx vitest run --project webapp
+      - name: Build
+        run: npm run build -w @slicc/webapp
+      - name: E2E tests
+        run: |
+          npx playwright install chromium
+          npm run test:e2e
+
+  node-server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f  # v6.3.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: tsc --noEmit -p tsconfig.cli.json
+      - name: Test
+        run: npx vitest run --project node-server
+      - name: Build
+        run: npm run build -w @slicc/node-server
+
+  chrome-extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f  # v6.3.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Test
+        run: npx vitest run --project chrome-extension
+      - name: Build webapp (dependency)
+        run: npm run build -w @slicc/webapp
+      - name: Build extension
+        run: npm run build -w @slicc/chrome-extension
+
+  cloudflare-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f  # v6.3.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: tsc --noEmit -p tsconfig.worker.json
+      - name: Test
+        run: npx vitest run --project cloudflare-worker
+
+  swift-server:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - name: Build
+        run: cd packages/swift-server && swift build -c release
+      - name: Test
+        run: cd packages/swift-server && swift test
+
+  swift-launcher:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -16,18 +105,18 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run typecheck
-      - run: npm run test
-      - run: npm run build
-      - name: E2E preview tests
+      - name: Build
+        run: npm run build -w @slicc/swift-launcher
+
+  # Summary job — the single required status check for branch protection
+  ci:
+    if: always()
+    needs: [lint, webapp, node-server, chrome-extension, cloudflare-worker, swift-launcher, swift-server]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check job results
         run: |
-          npx playwright install chromium
-          npm run test:e2e
-      - name: Check CLAUDE.md size
-        run: |
-          chars=$(wc -c < CLAUDE.md)
-          echo "CLAUDE.md is $chars characters"
-          if [ "$chars" -gt 30000 ]; then
-            echo "::error::CLAUDE.md exceeds 30,000 character limit ($chars chars). Please condense it."
+          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" || "${{ contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "::error::One or more jobs failed or were cancelled"
             exit 1
           fi
