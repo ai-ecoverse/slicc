@@ -16,6 +16,85 @@ export default defineConfig(({ mode }) => ({
   plugins: [
     {
       name: 'build-webapp-runtime-assets',
+      configureServer(server) {
+        let cachedSwCode: string | null = null;
+        let cachedSwMtime = 0;
+        let cachedOverlayCode: string | null = null;
+        let cachedOverlayMtime = 0;
+
+        server.middlewares.use('/preview-sw.js', async (_req, res) => {
+          try {
+            const { statSync } = await import('fs');
+            const mtime = statSync(previewSwEntry).mtimeMs;
+
+            if (!cachedSwCode || mtime > cachedSwMtime) {
+              const esbuild = await import('esbuild');
+              const result = await esbuild.build({
+                entryPoints: [previewSwEntry],
+                bundle: true,
+                write: false,
+                format: 'iife',
+                target: 'esnext',
+                define: { __DEV__: 'true', global: 'globalThis' },
+              });
+              cachedSwCode = result.outputFiles![0].text;
+              cachedSwMtime = mtime;
+            }
+
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(cachedSwCode);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error('[preview-sw-builder] Failed to build:', msg);
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(`console.error('[preview-sw] Build failed: ${msg.replace(/'/g, "\\'")}');`);
+          }
+        });
+
+        server.middlewares.use('/electron-overlay-entry.js', async (_req, res) => {
+          try {
+            const { statSync } = await import('fs');
+            const mtime = statSync(electronOverlayEntry).mtimeMs;
+
+            if (!cachedOverlayCode || mtime > cachedOverlayMtime) {
+              const esbuild = await import('esbuild');
+              const result = await esbuild.build({
+                entryPoints: [electronOverlayEntry],
+                bundle: true,
+                write: false,
+                format: 'iife',
+                target: 'esnext',
+                define: { __DEV__: 'true', global: 'globalThis' },
+                plugins: [{
+                  name: 'raw-svg',
+                  setup(build) {
+                    build.onResolve({ filter: /\.svg\?raw$/ }, (args) => ({
+                      path: resolve(args.resolveDir, args.path.replace('?raw', '')),
+                      namespace: 'raw-svg',
+                    }));
+                    build.onLoad({ filter: /.*/, namespace: 'raw-svg' }, async (args) => {
+                      const { readFile } = await import('fs/promises');
+                      return { contents: await readFile(args.path, 'utf8'), loader: 'text' };
+                    });
+                  },
+                }],
+              });
+              cachedOverlayCode = result.outputFiles![0].text;
+              cachedOverlayMtime = mtime;
+            }
+
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(cachedOverlayCode);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error('[electron-overlay-entry] Failed to build:', msg);
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(`console.error('[electron-overlay-entry] Build failed: ${msg.replace(/'/g, "\\'")}');`);
+          }
+        });
+      },
       async closeBundle() {
         // Keep this config focused on production build artifacts; node-server owns dev serving.
         // Rollup would code-split LightningFS into a shared chunk, which SWs can't import.
