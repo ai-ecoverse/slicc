@@ -47,6 +47,7 @@ export class TerminalPanel {
     }
 
     this.terminalViewEl.replaceChildren(terminalHost);
+    this.previewViewEl.replaceChildren(this.previewEmptyEl);
     this.previewViewEl.appendChild(previewHost);
 
     shell.setPreviewStateListener((hasPreview) => this.handlePreviewStateChange(hasPreview));
