@@ -79,18 +79,15 @@ async function cancelSubmission(extensionId, token) {
 async function upload(extensionId, zipPath, token) {
   const zipData = readFileSync(zipPath);
 
-  const response = await fetch(
-    `${CWS_API_BASE}/publishers/default/items/${extensionId}`,
-    {
-      method: 'PUT',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/zip',
-        'x-goog-api-version': '2',
-      },
-      body: zipData,
-    }
-  );
+  const response = await fetch(`${CWS_API_BASE}/publishers/default/items/${extensionId}`, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/zip',
+      'x-goog-api-version': '2',
+    },
+    body: zipData,
+  });
 
   if (!response.ok) {
     const text = await response.text();
@@ -108,16 +105,13 @@ async function upload(extensionId, zipPath, token) {
 }
 
 async function publish(extensionId, token) {
-  const response = await fetch(
-    `${CWS_API_BASE}/publishers/default/items/${extensionId}:publish`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-    }
-  );
+  const response = await fetch(`${CWS_API_BASE}/publishers/default/items/${extensionId}:publish`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+  });
 
   if (!response.ok) {
     const text = await response.text();
