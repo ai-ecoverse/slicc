@@ -3,6 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "vitest run"
+    "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('../../dist/node-server', { recursive: true, force: true });\" && tsc -p ../../tsconfig.cli.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p ../../tsconfig.cli.json"
   }
 }

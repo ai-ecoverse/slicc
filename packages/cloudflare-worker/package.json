@@ -3,6 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "vitest run"
+    "build": "npx wrangler deploy --dry-run --outdir dist",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p ../../tsconfig.worker.json",
+    "dev": "npx wrangler dev --config wrangler.jsonc"
   }
 }
