@@ -35,7 +35,6 @@ jobs:
       - run: npm run typecheck
       - run: npm run test
       - run: npm run build
-      - run: npm run build:extension
 
       - name: Import Apple certificates
         if: env.APPLE_CERTIFICATE_BASE64 != ''
@@ -59,12 +58,6 @@ jobs:
           
           # Store keychain path for later steps
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
-
-      - name: Build Sliccstart
-        run: |
-          cd packages/swift-launcher
-          chmod +x build-app.sh
-          ./build-app.sh
 
       - name: Publish release
         env:
