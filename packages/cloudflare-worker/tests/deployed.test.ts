@@ -31,6 +31,7 @@ describeIfConfigured('deployed tray worker', () => {
         'GET|POST /join/:token',
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',
+        'GET /auth/callback',
       ],
     });
 
