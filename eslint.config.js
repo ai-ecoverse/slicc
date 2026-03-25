@@ -98,7 +98,7 @@ export default tseslint.config(
   },
   {
     // Browser UI files - Browser globals only
-    files: ['src/ui/**/*.ts', 'src/cdp/**/*.ts', 'src/core/**/*.ts', 'src/fs/**/*.ts', 'src/git/**/*.ts', 'src/providers/**/*.ts', 'src/scoops/**/*.ts', 'src/shell/**/*.ts', 'src/skills/**/*.ts', 'src/tools/**/*.ts'],
+    files: ['packages/webapp/src/ui/**/*.ts', 'packages/webapp/src/cdp/**/*.ts', 'packages/webapp/src/core/**/*.ts', 'packages/webapp/src/fs/**/*.ts', 'packages/webapp/src/git/**/*.ts', 'packages/webapp/src/providers/**/*.ts', 'packages/webapp/src/scoops/**/*.ts', 'packages/webapp/src/shell/**/*.ts', 'packages/webapp/src/skills/**/*.ts', 'packages/webapp/src/tools/**/*.ts'],
     languageOptions: {
       globals: {
         ...globals.browser,
@@ -137,7 +137,7 @@ export default tseslint.config(
   },
   {
     // Electron overlay files - ban innerHTML for Trusted Types compatibility
-    files: ['src/ui/electron-overlay.ts', 'src/ui/electron-overlay-entry.ts'],
+    files: ['packages/webapp/src/ui/electron-overlay.ts', 'packages/webapp/src/ui/electron-overlay-entry.ts'],
     rules: {
       'no-restricted-properties': [
         'error',
