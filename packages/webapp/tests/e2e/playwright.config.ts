@@ -8,7 +8,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..')
 export default defineConfig({
   testDir: '.',
   webServer: {
-    command: `node ${resolve(repoRoot, 'dist/cli/index.js')} --serve-only`,
+    command: `node ${resolve(repoRoot, 'dist/node-server/index.js')} --serve-only`,
     port: 5780,
     reuseExistingServer: !process.env['CI'],
     env: { PORT: '5780' },
