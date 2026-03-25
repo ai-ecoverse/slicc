@@ -26,43 +26,51 @@ import { normalizePath } from './path-utils.js';
 export class RestrictedFS {
   private vfs: VirtualFS;
   private allowedPrefixes: string[];
+  private readOnlyPrefixes: string[];
 
-  constructor(vfs: VirtualFS, allowedPaths: string[]) {
+  constructor(vfs: VirtualFS, allowedPaths: string[], readOnlyPaths: string[] = []) {
     this.vfs = vfs;
-    // Normalize and ensure trailing slash for prefix matching
-    this.allowedPrefixes = allowedPaths.map((p) => {
+    const normalize = (p: string) => {
       const n = normalizePath(p);
       return n.endsWith('/') ? n : n + '/';
-    });
+    };
+    this.allowedPrefixes = allowedPaths.map(normalize);
+    this.readOnlyPrefixes = readOnlyPaths.map(normalize);
   }
 
-  /** Check if a path is within or is a parent of allowed prefixes. */
+  /** Check if a path is within or is a parent of allowed or read-only prefixes. */
   private isAllowed(path: string): boolean {
     const normalized = normalizePath(path);
-    return this.allowedPrefixes.some(
+    const allPrefixes = [...this.allowedPrefixes, ...this.readOnlyPrefixes];
+    return allPrefixes.some(
       (prefix) =>
-        // Path is the allowed dir itself (e.g., /scoops/test-scoop)
         normalized === prefix.slice(0, -1) ||
-        // Path is inside the allowed dir (e.g., /scoops/test-scoop/file.txt)
         normalized.startsWith(prefix) ||
-        // Path is a parent of an allowed dir (e.g., /scoops, /)
-        // Needed for cd to walk intermediate directories via stat
         normalized === '/' ||
         prefix.startsWith(normalized + '/')
     );
   }
 
-  /** Check if a path is within allowed prefixes (strict — no parent access). */
+  /** Check if a path is within allowed or read-only prefixes (strict — no parent access). */
   private isAllowedStrict(path: string): boolean {
+    const normalized = normalizePath(path);
+    const allPrefixes = [...this.allowedPrefixes, ...this.readOnlyPrefixes];
+    return allPrefixes.some(
+      (prefix) => normalized === prefix.slice(0, -1) || normalized.startsWith(prefix)
+    );
+  }
+
+  /** Check if a path is within read-write prefixes only (excludes read-only). */
+  private isWritable(path: string): boolean {
     const normalized = normalizePath(path);
     return this.allowedPrefixes.some(
       (prefix) => normalized === prefix.slice(0, -1) || normalized.startsWith(prefix)
     );
   }
 
-  /** Throw EACCES for write operations outside allowed paths (strict). */
+  /** Throw EACCES for write operations outside read-write paths. */
   private checkWrite(path: string): void {
-    if (!this.isAllowedStrict(path)) {
+    if (!this.isWritable(path)) {
       throw new FsError('EACCES', 'permission denied', normalizePath(path));
     }
   }
