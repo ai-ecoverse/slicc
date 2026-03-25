@@ -282,10 +282,12 @@ export class BrowserAPI {
    */
   async attachToPage(targetId: string): Promise<string> {
     await this.ensureConnected();
-    // Detach from previous target if needed
-    if (this.sessionId && this.attachedTargetId !== targetId) {
-      await this.detach();
+    // Skip if already attached to this target
+    if (this.sessionId && this.attachedTargetId === targetId) {
+      return this.sessionId;
     }
+    // Don't detach from previous target — just attach to the new one.
+    // Detaching then re-attaching causes Chrome to steal window focus.
 
     // Check if this is a remote tray target (format: "runtimeId:localTargetId")
     if (this.trayTargetProvider?.createRemoteTransport && targetId.includes(':')) {

@@ -226,17 +226,9 @@ export class DebuggerClient implements CDPTransport {
 
     if (tabId !== undefined) {
       this.sessionToTab.delete(sessionId);
-      // Only actually detach if no other sessions reference this tab
-      const stillReferenced = [...this.sessionToTab.values()].includes(tabId);
-      if (!stillReferenced) {
-        this.attachedTabs.delete(tabId);
-        await chrome.debugger.detach({ tabId }).catch((err) => {
-          log.debug('Detach failed (tab may be closed)', {
-            tabId,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        });
-      }
+      // Keep the chrome.debugger attachment alive to avoid re-attach focus steal.
+      // chrome.debugger.attach() causes Chrome to bring the window to the foreground,
+      // so we only detach when the tab is actually closed (handled by onDetach listener).
     }
 
     return {};
