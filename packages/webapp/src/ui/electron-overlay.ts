@@ -260,7 +260,10 @@ class SliccElectronLauncherElement extends HTMLElement {
     // Create button with Sliccy logo — both variants embedded, CSS toggles visibility.
     const button = doc.createElement('button');
     button.type = 'button';
+    const isMac = navigator.platform?.startsWith('Mac') || navigator.userAgent?.includes('Mac');
+    const shortcutLabel = `${isMac ? '\u2318' : 'Ctrl+'}${ELECTRON_OVERLAY_TOGGLE_SHORTCUT_DISPLAY_KEY}`;
     button.setAttribute('aria-label', 'Toggle SLICC overlay');
+    button.title = `Toggle SLICC (${shortcutLabel})`;
 
     const forDark = doc.createElement('div');
     forDark.className = 'logo-icon logo-for-dark';
@@ -774,7 +777,7 @@ export class SliccElectronOverlayElement extends HTMLElement {
 
   private onKeyDown = (event: KeyboardEvent): void => {
     if (
-      event.code === ELECTRON_OVERLAY_TOGGLE_SHORTCUT_CODE &&
+      (event.key === ELECTRON_OVERLAY_TOGGLE_SHORTCUT_DISPLAY_KEY || event.code === ELECTRON_OVERLAY_TOGGLE_SHORTCUT_CODE) &&
       (event.metaKey || event.ctrlKey) &&
       !event.shiftKey &&
       !event.altKey &&
