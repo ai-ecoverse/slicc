@@ -36,14 +36,17 @@ Playwright's `webServer` config spawns `node dist/node-server/index.js` on port 
 // playwright.config.ts
 export default defineConfig({
   webServer: {
-    command: 'node dist/node-server/index.js',
+    command: `node ${resolve(repoRoot, 'dist/node-server/index.js')} --serve-only`,
     port: 5780,
     reuseExistingServer: !process.env.CI,
     env: { PORT: '5780' },
   },
   use: { baseURL: 'http://localhost:5780' },
+  fullyParallel: true,
 });
 ```
+
+The `--serve-only` flag skips Chrome launch (the test server only needs to serve static assets and API endpoints — Playwright provides its own browser). The command uses an absolute path resolved from the repo root to avoid relative path ambiguity in worktrees.
 
 npm script: `"test:e2e": "npx playwright test --config packages/webapp/tests/e2e/playwright.config.ts"`
 
@@ -76,14 +79,27 @@ export async function seedVFS(page: Page, files: Record<string, string>) {
 }
 
 export async function waitForSW(page: Page): Promise<void> {
-  await page.evaluate(() => navigator.serviceWorker.ready);
+  await page.evaluate(async () => {
+    if (!('serviceWorker' in navigator)) {
+      throw new Error('Service workers not supported');
+    }
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      const reg = await navigator.serviceWorker.getRegistration('/preview/');
+      if (reg?.active) return;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    throw new Error('Preview SW did not activate within 15s');
+  });
 }
 ```
+
+Note: `navigator.serviceWorker.ready` cannot be used here because it waits for a SW controlling the *current page*. The preview SW is registered with `scope: '/preview/'`, so it doesn't control `/`. Instead we poll `getRegistration('/preview/')` until the SW is active.
 
 ### Test sequence per test
 
 1. `page.goto('/')` — app boots, SW registers
-2. `waitForSW(page)` — SW is active and controlling the page
+2. `waitForSW(page)` — polls until SW is active for `/preview/` scope
 3. `seedVFS(page, { ... })` — write test content to IndexedDB
 4. Navigate or fetch `/preview/...` URLs — assert responses
 
@@ -117,14 +133,16 @@ Tests use `page.evaluate(() => fetch(...))` for sub-resource assertions rather t
 
 ## CI integration
 
-Deferred. The suite will be validated locally first. Future CI step:
+Runs in `.github/workflows/ci.yml` after the `build:extension` step:
 
 ```yaml
 - name: E2E preview tests
   run: |
-    npx playwright install chromium --with-deps
+    npx playwright install chromium
     npm run test:e2e
 ```
+
+Adds ~30s to CI on `macos-latest` (Chromium install + 10 parallel tests).
 
 ## Out of scope
 
