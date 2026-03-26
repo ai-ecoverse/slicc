@@ -531,7 +531,10 @@ export function resolveModelById(modelId?: string): Model<Api> {
     let resolved: Model<Api> = model;
 
     if (providerConfig.isOAuth) {
-      resolved = { ...resolved, api: `${providerId}-anthropic` as Api, provider: providerId };
+      const providerModels = getProviderModels(providerId);
+      const providerModel = providerModels.find((m) => m.id === modelId);
+      const correctApi = providerModel?.api ?? (`${providerId}-anthropic` as Api);
+      resolved = { ...resolved, api: correctApi, provider: providerId };
     } else if (providerId === 'bedrock-camp') {
       resolved = { ...resolved, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
     }
@@ -569,7 +572,10 @@ export function resolveCurrentModel(): Model<Api> {
 
     // Override api and provider for custom routing
     if (providerConfig.isOAuth) {
-      resolved = { ...resolved, api: `${providerId}-anthropic` as Api, provider: providerId };
+      // Look up the correct api from the provider's model list (may be -openai or -anthropic)
+      const providerModel = models.find((m) => m.id === effectiveModelId);
+      const correctApi = providerModel?.api ?? (`${providerId}-anthropic` as Api);
+      resolved = { ...resolved, api: correctApi, provider: providerId };
     } else if (providerId === 'bedrock-camp') {
       resolved = { ...resolved, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
     }
