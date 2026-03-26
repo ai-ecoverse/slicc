@@ -4,10 +4,11 @@ import type { Command } from 'just-bash';
 function sayHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout:
-      'usage: say [-v voice] [-r rate] [--list] <text>\n\n' +
+      'usage: say [-v voice] [-r rate] [-l lang] [--list] <text>\n\n' +
       '  Speaks the given text using the Web Speech API.\n' +
       '  -v voice   Voice name (partial match supported)\n' +
       '  -r rate    Speech rate (0.1 to 10, default 1)\n' +
+      '  -l lang    Language tag (BCP 47, e.g. en-US, de-DE, fr-FR)\n' +
       '  --list     List available voices\n',
     stderr: '',
     exitCode: 0,
@@ -73,6 +74,7 @@ export function createSayCommand(): Command {
 
     let voiceName: string | null = null;
     let rate = 1;
+    let lang: string | null = null;
     const textParts: string[] = [];
 
     for (let i = 0; i < args.length; i++) {
@@ -90,6 +92,11 @@ export function createSayCommand(): Command {
         if (isNaN(rate) || rate < 0.1 || rate > 10) {
           return { stdout: '', stderr: 'say: rate must be between 0.1 and 10\n', exitCode: 1 };
         }
+      } else if (arg === '-l') {
+        if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
+          return { stdout: '', stderr: 'say: -l requires a language tag\n', exitCode: 1 };
+        }
+        lang = args[++i];
       } else if (arg.startsWith('-') && arg !== '--list') {
         return { stdout: '', stderr: `say: unknown option: ${arg}\n`, exitCode: 1 };
       } else if (!arg.startsWith('-')) {
@@ -104,6 +111,9 @@ export function createSayCommand(): Command {
 
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = rate;
+    if (lang) {
+      utterance.lang = lang;
+    }
 
     if (voiceName) {
       const match = voices.find((v) => v.name.toLowerCase().includes(voiceName!.toLowerCase()));

@@ -113,6 +113,21 @@ describe('say command', () => {
     expect(result.stderr).toBe('say: unknown option: --unknown\n');
   });
 
+  it('returns error for -l without value', async () => {
+    vi.stubGlobal('window', {});
+    vi.stubGlobal('speechSynthesis', {
+      getVoices: () => [],
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
+
+    const cmd = createSayCommand();
+    const result = await cmd.execute(['-l', '-v', 'test', 'hello'], createMockCtx());
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe('say: -l requires a language tag\n');
+  });
+
   it('shows help when no text provided', async () => {
     vi.stubGlobal('window', {});
     vi.stubGlobal('speechSynthesis', {
