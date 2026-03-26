@@ -266,6 +266,27 @@ async function init(): Promise<void> {
   (globalThis as unknown as Record<string, unknown>).__slicc_sprinkleManager =
     createSprinkleManagerProxy();
 
+  // Start BSH navigation watchdog — auto-executes .bsh scripts on matching navigations
+  // Mirrors the setup in packages/webapp/src/ui/main.ts
+  const sharedFs = orchestrator.getSharedFS();
+  if (sharedFs) {
+    try {
+      const { WasmShell } = await import('../../../packages/webapp/src/shell/index.js');
+      const { BshWatchdog } = await import('../../../packages/webapp/src/shell/bsh-watchdog.js');
+      const bshShell = new WasmShell({ fs: sharedFs, browserAPI: browser });
+      const bshWatchdog = new BshWatchdog({
+        browserAPI: browser,
+        fs: sharedFs,
+        execute: (scriptPath) => bshShell.executeScriptFile(scriptPath),
+      });
+      void bshWatchdog.start();
+      window.addEventListener('beforeunload', () => bshWatchdog.stop(), { once: true });
+      console.log('[slicc-offscreen] BSH navigation watchdog started');
+    } catch (e) {
+      log.warn('Failed to start BSH watchdog in offscreen', e);
+    }
+  }
+
   console.log('[slicc-offscreen] Agent engine ready, scoops:', orchestrator.getScoops().length);
 }
 
