@@ -15,9 +15,11 @@ private let contentTypeHeaderValue = "application/json; charset=utf-8"
 private let htmlContentTypeHeaderValue = "text/html; charset=utf-8"
 private let proxyHopByHopHeaders: Set<String> = [
     "host", "connection", "x-target-url", "content-length", "transfer-encoding",
+    "x-proxy-cookie",
 ]
 private let proxyBlockedResponseHeaders: Set<String> = [
     "transfer-encoding", "content-encoding", "www-authenticate",
+    "set-cookie",
 ]
 private let fetchProxyMethods: [HTTPRequest.Method] = [.get, .head, .post, .put, .patch, .delete, .options]
 
@@ -330,6 +332,26 @@ private func jsonHeaders(from headers: HTTPFields) -> LickSystem.JSONObject {
 private func makeProxyRequest(from request: Request, targetURL: URL, rawBody: ByteBuffer) throws -> HTTPClient.Request {
     var headers = HTTPHeaders(request.headers)
     headers.remove(name: "accept-encoding")
+
+    // Forbidden-header transport: restore X-Proxy-Cookie → Cookie
+    if let proxyCookie = headers["x-proxy-cookie"].first {
+        headers.add(name: "Cookie", value: proxyCookie)
+    }
+
+    // Forbidden-header transport: restore X-Proxy-Proxy-* → Proxy-*
+    let proxyPrefixHeaders = headers.compactMap { field -> (String, String)? in
+        let lower = field.name.lowercased()
+        guard lower.hasPrefix("x-proxy-proxy-") else { return nil }
+        let restored = String(field.name.dropFirst("x-proxy-".count))
+        return (restored, field.value)
+    }
+    for (name, _) in proxyPrefixHeaders {
+        headers.remove(name: "x-proxy-\(name)")
+    }
+    for (name, value) in proxyPrefixHeaders {
+        headers.add(name: name, value: value)
+    }
+
     for header in proxyHopByHopHeaders {
         headers.remove(name: header)
     }
@@ -350,10 +372,20 @@ private func makeProxyRequest(from request: Request, targetURL: URL, rawBody: By
 }
 
 private func makeProxyResponse(from response: HTTPClient.Response) -> Response {
+    // Forbidden-header transport: collect Set-Cookie headers and encode as X-Proxy-Set-Cookie
+    let setCookies = response.headers[canonicalForm: "set-cookie"].map { String($0) }
+
     var headers = HTTPFields(response.headers)
     for header in proxyBlockedResponseHeaders {
         headers[HTTPField.Name(header)!] = nil
     }
+
+    if !setCookies.isEmpty,
+       let jsonData = try? JSONSerialization.data(withJSONObject: setCookies),
+       let jsonString = String(data: jsonData, encoding: .utf8) {
+        headers[HTTPField.Name("X-Proxy-Set-Cookie")!] = jsonString
+    }
+
     headers[cacheControlHeader] = "no-store, no-cache"
     headers[HTTPField.Name.contentLength] = nil
 
