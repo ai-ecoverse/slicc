@@ -46,9 +46,13 @@ func registerAPIRoutes(
     httpClient: HTTPClient
 ) {
     router.get("/api/runtime-config") { _, _ in
-        try jsonResponse(
+        let envWorkerBaseUrl = ProcessInfo.processInfo.environment["WORKER_BASE_URL"]
+        let trayWorkerBaseUrl = config.leadWorkerBaseUrl
+            ?? envWorkerBaseUrl
+            ?? (config.dev ? nil : "https://www.sliccy.ai")
+        return try jsonResponse(
             .object([
-                "trayWorkerBaseUrl": jsonStringOrNull(config.leadWorkerBaseUrl),
+                "trayWorkerBaseUrl": jsonStringOrNull(trayWorkerBaseUrl),
                 "trayJoinUrl": jsonStringOrNull(config.joinUrl),
             ])
         )
