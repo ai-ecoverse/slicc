@@ -965,20 +965,21 @@ async function main() {
       // responses. Collect all Set-Cookie values and encode as JSON in a
       // transport header the browser can read.
       const setCookieValues = upstream.headers.getSetCookie();
-      if (setCookieValues.length > 0) {
-        res.setHeader('X-Proxy-Set-Cookie', JSON.stringify(setCookieValues));
-      }
       upstream.headers.forEach((v, k) => {
         const lower = k.toLowerCase();
         if (
           lower !== 'transfer-encoding' &&
           lower !== 'content-encoding' &&
           lower !== 'www-authenticate' &&
-          lower !== 'set-cookie'
+          lower !== 'set-cookie' &&
+          !lower.startsWith('x-proxy-')
         ) {
           res.setHeader(k, v);
         }
       });
+      if (setCookieValues.length > 0) {
+        res.setHeader('X-Proxy-Set-Cookie', JSON.stringify(setCookieValues));
+      }
 
       // Send body as raw binary - explicitly set content-length and use end()
       // instead of send() to avoid any Express middleware transformations

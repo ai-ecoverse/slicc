@@ -379,6 +379,12 @@ private func makeProxyResponse(from response: HTTPClient.Response) -> Response {
     for header in proxyBlockedResponseHeaders {
         headers[HTTPField.Name(header)!] = nil
     }
+    // Strip any upstream X-Proxy-* headers to prevent spoofing
+    for field in headers {
+        if field.name.canonicalName.lowercased().hasPrefix("x-proxy-") {
+            headers[field.name] = nil
+        }
+    }
 
     if !setCookies.isEmpty,
        let jsonData = try? JSONSerialization.data(withJSONObject: setCookies),
