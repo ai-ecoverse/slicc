@@ -27,6 +27,15 @@ import { CliLogDedup } from './cli-log-dedup.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..', '..');
+
+// Version command — exit immediately, no side effects
+const rawArgs = process.argv.slice(2);
+if (rawArgs.includes('version') || rawArgs.includes('--version') || rawArgs.includes('-v')) {
+  const pkg = JSON.parse(readFileSync(join(PROJECT_ROOT, 'package.json'), 'utf8'));
+  console.log(pkg.version);
+  process.exit(0);
+}
+
 const RUNTIME_FLAGS = parseCliRuntimeFlags(process.argv.slice(2));
 const DEV_MODE = RUNTIME_FLAGS.dev;
 const SERVE_ONLY = RUNTIME_FLAGS.serveOnly;
