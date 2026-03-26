@@ -22,8 +22,8 @@ import {
   createUpskillCommand,
 } from './supplemental-commands/upskill-command.js';
 import { MountCommands } from '../fs/mount-commands.js';
-import { discoverJshCommands } from './jsh-discovery.js';
-import { executeJshFile } from './jsh-executor.js';
+import { discoverJshCommands, type JshDiscoveryFS } from './jsh-discovery.js';
+import { executeJshFile, executeJsCode } from './jsh-executor.js';
 import { parseShellArgs } from './parse-shell-args.js';
 import { trackShellCommand } from '../ui/telemetry.js';
 
@@ -236,6 +236,8 @@ export interface WasmShellOptions {
   env?: Record<string, string>;
   /** BrowserAPI for playwright-cli command. */
   browserAPI?: BrowserAPI;
+  /** Optional: FS to use for .jsh discovery (defaults to fs). Useful for scoops where skill loading uses unrestricted VFS but the shell uses RestrictedFS. */
+  jshDiscoveryFs?: JshDiscoveryFS;
 }
 
 export class WasmShell {
@@ -371,7 +373,8 @@ export class WasmShell {
 
   /** Discover .jsh commands from VFS (fresh scan each call, no caching), filtering out built-in command names. */
   private async getFilteredJshCommands(): Promise<Map<string, string>> {
-    const all = await discoverJshCommands(this.options.fs);
+    const discoveryFs = this.options.jshDiscoveryFs ?? this.options.fs;
+    const all = await discoverJshCommands(discoveryFs);
     const filtered = new Map<string, string>();
     for (const [name, path] of all) {
       if (!this.builtinCommandNames.has(name)) {
@@ -404,7 +407,24 @@ export class WasmShell {
 
     const args = argsStr ? parseShellArgs(argsStr) : [];
 
-    const result = await executeJshFile(scriptPath, args, {
+    // Read the script source using the discovery FS (which can see paths outside the sandbox)
+    const discoveryFs = this.options.jshDiscoveryFs ?? this.options.fs;
+    let code: string;
+    try {
+      const raw = await discoveryFs.readFile(scriptPath, { encoding: 'utf-8' });
+      code = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+    } catch {
+      return {
+        stdout: '',
+        stderr: `jsh: cannot read script '${scriptPath}'\n`,
+        exitCode: 127,
+        env: this.lastEnv,
+      };
+    }
+
+    // Execute with the SANDBOXED fs (this.vfsAdapter) — not the discovery FS
+    const argv = ['node', scriptPath, ...args];
+    const result = await executeJsCode(code, argv, {
       fs: this.vfsAdapter,
       cwd: this.cwd,
       env: new Map(Object.entries(this.lastEnv)),

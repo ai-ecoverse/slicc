@@ -133,8 +133,6 @@ export class ScoopContext {
       // Create shell — cone starts at /, scoops at /scoops/{folder}/workspace
       const cwd = this.scoop.isCone ? '/' : `/scoops/${this.scoop.folder}/workspace`;
       const browser = this.callbacks.getBrowserAPI();
-      this.shell = new WasmShell({ fs: this.fs as VirtualFS, cwd, browserAPI: browser });
-      log.info('WasmShell initialized', { folder: this.scoop.folder });
 
       // Always load skills from the cone's /workspace/skills/ directory.
       // Scoops now have read access to /workspace/ via RestrictedFS ACL,
@@ -147,6 +145,15 @@ export class ScoopContext {
       }
 
       const effectiveSkillsFs = (this.skillsFs ?? this.fs) as VirtualFS;
+
+      // Pass effectiveSkillsFs for JSH discovery so scoops can find .jsh files from all loaded skills
+      this.shell = new WasmShell({
+        fs: this.fs as VirtualFS,
+        cwd,
+        browserAPI: browser,
+        jshDiscoveryFs: this.skillsFs ? effectiveSkillsFs : undefined,
+      });
+      log.info('WasmShell initialized', { folder: this.scoop.folder });
       const skills = await loadSkills(effectiveSkillsFs, this.skillsDir);
 
       // Create scoop-management tools (send_message, scoop management)
