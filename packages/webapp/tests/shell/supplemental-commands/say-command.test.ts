@@ -113,6 +113,66 @@ describe('say command', () => {
     expect(result.stderr).toBe('say: unknown option: --unknown\n');
   });
 
+  it('returns error for -l without value', async () => {
+    vi.stubGlobal('window', {});
+    vi.stubGlobal('speechSynthesis', {
+      getVoices: () => [],
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
+
+    const cmd = createSayCommand();
+    const result = await cmd.execute(['-l', '-v', 'test', 'hello'], createMockCtx());
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe('say: -l requires a language tag\n');
+  });
+
+  it('returns error when -l is not provided', async () => {
+    vi.stubGlobal('window', {});
+    vi.stubGlobal('speechSynthesis', {
+      getVoices: () => [],
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
+
+    const cmd = createSayCommand();
+    const result = await cmd.execute(['hello', 'world'], createMockCtx());
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe('say: -l language tag is required\n');
+  });
+
+  it('sets utterance.lang when -l is provided', async () => {
+    const mockUtterance: Record<string, unknown> = {};
+    vi.stubGlobal('window', {});
+    vi.stubGlobal(
+      'SpeechSynthesisUtterance',
+      class {
+        constructor(text: string) {
+          Object.assign(mockUtterance, { text });
+          return mockUtterance;
+        }
+      }
+    );
+    vi.stubGlobal('speechSynthesis', {
+      getVoices: () => [],
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      speak: (u: any) => {
+        // Trigger onend to resolve the promise
+        setTimeout(() => u.onend?.(), 0);
+      },
+    });
+
+    const cmd = createSayCommand();
+    const result = await cmd.execute(['-l', 'de-DE', 'Hallo', 'Welt'], createMockCtx());
+
+    expect(result.exitCode).toBe(0);
+    expect(mockUtterance.lang).toBe('de-DE');
+    expect(mockUtterance.text).toBe('Hallo Welt');
+  });
+
   it('shows help when no text provided', async () => {
     vi.stubGlobal('window', {});
     vi.stubGlobal('speechSynthesis', {
