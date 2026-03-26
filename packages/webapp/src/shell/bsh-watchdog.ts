@@ -10,6 +10,7 @@
  */
 
 import type { CDPTransport } from '../cdp/transport.js';
+import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { VirtualFS } from '../fs/index.js';
 import { discoverBshScripts, findMatchingScripts, type BshEntry } from './bsh-discovery.js';
 import { createLogger } from '../core/logger.js';
@@ -17,16 +18,23 @@ import { createLogger } from '../core/logger.js';
 const log = createLogger('bsh-watchdog');
 
 export interface BshWatchdogOptions {
-  /** CDP transport to subscribe to navigation events on. */
-  transport: CDPTransport;
+  /** Optional CDP transport to subscribe to navigation events on.
+   *  If `browserAPI` is provided, the watchdog will derive the transport
+   *  from `browserAPI.getTransport()` and this option may be omitted. */
+  transport?: CDPTransport;
+  /** BrowserAPI instance — preferred over raw transport.
+   *  When provided, the watchdog registers a session-change callback so it
+   *  automatically tracks transport swaps (remote targets, reconnects). */
+  browserAPI?: BrowserAPI;
   /** VirtualFS for discovering .bsh files and reading script content. */
   fs: VirtualFS;
-  /** How often (ms) to re-discover .bsh files. Default: 30000. */
+  /** How often (ms) to re-discover .bsh files. Default: 10000. */
   discoveryIntervalMs?: number;
 }
 
 export class BshWatchdog {
-  private readonly transport: CDPTransport;
+  private transport: CDPTransport;
+  private readonly browserAPI?: BrowserAPI;
   private readonly fs: VirtualFS;
   private readonly discoveryIntervalMs: number;
 
@@ -38,9 +46,13 @@ export class BshWatchdog {
   private executing = new Set<string>();
 
   constructor(options: BshWatchdogOptions) {
-    this.transport = options.transport;
+    if (!options.transport && !options.browserAPI) {
+      throw new Error('BshWatchdog requires either transport or browserAPI');
+    }
+    this.browserAPI = options.browserAPI;
+    this.transport = options.transport ?? options.browserAPI!.getTransport();
     this.fs = options.fs;
-    this.discoveryIntervalMs = options.discoveryIntervalMs ?? 30_000;
+    this.discoveryIntervalMs = options.discoveryIntervalMs ?? 10_000;
   }
 
   /** Start watching for navigations. */
@@ -59,6 +71,17 @@ export class BshWatchdog {
     // Subscribe to navigation events
     this.transport.on('Page.frameNavigated', this.onFrameNavigated);
 
+    // When using BrowserAPI, register for session-change notifications so we
+    // automatically follow transport swaps (remote targets, reconnects).
+    // Page.enable is already sent by attachToPage before the callback fires.
+    if (this.browserAPI) {
+      this.browserAPI.setSessionChangeCallback((_sessionId, newTransport) => {
+        if (newTransport !== this.transport) {
+          this.setTransport(newTransport);
+        }
+      });
+    }
+
     log.info('BSH watchdog started', { scriptCount: this.entries.length });
   }
 
@@ -74,10 +97,28 @@ export class BshWatchdog {
       this.discoveryTimer = null;
     }
 
+    if (this.browserAPI) {
+      this.browserAPI.setSessionChangeCallback(undefined);
+    }
+
     this.entries = [];
     this.executing.clear();
 
     log.info('BSH watchdog stopped');
+  }
+
+  /**
+   * Swap the underlying CDP transport.
+   * Moves the `Page.frameNavigated` listener from the old transport to the new one.
+   */
+  setTransport(newTransport: CDPTransport): void {
+    if (newTransport === this.transport) return;
+    this.transport.off('Page.frameNavigated', this.onFrameNavigated);
+    this.transport = newTransport;
+    if (this.running) {
+      this.transport.on('Page.frameNavigated', this.onFrameNavigated);
+    }
+    log.info('BSH watchdog transport swapped');
   }
 
   /** Force a re-discovery of .bsh files. */

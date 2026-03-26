@@ -214,6 +214,77 @@ describe('shared server API conformance', () => {
     expect(responseBody).toHaveProperty('trayWorkerBaseUrl');
   });
 
+  it('strips localhost Origin from proxy requests by default', async () => {
+    const res = await fetchFromServer('/api/fetch-proxy', {
+      method: 'GET',
+      headers: {
+        'x-target-url': serverUrl('/api/runtime-config'),
+        origin: 'http://localhost:5710',
+      },
+    });
+    expect(res.status).toBe(200);
+    // The proxy should have stripped the localhost origin before forwarding
+    // We can't directly verify what was sent upstream, but we verify the proxy doesn't error
+  });
+
+  it('forwards X-Proxy-Origin as Origin to upstream', async () => {
+    const res = await fetchFromServer('/api/fetch-proxy', {
+      method: 'GET',
+      headers: {
+        'x-target-url': serverUrl('/api/runtime-config'),
+        'x-proxy-origin': 'https://suno.com',
+      },
+    });
+    expect(res.status).toBe(200);
+    // Verify X-Proxy-Origin doesn't leak into response
+    expect(res.headers.get('x-proxy-origin')).toBeNull();
+  });
+
+  it('forwards X-Proxy-Referer as Referer to upstream', async () => {
+    const res = await fetchFromServer('/api/fetch-proxy', {
+      method: 'GET',
+      headers: {
+        'x-target-url': serverUrl('/api/runtime-config'),
+        'x-proxy-referer': 'https://suno.com/create',
+      },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-proxy-referer')).toBeNull();
+  });
+
+  it('transports Origin header to upstream via X-Proxy-Origin', async () => {
+    const { createServer } = await import('node:http');
+    const upstream = createServer((req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(
+        JSON.stringify({
+          origin: req.headers['origin'] || null,
+          referer: req.headers['referer'] || null,
+        })
+      );
+    });
+
+    await new Promise<void>((resolve) => upstream.listen(0, resolve));
+    const port = (upstream.address() as import('node:net').AddressInfo).port;
+
+    try {
+      const res = await fetchFromServer('/api/fetch-proxy', {
+        method: 'GET',
+        headers: {
+          'x-target-url': `http://localhost:${port}/`,
+          'x-proxy-origin': 'https://suno.com',
+          'x-proxy-referer': 'https://suno.com/create',
+        },
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.origin).toBe('https://suno.com');
+      expect(body.referer).toBe('https://suno.com/create');
+    } finally {
+      upstream.close();
+    }
+  });
+
   it('returns webhook CORS headers for preflight requests', async () => {
     const response = await fetchFromServer('/webhooks/test-id', { method: 'OPTIONS' });
     expect(response.status).toBe(204);

@@ -120,7 +120,7 @@ function prepareRequestBody(
 
 /**
  * Encode request headers that browsers silently strip (forbidden headers).
- * Cookie → X-Proxy-Cookie, Proxy-* → X-Proxy-Proxy-*
+ * Cookie → X-Proxy-Cookie, Origin → X-Proxy-Origin, Referer → X-Proxy-Referer, Proxy-* → X-Proxy-Proxy-*
  */
 export function encodeForbiddenRequestHeaders(
   headers: Record<string, string> | undefined
@@ -131,6 +131,10 @@ export function encodeForbiddenRequestHeaders(
     const lower = key.toLowerCase();
     if (lower === 'cookie') {
       result['X-Proxy-Cookie'] = value;
+    } else if (lower === 'origin') {
+      result['X-Proxy-Origin'] = value;
+    } else if (lower === 'referer') {
+      result['X-Proxy-Referer'] = value;
     } else if (lower.startsWith('proxy-')) {
       result[`X-Proxy-${key}`] = value;
     } else {
