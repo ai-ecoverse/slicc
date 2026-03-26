@@ -61,9 +61,9 @@ export function createSayCommand(): Command {
       };
     }
 
-    const voices = await getVoices();
-
+    // Handle --list early (needs voices)
     if (args.includes('--list')) {
+      const voices = await getVoices();
       const lines = voices.map((v) => `${v.name} (${v.lang})${v.default ? ' [default]' : ''}`);
       return {
         stdout: lines.join('\n') + '\n',
@@ -72,6 +72,7 @@ export function createSayCommand(): Command {
       };
     }
 
+    // Parse args (no voice loading needed)
     let voiceName: string | null = null;
     let rate = 1;
     let lang: string | null = null;
@@ -104,6 +105,7 @@ export function createSayCommand(): Command {
       }
     }
 
+    // Validate
     const text = textParts.join(' ');
     if (!text) {
       return sayHelp();
@@ -113,13 +115,14 @@ export function createSayCommand(): Command {
       return { stdout: '', stderr: 'say: -l language tag is required\n', exitCode: 1 };
     }
 
+    // Create utterance
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = rate;
-    if (lang) {
-      utterance.lang = lang;
-    }
+    utterance.lang = lang;
 
+    // Voice matching (only loads voices if -v was specified)
     if (voiceName) {
+      const voices = await getVoices();
       const match = voices.find((v) => v.name.toLowerCase().includes(voiceName!.toLowerCase()));
       if (match) {
         utterance.voice = match;
