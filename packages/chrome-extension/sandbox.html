@@ -39,24 +39,14 @@ function proxiedFetch(input, init) {
   return new Promise((resolve, reject) => {
     const id = 'fp-' + (++fetchIdCounter);
     pendingFetch.set(id, { resolve, reject });
-    // Encode forbidden request headers before postMessage so the parent-side
-    // handler forwards them through to the actual fetch call.
-    // Cookie → X-Proxy-Cookie, Proxy-* → X-Proxy-Proxy-*
-    let encodedHeaders;
-    if (init && init.headers) {
-      const raw = Object.fromEntries(new Headers(init.headers).entries());
-      encodedHeaders = {};
-      for (const [key, value] of Object.entries(raw)) {
-        const lower = key.toLowerCase();
-        if (lower === 'cookie') {
-          encodedHeaders['X-Proxy-Cookie'] = value;
-        } else if (lower.startsWith('proxy-')) {
-          encodedHeaders['X-Proxy-' + key] = value;
-        } else {
-          encodedHeaders[key] = value;
-        }
-      }
-    }
+    // Pass headers through as-is. In extension mode the parent handler calls
+    // fetch(url, init) directly (not through /api/fetch-proxy), so there is no
+    // server-side decoder for encoded headers. Cookie headers will be stripped
+    // by the browser's fetch() API. Cookie-based auth in extension mode
+    // requires playwright-cli eval.
+    const encodedHeaders = init && init.headers
+      ? Object.fromEntries(new Headers(init.headers).entries())
+      : undefined;
     parent.postMessage({
       type: 'fetch_proxy',
       id,
