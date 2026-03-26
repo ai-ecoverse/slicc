@@ -36,6 +36,16 @@ final class APIRoutesTests: XCTestCase {
     }
 
     func testRuntimeConfigDefaultsToProductionUrlWhenNotDev() async throws {
+        let savedEnv = ProcessInfo.processInfo.environment["WORKER_BASE_URL"]
+        unsetenv("WORKER_BASE_URL")
+        defer {
+            if let savedEnv {
+                setenv("WORKER_BASE_URL", savedEnv, 1)
+            } else {
+                unsetenv("WORKER_BASE_URL")
+            }
+        }
+
         try await self.withHTTPClient { httpClient in
             let router = Router()
             registerAPIRoutes(
@@ -58,6 +68,16 @@ final class APIRoutesTests: XCTestCase {
     }
 
     func testRuntimeConfigReturnsNullUrlInDevMode() async throws {
+        let savedEnv = ProcessInfo.processInfo.environment["WORKER_BASE_URL"]
+        unsetenv("WORKER_BASE_URL")
+        defer {
+            if let savedEnv {
+                setenv("WORKER_BASE_URL", savedEnv, 1)
+            } else {
+                unsetenv("WORKER_BASE_URL")
+            }
+        }
+
         try await self.withHTTPClient { httpClient in
             let router = Router()
             registerAPIRoutes(

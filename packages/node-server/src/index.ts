@@ -751,7 +751,7 @@ async function main() {
     res.json({
       trayWorkerBaseUrl:
         RUNTIME_FLAGS.leadWorkerBaseUrl ??
-        process.env['WORKER_BASE_URL'] ??
+        (process.env['WORKER_BASE_URL']?.trim() || null) ??
         (DEV_MODE
           ? 'https://slicc-tray-hub-staging.minivelos.workers.dev'
           : 'https://www.sliccy.ai'),
