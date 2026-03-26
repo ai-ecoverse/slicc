@@ -920,6 +920,8 @@ async function main() {
         'content-length',
         'transfer-encoding',
         'x-proxy-cookie',
+        'x-proxy-origin',
+        'x-proxy-referer',
       ]);
       const headers: Record<string, string> = {};
       for (const [key, value] of Object.entries(req.headers)) {
@@ -933,6 +935,25 @@ async function main() {
       if (typeof proxyCookie === 'string') {
         headers['cookie'] = proxyCookie;
       }
+      // Forbidden-header transport: restore X-Proxy-Origin → Origin
+      const proxyOrigin = req.headers['x-proxy-origin'];
+      if (typeof proxyOrigin === 'string') {
+        headers['origin'] = proxyOrigin;
+      } else {
+        // No explicit origin requested — strip the browser's localhost origin
+        // to avoid upstream APIs rejecting based on Origin check
+        delete headers['origin'];
+      }
+
+      // Forbidden-header transport: restore X-Proxy-Referer → Referer
+      const proxyReferer = req.headers['x-proxy-referer'];
+      if (typeof proxyReferer === 'string') {
+        headers['referer'] = proxyReferer;
+      } else {
+        // Strip browser's localhost referer
+        delete headers['referer'];
+      }
+
       // Restore any X-Proxy-Proxy-* transport headers as Proxy-* headers
       for (const [key, value] of Object.entries(req.headers)) {
         if (key.startsWith('x-proxy-proxy-') && typeof value === 'string') {
