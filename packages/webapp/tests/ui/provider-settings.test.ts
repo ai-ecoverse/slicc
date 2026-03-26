@@ -875,6 +875,84 @@ describe('resolveCurrentModel with getModelIds', () => {
   });
 });
 
+describe('OAuth API routing uses api from getModelIds', () => {
+  beforeEach(() => {
+    storage.clear();
+    vi.clearAllMocks();
+  });
+
+  function setupOAuthProviderWithMixedApis() {
+    const providerConfigs = new Map(
+      mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
+    );
+    providerConfigs.set('adobe', {
+      id: 'adobe',
+      name: 'Adobe',
+      description: 'Adobe provider',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      getModelIds: () => [
+        { id: 'claude-sonnet-4-0', name: 'Claude Sonnet 4' },
+        { id: 'gpt-5', name: 'GPT-5', api: 'openai' },
+      ],
+    });
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
+    mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
+
+    // pi-ai registry knows both base models
+    mockGetModel.mockImplementation((provider: string, modelId: string) => ({
+      id: modelId,
+      name: modelId,
+      provider,
+      api: 'mock-api',
+      baseUrl: 'https://default.example.com',
+    }));
+
+    saveOAuthAccount({ providerId: 'adobe', accessToken: 'tok-adobe' });
+  }
+
+  it('resolveCurrentModel returns correct api from getModelIds for anthropic model', () => {
+    setupOAuthProviderWithMixedApis();
+    storage.set('selected-model', 'adobe:claude-sonnet-4-0');
+
+    const model = resolveCurrentModel();
+    expect(model.id).toBe('claude-sonnet-4-0');
+    expect(model.provider).toBe('adobe');
+    expect(String(model.api)).toBe('adobe-anthropic');
+  });
+
+  it('resolveCurrentModel returns correct api from getModelIds for openai model', () => {
+    setupOAuthProviderWithMixedApis();
+    storage.set('selected-model', 'adobe:gpt-5');
+
+    const model = resolveCurrentModel();
+    expect(model.id).toBe('gpt-5');
+    expect(model.provider).toBe('adobe');
+    expect(String(model.api)).toBe('adobe-openai');
+  });
+
+  it('resolveModelById returns correct api from getModelIds for anthropic model', () => {
+    setupOAuthProviderWithMixedApis();
+    storage.set('selected-model', 'adobe:claude-sonnet-4-0');
+
+    const model = resolveModelById('claude-sonnet-4-0');
+    expect(model.id).toBe('claude-sonnet-4-0');
+    expect(model.provider).toBe('adobe');
+    expect(String(model.api)).toBe('adobe-anthropic');
+  });
+
+  it('resolveModelById returns correct api from getModelIds for openai model', () => {
+    setupOAuthProviderWithMixedApis();
+    storage.set('selected-model', 'adobe:gpt-5');
+
+    const model = resolveModelById('gpt-5');
+    expect(model.id).toBe('gpt-5');
+    expect(model.provider).toBe('adobe');
+    expect(String(model.api)).toBe('adobe-openai');
+  });
+});
+
 describe('resolveCurrentModel with getModelDynamic returning undefined', () => {
   beforeEach(() => {
     storage.clear();
