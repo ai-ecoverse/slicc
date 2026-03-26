@@ -9,13 +9,7 @@ enum ConnectionState: String {
     case failed
 }
 
-/// Placeholder for chat messages — will be fully defined later.
-struct ChatMessage: Identifiable {
-    let id = UUID()
-    let role: String
-    let content: String
-    let timestamp: Date
-}
+// ChatMessage is defined in Models/ChatMessage.swift
 
 /// Global app state shared across views via @EnvironmentObject.
 @MainActor

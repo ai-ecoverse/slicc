@@ -21,7 +21,13 @@ let package = Package(
             dependencies: [
                 .product(name: "WebRTC", package: "WebRTC")
             ],
-            path: "SliccFollower"
+            path: "SliccFollower",
+            resources: [
+                .copy("WebView/chat.html"),
+                .copy("WebView/chat.css"),
+                .copy("WebView/chat.js"),
+                .process("Resources/Assets.xcassets")
+            ]
         )
     ]
 )
