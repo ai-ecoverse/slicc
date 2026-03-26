@@ -122,7 +122,7 @@ function prepareRequestBody(
  * Encode request headers that browsers silently strip (forbidden headers).
  * Cookie → X-Proxy-Cookie, Proxy-* → X-Proxy-Proxy-*
  */
-function encodeForbiddenRequestHeaders(
+export function encodeForbiddenRequestHeaders(
   headers: Record<string, string> | undefined
 ): Record<string, string> {
   if (!headers) return {};
@@ -144,7 +144,9 @@ function encodeForbiddenRequestHeaders(
  * Decode response headers that the proxy transported under non-forbidden names.
  * X-Proxy-Set-Cookie (JSON array) → set-cookie (JSON array string)
  */
-function decodeForbiddenResponseHeaders(headers: Record<string, string>): Record<string, string> {
+export function decodeForbiddenResponseHeaders(
+  headers: Record<string, string>
+): Record<string, string> {
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
     const lower = key.toLowerCase();
