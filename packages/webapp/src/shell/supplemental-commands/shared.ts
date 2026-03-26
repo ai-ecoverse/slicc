@@ -1,4 +1,3 @@
-import { loadPyodide } from 'pyodide';
 import type { PyodideInterface } from 'pyodide';
 import { getMimeType } from '../../core/mime-types.js';
 import { normalizePath } from '../../fs/path-utils.js';
@@ -173,6 +172,7 @@ const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 export async function getPyodide(): Promise<PyodideInterface> {
   if (!pyodidePromise) {
     pyodidePromise = (async () => {
+      const { loadPyodide } = await import('pyodide');
       let indexURL: string;
       if (typeof window === 'undefined') {
         indexURL = decodeURIComponent(
