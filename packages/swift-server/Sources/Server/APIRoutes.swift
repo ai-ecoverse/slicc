@@ -15,7 +15,7 @@ private let contentTypeHeaderValue = "application/json; charset=utf-8"
 private let htmlContentTypeHeaderValue = "text/html; charset=utf-8"
 private let proxyHopByHopHeaders: Set<String> = [
     "host", "connection", "x-target-url", "content-length", "transfer-encoding",
-    "x-proxy-cookie",
+    "x-proxy-cookie", "x-proxy-origin", "x-proxy-referer",
 ]
 private let proxyBlockedResponseHeaders: Set<String> = [
     "transfer-encoding", "content-encoding", "www-authenticate",
@@ -337,6 +337,31 @@ private func makeProxyRequest(from request: Request, targetURL: URL, rawBody: By
     if let proxyCookie = headers["x-proxy-cookie"].first {
         headers.add(name: "Cookie", value: proxyCookie)
     }
+
+    // Helper to check if a URL string is localhost
+    func isLocalhostOrigin(_ value: String) -> Bool {
+        guard let url = URL(string: value) else { return false }
+        let host = url.host ?? ""
+        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+    }
+
+    // Forbidden-header transport: restore X-Proxy-Origin → Origin
+    if let proxyOrigin = headers["X-Proxy-Origin"].first {
+        headers.replaceOrAdd(name: "Origin", value: proxyOrigin)
+    } else if let currentOrigin = headers["Origin"].first, isLocalhostOrigin(currentOrigin) {
+        // Only strip browser's auto-added localhost origin, preserve legitimate origins
+        headers.remove(name: "Origin")
+    }
+    headers.remove(name: "X-Proxy-Origin")
+
+    // Forbidden-header transport: restore X-Proxy-Referer → Referer
+    if let proxyReferer = headers["X-Proxy-Referer"].first {
+        headers.replaceOrAdd(name: "Referer", value: proxyReferer)
+    } else if let currentReferer = headers["Referer"].first, isLocalhostOrigin(currentReferer) {
+        // Only strip browser's auto-added localhost referer, preserve legitimate referers
+        headers.remove(name: "Referer")
+    }
+    headers.remove(name: "X-Proxy-Referer")
 
     // Forbidden-header transport: restore X-Proxy-Proxy-* → Proxy-*
     let proxyPrefixHeaders = headers.compactMap { field -> (String, String)? in

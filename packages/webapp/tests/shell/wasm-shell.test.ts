@@ -109,6 +109,24 @@ describe('encodeForbiddenRequestHeaders', () => {
     });
   });
 
+  it('encodes Origin → X-Proxy-Origin', () => {
+    expect(encodeForbiddenRequestHeaders({ Origin: 'https://suno.com' })).toEqual({
+      'X-Proxy-Origin': 'https://suno.com',
+    });
+  });
+
+  it('encodes origin (lowercase) → X-Proxy-Origin', () => {
+    expect(encodeForbiddenRequestHeaders({ origin: 'https://suno.com' })).toEqual({
+      'X-Proxy-Origin': 'https://suno.com',
+    });
+  });
+
+  it('encodes Referer → X-Proxy-Referer', () => {
+    expect(encodeForbiddenRequestHeaders({ Referer: 'https://example.com/page' })).toEqual({
+      'X-Proxy-Referer': 'https://example.com/page',
+    });
+  });
+
   it('encodes Proxy-Authorization → X-Proxy-Proxy-Authorization', () => {
     expect(encodeForbiddenRequestHeaders({ 'Proxy-Authorization': 'Basic abc' })).toEqual({
       'X-Proxy-Proxy-Authorization': 'Basic abc',
@@ -125,12 +143,16 @@ describe('encodeForbiddenRequestHeaders', () => {
     const result = encodeForbiddenRequestHeaders({
       Accept: 'text/html',
       Cookie: 'sid=abc',
+      Origin: 'https://example.com',
+      Referer: 'https://example.com/page',
       'Proxy-Authorization': 'Basic xyz',
       'Content-Type': 'application/json',
     });
     expect(result).toEqual({
       Accept: 'text/html',
       'X-Proxy-Cookie': 'sid=abc',
+      'X-Proxy-Origin': 'https://example.com',
+      'X-Proxy-Referer': 'https://example.com/page',
       'X-Proxy-Proxy-Authorization': 'Basic xyz',
       'Content-Type': 'application/json',
     });

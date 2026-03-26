@@ -106,6 +106,8 @@ window.fetch = async (input, init) => {
   for (const [k, v] of Object.entries(hdrs)) {
     const lk = k.toLowerCase();
     if (lk === 'cookie') { encoded['X-Proxy-Cookie'] = v; }
+    else if (lk === 'origin') { encoded['X-Proxy-Origin'] = v; }
+    else if (lk === 'referer') { encoded['X-Proxy-Referer'] = v; }
     else if (lk.startsWith('proxy-')) { encoded['X-Proxy-' + k] = v; }
     else { encoded[k] = v; }
   }
