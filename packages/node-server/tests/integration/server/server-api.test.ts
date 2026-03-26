@@ -54,8 +54,24 @@ describe('shared server API conformance', () => {
     const body = (await response.json()) as Record<string, unknown>;
     expect(body).toHaveProperty('trayWorkerBaseUrl');
     expect(body).toHaveProperty('trayJoinUrl');
-    expectStringOrNull(body['trayWorkerBaseUrl']);
+    // trayWorkerBaseUrl always has a default now (production or dev URL)
+    expect(typeof body['trayWorkerBaseUrl']).toBe('string');
+    expect((body['trayWorkerBaseUrl'] as string).length).toBeGreaterThan(0);
     expectStringOrNull(body['trayJoinUrl']);
+  });
+
+  it('returns a known default trayWorkerBaseUrl when no explicit URL is configured', async () => {
+    const response = await fetchFromServer('/api/runtime-config');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as Record<string, unknown>;
+    const url = body['trayWorkerBaseUrl'] as string;
+    // Should be one of the two known defaults depending on dev/production mode
+    const knownDefaults = [
+      'https://www.sliccy.ai',
+      'https://slicc-tray-hub-staging.minivelos.workers.dev',
+    ];
+    expect(knownDefaults).toContain(url);
   });
 
   it('serves the OAuth callback page and relays/stores pending OAuth results', async () => {
