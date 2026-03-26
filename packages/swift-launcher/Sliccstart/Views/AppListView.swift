@@ -87,18 +87,20 @@ struct AppListView: View {
             Divider()
             HStack {
                 if SliccBootstrapper.isBundled {
-                    if case .downloaded(let release, _, _) = appUpdater.state {
-                        Button("Restart to Update to \(release.tagName.description)") {
-                            appUpdater.install()
+                    if let bundle = appUpdater.downloadedAppBundle {
+                        if let version = bundle.infoDictionary?["CFBundleShortVersionString"] as? String, !version.isEmpty {
+                            Button("Restart to Update to v\(version)") {
+                                appUpdater.install(bundle)
+                            }
+                            .buttonStyle(.borderless).font(.caption)
+                            .foregroundStyle(.green)
+                        } else {
+                            Button("Restart to Update") {
+                                appUpdater.install(bundle)
+                            }
+                            .buttonStyle(.borderless).font(.caption)
+                            .foregroundStyle(.green)
                         }
-                        .buttonStyle(.borderless).font(.caption)
-                        .foregroundStyle(.green)
-                    } else if case .downloading(_, _, let fraction) = appUpdater.state {
-                        Text("Downloading \(Int(fraction * 100))%…")
-                            .font(.caption).foregroundStyle(.secondary)
-                    } else if case .newVersionDetected(let release, _) = appUpdater.state {
-                        Text("Found \(release.tagName.description)…")
-                            .font(.caption).foregroundStyle(.secondary)
                     } else {
                         Button("Check for Updates") {
                             appUpdater.check()
