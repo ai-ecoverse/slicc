@@ -24,7 +24,7 @@ import type {
   TextContent,
   Model,
 } from '../core/index.js';
-import { isContextOverflow } from '@mariozechner/pi-ai/dist/utils/overflow.js';
+import { isContextOverflow } from '@mariozechner/pi-ai';
 import type { AssistantMessage as PiAssistantMessage } from '@mariozechner/pi-ai';
 import type { SessionStore } from '../core/session.js';
 import { createFileTools, createBashTool, createJavaScriptTool } from '../tools/index.js';

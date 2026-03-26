@@ -7,8 +7,12 @@
  */
 
 import type { ProviderConfig } from '../types.js';
-import { registerApiProvider, calculateCost } from '@mariozechner/pi-ai';
-import { AssistantMessageEventStream } from '@mariozechner/pi-ai/dist/utils/event-stream.js';
+import {
+  registerApiProvider,
+  calculateCost,
+  createAssistantMessageEventStream,
+} from '@mariozechner/pi-ai';
+import type { AssistantMessageEventStream } from '@mariozechner/pi-ai';
 import { transformMessages } from '@mariozechner/pi-ai/dist/providers/transform-messages.js';
 import {
   buildBaseOptions,
@@ -368,7 +372,7 @@ export const streamBedrockCamp = (
   context: Context,
   options: BedrockCampOptions = {}
 ): AssistantMessageEventStream => {
-  const stream = new AssistantMessageEventStream();
+  const stream = createAssistantMessageEventStream();
 
   (async () => {
     const output: AssistantMessage = {
@@ -414,7 +418,7 @@ export const streamBedrockCamp = (
       if (!body.toolConfig) delete body.toolConfig;
       if (!body.additionalModelRequestFields) delete body.additionalModelRequestFields;
 
-      options?.onPayload?.(body);
+      options?.onPayload?.(body, model);
 
       // Build URL: POST {baseUrl}/model/{modelId}/converse
       const targetUrl = `${baseUrl.replace(/\/$/, '')}/model/${encodeURIComponent(model.id)}/converse`;
@@ -495,7 +499,7 @@ export const streamSimpleBedrockCamp = (
       reasoning: options.reasoning,
       thinkingBudgets: {
         ...(options.thinkingBudgets || {}),
-        [clampReasoning(options.reasoning)!]: adjusted.thinkingBudget,
+        [clampReasoning(options.reasoning)!]: adjusted.budgetTokens,
       },
     });
   }
