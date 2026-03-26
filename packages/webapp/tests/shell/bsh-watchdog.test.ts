@@ -299,6 +299,181 @@ describe('BshWatchdog', () => {
     expect(transport.sendCalls.filter((c) => c.method === 'Runtime.evaluate')).toHaveLength(0);
   });
 
+  it('accepts browserAPI option and subscribes via getTransport()', async () => {
+    await vfs.writeFile('/workspace/-.okta.com.bsh', 'console.log("ok");');
+
+    const mockBrowserAPI = {
+      getTransport: vi.fn(() => transport),
+      setSessionChangeCallback: vi.fn(),
+    } as unknown as import('../../src/cdp/browser-api.js').BrowserAPI;
+
+    const watchdog = new BshWatchdog({
+      browserAPI: mockBrowserAPI,
+      fs: vfs,
+      discoveryIntervalMs: 60_000,
+    });
+
+    await watchdog.start();
+
+    // Should have called setSessionChangeCallback
+    expect(mockBrowserAPI.setSessionChangeCallback).toHaveBeenCalledTimes(1);
+    expect(
+      typeof (mockBrowserAPI.setSessionChangeCallback as ReturnType<typeof vi.fn>).mock.calls[0][0]
+    ).toBe('function');
+
+    // Should still respond to navigation events on the transport from getTransport()
+    transport.emit('Page.frameNavigated', {
+      frame: { url: 'https://login.okta.com/home' },
+      sessionId: 'test-session',
+    });
+
+    await vi.waitFor(() => {
+      const evaluateCalls = transport.sendCalls.filter((c) => c.method === 'Runtime.evaluate');
+      expect(evaluateCalls).toHaveLength(1);
+    });
+
+    watchdog.stop();
+  });
+
+  it('swaps transport via setTransport()', async () => {
+    await vfs.writeFile('/workspace/-.okta.com.bsh', 'console.log("ok");');
+
+    const transportA = transport;
+    const transportB = createMockTransport();
+
+    const watchdog = new BshWatchdog({
+      transport: transportA,
+      fs: vfs,
+      discoveryIntervalMs: 60_000,
+    });
+
+    await watchdog.start();
+
+    // Swap to transport B
+    watchdog.setTransport(transportB);
+
+    // Navigation on old transport A should NOT trigger execution
+    transportA.emit('Page.frameNavigated', {
+      frame: { url: 'https://login.okta.com/home' },
+      sessionId: 'test-session',
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(transportA.sendCalls.filter((c) => c.method === 'Runtime.evaluate')).toHaveLength(0);
+
+    // Navigation on new transport B SHOULD trigger execution
+    transportB.emit('Page.frameNavigated', {
+      frame: { url: 'https://login.okta.com/home' },
+      sessionId: 'test-session',
+    });
+
+    await vi.waitFor(() => {
+      const evaluateCalls = transportB.sendCalls.filter((c) => c.method === 'Runtime.evaluate');
+      expect(evaluateCalls).toHaveLength(1);
+    });
+
+    watchdog.stop();
+  });
+
+  it('session-change callback triggers transport swap', async () => {
+    await vfs.writeFile('/workspace/-.okta.com.bsh', 'console.log("ok");');
+
+    let capturedCallback: ((sessionId: string, transport: CDPTransport) => void) | null = null;
+    const mockBrowserAPI = {
+      getTransport: vi.fn(() => transport),
+      setSessionChangeCallback: vi.fn(
+        (cb: (sessionId: string, transport: CDPTransport) => void) => {
+          capturedCallback = cb;
+        }
+      ),
+    } as unknown as import('../../src/cdp/browser-api.js').BrowserAPI;
+
+    const watchdog = new BshWatchdog({
+      browserAPI: mockBrowserAPI,
+      fs: vfs,
+      discoveryIntervalMs: 60_000,
+    });
+
+    await watchdog.start();
+    expect(capturedCallback).not.toBeNull();
+
+    // Simulate a session change with a new transport
+    const newTransport = createMockTransport();
+    capturedCallback!('new-session-id', newTransport);
+
+    // Old transport should no longer trigger execution
+    transport.emit('Page.frameNavigated', {
+      frame: { url: 'https://login.okta.com/home' },
+      sessionId: 'test-session',
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(transport.sendCalls.filter((c) => c.method === 'Runtime.evaluate')).toHaveLength(0);
+
+    // New transport should trigger execution
+    newTransport.emit('Page.frameNavigated', {
+      frame: { url: 'https://login.okta.com/home' },
+      sessionId: 'test-session',
+    });
+
+    await vi.waitFor(() => {
+      const evaluateCalls = newTransport.sendCalls.filter((c) => c.method === 'Runtime.evaluate');
+      expect(evaluateCalls).toHaveLength(1);
+    });
+
+    watchdog.stop();
+  });
+
+  it('re-discovery picks up new scripts', async () => {
+    const watchdog = new BshWatchdog({
+      transport,
+      fs: vfs,
+      discoveryIntervalMs: 60_000,
+    });
+
+    await watchdog.start();
+
+    // No scripts initially
+    expect(watchdog.getEntries()).toHaveLength(0);
+
+    // Navigation should do nothing
+    transport.emit('Page.frameNavigated', {
+      frame: { url: 'https://login.okta.com/home' },
+      sessionId: 'test-session',
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(transport.sendCalls.filter((c) => c.method === 'Runtime.evaluate')).toHaveLength(0);
+
+    // Write a new .bsh file and force re-discovery
+    await vfs.writeFile('/workspace/-.okta.com.bsh', 'console.log("ok");');
+    await watchdog.discover();
+
+    expect(watchdog.getEntries()).toHaveLength(1);
+
+    // Now navigation should execute the script
+    transport.emit('Page.frameNavigated', {
+      frame: { url: 'https://login.okta.com/home' },
+      sessionId: 'test-session',
+    });
+
+    await vi.waitFor(() => {
+      const evaluateCalls = transport.sendCalls.filter((c) => c.method === 'Runtime.evaluate');
+      expect(evaluateCalls).toHaveLength(1);
+    });
+
+    watchdog.stop();
+  });
+
+  it('throws when constructed with neither transport nor browserAPI', () => {
+    expect(
+      () =>
+        new BshWatchdog({
+          fs: vfs,
+        })
+    ).toThrow('BshWatchdog requires either transport or browserAPI');
+  });
+
   it('handles evaluation errors gracefully', async () => {
     const errorTransport = createMockTransport();
     // Return exceptionDetails for Runtime.evaluate
