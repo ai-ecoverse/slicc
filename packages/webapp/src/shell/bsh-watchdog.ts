@@ -6,27 +6,21 @@
  * 1. Periodically re-discovers `.bsh` files on the VFS
  * 2. Listens for main-frame navigations on attached browser tabs
  * 3. Matches the navigated URL against discovered hostname patterns + @match directives
- * 4. Executes matching scripts via the provided executor function
+ * 4. Executes matching scripts in the target page via CDP Runtime.evaluate
  */
 
 import type { CDPTransport } from '../cdp/transport.js';
 import type { VirtualFS } from '../fs/index.js';
 import { discoverBshScripts, findMatchingScripts, type BshEntry } from './bsh-discovery.js';
-import type { JshResult } from './jsh-executor.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('bsh-watchdog');
 
-/** Function that executes a .bsh script at the given VFS path. */
-export type BshExecutor = (scriptPath: string) => Promise<JshResult>;
-
 export interface BshWatchdogOptions {
   /** CDP transport to subscribe to navigation events on. */
   transport: CDPTransport;
-  /** VirtualFS for discovering .bsh files. */
+  /** VirtualFS for discovering .bsh files and reading script content. */
   fs: VirtualFS;
-  /** Callback to execute a .bsh script (receives the VFS path). */
-  execute: BshExecutor;
   /** How often (ms) to re-discover .bsh files. Default: 30000. */
   discoveryIntervalMs?: number;
 }
@@ -34,7 +28,6 @@ export interface BshWatchdogOptions {
 export class BshWatchdog {
   private readonly transport: CDPTransport;
   private readonly fs: VirtualFS;
-  private readonly execute: BshExecutor;
   private readonly discoveryIntervalMs: number;
 
   private entries: BshEntry[] = [];
@@ -47,7 +40,6 @@ export class BshWatchdog {
   constructor(options: BshWatchdogOptions) {
     this.transport = options.transport;
     this.fs = options.fs;
-    this.execute = options.execute;
     this.discoveryIntervalMs = options.discoveryIntervalMs ?? 30_000;
   }
 
@@ -113,9 +105,16 @@ export class BshWatchdog {
     if (frame?.parentId || !frame?.url) return;
 
     const url = frame.url;
+    const sessionId = params['sessionId'] as string | undefined;
 
     // Skip non-HTTP URLs (about:blank, chrome://, etc.)
     if (!url.startsWith('http://') && !url.startsWith('https://')) return;
+
+    // Need sessionId to evaluate in the target page
+    if (!sessionId) {
+      log.warn('BSH watchdog: no sessionId in Page.frameNavigated params, skipping', { url });
+      return;
+    }
 
     // Skip if no scripts discovered
     if (this.entries.length === 0) return;
@@ -133,18 +132,9 @@ export class BshWatchdog {
 
       log.info('BSH watchdog executing script', { script: entry.path, url });
 
-      void this.execute(entry.path)
-        .then((result) => {
-          if (result.exitCode !== 0) {
-            log.warn('BSH script failed', {
-              script: entry.path,
-              url,
-              exitCode: result.exitCode,
-              stderr: result.stderr.slice(0, 200),
-            });
-          } else {
-            log.info('BSH script completed', { script: entry.path, url });
-          }
+      void this.executeInTargetPage(entry.path, url, sessionId)
+        .then(() => {
+          log.info('BSH script completed', { script: entry.path, url });
         })
         .catch((err) => {
           log.error('BSH script execution error', {
@@ -158,4 +148,39 @@ export class BshWatchdog {
         });
     }
   };
+
+  /**
+   * Read the .bsh script from VFS and evaluate it in the target page via CDP.
+   */
+  private async executeInTargetPage(
+    scriptPath: string,
+    url: string,
+    sessionId: string
+  ): Promise<void> {
+    // Read script content from VFS
+    const content = await this.fs.readFile(scriptPath);
+    const scriptContent = typeof content === 'string' ? content : new TextDecoder().decode(content);
+
+    // Wrap in async IIFE with error handling and evaluate in target page
+    const wrappedScript = `(async () => { try {\n${scriptContent}\n} catch(e) { console.error('[bsh]', e); } })()`;
+
+    await this.transport.send('Runtime.enable', {}, sessionId);
+    const result = await this.transport.send(
+      'Runtime.evaluate',
+      {
+        expression: wrappedScript,
+        awaitPromise: true,
+        returnByValue: true,
+      },
+      sessionId
+    );
+
+    const exceptionDetails = result['exceptionDetails'] as
+      | { text: string; exception?: { description?: string } }
+      | undefined;
+    if (exceptionDetails) {
+      const msg = exceptionDetails.exception?.description ?? exceptionDetails.text;
+      log.warn('BSH script evaluation error', { script: scriptPath, url, error: msg });
+    }
+  }
 }
