@@ -88,12 +88,19 @@ struct AppListView: View {
             HStack {
                 if SliccBootstrapper.isBundled {
                     if let bundle = appUpdater.downloadedAppBundle {
-                        let version = bundle.infoDictionary?["CFBundleShortVersionString"] as? String ?? "latest"
-                        Button("Restart to Update to v\(version)") {
-                            appUpdater.install(bundle)
+                        if let version = bundle.infoDictionary?["CFBundleShortVersionString"] as? String, !version.isEmpty {
+                            Button("Restart to Update to v\(version)") {
+                                appUpdater.install(bundle)
+                            }
+                            .buttonStyle(.borderless).font(.caption)
+                            .foregroundStyle(.green)
+                        } else {
+                            Button("Restart to Update") {
+                                appUpdater.install(bundle)
+                            }
+                            .buttonStyle(.borderless).font(.caption)
+                            .foregroundStyle(.green)
                         }
-                        .buttonStyle(.borderless).font(.caption)
-                        .foregroundStyle(.green)
                     } else {
                         Button("Check for Updates") {
                             appUpdater.check()
