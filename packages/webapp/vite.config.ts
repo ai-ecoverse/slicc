@@ -205,6 +205,7 @@ export default defineConfig(({ mode }) => ({
     target: 'esnext',
     rollupOptions: {
       input: resolve(__dirname, 'index.html'),
+      external: ['pyodide'],
     },
     // preview-sw and electron-overlay-entry are built separately via esbuild.
   },

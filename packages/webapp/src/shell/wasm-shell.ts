@@ -87,6 +87,21 @@ async function readResponseBody(resp: Response, url?: string): Promise<string> {
  * Binary responses (images, archives, etc.) are encoded as latin1 strings
  * to preserve byte fidelity through just-bash's string-typed FetchResult.
  */
+// Convert Headers or Record<string, string> to a plain Record<string, string>.
+function headersToRecord(
+  headers: Record<string, string> | Headers | undefined
+): Record<string, string> | undefined {
+  if (!headers) return undefined;
+  if (headers instanceof Headers) {
+    const rec: Record<string, string> = {};
+    headers.forEach((v, k) => {
+      rec[k] = v;
+    });
+    return rec;
+  }
+  return headers;
+}
+
 // Multipart form bodies contain latin1-encoded binary file content from curl —
 // convert to raw bytes so fetch() doesn't re-encode as UTF-8.
 function prepareRequestBody(
@@ -109,10 +124,11 @@ function createProxiedFetch(): SecureFetch {
   if (isExtension) {
     // Extension mode — host_permissions grant native CORS bypass
     return async (url, options) => {
+      const plainHeaders = headersToRecord(options?.headers);
       const resp = await fetch(url, {
         method: options?.method ?? 'GET',
-        headers: options?.headers,
-        body: prepareRequestBody(options?.body, options?.headers),
+        headers: plainHeaders,
+        body: prepareRequestBody(options?.body, plainHeaders),
       });
       const body = await readResponseBody(resp, url);
       const respHeaders: Record<string, string> = {};
@@ -126,8 +142,9 @@ function createProxiedFetch(): SecureFetch {
   // CLI mode — proxy through /api/fetch-proxy
   return async (url, options) => {
     const method = options?.method ?? 'GET';
+    const plainHeaders = headersToRecord(options?.headers);
     const headers: Record<string, string> = {
-      ...options?.headers,
+      ...plainHeaders,
       'X-Target-URL': url,
     };
 
