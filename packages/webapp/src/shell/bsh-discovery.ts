@@ -123,7 +123,10 @@ export function parseMatchDirectives(content: string): string[] {
 export function hostnameMatches(hostname: string, pattern: string): boolean {
   if (pattern.startsWith('*.')) {
     const suffix = pattern.slice(1); // `.okta.com`
-    return hostname.endsWith(suffix) && hostname.length > suffix.length;
+    const bareDomain = pattern.slice(2); // `okta.com`
+    return (
+      hostname === bareDomain || (hostname.endsWith(suffix) && hostname.length > suffix.length)
+    );
   }
   return hostname === pattern;
 }
