@@ -122,7 +122,10 @@ function prepareRequestBody(
  * Encode request headers that browsers silently strip (forbidden headers).
  * Cookie → X-Proxy-Cookie, Proxy-* → X-Proxy-Proxy-*
  */
-function encodeForbiddenRequestHeaders(headers: Record<string, string>): Record<string, string> {
+function encodeForbiddenRequestHeaders(
+  headers: Record<string, string> | undefined
+): Record<string, string> {
+  if (!headers) return {};
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
     const lower = key.toLowerCase();
