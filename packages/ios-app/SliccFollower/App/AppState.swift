@@ -54,6 +54,26 @@ class AppState: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "joinUrl")
     }
 
+    /// Send a user message to the agent.
+    func sendMessage(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let message = ChatMessage(
+            id: UUID().uuidString,
+            role: .user,
+            content: trimmed,
+            timestamp: Date().timeIntervalSince1970 * 1000
+        )
+        messages.append(message)
+        // TODO: Send message over WebRTC data channel to leader
+    }
+
+    /// Abort the current streaming response.
+    func abort() {
+        isStreaming = false
+        // TODO: Send abort signal over WebRTC data channel
+    }
+
     // MARK: - Private
 
     private func addToHistory(_ url: String) {
