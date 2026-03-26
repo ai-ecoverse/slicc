@@ -1,9 +1,10 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
-import { BshWatchdog, type BshExecutor } from '../../src/shell/bsh-watchdog.js';
+import { BshWatchdog } from '../../src/shell/bsh-watchdog.js';
 import type { CDPTransport } from '../../src/cdp/transport.js';
-import type { JshResult } from '../../src/shell/jsh-executor.js';
+import type { BrowserAPI } from '../../src/cdp/browser-api.js';
+import type { PageInfo } from '../../src/cdp/types.js';
 
 let dbCounter = 0;
 
@@ -34,15 +35,30 @@ function createMockTransport(): CDPTransport & {
   };
 }
 
-function successResult(): JshResult {
-  return { stdout: 'ok\n', stderr: '', exitCode: 0 };
+/** Create a mock BrowserAPI with listPages, withTab, and evaluate. */
+function createMockBrowserAPI(pages: PageInfo[] = []): {
+  mock: Pick<BrowserAPI, 'listPages' | 'withTab' | 'evaluate'> & BrowserAPI;
+  evaluatedExpressions: string[];
+} {
+  const evaluatedExpressions: string[] = [];
+
+  const mock = {
+    listPages: vi.fn(async () => pages),
+    withTab: vi.fn(async <T>(_targetId: string, fn: (sessionId: string) => Promise<T>) => {
+      return fn('mock-session');
+    }),
+    evaluate: vi.fn(async (expression: string) => {
+      evaluatedExpressions.push(expression);
+      return undefined;
+    }),
+  } as unknown as Pick<BrowserAPI, 'listPages' | 'withTab' | 'evaluate'> & BrowserAPI;
+
+  return { mock, evaluatedExpressions };
 }
 
 describe('BshWatchdog', () => {
   let vfs: VirtualFS;
   let transport: ReturnType<typeof createMockTransport>;
-  let executor: BshExecutor;
-  let executedPaths: string[];
 
   beforeEach(async () => {
     vfs = await VirtualFS.create({
@@ -50,20 +66,16 @@ describe('BshWatchdog', () => {
       wipe: true,
     });
     transport = createMockTransport();
-    executedPaths = [];
-    executor = vi.fn(async (path: string): Promise<JshResult> => {
-      executedPaths.push(path);
-      return successResult();
-    });
   });
 
   it('discovers .bsh files on start', async () => {
     await vfs.writeFile('/workspace/-.okta.com.bsh', 'console.log("ok");');
+    const { mock } = createMockBrowserAPI();
 
     const watchdog = new BshWatchdog({
       transport,
       fs: vfs,
-      execute: executor,
+      browserAPI: mock,
       discoveryIntervalMs: 60_000,
     });
 
@@ -74,11 +86,14 @@ describe('BshWatchdog', () => {
 
   it('executes matching script on main frame navigation', async () => {
     await vfs.writeFile('/workspace/-.okta.com.bsh', 'console.log("ok");');
+    const { mock, evaluatedExpressions } = createMockBrowserAPI([
+      { targetId: 'target-1', title: 'Okta', url: 'https://login.okta.com/home' },
+    ]);
 
     const watchdog = new BshWatchdog({
       transport,
       fs: vfs,
-      execute: executor,
+      browserAPI: mock,
       discoveryIntervalMs: 60_000,
     });
 
@@ -91,19 +106,24 @@ describe('BshWatchdog', () => {
 
     // Wait for async execution
     await vi.waitFor(() => {
-      expect(executedPaths).toContain('/workspace/-.okta.com.bsh');
+      expect(evaluatedExpressions).toHaveLength(1);
+      expect(evaluatedExpressions[0]).toContain('console.log("ok")');
     });
 
+    expect(mock.withTab).toHaveBeenCalledWith('target-1', expect.any(Function));
     watchdog.stop();
   });
 
   it('ignores sub-frame navigations', async () => {
     await vfs.writeFile('/workspace/-.okta.com.bsh', 'console.log("ok");');
+    const { mock, evaluatedExpressions } = createMockBrowserAPI([
+      { targetId: 'target-1', title: 'Okta', url: 'https://login.okta.com/iframe' },
+    ]);
 
     const watchdog = new BshWatchdog({
       transport,
       fs: vfs,
-      execute: executor,
+      browserAPI: mock,
       discoveryIntervalMs: 60_000,
     });
 
@@ -116,18 +136,19 @@ describe('BshWatchdog', () => {
 
     // Give time for potential execution
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(executedPaths).toHaveLength(0);
+    expect(evaluatedExpressions).toHaveLength(0);
 
     watchdog.stop();
   });
 
   it('ignores non-HTTP URLs', async () => {
     await vfs.writeFile('/workspace/-.okta.com.bsh', 'console.log("ok");');
+    const { mock, evaluatedExpressions } = createMockBrowserAPI();
 
     const watchdog = new BshWatchdog({
       transport,
       fs: vfs,
-      execute: executor,
+      browserAPI: mock,
       discoveryIntervalMs: 60_000,
     });
 
@@ -141,18 +162,21 @@ describe('BshWatchdog', () => {
     });
 
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(executedPaths).toHaveLength(0);
+    expect(evaluatedExpressions).toHaveLength(0);
 
     watchdog.stop();
   });
 
   it('does not execute when no scripts match', async () => {
     await vfs.writeFile('/workspace/-.okta.com.bsh', 'console.log("ok");');
+    const { mock, evaluatedExpressions } = createMockBrowserAPI([
+      { targetId: 'target-1', title: 'Unrelated', url: 'https://unrelated.com/page' },
+    ]);
 
     const watchdog = new BshWatchdog({
       transport,
       fs: vfs,
-      execute: executor,
+      browserAPI: mock,
       discoveryIntervalMs: 60_000,
     });
 
@@ -163,7 +187,7 @@ describe('BshWatchdog', () => {
     });
 
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(executedPaths).toHaveLength(0);
+    expect(evaluatedExpressions).toHaveLength(0);
 
     watchdog.stop();
   });
@@ -173,11 +197,15 @@ describe('BshWatchdog', () => {
       '/workspace/-.okta.com.bsh',
       '// @match *://login.okta.com/*\nconsole.log("ok");'
     );
+    const { mock, evaluatedExpressions } = createMockBrowserAPI([
+      { targetId: 'target-1', title: 'Okta Login', url: 'https://login.okta.com/home' },
+      { targetId: 'target-2', title: 'Okta Admin', url: 'https://admin.okta.com/dashboard' },
+    ]);
 
     const watchdog = new BshWatchdog({
       transport,
       fs: vfs,
-      execute: executor,
+      browserAPI: mock,
       discoveryIntervalMs: 60_000,
     });
 
@@ -189,7 +217,7 @@ describe('BshWatchdog', () => {
     });
 
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(executedPaths).toHaveLength(0);
+    expect(evaluatedExpressions).toHaveLength(0);
 
     // This SHOULD match
     transport.emit('Page.frameNavigated', {
@@ -197,7 +225,8 @@ describe('BshWatchdog', () => {
     });
 
     await vi.waitFor(() => {
-      expect(executedPaths).toContain('/workspace/-.okta.com.bsh');
+      expect(evaluatedExpressions).toHaveLength(1);
+      expect(evaluatedExpressions[0]).toContain('console.log("ok")');
     });
 
     watchdog.stop();
@@ -205,19 +234,27 @@ describe('BshWatchdog', () => {
 
   it('prevents re-entrant execution for same script+URL', async () => {
     let resolveExec: (() => void) | null = null;
-    const slowExecutor = vi.fn(async (): Promise<JshResult> => {
-      await new Promise<void>((resolve) => {
-        resolveExec = resolve;
-      });
-      return successResult();
-    });
+    const slowMockBrowserAPI = {
+      listPages: vi.fn(async () => [
+        { targetId: 'target-1', title: 'Okta', url: 'https://login.okta.com/home' },
+      ]),
+      withTab: vi.fn(async <T>(_targetId: string, fn: (sessionId: string) => Promise<T>) => {
+        return fn('mock-session');
+      }),
+      evaluate: vi.fn(async () => {
+        await new Promise<void>((resolve) => {
+          resolveExec = resolve;
+        });
+        return undefined;
+      }),
+    } as unknown as BrowserAPI;
 
     await vfs.writeFile('/workspace/-.okta.com.bsh', 'console.log("ok");');
 
     const watchdog = new BshWatchdog({
       transport,
       fs: vfs,
-      execute: slowExecutor,
+      browserAPI: slowMockBrowserAPI,
       discoveryIntervalMs: 60_000,
     });
 
@@ -228,9 +265,9 @@ describe('BshWatchdog', () => {
       frame: { url: 'https://login.okta.com/home' },
     });
 
-    // Wait for executor to be called
+    // Wait for evaluate to be called
     await vi.waitFor(() => {
-      expect(slowExecutor).toHaveBeenCalledTimes(1);
+      expect(slowMockBrowserAPI.evaluate).toHaveBeenCalledTimes(1);
     });
 
     // Second navigation to same URL — should be skipped (still executing)
@@ -239,7 +276,7 @@ describe('BshWatchdog', () => {
     });
 
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(slowExecutor).toHaveBeenCalledTimes(1);
+    expect(slowMockBrowserAPI.evaluate).toHaveBeenCalledTimes(1);
 
     // Resolve the first execution
     resolveExec!();
@@ -251,7 +288,7 @@ describe('BshWatchdog', () => {
     });
 
     await vi.waitFor(() => {
-      expect(slowExecutor).toHaveBeenCalledTimes(2);
+      expect(slowMockBrowserAPI.evaluate).toHaveBeenCalledTimes(2);
     });
 
     // Resolve second execution and stop
@@ -261,11 +298,14 @@ describe('BshWatchdog', () => {
 
   it('stops listening after stop()', async () => {
     await vfs.writeFile('/workspace/-.okta.com.bsh', 'console.log("ok");');
+    const { mock, evaluatedExpressions } = createMockBrowserAPI([
+      { targetId: 'target-1', title: 'Okta', url: 'https://login.okta.com/home' },
+    ]);
 
     const watchdog = new BshWatchdog({
       transport,
       fs: vfs,
-      execute: executor,
+      browserAPI: mock,
       discoveryIntervalMs: 60_000,
     });
 
@@ -277,20 +317,28 @@ describe('BshWatchdog', () => {
     });
 
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(executedPaths).toHaveLength(0);
+    expect(evaluatedExpressions).toHaveLength(0);
   });
 
-  it('handles executor errors gracefully', async () => {
-    const failingExecutor = vi.fn(async (): Promise<JshResult> => {
-      throw new Error('execution failed');
-    });
+  it('handles evaluation errors gracefully', async () => {
+    const failingMockBrowserAPI = {
+      listPages: vi.fn(async () => [
+        { targetId: 'target-1', title: 'Okta', url: 'https://login.okta.com/home' },
+      ]),
+      withTab: vi.fn(async <T>(_targetId: string, fn: (sessionId: string) => Promise<T>) => {
+        return fn('mock-session');
+      }),
+      evaluate: vi.fn(async () => {
+        throw new Error('evaluation failed');
+      }),
+    } as unknown as BrowserAPI;
 
     await vfs.writeFile('/workspace/-.okta.com.bsh', 'console.log("ok");');
 
     const watchdog = new BshWatchdog({
       transport,
       fs: vfs,
-      execute: failingExecutor,
+      browserAPI: failingMockBrowserAPI,
       discoveryIntervalMs: 60_000,
     });
 
@@ -302,7 +350,7 @@ describe('BshWatchdog', () => {
     });
 
     await vi.waitFor(() => {
-      expect(failingExecutor).toHaveBeenCalledTimes(1);
+      expect(failingMockBrowserAPI.evaluate).toHaveBeenCalledTimes(1);
     });
 
     watchdog.stop();

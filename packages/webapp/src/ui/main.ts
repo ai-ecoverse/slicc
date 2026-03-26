@@ -961,7 +961,7 @@ async function main(): Promise<void> {
         const bshWatchdog = new BshWatchdog({
           transport: browser.getTransport(),
           fs: sharedFs,
-          execute: (scriptPath) => shell.executeScriptFile(scriptPath),
+          browserAPI: browser,
         });
         void bshWatchdog.start();
         window.addEventListener('beforeunload', () => bshWatchdog.stop(), { once: true });

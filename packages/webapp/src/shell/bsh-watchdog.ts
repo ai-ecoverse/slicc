@@ -6,27 +6,24 @@
  * 1. Periodically re-discovers `.bsh` files on the VFS
  * 2. Listens for main-frame navigations on attached browser tabs
  * 3. Matches the navigated URL against discovered hostname patterns + @match directives
- * 4. Executes matching scripts via the provided executor function
+ * 4. Executes matching scripts in the target page via CDP Runtime.evaluate
  */
 
 import type { CDPTransport } from '../cdp/transport.js';
+import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { VirtualFS } from '../fs/index.js';
 import { discoverBshScripts, findMatchingScripts, type BshEntry } from './bsh-discovery.js';
-import type { JshResult } from './jsh-executor.js';
 import { createLogger } from '../core/logger.js';
 
 const log = createLogger('bsh-watchdog');
 
-/** Function that executes a .bsh script at the given VFS path. */
-export type BshExecutor = (scriptPath: string) => Promise<JshResult>;
-
 export interface BshWatchdogOptions {
   /** CDP transport to subscribe to navigation events on. */
   transport: CDPTransport;
-  /** VirtualFS for discovering .bsh files. */
+  /** VirtualFS for discovering .bsh files and reading script content. */
   fs: VirtualFS;
-  /** Callback to execute a .bsh script (receives the VFS path). */
-  execute: BshExecutor;
+  /** BrowserAPI for evaluating scripts in the target page via CDP. */
+  browserAPI: BrowserAPI;
   /** How often (ms) to re-discover .bsh files. Default: 30000. */
   discoveryIntervalMs?: number;
 }
@@ -34,7 +31,7 @@ export interface BshWatchdogOptions {
 export class BshWatchdog {
   private readonly transport: CDPTransport;
   private readonly fs: VirtualFS;
-  private readonly execute: BshExecutor;
+  private readonly browserAPI: BrowserAPI;
   private readonly discoveryIntervalMs: number;
 
   private entries: BshEntry[] = [];
@@ -47,7 +44,7 @@ export class BshWatchdog {
   constructor(options: BshWatchdogOptions) {
     this.transport = options.transport;
     this.fs = options.fs;
-    this.execute = options.execute;
+    this.browserAPI = options.browserAPI;
     this.discoveryIntervalMs = options.discoveryIntervalMs ?? 30_000;
   }
 
@@ -133,18 +130,9 @@ export class BshWatchdog {
 
       log.info('BSH watchdog executing script', { script: entry.path, url });
 
-      void this.execute(entry.path)
-        .then((result) => {
-          if (result.exitCode !== 0) {
-            log.warn('BSH script failed', {
-              script: entry.path,
-              url,
-              exitCode: result.exitCode,
-              stderr: result.stderr.slice(0, 200),
-            });
-          } else {
-            log.info('BSH script completed', { script: entry.path, url });
-          }
+      void this.executeInTargetPage(entry.path, url)
+        .then(() => {
+          log.info('BSH script completed', { script: entry.path, url });
         })
         .catch((err) => {
           log.error('BSH script execution error', {
@@ -158,4 +146,28 @@ export class BshWatchdog {
         });
     }
   };
+
+  /**
+   * Read the .bsh script from VFS and evaluate it in the target page via CDP.
+   */
+  private async executeInTargetPage(scriptPath: string, url: string): Promise<void> {
+    // Read script content from VFS
+    const content = await this.fs.readFile(scriptPath);
+    const scriptContent = typeof content === 'string' ? content : new TextDecoder().decode(content);
+
+    // Find the target page by URL
+    const pages = await this.browserAPI.listPages();
+    const targetPage = pages.find((p) => p.url === url);
+    if (!targetPage) {
+      log.warn('BSH target page not found', { scriptPath, url });
+      return;
+    }
+
+    // Wrap in async IIFE with error handling and evaluate in target page
+    const wrappedScript = `(async () => { try { ${scriptContent} } catch(e) { console.error('[bsh]', e); } })()`;
+
+    await this.browserAPI.withTab(targetPage.targetId, async () => {
+      await this.browserAPI.evaluate(wrappedScript);
+    });
+  }
 }
