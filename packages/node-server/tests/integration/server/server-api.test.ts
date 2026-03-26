@@ -118,6 +118,102 @@ describe('shared server API conformance', () => {
     expect(body).toHaveProperty('trayWorkerBaseUrl');
   });
 
+  it('accepts X-Proxy-Cookie without errors and does not forward it in the response', async () => {
+    const proxied = await fetchFromServer('/api/fetch-proxy', {
+      method: 'GET',
+      headers: {
+        'x-target-url': serverUrl('/api/runtime-config'),
+        'x-proxy-cookie': 'session=abc123',
+      },
+    });
+    expect(proxied.status).toBe(200);
+    // X-Proxy-Cookie is a request-only transport header — it must not appear in the response
+    expect(proxied.headers.get('x-proxy-cookie')).toBeNull();
+
+    const responseBody = (await proxied.json()) as Record<string, unknown>;
+    expect(responseBody).toHaveProperty('trayWorkerBaseUrl');
+  });
+
+  it('does not include raw set-cookie in proxy responses', async () => {
+    const proxied = await fetchFromServer('/api/fetch-proxy', {
+      method: 'GET',
+      headers: {
+        'x-target-url': serverUrl('/api/runtime-config'),
+      },
+    });
+    expect(proxied.status).toBe(200);
+    // set-cookie is explicitly stripped from proxy responses (it would be
+    // transported via X-Proxy-Set-Cookie if the upstream had set any)
+    expect(proxied.headers.get('set-cookie')).toBeNull();
+  });
+
+  it('does not include X-Proxy-Set-Cookie when upstream sets no cookies', async () => {
+    const proxied = await fetchFromServer('/api/fetch-proxy', {
+      method: 'GET',
+      headers: {
+        'x-target-url': serverUrl('/api/runtime-config'),
+      },
+    });
+    expect(proxied.status).toBe(200);
+    // When upstream response has no Set-Cookie, the transport header should be absent
+    expect(proxied.headers.get('x-proxy-set-cookie')).toBeNull();
+  });
+
+  it('transports Set-Cookie from upstream as X-Proxy-Set-Cookie JSON array', async () => {
+    const { createServer } = await import('node:http');
+    const upstream = createServer((_req, res) => {
+      res.setHeader('Set-Cookie', ['session=abc123; Path=/', 'theme=dark; Path=/']);
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ ok: true }));
+    });
+
+    await new Promise<void>((resolve) => upstream.listen(0, resolve));
+    const port = (upstream.address() as import('node:net').AddressInfo).port;
+
+    try {
+      const proxied = await fetchFromServer('/api/fetch-proxy', {
+        method: 'GET',
+        headers: {
+          'x-target-url': `http://localhost:${port}/`,
+        },
+      });
+
+      expect(proxied.status).toBe(200);
+      // Raw set-cookie must be stripped from the proxy response
+      expect(proxied.headers.get('set-cookie')).toBeNull();
+
+      // The transport header must carry the cookies as a JSON array
+      const transportHeader = proxied.headers.get('x-proxy-set-cookie');
+      expect(transportHeader).not.toBeNull();
+      const cookies: string[] = JSON.parse(transportHeader!);
+      expect(cookies).toBeInstanceOf(Array);
+      expect(cookies).toHaveLength(2);
+      expect(cookies[0]).toContain('session=abc123');
+      expect(cookies[1]).toContain('theme=dark');
+    } finally {
+      upstream.close();
+    }
+  });
+
+  it('accepts X-Proxy-Proxy-Authorization without errors', async () => {
+    const proxied = await fetchFromServer('/api/fetch-proxy', {
+      method: 'GET',
+      headers: {
+        'x-target-url': serverUrl('/api/runtime-config'),
+        'x-proxy-proxy-authorization': 'Basic xyz',
+      },
+    });
+    // The proxy should restore X-Proxy-Proxy-Authorization as Proxy-Authorization
+    // for the upstream request. Since the upstream is our own server, it doesn't
+    // care about that header — we just verify the proxy doesn't error.
+    expect(proxied.status).toBe(200);
+    // The transport header itself should not appear in the response
+    expect(proxied.headers.get('x-proxy-proxy-authorization')).toBeNull();
+
+    const responseBody = (await proxied.json()) as Record<string, unknown>;
+    expect(responseBody).toHaveProperty('trayWorkerBaseUrl');
+  });
+
   it('returns webhook CORS headers for preflight requests', async () => {
     const response = await fetchFromServer('/webhooks/test-id', { method: 'OPTIONS' });
     expect(response.status).toBe(204);
