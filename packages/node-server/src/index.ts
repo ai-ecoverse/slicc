@@ -1078,7 +1078,7 @@ async function main() {
     app.use(express.static(uiDir));
 
     // SPA fallback — serve index.html for all non-file routes
-    app.get('*', (_req, res) => {
+    app.get('/{*path}', (_req, res) => {
       res.sendFile(join(uiDir, 'index.html'));
     });
   }
