@@ -271,13 +271,10 @@ async function init(): Promise<void> {
   const sharedFs = orchestrator.getSharedFS();
   if (sharedFs) {
     try {
-      const { WasmShell } = await import('../../../packages/webapp/src/shell/index.js');
       const { BshWatchdog } = await import('../../../packages/webapp/src/shell/bsh-watchdog.js');
-      const bshShell = new WasmShell({ fs: sharedFs, browserAPI: browser });
       const bshWatchdog = new BshWatchdog({
         browserAPI: browser,
         fs: sharedFs,
-        execute: (scriptPath) => bshShell.executeScriptFile(scriptPath),
       });
       void bshWatchdog.start();
       window.addEventListener('beforeunload', () => bshWatchdog.stop(), { once: true });
