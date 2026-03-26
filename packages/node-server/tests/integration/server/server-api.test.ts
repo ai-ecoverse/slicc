@@ -159,6 +159,42 @@ describe('shared server API conformance', () => {
     expect(proxied.headers.get('x-proxy-set-cookie')).toBeNull();
   });
 
+  it('transports Set-Cookie from upstream as X-Proxy-Set-Cookie JSON array', async () => {
+    const { createServer } = await import('node:http');
+    const upstream = createServer((_req, res) => {
+      res.setHeader('Set-Cookie', ['session=abc123; Path=/', 'theme=dark; Path=/']);
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ ok: true }));
+    });
+
+    await new Promise<void>((resolve) => upstream.listen(0, resolve));
+    const port = (upstream.address() as import('node:net').AddressInfo).port;
+
+    try {
+      const proxied = await fetchFromServer('/api/fetch-proxy', {
+        method: 'GET',
+        headers: {
+          'x-target-url': `http://localhost:${port}/`,
+        },
+      });
+
+      expect(proxied.status).toBe(200);
+      // Raw set-cookie must be stripped from the proxy response
+      expect(proxied.headers.get('set-cookie')).toBeNull();
+
+      // The transport header must carry the cookies as a JSON array
+      const transportHeader = proxied.headers.get('x-proxy-set-cookie');
+      expect(transportHeader).not.toBeNull();
+      const cookies: string[] = JSON.parse(transportHeader!);
+      expect(cookies).toBeInstanceOf(Array);
+      expect(cookies).toHaveLength(2);
+      expect(cookies[0]).toContain('session=abc123');
+      expect(cookies[1]).toContain('theme=dark');
+    } finally {
+      upstream.close();
+    }
+  });
+
   it('accepts X-Proxy-Proxy-Authorization without errors', async () => {
     const proxied = await fetchFromServer('/api/fetch-proxy', {
       method: 'GET',
