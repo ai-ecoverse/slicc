@@ -20,7 +20,8 @@ const OAUTH_RELAY_HTML = `<!DOCTYPE html>
 <script>
 try {
   var params = new URLSearchParams(location.search);
-  var raw = params.get('state');
+  var hashParams = new URLSearchParams(location.hash.replace(/^#/, ''));
+  var raw = params.get('state') || hashParams.get('state');
   if (!raw) throw new Error('Missing state parameter');
   var state = JSON.parse(atob(raw));
   var port = Number(state.port);
