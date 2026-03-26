@@ -20,11 +20,9 @@
     [
       "@semantic-release/github",
       {
-        "successComment": false,
         "failComment": false,
         "failTitle": false,
         "labels": false,
-        "releasedLabels": false,
         "assets": [
           "artifacts/release/*.zip",
           "artifacts/release/*.tgz",
