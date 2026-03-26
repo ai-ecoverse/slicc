@@ -563,7 +563,7 @@ describe('upskill Tessl registry integration', () => {
     const encoder = new TextEncoder();
     const zipBytes = zipSync({
       'skills-main/reload-skill/SKILL.md': encoder.encode(
-        '---\nname: reload-skill\n---\n# Reload Skill\n',
+        '---\nname: reload-skill\n---\n# Reload Skill\n'
       ),
     });
     const zipBody = String.fromCharCode(...zipBytes);
@@ -578,7 +578,7 @@ describe('upskill Tessl registry integration', () => {
     const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
     const result = await cmd.execute(
       ['acme/skills', '--skill', 'reload-skill'],
-      createMockCtx() as never,
+      createMockCtx() as never
     );
 
     expect(result.exitCode).toBe(0);

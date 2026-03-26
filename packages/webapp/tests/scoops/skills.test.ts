@@ -257,10 +257,7 @@ Write clean code.
 
       // Scoop's RestrictedFS blocks /workspace/
       const restrictedFs = new RestrictedFS(sharedFs, ['/scoops/my-scoop/', '/shared/']);
-      const skills = await loadSkills(
-        restrictedFs as unknown as VirtualFS,
-        '/workspace/skills'
-      );
+      const skills = await loadSkills(restrictedFs as unknown as VirtualFS, '/workspace/skills');
 
       // Should find nothing — confirming the problem this fix addresses
       expect(skills).toHaveLength(0);

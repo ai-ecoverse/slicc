@@ -433,11 +433,7 @@ export class Orchestrator {
     // Create the appropriate filesystem for this scoop
     const fs = scoop.isCone
       ? this.sharedFs // Cone gets unrestricted access
-      : new RestrictedFS(
-          this.sharedFs,
-          [`/scoops/${scoop.folder}/`, '/shared/'],
-          ['/workspace/'],
-        );
+      : new RestrictedFS(this.sharedFs, [`/scoops/${scoop.folder}/`, '/shared/'], ['/workspace/']);
 
     // Create the scoop context with full callbacks
     const contextCallbacks: ScoopContextCallbacks = {

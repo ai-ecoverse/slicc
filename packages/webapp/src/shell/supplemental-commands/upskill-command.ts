@@ -1175,7 +1175,9 @@ async function reloadSkillsAfterInstall(): Promise<void> {
         payload: { type: 'reload-skills' },
       });
     }
-  } catch { /* best-effort */ }
+  } catch {
+    /* best-effort */
+  }
 }
 
 /**

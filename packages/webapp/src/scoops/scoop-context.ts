@@ -360,10 +360,10 @@ export class ScoopContext {
       : `/scoops/${this.scoop.folder}/CLAUDE.md`;
     try {
       const content = await this.fs!.readFile(memoryPath, { encoding: 'utf-8' });
-      scoopMemory = typeof content === 'string'
-        ? content
-        : new TextDecoder().decode(content);
-    } catch { /* no memory file -- expected for fresh scoops */ }
+      scoopMemory = typeof content === 'string' ? content : new TextDecoder().decode(content);
+    } catch {
+      /* no memory file -- expected for fresh scoops */
+    }
 
     const globalMemory = await this.callbacks.getGlobalMemory();
 
