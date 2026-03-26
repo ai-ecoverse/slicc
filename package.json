@@ -47,7 +47,7 @@
     "prepare": "husky"
   },
   "dependencies": {
-    "express": "^4.21.2",
+    "express": "^5.0.0",
     "pyodide": "0.29.3",
     "ws": "^8.18.0"
   },
