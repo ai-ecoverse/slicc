@@ -190,6 +190,7 @@ export default defineConfig(({ mode }) => ({
         'node_modules/@mariozechner/pi-ai/dist/providers/simple-options.js'
       ),
     },
+    dedupe: ['@mariozechner/pi-ai'],
   },
   esbuild: {
     target: 'esnext',

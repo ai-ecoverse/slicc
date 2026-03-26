@@ -36,6 +36,7 @@ import type {
   SimpleStreamOptions,
   AnthropicOptions,
   OpenAICompletionsOptions,
+  AssistantMessageEventStream,
 } from '@mariozechner/pi-ai';
 import {
   saveOAuthAccount,
