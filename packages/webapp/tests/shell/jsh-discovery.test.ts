@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { RestrictedFS } from '../../src/fs/restricted-fs.js';
 import { discoverJshCommands } from '../../src/shell/jsh-discovery.js';
 
 describe('discoverJshCommands', () => {
@@ -84,5 +85,75 @@ describe('discoverJshCommands', () => {
     const second = await discoverJshCommands(vfs);
     expect(second.size).toBe(2);
     expect(second.has('bar')).toBe(true);
+  });
+});
+
+describe('discoverJshCommands with RestrictedFS', () => {
+  let vfs: VirtualFS;
+  let dbCounter = 100;
+
+  beforeEach(async () => {
+    vfs = await VirtualFS.create({
+      dbName: `test-jsh-restricted-${dbCounter++}`,
+      wipe: true,
+    });
+  });
+
+  it('discovers .jsh files in /shared/ via plain VFS', async () => {
+    await vfs.writeFile('/shared/scripts/myscript.jsh', '#!/bin/bash\necho hello');
+    const result = await discoverJshCommands(vfs);
+    expect(result.get('myscript')).toBe('/shared/scripts/myscript.jsh');
+  });
+
+  it('discovers .jsh in /shared/ through RestrictedFS', async () => {
+    await vfs.writeFile('/shared/scripts/myscript.jsh', '#!/bin/bash\necho hello');
+    const restricted = new RestrictedFS(vfs, ['/scoops/test-scoop/', '/shared/'], ['/workspace/']);
+    const result = await discoverJshCommands(restricted);
+    expect(result.get('myscript')).toBe('/shared/scripts/myscript.jsh');
+  });
+
+  it('discovers .jsh in /workspace/skills/ through RestrictedFS (read-only access)', async () => {
+    await vfs.writeFile('/workspace/skills/test-skill/test.jsh', 'echo skill-cmd');
+    const restricted = new RestrictedFS(vfs, ['/scoops/test-scoop/', '/shared/'], ['/workspace/']);
+    const result = await discoverJshCommands(restricted);
+    expect(result.get('test')).toBe('/workspace/skills/test-skill/test.jsh');
+  });
+
+  it('discovers .jsh in /scoops/test-scoop/ through RestrictedFS', async () => {
+    await vfs.writeFile('/scoops/test-scoop/local.jsh', 'echo local');
+    const restricted = new RestrictedFS(vfs, ['/scoops/test-scoop/', '/shared/'], ['/workspace/']);
+    const result = await discoverJshCommands(restricted);
+    expect(result.get('local')).toBe('/scoops/test-scoop/local.jsh');
+  });
+
+  it('does NOT discover .jsh in inaccessible paths', async () => {
+    await vfs.writeFile('/scoops/other-scoop/secret.jsh', 'echo secret');
+    const restricted = new RestrictedFS(vfs, ['/scoops/test-scoop/', '/shared/'], ['/workspace/']);
+    const result = await discoverJshCommands(restricted);
+    expect(result.has('secret')).toBe(false);
+  });
+
+  it('/workspace/skills/ wins over /shared/ for same basename', async () => {
+    await vfs.writeFile('/workspace/skills/deploy/deploy.jsh', 'echo skills-version');
+    await vfs.writeFile('/shared/deploy.jsh', 'echo shared-version');
+    const restricted = new RestrictedFS(vfs, ['/scoops/test-scoop/', '/shared/'], ['/workspace/']);
+    const result = await discoverJshCommands(restricted);
+    expect(result.get('deploy')).toBe('/workspace/skills/deploy/deploy.jsh');
+  });
+
+  it('discovers .jsh files in compatibility skill paths via unrestricted FS', async () => {
+    // File in a compatibility skill directory (not accessible via RestrictedFS)
+    await vfs.writeFile('/.agents/skills/secret-sauce/scripts/generate.jsh', 'echo generate');
+
+    // RestrictedFS would NOT find this
+    const restricted = new RestrictedFS(vfs, ['/scoops/test-scoop/', '/shared/'], ['/workspace/']);
+    const restrictedResult = await discoverJshCommands(restricted);
+    expect(restrictedResult.has('generate')).toBe(false);
+
+    // But unrestricted VFS finds it
+    const unrestrictedResult = await discoverJshCommands(vfs);
+    expect(unrestrictedResult.get('generate')).toBe(
+      '/.agents/skills/secret-sauce/scripts/generate.jsh'
+    );
   });
 });
