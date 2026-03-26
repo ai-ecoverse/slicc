@@ -959,7 +959,7 @@ async function main(): Promise<void> {
       try {
         const { BshWatchdog } = await import('../shell/bsh-watchdog.js');
         const bshWatchdog = new BshWatchdog({
-          transport: browser.getTransport(),
+          browserAPI: browser,
           fs: sharedFs,
         });
         void bshWatchdog.start();

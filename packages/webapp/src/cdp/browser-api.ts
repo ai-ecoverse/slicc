@@ -53,6 +53,7 @@ export class BrowserAPI {
   private trayTargetProvider: TrayTargetProvider | null = null;
   private remoteTargetInfo: { runtimeId: string; localTargetId: string } | null = null;
   private _tabLock: Promise<void> = Promise.resolve();
+  private _onSessionChange?: (sessionId: string, transport: CDPTransport) => void;
   private readonly handleJavaScriptDialogOpening = async (
     params: Record<string, unknown>
   ): Promise<void> => {
@@ -88,6 +89,16 @@ export class BrowserAPI {
    */
   getTransport(): CDPTransport {
     return this.client;
+  }
+
+  /**
+   * Register a callback invoked after every `attachToPage()` completes.
+   * The callback receives the CDP session ID and the active transport,
+   * allowing subscribers (e.g. BshWatchdog) to track transport swaps and
+   * know that `Page.enable` has already been sent.
+   */
+  setSessionChangeCallback(cb: (sessionId: string, transport: CDPTransport) => void): void {
+    this._onSessionChange = cb;
   }
 
   /**
@@ -314,6 +325,7 @@ export class BrowserAPI {
         this.sessionId = result['sessionId'] as string;
         this.attachedTargetId = targetId;
         await this.client.send('Page.enable', {}, this.sessionId);
+        this._onSessionChange?.(this.sessionId, this.client);
         return this.sessionId;
       }
     }
@@ -327,6 +339,7 @@ export class BrowserAPI {
     // Keep Page events available so unexpected dialogs can be auto-dismissed
     // before they stall the current CDP command.
     await this.client.send('Page.enable', {}, this.sessionId);
+    this._onSessionChange?.(this.sessionId, this.client);
     return this.sessionId;
   }
 
