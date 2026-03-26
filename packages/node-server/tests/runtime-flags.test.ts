@@ -24,6 +24,7 @@ describe('parseCliRuntimeFlags', () => {
       logLevel: 'info',
       logDir: null,
       prompt: null,
+      version: false,
     });
   });
 
@@ -44,6 +45,7 @@ describe('parseCliRuntimeFlags', () => {
       logLevel: 'info',
       logDir: null,
       prompt: null,
+      version: false,
     });
   });
 
@@ -72,6 +74,7 @@ describe('parseCliRuntimeFlags', () => {
       logLevel: 'info',
       logDir: null,
       prompt: null,
+      version: false,
     });
   });
 
@@ -94,6 +97,7 @@ describe('parseCliRuntimeFlags', () => {
       logLevel: 'info',
       logDir: null,
       prompt: null,
+      version: false,
     });
   });
 
@@ -114,6 +118,7 @@ describe('parseCliRuntimeFlags', () => {
       logLevel: 'info',
       logDir: null,
       prompt: null,
+      version: false,
     });
   });
 
@@ -134,6 +139,7 @@ describe('parseCliRuntimeFlags', () => {
       logLevel: 'info',
       logDir: null,
       prompt: null,
+      version: false,
     });
   });
 
@@ -154,6 +160,7 @@ describe('parseCliRuntimeFlags', () => {
       logLevel: 'info',
       logDir: null,
       prompt: null,
+      version: false,
     });
   });
 
@@ -174,6 +181,7 @@ describe('parseCliRuntimeFlags', () => {
       logLevel: 'info',
       logDir: null,
       prompt: null,
+      version: false,
     });
   });
 
@@ -219,6 +227,7 @@ describe('parseCliRuntimeFlags', () => {
       logLevel: 'info',
       logDir: null,
       prompt: null,
+      version: false,
     });
   });
 
@@ -239,6 +248,7 @@ describe('parseCliRuntimeFlags', () => {
       logLevel: 'info',
       logDir: null,
       prompt: null,
+      version: false,
     });
   });
 
@@ -267,5 +277,11 @@ describe('parseCliRuntimeFlags', () => {
 
   it('sets logDir to null for empty --log-dir', () => {
     expect(parseCliRuntimeFlags(['--log-dir=']).logDir).toBe(null);
+  });
+
+  it('parses version flag variants', () => {
+    expect(parseCliRuntimeFlags(['version']).version).toBe(true);
+    expect(parseCliRuntimeFlags(['--version']).version).toBe(true);
+    expect(parseCliRuntimeFlags(['-v']).version).toBe(true);
   });
 });

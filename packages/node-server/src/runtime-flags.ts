@@ -18,6 +18,7 @@ export interface CliRuntimeFlags {
   logDir: string | null;
   /** Initial prompt to auto-submit when the UI loads */
   prompt: string | null;
+  version: boolean;
 }
 
 export const DEFAULT_CLI_CDP_PORT = 9222;
@@ -45,10 +46,15 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
   let logLevel: LogLevel = 'info';
   let logDir: string | null = null;
   let prompt: string | null = null;
+  let version = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
 
+    if (arg === 'version' || arg === '--version' || arg === '-v') {
+      version = true;
+      continue;
+    }
     if (arg === '--dev') {
       dev = true;
       continue;
@@ -180,5 +186,6 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
     logLevel,
     logDir,
     prompt,
+    version,
   };
 }
