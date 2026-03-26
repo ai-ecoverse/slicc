@@ -10,6 +10,18 @@
       "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
       "groupName": "non-major dependencies",
       "groupSlug": "non-major"
+    },
+    {
+      "matchPackagePrefixes": ["@mariozechner/"],
+      "groupName": "mariozechner packages"
+    },
+    {
+      "matchPackagePrefixes": ["@semantic-release/"],
+      "groupName": "semantic-release packages"
+    },
+    {
+      "matchPackagePrefixes": ["@xterm/"],
+      "groupName": "xterm packages"
     }
   ]
 }
