@@ -5,6 +5,7 @@
  * and drains them sequentially, with proper error handling.
  */
 
+import 'fake-indexeddb/auto';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   ScoopContext,
@@ -1401,5 +1402,52 @@ describe('ScoopContext image error recovery', () => {
 
     expect((ctx as any).isRecovering).toBe(false);
     expect(callbacks.onError).not.toHaveBeenCalled();
+  });
+});
+
+describe('ScoopContext.reloadSkills', () => {
+  it('updates system prompt when new skills are installed', async () => {
+    const callbacks = createMockCallbacks();
+    const ctx = new ScoopContext(testScoop, callbacks, {} as VirtualFS);
+
+    // Inject mock agent with setSystemPrompt spy
+    const setSystemPrompt = vi.fn();
+    const agent = {
+      prompt: vi.fn(),
+      abort: vi.fn(),
+      subscribe: vi.fn(() => () => {}),
+      followUp: vi.fn(),
+      clearAllQueues: vi.fn(),
+      setSystemPrompt,
+      state: { isStreaming: false, systemPrompt: 'old prompt' },
+    };
+    (ctx as any).agent = agent;
+    (ctx as any).status = 'ready';
+
+    // Create a real VFS with a skill
+    const { VirtualFS } = await import('../../src/fs/virtual-fs.js');
+    const vfs = await VirtualFS.create({ dbName: 'test-reload-skills', wipe: true });
+    await vfs.mkdir('/workspace/skills/test-skill', { recursive: true });
+    await vfs.writeFile(
+      '/workspace/skills/test-skill/SKILL.md',
+      '---\nname: test-skill\ndescription: A test skill\n---\nTest instructions.'
+    );
+
+    // Set the skillsFs so reloadSkills can find the skill
+    (ctx as any).skillsFs = vfs;
+
+    await ctx.reloadSkills();
+
+    expect(setSystemPrompt).toHaveBeenCalledOnce();
+    const newPrompt = setSystemPrompt.mock.calls[0]![0] as string;
+    expect(newPrompt).toContain('test-skill');
+    expect(newPrompt).toContain('A test skill');
+  });
+
+  it('is a no-op when agent is not initialized', async () => {
+    const callbacks = createMockCallbacks();
+    const ctx = new ScoopContext(testScoop, callbacks, {} as VirtualFS);
+    // agent is null -- should not throw
+    await expect(ctx.reloadSkills()).resolves.toBeUndefined();
   });
 });

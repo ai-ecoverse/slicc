@@ -220,4 +220,47 @@ Write clean code.
       expect(result).toContain('Path: /b');
     });
   });
+
+  describe('scoop skill visibility via skillsFs', () => {
+    it('loads cone-installed skills when given unrestricted FS', async () => {
+      const sharedFs = await VirtualFS.create({
+        dbName: `test-scoop-visibility-${dbCounter++}`,
+        wipe: true,
+      });
+
+      // Simulate upskill installing a skill to cone's directory
+      await sharedFs.mkdir('/workspace/skills/migrations', { recursive: true });
+      await sharedFs.writeFile(
+        '/workspace/skills/migrations/SKILL.md',
+        '---\nname: migrations\ndescription: Migrate pages\n---\nMigration instructions.'
+      );
+
+      // Load skills from /workspace/skills/ using the unrestricted FS
+      // (this is what scoops will do after the fix)
+      const skills = await loadSkills(sharedFs, '/workspace/skills');
+
+      expect(skills.some((s) => s.metadata.name === 'migrations')).toBe(true);
+    });
+
+    it('RestrictedFS cannot reach /workspace/skills/', async () => {
+      const { RestrictedFS } = await import('../../src/fs/restricted-fs.js');
+      const sharedFs = await VirtualFS.create({
+        dbName: `test-scoop-restricted-${dbCounter++}`,
+        wipe: true,
+      });
+
+      await sharedFs.mkdir('/workspace/skills/test-skill', { recursive: true });
+      await sharedFs.writeFile(
+        '/workspace/skills/test-skill/SKILL.md',
+        '---\nname: test-skill\ndescription: Test\n---\nTest.'
+      );
+
+      // Scoop's RestrictedFS blocks /workspace/
+      const restrictedFs = new RestrictedFS(sharedFs, ['/scoops/my-scoop/', '/shared/']);
+      const skills = await loadSkills(restrictedFs as unknown as VirtualFS, '/workspace/skills');
+
+      // Should find nothing — confirming the problem this fix addresses
+      expect(skills).toHaveLength(0);
+    });
+  });
 });
