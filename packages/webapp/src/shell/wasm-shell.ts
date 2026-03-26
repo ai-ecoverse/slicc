@@ -118,6 +118,49 @@ function prepareRequestBody(
   return body;
 }
 
+/**
+ * Encode request headers that browsers silently strip (forbidden headers).
+ * Cookie → X-Proxy-Cookie, Proxy-* → X-Proxy-Proxy-*
+ */
+export function encodeForbiddenRequestHeaders(
+  headers: Record<string, string> | undefined
+): Record<string, string> {
+  if (!headers) return {};
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    const lower = key.toLowerCase();
+    if (lower === 'cookie') {
+      result['X-Proxy-Cookie'] = value;
+    } else if (lower.startsWith('proxy-')) {
+      result[`X-Proxy-${key}`] = value;
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+/**
+ * Decode response headers that the proxy transported under non-forbidden names.
+ * X-Proxy-Set-Cookie (JSON array) → set-cookie (JSON array string)
+ */
+export function decodeForbiddenResponseHeaders(
+  headers: Record<string, string>
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    const lower = key.toLowerCase();
+    if (lower === 'x-proxy-set-cookie') {
+      // Value is a JSON array of Set-Cookie strings from the proxy.
+      // Keep as JSON array string since Record<string,string> can only hold one value.
+      result['set-cookie'] = value;
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
 function createProxiedFetch(): SecureFetch {
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
@@ -143,8 +186,9 @@ function createProxiedFetch(): SecureFetch {
   return async (url, options) => {
     const method = options?.method ?? 'GET';
     const plainHeaders = headersToRecord(options?.headers);
+    const encoded = encodeForbiddenRequestHeaders(plainHeaders);
     const headers: Record<string, string> = {
-      ...plainHeaders,
+      ...encoded,
       'X-Target-URL': url,
     };
 
@@ -168,10 +212,11 @@ function createProxiedFetch(): SecureFetch {
     }
 
     const body = await readResponseBody(resp, url);
-    const respHeaders: Record<string, string> = {};
+    const rawHeaders: Record<string, string> = {};
     resp.headers.forEach((v, k) => {
-      respHeaders[k] = v;
+      rawHeaders[k] = v;
     });
+    const respHeaders = decodeForbiddenResponseHeaders(rawHeaders);
 
     return { status: resp.status, statusText: resp.statusText, headers: respHeaders, body, url };
   };

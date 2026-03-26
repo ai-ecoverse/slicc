@@ -129,13 +129,14 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 
 ### `.bsh` browser scripts
 
-- `.bsh` files are JavaScript browser-navigation helpers.
+- `.bsh` files are JavaScript browser-navigation helpers that run in the **target browser page context** via CDP `Runtime.evaluate`.
+- Scripts have access to `document`, `window`, and all page globals — NOT `process`/`fs`/`exec()`.
 - Discovery roots are `/workspace` and `/shared`.
 - Filename controls hostname matching:
   - `-.okta.com.bsh` → `*.okta.com`
   - `login.okta.com.bsh` → exact host match
 - Optional `// @match` directives in the first 10 lines narrow matching further.
-- `BshWatchdog` is responsible for running matching scripts on navigation.
+- `BshWatchdog` reads scripts from VFS and evaluates them in the target page via `BrowserAPI.evaluate()`.
 
 ## Related Guides
 

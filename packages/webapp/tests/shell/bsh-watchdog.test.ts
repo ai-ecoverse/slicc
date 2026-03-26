@@ -1,22 +1,27 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
-import { BshWatchdog, type BshExecutor } from '../../src/shell/bsh-watchdog.js';
+import { BshWatchdog } from '../../src/shell/bsh-watchdog.js';
 import type { CDPTransport } from '../../src/cdp/transport.js';
-import type { JshResult } from '../../src/shell/jsh-executor.js';
 
 let dbCounter = 0;
 
-/** Create a minimal mock CDPTransport with event subscription support. */
+/** Create a minimal mock CDPTransport with event subscription and send tracking. */
 function createMockTransport(): CDPTransport & {
   emit(event: string, params: Record<string, unknown>): void;
+  sendCalls: Array<{ method: string; params: Record<string, unknown>; sessionId?: string }>;
 } {
   const listeners = new Map<string, Set<(params: Record<string, unknown>) => void>>();
+  const sendCalls: Array<{ method: string; params: Record<string, unknown>; sessionId?: string }> =
+    [];
 
   return {
     connect: vi.fn().mockResolvedValue(undefined),
     disconnect: vi.fn(),
-    send: vi.fn().mockResolvedValue({}),
+    send: vi.fn(async (method: string, params: Record<string, unknown>, sessionId?: string) => {
+      sendCalls.push({ method, params, sessionId });
+      return {};
+    }),
     on(event: string, listener: (params: Record<string, unknown>) => void): void {
       if (!listeners.has(event)) listeners.set(event, new Set());
       listeners.get(event)!.add(listener);
@@ -26,6 +31,7 @@ function createMockTransport(): CDPTransport & {
     },
     once: vi.fn().mockResolvedValue({}),
     state: 'connected' as const,
+    sendCalls,
     emit(event: string, params: Record<string, unknown>): void {
       for (const listener of listeners.get(event) ?? []) {
         listener(params);
@@ -34,15 +40,9 @@ function createMockTransport(): CDPTransport & {
   };
 }
 
-function successResult(): JshResult {
-  return { stdout: 'ok\n', stderr: '', exitCode: 0 };
-}
-
 describe('BshWatchdog', () => {
   let vfs: VirtualFS;
   let transport: ReturnType<typeof createMockTransport>;
-  let executor: BshExecutor;
-  let executedPaths: string[];
 
   beforeEach(async () => {
     vfs = await VirtualFS.create({
@@ -50,11 +50,6 @@ describe('BshWatchdog', () => {
       wipe: true,
     });
     transport = createMockTransport();
-    executedPaths = [];
-    executor = vi.fn(async (path: string): Promise<JshResult> => {
-      executedPaths.push(path);
-      return successResult();
-    });
   });
 
   it('discovers .bsh files on start', async () => {
@@ -63,7 +58,6 @@ describe('BshWatchdog', () => {
     const watchdog = new BshWatchdog({
       transport,
       fs: vfs,
-      execute: executor,
       discoveryIntervalMs: 60_000,
     });
 
@@ -78,21 +72,29 @@ describe('BshWatchdog', () => {
     const watchdog = new BshWatchdog({
       transport,
       fs: vfs,
-      execute: executor,
       discoveryIntervalMs: 60_000,
     });
 
     await watchdog.start();
 
-    // Simulate main frame navigation
+    // Simulate main frame navigation with sessionId
     transport.emit('Page.frameNavigated', {
       frame: { url: 'https://login.okta.com/home' },
+      sessionId: 'test-session',
     });
 
     // Wait for async execution
     await vi.waitFor(() => {
-      expect(executedPaths).toContain('/workspace/-.okta.com.bsh');
+      const evaluateCalls = transport.sendCalls.filter((c) => c.method === 'Runtime.evaluate');
+      expect(evaluateCalls).toHaveLength(1);
+      expect(evaluateCalls[0].params['expression']).toContain('console.log("ok")');
+      expect(evaluateCalls[0].sessionId).toBe('test-session');
     });
+
+    // Verify Runtime.enable was called with the correct sessionId
+    const enableCalls = transport.sendCalls.filter((c) => c.method === 'Runtime.enable');
+    expect(enableCalls).toHaveLength(1);
+    expect(enableCalls[0].sessionId).toBe('test-session');
 
     watchdog.stop();
   });
@@ -103,7 +105,6 @@ describe('BshWatchdog', () => {
     const watchdog = new BshWatchdog({
       transport,
       fs: vfs,
-      execute: executor,
       discoveryIntervalMs: 60_000,
     });
 
@@ -112,11 +113,12 @@ describe('BshWatchdog', () => {
     // Simulate sub-frame navigation (has parentId)
     transport.emit('Page.frameNavigated', {
       frame: { url: 'https://login.okta.com/iframe', parentId: 'parent-123' },
+      sessionId: 'test-session',
     });
 
     // Give time for potential execution
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(executedPaths).toHaveLength(0);
+    expect(transport.sendCalls.filter((c) => c.method === 'Runtime.evaluate')).toHaveLength(0);
 
     watchdog.stop();
   });
@@ -127,7 +129,6 @@ describe('BshWatchdog', () => {
     const watchdog = new BshWatchdog({
       transport,
       fs: vfs,
-      execute: executor,
       discoveryIntervalMs: 60_000,
     });
 
@@ -135,13 +136,15 @@ describe('BshWatchdog', () => {
 
     transport.emit('Page.frameNavigated', {
       frame: { url: 'about:blank' },
+      sessionId: 'test-session',
     });
     transport.emit('Page.frameNavigated', {
       frame: { url: 'chrome://extensions' },
+      sessionId: 'test-session',
     });
 
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(executedPaths).toHaveLength(0);
+    expect(transport.sendCalls.filter((c) => c.method === 'Runtime.evaluate')).toHaveLength(0);
 
     watchdog.stop();
   });
@@ -152,7 +155,6 @@ describe('BshWatchdog', () => {
     const watchdog = new BshWatchdog({
       transport,
       fs: vfs,
-      execute: executor,
       discoveryIntervalMs: 60_000,
     });
 
@@ -160,10 +162,11 @@ describe('BshWatchdog', () => {
 
     transport.emit('Page.frameNavigated', {
       frame: { url: 'https://unrelated.com/page' },
+      sessionId: 'test-session',
     });
 
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(executedPaths).toHaveLength(0);
+    expect(transport.sendCalls.filter((c) => c.method === 'Runtime.evaluate')).toHaveLength(0);
 
     watchdog.stop();
   });
@@ -177,7 +180,6 @@ describe('BshWatchdog', () => {
     const watchdog = new BshWatchdog({
       transport,
       fs: vfs,
-      execute: executor,
       discoveryIntervalMs: 60_000,
     });
 
@@ -186,18 +188,22 @@ describe('BshWatchdog', () => {
     // This should NOT match (admin.okta.com doesn't match @match pattern)
     transport.emit('Page.frameNavigated', {
       frame: { url: 'https://admin.okta.com/dashboard' },
+      sessionId: 'test-session',
     });
 
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(executedPaths).toHaveLength(0);
+    expect(transport.sendCalls.filter((c) => c.method === 'Runtime.evaluate')).toHaveLength(0);
 
     // This SHOULD match
     transport.emit('Page.frameNavigated', {
       frame: { url: 'https://login.okta.com/home' },
+      sessionId: 'test-session',
     });
 
     await vi.waitFor(() => {
-      expect(executedPaths).toContain('/workspace/-.okta.com.bsh');
+      const evaluateCalls = transport.sendCalls.filter((c) => c.method === 'Runtime.evaluate');
+      expect(evaluateCalls).toHaveLength(1);
+      expect(evaluateCalls[0].params['expression']).toContain('console.log("ok")');
     });
 
     watchdog.stop();
@@ -205,53 +211,66 @@ describe('BshWatchdog', () => {
 
   it('prevents re-entrant execution for same script+URL', async () => {
     let resolveExec: (() => void) | null = null;
-    const slowExecutor = vi.fn(async (): Promise<JshResult> => {
-      await new Promise<void>((resolve) => {
-        resolveExec = resolve;
-      });
-      return successResult();
-    });
+    const slowTransport = createMockTransport();
+    // Override send to block on Runtime.evaluate
+    slowTransport.send = vi.fn(
+      async (method: string, params: Record<string, unknown>, sessionId?: string) => {
+        slowTransport.sendCalls.push({ method, params, sessionId });
+        if (method === 'Runtime.evaluate') {
+          await new Promise<void>((resolve) => {
+            resolveExec = resolve;
+          });
+        }
+        return {};
+      }
+    ) as CDPTransport['send'];
 
     await vfs.writeFile('/workspace/-.okta.com.bsh', 'console.log("ok");');
 
     const watchdog = new BshWatchdog({
-      transport,
+      transport: slowTransport,
       fs: vfs,
-      execute: slowExecutor,
       discoveryIntervalMs: 60_000,
     });
 
     await watchdog.start();
 
     // First navigation — starts execution
-    transport.emit('Page.frameNavigated', {
+    slowTransport.emit('Page.frameNavigated', {
       frame: { url: 'https://login.okta.com/home' },
+      sessionId: 'test-session',
     });
 
-    // Wait for executor to be called
+    // Wait for evaluate to be called
     await vi.waitFor(() => {
-      expect(slowExecutor).toHaveBeenCalledTimes(1);
+      expect(slowTransport.sendCalls.filter((c) => c.method === 'Runtime.evaluate')).toHaveLength(
+        1
+      );
     });
 
     // Second navigation to same URL — should be skipped (still executing)
-    transport.emit('Page.frameNavigated', {
+    slowTransport.emit('Page.frameNavigated', {
       frame: { url: 'https://login.okta.com/home' },
+      sessionId: 'test-session',
     });
 
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(slowExecutor).toHaveBeenCalledTimes(1);
+    expect(slowTransport.sendCalls.filter((c) => c.method === 'Runtime.evaluate')).toHaveLength(1);
 
     // Resolve the first execution
     resolveExec!();
 
     // Now a third navigation should work
     await new Promise((resolve) => setTimeout(resolve, 50));
-    transport.emit('Page.frameNavigated', {
+    slowTransport.emit('Page.frameNavigated', {
       frame: { url: 'https://login.okta.com/home' },
+      sessionId: 'test-session',
     });
 
     await vi.waitFor(() => {
-      expect(slowExecutor).toHaveBeenCalledTimes(2);
+      expect(slowTransport.sendCalls.filter((c) => c.method === 'Runtime.evaluate')).toHaveLength(
+        2
+      );
     });
 
     // Resolve second execution and stop
@@ -265,7 +284,6 @@ describe('BshWatchdog', () => {
     const watchdog = new BshWatchdog({
       transport,
       fs: vfs,
-      execute: executor,
       discoveryIntervalMs: 60_000,
     });
 
@@ -274,36 +292,74 @@ describe('BshWatchdog', () => {
 
     transport.emit('Page.frameNavigated', {
       frame: { url: 'https://login.okta.com/home' },
+      sessionId: 'test-session',
     });
 
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(executedPaths).toHaveLength(0);
+    expect(transport.sendCalls.filter((c) => c.method === 'Runtime.evaluate')).toHaveLength(0);
   });
 
-  it('handles executor errors gracefully', async () => {
-    const failingExecutor = vi.fn(async (): Promise<JshResult> => {
-      throw new Error('execution failed');
-    });
+  it('handles evaluation errors gracefully', async () => {
+    const errorTransport = createMockTransport();
+    // Return exceptionDetails for Runtime.evaluate
+    errorTransport.send = vi.fn(
+      async (method: string, params: Record<string, unknown>, sessionId?: string) => {
+        errorTransport.sendCalls.push({ method, params, sessionId });
+        if (method === 'Runtime.evaluate') {
+          return {
+            exceptionDetails: {
+              text: 'evaluation failed',
+              exception: { description: 'Error: evaluation failed' },
+            },
+          };
+        }
+        return {};
+      }
+    ) as CDPTransport['send'];
 
     await vfs.writeFile('/workspace/-.okta.com.bsh', 'console.log("ok");');
 
     const watchdog = new BshWatchdog({
-      transport,
+      transport: errorTransport,
       fs: vfs,
-      execute: failingExecutor,
       discoveryIntervalMs: 60_000,
     });
 
     await watchdog.start();
 
     // Should not throw
+    errorTransport.emit('Page.frameNavigated', {
+      frame: { url: 'https://login.okta.com/home' },
+      sessionId: 'test-session',
+    });
+
+    await vi.waitFor(() => {
+      expect(errorTransport.sendCalls.filter((c) => c.method === 'Runtime.evaluate')).toHaveLength(
+        1
+      );
+    });
+
+    watchdog.stop();
+  });
+
+  it('skips execution when sessionId is missing', async () => {
+    await vfs.writeFile('/workspace/-.okta.com.bsh', 'console.log("ok");');
+
+    const watchdog = new BshWatchdog({
+      transport,
+      fs: vfs,
+      discoveryIntervalMs: 60_000,
+    });
+
+    await watchdog.start();
+
+    // Emit without sessionId
     transport.emit('Page.frameNavigated', {
       frame: { url: 'https://login.okta.com/home' },
     });
 
-    await vi.waitFor(() => {
-      expect(failingExecutor).toHaveBeenCalledTimes(1);
-    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(transport.sendCalls.filter((c) => c.method === 'Runtime.evaluate')).toHaveLength(0);
 
     watchdog.stop();
   });

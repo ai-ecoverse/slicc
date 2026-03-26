@@ -919,11 +919,26 @@ async function main() {
         'x-target-url',
         'content-length',
         'transfer-encoding',
+        'x-proxy-cookie',
       ]);
       const headers: Record<string, string> = {};
       for (const [key, value] of Object.entries(req.headers)) {
         if (!skipHeaders.has(key) && typeof value === 'string') {
           headers[key] = value;
+        }
+      }
+      // Forbidden-header transport: browser cannot send Cookie via fetch(),
+      // so the client encodes it as X-Proxy-Cookie. Restore it here.
+      const proxyCookie = req.headers['x-proxy-cookie'];
+      if (typeof proxyCookie === 'string') {
+        headers['cookie'] = proxyCookie;
+      }
+      // Restore any X-Proxy-Proxy-* transport headers as Proxy-* headers
+      for (const [key, value] of Object.entries(req.headers)) {
+        if (key.startsWith('x-proxy-proxy-') && typeof value === 'string') {
+          const restored = key.replace(/^x-proxy-/, '');
+          headers[restored] = value;
+          delete headers[key];
         }
       }
       // Always request uncompressed responses from upstream — the proxy doesn't
@@ -946,16 +961,25 @@ async function main() {
       // Forward response headers (strip www-authenticate to prevent
       // the browser from showing a native Basic Auth dialog — isomorphic-git
       // handles 401s through its own onAuth callback)
+      // Forbidden-header transport: browser fetch() strips Set-Cookie from
+      // responses. Collect all Set-Cookie values and encode as JSON in a
+      // transport header the browser can read.
+      const setCookieValues = upstream.headers.getSetCookie();
       upstream.headers.forEach((v, k) => {
         const lower = k.toLowerCase();
         if (
           lower !== 'transfer-encoding' &&
           lower !== 'content-encoding' &&
-          lower !== 'www-authenticate'
+          lower !== 'www-authenticate' &&
+          lower !== 'set-cookie' &&
+          !lower.startsWith('x-proxy-')
         ) {
           res.setHeader(k, v);
         }
       });
+      if (setCookieValues.length > 0) {
+        res.setHeader('X-Proxy-Set-Cookie', JSON.stringify(setCookieValues));
+      }
 
       // Send body as raw binary - explicitly set content-length and use end()
       // instead of send() to avoid any Express middleware transformations

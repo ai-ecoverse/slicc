@@ -171,7 +171,7 @@ Type `commands` in the terminal to see all available commands. Key commands:
 
 - **Filename = hostname pattern**: `-.okta.com.bsh` matches `*.okta.com`, `login.okta.com.bsh` matches exactly `login.okta.com`
 - **`// @match` directive**: Add in first 10 lines to restrict to specific URL patterns (e.g. `// @match *://login.okta.com/app/*`)
-- Same execution engine as `.jsh` — access `process`, `console`, `fs`, `exec()` globals
+- Scripts run in the **target browser page context** via CDP `Runtime.evaluate` — you have access to `document`, `window`, and all page globals, NOT `process`/`fs`/`exec()`
 - The BshWatchdog monitors browser navigations and runs matching scripts automatically
 
 ## Inline Cards
