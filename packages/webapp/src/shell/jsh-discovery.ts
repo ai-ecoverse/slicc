@@ -7,7 +7,14 @@
  * first to give them priority.
  */
 
-import type { VirtualFS } from '../fs/index.js';
+import type { FileContent, ReadFileOptions } from '../fs/types.js';
+
+/** Minimal filesystem interface needed for JSH discovery and script reading. */
+export interface JshDiscoveryFS {
+  exists(path: string): Promise<boolean>;
+  walk(path: string): AsyncGenerator<string>;
+  readFile(path: string, options?: ReadFileOptions): Promise<FileContent>;
+}
 
 /** Priority roots to scan first (in order). */
 const PRIORITY_ROOTS = ['/workspace/skills'];
@@ -17,7 +24,7 @@ const PRIORITY_ROOTS = ['/workspace/skills'];
  * command name → VFS path. First occurrence of a basename wins.
  * Priority roots are scanned before the general `/` walk.
  */
-export async function discoverJshCommands(fs: VirtualFS): Promise<Map<string, string>> {
+export async function discoverJshCommands(fs: JshDiscoveryFS): Promise<Map<string, string>> {
   const commands = new Map<string, string>();
 
   // Scan priority roots first
@@ -34,7 +41,11 @@ export async function discoverJshCommands(fs: VirtualFS): Promise<Map<string, st
 }
 
 /** Walk a directory and collect .jsh files into the map (first wins). */
-async function scanDir(fs: VirtualFS, root: string, commands: Map<string, string>): Promise<void> {
+async function scanDir(
+  fs: JshDiscoveryFS,
+  root: string,
+  commands: Map<string, string>
+): Promise<void> {
   for await (const filePath of fs.walk(root)) {
     if (!filePath.endsWith('.jsh')) continue;
     const name = commandName(filePath);
