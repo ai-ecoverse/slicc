@@ -128,6 +128,21 @@ describe('say command', () => {
     expect(result.stderr).toBe('say: -l requires a language tag\n');
   });
 
+  it('returns error when -l is not provided', async () => {
+    vi.stubGlobal('window', {});
+    vi.stubGlobal('speechSynthesis', {
+      getVoices: () => [],
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
+
+    const cmd = createSayCommand();
+    const result = await cmd.execute(['hello', 'world'], createMockCtx());
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe('say: -l language tag is required\n');
+  });
+
   it('shows help when no text provided', async () => {
     vi.stubGlobal('window', {});
     vi.stubGlobal('speechSynthesis', {

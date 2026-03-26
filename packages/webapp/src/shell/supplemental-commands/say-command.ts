@@ -8,7 +8,7 @@ function sayHelp(): { stdout: string; stderr: string; exitCode: number } {
       '  Speaks the given text using the Web Speech API.\n' +
       '  -v voice   Voice name (partial match supported)\n' +
       '  -r rate    Speech rate (0.1 to 10, default 1)\n' +
-      '  -l lang    Language tag (BCP 47, e.g. en-US, de-DE, fr-FR)\n' +
+      '  -l lang    Language tag (required, BCP 47, e.g. en-US, de-DE, fr-FR)\n' +
       '  --list     List available voices\n',
     stderr: '',
     exitCode: 0,
@@ -107,6 +107,10 @@ export function createSayCommand(): Command {
     const text = textParts.join(' ');
     if (!text) {
       return sayHelp();
+    }
+
+    if (!lang) {
+      return { stdout: '', stderr: 'say: -l language tag is required\n', exitCode: 1 };
     }
 
     const utterance = new SpeechSynthesisUtterance(text);
