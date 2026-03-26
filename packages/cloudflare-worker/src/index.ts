@@ -13,6 +13,29 @@ export interface WorkerEnv {
   CLOUDFLARE_TURN_API_TOKEN?: string;
 }
 
+const OAUTH_RELAY_HTML = `<!DOCTYPE html>
+<html><head><title>Redirecting to SLICC...</title></head>
+<body>
+<p id="msg">Redirecting to SLICC...</p>
+<script>
+try {
+  var params = new URLSearchParams(location.search);
+  var raw = params.get('state');
+  if (!raw) throw new Error('Missing state parameter');
+  var state = JSON.parse(atob(raw));
+  var port = Number(state.port);
+  var path = state.path || '/auth/callback';
+  var nonce = state.nonce || '';
+  if (!port || port < 1024 || port > 65535) throw new Error('Invalid port: ' + port);
+  if (!path.startsWith('/')) throw new Error('Invalid path');
+  var target = 'http://localhost:' + port + path + '?nonce=' + encodeURIComponent(nonce);
+  location.replace(target + location.hash);
+} catch (e) {
+  document.getElementById('msg').textContent = 'OAuth redirect failed: ' + e.message + '. Close this window and try again.';
+}
+</script>
+</body></html>`;
+
 export async function handleWorkerRequest(request: Request, env: WorkerEnv): Promise<Response> {
   const url = new URL(request.url);
 
@@ -29,6 +52,15 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
       },
       410
     );
+  }
+
+  // OAuth callback relay — serves a static HTML page that reads the OAuth state
+  // parameter and redirects to the correct localhost port. Provider-agnostic.
+  if (url.pathname === '/auth/callback') {
+    return new Response(OAUTH_RELAY_HTML, {
+      status: 200,
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    });
   }
 
   const tokenMatch = url.pathname.match(/^\/(join|controller|webhook)\/([^/]+?)(?:\/([^/]+))?$/);
@@ -60,6 +92,7 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
         'GET|POST /join/:token',
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',
+        'GET /auth/callback',
       ],
     },
     200

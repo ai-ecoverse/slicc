@@ -906,7 +906,7 @@ export function register(): void {
 2. `provider-settings.ts` calls `config.onOAuthLogin(launcher, onSuccess)`
 3. The provider builds its authorize URL and calls `launcher(authorizeUrl)`
 4. The generic `OAuthLauncher` (from `packages/webapp/src/providers/oauth-service.ts`) handles transport:
-   - **CLI**: Opens popup → IDP login → redirects to `http://localhost:5710/auth/callback` → callback page postMessages the redirect URL back → popup closes
+   - **CLI**: Opens popup → IDP login → redirects to `https://www.sliccy.ai/auth/callback` → relay page decodes `state` (port, path, nonce) → redirects to `http://localhost:{port}/auth/callback` → callback page postMessages the redirect URL back → popup closes
    - **Extension**: Sends `oauth-request` to service worker → `chrome.identity.launchWebAuthFlow` → returns redirect URL with token in fragment
 5. The provider extracts the token from the redirect URL and calls `saveOAuthAccount()`
 6. `onSuccess()` re-renders the accounts list showing the logged-in state
@@ -923,8 +923,10 @@ export function register(): void {
 
 | Mode      | Redirect URI                              | Registration                          |
 | --------- | ----------------------------------------- | ------------------------------------- |
-| CLI       | `http://localhost:5710/auth/callback`     | Register with your OAuth provider/IdP |
+| CLI       | `https://www.sliccy.ai/auth/callback`     | Register with your OAuth provider/IdP |
 | Extension | `https://<extension-id>.chromiumapp.org/` | Register with your OAuth provider/IdP |
+
+The CLI redirect URI uses the sliccy.ai relay which decodes the OAuth `state` parameter to find the localhost port. Encode `{port, path, nonce}` as base64 JSON in the `state` param. See `packages/webapp/providers/adobe.ts` for the pattern.
 
 **Type**:
 

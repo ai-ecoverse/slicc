@@ -287,16 +287,47 @@ export const config: ProviderConfig = {
         `https://${(chrome as any).runtime.id}.chromiumapp.org/`)
       : (adobeConfig.redirectUri ?? `${window.location.origin}/auth/callback`);
 
+    // Build OAuth state with port and CSRF nonce for the sliccy.ai relay (CLI only)
+    const oauthState = !isExtension
+      ? btoa(
+          JSON.stringify({
+            port: parseInt(new URL(window.location.href).port || '5710', 10),
+            path: '/auth/callback',
+            nonce: crypto.randomUUID(),
+          })
+        )
+      : undefined;
+    const expectedNonce = oauthState ? JSON.parse(atob(oauthState)).nonce : null;
+
     const params = new URLSearchParams({
       client_id: clientId,
       scope: scopes,
       response_type: 'token',
       redirect_uri: redirectUri,
     });
+    if (oauthState) params.set('state', oauthState);
     const authorizeUrl = `${imsHost(imsEnv)}/ims/authorize/v2?${params}`;
 
     const redirectUrl = await launcher(authorizeUrl);
     if (!redirectUrl) return;
+
+    // Verify CSRF nonce from relay callback
+    if (expectedNonce && redirectUrl) {
+      try {
+        const callbackUrl = new URL(redirectUrl);
+        const receivedNonce = callbackUrl.searchParams.get('nonce');
+        if (receivedNonce !== expectedNonce) {
+          console.error('[adobe] OAuth nonce mismatch — possible CSRF');
+          return;
+        }
+      } catch (err) {
+        // URL parse failure — continue (backwards compat with old localhost flow)
+        console.warn(
+          '[adobe] Nonce check skipped (URL parse failed):',
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    }
 
     const tokenInfo = extractTokenFromUrl(redirectUrl);
     if (!tokenInfo) {
@@ -426,6 +457,18 @@ async function silentRenewToken(): Promise<string | null> {
           `https://${(chrome as any).runtime.id}.chromiumapp.org/`)
         : (adobeConfig.redirectUri ?? `${window.location.origin}/auth/callback`);
 
+      // Build OAuth state with port and CSRF nonce for the sliccy.ai relay (CLI only)
+      const oauthState = !isExtension
+        ? btoa(
+            JSON.stringify({
+              port: parseInt(new URL(window.location.href).port || '5710', 10),
+              path: '/auth/callback',
+              nonce: crypto.randomUUID(),
+            })
+          )
+        : undefined;
+      const expectedNonce = oauthState ? JSON.parse(atob(oauthState)).nonce : null;
+
       const params = new URLSearchParams({
         client_id: clientId,
         scope: scopes,
@@ -433,6 +476,7 @@ async function silentRenewToken(): Promise<string | null> {
         redirect_uri: redirectUri,
         prompt: 'none', // Silent — no UI, relies on existing IMS session
       });
+      if (oauthState) params.set('state', oauthState);
       const authorizeUrl = `${imsHost(imsEnv)}/ims/authorize/v2?${params}`;
 
       // Use the same launcher as normal login — handles CLI, extension, and Electron
@@ -441,6 +485,24 @@ async function silentRenewToken(): Promise<string | null> {
       const redirectUrl = await launcher(authorizeUrl);
 
       if (!redirectUrl) return null;
+
+      // Verify CSRF nonce from relay callback
+      if (expectedNonce && redirectUrl) {
+        try {
+          const callbackUrl = new URL(redirectUrl);
+          const receivedNonce = callbackUrl.searchParams.get('nonce');
+          if (receivedNonce !== expectedNonce) {
+            console.error('[adobe] OAuth nonce mismatch — possible CSRF');
+            return null;
+          }
+        } catch (err) {
+          // URL parse failure — continue (backwards compat with old localhost flow)
+          console.warn(
+            '[adobe] Nonce check skipped (URL parse failed):',
+            err instanceof Error ? err.message : String(err)
+          );
+        }
+      }
 
       const tokenInfo = extractTokenFromUrl(redirectUrl);
       if (!tokenInfo) return null;

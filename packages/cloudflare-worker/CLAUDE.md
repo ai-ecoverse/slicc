@@ -28,6 +28,7 @@ The worker provides tray session coordination, capability-token routing, TURN cr
 - `GET|POST /join/:token` — follower join and bootstrap polling flow
 - `GET|POST /controller/:token` — leader attach flow and leader WebSocket upgrade
 - `POST /webhook/:token/:webhookId` — forward webhook events into the live leader
+- `GET /auth/callback` — OAuth callback relay page (decodes `state` param with port/path/nonce, redirects to localhost)
 
 ### Signaling model
 
@@ -73,4 +74,8 @@ This lives at the repo root because it coordinates the worker with browser runti
 
 - Treat the worker as coordination infrastructure, not canonical session storage.
 - Keep signaling protocol changes aligned with the browser tray runtime in `packages/webapp/src/scoops/`.
-- When modifying routes or tokens, update both the worker tests and the consuming runtime docs.
+- **When adding or changing routes**, update ALL THREE test/config locations:
+  1. `tests/index.test.ts` — unit test that checks the routes list in the root 200 response
+  2. `tests/deployed.test.ts` — smoke test that runs against the deployed staging worker (also checks routes list)
+  3. The routes array in `src/index.ts` (the default 200 response)
+     Missing any of these causes CI failures — the staging smoke test deploys the worker then verifies the routes match.
