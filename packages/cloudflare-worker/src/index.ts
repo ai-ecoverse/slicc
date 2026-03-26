@@ -16,6 +16,12 @@ export interface WorkerEnv {
 export async function handleWorkerRequest(request: Request, env: WorkerEnv): Promise<Response> {
   const url = new URL(request.url);
 
+  if (url.hostname === 'sliccy.ai') {
+    const target = new URL(url.toString());
+    target.hostname = 'www.sliccy.ai';
+    return Response.redirect(target.toString(), 301);
+  }
+
   if (url.pathname === '/tray' && request.method === 'POST') {
     return createTray(request, env);
   }

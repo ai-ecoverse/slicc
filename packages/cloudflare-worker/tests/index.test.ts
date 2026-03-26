@@ -1138,4 +1138,17 @@ describe('tray worker skeleton', () => {
       ],
     });
   });
+
+  it('redirects apex sliccy.ai to www.sliccy.ai with 301 preserving path and query', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(new Request('https://sliccy.ai/some/path?q=1'), env);
+    expect(response.status).toBe(301);
+    expect(response.headers.get('Location')).toBe('https://www.sliccy.ai/some/path?q=1');
+  });
+
+  it('does not redirect requests to www.sliccy.ai', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(new Request('https://www.sliccy.ai/'), env);
+    expect(response.status).toBe(200);
+  });
 });
