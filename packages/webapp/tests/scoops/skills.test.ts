@@ -95,7 +95,7 @@ Write clean code.
       await vfs.mkdir('/repo/.claude/skills/compat-skill', { recursive: true });
       await vfs.writeFile(
         '/repo/.claude/skills/compat-skill/SKILL.md',
-        '# Compat Skill\n\nUse this compatibility skill.',
+        '# Compat Skill\n\nUse this compatibility skill.'
       );
 
       const skills = await loadSkills(vfs, '/workspace/skills');
@@ -140,7 +140,9 @@ Write clean code.
       const names = skills.map((skill) => skill.metadata.name).sort();
 
       expect(names).toEqual(['compat-skill', 'legacy']);
-      expect(skills.find((skill) => skill.metadata.name === 'legacy')?.path).toBe('/workspace/skills/legacy.md');
+      expect(skills.find((skill) => skill.metadata.name === 'legacy')?.path).toBe(
+        '/workspace/skills/legacy.md'
+      );
     });
 
     it('keeps standalone native markdown skills ahead of compatibility duplicates', async () => {

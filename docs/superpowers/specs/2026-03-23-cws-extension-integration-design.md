@@ -31,6 +31,7 @@ MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAnEuuMuC5INo0Harfu36DPaBV+NtIMF7CUyhf
 **File:** `packages/webapp/providers/adobe-config.json`
 
 Update `extensionRedirectUri`:
+
 ```json
 "extensionRedirectUri": "https://akggccfpkleihhemkkikggopnifgelbk.chromiumapp.org/adobe"
 ```
@@ -44,20 +45,24 @@ The code in `packages/webapp/providers/adobe.ts` line 232 has a dynamic fallback
 Replace the manual "Load Unpacked" developer mode flow with a direct link to the CWS listing.
 
 **File:** `packages/swift-launcher/Sliccstart/Models/SliccProcess.swift`
+
 - Replace `guidedInstallExtension(chromePath:)` with a new method (e.g., `openChromeWebStore()`) that opens the CWS listing URL: `https://chromewebstore.google.com/detail/slicc/akggccfpkleihhemkkikggopnifgelbk` in the default browser via `NSWorkspace.shared.open()`
 - Remove the `~/.slicc/extension/` copy logic (lines 105-117: stablePath, sourcePath, copyItem)
 - Remove the Finder window opening (`NSWorkspace.shared.selectFile`)
 - The `chromePath` parameter is no longer needed since we open the CWS URL in the default browser
 
 **File:** `packages/swift-launcher/Sliccstart/Views/AppListView.swift`
+
 - Update button label from "Install to Chrome" to "Get Extension" (or similar)
 - Simplify the button action: call the new `openChromeWebStore()` method directly instead of showing the guided install dialog
 - Remove Developer Mode instruction text
 
 **File:** `packages/swift-launcher/Sliccstart/Models/SliccBootstrapper.swift`
+
 - Remove `npm run build:extension` from both `bootstrap()` (line ~118) and `update()` (line ~146) methods — CWS is now the distribution path, local extension builds are only for development
 
 **File:** `packages/swift-launcher/Sliccstart/SliccstartApp.swift`
+
 - Remove or simplify the `onGuidedInstall` callback handler (lines ~86-96) that displays the old Developer Mode instructions — replace with a simple CWS URL open, or remove entirely if the button in AppListView now handles it directly
 
 ## Testing

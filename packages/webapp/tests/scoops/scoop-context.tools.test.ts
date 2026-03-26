@@ -168,7 +168,7 @@ describe('ScoopContext active tool surface', () => {
     ] as any);
     mocks.formatSkillsForPrompt.mockImplementationOnce(
       ((skills: Array<{ path: string }>) =>
-        `AVAILABLE SKILLS\n${skills.map((skill) => `Path: ${skill.path}`).join('\n')}`) as any,
+        `AVAILABLE SKILLS\n${skills.map((skill) => `Path: ${skill.path}`).join('\n')}`) as any
     );
 
     const ctx = new ScoopContext(testScoop, createMockCallbacks(), createMockFs() as any);
@@ -189,7 +189,7 @@ describe('ScoopContext active tool surface', () => {
     ] as any);
     mocks.formatSkillsForPrompt.mockImplementationOnce(
       ((skills: Array<{ path: string }>) =>
-        `AVAILABLE SKILLS\n${skills.map((skill) => `Path: ${skill.path}`).join('\n')}`) as any,
+        `AVAILABLE SKILLS\n${skills.map((skill) => `Path: ${skill.path}`).join('\n')}`) as any
     );
 
     const cone: RegisteredScoop = { ...testScoop, isCone: true, folder: '' };

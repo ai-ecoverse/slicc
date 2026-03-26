@@ -20,7 +20,10 @@ describe('Search Tools', () => {
     find = tools.find((t) => t.name === 'find')!;
 
     // Set up test files
-    await fs.writeFile('/src/main.ts', 'import { foo } from "../../src/tools/foo";\nconsole.log(foo());\n');
+    await fs.writeFile(
+      '/src/main.ts',
+      'import { foo } from "../../src/tools/foo";\nconsole.log(foo());\n'
+    );
     await fs.writeFile('/src/foo.ts', 'export function foo() {\n  return "bar";\n}\n');
     await fs.writeFile('/readme.md', '# Test Project\nThis is a test.\n');
   });

@@ -2,9 +2,12 @@
 /* Dialog — S2 Standard Dialog pattern                                */
 /* ================================================================== */
 .dialog-overlay {
-  position: fixed; inset: 0;
-  background: rgba(0,0,0,.55);
-  display: flex; align-items: center; justify-content: center;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   z-index: 100;
   backdrop-filter: blur(4px);
 }
@@ -12,7 +15,8 @@
   background: var(--s2-bg-layer-2);
   border-radius: var(--s2-radius-xl);
   padding: var(--s2-spacing-500);
-  width: 440px; max-width: 90vw;
+  width: 440px;
+  max-width: 90vw;
   box-shadow: var(--s2-shadow-elevated);
   border: 1px solid var(--s2-border-subtle);
 }
@@ -41,23 +45,41 @@
   outline: none;
   transition: border-color var(--s2-transition-default);
 }
-.dialog__input:focus { border-color: var(--s2-accent); }
+.dialog__input:focus {
+  border-color: var(--s2-accent);
+}
 
 /* S2 Accent fill button (pill) */
 .dialog__btn {
-  width: 100%; padding: 10px;
-  border: none; border-radius: var(--s2-radius-pill);
-  background: var(--s2-accent); color: #fff;
+  width: 100%;
+  padding: 10px;
+  border: none;
+  border-radius: var(--s2-radius-pill);
+  background: var(--s2-accent);
+  color: #fff;
   font-size: var(--s2-font-size-100);
-  font-weight: 600; font-family: var(--s2-font-family);
+  font-weight: 600;
+  font-family: var(--s2-font-family);
   cursor: pointer;
-  transition: background var(--s2-transition-default), transform var(--s2-transition-default);
+  transition:
+    background var(--s2-transition-default),
+    transform var(--s2-transition-default);
 }
-.dialog__btn:hover { background: var(--s2-accent-hover); }
-.dialog__btn:active { transform: scale(0.98); }
-.dialog__btn:disabled { opacity: .4; cursor: not-allowed; }
+.dialog__btn:hover {
+  background: var(--s2-accent-hover);
+}
+.dialog__btn:active {
+  transform: scale(0.98);
+}
+.dialog__btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 .dialog__btn--secondary {
-  background: transparent; border: 1px solid var(--s2-border-default);
+  background: transparent;
+  border: 1px solid var(--s2-border-default);
   color: var(--s2-content-default);
 }
-.dialog__btn--secondary:hover { background: var(--s2-gray-200); }
+.dialog__btn--secondary:hover {
+  background: var(--s2-gray-200);
+}

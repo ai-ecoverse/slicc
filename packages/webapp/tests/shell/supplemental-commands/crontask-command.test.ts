@@ -461,7 +461,8 @@ describe('crontask command - Extension mode', () => {
     // Set LickManager on globalThis before creating command
     (globalThis as any).__slicc_lickManager = mockLickManager;
 
-    const { createCrontaskCommand: createCmd } = await import('../../../src/shell/supplemental-commands/crontask-command.js');
+    const { createCrontaskCommand: createCmd } =
+      await import('../../../src/shell/supplemental-commands/crontask-command.js');
     command = createCmd();
   });
 

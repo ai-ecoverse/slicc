@@ -8,8 +8,15 @@
  * Also maintains an event buffer for state sync on panel reconnect.
  */
 
-import type { Orchestrator, OrchestratorCallbacks } from '../../../packages/webapp/src/scoops/orchestrator.js';
-import type { RegisteredScoop, ChannelMessage, ScoopTabState } from '../../../packages/webapp/src/scoops/types.js';
+import type {
+  Orchestrator,
+  OrchestratorCallbacks,
+} from '../../../packages/webapp/src/scoops/orchestrator.js';
+import type {
+  RegisteredScoop,
+  ChannelMessage,
+  ScoopTabState,
+} from '../../../packages/webapp/src/scoops/types.js';
 import type {
   ExtensionMessage,
   PanelToOffscreenMessage,

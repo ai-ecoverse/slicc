@@ -5,127 +5,285 @@
       "name": "content-driven-development",
       "displayName": "AEM Content-Driven Development",
       "description": "Master orchestrator for AEM development — builds code against real content with author-friendly content models",
-      "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "content-driven-development" },
-      "affinity": { "apps": ["aem"], "tasks": ["build-websites"], "role": ["developer"], "purpose": ["work"] }
+      "source": {
+        "repo": "adobe/skills",
+        "path": "skills/aem/edge-delivery-services/skills",
+        "skill": "content-driven-development"
+      },
+      "affinity": {
+        "apps": ["aem"],
+        "tasks": ["build-websites"],
+        "role": ["developer"],
+        "purpose": ["work"]
+      }
     },
     {
       "name": "building-blocks",
       "displayName": "AEM Building Blocks",
       "description": "Implementation guide for AEM blocks — handles block development, core functionality, scripts, and styles",
-      "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "building-blocks" },
-      "affinity": { "apps": ["aem"], "tasks": ["build-websites"], "role": ["developer"], "purpose": ["work"] }
+      "source": {
+        "repo": "adobe/skills",
+        "path": "skills/aem/edge-delivery-services/skills",
+        "skill": "building-blocks"
+      },
+      "affinity": {
+        "apps": ["aem"],
+        "tasks": ["build-websites"],
+        "role": ["developer"],
+        "purpose": ["work"]
+      }
     },
     {
       "name": "content-modeling",
       "displayName": "AEM Content Modeling",
       "description": "Design content models and table structures for AEM blocks that are easy for authors to work with",
-      "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "content-modeling" },
-      "affinity": { "apps": ["aem"], "tasks": ["build-websites", "write-content"], "role": ["developer", "content-creator", "designer"], "purpose": ["work"] }
+      "source": {
+        "repo": "adobe/skills",
+        "path": "skills/aem/edge-delivery-services/skills",
+        "skill": "content-modeling"
+      },
+      "affinity": {
+        "apps": ["aem"],
+        "tasks": ["build-websites", "write-content"],
+        "role": ["developer", "content-creator", "designer"],
+        "purpose": ["work"]
+      }
     },
     {
       "name": "analyze-and-plan",
       "displayName": "AEM Analyze & Plan",
       "description": "Analyze development requirements and define acceptance criteria before coding AEM blocks",
-      "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "analyze-and-plan" },
-      "affinity": { "apps": ["aem"], "tasks": ["build-websites"], "role": ["developer"], "purpose": ["work"] }
+      "source": {
+        "repo": "adobe/skills",
+        "path": "skills/aem/edge-delivery-services/skills",
+        "skill": "analyze-and-plan"
+      },
+      "affinity": {
+        "apps": ["aem"],
+        "tasks": ["build-websites"],
+        "role": ["developer"],
+        "purpose": ["work"]
+      }
     },
     {
       "name": "block-collection-and-party",
       "displayName": "AEM Block Collection & Party",
       "description": "Search Adobe's official Block Collection and the community Block Party for reference implementations",
-      "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "block-collection-and-party" },
-      "affinity": { "apps": ["aem"], "tasks": ["build-websites"], "role": ["developer"], "purpose": ["work"] }
+      "source": {
+        "repo": "adobe/skills",
+        "path": "skills/aem/edge-delivery-services/skills",
+        "skill": "block-collection-and-party"
+      },
+      "affinity": {
+        "apps": ["aem"],
+        "tasks": ["build-websites"],
+        "role": ["developer"],
+        "purpose": ["work"]
+      }
     },
     {
       "name": "docs-search",
       "displayName": "AEM Docs Search",
       "description": "Search aem.live documentation and blog posts for AEM features, implementation guidance, and best practices",
-      "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "docs-search" },
-      "affinity": { "apps": ["aem"], "tasks": ["build-websites", "research"], "role": ["developer", "content-creator"], "purpose": ["work"] }
+      "source": {
+        "repo": "adobe/skills",
+        "path": "skills/aem/edge-delivery-services/skills",
+        "skill": "docs-search"
+      },
+      "affinity": {
+        "apps": ["aem"],
+        "tasks": ["build-websites", "research"],
+        "role": ["developer", "content-creator"],
+        "purpose": ["work"]
+      }
     },
     {
       "name": "authoring-analysis",
       "displayName": "AEM Authoring Analysis",
       "description": "Analyze content sequences and determine authoring approach — default content vs. specific blocks",
-      "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "authoring-analysis" },
-      "affinity": { "apps": ["aem"], "tasks": ["write-content", "build-websites"], "role": ["content-creator", "developer"], "purpose": ["work"] }
+      "source": {
+        "repo": "adobe/skills",
+        "path": "skills/aem/edge-delivery-services/skills",
+        "skill": "authoring-analysis"
+      },
+      "affinity": {
+        "apps": ["aem"],
+        "tasks": ["write-content", "build-websites"],
+        "role": ["content-creator", "developer"],
+        "purpose": ["work"]
+      }
     },
     {
       "name": "block-inventory",
       "displayName": "AEM Block Inventory",
       "description": "Survey and catalog available blocks from local project and Block Collection with purposes",
-      "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "block-inventory" },
-      "affinity": { "apps": ["aem"], "tasks": ["build-websites"], "role": ["developer", "designer"], "purpose": ["work"] }
+      "source": {
+        "repo": "adobe/skills",
+        "path": "skills/aem/edge-delivery-services/skills",
+        "skill": "block-inventory"
+      },
+      "affinity": {
+        "apps": ["aem"],
+        "tasks": ["build-websites"],
+        "role": ["developer", "designer"],
+        "purpose": ["work"]
+      }
     },
     {
       "name": "find-test-content",
       "displayName": "AEM Find Test Content",
       "description": "Search for published pages containing a specific block to locate test content during development",
-      "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "find-test-content" },
-      "affinity": { "apps": ["aem"], "tasks": ["build-websites"], "role": ["developer"], "purpose": ["work"] }
+      "source": {
+        "repo": "adobe/skills",
+        "path": "skills/aem/edge-delivery-services/skills",
+        "skill": "find-test-content"
+      },
+      "affinity": {
+        "apps": ["aem"],
+        "tasks": ["build-websites"],
+        "role": ["developer"],
+        "purpose": ["work"]
+      }
     },
     {
       "name": "page-import",
       "displayName": "AEM Page Import",
       "description": "Orchestrator for importing/migrating webpages into structured AEM HTML",
-      "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "page-import" },
-      "affinity": { "apps": ["aem"], "tasks": ["build-websites", "extract-data"], "role": ["developer", "content-creator"], "purpose": ["work"] }
+      "source": {
+        "repo": "adobe/skills",
+        "path": "skills/aem/edge-delivery-services/skills",
+        "skill": "page-import"
+      },
+      "affinity": {
+        "apps": ["aem"],
+        "tasks": ["build-websites", "extract-data"],
+        "role": ["developer", "content-creator"],
+        "purpose": ["work"]
+      }
     },
     {
       "name": "scrape-webpage",
       "displayName": "AEM Scrape Webpage",
       "description": "Scrape a webpage to extract content, metadata, and images for AEM import pipeline",
-      "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "scrape-webpage" },
-      "affinity": { "apps": ["aem"], "tasks": ["extract-data", "build-websites"], "role": ["developer"], "purpose": ["work"] }
+      "source": {
+        "repo": "adobe/skills",
+        "path": "skills/aem/edge-delivery-services/skills",
+        "skill": "scrape-webpage"
+      },
+      "affinity": {
+        "apps": ["aem"],
+        "tasks": ["extract-data", "build-websites"],
+        "role": ["developer"],
+        "purpose": ["work"]
+      }
     },
     {
       "name": "identify-page-structure",
       "displayName": "AEM Identify Page Structure",
       "description": "Analyze scraped webpage to identify section boundaries and content sequences for import",
-      "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "identify-page-structure" },
-      "affinity": { "apps": ["aem"], "tasks": ["build-websites", "extract-data"], "role": ["developer"], "purpose": ["work"] }
+      "source": {
+        "repo": "adobe/skills",
+        "path": "skills/aem/edge-delivery-services/skills",
+        "skill": "identify-page-structure"
+      },
+      "affinity": {
+        "apps": ["aem"],
+        "tasks": ["build-websites", "extract-data"],
+        "role": ["developer"],
+        "purpose": ["work"]
+      }
     },
     {
       "name": "page-decomposition",
       "displayName": "AEM Page Decomposition",
       "description": "Analyze content sequences within a section, identifying breaking points between default content and blocks",
-      "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "page-decomposition" },
-      "affinity": { "apps": ["aem"], "tasks": ["build-websites"], "role": ["developer"], "purpose": ["work"] }
+      "source": {
+        "repo": "adobe/skills",
+        "path": "skills/aem/edge-delivery-services/skills",
+        "skill": "page-decomposition"
+      },
+      "affinity": {
+        "apps": ["aem"],
+        "tasks": ["build-websites"],
+        "role": ["developer"],
+        "purpose": ["work"]
+      }
     },
     {
       "name": "generate-import-html",
       "displayName": "AEM Generate Import HTML",
       "description": "Generate structured HTML from authoring analysis — creates sections, block tables, metadata, and images",
-      "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "generate-import-html" },
-      "affinity": { "apps": ["aem"], "tasks": ["build-websites"], "role": ["developer"], "purpose": ["work"] }
+      "source": {
+        "repo": "adobe/skills",
+        "path": "skills/aem/edge-delivery-services/skills",
+        "skill": "generate-import-html"
+      },
+      "affinity": {
+        "apps": ["aem"],
+        "tasks": ["build-websites"],
+        "role": ["developer"],
+        "purpose": ["work"]
+      }
     },
     {
       "name": "preview-import",
       "displayName": "AEM Preview Import",
       "description": "Open and verify imported content in the local AEM dev server, comparing with the original page",
-      "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "preview-import" },
-      "affinity": { "apps": ["aem"], "tasks": ["build-websites"], "role": ["developer"], "purpose": ["work"] }
+      "source": {
+        "repo": "adobe/skills",
+        "path": "skills/aem/edge-delivery-services/skills",
+        "skill": "preview-import"
+      },
+      "affinity": {
+        "apps": ["aem"],
+        "tasks": ["build-websites"],
+        "role": ["developer"],
+        "purpose": ["work"]
+      }
     },
     {
       "name": "testing-blocks",
       "displayName": "AEM Testing Blocks",
       "description": "Guide testing of AEM code changes — unit testing, browser testing with Playwright, and linting",
-      "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "testing-blocks" },
-      "affinity": { "apps": ["aem"], "tasks": ["build-websites", "browser-automation"], "role": ["developer"], "purpose": ["work"] }
+      "source": {
+        "repo": "adobe/skills",
+        "path": "skills/aem/edge-delivery-services/skills",
+        "skill": "testing-blocks"
+      },
+      "affinity": {
+        "apps": ["aem"],
+        "tasks": ["build-websites", "browser-automation"],
+        "role": ["developer"],
+        "purpose": ["work"]
+      }
     },
     {
       "name": "code-review",
       "displayName": "AEM Code Review",
       "description": "Review AEM code for quality, performance, accessibility, and best practices — self-review or PR review",
-      "source": { "repo": "adobe/skills", "path": "skills/aem/edge-delivery-services/skills", "skill": "code-review" },
-      "affinity": { "apps": ["aem"], "tasks": ["build-websites"], "role": ["developer"], "purpose": ["work"] }
+      "source": {
+        "repo": "adobe/skills",
+        "path": "skills/aem/edge-delivery-services/skills",
+        "skill": "code-review"
+      },
+      "affinity": {
+        "apps": ["aem"],
+        "tasks": ["build-websites"],
+        "role": ["developer"],
+        "purpose": ["work"]
+      }
     },
     {
       "name": "aem-cli",
       "displayName": "AEM CLI",
       "description": "Shell command for AEM — list, get, put, preview, publish, and upload pages via OAuth-authenticated API calls",
       "source": { "repo": "ai-ecoverse/skills", "skill": "aem" },
-      "affinity": { "apps": ["aem"], "tasks": ["build-websites", "write-content"], "role": ["developer", "content-creator"], "purpose": ["work"] }
+      "affinity": {
+        "apps": ["aem"],
+        "tasks": ["build-websites", "write-content"],
+        "role": ["developer", "content-creator"],
+        "purpose": ["work"]
+      }
     },
     {
       "name": "bluebubbles",
@@ -139,7 +297,10 @@
       "displayName": "Skill Creator",
       "description": "Create, improve, and measure SLICC skills with guided workflows and evals",
       "source": { "repo": "anthropics/skills", "skill": "skill-creator" },
-      "affinity": { "role": ["developer", "founder", "student", "researcher"], "purpose": ["work", "side-project", "personal", "exploring"] },
+      "affinity": {
+        "role": ["developer", "founder", "student", "researcher"],
+        "purpose": ["work", "side-project", "personal", "exploring"]
+      },
       "priority": 0.8
     }
   ]

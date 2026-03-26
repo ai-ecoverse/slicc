@@ -72,9 +72,8 @@ let _lickProxy: Awaited<
 > | null = null;
 async function getLickProxy() {
   if (_lickProxy) return _lickProxy;
-  const { createLickManagerProxy } = await import(
-    '../../../../chrome-extension/src/lick-manager-proxy.js'
-  );
+  const { createLickManagerProxy } =
+    await import('../../../../chrome-extension/src/lick-manager-proxy.js');
   _lickProxy = createLickManagerProxy();
   return _lickProxy;
 }

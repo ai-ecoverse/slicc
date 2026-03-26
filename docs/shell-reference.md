@@ -16,31 +16,31 @@ SLICC uses `just-bash` (WASM Bash interpreter v2.11.7) as its core shell runtime
 
 Custom commands implemented in TypeScript and registered in just-bash.
 
-| Command | File | Description | Key Arguments |
-|---------|------|-------------|-----------------|
-| **commands** | `help-command.ts` | List all available commands (built-ins + .jsh) | None |
-| **which** | `which-command.ts` | Resolve a command path | `<command>` — returns `/usr/bin/<name>` or VFS path |
-| **uname** | `uname-command.ts` | Print the current browser user agent | None |
-| **host** | `host-command.ts` | Print the current leader tray status plus `launch_url` and `join_url` (`launch_url` is `https://.../tray/<id>` when this runtime is leader) | None |
-| **oauth-token** | `oauth-token-command.ts` | Get an OAuth access token for a provider | `<providerId>`, `--provider <id>`, `--list`, no args = selected provider; auto-triggers login if needed |
-| **serve** | `serve-command.ts` | Open a VFS app directory in a browser tab | `[--entry <relative-path>] <directory>` — defaults to `index.html`; rejects absolute/traversal entry paths |
-| **open** | `open-command.ts` | Open URL or VFS file in browser tab | `<url\|path>` — serves VFS files via preview SW; `--download` / `-d` forces download; `--view` / `-v` returns image inline for agent vision |
-| **imgcat** | `imgcat-command.ts` | Display image inline in terminal | `<path>` — base64 + ansi escape codes |
-| **zip** | `zip-command.ts` | Create ZIP archive | `<archive.zip> <file1> [file2...]` |
-| **unzip** | `unzip-command.ts` | Extract ZIP archive | `<archive.zip> [-d output-dir]` |
-| **sqlite3** | `sqlite-command.ts` | Execute SQLite queries | `-c "SELECT * FROM table" db.sqlite` |
-| **node** | `node-command.ts` | Execute JavaScript code | `-e "console.log(1+1)"` with fs bridge |
-| **python3 / python** | `python-command.ts` | Execute Python code | `-c "print([i**2 for i in range(5)])"` with Pyodide |
-| **webhook** | `webhook-command.ts` | Manage webhooks for event-driven licks | `webhook create <endpoint>`, `webhook list`, `webhook delete <id>` |
-| **crontask** | `crontask-command.ts` | Schedule cron jobs that dispatch licks | `crontask add <name> "0 9 * * *" scoop-name "instructions..."` |
-| **pdftk / pdf** | `pdftk-command.ts` | PDF manipulation | `pdf burst input.pdf`, `pdf cat input.pdf output output.pdf` |
-| **convert / magick** | `convert-command.ts` | Image conversion (ImageMagick style) | `convert -resize 800x600 input.jpg output.jpg` |
-| **playwright-cli / playwright / puppeteer** | `playwright-command.ts` | Browser automation shell CLI | `snapshot`, `click <ref>`, `cookie-set`, `tab-list` |
-| **screencapture** | `screencapture-command.ts` | Capture user's screen via browser screen sharing API | `<output.png>`, `-c` (clipboard), `-v` / `--view` (agent vision) |
-| **upskill** | `upskill-command.ts` | Install skills from GitHub/ClawHub | `upskill owner/repo`, `upskill clawhub:name`, `upskill search "query"` |
-| **sprinkle** | `sprinkle-command.ts` | Manage `.shtml` sprinkle panels and inline chat UI | `sprinkle list`, `sprinkle open <name>`, `sprinkle chat '<html>'` |
-| **debug** | `debug-command.ts` | Toggle Terminal/Memory tabs in extension mode | `debug on`, `debug off`, no args = show state; extension-only (not registered in CLI) |
-| **git** | (isomorphic-git) | Full git support | `git clone`, `git commit`, `git push`, etc. |
+| Command                                     | File                       | Description                                                                                                                                 | Key Arguments                                                                                                                               |
+| ------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| **commands**                                | `help-command.ts`          | List all available commands (built-ins + .jsh)                                                                                              | None                                                                                                                                        |
+| **which**                                   | `which-command.ts`         | Resolve a command path                                                                                                                      | `<command>` — returns `/usr/bin/<name>` or VFS path                                                                                         |
+| **uname**                                   | `uname-command.ts`         | Print the current browser user agent                                                                                                        | None                                                                                                                                        |
+| **host**                                    | `host-command.ts`          | Print the current leader tray status plus `launch_url` and `join_url` (`launch_url` is `https://.../tray/<id>` when this runtime is leader) | None                                                                                                                                        |
+| **oauth-token**                             | `oauth-token-command.ts`   | Get an OAuth access token for a provider                                                                                                    | `<providerId>`, `--provider <id>`, `--list`, no args = selected provider; auto-triggers login if needed                                     |
+| **serve**                                   | `serve-command.ts`         | Open a VFS app directory in a browser tab                                                                                                   | `[--entry <relative-path>] <directory>` — defaults to `index.html`; rejects absolute/traversal entry paths                                  |
+| **open**                                    | `open-command.ts`          | Open URL or VFS file in browser tab                                                                                                         | `<url\|path>` — serves VFS files via preview SW; `--download` / `-d` forces download; `--view` / `-v` returns image inline for agent vision |
+| **imgcat**                                  | `imgcat-command.ts`        | Display image inline in terminal                                                                                                            | `<path>` — base64 + ansi escape codes                                                                                                       |
+| **zip**                                     | `zip-command.ts`           | Create ZIP archive                                                                                                                          | `<archive.zip> <file1> [file2...]`                                                                                                          |
+| **unzip**                                   | `unzip-command.ts`         | Extract ZIP archive                                                                                                                         | `<archive.zip> [-d output-dir]`                                                                                                             |
+| **sqlite3**                                 | `sqlite-command.ts`        | Execute SQLite queries                                                                                                                      | `-c "SELECT * FROM table" db.sqlite`                                                                                                        |
+| **node**                                    | `node-command.ts`          | Execute JavaScript code                                                                                                                     | `-e "console.log(1+1)"` with fs bridge                                                                                                      |
+| **python3 / python**                        | `python-command.ts`        | Execute Python code                                                                                                                         | `-c "print([i**2 for i in range(5)])"` with Pyodide                                                                                         |
+| **webhook**                                 | `webhook-command.ts`       | Manage webhooks for event-driven licks                                                                                                      | `webhook create <endpoint>`, `webhook list`, `webhook delete <id>`                                                                          |
+| **crontask**                                | `crontask-command.ts`      | Schedule cron jobs that dispatch licks                                                                                                      | `crontask add <name> "0 9 * * *" scoop-name "instructions..."`                                                                              |
+| **pdftk / pdf**                             | `pdftk-command.ts`         | PDF manipulation                                                                                                                            | `pdf burst input.pdf`, `pdf cat input.pdf output output.pdf`                                                                                |
+| **convert / magick**                        | `convert-command.ts`       | Image conversion (ImageMagick style)                                                                                                        | `convert -resize 800x600 input.jpg output.jpg`                                                                                              |
+| **playwright-cli / playwright / puppeteer** | `playwright-command.ts`    | Browser automation shell CLI                                                                                                                | `snapshot`, `click <ref>`, `cookie-set`, `tab-list`                                                                                         |
+| **screencapture**                           | `screencapture-command.ts` | Capture user's screen via browser screen sharing API                                                                                        | `<output.png>`, `-c` (clipboard), `-v` / `--view` (agent vision)                                                                            |
+| **upskill**                                 | `upskill-command.ts`       | Install skills from GitHub/ClawHub                                                                                                          | `upskill owner/repo`, `upskill clawhub:name`, `upskill search "query"`                                                                      |
+| **sprinkle**                                | `sprinkle-command.ts`      | Manage `.shtml` sprinkle panels and inline chat UI                                                                                          | `sprinkle list`, `sprinkle open <name>`, `sprinkle chat '<html>'`                                                                           |
+| **debug**                                   | `debug-command.ts`         | Toggle Terminal/Memory tabs in extension mode                                                                                               | `debug on`, `debug off`, no args = show state; extension-only (not registered in CLI)                                                       |
+| **git**                                     | (isomorphic-git)           | Full git support                                                                                                                            | `git clone`, `git commit`, `git push`, etc.                                                                                                 |
 
 **Example usage**:
 
@@ -155,6 +155,7 @@ Rule: First basename wins (no conflicts)
 ```
 
 **Execution**: Via `jsh-executor.ts` (dual-mode):
+
 - CLI: `AsyncFunction` constructor with Node-like globals
 - Extension: Sandbox iframe (CSP-compliant), VFS via postMessage
 
@@ -174,10 +175,10 @@ process.stderr.write(s)       // Write to stderr
 #### console
 
 ```typescript
-console.log(...args)          // stdout (space-separated)
-console.info(...args)         // stdout
-console.warn(...args)         // stderr
-console.error(...args)        // stderr
+console.log(...args); // stdout (space-separated)
+console.info(...args); // stdout
+console.warn(...args); // stderr
+console.error(...args); // stderr
 ```
 
 #### fs (VirtualFS bridge)
@@ -238,11 +239,11 @@ const outputFile = args[1] || inputFile.replace(/\.csv$/, '.json');
 (async () => {
   try {
     const csv = await fs.readFile(inputFile);
-    const lines = csv.split('\n').filter(l => l.trim());
-    const header = lines[0].split(',').map(s => s.trim());
+    const lines = csv.split('\n').filter((l) => l.trim());
+    const header = lines[0].split(',').map((s) => s.trim());
 
-    const rows = lines.slice(1).map(line => {
-      const values = line.split(',').map(s => s.trim());
+    const rows = lines.slice(1).map((line) => {
+      const values = line.split(',').map((s) => s.trim());
       return Object.fromEntries(header.map((h, i) => [h, values[i]]));
     });
 
@@ -287,14 +288,14 @@ Shell arguments support quotes, escapes, and whitespace.
 
 ### Rules
 
-| Pattern | Result |
-|---------|--------|
-| `word` | Single word token |
-| `"hello world"` | Single token: `hello world` |
-| `'hello world'` | Single token: `hello world` |
-| `hello\ world` | Single token: `hello world` |
-| `a "b c" d` | Three tokens: `a`, `b c`, `d` |
-| `"a\"b"` | Single token: `a"b` (escaped quote) |
+| Pattern         | Result                              |
+| --------------- | ----------------------------------- |
+| `word`          | Single word token                   |
+| `"hello world"` | Single token: `hello world`         |
+| `'hello world'` | Single token: `hello world`         |
+| `hello\ world`  | Single token: `hello world`         |
+| `a "b c" d`     | Three tokens: `a`, `b c`, `d`       |
+| `"a\"b"`        | Single token: `a"b` (escaped quote) |
 
 ### Examples
 
@@ -415,14 +416,14 @@ Cross-origin fetch from extension pages allowed directly. Sandbox iframe proxies
 
 ### Behavior
 
-| Runtime | Fetch Type | Route |
-|---------|-----------|-------|
-| CLI Node | Any | `/api/fetch-proxy` |
-| CLI browser page | Anthropic API | Direct (whitelist) |
-| CLI browser page | Other cross-origin | `/api/fetch-proxy` |
-| Extension | Anthropic API | Direct (whitelist) |
-| Extension | Other | Direct (host_permissions) |
-| Extension sandbox | Any | postMessage to parent |
+| Runtime           | Fetch Type         | Route                     |
+| ----------------- | ------------------ | ------------------------- |
+| CLI Node          | Any                | `/api/fetch-proxy`        |
+| CLI browser page  | Anthropic API      | Direct (whitelist)        |
+| CLI browser page  | Other cross-origin | `/api/fetch-proxy`        |
+| Extension         | Anthropic API      | Direct (whitelist)        |
+| Extension         | Other              | Direct (host_permissions) |
+| Extension sandbox | Any                | postMessage to parent     |
 
 ---
 
@@ -498,12 +499,14 @@ For large-scale processing (1000+ files), batch operations and JavaScript tool a
 ## Dual-Mode Notes
 
 ### CLI Mode
+
 - Full bash capabilities
 - Shell state persisted across commands
 - `node -e` uses `AsyncFunction` constructor
 - Fetch requests routed through Express `/api/fetch-proxy`
 
 ### Extension Mode
+
 - Full bash capabilities (same as CLI)
 - Shell state persisted across commands
 - `node -e` and `.jsh` scripts run in sandbox iframe (CSP-compliant)

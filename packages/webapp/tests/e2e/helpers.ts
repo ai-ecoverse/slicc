@@ -3,9 +3,7 @@ import { type Page } from '@playwright/test';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const LFS_SCRIPT = require.resolve(
-  '@isomorphic-git/lightning-fs/dist/lightning-fs.min.js'
-);
+const LFS_SCRIPT = require.resolve('@isomorphic-git/lightning-fs/dist/lightning-fs.min.js');
 
 /** Minimal interface for the LightningFS promises API used in seedVFS. */
 interface LightningFSPromises {
@@ -65,10 +63,7 @@ export async function installVfsFallbackResponder(page: Page): Promise<void> {
  * The preview SW reads from this same database.
  * Must be called after the page has loaded (needs a page context to evaluate JS).
  */
-export async function seedVFS(
-  page: Page,
-  files: Record<string, string>
-): Promise<void> {
+export async function seedVFS(page: Page, files: Record<string, string>): Promise<void> {
   await page.addScriptTag({ path: LFS_SCRIPT });
   await page.evaluate(async (fileMap: Record<string, string>) => {
     const LFS = (window as Window & { LightningFS: LightningFSConstructor }).LightningFS;

@@ -369,7 +369,7 @@ function formatSkillInfo(skill: DiscoveredSkill): string {
 
 function formatCompatibilityMutationError(
   commandName: 'skill' | 'upskill',
-  skill: DiscoveredSkill,
+  skill: DiscoveredSkill
 ): string {
   return `${commandName}: "${skill.name}" is discoverable from ${skill.sourceRoot} but remains compatibility-only/read-only. Only native /workspace/skills entries are install-managed.\n`;
 }
@@ -495,7 +495,13 @@ async function fetchTesslResults(
     const key = a.sourceUrl || item.id;
     const existing = seen.get(key);
     // Keep the highest-scored entry per source repo
-    if (existing && existing.qualityScore != null && score != null && existing.qualityScore >= score) continue;
+    if (
+      existing &&
+      existing.qualityScore != null &&
+      score != null &&
+      existing.qualityScore >= score
+    )
+      continue;
     // Derive skill directory from path (parent of SKILL.md)
     const skillDir = a.path.replace(/\/SKILL\.md$/i, '');
     const skillId = skillDir.split('/').pop() || a.name;
@@ -807,7 +813,9 @@ function extractRequiredBins(frontmatter: string): string[] {
 async function resolveTesslRef(
   name: string,
   fetch: SecureFetch
-): Promise<{ owner: string; repo: string; skillPath: string; skillName: string } | { error: string }> {
+): Promise<
+  { owner: string; repo: string; skillPath: string; skillName: string } | { error: string }
+> {
   const url = `${TESSL_API}/experimental/search?q=${encodeURIComponent(name)}&contentType=skills&page%5Bsize%5D=5`;
   const response = await fetch(url, {
     headers: { Accept: 'application/json' },
@@ -817,9 +825,7 @@ async function resolveTesslRef(
   }
   const data = JSON.parse(response.body) as TesslSearchResponse;
   // Find exact name match among skills
-  const match = data.data?.find(
-    (item) => item.type === 'skill' && item.attributes.name === name
-  );
+  const match = data.data?.find((item) => item.type === 'skill' && item.attributes.name === name);
   if (!match) {
     return { error: `skill "${name}" not found on Tessl registry` };
   }
@@ -872,7 +878,10 @@ async function fetchRepoZip(
   try {
     return { status: 'ok', files: unzipSync(zipBytes) };
   } catch (e) {
-    return { status: 'error', message: `failed to unzip: ${e instanceof Error ? e.message : String(e)}` };
+    return {
+      status: 'error',
+      message: `failed to unzip: ${e instanceof Error ? e.message : String(e)}`,
+    };
   }
 }
 
@@ -922,7 +931,9 @@ async function listGitHubSkills(
       return { skills };
     }
     if (zip.status === 'not_found') {
-      const target = branch ? `branch "${branch}" in ${owner}/${repo}` : `repository ${owner}/${repo}`;
+      const target = branch
+        ? `branch "${branch}" in ${owner}/${repo}`
+        : `repository ${owner}/${repo}`;
       return { skills: [], error: `${target} not found` };
     }
     // zip.status === 'error' — fall through to API
@@ -1000,7 +1011,9 @@ async function installFromGitHub(
     if (fetch) {
       const zip = await fetchRepoZip(owner, repo, fetch, branch);
       if (zip.status === 'not_found') {
-        const target = branch ? `branch "${branch}" in ${owner}/${repo}` : `repository ${owner}/${repo}`;
+        const target = branch
+          ? `branch "${branch}" in ${owner}/${repo}`
+          : `repository ${owner}/${repo}`;
         return {
           stdout: '',
           stderr: `upskill: ${target} not found\n`,
@@ -1281,7 +1294,16 @@ async function handleRecommendations(
         : listResult.skills;
 
       for (const skill of toInstall) {
-        const result = await installFromGitHub(owner, repo, skill.path, skill.name, fs, github, false, fetchFn);
+        const result = await installFromGitHub(
+          owner,
+          repo,
+          skill.path,
+          skill.name,
+          fs,
+          github,
+          false,
+          fetchFn
+        );
         if (result.exitCode === 0) {
           output += result.stdout;
           successCount++;
@@ -1451,7 +1473,16 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
         return { stdout: '', stderr: `upskill: ${resolved.error}\n`, exitCode: 1 };
       }
       const github = await createGitHubRequestContext(fetchFn);
-      return installFromGitHub(resolved.owner, resolved.repo, resolved.skillPath, resolved.skillName, fs, github, force, fetchFn);
+      return installFromGitHub(
+        resolved.owner,
+        resolved.repo,
+        resolved.skillPath,
+        resolved.skillName,
+        fs,
+        github,
+        force,
+        fetchFn
+      );
     }
 
     // Check if it's a GitHub reference

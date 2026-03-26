@@ -23,7 +23,10 @@ import {
   getSelectedProvider,
   getAccounts,
 } from '../../../src/ui/provider-settings.js';
-import { getRegisteredProviderConfig, getRegisteredProviderIds } from '../../../src/providers/index.js';
+import {
+  getRegisteredProviderConfig,
+  getRegisteredProviderIds,
+} from '../../../src/providers/index.js';
 import { createOAuthLauncher } from '../../../src/providers/oauth-service.js';
 
 const mockGetOAuthAccountInfo = vi.mocked(getOAuthAccountInfo);

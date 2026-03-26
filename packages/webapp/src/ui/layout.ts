@@ -378,14 +378,18 @@ export class Layout {
     // Update extension toolbar icon (if in extension mode)
     const chromeAny = typeof chrome !== 'undefined' ? (chrome as any) : null;
     if (chromeAny?.action?.setIcon) {
-      chromeAny.action.setIcon({
-        path: {
-          16: `logos/sliccy-color-${clamped}scoops-16x16.png`,
-          32: `logos/sliccy-color-${clamped}scoops-32x32.png`,
-          48: `logos/sliccy-color-${clamped}scoops-48x48.png`,
-          128: `logos/sliccy-color-${clamped}scoops-128x128.png`,
-        },
-      }).catch(() => { /* best-effort */ });
+      chromeAny.action
+        .setIcon({
+          path: {
+            16: `logos/sliccy-color-${clamped}scoops-16x16.png`,
+            32: `logos/sliccy-color-${clamped}scoops-32x32.png`,
+            48: `logos/sliccy-color-${clamped}scoops-48x48.png`,
+            128: `logos/sliccy-color-${clamped}scoops-128x128.png`,
+          },
+        })
+        .catch(() => {
+          /* best-effort */
+        });
     }
   }
 
@@ -920,8 +924,9 @@ export class Layout {
         },
       }),
       fileBrowser: new FileBrowserPanel(fileBrowserContainer, {
-        onRunCommand: (command) => {
-          void this.runFileBrowserCommand(command);
+        onRunCommand: async (command) => {
+          await this.runFileBrowserCommand(command);
+          this.openTerminal();
         },
         onClearFilesystem: () => this.onClearFilesystem?.(),
       }),

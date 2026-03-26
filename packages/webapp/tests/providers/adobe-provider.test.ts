@@ -13,7 +13,9 @@ vi.stubGlobal('localStorage', {
   getItem: (k: string) => storage.get(k) ?? null,
   setItem: (k: string, v: string) => storage.set(k, v),
   removeItem: (k: string) => storage.delete(k),
-  get length() { return storage.size; },
+  get length() {
+    return storage.size;
+  },
   key: (i: number) => [...storage.keys()][i] ?? null,
   clear: () => storage.clear(),
 });
@@ -92,7 +94,8 @@ describe('Token extraction from URL', () => {
   }
 
   it('extracts token from redirect URL fragment', () => {
-    const url = 'https://example.com/callback#access_token=abc123&expires_in=3600&token_type=bearer';
+    const url =
+      'https://example.com/callback#access_token=abc123&expires_in=3600&token_type=bearer';
     const result = extractTokenFromUrl(url);
     expect(result).toEqual({ accessToken: 'abc123', expiresIn: 3600 });
   });
@@ -109,6 +112,77 @@ describe('Token extraction from URL', () => {
     const url = 'https://example.com/callback#access_token=xyz';
     const result = extractTokenFromUrl(url);
     expect(result?.expiresIn).toBe(86400);
+  });
+});
+
+describe('Model metadata survives renewal', () => {
+  beforeEach(() => storage.clear());
+
+  it('persisted models with api field are returned with metadata intact', () => {
+    // Simulates what getModelIds returns from localStorage after enrichModel persisted the data
+    const models = [
+      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', context_window: 1000000 },
+      {
+        id: 'zai-glm-4.7',
+        name: 'GLM 4.7',
+        api: 'openai',
+        context_window: 131072,
+        max_tokens: 40960,
+      },
+    ];
+    localStorage.setItem('slicc-adobe-models', JSON.stringify(models));
+
+    const persisted = JSON.parse(localStorage.getItem('slicc-adobe-models')!);
+    expect(persisted[1].api).toBe('openai');
+    expect(persisted[1].context_window).toBe(131072);
+  });
+
+  it('persisted models WITHOUT api field lose routing info (pre-metadata format)', () => {
+    // Simulates stale localStorage from before metadata changes
+    const models = [
+      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
+      { id: 'zai-glm-4.7', name: 'GLM 4.7' },
+    ];
+    localStorage.setItem('slicc-adobe-models', JSON.stringify(models));
+
+    const persisted = JSON.parse(localStorage.getItem('slicc-adobe-models')!);
+    // No api field — stream router will default to anthropic (wrong for Cerebras)
+    expect(persisted[1].api).toBeUndefined();
+  });
+
+  it('getAdobeModels pattern repopulates metadata after renewal', async () => {
+    // Simulates the fix: after renewal, getAdobeModels is called which
+    // populates proxyMetadataCache AND persists enriched models to localStorage
+    const proxyMetadataCache = new Map<string, { api?: string; context_window?: number }>();
+    const proxyResponse = [
+      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', context_window: 1000000 },
+      { id: 'zai-glm-4.7', name: 'GLM 4.7', api: 'openai', context_window: 131072 },
+    ];
+
+    // Simulate fetchProxyModels populating the cache
+    for (const pm of proxyResponse) {
+      proxyMetadataCache.set(pm.id, { api: (pm as any).api, context_window: pm.context_window });
+    }
+
+    // Simulate enrichModel using the cache
+    const enriched = proxyResponse.map((m) => {
+      const entry: any = { id: m.id, name: m.name };
+      const meta = proxyMetadataCache.get(m.id);
+      if (meta?.api) entry.api = meta.api;
+      if (meta?.context_window !== undefined) entry.context_window = meta.context_window;
+      return entry;
+    });
+
+    // After enrichment, api field is present for Cerebras models
+    expect(enriched[1].api).toBe('openai');
+    expect(enriched[0].api).toBeUndefined(); // Anthropic models don't have explicit api
+
+    // Persist to localStorage (simulates what getModelIds does)
+    localStorage.setItem('slicc-adobe-models', JSON.stringify(enriched));
+
+    // Verify round-trip: models loaded from localStorage retain api field
+    const roundTripped = JSON.parse(localStorage.getItem('slicc-adobe-models')!);
+    expect(roundTripped[1].api).toBe('openai');
   });
 });
 
@@ -161,7 +235,7 @@ describe('Renewal deduplication pattern', () => {
         try {
           callCount++;
           // Simulate async work (network call)
-          await new Promise(r => setTimeout(r, 10));
+          await new Promise((r) => setTimeout(r, 10));
           return 'token-' + callCount;
         } finally {
           renewalInProgress = null;

@@ -32,7 +32,10 @@ export function showSprinklePicker(
 ): void {
   // Toggle: if picker is already open, close it and return
   const existing = document.querySelector('.sprinkle-picker');
-  if (existing) { existing.remove(); return; }
+  if (existing) {
+    existing.remove();
+    return;
+  }
 
   const { registry, callbacks, getAvailableSprinkles } = options;
 

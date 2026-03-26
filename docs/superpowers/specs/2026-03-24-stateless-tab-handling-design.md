@@ -45,13 +45,13 @@ Use CDP `targetId` directly — already unique, stable, and what `BrowserAPI` us
 
 **6 commands do NOT require `--tab`:**
 
-| Command | Reason |
-|---------|--------|
-| `tab-list` | Lists all tabs — reads from Chrome, no tab context needed |
-| `tab-new` / `open` | Creates a new tab, **returns the new targetId** |
-| `tab-select` | Removed (no implicit current tab to select) |
-| `record` | Creates recording — tab-agnostic |
-| `stop-recording` | Stops recording — tab-agnostic |
+| Command            | Reason                                                    |
+| ------------------ | --------------------------------------------------------- |
+| `tab-list`         | Lists all tabs — reads from Chrome, no tab context needed |
+| `tab-new` / `open` | Creates a new tab, **returns the new targetId**           |
+| `tab-select`       | Removed (no implicit current tab to select)               |
+| `record`           | Creates recording — tab-agnostic                          |
+| `stop-recording`   | Stops recording — tab-agnostic                            |
 
 ### `tab-list` Output
 
@@ -77,16 +77,19 @@ Opened https://example.com in new tab [targetId: E9A3F...]
 ### Error Handling
 
 **Invalid/closed tab ID:** If `--tab <id>` points to a tab that no longer exists, the command returns a clear error:
+
 ```
 Error: Tab <id> not found. Run 'playwright-cli tab-list' to see available tabs.
 ```
 
 **Missing `--tab`:** If a command requires `--tab` but it's not provided:
+
 ```
 Error: --tab <targetId> is required. Run 'playwright-cli tab-list' to get tab IDs.
 ```
 
 **Old syntax used:** Index-based or implicit-tab commands produce a helpful migration message:
+
 ```
 Error: Implicit tab selection removed. Use: playwright-cli screenshot --tab <targetId>
 ```
@@ -122,7 +125,9 @@ class BrowserAPI {
 
   async withTab<T>(targetId: string, fn: (sessionId: string) => Promise<T>): Promise<T> {
     let release: () => void;
-    const next = new Promise<void>(r => { release = r; });
+    const next = new Promise<void>((r) => {
+      release = r;
+    });
     const prev = this._lock;
     this._lock = next;
     await prev;
@@ -137,6 +142,7 @@ class BrowserAPI {
 ```
 
 The mutex protects the **entire** attach → operate → (implicit detach on next attach) cycle. This covers:
+
 - Local target attachment (normal tabs)
 - Remote target attachment (tray federation — transport swaps)
 - Session ID and remote target info state
@@ -146,6 +152,7 @@ Each playwright command uses `browser.withTab(targetId, async (session) => { ...
 ### Concurrency Tests
 
 Mutex tests live in `packages/webapp/tests/cdp/browser-api.test.ts`:
+
 - Two concurrent `withTab()` calls with different targetIds serialize correctly
 - The second call waits for the first to complete before attaching
 - If the first call throws, the second still proceeds (mutex releases in `finally`)
@@ -215,6 +222,7 @@ No change to snapshot caching mechanism needed — explicit `--tab` naturally sc
 Update agent instructions for the new tab handling pattern:
 
 **Before:**
+
 ```
 playwright-cli tab-new https://example.com
 playwright-cli screenshot
@@ -223,6 +231,7 @@ playwright-cli click e5
 ```
 
 **After:**
+
 ```
 playwright-cli tab-new https://example.com
 # Output: Opened in new tab [targetId: E9A3F...]
@@ -233,6 +242,7 @@ playwright-cli click --tab E9A3F e5
 ```
 
 Key instructions:
+
 - Always capture the targetId from `tab-new` or `tab-list`
 - Every command that operates on a tab requires `--tab <targetId>`
 - Use `tab-list` to find the active tab (marked `(active)`)
@@ -271,12 +281,14 @@ Key instructions:
 This is a **breaking change** to the playwright command interface.
 
 **What breaks:**
+
 - All agent workflows using implicit current tab (the primary pattern today)
 - All skills using `playwright-cli` without `--tab`
 - Index-based tab operations (`tab-close 2`)
 - `tab-select` command (removed)
 
 **Migration path:**
+
 - Update `packages/vfs-root/shared/CLAUDE.md` (agent system prompt)
 - Update all skills in `packages/vfs-root/workspace/skills/`
 - Old syntax produces helpful error messages pointing to the new syntax
@@ -287,6 +299,7 @@ This is a **breaking change** to the playwright command interface.
 ### Current Gap
 
 `BrowserAPI.createPage()` creates tabs via CDP `Target.createTarget`. In extension mode, this bypasses Chrome's tab grouping hooks — agent-created tabs are NOT added to the "slicc" tab group. Tab grouping currently only works when:
+
 - The debugger client opens a tab (`packages/webapp/src/cdp/debugger-client.ts:250`)
 - The service worker opens a tab (`packages/chrome-extension/src/service-worker.ts:417`)
 

@@ -1,7 +1,10 @@
 import 'fake-indexeddb/auto';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
-import { LeaderSyncManager, type LeaderSyncManagerOptions } from '../../src/scoops/tray-leader-sync.js';
+import {
+  LeaderSyncManager,
+  type LeaderSyncManagerOptions,
+} from '../../src/scoops/tray-leader-sync.js';
 import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
 import type { AgentEvent, ChatMessage } from '../../src/ui/types.js';
 import type {
@@ -430,7 +433,9 @@ describe('LeaderSyncManager', () => {
       const channel = new FakeChannel();
       manager.addFollower('b1', channel);
 
-      manager.setLocalTargets([{ targetId: 'lt1', title: 'Leader Tab', url: 'https://leader.com' }]);
+      manager.setLocalTargets([
+        { targetId: 'lt1', title: 'Leader Tab', url: 'https://leader.com' },
+      ]);
       channel.simulateMessage({
         type: 'targets.advertise',
         targets: [{ targetId: 'tab1', title: 'Remote Tab', url: 'https://example.com' }],
@@ -453,7 +458,9 @@ describe('LeaderSyncManager', () => {
       manager.addFollower('b1', ch1);
       manager.addFollower('b2', ch2);
 
-      manager.setLocalTargets([{ targetId: 'lt1', title: 'Leader Tab', url: 'https://leader.com' }]);
+      manager.setLocalTargets([
+        { targetId: 'lt1', title: 'Leader Tab', url: 'https://leader.com' },
+      ]);
       ch1.simulateMessage({
         type: 'targets.advertise',
         targets: [{ targetId: 'tab1', title: 'Remote Tab', url: 'https://example.com' }],
@@ -503,7 +510,9 @@ describe('LeaderSyncManager', () => {
       const ch1 = new FakeChannel();
       manager.addFollower('b1', ch1);
 
-      manager.setLocalTargets([{ targetId: 'lt1', title: 'Leader Tab', url: 'https://leader.com' }]);
+      manager.setLocalTargets([
+        { targetId: 'lt1', title: 'Leader Tab', url: 'https://leader.com' },
+      ]);
       ch1.simulateMessage({
         type: 'targets.advertise',
         targets: [{ targetId: 'tab1', title: 'Remote Tab', url: 'https://example.com' }],

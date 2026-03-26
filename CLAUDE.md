@@ -6,29 +6,30 @@ This root file is the repo navigation hub. Keep package-specific architecture an
 
 ### Packages
 
-| Path | Purpose |
-| --- | --- |
-| `packages/webapp/` | Browser app core: UI, VFS, shell, CDP, tools, providers, skills, scoops |
-| `packages/chrome-extension/` | Manifest V3 extension entry points, HTML shells, and message bridges |
-| `packages/cloudflare-worker/` | Tray hub worker for session coordination, signaling, and TURN credentials |
-| `packages/node-server/` | Node.js CLI/Electron server: Chrome launch, CDP proxy, dev serving |
-| `packages/vfs-root/` | Default VFS content copied into the app on init/reset |
-| `packages/swift-launcher/` | Native macOS SwiftUI launcher app (`Sliccstart`) |
-| `packages/swift-server/` | Native macOS Hummingbird server (`slicc-server`) |
-| `packages/dev-tools/` | Repo-level tooling guidance for build helpers, QA setup, configs, and test utilities |
-| `packages/assets/` | Shared static files (logos, fonts, favicon) used by multiple packages |
+| Path                          | Purpose                                                                              |
+| ----------------------------- | ------------------------------------------------------------------------------------ |
+| `packages/webapp/`            | Browser app core: UI, VFS, shell, CDP, tools, providers, skills, scoops              |
+| `packages/chrome-extension/`  | Manifest V3 extension entry points, HTML shells, and message bridges                 |
+| `packages/cloudflare-worker/` | Tray hub worker for session coordination, signaling, and TURN credentials            |
+| `packages/node-server/`       | Node.js CLI/Electron server: Chrome launch, CDP proxy, dev serving                   |
+| `packages/vfs-root/`          | Default VFS content copied into the app on init/reset                                |
+| `packages/swift-launcher/`    | Native macOS SwiftUI launcher app (`Sliccstart`)                                     |
+| `packages/swift-server/`      | Native macOS Hummingbird server (`slicc-server`)                                     |
+| `packages/dev-tools/`         | Repo-level tooling guidance for build helpers, QA setup, configs, and test utilities |
+| `packages/assets/`            | Shared static files (logos, fonts, favicon) used by multiple packages                |
 
 ### Other Top-Level Directories
 
-| Path | Purpose |
-| --- | --- |
-| `docs/` | Long-form developer and agent reference docs, including screenshots and other docs assets |
-| `packages/*/tests/` | Per-package TypeScript/Vitest tests mirrored by subsystem |
-| `dist/` | Generated build output; do not hand-edit |
+| Path                | Purpose                                                                                   |
+| ------------------- | ----------------------------------------------------------------------------------------- |
+| `docs/`             | Long-form developer and agent reference docs, including screenshots and other docs assets |
+| `packages/*/tests/` | Per-package TypeScript/Vitest tests mirrored by subsystem                                 |
+| `dist/`             | Generated build output; do not hand-edit                                                  |
 
 ## Top-Level Commands
 
 ```bash
+npm install             # Install dependencies (first time)
 npm run build           # Production build (UI + CLI/Electron)
 npm run test            # Vitest run
 npm run typecheck       # Browser + Node typecheck
@@ -79,8 +80,8 @@ Use the ice cream terms in code review comments and docs when they match the dom
 Multiple standalone SLICC instances can run simultaneously. All ports auto-resolve to avoid conflicts — just override the UI port:
 
 ```bash
-PORT=5720 npm run dev:full   # Second instance on port 5720
-PORT=5730 npm run dev:full   # Third instance on port 5730
+PORT=5720 npm run dev   # Second instance on port 5720
+PORT=5730 npm run dev   # Third instance on port 5730
 ```
 
 Each instance gets an isolated Chrome profile (keyed by port), separate CDP port (auto-detected), and separate HMR port. No shared state between instances.
@@ -201,21 +202,24 @@ Every change must satisfy **tests**, **docs**, and **verification**.
 
 ### Documentation
 
-| Tier | File | Update when... |
-| --- | --- | --- |
-| Public | `README.md` | User-facing behavior changes |
-| Development | `CLAUDE.md` files | Developer conventions, package architecture, build workflows |
-| Agent reference | `docs/` | Detailed tools, commands, and patterns |
+| Tier            | File              | Update when...                                               |
+| --------------- | ----------------- | ------------------------------------------------------------ |
+| Public          | `README.md`       | User-facing behavior changes                                 |
+| Development     | `CLAUDE.md` files | Developer conventions, package architecture, build workflows |
+| Agent reference | `docs/`           | Detailed tools, commands, and patterns                       |
 
 ### Verification
 
 These are the repo's CI gates and the default full verification pass before commit:
 
 ```bash
+npx prettier --write <changed-files>   # Format FIRST — CI fails on unformatted code
 npm run typecheck
 npm run test
 npm run build
-npm run build:extension
+npm run build -w @slicc/chrome-extension
 ```
 
-CI runs the same four gates in `.github/workflows/ci.yml`.
+**Always run Prettier before committing.** CI runs `npx prettier --check .` as a lint gate and will reject unformatted code. Run `npx prettier --write <files>` on every file you touch. This is the most common CI failure — don't skip it.
+
+CI runs these gates in `.github/workflows/ci.yml`.

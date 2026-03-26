@@ -1080,8 +1080,20 @@ describe('model metadata overrides', () => {
     mockGetModels.mockImplementation((providerId: string) => {
       if (providerId === 'anthropic') {
         return [
-          { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', contextWindow: 200000, maxTokens: 16384, reasoning: true },
-          { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', contextWindow: 200000, maxTokens: 16384, reasoning: true },
+          {
+            id: 'claude-opus-4-6',
+            name: 'Claude Opus 4.6',
+            contextWindow: 200000,
+            maxTokens: 16384,
+            reasoning: true,
+          },
+          {
+            id: 'claude-sonnet-4-6',
+            name: 'Claude Sonnet 4.6',
+            contextWindow: 200000,
+            maxTokens: 16384,
+            reasoning: true,
+          },
         ];
       }
       return [];
@@ -1099,7 +1111,12 @@ describe('model metadata overrides', () => {
       requiresApiKey: false,
       requiresBaseUrl: false,
       getModelIds: () => [
-        { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', context_window: 1000000, max_tokens: 128000 },
+        {
+          id: 'claude-opus-4-6',
+          name: 'Claude Opus 4.6',
+          context_window: 1000000,
+          max_tokens: 128000,
+        },
       ],
     });
     mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
@@ -1121,7 +1138,15 @@ describe('model metadata overrides', () => {
       requiresApiKey: false,
       requiresBaseUrl: false,
       getModelIds: () => [
-        { id: 'zai-glm-4.7', name: 'GLM 4.7', api: 'openai', context_window: 131072, max_tokens: 40960, reasoning: true, input: ['text'] },
+        {
+          id: 'zai-glm-4.7',
+          name: 'GLM 4.7',
+          api: 'openai',
+          context_window: 131072,
+          max_tokens: 40960,
+          reasoning: true,
+          input: ['text'],
+        },
       ],
     });
     mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
@@ -1152,8 +1177,8 @@ describe('model metadata overrides', () => {
     mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
 
     const models = getProviderModels('test-proxy');
-    const glm = models.find(m => m.id === 'zai-glm-4.7')!;
-    const opus = models.find(m => m.id === 'claude-opus-4-6')!;
+    const glm = models.find((m) => m.id === 'zai-glm-4.7')!;
+    const opus = models.find((m) => m.id === 'claude-opus-4-6')!;
     expect(String(glm.api)).toContain('openai');
     expect(String(opus.api)).toContain('anthropic');
   });
@@ -1176,11 +1201,11 @@ describe('model metadata overrides', () => {
     mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
 
     const models = getProviderModels('custom-oauth');
-    const opus = models.find(m => m.id === 'claude-opus-4-6');
+    const opus = models.find((m) => m.id === 'claude-opus-4-6');
     expect(opus).toBeDefined();
     expect(opus!.contextWindow).toBe(500000);
     // Unaffected model keeps defaults
-    const sonnet = models.find(m => m.id === 'claude-sonnet-4-6');
+    const sonnet = models.find((m) => m.id === 'claude-sonnet-4-6');
     expect(sonnet!.contextWindow).toBe(200000);
   });
 
@@ -1218,9 +1243,7 @@ describe('model metadata overrides', () => {
       description: '',
       requiresApiKey: false,
       requiresBaseUrl: false,
-      getModelIds: () => [
-        { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
-      ],
+      getModelIds: () => [{ id: 'claude-opus-4-6', name: 'Claude Opus 4.6' }],
     });
     mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
 

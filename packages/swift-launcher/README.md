@@ -11,10 +11,19 @@ launches them with SLICC attached.
 
 ## Quick Start
 
+### Prerequisites
+
+Before building the launcher, ensure these are built from the repo root:
+
+- `npm run build -w @slicc/webapp` (produces `dist/ui`)
+- `cd packages/swift-server && swift build -c release` (produces the server binary)
+
+Or simply run `npm run build` from the repo root, which builds everything in the correct order.
+
 ```bash
 # Build the .app bundle
 cd packages/swift-launcher
-./build-app.sh
+npm run build
 
 # Strip quarantine (unsigned app)
 xattr -cr build/Sliccstart.app
@@ -24,6 +33,7 @@ open build/Sliccstart.app
 ```
 
 Optionally install to Applications:
+
 ```bash
 cp -r build/Sliccstart.app /Applications/
 ```
@@ -60,21 +70,21 @@ and build the native server: `cd packages/swift-server && swift build`
 
 Sliccstart is a thin GUI. All SLICC intelligence stays in TypeScript:
 
-| Action | What Sliccstart runs |
-|--------|---------------------|
-| Launch browser | `node dist/node-server/index.js --cdp-port=9222` with `CHROME_PATH` env (port 5710) |
-| Launch Electron | `node dist/node-server/index.js --electron /path/to/app --kill` (port 5711+) |
-| Get extension | Opens Chrome Web Store listing in Chrome |
-| Update | `git pull && npm install && npm run build` |
+| Action          | What Sliccstart runs                                                                |
+| --------------- | ----------------------------------------------------------------------------------- |
+| Launch browser  | `node dist/node-server/index.js --cdp-port=9222` with `CHROME_PATH` env (port 5710) |
+| Launch Electron | `node dist/node-server/index.js --electron /path/to/app --kill` (port 5711+)        |
+| Get extension   | Opens Chrome Web Store listing in Chrome                                            |
+| Update          | `git pull && npm install && npm run build`                                          |
 
 Each browser/Electron instance gets its own port (5710 for browser, 5711+ for
 Electron apps), so you can run multiple apps simultaneously.
 
 ## Ports
 
-| Port | Purpose |
-|------|---------|
-| 5710 | Browser standalone mode |
+| Port  | Purpose                                |
+| ----- | -------------------------------------- |
+| 5710  | Browser standalone mode                |
 | 5711+ | Electron app instances (auto-assigned) |
-| 9222 | Chrome CDP (browser mode) |
-| 9223+ | Electron CDP (auto-assigned) |
+| 9222  | Chrome CDP (browser mode)              |
+| 9223+ | Electron CDP (auto-assigned)           |

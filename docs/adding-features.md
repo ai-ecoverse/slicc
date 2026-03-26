@@ -9,6 +9,7 @@ Agent-first, implementation-focused guide to extending SLICC. Each guide shows e
 **When**: To register a new bash command (e.g., `convert`, `webhook`, `crontask`).
 
 **Files to modify**:
+
 - Create: `packages/webapp/src/shell/supplemental-commands/my-command.ts`
 - Modify: `packages/webapp/src/shell/supplemental-commands/index.ts`
 
@@ -118,6 +119,7 @@ describe('my-command', () => {
 **When**: To ship executable scripts as part of a skill (e.g., a custom build tool, data processor).
 
 **Files to create**:
+
 - Create: `packages/vfs-root/workspace/skills/my-skill/my-script.jsh`
 
 **Implementation**:
@@ -156,13 +158,13 @@ const inputFile = args[0];
 
 **Globals API**:
 
-| Global | Methods |
-|--------|---------|
-| `process` | `argv[]`, `env` (object), `cwd()`, `exit(code)`, `stdout.write()`, `stderr.write()` |
-| `console` | `log()`, `info()`, `warn()`, `error()` |
-| `fs` | `readFile(path)`, `readFileBinary(path)`, `writeFile(path, content)`, `writeFileBinary(path, bytes)`, `readDir(path)`, `mkdir(path)`, `rm(path)`, `stat(path)`, `exists(path)`, `fetchToFile(url, path)` |
-| `require(id)` | ❌ Not supported (throws error) |
-| `module`, `exports` | Available for ES module pattern |
+| Global              | Methods                                                                                                                                                                                                  |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `process`           | `argv[]`, `env` (object), `cwd()`, `exit(code)`, `stdout.write()`, `stderr.write()`                                                                                                                      |
+| `console`           | `log()`, `info()`, `warn()`, `error()`                                                                                                                                                                   |
+| `fs`                | `readFile(path)`, `readFileBinary(path)`, `writeFile(path, content)`, `writeFileBinary(path, bytes)`, `readDir(path)`, `mkdir(path)`, `rm(path)`, `stat(path)`, `exists(path)`, `fetchToFile(url, path)` |
+| `require(id)`       | ❌ Not supported (throws error)                                                                                                                                                                          |
+| `module`, `exports` | Available for ES module pattern                                                                                                                                                                          |
 
 **Discovery**:
 
@@ -173,6 +175,7 @@ my-script arg1 arg2
 ```
 
 Execution modes:
+
 - **CLI mode**: Uses `AsyncFunction` constructor, full Node.js-like globals
 - **Extension mode**: Routes through sandbox iframe (CSP-compliant), via postMessage for VFS operations
 
@@ -212,6 +215,7 @@ describe('my-script.jsh', () => {
 **When**: To add a tool available to the agent (e.g., a new `read_database` tool).
 
 **Files to create/modify**:
+
 - Create: `packages/webapp/src/tools/my-tool.ts`
 - Modify: `packages/webapp/src/scoops/scoop-context.ts` (wiring)
 
@@ -328,6 +332,7 @@ describe('my_tool', () => {
 **When**: To add or change browser automation behavior, tab workflows, or preview-serving commands.
 
 **Files to modify**:
+
 - Modify: `packages/webapp/src/shell/supplemental-commands/playwright-command.ts`
 - Modify: `packages/webapp/src/shell/supplemental-commands/serve-command.ts`
 - Modify: `packages/webapp/src/shell/supplemental-commands/shared.ts` (shared preview/path helpers)
@@ -355,6 +360,7 @@ describe('my_tool', () => {
 **When**: To add a messaging or multi-scoop management tool.
 
 **Files to modify**:
+
 - Modify: `packages/webapp/src/scoops/scoop-management-tools.ts`
 
 **Implementation**:
@@ -465,7 +471,7 @@ describe('my_special_tool', () => {
       // ... other config ...
     });
 
-    const tool = tools.find(t => t.name === 'my_special_tool');
+    const tool = tools.find((t) => t.name === 'my_special_tool');
     expect(tool).toBeDefined();
     const result = await tool!.execute({ param1: 'test' });
     expect(result.content).toContain('result');
@@ -482,6 +488,7 @@ describe('my_special_tool', () => {
 **When**: To add a new tab or section in the UI (e.g., a settings panel, network monitor).
 
 **Files to create/modify**:
+
 - Create: `packages/webapp/src/ui/my-panel.ts`
 - Modify: `packages/webapp/src/ui/layout.ts`, `packages/webapp/src/ui/main.ts`
 
@@ -642,6 +649,7 @@ describe('MyPanel', () => {
 **When**: To ship reusable agent instructions as a markdown file.
 
 **Files to create**:
+
 - Create: `packages/vfs-root/workspace/skills/my-skill/SKILL.md`
 - Optional: `packages/vfs-root/workspace/skills/my-skill/helper.jsh` (executable script)
 
@@ -665,6 +673,7 @@ You are an expert in [domain]. Your role is to [responsibility].
 ## Example
 
 When the user asks for X, follow this approach:
+
 - Step 1: [description]
 - Step 2: [description]
 - Step 3: [description]
@@ -674,6 +683,7 @@ Use the `bash` tool to run commands. Use `read_file` to inspect files.
 ## Output Format
 
 Always provide:
+
 - A brief summary
 - Code blocks (when applicable)
 - Relevant file paths
@@ -737,6 +747,7 @@ describe('loadSkills', () => {
 ## 8. Add a Provider
 
 Providers come from three sources:
+
 - **Pi-ai auto-discovery**: `getProviders()` returns all pi-ai providers automatically — no files needed. Filtered by `packages/dev-tools/providers.build.json` (`include: ["*"]` = all, `exclude: ["*"]` = none).
 - **Built-in extensions**: `packages/webapp/src/providers/built-in/*.ts` — only for providers needing custom `register()` functions (e.g., bedrock-camp). Also filtered by `packages/dev-tools/providers.build.json`.
 - **External**: `packages/webapp/providers/*.ts` (gitignored within the webapp package) — always included, never filtered. For custom OAuth providers, corporate proxies, etc. Some providers (e.g., `adobe.ts`) are explicitly un-gitignored and tracked in version control.
@@ -780,6 +791,7 @@ External providers in `packages/webapp/providers/` are always included (never fi
 **When**: To support a provider that authenticates via OAuth (implicit grant or PKCE) — typically a corporate LLM proxy behind SSO.
 
 **Files to create**:
+
 - `packages/webapp/providers/my-corp.ts` (external, gitignored)
 - `packages/webapp/providers/my-corp-config.json` (optional, for client ID / endpoints)
 
@@ -796,9 +808,16 @@ const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?
 
 // Load config from a gitignored JSON file
 const configFiles = import.meta.glob('/packages/webapp/providers/my-corp-config.json', {
-  eager: true, import: 'default',
-}) as Record<string, { clientId: string; proxyEndpoint: string; redirectUri?: string; extensionRedirectUri?: string }>;
-const corpConfig = configFiles['/packages/webapp/providers/my-corp-config.json'] ?? { clientId: '', proxyEndpoint: '' };
+  eager: true,
+  import: 'default',
+}) as Record<
+  string,
+  { clientId: string; proxyEndpoint: string; redirectUri?: string; extensionRedirectUri?: string }
+>;
+const corpConfig = configFiles['/packages/webapp/providers/my-corp-config.json'] ?? {
+  clientId: '',
+  proxyEndpoint: '',
+};
 
 export const config: ProviderConfig = {
   id: 'my-corp',
@@ -811,7 +830,8 @@ export const config: ProviderConfig = {
   onOAuthLogin: async (launcher: OAuthLauncher, onSuccess: () => void) => {
     // Build the redirect URI based on runtime
     const redirectUri = isExtension
-      ? (corpConfig.extensionRedirectUri ?? `https://${(chrome as any).runtime.id}.chromiumapp.org/`)
+      ? (corpConfig.extensionRedirectUri ??
+        `https://${(chrome as any).runtime.id}.chromiumapp.org/`)
       : (corpConfig.redirectUri ?? `${window.location.origin}/auth/callback`);
 
     const params = new URLSearchParams({
@@ -865,9 +885,16 @@ export function register(): void {
   registerApiProvider({
     api: 'my-corp-anthropic' as Api,
     stream: (model: Model<Api>, context: Context, options: any = {}) => {
-      const account = getAccounts().find(a => a.providerId === 'my-corp');
-      const proxyModel = { ...model, baseUrl: corpConfig.proxyEndpoint, api: 'anthropic-messages' as Api };
-      return streamAnthropic(proxyModel as any, context, { ...options, apiKey: account?.accessToken });
+      const account = getAccounts().find((a) => a.providerId === 'my-corp');
+      const proxyModel = {
+        ...model,
+        baseUrl: corpConfig.proxyEndpoint,
+        api: 'anthropic-messages' as Api,
+      };
+      return streamAnthropic(proxyModel as any, context, {
+        ...options,
+        apiKey: account?.accessToken,
+      });
     },
   });
 }
@@ -885,6 +912,7 @@ export function register(): void {
 6. `onSuccess()` re-renders the accounts list showing the logged-in state
 
 **Key files**:
+
 - `packages/webapp/src/providers/types.ts` — `ProviderConfig` (with `onOAuthLogin`, `onOAuthLogout`), `OAuthLauncher` type
 - `packages/webapp/src/providers/oauth-service.ts` — `createOAuthLauncher()` factory (CLI popup vs extension chrome.identity)
 - `packages/webapp/src/ui/provider-settings.ts` — Calls `config.onOAuthLogin(launcher, onSuccess)` when login button clicked
@@ -893,9 +921,9 @@ export function register(): void {
 
 **Dual-mode redirect URIs**:
 
-| Mode | Redirect URI | Registration |
-|------|-------------|-------------|
-| CLI | `http://localhost:5710/auth/callback` | Register with your OAuth provider/IdP |
+| Mode      | Redirect URI                              | Registration                          |
+| --------- | ----------------------------------------- | ------------------------------------- |
+| CLI       | `http://localhost:5710/auth/callback`     | Register with your OAuth provider/IdP |
 | Extension | `https://<extension-id>.chromiumapp.org/` | Register with your OAuth provider/IdP |
 
 **Type**:
@@ -908,7 +936,7 @@ interface ProviderConfig {
   requiresApiKey: boolean;
   apiKeyPlaceholder?: string;
   apiKeyEnvVar?: string;
-  requiresBaseUrl: boolean;      // shown for non-OAuth; also shown for OAuth providers when true
+  requiresBaseUrl: boolean; // shown for non-OAuth; also shown for OAuth providers when true
   baseUrlPlaceholder?: string;
   baseUrlDescription?: string;
   isOAuth?: boolean;
@@ -922,11 +950,11 @@ interface ProviderConfig {
 
 /** Wire format for model capabilities (snake_case, merged into camelCase Model objects). */
 interface ModelMetadata {
-  api?: 'anthropic' | 'openai';    // stream function routing
-  context_window?: number;          // context window in tokens
-  max_tokens?: number;              // max output tokens
-  reasoning?: boolean;              // supports thinking/reasoning
-  input?: string[];                 // input modalities (['text', 'image'])
+  api?: 'anthropic' | 'openai'; // stream function routing
+  context_window?: number; // context window in tokens
+  max_tokens?: number; // max output tokens
+  reasoning?: boolean; // supports thinking/reasoning
+  input?: string[]; // input modalities (['text', 'image'])
 }
 
 type OAuthLauncher = (authorizeUrl: string) => Promise<string | null>;
@@ -970,7 +998,7 @@ When adding a feature:
 
 - [ ] Core logic implemented with error handling
 - [ ] Test file in `packages/*/tests/` mirroring the `src/` structure
-- [ ] Pure-logic tests added (avoid DOM/chrome.* testing in vitest unless necessary)
+- [ ] Pure-logic tests added (avoid DOM/chrome.\* testing in vitest unless necessary)
 - [ ] Extension mode compatibility verified (CSP, chrome.runtime.getURL, sandbox iframe if needed)
 - [ ] Dual-mode tested (CLI + extension)
 - [ ] Logging added (`createLogger('namespace')`)
@@ -988,9 +1016,6 @@ npm run typecheck
 # Run tests
 npm run test
 
-# Watch mode for TDD
-npm run test:watch
-
 # Standalone dev
 npm run dev:full
 
@@ -1006,6 +1031,7 @@ npm run build:extension
 **When**: A shell command or tool needs user interaction before proceeding (e.g., permission approval, file picker, form input). Tool UI solves the "user gesture" problem — browser APIs like `showDirectoryPicker()` require a user click, but agent-driven tool calls have no gesture context.
 
 **Files to modify**:
+
 - Your command file (e.g., `packages/webapp/src/fs/mount-commands.ts`)
 - Import from: `packages/webapp/src/tools/tool-ui.ts`
 
@@ -1024,7 +1050,7 @@ import { getToolExecutionContext, showToolUIFromContext } from '../tools/tool-ui
 async function execute(args: string[]): Promise<ShellResult> {
   // Check if running in agent context (no user gesture)
   const toolContext = getToolExecutionContext();
-  
+
   if (toolContext) {
     // Agent-driven: show approval UI
     const result = await showToolUIFromContext({
@@ -1050,7 +1076,7 @@ async function execute(args: string[]): Promise<ShellResult> {
         return { approved: false };
       },
     });
-    
+
     if (!result?.approved) {
       return { stdout: '', stderr: 'User denied', exitCode: 1 };
     }

@@ -3,16 +3,20 @@
 Use these CSS classes in `.shtml` sprinkles. Do NOT write custom CSS — these components cover all common UI patterns.
 
 ## Cards
+
 `.sprinkle-card` — Card with shadow (hover elevates).
 `.sprinkle-stat-card` — Stat card with `.value` + `.label` children.
 
 ## Action Card (Inline)
+
 `.sprinkle-action-card` — Compact card with background and border for inline chat interactions (` ```shtml ` blocks). Children:
+
 - `__header` — Bold title row. Put a `.sprinkle-badge` inside for status (auto right-aligned).
 - `__body` — Secondary-color description text.
 - `__actions` — Right-aligned button row with top border separator.
 
 All three children are optional. Minimal card (just actions):
+
 ```html
 <div class="sprinkle-action-card">
   <div class="sprinkle-action-card__actions">
@@ -22,6 +26,7 @@ All three children are optional. Minimal card (just actions):
 ```
 
 Use existing `.sprinkle-*` components inside the body:
+
 ```html
 <div class="sprinkle-action-card">
   <div class="sprinkle-action-card__header">Build status</div>
@@ -37,6 +42,7 @@ Use existing `.sprinkle-*` components inside the body:
 ```
 
 Full card with all sections:
+
 ```html
 <div class="sprinkle-action-card">
   <div class="sprinkle-action-card__header">
@@ -45,26 +51,39 @@ Full card with all sections:
   </div>
   <div class="sprinkle-action-card__body">Description</div>
   <div class="sprinkle-action-card__actions">
-    <button class="sprinkle-btn sprinkle-btn--secondary" onclick="slicc.lick('cancel')">Cancel</button>
-    <button class="sprinkle-btn sprinkle-btn--primary" onclick="slicc.lick({action:'confirm',data:{id:1}})">Confirm</button>
+    <button class="sprinkle-btn sprinkle-btn--secondary" onclick="slicc.lick('cancel')">
+      Cancel
+    </button>
+    <button
+      class="sprinkle-btn sprinkle-btn--primary"
+      onclick="slicc.lick({action:'confirm',data:{id:1}})"
+    >
+      Confirm
+    </button>
   </div>
 </div>
 ```
 
 ## Table
+
 `.sprinkle-table` — Table with bold headers (no uppercase!), row hover, row dividers.
 
 ## Badges
+
 `.sprinkle-badge` — Bold solid-fill badges.
+
 - Color variants: `--positive`, `--negative`, `--notice`, `--informative`, `--accent`
 - Styles: `--subtle` (tinted bg), `--outline` (stroke)
 - Combine: `sprinkle-badge sprinkle-badge--subtle sprinkle-badge--positive`
 
 ## Status Light
+
 `.sprinkle-status-light` — Dot + label. Variants: `--positive`/`--negative`/`--notice`/`--informative`.
 
 ## Buttons
+
 `.sprinkle-btn` — Pill-rounded buttons.
+
 - `--primary` — accent fill (CTA)
 - `--secondary` — outline with hover
 - `--negative` — red fill (destructive)
@@ -73,24 +92,30 @@ Full card with all sections:
 `.sprinkle-btn-group` — Gap-spaced button group (each button keeps pill shape).
 
 ## Text Field
+
 `.sprinkle-text-field` — Styled text input. Use on `<input type="text">`. Supports hover/focus states, placeholder styling. Combine with `.sprinkle-row` for inline input + button layouts:
+
 ```html
 <div class="sprinkle-row">
-  <input type="text" class="sprinkle-text-field" style="flex:1" placeholder="https://example.com">
+  <input type="text" class="sprinkle-text-field" style="flex:1" placeholder="https://example.com" />
   <button class="sprinkle-btn sprinkle-btn--primary">Go</button>
 </div>
 ```
 
 ## Progress Bar
+
 `.sprinkle-progress-bar` — Two modes:
 
 **Simple** (no label):
+
 ```html
 <div class="sprinkle-progress-bar" style="--progress: 75%"></div>
 ```
+
 Auto-fills via `::after` pseudo-element. No children needed.
 
 **With label**:
+
 ```html
 <div class="sprinkle-progress-bar">
   <div class="sprinkle-progress-bar__header">
@@ -102,23 +127,28 @@ Auto-fills via `::after` pseudo-element. No children needed.
   </div>
 </div>
 ```
+
 The `.fill` child accepts inline `style="width: 75%"` or `data-value="75"`. Alternatively, omit `.fill` and set `--progress` on the container.
 
 **Color variants** on container: `--positive` (green), `--negative` (red), `--notice` (orange), `--informative` (blue).
 Inline `--fill-color` overrides the variant color.
 
 ## Meter
+
 `.sprinkle-meter` — Same structure as progress bar but uses `.sprinkle-meter`, `__header`/`__track`.
 
 **Simple**:
+
 ```html
 <div class="sprinkle-meter" style="--value: 50%"></div>
 ```
+
 Accepts `--value` or `--progress` for fill width.
 
 **Variants**: `--positive`/`--notice`/`--negative` on container. Default color: informative (blue).
 
 ## Layout — Basic
+
 `.sprinkle-grid` — Auto-fit responsive grid.
 `.sprinkle-stack` — Vertical stack with gap.
 `.sprinkle-row` — Horizontal flex row, centered.
@@ -130,7 +160,9 @@ Accepts `--value` or `--progress` for fill width.
 ## Layout — Advanced (Fragment & Full-Doc)
 
 ### Sidebar
+
 `.sprinkle-sidebar` — Two-column layout: fixed nav + flexible main.
+
 ```html
 <div class="sprinkle-sidebar">
   <nav class="sprinkle-sidebar__nav">
@@ -145,7 +177,9 @@ Accepts `--value` or `--progress` for fill width.
 ```
 
 ### Split Pane
+
 `.sprinkle-split` — Equal horizontal split. Add `--vertical` for stacked.
+
 ```html
 <div class="sprinkle-split">
   <div>Left / Top pane</div>
@@ -154,20 +188,28 @@ Accepts `--value` or `--progress` for fill width.
 ```
 
 ### Toolbar
+
 `.sprinkle-toolbar` — Horizontal action bar with start/center/end slots.
+
 ```html
 <div class="sprinkle-toolbar">
   <div class="sprinkle-toolbar__start"><button class="sprinkle-btn">Back</button></div>
   <div class="sprinkle-toolbar__center"><strong>Title</strong></div>
-  <div class="sprinkle-toolbar__end"><button class="sprinkle-btn sprinkle-btn--primary">Save</button></div>
+  <div class="sprinkle-toolbar__end">
+    <button class="sprinkle-btn sprinkle-btn--primary">Save</button>
+  </div>
 </div>
 ```
 
 ### Tabs
+
 `.sprinkle-tabs` — Tab bar with panels.
+
 ```html
 <div class="sprinkle-tabs">
-  <button class="sprinkle-tabs__tab sprinkle-tabs__tab--active" onclick="switchTab(0)">Tab 1</button>
+  <button class="sprinkle-tabs__tab sprinkle-tabs__tab--active" onclick="switchTab(0)">
+    Tab 1
+  </button>
   <button class="sprinkle-tabs__tab" onclick="switchTab(1)">Tab 2</button>
 </div>
 <div class="sprinkle-tabs__panel sprinkle-tabs__panel--active">Content 1</div>
@@ -175,7 +217,9 @@ Accepts `--value` or `--progress` for fill width.
 ```
 
 ### Dialog / Modal
+
 `.sprinkle-dialog` — Overlay dialog. Use `hidden` attribute to hide.
+
 ```html
 <div class="sprinkle-dialog" hidden id="myDialog">
   <div class="sprinkle-dialog__backdrop" onclick="closeDialog()"></div>
@@ -194,21 +238,26 @@ Accepts `--value` or `--progress` for fill width.
 ```
 
 ### Collapsible
+
 `.sprinkle-collapsible` — Expandable section. Add `--open` class to expand.
+
 ```html
 <div class="sprinkle-collapsible sprinkle-collapsible--open">
-  <button class="sprinkle-collapsible__header" onclick="this.parentElement.classList.toggle('sprinkle-collapsible--open')">
+  <button
+    class="sprinkle-collapsible__header"
+    onclick="this.parentElement.classList.toggle('sprinkle-collapsible--open')"
+  >
     <span class="sprinkle-collapsible__chevron"></span>
     Section Title
   </button>
-  <div class="sprinkle-collapsible__body">
-    Expandable content here.
-  </div>
+  <div class="sprinkle-collapsible__body">Expandable content here.</div>
 </div>
 ```
 
 ### Canvas / SVG Container
+
 `.sprinkle-canvas` — Container for canvas or SVG. Aspect ratio modifiers: `--16x9`, `--4x3`, `--1x1`.
+
 ```html
 <div class="sprinkle-canvas sprinkle-canvas--16x9">
   <svg viewBox="0 0 800 450"><!-- chart --></svg>
@@ -216,14 +265,18 @@ Accepts `--value` or `--progress` for fill width.
 ```
 
 ### Container Queries
+
 Wrap content in `.sprinkle-panel` for responsive container queries:
+
 - Below 400px: sidebar stacks vertically, grids go single-column, splits stack, toolbar wraps
 - Above 600px: sidebar nav at 240px, grids use auto-fit minmax(180px, 1fr)
 
 ## Key-Value List
+
 `.sprinkle-kv-list` — Key-value pairs. Use `<dl>` with `<dt>`/`<dd>` (preferred) or `<ul>` with `<li>` containing `.key`/`.value` spans. The `<dl>` variant renders as a two-column grid with labels left, values right-aligned bold.
 
 ## Empty State
+
 `.sprinkle-empty-state` — Centered empty state messaging.
 
 ---
@@ -233,42 +286,54 @@ Wrap content in `.sprinkle-panel` for responsive container queries:
 Sprinkles can send multiple distinct actions via `slicc.lick()`. The cone routes each action to the owning scoop.
 
 **Button with action + data**:
+
 ```html
-<button class="sprinkle-btn sprinkle-btn--primary"
-  onclick="slicc.lick({action: 'save-section', data: {id: 'hero', content: getContent()}})">
+<button
+  class="sprinkle-btn sprinkle-btn--primary"
+  onclick="slicc.lick({action: 'save-section', data: {id: 'hero', content: getContent()}})"
+>
   Save
 </button>
 ```
 
 **Toolbar with multiple actions**:
+
 ```html
 <div class="sprinkle-toolbar">
   <div class="sprinkle-toolbar__start">
     <button class="sprinkle-btn" onclick="slicc.lick({action: 'run-audit'})">Run Audit</button>
   </div>
   <div class="sprinkle-toolbar__end">
-    <button class="sprinkle-btn sprinkle-btn--secondary" onclick="slicc.lick({action: 'export-report'})">Export</button>
-    <button class="sprinkle-btn sprinkle-btn--primary" onclick="slicc.lick({action: 'fix-all'})">Fix All</button>
+    <button
+      class="sprinkle-btn sprinkle-btn--secondary"
+      onclick="slicc.lick({action: 'export-report'})"
+    >
+      Export
+    </button>
+    <button class="sprinkle-btn sprinkle-btn--primary" onclick="slicc.lick({action: 'fix-all'})">
+      Fix All
+    </button>
   </div>
 </div>
 ```
 
 **Handling updates from the agent**:
+
 ```html
 <script>
-slicc.on('update', function(data) {
-  if (data.type === 'audit-results') {
-    renderResults(data.results);
-  } else if (data.type === 'status') {
-    document.getElementById('status').textContent = data.message;
-  }
-});
+  slicc.on('update', function (data) {
+    if (data.type === 'audit-results') {
+      renderResults(data.results);
+    } else if (data.type === 'status') {
+      document.getElementById('status').textContent = data.message;
+    }
+  });
 
-// Restore state on reopen
-var saved = slicc.getState();
-if (saved) {
-  renderResults(saved.results);
-}
+  // Restore state on reopen
+  var saved = slicc.getState();
+  if (saved) {
+    renderResults(saved.results);
+  }
 </script>
 ```
 
@@ -302,9 +367,18 @@ Panels should look like professional tools, not chatbot output. Follow these rul
 
   <!-- Top-level KPIs -->
   <div class="sprinkle-grid">
-    <div class="sprinkle-stat-card"><div class="value">A</div><div class="label">Grade</div></div>
-    <div class="sprinkle-stat-card"><div class="value">12</div><div class="label">Passed</div></div>
-    <div class="sprinkle-stat-card"><div class="value">0</div><div class="label">Issues</div></div>
+    <div class="sprinkle-stat-card">
+      <div class="value">A</div>
+      <div class="label">Grade</div>
+    </div>
+    <div class="sprinkle-stat-card">
+      <div class="value">12</div>
+      <div class="label">Passed</div>
+    </div>
+    <div class="sprinkle-stat-card">
+      <div class="value">0</div>
+      <div class="label">Issues</div>
+    </div>
   </div>
 
   <div class="sprinkle-divider"></div>
@@ -312,15 +386,20 @@ Panels should look like professional tools, not chatbot output. Follow these rul
   <!-- Findings table with severity badges -->
   <h3 class="sprinkle-body" style="font-weight:600">Issues</h3>
   <table class="sprinkle-table">
-    <thead><tr><th>Severity</th><th>Finding</th></tr></thead>
+    <thead>
+      <tr>
+        <th>Severity</th>
+        <th>Finding</th>
+      </tr>
+    </thead>
     <tbody>
       <tr>
         <td><span class="sprinkle-badge sprinkle-badge--negative">Critical</span></td>
-        <td><strong>Title</strong><br><span class="sprinkle-detail">Description</span></td>
+        <td><strong>Title</strong><br /><span class="sprinkle-detail">Description</span></td>
       </tr>
       <tr>
         <td><span class="sprinkle-badge sprinkle-badge--notice">Warning</span></td>
-        <td><strong>Title</strong><br><span class="sprinkle-detail">Description</span></td>
+        <td><strong>Title</strong><br /><span class="sprinkle-detail">Description</span></td>
       </tr>
     </tbody>
   </table>
@@ -330,9 +409,17 @@ Panels should look like professional tools, not chatbot output. Follow these rul
   <!-- Passed checks with status lights -->
   <h3 class="sprinkle-body" style="font-weight:600">Passed checks</h3>
   <table class="sprinkle-table">
-    <thead><tr><th>Status</th><th>Check</th></tr></thead>
+    <thead>
+      <tr>
+        <th>Status</th>
+        <th>Check</th>
+      </tr>
+    </thead>
     <tbody>
-      <tr><td><span class="sprinkle-status-light sprinkle-status-light--positive">Pass</span></td><td>Check description</td></tr>
+      <tr>
+        <td><span class="sprinkle-status-light sprinkle-status-light--positive">Pass</span></td>
+        <td>Check description</td>
+      </tr>
     </tbody>
   </table>
 
@@ -341,10 +428,13 @@ Panels should look like professional tools, not chatbot output. Follow these rul
   <!-- Stats as key-value list -->
   <h3 class="sprinkle-body" style="font-weight:600">Stats</h3>
   <dl class="sprinkle-kv-list">
-    <dt>Metric</dt><dd>Value</dd>
+    <dt>Metric</dt>
+    <dd>Value</dd>
   </dl>
 
-  <p class="sprinkle-detail" style="text-align:center;margin-top:var(--s2-spacing-200)">Footer note</p>
+  <p class="sprinkle-detail" style="text-align:center;margin-top:var(--s2-spacing-200)">
+    Footer note
+  </p>
 </div>
 ```
 
@@ -359,11 +449,13 @@ Built-in sprinkles ship at `/shared/sprinkles/`. They are full-document HTML app
 Every built-in sprinkle has three view states: **empty** (URL input form), **loading** (spinner), and **ready** (full UI). The scoop controls transitions via `sprinkle send`:
 
 1. **Immediately after opening**, push analyzing status so the user sees progress:
+
    ```bash
    sprinkle send <name> '{"status":"analyzing","url":"https://example.com"}'
    ```
 
 2. **When analysis is complete**, push data in the format specified by the DATA CONTRACT:
+
    ```bash
    sprinkle send <name> '{"content":"...","rules":{...}}'
    ```
@@ -445,7 +537,7 @@ sprinkle send <sprinkle-name> '{"action":"fix-error","message":"Cannot apply —
 Sprinkles handle these update actions:
 
 ```javascript
-slicc.on('update', function(data) {
+slicc.on('update', function (data) {
   if (data.action === 'fix-applied') {
     // Update local data with confirmed value, then show toast
     applyFixToLocal(data.pageIndex, data.category, data.value);
@@ -464,50 +556,57 @@ slicc.on('update', function(data) {
 Full-document sprinkles (`.shtml`) inherit S2 CSS custom properties from the parent page. Always use tokens — never hardcode hex values.
 
 ### Border Radius
-| Token | Value | Usage |
-|-------|-------|-------|
-| `--s2-radius-s` | 4px | Checkboxes, in-field buttons |
-| `--s2-radius-default` | 8px | Most components, inputs, small cards |
-| `--s2-radius-l` | 10px | Cards, panels, action boxes |
-| `--s2-radius-xl` | 16px | Dialogs, modals, wells |
-| `--s2-radius-pill` | 9999px | **Buttons**, badges, avatars, tags |
+
+| Token                 | Value  | Usage                                |
+| --------------------- | ------ | ------------------------------------ |
+| `--s2-radius-s`       | 4px    | Checkboxes, in-field buttons         |
+| `--s2-radius-default` | 8px    | Most components, inputs, small cards |
+| `--s2-radius-l`       | 10px   | Cards, panels, action boxes          |
+| `--s2-radius-xl`      | 16px   | Dialogs, modals, wells               |
+| `--s2-radius-pill`    | 9999px | **Buttons**, badges, avatars, tags   |
 
 **Buttons MUST use `--s2-radius-pill`** (pill rounding). This is a core S2 convention.
 
 ### Backgrounds
-| Token | Usage |
-|-------|-------|
-| `--s2-bg-base` | Page/body background (gray-25) |
-| `--s2-bg-layer-1` | Sidebar/panel background (gray-50) |
-| `--s2-bg-layer-2` | Nested layer background (gray-75) |
+
+| Token              | Usage                                        |
+| ------------------ | -------------------------------------------- |
+| `--s2-bg-base`     | Page/body background (gray-25)               |
+| `--s2-bg-layer-1`  | Sidebar/panel background (gray-50)           |
+| `--s2-bg-layer-2`  | Nested layer background (gray-75)            |
 | `--s2-bg-elevated` | Cards, buttons, elevated surfaces (gray-100) |
 
 **Never use `#fff` for backgrounds.** Use `var(--s2-bg-elevated)` for cards/buttons, `var(--s2-bg-base)` for page background.
 
 ### Text on Dark Backgrounds
+
 Use `var(--s2-gray-25)` instead of `#fff` or `color: white`. S2 avoids pure white on dark backgrounds to prevent halation.
 
 ### Semantic Color Tints
+
 For subtle tinted backgrounds (badges, hover states), use `color-mix`:
+
 ```css
-background: color-mix(in srgb, var(--s2-positive) 10%, transparent);  /* green tint */
-background: color-mix(in srgb, var(--s2-negative) 8%, transparent);   /* red tint */
-background: color-mix(in srgb, var(--s2-notice) 10%, transparent);    /* amber tint */
-background: color-mix(in srgb, var(--s2-accent) 6%, transparent);     /* blue tint */
+background: color-mix(in srgb, var(--s2-positive) 10%, transparent); /* green tint */
+background: color-mix(in srgb, var(--s2-negative) 8%, transparent); /* red tint */
+background: color-mix(in srgb, var(--s2-notice) 10%, transparent); /* amber tint */
+background: color-mix(in srgb, var(--s2-accent) 6%, transparent); /* blue tint */
 ```
 
 ### Shadows
-| Token | Usage |
-|-------|-------|
-| `--s2-shadow-container` | Subtle card shadow |
-| `--s2-shadow-elevated` | Menus, tooltips, modals |
+
+| Token                   | Usage                   |
+| ----------------------- | ----------------------- |
+| `--s2-shadow-container` | Subtle card shadow      |
+| `--s2-shadow-elevated`  | Menus, tooltips, modals |
 
 ### Spacing
-| Token | Value |
-|-------|-------|
-| `--s2-spacing-100` | 8px |
-| `--s2-spacing-200` | 12px |
-| `--s2-spacing-300` | 16px |
-| `--s2-spacing-400` | 24px |
-| `--s2-spacing-500` | 32px |
-| `--s2-spacing-600` | 40px |
+
+| Token              | Value |
+| ------------------ | ----- |
+| `--s2-spacing-100` | 8px   |
+| `--s2-spacing-200` | 12px  |
+| `--s2-spacing-300` | 16px  |
+| `--s2-spacing-400` | 24px  |
+| `--s2-spacing-500` | 32px  |
+| `--s2-spacing-600` | 40px  |

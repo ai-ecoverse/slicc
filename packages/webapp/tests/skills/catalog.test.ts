@@ -27,10 +27,12 @@ describe('discoverSkillCandidates', () => {
 
     const candidates = await discoverSkillCandidates(fs);
 
-    expect(candidates.map((candidate) => ({
-      source: candidate.source,
-      path: candidate.path,
-    }))).toEqual([
+    expect(
+      candidates.map((candidate) => ({
+        source: candidate.source,
+        path: candidate.path,
+      }))
+    ).toEqual([
       { source: 'native', path: '/workspace/skills/native-skill' },
       { source: 'agents', path: '/repo/tools/.agents/skills/agent-skill' },
       { source: 'claude', path: '/repo/docs/.claude/skills/claude-skill' },
@@ -49,11 +51,8 @@ describe('discoverSkillCandidates', () => {
     expect(
       candidates
         .filter((candidate) => candidate.source === 'agents')
-        .map((candidate) => candidate.path),
-    ).toEqual([
-      '/a-first/.agents/skills/duplicate',
-      '/z-last/.agents/skills/duplicate',
-    ]);
+        .map((candidate) => candidate.path)
+    ).toEqual(['/a-first/.agents/skills/duplicate', '/z-last/.agents/skills/duplicate']);
   });
 
   it('continues scanning until later reachable compatibility roots are visited', async () => {
@@ -66,10 +65,12 @@ describe('discoverSkillCandidates', () => {
 
     const candidates = await discoverSkillCandidates(fs);
 
-    expect(candidates).toContainEqual(expect.objectContaining({
-      source: 'claude',
-      path: '/zz-after-cap/.claude/skills/late-skill',
-    }));
+    expect(candidates).toContainEqual(
+      expect.objectContaining({
+        source: 'claude',
+        path: '/zz-after-cap/.claude/skills/late-skill',
+      })
+    );
   }, 10_000);
 
   it('refreshes cached compatibility discovery after the same fs instance mutates', async () => {
@@ -114,12 +115,10 @@ describe('resolveSkillNameCollisions', () => {
         { name: 'shared', path: '/repo/.agents/skills/shared' },
         { name: 'shared', path: '/repo/.claude/skills/shared' },
       ],
-      (entry) => entry.name,
+      (entry) => entry.name
     );
 
-    expect(winners).toEqual([
-      { name: 'shared', path: '/workspace/skills/shared' },
-    ]);
+    expect(winners).toEqual([{ name: 'shared', path: '/workspace/skills/shared' }]);
     expect(collisions).toEqual([
       {
         name: 'shared',

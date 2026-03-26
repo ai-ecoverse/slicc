@@ -77,14 +77,11 @@ test.describe('preview service worker', () => {
   test.describe('project serve mode (?projectRoot=)', () => {
     test('resolves root-relative CSS against project root', async ({ page }) => {
       await seedVFS(page, {
-        '/shared/app/index.html':
-          '<link rel="stylesheet" href="/styles/main.css"><h1>Project</h1>',
+        '/shared/app/index.html': '<link rel="stylesheet" href="/styles/main.css"><h1>Project</h1>',
         '/shared/app/styles/main.css': 'body { color: red; }',
       });
 
-      await page.goto(
-        '/preview/shared/app/index.html?projectRoot=/shared/app'
-      );
+      await page.goto('/preview/shared/app/index.html?projectRoot=/shared/app');
 
       const css = await page.evaluate(async () => {
         const resp = await fetch('/styles/main.css');
@@ -105,9 +102,7 @@ test.describe('preview service worker', () => {
         '/shared/app/scripts/app.js': 'console.log("loaded")',
       });
 
-      await page.goto(
-        '/preview/shared/app/index.html?projectRoot=/shared/app'
-      );
+      await page.goto('/preview/shared/app/index.html?projectRoot=/shared/app');
 
       const js = await page.evaluate(async () => {
         const resp = await fetch('/scripts/app.js');
@@ -127,9 +122,7 @@ test.describe('preview service worker', () => {
         '/shared/app/index.html': '<h1>App</h1>',
       });
 
-      await page.goto(
-        '/preview/shared/app/index.html?projectRoot=/shared/app'
-      );
+      await page.goto('/preview/shared/app/index.html?projectRoot=/shared/app');
       await installVfsFallbackResponder(page);
 
       const result = await page.evaluate(async () => {
@@ -148,9 +141,7 @@ test.describe('preview service worker', () => {
         '/shared/app/@vite/client': 'HIJACKED_BY_VFS',
       });
 
-      await page.goto(
-        '/preview/shared/app/index.html?projectRoot=/shared/app'
-      );
+      await page.goto('/preview/shared/app/index.html?projectRoot=/shared/app');
 
       // If isSliccAppPath works, the SW skips this request and the server
       // returns the SPA fallback (HTML). If it fails, the SW would serve
@@ -169,9 +160,7 @@ test.describe('preview service worker', () => {
         '/shared/app/api/runtime-config': '{"hijacked": true}',
       });
 
-      await page.goto(
-        '/preview/shared/app/index.html?projectRoot=/shared/app'
-      );
+      await page.goto('/preview/shared/app/index.html?projectRoot=/shared/app');
 
       const result = await page.evaluate(async () => {
         const resp = await fetch('/api/runtime-config');
@@ -192,9 +181,7 @@ test.describe('preview service worker', () => {
         '/shared/app/index.html': '<h1>Fake Root</h1>',
       });
 
-      await page.goto(
-        '/preview/shared/app/index.html?projectRoot=/shared/app'
-      );
+      await page.goto('/preview/shared/app/index.html?projectRoot=/shared/app');
 
       const result = await page.evaluate(async () => {
         const resp = await fetch('/');
@@ -210,9 +197,7 @@ test.describe('preview service worker', () => {
         '/shared/app/index.html': '<h1>App</h1>',
       });
 
-      await page.goto(
-        '/preview/shared/app/index.html?projectRoot=/shared/app'
-      );
+      await page.goto('/preview/shared/app/index.html?projectRoot=/shared/app');
 
       // Cross-origin fetch should hit the network, not the SW.
       // CORS will block reading the response body, but the request

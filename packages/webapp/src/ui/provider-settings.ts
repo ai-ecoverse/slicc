@@ -111,7 +111,7 @@ export function getProviderConfig(providerId: string): ProviderConfig {
 /** Apply ModelMetadata overrides to a model object (mutates in place). */
 function applyModelMetadata(
   model: Record<string, any>,
-  metadata: { context_window?: number; max_tokens?: number; reasoning?: boolean; input?: string[] },
+  metadata: { context_window?: number; max_tokens?: number; reasoning?: boolean; input?: string[] }
 ): void {
   if (metadata.context_window !== undefined) model.contextWindow = metadata.context_window;
   if (metadata.max_tokens !== undefined) model.maxTokens = metadata.max_tokens;
@@ -148,10 +148,12 @@ export function getProviderModels(providerId: string): Model<Api>[] {
       // Build a lookup across all pi-ai providers so we find base models
       // regardless of their origin (Anthropic, Cerebras, OpenAI, etc.)
       const modelMap = new Map<string, Model<Api>>();
-      for (const p of (getProviders() as string[])) {
+      for (const p of getProviders() as string[]) {
         try {
           for (const m of getModelsDynamic(p)) modelMap.set(m.id, m);
-        } catch { /* provider may not have models */ }
+        } catch {
+          /* provider may not have models */
+        }
       }
       return modelIds.map((pm) => {
         // Determine API type from metadata: 'openai' or 'anthropic' (default)

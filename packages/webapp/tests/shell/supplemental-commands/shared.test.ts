@@ -192,17 +192,13 @@ describe('resolveNodePackageBaseUrl', () => {
         'sql.js/dist/sql-wasm.js',
         '../../../../../node_modules/sql.js/dist/'
       ).toString()
-    ).toContain(
-      '/node_modules/sql.js/dist/'
-    );
+    ).toContain('/node_modules/sql.js/dist/');
   });
 
   it('resolves the pyodide package directory in node', () => {
     expect(
       resolveNodePackageBaseUrl('pyodide/pyodide.mjs', '../../../../../node_modules/pyodide/')
         .pathname
-    ).toContain(
-      '/node_modules/pyodide/'
-    );
+    ).toContain('/node_modules/pyodide/');
   });
 });

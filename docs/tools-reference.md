@@ -42,7 +42,7 @@ interface AgentTool<TDetails = unknown> extends Tool {
     toolCallId: string,
     params: Record<string, any>,
     signal?: AbortSignal,
-    onUpdate?: AgentToolUpdateCallback<TDetails>,
+    onUpdate?: AgentToolUpdateCallback<TDetails>
   ) => Promise<AgentToolResult<TDetails>>;
 }
 
@@ -70,7 +70,7 @@ The `tool-adapter.ts` converts `ToolDefinition` → `AgentTool`:
 ```typescript
 // packages/webapp/src/core/tool-adapter.ts
 export function adaptTools(tools: ToolDefinition[]): AgentTool[] {
-  return tools.map(tool => ({
+  return tools.map((tool) => ({
     name: tool.name,
     description: tool.description,
     parameters: tool.inputSchema,
@@ -96,10 +96,10 @@ export function adaptTools(tools: ToolDefinition[]): AgentTool[] {
 
 Execute shell commands in a full Unix-like environment (just-bash 2.11.7).
 
-| Property | Value |
-|----------|-------|
-| **Name** | `bash` |
-| **Input** | `{ command: string }` |
+| Property   | Value                                 |
+| ---------- | ------------------------------------- |
+| **Name**   | `bash`                                |
+| **Input**  | `{ command: string }`                 |
 | **Output** | `{ content: stdout+stderr, isError }` |
 
 **Schema**:
@@ -115,6 +115,7 @@ Execute shell commands in a full Unix-like environment (just-bash 2.11.7).
 ```
 
 **Features**:
+
 - 78+ commands (grep, sed, awk, find, jq, tar, curl, git, node, python3, etc.)
 - Pipes, redirects, control flow, command substitution
 - Custom commands include `git`, `node -e`, `python3 -c`, `sqlite3`, `zip/unzip`, `webhook`, `crontask`, `convert`, `which`, and `playwright-cli` / `playwright` / `puppeteer`
@@ -125,6 +126,7 @@ Execute shell commands in a full Unix-like environment (just-bash 2.11.7).
 - Data: jq (JSON), base64, md5sum, sha256sum
 
 **Exit status handling**:
+
 - Most non-zero shell exit codes are returned as `isError: true`
 - Expected no-match `grep`/`egrep`/`fgrep`/`rg` exits (`1` with empty stderr) stay non-errors so agents can check absence without retrying
 
@@ -158,11 +160,11 @@ python3 -c "print([i**2 for i in range(5)])"
 
 Read file contents from the virtual filesystem (VirtualFS for cone, RestrictedFS for scoops).
 
-| Property | Value |
-|----------|-------|
-| **Name** | `read_file` |
-| **Input** | `{ path: string, offset?: number, limit?: number }` |
-| **Output** | `{ content: numbered lines }` |
+| Property   | Value                                               |
+| ---------- | --------------------------------------------------- |
+| **Name**   | `read_file`                                         |
+| **Input**  | `{ path: string, offset?: number, limit?: number }` |
+| **Output** | `{ content: numbered lines }`                       |
 
 **Schema**:
 
@@ -188,11 +190,11 @@ Read file contents from the virtual filesystem (VirtualFS for cone, RestrictedFS
 
 Write or create a file in the virtual filesystem. Creates parent directories automatically.
 
-| Property | Value |
-|----------|-------|
-| **Name** | `write_file` |
-| **Input** | `{ path: string, content: string }` |
-| **Output** | `{ content: "File written" }` |
+| Property   | Value                               |
+| ---------- | ----------------------------------- |
+| **Name**   | `write_file`                        |
+| **Input**  | `{ path: string, content: string }` |
+| **Output** | `{ content: "File written" }`       |
 
 **Schema**:
 
@@ -215,11 +217,11 @@ Write or create a file in the virtual filesystem. Creates parent directories aut
 
 Apply a string replacement edit to an existing file.
 
-| Property | Value |
-|----------|-------|
-| **Name** | `edit_file` |
-| **Input** | `{ path: string, old_string: string, new_string: string }` |
-| **Output** | `{ content: "Edit applied" \| error message }` |
+| Property   | Value                                                      |
+| ---------- | ---------------------------------------------------------- |
+| **Name**   | `edit_file`                                                |
+| **Input**  | `{ path: string, old_string: string, new_string: string }` |
+| **Output** | `{ content: "Edit applied" \| error message }`             |
 
 **Schema**:
 
@@ -236,6 +238,7 @@ Apply a string replacement edit to an existing file.
 ```
 
 **Behavior**:
+
 - Fails if `old_string` not found (case-sensitive)
 - Fails if `old_string` matches multiple times (ambiguous)
 - Use larger context to make match unique
@@ -248,11 +251,11 @@ Apply a string replacement edit to an existing file.
 
 Search file contents recursively in VirtualFS using a JavaScript regular expression. This factory remains in `packages/webapp/src/tools/search-tools.ts` for module-level use and tests, but active scoop/cone agents search through `bash` instead.
 
-| Property | Value |
-|----------|-------|
-| **Name** | `grep` |
-| **Input** | `{ pattern: string, path?: string, include?: string }` |
-| **Output** | `{ content: matches or "No matches found." }` |
+| Property   | Value                                                  |
+| ---------- | ------------------------------------------------------ |
+| **Name**   | `grep`                                                 |
+| **Input**  | `{ pattern: string, path?: string, include?: string }` |
+| **Output** | `{ content: matches or "No matches found." }`          |
 
 **Schema**:
 
@@ -269,6 +272,7 @@ Search file contents recursively in VirtualFS using a JavaScript regular express
 ```
 
 **Behavior**:
+
 - Recursively walks VirtualFS from `path` (default `/`)
 - Returns matches as `path:line: content`
 - Optional `include` limits files by glob pattern
@@ -283,10 +287,10 @@ Search file contents recursively in VirtualFS using a JavaScript regular express
 
 List files and directories recursively in VirtualFS using simple glob matching. This factory remains in `packages/webapp/src/tools/search-tools.ts` for module-level use and tests, but active scoop/cone agents search through `bash` instead.
 
-| Property | Value |
-|----------|-------|
-| **Name** | `find` |
-| **Input** | `{ pattern?: string, path?: string }` |
+| Property   | Value                                              |
+| ---------- | -------------------------------------------------- |
+| **Name**   | `find`                                             |
+| **Input**  | `{ pattern?: string, path?: string }`              |
 | **Output** | `{ content: matching paths or "No files found." }` |
 
 **Schema**:
@@ -302,12 +306,11 @@ List files and directories recursively in VirtualFS using simple glob matching. 
 ```
 
 **Behavior**:
+
 - Recursively walks VirtualFS from `path` (default `/`)
 - Uses simple glob matching with `*`, `**`, and `?`
 - Default `pattern` is `*`
 - Truncates after 500 results
-
-
 
 ### javascript
 
@@ -315,13 +318,14 @@ List files and directories recursively in VirtualFS using simple glob matching. 
 
 Execute JavaScript code in an isolated sandbox with VFS access.
 
-| Property | Value |
-|----------|-------|
-| **Name** | `javascript` |
-| **Input** | `{ code: string }` |
+| Property   | Value                        |
+| ---------- | ---------------------------- |
+| **Name**   | `javascript`                 |
+| **Input**  | `{ code: string }`           |
 | **Output** | `{ content: stdout+stderr }` |
 
 **Sandbox**:
+
 - CLI mode: Uses `AsyncFunction` constructor
 - Extension mode: Runs in hidden iframe (CSP-exempt), VFS ops via postMessage
 
@@ -349,7 +353,7 @@ const fs = {
 ```javascript
 const data = await fs.readFile('/data.json');
 const parsed = JSON.parse(data);
-const result = parsed.items.filter(x => x.id > 10);
+const result = parsed.items.filter((x) => x.id > 10);
 console.log(result);
 ```
 
@@ -359,13 +363,14 @@ console.log(result);
 
 Active agents should use the shell's `grep`, `find`, and `rg` commands through `bash` for search. Use these when you need shell composition, pipes, or ripgrep-specific behavior.
 
-| Command | Purpose | Example |
-|---------|---------|---------|
-| `find` | Find files/directories by name, type, or path | `find /workspace -name "*.js" -type f` |
-| `grep` / `egrep` / `fgrep` | Search line-oriented text output | `grep -R "TODO" /workspace/src` |
-| `rg` | Fast recursive text search | `rg "function main" /workspace/src --type ts` |
+| Command                    | Purpose                                       | Example                                       |
+| -------------------------- | --------------------------------------------- | --------------------------------------------- |
+| `find`                     | Find files/directories by name, type, or path | `find /workspace -name "*.js" -type f`        |
+| `grep` / `egrep` / `fgrep` | Search line-oriented text output              | `grep -R "TODO" /workspace/src`               |
+| `rg`                       | Fast recursive text search                    | `rg "function main" /workspace/src --type ts` |
 
 **Behavior notes**:
+
 - Use these through `bash`; this is the active search path for scoop/cone agents
 - `grep` and `rg` return exit code `1` when no matches are found; the `bash` tool preserves that output without surfacing it as an agent error when stderr is empty
 
@@ -394,11 +399,11 @@ These tools are MCP-style tools for messaging and scoop management.
 
 Universal (available to all scoops).
 
-| Property | Value |
-|----------|-------|
-| **Name** | `send_message` |
-| **Input** | `{ text: string, sender?: string }` |
-| **Output** | `{ content: "Message sent" }` |
+| Property   | Value                               |
+| ---------- | ----------------------------------- |
+| **Name**   | `send_message`                      |
+| **Input**  | `{ text: string, sender?: string }` |
+| **Output** | `{ content: "Message sent" }`       |
 
 **Use case**: Progress updates, interim messages.
 
@@ -408,10 +413,10 @@ Universal (available to all scoops).
 
 Cone-only. List all registered scoops.
 
-| Property | Value |
-|----------|-------|
-| **Name** | `list_scoops` |
-| **Input** | None |
+| Property   | Value                                            |
+| ---------- | ------------------------------------------------ |
+| **Name**   | `list_scoops`                                    |
+| **Input**  | None                                             |
 | **Output** | `{ content: "Scoop list\n- name1\n- name2..." }` |
 
 ---
@@ -420,13 +425,14 @@ Cone-only. List all registered scoops.
 
 Cone-only. Create a new scoop.
 
-| Property | Value |
-|----------|-------|
-| **Name** | `scoop_scoop` |
-| **Input** | `{ name: string }` — display name (e.g., "Andy") |
-| **Output** | `{ content: "Scoop created" }` |
+| Property   | Value                                            |
+| ---------- | ------------------------------------------------ |
+| **Name**   | `scoop_scoop`                                    |
+| **Input**  | `{ name: string }` — display name (e.g., "Andy") |
+| **Output** | `{ content: "Scoop created" }`                   |
 
 **Behavior**:
+
 - Folder is auto-derived from name (lowercase, slugified)
 - Scoop is registered but not activated
 - Use `feed_scoop` to give it a task
@@ -437,13 +443,14 @@ Cone-only. Create a new scoop.
 
 Cone-only. Delegate a task to a scoop.
 
-| Property | Value |
-|----------|-------|
-| **Name** | `feed_scoop` |
-| **Input** | `{ scoop_name: string, prompt: string }` |
+| Property   | Value                                       |
+| ---------- | ------------------------------------------- |
+| **Name**   | `feed_scoop`                                |
+| **Input**  | `{ scoop_name: string, prompt: string }`    |
 | **Output** | `{ content: "Task sent to scoop-name..." }` |
 
 **Requirements**:
+
 - `prompt` must be complete and self-contained
 - Scoop has NO access to cone's conversation history
 - Include all context: file paths, URLs, instructions, expected output format
@@ -454,10 +461,10 @@ Cone-only. Delegate a task to a scoop.
 
 Cone-only. Remove a scoop.
 
-| Property | Value |
-|----------|-------|
-| **Name** | `drop_scoop` |
-| **Input** | `{ scoop_name: string }` |
+| Property   | Value                          |
+| ---------- | ------------------------------ |
+| **Name**   | `drop_scoop`                   |
+| **Input**  | `{ scoop_name: string }`       |
 | **Output** | `{ content: "Scoop removed" }` |
 
 ---
@@ -466,29 +473,29 @@ Cone-only. Remove a scoop.
 
 Cone-only. Update the shared global memory file (`/shared/CLAUDE.md`).
 
-| Property | Value |
-|----------|-------|
-| **Name** | `update_global_memory` |
-| **Input** | `{ content: string }` |
+| Property   | Value                           |
+| ---------- | ------------------------------- |
+| **Name**   | `update_global_memory`          |
+| **Input**  | `{ content: string }`           |
 | **Output** | `{ content: "Memory updated" }` |
 
 ---
 
 ## Tool Availability by Scope
 
-| Tool | Cone | Scoop | Notes |
-|------|------|-------|-------|
-| bash | ✓ | ✓ | Includes `playwright-cli` / `playwright` / `puppeteer` shell commands |
-| read_file | ✓ | ✓ (restricted) | Active in `ScoopContext` |
-| write_file | ✓ | ✓ (restricted) | Active in `ScoopContext` |
-| edit_file | ✓ | ✓ (restricted) | Active in `ScoopContext` |
-| javascript | ✓ | ✓ | Active in `ScoopContext` |
-| **send_message** | ✓ | ✓ | Scoop-management tool |
-| **list_scoops** | ✓ | ✗ | Cone-only scoop-management tool |
-| **scoop_scoop** | ✓ | ✗ | Cone-only scoop-management tool |
-| **feed_scoop** | ✓ | ✗ | Cone-only scoop-management tool |
-| **drop_scoop** | ✓ | ✗ | Cone-only scoop-management tool |
-| **update_global_memory** | ✓ | ✗ | Cone-only scoop-management tool |
+| Tool                     | Cone | Scoop          | Notes                                                                 |
+| ------------------------ | ---- | -------------- | --------------------------------------------------------------------- |
+| bash                     | ✓    | ✓              | Includes `playwright-cli` / `playwright` / `puppeteer` shell commands |
+| read_file                | ✓    | ✓ (restricted) | Active in `ScoopContext`                                              |
+| write_file               | ✓    | ✓ (restricted) | Active in `ScoopContext`                                              |
+| edit_file                | ✓    | ✓ (restricted) | Active in `ScoopContext`                                              |
+| javascript               | ✓    | ✓              | Active in `ScoopContext`                                              |
+| **send_message**         | ✓    | ✓              | Scoop-management tool                                                 |
+| **list_scoops**          | ✓    | ✗              | Cone-only scoop-management tool                                       |
+| **scoop_scoop**          | ✓    | ✗              | Cone-only scoop-management tool                                       |
+| **feed_scoop**           | ✓    | ✗              | Cone-only scoop-management tool                                       |
+| **drop_scoop**           | ✓    | ✗              | Cone-only scoop-management tool                                       |
+| **update_global_memory** | ✓    | ✗              | Cone-only scoop-management tool                                       |
 
 ---
 
@@ -501,9 +508,9 @@ LLM-summarized context compaction (`packages/webapp/src/core/context-compaction.
 **Constants** (from pi-coding-agent's `DEFAULT_COMPACTION_SETTINGS`):
 
 ```typescript
-contextWindow = 200000;       // Claude's context window
-reserveTokens = 16384;        // Headroom below context limit
-keepRecentTokens = 20000;     // Recent messages to preserve
+contextWindow = 200000; // Claude's context window
+reserveTokens = 16384; // Headroom below context limit
+keepRecentTokens = 20000; // Recent messages to preserve
 ```
 
 **Algorithm**:
@@ -553,6 +560,7 @@ The agent can inspect `isError` to determine if a tool call succeeded or needs r
 ## Dual-Mode Notes (CLI vs Extension)
 
 ### CLI Mode
+
 - VirtualFS backed by IndexedDB (LightningFS)
 - Tools run in Node.js
 - Browser operations via Chrome DevTools Protocol (WebSocket)
@@ -560,6 +568,7 @@ The agent can inspect `isError` to determine if a tool call succeeded or needs r
 - Fetch requests routed through `/api/fetch-proxy` (Express server)
 
 ### Extension Mode
+
 - VirtualFS backed by IndexedDB (LightningFS)
 - Tools run in browser (side panel)
 - Browser operations via `chrome.debugger` API

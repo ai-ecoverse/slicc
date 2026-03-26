@@ -301,21 +301,20 @@ describe('BrowserAPI', () => {
       expect(mockClient.send).toHaveBeenCalledWith('Page.enable', {}, 'sess-1');
     });
 
-    it('detaches from current target before attaching to new one', async () => {
+    it('attaches to new target without detaching previous (avoids focus steal)', async () => {
       // First attach
       (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ sessionId: 'sess-1' });
       await api.attachToPage('target-1');
 
-      // Second attach (should detach first)
-      (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({}) // detach
-        .mockResolvedValueOnce({ sessionId: 'sess-2' }); // new attach
+      // Second attach (should NOT detach first — avoids Chrome focus steal)
+      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ sessionId: 'sess-2' }); // direct attach, no detach
       await api.attachToPage('target-2');
 
-      // Verify detach was called
-      expect(mockClient.send).toHaveBeenCalledWith('Target.detachFromTarget', {
-        sessionId: 'sess-1',
-      });
+      // Verify detach was NOT called
+      expect(mockClient.send).not.toHaveBeenCalledWith(
+        'Target.detachFromTarget',
+        expect.anything()
+      );
     });
 
     it('detach is a no-op when not attached', async () => {
@@ -815,7 +814,13 @@ describe('BrowserAPI', () => {
       expect(r2).toBe('op2-success');
 
       // Verify op2 only starts after op1 fully completes (error handled)
-      expect(executionOrder).toEqual(['op1-start', 'op1-error', 'op1-caught', 'op2-start', 'op2-end']);
+      expect(executionOrder).toEqual([
+        'op1-start',
+        'op1-error',
+        'op1-caught',
+        'op2-start',
+        'op2-end',
+      ]);
     });
 
     it('passes the correct sessionId to the callback', async () => {

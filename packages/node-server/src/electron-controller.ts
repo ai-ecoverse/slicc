@@ -250,7 +250,11 @@ export async function launchElectronApp(options: {
  * Decode a base64 PNG into raw RGBA pixel data by parsing chunks and inflating.
  * Returns { width, height, pixels } where pixels is a Buffer of RGBA bytes.
  */
-export function decodePngPixels(base64Data: string): { width: number; height: number; pixels: Buffer } {
+export function decodePngPixels(base64Data: string): {
+  width: number;
+  height: number;
+  pixels: Buffer;
+} {
   const buf = Buffer.from(base64Data, 'base64');
 
   // Validate PNG signature
@@ -322,7 +326,8 @@ export function decodePngPixels(base64Data: string): { width: number; height: nu
         case 3: // Average
           row[i] = (row[i]! + ((a + b) >>> 1)) & 0xff;
           break;
-        case 4: { // Paeth
+        case 4: {
+          // Paeth
           const p = a + b - c;
           const pa = Math.abs(p - a);
           const pb = Math.abs(p - b);
@@ -337,7 +342,7 @@ export function decodePngPixels(base64Data: string): { width: number; height: nu
     for (let x = 0; x < width; x++) {
       const srcIdx = x * bytesPerPixel;
       const dstIdx = (y * width + x) * 4;
-      pixels[dstIdx] = row[srcIdx]!;       // R
+      pixels[dstIdx] = row[srcIdx]!; // R
       pixels[dstIdx + 1] = row[srcIdx + 1]!; // G
       pixels[dstIdx + 2] = row[srcIdx + 2]!; // B
       pixels[dstIdx + 3] = bytesPerPixel === 4 ? row[srcIdx + 3]! : 255; // A
@@ -524,12 +529,16 @@ export class ElectronOverlayInjector {
       }
 
       const targets = (await response.json()) as ElectronInspectableTarget[];
-      const pageCount = targets.filter(t => t.type === 'page').length;
+      const pageCount = targets.filter((t) => t.type === 'page').length;
       const injectableTargets = selectBestOverlayTargets(targets);
       if (injectableTargets.length < pageCount) {
-        console.log(`[electron-float] Selected ${injectableTargets.length}/${pageCount} page targets for overlay injection`);
+        console.log(
+          `[electron-float] Selected ${injectableTargets.length}/${pageCount} page targets for overlay injection`
+        );
         for (const t of injectableTargets) {
-          console.log(`[electron-float]   → ${t.title || '(untitled)'} @ ${t.url.substring(0, 80)}`);
+          console.log(
+            `[electron-float]   → ${t.title || '(untitled)'} @ ${t.url.substring(0, 80)}`
+          );
         }
       }
       const liveConnectionIds = new Set(
@@ -596,7 +605,9 @@ export class ElectronOverlayInjector {
             const value = msg.result?.result?.value;
             resolve(value === 'ok');
           }
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       };
 
       const cleanup = () => {
@@ -638,7 +649,9 @@ export class ElectronOverlayInjector {
     ws.on('open', () => {
       const isWebContent = target.url.startsWith('https://');
       const alreadyBypassed = cspBypassedTargets.has(target.url);
-      console.log(`[electron-float] Connected to target, web=${isWebContent}, bypassed=${alreadyBypassed}, url=${target.url}`);
+      console.log(
+        `[electron-float] Connected to target, web=${isWebContent}, bypassed=${alreadyBypassed}, url=${target.url}`
+      );
 
       send('Runtime.enable');
       send('Page.enable');
@@ -648,10 +661,15 @@ export class ElectronOverlayInjector {
 
       if (alreadyBypassed) {
         // Already reloaded with CSP bypass previously — detect theme and inject
-        console.log(`[electron-float] Detecting theme and injecting overlay (CSP already bypassed)...`);
+        console.log(
+          `[electron-float] Detecting theme and injecting overlay (CSP already bypassed)...`
+        );
         void detectAppThemeFromScreenshot(ws, send).then((theme) => {
           if (ws.readyState !== WebSocket.OPEN) return;
-          send('Runtime.evaluate', { expression: buildThemedBootstrap(theme), awaitPromise: false });
+          send('Runtime.evaluate', {
+            expression: buildThemedBootstrap(theme),
+            awaitPromise: false,
+          });
         });
         return;
       }
@@ -677,14 +695,18 @@ export class ElectronOverlayInjector {
 
           const loaded = await this.probeOverlayIframeLoaded(ws, send);
           if (loaded) {
-            console.log(`[electron-float] Overlay iframe loaded successfully — no CSP reload needed`);
+            console.log(
+              `[electron-float] Overlay iframe loaded successfully — no CSP reload needed`
+            );
             cspBypassedTargets.add(target.url);
             return;
           }
 
           // Phase 2: Page.setBypassCSP was already set — a simple reload should
           // make the browser ignore CSP headers on the fresh navigation.
-          console.log(`[electron-float] Overlay iframe blocked by CSP, reloading with bypass: ${target.url}`);
+          console.log(
+            `[electron-float] Overlay iframe blocked by CSP, reloading with bypass: ${target.url}`
+          );
           cspBypassedTargets.add(target.url);
           pendingReload = true;
           pendingCspEscalation = true;
@@ -701,11 +723,16 @@ export class ElectronOverlayInjector {
         // Inject overlay after page load completes (after CSP-bypass reload)
         if (msg.method === 'Page.loadEventFired' && pendingReload) {
           pendingReload = false;
-          console.log(`[electron-float] Page loaded after CSP reload, detecting theme and injecting overlay...`);
+          console.log(
+            `[electron-float] Page loaded after CSP reload, detecting theme and injecting overlay...`
+          );
           if (ws.readyState !== WebSocket.OPEN) return;
           void detectAppThemeFromScreenshot(ws, send).then((theme) => {
             if (ws.readyState !== WebSocket.OPEN) return;
-            send('Runtime.evaluate', { expression: buildThemedBootstrap(theme), awaitPromise: false });
+            send('Runtime.evaluate', {
+              expression: buildThemedBootstrap(theme),
+              awaitPromise: false,
+            });
           });
 
           // If this was a simple reload (no proxy), check if the iframe loads now.
@@ -716,11 +743,15 @@ export class ElectronOverlayInjector {
               if (ws.readyState !== WebSocket.OPEN) return;
               const loaded = await this.probeOverlayIframeLoaded(ws, send);
               if (loaded) {
-                console.log(`[electron-float] Overlay iframe loaded after CSP reload — no proxy needed`);
+                console.log(
+                  `[electron-float] Overlay iframe loaded after CSP reload — no proxy needed`
+                );
                 return;
               }
 
-              console.log(`[electron-float] CSP reload insufficient, escalating to Fetch proxy: ${target.url}`);
+              console.log(
+                `[electron-float] CSP reload insufficient, escalating to Fetch proxy: ${target.url}`
+              );
               fetchProxyActive = true;
               const urlOrigin = new URL(target.url).origin;
               send('Fetch.enable', {
@@ -796,7 +827,7 @@ export class ElectronOverlayInjector {
                   continue;
                 }
                 if (Array.isArray(value)) {
-                  value.forEach(v => responseHeaders.push({ name, value: v }));
+                  value.forEach((v) => responseHeaders.push({ name, value: v }));
                 } else if (value) {
                   responseHeaders.push({ name, value });
                 }
@@ -816,7 +847,10 @@ export class ElectronOverlayInjector {
           });
 
           proxyReq.on('error', (err) => {
-            console.error(`[electron-float] Proxy request failed for ${url.substring(0, 60)}:`, err.message);
+            console.error(
+              `[electron-float] Proxy request failed for ${url.substring(0, 60)}:`,
+              err.message
+            );
             if (ws.readyState === WebSocket.OPEN) {
               send('Fetch.failRequest', { requestId, errorReason: 'Failed' });
             }

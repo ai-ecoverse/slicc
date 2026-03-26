@@ -1342,7 +1342,10 @@ async function captureCookiesAndComplete(
  * Check if a teleport watcher has been triggered and needs to block.
  * Returns a result string if blocked, null if not blocking.
  */
-async function checkTeleportBlock(state: PlaywrightState, targetId: string): Promise<string | null> {
+async function checkTeleportBlock(
+  state: PlaywrightState,
+  targetId: string
+): Promise<string | null> {
   const watcher = state.teleportWatchers.get(targetId);
   if (!watcher) return null;
   if (watcher.phase === 'done' || watcher.phase === 'timedOut') {
@@ -1475,7 +1478,9 @@ type CmdResult = { stdout: string; stderr: string; exitCode: number };
 function requireTab(flags: Record<string, string>): { targetId: string } | { error: string } {
   const tabId = flags['tab'];
   if (!tabId) {
-    return { error: 'Error: --tab <targetId> is required. Run \'playwright-cli tab-list\' to get tab IDs.\n' };
+    return {
+      error: "Error: --tab <targetId> is required. Run 'playwright-cli tab-list' to get tab IDs.\n",
+    };
   }
   return { targetId: tabId };
 }
@@ -1606,7 +1611,9 @@ export function createPlaywrightCommand(
           // Disarm any existing watcher on this tab
           const existingWatcher = state.teleportWatchers.get(tab.targetId);
           if (existingWatcher) {
-            log.info('Disarming existing teleport watcher before re-arming', { targetId: tab.targetId });
+            log.info('Disarming existing teleport watcher before re-arming', {
+              targetId: tab.targetId,
+            });
             cleanupTeleportWatcher(existingWatcher);
             state.teleportWatchers.delete(tab.targetId);
           }
@@ -1941,7 +1948,9 @@ export function createPlaywrightCommand(
             // Fall back to CSS selector
             const selector = snapshot.refToSelector.get(ref);
             if (!selector) {
-              throw new Error(`Unknown ref "${ref}". Available: ${[...snapshot.refToSelector.keys()].slice(0, 10).join(', ')}...`);
+              throw new Error(
+                `Unknown ref "${ref}". Available: ${[...snapshot.refToSelector.keys()].slice(0, 10).join(', ')}...`
+              );
             }
             await browser.click(selector);
             state.snapshots.delete(tab.targetId);
@@ -2099,7 +2108,9 @@ export function createPlaywrightCommand(
           const expression = positional.join(' ');
           const output = await browser.withTab(tab.targetId, async () => {
             const evalResult = await browser.evaluate(expression);
-            return typeof evalResult === 'string' ? evalResult : JSON.stringify(evalResult, null, 2);
+            return typeof evalResult === 'string'
+              ? evalResult
+              : JSON.stringify(evalResult, null, 2);
           });
           result = { stdout: (output ?? 'undefined') + '\n', stderr: '', exitCode: 0 };
           break;

@@ -160,6 +160,7 @@ playwright-cli stop-recording <recordingId>        # Stop and save HAR
 **Best practices for scoops:**
 
 1. **Track your own tab IDs.** When you open a tab, capture the targetId and store it. Don't rely on `tab-list` to find your tabs later — other agents' tabs will be mixed in.
+
    ```bash
    # Open and capture the ID
    playwright-cli tab-new https://example.com

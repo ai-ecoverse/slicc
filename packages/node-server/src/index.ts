@@ -540,7 +540,7 @@ async function main() {
 
     if (chromeProfile.extensionPath && !existsSync(chromeProfile.extensionPath)) {
       console.error(
-        `Extension profile requires ${chromeProfile.extensionPath}. Run \`npm run qa:setup\` or \`npm run build:extension\` first.`
+        `Extension profile requires ${chromeProfile.extensionPath}. Run \`npm run build -w @slicc/chrome-extension\` first.`
       );
       process.exit(1);
     }
@@ -919,9 +919,8 @@ async function main() {
       headers['accept-encoding'] = 'identity';
       if (Object.keys(headers).length > 0) fetchInit.headers = headers;
       if (rawBody.length > 0 && !['GET', 'HEAD'].includes(req.method)) {
-        // Buffer extends Uint8Array (valid BodyInit at runtime) but TS can't
-        // prove the backing ArrayBuffer is non-shared, so double-cast is needed.
-        fetchInit.body = rawBody as unknown as BodyInit;
+        // Buffer extends Uint8Array which is a valid fetch body at runtime.
+        fetchInit.body = rawBody as unknown as RequestInit['body'];
       }
 
       const upstream = await fetch(targetUrl, fetchInit);
@@ -964,6 +963,7 @@ async function main() {
     const { createServer: createViteServer } = await import('vite');
     const webappIndexHtml = resolve(process.cwd(), 'packages/webapp/index.html');
     const vite = await createViteServer({
+      configFile: resolve(process.cwd(), 'packages/webapp/vite.config.ts'),
       server: {
         middlewareMode: true,
         hmr: {
@@ -975,7 +975,11 @@ async function main() {
     });
     app.use(vite.middlewares);
     app.use(async (req, res, next) => {
-      if (req.method !== 'GET' || !req.headers.accept?.includes('text/html') || req.path.includes('.')) {
+      if (
+        req.method !== 'GET' ||
+        !req.headers.accept?.includes('text/html') ||
+        req.path.includes('.')
+      ) {
         next();
         return;
       }

@@ -39,7 +39,7 @@ describe('VirtualFS', () => {
   it('writes and reads binary files', async () => {
     const data = new Uint8Array([10, 20, 30]);
     await vfs.writeFile('/binary.dat', data);
-    const result = await vfs.readFile('/binary.dat', { encoding: 'binary' }) as Uint8Array;
+    const result = (await vfs.readFile('/binary.dat', { encoding: 'binary' })) as Uint8Array;
     // LightningFS may return a view into a larger buffer, compare actual bytes
     expect(result.length).toBe(data.length);
     expect(Array.from(result)).toEqual(Array.from(data));
@@ -86,7 +86,9 @@ describe('RestrictedFS', () => {
   });
 
   it('prevents path traversal (returns ENOENT)', async () => {
-    await expect(restricted.readFile('/scoops/andy-scoop/../../root-file.txt')).rejects.toThrow('ENOENT');
+    await expect(restricted.readFile('/scoops/andy-scoop/../../root-file.txt')).rejects.toThrow(
+      'ENOENT'
+    );
   });
 
   it('prevents writing outside allowed dirs', async () => {
@@ -101,13 +103,14 @@ describe('RestrictedFS', () => {
 
   it('readDir on parent dir filters to only allowed children', async () => {
     const entries = await restricted.readDir('/scoops');
-    const names = entries.map(e => e.name);
+    const names = entries.map((e) => e.name);
     expect(names).toContain('andy-scoop');
   });
 });
 ```
 
 Key patterns:
+
 - **ENOENT vs EACCES**: Outside reads → ENOENT. Outside writes → EACCES.
 - **Path traversal**: Test `/../..` escapes → should throw ENOENT.
 - **Parent traversal**: Reading parent dirs is allowed (needed for `cd`). Writing parent dirs is blocked.
@@ -160,6 +163,7 @@ describe('Bash Tool', () => {
 ```
 
 Key patterns:
+
 - Test command execution: call `tool.execute()` with args
 - Check `isError` flag for error conditions
 - Use file operations within tool tests (pipes, redirects)
@@ -174,10 +178,12 @@ import { describe, it, expect } from 'vitest';
 import { createWhichCommand } from './which-command.js';
 import type { IFileSystem } from 'just-bash';
 
-function createMockCtx(overrides: {
-  registeredCommands?: string[];
-  fs?: Partial<IFileSystem>;
-} = {}) {
+function createMockCtx(
+  overrides: {
+    registeredCommands?: string[];
+    fs?: Partial<IFileSystem>;
+  } = {}
+) {
   const fs: Partial<IFileSystem> = {
     resolvePath: (base: string, path: string) => (path.startsWith('/') ? path : `${base}/${path}`),
     ...overrides.fs,
@@ -217,9 +223,7 @@ describe('which command', () => {
   });
 
   it('finds .jsh file on VFS', async () => {
-    const mockVfs = createMockVfs([
-      '/workspace/skills/test-skill/hello.jsh',
-    ]);
+    const mockVfs = createMockVfs(['/workspace/skills/test-skill/hello.jsh']);
     const cmd = createWhichCommand(mockVfs);
     const result = await cmd.execute(['hello'], createMockCtx());
     expect(result.exitCode).toBe(0);
@@ -229,6 +233,7 @@ describe('which command', () => {
 ```
 
 Key patterns:
+
 - **Mock context**: Create minimal mock with only needed properties
 - **Mock VFS**: Return specific files from `walk()` for file discovery tests
 - **Test arg parsing separately**: Test command-line parsing logic without WASM runtime
@@ -323,14 +328,13 @@ For skipped categories, ensure **manual verification in both CLI and extension m
 
 ## Running Tests
 
-| Command | Purpose |
-|---------|---------|
-| `npm run test` | Run all tests once; fail fast on first error |
-| `npm run test:watch` | Watch mode; re-run affected tests on file change |
-| `npx vitest run packages/webapp/tests/fs/virtual-fs.test.ts` | Run single test file |
-| `npx vitest run packages/webapp/tests/fs/` | Run all tests in directory |
-| `npx vitest run --reporter=verbose` | Verbose output with full stack traces |
-| `npx vitest run --reporter=dot` | Minimal output (one `.` per test) |
+| Command                                                      | Purpose                                      |
+| ------------------------------------------------------------ | -------------------------------------------- |
+| `npm run test`                                               | Run all tests once; fail fast on first error |
+| `npx vitest run packages/webapp/tests/fs/virtual-fs.test.ts` | Run single test file                         |
+| `npx vitest run packages/webapp/tests/fs/`                   | Run all tests in directory                   |
+| `npx vitest run --reporter=verbose`                          | Verbose output with full stack traces        |
+| `npx vitest run --reporter=dot`                              | Minimal output (one `.` per test)            |
 
 ## Test File Organization
 
@@ -382,23 +386,27 @@ describe('File operations', () => {
 ## Debugging Tests
 
 Run a single test with verbose output:
+
 ```bash
 npx vitest run --reporter=verbose packages/webapp/tests/fs/virtual-fs.test.ts
 ```
 
 Add `console.log()` in test code — output appears in terminal:
+
 ```typescript
 it('does something', async () => {
   const result = await operation();
-  console.log('result:', result);  // visible in test output
+  console.log('result:', result); // visible in test output
   expect(result).toBe(expected);
 });
 ```
 
 Watch mode for rapid iteration:
+
 ```bash
 npx vitest watch packages/webapp/tests/fs/virtual-fs.test.ts
 ```
+
 Make changes to test or source → Vitest re-runs automatically.
 
 ## Integration vs Unit Tests
@@ -407,6 +415,7 @@ Make changes to test or source → Vitest re-runs automatically.
 - **Integration tests** (acceptable): Test filesystem + shell + tool together if they can't be tested separately
 
 Example of acceptable integration test:
+
 ```typescript
 describe('Bash tool integration', () => {
   it('reads from VirtualFS via shell', async () => {

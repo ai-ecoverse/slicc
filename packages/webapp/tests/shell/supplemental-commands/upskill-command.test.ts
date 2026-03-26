@@ -5,7 +5,12 @@ import type { IFileSystem, SecureFetch } from 'just-bash';
 import { zipSync } from 'fflate';
 import { VirtualFS } from '../../../src/fs/index.js';
 import { initSkillsSystem } from '../../../src/skills/index.js';
-import { createSkillCommand, createUpskillCommand, _resetGlobalFsCache, scoreSkills } from '../../../src/shell/supplemental-commands/upskill-command.js';
+import {
+  createSkillCommand,
+  createUpskillCommand,
+  _resetGlobalFsCache,
+  scoreSkills,
+} from '../../../src/shell/supplemental-commands/upskill-command.js';
 
 function createMockCtx() {
   const fs: Partial<IFileSystem> = {
@@ -59,7 +64,7 @@ describe('skill/upskill command compatibility discovery', () => {
     await fs.mkdir('/workspace/skills/native-skill', { recursive: true });
     await fs.writeFile(
       '/workspace/skills/native-skill/manifest.yaml',
-      'skill: native-skill\nversion: 1.2.3\ndescription: Native skill\n',
+      'skill: native-skill\nversion: 1.2.3\ndescription: Native skill\n'
     );
 
     await fs.mkdir('/repo/.claude/skills/compat-skill', { recursive: true });
@@ -81,7 +86,10 @@ describe('skill/upskill command compatibility discovery', () => {
     await fs.mkdir('/repo/.agents/skills/agent-skill', { recursive: true });
     await fs.writeFile('/repo/.agents/skills/agent-skill/SKILL.md', '# Agent Skill');
 
-    const result = await createSkillCommand(fs).execute(['info', 'agent-skill'], createMockCtx() as never);
+    const result = await createSkillCommand(fs).execute(
+      ['info', 'agent-skill'],
+      createMockCtx() as never
+    );
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Skill: agent-skill');
@@ -95,7 +103,10 @@ describe('skill/upskill command compatibility discovery', () => {
     await fs.mkdir('/repo/.claude/skills/compat-skill', { recursive: true });
     await fs.writeFile('/repo/.claude/skills/compat-skill/SKILL.md', '# Compat Skill');
 
-    const result = await createSkillCommand(fs).execute(['install', 'compat-skill'], createMockCtx() as never);
+    const result = await createSkillCommand(fs).execute(
+      ['install', 'compat-skill'],
+      createMockCtx() as never
+    );
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('compatibility-only/read-only');
@@ -106,7 +117,10 @@ describe('skill/upskill command compatibility discovery', () => {
     await fs.mkdir('/repo/.claude/skills/compat-skill', { recursive: true });
     await fs.writeFile('/repo/.claude/skills/compat-skill/SKILL.md', '# Compat Skill');
 
-    const result = await createSkillCommand(fs).execute(['uninstall', 'compat-skill'], createMockCtx() as never);
+    const result = await createSkillCommand(fs).execute(
+      ['uninstall', 'compat-skill'],
+      createMockCtx() as never
+    );
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('compatibility skill');
@@ -117,7 +131,10 @@ describe('skill/upskill command compatibility discovery', () => {
     await fs.mkdir('/repo/.agents/skills/local-agent-skill', { recursive: true });
     await fs.writeFile('/repo/.agents/skills/local-agent-skill/SKILL.md', '# Local Agent Skill');
 
-    const result = await createUpskillCommand(fs, vi.fn() as never).execute(['list'], createMockCtx() as never);
+    const result = await createUpskillCommand(fs, vi.fn() as never).execute(
+      ['list'],
+      createMockCtx() as never
+    );
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Discoverable local skills:');
@@ -321,20 +338,47 @@ describe('upskill Tessl registry integration', () => {
   it('search queries both ClawHub and Tessl registries', async () => {
     const fetchMock = vi.fn(async (url: string) => {
       if (url.includes('convex.site')) {
-        return response(200, JSON.stringify({ results: [{ slug: 'pdf-tool', displayName: 'PDF Tool', summary: 'Converts PDFs', version: null, updatedAt: 0 }] }));
+        return response(
+          200,
+          JSON.stringify({
+            results: [
+              {
+                slug: 'pdf-tool',
+                displayName: 'PDF Tool',
+                summary: 'Converts PDFs',
+                version: null,
+                updatedAt: 0,
+              },
+            ],
+          })
+        );
       }
       if (url.includes('api.tessl.io')) {
-        return response(200, JSON.stringify({
-          meta: { pagination: { total: 1 } },
-          data: [{
-            id: 'tessl-1', type: 'skill',
-            attributes: {
-              name: 'pdf-converter', description: 'Advanced PDF conversion',
-              sourceUrl: 'https://github.com/acme/skills', path: 'skills/pdf-converter/SKILL.md',
-              featured: false, scores: { aggregate: 0.85, quality: null, security: null, evalImprovementMultiplier: null },
-            },
-          }],
-        }));
+        return response(
+          200,
+          JSON.stringify({
+            meta: { pagination: { total: 1 } },
+            data: [
+              {
+                id: 'tessl-1',
+                type: 'skill',
+                attributes: {
+                  name: 'pdf-converter',
+                  description: 'Advanced PDF conversion',
+                  sourceUrl: 'https://github.com/acme/skills',
+                  path: 'skills/pdf-converter/SKILL.md',
+                  featured: false,
+                  scores: {
+                    aggregate: 0.85,
+                    quality: null,
+                    security: null,
+                    evalImprovementMultiplier: null,
+                  },
+                },
+              },
+            ],
+          })
+        );
       }
       throw new Error(`unexpected url: ${url}`);
     });
@@ -367,23 +411,46 @@ describe('upskill Tessl registry integration', () => {
       if (url.includes('codeload.github.com')) return response(500, 'Simulated failure');
       // Tessl resolve endpoint
       if (url.includes('api.tessl.io') && url.includes('postgres-pro')) {
-        return response(200, JSON.stringify({
-          meta: { pagination: { total: 1 } },
-          data: [{
-            id: 'tessl-pg', type: 'skill',
-            attributes: {
-              name: 'postgres-pro', description: 'PostgreSQL skill',
-              sourceUrl: 'https://github.com/acme/db-skills', path: 'skills/postgres-pro/SKILL.md',
-              featured: true, scores: { aggregate: 0.9, quality: null, security: null, evalImprovementMultiplier: null },
-            },
-          }],
-        }));
+        return response(
+          200,
+          JSON.stringify({
+            meta: { pagination: { total: 1 } },
+            data: [
+              {
+                id: 'tessl-pg',
+                type: 'skill',
+                attributes: {
+                  name: 'postgres-pro',
+                  description: 'PostgreSQL skill',
+                  sourceUrl: 'https://github.com/acme/db-skills',
+                  path: 'skills/postgres-pro/SKILL.md',
+                  featured: true,
+                  scores: {
+                    aggregate: 0.9,
+                    quality: null,
+                    security: null,
+                    evalImprovementMultiplier: null,
+                  },
+                },
+              },
+            ],
+          })
+        );
       }
       // GitHub contents listing
       if (url.includes('api.github.com') && url.endsWith('/contents/skills/postgres-pro')) {
-        return response(200, JSON.stringify([
-          { name: 'SKILL.md', path: 'skills/postgres-pro/SKILL.md', type: 'file', download_url: 'https://raw.githubusercontent.com/acme/db-skills/main/skills/postgres-pro/SKILL.md' },
-        ]));
+        return response(
+          200,
+          JSON.stringify([
+            {
+              name: 'SKILL.md',
+              path: 'skills/postgres-pro/SKILL.md',
+              type: 'file',
+              download_url:
+                'https://raw.githubusercontent.com/acme/db-skills/main/skills/postgres-pro/SKILL.md',
+            },
+          ])
+        );
       }
       // Raw file download
       if (url.includes('raw.githubusercontent.com') && url.includes('SKILL.md')) {
@@ -406,12 +473,23 @@ describe('upskill Tessl registry integration', () => {
         return response(200, JSON.stringify([{ name: 'alpha', path: 'alpha', type: 'dir' }]));
       }
       if (url.endsWith('/contents/alpha')) {
-        return response(200, JSON.stringify([
-          { name: 'SKILL.md', path: 'alpha/SKILL.md', type: 'file', download_url: 'https://raw.githubusercontent.com/octo/skills/main/alpha/SKILL.md' },
-        ]));
+        return response(
+          200,
+          JSON.stringify([
+            {
+              name: 'SKILL.md',
+              path: 'alpha/SKILL.md',
+              type: 'file',
+              download_url: 'https://raw.githubusercontent.com/octo/skills/main/alpha/SKILL.md',
+            },
+          ])
+        );
       }
       if (url.endsWith('/alpha/SKILL.md')) {
-        return response(200, '---\nname: alpha\nrequires:\n  bins:\n    - ffmpeg\n    - magick\n---\n# Alpha\n');
+        return response(
+          200,
+          '---\nname: alpha\nrequires:\n  bins:\n    - ffmpeg\n    - magick\n---\n# Alpha\n'
+        );
       }
       throw new Error(`unexpected url: ${url}`);
     });
@@ -453,11 +531,18 @@ describe('upskill Tessl registry integration', () => {
     expect(listResult.stdout).not.toContain('other');
 
     // Install should also work via ZIP
-    const installResult = await cmd.execute(['acme/skills', '--skill', 'my-skill'], createMockCtx() as any);
+    const installResult = await cmd.execute(
+      ['acme/skills', '--skill', 'my-skill'],
+      createMockCtx() as any
+    );
     expect(installResult.exitCode).toBe(0);
     expect(installResult.stdout).toContain('Installed skill "my-skill"');
-    await expect(fs.readTextFile('/workspace/skills/my-skill/SKILL.md')).resolves.toContain('My Skill');
-    await expect(fs.readTextFile('/workspace/skills/my-skill/helper.js')).resolves.toContain('console.log');
+    await expect(fs.readTextFile('/workspace/skills/my-skill/SKILL.md')).resolves.toContain(
+      'My Skill'
+    );
+    await expect(fs.readTextFile('/workspace/skills/my-skill/helper.js')).resolves.toContain(
+      'console.log'
+    );
 
     // Verify no GitHub API calls were made
     for (const [url] of fetchMock.mock.calls) {
@@ -510,7 +595,12 @@ describe('scoreSkills', () => {
       displayName: 'AEM',
       description: 'AEM skill',
       source: { repo: 'adobe/skills', path: 'skills/aem', skill: 'aem' },
-      affinity: { apps: ['aem'], tasks: ['build-websites', 'seo'], role: ['developer'], purpose: ['work'] },
+      affinity: {
+        apps: ['aem'],
+        tasks: ['build-websites', 'seo'],
+        role: ['developer'],
+        purpose: ['work'],
+      },
     },
     {
       name: 'bluebubbles',
@@ -537,7 +627,13 @@ describe('scoreSkills', () => {
   ];
 
   it('scores skills by affinity weights (apps=3, tasks=2, role=1, purpose=1)', () => {
-    const profile = { purpose: 'work', role: 'developer', tasks: ['build-websites'], apps: ['aem'], name: 'Test' };
+    const profile = {
+      purpose: 'work',
+      role: 'developer',
+      tasks: ['build-websites'],
+      apps: ['aem'],
+      name: 'Test',
+    };
     const scored = scoreSkills(catalog, profile);
 
     // AEM: apps(aem)=3 + tasks(build-websites)=2 + role(developer)=1 + purpose(work)=1 = 7
@@ -557,7 +653,13 @@ describe('scoreSkills', () => {
   });
 
   it('excludes skills with zero score', () => {
-    const profile = { purpose: 'school', role: 'student', tasks: ['research'], apps: [], name: 'Test' };
+    const profile = {
+      purpose: 'school',
+      role: 'student',
+      tasks: ['research'],
+      apps: [],
+      name: 'Test',
+    };
     const scored = scoreSkills(catalog, profile);
 
     // AEM and bluebubbles should not match
@@ -566,7 +668,13 @@ describe('scoreSkills', () => {
   });
 
   it('sorts by score descending', () => {
-    const profile = { purpose: 'work', role: 'developer', tasks: ['build-websites', 'extract-data'], apps: ['aem'], name: 'Test' };
+    const profile = {
+      purpose: 'work',
+      role: 'developer',
+      tasks: ['build-websites', 'extract-data'],
+      apps: ['aem'],
+      name: 'Test',
+    };
     const scored = scoreSkills(catalog, profile);
 
     for (let i = 1; i < scored.length; i++) {
@@ -621,20 +729,39 @@ describe('upskill recommendations subcommand', () => {
   it('lists recommendations when profile and catalog exist', async () => {
     // Write profile under user's name
     await fs.mkdir('/home/test', { recursive: true });
-    await fs.writeFile('/home/test/.welcome.json', JSON.stringify({
-      purpose: 'work', role: 'developer', tasks: ['build-websites'], apps: ['aem'], name: 'Test',
-    }));
+    await fs.writeFile(
+      '/home/test/.welcome.json',
+      JSON.stringify({
+        purpose: 'work',
+        role: 'developer',
+        tasks: ['build-websites'],
+        apps: ['aem'],
+        name: 'Test',
+      })
+    );
 
     // Write catalog
     await fs.mkdir('/shared', { recursive: true });
-    await fs.writeFile('/shared/skill-catalog.json', JSON.stringify({
-      version: 1,
-      skills: [{
-        name: 'aem', displayName: 'AEM', description: 'AEM skill',
-        source: { repo: 'adobe/skills', path: 'skills/aem', skill: 'aem' },
-        affinity: { apps: ['aem'], tasks: ['build-websites'], role: ['developer'], purpose: ['work'] },
-      }],
-    }));
+    await fs.writeFile(
+      '/shared/skill-catalog.json',
+      JSON.stringify({
+        version: 1,
+        skills: [
+          {
+            name: 'aem',
+            displayName: 'AEM',
+            description: 'AEM skill',
+            source: { repo: 'adobe/skills', path: 'skills/aem', skill: 'aem' },
+            affinity: {
+              apps: ['aem'],
+              tasks: ['build-websites'],
+              role: ['developer'],
+              purpose: ['work'],
+            },
+          },
+        ],
+      })
+    );
 
     const fetchMock = vi.fn();
     const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);

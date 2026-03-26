@@ -443,7 +443,8 @@ describe('LickManager Proxy', () => {
 
   describe('listCronTasksAsync', () => {
     it('sends listCronTasks op and resolves with array', async () => {
-      const { listCronTasksAsync, startLickManagerHost } = await import('../src/lick-manager-proxy.js');
+      const { listCronTasksAsync, startLickManagerHost } =
+        await import('../src/lick-manager-proxy.js');
 
       const mockTasks = [
         {
@@ -485,7 +486,8 @@ describe('LickManager Proxy', () => {
     });
 
     it('error response rejects the promise', async () => {
-      const { listCronTasksAsync, startLickManagerHost } = await import('../src/lick-manager-proxy.js');
+      const { listCronTasksAsync, startLickManagerHost } =
+        await import('../src/lick-manager-proxy.js');
 
       const mockLickManager = {
         createCronTask: vi.fn(),
@@ -535,7 +537,8 @@ describe('LickManager Proxy', () => {
     });
 
     it('only resolves on lick-op-response type', async () => {
-      const { listCronTasksAsync, startLickManagerHost } = await import('../src/lick-manager-proxy.js');
+      const { listCronTasksAsync, startLickManagerHost } =
+        await import('../src/lick-manager-proxy.js');
 
       const mockTasks = [
         {
@@ -578,7 +581,8 @@ describe('LickManager Proxy', () => {
     });
 
     it('returns empty array when no tasks', async () => {
-      const { listCronTasksAsync, startLickManagerHost } = await import('../src/lick-manager-proxy.js');
+      const { listCronTasksAsync, startLickManagerHost } =
+        await import('../src/lick-manager-proxy.js');
 
       const mockLickManager = {
         createCronTask: vi.fn(),

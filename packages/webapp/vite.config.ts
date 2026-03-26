@@ -1,6 +1,4 @@
-/// <reference types="vitest" />
 import { defineConfig } from 'vite';
-import { configDefaults } from 'vitest/config';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -66,19 +64,21 @@ export default defineConfig(({ mode }) => ({
                 format: 'iife',
                 target: 'esnext',
                 define: { __DEV__: 'true', global: 'globalThis' },
-                plugins: [{
-                  name: 'raw-svg',
-                  setup(build) {
-                    build.onResolve({ filter: /\.svg\?raw$/ }, (args) => ({
-                      path: resolve(args.resolveDir, args.path.replace('?raw', '')),
-                      namespace: 'raw-svg',
-                    }));
-                    build.onLoad({ filter: /.*/, namespace: 'raw-svg' }, async (args) => {
-                      const { readFile } = await import('fs/promises');
-                      return { contents: await readFile(args.path, 'utf8'), loader: 'text' };
-                    });
+                plugins: [
+                  {
+                    name: 'raw-svg',
+                    setup(build) {
+                      build.onResolve({ filter: /\.svg\?raw$/ }, (args) => ({
+                        path: resolve(args.resolveDir, args.path.replace('?raw', '')),
+                        namespace: 'raw-svg',
+                      }));
+                      build.onLoad({ filter: /.*/, namespace: 'raw-svg' }, async (args) => {
+                        const { readFile } = await import('fs/promises');
+                        return { contents: await readFile(args.path, 'utf8'), loader: 'text' };
+                      });
+                    },
                   },
-                }],
+                ],
               });
               cachedOverlayCode = result.outputFiles![0].text;
               cachedOverlayMtime = mtime;
@@ -91,7 +91,9 @@ export default defineConfig(({ mode }) => ({
             console.error('[electron-overlay-entry] Failed to build:', msg);
             res.statusCode = 500;
             res.setHeader('Content-Type', 'application/javascript');
-            res.end(`console.error('[electron-overlay-entry] Build failed: ${msg.replace(/'/g, "\\'")}');`);
+            res.end(
+              `console.error('[electron-overlay-entry] Build failed: ${msg.replace(/'/g, "\\'")}');`
+            );
           }
         });
       },
@@ -119,23 +121,28 @@ export default defineConfig(({ mode }) => ({
           target: 'esnext',
           minify: true,
           define: { __DEV__: 'false', global: 'globalThis' },
-          plugins: [{
-            name: 'raw-svg',
-            setup(build) {
-              // Strip ?raw suffix and load .svg files as text (matches Vite's ?raw behavior).
-              build.onResolve({ filter: /\.svg\?raw$/ }, (args) => ({
-                path: resolve(args.resolveDir, args.path.replace('?raw', '')),
-                namespace: 'raw-svg',
-              }));
-              build.onLoad({ filter: /.*/, namespace: 'raw-svg' }, async (args) => {
-                const { readFile } = await import('fs/promises');
-                return { contents: await readFile(args.path, 'utf8'), loader: 'text' };
-              });
+          plugins: [
+            {
+              name: 'raw-svg',
+              setup(build) {
+                // Strip ?raw suffix and load .svg files as text (matches Vite's ?raw behavior).
+                build.onResolve({ filter: /\.svg\?raw$/ }, (args) => ({
+                  path: resolve(args.resolveDir, args.path.replace('?raw', '')),
+                  namespace: 'raw-svg',
+                }));
+                build.onLoad({ filter: /.*/, namespace: 'raw-svg' }, async (args) => {
+                  const { readFile } = await import('fs/promises');
+                  return { contents: await readFile(args.path, 'utf8'), loader: 'text' };
+                });
+              },
             },
-          }],
+          ],
         });
 
-        copyFileSync(resolve(__dirname, '../assets/logos/favicon.png'), resolve(uiOutDir, 'favicon.png'));
+        copyFileSync(
+          resolve(__dirname, '../assets/logos/favicon.png'),
+          resolve(uiOutDir, 'favicon.png')
+        );
         // Vite preserves the nested HTML path when the repo root is the Vite root.
         // In some Vite versions the HTML lands directly at outDir root — only copy if nested.
         const { existsSync } = await import('fs');
@@ -163,20 +170,20 @@ export default defineConfig(({ mode }) => ({
       // @smithy/node-http-handler imports named exports from Node builtins
       // (without node: prefix). Vite's browser-external can't provide named
       // exports, so alias to stubs with the required exports.
-      'stream': resolve(__dirname, 'src/shims/stream.ts'),
-      'http': resolve(__dirname, 'src/shims/http.ts'),
-      'https': resolve(__dirname, 'src/shims/https.ts'),
-      'http2': resolve(__dirname, 'src/shims/http2.ts'),
+      stream: resolve(__dirname, 'src/shims/stream.ts'),
+      http: resolve(__dirname, 'src/shims/http.ts'),
+      https: resolve(__dirname, 'src/shims/https.ts'),
+      http2: resolve(__dirname, 'src/shims/http2.ts'),
       // Deep import into pi-coding-agent's compaction submodule — the main entry
       // re-exports 113 Node-only modules that break Vite's browser bundle.
       // The compaction submodule only depends on @mariozechner/pi-ai (browser-safe).
       '@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js': resolve(
         workspaceRoot,
-        'node_modules/@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js',
+        'node_modules/@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js'
       ),
       '@mariozechner/pi-ai/dist/utils/overflow.js': resolve(
         workspaceRoot,
-        'node_modules/@mariozechner/pi-ai/dist/utils/overflow.js',
+        'node_modules/@mariozechner/pi-ai/dist/utils/overflow.js'
       ),
     },
   },
@@ -196,15 +203,5 @@ export default defineConfig(({ mode }) => ({
       input: resolve(__dirname, 'index.html'),
     },
     // preview-sw and electron-overlay-entry are built separately via esbuild.
-  },
-  test: {
-    globals: true,
-    environment: 'node',
-    include: ['packages/*/tests/**/*.test.ts'],
-    exclude: [
-      ...configDefaults.exclude,
-      'packages/node-server/tests/integration/**/*.test.ts',
-      'packages/*/tests/e2e/**/*.test.ts',
-    ],
   },
 }));

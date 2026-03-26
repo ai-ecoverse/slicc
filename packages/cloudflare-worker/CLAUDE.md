@@ -53,16 +53,13 @@ npx wrangler deploy --config packages/cloudflare-worker/wrangler.jsonc
 cd packages/cloudflare-worker && WORKER_BASE_URL=https://... npm test -- tests/deployed.test.ts
 ```
 
-### QA flows that use the worker
+### Extension testing with the worker
 
 ```bash
-npm run qa:setup
-npm run qa:leader
-npm run qa:follower
-npm run qa:extension
+npm run start:extension
 ```
 
-These live at the repo root because they coordinate the worker with browser runtimes.
+This lives at the repo root because it coordinates the worker with browser runtimes.
 
 ## CI and Deployment
 

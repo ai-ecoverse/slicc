@@ -11,17 +11,15 @@ import type { VirtualFS } from '../../../src/fs/index.js';
 /** Minimal mock BrowserAPI. */
 function createMockBrowser(overrides: Partial<BrowserAPI> = {}): BrowserAPI {
   return {
-    listPages: vi
-      .fn()
-      .mockResolvedValue([
-        {
-          targetId: 'tab-1',
-          title: 'Test Page',
-          url: 'https://example.com',
-          type: 'page',
-          attached: false,
-        },
-      ]),
+    listPages: vi.fn().mockResolvedValue([
+      {
+        targetId: 'tab-1',
+        title: 'Test Page',
+        url: 'https://example.com',
+        type: 'page',
+        attached: false,
+      },
+    ]),
     createPage: vi.fn().mockResolvedValue('tab-new'),
     attachToPage: vi.fn().mockResolvedValue(undefined),
     navigate: vi.fn().mockResolvedValue(undefined),
@@ -71,9 +69,11 @@ function createMockBrowser(overrides: Partial<BrowserAPI> = {}): BrowserAPI {
       send: vi.fn().mockResolvedValue({}),
     }),
     getSessionId: vi.fn().mockReturnValue('session-1'),
-    withTab: vi.fn().mockImplementation(async (_targetId: string, fn: (s: string) => Promise<any>) => {
-      return fn('session-1');
-    }),
+    withTab: vi
+      .fn()
+      .mockImplementation(async (_targetId: string, fn: (s: string) => Promise<any>) => {
+        return fn('session-1');
+      }),
     ...overrides,
   } as unknown as BrowserAPI;
 }
@@ -229,7 +229,6 @@ describe('playwright-cli open', () => {
     expect(browser.createPage).toHaveBeenCalledWith('about:blank');
   });
 
-
   it('does not convert regular URLs to preview paths', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://example.com'], {} as any);
@@ -329,7 +328,10 @@ describe('playwright-cli snapshot', () => {
 
   it('saves snapshot to file with --filename', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['snapshot', '--filename=/tmp/snap.txt', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(
+      ['snapshot', '--filename=/tmp/snap.txt', '--tab=tab-1'],
+      {} as any
+    );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Snapshot saved to /tmp/snap.txt');
     expect(fs.writeFile).toHaveBeenCalledWith('/tmp/snap.txt', expect.any(String));
@@ -366,7 +368,11 @@ describe('playwright-cli snapshot', () => {
         throw new Error(`No target found for id: ${targetId}`);
       }),
     });
-    const cmd = createPlaywrightCommand('playwright-cli', brokenBrowser as BrowserAPI, fs as VirtualFS);
+    const cmd = createPlaywrightCommand(
+      'playwright-cli',
+      brokenBrowser as BrowserAPI,
+      fs as VirtualFS
+    );
     const result = await cmd.execute(['snapshot', '--tab=nonexistent'], {} as any);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('No target found');
@@ -755,7 +761,6 @@ describe('playwright-cli tab management', () => {
     expect(result.stdout).toContain('(active)');
     expect(result.stdout).toContain('[tab-new]');
   });
-
 
   it('tab-close rejects malformed indexes without closing a tab', async () => {
     const send = vi.fn().mockResolvedValue({});
@@ -1275,7 +1280,15 @@ describe('playwright-cli cookie commands', () => {
     );
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(
-      ['cookie-set', 'name', 'value', '--domain=.example.com', '--secure', '--httpOnly', '--tab=tab-1'],
+      [
+        'cookie-set',
+        'name',
+        'value',
+        '--domain=.example.com',
+        '--secure',
+        '--httpOnly',
+        '--tab=tab-1',
+      ],
       {} as any
     );
     expect(result.exitCode).toBe(0);
@@ -1301,7 +1314,10 @@ describe('playwright-cli cookie commands', () => {
       })
     );
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['cookie-set', '--tab=tab-1', 'name', 'value', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(
+      ['cookie-set', '--tab=tab-1', 'name', 'value', '--tab=tab-1'],
+      {} as any
+    );
 
     expect(result.exitCode).toBe(0);
     expect(browser.sendCDP).toHaveBeenCalledWith('Network.setCookie', {
@@ -1430,7 +1446,10 @@ describe('playwright-cli localStorage commands', () => {
   it('localstorage-set sets a value', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['localstorage-set', '--tab=tab-1', 'myKey', 'myValue'], {} as any);
+    const result = await cmd.execute(
+      ['localstorage-set', '--tab=tab-1', 'myKey', 'myValue'],
+      {} as any
+    );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('localStorage "myKey" set');
     expect(browser.evaluate).toHaveBeenCalledWith('localStorage.setItem("myKey", "myValue")');
@@ -1526,7 +1545,10 @@ describe('playwright-cli sessionStorage commands', () => {
   it('sessionstorage-set sets a value', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
-    const result = await cmd.execute(['sessionstorage-set', '--tab=tab-1', 'sKey', 'sVal'], {} as any);
+    const result = await cmd.execute(
+      ['sessionstorage-set', '--tab=tab-1', 'sKey', 'sVal'],
+      {} as any
+    );
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('sessionStorage "sKey" set');
     expect(browser.evaluate).toHaveBeenCalledWith('sessionStorage.setItem("sKey", "sVal")');
@@ -1576,7 +1598,6 @@ describe('playwright-cli open --background/--foreground', () => {
       JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
     );
   });
-
 
   it('open --foreground switches current target', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
@@ -1887,14 +1908,20 @@ describe('playwright-cli teleport subcommand', () => {
 
   it('rejects invalid regex for --start', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['teleport', '--tab=tab-1', '--start=[invalid', '--return=ok'], {} as any);
+    const result = await cmd.execute(
+      ['teleport', '--tab=tab-1', '--start=[invalid', '--return=ok'],
+      {} as any
+    );
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('Invalid regex for --start');
   });
 
   it('rejects invalid regex for --return', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const result = await cmd.execute(['teleport', '--tab=tab-1', '--start=ok', '--return=[invalid'], {} as any);
+    const result = await cmd.execute(
+      ['teleport', '--tab=tab-1', '--start=ok', '--return=[invalid'],
+      {} as any
+    );
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('Invalid regex for --return');
   });
@@ -1973,16 +2000,25 @@ describe('playwright-cli teleport subcommand', () => {
 
   it('re-arms by disarming existing watcher first', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
-    const openResult = await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
+    const openResult = await cmd.execute(
+      ['open', 'https://example.com', '--foreground'],
+      {} as any
+    );
     const targetId = openResult.stdout.match(/Opened tab[^\n]*\s(tab-\w+)/)?.[1] || 'tab-new';
 
-    await cmd.execute(['teleport', '--tab=tab-1', '--start=first', '--return=first-back'], {} as any);
+    await cmd.execute(
+      ['teleport', '--tab=tab-1', '--start=first', '--return=first-back'],
+      {} as any
+    );
 
     const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
     const firstWatcher = state.teleportWatchers.get('tab-1');
     expect(firstWatcher).not.toBeNull();
 
-    await cmd.execute(['teleport', '--tab=tab-1', '--start=second', '--return=second-back'], {} as any);
+    await cmd.execute(
+      ['teleport', '--tab=tab-1', '--start=second', '--return=second-back'],
+      {} as any
+    );
     // Should have replaced the watcher for this target
     const secondWatcher = state.teleportWatchers.get('tab-1');
     expect(secondWatcher).not.toBe(firstWatcher);
@@ -2073,7 +2109,9 @@ describe('playwright-cli teleport trigger and capture', () => {
 
     const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
     expect(state.teleportWatchers.values().next().value!.phase).toBe('armed');
-    expect(state.teleportWatchers.values().next().value!.originalLeaderUrl).toBe('https://app.example.com/dashboard');
+    expect(state.teleportWatchers.values().next().value!.originalLeaderUrl).toBe(
+      'https://app.example.com/dashboard'
+    );
 
     // Advance past first poll (no match)
     await vi.advanceTimersByTimeAsync(1000);
@@ -2108,9 +2146,14 @@ describe('playwright-cli teleport trigger and capture', () => {
 
     // Cleanup timers and catch the unhandled rejection from the completion promise
     if (state.teleportWatchers.size > 0) {
-      state.teleportWatchers.values().next().value?.completionPromise?.catch(() => {});
-      state.teleportWatchers.values().next().value?.pollInterval && clearInterval(state.teleportWatchers.values().next().value?.pollInterval);
-      state.teleportWatchers.values().next().value?.timeoutTimer && clearTimeout(state.teleportWatchers.values().next().value?.timeoutTimer);
+      state.teleportWatchers
+        .values()
+        .next()
+        .value?.completionPromise?.catch(() => {});
+      state.teleportWatchers.values().next().value?.pollInterval &&
+        clearInterval(state.teleportWatchers.values().next().value?.pollInterval);
+      state.teleportWatchers.values().next().value?.timeoutTimer &&
+        clearTimeout(state.teleportWatchers.values().next().value?.timeoutTimer);
     }
   });
 
@@ -2124,7 +2167,10 @@ describe('playwright-cli teleport trigger and capture', () => {
       if (expr === 'window.location.href') {
         const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
         // Before watcher is created (capturing leader URL at arm time) or in armed phase
-        if (state.teleportWatchers.size === 0 || state.teleportWatchers.values().next().value?.phase === 'armed') {
+        if (
+          state.teleportWatchers.size === 0 ||
+          state.teleportWatchers.values().next().value?.phase === 'armed'
+        ) {
           leaderCallCount++;
           // First call is during arm (capturing originalLeaderUrl), rest are polls
           return leaderCallCount <= 1
@@ -2162,7 +2208,9 @@ describe('playwright-cli teleport trigger and capture', () => {
 
     const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
     // Verify the original leader URL was captured at arm time
-    expect(state.teleportWatchers.values().next().value!.originalLeaderUrl).toBe('https://app.example.com/dashboard');
+    expect(state.teleportWatchers.values().next().value!.originalLeaderUrl).toBe(
+      'https://app.example.com/dashboard'
+    );
 
     // Leader poll triggers immediately
     await vi.advanceTimersByTimeAsync(1000);
@@ -2218,7 +2266,10 @@ describe('playwright-cli teleport trigger and capture', () => {
     (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
       if (expr === 'window.location.href') {
         const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
-        if (state.teleportWatchers.size === 0 || state.teleportWatchers.values().next().value?.phase === 'armed') {
+        if (
+          state.teleportWatchers.size === 0 ||
+          state.teleportWatchers.values().next().value?.phase === 'armed'
+        ) {
           leaderCallCount++;
           return leaderCallCount <= 1
             ? 'https://idp.example.com/start'
@@ -2261,7 +2312,9 @@ describe('playwright-cli teleport trigger and capture', () => {
     );
 
     const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
-    expect(state.teleportWatchers.values().next().value!.originalLeaderUrl).toBe('https://idp.example.com/start');
+    expect(state.teleportWatchers.values().next().value!.originalLeaderUrl).toBe(
+      'https://idp.example.com/start'
+    );
 
     await vi.advanceTimersByTimeAsync(1000);
     await vi.advanceTimersByTimeAsync(1000);
@@ -2290,7 +2343,10 @@ describe('playwright-cli teleport trigger and capture', () => {
     (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
       if (expr === 'window.location.href') {
         const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
-        if (state.teleportWatchers.size === 0 || state.teleportWatchers.values().next().value?.phase === 'armed') {
+        if (
+          state.teleportWatchers.size === 0 ||
+          state.teleportWatchers.values().next().value?.phase === 'armed'
+        ) {
           leaderCallCount++;
           return leaderCallCount <= 1
             ? 'https://app.example.com/dashboard'
@@ -2360,7 +2416,10 @@ describe('playwright-cli teleport trigger and capture', () => {
     (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
       if (expr === 'window.location.href') {
         const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
-        if (state.teleportWatchers.size === 0 || state.teleportWatchers.values().next().value?.phase === 'armed') {
+        if (
+          state.teleportWatchers.size === 0 ||
+          state.teleportWatchers.values().next().value?.phase === 'armed'
+        ) {
           leaderCallCount++;
           return leaderCallCount <= 1
             ? 'https://app.example.com/dashboard'
@@ -2446,7 +2505,10 @@ describe('playwright-cli teleport trigger and capture', () => {
     (browser.evaluate as ReturnType<typeof vi.fn>).mockImplementation((expr: string) => {
       if (expr === 'window.location.href') {
         const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
-        if (state.teleportWatchers.size === 0 || state.teleportWatchers.values().next().value?.phase === 'armed') {
+        if (
+          state.teleportWatchers.size === 0 ||
+          state.teleportWatchers.values().next().value?.phase === 'armed'
+        ) {
           leaderCallCount++;
           return leaderCallCount <= 1
             ? 'https://app.example.com/dashboard'
@@ -2519,12 +2581,18 @@ describe('playwright-cli teleport trigger and capture', () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
     // Very short timeout (5 seconds)
-    await cmd.execute(['teleport', '--tab=tab-1', '--start=login', '--return=app', '--timeout=5'], {} as any);
+    await cmd.execute(
+      ['teleport', '--tab=tab-1', '--start=login', '--return=app', '--timeout=5'],
+      {} as any
+    );
 
     const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
 
     // Attach a catch handler to prevent unhandled rejection
-    const completionCatch = state.teleportWatchers.values().next().value!.completionPromise!.catch(() => {});
+    const completionCatch = state.teleportWatchers
+      .values()
+      .next()
+      .value!.completionPromise!.catch(() => {});
 
     // Leader poll triggers — enters waitingForAuth phase
     await vi.advanceTimersByTimeAsync(1000);
@@ -2559,7 +2627,10 @@ describe('playwright-cli teleport trigger and capture', () => {
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
-    await cmd.execute(['teleport', '--tab=tab-1', '--start=login', '--return=app', '--timeout=60'], {} as any);
+    await cmd.execute(
+      ['teleport', '--tab=tab-1', '--start=login', '--return=app', '--timeout=60'],
+      {} as any
+    );
 
     // Trigger the teleport (leader poll matches start pattern)
     await vi.advanceTimersByTimeAsync(1000);
@@ -2589,7 +2660,10 @@ describe('playwright-cli teleport trigger and capture', () => {
     const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
 
     // Attach a catch handler to prevent unhandled rejection
-    const completionCatch = state.teleportWatchers.values().next().value!.completionPromise!.catch(() => {});
+    const completionCatch = state.teleportWatchers
+      .values()
+      .next()
+      .value!.completionPromise!.catch(() => {});
 
     // Leader poll triggers
     await vi.advanceTimersByTimeAsync(1000);
@@ -2643,7 +2717,8 @@ describe('playwright-cli open/goto with --teleport-start and --teleport-return',
     expect(state.teleportWatchers.values().next().value!.returnPattern.source).toBe('callback');
 
     // Cleanup
-    state.teleportWatchers.values().next().value!.pollInterval && clearInterval(state.teleportWatchers.values().next().value!.pollInterval);
+    state.teleportWatchers.values().next().value!.pollInterval &&
+      clearInterval(state.teleportWatchers.values().next().value!.pollInterval);
   });
 
   it('tab-new with --teleport-start/--teleport-return arms watcher', async () => {
@@ -2666,14 +2741,21 @@ describe('playwright-cli open/goto with --teleport-start and --teleport-return',
     expect(state.teleportWatchers.values().next().value!.startPattern.source).toBe('sso');
 
     // Cleanup
-    state.teleportWatchers.values().next().value!.pollInterval && clearInterval(state.teleportWatchers.values().next().value!.pollInterval);
+    state.teleportWatchers.values().next().value!.pollInterval &&
+      clearInterval(state.teleportWatchers.values().next().value!.pollInterval);
   });
 
   it('goto with --teleport-start/--teleport-return arms watcher', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
     const result = await cmd.execute(
-      ['goto', '--tab=tab-1', 'https://app.example.com', '--teleport-start=auth', '--teleport-return=home'],
+      [
+        'goto',
+        '--tab=tab-1',
+        'https://app.example.com',
+        '--teleport-start=auth',
+        '--teleport-return=home',
+      ],
       {} as any
     );
 
@@ -2686,7 +2768,8 @@ describe('playwright-cli open/goto with --teleport-start and --teleport-return',
     expect(state.teleportWatchers.values().next().value!.returnPattern.source).toBe('home');
 
     // Cleanup
-    state.teleportWatchers.values().next().value!.pollInterval && clearInterval(state.teleportWatchers.values().next().value!.pollInterval);
+    state.teleportWatchers.values().next().value!.pollInterval &&
+      clearInterval(state.teleportWatchers.values().next().value!.pollInterval);
   });
 
   it('open rejects invalid --teleport-start regex', async () => {
@@ -2710,7 +2793,13 @@ describe('playwright-cli open/goto with --teleport-start and --teleport-return',
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://example.com', '--foreground'], {} as any);
     const result = await cmd.execute(
-      ['goto', '--tab=tab-1', 'https://example.com', '--teleport-start=ok', '--teleport-return=[invalid'],
+      [
+        'goto',
+        '--tab=tab-1',
+        'https://example.com',
+        '--teleport-start=ok',
+        '--teleport-return=[invalid',
+      ],
       {} as any
     );
 
@@ -2772,7 +2861,10 @@ describe('formatCookieDomainSummary (via teleport output)', () => {
       if (expr === 'window.location.href') {
         const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
         // Before watcher exists (capturing leader URL at arm time) or in armed phase
-        if (state.teleportWatchers.size === 0 || state.teleportWatchers.values().next().value?.phase === 'armed') {
+        if (
+          state.teleportWatchers.size === 0 ||
+          state.teleportWatchers.values().next().value?.phase === 'armed'
+        ) {
           return 'https://login.example.com/sso';
         }
         // Follower: first hit auth (startPattern), then return (returnPattern)
@@ -2785,7 +2877,10 @@ describe('formatCookieDomainSummary (via teleport output)', () => {
 
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
     await cmd.execute(['open', 'https://app.example.com', '--foreground'], {} as any);
-    await cmd.execute(['teleport', '--tab=tab-1', '--start=login', '--return=app\\.example\\.com'], {} as any);
+    await cmd.execute(
+      ['teleport', '--tab=tab-1', '--start=login', '--return=app\\.example\\.com'],
+      {} as any
+    );
 
     // Trigger leader → waitingForAuth
     await vi.advanceTimersByTimeAsync(1000);
@@ -2802,6 +2897,9 @@ describe('formatCookieDomainSummary (via teleport output)', () => {
     // Since checkTeleportBlock runs first, it should have consumed the "done" state already.
     // Let's verify via state
     const state = getSharedState(browser as BrowserAPI, fs as VirtualFS);
-    expect(state.teleportWatchers.size === 0 || state.teleportWatchers.values().next().value?.phase === 'done').toBe(true);
+    expect(
+      state.teleportWatchers.size === 0 ||
+        state.teleportWatchers.values().next().value?.phase === 'done'
+    ).toBe(true);
   });
 });

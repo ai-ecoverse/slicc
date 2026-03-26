@@ -7,33 +7,348 @@ on:
     branches: [main]
 
 jobs:
-  ci:
-    runs-on: macos-latest
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      webapp: ${{ steps.filter.outputs.webapp }}
+      vfs-root: ${{ steps.filter.outputs.vfs-root }}
+      assets: ${{ steps.filter.outputs.assets }}
+      node-server: ${{ steps.filter.outputs.node-server }}
+      extension: ${{ steps.filter.outputs.extension }}
+      cloudflare-worker: ${{ steps.filter.outputs.cloudflare-worker }}
+      swift-server: ${{ steps.filter.outputs.swift-server }}
+      swift-launcher: ${{ steps.filter.outputs.swift-launcher }}
+      root-config: ${{ steps.filter.outputs.root-config }}
+      is-queue-leader: ${{ steps.queue-position.outputs.leader }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f  # v6.3.0
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
+        id: filter
+        with:
+          filters: |
+            webapp:
+              - 'packages/webapp/**'
+            vfs-root:
+              - 'packages/vfs-root/**'
+            assets:
+              - 'packages/assets/**'
+            node-server:
+              - 'packages/node-server/**'
+            extension:
+              - 'packages/chrome-extension/**'
+            cloudflare-worker:
+              - 'packages/cloudflare-worker/**'
+            swift-server:
+              - 'packages/swift-server/**'
+            swift-launcher:
+              - 'packages/swift-launcher/**'
+            root-config:
+              - 'package.json'
+              - 'package-lock.json'
+              - 'tsconfig*.json'
+              - 'vitest*.config.*'
+              - '.github/workflows/ci.yml'
+      - name: Check merge queue position
+        id: queue-position
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" != "merge_group" ]; then
+            echo "leader=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Extract PR number from merge queue branch name (gh-readonly-queue/main/pr-NNN-sha)
+          PR_NUMBER=$(echo "${{ github.event.merge_group.head_ref }}" | grep -oP 'pr-\K[0-9]+')
+          if [ -z "$PR_NUMBER" ]; then
+            echo "leader=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          POSITION=$(gh api graphql -f query='{ repository(owner: "${{ github.repository_owner }}", name: "${{ github.event.repository.name }}") { mergeQueue(branch: "main") { entries(first: 20) { nodes { position pullRequest { number } } } } } }' --jq ".data.repository.mergeQueue.entries.nodes[] | select(.pullRequest.number == $PR_NUMBER) | .position" 2>/dev/null || echo "")
+          if [ "$POSITION" = "1" ] || [ -z "$POSITION" ]; then
+            echo "leader=true" >> "$GITHUB_OUTPUT"
+            echo "Queue position: $POSITION (leader)"
+          else
+            echo "leader=false" >> "$GITHUB_OUTPUT"
+            echo "Queue position: $POSITION (skipping expensive jobs)"
+          fi
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run typecheck
-      - run: npm run test
-      - run: npm run build
-      - run: npm run build:extension
-      - name: E2E preview tests
-        run: |
-          npx playwright install chromium
-          npm run test:e2e
+      - name: Format check
+        run: npx prettier --check .
       - name: Check CLAUDE.md size
         run: |
           chars=$(wc -c < CLAUDE.md)
-          echo "CLAUDE.md is $chars characters"
           if [ "$chars" -gt 30000 ]; then
             echo "::error::CLAUDE.md exceeds 30,000 character limit ($chars chars). Please condense it."
             exit 1
           fi
-      - name: Build Sliccstart
+
+  webapp:
+    needs: changes
+    if: >-
+      needs.changes.outputs.webapp == 'true' ||
+      needs.changes.outputs.vfs-root == 'true' ||
+      needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: tsc --noEmit -p tsconfig.json
+      - name: Test
+        run: npx vitest run --project webapp
+      - name: Build
+        run: npm run build -w @slicc/webapp
+      - name: Build node-server (E2E dependency)
+        run: npm run build -w @slicc/node-server
+      - name: E2E tests
         run: |
-          cd packages/swift-launcher
-          chmod +x build-app.sh
-          ./build-app.sh
+          npx playwright install chromium
+          npm run test:e2e
+
+  node-server:
+    needs: changes
+    if: >-
+      needs.changes.outputs.node-server == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: tsc --noEmit -p tsconfig.cli.json
+      - name: Test
+        run: npx vitest run --project node-server
+      - name: Build
+        run: npm run build -w @slicc/node-server
+
+  chrome-extension:
+    needs: changes
+    if: >-
+      needs.changes.outputs.extension == 'true' ||
+      needs.changes.outputs.webapp == 'true' ||
+      needs.changes.outputs.vfs-root == 'true' ||
+      needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Test
+        run: npx vitest run --project chrome-extension
+      - name: Build webapp (dependency)
+        run: npm run build -w @slicc/webapp
+      - name: Build extension
+        run: npm run build -w @slicc/chrome-extension
+
+  cloudflare-worker:
+    needs: changes
+    if: >-
+      needs.changes.outputs.cloudflare-worker == 'true' ||
+      needs.changes.outputs.root-config == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: tsc --noEmit -p tsconfig.worker.json
+      - name: Test
+        run: npx vitest run --project cloudflare-worker
+
+      # Deploy to staging on PRs (not forks) and pushes to main
+      - name: Deploy staging worker (attempt 1)
+        id: deploy_attempt_1
+        if: |
+          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false) ||
+          github.event_name == 'push'
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/cloudflare-worker
+          command: deploy --env staging
+          secrets: |
+            CLOUDFLARE_TURN_API_TOKEN
+        env:
+          CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
+      - name: Wait before staging deploy retry 2
+        if: steps.deploy_attempt_1.outcome == 'failure'
+        run: sleep 20
+      - name: Deploy staging worker (attempt 2)
+        id: deploy_attempt_2
+        if: steps.deploy_attempt_1.outcome == 'failure'
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/cloudflare-worker
+          command: deploy --env staging
+          secrets: |
+            CLOUDFLARE_TURN_API_TOKEN
+        env:
+          CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
+      - name: Wait before staging deploy retry 3
+        if: steps.deploy_attempt_1.outcome == 'failure' && steps.deploy_attempt_2.outcome == 'failure'
+        run: sleep 40
+      - name: Deploy staging worker (attempt 3)
+        id: deploy_attempt_3
+        if: steps.deploy_attempt_1.outcome == 'failure' && steps.deploy_attempt_2.outcome == 'failure'
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: packages/cloudflare-worker
+          command: deploy --env staging
+          secrets: |
+            CLOUDFLARE_TURN_API_TOKEN
+        env:
+          CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
+      - name: Finalize staging deploy
+        id: deploy
+        if: steps.deploy_attempt_1.outcome == 'success' || steps.deploy_attempt_2.outcome == 'success' || steps.deploy_attempt_3.outcome == 'success'
+        env:
+          DEPLOYMENT_URL_1: ${{ steps.deploy_attempt_1.outputs.deployment-url }}
+          DEPLOYMENT_URL_2: ${{ steps.deploy_attempt_2.outputs.deployment-url }}
+          DEPLOYMENT_URL_3: ${{ steps.deploy_attempt_3.outputs.deployment-url }}
+        run: |
+          DEPLOYMENT_URL="${DEPLOYMENT_URL_1:-}"
+          if [ -z "$DEPLOYMENT_URL" ]; then DEPLOYMENT_URL="${DEPLOYMENT_URL_2:-}"; fi
+          if [ -z "$DEPLOYMENT_URL" ]; then DEPLOYMENT_URL="${DEPLOYMENT_URL_3:-}"; fi
+          if [ -z "$DEPLOYMENT_URL" ]; then
+            echo "::error::Staging deploy failed after 3 attempts"
+            exit 1
+          fi
+          echo "deployment-url=${DEPLOYMENT_URL}" >> "$GITHUB_OUTPUT"
+      - name: Smoke test staging
+        if: steps.deploy.outcome == 'success'
+        env:
+          WORKER_BASE_URL: ${{ steps.deploy.outputs.deployment-url }}
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            if npx vitest run --project cloudflare-worker packages/cloudflare-worker/tests/deployed.test.ts; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 6 ]; then
+              echo "Deployed smoke test failed after ${attempt} attempts"
+              exit 1
+            fi
+            echo "Smoke test attempt ${attempt} failed; waiting for propagation..."
+            sleep 15
+          done
+
+  swift-server:
+    needs: [changes, lint]
+    if: >-
+      needs.lint.result == 'success' &&
+      needs.changes.outputs.is-queue-leader == 'true' &&
+      needs.changes.outputs.swift-server == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Build
+        run: cd packages/swift-server && swift build -c release
+      - name: Test
+        run: cd packages/swift-server && swift test
+
+  swift-launcher:
+    needs: [changes, lint]
+    if: >-
+      needs.lint.result == 'success' &&
+      needs.changes.outputs.is-queue-leader == 'true' &&
+      (needs.changes.outputs.swift-launcher == 'true' ||
+      needs.changes.outputs.swift-server == 'true' ||
+      needs.changes.outputs.webapp == 'true' ||
+      needs.changes.outputs.vfs-root == 'true' ||
+      needs.changes.outputs.assets == 'true' ||
+      needs.changes.outputs.root-config == 'true')
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build webapp (dependency)
+        run: npm run build -w @slicc/webapp
+      - name: Build swift-server (dependency)
+        run: cd packages/swift-server && swift build -c release
+      - name: Build
+        run: npm run build -w @slicc/swift-launcher
+
+  # Wait for any in-progress release before allowing merge queue to land.
+  # Only runs on merge_group events; skipped (= passing) for PRs.
+  release-gate:
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      actions: read
+    steps:
+      - name: Wait for active release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          while true; do
+            ACTIVE=$(gh api "repos/${{ github.repository }}/actions/workflows/release.yml/runs?status=in_progress&per_page=1" --jq '.total_count')
+            QUEUED=$(gh api "repos/${{ github.repository }}/actions/workflows/release.yml/runs?status=queued&per_page=1" --jq '.total_count')
+            if [ "$ACTIVE" = "0" ] && [ "$QUEUED" = "0" ]; then
+              echo "No release in progress, proceeding"
+              break
+            fi
+            echo "Release running (active=$ACTIVE queued=$QUEUED), waiting 30s..."
+            sleep 30
+          done
+
+  # Summary job — the single required status check for branch protection
+  ci:
+    if: always()
+    needs:
+      [
+        changes,
+        lint,
+        webapp,
+        node-server,
+        chrome-extension,
+        cloudflare-worker,
+        swift-launcher,
+        swift-server,
+        release-gate,
+      ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check job results
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" || "${{ contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            echo "::error::One or more jobs failed or were cancelled"
+            exit 1
+          fi

@@ -160,7 +160,9 @@ export async function loadSkills(fs: VirtualFS, skillsDir: string): Promise<Skil
   const discoveredSkills = await loadDiscoveredSkills(fs, skillsDir);
   const standaloneSkills = await loadStandaloneMarkdownSkills(fs, skillsDir);
   const nativeDiscoveredSkills = discoveredSkills.filter((skill) => skill.source === 'native');
-  const compatibilityDiscoveredSkills = discoveredSkills.filter((skill) => skill.source !== 'native');
+  const compatibilityDiscoveredSkills = discoveredSkills.filter(
+    (skill) => skill.source !== 'native'
+  );
   const skills = dedupeSkillsByName([
     ...nativeDiscoveredSkills,
     ...standaloneSkills,
@@ -173,7 +175,10 @@ export async function loadSkills(fs: VirtualFS, skillsDir: string): Promise<Skil
 
 type LoadedDiscoveredSkill = Skill & { source: SkillDiscoverySource };
 
-async function loadDiscoveredSkills(fs: VirtualFS, skillsDir: string): Promise<LoadedDiscoveredSkill[]> {
+async function loadDiscoveredSkills(
+  fs: VirtualFS,
+  skillsDir: string
+): Promise<LoadedDiscoveredSkill[]> {
   const discovered = await discoverSkills(fs, skillsDir);
   const skills: LoadedDiscoveredSkill[] = [];
 

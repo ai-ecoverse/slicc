@@ -8,15 +8,15 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
 
 ## Directory Structure
 
-| Path | Purpose |
-| --- | --- |
-| `packages/vfs-root/shared/` | Shared content that becomes `/shared/` in the VFS |
-| `packages/vfs-root/workspace/` | Default workspace content that becomes `/workspace/` in the VFS |
-| `packages/vfs-root/shared/CLAUDE.md` | Agent-facing runtime instructions bundled into `/shared/CLAUDE.md` |
-| `packages/vfs-root/shared/sprinkles/` | Built-in sprinkle UIs |
-| `packages/vfs-root/shared/sounds/` | Shared notification sounds |
-| `packages/vfs-root/shared/skill-catalog.json` | Built-in skill catalog metadata |
-| `packages/vfs-root/workspace/skills/` | Default installable workspace skills |
+| Path                                          | Purpose                                                            |
+| --------------------------------------------- | ------------------------------------------------------------------ |
+| `packages/vfs-root/shared/`                   | Shared content that becomes `/shared/` in the VFS                  |
+| `packages/vfs-root/workspace/`                | Default workspace content that becomes `/workspace/` in the VFS    |
+| `packages/vfs-root/shared/CLAUDE.md`          | Agent-facing runtime instructions bundled into `/shared/CLAUDE.md` |
+| `packages/vfs-root/shared/sprinkles/`         | Built-in sprinkle UIs                                              |
+| `packages/vfs-root/shared/sounds/`            | Shared notification sounds                                         |
+| `packages/vfs-root/shared/skill-catalog.json` | Built-in skill catalog metadata                                    |
+| `packages/vfs-root/workspace/skills/`         | Default installable workspace skills                               |
 
 ## Adding Default Content
 

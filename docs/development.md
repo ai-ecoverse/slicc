@@ -4,32 +4,28 @@ Build, run, test, and debug SLICC locally.
 
 ## Build and Development Commands
 
-| Command | What It Does | When to Use |
-|---------|-------------|-----------|
-| `npm run dev:full` | Full dev mode: Vite HMR + Chrome + CDP proxy (port 5710) | Interactive development; live reload; test browser features |
-| `npm run dev:electron -- /Applications/Slack.app` | Launch the main CLI in Electron attach mode against an Electron app | Electron overlay/runtime work |
-| `npm run dev` | Vite dev server only (no Chrome/CDP) | Quick UI iteration without launching browser |
-| `npm run qa:setup` | Build the extension and scaffold dedicated `leader` / `follower` / `extension` Chrome QA profiles | First-time manual verification setup; reset profile colors/state |
-| `npm run qa:leader` | Launch the CLI with the dedicated leader Chrome profile, auto-connected to the staging tray hub | Manual tray-leader verification; `host` should show `status: leader` |
-| `npm run qa:follower` | Launch the CLI with the dedicated follower Chrome profile | Manual follower-join verification with isolated browser state |
-| `npm run qa:extension` | Rebuild the extension, then launch the CLI with the dedicated extension profile auto-loading `dist/extension` | Extension verification without re-loading unpacked extension by hand |
-| `npm run build` | Production build: Vite UI + TSC CLI/Electron Node target | Pre-deployment validation; final bundle check |
-| `npm run build:ui` | Vite build only into `dist/ui/` | Build UI assets separately |
-| `npm run build:cli` | TSC build only into `dist/node-server/` | Build CLI server + Electron attach helpers separately |
-| `npm run build:extension` | Chrome extension bundle into `dist/extension/` | Build extension; load in `chrome://extensions` |
-| `npm run package:release` | Package deterministic extension + Node/CLI release artifacts into `artifacts/release/` (after running the build commands) | Prepare CI/local release assets for GitHub Releases and later npm publish wiring |
-| `npm run start` | Run production CLI (requires build first) | Run built production bundle |
-| `npm run start:electron -- /Applications/Slack.app` | Run the built Electron attach mode | Smoke-test production Electron output |
-| `npm run typecheck` | Typecheck browser + Node targets | Verify no type errors before committing |
-| `npm run test` | Vitest run (all tests) | Run full test suite; CI validation |
-| `SLICC_TEST_SERVER_URL=http://localhost:5710 npm run test:server-integration` | Run shared server API conformance tests against an externally running Node or Swift server | Validate standalone server HTTP/WebSocket behavior |
-| `npm run test:e2e` | Playwright e2e tests for preview SW (requires `npm run build` first) | Validate preview serving and project serve mode in a real browser |
-| `npm run test:watch` | Vitest watch mode | Iterate on test changes; TDD workflow |
-| `npx vitest run packages/webapp/tests/fs/virtual-fs.test.ts` | Run single test file | Debug a specific module |
-| `npx wrangler dev --config packages/cloudflare-worker/wrangler.jsonc` | Run the Cloudflare Worker tray hub locally (if Wrangler is installed/authenticated) | Exercise `packages/cloudflare-worker/src/` against a real Worker runtime |
-| `npx wrangler deploy --env staging --config packages/cloudflare-worker/wrangler.jsonc` | Deploy the staging Cloudflare Worker tray hub using `packages/cloudflare-worker/wrangler.jsonc` | Publish the staging tray hub (`slicc-tray-hub-staging`) used by GitHub Actions |
-| `npx wrangler deploy --config packages/cloudflare-worker/wrangler.jsonc` | Deploy the production Cloudflare Worker tray hub using `packages/cloudflare-worker/wrangler.jsonc` | Publish the production tray hub |
-| `cd packages/cloudflare-worker && WORKER_BASE_URL=https://... npm test -- tests/deployed.test.ts` | Run the deployed tray-hub smoke test | Verify the live Worker contract (`POST /tray`, controller attach, leader WebSocket, webhook responses) |
+| Command                                                                                           | What It Does                                                                                                              | When to Use                                                                                            |
+| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `npm run dev:full`                                                                                | Full dev mode: Vite HMR + Chrome + CDP proxy (port 5710)                                                                  | Interactive development; live reload; test browser features                                            |
+| `npm run dev:electron -- /Applications/Slack.app`                                                 | Launch the main CLI in Electron attach mode against an Electron app                                                       | Electron overlay/runtime work                                                                          |
+| `npm run dev`                                                                                     | Vite dev server only (no Chrome/CDP)                                                                                      | Quick UI iteration without launching browser                                                           |
+| `npm run start:extension`                                                                         | Rebuild the extension, then launch the CLI with the dedicated extension profile auto-loading `dist/extension`             | Extension verification without re-loading unpacked extension by hand                                   |
+| `npm run build`                                                                                   | Production build: Vite UI + TSC CLI/Electron Node target                                                                  | Pre-deployment validation; final bundle check                                                          |
+| `npm run build:ui`                                                                                | Vite build only into `dist/ui/`                                                                                           | Build UI assets separately                                                                             |
+| `npm run build:cli`                                                                               | TSC build only into `dist/node-server/`                                                                                   | Build CLI server + Electron attach helpers separately                                                  |
+| `npm run build:extension`                                                                         | Chrome extension bundle into `dist/extension/`                                                                            | Build extension; load in `chrome://extensions`                                                         |
+| `npm run package:release`                                                                         | Package deterministic extension + Node/CLI release artifacts into `artifacts/release/` (after running the build commands) | Prepare CI/local release assets for GitHub Releases and later npm publish wiring                       |
+| `npm run start`                                                                                   | Run production CLI (requires build first)                                                                                 | Run built production bundle                                                                            |
+| `npm run start:electron -- /Applications/Slack.app`                                               | Run the built Electron attach mode                                                                                        | Smoke-test production Electron output                                                                  |
+| `npm run typecheck`                                                                               | Typecheck browser + Node targets                                                                                          | Verify no type errors before committing                                                                |
+| `npm run test`                                                                                    | Vitest run (all tests)                                                                                                    | Run full test suite; CI validation                                                                     |
+| `SLICC_TEST_SERVER_URL=http://localhost:5710 npm run test:server-integration`                     | Run shared server API conformance tests against an externally running Node or Swift server                                | Validate standalone server HTTP/WebSocket behavior                                                     |
+| `npm run test:e2e`                                                                                | Playwright e2e tests for preview SW (requires `npm run build` first)                                                      | Validate preview serving and project serve mode in a real browser                                      |
+| `npx vitest run packages/webapp/tests/fs/virtual-fs.test.ts`                                      | Run single test file                                                                                                      | Debug a specific module                                                                                |
+| `npx wrangler dev --config packages/cloudflare-worker/wrangler.jsonc`                             | Run the Cloudflare Worker tray hub locally (if Wrangler is installed/authenticated)                                       | Exercise `packages/cloudflare-worker/src/` against a real Worker runtime                               |
+| `npx wrangler deploy --env staging --config packages/cloudflare-worker/wrangler.jsonc`            | Deploy the staging Cloudflare Worker tray hub using `packages/cloudflare-worker/wrangler.jsonc`                           | Publish the staging tray hub (`slicc-tray-hub-staging`) used by GitHub Actions                         |
+| `npx wrangler deploy --config packages/cloudflare-worker/wrangler.jsonc`                          | Deploy the production Cloudflare Worker tray hub using `packages/cloudflare-worker/wrangler.jsonc`                        | Publish the production tray hub                                                                        |
+| `cd packages/cloudflare-worker && WORKER_BASE_URL=https://... npm test -- tests/deployed.test.ts` | Run the deployed tray-hub smoke test                                                                                      | Verify the live Worker contract (`POST /tray`, controller attach, leader WebSocket, webhook responses) |
 
 ## Release Operations
 
@@ -83,12 +79,12 @@ When `WORKER_BASE_URL` is set for the CLI/Electron server, the standalone browse
 
 ## Ports (CLI Mode Only)
 
-| Port | Service | Mode |
-|------|---------|------|
-| 5710 | UI server | CLI + Electron embedded app |
-| 9222 | Chrome CDP | CLI only |
-| 9223 | Electron CDP | Electron float only |
-| 24679 | Vite HMR WebSocket | CLI/Electron dev mode |
+| Port  | Service            | Mode                        |
+| ----- | ------------------ | --------------------------- |
+| 5710  | UI server          | CLI + Electron embedded app |
+| 9222  | Chrome CDP         | CLI only                    |
+| 9223  | Electron CDP       | Electron float only         |
+| 24679 | Vite HMR WebSocket | CLI/Electron dev mode       |
 
 ## Environment Variables
 
@@ -99,7 +95,7 @@ When `WORKER_BASE_URL` is set for the CLI/Electron server, the standalone browse
 
 1. **Edit** — Change source code in `packages/*/src/`
 2. **Typecheck** — Run `npm run typecheck` (browser + Node targets)
-3. **Test** — Run `npm run test` (or `npm run test:watch` for rapid iteration)
+3. **Test** — Run `npm run test`
 4. **Build** — Run all four build gates: `npm run typecheck`, `npm run test`, `npm run build`, `npm run build:extension`
 5. **Verify manually** — Test in the relevant runtimes; include Electron mode when touching float/runtime code (see checklist below)
 
@@ -118,9 +114,7 @@ Manual verification in the relevant runtimes:
   - Launch Chrome automatically
   - Navigate to http://localhost:5710
   - Interact with UI; check functionality
-- [ ] Feature works with QA Chrome profiles when browser isolation matters (`npm run qa:setup`, then `qa:leader` / `qa:follower` / `qa:extension`)
-  - Dedicated profile colors are visible
-  - Leader/follower state stays isolated between windows
+- [ ] Feature works with extension profile (`npm run start:extension`)
   - Extension profile auto-loads `dist/extension`
 - [ ] Feature works in extension mode (load `dist/extension/` unpacked in `chrome://extensions`)
   - Load `dist/extension/` as unpacked extension
@@ -176,9 +170,10 @@ Use these before relying on CI:
 
 > **End users** install the extension from the [Chrome Web Store](https://chromewebstore.google.com/detail/slicc/akggccfpkleihhemkkikggopnifgelbk). The steps below are for **development** only — loading a local build for testing.
 
-If you want a reusable browser profile instead of re-loading the unpacked extension by hand every time, run `npm run qa:setup` once and use `npm run qa:extension` for subsequent launches.
+If you want a reusable browser profile instead of re-loading the unpacked extension by hand every time, use `npm run start:extension`.
 
 1. **Build extension bundle**
+
    ```bash
    npm run build:extension
    ```
@@ -211,11 +206,13 @@ If you want a reusable browser profile instead of re-loading the unpacked extens
 ### Setup
 
 Start dev server with Chrome and CDP:
+
 ```bash
 npm run dev:full
 ```
 
 This launches:
+
 - Express server on port 5710
 - Chrome with remote debugging on port 9222
 - Vite HMR WebSocket on port 24679
@@ -223,6 +220,7 @@ This launches:
 ### Electron float debugging
 
 Start Electron attach mode against an Electron app:
+
 ```bash
 npm run dev:electron -- /Applications/Slack.app
 
@@ -231,6 +229,7 @@ npm run dev:electron -- /Applications/Slack.app
 ```
 
 This launches:
+
 - The main CLI entrypoint in `--electron` mode
 - The target Electron app with remote debugging on port 9223
 - The same local UI server on port 5710 plus persistent overlay injection from `electron-overlay-entry.js`
@@ -238,6 +237,7 @@ This launches:
 ### Viewing console output
 
 Browser console output is forwarded to CLI stdout via CDP console forwarder. Check the terminal:
+
 ```
 [browser] log: some message from page
 [browser] error: exception thrown
@@ -253,6 +253,7 @@ console.log('User message:', text);
 ```
 
 Output appears in CLI terminal:
+
 ```
 [browser] log: User message: hello
 ```
@@ -262,6 +263,7 @@ Remove before committing.
 ### Checking HTTP requests
 
 The Express server logs all requests to CLI stdout with method, URL, status, and duration:
+
 ```
 GET  /cdp  200  12ms
 POST /api/fetch-proxy  200  45ms
@@ -270,6 +272,7 @@ POST /api/fetch-proxy  200  45ms
 ## Logging
 
 Import logger from core:
+
 ```typescript
 import { createLogger } from '../core/logger.js';
 const log = createLogger('my-module');
@@ -286,15 +289,14 @@ log.error('error message');
 
 ## Test Running Reference
 
-| Command | Purpose |
-|---------|---------|
-| `npm run test` | Run all tests once |
+| Command                                                                       | Purpose                                                        |
+| ----------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `npm run test`                                                                | Run all tests once                                             |
 | `SLICC_TEST_SERVER_URL=http://localhost:5710 npm run test:server-integration` | Run server integration suite against an already running server |
-| `npm run test:e2e` | Playwright e2e tests for preview SW (requires build) |
-| `npm run test:watch` | Watch mode; re-run on file change |
-| `npx vitest run packages/webapp/tests/fs/virtual-fs.test.ts` | Run single file |
-| `npx vitest run packages/webapp/tests/fs/` | Run all tests in directory |
-| `npx vitest run --reporter=verbose` | Verbose test output |
+| `npm run test:e2e`                                                            | Playwright e2e tests for preview SW (requires build)           |
+| `npx vitest run packages/webapp/tests/fs/virtual-fs.test.ts`                  | Run single file                                                |
+| `npx vitest run packages/webapp/tests/fs/`                                    | Run all tests in directory                                     |
+| `npx vitest run --reporter=verbose`                                           | Verbose test output                                            |
 
 ## Multi-Mode Compatibility Checklist
 
@@ -336,6 +338,7 @@ if (isExtension) {
 New pure-logic code MUST have tests. Test file location: `foo.test.ts` in `packages/*/tests/` mirroring the `src/` structure.
 
 Test setup uses `fake-indexeddb/auto` for VirtualFS:
+
 ```typescript
 import 'fake-indexeddb/auto';
 import { VirtualFS } from './virtual-fs.js';
@@ -348,6 +351,7 @@ const vfs = await VirtualFS.create({
 ```
 
 Acceptable to skip tests:
+
 - DOM-dependent code (UI panels, xterm.js)
 - `chrome.debugger` API code (DebuggerClient)
 - These should be manually verified in both modes
