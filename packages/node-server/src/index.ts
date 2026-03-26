@@ -932,25 +932,41 @@ async function main() {
       // Forbidden-header transport: browser cannot send Cookie via fetch(),
       // so the client encodes it as X-Proxy-Cookie. Restore it here.
       const proxyCookie = req.headers['x-proxy-cookie'];
-      if (typeof proxyCookie === 'string') {
-        headers['cookie'] = proxyCookie;
+      if (proxyCookie) {
+        headers['cookie'] = Array.isArray(proxyCookie) ? proxyCookie[0] : proxyCookie;
       }
+
+      // Helper: check if an origin/referer value is a localhost URL
+      function isLocalhostOrigin(origin: string | undefined): boolean {
+        if (!origin) return false;
+        try {
+          const url = new URL(origin);
+          return (
+            url.hostname === 'localhost' ||
+            url.hostname === '127.0.0.1' ||
+            url.hostname === '::1' ||
+            url.hostname === '[::1]'
+          );
+        } catch {
+          return false;
+        }
+      }
+
       // Forbidden-header transport: restore X-Proxy-Origin → Origin
       const proxyOrigin = req.headers['x-proxy-origin'];
-      if (typeof proxyOrigin === 'string') {
-        headers['origin'] = proxyOrigin;
-      } else {
-        // No explicit origin requested — strip the browser's localhost origin
-        // to avoid upstream APIs rejecting based on Origin check
+      if (proxyOrigin) {
+        headers['origin'] = Array.isArray(proxyOrigin) ? proxyOrigin[0] : proxyOrigin;
+      } else if (isLocalhostOrigin(headers['origin'] as string)) {
+        // Only strip browser's auto-added localhost origin, preserve legitimate origins
         delete headers['origin'];
       }
 
       // Forbidden-header transport: restore X-Proxy-Referer → Referer
       const proxyReferer = req.headers['x-proxy-referer'];
-      if (typeof proxyReferer === 'string') {
-        headers['referer'] = proxyReferer;
-      } else {
-        // Strip browser's localhost referer
+      if (proxyReferer) {
+        headers['referer'] = Array.isArray(proxyReferer) ? proxyReferer[0] : proxyReferer;
+      } else if (isLocalhostOrigin(headers['referer'] as string)) {
+        // Only strip browser's auto-added localhost referer, preserve legitimate referers
         delete headers['referer'];
       }
 

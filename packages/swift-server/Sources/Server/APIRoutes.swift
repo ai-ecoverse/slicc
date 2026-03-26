@@ -338,11 +338,18 @@ private func makeProxyRequest(from request: Request, targetURL: URL, rawBody: By
         headers.add(name: "Cookie", value: proxyCookie)
     }
 
+    // Helper to check if a URL string is localhost
+    func isLocalhostOrigin(_ value: String) -> Bool {
+        guard let url = URL(string: value) else { return false }
+        let host = url.host ?? ""
+        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+    }
+
     // Forbidden-header transport: restore X-Proxy-Origin → Origin
     if let proxyOrigin = headers["X-Proxy-Origin"].first {
         headers.replaceOrAdd(name: "Origin", value: proxyOrigin)
-    } else {
-        // Strip browser's localhost origin
+    } else if let currentOrigin = headers["Origin"].first, isLocalhostOrigin(currentOrigin) {
+        // Only strip browser's auto-added localhost origin, preserve legitimate origins
         headers.remove(name: "Origin")
     }
     headers.remove(name: "X-Proxy-Origin")
@@ -350,7 +357,8 @@ private func makeProxyRequest(from request: Request, targetURL: URL, rawBody: By
     // Forbidden-header transport: restore X-Proxy-Referer → Referer
     if let proxyReferer = headers["X-Proxy-Referer"].first {
         headers.replaceOrAdd(name: "Referer", value: proxyReferer)
-    } else {
+    } else if let currentReferer = headers["Referer"].first, isLocalhostOrigin(currentReferer) {
+        // Only strip browser's auto-added localhost referer, preserve legitimate referers
         headers.remove(name: "Referer")
     }
     headers.remove(name: "X-Proxy-Referer")
