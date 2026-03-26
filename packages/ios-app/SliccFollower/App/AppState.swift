@@ -25,5 +25,52 @@ class AppState: ObservableObject {
     @Published var trayId: String?
     @Published var messages: [ChatMessage] = []
     @Published var isStreaming: Bool = false
+
+    // Connection metadata (populated after successful connect)
+    @Published var leaderConnected: Bool = false
+    @Published var participantCount: Int = 0
+    @Published var connectedSince: Date?
+    @Published var autoReconnect: Bool = true
+
+    // Join URL history (last 5)
+    @Published var joinUrlHistory: [String] = []
+
+    /// Attempt to connect to the tray using the current joinUrl.
+    func connect() {
+        guard !joinUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        connectionState = .connecting
+        addToHistory(joinUrl)
+        // TODO: Wire up TraySignalingClient + WebRTC connection
+    }
+
+    /// Disconnect from the current tray session.
+    func disconnect() {
+        connectionState = .disconnected
+        trayId = nil
+        leaderConnected = false
+        participantCount = 0
+        connectedSince = nil
+        // TODO: Tear down WebRTC / signaling
+    }
+
+    /// Clear all stored data (history, credentials, etc.)
+    func clearStoredData() {
+        joinUrlHistory = []
+        UserDefaults.standard.removeObject(forKey: "joinUrlHistory")
+        UserDefaults.standard.removeObject(forKey: "joinUrl")
+    }
+
+    // MARK: - Private
+
+    private func addToHistory(_ url: String) {
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        joinUrlHistory.removeAll { $0 == trimmed }
+        joinUrlHistory.insert(trimmed, at: 0)
+        if joinUrlHistory.count > 5 {
+            joinUrlHistory = Array(joinUrlHistory.prefix(5))
+        }
+        UserDefaults.standard.set(joinUrlHistory, forKey: "joinUrlHistory")
+    }
 }
 
