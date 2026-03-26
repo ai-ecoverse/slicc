@@ -58,6 +58,19 @@ describe('shared server API conformance', () => {
     expectStringOrNull(body['trayJoinUrl']);
   });
 
+  it('returns a non-empty, valid trayWorkerBaseUrl string', async () => {
+    const response = await fetchFromServer('/api/runtime-config');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as Record<string, unknown>;
+    const url = body['trayWorkerBaseUrl'];
+    expect(typeof url).toBe('string');
+    expect((url as string).length).toBeGreaterThan(0);
+
+    const parsed = new URL(url as string);
+    expect(parsed.protocol).toBe('https:');
+  });
+
   it('serves the OAuth callback page and relays/stores pending OAuth results', async () => {
     const drain = await fetchFromServer('/api/oauth-result');
     expect([200, 204]).toContain(drain.status);
