@@ -53,7 +53,7 @@ export class BrowserAPI {
   private trayTargetProvider: TrayTargetProvider | null = null;
   private remoteTargetInfo: { runtimeId: string; localTargetId: string } | null = null;
   private _tabLock: Promise<void> = Promise.resolve();
-  private _onSessionChange?: (sessionId: string, transport: CDPTransport) => void;
+  private _onSessionChange?: ((sessionId: string, transport: CDPTransport) => void) | undefined;
   private readonly handleJavaScriptDialogOpening = async (
     params: Record<string, unknown>
   ): Promise<void> => {
@@ -92,12 +92,19 @@ export class BrowserAPI {
   }
 
   /**
-   * Register a callback invoked after every `attachToPage()` completes.
-   * The callback receives the CDP session ID and the active transport,
-   * allowing subscribers (e.g. BshWatchdog) to track transport swaps and
-   * know that `Page.enable` has already been sent.
+   * Register a callback invoked when a new CDP session is established via
+   * `attachToPage()`.  The callback receives the CDP session ID and the
+   * active transport, allowing subscribers (e.g. BshWatchdog) to track
+   * transport swaps and know that `Page.enable` has already been sent.
+   *
+   * The callback is **not** invoked when `attachToPage()` returns early
+   * because the requested target is already attached (no new session).
+   *
+   * Pass `undefined` to clear a previously registered callback.
    */
-  setSessionChangeCallback(cb: (sessionId: string, transport: CDPTransport) => void): void {
+  setSessionChangeCallback(
+    cb: ((sessionId: string, transport: CDPTransport) => void) | undefined
+  ): void {
     this._onSessionChange = cb;
   }
 

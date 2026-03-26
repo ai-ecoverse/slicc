@@ -18,7 +18,9 @@ import { createLogger } from '../core/logger.js';
 const log = createLogger('bsh-watchdog');
 
 export interface BshWatchdogOptions {
-  /** CDP transport to subscribe to navigation events on. */
+  /** Optional CDP transport to subscribe to navigation events on.
+   *  If `browserAPI` is provided, the watchdog will derive the transport
+   *  from `browserAPI.getTransport()` and this option may be omitted. */
   transport?: CDPTransport;
   /** BrowserAPI instance — preferred over raw transport.
    *  When provided, the watchdog registers a session-change callback so it
@@ -93,6 +95,10 @@ export class BshWatchdog {
     if (this.discoveryTimer) {
       clearInterval(this.discoveryTimer);
       this.discoveryTimer = null;
+    }
+
+    if (this.browserAPI) {
+      this.browserAPI.setSessionChangeCallback(undefined);
     }
 
     this.entries = [];

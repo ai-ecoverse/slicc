@@ -333,6 +333,9 @@ describe('BshWatchdog', () => {
     });
 
     watchdog.stop();
+
+    // stop() should clear the session-change callback
+    expect(mockBrowserAPI.setSessionChangeCallback).toHaveBeenCalledWith(undefined);
   });
 
   it('swaps transport via setTransport()', async () => {
