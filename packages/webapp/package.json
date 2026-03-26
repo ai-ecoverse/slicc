@@ -12,7 +12,7 @@
     "@cantoo/pdf-lib": "^2.6.1",
     "@imagemagick/magick-wasm": "^0.0.39",
     "@isomorphic-git/lightning-fs": "4.6.2",
-    "@mariozechner/pi-agent-core": "^0.55.4",
+    "@mariozechner/pi-agent-core": "^0.62.0",
     "@mariozechner/pi-ai": "^0.55.4",
     "@mariozechner/pi-coding-agent": "^0.57.1",
     "@xterm/addon-fit": "^0.11.0",
