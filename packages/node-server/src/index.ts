@@ -749,7 +749,12 @@ async function main() {
 
   app.get('/api/runtime-config', (_req, res) => {
     res.json({
-      trayWorkerBaseUrl: RUNTIME_FLAGS.leadWorkerBaseUrl ?? process.env['WORKER_BASE_URL'] ?? null,
+      trayWorkerBaseUrl:
+        RUNTIME_FLAGS.leadWorkerBaseUrl ??
+        process.env['WORKER_BASE_URL'] ??
+        (DEV_MODE
+          ? 'https://slicc-tray-hub-staging.minivelos.workers.dev'
+          : 'https://www.sliccy.ai'),
       trayJoinUrl: discoveredTrayJoinUrl ?? null,
     });
   });
