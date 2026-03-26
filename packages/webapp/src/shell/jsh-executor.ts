@@ -286,6 +286,11 @@ export async function executeJsCode(
 
       // Register a fetch proxy handler so cross-origin fetch() calls from the
       // sandbox are routed through the host page (which has host_permissions).
+      // Note: the sandbox already encodes forbidden headers (Cookie → X-Proxy-Cookie,
+      // Proxy-* → X-Proxy-Proxy-*) before postMessage. In extension mode the parent's
+      // fetch goes direct to the target URL (not through /api/fetch-proxy), so there is
+      // no server-side decoder — Cookie stripping still applies. The encoding is applied
+      // for consistency and will work if the parent ever routes through the proxy.
       const fetchProxyHandler = (event: MessageEvent) => {
         const msg = event.data;
         if (!msg || msg.type !== 'fetch_proxy') return;
