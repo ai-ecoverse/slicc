@@ -94,8 +94,12 @@ describe('hostnameMatches', () => {
     expect(hostnameMatches('foo.bar.okta.com', '*.okta.com')).toBe(true);
   });
 
-  it('does not match bare domain against wildcard', () => {
-    expect(hostnameMatches('okta.com', '*.okta.com')).toBe(false);
+  it('matches bare domain against wildcard', () => {
+    expect(hostnameMatches('okta.com', '*.okta.com')).toBe(true);
+  });
+
+  it('matches bare domain httpbin.org against wildcard', () => {
+    expect(hostnameMatches('httpbin.org', '*.httpbin.org')).toBe(true);
   });
 
   it('does not match unrelated domain', () => {

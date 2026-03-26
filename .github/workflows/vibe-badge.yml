@@ -1,20 +1,25 @@
 name: Update Vibe Coded Badge
 
 on:
-  push:
-    branches: [main]
+  schedule:
+    - cron: '0 6 * * *' # daily at 06:00 UTC
+  workflow_dispatch: # manual trigger
+
+concurrency:
+  group: vibe-badge
+  cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   update-badge:
     runs-on: ubuntu-latest
-    if: "!contains(github.event.head_commit.message, '[skip vibe-badge]')"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
 
       - uses: ai-ecoverse/vibe-coded-badge-action@main

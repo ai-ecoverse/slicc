@@ -461,6 +461,13 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     }
   );
   (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
+  (window as unknown as Record<string, unknown>).__slicc_reloadSkills = () => {
+    chrome.runtime.sendMessage({
+      source: 'panel',
+      payload: { type: 'reload-skills' },
+    });
+    return Promise.resolve();
+  };
 
   // Register handler so the offscreen proxy can relay sprinkle operations here.
   // Routed through the OffscreenClient's existing onMessage listener to ensure delivery.
@@ -952,9 +959,8 @@ async function main(): Promise<void> {
       try {
         const { BshWatchdog } = await import('../shell/bsh-watchdog.js');
         const bshWatchdog = new BshWatchdog({
-          transport: browser.getTransport(),
+          browserAPI: browser,
           fs: sharedFs,
-          execute: (scriptPath) => shell.executeScriptFile(scriptPath),
         });
         void bshWatchdog.start();
         window.addEventListener('beforeunload', () => bshWatchdog.stop(), { once: true });
@@ -1195,6 +1201,8 @@ async function main(): Promise<void> {
     });
     // Expose for open command, sprinkle shell command, and E2E/demo scripts
     (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
+    (window as unknown as Record<string, unknown>).__slicc_reloadSkills = () =>
+      orchestrator.reloadAllSkills();
     if (__DEV__) (window as unknown as Record<string, unknown>).__slicc_orchestrator = orchestrator;
 
     await sprinkleManager.refresh();

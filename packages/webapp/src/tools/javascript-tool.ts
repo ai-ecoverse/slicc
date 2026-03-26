@@ -100,9 +100,20 @@ window.fetch = async (input, init) => {
   try { parsed = new URL(url, location.origin); } catch { return _origFetch(input, init); }
   if (parsed.origin === location.origin) return _origFetch(input, init);
   if (parsed.hostname.endsWith('anthropic.com')) return _origFetch(input, init);
+  const hdrs = Object.assign({}, init && init.headers ? Object.fromEntries(new Headers(init.headers).entries()) : {}, { 'X-Target-URL': url });
+  // Transport-encode forbidden headers so the browser doesn't strip them
+  const encoded = {};
+  for (const [k, v] of Object.entries(hdrs)) {
+    const lk = k.toLowerCase();
+    if (lk === 'cookie') { encoded['X-Proxy-Cookie'] = v; }
+    else if (lk === 'origin') { encoded['X-Proxy-Origin'] = v; }
+    else if (lk === 'referer') { encoded['X-Proxy-Referer'] = v; }
+    else if (lk.startsWith('proxy-')) { encoded['X-Proxy-' + k] = v; }
+    else { encoded[k] = v; }
+  }
   const proxyInit = {
     method: (init && init.method) || 'GET',
-    headers: Object.assign({}, init && init.headers ? Object.fromEntries(new Headers(init.headers).entries()) : {}, { 'X-Target-URL': url }),
+    headers: encoded,
     cache: 'no-store',
   };
   if (init && init.body && !['GET','HEAD'].includes(proxyInit.method)) proxyInit.body = init.body;

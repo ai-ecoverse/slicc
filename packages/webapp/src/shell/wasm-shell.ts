@@ -87,6 +87,21 @@ async function readResponseBody(resp: Response, url?: string): Promise<string> {
  * Binary responses (images, archives, etc.) are encoded as latin1 strings
  * to preserve byte fidelity through just-bash's string-typed FetchResult.
  */
+// Convert Headers or Record<string, string> to a plain Record<string, string>.
+function headersToRecord(
+  headers: Record<string, string> | Headers | undefined
+): Record<string, string> | undefined {
+  if (!headers) return undefined;
+  if (headers instanceof Headers) {
+    const rec: Record<string, string> = {};
+    headers.forEach((v, k) => {
+      rec[k] = v;
+    });
+    return rec;
+  }
+  return headers;
+}
+
 // Multipart form bodies contain latin1-encoded binary file content from curl —
 // convert to raw bytes so fetch() doesn't re-encode as UTF-8.
 function prepareRequestBody(
@@ -103,16 +118,64 @@ function prepareRequestBody(
   return body;
 }
 
+/**
+ * Encode request headers that browsers silently strip (forbidden headers).
+ * Cookie → X-Proxy-Cookie, Origin → X-Proxy-Origin, Referer → X-Proxy-Referer, Proxy-* → X-Proxy-Proxy-*
+ */
+export function encodeForbiddenRequestHeaders(
+  headers: Record<string, string> | undefined
+): Record<string, string> {
+  if (!headers) return {};
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    const lower = key.toLowerCase();
+    if (lower === 'cookie') {
+      result['X-Proxy-Cookie'] = value;
+    } else if (lower === 'origin') {
+      result['X-Proxy-Origin'] = value;
+    } else if (lower === 'referer') {
+      result['X-Proxy-Referer'] = value;
+    } else if (lower.startsWith('proxy-')) {
+      result[`X-Proxy-${key}`] = value;
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+/**
+ * Decode response headers that the proxy transported under non-forbidden names.
+ * X-Proxy-Set-Cookie (JSON array) → set-cookie (JSON array string)
+ */
+export function decodeForbiddenResponseHeaders(
+  headers: Record<string, string>
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    const lower = key.toLowerCase();
+    if (lower === 'x-proxy-set-cookie') {
+      // Value is a JSON array of Set-Cookie strings from the proxy.
+      // Keep as JSON array string since Record<string,string> can only hold one value.
+      result['set-cookie'] = value;
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
 function createProxiedFetch(): SecureFetch {
   const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
   if (isExtension) {
     // Extension mode — host_permissions grant native CORS bypass
     return async (url, options) => {
+      const plainHeaders = headersToRecord(options?.headers);
       const resp = await fetch(url, {
         method: options?.method ?? 'GET',
-        headers: options?.headers,
-        body: prepareRequestBody(options?.body, options?.headers),
+        headers: plainHeaders,
+        body: prepareRequestBody(options?.body, plainHeaders),
       });
       const body = await readResponseBody(resp, url);
       const respHeaders: Record<string, string> = {};
@@ -126,8 +189,10 @@ function createProxiedFetch(): SecureFetch {
   // CLI mode — proxy through /api/fetch-proxy
   return async (url, options) => {
     const method = options?.method ?? 'GET';
+    const plainHeaders = headersToRecord(options?.headers);
+    const encoded = encodeForbiddenRequestHeaders(plainHeaders);
     const headers: Record<string, string> = {
-      ...options?.headers,
+      ...encoded,
       'X-Target-URL': url,
     };
 
@@ -151,10 +216,11 @@ function createProxiedFetch(): SecureFetch {
     }
 
     const body = await readResponseBody(resp, url);
-    const respHeaders: Record<string, string> = {};
+    const rawHeaders: Record<string, string> = {};
     resp.headers.forEach((v, k) => {
-      respHeaders[k] = v;
+      rawHeaders[k] = v;
     });
+    const respHeaders = decodeForbiddenResponseHeaders(rawHeaders);
 
     return { status: resp.status, statusText: resp.statusText, headers: respHeaders, body, url };
   };

@@ -27,11 +27,16 @@ import {
   streamSimpleOpenAICompletions,
   getModels,
   getProviders,
+  createAssistantMessageEventStream,
 } from '@mariozechner/pi-ai';
-import { AssistantMessageEventStream } from '@mariozechner/pi-ai/dist/utils/event-stream.js';
-import type { Api, Model, Context, SimpleStreamOptions } from '@mariozechner/pi-ai';
-import type { AnthropicOptions } from '@mariozechner/pi-ai/dist/providers/anthropic.js';
-import type { OpenAICompletionsOptions } from '@mariozechner/pi-ai/dist/providers/openai-completions.js';
+import type {
+  Api,
+  Model,
+  Context,
+  SimpleStreamOptions,
+  AnthropicOptions,
+  OpenAICompletionsOptions,
+} from '@mariozechner/pi-ai';
 import {
   saveOAuthAccount,
   getAccounts,
@@ -513,6 +518,17 @@ async function silentRenewToken(): Promise<string | null> {
       });
 
       console.log('[adobe] Token renewed silently');
+
+      // Refresh model list to repopulate proxyMetadataCache (needed for
+      // OpenAI-compatible model routing). Without this, getModelIds() falls
+      // back to stale localStorage data that may lack the 'api' field.
+      await getAdobeModels().catch((err) =>
+        console.warn(
+          '[adobe] Failed to refresh models after silent renewal:',
+          err instanceof Error ? err.message : String(err)
+        )
+      );
+
       return tokenInfo.accessToken;
     } catch (err) {
       console.warn(
@@ -560,7 +576,7 @@ const streamAdobe = (
   context: Context,
   options: AnthropicOptions | OpenAICompletionsOptions = {}
 ) => {
-  const stream = new AssistantMessageEventStream();
+  const stream = createAssistantMessageEventStream();
   (async () => {
     try {
       const accessToken = await getValidAccessToken();
@@ -609,7 +625,7 @@ const streamAdobe = (
 };
 
 const streamSimpleAdobe = (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => {
-  const stream = new AssistantMessageEventStream();
+  const stream = createAssistantMessageEventStream();
   (async () => {
     try {
       const accessToken = await getValidAccessToken();

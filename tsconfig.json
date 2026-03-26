@@ -12,7 +12,15 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "preserve",
-    "types": ["vite/client"]
+    "types": ["vite/client"],
+    "paths": {
+      "@mariozechner/pi-ai/dist/providers/transform-messages.js": [
+        "./node_modules/@mariozechner/pi-ai/dist/providers/transform-messages.d.ts"
+      ],
+      "@mariozechner/pi-ai/dist/providers/simple-options.js": [
+        "./node_modules/@mariozechner/pi-ai/dist/providers/simple-options.d.ts"
+      ]
+    }
   },
   "include": ["packages/webapp/src/**/*.ts", "packages/chrome-extension/src/**/*.ts"],
   "exclude": ["packages/node-server/src/**/*.ts"]

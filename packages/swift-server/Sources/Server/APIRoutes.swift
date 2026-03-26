@@ -15,9 +15,11 @@ private let contentTypeHeaderValue = "application/json; charset=utf-8"
 private let htmlContentTypeHeaderValue = "text/html; charset=utf-8"
 private let proxyHopByHopHeaders: Set<String> = [
     "host", "connection", "x-target-url", "content-length", "transfer-encoding",
+    "x-proxy-cookie", "x-proxy-origin", "x-proxy-referer",
 ]
 private let proxyBlockedResponseHeaders: Set<String> = [
     "transfer-encoding", "content-encoding", "www-authenticate",
+    "set-cookie",
 ]
 private let fetchProxyMethods: [HTTPRequest.Method] = [.get, .head, .post, .put, .patch, .delete, .options]
 
@@ -46,9 +48,17 @@ func registerAPIRoutes(
     httpClient: HTTPClient
 ) {
     router.get("/api/runtime-config") { _, _ in
-        try jsonResponse(
+        let envWorkerBaseUrl: String? = {
+            guard let raw = ProcessInfo.processInfo.environment["WORKER_BASE_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !raw.isEmpty else { return nil }
+            return raw
+        }()
+        let trayWorkerBaseUrl = config.leadWorkerBaseUrl
+            ?? envWorkerBaseUrl
+            ?? (config.dev ? nil : "https://www.sliccy.ai")
+        return try jsonResponse(
             .object([
-                "trayWorkerBaseUrl": jsonStringOrNull(config.leadWorkerBaseUrl),
+                "trayWorkerBaseUrl": jsonStringOrNull(trayWorkerBaseUrl),
                 "trayJoinUrl": jsonStringOrNull(config.joinUrl),
             ])
         )
@@ -322,6 +332,51 @@ private func jsonHeaders(from headers: HTTPFields) -> LickSystem.JSONObject {
 private func makeProxyRequest(from request: Request, targetURL: URL, rawBody: ByteBuffer) throws -> HTTPClient.Request {
     var headers = HTTPHeaders(request.headers)
     headers.remove(name: "accept-encoding")
+
+    // Forbidden-header transport: restore X-Proxy-Cookie → Cookie
+    if let proxyCookie = headers["x-proxy-cookie"].first {
+        headers.add(name: "Cookie", value: proxyCookie)
+    }
+
+    // Helper to check if a URL string is localhost
+    func isLocalhostOrigin(_ value: String) -> Bool {
+        guard let url = URL(string: value) else { return false }
+        let host = url.host ?? ""
+        return host == "localhost" || host == "127.0.0.1" || host == "::1"
+    }
+
+    // Forbidden-header transport: restore X-Proxy-Origin → Origin
+    if let proxyOrigin = headers["X-Proxy-Origin"].first {
+        headers.replaceOrAdd(name: "Origin", value: proxyOrigin)
+    } else if let currentOrigin = headers["Origin"].first, isLocalhostOrigin(currentOrigin) {
+        // Only strip browser's auto-added localhost origin, preserve legitimate origins
+        headers.remove(name: "Origin")
+    }
+    headers.remove(name: "X-Proxy-Origin")
+
+    // Forbidden-header transport: restore X-Proxy-Referer → Referer
+    if let proxyReferer = headers["X-Proxy-Referer"].first {
+        headers.replaceOrAdd(name: "Referer", value: proxyReferer)
+    } else if let currentReferer = headers["Referer"].first, isLocalhostOrigin(currentReferer) {
+        // Only strip browser's auto-added localhost referer, preserve legitimate referers
+        headers.remove(name: "Referer")
+    }
+    headers.remove(name: "X-Proxy-Referer")
+
+    // Forbidden-header transport: restore X-Proxy-Proxy-* → Proxy-*
+    let proxyPrefixHeaders = headers.compactMap { field -> (String, String)? in
+        let lower = field.name.lowercased()
+        guard lower.hasPrefix("x-proxy-proxy-") else { return nil }
+        let restored = String(field.name.dropFirst("x-proxy-".count))
+        return (restored, field.value)
+    }
+    for (name, _) in proxyPrefixHeaders {
+        headers.remove(name: "x-proxy-\(name)")
+    }
+    for (name, value) in proxyPrefixHeaders {
+        headers.add(name: name, value: value)
+    }
+
     for header in proxyHopByHopHeaders {
         headers.remove(name: header)
     }
@@ -342,10 +397,26 @@ private func makeProxyRequest(from request: Request, targetURL: URL, rawBody: By
 }
 
 private func makeProxyResponse(from response: HTTPClient.Response) -> Response {
+    // Forbidden-header transport: collect Set-Cookie headers and encode as X-Proxy-Set-Cookie
+    let setCookies = response.headers[canonicalForm: "set-cookie"].map { String($0) }
+
     var headers = HTTPFields(response.headers)
     for header in proxyBlockedResponseHeaders {
         headers[HTTPField.Name(header)!] = nil
     }
+    // Strip any upstream X-Proxy-* headers to prevent spoofing
+    for field in headers {
+        if field.name.canonicalName.lowercased().hasPrefix("x-proxy-") {
+            headers[field.name] = nil
+        }
+    }
+
+    if !setCookies.isEmpty,
+       let jsonData = try? JSONSerialization.data(withJSONObject: setCookies),
+       let jsonString = String(data: jsonData, encoding: .utf8) {
+        headers[HTTPField.Name("X-Proxy-Set-Cookie")!] = jsonString
+    }
+
     headers[cacheControlHeader] = "no-store, no-cache"
     headers[HTTPField.Name.contentLength] = nil
 

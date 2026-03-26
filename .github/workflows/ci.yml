@@ -6,6 +6,10 @@ on:
   merge_group:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   changes:
     runs-on: ubuntu-latest
@@ -19,9 +23,10 @@ jobs:
       swift-server: ${{ steps.filter.outputs.swift-server }}
       swift-launcher: ${{ steps.filter.outputs.swift-launcher }}
       root-config: ${{ steps.filter.outputs.root-config }}
+      is-queue-leader: ${{ steps.queue-position.outputs.leader }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
         id: filter
         with:
           filters: |
@@ -47,6 +52,29 @@ jobs:
               - 'tsconfig*.json'
               - 'vitest*.config.*'
               - '.github/workflows/ci.yml'
+      - name: Check merge queue position
+        id: queue-position
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" != "merge_group" ]; then
+            echo "leader=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Extract PR number from merge queue branch name (gh-readonly-queue/main/pr-NNN-sha)
+          PR_NUMBER=$(echo "${{ github.event.merge_group.head_ref }}" | grep -oP 'pr-\K[0-9]+')
+          if [ -z "$PR_NUMBER" ]; then
+            echo "leader=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          POSITION=$(gh api graphql -f query='{ repository(owner: "${{ github.repository_owner }}", name: "${{ github.event.repository.name }}") { mergeQueue(branch: "main") { entries(first: 20) { nodes { position pullRequest { number } } } } } }' --jq ".data.repository.mergeQueue.entries.nodes[] | select(.pullRequest.number == $PR_NUMBER) | .position" 2>/dev/null || echo "")
+          if [ "$POSITION" = "1" ] || [ -z "$POSITION" ]; then
+            echo "leader=true" >> "$GITHUB_OUTPUT"
+            echo "Queue position: $POSITION (leader)"
+          else
+            echo "leader=false" >> "$GITHUB_OUTPUT"
+            echo "Queue position: $POSITION (skipping expensive jobs)"
+          fi
 
   lint:
     runs-on: ubuntu-latest
@@ -54,7 +82,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - run: npm ci
       - name: Format check
@@ -79,7 +107,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - run: npm ci
       - name: Typecheck
@@ -105,7 +133,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - run: npm ci
       - name: Typecheck
@@ -128,7 +156,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - run: npm ci
       - name: Test
@@ -149,7 +177,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - run: npm ci
       - name: Typecheck
@@ -245,6 +273,7 @@ jobs:
     needs: [changes, lint]
     if: >-
       needs.lint.result == 'success' &&
+      needs.changes.outputs.is-queue-leader == 'true' &&
       needs.changes.outputs.swift-server == 'true'
     runs-on: macos-latest
     steps:
@@ -258,6 +287,7 @@ jobs:
     needs: [changes, lint]
     if: >-
       needs.lint.result == 'success' &&
+      needs.changes.outputs.is-queue-leader == 'true' &&
       (needs.changes.outputs.swift-launcher == 'true' ||
       needs.changes.outputs.swift-server == 'true' ||
       needs.changes.outputs.webapp == 'true' ||
@@ -269,7 +299,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - run: npm ci
       - name: Build webapp (dependency)
@@ -278,6 +308,30 @@ jobs:
         run: cd packages/swift-server && swift build -c release
       - name: Build
         run: npm run build -w @slicc/swift-launcher
+
+  # Wait for any in-progress release before allowing merge queue to land.
+  # Only runs on merge_group events; skipped (= passing) for PRs.
+  release-gate:
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      actions: read
+    steps:
+      - name: Wait for active release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          while true; do
+            ACTIVE=$(gh api "repos/${{ github.repository }}/actions/workflows/release.yml/runs?status=in_progress&per_page=1" --jq '.total_count')
+            QUEUED=$(gh api "repos/${{ github.repository }}/actions/workflows/release.yml/runs?status=queued&per_page=1" --jq '.total_count')
+            if [ "$ACTIVE" = "0" ] && [ "$QUEUED" = "0" ]; then
+              echo "No release in progress, proceeding"
+              break
+            fi
+            echo "Release running (active=$ACTIVE queued=$QUEUED), waiting 30s..."
+            sleep 30
+          done
 
   # Summary job — the single required status check for branch protection
   ci:
@@ -292,6 +346,7 @@ jobs:
         cloudflare-worker,
         swift-launcher,
         swift-server,
+        release-gate,
       ]
     runs-on: ubuntu-latest
     steps:

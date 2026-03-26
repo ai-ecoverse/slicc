@@ -90,6 +90,11 @@ export interface SprinkleLickMsg {
   body: unknown;
 }
 
+/** Request skill reload after upskill install. */
+export interface ReloadSkillsMsg {
+  type: 'reload-skills';
+}
+
 export type PanelToOffscreenMessage =
   | UserMessageMsg
   | ScoopCreateMsg
@@ -104,7 +109,8 @@ export type PanelToOffscreenMessage =
   | RefreshTrayRuntimeMsg
   | PanelCdpCommandMsg
   | OAuthRequestMsg
-  | SprinkleLickMsg;
+  | SprinkleLickMsg
+  | ReloadSkillsMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen → Side Panel (via service worker relay)

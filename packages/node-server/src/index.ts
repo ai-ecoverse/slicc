@@ -27,7 +27,16 @@ import { CliLogDedup } from './cli-log-dedup.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..', '..');
+
 const RUNTIME_FLAGS = parseCliRuntimeFlags(process.argv.slice(2));
+
+// Version command — exit immediately, no side effects
+if (RUNTIME_FLAGS.version) {
+  const pkg = JSON.parse(readFileSync(join(PROJECT_ROOT, 'package.json'), 'utf8'));
+  console.log(pkg.version);
+  process.exit(0);
+}
+
 const DEV_MODE = RUNTIME_FLAGS.dev;
 const SERVE_ONLY = RUNTIME_FLAGS.serveOnly;
 const ELECTRON_MODE = RUNTIME_FLAGS.electron;
@@ -740,7 +749,12 @@ async function main() {
 
   app.get('/api/runtime-config', (_req, res) => {
     res.json({
-      trayWorkerBaseUrl: RUNTIME_FLAGS.leadWorkerBaseUrl ?? process.env['WORKER_BASE_URL'] ?? null,
+      trayWorkerBaseUrl:
+        RUNTIME_FLAGS.leadWorkerBaseUrl ??
+        (process.env['WORKER_BASE_URL']?.trim() || null) ??
+        (DEV_MODE
+          ? 'https://slicc-tray-hub-staging.minivelos.workers.dev'
+          : 'https://www.sliccy.ai'),
       trayJoinUrl: discoveredTrayJoinUrl ?? null,
     });
   });
@@ -905,11 +919,63 @@ async function main() {
         'x-target-url',
         'content-length',
         'transfer-encoding',
+        'x-proxy-cookie',
+        'x-proxy-origin',
+        'x-proxy-referer',
       ]);
       const headers: Record<string, string> = {};
       for (const [key, value] of Object.entries(req.headers)) {
         if (!skipHeaders.has(key) && typeof value === 'string') {
           headers[key] = value;
+        }
+      }
+      // Forbidden-header transport: browser cannot send Cookie via fetch(),
+      // so the client encodes it as X-Proxy-Cookie. Restore it here.
+      const proxyCookie = req.headers['x-proxy-cookie'];
+      if (proxyCookie) {
+        headers['cookie'] = Array.isArray(proxyCookie) ? proxyCookie[0] : proxyCookie;
+      }
+
+      // Helper: check if an origin/referer value is a localhost URL
+      function isLocalhostOrigin(origin: string | undefined): boolean {
+        if (!origin) return false;
+        try {
+          const url = new URL(origin);
+          return (
+            url.hostname === 'localhost' ||
+            url.hostname === '127.0.0.1' ||
+            url.hostname === '::1' ||
+            url.hostname === '[::1]'
+          );
+        } catch {
+          return false;
+        }
+      }
+
+      // Forbidden-header transport: restore X-Proxy-Origin → Origin
+      const proxyOrigin = req.headers['x-proxy-origin'];
+      if (proxyOrigin) {
+        headers['origin'] = Array.isArray(proxyOrigin) ? proxyOrigin[0] : proxyOrigin;
+      } else if (isLocalhostOrigin(headers['origin'] as string)) {
+        // Only strip browser's auto-added localhost origin, preserve legitimate origins
+        delete headers['origin'];
+      }
+
+      // Forbidden-header transport: restore X-Proxy-Referer → Referer
+      const proxyReferer = req.headers['x-proxy-referer'];
+      if (proxyReferer) {
+        headers['referer'] = Array.isArray(proxyReferer) ? proxyReferer[0] : proxyReferer;
+      } else if (isLocalhostOrigin(headers['referer'] as string)) {
+        // Only strip browser's auto-added localhost referer, preserve legitimate referers
+        delete headers['referer'];
+      }
+
+      // Restore any X-Proxy-Proxy-* transport headers as Proxy-* headers
+      for (const [key, value] of Object.entries(req.headers)) {
+        if (key.startsWith('x-proxy-proxy-') && typeof value === 'string') {
+          const restored = key.replace(/^x-proxy-/, '');
+          headers[restored] = value;
+          delete headers[key];
         }
       }
       // Always request uncompressed responses from upstream — the proxy doesn't
@@ -932,16 +998,25 @@ async function main() {
       // Forward response headers (strip www-authenticate to prevent
       // the browser from showing a native Basic Auth dialog — isomorphic-git
       // handles 401s through its own onAuth callback)
+      // Forbidden-header transport: browser fetch() strips Set-Cookie from
+      // responses. Collect all Set-Cookie values and encode as JSON in a
+      // transport header the browser can read.
+      const setCookieValues = upstream.headers.getSetCookie();
       upstream.headers.forEach((v, k) => {
         const lower = k.toLowerCase();
         if (
           lower !== 'transfer-encoding' &&
           lower !== 'content-encoding' &&
-          lower !== 'www-authenticate'
+          lower !== 'www-authenticate' &&
+          lower !== 'set-cookie' &&
+          !lower.startsWith('x-proxy-')
         ) {
           res.setHeader(k, v);
         }
       });
+      if (setCookieValues.length > 0) {
+        res.setHeader('X-Proxy-Set-Cookie', JSON.stringify(setCookieValues));
+      }
 
       // Send body as raw binary - explicitly set content-length and use end()
       // instead of send() to avoid any Express middleware transformations

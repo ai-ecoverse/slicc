@@ -181,11 +181,16 @@ export default defineConfig(({ mode }) => ({
         workspaceRoot,
         'node_modules/@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js'
       ),
-      '@mariozechner/pi-ai/dist/utils/overflow.js': resolve(
+      '@mariozechner/pi-ai/dist/providers/transform-messages.js': resolve(
         workspaceRoot,
-        'node_modules/@mariozechner/pi-ai/dist/utils/overflow.js'
+        'node_modules/@mariozechner/pi-ai/dist/providers/transform-messages.js'
+      ),
+      '@mariozechner/pi-ai/dist/providers/simple-options.js': resolve(
+        workspaceRoot,
+        'node_modules/@mariozechner/pi-ai/dist/providers/simple-options.js'
       ),
     },
+    dedupe: ['@mariozechner/pi-ai'],
   },
   esbuild: {
     target: 'esnext',

@@ -533,6 +533,13 @@ export class OffscreenBridge {
         break;
       }
 
+      case 'reload-skills': {
+        this.orchestrator.reloadAllSkills().catch((err) => {
+          console.warn('[offscreen-bridge] Skill reload failed:', err);
+        });
+        break;
+      }
+
       case 'panel-cdp-command': {
         const { id, method, params, sessionId } = msg;
         if (!this.browserAPI) {
