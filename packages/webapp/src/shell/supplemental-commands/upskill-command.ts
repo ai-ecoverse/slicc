@@ -13,6 +13,7 @@ const SKILLS_DIR = '/workspace/skills';
 const GITHUB_GLOBAL_DB = 'slicc-fs-global';
 const GITHUB_TOKEN_PATH = '/workspace/.git/github-token';
 const GITHUB_API_ACCEPT = 'application/vnd.github.v3+json';
+const SKILL_CATALOG_URL = 'https://www.sliccy.com/skills/catalog.json';
 
 interface ClawHubSearchResult {
   slug: string;
@@ -98,10 +99,57 @@ interface UserProfile {
   name: string;
 }
 
+interface RemoteCatalogRow {
+  name: string;
+  displayName: string;
+  description: string;
+  repo: string;
+  path: string;
+  skill: string;
+  apps: string;
+  tasks: string;
+  role: string;
+  purpose: string;
+  boost: string;
+}
+
 interface ScoredSkill {
   entry: CatalogSkill;
   score: number;
   matchReasons: string[];
+}
+
+function splitField(value: string): string[] | undefined {
+  if (!value || !value.trim()) return undefined;
+  return value
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function parseRemoteCatalog(data: RemoteCatalogRow[]): CatalogSkill[] {
+  return data.map((row) => {
+    const boost = row.boost ? parseFloat(row.boost) : NaN;
+    const priority = Number.isFinite(boost) ? boost : undefined;
+
+    return {
+      name: row.name,
+      displayName: row.displayName || row.name,
+      description: row.description || '',
+      source: {
+        repo: row.repo,
+        path: row.path || undefined,
+        skill: row.skill || undefined,
+      },
+      affinity: {
+        apps: splitField(row.apps),
+        tasks: splitField(row.tasks),
+        role: splitField(row.role),
+        purpose: splitField(row.purpose),
+      },
+      priority,
+    };
+  });
 }
 
 const AFFINITY_WEIGHTS = { apps: 3, tasks: 2, role: 1, purpose: 1 };
@@ -1304,15 +1352,21 @@ async function handleRecommendations(
     };
   }
 
-  // Read skill catalog
-  let catalog: SkillCatalog;
+  // Fetch skill catalog from remote
+  let catalogSkills: CatalogSkill[];
   try {
-    const raw = await fs.readTextFile('/shared/skill-catalog.json');
-    catalog = JSON.parse(raw) as SkillCatalog;
-  } catch {
+    const response = await fetchFn(SKILL_CATALOG_URL, {
+      headers: { Accept: 'application/json' },
+    });
+    if (response.status !== 200) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const data = JSON.parse(response.body) as { data: RemoteCatalogRow[] };
+    catalogSkills = parseRemoteCatalog(data.data);
+  } catch (err) {
     return {
       stdout: '',
-      stderr: 'upskill: skill catalog not found at /shared/skill-catalog.json\n',
+      stderr: `upskill: failed to fetch skill catalog from ${SKILL_CATALOG_URL}: ${err instanceof Error ? err.message : String(err)}\n`,
       exitCode: 1,
     };
   }
@@ -1328,7 +1382,7 @@ async function handleRecommendations(
   }
 
   // Score and filter
-  const scored = scoreSkills(catalog.skills, profile).filter((s) => !installed.has(s.entry.name));
+  const scored = scoreSkills(catalogSkills, profile).filter((s) => !installed.has(s.entry.name));
 
   if (scored.length === 0) {
     return {
