@@ -1180,26 +1180,44 @@ async function installSkillFromZip(
     // Doesn't exist, continue
   }
 
-  const prefix = skillPath.replace(/^\/|\/$/g, '') + '/';
+  const normalizedSkillPath = skillPath.replace(/^\/|\/$/g, '');
+  const prefix = normalizedSkillPath ? normalizedSkillPath + '/' : '';
   await fs.mkdir(destDir, { recursive: true });
   let fileCount = 0;
 
-  for (const [path, content] of Object.entries(files)) {
-    if (!path.startsWith(prefix)) continue;
-    const relativePath = path.slice(prefix.length);
-    if (!relativePath || path.endsWith('/')) continue;
+  try {
+    for (const [path, content] of Object.entries(files)) {
+      if (!path.startsWith(prefix)) continue;
+      const relativePath = path.slice(prefix.length);
+      if (!relativePath || path.endsWith('/')) continue;
 
-    const filePath = `${destDir}/${relativePath}`;
-    const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
-    if (parentDir !== destDir) {
-      await fs.mkdir(parentDir, { recursive: true });
+      const filePath = `${destDir}/${relativePath}`;
+
+      // Zip-slip protection: reject paths that escape destDir
+      const normalizedPath = filePath.replace(/\/+/g, '/');
+      if (
+        normalizedPath.includes('/../') ||
+        normalizedPath.includes('/..') ||
+        !normalizedPath.startsWith(destDir + '/')
+      ) {
+        continue; // skip malicious entry
+      }
+
+      const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
+      if (parentDir !== destDir) {
+        await fs.mkdir(parentDir, { recursive: true });
+      }
+
+      await fs.writeFile(filePath, content);
+      fileCount++;
     }
-
-    await fs.writeFile(filePath, content);
-    fileCount++;
+  } catch (err) {
+    await fs.rm(destDir, { recursive: true }).catch(() => {});
+    throw err;
   }
 
   if (fileCount === 0) {
+    await fs.rm(destDir, { recursive: true }).catch(() => {});
     return { ok: false, error: `no files found for skill "${skillName}" in ZIP` };
   }
   return { ok: true };
@@ -1347,15 +1365,41 @@ async function handleRecommendations(
       Array.from(repoGroups.entries()).map(async ([repoKey, recs]) => {
         const [owner, repo] = repoKey.split('/');
         const zip = await fetchRepoZip(owner, repo, fetchFn);
-        if (zip.status === 'not_found') {
-          return { errors: `upskill: repository ${repoKey} not found\n`, results: [] };
-        }
-        if (zip.status === 'error') {
-          return { errors: `upskill: failed to fetch ${repoKey}: ${zip.message}\n`, results: [] };
+        if (zip.status === 'not_found' || zip.status === 'error') {
+          const errMsg =
+            zip.status === 'not_found'
+              ? `upskill: repository ${repoKey} not found\n`
+              : `upskill: failed to fetch ${repoKey}: ${zip.message}\n`;
+          const results: Array<{ ok: boolean; name: string; error?: string }> = [];
+          for (const rec of recs) {
+            completedSkills++;
+            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+            const eta =
+              completedSkills < totalSkills
+                ? ` (~${Math.round(((totalSkills - completedSkills) * (Date.now() - startTime)) / completedSkills / 1000)}s remaining)`
+                : '';
+            output += `[${completedSkills}/${totalSkills}] Failed "${rec.entry.name}" from ${repoKey}: repo fetch failed${eta}\n`;
+            results.push({
+              ok: false,
+              name: rec.entry.name,
+              error: `repo fetch failed for ${repoKey}`,
+            });
+          }
+          return { errors: errMsg, results };
         }
 
         const files = stripZipPrefix(zip.files);
         const results: Array<{ ok: boolean; name: string; error?: string }> = [];
+
+        // Precompute skill index: map skillName → path for all SKILL.md entries
+        const skillIndex = new Map<string, string>();
+        for (const p of Object.keys(files)) {
+          if (p.endsWith('/SKILL.md')) {
+            const skillDir = p.replace(/\/SKILL\.md$/, '');
+            const name = skillDir.split('/').pop() || skillDir;
+            skillIndex.set(name, skillDir);
+          }
+        }
 
         for (const rec of recs) {
           const src = rec.entry.source;
@@ -1364,40 +1408,45 @@ async function handleRecommendations(
           let skillName: string;
 
           if (src.skill) {
-            // Find specific skill in the ZIP
-            const prefix = src.path ? src.path.replace(/^\/|\/$/g, '') + '/' : '';
-            const skillMdKey = Object.keys(files).find(
-              (p) => p.startsWith(prefix) && p.endsWith(`${src.skill}/SKILL.md`)
-            );
-            if (!skillMdKey) {
+            // Look up skill in precomputed index
+            const indexedPath = skillIndex.get(src.skill);
+            if (!indexedPath) {
+              const error = `skill "${src.skill}" not found in ${repoKey}`;
               results.push({
                 ok: false,
                 name: rec.entry.name,
-                error: `skill "${src.skill}" not found in ${repoKey}`,
+                error,
               });
               completedSkills++;
+              const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+              const eta =
+                completedSkills < totalSkills
+                  ? ` (~${Math.round(((totalSkills - completedSkills) * (Date.now() - startTime)) / completedSkills / 1000)}s remaining)`
+                  : '';
+              output += `[${completedSkills}/${totalSkills}] Failed "${rec.entry.name}" from ${repoKey}: ${error}${eta}\n`;
               continue;
             }
-            skillPath = skillMdKey.replace(/\/SKILL\.md$/, '');
+            skillPath = indexedPath;
             skillName = src.skill;
           } else {
             // Use the path directly — the catalog entry name is the skill name
-            const prefix = src.path ? src.path.replace(/^\/|\/$/g, '') : '';
-            skillPath = prefix;
+            const normalizedPath = src.path ? src.path.replace(/^\/|\/$/g, '') : '';
+            skillPath = normalizedPath;
             skillName = rec.entry.name;
           }
 
+          const skillStart = Date.now();
           const result = await installSkillFromZip(skillPath, skillName, files, fs, false);
           completedSkills++;
 
-          const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+          const skillDuration = ((Date.now() - skillStart) / 1000).toFixed(1);
           const avgTime = (Date.now() - startTime) / completedSkills;
           const remaining = Math.round(((totalSkills - completedSkills) * avgTime) / 1000);
           const eta = completedSkills < totalSkills ? ` (~${remaining}s remaining)` : '';
 
           if (result.ok) {
             results.push({ ok: true, name: skillName });
-            output += `[${completedSkills}/${totalSkills}] Installed "${skillName}" from ${repoKey} (${elapsed}s)${eta}\n`;
+            output += `[${completedSkills}/${totalSkills}] Installed "${skillName}" from ${repoKey} (${skillDuration}s)${eta}\n`;
           } else {
             results.push({ ok: false, name: skillName, error: result.error });
             output += `[${completedSkills}/${totalSkills}] Failed "${skillName}" from ${repoKey}: ${result.error}${eta}\n`;
