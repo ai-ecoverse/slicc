@@ -76,6 +76,17 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
     });
   }
 
+  // Serve runtime config for the webapp (when served from the worker)
+  if (url.pathname === '/api/runtime-config') {
+    const workerBaseUrl = `${url.protocol}//${url.host}`;
+    return jsonResponse({ trayWorkerBaseUrl: workerBaseUrl });
+  }
+
+  // Fetch proxy not available in worker mode (webapp uses direct fetch instead)
+  if (url.pathname === '/api/fetch-proxy') {
+    return jsonResponse({ error: 'Fetch proxy not available in worker mode' }, 404);
+  }
+
   const tokenMatch = url.pathname.match(/^\/(join|controller|webhook)\/([^/]+?)(?:\/([^/]+))?$/);
   if (tokenMatch) {
     const route = tokenMatch[1];
@@ -125,6 +136,8 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',
         'GET /auth/callback',
+        'GET /api/runtime-config',
+        'ANY /api/fetch-proxy',
       ],
     },
     200

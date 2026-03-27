@@ -32,6 +32,8 @@ describeIfConfigured('deployed tray worker', () => {
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',
         'GET /auth/callback',
+        'GET /api/runtime-config',
+        'ANY /api/fetch-proxy',
       ],
     });
 

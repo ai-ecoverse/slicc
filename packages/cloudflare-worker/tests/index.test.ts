@@ -1148,6 +1148,8 @@ describe('tray worker skeleton', () => {
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',
         'GET /auth/callback',
+        'GET /api/runtime-config',
+        'ANY /api/fetch-proxy',
       ],
     });
   });
@@ -1239,5 +1241,25 @@ describe('browser routing', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { service: string };
     expect(body.service).toBe('slicc-tray-hub');
+  });
+});
+
+describe('API routes', () => {
+  it('returns runtime config with worker base URL', async () => {
+    const { env } = createTestHarness();
+    const req = new Request('https://www.sliccy.ai/api/runtime-config');
+    const res = await handleWorkerRequest(req, env);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { trayWorkerBaseUrl: string };
+    expect(body.trayWorkerBaseUrl).toBe('https://www.sliccy.ai');
+  });
+
+  it('returns 404 for fetch-proxy', async () => {
+    const { env } = createTestHarness();
+    const req = new Request('https://www.sliccy.ai/api/fetch-proxy', { method: 'POST' });
+    const res = await handleWorkerRequest(req, env);
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain('not available');
   });
 });
