@@ -11,6 +11,8 @@ If this scares, confuses, or excites you, keep reading.
 
 # slicc — Self-Licking Ice Cream Cone
 
+[![74% Vibe_Coded](https://img.shields.io/badge/74%25-Vibe_Coded-ff69b4?style=for-the-badge&logo=claude&logoColor=white)](https://github.com/ai-ecoverse/vibe-coded-badge-action)
+
 [![npm](https://img.shields.io/npm/v/sliccy)](https://www.npmjs.com/package/sliccy)
 
 > A browser-native AI agent for getting practical work done in and through the browser.
