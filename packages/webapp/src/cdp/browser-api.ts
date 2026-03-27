@@ -18,6 +18,7 @@ import type {
 } from './types.js';
 import type { TrayTargetEntry } from '../scoops/tray-sync-protocol.js';
 import { normalizeAccessibilityText } from './normalize-accessibility-text.js';
+import { INJECTED_ARIA_SNAPSHOT_SCRIPT } from './injected-aria-snapshot.js';
 import { createLogger } from '../core/logger.js';
 
 /**
@@ -605,73 +606,29 @@ export class BrowserAPI {
 
   /**
    * Get the accessibility tree of the attached page.
+   *
+   * Uses an injected JavaScript approach (ported from Playwright's
+   * ariaSnapshot.ts) instead of CDP's Accessibility domain, so it
+   * works on any browser engine (Chrome, WebKit, etc.).
    */
   async getAccessibilityTree(): Promise<AccessibilityNode> {
     await this.ensureConnected();
     this.ensureAttached();
 
-    await this.client.send('Accessibility.enable', {}, this.sessionId!);
+    // Inject the aria snapshot script into the page via Runtime.evaluate.
+    // This works on both CDP (Chrome) and WebKit Inspector Protocol.
+    const rawResult = await this.evaluate(INJECTED_ARIA_SNAPSHOT_SCRIPT, {
+      awaitPromise: false,
+      returnByValue: true,
+    });
 
-    const result = await this.client.send('Accessibility.getFullAXTree', {}, this.sessionId!);
-
-    const nodes = result['nodes'] as Array<{
-      nodeId: string;
-      backendDOMNodeId?: number;
-      role: { value: unknown };
-      name: { value: unknown };
-      description?: { value: unknown };
-      value?: { value: unknown };
-      parentId?: string;
-      childIds?: string[];
-    }>;
-
-    if (!nodes || nodes.length === 0) {
+    if (!rawResult || typeof rawResult !== 'object') {
       return { role: 'RootWebArea', name: '' };
     }
 
-    // Build a map of nodeId → node
-    const nodeMap = new Map<string, AccessibilityNode & { childIds?: string[] }>();
-    let rootId: string | undefined;
-
-    for (const n of nodes) {
-      const value = normalizeAccessibilityText(n.value?.value);
-      const description = normalizeAccessibilityText(n.description?.value);
-      const node: AccessibilityNode & { childIds?: string[] } = {
-        role: normalizeAccessibilityText(n.role?.value, 'unknown'),
-        name: normalizeAccessibilityText(n.name?.value),
-      };
-      if (value !== '') node.value = value;
-      if (description !== '') node.description = description;
-      if (n.backendDOMNodeId) node.backendNodeId = n.backendDOMNodeId;
-      if (n.childIds) node.childIds = n.childIds;
-      nodeMap.set(n.nodeId, node);
-
-      if (!n.parentId) rootId = n.nodeId;
-    }
-
-    // Build tree recursively
-    function buildTree(id: string): AccessibilityNode {
-      const node = nodeMap.get(id);
-      if (!node) return { role: 'unknown', name: '' };
-
-      const result: AccessibilityNode = {
-        role: node.role,
-        name: node.name,
-      };
-      if (node.value) result.value = node.value;
-      if (node.description) result.description = node.description;
-      if (node.backendNodeId) result.backendNodeId = node.backendNodeId;
-
-      if (node.childIds && node.childIds.length > 0) {
-        result.children = node.childIds
-          .map((cid) => buildTree(cid))
-          .filter((c) => c.role !== 'unknown');
-      }
-
-      return result;
-    }
-
-    return rootId ? buildTree(rootId) : { role: 'RootWebArea', name: '' };
+    // The injected script returns a tree already in AccessibilityNode format.
+    // Normalize it to ensure all string fields are proper strings.
+    return normalizeInjectedTree(rawResult as Record<string, unknown>);
   }
 
   /**
@@ -1033,4 +990,29 @@ export class BrowserAPI {
       height: model.height,
     };
   }
+}
+
+/**
+ * Normalize the raw tree returned by the injected aria snapshot script
+ * into the AccessibilityNode format expected by SLICC consumers.
+ */
+function normalizeInjectedTree(raw: Record<string, unknown>): AccessibilityNode {
+  const role = normalizeAccessibilityText(raw.role, 'unknown');
+  const name = normalizeAccessibilityText(raw.name);
+
+  const node: AccessibilityNode = { role, name };
+
+  const value = normalizeAccessibilityText(raw.value);
+  if (value !== '') node.value = value;
+
+  const description = normalizeAccessibilityText(raw.description);
+  if (description !== '') node.description = description;
+
+  if (Array.isArray(raw.children) && raw.children.length > 0) {
+    node.children = (raw.children as Record<string, unknown>[])
+      .map((child) => normalizeInjectedTree(child))
+      .filter((c) => c.role !== 'unknown');
+  }
+
+  return node;
 }
