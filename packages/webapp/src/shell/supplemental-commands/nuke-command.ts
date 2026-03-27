@@ -34,7 +34,7 @@ export function createNukeCommand(): Command {
       stdout: '',
       stderr:
         '⚠️  WARNING: this will reset the entire environment, file system, chats, and scoops.\n' +
-        'Run `nuke 1 2 3 4` to proceed.\n',
+        'Run nuke again with the secret launch code to proceed.\n',
       exitCode: 1,
     };
   });
