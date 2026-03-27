@@ -689,10 +689,21 @@
 
       function updateDots(step) {
         var dots = document.getElementById('dots').children;
+        // Map the logical step number to the visible dot index.
+        // When purpose !== 'work', step 5 is skipped in navigation,
+        // so compress steps after 5 by one when updating dots.
+        var effectiveStep = step;
+        if (profile.purpose !== 'work' && step > 5) {
+          effectiveStep = step - 1;
+        }
         for (var i = 0; i < dots.length; i++) {
+          var dotIndex = i + 1;
           dots[i].className = 'dot';
-          if (i + 1 === step) dots[i].className = 'dot active';
-          else if (i + 1 < step) dots[i].className = 'dot done';
+          if (dotIndex === effectiveStep) {
+            dots[i].className = 'dot active';
+          } else if (dotIndex < effectiveStep) {
+            dots[i].className = 'dot done';
+          }
         }
       }
 
@@ -718,6 +729,14 @@
       function goStep(n) {
         if (n === 5 && profile.purpose !== 'work') n = 6;
         if (n === 2) buildRolePills();
+        // Hide the 7th dot when company step will be skipped
+        if (n === 2 && profile.purpose !== 'work') {
+          var allDots = document.getElementById('dots').children;
+          if (allDots[6]) allDots[6].style.display = 'none';
+        } else if (n === 2 && profile.purpose === 'work') {
+          var allDots = document.getElementById('dots').children;
+          if (allDots[6]) allDots[6].style.display = '';
+        }
         if (n === 7) buildAppPills();
 
         // Save name when leaving step 4
@@ -785,7 +804,7 @@
           if (!data) return;
           if (data.action === 'mount-complete') {
             profile.mountWorkspace = true;
-            profile.mountedDirName = data.dirName || 'workspace';
+            profile.mountedDirName = data.dirName || 'mnt';
             mountHandleReady = true;
             console.log('[welcome] Mount complete:', data.dirName);
             var btn = document.querySelector('#mountPills .pill');
