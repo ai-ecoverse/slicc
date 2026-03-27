@@ -276,22 +276,10 @@ export class ScoopsPanel {
         actionsEl.appendChild(errDot);
       }
 
-      const deleteBtn = document.createElement('button');
-      deleteBtn.className = 'scoop-delete';
-      deleteBtn.dataset.tooltip = 'Delete scoop';
-      deleteBtn.setAttribute('aria-label', 'Delete scoop');
-      deleteBtn.innerHTML =
-        '<svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M6 6L14 14M14 6L6 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
-      actionsEl.appendChild(deleteBtn);
-
       item.appendChild(actionsEl);
 
-      item.addEventListener('click', (e) => {
-        if ((e.target as HTMLElement).closest('.scoop-delete')) {
-          this.deleteScoop(scoop.jid);
-        } else {
-          this.selectScoop(scoop);
-        }
+      item.addEventListener('click', () => {
+        this.selectScoop(scoop);
       });
 
       // Collapsed-mode tooltip
@@ -456,30 +444,6 @@ export class ScoopsPanel {
     const list = document.createElement('div');
     list.className = 'scoops-list';
     panel.appendChild(list);
-
-    // Footer — pinned to bottom, dev-only clear scoops DB
-    if (typeof __DEV__ !== 'undefined' && __DEV__) {
-      const footer = document.createElement('div');
-      footer.className = 'scoops-footer';
-      const clearBtn = document.createElement('button');
-      clearBtn.className = 'scoops-footer__btn';
-      clearBtn.dataset.tooltip = 'Clear Scoops DB';
-      clearBtn.dataset.tooltipPos = 'right';
-      clearBtn.setAttribute('aria-label', 'Clear Scoops DB');
-      clearBtn.innerHTML =
-        '<svg width="14" height="14" viewBox="0 0 20 20" fill="none"><path d="M18 4.75C18 2.616 13.976 1.5 10 1.5C6.024 1.5 2 2.616 2 4.75C2 4.817 2.015 4.88 2.023 4.946C2.017 4.985 2 5.02 2 5.061V15C2 17.062 6.147 18 10 18C13.853 18 18 17.062 18 15V5.061C18 5.02 17.983 4.985 17.977 4.946C17.985 4.88 18 4.817 18 4.75ZM16.5 9.995C16.408 10.41 14.272 11.5 10 11.5C5.727 11.5 3.59 10.409 3.5 10V6.724C5.03 7.567 7.524 8 10 8C12.476 8 14.97 7.567 16.5 6.724L16.5 9.995ZM10 3C14.289 3 16.5 4.227 16.5 4.75C16.5 5.273 14.289 6.5 10 6.5C5.711 6.5 3.5 5.273 3.5 4.75C3.5 4.227 5.711 3 10 3ZM10 16.5C5.727 16.5 3.59 15.409 3.5 15V11.846C5.052 12.63 7.583 13 10 13C12.417 13 14.948 12.63 16.5 11.846L16.5 14.994C16.41 15.409 14.273 16.5 10 16.5Z" fill="currentColor"/><line x1="7" y1="8" x2="13" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="7" y1="12" x2="13" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
-      clearBtn.addEventListener('click', async () => {
-        const dbs = await indexedDB.databases();
-        for (const db of dbs) {
-          if (db.name?.startsWith('slicc-fs') || db.name === 'slicc-groups') {
-            indexedDB.deleteDatabase(db.name);
-          }
-        }
-        location.reload();
-      });
-      footer.appendChild(clearBtn);
-      panel.appendChild(footer);
-    }
 
     this.container.appendChild(panel);
 
