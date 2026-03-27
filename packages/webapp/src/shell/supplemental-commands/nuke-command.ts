@@ -16,14 +16,8 @@ export function createNukeCommand(): Command {
       };
     }
 
-    // Check for the secret launch code: exactly args ['1', '2', '3', '4']
-    if (
-      args.length === 4 &&
-      args[0] === '1' &&
-      args[1] === '2' &&
-      args[2] === '3' &&
-      args[3] === '4'
-    ) {
+    // Check for the secret launch code: args must contain '1234' when concatenated
+    if (args.join('').includes('1234')) {
       // Delete all IndexedDB databases and reload
       const dbs = await indexedDB.databases();
       let hadBlocked = false;
