@@ -316,7 +316,6 @@ jobs:
     needs: [changes, lint]
     if: >-
       needs.lint.result == 'success' &&
-      needs.changes.outputs.is-queue-leader == 'true' &&
       needs.changes.outputs.ios-app == 'true'
     runs-on: macos-latest
     steps:
