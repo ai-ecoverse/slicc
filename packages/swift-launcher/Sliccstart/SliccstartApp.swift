@@ -21,6 +21,7 @@ struct SliccstartApp: App {
     @NSApplicationDelegateAdaptor private var appDelegate: SliccstartAppDelegate
     @State private var bootstrapper = SliccBootstrapper()
     @State private var appManagementPermission = AppManagementPermission()
+    @State private var webKitManager = WebKitManager()
     @State private var targets: [AppTarget] = []
     @State private var isReady = false
     @State private var alertMessage: String?
@@ -60,6 +61,7 @@ struct SliccstartApp: App {
                         targets: targets,
                         sliccProcess: sliccProcess,
                         appManagementPermission: appManagementPermission,
+                        webKitManager: webKitManager,
                         appUpdater: appUpdater,
                         onLaunchStandalone: { target in
                             log.info("onLaunchStandalone: \(target.name, privacy: .public)")
@@ -79,6 +81,27 @@ struct SliccstartApp: App {
                                 showError(error.localizedDescription)
                             }
                         },
+                        onLaunchWebKit: {
+                            log.info("onLaunchWebKit")
+                            guard case .installed(let binaryPath, let frameworkPath) = webKitManager.installState else { return }
+                            do {
+                                try sliccProcess.launchWebKit(binaryPath: binaryPath, frameworkPath: frameworkPath)
+                            } catch {
+                                log.error("onLaunchWebKit failed: \(error.localizedDescription, privacy: .public)")
+                                showError(error.localizedDescription)
+                            }
+                        },
+                        onInstallWebKit: {
+                            log.info("onInstallWebKit")
+                            Task {
+                                do {
+                                    try await webKitManager.install()
+                                } catch {
+                                    log.error("WebKit install failed: \(error.localizedDescription, privacy: .public)")
+                                    showError(error.localizedDescription)
+                                }
+                            }
+                        },
                         onCreateDebugBuild: { target in
                             debugBuildTarget = target
                             showDebugBuildDialog = true
@@ -96,7 +119,10 @@ struct SliccstartApp: App {
                                 isReady = true
                             }
                         },
-                        onRescan: { targets = AppScanner.scan(hasAppManagementPermission: appManagementPermission.isGranted) }
+                        onRescan: {
+                            targets = AppScanner.scan(hasAppManagementPermission: appManagementPermission.isGranted)
+                            webKitManager.refresh()
+                        }
                     )
                 }
             }
@@ -157,6 +183,7 @@ struct SliccstartApp: App {
             }
         }
         targets = AppScanner.scan(hasAppManagementPermission: appManagementPermission.isGranted)
+        webKitManager.refresh()
         isReady = true
 
         // Check for app updates in bundled mode
