@@ -128,23 +128,28 @@ function splitField(value: string): string[] | undefined {
 }
 
 function parseRemoteCatalog(data: RemoteCatalogRow[]): CatalogSkill[] {
-  return data.map((row) => ({
-    name: row.name,
-    displayName: row.displayName || row.name,
-    description: row.description || '',
-    source: {
-      repo: row.repo,
-      path: row.path || undefined,
-      skill: row.skill || undefined,
-    },
-    affinity: {
-      apps: splitField(row.apps),
-      tasks: splitField(row.tasks),
-      role: splitField(row.role),
-      purpose: splitField(row.purpose),
-    },
-    priority: row.boost ? parseFloat(row.boost) || undefined : undefined,
-  }));
+  return data.map((row) => {
+    const boost = row.boost ? parseFloat(row.boost) : NaN;
+    const priority = Number.isFinite(boost) ? boost : undefined;
+
+    return {
+      name: row.name,
+      displayName: row.displayName || row.name,
+      description: row.description || '',
+      source: {
+        repo: row.repo,
+        path: row.path || undefined,
+        skill: row.skill || undefined,
+      },
+      affinity: {
+        apps: splitField(row.apps),
+        tasks: splitField(row.tasks),
+        role: splitField(row.role),
+        purpose: splitField(row.purpose),
+      },
+      priority,
+    };
+  });
 }
 
 const AFFINITY_WEIGHTS = { apps: 3, tasks: 2, role: 1, purpose: 1 };
