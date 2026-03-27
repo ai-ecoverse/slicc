@@ -10,6 +10,7 @@
 		02019B8CFDC4B36D610933B8 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 434BBAD25E91BD0B7D626821 /* AppState.swift */; };
 		07D3C6559F4B00E26067D5C4 /* chat.css in Resources */ = {isa = PBXBuildFile; fileRef = E0052066D742EEE8123EDE79 /* chat.css */; };
 		0CAAEE94D02D4006193FA4BB /* InputBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCB2F32F2BEEC4DE1D526DB /* InputBar.swift */; };
+		0E6ABE1BE4750990FE352E48 /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B26DA62FD50A37F19C808293 /* QRScannerView.swift */; };
 		238295F68E3669C0968C9934 /* WebRTCManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9AF8A8A50FCC9C2DBECA0CF /* WebRTCManager.swift */; };
 		2401C7FE702795E1066A7C9F /* ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBB646EF0D0006D1A43F527D /* ChatMessage.swift */; };
 		3A9E122F6A6C4C0F6258C5C6 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A069AA812629AC5FE70AC9 /* SettingsView.swift */; };
@@ -19,17 +20,15 @@
 		487756D13ED6B5D4FB9FF6A0 /* TrayFollowerConnector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93EE217FAA3F9F7DD3A0B07F /* TrayFollowerConnector.swift */; };
 		4BA93B0DC88934132A09F1D6 /* FollowerSyncManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82060520ADE3CE44E0D0FAE0 /* FollowerSyncManager.swift */; };
 		532EBF4FC79CF40ABCD366F0 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4E99369A8A6B1A9B8EBE996E /* WebKit.framework */; };
-
 		5A678420A08BBB43297E1D8D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F0583BDF50B1A1B9CE68AE67 /* Assets.xcassets */; };
+		5DBC389110F337A40762C4E1 /* MessageListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E727142147B0FB449F418D1 /* MessageListView.swift */; };
 		73CC65978EB7E4B1818441ED /* MessageWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 293EF6D00AE2A86081777881 /* MessageWebView.swift */; };
 		73CD8FDB68D950291A923BCD /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11B186EDFDE184DC8B3215C4 /* ChatView.swift */; };
-		BB7777777777777777777777 /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB8888888888888888888888 /* QRScannerView.swift */; };
-		AA1111111111111111111111 /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA2222222222222222222222 /* MarkdownText.swift */; };
-		AA3333333333333333333333 /* MessageBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA4444444444444444444444 /* MessageBubble.swift */; };
-		AA5555555555555555555555 /* MessageListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA6666666666666666666666 /* MessageListView.swift */; };
+		7AFB535E78304FCE5CE7058A /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 523A4A068180D7EE98435885 /* MarkdownText.swift */; };
 		7BEE859F6C68FEAFD63D1FBB /* SyncProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 618555E73F15FDB4DB0CAA6F /* SyncProtocol.swift */; };
 		8A4DC8067E31936EA9C475BC /* TrayTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EDB6F858D918DBBE06D4702 /* TrayTypes.swift */; };
 		977007CC44BE2B53361DF256 /* Keepalive.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDA931BF1BE121985E2FB3EE /* Keepalive.swift */; };
+		A50239DCBBAD6235AC7C296A /* MessageBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF78C09597C5D63A373EB126 /* MessageBubble.swift */; };
 		B4A19D759C5C4CDDFFA1FC35 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F8BFCDA8C3F71C0A853D573 /* ContentView.swift */; };
 		C43F5710585B9C800CAAA0A2 /* ConnectionStatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 940DB17683937E3DAE6E914C /* ConnectionStatusView.swift */; };
 		D2A85DC611A43443DEC75989 /* TraySignaling.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E70132BA0E6C4BC99D8CB73 /* TraySignaling.swift */; };
@@ -37,44 +36,30 @@
 		FBCB39B163E63ED4E5CA70C6 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B4C27643E1CF51B1F1B38003 /* AVFoundation.framework */; };
 /* End PBXBuildFile section */
 
-/* Begin PBXCopyFilesBuildPhase section */
-		C78FFF26866830961730D056 /* Embed Frameworks */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 10;
-			files = (
-
-			);
-			name = "Embed Frameworks";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXCopyFilesBuildPhase section */
-
 /* Begin PBXFileReference section */
 		11B186EDFDE184DC8B3215C4 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		1F8BFCDA8C3F71C0A853D573 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		293EF6D00AE2A86081777881 /* MessageWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageWebView.swift; sourceTree = "<group>"; };
 		2EDB6F858D918DBBE06D4702 /* TrayTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrayTypes.swift; sourceTree = "<group>"; };
-		BB8888888888888888888888 /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
 		434BBAD25E91BD0B7D626821 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		4E70132BA0E6C4BC99D8CB73 /* TraySignaling.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TraySignaling.swift; sourceTree = "<group>"; };
 		4E99369A8A6B1A9B8EBE996E /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
+		523A4A068180D7EE98435885 /* MarkdownText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownText.swift; sourceTree = "<group>"; };
 		618555E73F15FDB4DB0CAA6F /* SyncProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncProtocol.swift; sourceTree = "<group>"; };
+		7E727142147B0FB449F418D1 /* MessageListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageListView.swift; sourceTree = "<group>"; };
 		80B1AD93046CF0476B3BBC39 /* chat.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = chat.js; sourceTree = "<group>"; };
 		82060520ADE3CE44E0D0FAE0 /* FollowerSyncManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FollowerSyncManager.swift; sourceTree = "<group>"; };
 		93EE217FAA3F9F7DD3A0B07F /* TrayFollowerConnector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrayFollowerConnector.swift; sourceTree = "<group>"; };
 		940DB17683937E3DAE6E914C /* ConnectionStatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatusView.swift; sourceTree = "<group>"; };
 		A47A1376F89AB8ECBC3F688B /* chat.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = chat.html; sourceTree = "<group>"; };
+		AF78C09597C5D63A373EB126 /* MessageBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageBubble.swift; sourceTree = "<group>"; };
+		B26DA62FD50A37F19C808293 /* QRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRScannerView.swift; sourceTree = "<group>"; };
 		B4C27643E1CF51B1F1B38003 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
 		BBB646EF0D0006D1A43F527D /* ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessage.swift; sourceTree = "<group>"; };
 		BDA931BF1BE121985E2FB3EE /* Keepalive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keepalive.swift; sourceTree = "<group>"; };
 		C00DD8A5F90DA65983AA6601 /* SliccFollower.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SliccFollower.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C7D4AD0E32B059DB9EABFF3E /* SliccFollowerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SliccFollowerApp.swift; sourceTree = "<group>"; };
 		C9AF8A8A50FCC9C2DBECA0CF /* WebRTCManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebRTCManager.swift; sourceTree = "<group>"; };
-		AA2222222222222222222222 /* MarkdownText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownText.swift; sourceTree = "<group>"; };
-		AA4444444444444444444444 /* MessageBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageBubble.swift; sourceTree = "<group>"; };
-		AA6666666666666666666666 /* MessageListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageListView.swift; sourceTree = "<group>"; };
 		CCCB2F32F2BEEC4DE1D526DB /* InputBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InputBar.swift; sourceTree = "<group>"; };
 		E0052066D742EEE8123EDE79 /* chat.css */ = {isa = PBXFileReference; lastKnownFileType = text.css; path = chat.css; sourceTree = "<group>"; };
 		F0583BDF50B1A1B9CE68AE67 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -138,11 +123,11 @@
 				940DB17683937E3DAE6E914C /* ConnectionStatusView.swift */,
 				1F8BFCDA8C3F71C0A853D573 /* ContentView.swift */,
 				CCCB2F32F2BEEC4DE1D526DB /* InputBar.swift */,
-				AA2222222222222222222222 /* MarkdownText.swift */,
-				AA4444444444444444444444 /* MessageBubble.swift */,
-				AA6666666666666666666666 /* MessageListView.swift */,
+				523A4A068180D7EE98435885 /* MarkdownText.swift */,
+				AF78C09597C5D63A373EB126 /* MessageBubble.swift */,
+				7E727142147B0FB449F418D1 /* MessageListView.swift */,
 				293EF6D00AE2A86081777881 /* MessageWebView.swift */,
-				BB8888888888888888888888 /* QRScannerView.swift */,
+				B26DA62FD50A37F19C808293 /* QRScannerView.swift */,
 				F0A069AA812629AC5FE70AC9 /* SettingsView.swift */,
 			);
 			path = Views;
@@ -218,7 +203,6 @@
 				453D32FDE3BC3DC23025768F /* Sources */,
 				0A046FDD1D95235866F8CCD1 /* Resources */,
 				5B55828FCBC44084D22E9080 /* Frameworks */,
-				C78FFF26866830961730D056 /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
@@ -292,11 +276,11 @@
 				4BA93B0DC88934132A09F1D6 /* FollowerSyncManager.swift in Sources */,
 				0CAAEE94D02D4006193FA4BB /* InputBar.swift in Sources */,
 				977007CC44BE2B53361DF256 /* Keepalive.swift in Sources */,
-				AA1111111111111111111111 /* MarkdownText.swift in Sources */,
-				AA3333333333333333333333 /* MessageBubble.swift in Sources */,
-				AA5555555555555555555555 /* MessageListView.swift in Sources */,
+				7AFB535E78304FCE5CE7058A /* MarkdownText.swift in Sources */,
+				A50239DCBBAD6235AC7C296A /* MessageBubble.swift in Sources */,
+				5DBC389110F337A40762C4E1 /* MessageListView.swift in Sources */,
 				73CC65978EB7E4B1818441ED /* MessageWebView.swift in Sources */,
-				BB7777777777777777777777 /* QRScannerView.swift in Sources */,
+				0E6ABE1BE4750990FE352E48 /* QRScannerView.swift in Sources */,
 				3A9E122F6A6C4C0F6258C5C6 /* SettingsView.swift in Sources */,
 				3EDEBD047CEC3F24BC3ED785 /* SliccFollowerApp.swift in Sources */,
 				7BEE859F6C68FEAFD63D1FBB /* SyncProtocol.swift in Sources */,
