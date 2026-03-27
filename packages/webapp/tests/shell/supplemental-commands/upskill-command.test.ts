@@ -740,30 +740,32 @@ describe('upskill recommendations subcommand', () => {
       })
     );
 
-    // Write catalog
-    await fs.mkdir('/shared', { recursive: true });
-    await fs.writeFile(
-      '/shared/skill-catalog.json',
-      JSON.stringify({
-        version: 1,
-        skills: [
-          {
-            name: 'aem',
-            displayName: 'AEM',
-            description: 'AEM skill',
-            source: { repo: 'adobe/skills', path: 'skills/aem', skill: 'aem' },
-            affinity: {
-              apps: ['aem'],
-              tasks: ['build-websites'],
-              role: ['developer'],
-              purpose: ['work'],
-            },
-          },
-        ],
-      })
-    );
-
-    const fetchMock = vi.fn();
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/skills/catalog.json')) {
+        return {
+          status: 200,
+          body: JSON.stringify({
+            data: [
+              {
+                name: 'aem',
+                displayName: 'AEM',
+                description: 'AEM skill',
+                repo: 'adobe/skills',
+                path: 'skills/aem',
+                skill: 'aem',
+                apps: 'aem',
+                tasks: 'build-websites',
+                role: 'developer',
+                purpose: 'work',
+                boost: '',
+              },
+            ],
+          }),
+          headers: {},
+        };
+      }
+      return { status: 404, body: '', headers: {} };
+    });
     const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
     const result = await cmd.execute(['recommendations'], createMockCtx() as any);
 
@@ -771,5 +773,30 @@ describe('upskill recommendations subcommand', () => {
     expect(result.stdout).toContain('AEM');
     expect(result.stdout).toContain('score: 7');
     expect(result.stdout).toContain('upskill recommendations --install');
+  });
+
+  it('returns error when catalog fetch fails', async () => {
+    // Write profile so we get past profile check
+    await fs.mkdir('/home/test', { recursive: true });
+    await fs.writeFile(
+      '/home/test/.welcome.json',
+      JSON.stringify({
+        purpose: 'work',
+        role: 'developer',
+        tasks: ['build-websites'],
+        apps: ['aem'],
+        name: 'Test',
+      })
+    );
+
+    const fetchMock = vi.fn().mockImplementation(async () => {
+      return { status: 500, body: 'Internal Server Error', headers: {} };
+    });
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['recommendations'], createMockCtx() as any);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('failed to fetch skill catalog');
+    expect(result.stderr).toContain('sliccy.com/skills/catalog.json');
   });
 });
