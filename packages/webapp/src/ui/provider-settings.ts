@@ -9,8 +9,6 @@ import type { Model } from '../core/index.js';
 import type { Api } from '@mariozechner/pi-ai';
 import { storeTrayJoinUrl, hasStoredTrayJoinUrl } from '../scoops/tray-runtime-config.js';
 import { getFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
-import { getThemePreference, setThemePreference } from './theme.js';
-import type { ThemePreference } from './theme.js';
 import type { RefreshTrayRuntimeMsg } from '../../../chrome-extension/src/messages.js';
 import {
   getRegisteredProviderConfig,
@@ -775,7 +773,8 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
       btnRow.style.cssText = 'display: flex; gap: 8px;';
 
       const addBtn = document.createElement('button');
-      addBtn.className = 'dialog__btn';
+      addBtn.className =
+        currentAccounts.length > 0 ? 'dialog__btn dialog__btn--secondary' : 'dialog__btn';
       addBtn.style.flex = '1';
       addBtn.textContent = 'Add Account';
       addBtn.addEventListener('click', () => renderAccountForm());
@@ -825,76 +824,16 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
       joinTrayBtn.addEventListener('click', () => renderJoinTrayForm());
       dialog.appendChild(joinTrayBtn);
 
-      // ── Theme section ───────────────────────────────────────────
-      const themeSep = document.createElement('hr');
-      themeSep.style.cssText =
+      // Separator before Get Started
+      const closeSep = document.createElement('hr');
+      closeSep.style.cssText =
         'border: none; border-top: 1px solid var(--s2-border-subtle); margin: 16px 0;';
-      dialog.appendChild(themeSep);
-
-      const themeLabel = document.createElement('div');
-      themeLabel.className = 'dialog__desc';
-      themeLabel.style.cssText = 'font-weight: 600; margin-bottom: 8px;';
-      themeLabel.textContent = 'Theme';
-      dialog.appendChild(themeLabel);
-
-      const themeGroup = document.createElement('div');
-      themeGroup.setAttribute('role', 'radiogroup');
-      themeGroup.setAttribute('aria-label', 'Theme');
-      themeGroup.style.cssText =
-        'display: flex; gap: 0; margin-bottom: 16px; ' +
-        'border-radius: var(--s2-radius-default); overflow: hidden; ' +
-        'border: 1px solid var(--s2-border-subtle);';
-
-      const themeOptions: [ThemePreference, string][] = [
-        ['system', 'System'],
-        ['light', 'Light'],
-        ['dark', 'Dark'],
-      ];
-      const themeBtns: HTMLButtonElement[] = [];
-
-      for (const [value, label] of themeOptions) {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.setAttribute('role', 'radio');
-        btn.setAttribute('aria-checked', String(value === getThemePreference()));
-        btn.textContent = label;
-        btn.dataset.theme = value;
-        btn.style.cssText =
-          'flex: 1; padding: 8px 0; border: none; ' +
-          'font-size: 13px; font-weight: 600; cursor: pointer; ' +
-          'transition: background var(--s2-transition-default), ' +
-          'color var(--s2-transition-default);';
-        themeBtns.push(btn);
-        themeGroup.appendChild(btn);
-      }
-
-      function styleThemeBtns() {
-        const cs = getComputedStyle(document.documentElement);
-        for (const btn of themeBtns) {
-          const active = btn.dataset.theme === getThemePreference();
-          btn.setAttribute('aria-checked', String(active));
-          btn.style.background = active
-            ? cs.getPropertyValue('--s2-accent').trim()
-            : cs.getPropertyValue('--s2-bg-layer-2').trim();
-          btn.style.color = active ? '#fff' : cs.getPropertyValue('--s2-content-secondary').trim();
-        }
-      }
-      styleThemeBtns();
-
-      for (const btn of themeBtns) {
-        btn.addEventListener('click', () => {
-          setThemePreference(btn.dataset.theme as ThemePreference);
-          styleThemeBtns();
-        });
-      }
-
-      dialog.appendChild(themeGroup);
+      dialog.appendChild(closeSep);
 
       // Close button
       const closeBtn = document.createElement('button');
-      closeBtn.className = 'dialog__btn dialog__btn--secondary';
-      closeBtn.style.marginTop = '8px';
-      closeBtn.textContent = 'Close';
+      closeBtn.className = 'dialog__btn';
+      closeBtn.textContent = 'Get Started';
       closeBtn.addEventListener('click', () => {
         overlay.remove();
         resolve((localStorage.getItem(ACCOUNTS_KEY) ?? '') !== accountsBefore);
