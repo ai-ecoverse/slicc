@@ -679,7 +679,6 @@ export class Layout {
           await this.runFileBrowserCommand(command);
           this.extensionZone.activateTab('terminal');
         },
-        onClearFilesystem: () => this.onClearFilesystem?.(),
       }),
       memory: new MemoryPanel(memoryContainer),
       scoops: new ScoopsPanel(this.scoopsEl, {
@@ -928,7 +927,6 @@ export class Layout {
           await this.runFileBrowserCommand(command);
           this.openTerminal();
         },
-        onClearFilesystem: () => this.onClearFilesystem?.(),
       }),
       memory: new MemoryPanel(memoryContainer),
       scoops: new ScoopsPanel(this.scoopsEl, {

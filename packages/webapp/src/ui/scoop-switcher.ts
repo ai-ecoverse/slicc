@@ -148,19 +148,6 @@ export class ScoopSwitcher {
           item.appendChild(badge);
         }
 
-        if (!scoop.isCone) {
-          const del = document.createElement('span');
-          del.className = 'scoop-dd__delete';
-          del.textContent = '\u00d7';
-          del.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.callbacks.onDeleteScoop(scoop.jid);
-            this.dropdownOpen = false;
-            this.render();
-          });
-          item.appendChild(del);
-        }
-
         item.addEventListener('click', () => {
           this.selectedJid = scoop.jid;
           this.dropdownOpen = false;

@@ -49,6 +49,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
       'uname',
       'host',
       'oauth-token',
+      'nuke',
     ],
   ],
   ['Data processing', ['xargs', 'jq', 'base64', 'date']],
