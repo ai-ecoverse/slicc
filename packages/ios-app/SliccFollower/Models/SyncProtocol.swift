@@ -11,6 +11,7 @@ enum AgentEvent: Codable {
     case toolResult(messageId: String, toolName: String, result: String, isError: Bool?)
     case turnEnd(messageId: String)
     case error(error: String)
+    case unknown(type: String)
 
     private enum CodingKeys: String, CodingKey {
         case type, messageId, text, toolName, toolInput, result, isError, error
@@ -44,9 +45,7 @@ enum AgentEvent: Codable {
         case "error":
             self = .error(error: try container.decode(String.self, forKey: .error))
         default:
-            throw DecodingError.dataCorrupted(
-                .init(codingPath: decoder.codingPath,
-                      debugDescription: "Unknown AgentEvent type: \(type)"))
+            self = .unknown(type: type)
         }
     }
 
@@ -80,6 +79,8 @@ enum AgentEvent: Codable {
         case let .error(error):
             try container.encode("error", forKey: .type)
             try container.encode(error, forKey: .error)
+        case let .unknown(type):
+            try container.encode(type, forKey: .type)
         }
     }
 }
@@ -97,6 +98,7 @@ enum LeaderToFollowerMessage: Codable {
     case error(error: String)
     case ping
     case pong
+    case unknown(type: String)
 
     private enum CodingKeys: String, CodingKey {
         case type, messages, scoopJid, chunkData, chunkIndex, totalChunks
@@ -109,8 +111,8 @@ enum LeaderToFollowerMessage: Codable {
         switch type {
         case "snapshot":
             self = .snapshot(
-                messages: try container.decode([ChatMessage].self, forKey: .messages),
-                scoopJid: try container.decode(String.self, forKey: .scoopJid))
+                messages: (try? container.decode([ChatMessage].self, forKey: .messages)) ?? [],
+                scoopJid: (try? container.decode(String.self, forKey: .scoopJid)) ?? "")
         case "snapshot_chunk":
             self = .snapshotChunk(
                 chunkData: try container.decode(String.self, forKey: .chunkData),
@@ -135,9 +137,7 @@ enum LeaderToFollowerMessage: Codable {
         case "pong":
             self = .pong
         default:
-            throw DecodingError.dataCorrupted(
-                .init(codingPath: decoder.codingPath,
-                      debugDescription: "Unknown LeaderToFollowerMessage type: \(type)"))
+            self = .unknown(type: type)
         }
     }
 
@@ -173,6 +173,8 @@ enum LeaderToFollowerMessage: Codable {
             try container.encode("ping", forKey: .type)
         case .pong:
             try container.encode("pong", forKey: .type)
+        case let .unknown(type):
+            try container.encode(type, forKey: .type)
         }
     }
 }
