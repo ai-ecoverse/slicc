@@ -22,6 +22,7 @@ jobs:
       cloudflare-worker: ${{ steps.filter.outputs.cloudflare-worker }}
       swift-server: ${{ steps.filter.outputs.swift-server }}
       swift-launcher: ${{ steps.filter.outputs.swift-launcher }}
+      ios-app: ${{ steps.filter.outputs.ios-app }}
       root-config: ${{ steps.filter.outputs.root-config }}
       is-queue-leader: ${{ steps.queue-position.outputs.leader }}
     steps:
@@ -46,6 +47,8 @@ jobs:
               - 'packages/swift-server/**'
             swift-launcher:
               - 'packages/swift-launcher/**'
+            ios-app:
+              - 'packages/ios-app/**'
             root-config:
               - 'package.json'
               - 'package-lock.json'
@@ -497,6 +500,29 @@ jobs:
           # blocking PRs while existing findings get cleaned up incrementally.
           cd packages/swift-launcher && periphery scan --disable-update-check || true
 
+  ios-app:
+    needs: [changes, lint]
+    if: >-
+      needs.lint.result == 'success' &&
+      needs.changes.outputs.is-queue-leader == 'true' &&
+      needs.changes.outputs.ios-app == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: cd packages/ios-app && xcodegen generate
+      - name: Build
+        run: |
+          cd packages/ios-app
+          xcodebuild build \
+            -project SliccFollower.xcodeproj \
+            -scheme SliccFollower \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            | tail -20
+
   # Wait for any in-progress release before allowing merge queue to land.
   # Only runs on merge_group events; skipped (= passing) for PRs.
   release-gate:
@@ -535,6 +561,7 @@ jobs:
         cloudflare-worker,
         swift-launcher,
         swift-server,
+        ios-app,
         release-gate,
       ]
     runs-on: ubuntu-latest
