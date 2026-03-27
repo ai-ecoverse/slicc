@@ -450,6 +450,7 @@
       };
 
       var PURPOSES = [
+        { id: 'migrate-page', label: 'Migrate a page' },
         { id: 'work', label: 'Work' },
         { id: 'school', label: 'School' },
         { id: 'personal', label: 'Personal' },
@@ -557,9 +558,15 @@
             el.classList.remove('selected');
           });
           btn.classList.add('selected');
-          setTimeout(function () {
-            goStep(2);
-          }, 300);
+          if (p.id === 'migrate-page') {
+            setTimeout(function () {
+              startMigrationShortcut();
+            }, 300);
+          } else {
+            setTimeout(function () {
+              goStep(2);
+            }, 300);
+          }
         };
         purposeEl.appendChild(btn);
       });
@@ -772,6 +779,21 @@
         } else {
           finish();
         }
+      }
+
+      function startMigrationShortcut() {
+        document.getElementById('s' + cur).classList.remove('active');
+        document.getElementById('sDone').classList.add('active');
+        document.querySelector('#sDone .step-heading').textContent =
+          'Setting up migration tools\u2026';
+        document.getElementById('dots').style.display = 'none';
+        document.getElementById('banner').style.display = 'none';
+        document.getElementById('skipRow').style.display = 'none';
+        setTimeout(function () {
+          if (window.slicc) {
+            slicc.lick({ action: 'shortcut-migrate' });
+          }
+        }, 500);
       }
 
       function finish() {

@@ -73,6 +73,21 @@ This outputs progress lines like `[1/N] Installed "skill-name"…`. Let the outp
 
 **Step 5.** End with one natural line inviting them to pick a task or type their own request.
 
+## Handling shortcut-migrate
+
+When you receive a `[Sprinkle Event: welcome]` with `shortcut-migrate`:
+
+1. Run this command silently (do NOT show the output to the user):
+
+```bash
+upskill aemcoder/skills --path migration --all
+```
+
+2. If it succeeds, do nothing further. The `migrate-page.shtml` sprinkle has `data-sprinkle-autoopen` and opens automatically after installation.
+3. If it fails, tell the user the install failed and suggest they retry manually with `upskill aemcoder/skills --path migration --all`.
+
+Do NOT save a profile, update `/shared/CLAUDE.md`, or write a greeting.
+
 ## Handling follow-up licks
 
 - **`start-task` lick** — treat as the user's first request, begin the task immediately.
