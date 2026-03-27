@@ -194,6 +194,7 @@ final class APIRoutesTests: XCTestCase {
             logDir: nil,
             logDirectoryURL: nil,
             prompt: nil,
+            browser: "chrome",
             staticRoot: nil
         )
     }
