@@ -4,6 +4,7 @@ struct ChatView: View {
     @EnvironmentObject var appState: AppState
     @State private var inputText = ""
     @State private var showSettings = false
+    @State private var hasAppeared = false
 
     private let background = Color(red: 0x0F / 255, green: 0x0F / 255, blue: 0x1A / 255)
 
@@ -16,12 +17,11 @@ struct ChatView: View {
             )
             .animation(.easeInOut(duration: 0.3), value: appState.connectionState)
 
-            // Message list (WebView)
-            MessageWebView(
+            // Message list (native SwiftUI)
+            MessageListView(
                 messages: appState.messages,
                 isStreaming: appState.isStreaming
             )
-            .ignoresSafeArea(.keyboard)
 
             // Input bar
             InputBar(
@@ -49,6 +49,17 @@ struct ChatView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView()
                 .environmentObject(appState)
+        }
+        .onAppear {
+            guard !hasAppeared else { return }
+            hasAppeared = true
+            let stored = UserDefaults.standard.string(forKey: "joinUrl") ?? ""
+            if stored.isEmpty {
+                showSettings = true
+            } else if appState.connectionState == .disconnected && appState.joinUrl.isEmpty {
+                appState.joinUrl = stored
+                appState.connect()
+            }
         }
     }
 }

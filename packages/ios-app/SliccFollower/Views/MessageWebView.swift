@@ -29,8 +29,7 @@ struct MessageWebView: UIViewRepresentable {
         webView.scrollView.bouncesZoom = false
 
         // Load chat.html from bundle
-        if let htmlURL = Bundle.main.url(forResource: "chat", withExtension: "html",
-                                          subdirectory: nil) {
+        if let htmlURL = Bundle.main.url(forResource: "chat", withExtension: "html") {
             webView.loadFileURL(htmlURL, allowingReadAccessTo: htmlURL.deletingLastPathComponent())
         }
 

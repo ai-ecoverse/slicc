@@ -114,7 +114,7 @@ class WebRTCManager: NSObject {
         guard let channel = dataChannel, channel.readyState == .open else {
             return false
         }
-        let buffer = RTCDataBuffer(data: data, isBinary: true)
+        let buffer = RTCDataBuffer(data: data, isBinary: false)
         return channel.sendData(buffer)
     }
 
@@ -183,8 +183,6 @@ extension WebRTCManager: RTCPeerConnectionDelegate {
         delegate?.webRTCManager(self, didChangeConnectionState: newState)
 
         switch newState {
-        case .disconnected:
-            delegate?.webRTCManagerDidDisconnect(self, reason: "ICE connection disconnected")
         case .failed:
             delegate?.webRTCManagerDidDisconnect(self, reason: "ICE connection failed")
         case .closed:

@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import WebRTC
+import os
 
 /// Represents the current connection state of the follower app.
 enum ConnectionState: String {
@@ -13,6 +14,13 @@ enum ConnectionState: String {
 
 // ChatMessage is defined in Models/ChatMessage.swift
 
+/// Wrapper for decoding chunked snapshot payloads.
+/// The leader serializes snapshots as `JSON.stringify({ messages, scoopJid })`.
+private struct SnapshotPayload: Codable {
+    let messages: [ChatMessage]
+    let scoopJid: String
+}
+
 /// Global app state shared across views via @EnvironmentObject.
 ///
 /// Central coordinator wiring: TraySignaling → WebRTC → sync → UI.
@@ -20,6 +28,10 @@ enum ConnectionState: String {
 /// @Published properties for SwiftUI views.
 @MainActor
 class AppState: ObservableObject {
+
+    // MARK: - Logging
+
+    private let logger = Logger(subsystem: "com.slicc.follower", category: "AppState")
 
     // MARK: - Published UI State
 
@@ -40,6 +52,14 @@ class AppState: ObservableObject {
 
     /// Last connection error, surfaced to the UI.
     @Published var lastError: String?
+
+    // MARK: - Init
+
+    init() {
+        if let history = UserDefaults.standard.stringArray(forKey: "joinUrlHistory") {
+            joinUrlHistory = history
+        }
+    }
 
     // MARK: - Streaming Bridge
 
@@ -276,6 +296,7 @@ class AppState: ObservableObject {
 
     /// Called from WebRTCBridge when the data channel opens.
     func dataChannelOpened() {
+        logger.info("Data channel opened")
         connectionState = .connected
         connectedSince = Date()
 
@@ -303,36 +324,54 @@ class AppState: ObservableObject {
     /// Called from WebRTCBridge when data arrives on the channel.
     func handleDataChannelMessage(_ data: Data) {
         let decoder = JSONDecoder()
-        guard let msg = try? decoder.decode(LeaderToFollowerMessage.self, from: data) else {
-            print("[AppState] Failed to decode leader message (\(data.count) bytes)")
+
+        let msg: LeaderToFollowerMessage
+        do {
+            msg = try decoder.decode(LeaderToFollowerMessage.self, from: data)
+        } catch {
+            let preview = String(data: data.prefix(200), encoding: .utf8) ?? "<binary>"
+            logger.error("Failed to decode leader message (\(data.count) bytes): \(error.localizedDescription) — preview: \(preview)")
             return
         }
 
         switch msg {
-        case let .snapshot(chatMessages, _):
+        case let .snapshot(chatMessages, scoopJid):
+            logger.info("Snapshot received: \(chatMessages.count) messages, scoopJid=\(scoopJid)")
             messages = chatMessages
             isStreaming = chatMessages.last?.isStreaming == true
             streamingMessageId = isStreaming ? chatMessages.last?.id : nil
 
         case let .snapshotChunk(chunkData, chunkIndex, totalChunks, _):
+            logger.info("Snapshot chunk \(chunkIndex + 1)/\(totalChunks) received (\(chunkData.count) chars)")
             snapshotTotalChunks = totalChunks
             snapshotChunks[chunkIndex] = chunkData
             if snapshotChunks.count == totalChunks {
-                // Reassemble snapshot.
+                // Reassemble snapshot — the payload is {"messages": [...], "scoopJid": "..."}
                 let fullJson = (0..<totalChunks).compactMap { snapshotChunks[$0] }.joined()
                 snapshotChunks.removeAll()
-                if let data = fullJson.data(using: .utf8),
-                   let chatMessages = try? JSONDecoder().decode([ChatMessage].self, from: data) {
-                    messages = chatMessages
-                    isStreaming = chatMessages.last?.isStreaming == true
-                    streamingMessageId = isStreaming ? chatMessages.last?.id : nil
+                logger.info("Reassembling chunked snapshot (\(fullJson.count) chars total)")
+                if let jsonData = fullJson.data(using: .utf8) {
+                    do {
+                        let payload = try JSONDecoder().decode(SnapshotPayload.self, from: jsonData)
+                        logger.info("Chunked snapshot decoded: \(payload.messages.count) messages, scoopJid=\(payload.scoopJid)")
+                        messages = payload.messages
+                        isStreaming = payload.messages.last?.isStreaming == true
+                        streamingMessageId = isStreaming ? payload.messages.last?.id : nil
+                    } catch {
+                        logger.error("Failed to decode reassembled snapshot: \(error.localizedDescription)")
+                        // Log a preview of the JSON for debugging
+                        let preview = String(fullJson.prefix(300))
+                        logger.error("Snapshot JSON preview: \(preview)")
+                    }
                 }
             }
 
-        case let .agentEvent(event, _):
+        case let .agentEvent(event, scoopJid):
+            logger.debug("Agent event received: scoopJid=\(scoopJid)")
             handleAgentEvent(event)
 
         case let .userMessageEcho(text, messageId, _):
+            logger.debug("User message echo: id=\(messageId)")
             // Only add if not already present (we optimistically added in sendMessage).
             if !messages.contains(where: { $0.id == messageId }) {
                 let msg = ChatMessage(
@@ -345,6 +384,7 @@ class AppState: ObservableObject {
             }
 
         case let .status(scoopStatus):
+            logger.debug("Status update: \(scoopStatus)")
             let wasStreaming = isStreaming
             isStreaming = (scoopStatus == "streaming" || scoopStatus == "running")
             if wasStreaming && !isStreaming {
@@ -352,6 +392,7 @@ class AppState: ObservableObject {
             }
 
         case let .error(error):
+            logger.error("Leader error: \(error)")
             lastError = error
 
         case .ping:
@@ -362,6 +403,7 @@ class AppState: ObservableObject {
             Task { await keepalive?.receivedPong() }
 
         case .unknown:
+            logger.debug("Unknown message type received")
             break  // Silently ignore unhandled message types
         }
     }
@@ -370,6 +412,7 @@ class AppState: ObservableObject {
     private func handleAgentEvent(_ event: AgentEvent) {
         switch event {
         case let .messageStart(messageId):
+            logger.info("Agent event: message_start id=\(messageId)")
             let newMsg = ChatMessage(
                 id: messageId,
                 role: .assistant,
@@ -389,12 +432,14 @@ class AppState: ObservableObject {
             onStreamingEvent?(.contentDelta(messageId: messageId, text: text))
 
         case let .contentDone(messageId):
+            logger.debug("Agent event: content_done id=\(messageId)")
             if let idx = messages.firstIndex(where: { $0.id == messageId }) {
                 messages[idx].isStreaming = false
             }
             onStreamingEvent?(.contentDone(messageId: messageId))
 
         case let .toolUseStart(messageId, toolName, toolInput):
+            logger.info("Agent event: tool_use_start id=\(messageId) tool=\(toolName)")
             if let idx = messages.firstIndex(where: { $0.id == messageId }) {
                 let inputStr: String
                 if let toolInput, let data = try? JSONEncoder().encode(toolInput),
@@ -422,6 +467,7 @@ class AppState: ObservableObject {
             }
 
         case let .turnEnd(messageId):
+            logger.info("Agent event: turn_end id=\(messageId)")
             if let idx = messages.firstIndex(where: { $0.id == messageId }) {
                 messages[idx].isStreaming = false
             }
@@ -429,9 +475,11 @@ class AppState: ObservableObject {
             streamingMessageId = nil
 
         case let .error(error):
+            logger.error("Agent event: error — \(error)")
             lastError = error
 
         case .unknown:
+            logger.debug("Agent event: unknown type")
             break  // Silently ignore unhandled event types
         }
     }
