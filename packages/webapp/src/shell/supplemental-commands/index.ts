@@ -13,6 +13,7 @@ import { createPython3LikeCommand } from './python-command.js';
 import { createServeCommand } from './serve-command.js';
 import { createSqliteCommand } from './sqlite-command.js';
 import { createUnameCommand } from './uname-command.js';
+import { createManCommand } from './man-command.js';
 import { createUnzipCommand } from './unzip-command.js';
 import { createWebhookCommand } from './webhook-command.js';
 import { createCrontaskCommand } from './crontask-command.js';
@@ -69,6 +70,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createConvertCommand('magick'),
     createWhichCommand(options.fs),
     createUnameCommand(),
+    createManCommand(),
     createOAuthTokenCommand(),
     createRsyncCommand({ fs: options.fs }),
     createScreencaptureCommand(),

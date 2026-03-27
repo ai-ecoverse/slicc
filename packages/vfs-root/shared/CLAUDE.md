@@ -158,6 +158,7 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **host** — Print the current leader tray status plus `join_url`. When this runtime is leader, shows the join URL and connected followers. Use `host reset` to disconnect all followers and create a fresh tray session with a new join URL (leader only).
 - **pbcopy / pbpaste** — Clipboard commands. `echo hello | pbcopy` copies stdin to clipboard, `pbpaste` outputs clipboard contents. Uses `navigator.clipboard` API.
 - **xclip / xsel** — Clipboard commands that auto-detect direction: `echo hello | xclip` copies (stdin present), `xclip` alone pastes (no stdin).
+- **man** — Read detailed manual pages for commands and concepts. `man <topic>` fetches documentation from sliccy.com. Use this to get in-depth information about SLICC commands, ice cream vocabulary, and other topics. Example: `man scoop`, `man playwright-cli`.
 - **say** — Text-to-speech using Web Speech API. `say hello world`, `say -v Samantha hello` (voice selection), `say -r 1.5 fast speech` (rate 0.1-10), `say --list` (list voices).
 - **afplay** — Play audio files using Web Audio API. `afplay /path/to/audio.mp3`, `afplay -v 0.5 file.wav` (volume 0-1), `afplay -r 1.5 file.mp3` (rate 0.25-4).
 - **chime** — Play a notification chime sound. Alias for `afplay /shared/sounds/chime.mp3`.
