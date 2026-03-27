@@ -1158,6 +1158,53 @@ async function runPostInstallHooks(): Promise<void> {
   await reloadSkillsAfterInstall();
 }
 
+/**
+ * Install a single skill from an already-downloaded and stripped ZIP archive.
+ * Skips post-install hooks so batch callers can run them once at the end.
+ */
+async function installSkillFromZip(
+  skillPath: string,
+  skillName: string,
+  files: Record<string, Uint8Array>,
+  fs: VirtualFS,
+  force: boolean = false
+): Promise<{ ok: boolean; error?: string }> {
+  const destDir = `${SKILLS_DIR}/${skillName}`;
+  try {
+    await fs.stat(destDir);
+    if (!force) {
+      return { ok: false, error: `skill "${skillName}" already exists (use --force to overwrite)` };
+    }
+    await fs.rm(destDir, { recursive: true });
+  } catch {
+    // Doesn't exist, continue
+  }
+
+  const prefix = skillPath.replace(/^\/|\/$/g, '') + '/';
+  await fs.mkdir(destDir, { recursive: true });
+  let fileCount = 0;
+
+  for (const [path, content] of Object.entries(files)) {
+    if (!path.startsWith(prefix)) continue;
+    const relativePath = path.slice(prefix.length);
+    if (!relativePath || path.endsWith('/')) continue;
+
+    const filePath = `${destDir}/${relativePath}`;
+    const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
+    if (parentDir !== destDir) {
+      await fs.mkdir(parentDir, { recursive: true });
+    }
+
+    await fs.writeFile(filePath, content);
+    fileCount++;
+  }
+
+  if (fileCount === 0) {
+    return { ok: false, error: `no files found for skill "${skillName}" in ZIP` };
+  }
+  return { ok: true };
+}
+
 /** After a successful install, reload skills on all active agent contexts. */
 async function reloadSkillsAfterInstall(): Promise<void> {
   try {
@@ -1274,49 +1321,113 @@ async function handleRecommendations(
   }
 
   if (install) {
-    // Install all recommended skills
+    // Group scored entries by repo so each ZIP is downloaded only once
+    const repoGroups = new Map<string, ScoredSkill[]>();
+    for (const rec of scored) {
+      const repoKey = rec.entry.source.repo;
+      const group = repoGroups.get(repoKey);
+      if (group) {
+        group.push(rec);
+      } else {
+        repoGroups.set(repoKey, [rec]);
+      }
+    }
+
+    // Count total skills for progress tracking
+    const totalSkills = scored.length;
+    let completedSkills = 0;
+    const startTime = Date.now();
+
     let output = '';
     let errors = '';
     let successCount = 0;
 
-    for (const rec of scored) {
-      const src = rec.entry.source;
-      const github = await createGitHubRequestContext(fetchFn);
+    // Process repos in parallel, skills within each repo sequentially (shared ZIP)
+    const repoResults = await Promise.allSettled(
+      Array.from(repoGroups.entries()).map(async ([repoKey, recs]) => {
+        const [owner, repo] = repoKey.split('/');
+        const zip = await fetchRepoZip(owner, repo, fetchFn);
+        if (zip.status === 'not_found') {
+          return { errors: `upskill: repository ${repoKey} not found\n`, results: [] };
+        }
+        if (zip.status === 'error') {
+          return { errors: `upskill: failed to fetch ${repoKey}: ${zip.message}\n`, results: [] };
+        }
 
-      const [owner, repo] = src.repo.split('/');
-      const listResult = await listGitHubSkills(owner, repo, github, src.path, fetchFn);
-      if (listResult.error) {
-        errors += `upskill: failed to list ${rec.entry.name}: ${listResult.error}\n`;
+        const files = stripZipPrefix(zip.files);
+        const results: Array<{ ok: boolean; name: string; error?: string }> = [];
+
+        for (const rec of recs) {
+          const src = rec.entry.source;
+          // Resolve the skill path from the ZIP
+          let skillPath: string;
+          let skillName: string;
+
+          if (src.skill) {
+            // Find specific skill in the ZIP
+            const prefix = src.path ? src.path.replace(/^\/|\/$/g, '') + '/' : '';
+            const skillMdKey = Object.keys(files).find(
+              (p) => p.startsWith(prefix) && p.endsWith(`${src.skill}/SKILL.md`)
+            );
+            if (!skillMdKey) {
+              results.push({
+                ok: false,
+                name: rec.entry.name,
+                error: `skill "${src.skill}" not found in ${repoKey}`,
+              });
+              completedSkills++;
+              continue;
+            }
+            skillPath = skillMdKey.replace(/\/SKILL\.md$/, '');
+            skillName = src.skill;
+          } else {
+            // Use the path directly — the catalog entry name is the skill name
+            const prefix = src.path ? src.path.replace(/^\/|\/$/g, '') : '';
+            skillPath = prefix;
+            skillName = rec.entry.name;
+          }
+
+          const result = await installSkillFromZip(skillPath, skillName, files, fs, false);
+          completedSkills++;
+
+          const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+          const avgTime = (Date.now() - startTime) / completedSkills;
+          const remaining = Math.round(((totalSkills - completedSkills) * avgTime) / 1000);
+          const eta = completedSkills < totalSkills ? ` (~${remaining}s remaining)` : '';
+
+          if (result.ok) {
+            results.push({ ok: true, name: skillName });
+            output += `[${completedSkills}/${totalSkills}] Installed "${skillName}" from ${repoKey} (${elapsed}s)${eta}\n`;
+          } else {
+            results.push({ ok: false, name: skillName, error: result.error });
+            output += `[${completedSkills}/${totalSkills}] Failed "${skillName}" from ${repoKey}: ${result.error}${eta}\n`;
+          }
+        }
+
+        return { errors: '', results };
+      })
+    );
+
+    // Collect results from parallel repo processing
+    for (const settled of repoResults) {
+      if (settled.status === 'rejected') {
+        errors += `upskill: unexpected error: ${settled.reason}\n`;
         continue;
       }
-
-      // If a specific skill is named, install just that one; otherwise install all from the path
-      const toInstall = src.skill
-        ? listResult.skills.filter((s) => s.name === src.skill)
-        : listResult.skills;
-
-      for (const skill of toInstall) {
-        const result = await installFromGitHub(
-          owner,
-          repo,
-          skill.path,
-          skill.name,
-          fs,
-          github,
-          false,
-          fetchFn
-        );
-        if (result.exitCode === 0) {
-          output += result.stdout;
-          successCount++;
-        } else {
-          errors += result.stderr;
-        }
+      if (settled.value.errors) {
+        errors += settled.value.errors;
+      }
+      for (const r of settled.value.results) {
+        if (r.ok) successCount++;
+        else if (r.error) errors += `upskill: ${r.error}\n`;
       }
     }
 
+    const totalElapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
     if (successCount > 0) {
-      output += `\nInstalled ${successCount} recommended skill(s)\n`;
+      output += `\nInstalled ${successCount} recommended skill(s) in ${totalElapsed}s\n`;
+      await runPostInstallHooks();
     }
     return { stdout: output, stderr: errors, exitCode: errors ? 1 : 0 };
   }
@@ -1554,36 +1665,78 @@ export function createUpskillCommand(fs: VirtualFS, fetchFn: SecureFetch): Comma
         return { stdout: output, stderr: '', exitCode: 0 };
       }
 
-      // Install selected skills
+      // Install selected skills — download ZIP once, extract all skills from it
       let output = '';
       let errors = '';
       let successCount = 0;
+      const totalSkills = skillsToInstall.length;
+      const startTime = Date.now();
 
-      for (const skill of skillsToInstall) {
-        const installResult = await installFromGitHub(
-          owner,
-          repo,
-          skill.path,
-          skill.name,
-          fs,
-          github,
-          force,
-          fetchFn,
-          effectiveBranch
-        );
+      // For batch installs (--all or multiple --skill), use ZIP and skip per-skill hooks
+      if (totalSkills > 1) {
+        const zip = await fetchRepoZip(owner, repo, fetchFn, effectiveBranch);
+        if (zip.status === 'not_found') {
+          const target = effectiveBranch
+            ? `branch "${effectiveBranch}" in ${owner}/${repo}`
+            : `repository ${owner}/${repo}`;
+          return { stdout: '', stderr: `upskill: ${target} not found\n`, exitCode: 1 };
+        }
+        if (zip.status === 'error') {
+          return {
+            stdout: '',
+            stderr: `upskill: failed to fetch ${owner}/${repo}: ${zip.message}\n`,
+            exitCode: 1,
+          };
+        }
 
-        if (installResult.exitCode === 0) {
-          output += installResult.stdout;
-          successCount++;
-        } else {
-          errors += installResult.stderr;
+        const files = stripZipPrefix(zip.files);
+
+        for (let si = 0; si < skillsToInstall.length; si++) {
+          const skill = skillsToInstall[si];
+          const result = await installSkillFromZip(skill.path, skill.name, files, fs, force);
+          const idx = si + 1;
+          const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+          const avgTime = (Date.now() - startTime) / idx;
+          const remaining = Math.round(((totalSkills - idx) * avgTime) / 1000);
+          const eta = idx < totalSkills ? ` (~${remaining}s remaining)` : '';
+
+          if (result.ok) {
+            output += `[${idx}/${totalSkills}] Installed "${skill.name}" from ${owner}/${repo} (${elapsed}s)${eta}\n`;
+            successCount++;
+          } else {
+            output += `[${idx}/${totalSkills}] Failed "${skill.name}": ${result.error}${eta}\n`;
+            errors += `upskill: ${result.error}\n`;
+          }
+        }
+      } else {
+        // Single skill — use the existing installFromGitHub path
+        for (const skill of skillsToInstall) {
+          const installResult = await installFromGitHub(
+            owner,
+            repo,
+            skill.path,
+            skill.name,
+            fs,
+            github,
+            force,
+            fetchFn,
+            effectiveBranch
+          );
+
+          if (installResult.exitCode === 0) {
+            output += installResult.stdout;
+            successCount++;
+          } else {
+            errors += installResult.stderr;
+          }
         }
       }
 
+      const totalElapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
       if (successCount > 0) {
-        output += `\nInstalled ${successCount} skill(s)\n`;
-        await refreshSprinklesAfterInstall();
-        await reloadSkillsAfterInstall();
+        output += `\nInstalled ${successCount} skill(s)${totalSkills > 1 ? ` in ${totalElapsed}s` : ''}\n`;
+        await runPostInstallHooks();
       }
 
       return {
