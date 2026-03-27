@@ -1,9 +1,11 @@
 import SwiftUI
+import VisionKit
 
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) var dismiss
     @AppStorage("joinUrl") private var storedJoinUrl: String = ""
+    @State private var showScanner = false
 
     var body: some View {
         NavigationStack {
@@ -53,11 +55,15 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.borderless)
             }
-            // TODO: Implement QR code scanner using DataScannerViewController (iOS 16+)
-            Button {
-                // QR scanning not yet implemented
-            } label: {
-                Label("Scan QR Code", systemImage: "qrcode.viewfinder")
+            if DataScannerViewController.isSupported {
+                Button {
+                    showScanner = true
+                } label: {
+                    Label("Scan QR Code", systemImage: "qrcode.viewfinder")
+                }
+                .sheet(isPresented: $showScanner) {
+                    QRScannerView(scannedURL: $appState.joinUrl)
+                }
             }
             connectDisconnectButton
             connectionStatusRow

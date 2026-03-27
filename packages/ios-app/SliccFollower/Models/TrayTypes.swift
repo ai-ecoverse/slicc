@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - TraySessionDescription
 
-struct TraySessionDescription: Codable {
+struct TraySessionDescription: Codable, Sendable {
     let type: SDPType
     let sdp: String
 
@@ -14,7 +14,7 @@ struct TraySessionDescription: Codable {
 
 // MARK: - TrayIceCandidate
 
-struct TrayIceCandidate: Codable {
+struct TrayIceCandidate: Codable, Sendable {
     let candidate: String
     let sdpMid: String?
     let sdpMLineIndex: Int?
@@ -23,7 +23,7 @@ struct TrayIceCandidate: Codable {
 
 // MARK: - TrayBootstrapState
 
-enum TrayBootstrapState: String, Codable {
+enum TrayBootstrapState: String, Codable, Sendable {
     case pending
     case offered
     case connected
@@ -32,7 +32,7 @@ enum TrayBootstrapState: String, Codable {
 
 // MARK: - TrayBootstrapFailure
 
-struct TrayBootstrapFailure: Codable {
+struct TrayBootstrapFailure: Codable, Sendable {
     let code: String
     let message: String
     let retryable: Bool
@@ -42,7 +42,7 @@ struct TrayBootstrapFailure: Codable {
 
 // MARK: - TrayBootstrapStatus
 
-struct TrayBootstrapStatus: Codable {
+struct TrayBootstrapStatus: Codable, Sendable {
     let controllerId: String
     let bootstrapId: String
     let attempt: Int
@@ -57,7 +57,7 @@ struct TrayBootstrapStatus: Codable {
 
 // MARK: - TurnIceServer
 
-struct TurnIceServer: Codable {
+struct TurnIceServer: Codable, Sendable {
     let urls: [String]
     let username: String
     let credential: String
@@ -65,7 +65,7 @@ struct TurnIceServer: Codable {
 
 // MARK: - TrayLeaderSummary
 
-struct TrayLeaderSummary: Codable {
+struct TrayLeaderSummary: Codable, Sendable {
     let controllerId: String
     let connected: Bool
     let reconnectDeadline: String?
@@ -73,7 +73,7 @@ struct TrayLeaderSummary: Codable {
 
 // MARK: - TrayBootstrapEvent
 
-enum TrayBootstrapEvent: Codable {
+enum TrayBootstrapEvent: Codable, Sendable {
     case offer(sequence: Int, sentAt: String, offer: TraySessionDescription)
     case iceCandidate(sequence: Int, sentAt: String, candidate: TrayIceCandidate)
     case failed(sequence: Int, sentAt: String, failure: TrayBootstrapFailure)
@@ -128,7 +128,7 @@ enum TrayBootstrapEvent: Codable {
 
 // MARK: - FollowerAttachResult
 
-enum FollowerAttachResult: Codable {
+enum FollowerAttachResult: Codable, Sendable {
     case wait(code: String, retryAfterMs: Int)
     case signal(code: String, bootstrap: TrayBootstrapStatus)
     case fail(code: String, error: String)
@@ -181,7 +181,7 @@ enum FollowerAttachResult: Codable {
 
 // MARK: - FollowerAttachResponse
 
-struct FollowerAttachResponse: Codable {
+struct FollowerAttachResponse: Codable, Sendable {
     let trayId: String
     let controllerId: String
     let role: String
@@ -193,7 +193,7 @@ struct FollowerAttachResponse: Codable {
 
 // MARK: - FollowerBootstrapResponse
 
-struct FollowerBootstrapResponse: Codable {
+struct FollowerBootstrapResponse: Codable, Sendable {
     let trayId: String
     let controllerId: String
     let role: String

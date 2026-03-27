@@ -22,62 +22,7 @@ enum TraySignalingError: Error, LocalizedError {
     }
 }
 
-// MARK: - Wire types (Codable, matching tray-types.ts)
-
-struct TrayLeaderSummary: Codable, Sendable {
-    let controllerId: String
-    let connected: Bool
-    let reconnectDeadline: String?
-}
-
-struct TraySessionDescription: Codable, Sendable {
-    let type: String // "offer" or "answer"
-    let sdp: String
-}
-
-struct TrayIceCandidate: Codable, Sendable {
-    let candidate: String
-    let sdpMid: String?
-    let sdpMLineIndex: Int?
-    let usernameFragment: String?
-}
-
-struct TrayBootstrapFailure: Codable, Sendable {
-    let code: String
-    let message: String
-    let retryable: Bool
-    let retryAfterMs: Int?
-    let failedAt: String
-}
-
-struct TrayBootstrapStatus: Codable, Sendable {
-    let controllerId: String
-    let bootstrapId: String
-    let attempt: Int
-    let state: String // "pending" | "offered" | "connected" | "failed"
-    let expiresAt: String
-    let cursor: Int
-    let maxRetries: Int
-    let retriesRemaining: Int
-    let retryAfterMs: Int?
-    let failure: TrayBootstrapFailure?
-}
-
-struct TurnIceServer: Codable, Sendable {
-    let urls: [String]
-    let username: String
-    let credential: String
-}
-
-/// Discriminated-union bootstrap event. The `type` field selects which payload is present.
-struct TrayBootstrapEvent: Codable, Sendable {
-    let sequence: Int
-    let sentAt: String
-    let type: String // "bootstrap.offer" | "bootstrap.ice_candidate" | "bootstrap.failed"
-    let offer: TraySessionDescription?
-    let candidate: TrayIceCandidate?
-    let failure: TrayBootstrapFailure?
-}
+// Wire types are defined in Models/TrayTypes.swift
 
 // MARK: - Raw HTTP response shapes (private, for decoding only)
 
@@ -188,7 +133,7 @@ actor TraySignalingClient {
             "action": "answer",
             "controllerId": controllerId,
             "bootstrapId": bootstrapId,
-            "answer": ["type": answer.type, "sdp": answer.sdp],
+            "answer": ["type": answer.type.rawValue, "sdp": answer.sdp],
         ]
         return try await postBootstrapRequest(body: body)
     }

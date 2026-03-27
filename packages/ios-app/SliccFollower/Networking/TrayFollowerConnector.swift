@@ -357,7 +357,7 @@ extension TrayFollowerConnector: WebRTCManagerDelegate {
         Task { [controllerId] in
             guard !bootstrapId.isEmpty else { return }
             // Fire-and-forget, matching the TS implementation.
-            try? await signaling.sendIceCandidate(
+            _ = try? await signaling.sendIceCandidate(
                 controllerId: controllerId,
                 bootstrapId: bootstrapId,
                 candidate: trayCandidate
