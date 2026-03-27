@@ -25,6 +25,7 @@ describe('parseCliRuntimeFlags', () => {
       logDir: null,
       prompt: null,
       version: false,
+      browser: 'chrome',
     });
   });
 
@@ -46,6 +47,7 @@ describe('parseCliRuntimeFlags', () => {
       logDir: null,
       prompt: null,
       version: false,
+      browser: 'chrome',
     });
   });
 
@@ -75,6 +77,7 @@ describe('parseCliRuntimeFlags', () => {
       logDir: null,
       prompt: null,
       version: false,
+      browser: 'chrome',
     });
   });
 
@@ -98,6 +101,7 @@ describe('parseCliRuntimeFlags', () => {
       logDir: null,
       prompt: null,
       version: false,
+      browser: 'chrome',
     });
   });
 
@@ -119,6 +123,7 @@ describe('parseCliRuntimeFlags', () => {
       logDir: null,
       prompt: null,
       version: false,
+      browser: 'chrome',
     });
   });
 
@@ -140,6 +145,7 @@ describe('parseCliRuntimeFlags', () => {
       logDir: null,
       prompt: null,
       version: false,
+      browser: 'chrome',
     });
   });
 
@@ -161,6 +167,7 @@ describe('parseCliRuntimeFlags', () => {
       logDir: null,
       prompt: null,
       version: false,
+      browser: 'chrome',
     });
   });
 
@@ -182,6 +189,7 @@ describe('parseCliRuntimeFlags', () => {
       logDir: null,
       prompt: null,
       version: false,
+      browser: 'chrome',
     });
   });
 
@@ -228,6 +236,7 @@ describe('parseCliRuntimeFlags', () => {
       logDir: null,
       prompt: null,
       version: false,
+      browser: 'chrome',
     });
   });
 
@@ -249,6 +258,7 @@ describe('parseCliRuntimeFlags', () => {
       logDir: null,
       prompt: null,
       version: false,
+      browser: 'chrome',
     });
   });
 
