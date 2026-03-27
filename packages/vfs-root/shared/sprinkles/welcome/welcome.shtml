@@ -1,557 +1,685 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-<title>Welcome</title>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+  <head>
+    <title>Welcome</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
 
-  body {
-    font-family: var(--s2-font-family, 'Adobe Clean', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif);
-    background: var(--s2-bg-base, #1a1a1a);
-    color: var(--s2-content-default, #e8e8e8);
-    min-height: 100vh;
-    overflow-x: hidden;
-  }
+      body {
+        font-family: var(
+          --s2-font-family,
+          'Adobe Clean',
+          -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          system-ui,
+          sans-serif
+        );
+        background: var(--s2-bg-base, #1a1a1a);
+        color: var(--s2-content-default, #e8e8e8);
+        min-height: 100vh;
+        overflow-x: hidden;
+      }
 
-  /* ── Header — compact, no gradient ── */
-  .header {
-    padding: 32px 24px 24px;
-    text-align: center;
-  }
-  .header-title {
-    font-size: 28px;
-    font-weight: 800;
-    line-height: 1.2;
-    color: var(--s2-content-default, #e8e8e8);
-    letter-spacing: -0.01em;
-  }
+      /* ── Header — compact, no gradient ── */
+      .header {
+        padding: 32px 24px 24px;
+        text-align: center;
+      }
+      .header-title {
+        font-size: 28px;
+        font-weight: 800;
+        line-height: 1.2;
+        color: var(--s2-content-default, #e8e8e8);
+        letter-spacing: -0.01em;
+      }
 
-  /* ── Content area ── */
-  .content {
-    padding: 0 24px 32px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-  }
+      /* ── Content area ── */
+      .content {
+        padding: 0 24px 32px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
 
-  /* ── Step heading ── */
-  .step-heading {
-    font-size: 18px;
-    font-weight: 700;
-    color: var(--s2-content-default, #e8e8e8);
-    text-align: center;
-    margin-bottom: 4px;
-    line-height: 1.3;
-  }
-  .step-sub {
-    font-size: 14px;
-    color: var(--s2-content-secondary, #a1a1a1);
-    text-align: center;
-    line-height: 1.5;
-  }
+      /* ── Step heading ── */
+      .step-heading {
+        font-size: 18px;
+        font-weight: 700;
+        color: var(--s2-content-default, #e8e8e8);
+        text-align: center;
+        margin-bottom: 4px;
+        line-height: 1.3;
+      }
+      .step-sub {
+        font-size: 14px;
+        color: var(--s2-content-secondary, #a1a1a1);
+        text-align: center;
+        line-height: 1.5;
+      }
 
-  /* ── Step visibility ── */
-  .step { display: none; animation: fadeUp 0.2s ease both; width: 100%; }
-  .step.active { display: block; }
-  @keyframes fadeUp {
-    from { opacity: 0; transform: translateY(8px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
+      /* ── Step visibility ── */
+      .step {
+        display: none;
+        animation: fadeUp 0.2s ease both;
+        width: 100%;
+      }
+      .step.active {
+        display: block;
+      }
+      @keyframes fadeUp {
+        from {
+          opacity: 0;
+          transform: translateY(8px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
 
-  /* ── Pills — text-only, dark theme ── */
-  .pills {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    max-width: 520px;
-    margin: 20px auto 0;
-    justify-content: center;
-  }
-  .pill {
-    display: inline-flex;
-    align-items: center;
-    height: 38px;
-    padding: 0 16px;
-    border-radius: 10px;
-    background: var(--s2-bg-elevated, #2c2c2c);
-    border: 1px solid var(--s2-border-subtle, #3a3a3a);
-    cursor: pointer;
-    font-family: inherit;
-    font-size: 14px;
-    font-weight: 500;
-    line-height: 1;
-    color: var(--s2-content-default, #e8e8e8);
-    transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
-    user-select: none;
-    white-space: nowrap;
-  }
-  .pill:hover {
-    background: var(--s2-bg-layer-2, #252525);
-    border-color: var(--s2-border-default, #4a4a4a);
-  }
-  .pill:focus-visible {
-    outline: 2px solid var(--s2-accent, #3562ff);
-    outline-offset: 2px;
-  }
-  .pill.selected {
-    background: var(--s2-bg-layer-2, #252525);
-    border-color: var(--s2-accent, #3562ff);
-    box-shadow: 0 0 0 1px var(--s2-accent, #3562ff);
-    color: var(--s2-content-default, #e8e8e8);
-  }
+      /* ── Pills — text-only, dark theme ── */
+      .pills {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        max-width: 520px;
+        margin: 20px auto 0;
+        justify-content: center;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        height: 38px;
+        padding: 0 16px;
+        border-radius: 10px;
+        background: var(--s2-bg-elevated, #2c2c2c);
+        border: 1px solid var(--s2-border-subtle, #3a3a3a);
+        cursor: pointer;
+        font-family: inherit;
+        font-size: 14px;
+        font-weight: 500;
+        line-height: 1;
+        color: var(--s2-content-default, #e8e8e8);
+        transition:
+          border-color 0.15s,
+          background 0.15s,
+          box-shadow 0.15s;
+        user-select: none;
+        white-space: nowrap;
+      }
+      .pill:hover {
+        background: var(--s2-bg-layer-2, #252525);
+        border-color: var(--s2-border-default, #4a4a4a);
+      }
+      .pill:focus-visible {
+        outline: 2px solid var(--s2-accent, #3562ff);
+        outline-offset: 2px;
+      }
+      .pill.selected {
+        background: var(--s2-bg-layer-2, #252525);
+        border-color: var(--s2-accent, #3562ff);
+        box-shadow: 0 0 0 1px var(--s2-accent, #3562ff);
+        color: var(--s2-content-default, #e8e8e8);
+      }
 
-  /* ── Navigation ── */
-  .nav {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    max-width: 520px;
-    margin: 20px auto 0;
-    width: 100%;
-    gap: 8px;
-  }
-  .nav-back {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    background: none;
-    border: none;
-    font-family: inherit;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--s2-content-secondary, #a1a1a1);
-    cursor: pointer;
-    padding: 6px 10px;
-    border-radius: 8px;
-    transition: background 0.15s, color 0.15s;
-    position: absolute;
-    left: 24px;
-  }
-  .nav-back:hover { background: var(--s2-bg-elevated, #2c2c2c); color: var(--s2-content-default, #e8e8e8); }
-  .nav-wrapper { position: relative; max-width: 520px; margin: 20px auto 0; width: 100%; display: flex; justify-content: center; }
+      /* ── Navigation ── */
+      .nav {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        max-width: 520px;
+        margin: 20px auto 0;
+        width: 100%;
+        gap: 8px;
+      }
+      .nav-back {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        background: none;
+        border: none;
+        font-family: inherit;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--s2-content-secondary, #a1a1a1);
+        cursor: pointer;
+        padding: 6px 10px;
+        border-radius: 8px;
+        transition:
+          background 0.15s,
+          color 0.15s;
+        position: absolute;
+        left: 24px;
+      }
+      .nav-back:hover {
+        background: var(--s2-bg-elevated, #2c2c2c);
+        color: var(--s2-content-default, #e8e8e8);
+      }
+      .nav-wrapper {
+        position: relative;
+        max-width: 520px;
+        margin: 20px auto 0;
+        width: 100%;
+        display: flex;
+        justify-content: center;
+      }
 
-  /* ── CTA button ── */
-  .cta {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 10px 28px;
-    border-radius: 9999px;
-    background: var(--s2-accent, #3562ff);
-    color: #fff;
-    border: none;
-    font-family: inherit;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background 0.15s, opacity 0.15s;
-  }
-  .cta:hover { background: var(--s2-accent-hover, #4a75ff); }
-  .cta:disabled { opacity: 0.3; cursor: default; }
+      /* ── CTA button ── */
+      .cta {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 10px 28px;
+        border-radius: 9999px;
+        background: var(--s2-accent, #3562ff);
+        color: #fff;
+        border: none;
+        font-family: inherit;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition:
+          background 0.15s,
+          opacity 0.15s;
+      }
+      .cta:hover {
+        background: var(--s2-accent-hover, #4a75ff);
+      }
+      .cta:disabled {
+        opacity: 0.3;
+        cursor: default;
+      }
 
-  /* ── Progress dots ── */
-  .dots {
-    display: flex;
-    justify-content: center;
-    gap: 6px;
-    margin-top: 28px;
-  }
-  .dot {
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: var(--s2-gray-300, #4a4a4a);
-    transition: background 0.2s, transform 0.2s;
-  }
-  .dot.active { background: var(--s2-accent, #3562ff); transform: scale(1.3); }
-  .dot.done { background: var(--s2-accent, #3562ff); }
+      /* ── Progress dots ── */
+      .dots {
+        display: flex;
+        justify-content: center;
+        gap: 6px;
+        margin-top: 28px;
+      }
+      .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--s2-gray-300, #4a4a4a);
+        transition:
+          background 0.2s,
+          transform 0.2s;
+      }
+      .dot.active {
+        background: var(--s2-accent, #3562ff);
+        transform: scale(1.3);
+      }
+      .dot.done {
+        background: var(--s2-accent, #3562ff);
+      }
 
-  /* ── Prompt bar — clean, no glow ── */
-  .prompt-bar {
-    margin: 20px auto 0;
-    max-width: 520px;
-    width: 100%;
-  }
-  .prompt-bar-inner {
-    background: var(--s2-bg-elevated, #2c2c2c);
-    border: 1px solid var(--s2-border-subtle, #3a3a3a);
-    border-radius: 24px;
-    padding: 10px 10px 10px 16px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    transition: border-color 0.15s;
-  }
-  .prompt-bar-inner:focus-within {
-    border-color: var(--s2-accent, #3562ff);
-  }
-  .prompt-bar-inner input {
-    flex: 1;
-    border: none;
-    outline: none;
-    font-family: inherit;
-    font-size: 15px;
-    line-height: 1.5;
-    color: var(--s2-content-default, #e8e8e8);
-    background: transparent;
-  }
-  .prompt-bar-inner input::placeholder { color: var(--s2-content-tertiary, #8a8a8a); }
-  .send-btn {
-    width: 34px; height: 34px;
-    border-radius: 50%;
-    border: none;
-    background: var(--s2-accent, #3562ff);
-    color: #fff;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    transition: background 0.15s;
-  }
-  .send-btn:hover { background: var(--s2-accent-hover, #4a75ff); }
-  .send-btn svg { width: 16px; height: 16px; }
+      /* ── Prompt bar — clean, no glow ── */
+      .prompt-bar {
+        margin: 20px auto 0;
+        max-width: 520px;
+        width: 100%;
+      }
+      .prompt-bar-inner {
+        background: var(--s2-bg-elevated, #2c2c2c);
+        border: 1px solid var(--s2-border-subtle, #3a3a3a);
+        border-radius: 24px;
+        padding: 10px 10px 10px 16px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        transition: border-color 0.15s;
+      }
+      .prompt-bar-inner:focus-within {
+        border-color: var(--s2-accent, #3562ff);
+      }
+      .prompt-bar-inner input {
+        flex: 1;
+        border: none;
+        outline: none;
+        font-family: inherit;
+        font-size: 15px;
+        line-height: 1.5;
+        color: var(--s2-content-default, #e8e8e8);
+        background: transparent;
+      }
+      .prompt-bar-inner input::placeholder {
+        color: var(--s2-content-tertiary, #8a8a8a);
+      }
+      .send-btn {
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: none;
+        background: var(--s2-accent, #3562ff);
+        color: #fff;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        transition: background 0.15s;
+      }
+      .send-btn:hover {
+        background: var(--s2-accent-hover, #4a75ff);
+      }
+      .send-btn svg {
+        width: 16px;
+        height: 16px;
+      }
 
-  /* ── Skip — small, below dots ── */
-  .skip-row {
-    text-align: center;
-    margin-top: 16px;
-  }
-  .skip-link {
-    background: none;
-    border: none;
-    font-family: inherit;
-    font-size: 12px;
-    font-weight: 400;
-    color: var(--s2-content-tertiary, #8a8a8a);
-    cursor: pointer;
-    padding: 4px 8px;
-  }
-  .skip-link:hover { color: var(--s2-content-secondary, #a1a1a1); }
+      /* ── Skip — small, below dots ── */
+      .skip-row {
+        text-align: center;
+        margin-top: 16px;
+      }
+      .skip-link {
+        background: none;
+        border: none;
+        font-family: inherit;
+        font-size: 12px;
+        font-weight: 400;
+        color: var(--s2-content-tertiary, #8a8a8a);
+        cursor: pointer;
+        padding: 4px 8px;
+      }
+      .skip-link:hover {
+        color: var(--s2-content-secondary, #a1a1a1);
+      }
 
-  /* ── Completion state ── */
-  .heading-state {
-    text-align: center;
-    padding: 40px 0;
-    animation: fadeUp 0.2s ease both;
-  }
-  .heading-state .step-heading { font-size: 18px; }
-</style>
-</head>
-<body>
-
-  <!-- Header -->
-  <div class="header" id="banner">
-    <div class="header-title">Welcome to slicc</div>
-  </div>
-
-  <div class="content">
-
-    <!-- Step 1: Purpose -->
-    <div class="step active" id="s1">
-      <div class="step-heading">What brings you here?</div>
-      <div class="pills" id="purposePills"></div>
+      /* ── Completion state ── */
+      .heading-state {
+        text-align: center;
+        padding: 40px 0;
+        animation: fadeUp 0.2s ease both;
+      }
+      .heading-state .step-heading {
+        font-size: 18px;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Header -->
+    <div class="header" id="banner">
+      <div class="header-title">Welcome to slicc</div>
     </div>
 
-    <!-- Step 2: Role -->
-    <div class="step" id="s2">
-      <div class="step-heading" id="s2Heading">What do you do?</div>
-      <div class="pills" id="rolePills"></div>
-    </div>
-
-    <!-- Step 3: Tasks -->
-    <div class="step" id="s3">
-      <div class="step-heading">What do you want to tackle?</div>
-      <div class="step-sub">Pick as many as you like</div>
-      <div class="pills" id="taskPills"></div>
-      <div class="nav-wrapper">
-        <button class="nav-back" onclick="back(2)">&larr; Back</button>
-        <button class="cta" id="taskContinue" onclick="goStep(4)">Continue</button>
+    <div class="content">
+      <!-- Step 1: Purpose -->
+      <div class="step active" id="s1">
+        <div class="step-heading">What brings you here?</div>
+        <div class="pills" id="purposePills"></div>
       </div>
-    </div>
 
-    <!-- Step 4: Apps -->
-    <div class="step" id="s4">
-      <div class="step-heading">What apps do you use most?</div>
-      <div class="step-sub">Pick any that apply</div>
-      <div class="pills" id="appPills"></div>
-      <div class="nav-wrapper">
-        <button class="nav-back" onclick="back(3)">&larr; Back</button>
-        <button class="cta" id="appContinue" onclick="goStep(5)">Continue</button>
+      <!-- Step 2: Role -->
+      <div class="step" id="s2">
+        <div class="step-heading" id="s2Heading">What do you do?</div>
+        <div class="pills" id="rolePills"></div>
       </div>
-    </div>
 
-    <!-- Step 5: Name -->
-    <div class="step" id="s5">
-      <div class="step-heading">What should I call you?</div>
-      <div class="prompt-bar">
-        <div class="prompt-bar-inner">
-          <input type="text" id="nameIn" placeholder="Your name" autofocus
-            onkeydown="if(event.key==='Enter')finish()">
-          <button class="send-btn" onclick="finish()" aria-label="Let's go" data-tooltip="Let's go">
-            <svg viewBox="0 0 20 20" fill="currentColor"><path d="M3.1 17.4a.75.75 0 01-.96-1.05L5.68 10 2.14 3.65a.75.75 0 01.96-1.05l14.5 6.75a.75.75 0 010 1.3l-14.5 6.75z"/></svg>
-          </button>
+      <!-- Step 3: Tasks -->
+      <div class="step" id="s3">
+        <div class="step-heading">What do you want to tackle?</div>
+        <div class="step-sub">Pick as many as you like</div>
+        <div class="pills" id="taskPills"></div>
+        <div class="nav-wrapper">
+          <button class="nav-back" onclick="back(2)">&larr; Back</button>
+          <button class="cta" id="taskContinue" onclick="goStep(4)">Continue</button>
         </div>
       </div>
-      <div class="nav-wrapper">
-        <button class="nav-back" onclick="back(4)">&larr; Back</button>
+
+      <!-- Step 4: Apps -->
+      <div class="step" id="s4">
+        <div class="step-heading">What apps do you use most?</div>
+        <div class="step-sub">Pick any that apply</div>
+        <div class="pills" id="appPills"></div>
+        <div class="nav-wrapper">
+          <button class="nav-back" onclick="back(3)">&larr; Back</button>
+          <button class="cta" id="appContinue" onclick="goStep(5)">Continue</button>
+        </div>
+      </div>
+
+      <!-- Step 5: Name -->
+      <div class="step" id="s5">
+        <div class="step-heading">What should I call you?</div>
+        <div class="prompt-bar">
+          <div class="prompt-bar-inner">
+            <input
+              type="text"
+              id="nameIn"
+              placeholder="Your name"
+              autofocus
+              onkeydown="if (event.key === 'Enter') finish();"
+            />
+            <button
+              class="send-btn"
+              onclick="finish()"
+              aria-label="Let's go"
+              data-tooltip="Let's go"
+            >
+              <svg viewBox="0 0 20 20" fill="currentColor">
+                <path
+                  d="M3.1 17.4a.75.75 0 01-.96-1.05L5.68 10 2.14 3.65a.75.75 0 01.96-1.05l14.5 6.75a.75.75 0 010 1.3l-14.5 6.75z"
+                />
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="nav-wrapper">
+          <button class="nav-back" onclick="back(4)">&larr; Back</button>
+        </div>
+      </div>
+
+      <!-- Completion state -->
+      <div class="step" id="sDone">
+        <div class="heading-state">
+          <div class="step-heading">Setting things up&hellip;</div>
+        </div>
+      </div>
+
+      <!-- Progress dots -->
+      <div class="dots" id="dots">
+        <div class="dot active"></div>
+        <div class="dot"></div>
+        <div class="dot"></div>
+        <div class="dot"></div>
+        <div class="dot"></div>
+      </div>
+
+      <!-- Skip — below dots, de-emphasized -->
+      <div class="skip-row" id="skipRow">
+        <button class="skip-link" id="skipBtn" onclick="skipStep()">skip this step</button>
       </div>
     </div>
 
-    <!-- Completion state -->
-    <div class="step" id="sDone">
-      <div class="heading-state">
-        <div class="step-heading">Setting things up&hellip;</div>
-      </div>
-    </div>
+    <script>
+      var cur = 1;
+      var profile = { purpose: '', role: '', roleCustom: '', tasks: [], apps: [], name: '' };
 
-    <!-- Progress dots -->
-    <div class="dots" id="dots">
-      <div class="dot active"></div>
-      <div class="dot"></div>
-      <div class="dot"></div>
-      <div class="dot"></div>
-      <div class="dot"></div>
-    </div>
+      var PURPOSES = [
+        { id: 'migrate-page', label: 'Migrate a page' },
+        { id: 'work', label: 'Work' },
+        { id: 'school', label: 'School' },
+        { id: 'personal', label: 'Personal' },
+        { id: 'side-project', label: 'Side project' },
+        { id: 'exploring', label: 'Just exploring' },
+      ];
 
-    <!-- Skip — below dots, de-emphasized -->
-    <div class="skip-row" id="skipRow">
-      <button class="skip-link" id="skipBtn" onclick="skipStep()">skip this step</button>
-    </div>
+      var ROLES_BY_PURPOSE = {
+        work: {
+          heading: "What's your role?",
+          roles: [
+            { id: 'developer', label: 'Developer' },
+            { id: 'designer', label: 'Designer' },
+            { id: 'content-creator', label: 'Content creator' },
+            { id: 'marketer', label: 'Marketer' },
+            { id: 'product-pm', label: 'Product / PM' },
+            { id: 'founder', label: 'Founder' },
+            { id: 'other', label: 'Something else' },
+          ],
+        },
+        school: {
+          heading: 'What are you studying?',
+          roles: [
+            { id: 'student', label: 'Student' },
+            { id: 'researcher', label: 'Researcher' },
+            { id: 'developer', label: 'Developer' },
+            { id: 'designer', label: 'Designer' },
+            { id: 'other', label: 'Something else' },
+          ],
+        },
+        _default: {
+          heading: "What's your background?",
+          roles: [
+            { id: 'developer', label: 'Developer' },
+            { id: 'designer', label: 'Designer' },
+            { id: 'content-creator', label: 'Content creator' },
+            { id: 'marketer', label: 'Marketer' },
+            { id: 'product-pm', label: 'Product / PM' },
+            { id: 'student', label: 'Student' },
+            { id: 'researcher', label: 'Researcher' },
+            { id: 'founder', label: 'Founder' },
+            { id: 'other', label: 'Something else' },
+          ],
+        },
+      };
 
-  </div>
+      var TASKS = [
+        { id: 'build-websites', label: 'Build websites' },
+        { id: 'automate', label: 'Automate tasks' },
+        { id: 'research', label: 'Research & analyze' },
+        { id: 'write-content', label: 'Write content' },
+        { id: 'extract-data', label: 'Extract data' },
+        { id: 'monitor', label: 'Monitor sites' },
+        { id: 'seo', label: 'SEO & audits' },
+        { id: 'manage-files', label: 'Manage files' },
+        { id: 'browser-automation', label: 'Browser automation' },
+        { id: 'not-sure', label: 'Not sure yet' },
+      ];
 
-<script>
-  var cur = 1;
-  var profile = { purpose: '', role: '', roleCustom: '', tasks: [], apps: [], name: '' };
+      /* Apps available for installation, with relevance tags */
+      var APPS = [
+        {
+          id: 'aem',
+          label: 'Adobe Experience Manager',
+          relevance: [
+            'build-websites',
+            'write-content',
+            'seo',
+            'content-creator',
+            'marketer',
+            'designer',
+          ],
+        },
+        { id: 'imessage', label: 'iMessage', relevance: ['personal', 'side-project', 'exploring'] },
+      ];
 
-  var PURPOSES = [
-    { id: 'work', label: 'Work' },
-    { id: 'school', label: 'School' },
-    { id: 'personal', label: 'Personal' },
-    { id: 'side-project', label: 'Side project' },
-    { id: 'exploring', label: 'Just exploring' },
-  ];
-
-  var ROLES_BY_PURPOSE = {
-    work: {
-      heading: "What's your role?",
-      roles: [
-        { id: 'developer', label: 'Developer' },
-        { id: 'designer', label: 'Designer' },
-        { id: 'content-creator', label: 'Content creator' },
-        { id: 'marketer', label: 'Marketer' },
-        { id: 'product-pm', label: 'Product / PM' },
-        { id: 'founder', label: 'Founder' },
-        { id: 'other', label: 'Something else' },
-      ]
-    },
-    school: {
-      heading: "What are you studying?",
-      roles: [
-        { id: 'student', label: 'Student' },
-        { id: 'researcher', label: 'Researcher' },
-        { id: 'developer', label: 'Developer' },
-        { id: 'designer', label: 'Designer' },
-        { id: 'other', label: 'Something else' },
-      ]
-    },
-    _default: {
-      heading: "What's your background?",
-      roles: [
-        { id: 'developer', label: 'Developer' },
-        { id: 'designer', label: 'Designer' },
-        { id: 'content-creator', label: 'Content creator' },
-        { id: 'marketer', label: 'Marketer' },
-        { id: 'product-pm', label: 'Product / PM' },
-        { id: 'student', label: 'Student' },
-        { id: 'researcher', label: 'Researcher' },
-        { id: 'founder', label: 'Founder' },
-        { id: 'other', label: 'Something else' },
-      ]
-    }
-  };
-
-  var TASKS = [
-    { id: 'build-websites', label: 'Build websites' },
-    { id: 'automate', label: 'Automate tasks' },
-    { id: 'research', label: 'Research & analyze' },
-    { id: 'write-content', label: 'Write content' },
-    { id: 'extract-data', label: 'Extract data' },
-    { id: 'monitor', label: 'Monitor sites' },
-    { id: 'seo', label: 'SEO & audits' },
-    { id: 'manage-files', label: 'Manage files' },
-    { id: 'browser-automation', label: 'Browser automation' },
-    { id: 'not-sure', label: 'Not sure yet' },
-  ];
-
-  /* Apps available for installation, with relevance tags */
-  var APPS = [
-    { id: 'aem', label: 'Adobe Experience Manager', relevance: ['build-websites', 'write-content', 'seo', 'content-creator', 'marketer', 'designer'] },
-    { id: 'imessage', label: 'iMessage', relevance: ['personal', 'side-project', 'exploring'] },
-  ];
-
-  function getRelevantApps() {
-    /* Show apps relevant to selected tasks, role, or purpose */
-    var context = profile.tasks.concat([profile.role, profile.purpose]);
-    var scored = APPS.map(function(app) {
-      var score = app.relevance.filter(function(tag) { return context.indexOf(tag) >= 0; }).length;
-      return { app: app, score: score };
-    });
-    /* Show all apps, sorted by relevance */
-    scored.sort(function(a, b) { return b.score - a.score; });
-    return scored.map(function(s) { return s.app; });
-  }
-
-  /* ── Build step 1: Purpose pills ── */
-  var purposeEl = document.getElementById('purposePills');
-  PURPOSES.forEach(function(p) {
-    var btn = document.createElement('button');
-    btn.className = 'pill';
-    btn.textContent = p.label;
-    btn.dataset.id = p.id;
-    btn.onclick = function() {
-      profile.purpose = p.id;
-      purposeEl.querySelectorAll('.pill').forEach(function(el) { el.classList.remove('selected'); });
-      btn.classList.add('selected');
-      setTimeout(function() { goStep(2); }, 300);
-    };
-    purposeEl.appendChild(btn);
-  });
-
-  /* ── Build step 3: Task pills ── */
-  var taskEl = document.getElementById('taskPills');
-  var taskBtn = document.getElementById('taskContinue');
-  TASKS.forEach(function(t) {
-    var btn = document.createElement('button');
-    btn.className = 'pill';
-    btn.textContent = t.label;
-    btn.dataset.id = t.id;
-    btn.onclick = function() {
-      btn.classList.toggle('selected');
-      profile.tasks = [];
-      taskEl.querySelectorAll('.pill.selected').forEach(function(el) {
-        profile.tasks.push(el.dataset.id);
-      });
-    };
-    taskEl.appendChild(btn);
-  });
-
-  function buildAppPills() {
-    var appEl = document.getElementById('appPills');
-    appEl.innerHTML = '';
-    var apps = getRelevantApps();
-    apps.forEach(function(a) {
-      var btn = document.createElement('button');
-      btn.className = 'pill';
-      btn.textContent = a.label;
-      btn.dataset.id = a.id;
-      btn.onclick = function() {
-        btn.classList.toggle('selected');
-        profile.apps = [];
-        appEl.querySelectorAll('.pill.selected').forEach(function(el) {
-          profile.apps.push(el.dataset.id);
+      function getRelevantApps() {
+        /* Show apps relevant to selected tasks, role, or purpose */
+        var context = profile.tasks.concat([profile.role, profile.purpose]);
+        var scored = APPS.map(function (app) {
+          var score = app.relevance.filter(function (tag) {
+            return context.indexOf(tag) >= 0;
+          }).length;
+          return { app: app, score: score };
         });
-      };
-      appEl.appendChild(btn);
-    });
-  }
-
-  function buildRolePills() {
-    var roleEl = document.getElementById('rolePills');
-    roleEl.innerHTML = '';
-    var config = ROLES_BY_PURPOSE[profile.purpose] || ROLES_BY_PURPOSE._default;
-    document.getElementById('s2Heading').textContent = config.heading;
-    config.roles.forEach(function(r) {
-      var btn = document.createElement('button');
-      btn.className = 'pill';
-      btn.textContent = r.label;
-      btn.dataset.id = r.id;
-      btn.onclick = function() {
-        profile.role = r.id;
-        roleEl.querySelectorAll('.pill').forEach(function(el) { el.classList.remove('selected'); });
-        btn.classList.add('selected');
-        setTimeout(function() { goStep(3); }, 300);
-      };
-      roleEl.appendChild(btn);
-    });
-  }
-
-  function updateDots(step) {
-    var dots = document.getElementById('dots').children;
-    for (var i = 0; i < dots.length; i++) {
-      dots[i].className = 'dot';
-      if (i + 1 === step) dots[i].className = 'dot active';
-      else if (i + 1 < step) dots[i].className = 'dot done';
-    }
-  }
-
-  function updateNav(step) {
-    /* Steps 1 & 2 auto-advance, so they show back (step 2 only) via their own nav.
-       Steps 3 & 4 have explicit nav-wrappers. Hide/show skip. */
-    var skipRow = document.getElementById('skipRow');
-    skipRow.style.display = (step <= 5) ? '' : 'none';
-  }
-
-  function goStep(n) {
-    if (n === 2) buildRolePills();
-    if (n === 4) buildAppPills();
-    document.getElementById('s' + cur).classList.remove('active');
-    document.getElementById('s' + n).classList.add('active');
-    cur = n;
-    updateDots(n);
-    updateNav(n);
-
-    /* Steps 1 & 2: show back button inline */
-    if (n === 1 || n === 2) {
-      var step = document.getElementById('s' + n);
-      var existing = step.querySelector('.nav-wrapper');
-      if (n === 2 && !existing) {
-        var wrap = document.createElement('div');
-        wrap.className = 'nav-wrapper';
-        var backBtn = document.createElement('button');
-        backBtn.className = 'nav-back';
-        backBtn.innerHTML = '&larr; Back';
-        backBtn.onclick = function() { back(1); };
-        wrap.appendChild(backBtn);
-        step.appendChild(wrap);
+        /* Show all apps, sorted by relevance */
+        scored.sort(function (a, b) {
+          return b.score - a.score;
+        });
+        return scored.map(function (s) {
+          return s.app;
+        });
       }
-    }
 
-    if (n === 5) {
-      var nameIn = document.getElementById('nameIn');
-      setTimeout(function() { nameIn.focus(); }, 100);
-    }
-  }
+      /* ── Build step 1: Purpose pills ── */
+      var purposeEl = document.getElementById('purposePills');
+      PURPOSES.forEach(function (p) {
+        var btn = document.createElement('button');
+        btn.className = 'pill';
+        btn.textContent = p.label;
+        btn.dataset.id = p.id;
+        btn.onclick = function () {
+          profile.purpose = p.id;
+          purposeEl.querySelectorAll('.pill').forEach(function (el) {
+            el.classList.remove('selected');
+          });
+          btn.classList.add('selected');
+          if (p.id === 'migrate-page') {
+            setTimeout(function () {
+              startMigrationShortcut();
+            }, 300);
+          } else {
+            setTimeout(function () {
+              goStep(2);
+            }, 300);
+          }
+        };
+        purposeEl.appendChild(btn);
+      });
 
-  function back(toStep) {
-    goStep(toStep);
-  }
+      /* ── Build step 3: Task pills ── */
+      var taskEl = document.getElementById('taskPills');
+      var taskBtn = document.getElementById('taskContinue');
+      TASKS.forEach(function (t) {
+        var btn = document.createElement('button');
+        btn.className = 'pill';
+        btn.textContent = t.label;
+        btn.dataset.id = t.id;
+        btn.onclick = function () {
+          btn.classList.toggle('selected');
+          profile.tasks = [];
+          taskEl.querySelectorAll('.pill.selected').forEach(function (el) {
+            profile.tasks.push(el.dataset.id);
+          });
+        };
+        taskEl.appendChild(btn);
+      });
 
-  function skipStep() {
-    if (cur < 5) {
-      goStep(cur + 1);
-    } else {
-      finish();
-    }
-  }
+      function buildAppPills() {
+        var appEl = document.getElementById('appPills');
+        appEl.innerHTML = '';
+        var apps = getRelevantApps();
+        apps.forEach(function (a) {
+          var btn = document.createElement('button');
+          btn.className = 'pill';
+          btn.textContent = a.label;
+          btn.dataset.id = a.id;
+          btn.onclick = function () {
+            btn.classList.toggle('selected');
+            profile.apps = [];
+            appEl.querySelectorAll('.pill.selected').forEach(function (el) {
+              profile.apps.push(el.dataset.id);
+            });
+          };
+          appEl.appendChild(btn);
+        });
+      }
 
-  function finish() {
-    profile.name = (document.getElementById('nameIn').value || '').trim();
+      function buildRolePills() {
+        var roleEl = document.getElementById('rolePills');
+        roleEl.innerHTML = '';
+        var config = ROLES_BY_PURPOSE[profile.purpose] || ROLES_BY_PURPOSE._default;
+        document.getElementById('s2Heading').textContent = config.heading;
+        config.roles.forEach(function (r) {
+          var btn = document.createElement('button');
+          btn.className = 'pill';
+          btn.textContent = r.label;
+          btn.dataset.id = r.id;
+          btn.onclick = function () {
+            profile.role = r.id;
+            roleEl.querySelectorAll('.pill').forEach(function (el) {
+              el.classList.remove('selected');
+            });
+            btn.classList.add('selected');
+            setTimeout(function () {
+              goStep(3);
+            }, 300);
+          };
+          roleEl.appendChild(btn);
+        });
+      }
 
-    // Show completion state
-    document.getElementById('s' + cur).classList.remove('active');
-    document.getElementById('sDone').classList.add('active');
-    document.getElementById('dots').style.display = 'none';
-    document.getElementById('banner').style.display = 'none';
-    document.getElementById('skipRow').style.display = 'none';
+      function updateDots(step) {
+        var dots = document.getElementById('dots').children;
+        for (var i = 0; i < dots.length; i++) {
+          dots[i].className = 'dot';
+          if (i + 1 === step) dots[i].className = 'dot active';
+          else if (i + 1 < step) dots[i].className = 'dot done';
+        }
+      }
 
-    // Fire lick (panel stays open)
-    if (window.slicc) {
-      slicc.lick({ action: 'onboarding-complete', data: profile });
-    }
-  }
-</script>
-</body>
+      function updateNav(step) {
+        /* Steps 1 & 2 auto-advance, so they show back (step 2 only) via their own nav.
+       Steps 3 & 4 have explicit nav-wrappers. Hide/show skip. */
+        var skipRow = document.getElementById('skipRow');
+        skipRow.style.display = step <= 5 ? '' : 'none';
+      }
+
+      function goStep(n) {
+        if (n === 2) buildRolePills();
+        if (n === 4) buildAppPills();
+        document.getElementById('s' + cur).classList.remove('active');
+        document.getElementById('s' + n).classList.add('active');
+        cur = n;
+        updateDots(n);
+        updateNav(n);
+
+        /* Steps 1 & 2: show back button inline */
+        if (n === 1 || n === 2) {
+          var step = document.getElementById('s' + n);
+          var existing = step.querySelector('.nav-wrapper');
+          if (n === 2 && !existing) {
+            var wrap = document.createElement('div');
+            wrap.className = 'nav-wrapper';
+            var backBtn = document.createElement('button');
+            backBtn.className = 'nav-back';
+            backBtn.innerHTML = '&larr; Back';
+            backBtn.onclick = function () {
+              back(1);
+            };
+            wrap.appendChild(backBtn);
+            step.appendChild(wrap);
+          }
+        }
+
+        if (n === 5) {
+          var nameIn = document.getElementById('nameIn');
+          setTimeout(function () {
+            nameIn.focus();
+          }, 100);
+        }
+      }
+
+      function back(toStep) {
+        goStep(toStep);
+      }
+
+      function skipStep() {
+        if (cur < 5) {
+          goStep(cur + 1);
+        } else {
+          finish();
+        }
+      }
+
+      function startMigrationShortcut() {
+        document.getElementById('s' + cur).classList.remove('active');
+        document.getElementById('sDone').classList.add('active');
+        document.querySelector('#sDone .step-heading').textContent =
+          'Setting up migration tools\u2026';
+        document.getElementById('dots').style.display = 'none';
+        document.getElementById('banner').style.display = 'none';
+        document.getElementById('skipRow').style.display = 'none';
+        setTimeout(function () {
+          if (window.slicc) {
+            slicc.lick({ action: 'shortcut-migrate' });
+          }
+        }, 500);
+      }
+
+      function finish() {
+        profile.name = (document.getElementById('nameIn').value || '').trim();
+
+        // Show completion state
+        document.getElementById('s' + cur).classList.remove('active');
+        document.getElementById('sDone').classList.add('active');
+        document.getElementById('dots').style.display = 'none';
+        document.getElementById('banner').style.display = 'none';
+        document.getElementById('skipRow').style.display = 'none';
+
+        // Fire lick (panel stays open)
+        if (window.slicc) {
+          slicc.lick({ action: 'onboarding-complete', data: profile });
+        }
+      }
+    </script>
+  </body>
 </html>
