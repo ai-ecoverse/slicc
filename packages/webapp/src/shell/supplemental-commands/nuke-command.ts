@@ -18,49 +18,14 @@ export function createNukeCommand(): Command {
 
     // Check for the secret launch code: args must contain '1234' when concatenated
     if (args.join('').includes('1234')) {
-      // Delete all IndexedDB databases and reload
-      const dbs = await indexedDB.databases();
-      let hadBlocked = false;
-      let hadError = false;
-      await Promise.all(
-        dbs.map((db) =>
-          db.name
-            ? new Promise<void>((res) => {
-                const req = indexedDB.deleteDatabase(db.name!);
-                req.onsuccess = () => res();
-                req.onerror = () => {
-                  hadError = true;
-                  res();
-                };
-                req.onblocked = () => {
-                  hadBlocked = true;
-                  res();
-                };
-              })
-            : Promise.resolve()
-        )
-      );
-
-      if (hadBlocked) {
-        return {
-          stdout: '',
-          stderr:
-            'Some databases could not be deleted because they are still in use ' +
-            '(another tab or window may be open).\n' +
-            'Close other tabs and try again.\n',
-          exitCode: 1,
-        };
-      }
-      if (hadError) {
-        return {
-          stdout: '',
-          stderr:
-            'Some databases could not be deleted due to an unexpected error.\n' +
-            'Close other tabs and try again.\n',
-          exitCode: 1,
-        };
-      }
-
+      // Fire deleteDatabase for every known DB — don't await.
+      // The page holds open connections so onblocked will fire,
+      // but the reload releases them and deletions complete.
+      indexedDB.databases().then((dbs) => {
+        for (const db of dbs) {
+          if (db.name) indexedDB.deleteDatabase(db.name);
+        }
+      });
       setTimeout(() => location.reload(), 0);
       return { stdout: 'Nuking everything…\n', stderr: '', exitCode: 0 };
     }
