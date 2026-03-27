@@ -99,7 +99,7 @@ async function storePendingMount(handle: FileSystemDirectoryHandle): Promise<voi
   db.close();
 }
 
-/** Retrieve and clear the pending mount handle, then mount it to /workspace/<dirname>. */
+/** Retrieve and clear the pending mount handle, then mount it to /mnt/<dirname>. */
 async function applyPendingMount(fs: VirtualFS): Promise<void> {
   let db: IDBDatabase;
   try {
@@ -120,9 +120,9 @@ async function applyPendingMount(fs: VirtualFS): Promise<void> {
   if (handle) {
     tx.objectStore('handles').delete(PENDING_MOUNT_KEY);
     await new Promise<void>((r) => (tx.oncomplete = () => r()));
-    const mountPath = `/workspace/${handle.name}`;
+    const mountPath = `/mnt/${handle.name}`;
     await fs.mount(mountPath, handle);
-    log.info('Mounted workspace from welcome onboarding', { name: handle.name, path: mountPath });
+    log.info('Mounted folder from welcome onboarding', { name: handle.name, path: mountPath });
   }
   db.close();
 }
