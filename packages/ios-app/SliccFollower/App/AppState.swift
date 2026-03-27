@@ -197,41 +197,34 @@ class AppState: ObservableObject {
                 self.leaderConnected = poll.leader?.connected ?? false
 
                 for event in poll.events {
-                    switch event.type {
-                    case "bootstrap.offer":
-                        if let offer = event.offer {
-                            let answer = try await rtc.handleOffer(sdp: offer.sdp)
-                            let answerDesc = TraySessionDescription(
-                                type: answer.type, sdp: answer.sdp)
-                            _ = try await client.sendAnswer(
-                                controllerId: controllerId,
-                                bootstrapId: bootstrapId,
-                                answer: answerDesc
-                            )
-                            gotOffer = true
-                        }
+                    switch event {
+                    case .offer(_, _, let offer):
+                        let answer = try await rtc.handleOffer(sdp: offer.sdp)
+                        let answerDesc = TraySessionDescription(
+                            type: .answer, sdp: answer.sdp)
+                        _ = try await client.sendAnswer(
+                            controllerId: controllerId,
+                            bootstrapId: bootstrapId,
+                            answer: answerDesc
+                        )
+                        gotOffer = true
 
-                    case "bootstrap.ice_candidate":
-                        if let cand = event.candidate {
-                            try await rtc.addIceCandidate(
-                                candidate: cand.candidate,
-                                sdpMid: cand.sdpMid,
-                                sdpMLineIndex: cand.sdpMLineIndex.map { Int32($0) }
-                            )
-                        }
+                    case .iceCandidate(_, _, let cand):
+                        try await rtc.addIceCandidate(
+                            candidate: cand.candidate,
+                            sdpMid: cand.sdpMid,
+                            sdpMLineIndex: cand.sdpMLineIndex.map { Int32($0) }
+                        )
 
-                    case "bootstrap.failed":
+                    case .failed(_, _, let failure):
                         self.connectionState = .failed
-                        self.lastError = event.failure?.message ?? "Bootstrap failed"
+                        self.lastError = failure.message
                         return
-
-                    default:
-                        break
                     }
                 }
 
                 // Check if we're connected now.
-                if poll.bootstrap.state == "connected" {
+                if poll.bootstrap.state == .connected {
                     break
                 }
 
@@ -321,7 +314,7 @@ class AppState: ObservableObject {
             isStreaming = chatMessages.last?.isStreaming == true
             streamingMessageId = isStreaming ? chatMessages.last?.id : nil
 
-        case let .snapshotChunk(chunkData, chunkIndex, totalChunks, scoopJid):
+        case let .snapshotChunk(chunkData, chunkIndex, totalChunks, _):
             snapshotTotalChunks = totalChunks
             snapshotChunks[chunkIndex] = chunkData
             if snapshotChunks.count == totalChunks {
@@ -367,6 +360,9 @@ class AppState: ObservableObject {
 
         case .pong:
             Task { await keepalive?.receivedPong() }
+
+        case .unknown:
+            break  // Silently ignore unhandled message types
         }
     }
 
@@ -434,6 +430,9 @@ class AppState: ObservableObject {
 
         case let .error(error):
             lastError = error
+
+        case .unknown:
+            break  // Silently ignore unhandled event types
         }
     }
 
