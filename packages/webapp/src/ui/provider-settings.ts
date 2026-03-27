@@ -633,6 +633,8 @@ const ICON_PATHS = {
 export interface ShowProviderSettingsOptions {
   /** When true, start with the "Join a tray" form instead of the account form (when no accounts exist). */
   preferTrayJoin?: boolean;
+  /** When set, show a simplified "Join this tray" confirmation with the URL pre-filled (no paste needed). */
+  autoJoinUrl?: string;
 }
 
 /**
@@ -654,6 +656,8 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
     // Decide initial view: list if accounts exist, tray-join or add-form if empty
     if (getAccounts().length > 0) {
       renderAccountsList();
+    } else if (options?.autoJoinUrl) {
+      renderAutoJoinConfirmation(options.autoJoinUrl);
     } else if (options?.preferTrayJoin) {
       renderJoinTrayForm();
     } else {
@@ -1116,6 +1120,80 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
           baseUrlInput.focus();
         }
       });
+    }
+
+    function renderAutoJoinConfirmation(joinUrl: string) {
+      dialog.innerHTML = '';
+
+      const title = document.createElement('div');
+      title.className = 'dialog__title';
+      title.textContent = 'Join this tray';
+      dialog.appendChild(title);
+
+      const desc = document.createElement('div');
+      desc.className = 'dialog__desc';
+      desc.style.marginBottom = '12px';
+      desc.textContent =
+        'You\u2019ve been invited to join a SLICC tray session. Click below to connect.';
+      dialog.appendChild(desc);
+
+      // Show truncated URL for context
+      const urlDisplay = document.createElement('div');
+      urlDisplay.className = 'dialog__desc';
+      urlDisplay.style.cssText =
+        'font-family: monospace; font-size: 11px; color: var(--s2-content-secondary); word-break: break-all; margin-bottom: 16px; padding: 8px; background: var(--s2-bg-secondary); border-radius: 4px;';
+      const displayUrl =
+        joinUrl.length > 80 ? joinUrl.slice(0, 40) + '\u2026' + joinUrl.slice(-37) : joinUrl;
+      urlDisplay.textContent = displayUrl;
+      dialog.appendChild(urlDisplay);
+
+      const statusEl = document.createElement('div');
+      statusEl.style.cssText =
+        'font-size: 12px; color: var(--s2-content-secondary); margin-bottom: 8px; display: none;';
+      dialog.appendChild(statusEl);
+
+      const joinBtn = document.createElement('button');
+      joinBtn.className = 'dialog__btn';
+      joinBtn.textContent = 'Join tray';
+      joinBtn.addEventListener('click', () => {
+        const stored = storeTrayJoinUrl(window.localStorage, joinUrl);
+        if (!stored) {
+          statusEl.textContent = 'Invalid tray join URL.';
+          statusEl.style.display = '';
+          statusEl.style.color = 'var(--slicc-cone)';
+          return;
+        }
+
+        if (isExtensionRuntime()) {
+          const payload: RefreshTrayRuntimeMsg = { type: 'refresh-tray-runtime' };
+          void chrome.runtime.sendMessage({ source: 'panel' as const, payload }).catch(() => {});
+        } else {
+          window.dispatchEvent(
+            new CustomEvent('slicc:tray-join', {
+              detail: { joinUrl: stored.joinUrl },
+            })
+          );
+        }
+
+        statusEl.textContent = 'Connecting to tray...';
+        statusEl.style.display = '';
+        statusEl.style.color = 'var(--s2-content-secondary)';
+
+        setTimeout(() => {
+          overlay.remove();
+          resolve(false);
+        }, 800);
+      });
+      dialog.appendChild(joinBtn);
+
+      const altBtn = document.createElement('button');
+      altBtn.className = 'dialog__btn dialog__btn--secondary';
+      altBtn.style.marginTop = '8px';
+      altBtn.textContent = 'Set up an account instead';
+      altBtn.addEventListener('click', () => {
+        renderAccountForm();
+      });
+      dialog.appendChild(altBtn);
     }
 
     function renderJoinTrayForm() {

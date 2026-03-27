@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { handleWorkerRequest } from '../src/index.js';
 import {
   FOLLOWER_ATTACH_RETRY_AFTER_MS,
+  wantsJSON,
   TRAY_RECLAIM_TTL_MS,
   type DurableObjectIdLike,
   type DurableObjectStateLike,
@@ -122,15 +123,23 @@ class FakeNamespace {
   }
 }
 
+const MOCK_HTML = '<html><body>SPA</body></html>';
+const fakeAssets = {
+  fetch: async (_req: Request) =>
+    new Response(MOCK_HTML, {
+      headers: { 'content-type': 'text/html' },
+    }),
+};
+
 function createTestHarness(start = Date.parse('2026-03-11T00:00:00.000Z')): {
-  env: { TRAY_HUB: FakeNamespace };
+  env: { TRAY_HUB: FakeNamespace; ASSETS: typeof fakeAssets };
   advance: (ms: number) => void;
   readTray: (trayId: string) => Promise<TrayRecord | undefined>;
 } {
   let now = start;
   const namespace = new FakeNamespace(() => now);
   return {
-    env: { TRAY_HUB: namespace },
+    env: { TRAY_HUB: namespace, ASSETS: fakeAssets },
     advance: (ms: number) => {
       now += ms;
     },
@@ -238,7 +247,7 @@ describe('tray worker skeleton', () => {
     };
 
     const waitingForLeader = await handleWorkerRequest(
-      new Request(session.capabilities.join.url),
+      new Request(`${session.capabilities.join.url}?json=true`),
       env
     );
     expect(waitingForLeader.status).toBe(409);
@@ -261,7 +270,7 @@ describe('tray worker skeleton', () => {
     const leader = (await leaderAttach.json()) as { websocket: { url: string } };
 
     const waitingForSocket = await handleWorkerRequest(
-      new Request(session.capabilities.join.url),
+      new Request(`${session.capabilities.join.url}?json=true`),
       env
     );
     expect(waitingForSocket.status).toBe(409);
@@ -278,7 +287,7 @@ describe('tray worker skeleton', () => {
     expect(socketResponse.status).toBe(101);
 
     const signalingReady = await handleWorkerRequest(
-      new Request(session.capabilities.join.url),
+      new Request(`${session.capabilities.join.url}?json=true`),
       env
     );
     expect(signalingReady.status).toBe(200);
@@ -317,7 +326,10 @@ describe('tray worker skeleton', () => {
     expect(preflight.headers.get('access-control-allow-headers')).toContain('content-type');
 
     // GET (non-POST) join probe should also have CORS
-    const probe = await handleWorkerRequest(new Request(session.capabilities.join.url), env);
+    const probe = await handleWorkerRequest(
+      new Request(`${session.capabilities.join.url}?json=true`),
+      env
+    );
     expect(probe.headers.get('access-control-allow-origin')).toBe('*');
 
     // POST attach should also have CORS
@@ -1126,7 +1138,7 @@ describe('tray worker skeleton', () => {
 
   it('advertises /tray as the only create route in service metadata', async () => {
     const { env } = createTestHarness();
-    const response = await handleWorkerRequest(new Request('https://tray.test/'), env);
+    const response = await handleWorkerRequest(new Request('https://tray.test/?json=true'), env);
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
@@ -1136,6 +1148,8 @@ describe('tray worker skeleton', () => {
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',
         'GET /auth/callback',
+        'GET /api/runtime-config',
+        'ANY /api/fetch-proxy',
       ],
     });
   });
@@ -1151,5 +1165,101 @@ describe('tray worker skeleton', () => {
     const { env } = createTestHarness();
     const response = await handleWorkerRequest(new Request('https://www.sliccy.ai/'), env);
     expect(response.status).toBe(200);
+  });
+});
+
+describe('wantsJSON', () => {
+  it('returns true when ?json=true is present', () => {
+    const req = new Request('https://example.com/join/token?json=true');
+    expect(wantsJSON(req)).toBe(true);
+  });
+
+  it('returns false when ?json is absent', () => {
+    const req = new Request('https://example.com/join/token');
+    expect(wantsJSON(req)).toBe(false);
+  });
+
+  it('returns false when ?json has other value', () => {
+    const req = new Request('https://example.com/?json=false');
+    expect(wantsJSON(req)).toBe(false);
+  });
+});
+
+describe('browser routing', () => {
+  it('serves SPA for plain GET requests to /', async () => {
+    const { env } = createTestHarness();
+    const req = new Request('https://example.com/');
+    const res = await handleWorkerRequest(req, env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+  });
+
+  it('serves SPA for plain GET requests to /join/:token', async () => {
+    const { env } = createTestHarness();
+    const trayRes = await handleWorkerRequest(
+      new Request('https://example.com/tray', { method: 'POST' }),
+      env
+    );
+    const tray = (await trayRes.json()) as {
+      capabilities: { join: { token: string } };
+    };
+    const joinToken = tray.capabilities.join.token;
+
+    const req = new Request(`https://example.com/join/${joinToken}`);
+    const res = await handleWorkerRequest(req, env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+  });
+
+  it('serves JSON API for requests to /join/:token with ?json=true', async () => {
+    const { env } = createTestHarness();
+    const trayRes = await handleWorkerRequest(
+      new Request('https://example.com/tray', { method: 'POST' }),
+      env
+    );
+    const tray = (await trayRes.json()) as {
+      capabilities: { join: { url: string } };
+    };
+
+    const req = new Request(`${tray.capabilities.join.url}?json=true`);
+    const res = await handleWorkerRequest(req, env);
+    expect(res.headers.get('content-type')).toContain('application/json');
+  });
+
+  it('serves SPA for plain GET requests to unknown paths', async () => {
+    const { env } = createTestHarness();
+    const req = new Request('https://example.com/some/random/path');
+    const res = await handleWorkerRequest(req, env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+  });
+
+  it('serves JSON service info for requests to unknown paths with ?json=true', async () => {
+    const { env } = createTestHarness();
+    const req = new Request('https://example.com/some/random/path?json=true');
+    const res = await handleWorkerRequest(req, env);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { service: string };
+    expect(body.service).toBe('slicc-tray-hub');
+  });
+});
+
+describe('API routes', () => {
+  it('returns runtime config with worker base URL', async () => {
+    const { env } = createTestHarness();
+    const req = new Request('https://www.sliccy.ai/api/runtime-config');
+    const res = await handleWorkerRequest(req, env);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { trayWorkerBaseUrl: string };
+    expect(body.trayWorkerBaseUrl).toBe('https://www.sliccy.ai');
+  });
+
+  it('returns 404 for fetch-proxy', async () => {
+    const { env } = createTestHarness();
+    const req = new Request('https://www.sliccy.ai/api/fetch-proxy', { method: 'POST' });
+    const res = await handleWorkerRequest(req, env);
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain('not available');
   });
 });

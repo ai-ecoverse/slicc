@@ -30,6 +30,9 @@ jobs:
 
       - run: npm ci
 
+      - name: Build webapp for worker static assets
+        run: npm run build -w @slicc/webapp
+
       - name: Verify worker unit tests before deploy
         run: npx vitest run --project cloudflare-worker packages/cloudflare-worker/tests/index.test.ts
 

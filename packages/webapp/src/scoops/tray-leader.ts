@@ -423,8 +423,20 @@ export function createTrayFetch(fetchImpl: typeof fetch = fetch): typeof fetch {
   }
 
   return async (url, init = {}) => {
+    const targetUrl = typeof url === 'string' ? url : url.toString();
+
+    // Skip the proxy for same-origin requests (e.g. when served from the worker)
+    try {
+      const target = new URL(targetUrl);
+      if (target.origin === window.location.origin) {
+        return fetchImpl(targetUrl, { ...init, cache: 'no-store' as RequestCache });
+      }
+    } catch {
+      // If URL parsing fails, fall through to proxy
+    }
+
     const headers = new Headers(init.headers);
-    headers.set('X-Target-URL', typeof url === 'string' ? url : url.toString());
+    headers.set('X-Target-URL', targetUrl);
 
     const response = await fetchImpl('/api/fetch-proxy', {
       ...init,

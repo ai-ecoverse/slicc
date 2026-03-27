@@ -665,12 +665,22 @@ async function main(): Promise<void> {
   let apiKey = getApiKey();
   const hasTrayJoin = hasStoredTrayJoinUrl(window.localStorage);
   if (!apiKey && !hasTrayJoin) {
-    // Default to tray-join form when not on the default port (5710 prod, 3000 legacy dev)
-    const isDefaultPort =
-      window.location.port === '5710' ||
-      window.location.port === '3000' ||
-      window.location.port === '';
-    await showProviderSettings({ preferTrayJoin: !isDefaultPort });
+    // Three modes based on runtime context:
+    // 1. Port 5710/3000: leader/production — default to account login
+    // 2. Port '' (443/HTTPS) with /join/ path: remote tray UI — auto-join confirmation
+    // 3. Any other port: follower — default to "Join a tray" paste form
+    const isDefaultPort = window.location.port === '5710' || window.location.port === '3000';
+    const isRemoteTrayUI =
+      window.location.port === '' && window.location.pathname.includes('/join/');
+
+    if (isRemoteTrayUI) {
+      const joinUrl = window.location.origin + window.location.pathname;
+      await showProviderSettings({ autoJoinUrl: joinUrl });
+    } else if (!isDefaultPort && window.location.port !== '') {
+      await showProviderSettings({ preferTrayJoin: true });
+    } else {
+      await showProviderSettings();
+    }
     apiKey = getApiKey();
   }
   const allowProviderlessTrayJoin = !apiKey && hasStoredTrayJoinUrl(window.localStorage);
