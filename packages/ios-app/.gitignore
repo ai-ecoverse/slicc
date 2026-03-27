@@ -1,0 +1,6 @@
+.build/
+*.xcuserstate
+xcuserdata/
+DerivedData/
+simulator-screenshot.png
+
