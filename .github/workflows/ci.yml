@@ -514,13 +514,13 @@ jobs:
         run: cd packages/ios-app && xcodegen generate
       - name: Build
         run: |
+          set -o pipefail
           cd packages/ios-app
           xcodebuild build \
             -project SliccFollower.xcodeproj \
             -scheme SliccFollower \
             -destination 'generic/platform=iOS Simulator' \
-            CODE_SIGNING_ALLOWED=NO \
-            | tail -20
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tail -30
 
   # Wait for any in-progress release before allowing merge queue to land.
   # Only runs on merge_group events; skipped (= passing) for PRs.

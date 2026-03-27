@@ -29,8 +29,7 @@ targets:
         SUPPORTS_MACCATALYST: NO
     dependencies:
       - package: WebRTC
-      - framework: WebKit.framework
-        implicit: true
+      - sdk: WebKit.framework
       - sdk: AVFoundation.framework
 packages:
   WebRTC:
