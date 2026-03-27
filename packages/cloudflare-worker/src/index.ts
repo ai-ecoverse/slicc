@@ -2,6 +2,7 @@ import {
   createCapabilityToken,
   jsonResponse,
   parseCapabilityToken,
+  wantsJSON,
   type CreateTrayRequest,
   type DurableObjectNamespaceLike,
 } from './shared.js';
@@ -9,8 +10,13 @@ import { SessionTrayDurableObject } from './session-tray.js';
 
 export interface WorkerEnv {
   TRAY_HUB: DurableObjectNamespaceLike;
+  ASSETS: { fetch(request: Request): Promise<Response> };
   CLOUDFLARE_TURN_KEY_ID?: string;
   CLOUDFLARE_TURN_API_TOKEN?: string;
+}
+
+function serveSPA(request: Request, env: WorkerEnv): Promise<Response> {
+  return env.ASSETS.fetch(request);
 }
 
 const OAUTH_RELAY_HTML = `<!DOCTYPE html>
@@ -72,7 +78,21 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
 
   const tokenMatch = url.pathname.match(/^\/(join|controller|webhook)\/([^/]+?)(?:\/([^/]+))?$/);
   if (tokenMatch) {
+    const route = tokenMatch[1];
     const token = tokenMatch[2];
+
+    // Serve SPA for GET/HEAD browser navigation to join/controller URLs,
+    // unless the client explicitly requests JSON via ?json=true
+    // WebSocket upgrades must pass through to the Durable Object
+    if (
+      !wantsJSON(request) &&
+      !request.headers.get('Upgrade') &&
+      (route === 'join' || route === 'controller') &&
+      (request.method === 'GET' || request.method === 'HEAD')
+    ) {
+      return serveSPA(request, env);
+    }
+
     const parsed = parseCapabilityToken(token);
     if (!parsed) {
       return jsonResponse(
@@ -81,13 +101,18 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
       );
     }
     const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(parsed.trayId));
-    const webhookId = tokenMatch[1] === 'webhook' ? tokenMatch[3] : undefined;
+    const webhookId = route === 'webhook' ? tokenMatch[3] : undefined;
     if (webhookId) {
       const doUrl = new URL(request.url);
       doUrl.pathname = `/webhook/${token}/${webhookId}`;
       return stub.fetch(new Request(doUrl, request));
     }
     return stub.fetch(request);
+  }
+
+  // SPA fallback for GET/HEAD browser navigation, unless ?json=true
+  if (!wantsJSON(request) && (request.method === 'GET' || request.method === 'HEAD')) {
+    return serveSPA(request, env);
   }
 
   return jsonResponse(

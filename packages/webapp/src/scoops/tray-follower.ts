@@ -13,6 +13,12 @@ import type {
 
 const log = createLogger('tray-follower');
 
+function appendJsonParam(url: string): string {
+  const u = new URL(url);
+  u.searchParams.set('json', 'true');
+  return u.toString();
+}
+
 export interface FollowerAttachOptions extends FollowerJoinRequest {
   joinUrl: string;
   fetchImpl?: typeof fetch;
@@ -52,7 +58,8 @@ export interface FollowerBootstrapPlan {
 export async function attachTrayFollower(
   options: FollowerAttachOptions
 ): Promise<FollowerAttachPlan> {
-  const response = await (options.fetchImpl ?? fetch)(options.joinUrl, {
+  const fetchUrl = appendJsonParam(options.joinUrl);
+  const response = await (options.fetchImpl ?? fetch)(fetchUrl, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -187,7 +194,8 @@ async function postFollowerBootstrapRequest(
   options: FollowerBootstrapOptions,
   body: Record<string, unknown>
 ): Promise<FollowerBootstrapResponse> {
-  const response = await (options.fetchImpl ?? fetch)(options.joinUrl, {
+  const fetchUrl = appendJsonParam(options.joinUrl);
+  const response = await (options.fetchImpl ?? fetch)(fetchUrl, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),

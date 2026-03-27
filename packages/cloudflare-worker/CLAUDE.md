@@ -4,7 +4,7 @@ This file covers the tray hub worker in `packages/cloudflare-worker/`.
 
 ## Scope
 
-The worker provides tray session coordination, capability-token routing, TURN credential lookup, and leader/follower signaling for tray-connected SLICC runtimes.
+The worker provides tray session coordination, capability-token routing, TURN credential lookup, and leader/follower signaling for tray-connected SLICC runtimes. It also serves the built SLICC webapp as static assets to browser visitors.
 
 ## Main Files
 
@@ -43,11 +43,25 @@ The worker provides tray session coordination, capability-token routing, TURN cr
 - `session-tray.ts` caches ICE servers and refreshes them before TTL expiry.
 - `wrangler.jsonc` defines the key ID; the API token is stored as a Wrangler secret.
 
+### Static Asset Serving
+
+- The worker serves the built webapp (`dist/ui/`) via Cloudflare Workers Static Assets.
+- `wrangler.jsonc` configures `assets.directory` pointing to `../../dist/ui/` with binding name `ASSETS`.
+- Content negotiation uses `wantsJSON()` in `shared.ts` — checks for `?json=true` query parameter.
+- GET/HEAD requests to `/join/:token` and `/controller/:token` without `?json=true` get the SPA (webapp handles tray joining client-side).
+- GET/HEAD requests to unmatched paths without `?json=true` get an SPA fallback.
+- Requests with `?json=true`, POST requests, and WebSocket upgrades always get the API/JSON response.
+- The browser tray follower code (`packages/webapp/src/scoops/tray-follower.ts`) appends `?json=true` to all fetch calls to ensure API responses.
+- The webapp must be built (`npm run build -w @slicc/webapp`) before the worker can be deployed.
+
 ## Commands
 
 ### Worker and deploy
 
 ```bash
+# Build webapp first (required for static assets)
+npm run build -w @slicc/webapp
+
 npx wrangler dev --config packages/cloudflare-worker/wrangler.jsonc
 npx wrangler deploy --env staging --config packages/cloudflare-worker/wrangler.jsonc
 npx wrangler deploy --config packages/cloudflare-worker/wrangler.jsonc
