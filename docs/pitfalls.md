@@ -367,7 +367,7 @@ Use `format: 'iife'` to avoid code-splitting.
 
 **When Modifying preview-sw.ts**
 
-1. Test in dev mode (`npm run dev:full`)
+1. Test in dev mode (`npm run dev`)
 2. Verify prod build includes bundle (`npm run build`, check `dist/ui/preview-sw.js` for LightningFS code)
 3. Update the production bundle hook if adding imports
 
@@ -511,7 +511,7 @@ When adding a feature that touches:
 
 **Manual Testing**
 
-- [ ] Test in standalone CLI mode (`npm run dev:full`)
-- [ ] Test in extension mode (`npm run build:extension` → load in chrome://extensions)
+- [ ] Test in standalone CLI mode (`npm run dev`)
+- [ ] Test in extension mode (`npm run build -w @slicc/chrome-extension` → load in chrome://extensions)
 - [ ] If added WASM, verify bundled path in extension build
 - [ ] If added command, test in both terminal modes

@@ -637,23 +637,18 @@ describe('BrowserAPI', () => {
     });
 
     it('returns accessibility tree', async () => {
+      // The injected script approach uses Runtime.evaluate which returns the tree directly
       (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({}) // Accessibility.enable
+        .mockResolvedValueOnce({}) // Runtime.enable
         .mockResolvedValueOnce({
-          nodes: [
-            {
-              nodeId: '1',
-              role: { value: 'RootWebArea' },
-              name: { value: 'Test Page' },
-              childIds: ['2'],
+          result: {
+            type: 'object',
+            value: {
+              role: 'RootWebArea',
+              name: 'Test Page',
+              children: [{ role: 'heading', name: 'Hello World' }],
             },
-            {
-              nodeId: '2',
-              role: { value: 'heading' },
-              name: { value: 'Hello World' },
-              parentId: '1',
-            },
-          ],
+          },
         });
 
       const tree = await api.getAccessibilityTree();
@@ -666,8 +661,10 @@ describe('BrowserAPI', () => {
 
     it('returns fallback for empty tree', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({}) // Accessibility.enable
-        .mockResolvedValueOnce({ nodes: [] });
+        .mockResolvedValueOnce({}) // Runtime.enable
+        .mockResolvedValueOnce({
+          result: { type: 'undefined', value: undefined },
+        });
 
       const tree = await api.getAccessibilityTree();
       expect(tree.role).toBe('RootWebArea');
@@ -676,24 +673,23 @@ describe('BrowserAPI', () => {
 
     it('normalizes non-string accessibility values', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({}) // Accessibility.enable
+        .mockResolvedValueOnce({}) // Runtime.enable
         .mockResolvedValueOnce({
-          nodes: [
-            {
-              nodeId: '1',
-              role: { value: 'RootWebArea' },
-              name: { value: 'Slack' },
-              childIds: ['2'],
+          result: {
+            type: 'object',
+            value: {
+              role: 'RootWebArea',
+              name: 'Slack',
+              children: [
+                {
+                  role: 'textbox',
+                  name: { label: 'Message' },
+                  value: 0,
+                  description: ['composer'],
+                },
+              ],
             },
-            {
-              nodeId: '2',
-              role: { value: 'textbox' },
-              name: { value: { label: 'Message' } },
-              value: { value: 0 },
-              description: { value: ['composer'] },
-              parentId: '1',
-            },
-          ],
+          },
         });
 
       const tree = await api.getAccessibilityTree();

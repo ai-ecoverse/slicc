@@ -145,7 +145,7 @@ export class Orchestrator {
   /** Ensure root directory structure exists on the shared FS */
   private async ensureRootStructure(): Promise<void> {
     if (!this.sharedFs) return;
-    const dirs = ['/workspace', '/shared', '/scoops', '/home', '/tmp'];
+    const dirs = ['/workspace', '/shared', '/scoops', '/home', '/tmp', '/mnt'];
     for (const dir of dirs) {
       try {
         await this.sharedFs.mkdir(dir, { recursive: true });

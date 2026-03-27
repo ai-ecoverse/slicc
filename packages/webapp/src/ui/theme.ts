@@ -11,7 +11,7 @@ const VALID: Set<string> = new Set(['dark', 'light', 'system']);
 export function getThemePreference(): ThemePreference {
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored && VALID.has(stored)) return stored as ThemePreference;
-  return 'light';
+  return 'system';
 }
 
 export function setThemePreference(pref: ThemePreference): void {

@@ -82,6 +82,51 @@ import { initTelemetry } from './telemetry.js';
 
 const log = createLogger('main');
 
+const PENDING_MOUNT_DB = 'slicc-pending-mount';
+const PENDING_MOUNT_KEY = 'pendingMount';
+
+/** Store a directory handle for later mount during onboarding completion. */
+async function storePendingMount(handle: FileSystemDirectoryHandle): Promise<void> {
+  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+    const req = indexedDB.open(PENDING_MOUNT_DB, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore('handles');
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  const tx = db.transaction('handles', 'readwrite');
+  tx.objectStore('handles').put(handle, PENDING_MOUNT_KEY);
+  await new Promise<void>((r) => (tx.oncomplete = () => r()));
+  db.close();
+}
+
+/** Retrieve and clear the pending mount handle, then mount it to /mnt/<dirname>. */
+async function applyPendingMount(fs: VirtualFS): Promise<void> {
+  let db: IDBDatabase;
+  try {
+    db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const req = indexedDB.open(PENDING_MOUNT_DB, 1);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return; // DB doesn't exist yet
+  }
+  const tx = db.transaction('handles', 'readwrite');
+  const handle = await new Promise<FileSystemDirectoryHandle | undefined>((resolve) => {
+    const req = tx.objectStore('handles').get(PENDING_MOUNT_KEY);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => resolve(undefined);
+  });
+  if (handle) {
+    tx.objectStore('handles').delete(PENDING_MOUNT_KEY);
+    await new Promise<void>((r) => (tx.oncomplete = () => r()));
+    const mountPath = `/mnt/${handle.name}`;
+    await fs.mount(mountPath, handle);
+    log.info('Mounted folder from welcome onboarding', { name: handle.name, path: mountPath });
+  }
+  db.close();
+}
+
 type SkillDropNoticeKind = 'success' | 'error';
 
 function createSkillDropOverlay(): {
@@ -442,7 +487,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   // ── Sprinkle Manager (SHTML sprinkle panels) ────────────────────────
   const sprinkleManager = new SprinkleManager(
     localFs,
-    (event: LickEvent) => {
+    async (event: LickEvent) => {
       // Route sprinkle licks to the offscreen orchestrator's cone
       if (event.type === 'sprinkle') {
         // Handle welcome sprinkle lifecycle events
@@ -455,6 +500,41 @@ async function mainExtension(app: HTMLElement): Promise<void> {
           if (action === 'shortcut-migrate') {
             sprinkleManager.close('welcome');
           }
+          // Perform the actual mount if user selected a folder during onboarding
+          if (
+            action === 'onboarding-complete' &&
+            (body?.data as Record<string, unknown> | undefined)?.mountWorkspace
+          ) {
+            applyPendingMount(localFs).catch((err) =>
+              log.warn('Failed to mount workspace from onboarding', err)
+            );
+          }
+        }
+        // Handle request-mount from welcome sprinkle (sandbox can't call showDirectoryPicker)
+        if (
+          event.sprinkleName === 'welcome' &&
+          (event.body as Record<string, unknown> | null)?.action === 'request-mount'
+        ) {
+          try {
+            const w = window as Window & {
+              showDirectoryPicker?: (
+                opts: Record<string, unknown>
+              ) => Promise<FileSystemDirectoryHandle>;
+            };
+            if (!w.showDirectoryPicker) throw new Error('showDirectoryPicker not supported');
+            const handle = await w.showDirectoryPicker({ mode: 'readwrite' });
+            await storePendingMount(handle);
+            sprinkleManager.sendToSprinkle('welcome', {
+              action: 'mount-complete',
+              dirName: handle.name,
+            });
+          } catch (err: unknown) {
+            if ((err as { name?: string }).name !== 'AbortError') {
+              log.warn('Mount picker failed', err);
+            }
+            sprinkleManager.sendToSprinkle('welcome', { action: 'mount-cancelled' });
+          }
+          return; // Don't forward to orchestrator
         }
         client.sendSprinkleLick(event.sprinkleName!, event.body);
       }
@@ -1118,13 +1198,54 @@ async function main(): Promise<void> {
 
     // Handle welcome sprinkle lifecycle events
     if (isSprinkle && event.sprinkleName === 'welcome') {
-      const action = (event.body as Record<string, unknown> | null)?.action;
+      const body = event.body as Record<string, unknown> | null;
+      const action = body?.action;
       if (action === 'onboarding-complete' || action === 'shortcut-migrate') {
         localStorage.setItem('slicc-welcomed', '1');
       }
       if (action === 'shortcut-migrate') {
         sprinkleManager?.close('welcome');
       }
+      // Perform the actual mount if user selected a folder during onboarding
+      if (
+        action === 'onboarding-complete' &&
+        (body?.data as Record<string, unknown> | undefined)?.mountWorkspace &&
+        sharedFs
+      ) {
+        applyPendingMount(sharedFs).catch((err) =>
+          log.warn('Failed to mount workspace from onboarding', err)
+        );
+      }
+    }
+
+    // Handle request-mount from welcome sprinkle (fallback if direct picker fails)
+    if (
+      isSprinkle &&
+      event.sprinkleName === 'welcome' &&
+      (event.body as Record<string, unknown> | null)?.action === 'request-mount'
+    ) {
+      (async () => {
+        try {
+          const w = window as Window & {
+            showDirectoryPicker?: (
+              opts: Record<string, unknown>
+            ) => Promise<FileSystemDirectoryHandle>;
+          };
+          if (!w.showDirectoryPicker) throw new Error('showDirectoryPicker not supported');
+          const handle = await w.showDirectoryPicker({ mode: 'readwrite' });
+          await storePendingMount(handle);
+          sprinkleManager?.sendToSprinkle('welcome', {
+            action: 'mount-complete',
+            dirName: handle.name,
+          });
+        } catch (err: unknown) {
+          if ((err as { name?: string }).name !== 'AbortError') {
+            log.warn('Mount picker failed', err);
+          }
+          sprinkleManager?.sendToSprinkle('welcome', { action: 'mount-cancelled' });
+        }
+      })();
+      return; // Don't forward to orchestrator
     }
 
     // Determine the target:

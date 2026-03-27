@@ -704,7 +704,7 @@ export class ScoopContext {
     if (!this.fs) return;
 
     const dirs = this.scoop.isCone
-      ? ['/workspace', '/shared', '/scoops', '/home', '/tmp']
+      ? ['/workspace', '/shared', '/scoops', '/home', '/tmp', '/mnt']
       : [
           `/scoops/${this.scoop.folder}`,
           `/scoops/${this.scoop.folder}/workspace`,

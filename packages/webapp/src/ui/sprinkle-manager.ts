@@ -150,7 +150,7 @@ export class SprinkleManager {
     const entry = this.openSprinkles.get(name);
     if (!entry) return;
 
-    entry.renderer.dispose();
+    entry.renderer?.dispose();
     entry.container.remove();
     this.bridge.removeSprinkle(name);
     this.openSprinkles.delete(name);

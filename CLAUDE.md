@@ -29,11 +29,13 @@ This root file is the repo navigation hub. Keep package-specific architecture an
 ## Top-Level Commands
 
 ```bash
-npm install             # Install dependencies (first time)
-npm run build           # Production build (UI + CLI/Electron)
-npm run test            # Vitest run
-npm run typecheck       # Browser + Node typecheck
-npm run build:extension # Chrome extension build into dist/extension/
+npm install                              # Install dependencies (first time)
+npm run build                            # Production build (all workspaces)
+npm run build -w @slicc/webapp           # UI-only build (faster for UI changes)
+npm run build -w @slicc/chrome-extension # Chrome extension build into dist/extension/
+npm run test                             # Vitest run
+npm run typecheck                        # Browser + Node typecheck
+npm run dev                              # Dev mode with Vite HMR + Chrome + CDP
 ```
 
 For runtime-specific commands, use the nearest guide:
