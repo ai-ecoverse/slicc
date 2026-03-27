@@ -232,7 +232,8 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 
   const layout = new Layout(app, true);
   // Expose debug tab toggle for the shell `debug` command
-  (window as any).__slicc_debug_tabs = (show: boolean) => layout.setDebugTabs(show);
+  (window as unknown as Record<string, unknown>).__slicc_debug_tabs = (show: boolean) =>
+    layout.setDebugTabs(show);
   await layout.panels.chat.initSession('session-cone');
 
   let selectedScoop: RegisteredScoop | null = null;
@@ -405,9 +406,9 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 
   // Wire panels — OffscreenClient implements the Orchestrator methods
   // that ScoopsPanel, ScoopSwitcher, and MemoryPanel need
-  layout.panels.scoops.setOrchestrator(client as any);
-  layout.panels.memory.setOrchestrator(client as any);
-  layout.setScoopSwitcherOrchestrator?.(client as any);
+  layout.panels.scoops.setOrchestrator(client as unknown as Orchestrator);
+  layout.panels.memory.setOrchestrator(client as unknown as Orchestrator);
+  layout.setScoopSwitcherOrchestrator?.(client as unknown as Orchestrator);
 
   layout.onScoopSelect = selectScoop;
 
@@ -444,12 +445,16 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     (event: LickEvent) => {
       // Route sprinkle licks to the offscreen orchestrator's cone
       if (event.type === 'sprinkle') {
-        // Mark onboarding complete so welcome sprinkle doesn't reappear
-        if (
-          event.sprinkleName === 'welcome' &&
-          (event.body as any)?.action === 'onboarding-complete'
-        ) {
-          localStorage.setItem('slicc-welcomed', '1');
+        // Handle welcome sprinkle lifecycle events
+        if (event.sprinkleName === 'welcome') {
+          const body = event.body as Record<string, unknown> | null;
+          const action = body?.action;
+          if (action === 'onboarding-complete' || action === 'shortcut-migrate') {
+            localStorage.setItem('slicc-welcomed', '1');
+          }
+          if (action === 'shortcut-migrate') {
+            sprinkleManager.close('welcome');
+          }
         }
         client.sendSprinkleLick(event.sprinkleName!, event.body);
       }
@@ -471,8 +476,13 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 
   // Register handler so the offscreen proxy can relay sprinkle operations here.
   // Routed through the OffscreenClient's existing onMessage listener to ensure delivery.
-  client.setSprinkleOpHandler((payload: any) => {
-    const { id, op, name, data } = payload;
+  client.setSprinkleOpHandler((payload: Record<string, unknown>) => {
+    const { id, op, name, data } = payload as {
+      id: unknown;
+      op: string;
+      name: string;
+      data: unknown;
+    };
     console.log('[main-ext] sprinkle-op handler called', { id, op, name });
     (async () => {
       try {
@@ -507,23 +517,23 @@ async function mainExtension(app: HTMLElement): Promise<void> {
             break;
         }
         console.log('[main-ext] sprinkle-op response sending', { id, op, result: typeof result });
-        (chrome as any).runtime
-          .sendMessage({
+        (
+          chrome.runtime.sendMessage({
             source: 'panel',
             payload: { type: 'sprinkle-op-response', id, result },
-          })
-          .catch(() => {});
+          }) as Promise<unknown>
+        ).catch(() => {});
       } catch (err) {
-        (chrome as any).runtime
-          .sendMessage({
+        (
+          chrome.runtime.sendMessage({
             source: 'panel',
             payload: {
               type: 'sprinkle-op-response',
               id,
               error: err instanceof Error ? err.message : String(err),
             },
-          })
-          .catch(() => {});
+          }) as Promise<unknown>
+        ).catch(() => {});
       }
     })();
   });
@@ -1106,13 +1116,15 @@ async function main(): Promise<void> {
 
     log.debug('Lick event', { type: event.type, name: eventName, targetScoop: event.targetScoop });
 
-    // Mark onboarding complete so welcome sprinkle doesn't reappear
-    if (
-      isSprinkle &&
-      event.sprinkleName === 'welcome' &&
-      (event.body as any)?.action === 'onboarding-complete'
-    ) {
-      localStorage.setItem('slicc-welcomed', '1');
+    // Handle welcome sprinkle lifecycle events
+    if (isSprinkle && event.sprinkleName === 'welcome') {
+      const action = (event.body as Record<string, unknown> | null)?.action;
+      if (action === 'onboarding-complete' || action === 'shortcut-migrate') {
+        localStorage.setItem('slicc-welcomed', '1');
+      }
+      if (action === 'shortcut-migrate') {
+        sprinkleManager?.close('welcome');
+      }
     }
 
     // Determine the target:
