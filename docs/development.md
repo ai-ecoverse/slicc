@@ -6,14 +6,13 @@ Build, run, test, and debug SLICC locally.
 
 | Command                                                                                           | What It Does                                                                                                              | When to Use                                                                                            |
 | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `npm run dev:full`                                                                                | Full dev mode: Vite HMR + Chrome + CDP proxy (port 5710)                                                                  | Interactive development; live reload; test browser features                                            |
+| `npm run dev`                                                                                     | Full dev mode: Vite HMR + Chrome + CDP proxy (port 5710)                                                                  | Interactive development; live reload; test browser features                                            |
 | `npm run dev:electron -- /Applications/Slack.app`                                                 | Launch the main CLI in Electron attach mode against an Electron app                                                       | Electron overlay/runtime work                                                                          |
-| `npm run dev`                                                                                     | Vite dev server only (no Chrome/CDP)                                                                                      | Quick UI iteration without launching browser                                                           |
 | `npm run start:extension`                                                                         | Rebuild the extension, then launch the CLI with the dedicated extension profile auto-loading `dist/extension`             | Extension verification without re-loading unpacked extension by hand                                   |
-| `npm run build`                                                                                   | Production build: Vite UI + TSC CLI/Electron Node target                                                                  | Pre-deployment validation; final bundle check                                                          |
-| `npm run build:ui`                                                                                | Vite build only into `dist/ui/`                                                                                           | Build UI assets separately                                                                             |
-| `npm run build:cli`                                                                               | TSC build only into `dist/node-server/`                                                                                   | Build CLI server + Electron attach helpers separately                                                  |
-| `npm run build:extension`                                                                         | Chrome extension bundle into `dist/extension/`                                                                            | Build extension; load in `chrome://extensions`                                                         |
+| `npm run build`                                                                                   | Production build: all workspaces (webapp, node-server, extension, worker, swift)                                          | Pre-deployment validation; final bundle check                                                          |
+| `npm run build -w @slicc/webapp`                                                                  | Vite build only into `dist/ui/`                                                                                           | Build UI assets separately (faster iteration for UI-only changes)                                      |
+| `npm run build -w @slicc/node-server`                                                             | TSC build only into `dist/node-server/`                                                                                   | Build CLI server + Electron attach helpers separately                                                  |
+| `npm run build -w @slicc/chrome-extension`                                                        | Chrome extension bundle into `dist/extension/`                                                                            | Build extension; load in `chrome://extensions`                                                         |
 | `npm run package:release`                                                                         | Package deterministic extension + Node/CLI release artifacts into `artifacts/release/` (after running the build commands) | Prepare CI/local release assets for GitHub Releases and later npm publish wiring                       |
 | `npm run start`                                                                                   | Run production CLI (requires build first)                                                                                 | Run built production bundle                                                                            |
 | `npm run start:electron -- /Applications/Slack.app`                                               | Run the built Electron attach mode                                                                                        | Smoke-test production Electron output                                                                  |
@@ -110,7 +109,7 @@ All four build gates MUST pass:
 
 Manual verification in the relevant runtimes:
 
-- [ ] Feature works in CLI mode (`npm run dev:full`)
+- [ ] Feature works in CLI mode (`npm run dev`)
   - Launch Chrome automatically
   - Navigate to http://localhost:5710
   - Interact with UI; check functionality
@@ -208,7 +207,7 @@ If you want a reusable browser profile instead of re-loading the unpacked extens
 Start dev server with Chrome and CDP:
 
 ```bash
-npm run dev:full
+npm run dev
 ```
 
 This launches:
@@ -302,7 +301,7 @@ log.error('error message');
 
 New features MUST work in the relevant runtimes:
 
-- **CLI mode** (`npm run dev:full`)
+- **CLI mode** (`npm run dev`)
   - Runs in browser launched by Node/Express
   - Can use direct fetch without CORS
   - Can use `AsyncFunction` constructor
