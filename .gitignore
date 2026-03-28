@@ -17,3 +17,4 @@ providers.json
 test-results/
 playwright-report/
 packages/swift-launcher/.node-cache/
+/tasks/
