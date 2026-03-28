@@ -48,7 +48,7 @@ export interface HandoffEnv {
 const HANDOFF_TTL_MS = 86400000;
 const MAX_HANDOFF_BYTES = 65536;
 const MAX_TITLE_LENGTH = 160;
-const MAX_URLS = 100;
+const MAX_URLS = 10;
 
 const EXTENSION_ID = 'akggccfpkleihhemkkikggopnifgelbk';
 const EXTENSION_INSTALL_URL =
