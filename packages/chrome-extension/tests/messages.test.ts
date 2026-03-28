@@ -46,6 +46,24 @@ describe('isExtensionMessage', () => {
     expect(isExtensionMessage(msg)).toBe(true);
   });
 
+  it('returns true for pending handoff list envelopes', () => {
+    const msg: ExtensionMessage = {
+      source: 'service-worker',
+      payload: {
+        type: 'handoff-pending-list',
+        handoffs: [
+          {
+            handoffId: 'handoff-1',
+            sourceUrl: 'https://www.sliccy.ai/handoffs#abc',
+            receivedAt: new Date().toISOString(),
+            payload: { instruction: 'Continue this task in SLICC.' },
+          },
+        ],
+      },
+    };
+    expect(isExtensionMessage(msg)).toBe(true);
+  });
+
   it('returns false for null', () => {
     expect(isExtensionMessage(null)).toBe(false);
   });

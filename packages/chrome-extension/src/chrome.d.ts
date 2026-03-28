@@ -45,6 +45,12 @@ interface ChromeTab {
   url?: string;
 }
 
+interface ChromeTabChangeInfo {
+  status?: 'loading' | 'complete';
+  title?: string;
+  url?: string;
+}
+
 interface ChromeMessageSender {
   id?: string;
   tab?: ChromeTab;
@@ -53,6 +59,18 @@ interface ChromeMessageSender {
 interface ChromeOffscreenAPI {
   createDocument(params: { url: string; reasons: string[]; justification: string }): Promise<void>;
   hasDocument(): Promise<boolean>;
+}
+
+interface ChromeActionAPI {
+  setBadgeText(details: { text: string }): Promise<void>;
+  setBadgeBackgroundColor(details: { color: string }): Promise<void>;
+}
+
+interface ChromeStorageArea {
+  get(
+    keys?: string | string[] | Record<string, unknown> | null
+  ): Promise<Record<string, unknown>>;
+  set(items: Record<string, unknown>): Promise<void>;
 }
 
 interface ChromeAPI {
@@ -100,13 +118,25 @@ interface ChromeAPI {
     launchWebAuthFlow(options: { url: string; interactive: boolean }): Promise<string | undefined>;
     getRedirectURL(path?: string): string;
   };
+  action: ChromeActionAPI;
   offscreen: ChromeOffscreenAPI;
+  storage: {
+    local: ChromeStorageArea;
+  };
   debugger: ChromeDebuggerAPI;
   tabs: {
     query(queryInfo: Record<string, unknown>): Promise<ChromeTab[]>;
     create(properties: { url?: string; active?: boolean }): Promise<{ id: number }>;
     remove(tabId: number): Promise<void>;
     group(options: { tabIds: number | number[]; groupId?: number }): Promise<number>;
+    onCreated: {
+      addListener(callback: (tab: ChromeTab) => void): void;
+    };
+    onUpdated: {
+      addListener(
+        callback: (tabId: number, changeInfo: ChromeTabChangeInfo, tab: ChromeTab) => void
+      ): void;
+    };
   };
   tabGroups: {
     update(

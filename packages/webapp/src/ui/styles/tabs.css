@@ -65,6 +65,24 @@
   border-color: var(--s2-gray-800);
   color: #fff;
 }
+.mini-tabs__tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--s2-accent) 20%, #fff);
+  color: var(--s2-accent);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+.mini-tabs__tab--active .mini-tabs__tab-badge {
+  background: color-mix(in srgb, #fff 18%, transparent);
+  color: #fff;
+}
 .mini-tabs__tab:focus-visible {
   outline: 2px solid var(--s2-accent);
   outline-offset: 2px;

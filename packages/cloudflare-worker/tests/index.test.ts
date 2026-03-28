@@ -1144,6 +1144,7 @@ describe('tray worker skeleton', () => {
     await expect(response.json()).resolves.toMatchObject({
       routes: [
         'POST /tray',
+        'GET /handoffs',
         'GET|POST /join/:token',
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',
@@ -1165,6 +1166,20 @@ describe('tray worker skeleton', () => {
     const { env } = createTestHarness();
     const response = await handleWorkerRequest(new Request('https://www.sliccy.ai/'), env);
     expect(response.status).toBe(200);
+  });
+
+  it('serves the handoffs preview page at GET /handoffs', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/handoffs'),
+      env
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Type')).toContain('text/html');
+    const html = await response.text();
+    expect(html).toContain('SLICC handoff');
+    expect(html).toContain('location.hash');
+    expect(html).toContain('Invalid handoff payload');
   });
 });
 

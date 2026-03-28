@@ -467,6 +467,14 @@ export class OffscreenBridge {
         break;
       }
 
+      case 'handoff-list-request':
+      case 'handoff-accept':
+      case 'handoff-dismiss': {
+        // The extension service worker owns pending-handoff queue state.
+        // These messages are broadcast to all contexts, so offscreen treats them as no-ops.
+        break;
+      }
+
       case 'clear-chat': {
         await this.orchestrator.clearAllMessages();
         // Clear session store for all known scoops — must await so deletions

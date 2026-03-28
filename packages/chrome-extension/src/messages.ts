@@ -7,6 +7,22 @@
 
 import type { ScoopTabState } from './types.js';
 
+export interface GenericHandoffPayload {
+  title?: string;
+  instruction: string;
+  urls?: string[];
+  context?: string;
+  acceptanceCriteria?: string[];
+  notes?: string;
+}
+
+export interface PendingHandoff {
+  handoffId: string;
+  sourceUrl: string;
+  payload: GenericHandoffPayload;
+  receivedAt: string;
+}
+
 // ---------------------------------------------------------------------------
 // Side Panel → Offscreen (via service worker relay)
 // ---------------------------------------------------------------------------
@@ -95,6 +111,20 @@ export interface ReloadSkillsMsg {
   type: 'reload-skills';
 }
 
+export interface HandoffListRequestMsg {
+  type: 'handoff-list-request';
+}
+
+export interface HandoffAcceptMsg {
+  type: 'handoff-accept';
+  handoffId: string;
+}
+
+export interface HandoffDismissMsg {
+  type: 'handoff-dismiss';
+  handoffId: string;
+}
+
 export type PanelToOffscreenMessage =
   | UserMessageMsg
   | ScoopCreateMsg
@@ -110,7 +140,10 @@ export type PanelToOffscreenMessage =
   | PanelCdpCommandMsg
   | OAuthRequestMsg
   | SprinkleLickMsg
-  | ReloadSkillsMsg;
+  | ReloadSkillsMsg
+  | HandoffListRequestMsg
+  | HandoffAcceptMsg
+  | HandoffDismissMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen → Side Panel (via service worker relay)
@@ -195,6 +228,11 @@ export interface OAuthResultMsg {
   error?: string;
   /** Full redirect URL — needed for implicit grant (token in fragment). */
   redirectUrl?: string;
+}
+
+export interface HandoffPendingListMsg {
+  type: 'handoff-pending-list';
+  handoffs: PendingHandoff[];
 }
 
 export type OffscreenToPanelMessage =
@@ -300,7 +338,7 @@ export interface PanelEnvelope {
 
 export interface ServiceWorkerEnvelope {
   source: 'service-worker';
-  payload: CdpProxyMessage | TraySocketEventMessage | OAuthResultMsg;
+  payload: CdpProxyMessage | TraySocketEventMessage | OAuthResultMsg | HandoffPendingListMsg;
 }
 
 export type ExtensionMessage = OffscreenEnvelope | PanelEnvelope | ServiceWorkerEnvelope;
