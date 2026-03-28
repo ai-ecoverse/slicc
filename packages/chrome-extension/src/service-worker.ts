@@ -23,6 +23,9 @@ import type {
   TraySocketOpenedMsg,
   OAuthRequestMsg,
   OAuthResultMsg,
+  GenericHandoffPayload,
+  HandoffPendingListMsg,
+  PendingHandoff,
 } from './messages.js';
 
 // ---------------------------------------------------------------------------
@@ -36,6 +39,9 @@ chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 // ---------------------------------------------------------------------------
 
 const OFFSCREEN_URL = 'offscreen.html';
+const HANDOFFS_HOST = 'www.sliccy.ai';
+const HANDOFFS_PATH = '/handoffs';
+const HANDOFFS_STORAGE_KEY = 'slicc.pendingHandoffs';
 
 // Serialize concurrent ensureOffscreen calls to prevent race conditions
 // where multiple callers pass hasDocument() before any creates the document.
@@ -80,8 +86,10 @@ async function ensureOffscreen(): Promise<void> {
 // Create offscreen doc on install/startup
 chrome.runtime.onInstalled?.addListener?.(() => {
   ensureOffscreen();
+  void syncHandoffBadge();
 });
 ensureOffscreen();
+void syncHandoffBadge();
 
 // ---------------------------------------------------------------------------
 // Tab grouping — inline copy for service worker (SW can't import shared chunks)
@@ -120,6 +128,165 @@ async function addToSliccGroup(tabId: number): Promise<void> {
   }
 }
 
+function hashFragment(input: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function decodeBase64UrlUtf8(fragment: string): string {
+  const normalized = fragment.replace(/-/g, '+').replace(/_/g, '/');
+  const padding = normalized.length % 4;
+  const padded = padding === 0 ? normalized : normalized + '='.repeat(4 - padding);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function normalizeHandoffPayload(value: unknown): GenericHandoffPayload | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record['instruction'] !== 'string' || !record['instruction'].trim()) return null;
+  if (record['title'] !== undefined && typeof record['title'] !== 'string') return null;
+  if (record['context'] !== undefined && typeof record['context'] !== 'string') return null;
+  if (record['notes'] !== undefined && typeof record['notes'] !== 'string') return null;
+  if (record['urls'] !== undefined && !isStringArray(record['urls'])) return null;
+  if (record['acceptanceCriteria'] !== undefined && !isStringArray(record['acceptanceCriteria'])) {
+    return null;
+  }
+
+  return {
+    title: typeof record['title'] === 'string' ? record['title'] : undefined,
+    instruction: record['instruction'].trim(),
+    urls: isStringArray(record['urls']) ? record['urls'] : undefined,
+    context: typeof record['context'] === 'string' ? record['context'] : undefined,
+    acceptanceCriteria: isStringArray(record['acceptanceCriteria'])
+      ? record['acceptanceCriteria']
+      : undefined,
+    notes: typeof record['notes'] === 'string' ? record['notes'] : undefined,
+  };
+}
+
+function normalizePendingHandoff(value: unknown): PendingHandoff | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const payload = normalizeHandoffPayload(record['payload']);
+  if (!payload) return null;
+  if (typeof record['handoffId'] !== 'string' || !record['handoffId']) return null;
+  if (typeof record['sourceUrl'] !== 'string' || !record['sourceUrl']) return null;
+  if (typeof record['receivedAt'] !== 'string' || !record['receivedAt']) return null;
+  return {
+    handoffId: record['handoffId'],
+    sourceUrl: record['sourceUrl'],
+    payload,
+    receivedAt: record['receivedAt'],
+  };
+}
+
+function parseHandoffFromUrl(urlString: string): PendingHandoff | null {
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(urlString);
+  } catch {
+    return null;
+  }
+
+  if (
+    parsedUrl.protocol !== 'https:' ||
+    parsedUrl.hostname !== HANDOFFS_HOST ||
+    parsedUrl.pathname !== HANDOFFS_PATH
+  ) {
+    return null;
+  }
+
+  const fragment = parsedUrl.hash.replace(/^#/, '');
+  if (!fragment) return null;
+
+  try {
+    const json = decodeBase64UrlUtf8(fragment);
+    const payload = normalizeHandoffPayload(JSON.parse(json));
+    if (!payload) return null;
+    return {
+      handoffId: `handoff-${hashFragment(fragment)}`,
+      sourceUrl: parsedUrl.toString(),
+      payload,
+      receivedAt: new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function readPendingHandoffs(): Promise<PendingHandoff[]> {
+  const stored = await chrome.storage.local.get(HANDOFFS_STORAGE_KEY);
+  const raw = stored[HANDOFFS_STORAGE_KEY];
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((value) => normalizePendingHandoff(value))
+    .filter((value): value is PendingHandoff => value !== null);
+}
+
+async function syncHandoffBadge(handoffs?: PendingHandoff[]): Promise<void> {
+  const list = handoffs ?? (await readPendingHandoffs());
+  const count = list.length;
+  await chrome.action.setBadgeBackgroundColor({ color: '#ff5f72' });
+  await chrome.action.setBadgeText({ text: count > 0 ? (count > 99 ? '99+' : String(count)) : '' });
+}
+
+async function publishPendingHandoffs(handoffs?: PendingHandoff[]): Promise<void> {
+  const list = handoffs ?? (await readPendingHandoffs());
+  await syncHandoffBadge(list);
+  await sendServiceWorkerMessage({
+    type: 'handoff-pending-list',
+    handoffs: list,
+  } satisfies HandoffPendingListMsg);
+}
+
+async function storePendingHandoffs(handoffs: PendingHandoff[]): Promise<void> {
+  await chrome.storage.local.set({ [HANDOFFS_STORAGE_KEY]: handoffs });
+  await publishPendingHandoffs(handoffs);
+}
+
+async function queueHandoffFromUrl(urlString: string): Promise<void> {
+  const handoff = parseHandoffFromUrl(urlString);
+  if (!handoff) return;
+
+  const current = await readPendingHandoffs();
+  if (current.some((item) => item.handoffId === handoff.handoffId)) return;
+  await storePendingHandoffs([...current, handoff]);
+}
+
+async function clearPendingHandoff(handoffId: string): Promise<void> {
+  const current = await readPendingHandoffs();
+  const next = current.filter((item) => item.handoffId !== handoffId);
+  if (next.length === current.length) {
+    await publishPendingHandoffs(current);
+    return;
+  }
+  await storePendingHandoffs(next);
+}
+
+chrome.tabs.onCreated.addListener((tab: ChromeTab) => {
+  if (tab.url) void queueHandoffFromUrl(tab.url);
+});
+
+chrome.tabs.onUpdated.addListener(
+  (_tabId: number, changeInfo: { url?: string }, tab: ChromeTab) => {
+    const url = changeInfo.url ?? tab.url;
+    if (url) void queueHandoffFromUrl(url);
+  }
+);
+
 // ---------------------------------------------------------------------------
 // CDP state for proxying chrome.debugger calls
 // ---------------------------------------------------------------------------
@@ -143,6 +310,20 @@ chrome.runtime.onMessage.addListener(
 
     if (msg.source === 'panel') {
       const panelPayload = msg.payload;
+
+      if (panelPayload.type === 'handoff-list-request') {
+        void publishPendingHandoffs().catch((err) => {
+          console.error('[slicc-sw] Failed to publish pending handoffs:', err);
+        });
+        return false;
+      }
+
+      if (panelPayload.type === 'handoff-accept' || panelPayload.type === 'handoff-dismiss') {
+        void clearPendingHandoff(panelPayload.handoffId).catch((err) => {
+          console.error('[slicc-sw] Failed to clear pending handoff:', err);
+        });
+        return false;
+      }
 
       // Handle OAuth requests — service worker has chrome.identity access
       if (panelPayload.type === 'oauth-request') {

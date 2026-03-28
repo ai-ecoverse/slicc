@@ -28,6 +28,7 @@ import {
   setSelectedModelId,
   getProviderConfig,
 } from './provider-settings.js';
+import type { PendingHandoff } from '../../../chrome-extension/src/messages.js';
 
 const log = createLogger('chat-panel');
 
@@ -95,6 +96,10 @@ export class ChatPanel {
   private inlineSprinkles = new Map<string, InlineSprinkleInstance[]>();
   public onInlineSprinkleLick?: (action: string, data: unknown) => void;
   private modelSelectorEl!: HTMLElement;
+  private handoffModalEl!: HTMLElement;
+  private pendingHandoffs: PendingHandoff[] = [];
+  private onAcceptPendingHandoff: ((handoff: PendingHandoff) => void) | null = null;
+  private onDismissPendingHandoff: ((handoff: PendingHandoff) => void) | null = null;
   public onModelChange?: (modelId: string) => void;
 
   constructor(container: HTMLElement) {
@@ -253,6 +258,20 @@ export class ChatPanel {
     this.renderModelSelector();
   }
 
+  setPendingHandoffs(handoffs: PendingHandoff[]): void {
+    this.pendingHandoffs = [...handoffs];
+    this.renderPendingHandoffModal();
+  }
+
+  setPendingHandoffActions(callbacks: {
+    onAccept: (handoff: PendingHandoff) => void;
+    onDismiss: (handoff: PendingHandoff) => void;
+  }): void {
+    this.onAcceptPendingHandoff = callbacks.onAccept;
+    this.onDismissPendingHandoff = callbacks.onDismiss;
+    this.renderPendingHandoffModal();
+  }
+
   /** Add a user message to the display (for history loading). */
   addUserMessage(content: string): void {
     const msg: ChatMessage = {
@@ -288,6 +307,11 @@ export class ChatPanel {
     this.messagesInner.className = 'chat__messages-inner';
     this.messagesEl.appendChild(this.messagesInner);
     this.container.appendChild(this.messagesEl);
+
+    this.handoffModalEl = document.createElement('div');
+    this.handoffModalEl.className = 'chat__handoff-modal';
+    this.handoffModalEl.hidden = true;
+    this.container.appendChild(this.handoffModalEl);
 
     this.messagesEl.addEventListener(
       'scroll',
@@ -492,6 +516,80 @@ export class ChatPanel {
       }
     };
     document.addEventListener('keydown', this.keydownListener);
+  }
+
+  private renderPendingHandoffModal(): void {
+    if (!this.handoffModalEl) return;
+
+    const handoff = this.pendingHandoffs[0];
+    if (!handoff) {
+      this.handoffModalEl.hidden = true;
+      this.handoffModalEl.innerHTML = '';
+      return;
+    }
+
+    const { payload } = handoff;
+    const queueLabel =
+      this.pendingHandoffs.length > 1
+        ? `<span class="chat__handoff-badge">${this.pendingHandoffs.length} pending</span>`
+        : `<span class="chat__handoff-badge">1 pending</span>`;
+    const sections: string[] = [
+      `<section class="chat__handoff-section"><h3>Instruction</h3><p>${escapeHtml(payload.instruction)}</p></section>`,
+    ];
+
+    if (payload.urls && payload.urls.length > 0) {
+      sections.push(
+        `<section class="chat__handoff-section"><h3>URLs</h3><ul>${payload.urls
+          .map((url) => `<li>${escapeHtml(url)}</li>`)
+          .join('')}</ul></section>`
+      );
+    }
+
+    if (payload.context) {
+      sections.push(
+        `<section class="chat__handoff-section"><h3>Context</h3><p>${escapeHtml(payload.context)}</p></section>`
+      );
+    }
+
+    if (payload.acceptanceCriteria && payload.acceptanceCriteria.length > 0) {
+      sections.push(
+        `<section class="chat__handoff-section"><h3>Acceptance Criteria</h3><ul>${payload.acceptanceCriteria
+          .map((item) => `<li>${escapeHtml(item)}</li>`)
+          .join('')}</ul></section>`
+      );
+    }
+
+    if (payload.notes) {
+      sections.push(
+        `<section class="chat__handoff-section"><h3>Notes</h3><p>${escapeHtml(payload.notes)}</p></section>`
+      );
+    }
+
+    this.handoffModalEl.hidden = false;
+    this.handoffModalEl.innerHTML = `
+      <div class="chat__handoff-card" role="dialog" aria-modal="true" aria-label="Pending SLICC handoff">
+        <div class="chat__handoff-header">
+          <div>
+            <div class="chat__handoff-kicker">Incoming handoff</div>
+            <h2>${escapeHtml(payload.title || 'Continue this task in SLICC')}</h2>
+          </div>
+          ${queueLabel}
+        </div>
+        <p class="chat__handoff-copy">Accept this handoff to continue it in the cone, or dismiss it to ignore it.</p>
+        <div class="chat__handoff-body">${sections.join('')}</div>
+        <div class="chat__handoff-footer">
+          <button class="chat__handoff-btn chat__handoff-btn--secondary" data-action="dismiss" type="button">Dismiss</button>
+          <button class="chat__handoff-btn chat__handoff-btn--primary" data-action="accept" type="button">Accept</button>
+        </div>
+      </div>
+    `;
+
+    const acceptBtn =
+      this.handoffModalEl.querySelector<HTMLButtonElement>('[data-action="accept"]');
+    const dismissBtn =
+      this.handoffModalEl.querySelector<HTMLButtonElement>('[data-action="dismiss"]');
+    acceptBtn?.addEventListener('click', () => this.onAcceptPendingHandoff?.(handoff));
+    dismissBtn?.addEventListener('click', () => this.onDismissPendingHandoff?.(handoff));
   }
 
   private toggleVoiceMode(): void {

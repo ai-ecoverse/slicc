@@ -79,6 +79,10 @@ import {
 } from '../shell/supplemental-commands/playwright-command.js';
 import { SprinkleManager } from './sprinkle-manager.js';
 import { initTelemetry } from './telemetry.js';
+import type {
+  GenericHandoffPayload,
+  PendingHandoff,
+} from '../../../chrome-extension/src/messages.js';
 
 const log = createLogger('main');
 
@@ -267,6 +271,36 @@ function registerSkillDropInstall(
   });
 }
 
+function formatAcceptedHandoffMessage(payload: GenericHandoffPayload): string {
+  const sections: string[] = [];
+  if (payload.title) sections.push(`# ${payload.title}`);
+  sections.push('A new handoff was accepted from https://www.sliccy.ai/handoffs.');
+  sections.push('## Instruction');
+  sections.push(payload.instruction);
+
+  if (payload.urls && payload.urls.length > 0) {
+    sections.push('## URLs');
+    for (const url of payload.urls) sections.push(`- ${url}`);
+  }
+
+  if (payload.context) {
+    sections.push('## Context');
+    sections.push(payload.context);
+  }
+
+  if (payload.acceptanceCriteria && payload.acceptanceCriteria.length > 0) {
+    sections.push('## Acceptance Criteria');
+    for (const item of payload.acceptanceCriteria) sections.push(`- ${item}`);
+  }
+
+  if (payload.notes) {
+    sections.push('## Notes');
+    sections.push(payload.notes);
+  }
+
+  return sections.join('\n\n');
+}
+
 // ---------------------------------------------------------------------------
 // Extension mode — pure UI connecting to offscreen agent engine
 // ---------------------------------------------------------------------------
@@ -334,6 +368,10 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   // Uses `client` which is assigned right after construction.
   let client!: InstanceType<typeof OffscreenClient>;
   let knownScoopFolders = new Set<string>();
+  const syncPendingHandoffs = (handoffs: PendingHandoff[]) => {
+    layout.setPendingHandoffCount(handoffs.length);
+    layout.panels.chat.setPendingHandoffs(handoffs);
+  };
 
   const selectScoop = async (scoop: RegisteredScoop) => {
     selectedScoop = scoop;
@@ -409,6 +447,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
         layout.panels.chat.addUserMessage(content);
       }
     },
+    onPendingHandoffsChange: syncPendingHandoffs,
     onReady: async () => {
       try {
         log.info('Offscreen engine ready, scoop count:', client.getScoops().length);
@@ -447,6 +486,27 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   // Wire agent handle
   const agentHandle = client.createAgentHandle();
   layout.panels.chat.setAgent(agentHandle);
+  layout.panels.chat.setPendingHandoffActions({
+    onAccept: async (handoff) => {
+      const cone = client.getScoops().find((s) => s.isCone);
+      if (!cone) {
+        log.warn('Cannot accept handoff without a cone scoop', { handoffId: handoff.handoffId });
+        return;
+      }
+
+      await selectScoop(cone);
+      layout.setActiveTab('chat');
+      agentHandle.sendMessage(
+        formatAcceptedHandoffMessage(handoff.payload),
+        `handoff-${handoff.handoffId}`
+      );
+      client.acceptPendingHandoff(handoff.handoffId);
+    },
+    onDismiss: (handoff) => {
+      client.dismissPendingHandoff(handoff.handoffId);
+    },
+  });
+  client.requestPendingHandoffs();
 
   // Wire panels — OffscreenClient implements the Orchestrator methods
   // that ScoopsPanel, ScoopSwitcher, and MemoryPanel need

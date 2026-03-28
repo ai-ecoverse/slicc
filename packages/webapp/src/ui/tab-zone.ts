@@ -241,6 +241,33 @@ export class TabZone {
     return this.tabs.has(id);
   }
 
+  /** Render or clear a numeric badge for a tab. */
+  setTabBadge(id: string, count: number | null): void {
+    const entry = this.tabs.get(id);
+    if (!entry) return;
+
+    const existing = entry.btn.querySelector(`.${this.classPrefix}__tab-badge`);
+    if (!count || count <= 0) {
+      existing?.remove();
+      return;
+    }
+
+    const badge =
+      existing instanceof HTMLSpanElement ? existing : document.createElement('span');
+    badge.className = `${this.classPrefix}__tab-badge`;
+    badge.textContent = count > 99 ? '99+' : String(count);
+    badge.setAttribute('aria-label', `${count} notifications`);
+
+    if (!existing) {
+      const close = entry.btn.querySelector(`.${this.classPrefix}__tab-close`);
+      if (close) {
+        entry.btn.insertBefore(badge, close);
+      } else {
+        entry.btn.appendChild(badge);
+      }
+    }
+  }
+
   /** Get the tab count. */
   get tabCount(): number {
     return this.tabs.size;
