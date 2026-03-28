@@ -47,6 +47,8 @@ export class TabZone {
       container: HTMLElement;
       tab: TabZoneTab;
       mounted: boolean;
+      labelEl?: HTMLSpanElement;
+      badgeEl?: HTMLSpanElement;
     }
   >();
   private activeTabId: string | null = null;
@@ -128,7 +130,10 @@ export class TabZone {
     } else {
       // Normal text tab
       btn.className = `${this.classPrefix}__tab`;
-      btn.appendChild(document.createTextNode(tab.label));
+      const labelEl = document.createElement('span');
+      labelEl.className = `${this.classPrefix}__tab-label`;
+      labelEl.textContent = tab.label;
+      btn.appendChild(labelEl);
 
       if (tab.closable) {
         const closeSpan = document.createElement('span');
@@ -157,7 +162,7 @@ export class TabZone {
       container.style.display = 'none';
       this.contentArea.appendChild(container);
 
-      this.tabs.set(tab.id, { btn, container, tab, mounted: true });
+      this.tabs.set(tab.id, { btn, container, tab, mounted: true, labelEl });
 
       // Auto-activate first mounted tab
       if (!this.activeTabId || !this.tabs.get(this.activeTabId)?.mounted) {
@@ -244,6 +249,31 @@ export class TabZone {
   /** Get the tab count. */
   get tabCount(): number {
     return this.tabs.size;
+  }
+
+  /** Update the numeric badge for a text tab. */
+  setTabBadge(id: string, count: number | null): void {
+    const entry = this.tabs.get(id);
+    if (!entry || entry.tab.pinned || !entry.labelEl) return;
+
+    if (count === null || count <= 0) {
+      entry.badgeEl?.remove();
+      entry.badgeEl = undefined;
+      return;
+    }
+
+    if (!entry.badgeEl) {
+      const badgeEl = document.createElement('span');
+      badgeEl.className = `${this.classPrefix}__tab-badge`;
+      entry.btn.appendChild(badgeEl);
+      entry.badgeEl = badgeEl;
+    }
+
+    entry.badgeEl.textContent = count > 99 ? '99+' : String(count);
+    entry.badgeEl.setAttribute(
+      'aria-label',
+      count === 1 ? '1 pending handoff' : `${count} pending handoffs`
+    );
   }
 
   /** Enable the [+] button. */

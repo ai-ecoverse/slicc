@@ -155,6 +155,11 @@ export class Layout {
     this.extensionZone?.activateTab(id);
   }
 
+  setPendingHandoffCount(count: number): void {
+    if (!this.isExtension) return;
+    this.extensionZone?.setTabBadge('chat', count);
+  }
+
   getActiveTab(): TabId {
     return this.activeTab;
   }

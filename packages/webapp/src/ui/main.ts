@@ -411,6 +411,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     },
     onPendingHandoffListChange: (handoffs) => {
       layout.panels.chat.setPendingHandoffs(handoffs);
+      layout.setPendingHandoffCount(handoffs.length);
     },
     onReady: async () => {
       try {

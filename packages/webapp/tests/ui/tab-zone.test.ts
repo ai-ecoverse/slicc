@@ -231,4 +231,28 @@ describe('TabZone', () => {
     zone.removeTab('nonexistent');
     expect(zone.tabCount).toBe(0);
   });
+
+  it('shows and clears a badge on a text tab', () => {
+    const zone = new TabZone(tabBar, contentArea, 'primary');
+    zone.addTab(makeTab({ id: 'chat', label: 'Chat' }));
+
+    zone.setTabBadge('chat', 3);
+    let badge = tabBar.querySelector('.mini-tabs__tab-badge');
+    expect(badge).toBeTruthy();
+    expect(badge?.textContent).toBe('3');
+
+    zone.setTabBadge('chat', 0);
+    badge = tabBar.querySelector('.mini-tabs__tab-badge');
+    expect(badge).toBeNull();
+  });
+
+  it('caps badge display at 99+', () => {
+    const zone = new TabZone(tabBar, contentArea, 'primary');
+    zone.addTab(makeTab({ id: 'chat', label: 'Chat' }));
+
+    zone.setTabBadge('chat', 120);
+
+    const badge = tabBar.querySelector('.mini-tabs__tab-badge');
+    expect(badge?.textContent).toBe('99+');
+  });
 });
