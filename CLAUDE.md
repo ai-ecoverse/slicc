@@ -67,6 +67,32 @@ For runtime-specific commands, use the nearest guide:
 
 Use the ice cream terms in code review comments and docs when they match the domain.
 
+## SLICC Handoffs
+
+When a user says `handoff to slicc`, `move this to slicc`, `continue this in slicc`, or `test this in slicc`, treat that as a repo convention:
+
+- build a generic SLICC handoff payload
+- submit it with the bundled `scripts/slicc-handoff` helper from the installed skill when available
+- return the resulting handoff URL
+
+Use this payload shape:
+
+- `instruction` required
+- `title` optional
+- `urls` optional
+- `context` optional
+- `acceptanceCriteria` optional
+- `notes` optional
+- `openUrlsFirst` optional
+
+Assume SLICC has browser/session context, not repo/file context, unless the user explicitly says otherwise.
+
+See:
+
+- `docs/slicc-handoff.md`
+- `docs/schemas/slicc-handoff.schema.json`
+- `.agents/skills/slicc-handoff/SKILL.md`
+
 ## Git Conventions
 
 - Keep commits focused and package-local when possible.

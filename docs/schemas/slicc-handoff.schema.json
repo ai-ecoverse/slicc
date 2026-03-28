@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://www.sliccy.ai/schemas/slicc-handoff.schema.json",
+  "title": "SLICC Handoff",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["instruction"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "instruction": {
+      "type": "string",
+      "minLength": 1
+    },
+    "urls": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "string",
+        "pattern": "^https?://"
+      }
+    },
+    "context": {
+      "type": "string"
+    },
+    "acceptanceCriteria": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "notes": {
+      "type": "string"
+    },
+    "openUrlsFirst": {
+      "type": "boolean"
+    }
+  }
+}

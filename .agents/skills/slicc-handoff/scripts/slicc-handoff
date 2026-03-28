@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+BASE_URL="${SLICC_HANDOFF_BASE_URL:-https://www.sliccy.ai}"
+OPEN_AFTER=0
+PRINT_JSON=0
+READ_STDIN=0
+INPUT_FILE=""
+
+usage() {
+  cat <<'EOF'
+Usage:
+  scripts/slicc-handoff [payload.json]
+  scripts/slicc-handoff --file payload.json
+  scripts/slicc-handoff --stdin
+  cat payload.json | scripts/slicc-handoff
+
+Options:
+  --file PATH      Read the handoff payload from PATH.
+  --stdin          Read the handoff payload from stdin.
+  --base-url URL   Override the SLICC relay origin. Default: $SLICC_HANDOFF_BASE_URL or https://www.sliccy.ai
+  --open           Open the returned handoff URL after creation.
+  --json           Print the full JSON response instead of only the handoff URL.
+  -h, --help       Show this help text.
+
+The payload must be a JSON object matching docs/schemas/slicc-handoff.schema.json.
+EOF
+}
+
+fail() {
+  printf '%s\n' "$1" >&2
+  exit 1
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --file)
+      [[ $# -ge 2 ]] || fail "--file requires a path."
+      [[ -z "$INPUT_FILE" && "$READ_STDIN" -eq 0 ]] || fail "Choose exactly one input source."
+      INPUT_FILE="$2"
+      shift 2
+      ;;
+    --stdin)
+      [[ -z "$INPUT_FILE" && "$READ_STDIN" -eq 0 ]] || fail "Choose exactly one input source."
+      READ_STDIN=1
+      shift
+      ;;
+    --base-url)
+      [[ $# -ge 2 ]] || fail "--base-url requires a value."
+      BASE_URL="$2"
+      shift 2
+      ;;
+    --open)
+      OPEN_AFTER=1
+      shift
+      ;;
+    --json)
+      PRINT_JSON=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      fail "Unknown option: $1"
+      ;;
+    *)
+      [[ -z "$INPUT_FILE" && "$READ_STDIN" -eq 0 ]] || fail "Choose exactly one input source."
+      INPUT_FILE="$1"
+      shift
+      ;;
+  esac
+done
+
+payload_file="$(mktemp "${TMPDIR:-/tmp}/slicc-handoff-payload.XXXXXX.json")"
+response_file="$(mktemp "${TMPDIR:-/tmp}/slicc-handoff-response.XXXXXX.json")"
+cleanup() {
+  rm -f "$payload_file" "$response_file"
+}
+trap cleanup EXIT
+
+if [[ "$READ_STDIN" -eq 1 ]]; then
+  cat > "$payload_file"
+elif [[ -n "$INPUT_FILE" ]]; then
+  cp "$INPUT_FILE" "$payload_file"
+elif [[ ! -t 0 ]]; then
+  cat > "$payload_file"
+else
+  usage >&2
+  exit 1
+fi
+
+[[ -s "$payload_file" ]] || fail "Handoff payload is empty."
+
+node -e "
+const fs = require('fs');
+const path = process.argv[1];
+const body = JSON.parse(fs.readFileSync(path, 'utf8'));
+if (!body || typeof body !== 'object' || Array.isArray(body)) {
+  throw new Error('Handoff payload must be a JSON object.');
+}
+if (typeof body.instruction !== 'string' || body.instruction.trim().length === 0) {
+  throw new Error('Handoff payload must include a non-empty instruction.');
+}
+" "$payload_file" >/dev/null
+
+curl -fsS \
+  -X POST \
+  -H 'content-type: application/json' \
+  --data-binary "@$payload_file" \
+  "${BASE_URL%/}/handoffs" \
+  > "$response_file"
+
+handoff_url="$(
+  node -e "
+const fs = require('fs');
+const path = process.argv[1];
+const response = JSON.parse(fs.readFileSync(path, 'utf8'));
+if (!response || typeof response.url !== 'string' || response.url.length === 0) {
+  throw new Error('Relay response did not include a handoff URL.');
+}
+process.stdout.write(response.url);
+" "$response_file"
+)"
+
+if [[ "$PRINT_JSON" -eq 1 ]]; then
+  cat "$response_file"
+else
+  printf '%s\n' "$handoff_url"
+fi
+
+if [[ "$OPEN_AFTER" -eq 1 ]]; then
+  if command -v open >/dev/null 2>&1; then
+    open "$handoff_url" >/dev/null 2>&1 || true
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$handoff_url" >/dev/null 2>&1 || true
+  else
+    printf 'No supported URL opener found. Open this URL manually: %s\n' "$handoff_url" >&2
+  fi
+fi
