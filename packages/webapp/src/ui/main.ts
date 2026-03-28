@@ -409,6 +409,9 @@ async function mainExtension(app: HTMLElement): Promise<void> {
         layout.panels.chat.addUserMessage(content);
       }
     },
+    onPendingHandoffListChange: (handoffs) => {
+      layout.panels.chat.setPendingHandoffs(handoffs);
+    },
     onReady: async () => {
       try {
         log.info('Offscreen engine ready, scoop count:', client.getScoops().length);
@@ -447,6 +450,12 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   // Wire agent handle
   const agentHandle = client.createAgentHandle();
   layout.panels.chat.setAgent(agentHandle);
+  layout.panels.chat.onAcceptHandoff = (handoffId: string) => {
+    client.acceptPendingHandoff(handoffId);
+  };
+  layout.panels.chat.onDismissHandoff = (handoffId: string) => {
+    client.dismissPendingHandoff(handoffId);
+  };
 
   // Wire panels — OffscreenClient implements the Orchestrator methods
   // that ScoopsPanel, ScoopSwitcher, and MemoryPanel need
@@ -629,6 +638,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 
   // Request state from offscreen — retries automatically until ready
   client.requestState();
+  client.requestPendingHandoffs();
 
   log.info('Extension UI connected to offscreen agent engine');
 

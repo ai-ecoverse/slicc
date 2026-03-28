@@ -20,7 +20,7 @@ export default defineConfig(({ mode }) => ({
   root: repoRoot,
   publicDir: resolve(repoRoot, 'packages/assets'),
   define: {
-    __DEV__: JSON.stringify(mode !== 'production'),
+    __DEV__: JSON.stringify(mode !== 'production' || !!process.env['SLICC_EXT_DEV']),
   },
   resolve: {
     alias: {
@@ -55,7 +55,7 @@ export default defineConfig(({ mode }) => ({
   },
   build: {
     outDir: resolve(repoRoot, 'dist/extension'),
-    emptyOutDir: true,
+    emptyOutDir: !(mode !== 'production' || !!process.env['SLICC_EXT_DEV']),
     target: 'esnext',
     rollupOptions: {
       input: {
@@ -98,13 +98,25 @@ export default defineConfig(({ mode }) => ({
         // (avoids stale storage from previous installs). Set SLICC_EXT_DEV=1 to enable.
         const manifestSrc = resolve(__dirname, 'manifest.json');
         const manifestDest = resolve(outDir, 'manifest.json');
+        const manifest = JSON.parse(readFileSync(manifestSrc, 'utf-8'));
         if (process.env['SLICC_EXT_DEV']) {
-          const manifest = JSON.parse(readFileSync(manifestSrc, 'utf-8'));
           delete manifest.key;
-          writeFileSync(manifestDest, JSON.stringify(manifest, null, 2));
-        } else {
-          copyFileSync(manifestSrc, manifestDest);
         }
+        manifest.externally_connectable = {
+          matches: [
+            'https://www.sliccy.ai/*',
+            ...(mode !== 'production' || !!process.env['SLICC_EXT_DEV']
+              ? [
+                  'http://localhost/*',
+                  'https://localhost/*',
+                  'http://127.0.0.1/*',
+                  'https://127.0.0.1/*',
+                  'https://*.workers.dev/*',
+                ]
+              : []),
+          ],
+        };
+        writeFileSync(manifestDest, JSON.stringify(manifest, null, 2));
         copyFileSync(resolve(__dirname, 'sandbox.html'), resolve(outDir, 'sandbox.html'));
         copyFileSync(
           resolve(__dirname, 'sprinkle-sandbox.html'),

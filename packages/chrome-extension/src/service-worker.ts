@@ -23,6 +23,11 @@ import type {
   TraySocketOpenedMsg,
   OAuthRequestMsg,
   OAuthResultMsg,
+  PendingHandoff,
+  GenericHandoffPayload,
+  ExternalHandoffMessage,
+  HandoffPendingListMsg,
+  HandoffInjectMsg,
 } from './messages.js';
 
 // ---------------------------------------------------------------------------
@@ -36,6 +41,17 @@ chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 // ---------------------------------------------------------------------------
 
 const OFFSCREEN_URL = 'offscreen.html';
+const ALLOWED_HANDOFF_ORIGIN = 'https://www.sliccy.ai';
+const PENDING_HANDOFFS_STORAGE_KEY = 'slicc.pendingHandoffs';
+const HANDLED_HANDOFFS_STORAGE_KEY = 'slicc.handledHandoffs';
+const MAX_HANDOFF_BYTES = 65536;
+const MAX_TITLE_LENGTH = 160;
+const MAX_URLS = 100;
+const BADGE_COLOR = '#f000a0';
+const DEV_HANDOFF_ORIGINS_ENABLED =
+  typeof __DEV__ !== 'undefined'
+    ? __DEV__
+    : Boolean((globalThis as typeof globalThis & { __DEV__?: boolean }).__DEV__);
 
 // Serialize concurrent ensureOffscreen calls to prevent race conditions
 // where multiple callers pass hasDocument() before any creates the document.
@@ -82,6 +98,192 @@ chrome.runtime.onInstalled?.addListener?.(() => {
   ensureOffscreen();
 });
 ensureOffscreen();
+void syncPendingHandoffBadge();
+
+type PendingHandoffStore = Record<string, PendingHandoff>;
+type HandledHandoffStore = Record<string, string>;
+
+async function readPendingHandoffStore(): Promise<PendingHandoffStore> {
+  const stored = await chrome.storage.local.get(PENDING_HANDOFFS_STORAGE_KEY);
+  return (stored[PENDING_HANDOFFS_STORAGE_KEY] as PendingHandoffStore | undefined) ?? {};
+}
+
+async function writePendingHandoffStore(store: PendingHandoffStore): Promise<void> {
+  await chrome.storage.local.set({ [PENDING_HANDOFFS_STORAGE_KEY]: store });
+}
+
+async function readHandledHandoffStore(): Promise<HandledHandoffStore> {
+  const stored = await chrome.storage.local.get(HANDLED_HANDOFFS_STORAGE_KEY);
+  return (stored[HANDLED_HANDOFFS_STORAGE_KEY] as HandledHandoffStore | undefined) ?? {};
+}
+
+async function writeHandledHandoffStore(store: HandledHandoffStore): Promise<void> {
+  await chrome.storage.local.set({ [HANDLED_HANDOFFS_STORAGE_KEY]: store });
+}
+
+async function listPendingHandoffs(): Promise<PendingHandoff[]> {
+  const store = await readPendingHandoffStore();
+  return Object.values(store).sort((left, right) =>
+    left.receivedAt.localeCompare(right.receivedAt)
+  );
+}
+
+async function syncPendingHandoffBadge(): Promise<void> {
+  const handoffs = await listPendingHandoffs();
+  await chrome.action.setBadgeBackgroundColor({ color: BADGE_COLOR });
+  await chrome.action.setBadgeText({
+    text: handoffs.length === 0 ? '' : handoffs.length > 99 ? '99+' : String(handoffs.length),
+  });
+}
+
+async function broadcastPendingHandoffList(): Promise<void> {
+  const handoffs = await listPendingHandoffs();
+  await chrome.action.setBadgeBackgroundColor({ color: BADGE_COLOR });
+  await chrome.action.setBadgeText({
+    text: handoffs.length === 0 ? '' : handoffs.length > 99 ? '99+' : String(handoffs.length),
+  });
+  await sendServiceWorkerMessage({
+    type: 'handoff-pending-list',
+    handoffs,
+  } satisfies HandoffPendingListMsg).catch(() => {
+    // No panel open — badge/storage still reflect the correct state.
+  });
+}
+
+function isExternalHandoffMessage(message: unknown): message is ExternalHandoffMessage {
+  if (typeof message !== 'object' || message === null) return false;
+  const candidate = message as Partial<ExternalHandoffMessage>;
+  return candidate.type === 'handoff_message.v1';
+}
+
+function validateExternalSender(sender: ChromeMessageSender): string | null {
+  const origin = getSenderOrigin(sender);
+  if (!origin) {
+    return 'External handoff sender is missing a URL.';
+  }
+  return isAllowedHandoffOrigin(origin)
+    ? null
+    : `External handoffs are only allowed from ${describeAllowedOrigins()}.`;
+}
+
+function getSenderOrigin(sender: ChromeMessageSender): string | null {
+  if (sender.origin) return sender.origin;
+  if (!sender.url) return null;
+  try {
+    return new URL(sender.url).origin;
+  } catch {
+    return null;
+  }
+}
+
+function isAllowedHandoffOrigin(origin: string): boolean {
+  if (origin === ALLOWED_HANDOFF_ORIGIN) return true;
+  if (!DEV_HANDOFF_ORIGINS_ENABLED) return false;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return false;
+  }
+
+  if (
+    ['localhost', '127.0.0.1'].includes(parsed.hostname) &&
+    ['http:', 'https:'].includes(parsed.protocol)
+  ) {
+    return true;
+  }
+
+  return parsed.protocol === 'https:' && parsed.hostname.endsWith('.workers.dev');
+}
+
+function describeAllowedOrigins(): string {
+  if (!DEV_HANDOFF_ORIGINS_ENABLED) return ALLOWED_HANDOFF_ORIGIN;
+  return `${ALLOWED_HANDOFF_ORIGIN}, localhost/127.0.0.1 over http(s), and https://*.workers.dev`;
+}
+
+function validateExternalHandoff(message: ExternalHandoffMessage): string | null {
+  if (!/^[a-f0-9]{32}$/i.test(message.handoffId)) {
+    return 'handoffId must be a 32-character hexadecimal string.';
+  }
+
+  if (!isPlainObject(message.payload)) {
+    return 'payload must be an object.';
+  }
+
+  const allowedKeys = new Set([
+    'title',
+    'instruction',
+    'urls',
+    'context',
+    'acceptanceCriteria',
+    'notes',
+    'openUrlsFirst',
+  ]);
+  for (const key of Object.keys(message.payload)) {
+    if (!allowedKeys.has(key)) {
+      return `Unsupported handoff field: ${key}.`;
+    }
+  }
+
+  const normalized = normalizeHandoffPayload(message.payload);
+  if (!normalized) {
+    return 'payload shape is invalid.';
+  }
+
+  const size = new TextEncoder().encode(JSON.stringify(normalized)).byteLength;
+  if (size > MAX_HANDOFF_BYTES) {
+    return `payload exceeds ${MAX_HANDOFF_BYTES} bytes.`;
+  }
+
+  return null;
+}
+
+function normalizeHandoffPayload(payload: GenericHandoffPayload): GenericHandoffPayload | null {
+  if (payload.title !== undefined) {
+    if (typeof payload.title !== 'string' || payload.title.trim().length === 0) return null;
+    if (payload.title.length > MAX_TITLE_LENGTH) return null;
+  }
+  if (typeof payload.instruction !== 'string' || payload.instruction.trim().length === 0) {
+    return null;
+  }
+  if (payload.urls !== undefined) {
+    if (!Array.isArray(payload.urls) || payload.urls.length > MAX_URLS) return null;
+    for (const url of payload.urls) {
+      if (typeof url !== 'string' || url.trim().length === 0) return null;
+      try {
+        const parsed = new URL(url);
+        if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+      } catch {
+        return null;
+      }
+    }
+  }
+  if (payload.context !== undefined && typeof payload.context !== 'string') return null;
+  if (payload.notes !== undefined && typeof payload.notes !== 'string') return null;
+  if (payload.acceptanceCriteria !== undefined) {
+    if (!Array.isArray(payload.acceptanceCriteria)) return null;
+    for (const item of payload.acceptanceCriteria) {
+      if (typeof item !== 'string' || item.trim().length === 0) return null;
+    }
+  }
+  if (payload.openUrlsFirst !== undefined && typeof payload.openUrlsFirst !== 'boolean')
+    return null;
+
+  return {
+    title: payload.title?.trim(),
+    instruction: payload.instruction.trim(),
+    urls: payload.urls?.map((url) => url.trim()),
+    context: payload.context,
+    acceptanceCriteria: payload.acceptanceCriteria?.map((item) => item.trim()),
+    notes: payload.notes,
+    openUrlsFirst: payload.openUrlsFirst,
+  };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 // ---------------------------------------------------------------------------
 // Tab grouping — inline copy for service worker (SW can't import shared chunks)
@@ -143,6 +345,25 @@ chrome.runtime.onMessage.addListener(
 
     if (msg.source === 'panel') {
       const panelPayload = msg.payload;
+
+      if (panelPayload.type === 'handoff-list-request') {
+        void broadcastPendingHandoffList();
+        return false;
+      }
+
+      if (panelPayload.type === 'handoff-dismiss') {
+        void dismissPendingHandoff(panelPayload.handoffId).catch((err) => {
+          console.error('[slicc-sw] Failed to dismiss handoff:', err);
+        });
+        return false;
+      }
+
+      if (panelPayload.type === 'handoff-accept') {
+        void acceptPendingHandoff(panelPayload.handoffId).catch((err) => {
+          console.error('[slicc-sw] Failed to accept handoff:', err);
+        });
+        return false;
+      }
 
       // Handle OAuth requests — service worker has chrome.identity access
       if (panelPayload.type === 'oauth-request') {
@@ -231,6 +452,29 @@ chrome.runtime.onMessage.addListener(
   }
 );
 
+chrome.runtime.onMessageExternal.addListener(
+  (message: unknown, sender: ChromeMessageSender, sendResponse: (response?: unknown) => void) => {
+    if (!isExternalHandoffMessage(message)) {
+      sendResponse({
+        status: 'rejected',
+        error: 'Unsupported external message.',
+      });
+      return false;
+    }
+
+    void queueExternalHandoff(message, sender)
+      .then((response) => sendResponse(response))
+      .catch((error) => {
+        sendResponse({
+          status: 'rejected',
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+
+    return true;
+  }
+);
+
 function isExtMsg(msg: unknown): boolean {
   return typeof msg === 'object' && msg !== null && 'source' in msg && 'payload' in msg;
 }
@@ -312,6 +556,96 @@ async function sendServiceWorkerMessage(payload: ExtensionMessage['payload']): P
     source: 'service-worker' as const,
     payload,
   });
+}
+
+async function queueExternalHandoff(
+  message: ExternalHandoffMessage,
+  sender: ChromeMessageSender
+): Promise<{ status: 'queued' | 'duplicate' }> {
+  const senderError = validateExternalSender(sender);
+  if (senderError) {
+    throw new Error(senderError);
+  }
+
+  const validationError = validateExternalHandoff(message);
+  if (validationError) {
+    throw new Error(validationError);
+  }
+
+  const payload = normalizeHandoffPayload(message.payload);
+  if (!payload) {
+    throw new Error('payload shape is invalid.');
+  }
+
+  const [pending, handled] = await Promise.all([
+    readPendingHandoffStore(),
+    readHandledHandoffStore(),
+  ]);
+
+  if (pending[message.handoffId] || handled[message.handoffId]) {
+    await broadcastPendingHandoffList();
+    return { status: 'duplicate' };
+  }
+
+  pending[message.handoffId] = {
+    handoffId: message.handoffId,
+    receivedAt: new Date().toISOString(),
+    sourceUrl: sender.url,
+    payload,
+  };
+
+  await writePendingHandoffStore(pending);
+  await broadcastPendingHandoffList();
+  return { status: 'queued' };
+}
+
+async function dismissPendingHandoff(handoffId: string): Promise<void> {
+  const [pending, handled] = await Promise.all([
+    readPendingHandoffStore(),
+    readHandledHandoffStore(),
+  ]);
+
+  if (pending[handoffId]) {
+    delete pending[handoffId];
+    handled[handoffId] = new Date().toISOString();
+    await Promise.all([writePendingHandoffStore(pending), writeHandledHandoffStore(handled)]);
+  }
+
+  await broadcastPendingHandoffList();
+}
+
+async function acceptPendingHandoff(handoffId: string): Promise<void> {
+  const [pending, handled] = await Promise.all([
+    readPendingHandoffStore(),
+    readHandledHandoffStore(),
+  ]);
+
+  const handoff = pending[handoffId];
+  if (!handoff) {
+    await broadcastPendingHandoffList();
+    return;
+  }
+
+  if (handoff.payload.openUrlsFirst) {
+    for (const url of handoff.payload.urls ?? []) {
+      const tab = await chrome.tabs.create({ url, active: false });
+      await addToSliccGroup(tab.id);
+    }
+  }
+
+  await ensureOffscreen();
+  await chrome.runtime.sendMessage({
+    source: 'panel' as const,
+    payload: {
+      type: 'handoff-inject',
+      handoff,
+    } satisfies HandoffInjectMsg,
+  });
+
+  delete pending[handoffId];
+  handled[handoffId] = new Date().toISOString();
+  await Promise.all([writePendingHandoffStore(pending), writeHandledHandoffStore(handled)]);
+  await broadcastPendingHandoffList();
 }
 
 // ---------------------------------------------------------------------------

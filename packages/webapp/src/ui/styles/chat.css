@@ -26,6 +26,77 @@
   flex-direction: column;
   gap: 16px;
 }
+.chat__handoffs {
+  width: 100%;
+  max-width: var(--uxc-content-max-width);
+  margin: 0 auto;
+}
+.chat__handoffs-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.chat__handoffs-header {
+  color: var(--s2-content-tertiary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.chat__handoff-card {
+  border: 1px solid var(--s2-border-subtle);
+  border-radius: 16px;
+  background: var(--s2-bg-layer-1);
+  padding: 16px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+.chat__handoff-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--s2-content-default);
+}
+.chat__handoff-text {
+  margin: 8px 0 0;
+  color: var(--s2-content-secondary);
+  white-space: pre-wrap;
+}
+.chat__handoff-list {
+  margin-top: 10px;
+  color: var(--s2-content-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chat__handoff-criteria {
+  margin: 10px 0 0 18px;
+  padding: 0;
+  color: var(--s2-content-secondary);
+}
+.chat__handoff-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+.chat__handoff-btn {
+  appearance: none;
+  border: 1px solid var(--s2-border-subtle);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--s2-content-default);
+  padding: 8px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+.chat__handoff-btn--primary {
+  background: var(--s2-accent);
+  border-color: var(--s2-accent);
+  color: #fff;
+}
+.chat__handoff-btn:hover {
+  background: var(--s2-bg-layer-2);
+}
+.chat__handoff-btn--primary:hover {
+  background: color-mix(in srgb, var(--s2-accent) 88%, black);
+}
 
 /* Jump pill — shown when auto-scroll is detached */
 .chat__jump-pill {

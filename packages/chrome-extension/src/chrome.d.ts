@@ -48,6 +48,8 @@ interface ChromeTab {
 interface ChromeMessageSender {
   id?: string;
   tab?: ChromeTab;
+  url?: string;
+  origin?: string;
 }
 
 interface ChromeOffscreenAPI {
@@ -63,6 +65,11 @@ interface ChromeAPI {
     getURL(path: string): string;
     lastError: { message?: string } | undefined;
     sendMessage(message: unknown, callback?: (response: unknown) => void): Promise<void>;
+    sendMessage(
+      extensionId: string,
+      message: unknown,
+      callback?: (response: unknown) => void
+    ): void;
     onInstalled?: {
       addListener?(callback: () => void): void;
     };
@@ -82,6 +89,26 @@ interface ChromeAPI {
         ) => void | boolean
       ): void;
     };
+    onMessageExternal: {
+      addListener(
+        callback: (
+          message: unknown,
+          sender: ChromeMessageSender,
+          sendResponse: (response?: unknown) => void
+        ) => void | boolean
+      ): void;
+      removeListener(
+        callback: (
+          message: unknown,
+          sender: ChromeMessageSender,
+          sendResponse: (response?: unknown) => void
+        ) => void | boolean
+      ): void;
+    };
+  };
+  action: {
+    setBadgeText(details: { text: string }): Promise<void>;
+    setBadgeBackgroundColor(details: { color: string }): Promise<void>;
   };
   sidePanel: {
     setPanelBehavior(options: { openPanelOnActionClick: boolean }): Promise<void>;
@@ -101,6 +128,14 @@ interface ChromeAPI {
     getRedirectURL(path?: string): string;
   };
   offscreen: ChromeOffscreenAPI;
+  storage: {
+    local: {
+      get(
+        keys?: string | string[] | Record<string, unknown> | null
+      ): Promise<Record<string, unknown>>;
+      set(items: Record<string, unknown>): Promise<void>;
+    };
+  };
   debugger: ChromeDebuggerAPI;
   tabs: {
     query(queryInfo: Record<string, unknown>): Promise<ChromeTab[]>;

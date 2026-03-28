@@ -6,6 +6,7 @@
  */
 
 import type { AgentHandle, AgentEvent, ChatMessage, ToolCall } from './types.js';
+import type { PendingHandoff } from '../../../chrome-extension/src/messages.js';
 import {
   renderAssistantMessageContent,
   renderMessageContent,
@@ -66,6 +67,7 @@ function renderChatMessageContent(msg: ChatMessage): string {
 
 export class ChatPanel {
   private container: HTMLElement;
+  private handoffsEl!: HTMLElement;
   private messagesEl!: HTMLElement;
   private messagesInner!: HTMLElement;
   private inputArea!: HTMLElement;
@@ -90,10 +92,13 @@ export class ChatPanel {
   private lastScrollTop = 0;
   private jumpPill!: HTMLElement;
   private onDeleteQueuedMessage: ((messageId: string) => void) | null = null;
+  private pendingHandoffs: PendingHandoff[] = [];
   private pendingDeltaText = '';
   private streamingRafId: number | null = null;
   private inlineSprinkles = new Map<string, InlineSprinkleInstance[]>();
   public onInlineSprinkleLick?: (action: string, data: unknown) => void;
+  public onAcceptHandoff?: (handoffId: string) => void;
+  public onDismissHandoff?: (handoffId: string) => void;
   private modelSelectorEl!: HTMLElement;
   public onModelChange?: (modelId: string) => void;
 
@@ -120,6 +125,11 @@ export class ChatPanel {
   /** Set a callback for deleting queued messages (removes from orchestrator DB + queue). */
   setDeleteQueuedMessageCallback(cb: (messageId: string) => void): void {
     this.onDeleteQueuedMessage = cb;
+  }
+
+  setPendingHandoffs(handoffs: PendingHandoff[]): void {
+    this.pendingHandoffs = [...handoffs];
+    this.renderPendingHandoffs();
   }
 
   /** Initialize session persistence and restore messages. */
@@ -283,11 +293,15 @@ export class ChatPanel {
     // Messages area
     this.messagesEl = document.createElement('div');
     this.messagesEl.className = 'chat__messages';
+    this.handoffsEl = document.createElement('div');
+    this.handoffsEl.className = 'chat__handoffs';
+    this.messagesEl.appendChild(this.handoffsEl);
     // UXC: centered 800px content wrapper
     this.messagesInner = document.createElement('div');
     this.messagesInner.className = 'chat__messages-inner';
     this.messagesEl.appendChild(this.messagesInner);
     this.container.appendChild(this.messagesEl);
+    this.renderPendingHandoffs();
 
     this.messagesEl.addEventListener(
       'scroll',
@@ -989,6 +1003,98 @@ export class ChatPanel {
     this.autoScrollAttached = true;
     this.hideJumpPill();
     this.scrollToBottom(true);
+  }
+
+  private renderPendingHandoffs(): void {
+    if (!this.handoffsEl) return;
+
+    this.handoffsEl.innerHTML = '';
+    if (this.pendingHandoffs.length === 0) {
+      this.handoffsEl.style.display = 'none';
+      return;
+    }
+
+    this.handoffsEl.style.display = '';
+
+    const inner = document.createElement('div');
+    inner.className = 'chat__handoffs-inner';
+
+    const header = document.createElement('div');
+    header.className = 'chat__handoffs-header';
+    header.textContent =
+      this.pendingHandoffs.length === 1
+        ? '1 pending handoff'
+        : `${this.pendingHandoffs.length} pending handoffs`;
+    inner.appendChild(header);
+
+    for (const handoff of this.pendingHandoffs) {
+      const card = document.createElement('section');
+      card.className = 'chat__handoff-card';
+
+      const title = document.createElement('div');
+      title.className = 'chat__handoff-title';
+      title.textContent = handoff.payload.title || 'SLICC handoff';
+      card.appendChild(title);
+
+      const instruction = document.createElement('p');
+      instruction.className = 'chat__handoff-text';
+      instruction.textContent = handoff.payload.instruction;
+      card.appendChild(instruction);
+
+      if (handoff.payload.urls && handoff.payload.urls.length > 0) {
+        const urls = document.createElement('div');
+        urls.className = 'chat__handoff-list';
+        urls.textContent = `URLs: ${handoff.payload.urls.join(', ')}`;
+        card.appendChild(urls);
+      }
+
+      if (handoff.payload.context) {
+        const context = document.createElement('div');
+        context.className = 'chat__handoff-list';
+        context.textContent = `Context: ${handoff.payload.context}`;
+        card.appendChild(context);
+      }
+
+      if (handoff.payload.acceptanceCriteria && handoff.payload.acceptanceCriteria.length > 0) {
+        const criteria = document.createElement('ul');
+        criteria.className = 'chat__handoff-criteria';
+        for (const item of handoff.payload.acceptanceCriteria) {
+          const li = document.createElement('li');
+          li.textContent = item;
+          criteria.appendChild(li);
+        }
+        card.appendChild(criteria);
+      }
+
+      if (handoff.payload.notes) {
+        const notes = document.createElement('div');
+        notes.className = 'chat__handoff-list';
+        notes.textContent = `Notes: ${handoff.payload.notes}`;
+        card.appendChild(notes);
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'chat__handoff-actions';
+
+      const accept = document.createElement('button');
+      accept.className = 'chat__handoff-btn chat__handoff-btn--primary';
+      accept.type = 'button';
+      accept.textContent = 'Accept';
+      accept.addEventListener('click', () => this.onAcceptHandoff?.(handoff.handoffId));
+      actions.appendChild(accept);
+
+      const dismiss = document.createElement('button');
+      dismiss.className = 'chat__handoff-btn';
+      dismiss.type = 'button';
+      dismiss.textContent = 'Dismiss';
+      dismiss.addEventListener('click', () => this.onDismissHandoff?.(handoff.handoffId));
+      actions.appendChild(dismiss);
+
+      card.appendChild(actions);
+      inner.appendChild(card);
+    }
+
+    this.handoffsEl.appendChild(inner);
   }
 
   private appendMessageEl(msg: ChatMessage): void {

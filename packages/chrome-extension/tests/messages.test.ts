@@ -46,6 +46,14 @@ describe('isExtensionMessage', () => {
     expect(isExtensionMessage(msg)).toBe(true);
   });
 
+  it('returns true for handoff list envelopes', () => {
+    const msg: ExtensionMessage = {
+      source: 'service-worker',
+      payload: { type: 'handoff-pending-list', handoffs: [] },
+    };
+    expect(isExtensionMessage(msg)).toBe(true);
+  });
+
   it('returns false for null', () => {
     expect(isExtensionMessage(null)).toBe(false);
   });

@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build --config vite.config.ts",
+    "build:dev": "SLICC_EXT_DEV=1 vite build --config vite.config.ts --mode development",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p ../../tsconfig.json"
   },

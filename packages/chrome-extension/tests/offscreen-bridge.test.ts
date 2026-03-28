@@ -416,6 +416,76 @@ describe('OffscreenBridge buildStateSnapshot', () => {
   });
 });
 
+describe('OffscreenBridge handoff injection', () => {
+  let bridge: InstanceType<typeof OffscreenBridge>;
+  let mockOrchestrator: any;
+
+  beforeEach(async () => {
+    sentMessages.length = 0;
+    messageListeners.length = 0;
+    vi.clearAllMocks();
+
+    bridge = new OffscreenBridge();
+    mockOrchestrator = {
+      getScoops: vi.fn(() => [
+        { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+      ]),
+      handleMessage: vi.fn().mockResolvedValue(undefined),
+      createScoopTab: vi.fn(),
+      registerScoop: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await bridge.bind(mockOrchestrator);
+  });
+
+  it('formats an accepted handoff as a cone user message', async () => {
+    const listener = messageListeners[0];
+    listener(
+      {
+        source: 'panel',
+        payload: {
+          type: 'handoff-inject',
+          handoff: {
+            handoffId: 'handoff-1',
+            receivedAt: new Date().toISOString(),
+            payload: {
+              title: 'Verify the dashboard',
+              instruction: 'Continue this task in SLICC.',
+              urls: ['https://example.com/dashboard'],
+              context: 'Use the signed-in session that is already open.',
+              acceptanceCriteria: ['Dashboard loads', 'No console errors'],
+              notes: 'Focus on the empty state.',
+              openUrlsFirst: true,
+            },
+          },
+        },
+      },
+      {},
+      () => {}
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatJid: 'cone_1',
+        senderId: 'handoff',
+        content: expect.stringContaining('## Instruction'),
+      })
+    );
+    expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('## URLs'),
+      })
+    );
+    expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: expect.stringContaining('Handoff ID: handoff-1'),
+      })
+    );
+    expect(mockOrchestrator.createScoopTab).toHaveBeenCalledWith('cone_1');
+  });
+});
+
 describe('OffscreenBridge getBuffer/getOrCreateAssistantMsg', () => {
   let bridge: InstanceType<typeof OffscreenBridge>;
   let mockOrchestrator: any;

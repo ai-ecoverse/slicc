@@ -27,6 +27,7 @@ import type {
   ErrorMsg,
   ScoopCreatedMsg,
   IncomingMessageMsg,
+  PendingHandoff,
 } from './messages.js';
 import { SessionStore } from '../../../packages/webapp/src/ui/session-store.js';
 import type { ChatMessage } from '../../../packages/webapp/src/ui/types.js';
@@ -390,6 +391,32 @@ export class OffscreenBridge {
         break;
       }
 
+      case 'handoff-inject': {
+        const cone = await this.getOrCreateCone();
+        const messageId = `handoff-${msg.handoff.handoffId}-${Date.now()}`;
+        const content = formatHandoffMessage(msg.handoff);
+        const channelMsg: ChannelMessage = {
+          id: messageId,
+          chatJid: cone.jid,
+          senderId: 'handoff',
+          senderName: 'handoff',
+          content,
+          timestamp: new Date().toISOString(),
+          fromAssistant: false,
+          channel: 'web',
+        };
+        this.getBuffer(cone.jid).push({
+          id: messageId,
+          role: 'user',
+          content,
+          timestamp: Date.now(),
+        });
+        this.persistScoop(cone.jid);
+        await this.orchestrator.handleMessage(channelMsg);
+        this.orchestrator.createScoopTab(cone.jid);
+        break;
+      }
+
       case 'scoop-create': {
         const folder =
           msg.name
@@ -579,6 +606,42 @@ export class OffscreenBridge {
     this.emit({ type: 'scoop-list', scoops } satisfies ScoopListMsg);
   }
 
+  private async getOrCreateCone(): Promise<RegisteredScoop> {
+    if (!this.orchestrator) {
+      throw new Error('Orchestrator is not available');
+    }
+
+    const existingCone = this.orchestrator.getScoops().find((s) => s.isCone);
+    if (existingCone) {
+      return existingCone;
+    }
+
+    const cone: RegisteredScoop = {
+      jid: `cone_${Date.now()}`,
+      name: 'Cone',
+      folder: 'cone',
+      isCone: true,
+      type: 'cone',
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
+      addedAt: new Date().toISOString(),
+    };
+
+    await this.orchestrator.registerScoop(cone);
+    this.emit({
+      type: 'scoop-created',
+      scoop: {
+        jid: cone.jid,
+        name: cone.name,
+        folder: cone.folder,
+        isCone: cone.isCone,
+        assistantLabel: cone.assistantLabel,
+        status: 'ready',
+      },
+    } satisfies ScoopCreatedMsg);
+    return cone;
+  }
+
   /** Send a message to all panels via the service worker relay. */
   private emit(payload: import('./messages.js').OffscreenToPanelMessage | StateSnapshotMsg): void {
     chrome.runtime
@@ -590,6 +653,54 @@ export class OffscreenBridge {
         // No panel open — that's expected
       });
   }
+}
+
+function formatHandoffMessage(handoff: PendingHandoff): string {
+  const sections: string[] = [];
+  if (handoff.payload.title) {
+    sections.push(`# ${handoff.payload.title}`);
+  }
+  sections.push('A new handoff was accepted from the SLICC relay. Continue this task here.');
+  sections.push('');
+  sections.push('## Instruction');
+  sections.push(handoff.payload.instruction);
+
+  if (handoff.payload.urls && handoff.payload.urls.length > 0) {
+    sections.push('');
+    sections.push('## URLs');
+    for (const url of handoff.payload.urls) {
+      sections.push(`- ${url}`);
+    }
+  }
+
+  if (handoff.payload.context) {
+    sections.push('');
+    sections.push('## Context');
+    sections.push(handoff.payload.context);
+  }
+
+  if (handoff.payload.acceptanceCriteria && handoff.payload.acceptanceCriteria.length > 0) {
+    sections.push('');
+    sections.push('## Acceptance Criteria');
+    for (const item of handoff.payload.acceptanceCriteria) {
+      sections.push(`- ${item}`);
+    }
+  }
+
+  if (handoff.payload.notes) {
+    sections.push('');
+    sections.push('## Notes');
+    sections.push(handoff.payload.notes);
+  }
+
+  if (handoff.payload.openUrlsFirst) {
+    sections.push('');
+    sections.push('The requested URLs were opened before this handoff was delivered.');
+  }
+
+  sections.push('');
+  sections.push(`Handoff ID: ${handoff.handoffId}`);
+  return sections.join('\n');
 }
 
 function uid(): string {
