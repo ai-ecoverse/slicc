@@ -5,9 +5,15 @@ import {
   type CreateTrayRequest,
   type DurableObjectNamespaceLike,
 } from './shared.js';
+import {
+  handleCreateHandoff,
+  handleGetHandoffJson,
+  handleGetHandoffPage,
+  type HandoffEnv,
+} from './handoff.js';
 import { SessionTrayDurableObject } from './session-tray.js';
 
-export interface WorkerEnv {
+export interface WorkerEnv extends HandoffEnv {
   TRAY_HUB: DurableObjectNamespaceLike;
   CLOUDFLARE_TURN_KEY_ID?: string;
   CLOUDFLARE_TURN_API_TOKEN?: string;
@@ -50,6 +56,10 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
     return createTray(request, env);
   }
 
+  if (url.pathname === '/handoffs' && request.method === 'POST') {
+    return handleCreateHandoff(request, env);
+  }
+
   if ((url.pathname === '/session' || url.pathname === '/trays') && request.method === 'POST') {
     return jsonResponse(
       {
@@ -68,6 +78,16 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
       status: 200,
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
     });
+  }
+
+  const handoffMatch = url.pathname.match(/^\/handoffs\/([^/]+?)(\.json)?$/);
+  if (handoffMatch && request.method === 'GET') {
+    const handoffId = handoffMatch[1];
+    const wantsJson = handoffMatch[2] === '.json';
+    if (wantsJson) {
+      return handleGetHandoffJson(handoffId, env);
+    }
+    return handleGetHandoffPage(request, handoffId);
   }
 
   const tokenMatch = url.pathname.match(/^\/(join|controller|webhook)\/([^/]+?)(?:\/([^/]+))?$/);
@@ -96,6 +116,9 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
       phase: 1,
       routes: [
         'POST /tray',
+        'POST /handoffs',
+        'GET /handoffs/:id',
+        'GET /handoffs/:id.json',
         'GET|POST /join/:token',
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',

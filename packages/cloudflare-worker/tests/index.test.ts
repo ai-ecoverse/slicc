@@ -27,6 +27,47 @@ class FakeDurableObjectState implements DurableObjectStateLike {
   readonly storage = new FakeStorage();
 }
 
+class FakeR2Object {
+  constructor(private readonly body: string) {}
+
+  async text(): Promise<string> {
+    return this.body;
+  }
+}
+
+class FakeR2Bucket {
+  private readonly objects = new Map<string, string>();
+
+  async put(
+    key: string,
+    value: string | ArrayBuffer | ArrayBufferView,
+    _options?: {
+      httpMetadata?: { contentType?: string };
+      customMetadata?: Record<string, string>;
+    }
+  ): Promise<void> {
+    if (typeof value === 'string') {
+      this.objects.set(key, value);
+      return;
+    }
+
+    if (value instanceof ArrayBuffer) {
+      this.objects.set(key, new TextDecoder().decode(value));
+      return;
+    }
+
+    const view = ArrayBuffer.isView(value)
+      ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+      : new Uint8Array();
+    this.objects.set(key, new TextDecoder().decode(view));
+  }
+
+  async get(key: string): Promise<FakeR2Object | null> {
+    const body = this.objects.get(key);
+    return body === undefined ? null : new FakeR2Object(body);
+  }
+}
+
 class FakeWebSocket {
   readonly sent: string[] = [];
   readonly received: string[] = [];
@@ -123,14 +164,15 @@ class FakeNamespace {
 }
 
 function createTestHarness(start = Date.parse('2026-03-11T00:00:00.000Z')): {
-  env: { TRAY_HUB: FakeNamespace };
+  env: { TRAY_HUB: FakeNamespace; HANDOFFS: FakeR2Bucket; HANDOFFS_NOW: () => number };
   advance: (ms: number) => void;
   readTray: (trayId: string) => Promise<TrayRecord | undefined>;
 } {
   let now = start;
   const namespace = new FakeNamespace(() => now);
+  const handoffs = new FakeR2Bucket();
   return {
-    env: { TRAY_HUB: namespace },
+    env: { TRAY_HUB: namespace, HANDOFFS: handoffs, HANDOFFS_NOW: () => now },
     advance: (ms: number) => {
       now += ms;
     },
@@ -171,6 +213,79 @@ describe('tray worker skeleton', () => {
         canonical: 'POST /tray',
       });
     }
+  });
+
+  it('creates handoffs, serves relay HTML, and returns raw handoff JSON', async () => {
+    const { env } = createTestHarness();
+
+    const created = await handleWorkerRequest(
+      new Request('https://tray.test/handoffs', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          title: 'Finish the QA pass',
+          instruction: 'Continue this task inside SLICC and report back.',
+          urls: ['http://localhost:5710/dashboard'],
+          acceptanceCriteria: ['Load the dashboard', 'Confirm the empty state copy'],
+          openUrlsFirst: true,
+        }),
+      }),
+      env
+    );
+
+    expect(created.status).toBe(201);
+    const payload = (await created.json()) as {
+      handoffId: string;
+      url: string;
+      jsonUrl: string;
+      expiresAt: string;
+    };
+    expect(payload.handoffId).toMatch(/^[a-f0-9]{32}$/);
+    expect(payload.url).toBe(`https://tray.test/handoffs/${payload.handoffId}`);
+    expect(payload.jsonUrl).toBe(`https://tray.test/handoffs/${payload.handoffId}.json`);
+    expect(Date.parse(payload.expiresAt)).toBeGreaterThan(Date.parse('2026-03-11T00:00:00.000Z'));
+
+    const relayPage = await handleWorkerRequest(new Request(payload.url), env);
+    expect(relayPage.status).toBe(200);
+    expect(relayPage.headers.get('content-type')).toContain('text/html');
+    await expect(relayPage.text()).resolves.toContain('handoff_message.v1');
+
+    const recordResponse = await handleWorkerRequest(new Request(payload.jsonUrl), env);
+    expect(recordResponse.status).toBe(200);
+    await expect(recordResponse.json()).resolves.toMatchObject({
+      handoffId: payload.handoffId,
+      payload: {
+        title: 'Finish the QA pass',
+        instruction: 'Continue this task inside SLICC and report back.',
+        urls: ['http://localhost:5710/dashboard'],
+        acceptanceCriteria: ['Load the dashboard', 'Confirm the empty state copy'],
+        openUrlsFirst: true,
+      },
+    });
+  });
+
+  it('expires handoffs after 24 hours even if the object still exists', async () => {
+    const { env, advance } = createTestHarness();
+
+    const created = await handleWorkerRequest(
+      new Request('https://tray.test/handoffs', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          instruction: 'This should expire.',
+        }),
+      }),
+      env
+    );
+
+    const payload = (await created.json()) as { jsonUrl: string };
+    advance(24 * 60 * 60 * 1000 + 1);
+
+    const expired = await handleWorkerRequest(new Request(payload.jsonUrl), env);
+    expect(expired.status).toBe(410);
+    await expect(expired.json()).resolves.toMatchObject({
+      code: 'HANDOFF_EXPIRED',
+    });
   });
 
   it('returns an explicit wait instruction when a follower attaches before a live leader exists', async () => {
@@ -1132,6 +1247,9 @@ describe('tray worker skeleton', () => {
     await expect(response.json()).resolves.toMatchObject({
       routes: [
         'POST /tray',
+        'POST /handoffs',
+        'GET /handoffs/:id',
+        'GET /handoffs/:id.json',
         'GET|POST /join/:token',
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',

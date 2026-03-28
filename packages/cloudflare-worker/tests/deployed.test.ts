@@ -28,6 +28,9 @@ describeIfConfigured('deployed tray worker', () => {
     await expect(rootResponse.json()).resolves.toMatchObject({
       routes: [
         'POST /tray',
+        'POST /handoffs',
+        'GET /handoffs/:id',
+        'GET /handoffs/:id.json',
         'GET|POST /join/:token',
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',
@@ -208,6 +211,51 @@ describeIfConfigured('deployed tray worker', () => {
     await expect(webhookWithLeader.json()).resolves.toMatchObject({ code: 'WEBHOOK_ID_REQUIRED' });
 
     socket.close();
+  }, 30_000);
+
+  it('creates a handoff and exposes both relay HTML and raw JSON', async () => {
+    const baseUrl = new URL(workerBaseUrl!);
+
+    const createResponse = await fetch(new URL('/handoffs', baseUrl), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Verify the new onboarding flow',
+        instruction: 'Continue this task in SLICC and confirm whether it works.',
+        urls: ['http://localhost:5710/'],
+        acceptanceCriteria: ['Open the page', 'Summarize pass/fail'],
+      }),
+    });
+    expect(createResponse.status).toBe(201);
+
+    const created = (await createResponse.json()) as {
+      handoffId: string;
+      url: string;
+      jsonUrl: string;
+      expiresAt: string;
+    };
+    expect(created.handoffId).toMatch(/^[a-f0-9]{32}$/);
+    expect(created.url).toContain(`/handoffs/${created.handoffId}`);
+    expect(created.jsonUrl).toContain(`/handoffs/${created.handoffId}.json`);
+    expect(Date.parse(created.expiresAt)).toBeGreaterThan(Date.now());
+
+    const relayResponse = await fetch(created.url);
+    expect(relayResponse.status).toBe(200);
+    expect(relayResponse.headers.get('content-type')).toContain('text/html');
+
+    const jsonResponse = await fetch(created.jsonUrl, {
+      headers: { accept: 'application/json' },
+    });
+    expect(jsonResponse.status).toBe(200);
+    await expect(jsonResponse.json()).resolves.toMatchObject({
+      handoffId: created.handoffId,
+      payload: {
+        title: 'Verify the new onboarding flow',
+        instruction: 'Continue this task in SLICC and confirm whether it works.',
+        urls: ['http://localhost:5710/'],
+        acceptanceCriteria: ['Open the page', 'Summarize pass/fail'],
+      },
+    });
   }, 30_000);
 });
 

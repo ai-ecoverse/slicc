@@ -4,16 +4,17 @@ This file covers the tray hub worker in `packages/cloudflare-worker/`.
 
 ## Scope
 
-The worker provides tray session coordination, capability-token routing, TURN credential lookup, and leader/follower signaling for tray-connected SLICC runtimes.
+The worker provides tray session coordination, capability-token routing, TURN credential lookup, short-lived SLICC handoff relay pages, and leader/follower signaling for tray-connected runtimes.
 
 ## Main Files
 
 - `src/index.ts` — worker entry point and public HTTP routing
+- `src/handoff.ts` — generic handoff validation, R2 persistence, and relay HTML
 - `src/session-tray.ts` — `SessionTrayDurableObject` state machine
 - `src/tray-signaling.ts` — shared signaling message types
 - `src/turn-credentials.ts` — Cloudflare TURN credential fetcher
 - `src/shared.ts` — capability token and response helpers
-- `wrangler.jsonc` — Wrangler config, Durable Object binding, staging env
+- `wrangler.jsonc` — Wrangler config, Durable Object binding, R2 bucket bindings, staging env
 
 ## Tray Hub Architecture
 
@@ -25,6 +26,9 @@ The worker provides tray session coordination, capability-token routing, TURN cr
 ### Public routes
 
 - `POST /tray` — create a tray and issue join/controller/webhook capability URLs
+- `POST /handoffs` — persist a generic SLICC handoff in R2 and return relay URLs
+- `GET /handoffs/:id` — serve the relay HTML that forwards the handoff to the extension
+- `GET /handoffs/:id.json` — return the stored handoff JSON until its app-enforced expiry
 - `GET|POST /join/:token` — follower join and bootstrap polling flow
 - `GET|POST /controller/:token` — leader attach flow and leader WebSocket upgrade
 - `POST /webhook/:token/:webhookId` — forward webhook events into the live leader
@@ -42,6 +46,13 @@ The worker provides tray session coordination, capability-token routing, TURN cr
 - TURN credentials are fetched with `CLOUDFLARE_TURN_KEY_ID` and `CLOUDFLARE_TURN_API_TOKEN`.
 - `session-tray.ts` caches ICE servers and refreshes them before TTL expiry.
 - `wrangler.jsonc` defines the key ID; the API token is stored as a Wrangler secret.
+
+### Handoff storage
+
+- Generic handoffs are stored in the `HANDOFFS` R2 bucket under `handoffs/<id>.json`.
+- Each record stores `createdAt`, `expiresAt`, and the generic payload.
+- Reads must enforce the 24-hour expiry in code even if the object still exists in R2.
+- Configure a 1-day lifecycle cleanup rule on the R2 buckets outside Wrangler so old objects are eventually deleted.
 
 ## Commands
 
