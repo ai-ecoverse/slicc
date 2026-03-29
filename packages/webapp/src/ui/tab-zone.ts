@@ -252,8 +252,7 @@ export class TabZone {
       return;
     }
 
-    const badge =
-      existing instanceof HTMLSpanElement ? existing : document.createElement('span');
+    const badge = existing instanceof HTMLSpanElement ? existing : document.createElement('span');
     badge.className = `${this.classPrefix}__tab-badge`;
     badge.textContent = count > 99 ? '99+' : String(count);
     badge.setAttribute('aria-label', `${count} notifications`);
