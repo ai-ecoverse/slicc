@@ -46,6 +46,7 @@ const HANDOFFS_STORAGE_KEY = 'slicc.pendingHandoffs';
 // Serialize concurrent ensureOffscreen calls to prevent race conditions
 // where multiple callers pass hasDocument() before any creates the document.
 let offscreenLock: Promise<void> | null = null;
+let pendingHandoffMutation: Promise<unknown> = Promise.resolve();
 
 async function ensureOffscreen(): Promise<void> {
   if (offscreenLock) return offscreenLock;
@@ -87,9 +88,11 @@ async function ensureOffscreen(): Promise<void> {
 chrome.runtime.onInstalled?.addListener?.(() => {
   ensureOffscreen();
   void syncHandoffBadge();
+  void scanOpenHandoffTabs();
 });
 ensureOffscreen();
 void syncHandoffBadge();
+void scanOpenHandoffTabs();
 
 // ---------------------------------------------------------------------------
 // Tab grouping — inline copy for service worker (SW can't import shared chunks)
@@ -185,9 +188,11 @@ function normalizePendingHandoff(value: unknown): PendingHandoff | null {
   if (typeof record['handoffId'] !== 'string' || !record['handoffId']) return null;
   if (typeof record['sourceUrl'] !== 'string' || !record['sourceUrl']) return null;
   if (typeof record['receivedAt'] !== 'string' || !record['receivedAt']) return null;
+  if (record['sourceTabId'] !== undefined && typeof record['sourceTabId'] !== 'number') return null;
   return {
     handoffId: record['handoffId'],
     sourceUrl: record['sourceUrl'],
+    sourceTabId: typeof record['sourceTabId'] === 'number' ? record['sourceTabId'] : undefined,
     payload,
     receivedAt: record['receivedAt'],
   };
@@ -198,7 +203,7 @@ function isAllowedHandoffUrl(parsedUrl: URL): boolean {
   return parsedUrl.protocol === 'https:' && parsedUrl.hostname === HANDOFFS_HOST;
 }
 
-function parseHandoffFromUrl(urlString: string): PendingHandoff | null {
+function parseHandoffFromUrl(urlString: string, sourceTabId?: number): PendingHandoff | null {
   let parsedUrl: URL;
   try {
     parsedUrl = new URL(urlString);
@@ -220,6 +225,7 @@ function parseHandoffFromUrl(urlString: string): PendingHandoff | null {
     return {
       handoffId: `handoff-${hashFragment(fragment)}`,
       sourceUrl: parsedUrl.toString(),
+      sourceTabId,
       payload,
       receivedAt: new Date().toISOString(),
     };
@@ -258,33 +264,70 @@ async function storePendingHandoffs(handoffs: PendingHandoff[]): Promise<void> {
   await publishPendingHandoffs(handoffs);
 }
 
-async function queueHandoffFromUrl(urlString: string): Promise<void> {
-  const handoff = parseHandoffFromUrl(urlString);
-  if (!handoff) return;
-
-  const current = await readPendingHandoffs();
-  if (current.some((item) => item.handoffId === handoff.handoffId)) return;
-  await storePendingHandoffs([...current, handoff]);
+function runPendingHandoffMutation<T>(fn: () => Promise<T>): Promise<T> {
+  const run = pendingHandoffMutation.then(fn, fn);
+  pendingHandoffMutation = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
 }
 
-async function clearPendingHandoff(handoffId: string): Promise<void> {
-  const current = await readPendingHandoffs();
-  const next = current.filter((item) => item.handoffId !== handoffId);
-  if (next.length === current.length) {
-    await publishPendingHandoffs(current);
-    return;
+async function queueHandoffFromUrl(urlString: string, sourceTabId?: number): Promise<void> {
+  const handoff = parseHandoffFromUrl(urlString, sourceTabId);
+  if (!handoff) return;
+
+  await runPendingHandoffMutation(async () => {
+    const current = await readPendingHandoffs();
+    if (current.some((item) => item.handoffId === handoff.handoffId)) return;
+    await storePendingHandoffs([...current, handoff]);
+  });
+}
+
+async function clearPendingHandoff(handoffId: string): Promise<PendingHandoff | null> {
+  return runPendingHandoffMutation(async () => {
+    const current = await readPendingHandoffs();
+    const removed = current.find((item) => item.handoffId === handoffId) ?? null;
+    const next = current.filter((item) => item.handoffId !== handoffId);
+    if (!removed) {
+      await publishPendingHandoffs(current);
+      return null;
+    }
+    await storePendingHandoffs(next);
+    return removed;
+  });
+}
+
+async function closeHandoffTab(handoff: PendingHandoff | null): Promise<void> {
+  if (typeof handoff?.sourceTabId !== 'number') return;
+  try {
+    await chrome.tabs.remove(handoff.sourceTabId);
+  } catch (err) {
+    console.info('[slicc-sw] Failed to close handoff tab (best-effort)', {
+      handoffId: handoff.handoffId,
+      sourceTabId: handoff.sourceTabId,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
-  await storePendingHandoffs(next);
+}
+
+async function scanOpenHandoffTabs(): Promise<void> {
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    if (tab.url) {
+      await queueHandoffFromUrl(tab.url, tab.id);
+    }
+  }
 }
 
 chrome.tabs.onCreated.addListener((tab: ChromeTab) => {
-  if (tab.url) void queueHandoffFromUrl(tab.url);
+  if (tab.url) void queueHandoffFromUrl(tab.url, tab.id);
 });
 
 chrome.tabs.onUpdated.addListener(
   (_tabId: number, changeInfo: { url?: string }, tab: ChromeTab) => {
     const url = changeInfo.url ?? tab.url;
-    if (url) void queueHandoffFromUrl(url);
+    if (url) void queueHandoffFromUrl(url, tab.id);
   }
 );
 
@@ -320,9 +363,14 @@ chrome.runtime.onMessage.addListener(
       }
 
       if (panelPayload.type === 'handoff-accept' || panelPayload.type === 'handoff-dismiss') {
-        void clearPendingHandoff(panelPayload.handoffId).catch((err) => {
-          console.error('[slicc-sw] Failed to clear pending handoff:', err);
-        });
+        void (async () => {
+          try {
+            const cleared = await clearPendingHandoff(panelPayload.handoffId);
+            await closeHandoffTab(cleared);
+          } catch (err) {
+            console.error('[slicc-sw] Failed to clear pending handoff:', err);
+          }
+        })();
         return false;
       }
 
