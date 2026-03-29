@@ -3,10 +3,10 @@
 SLICC can accept a handoff from another local coding agent through a browser tab URL:
 
 ```text
-https://www.sliccy.ai/handoffs#<base64url-json>
+https://www.sliccy.ai/handoff#<base64url-json>
 ```
 
-The fragment contains a base64url-encoded UTF-8 JSON payload. The Cloudflare worker serves a lightweight preview page at `/handoffs`, and the Chrome extension watches for matching tabs. When it sees one, it queues a pending handoff and shows an approval prompt in the SLICC Chat tab.
+The fragment contains a base64url-encoded UTF-8 JSON payload. The Cloudflare worker serves a lightweight preview page at `/handoff`, and the Chrome extension watches for matching tabs. When it sees one, it queues a pending handoff and shows an approval prompt in the SLICC Chat tab.
 
 ## Payload shape
 

@@ -274,7 +274,7 @@ function registerSkillDropInstall(
 function formatAcceptedHandoffMessage(payload: GenericHandoffPayload): string {
   const sections: string[] = [];
   if (payload.title) sections.push(`# ${payload.title}`);
-  sections.push('A new handoff was accepted from https://www.sliccy.ai/handoffs.');
+  sections.push('A new handoff was accepted from https://www.sliccy.ai/handoff.');
   sections.push('## Instruction');
   sections.push(payload.instruction);
 

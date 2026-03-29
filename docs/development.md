@@ -165,7 +165,7 @@ Use these before relying on CI:
 - `npx wrangler deploy --dry-run --config packages/cloudflare-worker/wrangler.jsonc`
 - `cd packages/cloudflare-worker && WORKER_BASE_URL=<deployed-worker-url> npm test -- tests/deployed.test.ts`
 
-The worker also serves a lightweight handoff preview page at `GET /handoffs` for `https://www.sliccy.ai/handoffs#<base64url-json>`.
+The worker also serves a lightweight handoff preview page at `GET /handoff` for `https://www.sliccy.ai/handoff#<base64url-json>`.
 
 ## Extension Testing Steps
 
@@ -194,7 +194,7 @@ If you want a reusable browser profile instead of re-loading the unpacked extens
    - Interact with side panel
    - Check terminal output
    - Verify file browser works
-   - Open a `https://www.sliccy.ai/handoffs#...` URL and confirm the Chat tab shows the pending handoff approval prompt
+   - Open a `https://www.sliccy.ai/handoff#...` URL and confirm the Chat tab shows the pending handoff approval prompt
    - Take screenshots if needed
 
 5. **Iterate**

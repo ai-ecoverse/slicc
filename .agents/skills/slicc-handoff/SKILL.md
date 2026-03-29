@@ -1,6 +1,6 @@
 # slicc-handoff
 
-Use this skill when the user says things like `handoff to slicc`, `move this to slicc`, or asks you to continue the work in the SLICC browser agent.
+Use this skill when the user says things like `handoff to slicc`, `move this to slicc`, `move to the browser`, `test in the browser`, `handoff to browser` or asks you to continue the work in the SLICC browser agent.
 
 ## What to do
 
@@ -10,7 +10,7 @@ Use this skill when the user says things like `handoff to slicc`, `move this to 
 2. Generate the handoff URL with:
    - `.agents/skills/slicc-handoff/scripts/slicc-handoff payload.json`
    - or pipe JSON with `--stdin`
-3. Open the generated `https://www.sliccy.ai/handoffs#...` URL in the local browser when possible.
+3. Open the generated `https://www.sliccy.ai/handoff#...` URL in the local browser when possible.
 4. Tell the user that SLICC should show an `Accept` / `Dismiss` prompt in the Chat tab.
 
 ## Payload guidance

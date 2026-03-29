@@ -40,7 +40,7 @@ chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
 const OFFSCREEN_URL = 'offscreen.html';
 const HANDOFFS_HOST = 'www.sliccy.ai';
-const HANDOFFS_PATH = '/handoffs';
+const HANDOFFS_PATH = '/handoff';
 const HANDOFFS_STORAGE_KEY = 'slicc.pendingHandoffs';
 
 // Serialize concurrent ensureOffscreen calls to prevent race conditions
@@ -193,6 +193,11 @@ function normalizePendingHandoff(value: unknown): PendingHandoff | null {
   };
 }
 
+function isAllowedHandoffUrl(parsedUrl: URL): boolean {
+  if (parsedUrl.pathname !== HANDOFFS_PATH) return false;
+  return parsedUrl.protocol === 'https:' && parsedUrl.hostname === HANDOFFS_HOST;
+}
+
 function parseHandoffFromUrl(urlString: string): PendingHandoff | null {
   let parsedUrl: URL;
   try {
@@ -201,11 +206,7 @@ function parseHandoffFromUrl(urlString: string): PendingHandoff | null {
     return null;
   }
 
-  if (
-    parsedUrl.protocol !== 'https:' ||
-    parsedUrl.hostname !== HANDOFFS_HOST ||
-    parsedUrl.pathname !== HANDOFFS_PATH
-  ) {
+  if (!isAllowedHandoffUrl(parsedUrl)) {
     return null;
   }
 

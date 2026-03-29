@@ -11,7 +11,7 @@
 import { defineConfig } from 'vite';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
+import { copyFileSync, mkdirSync, readdirSync } from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '../..');
@@ -107,17 +107,7 @@ export default defineConfig(({ mode }) => ({
       closeBundle() {
         const outDir = resolve(repoRoot, 'dist/extension');
         mkdirSync(outDir, { recursive: true });
-        // Copy manifest — strip "key" field in dev builds so Chrome assigns a random ID
-        // (avoids stale storage from previous installs). Set SLICC_EXT_DEV=1 to enable.
-        const manifestSrc = resolve(__dirname, 'manifest.json');
-        const manifestDest = resolve(outDir, 'manifest.json');
-        if (process.env['SLICC_EXT_DEV']) {
-          const manifest = JSON.parse(readFileSync(manifestSrc, 'utf-8'));
-          delete manifest.key;
-          writeFileSync(manifestDest, JSON.stringify(manifest, null, 2));
-        } else {
-          copyFileSync(manifestSrc, manifestDest);
-        }
+        copyFileSync(resolve(__dirname, 'manifest.json'), resolve(outDir, 'manifest.json'));
         copyFileSync(resolve(__dirname, 'sandbox.html'), resolve(outDir, 'sandbox.html'));
         copyFileSync(
           resolve(__dirname, 'sprinkle-sandbox.html'),

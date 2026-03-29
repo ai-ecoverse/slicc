@@ -277,7 +277,7 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
     return jsonResponse({ error: 'Fetch proxy not available in worker mode' }, 404);
   }
 
-  if (url.pathname === '/handoffs' && request.method === 'GET') {
+  if (url.pathname === '/handoff' && request.method === 'GET') {
     return new Response(HANDOFFS_PAGE_HTML, {
       status: 200,
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
@@ -329,7 +329,7 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
       phase: 1,
       routes: [
         'POST /tray',
-        'GET /handoffs',
+        'GET /handoff',
         'GET|POST /join/:token',
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',

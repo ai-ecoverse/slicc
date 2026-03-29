@@ -55,7 +55,7 @@ For runtime-specific commands, use the nearest guide:
 In this repo, phrases like `handoff to slicc` or `move this to slicc` mean:
 
 - build a structured JSON payload with `instruction` plus optional `title`, `urls`, `context`, `acceptanceCriteria`, and `notes`
-- base64url-encode that JSON into the fragment of `https://www.sliccy.ai/handoffs#...`
+- base64url-encode that JSON into the fragment of `https://www.sliccy.ai/handoff#...`
 - open that URL in the local browser so the SLICC extension can detect it and show an approval prompt
 
 Prefer the helper in `.agents/skills/slicc-handoff/scripts/slicc-handoff` when it exists.

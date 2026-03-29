@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE_URL="https://www.sliccy.ai/handoffs"
+BASE_URL="https://www.sliccy.ai/handoff"
 USE_STDIN=0
 OPEN_URL=0
 PAYLOAD_PATH=""
@@ -107,7 +107,7 @@ HANDOFF_URL="$(
       };
 
       process.stdout.write(
-        "https://www.sliccy.ai/handoffs#" +
+        "https://www.sliccy.ai/handoff#" +
           Buffer.from(JSON.stringify(normalized), "utf8").toString("base64url")
       );
     });
