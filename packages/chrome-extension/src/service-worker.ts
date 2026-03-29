@@ -24,6 +24,13 @@ import type {
   OAuthRequestMsg,
   OAuthResultMsg,
 } from './messages.js';
+import {
+  handleCreatedTabHandoff,
+  handlePanelHandoffMessage,
+  handleUpdatedTabHandoff,
+  initializeHandoffs,
+  isHandoffPanelMessage,
+} from './handoffs.js';
 
 // ---------------------------------------------------------------------------
 // Side panel behavior
@@ -80,8 +87,10 @@ async function ensureOffscreen(): Promise<void> {
 // Create offscreen doc on install/startup
 chrome.runtime.onInstalled?.addListener?.(() => {
   ensureOffscreen();
+  initializeHandoffs();
 });
 ensureOffscreen();
+initializeHandoffs();
 
 // ---------------------------------------------------------------------------
 // Tab grouping — inline copy for service worker (SW can't import shared chunks)
@@ -120,6 +129,14 @@ async function addToSliccGroup(tabId: number): Promise<void> {
   }
 }
 
+chrome.tabs.onCreated.addListener(handleCreatedTabHandoff);
+
+chrome.tabs.onUpdated.addListener(
+  (_tabId: number, changeInfo: ChromeTabChangeInfo, tab: ChromeTab) => {
+    handleUpdatedTabHandoff(changeInfo, tab);
+  }
+);
+
 // ---------------------------------------------------------------------------
 // CDP state for proxying chrome.debugger calls
 // ---------------------------------------------------------------------------
@@ -143,6 +160,11 @@ chrome.runtime.onMessage.addListener(
 
     if (msg.source === 'panel') {
       const panelPayload = msg.payload;
+
+      if (isHandoffPanelMessage(panelPayload)) {
+        handlePanelHandoffMessage(panelPayload);
+        return false;
+      }
 
       // Handle OAuth requests — service worker has chrome.identity access
       if (panelPayload.type === 'oauth-request') {

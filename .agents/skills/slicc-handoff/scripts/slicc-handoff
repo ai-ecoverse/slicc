@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+BASE_URL="https://www.sliccy.ai/handoff"
+USE_STDIN=0
+OPEN_URL=0
+PAYLOAD_PATH=""
+
+usage() {
+  cat <<'EOF'
+Usage: slicc-handoff [--stdin] [--open] <payload.json>
+
+Generate a SLICC handoff URL with a base64url-encoded JSON fragment.
+
+Options:
+  --stdin   Read the payload JSON from stdin instead of a file
+  --open    Open the generated URL in the local browser when possible
+  -h, --help  Show this help text
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --stdin)
+      USE_STDIN=1
+      shift
+      ;;
+    --open)
+      OPEN_URL=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      if [[ -n "$PAYLOAD_PATH" ]]; then
+        echo "Unexpected argument: $1" >&2
+        usage >&2
+        exit 1
+      fi
+      PAYLOAD_PATH="$1"
+      shift
+      ;;
+  esac
+done
+
+if [[ "$USE_STDIN" -eq 1 ]]; then
+  PAYLOAD_JSON="$(cat)"
+elif [[ -n "$PAYLOAD_PATH" ]]; then
+  PAYLOAD_JSON="$(cat "$PAYLOAD_PATH")"
+else
+  usage >&2
+  exit 1
+fi
+
+HANDOFF_URL="$(
+  printf '%s' "$PAYLOAD_JSON" | node -e '
+    const chunks = [];
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => chunks.push(chunk));
+    process.stdin.on("end", () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(chunks.join(""));
+      } catch (error) {
+        console.error(`Invalid JSON: ${error.message}`);
+        process.exit(1);
+      }
+
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        console.error("Payload must be a JSON object.");
+        process.exit(1);
+      }
+
+      if (typeof parsed.instruction !== "string" || !parsed.instruction.trim()) {
+        console.error("Payload must include a non-empty instruction string.");
+        process.exit(1);
+      }
+
+      if ("urls" in parsed && (!Array.isArray(parsed.urls) || parsed.urls.some((item) => typeof item !== "string"))) {
+        console.error("urls must be an array of strings when provided.");
+        process.exit(1);
+      }
+
+      if ("acceptanceCriteria" in parsed && (!Array.isArray(parsed.acceptanceCriteria) || parsed.acceptanceCriteria.some((item) => typeof item !== "string"))) {
+        console.error("acceptanceCriteria must be an array of strings when provided.");
+        process.exit(1);
+      }
+
+      for (const key of ["title", "context", "notes"]) {
+        if (key in parsed && typeof parsed[key] !== "string") {
+          console.error(`${key} must be a string when provided.`);
+          process.exit(1);
+        }
+      }
+
+      const normalized = {
+        ...(typeof parsed.title === "string" ? { title: parsed.title } : {}),
+        instruction: parsed.instruction.trim(),
+        ...(Array.isArray(parsed.urls) && parsed.urls.length > 0 ? { urls: parsed.urls } : {}),
+        ...(typeof parsed.context === "string" ? { context: parsed.context } : {}),
+        ...(Array.isArray(parsed.acceptanceCriteria) && parsed.acceptanceCriteria.length > 0
+          ? { acceptanceCriteria: parsed.acceptanceCriteria }
+          : {}),
+        ...(typeof parsed.notes === "string" ? { notes: parsed.notes } : {}),
+      };
+
+      process.stdout.write(
+        "https://www.sliccy.ai/handoff#" +
+          Buffer.from(JSON.stringify(normalized), "utf8").toString("base64url")
+      );
+    });
+  '
+)"
+
+printf '%s\n' "$HANDOFF_URL"
+
+if [[ "$OPEN_URL" -eq 1 ]]; then
+  if command -v open >/dev/null 2>&1; then
+    open "$HANDOFF_URL"
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$HANDOFF_URL" >/dev/null 2>&1 &
+  else
+    echo "Generated the handoff URL, but could not find a browser opener command." >&2
+    exit 1
+  fi
+fi

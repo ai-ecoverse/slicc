@@ -25,6 +25,7 @@ The worker provides tray session coordination, capability-token routing, TURN cr
 ### Public routes
 
 - `POST /tray` — create a tray and issue join/controller/webhook capability URLs
+- `GET /handoff` — lightweight handoff preview page for `https://www.sliccy.ai/handoff#<base64url-json>`
 - `GET|POST /join/:token` — follower join and bootstrap polling flow
 - `GET|POST /controller/:token` — leader attach flow and leader WebSocket upgrade
 - `POST /webhook/:token/:webhookId` — forward webhook events into the live leader
@@ -73,6 +74,7 @@ This lives at the repo root because it coordinates the worker with browser runti
 ## Operational Notes
 
 - Treat the worker as coordination infrastructure, not canonical session storage.
+- The `/handoff` page is intentionally stateless; the URL fragment is the transport and the page only previews it.
 - Keep signaling protocol changes aligned with the browser tray runtime in `packages/webapp/src/scoops/`.
 - **When adding or changing routes**, update ALL THREE test/config locations:
   1. `tests/index.test.ts` — unit test that checks the routes list in the root 200 response

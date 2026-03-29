@@ -159,6 +159,11 @@ export class Layout {
     return this.activeTab;
   }
 
+  setPendingHandoffCount(count: number): void {
+    if (!this.isExtension) return;
+    this.extensionZone.setTabBadge('chat', count > 0 ? count : null);
+  }
+
   /** Check if the terminal panel is currently open in a zone. */
   isTerminalOpen(): boolean {
     if (this.isExtension) return true;

@@ -231,4 +231,28 @@ describe('TabZone', () => {
     zone.removeTab('nonexistent');
     expect(zone.tabCount).toBe(0);
   });
+
+  it('renders and clears numeric badges for tabs', () => {
+    const zone = new TabZone(tabBar, contentArea, 'primary');
+    zone.addTab(makeTab({ id: 'chat', label: 'Chat' }));
+
+    zone.setTabBadge('chat', 3);
+    const badge = tabBar.querySelector('.mini-tabs__tab-badge') as HTMLElement;
+    expect(badge).toBeTruthy();
+    expect(badge.textContent).toBe('3');
+    expect(badge.getAttribute('aria-label')).toBe('3 notifications');
+
+    zone.setTabBadge('chat', 0);
+    expect(tabBar.querySelector('.mini-tabs__tab-badge')).toBeNull();
+  });
+
+  it('uses the configured class prefix for tab badges', () => {
+    const zone = new TabZone(tabBar, contentArea, 'primary', {}, { classPrefix: 'tab-bar' });
+    zone.addTab(makeTab({ id: 'chat', label: 'Chat' }));
+
+    zone.setTabBadge('chat', 2);
+    const badge = tabBar.querySelector('.tab-bar__tab-badge') as HTMLElement;
+    expect(badge).toBeTruthy();
+    expect(badge.textContent).toBe('2');
+  });
 });
