@@ -19,6 +19,7 @@ export interface GenericHandoffPayload {
 export interface PendingHandoff {
   handoffId: string;
   sourceUrl: string;
+  sourceTabId?: number;
   payload: GenericHandoffPayload;
   receivedAt: string;
 }

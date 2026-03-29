@@ -27,6 +27,26 @@ const tabCreatedListeners: TabCreatedListener[] = [];
 const tabUpdatedListeners: TabUpdatedListener[] = [];
 const storageState = new Map<string, unknown>();
 
+async function readLocalStorage(
+  keys?: string | string[] | Record<string, unknown> | null
+): Promise<Record<string, unknown>> {
+  if (typeof keys === 'string') {
+    return { [keys]: storageState.get(keys) };
+  }
+  if (Array.isArray(keys)) {
+    return Object.fromEntries(keys.map((key) => [key, storageState.get(key)]));
+  }
+  if (keys && typeof keys === 'object') {
+    return Object.fromEntries(
+      Object.entries(keys).map(([key, defaultValue]) => [
+        key,
+        storageState.get(key) ?? defaultValue,
+      ])
+    );
+  }
+  return Object.fromEntries(storageState.entries());
+}
+
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
 
@@ -74,23 +94,7 @@ function createChromeMock() {
     },
     storage: {
       local: {
-        get: vi.fn(async (keys?: string | string[] | Record<string, unknown> | null) => {
-          if (typeof keys === 'string') {
-            return { [keys]: storageState.get(keys) };
-          }
-          if (Array.isArray(keys)) {
-            return Object.fromEntries(keys.map((key) => [key, storageState.get(key)]));
-          }
-          if (keys && typeof keys === 'object') {
-            return Object.fromEntries(
-              Object.entries(keys).map(([key, defaultValue]) => [
-                key,
-                storageState.get(key) ?? defaultValue,
-              ])
-            );
-          }
-          return Object.fromEntries(storageState.entries());
-        }),
+        get: vi.fn(readLocalStorage),
         set: vi.fn(async (items: Record<string, unknown>) => {
           for (const [key, value] of Object.entries(items)) {
             storageState.set(key, value);
@@ -275,6 +279,7 @@ describe('extension service worker', () => {
 
     const stored = storageState.get('slicc.pendingHandoffs') as Array<any>;
     expect(stored).toHaveLength(1);
+    expect(stored[0].sourceTabId).toBe(42);
     expect(stored[0].payload).toMatchObject({
       title: 'Verify signup',
       instruction: 'Check whether signup works.',
@@ -329,6 +334,61 @@ describe('extension service worker', () => {
     expect(stored).toHaveLength(1);
   });
 
+  it('serializes concurrent handoff arrivals so different tabs are not lost', async () => {
+    const chromeMock = (globalThis as any).chrome;
+    chromeMock.storage.local.get.mockImplementation(
+      async (keys?: string | string[] | Record<string, unknown> | null) => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        return readLocalStorage(keys);
+      }
+    );
+
+    dispatchUpdatedTab(12, buildHandoffUrl({ instruction: 'First concurrent handoff.' }));
+    dispatchUpdatedTab(13, buildHandoffUrl({ instruction: 'Second concurrent handoff.' }));
+    await flushAsync();
+    await flushAsync();
+
+    const stored = storageState.get('slicc.pendingHandoffs') as Array<any>;
+    expect(stored).toHaveLength(2);
+    expect(stored.map((item) => item.payload.instruction)).toEqual([
+      'First concurrent handoff.',
+      'Second concurrent handoff.',
+    ]);
+  });
+
+  it('scans already-open handoff tabs when the service worker starts', async () => {
+    runtimeMessageListeners.length = 0;
+    runtimeSentMessages.length = 0;
+    installedListeners.length = 0;
+    debuggerEventListeners.length = 0;
+    debuggerDetachListeners.length = 0;
+    tabCreatedListeners.length = 0;
+    tabUpdatedListeners.length = 0;
+    storageState.clear();
+    MockWebSocket.instances.length = 0;
+    vi.resetModules();
+
+    const chromeMock = createChromeMock();
+    chromeMock.tabs.query.mockResolvedValue([
+      {
+        id: 77,
+        url: buildHandoffUrl({ instruction: 'Pick me up from an already open tab.' }),
+      },
+    ]);
+
+    (globalThis as typeof globalThis & { chrome: ReturnType<typeof createChromeMock> }).chrome =
+      chromeMock;
+    (globalThis as typeof globalThis & { WebSocket: typeof MockWebSocket }).WebSocket =
+      MockWebSocket as never;
+
+    await loadServiceWorker(false);
+    await flushAsync();
+
+    const stored = storageState.get('slicc.pendingHandoffs') as Array<any>;
+    expect(stored).toHaveLength(1);
+    expect(stored[0].sourceTabId).toBe(77);
+  });
+
   it('publishes the current pending handoff list when requested by the panel', async () => {
     const url = buildHandoffUrl({ instruction: 'Send me the current queue.' });
     dispatchUpdatedTab(5, url);
@@ -351,7 +411,7 @@ describe('extension service worker', () => {
     });
   });
 
-  it('clears a pending handoff when dismissed or accepted', async () => {
+  it('clears a pending handoff and closes the source tab when dismissed or accepted', async () => {
     const url = buildHandoffUrl({ instruction: 'Clear this handoff.' });
     dispatchUpdatedTab(21, url);
     await flushAsync();
@@ -364,6 +424,7 @@ describe('extension service worker', () => {
 
     expect(storageState.get('slicc.pendingHandoffs')).toEqual([]);
     expect((globalThis as any).chrome.action.setBadgeText).toHaveBeenCalledWith({ text: '' });
+    expect((globalThis as any).chrome.tabs.remove).toHaveBeenCalledWith(21);
 
     dispatchUpdatedTab(21, url);
     await flushAsync();
@@ -372,5 +433,6 @@ describe('extension service worker', () => {
     await flushAsync();
 
     expect(storageState.get('slicc.pendingHandoffs')).toEqual([]);
+    expect((globalThis as any).chrome.tabs.remove).toHaveBeenCalledTimes(2);
   });
 });

@@ -16,7 +16,7 @@ Write like a professional tool, not a chatbot. No emoji in headings or labels â€
 
 ## External Handoffs
 
-Accepted browser handoffs from `https://www.sliccy.ai/handoffs#...` arrive in the cone as normal user messages after the human approves them in the Chat tab. Treat them like any other direct user request.
+Accepted browser handoffs from `https://www.sliccy.ai/handoff#...` arrive in the cone as normal user messages after the human approves them in the Chat tab. Treat them like any other direct user request.
 
 ## Principles
 
