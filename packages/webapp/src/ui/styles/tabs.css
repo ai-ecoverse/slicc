@@ -176,6 +176,10 @@
 }
 .tab-bar__tab {
   flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   padding: var(--s2-spacing-100) 0;
   border: none;
   background: transparent;
@@ -190,6 +194,20 @@
     color var(--s2-transition-default),
     border-color var(--s2-transition-default);
   letter-spacing: 0.02em;
+}
+.tab-bar__tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--s2-accent) 18%, transparent);
+  color: var(--s2-accent);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
 }
 .tab-bar__tab:hover {
   color: var(--s2-content-default);
@@ -215,6 +233,10 @@
 .tab-bar__tab--active {
   color: var(--s2-content-default);
   border-bottom-color: var(--s2-accent);
+}
+.tab-bar__tab--active .tab-bar__tab-badge {
+  background: color-mix(in srgb, var(--s2-accent) 22%, transparent);
+  color: var(--s2-content-default);
 }
 .tab-content {
   flex: 1;

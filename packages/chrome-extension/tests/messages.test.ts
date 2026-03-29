@@ -54,7 +54,7 @@ describe('isExtensionMessage', () => {
         handoffs: [
           {
             handoffId: 'handoff-1',
-            sourceUrl: 'https://www.sliccy.ai/handoffs#abc',
+            sourceUrl: 'https://www.sliccy.ai/handoff#abc',
             receivedAt: new Date().toISOString(),
             payload: { instruction: 'Continue this task in SLICC.' },
           },

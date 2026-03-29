@@ -245,4 +245,14 @@ describe('TabZone', () => {
     zone.setTabBadge('chat', 0);
     expect(tabBar.querySelector('.mini-tabs__tab-badge')).toBeNull();
   });
+
+  it('uses the configured class prefix for tab badges', () => {
+    const zone = new TabZone(tabBar, contentArea, 'primary', {}, { classPrefix: 'tab-bar' });
+    zone.addTab(makeTab({ id: 'chat', label: 'Chat' }));
+
+    zone.setTabBadge('chat', 2);
+    const badge = tabBar.querySelector('.tab-bar__tab-badge') as HTMLElement;
+    expect(badge).toBeTruthy();
+    expect(badge.textContent).toBe('2');
+  });
 });

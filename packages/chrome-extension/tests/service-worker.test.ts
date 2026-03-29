@@ -83,7 +83,10 @@ function createChromeMock() {
           }
           if (keys && typeof keys === 'object') {
             return Object.fromEntries(
-              Object.entries(keys).map(([key, defaultValue]) => [key, storageState.get(key) ?? defaultValue])
+              Object.entries(keys).map(([key, defaultValue]) => [
+                key,
+                storageState.get(key) ?? defaultValue,
+              ])
             );
           }
           return Object.fromEntries(storageState.entries());
@@ -175,13 +178,21 @@ function dispatchUpdatedTab(tabId: number, url: string): void {
   }
 }
 
-function buildHandoffUrl(payload: Record<string, unknown>): string {
-  return `https://www.sliccy.ai/handoffs#${Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')}`;
+function buildHandoffUrl(
+  payload: Record<string, unknown>,
+  origin = 'https://www.sliccy.ai'
+): string {
+  return `${origin}/handoff#${Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')}`;
 }
 
 async function flushAsync(): Promise<void> {
   await Promise.resolve();
   await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function loadServiceWorker(dev = false): Promise<void> {
+  (globalThis as typeof globalThis & { __DEV__?: boolean }).__DEV__ = dev;
+  await import('../src/service-worker.js');
 }
 
 describe('extension service worker', () => {
@@ -203,7 +214,7 @@ describe('extension service worker', () => {
     (globalThis as typeof globalThis & { WebSocket: typeof MockWebSocket }).WebSocket =
       MockWebSocket as never;
 
-    await import('../src/service-worker.js');
+    await loadServiceWorker(false);
   });
 
   it('hosts the leader tray socket in the service worker and relays frames', async () => {
@@ -284,7 +295,7 @@ describe('extension service worker', () => {
   });
 
   it('ignores non-matching handoff tabs', async () => {
-    dispatchUpdatedTab(7, 'https://www.sliccy.ai/handoffs#abc');
+    dispatchUpdatedTab(7, 'https://www.sliccy.ai/handoff#abc');
     dispatchCreatedTab({ id: 8, url: 'https://www.sliccy.ai/other#abc' });
     await flushAsync();
 
@@ -294,6 +305,17 @@ describe('extension service worker', () => {
         payload: expect.objectContaining({ type: 'handoff-pending-list' }),
       })
     );
+  });
+
+  it('rejects localhost handoff tabs', async () => {
+    const localhostUrl = buildHandoffUrl(
+      { instruction: 'Ignore localhost handoff detection.' },
+      'http://localhost:8787'
+    );
+
+    dispatchUpdatedTab(33, localhostUrl);
+    await flushAsync();
+    expect(storageState.get('slicc.pendingHandoffs')).toBeUndefined();
   });
 
   it('dedupes repeated tab events for the same handoff payload', async () => {
