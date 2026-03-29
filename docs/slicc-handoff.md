@@ -1,6 +1,6 @@
 # SLICC Handoff URLs
 
-SLICC can accept a handoff from another local coding agent through a browser tab URL:
+SLICC can accept a handoff from another agent through a browser tab URL:
 
 ```text
 https://www.sliccy.ai/handoff#<base64url-json>
