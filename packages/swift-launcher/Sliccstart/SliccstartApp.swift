@@ -29,7 +29,7 @@ struct SliccstartApp: App {
     @State private var debugBuildTarget: AppTarget?
     @State private var isCreatingDebugBuild = false
     @State private var debugBuildProgress: String = ""
-    @StateObject private var appUpdater = AppUpdater(owner: "ai-ecoverse", repo: "slicc", releasePrefix: "Sliccstart")
+    @StateObject private var appUpdater = AppUpdater(owner: "ai-ecoverse", repo: "slicc", releasePrefix: "Sliccstart", provider: TolerantGithubReleaseProvider())
 
     init() {
         NSApplication.shared.setActivationPolicy(.regular)
