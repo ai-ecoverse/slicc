@@ -296,25 +296,26 @@ describe('executeJshFile', () => {
     expect(result.stdout.trim()).toBe('number');
   });
 
-  it('provides require that returns a promise (CDN-backed)', async () => {
+  it('provides synchronous require that throws for non-pre-loaded modules', async () => {
     const ctx = createMockCtx({
       '/workspace/req.jsh':
-        'const r = require("nonexistent-pkg-xyz"); console.log(typeof r.then); r.catch(() => {});',
+        'try { require("nonexistent-pkg-xyz"); } catch(e) { console.log(e.message); }',
     });
     const result = await executeJshFile('/workspace/req.jsh', [], ctx);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('function'); // require returns a Promise (thenable)
+    // require is synchronous now; non-pre-loaded modules throw with a helpful message
+    expect(result.stdout).toContain('not pre-loaded');
   });
 
-  it('require catches network errors gracefully', async () => {
+  it('require throws synchronously for modules that fail to pre-fetch', async () => {
     const ctx = createMockCtx({
       '/workspace/req-err.jsh':
-        'try { await require("this-package-definitely-does-not-exist-xyz123"); } catch(e) { console.log(e.message); }',
+        'try { require("this-package-definitely-does-not-exist-xyz123"); } catch(e) { console.log(e.message); }',
     });
     const result = await executeJshFile('/workspace/req-err.jsh', [], ctx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('require');
-    expect(result.stdout).toContain('esm.sh');
+    expect(result.stdout).toContain('not pre-loaded');
   });
 });
 
