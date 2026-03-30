@@ -3,6 +3,7 @@ import type { Command, CommandContext, SecureFetch } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import { VirtualFS as SharedVirtualFS } from '../../fs/index.js';
 import type { DiscoveredSkill } from '../../skills/types.js';
+import { SLICC_DIR, STATE_FILE } from '../../skills/constants.js';
 import { unzipSync } from 'fflate';
 import { consumeCachedBinaryByUrl } from '../binary-cache.js';
 
@@ -206,7 +207,7 @@ async function getInstalledSkillNames(fs: VirtualFS): Promise<Set<string>> {
   const names = new Set<string>();
   // 1. Native skills dir listing
   try {
-    const entries = await fs.readDir('/workspace/skills');
+    const entries = await fs.readDir(SKILLS_DIR);
     for (const e of entries) {
       if (e.type === 'directory') names.add(e.name);
     }
@@ -215,11 +216,33 @@ async function getInstalledSkillNames(fs: VirtualFS): Promise<Set<string>> {
   }
   // 2. State file (tracks applied skills)
   try {
-    const raw = await fs.readTextFile('/.slicc/state.json');
+    const raw = await fs.readTextFile(`/${SLICC_DIR}/${STATE_FILE}`);
     const state = JSON.parse(raw) as { applied_skills?: Array<{ name: string }> };
     for (const s of state.applied_skills ?? []) names.add(s.name);
   } catch {
     /* file may not exist */
+  }
+  // 3. Compatibility skill roots (.agents/skills/, .claude/skills/) — scan
+  //    top-level VFS directories (no deep BFS) for these well-known paths.
+  const COMPAT_DIRS = ['.agents', '.claude'] as const;
+  try {
+    const topLevel = await fs.readDir('/');
+    for (const dir of topLevel) {
+      if (dir.type !== 'directory') continue;
+      for (const compatDir of COMPAT_DIRS) {
+        try {
+          const skillsRoot = `/${dir.name}/${compatDir}/skills`;
+          const skillEntries = await fs.readDir(skillsRoot);
+          for (const se of skillEntries) {
+            if (se.type === 'directory') names.add(se.name);
+          }
+        } catch {
+          /* no compat skills dir */
+        }
+      }
+    }
+  } catch {
+    /* root listing failed */
   }
   return names;
 }
