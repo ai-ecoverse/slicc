@@ -2,7 +2,7 @@
  * SecretStore implementation backed by a .env file.
  *
  * Default location: ~/.slicc/secrets.env
- * Override via SLICC_SECRETS_FILE env var or --secrets-file flag.
+ * Override via SLICC_SECRETS_FILE env var.
  *
  * File is created with mode 0600 if it doesn't exist.
  */
