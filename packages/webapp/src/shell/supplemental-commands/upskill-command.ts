@@ -3,6 +3,7 @@ import type { Command, CommandContext, SecureFetch } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import { VirtualFS as SharedVirtualFS } from '../../fs/index.js';
 import type { DiscoveredSkill } from '../../skills/types.js';
+import { SLICC_DIR, STATE_FILE } from '../../skills/constants.js';
 import { unzipSync } from 'fflate';
 import { consumeCachedBinaryByUrl } from '../binary-cache.js';
 
@@ -195,6 +196,55 @@ function buildInstallCmd(source: CatalogSkillSource): string {
   if (source.path) cmd += ` --path ${source.path}`;
   if (source.skill) cmd += ` --skill ${source.skill}`;
   return cmd;
+}
+
+/**
+ * Lightweight check for installed skill names — avoids the expensive full-VFS
+ * BFS walk that discoverSkills() performs for compatibility roots.
+ * Only used by recommendations to filter already-installed skills.
+ */
+async function getInstalledSkillNames(fs: VirtualFS): Promise<Set<string>> {
+  const names = new Set<string>();
+  // 1. Native skills dir listing
+  try {
+    const entries = await fs.readDir(SKILLS_DIR);
+    for (const e of entries) {
+      if (e.type === 'directory') names.add(e.name);
+    }
+  } catch {
+    /* dir may not exist */
+  }
+  // 2. State file (tracks applied skills)
+  try {
+    const raw = await fs.readTextFile(`/${SLICC_DIR}/${STATE_FILE}`);
+    const state = JSON.parse(raw) as { applied_skills?: Array<{ name: string }> };
+    for (const s of state.applied_skills ?? []) names.add(s.name);
+  } catch {
+    /* file may not exist */
+  }
+  // 3. Compatibility skill roots (.agents/skills/, .claude/skills/) — scan
+  //    top-level VFS directories (no deep BFS) for these well-known paths.
+  const COMPAT_DIRS = ['.agents', '.claude'] as const;
+  try {
+    const topLevel = await fs.readDir('/');
+    for (const dir of topLevel) {
+      if (dir.type !== 'directory') continue;
+      for (const compatDir of COMPAT_DIRS) {
+        try {
+          const skillsRoot = `/${dir.name}/${compatDir}/skills`;
+          const skillEntries = await fs.readDir(skillsRoot);
+          for (const se of skillEntries) {
+            if (se.type === 'directory') names.add(se.name);
+          }
+        } catch {
+          /* no compat skills dir */
+        }
+      }
+    }
+  } catch {
+    /* root listing failed */
+  }
+  return names;
 }
 
 interface GitHubContent {
@@ -1352,33 +1402,31 @@ async function handleRecommendations(
     };
   }
 
-  // Fetch skill catalog from remote
+  // Fetch catalog and installed names in parallel
   let catalogSkills: CatalogSkill[];
+  let installed: Set<string>;
   try {
-    const response = await fetchFn(SKILL_CATALOG_URL, {
-      headers: { Accept: 'application/json' },
-    });
-    if (response.status !== 200) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-    const data = JSON.parse(response.body) as { data: RemoteCatalogRow[] };
-    catalogSkills = parseRemoteCatalog(data.data);
+    const [catalogResult, installedResult] = await Promise.all([
+      (async () => {
+        const response = await fetchFn(SKILL_CATALOG_URL, {
+          headers: { Accept: 'application/json' },
+        });
+        if (response.status !== 200) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const data = JSON.parse(response.body) as { data: RemoteCatalogRow[] };
+        return parseRemoteCatalog(data.data);
+      })(),
+      getInstalledSkillNames(fs),
+    ]);
+    catalogSkills = catalogResult;
+    installed = installedResult;
   } catch (err) {
     return {
       stdout: '',
       stderr: `upskill: failed to fetch skill catalog from ${SKILL_CATALOG_URL}: ${err instanceof Error ? err.message : String(err)}\n`,
       exitCode: 1,
     };
-  }
-
-  // Get already-installed skills
-  const installed = new Set<string>();
-  try {
-    const skills = await import('../../skills/index.js');
-    const discovered = await skills.discoverSkills(fs);
-    for (const s of discovered) installed.add(s.name);
-  } catch {
-    /* best effort */
   }
 
   // Score and filter
