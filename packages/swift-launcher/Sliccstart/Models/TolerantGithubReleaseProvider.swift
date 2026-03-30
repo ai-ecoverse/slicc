@@ -14,7 +14,9 @@ struct TolerantGithubReleaseProvider: ReleaseProvider {
 
     func fetchReleases(owner: String, repo: String, proxy: URLRequestProxy?) async throws -> [Release] {
         let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/releases")!
-        let (data, response) = try await URLSession.shared.data(from: url)
+        var request = URLRequest(url: url)
+        request = request.applyOrOriginal(proxy: proxy)
+        let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse, (200..<300).contains(httpResponse.statusCode) else {
             throw URLError(.badServerResponse)
         }

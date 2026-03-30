@@ -88,10 +88,12 @@ cpSync(uiSrc, uiDest, { recursive: true });
 // 3b. Credits.html (About panel website link)
 // ---------------------------------------------------------------------------
 const creditsSrc = resolve(__dirname, 'Sliccstart/Resources/Credits.html');
-if (existsSync(creditsSrc)) {
-  cpSync(creditsSrc, resolve(resources, 'Credits.html'));
-  console.log('Copied Credits.html');
+if (!existsSync(creditsSrc)) {
+  console.error(`ERROR: Credits.html not found: ${creditsSrc}`);
+  process.exit(1);
 }
+cpSync(creditsSrc, resolve(resources, 'Credits.html'));
+console.log('Copied Credits.html');
 
 // ---------------------------------------------------------------------------
 // 4. Info.plist

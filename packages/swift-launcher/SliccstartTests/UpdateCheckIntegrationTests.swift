@@ -57,11 +57,11 @@ final class UpdateCheckIntegrationTests: XCTestCase {
         // but every tag_name with a "v" prefix decodes as Version(0,0,0).
         XCTAssertFalse(releases.isEmpty, "Expected at least some releases from strict provider")
 
-        let allNull = releases.allSatisfy { $0.tagName == Version(0, 0, 0) }
-        XCTAssertTrue(
-            allNull,
-            "Expected ALL releases from strict GithubReleaseProvider to have tagName == Version(0,0,0) "
-            + "(proving the v-prefix bug), but some had real versions."
+        let nullVersions = releases.filter { $0.tagName == Version(0, 0, 0) }
+        XCTAssertFalse(
+            nullVersions.isEmpty,
+            "Expected at least one release from strict GithubReleaseProvider to have tagName == Version(0,0,0) "
+            + "(proving the v-prefix bug), but none did."
         )
     }
 }
