@@ -259,6 +259,7 @@ export class WasmShell {
   private history: string[] = [];
   private historyIndex = -1;
   private isExecuting = false;
+  private aborted = false;
   private continuationBuffer = '';
   /** Accumulated env state from successive exec() calls. */
   private lastEnv: Record<string, string>;
@@ -649,6 +650,10 @@ export class WasmShell {
 
     try {
       const result = await this.runCommand(trimmed);
+      if (this.aborted) {
+        this.aborted = false;
+        return { stdout: '', stderr: '', exitCode: 130 };
+      }
       if (result.stdout) {
         this.writeToTerminal(result.stdout);
       }
@@ -661,14 +666,14 @@ export class WasmShell {
         exitCode: result.exitCode,
       };
     } catch (e) {
+      if (this.aborted) {
+        this.aborted = false;
+        return { stdout: '', stderr: '', exitCode: 130 };
+      }
       const msg = e instanceof Error ? e.message : String(e);
       const stderr = `Error: ${msg}\n`;
       this.writeToTerminal(stderr, true);
-      return {
-        stdout: '',
-        stderr,
-        exitCode: 1,
-      };
+      return { stdout: '', stderr, exitCode: 1 };
     } finally {
       this.isExecuting = false;
       this.showPrompt();
@@ -705,7 +710,14 @@ export class WasmShell {
     if (!this.terminal) return;
 
     this.terminal.onData((data) => {
-      if (this.isExecuting) return;
+      if (this.isExecuting) {
+        // Allow Ctrl+C to interrupt running commands
+        if (data === '\x03' || (data.length === 1 && data.charCodeAt(0) === 3)) {
+          this.aborted = true;
+          this.terminal?.writeln('^C');
+        }
+        return;
+      }
 
       // Handle escape sequences as a whole (arrow keys, Home, End, Delete)
       if (data.startsWith('\x1b[') || data.startsWith('\x1bO')) {
@@ -1097,15 +1109,23 @@ export class WasmShell {
     this.isExecuting = true;
     try {
       const result = await this.runCommand(trimmed);
-      if (result.stdout) {
-        this.writeToTerminal(result.stdout);
-      }
-      if (result.stderr) {
-        this.writeToTerminal(result.stderr, true);
+      if (this.aborted) {
+        // Command was interrupted by Ctrl+C — suppress output
+        this.aborted = false;
+      } else {
+        if (result.stdout) {
+          this.writeToTerminal(result.stdout);
+        }
+        if (result.stderr) {
+          this.writeToTerminal(result.stderr, true);
+        }
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      this.writeToTerminal(`Error: ${msg}\n`, true);
+      if (!this.aborted) {
+        const msg = e instanceof Error ? e.message : String(e);
+        this.writeToTerminal(`Error: ${msg}\n`, true);
+      }
+      this.aborted = false;
     }
     this.isExecuting = false;
     this.showPrompt();
