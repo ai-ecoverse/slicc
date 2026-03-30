@@ -913,7 +913,7 @@ async function main() {
     }
   });
 
-  app.post('/api/secrets', (req, res) => {
+  app.post('/api/secrets', async (req, res) => {
     const { name, value, domains } = req.body as {
       name?: string;
       value?: string;
@@ -927,8 +927,13 @@ async function main() {
       res.status(400).json({ error: 'Missing required field: value' });
       return;
     }
+    if (value.trim().length === 0) {
+      res.status(400).json({ error: 'Secret value must not be empty' });
+      return;
+    }
     try {
       secretStore.set(name, value, Array.isArray(domains) ? domains : []);
+      await secretProxy.reload();
       res.json({ ok: true, name });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -936,9 +941,10 @@ async function main() {
     }
   });
 
-  app.delete('/api/secrets/:name', (req, res) => {
+  app.delete('/api/secrets/:name', async (req, res) => {
     try {
       secretStore.delete(req.params.name);
+      await secretProxy.reload();
       res.json({ ok: true, name: req.params.name });
     } catch (err) {
       res
@@ -1130,12 +1136,17 @@ async function main() {
         );
       }
 
-      // Send body — scrub real secret values from response body
+      // Send body — scrub real secret values from response body (text-only)
       const body = await upstream.arrayBuffer();
       let buffer = Buffer.from(body);
       if (secretProxy.hasSecrets()) {
-        const scrubbed = secretProxy.scrubResponse(buffer.toString('utf-8'));
-        buffer = Buffer.from(scrubbed, 'utf-8');
+        const ct = (upstream.headers.get('content-type') ?? '').toLowerCase();
+        const isText =
+          ct.startsWith('text/') || ct.startsWith('application/json') || ct.includes('charset=');
+        if (isText) {
+          const scrubbed = secretProxy.scrubResponse(buffer.toString('utf-8'));
+          buffer = Buffer.from(scrubbed, 'utf-8');
+        }
       }
       res.setHeader('Content-Length', buffer.length);
       res.end(buffer);

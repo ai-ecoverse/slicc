@@ -5,7 +5,7 @@
  * - KEY=VALUE lines (no quoting required)
  * - Single- and double-quoted values (quotes stripped)
  * - Comment lines starting with #
- * - Blank lines preserved on round-trip
+ * - Blank lines and comments are stripped on round-trip
  */
 
 export interface EnvEntry {
