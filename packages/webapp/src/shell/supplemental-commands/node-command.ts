@@ -159,32 +159,38 @@ export function createNodeCommand(): Command {
       return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
     };
 
-    // Pre-scan code for require('...') specifiers and fetch them into the cache
-    // so that requireShim can return synchronously.
-    const specifiers = extractRequireSpecifiers(code);
-    const cache = (nodeRuntimeState.__requireCache ??
-      (nodeRuntimeState.__requireCache = Object.create(null))) as Record<string, unknown>;
-    const uncached = specifiers.filter((id) => !(id in cache));
-    if (uncached.length > 0) {
-      const results = await Promise.allSettled(
-        uncached.map(async (id) => {
-          const mod = await import(/* @vite-ignore */ 'https://esm.sh/' + id);
-          const val = mod && typeof mod === 'object' && 'default' in mod ? mod.default : mod;
-          cache[id] = val;
-        })
-      );
-      for (let i = 0; i < results.length; i++) {
-        if (results[i].status === 'rejected') {
-          const err = (results[i] as PromiseRejectedResult).reason;
-          writeStderr(
-            `Warning: failed to pre-load require('${uncached[i]}'): ${err instanceof Error ? err.message : String(err)}\n`
-          );
+    const isExtensionMode = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+
+    if (!isExtensionMode) {
+      // Pre-scan code for require('...') specifiers and fetch them into the cache
+      // so that requireShim can return synchronously.
+      // (extension mode handles this inside the sandbox)
+      const specifiers = extractRequireSpecifiers(code);
+      const cache = (nodeRuntimeState.__requireCache ??
+        (nodeRuntimeState.__requireCache = Object.create(null))) as Record<string, unknown>;
+      const uncached = specifiers.filter((id) => !(id in cache));
+      if (uncached.length > 0) {
+        const results = await Promise.allSettled(
+          uncached.map(async (id) => {
+            const mod = await import(/* @vite-ignore */ 'https://esm.sh/' + id);
+            const val = mod && typeof mod === 'object' && 'default' in mod ? mod.default : mod;
+            cache[id] = val;
+          })
+        );
+        for (let i = 0; i < results.length; i++) {
+          if (results[i].status === 'rejected') {
+            const err = (results[i] as PromiseRejectedResult).reason;
+            writeStderr(
+              `Warning: failed to pre-load require('${uncached[i]}'): ${err instanceof Error ? err.message : String(err)}\n`
+            );
+          }
         }
       }
     }
 
     const requireShim = (id: string): unknown => {
-      if (id in cache) return cache[id];
+      const cache = nodeRuntimeState.__requireCache as Record<string, unknown> | undefined;
+      if (cache && id in cache) return cache[id];
       throw new Error(
         `require('${id}'): module not pre-loaded. Use a string literal or await import('https://esm.sh/${id}') directly.`
       );
@@ -195,7 +201,6 @@ export function createNodeCommand(): Command {
     try {
       // In extension mode, AsyncFunction constructor is blocked by CSP.
       // Route through the JavaScript tool's sandbox iframe which has full VFS bridge.
-      const isExtensionMode = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
       if (isExtensionMode) {
         // Wrap the user code with node-like shims.
         // The sandbox already provides `fs` (with readFile, writeFile, readDir, exists, etc.)
@@ -227,7 +232,25 @@ export function createNodeCommand(): Command {
             self.addEventListener('message', handler);
             parent.postMessage({ type: 'shell_exec', id, command }, '*');
           });
-          const __requireCache = {};
+          const __requireCache = Object.create(null);
+          async function __loadModule(id) {
+            const url = 'https://esm.sh/' + id;
+            try {
+              return await import(url);
+            } catch(e) {
+              // Fallback for sandbox/extension mode: fetch + blob URL
+              const resp = await fetch(url);
+              if (!resp.ok) throw new Error('HTTP ' + resp.status + ' fetching ' + url);
+              const text = await resp.text();
+              const blob = new Blob([text], { type: 'text/javascript' });
+              const blobUrl = URL.createObjectURL(blob);
+              try {
+                return await import(blobUrl);
+              } finally {
+                URL.revokeObjectURL(blobUrl);
+              }
+            }
+          }
           {
             const __code = ${JSON.stringify(code)};
             const __re = /\\brequire\\s*\\(\\s*(['"\`])([^'"\`\\s]+)\\1\\s*\\)/g;
@@ -238,7 +261,7 @@ export function createNodeCommand(): Command {
             if (__uncached.length > 0) {
               const __results = await Promise.allSettled(
                 __uncached.map(async (id) => {
-                  const mod = await import('https://esm.sh/' + id);
+                  const mod = await __loadModule(id);
                   const val = mod && typeof mod === 'object' && 'default' in mod ? mod.default : mod;
                   __requireCache[id] = val;
                 })

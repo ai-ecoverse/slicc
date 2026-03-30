@@ -315,6 +315,26 @@ describe('executeJshFile', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('not pre-loaded');
   });
+
+  it('require returns pre-cached module', async () => {
+    // Pre-populate cache before execution
+    const { nodeRuntimeState } = await import('../../src/shell/supplemental-commands/shared.js');
+    nodeRuntimeState.__requireCache = Object.create(null);
+    (nodeRuntimeState.__requireCache as Record<string, unknown>)['test-sentinel-pkg'] = {
+      hello: 'world',
+    };
+
+    const ctx = createMockCtx({
+      '/workspace/req-cached.jsh':
+        'const mod = require("test-sentinel-pkg"); console.log(JSON.stringify(mod));',
+    });
+    const result = await executeJshFile('/workspace/req-cached.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('{"hello":"world"}');
+
+    // Clean up
+    delete nodeRuntimeState.__requireCache;
+  });
 });
 
 describe('executeJsCode', () => {

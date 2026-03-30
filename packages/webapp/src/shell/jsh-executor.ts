@@ -147,21 +147,26 @@ export async function executeJsCode(
     return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
   };
 
-  // Pre-scan code for require() calls and pre-fetch all modules before execution
-  const specifiers = extractRequireSpecifiers(code);
-  const cache = (nodeRuntimeState.__requireCache ??
-    (nodeRuntimeState.__requireCache = Object.create(null))) as Record<string, unknown>;
-  const uncached = specifiers.filter((id) => !(id in cache));
-  if (uncached.length > 0) {
-    const results = await Promise.allSettled(
-      uncached.map(async (id) => {
-        const mod = await import('https://esm.sh/' + id);
-        return { id, value: mod.default !== undefined ? mod.default : mod };
-      })
-    );
-    for (const r of results) {
-      if (r.status === 'fulfilled') {
-        cache[r.value.id] = r.value.value;
+  const isExtensionMode = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+
+  if (!isExtensionMode) {
+    // Pre-scan code for require() calls and pre-fetch all modules before execution
+    // (extension mode handles this inside the sandbox)
+    const specifiers = extractRequireSpecifiers(code);
+    const cache = (nodeRuntimeState.__requireCache ??
+      (nodeRuntimeState.__requireCache = Object.create(null))) as Record<string, unknown>;
+    const uncached = specifiers.filter((id) => !(id in cache));
+    if (uncached.length > 0) {
+      const results = await Promise.allSettled(
+        uncached.map(async (id) => {
+          const mod = await import('https://esm.sh/' + id);
+          return { id, value: mod.default !== undefined ? mod.default : mod };
+        })
+      );
+      for (const r of results) {
+        if (r.status === 'fulfilled') {
+          cache[r.value.id] = r.value.value;
+        }
       }
     }
   }
@@ -177,7 +182,6 @@ export async function executeJsCode(
   const moduleShim = { exports: {} as Record<string, unknown>, filename: argv[1] || '<script>' };
 
   try {
-    const isExtensionMode = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
     if (isExtensionMode) {
       const wrappedCode = `
         const __stdout = [];
@@ -215,10 +219,28 @@ export async function executeJsCode(
           while ((m = re.exec(code)) !== null) specs.push(m[1]);
           return [...new Set(specs)];
         })();
-        const __requireCache = {};
+        const __requireCache = Object.create(null);
+        async function __loadModule(id) {
+          const url = 'https://esm.sh/' + id;
+          try {
+            return await import(url);
+          } catch(e) {
+            // Fallback for sandbox/extension mode: fetch + blob URL
+            const resp = await fetch(url);
+            if (!resp.ok) throw new Error('HTTP ' + resp.status + ' fetching ' + url);
+            const text = await resp.text();
+            const blob = new Blob([text], { type: 'text/javascript' });
+            const blobUrl = URL.createObjectURL(blob);
+            try {
+              return await import(blobUrl);
+            } finally {
+              URL.revokeObjectURL(blobUrl);
+            }
+          }
+        }
         await Promise.allSettled(__requireSpecifiers.map(async (id) => {
           try {
-            const mod = await import('https://esm.sh/' + id);
+            const mod = await __loadModule(id);
             __requireCache[id] = mod.default !== undefined ? mod.default : mod;
           } catch(e) { /* will throw when require() is called */ }
         }));
