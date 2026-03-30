@@ -6,6 +6,7 @@ import {
   type CreateTrayRequest,
   type DurableObjectNamespaceLike,
 } from './shared.js';
+import { HANDOFF_PAGE_HTML } from './handoff-page.js';
 import { SessionTrayDurableObject } from './session-tray.js';
 
 export interface WorkerEnv {
@@ -18,7 +19,6 @@ export interface WorkerEnv {
 function serveSPA(request: Request, env: WorkerEnv): Promise<Response> {
   return env.ASSETS.fetch(request);
 }
-
 const OAUTH_RELAY_HTML = `<!DOCTYPE html>
 <html><head><title>Redirecting to SLICC...</title></head>
 <body>
@@ -87,6 +87,13 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
     return jsonResponse({ error: 'Fetch proxy not available in worker mode' }, 404);
   }
 
+  if (url.pathname === '/handoff' && request.method === 'GET') {
+    return new Response(HANDOFF_PAGE_HTML, {
+      status: 200,
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    });
+  }
+
   const tokenMatch = url.pathname.match(/^\/(join|controller|webhook)\/([^/]+?)(?:\/([^/]+))?$/);
   if (tokenMatch) {
     const route = tokenMatch[1];
@@ -132,6 +139,7 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
       phase: 1,
       routes: [
         'POST /tray',
+        'GET /handoff',
         'GET|POST /join/:token',
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',

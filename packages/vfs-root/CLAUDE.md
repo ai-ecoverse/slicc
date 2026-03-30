@@ -34,6 +34,12 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
 - Add shared sounds under `packages/vfs-root/shared/sounds/`.
 - Prefer stable filenames because shell commands and docs may reference them directly.
 
+## External Handoffs
+
+- Browser handoffs use `https://www.sliccy.ai/handoff#...` URLs and, after approval, arrive in the cone as normal user messages.
+- The agent-facing handoff note belongs in `packages/vfs-root/shared/CLAUDE.md`, because that file is bundled into `/shared/CLAUDE.md` inside the runtime.
+- When handoff behavior changes, keep this package guide, `packages/vfs-root/shared/CLAUDE.md`, and `docs/slicc-handoff.md` aligned.
+
 ## Important Distinction
 
 `packages/vfs-root/shared/CLAUDE.md` is **agent-facing runtime content** bundled into the virtual filesystem.

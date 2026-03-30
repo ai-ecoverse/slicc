@@ -1,0 +1,160 @@
+#!/usr/bin/env node
+
+import { readFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import process from 'node:process';
+
+const BASE_URL = 'https://www.sliccy.ai/handoff';
+
+function usage() {
+  return `Usage: slicc-handoff [--stdin] [--open] <payload.json>
+
+Generate a SLICC handoff URL with a base64url-encoded JSON fragment.
+
+Options:
+  --stdin     Read the payload JSON from stdin instead of a file
+  --open      Open the generated URL in the local browser when possible
+  -h, --help  Show this help text`;
+}
+
+function fail(message) {
+  console.error(message);
+  process.exit(1);
+}
+
+function normalizePayload(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    fail('Payload must be a JSON object.');
+  }
+
+  const payload = value;
+  if (typeof payload['instruction'] !== 'string' || !payload['instruction'].trim()) {
+    fail('Payload must include a non-empty instruction string.');
+  }
+
+  if (
+    'urls' in payload &&
+    (!Array.isArray(payload['urls']) || payload['urls'].some((item) => typeof item !== 'string'))
+  ) {
+    fail('urls must be an array of strings when provided.');
+  }
+
+  if (
+    'acceptanceCriteria' in payload &&
+    (!Array.isArray(payload['acceptanceCriteria']) ||
+      payload['acceptanceCriteria'].some((item) => typeof item !== 'string'))
+  ) {
+    fail('acceptanceCriteria must be an array of strings when provided.');
+  }
+
+  for (const key of ['title', 'context', 'notes']) {
+    if (key in payload && typeof payload[key] !== 'string') {
+      fail(`${key} must be a string when provided.`);
+    }
+  }
+
+  return {
+    ...(typeof payload['title'] === 'string' ? { title: payload['title'] } : {}),
+    instruction: payload['instruction'].trim(),
+    ...(Array.isArray(payload['urls']) && payload['urls'].length > 0
+      ? { urls: payload['urls'] }
+      : {}),
+    ...(typeof payload['context'] === 'string' ? { context: payload['context'] } : {}),
+    ...(Array.isArray(payload['acceptanceCriteria']) && payload['acceptanceCriteria'].length > 0
+      ? { acceptanceCriteria: payload['acceptanceCriteria'] }
+      : {}),
+    ...(typeof payload['notes'] === 'string' ? { notes: payload['notes'] } : {}),
+  };
+}
+
+async function readStdin() {
+  const chunks = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+function openUrl(url) {
+  return new Promise((resolve, reject) => {
+    const opener =
+      process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
+    const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
+    const child = spawn(opener, args, {
+      detached: process.platform !== 'win32',
+      stdio: 'ignore',
+    });
+
+    child.on('error', () => {
+      reject(new Error('Generated the handoff URL, but could not find a browser opener command.'));
+    });
+
+    child.on('spawn', () => {
+      child.unref();
+      resolve();
+    });
+  });
+}
+
+async function main() {
+  let useStdinFlag = false;
+  let openOnSuccess = false;
+  let payloadPath = '';
+
+  const args = process.argv.slice(2);
+  while (args.length > 0) {
+    const arg = args.shift();
+    if (arg === undefined) break;
+    switch (arg) {
+      case '--stdin':
+        useStdinFlag = true;
+        break;
+      case '--open':
+        openOnSuccess = true;
+        break;
+      case '-h':
+      case '--help':
+        process.stdout.write(`${usage()}\n`);
+        return;
+      default:
+        if (payloadPath) {
+          fail(`Unexpected argument: ${arg}\n${usage()}`);
+        }
+        payloadPath = arg;
+        break;
+    }
+  }
+
+  const shouldReadStdin = useStdinFlag || (!process.stdin.isTTY && !payloadPath);
+
+  let payloadJson = '';
+  if (shouldReadStdin) {
+    payloadJson = await readStdin();
+  } else if (payloadPath) {
+    payloadJson = await readFile(payloadPath, 'utf8');
+  } else {
+    fail(usage());
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(payloadJson);
+  } catch (error) {
+    fail(`Invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  const normalizedPayload = normalizePayload(parsed);
+  const handoffUrl = `${BASE_URL}#${Buffer.from(JSON.stringify(normalizedPayload), 'utf8').toString(
+    'base64url'
+  )}`;
+
+  process.stdout.write(`${handoffUrl}\n`);
+
+  if (openOnSuccess) {
+    await openUrl(handoffUrl);
+  }
+}
+
+void main().catch((error) => {
+  fail(error instanceof Error ? error.message : String(error));
+});

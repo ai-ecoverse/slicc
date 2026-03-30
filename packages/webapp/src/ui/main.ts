@@ -79,6 +79,9 @@ import {
 } from '../shell/supplemental-commands/playwright-command.js';
 import { SprinkleManager } from './sprinkle-manager.js';
 import { initTelemetry } from './telemetry.js';
+import { formatAcceptedHandoffMessage } from './accepted-handoff-message.js';
+import { StandaloneHandoffWatcher } from './standalone-handoff-watcher.js';
+import type { PendingHandoff } from '../../../chrome-extension/src/messages.js';
 
 const log = createLogger('main');
 
@@ -335,6 +338,10 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   // Uses `client` which is assigned right after construction.
   let client!: InstanceType<typeof OffscreenClient>;
   let knownScoopFolders = new Set<string>();
+  const syncPendingHandoffs = (handoffs: PendingHandoff[]) => {
+    layout.setPendingHandoffCount(handoffs.length);
+    layout.panels.chat.setPendingHandoffs(handoffs);
+  };
 
   const selectScoop = async (scoop: RegisteredScoop) => {
     selectedScoop = scoop;
@@ -410,6 +417,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
         layout.panels.chat.addUserMessage(content);
       }
     },
+    onPendingHandoffsChange: syncPendingHandoffs,
     onReady: async () => {
       try {
         log.info('Offscreen engine ready, scoop count:', client.getScoops().length);
@@ -448,6 +456,27 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   // Wire agent handle
   const agentHandle = client.createAgentHandle();
   layout.panels.chat.setAgent(agentHandle);
+  layout.panels.chat.setPendingHandoffActions({
+    onAccept: async (handoff) => {
+      const cone = client.getScoops().find((s) => s.isCone);
+      if (!cone) {
+        log.warn('Cannot accept handoff without a cone scoop', { handoffId: handoff.handoffId });
+        return;
+      }
+
+      await selectScoop(cone);
+      layout.setActiveTab('chat');
+      agentHandle.sendMessage(
+        formatAcceptedHandoffMessage(handoff),
+        `handoff-${handoff.handoffId}`
+      );
+      client.acceptPendingHandoff(handoff.handoffId);
+    },
+    onDismiss: (handoff) => {
+      client.dismissPendingHandoff(handoff.handoffId);
+    },
+  });
+  client.requestPendingHandoffs();
 
   // Wire panels — OffscreenClient implements the Orchestrator methods
   // that ScoopsPanel, ScoopSwitcher, and MemoryPanel need
@@ -765,6 +794,10 @@ async function main(): Promise<void> {
 
   // Initialize the BrowserAPI (CLI mode only — extension uses CDP proxy in offscreen)
   const browser = new BrowserAPI();
+  const syncPendingHandoffs = (handoffs: PendingHandoff[]) => {
+    layout.setPendingHandoffCount(handoffs.length);
+    layout.panels.chat.setPendingHandoffs(handoffs);
+  };
 
   // Event system for UI
   const eventListeners = new Set<(event: UIAgentEvent) => void>();
@@ -1107,6 +1140,7 @@ async function main(): Promise<void> {
   // Mutable reference to leader sync — set when tray leader mode is active.
   // Used by coneAgentHandle to broadcast user messages to followers.
   let leaderSyncRef: LeaderSyncManager | null = null;
+  let standaloneHandoffWatcher: StandaloneHandoffWatcher | null = null;
 
   // Build the cone agent handle — all user input routes through orchestrator
   const coneAgentHandle: AgentHandle = {
@@ -1161,6 +1195,31 @@ async function main(): Promise<void> {
   };
 
   layout.panels.chat.setAgent(coneAgentHandle);
+  layout.panels.chat.setPendingHandoffActions({
+    onAccept: async (handoff) => {
+      const cone = orchestrator.getScoops().find((s) => s.isCone);
+      if (!cone) {
+        log.warn('Cannot accept handoff without a cone scoop', { handoffId: handoff.handoffId });
+        return;
+      }
+
+      await handleScoopSelect(cone);
+      layout.setActiveTab('chat');
+      coneAgentHandle.sendMessage(
+        formatAcceptedHandoffMessage(handoff),
+        `handoff-${handoff.handoffId}`
+      );
+
+      const cleared = standaloneHandoffWatcher?.clearHandoff(handoff.handoffId);
+      if (!cleared) return;
+      await Promise.allSettled(cleared.targetIds.map((targetId) => browser.closePage(targetId)));
+    },
+    onDismiss: async (handoff) => {
+      const cleared = standaloneHandoffWatcher?.clearHandoff(handoff.handoffId);
+      if (!cleared) return;
+      await Promise.allSettled(cleared.targetIds.map((targetId) => browser.closePage(targetId)));
+    },
+  });
 
   // Wire delete callback for queued messages
   layout.panels.chat.setDeleteQueuedMessageCallback((messageId: string) => {
@@ -1629,6 +1688,20 @@ async function main(): Promise<void> {
     // Trigger scoop select to properly load the chat context
     await handleScoopSelect(selectedScoop);
   }
+
+  standaloneHandoffWatcher = new StandaloneHandoffWatcher({
+    browser,
+    onPendingHandoffsChange: syncPendingHandoffs,
+  });
+  await standaloneHandoffWatcher.start();
+
+  window.addEventListener(
+    'beforeunload',
+    () => {
+      standaloneHandoffWatcher?.stop();
+    },
+    { once: true }
+  );
 
   if (runtimeMode === 'standalone' || runtimeMode === 'electron-overlay') {
     const runtimeConfig = await fetchRuntimeConfig();

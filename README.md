@@ -52,6 +52,7 @@ SLICC is for you if:
 
 - **Launch an agent from the CLI and let it work in the browser it controls.** Start one command, open the workspace, and give the agent shell tools, files, and live browser access in one place.
 - **Automate repetitive workflows in authenticated web apps.** Use browser automation, page inspection, screenshots, storage access, and scripted tab control where your logged-in browser session already has the context.
+- **Hand work off from another coding agent into your live browser session.** Open a `https://www.sliccy.ai/handoff#...` URL and let the extension queue an approval prompt inside SLICC.
 - **Solve technical tasks with practical tools.** Reach for `bash`, `git`, `grep`, `node`, `python`, previews, and browser automation when the job is bigger than text generation.
 - **Delegate parallel work to scoops.** Split tasks into isolated sub-agents with their own sandboxes and context, then let the main agent coordinate the results.
 - **Turn one-off wins into reusable workflows.** Package behavior as skills, build interactive sprinkles, and react to external events with webhooks and cron-driven licks.
