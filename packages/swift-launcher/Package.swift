@@ -12,7 +12,8 @@ let package = Package(
         .executableTarget(
             name: "Sliccstart",
             dependencies: ["AppUpdater"],
-            path: "Sliccstart"
+            path: "Sliccstart",
+            resources: [.process("Resources")]
         ),
         .testTarget(
             name: "SliccstartTests",
