@@ -296,13 +296,25 @@ describe('executeJshFile', () => {
     expect(result.stdout.trim()).toBe('number');
   });
 
-  it('provides require shim that throws', async () => {
+  it('provides require that returns a promise (CDN-backed)', async () => {
     const ctx = createMockCtx({
-      '/workspace/req.jsh': 'try { require("fs"); } catch(e) { console.log(e.message); }',
+      '/workspace/req.jsh':
+        'const r = require("nonexistent-pkg-xyz"); console.log(typeof r.then); r.catch(() => {});',
     });
     const result = await executeJshFile('/workspace/req.jsh', [], ctx);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('not supported');
+    expect(result.stdout).toContain('function'); // require returns a Promise (thenable)
+  });
+
+  it('require catches network errors gracefully', async () => {
+    const ctx = createMockCtx({
+      '/workspace/req-err.jsh':
+        'try { await require("this-package-definitely-does-not-exist-xyz123"); } catch(e) { console.log(e.message); }',
+    });
+    const result = await executeJshFile('/workspace/req-err.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('require');
+    expect(result.stdout).toContain('esm.sh');
   });
 });
 
