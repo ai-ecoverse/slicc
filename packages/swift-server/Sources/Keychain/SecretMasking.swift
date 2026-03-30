@@ -88,7 +88,7 @@ public struct SecretPair {
 /// `realValue` with its `maskedValue`.
 ///
 /// Secrets are sorted longest-first to avoid partial-match clobbering.
-public func buildScrubber(secrets: [SecretPair]) -> (String) -> String {
+public func buildScrubber(secrets: [SecretPair]) -> @Sendable (String) -> String {
     guard !secrets.isEmpty else { return { $0 } }
 
     let sorted = secrets.sorted { $0.realValue.count > $1.realValue.count }
