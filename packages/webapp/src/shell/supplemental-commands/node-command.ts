@@ -145,8 +145,20 @@ export function createNodeCommand(): Command {
       return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
     };
 
-    const requireShim = (id: string): never => {
-      throw new Error(`require('${id}') is not supported in node shim`);
+    const requireShim = async (id: string): Promise<unknown> => {
+      const cache = (nodeRuntimeState.__requireCache ??
+        (nodeRuntimeState.__requireCache = Object.create(null))) as Record<string, unknown>;
+      if (id in cache) return cache[id];
+      try {
+        const mod = await import(/* @vite-ignore */ 'https://esm.sh/' + id);
+        const val = mod && typeof mod === 'object' && 'default' in mod ? mod.default : mod;
+        cache[id] = val;
+        return val;
+      } catch (err) {
+        throw new Error(
+          `require('${id}') failed: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
     };
 
     const moduleShim = { exports: {} as Record<string, unknown>, filename };
@@ -186,7 +198,18 @@ export function createNodeCommand(): Command {
             self.addEventListener('message', handler);
             parent.postMessage({ type: 'shell_exec', id, command }, '*');
           });
-          const require = (id) => { throw new Error("require('" + id + "') is not supported"); };
+          const __requireCache = {};
+          const require = async (id) => {
+            if (id in __requireCache) return __requireCache[id];
+            try {
+              const mod = await import('https://esm.sh/' + id);
+              const val = mod && typeof mod === 'object' && 'default' in mod ? mod.default : mod;
+              __requireCache[id] = val;
+              return val;
+            } catch (err) {
+              throw new Error("require('" + id + "') failed: " + (err && err.message ? err.message : String(err)));
+            }
+          };
           const module = { exports: {} };
           const exports = module.exports;
           try {
@@ -391,7 +414,7 @@ export function createNodeCommand(): Command {
         fs: typeof fsBridge,
         process: typeof processShim,
         console: typeof nodeConsole,
-        require: (id: string) => never,
+        require: (id: string) => Promise<unknown>,
         module: typeof moduleShim,
         exports: Record<string, unknown>,
         __state: Record<string, unknown>,
