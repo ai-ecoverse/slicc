@@ -146,6 +146,12 @@ describe('domainMatches()', () => {
   it('rejects partial suffix match', () => {
     expect(domainMatches('*.github.com', 'notgithub.com')).toBe(false);
   });
+
+  it('bare * matches any domain', () => {
+    expect(domainMatches('*', 'api.github.com')).toBe(true);
+    expect(domainMatches('*', 'example.com')).toBe(true);
+    expect(domainMatches('*', 'localhost')).toBe(true);
+  });
 });
 
 describe('isAllowedDomain()', () => {
