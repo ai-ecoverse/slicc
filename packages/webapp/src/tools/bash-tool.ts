@@ -95,12 +95,12 @@ export function createBashTool(shell: WasmShell): ToolDefinition {
       },
       required: ['command'],
     },
-    async execute(input: Record<string, unknown>): Promise<ToolResult> {
+    async execute(input: Record<string, unknown>, signal?: AbortSignal): Promise<ToolResult> {
       const command = input['command'] as string;
       log.debug('Execute', { command });
 
       try {
-        const result = await shell.executeCommand(command);
+        const result = await shell.executeCommand(command, signal);
 
         log.debug('Result', {
           exitCode: result.exitCode,
