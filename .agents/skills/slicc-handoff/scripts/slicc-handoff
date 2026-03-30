@@ -78,13 +78,8 @@ async function readStdin() {
 function openUrl(url) {
   return new Promise((resolve, reject) => {
     const opener =
-      process.platform === 'darwin'
-        ? 'open'
-        : process.platform === 'win32'
-          ? 'cmd'
-          : 'xdg-open';
-    const args =
-      process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
+      process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
+    const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
     const child = spawn(opener, args, {
       detached: process.platform !== 'win32',
       stdio: 'ignore',
@@ -149,10 +144,9 @@ async function main() {
   }
 
   const normalizedPayload = normalizePayload(parsed);
-  const handoffUrl = `${BASE_URL}#${Buffer.from(
-    JSON.stringify(normalizedPayload),
-    'utf8'
-  ).toString('base64url')}`;
+  const handoffUrl = `${BASE_URL}#${Buffer.from(JSON.stringify(normalizedPayload), 'utf8').toString(
+    'base64url'
+  )}`;
 
   process.stdout.write(`${handoffUrl}\n`);
 
