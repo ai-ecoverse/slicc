@@ -203,7 +203,22 @@ export class BshWatchdog {
     const scriptContent = typeof content === 'string' ? content : new TextDecoder().decode(content);
 
     // Wrap in async IIFE with error handling and evaluate in target page
-    const wrappedScript = `(async () => { try {\n${scriptContent}\n} catch(e) { console.error('[bsh]', e); } })()`;
+    const wrappedScript = `(async () => {
+  const __requireCache = {};
+  const require = async (id) => {
+    if (__requireCache[id]) return __requireCache[id];
+    try {
+      const mod = await import('https://esm.sh/' + id);
+      __requireCache[id] = mod.default !== undefined ? mod.default : mod;
+      return __requireCache[id];
+    } catch(e) {
+      throw new Error("require('" + id + "'): failed to fetch from esm.sh: " + e.message);
+    }
+  };
+  try {
+    ${scriptContent}
+  } catch(e) { console.error('[bsh]', e); }
+})()`;
 
     await this.transport.send('Runtime.enable', {}, sessionId);
     const result = await this.transport.send(
