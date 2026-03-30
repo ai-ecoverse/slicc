@@ -104,12 +104,16 @@ public func buildScrubber(secrets: [SecretPair]) -> @Sendable (String) -> String
 
 /// Domain glob matching.
 ///
+/// - `*` matches any domain
 /// - `api.github.com` matches exactly
 /// - `*.github.com` matches `api.github.com`, `uploads.github.com`,
 ///   but NOT `github.com` itself
 public func domainMatches(pattern: String, hostname: String) -> Bool {
     let p = pattern.lowercased()
     let h = hostname.lowercased()
+
+    // Bare wildcard: allow any domain
+    if p == "*" { return true }
 
     guard p.hasPrefix("*.") else {
         return p == h

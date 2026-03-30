@@ -138,6 +138,12 @@ final class SecretMaskingTests: XCTestCase {
         XCTAssertFalse(domainMatches(pattern: "*.github.com", hostname: "notgithub.com"))
     }
 
+    func testBareWildcardMatchesAnyDomain() {
+        XCTAssertTrue(domainMatches(pattern: "*", hostname: "api.github.com"))
+        XCTAssertTrue(domainMatches(pattern: "*", hostname: "example.com"))
+        XCTAssertTrue(domainMatches(pattern: "*", hostname: "localhost"))
+    }
+
     // MARK: - isAllowedDomain()
 
     func testAllowedDomainAnyMatch() {

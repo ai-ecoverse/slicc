@@ -7,6 +7,9 @@ import Foundation
 /// uses this to:
 /// 1. Replace masked values → real values in outbound requests (with domain checks)
 /// 2. Replace real values → masked values in inbound responses
+///
+/// Call `reload()` after secret mutations (POST/DELETE) to pick up changes
+/// while keeping the same session ID for stable masked values.
 public final class SecretInjector: Sendable {
 
     /// A loaded secret with its masked counterpart.
@@ -25,19 +28,58 @@ public final class SecretInjector: Sendable {
         case domainBlocked(secretName: String, hostname: String)
     }
 
-    private let secrets: [LoadedSecret]
-    private let responseScrubber: @Sendable (String) -> String
+    /// The session ID used for masking. Kept stable across reloads.
+    private let sessionId: String?
+
+    private let lock = NSLock()
+    private nonisolated(unsafe) var _secrets: [LoadedSecret]
+    private nonisolated(unsafe) var _responseScrubber: @Sendable (String) -> String
+
+    private var secrets: [LoadedSecret] {
+        lock.lock()
+        defer { lock.unlock() }
+        return _secrets
+    }
+
+    private var responseScrubber: @Sendable (String) -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return _responseScrubber
+    }
+
+    private func setSecretsAndScrubber(secrets: [LoadedSecret], scrubber: @Sendable @escaping (String) -> String) {
+        lock.lock()
+        defer { lock.unlock() }
+        _secrets = secrets
+        _responseScrubber = scrubber
+    }
 
     /// Initialize with an explicit list of loaded secrets (for testing).
     init(secrets: [LoadedSecret]) {
-        self.secrets = secrets
+        self.sessionId = nil
+        self._secrets = secrets
         let pairs = secrets.map { SecretPair(realValue: $0.realValue, maskedValue: $0.maskedValue) }
-        self.responseScrubber = buildScrubber(secrets: pairs)
+        self._responseScrubber = buildScrubber(secrets: pairs)
     }
 
     /// Initialize by loading all secrets from the Keychain and masking them
     /// with the given session ID.
-    convenience init(sessionId: String) {
+    init(sessionId: String) {
+        self.sessionId = sessionId
+        self._secrets = []
+        self._responseScrubber = { $0 }
+        loadFromKeychain()
+    }
+
+    /// Reload secrets from the Keychain, keeping the same session ID.
+    /// Call this after secret mutations (POST/DELETE) so the injector
+    /// picks up added/removed secrets.
+    func reload() {
+        loadFromKeychain()
+    }
+
+    private func loadFromKeychain() {
+        guard let sessionId else { return }
         let entries = SecretStore.list()
         var loaded: [LoadedSecret] = []
         for entry in entries {
@@ -50,7 +92,8 @@ public final class SecretInjector: Sendable {
                 domains: secret.domains
             ))
         }
-        self.init(secrets: loaded)
+        let pairs = loaded.map { SecretPair(realValue: $0.realValue, maskedValue: $0.maskedValue) }
+        setSecretsAndScrubber(secrets: loaded, scrubber: buildScrubber(secrets: pairs))
     }
 
     /// Returns true if there are no secrets loaded.
