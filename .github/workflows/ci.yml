@@ -200,6 +200,9 @@ jobs:
     needs: changes
     if: >-
       needs.changes.outputs.cloudflare-worker == 'true' ||
+      needs.changes.outputs.webapp == 'true' ||
+      needs.changes.outputs.vfs-root == 'true' ||
+      needs.changes.outputs.assets == 'true' ||
       needs.changes.outputs.root-config == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -210,6 +213,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Build webapp for worker static assets
+        run: npm run build -w @slicc/webapp
       - name: Typecheck
         run: tsc --noEmit -p tsconfig.worker.json
       - name: Test
