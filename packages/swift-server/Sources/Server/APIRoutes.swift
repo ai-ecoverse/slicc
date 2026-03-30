@@ -210,7 +210,7 @@ func registerAPIRoutes(
         guard let name = payload["name"]?.stringValue, !name.isEmpty else {
             return try jsonErrorResponse(status: .badRequest, message: "Missing required field: name")
         }
-        guard let value = payload["value"]?.stringValue else {
+        guard let value = payload["value"]?.stringValue, !value.isEmpty else {
             return try jsonErrorResponse(status: .badRequest, message: "Missing required field: value")
         }
         let domains: [String]
@@ -221,6 +221,7 @@ func registerAPIRoutes(
         }
         do {
             try SecretStore.set(name: name, value: value, domains: domains)
+            secretInjector.reload()
             return try jsonResponse(.object(["ok": .bool(true), "name": .string(name)]))
         } catch SecretStoreError.emptyDomains {
             return try jsonErrorResponse(status: .badRequest, message: "Secret must have at least one authorized domain")
@@ -233,6 +234,7 @@ func registerAPIRoutes(
         let name = context.parameters.get("name") ?? ""
         do {
             try SecretStore.delete(name: name)
+            secretInjector.reload()
             return try jsonResponse(.object(["ok": .bool(true), "name": .string(name)]))
         } catch {
             return try jsonErrorResponse(status: .internalServerError, message: errorMessage(error))
@@ -298,7 +300,6 @@ func registerAPIRoutes(
                     }
                 }
 
-                // Also inject into the target URL header value for the upstream request
                 let injectedRequest = Request(
                     head: .init(
                         method: request.method,
