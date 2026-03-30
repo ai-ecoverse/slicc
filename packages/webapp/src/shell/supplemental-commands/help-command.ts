@@ -47,6 +47,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
       'commands',
       'which',
       'uname',
+      'man',
       'host',
       'oauth-token',
       'nuke',

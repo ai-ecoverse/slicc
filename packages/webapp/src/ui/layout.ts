@@ -261,9 +261,6 @@ export class Layout {
       this.scoopSwitcherEl.className = 'scoop-switcher';
       this.scoopSwitcher = new ScoopSwitcher(this.scoopSwitcherEl, {
         onScoopSelect: (scoop) => this.onScoopSelect?.(scoop),
-        onCreateScoop: (name) => {
-          this.panels?.scoops?.createScoop(name);
-        },
         onDeleteScoop: (jid) => {
           this.panels?.scoops?.deleteScoop?.(jid);
         },
