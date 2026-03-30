@@ -115,6 +115,21 @@ describe('handoff queue', () => {
     });
   });
 
+  it('captures staging handoff tabs', async () => {
+    const handoffs = await loadHandoffsModule();
+    const url = buildHandoffUrl(
+      { instruction: 'Handle staging handoffs too.' },
+      'https://slicc-tray-hub-staging.minivelos.workers.dev'
+    );
+
+    handoffs.handleUpdatedTabHandoff({ url }, { id: 52, url });
+    await flushAsync();
+
+    const stored = storageState.get('slicc.pendingHandoffs') as Array<any>;
+    expect(stored).toHaveLength(1);
+    expect(stored[0].sourceUrl).toBe(url);
+  });
+
   it('ignores non-matching handoff tabs', async () => {
     const handoffs = await loadHandoffsModule();
 
@@ -138,6 +153,15 @@ describe('handoff queue', () => {
     );
 
     handoffs.handleUpdatedTabHandoff({ url: localhostUrl }, { id: 33, url: localhostUrl });
+    await flushAsync();
+    expect(storageState.get('slicc.pendingHandoffs')).toBeUndefined();
+  });
+
+  it('rejects handoff tabs from non-allowed hosts', async () => {
+    const handoffs = await loadHandoffsModule();
+    const url = buildHandoffUrl({ instruction: 'Reject other domains.' }, 'https://example.com');
+
+    handoffs.handleUpdatedTabHandoff({ url }, { id: 34, url });
     await flushAsync();
     expect(storageState.get('slicc.pendingHandoffs')).toBeUndefined();
   });

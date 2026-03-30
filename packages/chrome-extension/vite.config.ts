@@ -61,13 +61,9 @@ export default defineConfig(({ mode }) => ({
       input: {
         index: resolve(__dirname, '../webapp/index.html'),
         offscreen: resolve(__dirname, 'offscreen.html'),
-        'service-worker': resolve(__dirname, 'src/service-worker.ts'),
       },
       output: {
-        entryFileNames: (chunkInfo) => {
-          if (chunkInfo.name === 'service-worker') return 'service-worker.js';
-          return 'assets/[name]-[hash].js';
-        },
+        entryFileNames: 'assets/[name]-[hash].js',
       },
     },
   },
@@ -83,6 +79,27 @@ export default defineConfig(({ mode }) => ({
         ) {
           return resolve(__dirname, '../webapp/src/stubs/pi-session-manager-stub.ts');
         }
+      },
+    },
+    {
+      name: 'build-extension-service-worker',
+      async closeBundle() {
+        // MV3 service workers are classic scripts, not ES modules.
+        // Bundle the service worker as one self-contained file so Chrome
+        // never sees Rollup-generated shared-chunk imports.
+        const esbuild = await import('esbuild');
+        await esbuild.build({
+          entryPoints: [resolve(__dirname, 'src/service-worker.ts')],
+          bundle: true,
+          outfile: resolve(repoRoot, 'dist/extension/service-worker.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: {
+            __DEV__: JSON.stringify(mode !== 'production'),
+            global: 'globalThis',
+          },
+        });
       },
     },
     {

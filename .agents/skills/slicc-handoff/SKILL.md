@@ -9,7 +9,7 @@ Use this skill when the user says things like `handoff to slicc`, `move this to 
    - optional `title`, `urls`, `context`, `acceptanceCriteria`, `notes`
 2. Generate the handoff URL with:
    - `.agents/skills/slicc-handoff/scripts/slicc-handoff payload.json`
-   - or pipe JSON with `--stdin`
+   - or pipe JSON directly into `.agents/skills/slicc-handoff/scripts/slicc-handoff`
 3. Open the generated `https://www.sliccy.ai/handoff#...` URL in the local browser when possible.
 4. Tell the user that SLICC should show an `Accept` / `Dismiss` prompt in the Chat tab.
 
@@ -27,5 +27,5 @@ Use this skill when the user says things like `handoff to slicc`, `move this to 
 ```
 
 ```bash
-cat payload.json | .agents/skills/slicc-handoff/scripts/slicc-handoff --stdin --open
+cat payload.json | .agents/skills/slicc-handoff/scripts/slicc-handoff --open
 ```

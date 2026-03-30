@@ -79,10 +79,9 @@ import {
 } from '../shell/supplemental-commands/playwright-command.js';
 import { SprinkleManager } from './sprinkle-manager.js';
 import { initTelemetry } from './telemetry.js';
-import type {
-  GenericHandoffPayload,
-  PendingHandoff,
-} from '../../../chrome-extension/src/messages.js';
+import { formatAcceptedHandoffMessage } from './accepted-handoff-message.js';
+import { StandaloneHandoffWatcher } from './standalone-handoff-watcher.js';
+import type { PendingHandoff } from '../../../chrome-extension/src/messages.js';
 
 const log = createLogger('main');
 
@@ -269,36 +268,6 @@ function registerSkillDropInstall(
       overlay.hide();
     }
   });
-}
-
-function formatAcceptedHandoffMessage(payload: GenericHandoffPayload): string {
-  const sections: string[] = [];
-  if (payload.title) sections.push(`# ${payload.title}`);
-  sections.push('A new handoff was accepted from https://www.sliccy.ai/handoff.');
-  sections.push('## Instruction');
-  sections.push(payload.instruction);
-
-  if (payload.urls && payload.urls.length > 0) {
-    sections.push('## URLs');
-    for (const url of payload.urls) sections.push(`- ${url}`);
-  }
-
-  if (payload.context) {
-    sections.push('## Context');
-    sections.push(payload.context);
-  }
-
-  if (payload.acceptanceCriteria && payload.acceptanceCriteria.length > 0) {
-    sections.push('## Acceptance Criteria');
-    for (const item of payload.acceptanceCriteria) sections.push(`- ${item}`);
-  }
-
-  if (payload.notes) {
-    sections.push('## Notes');
-    sections.push(payload.notes);
-  }
-
-  return sections.join('\n\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -498,7 +467,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       await selectScoop(cone);
       layout.setActiveTab('chat');
       agentHandle.sendMessage(
-        formatAcceptedHandoffMessage(handoff.payload),
+        formatAcceptedHandoffMessage(handoff),
         `handoff-${handoff.handoffId}`
       );
       client.acceptPendingHandoff(handoff.handoffId);
@@ -825,6 +794,10 @@ async function main(): Promise<void> {
 
   // Initialize the BrowserAPI (CLI mode only — extension uses CDP proxy in offscreen)
   const browser = new BrowserAPI();
+  const syncPendingHandoffs = (handoffs: PendingHandoff[]) => {
+    layout.setPendingHandoffCount(handoffs.length);
+    layout.panels.chat.setPendingHandoffs(handoffs);
+  };
 
   // Event system for UI
   const eventListeners = new Set<(event: UIAgentEvent) => void>();
@@ -1167,6 +1140,7 @@ async function main(): Promise<void> {
   // Mutable reference to leader sync — set when tray leader mode is active.
   // Used by coneAgentHandle to broadcast user messages to followers.
   let leaderSyncRef: LeaderSyncManager | null = null;
+  let standaloneHandoffWatcher: StandaloneHandoffWatcher | null = null;
 
   // Build the cone agent handle — all user input routes through orchestrator
   const coneAgentHandle: AgentHandle = {
@@ -1221,6 +1195,31 @@ async function main(): Promise<void> {
   };
 
   layout.panels.chat.setAgent(coneAgentHandle);
+  layout.panels.chat.setPendingHandoffActions({
+    onAccept: async (handoff) => {
+      const cone = orchestrator.getScoops().find((s) => s.isCone);
+      if (!cone) {
+        log.warn('Cannot accept handoff without a cone scoop', { handoffId: handoff.handoffId });
+        return;
+      }
+
+      await handleScoopSelect(cone);
+      layout.setActiveTab('chat');
+      coneAgentHandle.sendMessage(
+        formatAcceptedHandoffMessage(handoff),
+        `handoff-${handoff.handoffId}`
+      );
+
+      const cleared = standaloneHandoffWatcher?.clearHandoff(handoff.handoffId);
+      if (!cleared) return;
+      await Promise.allSettled(cleared.targetIds.map((targetId) => browser.closePage(targetId)));
+    },
+    onDismiss: async (handoff) => {
+      const cleared = standaloneHandoffWatcher?.clearHandoff(handoff.handoffId);
+      if (!cleared) return;
+      await Promise.allSettled(cleared.targetIds.map((targetId) => browser.closePage(targetId)));
+    },
+  });
 
   // Wire delete callback for queued messages
   layout.panels.chat.setDeleteQueuedMessageCallback((messageId: string) => {
@@ -1689,6 +1688,20 @@ async function main(): Promise<void> {
     // Trigger scoop select to properly load the chat context
     await handleScoopSelect(selectedScoop);
   }
+
+  standaloneHandoffWatcher = new StandaloneHandoffWatcher({
+    browser,
+    onPendingHandoffsChange: syncPendingHandoffs,
+  });
+  await standaloneHandoffWatcher.start();
+
+  window.addEventListener(
+    'beforeunload',
+    () => {
+      standaloneHandoffWatcher?.stop();
+    },
+    { once: true }
+  );
 
   if (runtimeMode === 'standalone' || runtimeMode === 'electron-overlay') {
     const runtimeConfig = await fetchRuntimeConfig();

@@ -4,9 +4,10 @@ SLICC can accept a handoff from another agent through a browser tab URL:
 
 ```text
 https://www.sliccy.ai/handoff#<base64url-json>
+https://slicc-tray-hub-staging.minivelos.workers.dev/handoff#<base64url-json>
 ```
 
-The fragment contains a base64url-encoded UTF-8 JSON payload. The Cloudflare worker serves a lightweight preview page at `/handoff`, and the Chrome extension watches for matching tabs. When it sees one, it queues a pending handoff and shows an approval prompt in the SLICC Chat tab.
+The fragment contains a base64url-encoded UTF-8 JSON payload. The handoff page serves a lightweight preview at `/handoff`, and both the Chrome extension and the standalone app watch for matching tabs. When one is seen, SLICC queues a pending handoff and shows an approval prompt in the Chat tab.
 
 ## Payload shape
 
@@ -47,10 +48,10 @@ Use the helper bundled with the `slicc-handoff` skill:
 .agents/skills/slicc-handoff/scripts/slicc-handoff payload.json
 ```
 
-Pipe JSON from stdin when that is easier:
+The helper is a Node script and auto-detects piped stdin:
 
 ```bash
-cat payload.json | .agents/skills/slicc-handoff/scripts/slicc-handoff --stdin
+cat payload.json | .agents/skills/slicc-handoff/scripts/slicc-handoff
 ```
 
-Add `--open` to launch the generated URL in the local browser when the host environment supports it.
+Add `--open` to launch the generated URL in the local browser when the host environment supports it. `--stdin` is still accepted as a compatibility alias, but it is no longer required when stdin is piped.

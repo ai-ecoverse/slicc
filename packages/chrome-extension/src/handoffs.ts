@@ -1,14 +1,12 @@
 import type {
-  GenericHandoffPayload,
   HandoffAcceptMsg,
   HandoffDismissMsg,
   HandoffListRequestMsg,
   HandoffPendingListMsg,
   PendingHandoff,
 } from './messages.js';
+import { normalizePendingHandoff, parseHandoffFromUrl } from './handoff-shared.js';
 
-const HANDOFFS_HOST = 'www.sliccy.ai';
-const HANDOFFS_PATH = '/handoff';
 const HANDOFFS_STORAGE_KEY = 'slicc.pendingHandoffs';
 
 let pendingHandoffMutation: Promise<unknown> = Promise.resolve();
@@ -57,111 +55,6 @@ export function handlePanelHandoffMessage(panelPayload: HandoffPanelMessage): vo
       console.error('[slicc-sw] Failed to clear pending handoff:', err);
     }
   })();
-}
-
-function hashFragment(input: string): string {
-  let hash = 2166136261;
-  for (let i = 0; i < input.length; i += 1) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16).padStart(8, '0');
-}
-
-function decodeBase64UrlUtf8(fragment: string): string {
-  const normalized = fragment.replace(/-/g, '+').replace(/_/g, '/');
-  const padding = normalized.length % 4;
-  const padded = padding === 0 ? normalized : normalized + '='.repeat(4 - padding);
-  const binary = atob(padded);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return new TextDecoder().decode(bytes);
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === 'string');
-}
-
-function normalizeHandoffPayload(value: unknown): GenericHandoffPayload | null {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  if (typeof record['instruction'] !== 'string' || !record['instruction'].trim()) return null;
-  if (record['title'] !== undefined && typeof record['title'] !== 'string') return null;
-  if (record['context'] !== undefined && typeof record['context'] !== 'string') return null;
-  if (record['notes'] !== undefined && typeof record['notes'] !== 'string') return null;
-  if (record['urls'] !== undefined && !isStringArray(record['urls'])) return null;
-  if (record['acceptanceCriteria'] !== undefined && !isStringArray(record['acceptanceCriteria'])) {
-    return null;
-  }
-
-  return {
-    title: typeof record['title'] === 'string' ? record['title'] : undefined,
-    instruction: record['instruction'].trim(),
-    urls: isStringArray(record['urls']) ? record['urls'] : undefined,
-    context: typeof record['context'] === 'string' ? record['context'] : undefined,
-    acceptanceCriteria: isStringArray(record['acceptanceCriteria'])
-      ? record['acceptanceCriteria']
-      : undefined,
-    notes: typeof record['notes'] === 'string' ? record['notes'] : undefined,
-  };
-}
-
-function normalizePendingHandoff(value: unknown): PendingHandoff | null {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  const payload = normalizeHandoffPayload(record['payload']);
-  if (!payload) return null;
-  if (typeof record['handoffId'] !== 'string' || !record['handoffId']) return null;
-  if (typeof record['sourceUrl'] !== 'string' || !record['sourceUrl']) return null;
-  if (typeof record['receivedAt'] !== 'string' || !record['receivedAt']) return null;
-  if (record['sourceTabId'] !== undefined && typeof record['sourceTabId'] !== 'number') {
-    return null;
-  }
-  return {
-    handoffId: record['handoffId'],
-    sourceUrl: record['sourceUrl'],
-    sourceTabId: typeof record['sourceTabId'] === 'number' ? record['sourceTabId'] : undefined,
-    payload,
-    receivedAt: record['receivedAt'],
-  };
-}
-
-function isAllowedHandoffUrl(parsedUrl: URL): boolean {
-  if (parsedUrl.pathname !== HANDOFFS_PATH) return false;
-  return parsedUrl.protocol === 'https:' && parsedUrl.hostname === HANDOFFS_HOST;
-}
-
-function parseHandoffFromUrl(urlString: string, sourceTabId?: number): PendingHandoff | null {
-  let parsedUrl: URL;
-  try {
-    parsedUrl = new URL(urlString);
-  } catch {
-    return null;
-  }
-
-  if (!isAllowedHandoffUrl(parsedUrl)) {
-    return null;
-  }
-
-  const fragment = parsedUrl.hash.replace(/^#/, '');
-  if (!fragment) return null;
-
-  try {
-    const json = decodeBase64UrlUtf8(fragment);
-    const payload = normalizeHandoffPayload(JSON.parse(json));
-    if (!payload) return null;
-    return {
-      handoffId: `handoff-${hashFragment(fragment)}`,
-      sourceUrl: parsedUrl.toString(),
-      sourceTabId,
-      payload,
-      receivedAt: new Date().toISOString(),
-    };
-  } catch {
-    return null;
-  }
 }
 
 async function readPendingHandoffs(): Promise<PendingHandoff[]> {
