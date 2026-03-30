@@ -136,8 +136,26 @@ export async function executeJsCode(
     return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
   };
 
-  const requireShim = (id: string): never => {
-    throw new Error(`require('${id}') is not supported in node shim`);
+  const requireShim = async (id: string): Promise<unknown> => {
+    if (
+      nodeRuntimeState.__requireCache &&
+      (nodeRuntimeState.__requireCache as Record<string, unknown>)[id] !== undefined
+    ) {
+      return (nodeRuntimeState.__requireCache as Record<string, unknown>)[id];
+    }
+    try {
+      const mod = await import('https://esm.sh/' + id);
+      const value = mod.default !== undefined ? mod.default : mod;
+      if (!nodeRuntimeState.__requireCache) {
+        nodeRuntimeState.__requireCache = Object.create(null);
+      }
+      (nodeRuntimeState.__requireCache as Record<string, unknown>)[id] = value;
+      return value;
+    } catch (e) {
+      throw new Error(
+        `require('${id}'): failed to fetch from esm.sh: ${e instanceof Error ? e.message : String(e)}`
+      );
+    }
   };
 
   const moduleShim = { exports: {} as Record<string, unknown>, filename: argv[1] || '<script>' };
@@ -173,7 +191,17 @@ export async function executeJsCode(
           self.addEventListener('message', handler);
           parent.postMessage({ type: 'shell_exec', id, command }, '*');
         });
-        const require = (id) => { throw new Error("require('" + id + "') is not supported"); };
+        const __requireCache = {};
+        const require = async (id) => {
+          if (__requireCache[id]) return __requireCache[id];
+          try {
+            const mod = await import('https://esm.sh/' + id);
+            __requireCache[id] = mod.default !== undefined ? mod.default : mod;
+            return __requireCache[id];
+          } catch(e) {
+            throw new Error("require('" + id + "'): failed to fetch from esm.sh: " + e.message);
+          }
+        };
         const module = { exports: {} };
         const exports = module.exports;
         try {
@@ -375,7 +403,7 @@ export async function executeJsCode(
       fs: typeof fsBridge,
       process: typeof processShim,
       console: typeof nodeConsole,
-      require: (id: string) => never,
+      require: (id: string) => Promise<unknown>,
       module: typeof moduleShim,
       exports: Record<string, unknown>,
       __state: Record<string, unknown>,
