@@ -179,7 +179,7 @@ Type `commands` in the terminal to see all available commands. Key commands:
 - **Filename = hostname pattern**: `-.okta.com.bsh` matches `*.okta.com`, `login.okta.com.bsh` matches exactly `login.okta.com`
 - **`// @match` directive**: Add in first 10 lines to restrict to specific URL patterns (e.g. `// @match *://login.okta.com/app/*`)
 - Scripts run in the **target browser page context** via CDP `Runtime.evaluate` — you have access to `document`, `window`, and all page globals, NOT `process`/`fs`/`exec()`
-- Scripts can import npm packages via `await require('package-name')` (fetches from esm.sh CDN)
+- Scripts can import npm packages via `require('package-name')` (fetches from esm.sh CDN)
 - The BshWatchdog monitors browser navigations and runs matching scripts automatically
 
 ## Inline Cards
@@ -279,7 +279,7 @@ Skills in native `/workspace/skills/` extend your capabilities, and SLICC also d
 - **Dual-mode**: Work in both CLI server and Chrome extension mode
 - **The `commands` output** lists discovered scripts under "User scripts (.jsh)"
 - **Top-level `await`**: `.jsh` files are wrapped in an `AsyncFunction` by the executor, so `await` works at the top level. All `fs.*` methods are async — **always `await` them**. Do not use `.then()` because the function body exits before promise chains resolve, causing callbacks to silently produce no output.
-- **CDN require()**: Scripts can import npm packages via `await require('package-name')`. This fetches from esm.sh CDN and caches for the session. Version pinning is supported: `await require('lodash@4')`.
+- **CDN require()**: Scripts can import npm packages via `require('package-name')`. This fetches from esm.sh CDN and caches for the session. Version pinning is supported: `require('lodash@4')`.
 
 ## Onboarding
 

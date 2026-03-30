@@ -216,12 +216,12 @@ console.log(ls.stdout);
 
 #### require / module / exports
 
-Scripts can import npm packages via `await require('package-name')`. This fetches from esm.sh CDN and caches for the session. Version pinning is supported: `await require('lodash@4')`.
+Scripts can import npm packages via `require('package-name')`. This fetches from esm.sh CDN and caches for the session. Version pinning is supported: `require('lodash@4')`.
 
 ```typescript
-const _ = await require('lodash');
-const { marked } = await require('marked');
-const chalk = await require('chalk@5');
+const _ = require('lodash');
+const { marked } = require('marked');
+const chalk = require('chalk@5');
 module.exports: {}        // Available for ES module pattern
 exports: module.exports   // Alias
 ```
@@ -491,17 +491,17 @@ For large-scale processing (1000+ files), batch operations and `.jsh` scripts ar
 
 ## CDN-backed require()
 
-`node -e`, `.jsh`, and `.bsh` scripts can import npm packages at runtime via `await require()`:
+`node -e`, `.jsh`, and `.bsh` scripts can import npm packages at runtime via `require()`:
 
 ```js
-const _ = await require('lodash');
-const { marked } = await require('marked');
-const chalk = await require('chalk@5');
+const _ = require('lodash');
+const { marked } = require('marked');
+const chalk = require('chalk@5');
 ```
 
 Packages are fetched from [esm.sh](https://esm.sh) and cached for the session. Version pinning via `@version` syntax is supported.
 
-**Note:** `require()` is async — always use `await`. This differs from Node.js where `require()` is synchronous.
+**Note:** require() is synchronous. Modules referenced with string literals are automatically pre-fetched before script execution. For dynamic specifiers, use `await import('https://esm.sh/' + name)` directly.
 
 ---
 
