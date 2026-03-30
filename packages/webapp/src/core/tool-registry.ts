@@ -53,14 +53,18 @@ export class ToolRegistry {
    * Execute a tool by name with the given input.
    * Returns a ToolResult, catching any errors.
    */
-  async execute(name: string, input: Record<string, unknown>): Promise<ToolResult> {
+  async execute(
+    name: string,
+    input: Record<string, unknown>,
+    signal?: AbortSignal
+  ): Promise<ToolResult> {
     const tool = this.tools.get(name);
     if (!tool) {
       return { content: `Unknown tool: ${name}`, isError: true };
     }
 
     try {
-      return await tool.execute(input);
+      return await tool.execute(input, signal);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return { content: `Tool error: ${message}`, isError: true };
