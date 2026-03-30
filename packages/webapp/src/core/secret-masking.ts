@@ -128,6 +128,8 @@ export function domainMatches(pattern: string, hostname: string): boolean {
   const p = pattern.toLowerCase();
   const h = hostname.toLowerCase();
 
+  if (p === '*') return true;
+
   if (!p.startsWith('*.')) {
     return p === h;
   }

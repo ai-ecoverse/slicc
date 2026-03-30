@@ -5,17 +5,17 @@ function helpText(): string {
   return `secret — manage secrets for the fetch proxy
 
 Usage:
-  secret set <name> --domain <patterns>   Store a secret (prompts for value)
-  secret list                             List stored secrets (names + domains)
-  secret delete <name>                    Delete a secret
-  secret test <name> <url>                Check if a URL matches a secret's domains
-  secret --help                           Show this help message
+  echo 'value' | secret set <name> --domain <patterns>   Store a secret (value via stdin)
+  secret list                                             List stored secrets (names + domains)
+  secret delete <name>                                    Delete a secret
+  secret test <name> <url>                                Check if a URL matches a secret's domains
+  secret --help                                           Show this help message
 
 The --domain flag accepts a comma-separated list of domain patterns.
 Patterns support exact matches and wildcards (e.g. *.github.com).
 
 Examples:
-  secret set GITHUB_TOKEN --domain "api.github.com,*.github.com"
+  echo 'mytoken' | secret set GITHUB_TOKEN --domain "api.github.com,*.github.com"
   secret list
   secret delete GITHUB_TOKEN
   secret test GITHUB_TOKEN https://api.github.com/repos
