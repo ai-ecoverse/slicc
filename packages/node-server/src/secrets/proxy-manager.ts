@@ -7,7 +7,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mask, buildScrubber, type SecretPair } from '../../../webapp/src/core/secret-masking.js';
+import { mask, buildScrubber, type SecretPair } from './masking.js';
 import { EnvSecretStore } from './env-secret-store.js';
 import { matchesDomains } from './domain-match.js';
 import type { Secret } from './types.js';
