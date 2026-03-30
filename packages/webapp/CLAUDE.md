@@ -59,7 +59,7 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 ### Tools
 
 - Path: `packages/webapp/src/tools/`
-- Active surface is file tools, `bash`, `javascript`, and scoop/nanoclaw helpers.
+- Active surface is file tools, `bash`, and scoop/nanoclaw helpers.
 - Browser automation is intentionally routed through shell commands rather than a separate tool family.
 
 ### Core Agent

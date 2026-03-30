@@ -13,21 +13,22 @@ export default defineConfig(({ mode }) => ({
   publicDir: resolve(workspaceRoot, 'packages/assets'),
   plugins: [
     {
-      name: 'stub-pi-session-manager',
+      name: 'stub-pi-node-internals',
       enforce: 'pre' as const,
-      // pi-coding-agent v0.64.0's compaction.js uses a relative import
-      // `../session-manager.js` which pulls in Node-only code (fs, crypto,
-      // path, url). Vite resolve.alias can't intercept relative imports
-      // inside node_modules, so we use a resolveId hook instead.
-      // The webapp only uses pure functions from compaction.js that never
-      // call buildSessionContext.
+      // pi-coding-agent's compaction.js uses relative imports that pull in
+      // Node-only code. session-manager.js needs fs/crypto/path/url, and
+      // config.js calls fileURLToPath(import.meta.url) at the top level.
+      // Vite resolve.alias can't intercept relative imports inside
+      // node_modules, so we use a resolveId hook instead.
       resolveId(source, importer) {
         const normalizedImporter = importer?.replace(/\\/g, '/');
-        if (
-          source.endsWith('/session-manager.js') &&
-          normalizedImporter?.includes('@mariozechner/pi-coding-agent')
-        ) {
-          return resolve(__dirname, 'src/stubs/pi-session-manager-stub.ts');
+        if (normalizedImporter?.includes('@mariozechner/pi-coding-agent')) {
+          if (source.endsWith('/session-manager.js')) {
+            return resolve(__dirname, 'src/stubs/pi-session-manager-stub.ts');
+          }
+          if (source.endsWith('/config.js') || source === '../config.js') {
+            return resolve(__dirname, 'src/stubs/pi-config-stub.ts');
+          }
         }
       },
     },
@@ -215,6 +216,7 @@ export default defineConfig(({ mode }) => ({
     target: 'esnext',
   },
   optimizeDeps: {
+    exclude: ['@mariozechner/pi-coding-agent'],
     esbuildOptions: {
       target: 'esnext',
     },

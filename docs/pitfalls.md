@@ -38,17 +38,16 @@ if (isExtensionMode) {
 
 **Implementation Details**
 
-| Aspect            | Details                                                                                                                    |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| **Sandbox file**  | `packages/chrome-extension/sandbox.html` (copied to `dist/extension/` by vite config)                                      |
-| **Exec pattern**  | Parent page sends `{ type: 'exec', id, code }`, sandbox posts back `{ type: 'exec_result', id, result, logs, error }`      |
-| **VFS bridge**    | Sandbox iframe uses same postMessage pattern for VFS operations (readFile, writeFile, etc.)                                |
-| **Shared iframe** | JavaScript tool and node command share the same sandbox iframe (find via `document.querySelector('iframe[data-js-tool]')`) |
-| **Wait for load** | In extension mode, must await sandbox iframe `load` event before posting messages                                          |
+| Aspect            | Details                                                                                                               |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------- |
+| **Sandbox file**  | `packages/chrome-extension/sandbox.html` (copied to `dist/extension/` by vite config)                                 |
+| **Exec pattern**  | Parent page sends `{ type: 'exec', id, code }`, sandbox posts back `{ type: 'exec_result', id, result, logs, error }` |
+| **VFS bridge**    | Sandbox iframe uses same postMessage pattern for VFS operations (readFile, writeFile, etc.)                           |
+| **Shared iframe** | Node command uses the sandbox iframe (find via `document.querySelector('iframe[data-js-tool]')`)                      |
+| **Wait for load** | In extension mode, must await sandbox iframe `load` event before posting messages                                     |
 
 **Related Files**
 
-- `packages/webapp/src/tools/javascript-tool.ts` lines 248–270 (dual-mode iframe setup)
 - `packages/webapp/src/shell/supplemental-commands/node-command.ts` lines 145–221 (extension routing)
 - `packages/chrome-extension/sandbox.html` (entry point, must load in extension via `chrome.runtime.getURL()`)
 
@@ -71,39 +70,6 @@ File: `packages/chrome-extension/vite.config.ts` `closeBundle` hook must:
 1. Copy Pyodide from node_modules (~13MB) to `dist/extension/pyodide/`
 2. Bundle ImageMagick WASM to `dist/extension/magick.wasm`
 3. Ensure manifest `web_accessible_resources` includes all assets
-
-## JavaScript Tool: Dual-Mode Pattern
-
-**CLI Mode** (`packages/webapp/src/tools/javascript-tool.ts` lines 262–270)
-
-```typescript
-iframe.sandbox.add('allow-scripts');
-iframe.sandbox.add('allow-same-origin');
-document.body.appendChild(iframe);
-const doc = iframe.contentDocument!;
-doc.open();
-doc.write(IFRAME_HTML);
-doc.close();
-iframeReady = Promise.resolve(iframe); // Synchronous
-```
-
-**Extension Mode** (`packages/webapp/src/tools/javascript-tool.ts` lines 250–260)
-
-```typescript
-iframeReady = new Promise<HTMLIFrameElement>((resolve) => {
-  iframe!.addEventListener(
-    'load',
-    () => {
-      resolve(iframe!);
-    },
-    { once: true }
-  );
-  iframe!.src = chrome.runtime.getURL('sandbox.html');
-  document.body.appendChild(iframe!);
-});
-```
-
-Key difference: extension mode must **wait for load event** before posting messages. CLI mode is synchronous.
 
 ## Node Command: Three-Branch Path
 

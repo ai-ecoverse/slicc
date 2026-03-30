@@ -49,6 +49,7 @@ export default defineConfig(({ mode }) => ({
     target: 'esnext',
   },
   optimizeDeps: {
+    exclude: ['@mariozechner/pi-coding-agent'],
     esbuildOptions: {
       target: 'esnext',
     },
@@ -73,15 +74,17 @@ export default defineConfig(({ mode }) => ({
   },
   plugins: [
     {
-      name: 'stub-pi-session-manager',
+      name: 'stub-pi-node-internals',
       enforce: 'pre' as const,
       resolveId(source, importer) {
         const normalizedImporter = importer?.replace(/\\/g, '/');
-        if (
-          source.endsWith('/session-manager.js') &&
-          normalizedImporter?.includes('@mariozechner/pi-coding-agent')
-        ) {
-          return resolve(__dirname, '../webapp/src/stubs/pi-session-manager-stub.ts');
+        if (normalizedImporter?.includes('@mariozechner/pi-coding-agent')) {
+          if (source.endsWith('/session-manager.js')) {
+            return resolve(__dirname, '../webapp/src/stubs/pi-session-manager-stub.ts');
+          }
+          if (source.endsWith('/config.js') || source === '../config.js') {
+            return resolve(__dirname, '../webapp/src/stubs/pi-config-stub.ts');
+          }
         }
       },
     },

@@ -283,7 +283,7 @@ export interface ToolDefinition {
   name: string;
   description: string;
   inputSchema: ToolInputSchema;
-  execute(input: Record<string, unknown>): Promise<ToolResult>;
+  execute(input: Record<string, unknown>, signal?: AbortSignal): Promise<ToolResult>;
 }
 
 /** Legacy tool result. */

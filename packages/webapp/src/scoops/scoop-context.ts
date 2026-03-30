@@ -27,7 +27,7 @@ import type {
 import { isContextOverflow } from '@mariozechner/pi-ai';
 import type { AssistantMessage as PiAssistantMessage } from '@mariozechner/pi-ai';
 import type { SessionStore } from '../core/session.js';
-import { createFileTools, createBashTool, createJavaScriptTool } from '../tools/index.js';
+import { createFileTools, createBashTool } from '../tools/index.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import {
   getApiKey,
@@ -173,7 +173,6 @@ export class ScoopContext {
       const legacyTools = [
         ...createFileTools(this.fs as VirtualFS),
         createBashTool(this.shell),
-        createJavaScriptTool(this.fs as VirtualFS),
         ...scoopManagementTools,
       ];
       const tools = adaptTools(legacyTools);

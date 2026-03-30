@@ -25,7 +25,6 @@ const mocks = vi.hoisted(() => {
     ]),
     createBashTool: vi.fn(() => ({ name: 'bash' })),
     createSearchTools: vi.fn(() => [{ name: 'grep' }, { name: 'find' }]),
-    createJavaScriptTool: vi.fn(() => ({ name: 'javascript' })),
     createScoopManagementTools: vi.fn(() => [{ name: 'send_message' }]),
     WasmShell: vi.fn(function () {
       return {};
@@ -50,7 +49,6 @@ vi.mock('../../src/tools/index.js', () => ({
   createFileTools: mocks.createFileTools,
   createBashTool: mocks.createBashTool,
   createSearchTools: mocks.createSearchTools,
-  createJavaScriptTool: mocks.createJavaScriptTool,
 }));
 
 vi.mock('../../src/shell/index.js', () => ({
@@ -134,14 +132,7 @@ describe('ScoopContext active tool surface', () => {
     const toolNames = mocks.agentCtorCalls[0].initialState.tools.map(
       (tool: { name: string }) => tool.name
     );
-    expect(toolNames).toEqual([
-      'read_file',
-      'write_file',
-      'edit_file',
-      'bash',
-      'javascript',
-      'send_message',
-    ]);
+    expect(toolNames).toEqual(['read_file', 'write_file', 'edit_file', 'bash', 'send_message']);
     expect(toolNames).not.toContain('grep');
     expect(toolNames).not.toContain('find');
   });

@@ -259,6 +259,7 @@ export class WasmShell {
   private history: string[] = [];
   private historyIndex = -1;
   private isExecuting = false;
+  private execAbort: AbortController | null = null;
   private continuationBuffer = '';
   /** Accumulated env state from successive exec() calls. */
   private lastEnv: Record<string, string>;
@@ -441,7 +442,7 @@ export class WasmShell {
   }
 
   /** Run a command through just-bash, carrying forward env/cwd state. */
-  private async runCommand(command: string): Promise<BashExecResult> {
+  private async runCommand(command: string, signal?: AbortSignal): Promise<BashExecResult> {
     // Track shell command for telemetry (extract first word as command name)
     const commandName = command.trim().split(/\s+/)[0] || 'unknown';
     trackShellCommand(commandName);
@@ -449,6 +450,7 @@ export class WasmShell {
     const result = await this.bash.exec(command, {
       env: this.lastEnv,
       cwd: this.cwd,
+      signal: signal ?? this.execAbort?.signal,
     });
     // Persist state for next call
     if (result.env) {
@@ -577,9 +579,10 @@ export class WasmShell {
 
   /** Execute a command programmatically (useful for agent integration). */
   async executeCommand(
-    command: string
+    command: string,
+    signal?: AbortSignal
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    const result = await this.runCommand(command);
+    const result = await this.runCommand(command, signal);
     return {
       stdout: result.stdout,
       stderr: result.stderr,
@@ -646,9 +649,15 @@ export class WasmShell {
     this.terminal.write(trimmed);
     this.terminal.writeln('');
     this.isExecuting = true;
+    this.execAbort = new AbortController();
 
     try {
       const result = await this.runCommand(trimmed);
+      const wasAborted = this.execAbort.signal.aborted;
+      this.execAbort = null;
+      if (wasAborted) {
+        return { stdout: '', stderr: '', exitCode: 130 };
+      }
       if (result.stdout) {
         this.writeToTerminal(result.stdout);
       }
@@ -661,14 +670,15 @@ export class WasmShell {
         exitCode: result.exitCode,
       };
     } catch (e) {
+      if (this.execAbort?.signal.aborted) {
+        this.execAbort = null;
+        return { stdout: '', stderr: '', exitCode: 130 };
+      }
+      this.execAbort = null;
       const msg = e instanceof Error ? e.message : String(e);
       const stderr = `Error: ${msg}\n`;
       this.writeToTerminal(stderr, true);
-      return {
-        stdout: '',
-        stderr,
-        exitCode: 1,
-      };
+      return { stdout: '', stderr, exitCode: 1 };
     } finally {
       this.isExecuting = false;
       this.showPrompt();
@@ -705,7 +715,14 @@ export class WasmShell {
     if (!this.terminal) return;
 
     this.terminal.onData((data) => {
-      if (this.isExecuting) return;
+      if (this.isExecuting) {
+        // Allow Ctrl+C to interrupt running commands
+        if (data === '\x03' || (data.length === 1 && data.charCodeAt(0) === 3)) {
+          this.execAbort?.abort();
+          this.terminal?.writeln('^C');
+        }
+        return;
+      }
 
       // Handle escape sequences as a whole (arrow keys, Home, End, Delete)
       if (data.startsWith('\x1b[') || data.startsWith('\x1bO')) {
@@ -1095,18 +1112,27 @@ export class WasmShell {
     }
 
     this.isExecuting = true;
+    this.execAbort = new AbortController();
     try {
       const result = await this.runCommand(trimmed);
-      if (result.stdout) {
-        this.writeToTerminal(result.stdout);
-      }
-      if (result.stderr) {
-        this.writeToTerminal(result.stderr, true);
+      const wasAborted = this.execAbort.signal.aborted;
+      if (wasAborted) {
+        // Command was interrupted — suppress output
+      } else {
+        if (result.stdout) {
+          this.writeToTerminal(result.stdout);
+        }
+        if (result.stderr) {
+          this.writeToTerminal(result.stderr, true);
+        }
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      this.writeToTerminal(`Error: ${msg}\n`, true);
+      if (!this.execAbort?.signal.aborted) {
+        const msg = e instanceof Error ? e.message : String(e);
+        this.writeToTerminal(`Error: ${msg}\n`, true);
+      }
     }
+    this.execAbort = null;
     this.isExecuting = false;
     this.showPrompt();
   }

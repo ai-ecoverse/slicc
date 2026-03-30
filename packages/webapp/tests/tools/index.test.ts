@@ -6,7 +6,6 @@ describe('tools/index exports', () => {
     expect(tools.createFileTools).toBeTypeOf('function');
     expect(tools.createBashTool).toBeTypeOf('function');
     expect(tools.createSearchTools).toBeTypeOf('function');
-    expect(tools.createJavaScriptTool).toBeTypeOf('function');
   });
 
   it('does not export the removed browser tool factory', () => {
