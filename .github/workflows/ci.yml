@@ -116,6 +116,21 @@ jobs:
         run: npx vitest run --project webapp
       - name: Build
         run: npm run build -w @slicc/webapp
+      - name: Check bundle for Node-only APIs
+        run: |
+          # Scan browser bundles for Node-only APIs that should never be bundled.
+          # Exclude pyodide files which legitimately contain Node references.
+          FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
+          MATCHES=$(grep -rlE "$FORBIDDEN" dist/ui/assets/*.js 2>/dev/null | grep -v pyodide || true)
+          if [ -n "$MATCHES" ]; then
+            echo "::error::Node-only APIs found in browser bundle:"
+            for f in $MATCHES; do
+              echo "  $f:"
+              grep -nE "$FORBIDDEN" "$f" | head -5
+            done
+            exit 1
+          fi
+          echo "✓ No Node-only APIs found in webapp bundle"
       - name: Build node-server (E2E dependency)
         run: npm run build -w @slicc/node-server
       - name: E2E tests
@@ -165,6 +180,21 @@ jobs:
         run: npm run build -w @slicc/webapp
       - name: Build extension
         run: npm run build -w @slicc/chrome-extension
+      - name: Check bundle for Node-only APIs
+        run: |
+          # Scan extension bundles for Node-only APIs that should never be bundled.
+          # Exclude pyodide files which legitimately contain Node references.
+          FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
+          MATCHES=$(grep -rlE "$FORBIDDEN" dist/extension/assets/*.js 2>/dev/null | grep -v pyodide || true)
+          if [ -n "$MATCHES" ]; then
+            echo "::error::Node-only APIs found in extension bundle:"
+            for f in $MATCHES; do
+              echo "  $f:"
+              grep -nE "$FORBIDDEN" "$f" | head -5
+            done
+            exit 1
+          fi
+          echo "✓ No Node-only APIs found in extension bundle"
 
   cloudflare-worker:
     needs: changes

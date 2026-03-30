@@ -13,6 +13,25 @@ export default defineConfig(({ mode }) => ({
   publicDir: resolve(workspaceRoot, 'packages/assets'),
   plugins: [
     {
+      name: 'stub-pi-session-manager',
+      enforce: 'pre' as const,
+      // pi-coding-agent v0.64.0's compaction.js uses a relative import
+      // `../session-manager.js` which pulls in Node-only code (fs, crypto,
+      // path, url). Vite resolve.alias can't intercept relative imports
+      // inside node_modules, so we use a resolveId hook instead.
+      // The webapp only uses pure functions from compaction.js that never
+      // call buildSessionContext.
+      resolveId(source, importer) {
+        const normalizedImporter = importer?.replace(/\\/g, '/');
+        if (
+          source.endsWith('/session-manager.js') &&
+          normalizedImporter?.includes('@mariozechner/pi-coding-agent')
+        ) {
+          return resolve(__dirname, 'src/stubs/pi-session-manager-stub.ts');
+        }
+      },
+    },
+    {
       name: 'build-webapp-runtime-assets',
       configureServer(server) {
         let cachedSwCode: string | null = null;

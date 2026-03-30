@@ -73,6 +73,19 @@ export default defineConfig(({ mode }) => ({
   },
   plugins: [
     {
+      name: 'stub-pi-session-manager',
+      enforce: 'pre' as const,
+      resolveId(source, importer) {
+        const normalizedImporter = importer?.replace(/\\/g, '/');
+        if (
+          source.endsWith('/session-manager.js') &&
+          normalizedImporter?.includes('@mariozechner/pi-coding-agent')
+        ) {
+          return resolve(__dirname, '../webapp/src/stubs/pi-session-manager-stub.ts');
+        }
+      },
+    },
+    {
       name: 'build-preview-sw',
       async closeBundle() {
         // Build preview-sw as a self-contained IIFE via esbuild.
