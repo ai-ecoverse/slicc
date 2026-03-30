@@ -145,7 +145,8 @@ struct ServerCommand: AsyncParsableCommand {
                 logger: Logger(label: "slicc.static-files")
             )
         )
-        registerAPIRoutes(router: router, lickSystem: lickSystem, config: config, httpClient: httpClient)
+        let secretInjector = SecretInjector(sessionId: UUID().uuidString)
+        registerAPIRoutes(router: router, lickSystem: lickSystem, config: config, httpClient: httpClient, secretInjector: secretInjector)
 
         let wsRouter = Router(context: BasicWebSocketRequestContext.self)
         await cdpProxy.install(on: wsRouter, cdpPort: cdpPort)

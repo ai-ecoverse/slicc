@@ -24,6 +24,7 @@ import { resolveCliBrowserLaunchUrl } from './launch-url.js';
 import { parseCliRuntimeFlags } from './runtime-flags.js';
 import { FileLogger } from './file-logger.js';
 import { CliLogDedup } from './cli-log-dedup.js';
+import { SecretProxyManager } from './secrets/proxy-manager.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..', '..');
@@ -591,6 +592,18 @@ async function main() {
   }
 
   // 3. Set up express app with request logging
+  const secretProxy = new SecretProxyManager();
+  try {
+    await secretProxy.reload();
+    if (secretProxy.hasSecrets()) {
+      console.log(
+        `Loaded ${secretProxy.getMaskedEntries().length} secrets for fetch-proxy injection`
+      );
+    }
+  } catch (err) {
+    console.warn('Failed to load secrets:', err instanceof Error ? err.message : err);
+  }
+
   const app = express();
   app.use(requestLogger);
 
