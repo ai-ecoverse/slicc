@@ -202,18 +202,26 @@ export class BshWatchdog {
     const content = await this.fs.readFile(scriptPath);
     const scriptContent = typeof content === 'string' ? content : new TextDecoder().decode(content);
 
-    // Wrap in async IIFE with error handling and evaluate in target page
+    // Wrap in async IIFE with pre-scanned synchronous require() and error handling
     const wrappedScript = `(async () => {
+  const __requireSpecifiers = (function() {
+    const re = /require\\s*\\(\\s*['"]([^'"]+)['"]\\s*\\)/g;
+    const code = ${JSON.stringify(scriptContent)};
+    const specs = [];
+    let m;
+    while ((m = re.exec(code)) !== null) specs.push(m[1]);
+    return [...new Set(specs)];
+  })();
   const __requireCache = {};
-  const require = async (id) => {
-    if (__requireCache[id]) return __requireCache[id];
+  await Promise.allSettled(__requireSpecifiers.map(async (id) => {
     try {
       const mod = await import('https://esm.sh/' + id);
       __requireCache[id] = mod.default !== undefined ? mod.default : mod;
-      return __requireCache[id];
-    } catch(e) {
-      throw new Error("require('" + id + "'): failed to fetch from esm.sh: " + e.message);
-    }
+    } catch(e) { /* will throw at require() call time */ }
+  }));
+  const require = (id) => {
+    if (id in __requireCache) return __requireCache[id];
+    throw new Error("require('" + id + "'): module not pre-loaded. Use a string literal or await import('https://esm.sh/" + id + "') directly.");
   };
   try {
     ${scriptContent}
