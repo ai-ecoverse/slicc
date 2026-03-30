@@ -66,6 +66,11 @@ public final class SecretInjector: Sendable {
         return env
     }
 
+    /// Returns masked entries with name, maskedValue, and domains for the /api/secrets/masked endpoint.
+    var maskedEntries: [(name: String, maskedValue: String, domains: [String])] {
+        secrets.map { (name: $0.name, maskedValue: $0.maskedValue, domains: $0.domains) }
+    }
+
     /// Inject real values into text destined for an upstream request.
     ///
     /// Scans `text` for any known masked values. For each match:
