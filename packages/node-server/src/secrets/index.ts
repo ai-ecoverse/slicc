@@ -2,3 +2,4 @@ export type { Secret, SecretEntry, SecretStore } from './types.js';
 export { EnvSecretStore } from './env-secret-store.js';
 export { matchDomain, matchesDomains } from './domain-match.js';
 export { parseEnvFile, serializeEnvFile } from './env-file.js';
+export { SecretProxyManager, type MaskedSecret } from './proxy-manager.js';
