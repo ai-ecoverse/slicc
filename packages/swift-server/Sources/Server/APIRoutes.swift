@@ -239,6 +239,21 @@ func registerAPIRoutes(
         }
     }
 
+    // Masked secrets endpoint — returns name + maskedValue + domains for shell env population.
+    // The browser fetches this at shell init to populate env vars with masked values.
+    // Real values are never exposed; only deterministic session-scoped masks.
+    router.get("/api/secrets/masked") { _, _ in
+        let entries = secretInjector.maskedEntries
+        let items: [LickSystem.JSONValue] = entries.map { entry in
+            .object([
+                "name": .string(entry.name),
+                "maskedValue": .string(entry.maskedValue),
+                "domains": .array(entry.domains.map { .string($0) }),
+            ])
+        }
+        return try jsonResponse(.array(items))
+    }
+
     for method in fetchProxyMethods {
         router.on("/api/fetch-proxy", method: method) { request, _ in
             guard let targetURLValue = request.headers[targetURLHeader],

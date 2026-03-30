@@ -952,6 +952,21 @@ async function main() {
         .json({ error: err instanceof Error ? err.message : 'Failed to delete secret' });
     }
   });
+
+  // Masked secrets endpoint — returns name + maskedValue pairs for shell env population.
+  // The browser fetches this at shell init to populate env vars with masked values.
+  // Real values are never exposed; only deterministic session-scoped masks.
+  app.get('/api/secrets/masked', (_req, res) => {
+    try {
+      const entries = secretProxy.getMaskedEntries();
+      res.json(entries);
+    } catch (err) {
+      res
+        .status(500)
+        .json({ error: err instanceof Error ? err.message : 'Failed to get masked secrets' });
+    }
+  });
+
   // Fetch proxy — forwards cross-origin requests from the browser to bypass CORS.
   // Used by just-bash's curl which calls the browser's fetch() API.
   // Note: express.json() may have already parsed the body, so we check req.body first.
