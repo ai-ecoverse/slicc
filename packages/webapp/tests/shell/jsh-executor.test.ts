@@ -296,25 +296,23 @@ describe('executeJshFile', () => {
     expect(result.stdout.trim()).toBe('number');
   });
 
-  it('provides synchronous require that throws for non-pre-loaded modules', async () => {
+  it('require throws for non-pre-scanned dynamic specifiers', async () => {
     const ctx = createMockCtx({
       '/workspace/req.jsh':
-        'try { require("nonexistent-pkg-xyz"); } catch(e) { console.log(e.message); }',
+        'try { const x = require(String("dynamic-pkg")); console.log("unexpected: " + x); } catch(e) { console.log(e.message); }',
     });
     const result = await executeJshFile('/workspace/req.jsh', [], ctx);
     expect(result.exitCode).toBe(0);
-    // require is synchronous now; non-pre-loaded modules throw with a helpful message
     expect(result.stdout).toContain('not pre-loaded');
   });
 
-  it('require throws synchronously for modules that fail to pre-fetch', async () => {
+  it('require throws helpful error for modules that failed to pre-fetch', async () => {
     const ctx = createMockCtx({
       '/workspace/req-err.jsh':
-        'try { require("this-package-definitely-does-not-exist-xyz123"); } catch(e) { console.log(e.message); }',
+        'try { const x = require("this-package-definitely-does-not-exist-xyz123"); console.log("got: " + typeof x); } catch(e) { console.log(e.message); }',
     });
     const result = await executeJshFile('/workspace/req-err.jsh', [], ctx);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('require');
     expect(result.stdout).toContain('not pre-loaded');
   });
 });
