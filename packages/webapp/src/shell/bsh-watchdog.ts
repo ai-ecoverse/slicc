@@ -212,7 +212,7 @@ export class BshWatchdog {
     while ((m = re.exec(code)) !== null) specs.push(m[1]);
     return [...new Set(specs)];
   })();
-  const __requireCache = {};
+  const __requireCache = Object.create(null);
   await Promise.allSettled(__requireSpecifiers.map(async (id) => {
     try {
       const mod = await import('https://esm.sh/' + id);
