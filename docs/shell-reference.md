@@ -378,7 +378,6 @@ await fs.writeFile('/output.jpg', newBytes);
 ### Tools Supporting Binary
 
 - **playwright-cli**: `screenshot --filename=<path>` saves PNGs directly to the VFS
-- **javascript** tool: `fs.readFileBinary()`, `fs.writeFileBinary()` preserve byte fidelity
 - **node** / **.jsh**: `fs.readFileBinary()`, `fs.writeFileBinary()` available
 - **bash**: Limited binary support (command output truncated at 100KB)
 
@@ -482,7 +481,7 @@ echo "Today is $DATE"
 - **File I/O**: IndexedDB operations, <100ms per file
 - **Binary operations**: LightningFS encoding/decoding, <50ms for typical images
 
-For large-scale processing (1000+ files), batch operations and JavaScript tool are faster than shell loops.
+For large-scale processing (1000+ files), batch operations and `.jsh` scripts are faster than shell loops.
 
 ---
 
@@ -491,7 +490,7 @@ For large-scale processing (1000+ files), batch operations and JavaScript tool a
 - **Binary output in bash**: Commands producing binary output are limited to 100KB (just-bash constraint)
 - **require() not supported**: .jsh scripts cannot import modules
 - **Symlinks**: Not supported by LightningFS
-- **Large files**: Reading >100MB files in bash is slow; use JavaScript tool instead
+- **Large files**: Reading >100MB files in bash is slow; use `node -e` or `.jsh` scripts instead
 - **Network timeout**: curl/fetch timeout at 30 seconds (default)
 
 ---
