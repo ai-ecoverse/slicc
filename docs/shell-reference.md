@@ -216,8 +216,12 @@ console.log(ls.stdout);
 
 #### require / module / exports
 
+Scripts can import npm packages via `await require('package-name')`. This fetches from esm.sh CDN and caches for the session. Version pinning is supported: `await require('lodash@4')`.
+
 ```typescript
-require(id)               // ❌ Not supported (throws error)
+const _ = await require('lodash');
+const { marked } = await require('marked');
+const chalk = await require('chalk@5');
 module.exports: {}        // Available for ES module pattern
 exports: module.exports   // Alias
 ```
@@ -485,10 +489,25 @@ For large-scale processing (1000+ files), batch operations and `.jsh` scripts ar
 
 ---
 
+## CDN-backed require()
+
+`node -e`, `.jsh`, and `.bsh` scripts can import npm packages at runtime via `await require()`:
+
+```js
+const _ = await require('lodash');
+const { marked } = await require('marked');
+const chalk = await require('chalk@5');
+```
+
+Packages are fetched from [esm.sh](https://esm.sh) and cached for the session. Version pinning via `@version` syntax is supported.
+
+**Note:** `require()` is async — always use `await`. This differs from Node.js where `require()` is synchronous.
+
+---
+
 ## Limitations
 
 - **Binary output in bash**: Commands producing binary output are limited to 100KB (just-bash constraint)
-- **require() not supported**: .jsh scripts cannot import modules
 - **Symlinks**: Not supported by LightningFS
 - **Large files**: Reading >100MB files in bash is slow; use `node -e` or `.jsh` scripts instead
 - **Network timeout**: curl/fetch timeout at 30 seconds (default)
