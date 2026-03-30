@@ -338,6 +338,61 @@ describe('shared server API conformance', () => {
     openSockets.add(socket);
   });
 
+  it('manages secrets via the /api/secrets REST API', async () => {
+    const testName = `INTTEST_${Date.now()}`;
+
+    // POST — create a secret
+    const create = await fetchFromServer('/api/secrets', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: testName, value: 'test_val', domains: ['api.test.com'] }),
+    });
+    expect(create.status).toBe(200);
+    await expect(create.json()).resolves.toEqual({ ok: true, name: testName });
+
+    // GET — list secrets (should include the created one)
+    const list = await fetchFromServer('/api/secrets');
+    expect(list.status).toBe(200);
+    const entries = (await list.json()) as Array<{ name: string; domains: string[] }>;
+    const found = entries.find((e) => e.name === testName);
+    expect(found).toBeDefined();
+    expect(found!.domains).toEqual(['api.test.com']);
+    // Value must never be returned
+    expect((found as Record<string, unknown>)['value']).toBeUndefined();
+
+    // DELETE — remove the secret
+    const del = await fetchFromServer(`/api/secrets/${testName}`, { method: 'DELETE' });
+    expect(del.status).toBe(200);
+    await expect(del.json()).resolves.toEqual({ ok: true, name: testName });
+
+    // Verify it's gone
+    const listAfter = await fetchFromServer('/api/secrets');
+    const entriesAfter = (await listAfter.json()) as Array<{ name: string }>;
+    expect(entriesAfter.find((e) => e.name === testName)).toBeUndefined();
+  });
+
+  it('rejects secret creation with missing name', async () => {
+    const res = await fetchFromServer('/api/secrets', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ value: 'v', domains: ['d.com'] }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body['error']).toBeDefined();
+  });
+
+  it('rejects secret creation with empty domains', async () => {
+    const res = await fetchFromServer('/api/secrets', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'INTTEST_NODOMAIN', value: 'v', domains: [] }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body['error']).toBeDefined();
+  });
+
   it('returns structured responses from lick-backed REST endpoints based on browser connectivity', async () => {
     const endpoints = [
       {
