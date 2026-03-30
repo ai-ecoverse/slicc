@@ -54,10 +54,7 @@ The lick still routes to the cone via `client.sendSprinkleLick()`.
 Same logic as extension mode:
 
 ```typescript
-if (
-  isSprinkle &&
-  event.sprinkleName === 'welcome'
-) {
+if (isSprinkle && event.sprinkleName === 'welcome') {
   const action = (event.body as any)?.action;
   if (action === 'onboarding-complete' || action === 'shortcut-migrate') {
     localStorage.setItem('slicc-welcomed', '1');
@@ -102,8 +99,8 @@ Do NOT save a profile, update CLAUDE.md, or write a greeting.
 
 ## Files Changed
 
-| File | Change |
-|------|--------|
-| `packages/vfs-root/shared/sprinkles/welcome/welcome.shtml` | Add migrate-page purpose, `startMigrationShortcut()` function |
-| `packages/webapp/src/ui/main.ts` | Handle `shortcut-migrate` lick in both extension and CLI paths |
-| `packages/vfs-root/workspace/skills/welcome/SKILL.md` | Add `shortcut-migrate` handler section |
+| File                                                       | Change                                                         |
+| ---------------------------------------------------------- | -------------------------------------------------------------- |
+| `packages/vfs-root/shared/sprinkles/welcome/welcome.shtml` | Add migrate-page purpose, `startMigrationShortcut()` function  |
+| `packages/webapp/src/ui/main.ts`                           | Handle `shortcut-migrate` lick in both extension and CLI paths |
+| `packages/vfs-root/workspace/skills/welcome/SKILL.md`      | Add `shortcut-migrate` handler section                         |
