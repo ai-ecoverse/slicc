@@ -259,7 +259,7 @@ export class WasmShell {
   private history: string[] = [];
   private historyIndex = -1;
   private isExecuting = false;
-  private aborted = false;
+  private execAbort: AbortController | null = null;
   private continuationBuffer = '';
   /** Accumulated env state from successive exec() calls. */
   private lastEnv: Record<string, string>;
@@ -450,6 +450,7 @@ export class WasmShell {
     const result = await this.bash.exec(command, {
       env: this.lastEnv,
       cwd: this.cwd,
+      signal: this.execAbort?.signal,
     });
     // Persist state for next call
     if (result.env) {
@@ -647,11 +648,13 @@ export class WasmShell {
     this.terminal.write(trimmed);
     this.terminal.writeln('');
     this.isExecuting = true;
+    this.execAbort = new AbortController();
 
     try {
       const result = await this.runCommand(trimmed);
-      if (this.aborted) {
-        this.aborted = false;
+      const wasAborted = this.execAbort.signal.aborted;
+      this.execAbort = null;
+      if (wasAborted) {
         return { stdout: '', stderr: '', exitCode: 130 };
       }
       if (result.stdout) {
@@ -666,10 +669,11 @@ export class WasmShell {
         exitCode: result.exitCode,
       };
     } catch (e) {
-      if (this.aborted) {
-        this.aborted = false;
+      if (this.execAbort?.signal.aborted) {
+        this.execAbort = null;
         return { stdout: '', stderr: '', exitCode: 130 };
       }
+      this.execAbort = null;
       const msg = e instanceof Error ? e.message : String(e);
       const stderr = `Error: ${msg}\n`;
       this.writeToTerminal(stderr, true);
@@ -713,7 +717,7 @@ export class WasmShell {
       if (this.isExecuting) {
         // Allow Ctrl+C to interrupt running commands
         if (data === '\x03' || (data.length === 1 && data.charCodeAt(0) === 3)) {
-          this.aborted = true;
+          this.execAbort?.abort();
           this.terminal?.writeln('^C');
         }
         return;
@@ -1107,11 +1111,12 @@ export class WasmShell {
     }
 
     this.isExecuting = true;
+    this.execAbort = new AbortController();
     try {
       const result = await this.runCommand(trimmed);
-      if (this.aborted) {
-        // Command was interrupted by Ctrl+C — suppress output
-        this.aborted = false;
+      const wasAborted = this.execAbort.signal.aborted;
+      if (wasAborted) {
+        // Command was interrupted — suppress output
       } else {
         if (result.stdout) {
           this.writeToTerminal(result.stdout);
@@ -1121,12 +1126,12 @@ export class WasmShell {
         }
       }
     } catch (e) {
-      if (!this.aborted) {
+      if (!this.execAbort?.signal.aborted) {
         const msg = e instanceof Error ? e.message : String(e);
         this.writeToTerminal(`Error: ${msg}\n`, true);
       }
-      this.aborted = false;
     }
+    this.execAbort = null;
     this.isExecuting = false;
     this.showPrompt();
   }
