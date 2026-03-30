@@ -131,6 +131,23 @@ jobs:
             exit 1
           fi
           echo "✓ No Node-only APIs found in webapp bundle"
+      - name: Check dev deps for Node-only APIs
+        working-directory: packages/webapp
+        run: |
+          # Force Vite to pre-bundle dependencies (same as dev server startup)
+          npx vite optimize --force
+          # Scan optimized deps for Node-only APIs that crash in the browser
+          FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
+          MATCHES=$(grep -rlE "$FORBIDDEN" ../../node_modules/.vite/deps/*.js 2>/dev/null | grep -v pyodide || true)
+          if [ -n "$MATCHES" ]; then
+            echo "::error::Node-only APIs found in Vite dev-optimized deps:"
+            for f in $MATCHES; do
+              echo "  $f:"
+              grep -nE "$FORBIDDEN" "$f" | head -5
+            done
+            exit 1
+          fi
+          echo "✓ No Node-only APIs found in dev-optimized deps"
       - name: Build node-server (E2E dependency)
         run: npm run build -w @slicc/node-server
       - name: E2E tests
@@ -195,6 +212,23 @@ jobs:
             exit 1
           fi
           echo "✓ No Node-only APIs found in extension bundle"
+      - name: Check dev deps for Node-only APIs
+        working-directory: packages/chrome-extension
+        run: |
+          # Force Vite to pre-bundle dependencies (same as dev server startup)
+          npx vite optimize --force
+          # Scan optimized deps for Node-only APIs that crash in the browser
+          FORBIDDEN='fileURLToPath|require\("(fs|path|crypto|child_process|os|net|tls|http2|dgram|cluster|readline|repl|vm|v8|perf_hooks|worker_threads|inspector)"\)'
+          MATCHES=$(grep -rlE "$FORBIDDEN" ../../node_modules/.vite/deps/*.js 2>/dev/null | grep -v pyodide || true)
+          if [ -n "$MATCHES" ]; then
+            echo "::error::Node-only APIs found in Vite dev-optimized deps (extension):"
+            for f in $MATCHES; do
+              echo "  $f:"
+              grep -nE "$FORBIDDEN" "$f" | head -5
+            done
+            exit 1
+          fi
+          echo "✓ No Node-only APIs found in dev-optimized deps (extension)"
 
   cloudflare-worker:
     needs: changes
