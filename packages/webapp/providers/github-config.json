@@ -1,5 +1,5 @@
 {
-  "clientId": "",
+  "clientId": "Ov23lihWfnEB9Y1sCsGj",
   "scopes": "repo,read:user",
   "redirectUri": "https://www.sliccy.ai/auth/callback",
   "extensionRedirectUri": "https://akggccfpkleihhemkkikggopnifgelbk.chromiumapp.org/github"
