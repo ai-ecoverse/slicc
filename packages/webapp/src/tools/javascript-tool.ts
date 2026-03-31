@@ -370,17 +370,9 @@ export function createJavaScriptTool(fs: VirtualFS): ToolDefinition {
   return {
     name: 'javascript',
     description:
-      'Execute JavaScript code in a persistent sandboxed runtime. ' +
-      'Variables and functions persist across calls (same iframe context). ' +
-      'VFS bridge: fs.readFile(path), fs.readFileBinary(path) → Uint8Array, ' +
-      'fs.writeFile(path, content), fs.writeFileBinary(path, uint8Array), ' +
-      'fs.readDir(path), fs.exists(path), fs.fetchToFile(url, path) — all async. ' +
-      'Use fs.readFileBinary() to load binary files (images, etc.) as Uint8Array for canvas/Blob operations. ' +
-      'fs.fetchToFile(url, path) downloads any URL and saves binary content to the VFS (best way to download files). ' +
-      'Top-level await is supported. Console output (log/error/warn) is captured. ' +
-      'The return value of the last expression is captured if you use "return <expr>". ' +
-      'Has access to browser APIs (fetch, URL, JSON, TextEncoder, etc.). ' +
-      'fetch() works for cross-origin URLs (proxied through the CLI server).',
+      'Execute JavaScript in a persistent sandboxed runtime. ' +
+      'VFS bridge: fs.readFile, fs.writeFile, fs.readFileBinary, fs.fetchToFile (all async). ' +
+      'Top-level await, browser APIs (fetch, URL, JSON), console output captured. Use "return <expr>" for results.',
     inputSchema: {
       type: 'object',
       properties: {

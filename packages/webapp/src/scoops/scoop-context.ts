@@ -153,13 +153,22 @@ export class ScoopContext {
       };
       const scoopManagementTools = createScoopManagementTools(scoopManagementToolsConfig);
 
-      // Create tools (browser automation and search are now via shell commands through bash)
-      const legacyTools = [
-        ...createFileTools(this.fs as VirtualFS),
-        createBashTool(this.shell),
-        createJavaScriptTool(this.fs as VirtualFS),
-        ...scoopManagementTools,
-      ];
+      // Create tools — cone gets everything, scoops get minimal set to save tokens
+      const fileTools = createFileTools(this.fs as VirtualFS);
+      const bashTool = createBashTool(this.shell);
+      const jsTool = createJavaScriptTool(this.fs as VirtualFS);
+
+      let legacyTools;
+      if (this.scoop.isCone) {
+        // Cone: all tools
+        legacyTools = [...fileTools, bashTool, jsTool, ...scoopManagementTools];
+      } else {
+        // Scoops: read_file + bash + send_message only (saves ~1,500 tokens)
+        // write_file and edit_file are accessible via bash if truly needed
+        const readFileTool = fileTools.find((t) => t.name === 'read_file');
+        const sendMsg = scoopManagementTools.find((t) => t.name === 'send_message');
+        legacyTools = [readFileTool, bashTool, sendMsg].filter(Boolean) as typeof fileTools;
+      }
       const tools = adaptTools(legacyTools);
 
       // Load scoop memory
@@ -229,6 +238,10 @@ export class ScoopContext {
       const compactFn = createCompactContext({
         model,
         getApiKey: () => getApiKey() ?? undefined,
+        // Trigger compaction earlier to prevent context bloat (default is ~183K)
+        contextWindow: this.scoop.isCone ? 200000 : 100000,
+        reserveTokens: 30000,
+        keepRecentTokens: 20000,
       });
 
       this.agent = new Agent({
@@ -705,67 +718,19 @@ Created: ${new Date().toISOString()}
   ): string {
     const assistantName = this.scoop.config?.assistantName || this.scoop.assistantLabel;
 
-    const basePrompt = `# ${assistantName}
+    const basePrompt = this.scoop.isCone
+      ? `# ${assistantName}
 
-You are ${assistantName}, ${this.scoop.isCone ? 'the main assistant (cone)' : 'a scoop assistant'} in SLICC (Self-Licking Ice Cream Cone).
+You are ${assistantName}, the cone (main assistant) in SLICC. You have full filesystem access, bash shell, file tools, and scoop management (list_scoops, feed_scoop, scoop_scoop, drop_scoop, update_global_memory).
 
-## Your Capabilities
+Delegate to scoops with feed_scoop — provide complete, self-contained prompts (scoops have NO access to your conversation). You'll be notified when they finish.
 
-You have access to:
-- A virtual filesystem at ${this.scoop.isCone ? '/' : `/scoops/${this.scoop.folder}/workspace`} (your working directory)
-- A bash shell for running commands (via the bash tool)
-- File reading, writing, and editing tools
-- Use shell commands like \`rg\`, \`grep\`, and \`find\` through the bash tool for search
-- **send_message**: Send messages immediately while working (for progress updates)
-- **schedule_task**: Schedule recurring or one-time tasks
-- **list_tasks**, **pause_task**, **resume_task**, **cancel_task**: Manage scheduled tasks
+Memory: global (/shared/CLAUDE.md, use update_global_memory), cone (/workspace/CLAUDE.md, edit directly).
 
-${
-  this.scoop.isCone
-    ? `
-As the cone (main assistant), you have elevated privileges:
-- **list_scoops**: See all registered scoops
-- **register_scoop**: Add new scoops
-- **update_global_memory**: Update the global CLAUDE.md shared across all scoops
-- Full filesystem access (unrestricted)
-- You can schedule tasks for any scoop
+${this.scoop.config?.systemPromptAppend ?? ''}`
+      : `# ${assistantName}
 
-## Delegating to Scoops
-
-Use the **delegate_to_scoop** tool to send work to scoops. IMPORTANT:
-- The scoop has NO access to your conversation history
-- You MUST write a **complete, self-contained prompt** with ALL context, instructions, file paths, URLs, etc.
-- If the user says "do the same" or references earlier work, YOU must expand that into explicit instructions
-- Use **list_scoops** first to see available scoop names
-
-**You will automatically receive a notification when a scoop finishes.** The notification contains their full response.
-You do NOT need to schedule polling tasks or check for completion markers — just delegate and wait. You will be
-prompted again with the scoop's results when they are done. Then you can act on those results (move files, etc.).
-`
-    : `
-You are a scoop with restricted filesystem access:
-- Your workspace: /scoops/${this.scoop.folder}/
-- Shared directory: /shared/ (read-write for all scoops)
-- Stay focused on your assigned tasks.
-`
-}
-
-## Memory
-
-Your memory is organized hierarchically:
-- **Global memory** (/shared/CLAUDE.md): Read by all scoops, ${this.scoop.isCone ? 'use update_global_memory tool to modify it' : 'read-only for you'}
-- **${this.scoop.isCone ? 'Cone' : 'Scoop'} memory** (${this.scoop.isCone ? '/workspace/CLAUDE.md' : `/scoops/${this.scoop.folder}/CLAUDE.md`}): Your private memory
-
-When you learn something important:
-- Use your memory for context-specific notes (edit with write_file or edit_file)
-${this.scoop.isCone ? '- Use update_global_memory tool for information that should be shared across all scoops' : ''}
-
-## Communication
-
-When using send_message:
-- Use it for progress updates on long tasks
-- Use it when you want to send multiple messages
-- Your final output is also sent, so don't repeat yourself
+You are ${assistantName}, a scoop in SLICC. Workspace: /scoops/${this.scoop.folder}/, shared: /shared/. You have bash, file tools, and send_message. Stay focused on your assigned task.
 
 ${this.scoop.config?.systemPromptAppend ?? ''}`;
 
@@ -792,10 +757,12 @@ ${scoopMemory}
 ---`;
     }
 
-    // Add skills
-    const skillsSection = formatSkillsForPrompt(skills);
-    if (skillsSection) {
-      fullPrompt += skillsSection;
+    // Add skills (cone only — scoops get skills via their brief if needed)
+    if (this.scoop.isCone) {
+      const skillsSection = formatSkillsForPrompt(skills);
+      if (skillsSection) {
+        fullPrompt += skillsSection;
+      }
     }
 
     return fullPrompt;
