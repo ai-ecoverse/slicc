@@ -296,13 +296,44 @@ describe('executeJshFile', () => {
     expect(result.stdout.trim()).toBe('number');
   });
 
-  it('provides require shim that throws', async () => {
+  it('require throws for non-pre-scanned dynamic specifiers', async () => {
     const ctx = createMockCtx({
-      '/workspace/req.jsh': 'try { require("fs"); } catch(e) { console.log(e.message); }',
+      '/workspace/req.jsh':
+        'try { const x = require(String("dynamic-pkg")); console.log("unexpected: " + x); } catch(e) { console.log(e.message); }',
     });
     const result = await executeJshFile('/workspace/req.jsh', [], ctx);
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('not supported');
+    expect(result.stdout).toContain('not pre-loaded');
+  });
+
+  it('require throws helpful error for modules that failed to pre-fetch', async () => {
+    const ctx = createMockCtx({
+      '/workspace/req-err.jsh':
+        'try { const x = require("this-package-definitely-does-not-exist-xyz123"); console.log("got: " + typeof x); } catch(e) { console.log(e.message); }',
+    });
+    const result = await executeJshFile('/workspace/req-err.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('not pre-loaded');
+  });
+
+  it('require returns pre-cached module', async () => {
+    // Pre-populate cache before execution
+    const { nodeRuntimeState } = await import('../../src/shell/supplemental-commands/shared.js');
+    nodeRuntimeState.__requireCache = Object.create(null);
+    (nodeRuntimeState.__requireCache as Record<string, unknown>)['test-sentinel-pkg'] = {
+      hello: 'world',
+    };
+
+    const ctx = createMockCtx({
+      '/workspace/req-cached.jsh':
+        'const mod = require("test-sentinel-pkg"); console.log(JSON.stringify(mod));',
+    });
+    const result = await executeJshFile('/workspace/req-cached.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('{"hello":"world"}');
+
+    // Clean up
+    delete nodeRuntimeState.__requireCache;
   });
 });
 

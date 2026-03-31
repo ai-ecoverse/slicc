@@ -2,6 +2,20 @@ import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
 import { NODE_VERSION, NodeExitError, formatConsoleArg, nodeRuntimeState } from './shared.js';
 
+/**
+ * Extract require('...') specifiers from source code via regex.
+ * Matches require("foo"), require('foo'), and require(`foo`) with static string literals.
+ */
+function extractRequireSpecifiers(code: string): string[] {
+  const re = /\brequire\s*\(\s*(['"`])([^'"`\s]+)\1\s*\)/g;
+  const ids = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(code)) !== null) {
+    ids.add(m[2]);
+  }
+  return [...ids];
+}
+
 function nodeHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout: 'usage: node -e <code> [args...]\n',
@@ -145,8 +159,41 @@ export function createNodeCommand(): Command {
       return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
     };
 
-    const requireShim = (id: string): never => {
-      throw new Error(`require('${id}') is not supported in node shim`);
+    const isExtensionMode = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+
+    if (!isExtensionMode) {
+      // Pre-scan code for require('...') specifiers and fetch them into the cache
+      // so that requireShim can return synchronously.
+      // (extension mode handles this inside the sandbox)
+      const specifiers = extractRequireSpecifiers(code);
+      const cache = (nodeRuntimeState.__requireCache ??
+        (nodeRuntimeState.__requireCache = Object.create(null))) as Record<string, unknown>;
+      const uncached = specifiers.filter((id) => !(id in cache));
+      if (uncached.length > 0) {
+        const results = await Promise.allSettled(
+          uncached.map(async (id) => {
+            const mod = await import(/* @vite-ignore */ 'https://esm.sh/' + id);
+            const val = mod && typeof mod === 'object' && 'default' in mod ? mod.default : mod;
+            cache[id] = val;
+          })
+        );
+        for (let i = 0; i < results.length; i++) {
+          if (results[i].status === 'rejected') {
+            const err = (results[i] as PromiseRejectedResult).reason;
+            writeStderr(
+              `Warning: failed to pre-load require('${uncached[i]}'): ${err instanceof Error ? err.message : String(err)}\n`
+            );
+          }
+        }
+      }
+    }
+
+    const requireShim = (id: string): unknown => {
+      const cache = nodeRuntimeState.__requireCache as Record<string, unknown> | undefined;
+      if (cache && id in cache) return cache[id];
+      throw new Error(
+        `require('${id}'): module not pre-loaded. Use a string literal or await import('https://esm.sh/${id}') directly.`
+      );
     };
 
     const moduleShim = { exports: {} as Record<string, unknown>, filename };
@@ -154,7 +201,6 @@ export function createNodeCommand(): Command {
     try {
       // In extension mode, AsyncFunction constructor is blocked by CSP.
       // Route through the JavaScript tool's sandbox iframe which has full VFS bridge.
-      const isExtensionMode = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
       if (isExtensionMode) {
         // Wrap the user code with node-like shims.
         // The sandbox already provides `fs` (with readFile, writeFile, readDir, exists, etc.)
@@ -186,7 +232,51 @@ export function createNodeCommand(): Command {
             self.addEventListener('message', handler);
             parent.postMessage({ type: 'shell_exec', id, command }, '*');
           });
-          const require = (id) => { throw new Error("require('" + id + "') is not supported"); };
+          const __requireCache = Object.create(null);
+          async function __loadModule(id) {
+            const url = 'https://esm.sh/' + id;
+            try {
+              return await import(url);
+            } catch(e) {
+              // Fallback for sandbox/extension mode: fetch + blob URL
+              const resp = await fetch(url);
+              if (!resp.ok) throw new Error('HTTP ' + resp.status + ' fetching ' + url);
+              const text = await resp.text();
+              const blob = new Blob([text], { type: 'text/javascript' });
+              const blobUrl = URL.createObjectURL(blob);
+              try {
+                return await import(blobUrl);
+              } finally {
+                URL.revokeObjectURL(blobUrl);
+              }
+            }
+          }
+          {
+            const __code = ${JSON.stringify(code)};
+            const __re = /\\brequire\\s*\\(\\s*(['"\`])([^'"\`\\s]+)\\1\\s*\\)/g;
+            const __ids = new Set();
+            let __m;
+            while ((__m = __re.exec(__code)) !== null) __ids.add(__m[2]);
+            const __uncached = [...__ids].filter((id) => !(id in __requireCache));
+            if (__uncached.length > 0) {
+              const __results = await Promise.allSettled(
+                __uncached.map(async (id) => {
+                  const mod = await __loadModule(id);
+                  const val = mod && typeof mod === 'object' && 'default' in mod ? mod.default : mod;
+                  __requireCache[id] = val;
+                })
+              );
+              for (let __i = 0; __i < __results.length; __i++) {
+                if (__results[__i].status === 'rejected') {
+                  __stderr.push("Warning: failed to pre-load require('" + __uncached[__i] + "'): " + __results[__i].reason + "\\n");
+                }
+              }
+            }
+          }
+          const require = (id) => {
+            if (id in __requireCache) return __requireCache[id];
+            throw new Error("require('" + id + "'): module not pre-loaded. Use a string literal or await import('https://esm.sh/" + id + "') directly.");
+          };
           const module = { exports: {} };
           const exports = module.exports;
           try {
@@ -391,7 +481,7 @@ export function createNodeCommand(): Command {
         fs: typeof fsBridge,
         process: typeof processShim,
         console: typeof nodeConsole,
-        require: (id: string) => never,
+        require: (id: string) => unknown,
         module: typeof moduleShim,
         exports: Record<string, unknown>,
         __state: Record<string, unknown>,
