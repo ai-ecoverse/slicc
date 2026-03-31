@@ -176,6 +176,26 @@ final class CDPProxyTests: XCTestCase {
         XCTAssertEqual(sentTexts.first, "{\"id\":2}")
         XCTAssertEqual(sentTexts.last, "{\"id\":1001}")
     }
+
+    func testChromeMessagePumpPreservesInboundMessageOrder() async {
+        let (messageStream, continuation) = AsyncStream<ProxyMessage>.makeStream()
+        let recorder = PumpMessageRecorder()
+
+        let pumpTask = Task {
+            await CDPProxy.runChromeMessagePump(messageStream) { message in
+                await recorder.record(message)
+            }
+        }
+
+        continuation.yield(.text("{\"id\":1}"))
+        continuation.yield(.text("{\"id\":2}"))
+        continuation.finish()
+
+        _ = await pumpTask.value
+
+        let receivedTexts = await recorder.snapshot()
+        XCTAssertEqual(receivedTexts, ["{\"id\":1}", "{\"id\":2}"])
+    }
 }
 
 private final class ClientRecorder: @unchecked Sendable {
@@ -424,5 +444,22 @@ private actor AsyncGate {
         for continuation in pendingContinuations {
             continuation.resume()
         }
+    }
+}
+
+private actor PumpMessageRecorder {
+    private var recordedTexts: [String] = []
+
+    func record(_ message: ProxyMessage) {
+        switch message {
+        case .text(let text):
+            self.recordedTexts.append(text)
+        case .binary(let buffer):
+            self.recordedTexts.append("<binary \(buffer.readableBytes)>")
+        }
+    }
+
+    func snapshot() -> [String] {
+        self.recordedTexts
     }
 }

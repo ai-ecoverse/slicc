@@ -426,22 +426,20 @@ actor CDPProxy {
         onEvent: @escaping @Sendable (ChromeSocketEvent) async -> Void
     ) async throws -> ChromeSocketHandle {
         let (socketStream, socketContinuation) = AsyncStream<WebSocket>.makeStream()
+        let (messageStream, messageContinuation) = AsyncStream<ProxyMessage>.makeStream()
         let connectFuture = WebSocket.connect(
             to: url,
             configuration: .init(maxFrameSize: maxFrameSize),
             on: HTTPClient.defaultEventLoopGroup
         ) { socket in
             socket.onText { _, text in
-                Task {
-                    await onMessage(.text(text))
-                }
+                messageContinuation.yield(.text(text))
             }
             socket.onBinary { _, buffer in
-                Task {
-                    await onMessage(.binary(buffer))
-                }
+                messageContinuation.yield(.binary(buffer))
             }
             socket.onClose.whenComplete { result in
+                messageContinuation.finish()
                 Task {
                     switch result {
                     case .success:
@@ -469,6 +467,10 @@ actor CDPProxy {
             throw CDPProxyError.discoveryFailed("WebSocket upgrade completed without a Chrome socket")
         }
 
+        let messagePump = Task {
+            await Self.runChromeMessagePump(messageStream, onMessage: onMessage)
+        }
+
         return ChromeSocketHandle(
             send: { message in
                 switch message {
@@ -479,12 +481,25 @@ actor CDPProxy {
                 }
             },
             close: {
+                messageContinuation.finish()
+                messagePump.cancel()
                 try? await socket.close(code: .goingAway)
             },
             isOpen: {
                 !socket.isClosed
             }
         )
+    }
+}
+
+extension CDPProxy {
+    static func runChromeMessagePump(
+        _ messageStream: AsyncStream<ProxyMessage>,
+        onMessage: @escaping @Sendable (ProxyMessage) async -> Void
+    ) async {
+        for await message in messageStream {
+            await onMessage(message)
+        }
     }
 }
 

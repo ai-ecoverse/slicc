@@ -29,6 +29,7 @@ swift run slicc-server --help
 - The server resolves ports, launches or attaches to a browser target, and serves `dist/ui` through `StaticFileMiddleware`.
 - `WebSocket/CDPProxy.swift` exposes the CDP proxy to browser clients.
 - `WebSocket/LickSystem.swift` keeps a set of connected browser clients, sends request/response messages, and broadcasts lick events.
+- `CDPProxy` keeps a single browser WebSocket open and forwards inbound Chrome frames through an ordered async message pump to avoid per-frame task churn.
 
 ## API Routes
 
