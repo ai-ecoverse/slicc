@@ -24,6 +24,8 @@ import { resolveCliBrowserLaunchUrl } from './launch-url.js';
 import { parseCliRuntimeFlags } from './runtime-flags.js';
 import { FileLogger } from './file-logger.js';
 import { CliLogDedup } from './cli-log-dedup.js';
+import { EnvSecretStore } from './secrets/env-secret-store.js';
+import { SecretProxyManager } from './secrets/proxy-manager.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..', '..');
@@ -591,6 +593,18 @@ async function main() {
   }
 
   // 3. Set up express app with request logging
+  const secretProxy = new SecretProxyManager();
+  try {
+    await secretProxy.reload();
+    if (secretProxy.hasSecrets()) {
+      console.log(
+        `Loaded ${secretProxy.getMaskedEntries().length} secrets for fetch-proxy injection`
+      );
+    }
+  } catch (err) {
+    console.warn('Failed to load secrets:', err instanceof Error ? err.message : err);
+  }
+
   const app = express();
   app.use(requestLogger);
 
@@ -885,6 +899,74 @@ async function main() {
     }
   });
 
+  // Secret management API — direct .env file access (no browser needed)
+  const secretStore = new EnvSecretStore();
+
+  app.get('/api/secrets', (_req, res) => {
+    try {
+      const entries = secretStore.list();
+      res.json(entries);
+    } catch (err) {
+      res
+        .status(500)
+        .json({ error: err instanceof Error ? err.message : 'Failed to list secrets' });
+    }
+  });
+
+  app.post('/api/secrets', async (req, res) => {
+    const { name, value, domains } = req.body as {
+      name?: string;
+      value?: string;
+      domains?: string[];
+    };
+    if (!name || typeof name !== 'string') {
+      res.status(400).json({ error: 'Missing required field: name' });
+      return;
+    }
+    if (value === undefined || value === null || typeof value !== 'string') {
+      res.status(400).json({ error: 'Missing required field: value' });
+      return;
+    }
+    if (value.trim().length === 0) {
+      res.status(400).json({ error: 'Secret value must not be empty' });
+      return;
+    }
+    try {
+      secretStore.set(name, value, Array.isArray(domains) ? domains : []);
+      await secretProxy.reload();
+      res.json({ ok: true, name });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(msg.includes('at least one') ? 400 : 500).json({ error: msg });
+    }
+  });
+
+  app.delete('/api/secrets/:name', async (req, res) => {
+    try {
+      secretStore.delete(req.params.name);
+      await secretProxy.reload();
+      res.json({ ok: true, name: req.params.name });
+    } catch (err) {
+      res
+        .status(500)
+        .json({ error: err instanceof Error ? err.message : 'Failed to delete secret' });
+    }
+  });
+
+  // Masked secrets endpoint — returns name + maskedValue pairs for shell env population.
+  // The browser fetches this at shell init to populate env vars with masked values.
+  // Real values are never exposed; only deterministic session-scoped masks.
+  app.get('/api/secrets/masked', (_req, res) => {
+    try {
+      const entries = secretProxy.getMaskedEntries();
+      res.json(entries);
+    } catch (err) {
+      res
+        .status(500)
+        .json({ error: err instanceof Error ? err.message : 'Failed to get masked secrets' });
+    }
+  });
+
   // Fetch proxy — forwards cross-origin requests from the browser to bypass CORS.
   // Used by just-bash's curl which calls the browser's fetch() API.
   // Note: express.json() may have already parsed the body, so we check req.body first.
@@ -983,8 +1065,40 @@ async function main() {
       // Without this, Cloudflare may Brotli-compress the response, the proxy strips
       // Content-Encoding (line below), and the browser receives compressed garbage.
       headers['accept-encoding'] = 'identity';
+
+      // --- Secret injection: unmask headers ---
+      let targetHostname: string;
+      try {
+        targetHostname = new URL(targetUrl).hostname;
+      } catch {
+        targetHostname = '';
+      }
+
+      if (secretProxy.hasSecrets()) {
+        // Unmask request headers (replace masked values with real, validate domain)
+        const headerResult = secretProxy.unmaskHeaders(headers, targetHostname);
+        if (headerResult.forbidden) {
+          res.status(403).json({
+            error: `Secret "${headerResult.forbidden.secretName}" is not allowed for domain "${headerResult.forbidden.hostname}"`,
+          });
+          return;
+        }
+      }
+
       if (Object.keys(headers).length > 0) fetchInit.headers = headers;
       if (rawBody.length > 0 && !['GET', 'HEAD'].includes(req.method)) {
+        // --- Secret injection: unmask request body ---
+        if (secretProxy.hasSecrets()) {
+          const bodyStr = rawBody.toString('utf-8');
+          const bodyResult = secretProxy.unmask(bodyStr, targetHostname);
+          if (bodyResult.forbidden) {
+            res.status(403).json({
+              error: `Secret "${bodyResult.forbidden.secretName}" is not allowed for domain "${bodyResult.forbidden.hostname}"`,
+            });
+            return;
+          }
+          rawBody = Buffer.from(bodyResult.text, 'utf-8');
+        }
         // Buffer extends Uint8Array which is a valid fetch body at runtime.
         fetchInit.body = rawBody as unknown as RequestInit['body'];
       }
@@ -1011,17 +1125,29 @@ async function main() {
           lower !== 'set-cookie' &&
           !lower.startsWith('x-proxy-')
         ) {
-          res.setHeader(k, v);
+          // Scrub real secret values from response headers
+          res.setHeader(k, secretProxy.scrubResponse(v));
         }
       });
       if (setCookieValues.length > 0) {
-        res.setHeader('X-Proxy-Set-Cookie', JSON.stringify(setCookieValues));
+        res.setHeader(
+          'X-Proxy-Set-Cookie',
+          secretProxy.scrubResponse(JSON.stringify(setCookieValues))
+        );
       }
 
-      // Send body as raw binary - explicitly set content-length and use end()
-      // instead of send() to avoid any Express middleware transformations
+      // Send body — scrub real secret values from response body (text-only)
       const body = await upstream.arrayBuffer();
-      const buffer = Buffer.from(body);
+      let buffer = Buffer.from(body);
+      if (secretProxy.hasSecrets()) {
+        const ct = (upstream.headers.get('content-type') ?? '').toLowerCase();
+        const isText =
+          ct.startsWith('text/') || ct.startsWith('application/json') || ct.includes('charset=');
+        if (isText) {
+          const scrubbed = secretProxy.scrubResponse(buffer.toString('utf-8'));
+          buffer = Buffer.from(scrubbed, 'utf-8');
+        }
+      }
       res.setHeader('Content-Length', buffer.length);
       res.end(buffer);
     } catch (err: unknown) {

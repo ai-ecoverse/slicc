@@ -324,10 +324,16 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   try {
     const { WasmShell } = await import('../shell/index.js');
     const { PanelCdpProxy, BrowserAPI: BrowserAPIClass } = await import('../cdp/index.js');
+    const { fetchSecretEnvVars } = await import('../core/secret-env.js');
     const panelCdp = new PanelCdpProxy();
     await panelCdp.connect();
     const panelBrowser = new BrowserAPIClass(panelCdp);
-    const shell = new WasmShell({ fs: localFs, browserAPI: panelBrowser });
+    const secretEnv = await fetchSecretEnvVars();
+    const shell = new WasmShell({
+      fs: localFs,
+      browserAPI: panelBrowser,
+      env: Object.keys(secretEnv).length > 0 ? secretEnv : undefined,
+    });
     await layout.panels.terminal.mountShell(shell);
     log.info('Terminal mounted with shared VFS and BrowserAPI (CDP proxy)');
   } catch (e) {
@@ -1084,7 +1090,13 @@ async function main(): Promise<void> {
 
     try {
       const { WasmShell } = await import('../shell/index.js');
-      const shell = new WasmShell({ fs: sharedFs, browserAPI: browser });
+      const { fetchSecretEnvVars } = await import('../core/secret-env.js');
+      const secretEnv = await fetchSecretEnvVars();
+      const shell = new WasmShell({
+        fs: sharedFs,
+        browserAPI: browser,
+        env: Object.keys(secretEnv).length > 0 ? secretEnv : undefined,
+      });
       await layout.panels.terminal.mountShell(shell);
       log.info('Terminal mounted with shared VFS');
 
