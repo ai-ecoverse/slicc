@@ -178,23 +178,80 @@ final class CDPProxyTests: XCTestCase {
     }
 
     func testChromeMessagePumpPreservesInboundMessageOrder() async {
-        let (messageStream, continuation) = AsyncStream<ProxyMessage>.makeStream()
+        let messagePump = ChromeInboundMessagePump(maxBufferedMessages: 4)
         let recorder = PumpMessageRecorder()
 
         let pumpTask = Task {
-            await CDPProxy.runChromeMessagePump(messageStream) { message in
+            await CDPProxy.runChromeMessagePump(messagePump) { message in
                 await recorder.record(message)
             }
         }
 
-        continuation.yield(.text("{\"id\":1}"))
-        continuation.yield(.text("{\"id\":2}"))
-        continuation.finish()
+        XCTAssertEqual(messagePump.enqueue(.text("{\"id\":1}")), .enqueued)
+        XCTAssertEqual(messagePump.enqueue(.text("{\"id\":2}")), .enqueued)
+        messagePump.finish()
 
         _ = await pumpTask.value
 
         let receivedTexts = await recorder.snapshot()
         XCTAssertEqual(receivedTexts, ["{\"id\":1}", "{\"id\":2}"])
+    }
+
+    func testChromeMessagePumpOverflowStopsAcceptingNewFramesAndDrainsBufferedFrames() async {
+        let messagePump = ChromeInboundMessagePump(maxBufferedMessages: 2)
+        let recorder = PumpMessageRecorder()
+
+        XCTAssertEqual(messagePump.enqueue(.text("{\"id\":1}")), .enqueued)
+        XCTAssertEqual(messagePump.enqueue(.text("{\"id\":2}")), .enqueued)
+        XCTAssertEqual(messagePump.enqueue(.text("{\"id\":3}")), .overflow)
+        XCTAssertEqual(messagePump.enqueue(.text("{\"id\":4}")), .terminated)
+
+        await CDPProxy.runChromeMessagePump(messagePump) { message in
+            await recorder.record(message)
+        }
+
+        let receivedTexts = await recorder.snapshot()
+        XCTAssertEqual(receivedTexts, ["{\"id\":1}", "{\"id\":2}"])
+    }
+
+    func testChromeSocketTerminationWaitsForPumpDrainBeforeReportingClose() async {
+        let messagePump = ChromeInboundMessagePump(maxBufferedMessages: 4)
+        let recorder = BlockingPumpMessageRecorder()
+        let closeEvents = ChromeSocketEventRecorder()
+
+        let pumpTask = Task {
+            await CDPProxy.runChromeMessagePump(messagePump) { message in
+                await recorder.record(message)
+            }
+        }
+
+        XCTAssertEqual(messagePump.enqueue(.text("{\"id\":1}")), .enqueued)
+        await recorder.waitForFirstMessage()
+        XCTAssertEqual(messagePump.enqueue(.text("{\"id\":2}")), .enqueued)
+
+        let terminationTask = Task {
+            await CDPProxy.handleChromeSocketTermination(
+                messagePump: messagePump,
+                messagePumpTask: pumpTask,
+                result: Result<Void, Error>.success(()),
+                closeDescription: "code=nil",
+                overflowDescription: nil,
+                onEvent: { event in
+                    await closeEvents.record(event)
+                }
+            )
+        }
+
+        let initialEvents = await closeEvents.snapshot()
+        XCTAssertEqual(initialEvents, [])
+
+        await recorder.releaseFirstMessage()
+        _ = await terminationTask.value
+
+        let recordedMessages = await recorder.snapshot()
+        let finalEvents = await closeEvents.snapshot()
+        XCTAssertEqual(recordedMessages, ["{\"id\":1}", "{\"id\":2}"])
+        XCTAssertEqual(finalEvents, ["closed: code=nil"])
     }
 }
 
@@ -461,5 +518,56 @@ private actor PumpMessageRecorder {
 
     func snapshot() -> [String] {
         self.recordedTexts
+    }
+}
+
+private actor BlockingPumpMessageRecorder {
+    private let firstMessageGate = AsyncGate()
+    private let releaseGate = AsyncGate()
+    private var recordedTexts: [String] = []
+    private var shouldBlockFirstMessage = true
+
+    func record(_ message: ProxyMessage) async {
+        if self.shouldBlockFirstMessage {
+            self.shouldBlockFirstMessage = false
+            await self.firstMessageGate.open()
+            await self.releaseGate.wait()
+        }
+
+        switch message {
+        case .text(let text):
+            self.recordedTexts.append(text)
+        case .binary(let buffer):
+            self.recordedTexts.append("<binary \(buffer.readableBytes)>")
+        }
+    }
+
+    func waitForFirstMessage() async {
+        await self.firstMessageGate.wait()
+    }
+
+    func releaseFirstMessage() async {
+        await self.releaseGate.open()
+    }
+
+    func snapshot() -> [String] {
+        self.recordedTexts
+    }
+}
+
+private actor ChromeSocketEventRecorder {
+    private var events: [String] = []
+
+    func record(_ event: ChromeSocketEvent) {
+        switch event {
+        case .closed(let description):
+            self.events.append("closed: \(description)")
+        case .error(let description):
+            self.events.append("error: \(description)")
+        }
+    }
+
+    func snapshot() -> [String] {
+        self.events
     }
 }
