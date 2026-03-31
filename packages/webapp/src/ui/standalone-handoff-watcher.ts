@@ -80,6 +80,18 @@ export class StandaloneHandoffWatcher {
     this.transport.off('Target.targetDestroyed', this.handleTargetDestroyed);
   }
 
+  injectHandoff(payload: PendingHandoff['payload'], sourceUrl = 'local'): string {
+    const handoffId = `injected-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    this.pendingByHandoffId.set(handoffId, {
+      handoffId,
+      sourceUrl,
+      payload,
+      receivedAt: new Date().toISOString(),
+    });
+    this.emitChange();
+    return handoffId;
+  }
+
   clearHandoff(handoffId: string): { handoff: PendingHandoff | null; targetIds: string[] } {
     const handoff = this.pendingByHandoffId.get(handoffId) ?? null;
     const targetIds = [...(this.targetIdsByHandoffId.get(handoffId) ?? [])];

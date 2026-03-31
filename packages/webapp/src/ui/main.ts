@@ -1566,6 +1566,14 @@ async function main(): Promise<void> {
             data.body
           );
         }
+
+        // Handle handoff injected via local API
+        if (data.type === 'handoff_event' && standaloneHandoffWatcher) {
+          standaloneHandoffWatcher.injectHandoff(
+            data.payload as PendingHandoff['payload'],
+            data.sourceUrl as string | undefined
+          );
+        }
       } catch (err) {
         log.error('Failed to process lick message', {
           error: err instanceof Error ? err.message : String(err),
