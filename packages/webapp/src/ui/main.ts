@@ -1698,18 +1698,8 @@ async function main(): Promise<void> {
   }
 
   standaloneHandoffWatcher = new StandaloneHandoffWatcher({
-    browser,
     onPendingHandoffsChange: syncPendingHandoffs,
   });
-  await standaloneHandoffWatcher.start();
-
-  window.addEventListener(
-    'beforeunload',
-    () => {
-      standaloneHandoffWatcher?.stop();
-    },
-    { once: true }
-  );
 
   if (runtimeMode === 'standalone' || runtimeMode === 'electron-overlay') {
     const runtimeConfig = await fetchRuntimeConfig();
