@@ -35,9 +35,17 @@ export default defineConfig(({ mode }) => ({
         repoRoot,
         'node_modules/@mariozechner/pi-coding-agent/dist/core/compaction/compaction.js'
       ),
+      // Deduplicate pi-ai to the same version used by pi-agent-core (0.62.0).
+      // Without this, the root 0.55.4 and nested 0.62.0 each get their own
+      // registerApiProvider registry, so custom providers registered via the
+      // root copy are invisible to the agent's lookup in the nested copy.
+      '@mariozechner/pi-ai': resolve(
+        repoRoot,
+        'node_modules/@mariozechner/pi-agent-core/node_modules/@mariozechner/pi-ai'
+      ),
       '@mariozechner/pi-ai/dist/utils/overflow.js': resolve(
         repoRoot,
-        'node_modules/@mariozechner/pi-ai/dist/utils/overflow.js'
+        'node_modules/@mariozechner/pi-agent-core/node_modules/@mariozechner/pi-ai/dist/utils/overflow.js'
       ),
     },
   },
