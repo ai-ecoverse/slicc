@@ -251,7 +251,7 @@ export class ScoopContext {
           systemPrompt,
           messages: restoredMessages,
         },
-        getApiKey: () => apiKey,
+        getApiKey: () => getApiKey() ?? undefined,
         transformContext: compactFn,
       });
 
