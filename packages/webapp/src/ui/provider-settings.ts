@@ -113,6 +113,7 @@ function applyModelMetadata(
   model: Record<string, any>,
   metadata: { context_window?: number; max_tokens?: number; reasoning?: boolean; input?: string[] }
 ): void {
+  if ((metadata as any).name !== undefined) model.name = (metadata as any).name;
   if (metadata.context_window !== undefined) model.contextWindow = metadata.context_window;
   if (metadata.max_tokens !== undefined) model.maxTokens = metadata.max_tokens;
   if (metadata.reasoning !== undefined) model.reasoning = metadata.reasoning;
