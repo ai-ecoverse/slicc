@@ -10,7 +10,7 @@ let package = Package(
         .package(url: "https://github.com/swift-server/async-http-client", from: "1.33.1"),
         .package(url: "https://github.com/vapor/websocket-kit", from: "2.16.1"),
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.7.1"),
-        .package(url: "https://github.com/apple/swift-log", from: "1.10.1"),
+        .package(url: "https://github.com/apple/swift-log", from: "1.11.0"),
     ],
     targets: [
         .executableTarget(
