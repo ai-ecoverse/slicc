@@ -885,6 +885,17 @@ async function main() {
     }
   });
 
+  // Handoff injection — accepts a handoff payload and broadcasts it to the webapp.
+  app.post('/api/handoff', (req, res) => {
+    const payload = req.body as { instruction?: unknown };
+    if (!payload?.instruction || typeof payload.instruction !== 'string') {
+      res.status(400).json({ error: 'instruction is required' });
+      return;
+    }
+    broadcastLickEvent({ type: 'handoff_event', payload });
+    res.json({ ok: true });
+  });
+
   // Fetch proxy — forwards cross-origin requests from the browser to bypass CORS.
   // Used by just-bash's curl which calls the browser's fetch() API.
   // Note: express.json() may have already parsed the body, so we check req.body first.

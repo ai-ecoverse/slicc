@@ -7,11 +7,10 @@ Use this skill when the user says things like `handoff to slicc`, `move this to 
 1. Build a compact JSON payload with:
    - `instruction` (required)
    - optional `title`, `urls`, `context`, `acceptanceCriteria`, `notes`
-2. Generate the handoff URL with:
-   - `.agents/skills/slicc-handoff/scripts/slicc-handoff payload.json`
-   - or pipe JSON directly into `.agents/skills/slicc-handoff/scripts/slicc-handoff`
-3. Open the generated `https://www.sliccy.ai/handoff#...` URL in the local browser when possible.
-4. Tell the user that SLICC should show an `Accept` / `Dismiss` prompt in the Chat tab.
+2. Run the script with `--open` to deliver the handoff:
+   - `.agents/skills/slicc-handoff/scripts/slicc-handoff --open payload.json`
+   - or pipe JSON directly: `cat payload.json | .agents/skills/slicc-handoff/scripts/slicc-handoff --open`
+3. Tell the user that SLICC should show an `Accept` / `Dismiss` prompt in the Chat tab.
 
 ## Payload guidance
 
@@ -23,7 +22,7 @@ Use this skill when the user says things like `handoff to slicc`, `move this to 
 ## Examples
 
 ```bash
-.agents/skills/slicc-handoff/scripts/slicc-handoff payload.json
+.agents/skills/slicc-handoff/scripts/slicc-handoff --open payload.json
 ```
 
 ```bash
