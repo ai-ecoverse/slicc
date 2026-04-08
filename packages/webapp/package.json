@@ -22,7 +22,7 @@
     "isomorphic-dompurify": "^3.1.0",
     "isomorphic-git": "1.37.5",
     "just-bash": "2.14.0",
-    "marked": "^17.0.4",
+    "marked": "^18.0.0",
     "unpdf": "^1.4.0"
   },
   "devDependencies": {
