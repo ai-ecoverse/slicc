@@ -1,0 +1,75 @@
+name: Publish Chrome Extension
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release tag (e.g. v0.3.2). Leave empty for latest release.'
+        required: false
+        default: ''
+        type: string
+      force_replace_pending_review:
+        description: 'Cancel any pending CWS review before uploading'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Resolve release tag
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            TAG="${{ inputs.version }}"
+          else
+            TAG=$(gh release view --json tagName -q '.tagName')
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::No release found"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Resolved release: $TAG"
+
+      - name: Download extension zip
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/cws
+          gh release download "${{ steps.release.outputs.tag }}" \
+            --pattern '*-extension-*.zip' \
+            --dir /tmp/cws
+          ZIP_FILE=$(ls /tmp/cws/*.zip)
+          echo "Downloaded: $ZIP_FILE"
+
+      - name: Publish to Chrome Web Store
+        env:
+          CWS_CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CWS_CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          CWS_REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+        run: |
+          ARGS=""
+          [ "${{ inputs.force_replace_pending_review }}" = "true" ] && ARGS="--force"
+          node build/publish-chrome.js /tmp/cws/*.zip $ARGS
+
+      - name: Summary
+        if: success()
+        run: |
+          echo "## Chrome Extension Published" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Version:** ${{ steps.release.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Dashboard:** https://chrome.google.com/webstore/devconsole" >> "$GITHUB_STEP_SUMMARY"
