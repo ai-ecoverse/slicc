@@ -7,6 +7,12 @@ export { PanelCdpProxy } from './panel-cdp-proxy.js';
 export { HarRecorder } from './har-recorder.js';
 export { RemoteCDPTransport } from './remote-cdp-transport.js';
 export type { RemoteCDPSender } from './remote-cdp-transport.js';
+export { WebKitCDPAdapter } from './webkit-cdp-adapter.js';
+export type {
+  WebKitCDPAdapterOptions,
+  WebKitWritable,
+  WebKitReadable,
+} from './webkit-cdp-adapter.js';
 export type { CDPTransport } from './transport.js';
 export type {
   CDPCommand,

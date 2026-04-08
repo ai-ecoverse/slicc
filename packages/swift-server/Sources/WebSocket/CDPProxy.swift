@@ -32,6 +32,13 @@ actor CDPProxy {
     private var activeClient: ClientHandle?
     private var messageBuffer: [ProxyMessage]?
 
+    // WebKit pipe bridge state
+    private var pipeWrite: FileHandle?
+    private var pipeRead: FileHandle?
+    private var pipeReadTask: Task<Void, Never>?
+    private var pipeBuffer: String = ""
+    private var pipeMode: Bool = false
+
     init(
         logger: Logger = Logger(label: "slicc.cdp-proxy"),
         maxMessageSize: Int = CDPProxy.defaultMaxMessageSize,
@@ -60,19 +67,41 @@ actor CDPProxy {
 
     func install(on router: Router<BasicWebSocketRequestContext>, cdpPort: Int) {
         self.cdpPort = cdpPort
+        let isPipeMode = self.pipeMode
         router.ws("/cdp") { _, _ in
             .upgrade([:])
         } onUpgrade: { inbound, outbound, context in
-            try await self.handleClientConnection(
-                inbound: inbound,
-                outbound: outbound,
-                context: context,
-                cdpPort: cdpPort
-            )
+            if isPipeMode {
+                try await self.handlePipeClientConnection(
+                    inbound: inbound,
+                    outbound: outbound
+                )
+            } else {
+                try await self.handleClientConnection(
+                    inbound: inbound,
+                    outbound: outbound,
+                    context: context,
+                    cdpPort: cdpPort
+                )
+            }
         }
     }
 
+    /// Configure the proxy in pipe mode for WebKit inspector pipe bridge.
+    /// In this mode, WebSocket messages are forwarded to/from the pipe instead of Chrome's WebSocket.
+    func installPipeMode(pipeWrite: FileHandle, pipeRead: FileHandle) {
+        self.pipeMode = true
+        self.pipeWrite = pipeWrite
+        self.pipeRead = pipeRead
+        self.startPipeReader()
+        self.logger.info("[cdp-proxy] WebKit pipe bridge ready")
+    }
+
     func preWarm(cdpPort: Int) async throws {
+        guard !pipeMode else {
+            // In pipe mode, no need to pre-warm — pipe is already connected
+            return
+        }
         self.cdpPort = cdpPort
         let cdpURL = try await self.cdpURL(for: cdpPort)
         try await self.ensureChromeConnection(url: cdpURL)
@@ -208,7 +237,19 @@ actor CDPProxy {
         }
     }
 
+    /// Write a message to the WebKit inspector pipe (null-byte delimited).
+    func writeToPipe(_ text: String) {
+        guard let pipeWrite else { return }
+        let message = text + "\0"
+        if let data = message.data(using: .utf8) {
+            pipeWrite.write(data)
+        }
+    }
+
     func shutdown() async {
+        self.pipeReadTask?.cancel()
+        self.pipeReadTask = nil
+
         self.chromeConnectionTask?.cancel()
         self.chromeReconnectTask?.cancel()
         self.chromeConnectionTask = nil
@@ -510,6 +551,115 @@ actor CDPProxy {
                 !socket.isClosed
             }
         )
+    }
+
+    // MARK: - WebKit Pipe Bridge
+
+    /// Start reading from the WebKit inspector pipe on a background task.
+    /// Accumulates data, splits on null bytes, and forwards each JSON message
+    /// to the active WebSocket client.
+    private func startPipeReader() {
+        guard let pipeRead else { return }
+
+        self.pipeReadTask = Task { [weak self] in
+            pipeRead.readabilityHandler = { handle in
+                let data = handle.availableData
+                guard !data.isEmpty else {
+                    // EOF — pipe closed
+                    pipeRead.readabilityHandler = nil
+                    return
+                }
+                let str = String(decoding: data, as: UTF8.self)
+                Task {
+                    guard let self else { return }
+                    await self.handlePipeData(str)
+                }
+            }
+
+            // Keep this task alive until cancelled
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+            pipeRead.readabilityHandler = nil
+        }
+    }
+
+    /// Process incoming data from the WebKit pipe, splitting on null bytes.
+    private func handlePipeData(_ str: String) async {
+        pipeBuffer += str
+
+        while let nullIdx = pipeBuffer.firstIndex(of: "\0") {
+            let raw = String(pipeBuffer[pipeBuffer.startIndex..<nullIdx])
+            pipeBuffer = String(pipeBuffer[pipeBuffer.index(after: nullIdx)...])
+            guard !raw.isEmpty else { continue }
+
+            let preview = String(raw.prefix(200))
+            let logLine = "[cdp-proxy] WebKit→Client: \(preview)"
+            if self.logDedup.shouldLog(logLine) {
+                self.logger.debug("\(logLine)")
+            }
+
+            if let activeClient {
+                do {
+                    try await activeClient.send(.text(raw))
+                } catch {
+                    self.logger.error("[cdp-proxy] Client WS error: \(String(describing: error))")
+                    if self.activeClient?.id == activeClient.id {
+                        self.activeClient = nil
+                    }
+                }
+            }
+        }
+    }
+
+    /// Handle a WebSocket client connection in pipe mode.
+    /// Messages from the client are forwarded to the WebKit pipe;
+    /// messages from the pipe are forwarded to the client (via startPipeReader).
+    private func handlePipeClientConnection(
+        inbound: WebSocketInboundStream,
+        outbound: WebSocketOutboundWriter
+    ) async throws {
+        let client = ClientHandle(
+            send: { message in
+                switch message {
+                case .text(let text):
+                    try await outbound.write(.text(text))
+                case .binary(let buffer):
+                    try await outbound.write(.binary(buffer))
+                }
+            },
+            close: { code, reason in
+                try? await outbound.close(code, reason: reason)
+            }
+        )
+
+        await self.addClient(client)
+        let clientID = client.id
+
+        do {
+            var iterator = inbound.makeAsyncIterator()
+            while let message = try await iterator.nextMessage(maxSize: self.maxMessageSize) {
+                let text: String
+                switch ProxyMessage(message) {
+                case .text(let t):
+                    text = t
+                case .binary(let buffer):
+                    text = String(decoding: Data(buffer.readableBytesView), as: UTF8.self)
+                }
+
+                let preview = String(text.prefix(200))
+                let logLine = "[cdp-proxy] Client→WebKit: \(preview)"
+                if self.logDedup.shouldLog(logLine) {
+                    self.logger.debug("\(logLine)")
+                }
+
+                self.writeToPipe(text)
+            }
+            await self.removeClient(id: clientID, reason: "[cdp-proxy] Client disconnected")
+        } catch {
+            self.logger.error("[cdp-proxy] Client WS error: \(String(describing: error))")
+            await self.removeClient(id: clientID, reason: "[cdp-proxy] Client disconnected")
+        }
     }
 }
 

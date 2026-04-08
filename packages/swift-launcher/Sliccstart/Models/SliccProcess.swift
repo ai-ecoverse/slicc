@@ -71,6 +71,38 @@ final class SliccProcess {
         ])
     }
 
+    // MARK: - WebKit mode
+
+    func launchWebKit(binaryPath: String, frameworkPath: String) throws {
+        let webkitId = "webkit-browser"
+        if runningTargets.contains(webkitId) {
+            log.info("launchWebKit: already running")
+            return
+        }
+        guard !Self.isPortInUse(Self.browserPort) else { throw LaunchError.portInUse(Self.browserPort) }
+        log.info("launchWebKit: launching on port \(Self.browserPort)")
+
+        let icon = NSWorkspace.shared.icon(forFile: binaryPath)
+        let target = AppTarget(
+            id: webkitId, name: "WebKit", path: binaryPath,
+            executablePath: binaryPath,
+            type: .webkitBrowser, icon: icon,
+            debugSupport: .supported,
+            isDebugBuild: false,
+            originalAppPath: nil
+        )
+
+        try spawn(target: target, extraArgs: [
+            "--browser=webkit",
+            "--cdp-port=\(Self.browserCdpPort)",
+        ], env: [
+            "WEBKIT_PATH": binaryPath,
+            "DYLD_FRAMEWORK_PATH": frameworkPath,
+            "DYLD_LIBRARY_PATH": frameworkPath,
+            "PORT": "\(Self.browserPort)",
+        ])
+    }
+
     // MARK: - Electron mode (each app gets its own port)
 
     func launchWithElectronApp(_ app: AppTarget) throws {

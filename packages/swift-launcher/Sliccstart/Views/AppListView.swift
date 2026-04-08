@@ -5,9 +5,12 @@ struct AppListView: View {
     let targets: [AppTarget]
     @Bindable var sliccProcess: SliccProcess
     @Bindable var appManagementPermission: AppManagementPermission
+    @Bindable var webKitManager: WebKitManager
     @ObservedObject var appUpdater: AppUpdater
     let onLaunchStandalone: (AppTarget) -> Void
     let onLaunchElectron: (AppTarget) -> Void
+    let onLaunchWebKit: () -> Void
+    let onInstallWebKit: () -> Void
     let onCreateDebugBuild: (AppTarget) -> Void
     let onUpdate: () -> Void
     let onRescan: () -> Void
@@ -17,8 +20,8 @@ struct AppListView: View {
             let browsers = targets.filter { $0.type == .chromiumBrowser }
             let electronApps = targets.filter { $0.type == .electronApp }
 
+            SectionHeader("Browsers")
             if !browsers.isEmpty {
-                SectionHeader("Browsers")
                 ForEach(browsers) { target in
                     AppRow(
                         target: target,
@@ -29,6 +32,14 @@ struct AppListView: View {
                     )
                 }
             }
+
+            // WebKit browser entry
+            WebKitRow(
+                webKitManager: webKitManager,
+                isRunning: sliccProcess.runningTargets.contains("webkit-browser"),
+                onLaunch: onLaunchWebKit,
+                onInstall: onInstallWebKit
+            )
 
             if !electronApps.isEmpty {
                 SectionHeader("Desktop Apps")
@@ -186,6 +197,67 @@ struct AppRow: View {
                 } else if statusDot == .needsPermission {
                     Circle().fill(.yellow).frame(width: 7, height: 7)
                         .help("App Management permission required. Click to open System Settings.")
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            if hovering {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
+    }
+}
+
+
+struct WebKitRow: View {
+    @Bindable var webKitManager: WebKitManager
+    let isRunning: Bool
+    let onLaunch: () -> Void
+    let onInstall: () -> Void
+
+    var body: some View {
+        Button {
+            if webKitManager.isInstalled {
+                onLaunch()
+            } else if !webKitManager.isInstalling {
+                onInstall()
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "safari")
+                    .font(.system(size: 15))
+                    .frame(width: 28, height: 28)
+                    .foregroundStyle(webKitManager.isInstalled ? .blue : .gray)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("WebKit")
+                        .font(.system(size: 13))
+                        .foregroundStyle(webKitManager.isInstalled ? .primary : .secondary)
+                    if webKitManager.isInstalling {
+                        Text("Installing...")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
+                    } else if !webKitManager.isInstalled {
+                        Text("Click to install")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                if isRunning {
+                    Circle().fill(.green).frame(width: 7, height: 7)
+                } else if webKitManager.isInstalling {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.6)
+                } else if !webKitManager.isInstalled {
+                    Circle().fill(.gray).frame(width: 7, height: 7)
+                        .help("WebKit not installed. Click to download.")
                 }
             }
             .padding(.horizontal, 12)
