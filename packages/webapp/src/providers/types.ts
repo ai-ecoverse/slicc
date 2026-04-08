@@ -56,6 +56,12 @@ export interface ProviderConfig {
    */
   modelOverrides?: Record<string, ModelMetadata>;
   /**
+   * Optional: preferred default model ID when no model has been explicitly selected.
+   * Searched by substring match (case-insensitive) against available model IDs.
+   * Falls back to the first model in the list if no match is found.
+   */
+  defaultModelId?: string;
+  /**
    * Optional: return the model IDs this provider supports.
    * When present, getProviderModels uses this instead of returning all Anthropic models.
    * Models are resolved against the Anthropic registry by ID; unknown IDs create fallback models.
