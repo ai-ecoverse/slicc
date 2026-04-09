@@ -1353,4 +1353,33 @@ describe('X-Robots-Tag header', () => {
     expect(res.status).toBe(201);
     expect(res.headers.get('x-robots-tag')).toBe('noindex');
   });
+
+  it('does NOT add x-robots-tag to WebSocket upgrade (101) responses', async () => {
+    const { env } = createTestHarness();
+    const created = await worker.fetch(
+      new Request('https://www.sliccy.ai/tray', { method: 'POST' }),
+      env
+    );
+    const session = (await created.json()) as {
+      capabilities: { controller: { url: string } };
+    };
+
+    const leaderAttach = await worker.fetch(
+      new Request(session.capabilities.controller.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'cone-ws-test', runtime: 'cli' }),
+      }),
+      env
+    );
+    const leader = (await leaderAttach.json()) as { websocket: { url: string } };
+
+    const wsResponse = await worker.fetch(
+      new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }),
+      env
+    );
+    expect(wsResponse.status).toBe(101);
+    expect(wsResponse.headers.has('x-robots-tag')).toBe(false);
+    expect((wsResponse as unknown as { webSocket: unknown }).webSocket).toBeDefined();
+  });
 });

@@ -209,11 +209,14 @@ const worker = {
         return Response.redirect('https://www.sliccy.com/', 301);
       }
       if (url.hostname === 'www.sliccy.ai') {
-        return Response.redirect('https://www.sliccy.com', 301);
+        return Response.redirect('https://www.sliccy.com/', 301);
       }
     }
 
     const response = await handleWorkerRequest(request, env);
+    if (response.status === 101) {
+      return response;
+    }
     const mutable = new Response(response.body, response);
     mutable.headers.set('X-Robots-Tag', 'noindex');
     return mutable;
