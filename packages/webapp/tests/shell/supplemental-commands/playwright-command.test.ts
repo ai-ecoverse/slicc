@@ -2903,3 +2903,147 @@ describe('formatCookieDomainSummary (via teleport output)', () => {
     ).toBe(true);
   });
 });
+
+describe('iframe support', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  const mainTreeWithIframe = {
+    role: 'RootWebArea',
+    name: 'Test Page',
+    children: [
+      {
+        role: 'button',
+        name: 'Submit',
+        backendNodeId: 42,
+        children: [],
+      },
+      {
+        role: 'iframe',
+        name: 'Content Frame',
+        value: 'https://app.example.com/frame',
+        children: [],
+      },
+    ],
+  };
+
+  const iframeTree = {
+    role: 'RootWebArea',
+    name: 'Frame Content',
+    children: [
+      {
+        role: 'heading',
+        name: 'Frame Heading',
+        backendNodeId: 100,
+        children: [],
+      },
+      {
+        role: 'button',
+        name: 'Frame Button',
+        backendNodeId: 101,
+        children: [],
+      },
+    ],
+  };
+
+  const frameTreeResponse = [
+    { frameId: 'main', url: 'https://example.com', name: '' },
+    {
+      frameId: 'frame-1',
+      parentFrameId: 'main',
+      url: 'https://app.example.com/frame',
+      name: '',
+    },
+  ];
+
+  beforeEach(() => {
+    browser = createMockBrowser({
+      getAccessibilityTree: vi.fn().mockResolvedValue(mainTreeWithIframe),
+      getFrameTree: vi.fn().mockResolvedValue(frameTreeResponse),
+      getAccessibilityTreeForFrame: vi.fn().mockResolvedValue(iframeTree),
+      evaluateInFrame: vi.fn().mockResolvedValue(undefined),
+    });
+    fs = createMockFS();
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
+      JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
+    );
+  });
+
+  it('snapshot emits iframe placeholder', async () => {
+    // Use a browser without getFrameTree so stitching is skipped
+    const simpleB = createMockBrowser({
+      getAccessibilityTree: vi.fn().mockResolvedValue(mainTreeWithIframe),
+    });
+    (simpleB.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
+      JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
+    );
+
+    const cmd = createPlaywrightCommand('playwright-cli', simpleB as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('- iframe "Content Frame"');
+  });
+
+  it('snapshot stitches iframe content', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    // Main frame content
+    expect(result.stdout).toContain('button "Submit"');
+    // Iframe placeholder
+    expect(result.stdout).toContain('- iframe "Content Frame"');
+    // Stitched iframe content
+    expect(result.stdout).toContain('heading "Frame Heading"');
+    expect(result.stdout).toContain('button "Frame Button"');
+    // Iframe refs use f1 prefix
+    expect(result.stdout).toContain('[ref=f1e1]');
+    expect(result.stdout).toContain('[ref=f1e2]');
+  });
+
+  it('snapshot with --no-iframes skips iframe stitching', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['snapshot', '--tab=tab-1', '--no-iframes=true'], {} as any);
+    expect(result.exitCode).toBe(0);
+    // Iframe placeholder should still be present
+    expect(result.stdout).toContain('- iframe "Content Frame"');
+    // Stitched content should NOT be present
+    expect(result.stdout).not.toContain('heading "Frame Heading"');
+    expect(result.stdout).not.toContain('button "Frame Button"');
+    expect(result.stdout).not.toContain('[ref=f1e1]');
+  });
+
+  it('frames subcommand lists frames', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['frames', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('[main]');
+    expect(result.stdout).toContain('[child]');
+    expect(result.stdout).toContain('https://example.com');
+    expect(result.stdout).toContain('https://app.example.com/frame');
+  });
+
+  it('click in iframe ref calls evaluateInFrame', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    // Take snapshot first to populate refs
+    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['click', 'f1e1', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Clicked f1e1 (in iframe)');
+    expect(browser.evaluateInFrame).toHaveBeenCalledWith(
+      'frame-1',
+      expect.stringContaining('document.querySelector')
+    );
+  });
+
+  it('fill in iframe ref calls evaluateInFrame', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['snapshot', '--tab=tab-1'], {} as any);
+    const result = await cmd.execute(['fill', 'f1e1', 'test text', '--tab=tab-1'], {} as any);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Filled f1e1 with: test text (in iframe)');
+    expect(browser.evaluateInFrame).toHaveBeenCalledWith(
+      'frame-1',
+      expect.stringContaining('test text')
+    );
+  });
+});
