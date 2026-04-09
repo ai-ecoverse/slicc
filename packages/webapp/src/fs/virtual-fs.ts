@@ -23,7 +23,7 @@ import { normalizePath, splitPath, joinPath } from './path-utils.js';
 import type { FsWatcher, FsChangeEvent } from './fs-watcher.js';
 
 /** Maximum number of symlink hops before throwing ELOOP. */
-const MAX_SYMLINK_DEPTH = 40;
+const MAX_SYMLINK_DEPTH = 10;
 
 export interface VirtualFsOptions {
   /** Database name for LightningFS IndexedDB storage. */
@@ -739,14 +739,14 @@ export class VirtualFS {
    * Resolve all symlinks in a path to produce the final canonical path.
    * @throws FsError ELOOP if more than MAX_SYMLINK_DEPTH symlinks are encountered
    */
-  async realpath(path: string): Promise<string> {
+  async realpath(path: string, _hops = 0): Promise<string> {
     const normalized = normalizePath(path);
     const mount = this.findMount(normalized);
     if (mount) return normalized; // Mount paths are already real
 
     const parts = normalized.split('/').filter(Boolean);
     let resolved = '/';
-    let hops = 0;
+    let hops = _hops;
 
     for (const part of parts) {
       resolved = resolved === '/' ? `/${part}` : `${resolved}/${part}`;
@@ -766,7 +766,7 @@ export class VirtualFS {
             resolved = normalizePath(joinPath(dir, target));
           }
           // The resolved path itself may contain more symlinks — resolve it fully
-          resolved = await this.realpath(resolved);
+          resolved = await this.realpath(resolved, hops);
         }
       } catch (err) {
         if (err instanceof FsError) throw err;
