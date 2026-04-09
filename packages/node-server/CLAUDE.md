@@ -52,7 +52,7 @@ PORT=5720 npm run dev
 PORT=5730 npm run dev
 ```
 
-Each instance gets its own browser profile, CDP port, and HMR port.
+Each instance gets its own browser profile and CDP port. HMR shares the UI server.
 
 ## Electron Notes
 

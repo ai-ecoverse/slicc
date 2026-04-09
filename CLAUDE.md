@@ -96,7 +96,7 @@ PORT=5720 npm run dev   # Second instance on port 5720
 PORT=5730 npm run dev   # Third instance on port 5730
 ```
 
-Each instance gets an isolated Chrome profile (keyed by port), separate CDP port (auto-detected), and separate HMR port. No shared state between instances.
+Each instance gets an isolated Chrome profile (keyed by port) and separate CDP port (auto-detected). HMR shares the UI server. No shared state between instances.
 
 ## Philosophy
 
