@@ -554,6 +554,7 @@ export class Orchestrator {
         this.callbacks.onSendMessage(jid, `${sender ? `[${sender}] ` : ''}${text}`);
       },
       getScoops: () => this.getScoops(),
+      getScoopTabState: scoop.isCone ? (jid: string) => this.tabs.get(jid) : undefined,
       onFeedScoop: scoop.isCone
         ? (scoopJid, prompt) => this.delegateToScoop(scoopJid, prompt, scoop.assistantLabel)
         : undefined,

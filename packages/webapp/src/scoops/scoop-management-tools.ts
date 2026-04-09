@@ -17,6 +17,8 @@ export interface ScoopManagementToolsConfig {
   /** Feed a prompt to a specific scoop (cone only). */
   onFeedScoop?: (scoopJid: string, prompt: string) => Promise<void>;
   getScoops: () => RegisteredScoop[];
+  /** Get tab state for a scoop by JID (status, lastActivity). */
+  getScoopTabState?: (jid: string) => import('./types.js').ScoopTabState | undefined;
   onScoopScoop?: (scoop: Omit<RegisteredScoop, 'jid'>) => Promise<RegisteredScoop>;
   onDropScoop?: (scoopJid: string) => Promise<void>;
   onSetGlobalMemory?: (content: string) => Promise<void>;
@@ -32,6 +34,7 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
     onSendMessage,
     onFeedScoop,
     getScoops,
+    getScoopTabState,
     onScoopScoop,
     onDropScoop,
     onSetGlobalMemory,
@@ -136,8 +139,20 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
 
         const formatted = scoops
           .map((s) => {
-            if (s.isCone) return `- ${s.assistantLabel} (${s.folder}) [CONE]`;
-            return `- ${s.name} (${s.folder})`;
+            const tab = getScoopTabState?.(s.jid);
+            const status = tab?.status ?? 'unknown';
+            const activity = tab?.lastActivity
+              ? new Date(tab.lastActivity).toLocaleString('en-US', {
+                  month: 'short',
+                  day: 'numeric',
+                  hour: 'numeric',
+                  minute: '2-digit',
+                  hour12: true,
+                })
+              : '';
+            const statusSuffix = activity ? ` — ${status} (since ${activity})` : ` — ${status}`;
+            if (s.isCone) return `- ${s.assistantLabel} (${s.folder}) [CONE]${statusSuffix}`;
+            return `- ${s.name} (${s.folder})${statusSuffix}`;
           })
           .join('\n');
 
