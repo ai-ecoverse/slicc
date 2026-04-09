@@ -33,7 +33,7 @@ Type `commands` in the terminal for the full list. Key commands:
 
 - **skill list/info/read** — inspect skills; `skill install/uninstall` manages native packages
 - **upskill** — install from GitHub (`upskill owner/repo`) or ClawHub (`upskill clawhub:name`)
-- **webhook/crontask** — set up licks (external event triggers)
+- **webhook/crontask/fswatch** — set up licks (external event triggers, file change watchers)
 - **sprinkle** — manage sprinkles: `list`, `open`, `close`, `send`, `chat`
 - **oauth-token** — get OAuth access token for a provider
 - **cost** — show session cost breakdown (tokens, cache, cost per cone/scoop)
