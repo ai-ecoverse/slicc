@@ -215,12 +215,11 @@ describe('BrowserAPI', () => {
         url: 'https://local.example.com',
       });
       // Verify the remote client was NOT called for Target.getTargets
-      expect(remoteClient.send).not.toHaveBeenCalledWith(
-        'Target.getTargets',
-        expect.anything(),
-        expect.anything(),
-        expect.anything()
-      );
+      expect(
+        (remoteClient.send as ReturnType<typeof vi.fn>).mock.calls.some(
+          (call) => call[0] === 'Target.getTargets'
+        )
+      ).toBe(false);
     });
   });
 
