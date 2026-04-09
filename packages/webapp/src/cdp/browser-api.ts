@@ -15,6 +15,7 @@ import type {
   WaitForSelectorOptions,
   BoundingBox,
   AccessibilityNode,
+  FrameInfo,
 } from './types.js';
 import type { TrayTargetEntry } from '../scoops/tray-sync-protocol.js';
 import { normalizeAccessibilityText } from './normalize-accessibility-text.js';
@@ -53,6 +54,7 @@ export class BrowserAPI {
   private attachedTargetId: string | null = null;
   private trayTargetProvider: TrayTargetProvider | null = null;
   private remoteTargetInfo: { runtimeId: string; localTargetId: string } | null = null;
+  private _frameContextCache = new Map<string, number>();
   private _tabLock: Promise<void> = Promise.resolve();
   private _onSessionChange?: ((sessionId: string, transport: CDPTransport) => void) | undefined;
   private readonly handleJavaScriptDialogOpening = async (
@@ -307,6 +309,9 @@ export class BrowserAPI {
     }
     // Don't detach from previous target — just attach to the new one.
     // Detaching then re-attaching causes Chrome to steal window focus.
+
+    // Invalidate cached isolated-world context IDs from the previous target
+    this._frameContextCache.clear();
 
     // Check if this is a remote tray target (format: "runtimeId:localTargetId")
     if (this.trayTargetProvider?.createRemoteTransport && targetId.includes(':')) {
@@ -829,6 +834,145 @@ export class BrowserAPI {
       { type: 'mouseReleased', x: end.x, y: end.y, button: 'left', clickCount: 1 },
       this.sessionId!
     );
+  }
+
+  /**
+   * Get the frame tree for the attached page as a flat list of FrameInfo objects.
+   */
+  async getFrameTree(): Promise<FrameInfo[]> {
+    await this.ensureConnected();
+    this.ensureAttached();
+
+    await this.client.send('Page.enable', {}, this.sessionId!);
+    const result = await this.client.send('Page.getFrameTree', {}, this.sessionId!);
+    const frameTree = result['frameTree'] as {
+      frame: { id: string; parentId?: string; url: string; name?: string; securityOrigin?: string };
+      childFrames?: unknown[];
+    };
+
+    const frames: FrameInfo[] = [];
+    const flatten = (
+      node: {
+        frame: {
+          id: string;
+          parentId?: string;
+          url: string;
+          name?: string;
+          securityOrigin?: string;
+        };
+        childFrames?: unknown[];
+      }
+    ): void => {
+      frames.push({
+        frameId: node.frame.id,
+        parentFrameId: node.frame.parentId,
+        url: node.frame.url,
+        name: node.frame.name ?? '',
+        securityOrigin: node.frame.securityOrigin,
+      });
+      if (Array.isArray(node.childFrames)) {
+        for (const child of node.childFrames) {
+          flatten(
+            child as {
+              frame: {
+                id: string;
+                parentId?: string;
+                url: string;
+                name?: string;
+                securityOrigin?: string;
+              };
+              childFrames?: unknown[];
+            }
+          );
+        }
+      }
+    };
+    flatten(frameTree);
+    return frames;
+  }
+
+  /**
+   * Evaluate a JavaScript expression in a specific frame.
+   * Creates an isolated world for the frame and caches the context ID.
+   */
+  async evaluateInFrame(
+    frameId: string,
+    expression: string,
+    options?: EvaluateOptions
+  ): Promise<unknown> {
+    await this.ensureConnected();
+    this.ensureAttached();
+
+    let contextId = this._frameContextCache.get(frameId);
+    if (contextId === undefined) {
+      try {
+        const worldResult = await this.client.send(
+          'Page.createIsolatedWorld',
+          { frameId, worldName: '__slicc_iframe', grantUniveralAccess: true },
+          this.sessionId!
+        );
+        contextId = worldResult['executionContextId'] as number;
+        this._frameContextCache.set(frameId, contextId);
+      } catch (err) {
+        throw new Error(
+          `Failed to create isolated world for frame ${frameId}: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
+
+    await this.client.send('Runtime.enable', {}, this.sessionId!);
+
+    const result = await this.client.send(
+      'Runtime.evaluate',
+      {
+        expression,
+        contextId,
+        awaitPromise: options?.awaitPromise ?? true,
+        returnByValue: options?.returnByValue ?? true,
+      },
+      this.sessionId!
+    );
+
+    const exceptionDetails = result['exceptionDetails'] as
+      | { text: string; exception?: { description?: string } }
+      | undefined;
+    if (exceptionDetails) {
+      // Invalidate cache — the frame may have navigated
+      this._frameContextCache.delete(frameId);
+      const msg = exceptionDetails.exception?.description ?? exceptionDetails.text;
+      throw new Error(`Evaluation in frame ${frameId} failed: ${msg}`);
+    }
+
+    const remoteObj = result['result'] as {
+      type: string;
+      value?: unknown;
+      description?: string;
+    };
+    return remoteObj.value;
+  }
+
+  /**
+   * Get the accessibility tree for a specific frame.
+   * For the main frame (no frameId), delegates to getAccessibilityTree().
+   */
+  async getAccessibilityTreeForFrame(frameId?: string): Promise<AccessibilityNode> {
+    if (!frameId) {
+      return this.getAccessibilityTree();
+    }
+
+    await this.ensureConnected();
+    this.ensureAttached();
+
+    const rawResult = await this.evaluateInFrame(frameId, INJECTED_ARIA_SNAPSHOT_SCRIPT, {
+      awaitPromise: false,
+      returnByValue: true,
+    });
+
+    if (!rawResult || typeof rawResult !== 'object') {
+      return { role: 'RootWebArea', name: '' };
+    }
+
+    return normalizeInjectedTree(rawResult as Record<string, unknown>);
   }
 
   /**
