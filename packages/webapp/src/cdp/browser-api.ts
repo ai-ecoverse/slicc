@@ -412,6 +412,13 @@ export class BrowserAPI {
     this.ensureAttached();
 
     try {
+      // Wake the renderer — background/throttled tabs can't capture screenshots
+      try {
+        await this.client.send('Page.bringToFront', {}, this.sessionId!);
+      } catch {
+        // Best-effort: some transports or older Chrome versions may not support this
+      }
+
       const params: Record<string, unknown> = {
         format: options?.format ?? 'png',
         captureBeyondViewport: true,

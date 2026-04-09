@@ -415,9 +415,11 @@ describe('BrowserAPI', () => {
     });
 
     it('captures a viewport screenshot (no clip, Chrome default)', async () => {
-      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-        data: 'viewport-shot',
-      }); // Page.captureScreenshot
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({}) // Page.bringToFront
+        .mockResolvedValueOnce({
+          data: 'viewport-shot',
+        }); // Page.captureScreenshot
 
       const data = await api.screenshot();
       expect(data).toBe('viewport-shot');
@@ -430,6 +432,7 @@ describe('BrowserAPI', () => {
 
     it('full page screenshot at DPR 1 uses CSS dimensions with scale 1', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({}) // Page.bringToFront
         .mockResolvedValueOnce({}) // Runtime.enable
         .mockResolvedValueOnce({ result: { value: '{"dpr":1,"w":1280,"h":5000}' } }) // Runtime.evaluate
         .mockResolvedValueOnce({ data: 'fullpage' }); // captureScreenshot
@@ -449,6 +452,7 @@ describe('BrowserAPI', () => {
 
     it('full page screenshot uses CSS dimensions with scale 1', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({}) // Page.bringToFront
         .mockResolvedValueOnce({}) // Runtime.enable
         .mockResolvedValueOnce({ result: { value: '{"w":1440,"h":3130}' } }) // Runtime.evaluate
         .mockResolvedValueOnce({ data: 'hidpi' }); // captureScreenshot
@@ -468,6 +472,7 @@ describe('BrowserAPI', () => {
 
     it('passes through provided clip with scale 1', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({}) // Page.bringToFront
         .mockResolvedValueOnce({}) // Runtime.enable
         .mockResolvedValueOnce({ result: { value: '{"w":1280,"h":3000}' } }) // Runtime.evaluate
         .mockResolvedValueOnce({ data: 'clipped' }); // captureScreenshot
