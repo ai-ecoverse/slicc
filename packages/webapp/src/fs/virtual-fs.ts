@@ -39,8 +39,10 @@ export class VirtualFS {
   /** Map from absolute mount path → FileSystemDirectoryHandle (File System Access API). */
   private mountPoints = new Map<string, FileSystemDirectoryHandle>();
   private watcher: FsWatcher | null = null;
+  private readonly dbName: string;
 
   private constructor(dbName: string, wipe: boolean) {
+    this.dbName = dbName;
     const fs = new FS(dbName, { wipe });
     this.rawFs = fs;
     this.lfs = fs.promises;
@@ -118,6 +120,19 @@ export class VirtualFS {
     pfs._activationPromise = null;
     pfs._deactivationPromise = null;
     pfs._initPromise = null;
+
+    // 6. Delete the IndexedDB database to free memory (critical for fake-indexeddb in tests)
+    if (typeof indexedDB !== 'undefined' && indexedDB.deleteDatabase) {
+      try {
+        const req = indexedDB.deleteDatabase(this.dbName);
+        await new Promise<void>((resolve, reject) => {
+          req.onsuccess = () => resolve();
+          req.onerror = () => reject(req.error);
+        });
+      } catch {
+        // Best effort — may fail if IndexedDB is not available
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
