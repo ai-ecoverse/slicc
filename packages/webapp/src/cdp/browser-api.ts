@@ -472,7 +472,14 @@ export class BrowserAPI {
       }
       // No clip/fullPage = viewport screenshot (Chrome's default behavior)
 
-      const result = await this.client.send('Page.captureScreenshot', params, this.sessionId!);
+      let result: Record<string, unknown>;
+      try {
+        result = await this.client.send('Page.captureScreenshot', params, this.sessionId!);
+      } catch (err: unknown) {
+        // Background/throttled tabs have a suspended renderer — wake it and retry once
+        await this.client.send('Page.bringToFront', {}, this.sessionId!);
+        result = await this.client.send('Page.captureScreenshot', params, this.sessionId!);
+      }
       let base64 = result['data'] as string;
 
       // Post-capture resize via ImageMagick WASM if image exceeds maxWidth.
