@@ -154,9 +154,17 @@ export type TrayFsResponseData =
   | { type: 'file'; content: string; encoding: 'utf-8' | 'base64' }
   | {
       type: 'stat';
-      stat: { type: 'file' | 'directory'; size: number; mtime: number; ctime: number };
+      stat: {
+        type: 'file' | 'directory' | 'symlink';
+        size: number;
+        mtime: number;
+        ctime: number;
+      };
     }
-  | { type: 'dirEntries'; entries: Array<{ name: string; type: 'file' | 'directory' }> }
+  | {
+      type: 'dirEntries';
+      entries: Array<{ name: string; type: 'file' | 'directory' | 'symlink' }>;
+    }
   | { type: 'exists'; exists: boolean }
   | { type: 'paths'; paths: string[] }
   | { type: 'void' };

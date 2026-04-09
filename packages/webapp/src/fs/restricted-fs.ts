@@ -173,6 +173,27 @@ export class RestrictedFS {
     return this.vfs.copyFile(src, dest);
   }
 
+  // ── Symlink operations ───────────────────────────────────────────────
+
+  async symlink(target: string, linkPath: string): Promise<void> {
+    this.checkWrite(linkPath);
+    return this.vfs.symlink(target, linkPath);
+  }
+
+  async readlink(path: string): Promise<string> {
+    if (!this.isAllowedStrict(path)) {
+      throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
+    }
+    return this.vfs.readlink(path);
+  }
+
+  async lstat(path: string): Promise<Stats> {
+    if (!this.isAllowed(path)) {
+      throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
+    }
+    return this.vfs.lstat(path);
+  }
+
   // ── Path utilities (no access control) ───────────────────────────────
 
   dirname(path: string): string {

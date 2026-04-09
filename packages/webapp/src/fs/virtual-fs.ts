@@ -19,7 +19,10 @@ import type {
   Stats,
 } from './types.js';
 import { FsError } from './types.js';
-import { normalizePath, splitPath } from './path-utils.js';
+import { normalizePath, splitPath, joinPath } from './path-utils.js';
+
+/** Maximum number of symlink hops before throwing ELOOP. */
+const MAX_SYMLINK_DEPTH = 40;
 
 export interface VirtualFsOptions {
   /** Database name for LightningFS IndexedDB storage. */
@@ -170,12 +173,14 @@ export class VirtualFS {
         throw this.convertFsaError(err, normalized);
       }
     }
+    // Resolve symlinks before reading
+    const resolved = await this.resolveSymlinks(normalized);
     try {
       const encoding = options?.encoding ?? 'utf-8';
       if (encoding === 'utf-8') {
-        return await this.lfs.readFile(normalized, { encoding: 'utf8' });
+        return await this.lfs.readFile(resolved, { encoding: 'utf8' });
       } else {
-        return await this.lfs.readFile(normalized);
+        return await this.lfs.readFile(resolved);
       }
     } catch (err) {
       throw this.convertError(err, normalized);
@@ -214,13 +219,21 @@ export class VirtualFS {
       }
       return;
     }
+    // Resolve symlinks before writing
+    let resolved: string;
+    try {
+      resolved = await this.resolveSymlinks(normalized);
+    } catch {
+      // Path doesn't exist yet — that's fine for new files, use the original path
+      resolved = normalized;
+    }
     // Ensure parent directory exists
-    const { dir } = splitPath(normalized);
+    const { dir } = splitPath(resolved);
     if (dir !== '/') {
       await this.mkdir(dir, { recursive: true });
     }
     try {
-      await this.lfs.writeFile(normalized, content);
+      await this.lfs.writeFile(resolved, content);
     } catch (err) {
       throw this.convertError(err, normalized);
     }
@@ -250,17 +263,23 @@ export class VirtualFS {
         throw this.convertFsaError(err, normalized);
       }
     }
+    // Resolve symlinks in the directory path itself
+    const resolved = await this.resolveSymlinks(normalized);
     try {
-      const names = await this.lfs.readdir(normalized);
+      const names = await this.lfs.readdir(resolved);
       const entries: DirEntry[] = [];
       for (const name of names) {
-        const childPath = normalized === '/' ? `/${name}` : `${normalized}/${name}`;
+        const childPath = resolved === '/' ? `/${name}` : `${resolved}/${name}`;
         try {
-          const stat = await this.lfs.stat(childPath);
-          entries.push({
-            name,
-            type: stat.isDirectory() ? 'directory' : 'file',
-          });
+          const s = await this.lfs.lstat(childPath);
+          if (s.isSymbolicLink()) {
+            entries.push({ name, type: 'symlink' });
+          } else {
+            entries.push({
+              name,
+              type: s.isDirectory() ? 'directory' : 'file',
+            });
+          }
         } catch {
           // Skip entries we can't stat
         }
@@ -341,8 +360,12 @@ export class VirtualFS {
       return;
     }
     try {
-      const stat = await this.lfs.stat(normalized);
-      if (stat.isDirectory()) {
+      // Use lstat to detect symlinks — if it's a symlink, just unlink it
+      // (don't follow the link or recurse into a target directory)
+      const s = await this.lfs.lstat(normalized);
+      if (s.isSymbolicLink()) {
+        await this.lfs.unlink(normalized);
+      } else if (s.isDirectory()) {
         if (options?.recursive) {
           await this.rmRecursive(normalized);
         } else {
@@ -407,13 +430,15 @@ export class VirtualFS {
         throw this.convertFsaError(err, normalized);
       }
     }
+    // Resolve symlinks before stat — stat follows symlinks
+    const resolved = await this.resolveSymlinks(normalized);
     try {
-      const stat = await this.lfs.stat(normalized);
+      const s = await this.lfs.stat(resolved);
       return {
-        type: stat.isDirectory() ? 'directory' : 'file',
-        size: stat.size,
-        mtime: stat.mtimeMs,
-        ctime: stat.ctimeMs,
+        type: s.isDirectory() ? 'directory' : 'file',
+        size: s.size,
+        mtime: s.mtimeMs,
+        ctime: s.ctimeMs,
       };
     } catch (err) {
       throw this.convertError(err, normalized);
@@ -434,10 +459,17 @@ export class VirtualFS {
       }
     }
     try {
-      await this.lfs.stat(normalized);
+      // Try following symlinks first (stat follows them)
+      await this.stat(normalized);
       return true;
     } catch {
-      return false;
+      // If stat fails (e.g., dangling symlink), check if the link itself exists
+      try {
+        await this.lfs.lstat(normalized);
+        return true;
+      } catch {
+        return false;
+      }
     }
   }
 
@@ -466,17 +498,42 @@ export class VirtualFS {
 
   /**
    * Recursively walk a directory tree, yielding all file paths.
+   * Follows symlinks to directories but tracks visited real paths to avoid infinite loops.
    */
-  async *walk(path: string): AsyncGenerator<string> {
+  async *walk(path: string, _visited?: Set<string>): AsyncGenerator<string> {
     const normalized = normalizePath(path);
+    const visited = _visited ?? new Set<string>();
+
+    // Track the real path to detect symlink loops
+    let realPath: string;
+    try {
+      realPath = await this.realpath(normalized);
+    } catch {
+      realPath = normalized;
+    }
+    if (visited.has(realPath)) return; // Avoid infinite loops
+    visited.add(realPath);
+
     const entries = await this.readDir(normalized);
 
     for (const entry of entries) {
       const childPath = normalized === '/' ? `/${entry.name}` : `${normalized}/${entry.name}`;
       if (entry.type === 'file') {
         yield childPath;
+      } else if (entry.type === 'symlink') {
+        // Determine if symlink points to a file or directory
+        try {
+          const targetStat = await this.stat(childPath);
+          if (targetStat.type === 'file') {
+            yield childPath;
+          } else if (targetStat.type === 'directory') {
+            yield* this.walk(childPath, visited);
+          }
+        } catch {
+          // Dangling symlink — skip
+        }
       } else {
-        yield* this.walk(childPath);
+        yield* this.walk(childPath, visited);
       }
     }
   }
@@ -508,6 +565,138 @@ export class VirtualFS {
     return splitPath(normalizePath(path)).base;
   }
 
+  // ---------------------------------------------------------------------------
+  // Symlink support
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Create a symbolic link at `linkPath` pointing to `target`.
+   * Target can be absolute or relative (relative to the directory containing the link).
+   * @throws FsError EEXIST if linkPath already exists
+   */
+  async symlink(target: string, linkPath: string): Promise<void> {
+    const normalizedLinkPath = normalizePath(linkPath);
+    const mount = this.findMount(normalizedLinkPath);
+    if (mount) {
+      throw new FsError(
+        'EINVAL',
+        'symlinks not supported on mounted filesystems',
+        normalizedLinkPath
+      );
+    }
+    // Ensure parent directory exists
+    const { dir } = splitPath(normalizedLinkPath);
+    if (dir !== '/') {
+      await this.mkdir(dir, { recursive: true });
+    }
+    try {
+      await this.lfs.symlink(target, normalizedLinkPath);
+    } catch (err) {
+      throw this.convertError(err, normalizedLinkPath);
+    }
+  }
+
+  /**
+   * Read the target of a symbolic link without following it.
+   * @throws FsError ENOENT if path doesn't exist, EINVAL if path is not a symlink
+   */
+  async readlink(path: string): Promise<string> {
+    const normalized = normalizePath(path);
+    try {
+      return await this.lfs.readlink(normalized);
+    } catch (err) {
+      throw this.convertError(err, normalized);
+    }
+  }
+
+  /**
+   * Stat a path without following symlinks.
+   * If the path is a symlink, returns type: 'symlink' with isSymlink and symlinkTarget set.
+   */
+  async lstat(path: string): Promise<Stats> {
+    const normalized = normalizePath(path);
+    const mount = this.findMount(normalized);
+    if (mount) {
+      // Mount points don't support symlinks — fall through to regular stat
+      return this.stat(normalized);
+    }
+    try {
+      const s = await this.lfs.lstat(normalized);
+      if (s.isSymbolicLink()) {
+        const target = await this.lfs.readlink(normalized);
+        return {
+          type: 'symlink',
+          size: s.size,
+          mtime: s.mtimeMs,
+          ctime: s.ctimeMs,
+          isSymlink: true,
+          symlinkTarget: target,
+        };
+      }
+      return {
+        type: s.isDirectory() ? 'directory' : 'file',
+        size: s.size,
+        mtime: s.mtimeMs,
+        ctime: s.ctimeMs,
+      };
+    } catch (err) {
+      throw this.convertError(err, normalized);
+    }
+  }
+
+  /**
+   * Resolve all symlinks in a path to produce the final canonical path.
+   * @throws FsError ELOOP if more than MAX_SYMLINK_DEPTH symlinks are encountered
+   */
+  async realpath(path: string): Promise<string> {
+    const normalized = normalizePath(path);
+    const mount = this.findMount(normalized);
+    if (mount) return normalized; // Mount paths are already real
+
+    const parts = normalized.split('/').filter(Boolean);
+    let resolved = '/';
+    let hops = 0;
+
+    for (const part of parts) {
+      resolved = resolved === '/' ? `/${part}` : `${resolved}/${part}`;
+      try {
+        const s = await this.lfs.lstat(resolved);
+        if (s.isSymbolicLink()) {
+          if (++hops > MAX_SYMLINK_DEPTH) {
+            throw new FsError('ELOOP', 'too many levels of symbolic links', path);
+          }
+          const target = await this.lfs.readlink(resolved);
+          if (target.startsWith('/')) {
+            // Absolute symlink — restart resolution from the target
+            resolved = normalizePath(target);
+          } else {
+            // Relative symlink — resolve relative to the link's parent directory
+            const { dir } = splitPath(resolved);
+            resolved = normalizePath(joinPath(dir, target));
+          }
+          // The resolved path itself may contain more symlinks — resolve it fully
+          resolved = await this.realpath(resolved);
+        }
+      } catch (err) {
+        if (err instanceof FsError) throw err;
+        throw this.convertError(err, resolved);
+      }
+    }
+
+    return resolved;
+  }
+
+  /**
+   * Internal helper: resolve symlinks in a path before an operation.
+   * Used by readFile, writeFile, stat, etc. to follow symlinks transparently.
+   * Only applies to LFS-backed paths (mount points are returned as-is).
+   */
+  private async resolveSymlinks(path: string): Promise<string> {
+    const mount = this.findMount(path);
+    if (mount) return path; // Mount points don't have symlinks
+    return this.realpath(path);
+  }
+
   /**
    * Convert LightningFS errors to FsError.
    */
@@ -528,6 +717,9 @@ export class VirtualFS {
     }
     if (msg.includes('ENOTEMPTY')) {
       return new FsError('ENOTEMPTY', 'directory not empty', path);
+    }
+    if (msg.includes('ELOOP')) {
+      return new FsError('ELOOP', 'too many levels of symbolic links', path);
     }
     // Default to EINVAL for unknown errors
     return new FsError('EINVAL', msg, path);

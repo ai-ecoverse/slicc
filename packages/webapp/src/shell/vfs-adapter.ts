@@ -206,7 +206,7 @@ export class VfsAdapter implements IFileSystem {
     return {
       isFile: s.type === 'file',
       isDirectory: s.type === 'directory',
-      isSymbolicLink: false,
+      isSymbolicLink: !!s.isSymlink,
       mode: s.type === 'directory' ? 0o755 : 0o644,
       size: s.size,
       mtime: new Date(s.mtime),
@@ -214,8 +214,16 @@ export class VfsAdapter implements IFileSystem {
   }
 
   async lstat(path: string): Promise<FsStat> {
-    // Our VFS has no symlinks, lstat === stat
-    return this.stat(path);
+    const normalized = normalizePath(path);
+    const s = await this.vfs.lstat(normalized);
+    return {
+      isFile: s.type === 'file',
+      isDirectory: s.type === 'directory',
+      isSymbolicLink: s.type === 'symlink',
+      mode: s.type === 'directory' ? 0o755 : s.type === 'symlink' ? 0o777 : 0o644,
+      size: s.size,
+      mtime: new Date(s.mtime),
+    };
   }
 
   async mkdir(path: string, options?: MkdirOptions): Promise<void> {
@@ -247,12 +255,36 @@ export class VfsAdapter implements IFileSystem {
         }));
     }
     const entries = await this.vfs.readDir(normalized);
-    return entries.map((e) => ({
-      name: e.name,
-      isFile: e.type === 'file',
-      isDirectory: e.type === 'directory',
-      isSymbolicLink: false,
-    }));
+    const result: DirentEntry[] = [];
+    for (const e of entries) {
+      if (e.type === 'symlink') {
+        // Try to determine if symlink target is file or directory
+        let isFile = false;
+        let isDir = false;
+        try {
+          const childPath = normalized === '/' ? `/${e.name}` : `${normalized}/${e.name}`;
+          const targetStat = await this.vfs.stat(childPath);
+          isFile = targetStat.type === 'file';
+          isDir = targetStat.type === 'directory';
+        } catch {
+          // Dangling symlink — report as symlink only
+        }
+        result.push({
+          name: e.name,
+          isFile,
+          isDirectory: isDir,
+          isSymbolicLink: true,
+        });
+      } else {
+        result.push({
+          name: e.name,
+          isFile: e.type === 'file',
+          isDirectory: e.type === 'directory',
+          isSymbolicLink: false,
+        });
+      }
+    }
+    return result;
   }
 
   async rm(path: string, options?: RmOptions): Promise<void> {
@@ -308,21 +340,20 @@ export class VfsAdapter implements IFileSystem {
     // Our VFS doesn't track permissions — no-op
   }
 
-  async symlink(_target: string, _linkPath: string): Promise<void> {
-    throw new Error('Symlinks not supported in VirtualFS');
+  async symlink(target: string, linkPath: string): Promise<void> {
+    await this.vfs.symlink(target, normalizePath(linkPath));
   }
 
   async link(_existingPath: string, _newPath: string): Promise<void> {
     throw new Error('Hard links not supported in VirtualFS');
   }
 
-  async readlink(_path: string): Promise<string> {
-    throw new Error('Symlinks not supported in VirtualFS');
+  async readlink(path: string): Promise<string> {
+    return this.vfs.readlink(normalizePath(path));
   }
 
   async realpath(path: string): Promise<string> {
-    // No symlinks, so realpath is just normalization
-    return normalizePath(path);
+    return this.vfs.realpath(normalizePath(path));
   }
 
   async utimes(path: string, _atime: Date, _mtime: Date): Promise<void> {
