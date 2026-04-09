@@ -94,6 +94,13 @@ jobs:
             echo "::error::CLAUDE.md exceeds 30,000 character limit ($chars chars). Please condense it."
             exit 1
           fi
+      - name: Check agent CLAUDE.md size
+        run: |
+          size=$(wc -c < packages/vfs-root/shared/CLAUDE.md)
+          if [ "$size" -gt 3000 ]; then
+            echo "::error::packages/vfs-root/shared/CLAUDE.md exceeds 3KB limit ($size bytes). Keep agent instructions concise."
+            exit 1
+          fi
 
   webapp:
     needs: changes
