@@ -1453,6 +1453,8 @@ describe('ScoopContext.reloadSkills', () => {
     expect(newPrompt).not.toBe('old prompt');
     expect(newPrompt).toContain('test-skill');
     expect(newPrompt).toContain('A test skill');
+
+    await vfs.dispose();
   });
 
   it('is a no-op when agent is not initialized', async () => {

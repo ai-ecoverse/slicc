@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import { VirtualFS } from '../../src/fs/index.js';
@@ -14,6 +14,10 @@ describe('discoverSkills', () => {
     globalThis.indexedDB = new IDBFactory();
     fs = await VirtualFS.create();
     await initSkillsSystem(fs);
+  });
+
+  afterEach(async () => {
+    await fs.dispose();
   });
 
   it('finds skill with manifest.yaml', async () => {
@@ -145,6 +149,10 @@ describe('getSkillInfo', () => {
     await initSkillsSystem(fs);
   });
 
+  afterEach(async () => {
+    await fs.dispose();
+  });
+
   it('returns skill by name', async () => {
     await fs.mkdir(SKILLS_DIR, { recursive: true });
     await fs.mkdir(`${SKILLS_DIR}/test-skill`);
@@ -187,6 +195,10 @@ describe('readSkillInstructions', () => {
     globalThis.indexedDB = new IDBFactory();
     fs = await VirtualFS.create();
     await initSkillsSystem(fs);
+  });
+
+  afterEach(async () => {
+    await fs.dispose();
   });
 
   it('returns SKILL.md content', async () => {

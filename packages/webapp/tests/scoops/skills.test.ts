@@ -2,7 +2,7 @@
  * Tests for the skills system — frontmatter parsing, loading, and prompt formatting.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import 'fake-indexeddb/auto';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { loadSkills, formatSkillsForPrompt } from '../../src/scoops/skills.js';
@@ -13,6 +13,10 @@ describe('Skills', () => {
 
   beforeEach(async () => {
     vfs = await VirtualFS.create({ dbName: `test-skills-${dbCounter++}`, wipe: true });
+  });
+
+  afterEach(async () => {
+    await vfs.dispose();
   });
 
   describe('loadSkills', () => {

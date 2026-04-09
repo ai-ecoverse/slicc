@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { VirtualFS } from '../../src/fs/index.js';
 import {
   initSkillsSystem,
@@ -24,6 +24,10 @@ describe('Skills State Management', () => {
       dbName: `test-state-${dbCounter++}`,
       wipe: true,
     });
+  });
+
+  afterEach(async () => {
+    await vfs.dispose();
   });
 
   describe('initSkillsSystem', () => {

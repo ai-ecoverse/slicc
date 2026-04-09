@@ -3,7 +3,7 @@
  */
 
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { VirtualFS } from '../../src/fs/index.js';
 import { VfsAdapter } from '../../src/shell/vfs-adapter.js';
 
@@ -18,6 +18,10 @@ describe('VfsAdapter', () => {
       wipe: true,
     });
     adapter = new VfsAdapter(vfs);
+  });
+
+  afterEach(async () => {
+    await vfs.dispose();
   });
 
   describe('writeFile — binary detection', () => {

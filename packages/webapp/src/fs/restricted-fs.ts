@@ -217,4 +217,11 @@ export class RestrictedFS {
   basename(path: string): string {
     return this.vfs.basename(path);
   }
+
+  /**
+   * Dispose the underlying VirtualFS, closing IndexedDB connections.
+   */
+  async dispose(): Promise<void> {
+    await this.vfs.dispose();
+  }
 }

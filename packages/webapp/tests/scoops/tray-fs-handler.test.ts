@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 
 import { handleFsRequest, uint8ToBase64, base64ToUint8 } from '../../src/scoops/tray-fs-handler.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
@@ -18,6 +18,10 @@ let dbCounter = 0;
 
 beforeEach(async () => {
   vfs = await VirtualFS.create({ dbName: `test-fs-handler-${dbCounter++}`, wipe: true });
+});
+
+afterEach(async () => {
+  await vfs.dispose();
 });
 
 function firstOk(responses: TrayFsResponse[]): TrayFsResponseData {

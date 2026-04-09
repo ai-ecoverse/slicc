@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { FsError } from '../../src/fs/types.js';
 
@@ -10,6 +10,10 @@ describe('VirtualFS symlinks & watcher', () => {
       dbName: 'test-vfs-symlinks',
       wipe: true,
     });
+  });
+
+  afterEach(async () => {
+    await vfs.dispose();
   });
 
   describe('symlinks', () => {

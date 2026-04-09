@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import 'fake-indexeddb/auto';
 import {
   parseRsyncArgs,
@@ -166,6 +166,10 @@ describe('createRsyncCommand', () => {
           return [{ ok: false, error: 'Unknown op' }];
       }
     };
+  });
+
+  afterEach(async () => {
+    await vfs.dispose();
   });
 
   function createCmd() {

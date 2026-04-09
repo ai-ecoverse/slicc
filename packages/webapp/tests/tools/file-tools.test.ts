@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { VirtualFS } from '../../src/fs/index.js';
 import { createFileTools } from '../../src/tools/file-tools.js';
 import type { ToolDefinition } from '../../src/core/types.js';
@@ -21,6 +21,10 @@ describe('File Tools', () => {
     readFile = tools.find((t) => t.name === 'read_file')!;
     writeFile = tools.find((t) => t.name === 'write_file')!;
     editFile = tools.find((t) => t.name === 'edit_file')!;
+  });
+
+  afterEach(async () => {
+    await fs.dispose();
   });
 
   it('creates three tools', () => {

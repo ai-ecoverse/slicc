@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
   discoverSprinkles,
@@ -16,6 +16,10 @@ describe('discoverSprinkles', () => {
       dbName: `test-sprinkle-discovery-${dbCounter++}`,
       wipe: true,
     });
+  });
+
+  afterEach(async () => {
+    await vfs.dispose();
   });
 
   it('returns empty map when no .shtml files exist', async () => {
@@ -156,6 +160,10 @@ describe('discoverSprinkles autoOpen', () => {
       dbName: `test-sprinkle-autoopen-${dbCounter++}`,
       wipe: true,
     });
+  });
+
+  afterEach(async () => {
+    await vfs.dispose();
   });
 
   it('sets autoOpen true when data-sprinkle-autoopen is present', async () => {

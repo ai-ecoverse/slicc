@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { VirtualFS } from '../../src/fs/index.js';
 import { createSearchTools } from '../../src/tools/search-tools.js';
 import type { ToolDefinition } from '../../src/core/types.js';
@@ -26,6 +26,10 @@ describe('Search Tools', () => {
     );
     await fs.writeFile('/src/foo.ts', 'export function foo() {\n  return "bar";\n}\n');
     await fs.writeFile('/readme.md', '# Test Project\nThis is a test.\n');
+  });
+
+  afterEach(async () => {
+    await fs.dispose();
   });
 
   describe('grep', () => {

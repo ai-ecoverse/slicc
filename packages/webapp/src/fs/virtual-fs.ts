@@ -34,6 +34,7 @@ export interface VirtualFsOptions {
 
 export class VirtualFS {
   private lfs: FS.PromisifiedFS;
+  private rawFs: FS;
   private _ready: Promise<void>;
   /** Map from absolute mount path → FileSystemDirectoryHandle (File System Access API). */
   private mountPoints = new Map<string, FileSystemDirectoryHandle>();
@@ -41,6 +42,7 @@ export class VirtualFS {
 
   private constructor(dbName: string, wipe: boolean) {
     const fs = new FS(dbName, { wipe });
+    this.rawFs = fs;
     this.lfs = fs.promises;
     // LightningFS initializes asynchronously; wait for first stat to complete
     this._ready = this.lfs
@@ -71,6 +73,25 @@ export class VirtualFS {
   /** Get the attached watcher, or null. */
   getWatcher(): FsWatcher | null {
     return this.watcher;
+  }
+
+  /**
+   * Close the underlying IndexedDB connection and release resources.
+   * Must be called when the VirtualFS instance is no longer needed (e.g., in test cleanup).
+   */
+  async dispose(): Promise<void> {
+    this.watcher?.dispose();
+    this.watcher = null;
+    // LightningFS PromisifiedFS stores the IDB backend internally.
+    // Trigger graceful shutdown via the internal backend API.
+    const pfs = this.lfs as any;
+    if (pfs._backend) {
+      if (pfs._backend.destroy) {
+        await pfs._backend.destroy();
+      } else if (pfs._backend.deactivate) {
+        await pfs._backend.deactivate();
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------

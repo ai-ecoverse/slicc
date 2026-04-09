@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import { VirtualFS } from '../../src/fs/index.js';
@@ -14,6 +14,10 @@ describe('uninstallSkill', () => {
     globalThis.indexedDB = new IDBFactory();
     fs = await VirtualFS.create();
     await initSkillsSystem(fs);
+  });
+
+  afterEach(async () => {
+    await fs.dispose();
   });
 
   it('removes added files and updates state', async () => {
