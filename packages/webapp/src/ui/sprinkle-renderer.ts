@@ -142,6 +142,102 @@ export class SprinkleRenderer {
               '*'
             )
         );
+      } else if (msg.type === 'sprinkle-writefile') {
+        this.bridge.writeFile(msg.path, msg.content).then(
+          () =>
+            iframe.contentWindow?.postMessage(
+              { type: 'sprinkle-writefile-response', id: msg.id },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-writefile-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
+      } else if (msg.type === 'sprinkle-readdir') {
+        this.bridge.readDir(msg.path).then(
+          (entries) =>
+            iframe.contentWindow?.postMessage(
+              { type: 'sprinkle-readdir-response', id: msg.id, entries },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-readdir-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
+      } else if (msg.type === 'sprinkle-exists') {
+        this.bridge.exists(msg.path).then(
+          (exists) =>
+            iframe.contentWindow?.postMessage(
+              { type: 'sprinkle-exists-response', id: msg.id, exists },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-exists-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
+      } else if (msg.type === 'sprinkle-stat') {
+        this.bridge.stat(msg.path).then(
+          (stat) =>
+            iframe.contentWindow?.postMessage(
+              { type: 'sprinkle-stat-response', id: msg.id, stat },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-stat-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
+      } else if (msg.type === 'sprinkle-mkdir') {
+        this.bridge.mkdir(msg.path).then(
+          () =>
+            iframe.contentWindow?.postMessage({ type: 'sprinkle-mkdir-response', id: msg.id }, '*'),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-mkdir-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
+      } else if (msg.type === 'sprinkle-rm') {
+        this.bridge.rm(msg.path).then(
+          () =>
+            iframe.contentWindow?.postMessage({ type: 'sprinkle-rm-response', id: msg.id }, '*'),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-rm-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
       }
     };
     window.addEventListener('message', this.messageHandler);
@@ -192,8 +288,8 @@ export class SprinkleRenderer {
   var _updateListeners = new Set();
   var _sprinkleName = '';
   var _state = null;
-  var _readFileId = 0;
-  var _readFileCallbacks = {};
+  var _cbId = 0;
+  var _callbacks = {};
 
   window.addEventListener('message', function(event) {
     var msg = event.data;
@@ -204,11 +300,25 @@ export class SprinkleRenderer {
       if (window.slicc) window.slicc.name = _sprinkleName;
     } else if (msg.type === 'sprinkle-update') {
       _updateListeners.forEach(function(cb) { try { cb(msg.data); } catch(e) { console.error(e); } });
-    } else if (msg.type === 'sprinkle-readfile-response') {
-      var cb = _readFileCallbacks[msg.id];
-      if (cb) { delete _readFileCallbacks[msg.id]; cb(msg.error, msg.content); }
+    } else if (msg.id && _callbacks[msg.id]) {
+      var cb = _callbacks[msg.id];
+      delete _callbacks[msg.id];
+      cb(msg);
     }
   });
+
+  function _vfsCall(type, params, extractResult) {
+    return new Promise(function(resolve, reject) {
+      var id = ++_cbId;
+      _callbacks[id] = function(msg) {
+        if (msg.error) reject(new Error(msg.error));
+        else resolve(extractResult ? extractResult(msg) : undefined);
+      };
+      var m = { type: type, id: id };
+      if (params) { for (var k in params) m[k] = params[k]; }
+      parent.postMessage(m, '*');
+    });
+  }
 
   var api = {
     lick: function(event) {
@@ -219,10 +329,51 @@ export class SprinkleRenderer {
     on: function(event, callback) { if (event === 'update') _updateListeners.add(callback); },
     off: function(event, callback) { if (event === 'update') _updateListeners.delete(callback); },
     readFile: function(path) {
+      return _vfsCall('sprinkle-readfile', { path: path }, function(m) { return m.content; });
+    },
+    writeFile: function(path, content) {
+      return _vfsCall('sprinkle-writefile', { path: path, content: content });
+    },
+    readDir: function(path) {
+      return _vfsCall('sprinkle-readdir', { path: path }, function(m) { return m.entries; });
+    },
+    exists: function(path) {
+      return _vfsCall('sprinkle-exists', { path: path }, function(m) { return m.exists; });
+    },
+    stat: function(path) {
+      return _vfsCall('sprinkle-stat', { path: path }, function(m) { return m.stat; });
+    },
+    mkdir: function(path) {
+      return _vfsCall('sprinkle-mkdir', { path: path });
+    },
+    rm: function(path) {
+      return _vfsCall('sprinkle-rm', { path: path });
+    },
+    screenshot: function(selector) {
       return new Promise(function(resolve, reject) {
-        var id = ++_readFileId;
-        _readFileCallbacks[id] = function(err, content) { if (err) reject(new Error(err)); else resolve(content); };
-        parent.postMessage({ type: 'sprinkle-readfile', id: id, path: path }, '*');
+        try {
+          var target = selector ? document.querySelector(selector) : document.body;
+          if (!target) { reject(new Error('Element not found: ' + selector)); return; }
+          var rect = target.getBoundingClientRect();
+          var w = Math.ceil(rect.width);
+          var h = Math.ceil(rect.height);
+          if (w === 0 || h === 0) { reject(new Error('Element has zero dimensions')); return; }
+          var canvas = document.createElement('canvas');
+          var dpr = window.devicePixelRatio || 1;
+          canvas.width = w * dpr;
+          canvas.height = h * dpr;
+          var ctx = canvas.getContext('2d');
+          ctx.scale(dpr, dpr);
+          var clone = target.cloneNode(true);
+          var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '">' +
+            '<foreignObject width="100%" height="100%">' +
+            new XMLSerializer().serializeToString(clone) +
+            '</foreignObject></svg>';
+          var img = new Image();
+          img.onload = function() { ctx.drawImage(img, 0, 0); resolve(canvas.toDataURL('image/png')); };
+          img.onerror = function() { reject(new Error('Screenshot rendering failed')); };
+          img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+        } catch(e) { reject(e); }
       });
     },
     setState: function(data) { _state = data; parent.postMessage({ type: 'sprinkle-set-state', data: data }, '*'); },
@@ -333,6 +484,102 @@ export class SprinkleRenderer {
               '*'
             )
         );
+      } else if (msg.type === 'sprinkle-writefile') {
+        this.bridge.writeFile(msg.path, msg.content).then(
+          () =>
+            iframe.contentWindow?.postMessage(
+              { type: 'sprinkle-writefile-response', id: msg.id },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-writefile-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
+      } else if (msg.type === 'sprinkle-readdir') {
+        this.bridge.readDir(msg.path).then(
+          (entries) =>
+            iframe.contentWindow?.postMessage(
+              { type: 'sprinkle-readdir-response', id: msg.id, entries },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-readdir-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
+      } else if (msg.type === 'sprinkle-exists') {
+        this.bridge.exists(msg.path).then(
+          (exists) =>
+            iframe.contentWindow?.postMessage(
+              { type: 'sprinkle-exists-response', id: msg.id, exists },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-exists-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
+      } else if (msg.type === 'sprinkle-stat') {
+        this.bridge.stat(msg.path).then(
+          (stat) =>
+            iframe.contentWindow?.postMessage(
+              { type: 'sprinkle-stat-response', id: msg.id, stat },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-stat-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
+      } else if (msg.type === 'sprinkle-mkdir') {
+        this.bridge.mkdir(msg.path).then(
+          () =>
+            iframe.contentWindow?.postMessage({ type: 'sprinkle-mkdir-response', id: msg.id }, '*'),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-mkdir-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
+      } else if (msg.type === 'sprinkle-rm') {
+        this.bridge.rm(msg.path).then(
+          () =>
+            iframe.contentWindow?.postMessage({ type: 'sprinkle-rm-response', id: msg.id }, '*'),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-rm-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
       }
     };
     window.addEventListener('message', this.messageHandler);
@@ -345,6 +592,9 @@ export class SprinkleRenderer {
     // Ensure the global sprinkle registry exists
     if (!window.__slicc_sprinkles) window.__slicc_sprinkles = {};
     window.__slicc_sprinkles[sprinkleName] = this.bridge;
+
+    // Give the bridge a reference to the container so screenshot() works in inline mode.
+    this.bridge._container = this.container;
 
     // Parse HTML and set content (scripts won't execute via innerHTML).
     // Content is user/agent-authored .shtml — trusted, not external input.
