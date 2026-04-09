@@ -1162,9 +1162,31 @@ describe('tray worker skeleton', () => {
     expect(response.headers.get('Location')).toBe('https://www.sliccy.ai/some/path?q=1');
   });
 
-  it('does not redirect requests to www.sliccy.ai', async () => {
+  it('redirects bare www.sliccy.ai to www.sliccy.com with 301', async () => {
     const { env } = createTestHarness();
     const response = await handleWorkerRequest(new Request('https://www.sliccy.ai/'), env);
+    expect(response.status).toBe(301);
+    expect(response.headers.get('Location')).toBe('https://www.sliccy.com/');
+  });
+
+  it('does not redirect www.sliccy.ai with query params', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(
+      new Request('https://www.sliccy.ai/?json=true'),
+      env
+    );
+    expect(response.status).toBe(200);
+  });
+
+  it('does not redirect www.sliccy.ai with a path', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(new Request('https://www.sliccy.ai/some/path'), env);
+    expect(response.status).toBe(200);
+  });
+
+  it('does not redirect www.sliccy.ai/handoff', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(new Request('https://www.sliccy.ai/handoff'), env);
     expect(response.status).toBe(200);
   });
 

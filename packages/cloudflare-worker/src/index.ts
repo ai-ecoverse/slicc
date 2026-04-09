@@ -52,6 +52,10 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
     return Response.redirect(target.toString(), 301);
   }
 
+  if (url.hostname === 'www.sliccy.ai' && url.pathname === '/' && url.search === '') {
+    return Response.redirect('https://www.sliccy.com', 301);
+  }
+
   if (url.pathname === '/tray' && request.method === 'POST') {
     return createTray(request, env);
   }
