@@ -21,6 +21,11 @@ import { createDefaultSharedFiles, createDefaultSkills } from './skills.js';
 import { buildActiveLicksError, type LickManager } from './lick-manager.js';
 import { SessionStore } from '../core/session.js';
 import { trackChatSend } from '../ui/telemetry.js';
+import {
+  registerSessionCostsProvider,
+  type ScoopCostData,
+} from '../shell/supplemental-commands/cost-command.js';
+import type { AssistantMessage } from '../core/types.js';
 
 const log = createLogger('orchestrator');
 
@@ -137,6 +142,9 @@ export class Orchestrator {
     for (const scoop of this.scoops.values()) {
       await this.createScoopTab(scoop.jid);
     }
+
+    // Register session costs provider for the `cost` shell command
+    registerSessionCostsProvider(() => this.getSessionCosts());
 
     // Start polling for pending messages
     this.startMessageLoop();
@@ -827,6 +835,59 @@ export class Orchestrator {
     if (context) {
       context.stop();
     }
+  }
+
+  /** Collect cost data from all scoops for the `cost` shell command. */
+  getSessionCosts(): ScoopCostData[] {
+    const results: ScoopCostData[] = [];
+    for (const scoop of this.scoops.values()) {
+      const context = this.contexts.get(scoop.jid);
+      if (!context) continue;
+      const messages = context.getAgentMessages();
+      const assistantMsgs = messages.filter((m): m is AssistantMessage => m.role === 'assistant');
+      if (assistantMsgs.length === 0) continue;
+
+      const aggregated = {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      };
+      const modelCounts = new Map<string, number>();
+      for (const msg of assistantMsgs) {
+        aggregated.input += msg.usage.input;
+        aggregated.output += msg.usage.output;
+        aggregated.cacheRead += msg.usage.cacheRead;
+        aggregated.cacheWrite += msg.usage.cacheWrite;
+        aggregated.totalTokens += msg.usage.totalTokens;
+        aggregated.cost.input += msg.usage.cost.input;
+        aggregated.cost.output += msg.usage.cost.output;
+        aggregated.cost.cacheRead += msg.usage.cost.cacheRead;
+        aggregated.cost.cacheWrite += msg.usage.cost.cacheWrite;
+        aggregated.cost.total += msg.usage.cost.total;
+        modelCounts.set(msg.model, (modelCounts.get(msg.model) ?? 0) + 1);
+      }
+
+      let topModel = '';
+      let topCount = 0;
+      for (const [model, count] of modelCounts) {
+        if (count > topCount) {
+          topModel = model;
+          topCount = count;
+        }
+      }
+
+      results.push({
+        name: scoop.assistantLabel,
+        type: scoop.isCone ? 'cone' : 'scoop',
+        model: topModel,
+        usage: aggregated,
+        turns: assistantMsgs.length,
+      });
+    }
+    return results;
   }
 
   /** Cleanup */

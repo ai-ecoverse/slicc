@@ -334,6 +334,28 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     log.warn('Failed to mount shell to terminal', e);
   }
 
+  // Register session costs provider for the panel's terminal shell.
+  // The offscreen document owns the orchestrator, so we request cost data via chrome.runtime.
+  {
+    const { registerSessionCostsProvider } =
+      await import('../shell/supplemental-commands/cost-command.js');
+    registerSessionCostsProvider(
+      () =>
+        new Promise((resolve) => {
+          chrome.runtime.sendMessage(
+            { source: 'panel' as const, payload: { type: 'get-session-costs' } },
+            (response: unknown) => {
+              if (chrome.runtime.lastError || !(response as { ok?: boolean })?.ok) {
+                resolve([]);
+                return;
+              }
+              resolve(((response as { costs?: unknown[] }).costs as []) ?? []);
+            }
+          );
+        })
+    );
+  }
+
   // Define selectScoop early so onReady can reference it.
   // Uses `client` which is assigned right after construction.
   let client!: InstanceType<typeof OffscreenClient>;
