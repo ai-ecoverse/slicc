@@ -70,6 +70,8 @@ export interface ScoopContextCallbacks {
   onSendMessage: (text: string, sender?: string) => void;
   /** Get all scoops (for cone) */
   getScoops: () => RegisteredScoop[];
+  /** Get tab state for a scoop by JID (cone only). */
+  getScoopTabState?: (jid: string) => import('./types.js').ScoopTabState | undefined;
   /** Feed a prompt to a specific scoop (cone only). */
   onFeedScoop?: (scoopJid: string, prompt: string) => Promise<void>;
   /** Create a new scoop (cone only) */
@@ -165,6 +167,7 @@ export class ScoopContext {
         scoop: this.scoop,
         onSendMessage: this.callbacks.onSendMessage,
         getScoops: this.callbacks.getScoops,
+        getScoopTabState: this.callbacks.getScoopTabState,
         onFeedScoop: this.callbacks.onFeedScoop,
         onScoopScoop: this.callbacks.onScoopScoop,
         onDropScoop: this.callbacks.onDropScoop,

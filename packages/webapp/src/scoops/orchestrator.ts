@@ -29,6 +29,9 @@ import type { AssistantMessage } from '../core/types.js';
 
 const log = createLogger('orchestrator');
 
+/** Time in ms to wait before notifying cone that a scoop hasn't started work. */
+export const SCOOP_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
+
 export interface OrchestratorCallbacks {
   /** Called when a scoop sends a response */
   onResponse: (scoopJid: string, text: string, isPartial: boolean) => void;
@@ -76,6 +79,8 @@ export class Orchestrator {
   private scoopResponseBuffer: Map<string, string> = new Map();
   private lickManager: LickManager | null = null;
   private sessionStore: SessionStore | null = null;
+  /** Tracks idle timers for scoops that haven't started work after becoming ready. */
+  private idleTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
   constructor(
     container: HTMLElement,
@@ -241,6 +246,7 @@ export class Orchestrator {
       if (err) throw err;
     }
 
+    this.clearIdleTimer(jid);
     await this.destroyScoopTab(jid);
     this.sessionStore?.delete(jid).catch((err) => {
       log.warn('Failed to delete agent session', {
@@ -269,6 +275,7 @@ export class Orchestrator {
   async resetFilesystem(): Promise<void> {
     // Destroy all scoop contexts (they hold references to the old VFS)
     for (const [jid, ctx] of this.contexts.entries()) {
+      this.clearIdleTimer(jid);
       ctx.stop();
       this.contexts.delete(jid);
     }
@@ -548,6 +555,7 @@ export class Orchestrator {
         this.callbacks.onSendMessage(jid, `${sender ? `[${sender}] ` : ''}${text}`);
       },
       getScoops: () => this.getScoops(),
+      getScoopTabState: scoop.isCone ? (jid: string) => this.tabs.get(jid) : undefined,
       onFeedScoop: scoop.isCone
         ? (scoopJid, prompt) => this.delegateToScoop(scoopJid, prompt, scoop.assistantLabel)
         : undefined,
@@ -600,11 +608,18 @@ export class Orchestrator {
       this.callbacks.onStatusChange(jid, 'ready');
     }
 
+    // Start idle timer for non-cone scoops
+    const scoopForTimer = this.scoops.get(jid);
+    if (scoopForTimer && !scoopForTimer.isCone) {
+      this.startIdleTimer(jid);
+    }
+
     log.info('Scoop context created', { jid, contextId });
   }
 
   /** Destroy a scoop context */
   async destroyScoopTab(jid: string): Promise<void> {
+    this.clearIdleTimer(jid);
     const context = this.contexts.get(jid);
     if (context) {
       context.dispose();
@@ -699,6 +714,9 @@ export class Orchestrator {
       log.error('Context not found after creation', { jid });
       return;
     }
+
+    // Cancel idle timer — this scoop has started work
+    this.clearIdleTimer(jid);
 
     // Update status and clear response buffer for fresh accumulation
     this.scoopResponseBuffer.delete(jid);
@@ -892,9 +910,61 @@ export class Orchestrator {
     return results;
   }
 
+  /** Start an idle timer for a scoop. If the scoop doesn't start processing within
+   *  SCOOP_IDLE_TIMEOUT_MS, send a notification to the cone. */
+  private startIdleTimer(jid: string): void {
+    this.clearIdleTimer(jid);
+    // Guard: don't start if the scoop is already processing (e.g. auto-feed race)
+    const currentTab = this.tabs.get(jid);
+    if (currentTab?.status === 'processing') return;
+    const timer = setTimeout(() => {
+      this.idleTimers.delete(jid);
+      const scoop = this.scoops.get(jid);
+      if (!scoop || scoop.isCone) return;
+
+      // Only notify if still in ready state (never processed)
+      const tab = this.tabs.get(jid);
+      if (tab?.status !== 'ready') return;
+
+      const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
+      if (!cone) return;
+
+      const notifyMsg: ChannelMessage = {
+        id: `scoop-idle-${jid}-${Date.now()}`,
+        chatJid: cone.jid,
+        senderId: scoop.folder,
+        senderName: scoop.assistantLabel,
+        content: `[@${scoop.assistantLabel} idle]: Scoop "${scoop.name}" has been ready for 2 minutes without receiving any work. This is expected if the scoop is waiting for webhooks or cron tasks. If you intended to delegate work, use feed_scoop to send a prompt.`,
+        timestamp: new Date().toISOString(),
+        fromAssistant: false,
+        channel: 'scoop-idle',
+      };
+      log.info('Scoop idle timeout', { jid, scoop: scoop.folder });
+      this.handleMessage(notifyMsg).catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.error('Failed to send idle notification', { jid, error: msg });
+      });
+    }, SCOOP_IDLE_TIMEOUT_MS);
+    this.idleTimers.set(jid, timer);
+  }
+
+  /** Clear an idle timer for a scoop. */
+  private clearIdleTimer(jid: string): void {
+    const timer = this.idleTimers.get(jid);
+    if (timer) {
+      clearTimeout(timer);
+      this.idleTimers.delete(jid);
+    }
+  }
+
   /** Cleanup */
   async shutdown(): Promise<void> {
     this.stopMessageLoop();
+
+    // Clear all idle timers
+    for (const jid of this.idleTimers.keys()) {
+      this.clearIdleTimer(jid);
+    }
 
     // Stop the scheduler
     this.scheduler?.stop();
