@@ -224,7 +224,11 @@ export class ChatPanel {
   }
 
   /** Add a lick message (webhook/cron/sprinkle event). */
-  addLickMessage(id: string, content: string, channel: 'webhook' | 'cron' | 'sprinkle'): void {
+  addLickMessage(
+    id: string,
+    content: string,
+    channel: 'webhook' | 'cron' | 'sprinkle' | 'fswatch'
+  ): void {
     const msg: ChatMessage = {
       id,
       role: 'user',
@@ -1159,7 +1163,11 @@ export class ChatPanel {
     isLastAssistant = false
   ): HTMLElement {
     // Licks (webhook/cron) get their own compact style like tool calls
-    const isLick = msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron';
+    const isLick =
+      msg.source === 'lick' ||
+      msg.channel === 'webhook' ||
+      msg.channel === 'cron' ||
+      msg.channel === 'fswatch';
     if (isLick) {
       const wrapper = document.createElement('div');
       wrapper.className = 'msg-group';
@@ -1232,7 +1240,10 @@ export class ChatPanel {
 
     // For lick messages in cone view, wrap content in collapsible
     const isLickInCone =
-      (msg.source === 'lick' || msg.channel === 'webhook' || msg.channel === 'cron') &&
+      (msg.source === 'lick' ||
+        msg.channel === 'webhook' ||
+        msg.channel === 'cron' ||
+        msg.channel === 'fswatch') &&
       this.sessionId === 'session-cone';
     // For scoop messages in cone view, wrap in collapsible
     const isScoopInCone =
@@ -1343,7 +1354,13 @@ export class ChatPanel {
     el.className = 'lick';
 
     const channelType =
-      msg.channel === 'webhook' ? 'Webhook' : msg.channel === 'cron' ? 'Cron' : 'Event';
+      msg.channel === 'webhook'
+        ? 'Webhook'
+        : msg.channel === 'cron'
+          ? 'Cron'
+          : msg.channel === 'fswatch'
+            ? 'File Watch'
+            : 'Event';
 
     // Summary shows tongue emoji and type
     const summary = document.createElement('summary');

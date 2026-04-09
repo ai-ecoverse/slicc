@@ -113,7 +113,7 @@ Options:
       const lickHandler = (globalThis as any).__slicc_lick_handler;
 
       const unsubscribe = watcher.watch(basePath, filter, (events: any[]) => {
-        if (lickHandler && scoop) {
+        if (lickHandler) {
           lickHandler({
             type: 'fswatch',
             fswatchId: id,

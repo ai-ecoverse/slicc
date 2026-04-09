@@ -388,7 +388,8 @@ export class Orchestrator {
 
     // Check trigger requirement using the scoop's own trigger
     // Bypass trigger check for lick messages (webhook/cron - they're explicitly routed to this scoop)
-    const isLick = message.channel === 'webhook' || message.channel === 'cron';
+    const isLick =
+      message.channel === 'webhook' || message.channel === 'cron' || message.channel === 'fswatch';
     if (!scoop.isCone && scoop.requiresTrigger && scoop.trigger && !isLick) {
       if (!message.content.includes(scoop.trigger)) {
         log.info('routeToScoop: trigger not found in content', {
