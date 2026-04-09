@@ -43,7 +43,7 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
   // send_message tool
   tools.push({
     name: 'send_message',
-    description: `Send a message immediately while you're still working. Use this for progress updates or to send multiple messages. Your final output is also sent to the user, so use this for interim updates.`,
+    description: `Send a progress message while still working. Your final output is also sent.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -71,7 +71,7 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
   if (scoop.isCone && onFeedScoop) {
     tools.push({
       name: 'feed_scoop',
-      description: `Give a scoop a task and activate it. You MUST provide a complete, self-contained prompt — the scoop has NO access to your conversation history. Include all necessary context, instructions, file paths, URLs, and expected output format. The scoop will work independently and you'll be notified when it finishes.`,
+      description: `Give a scoop a task. Provide a complete, self-contained prompt — the scoop has no access to your conversation. You'll be notified when it finishes.`,
       inputSchema: {
         type: 'object',
         properties: {
