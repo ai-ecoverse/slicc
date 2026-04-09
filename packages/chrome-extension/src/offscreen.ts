@@ -78,12 +78,21 @@ async function init(): Promise<void> {
   lickManager.setEventHandler((event) => {
     const isWebhook = event.type === 'webhook';
     const isSprinkle = event.type === 'sprinkle';
+    const isFsWatch = event.type === 'fswatch';
     const eventName = isWebhook
       ? event.webhookName
       : isSprinkle
         ? event.sprinkleName
-        : event.cronName;
-    const eventId = isWebhook ? event.webhookId : isSprinkle ? event.sprinkleName : event.cronId;
+        : isFsWatch
+          ? (event as any).fswatchName
+          : event.cronName;
+    const eventId = isWebhook
+      ? event.webhookId
+      : isSprinkle
+        ? event.sprinkleName
+        : isFsWatch
+          ? (event as any).fswatchId
+          : event.cronId;
     const channel = event.type;
 
     const scoops = orchestrator.getScoops();
@@ -103,7 +112,13 @@ async function init(): Promise<void> {
 
     if (resolvedTarget) {
       const msgId = `${channel}-${eventId}-${Date.now()}`;
-      const eventLabel = isWebhook ? 'Webhook Event' : isSprinkle ? 'Sprinkle Event' : 'Cron Event';
+      const eventLabel = isWebhook
+        ? 'Webhook Event'
+        : isSprinkle
+          ? 'Sprinkle Event'
+          : isFsWatch
+            ? 'File Watch Event'
+            : 'Cron Event';
       const content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
 
       const channelMsg: import('../../../packages/webapp/src/scoops/types.js').ChannelMessage = {

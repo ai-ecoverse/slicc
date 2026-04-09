@@ -20,6 +20,7 @@ import type {
 } from './types.js';
 import { FsError } from './types.js';
 import { normalizePath, splitPath, joinPath } from './path-utils.js';
+import type { FsWatcher, FsChangeEvent } from './fs-watcher.js';
 
 /** Maximum number of symlink hops before throwing ELOOP. */
 const MAX_SYMLINK_DEPTH = 40;
@@ -36,6 +37,7 @@ export class VirtualFS {
   private _ready: Promise<void>;
   /** Map from absolute mount path → FileSystemDirectoryHandle (File System Access API). */
   private mountPoints = new Map<string, FileSystemDirectoryHandle>();
+  private watcher: FsWatcher | null = null;
 
   private constructor(dbName: string, wipe: boolean) {
     const fs = new FS(dbName, { wipe });
@@ -59,6 +61,16 @@ export class VirtualFS {
   /** Get the underlying LightningFS promises API (for isomorphic-git). */
   getLightningFS(): FS.PromisifiedFS {
     return this.lfs;
+  }
+
+  /** Attach a file system watcher for change notifications. */
+  setWatcher(watcher: FsWatcher): void {
+    this.watcher = watcher;
+  }
+
+  /** Get the attached watcher, or null. */
+  getWatcher(): FsWatcher | null {
+    return this.watcher;
   }
 
   // ---------------------------------------------------------------------------
@@ -227,6 +239,13 @@ export class VirtualFS {
       // Path doesn't exist yet — that's fine for new files, use the original path
       resolved = normalized;
     }
+    // Check existence before write to determine create vs modify
+    let wasExisting = false;
+    try {
+      wasExisting = await this.exists(normalized);
+    } catch {
+      /* ignore */
+    }
     // Ensure parent directory exists
     const { dir } = splitPath(resolved);
     if (dir !== '/') {
@@ -237,6 +256,13 @@ export class VirtualFS {
     } catch (err) {
       throw this.convertError(err, normalized);
     }
+    this.watcher?.notify([
+      {
+        type: wasExisting ? 'modify' : 'create',
+        path: resolved,
+        entryType: 'file',
+      },
+    ]);
   }
 
   /**
@@ -331,6 +357,7 @@ export class VirtualFS {
       } catch (err) {
         throw this.convertError(err, normalized);
       }
+      this.watcher?.notify([{ type: 'create', path: normalized, entryType: 'directory' }]);
     }
   }
 
@@ -377,6 +404,7 @@ export class VirtualFS {
     } catch (err) {
       throw this.convertError(err, normalized);
     }
+    this.watcher?.notify([{ type: 'delete', path: normalized }]);
   }
 
   private async rmRecursive(path: string): Promise<void> {
@@ -594,6 +622,7 @@ export class VirtualFS {
     } catch (err) {
       throw this.convertError(err, normalizedLinkPath);
     }
+    this.watcher?.notify([{ type: 'create', path: normalizedLinkPath, entryType: 'symlink' }]);
   }
 
   /**

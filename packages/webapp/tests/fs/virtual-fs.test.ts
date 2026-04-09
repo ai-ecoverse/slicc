@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { FsError } from '../../src/fs/types.js';
 
@@ -293,6 +293,72 @@ describe('VirtualFS', () => {
       expect(files).toContain('/loop/file.txt');
       // Should terminate without infinite recursion
       expect(files.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('fs watcher integration', () => {
+    it('writeFile notifies watcher on create', async () => {
+      const { FsWatcher } = await import('../../src/fs/fs-watcher.js');
+      const watcher = new FsWatcher();
+      vfs.setWatcher(watcher);
+      const callback = vi.fn();
+      watcher.watch('/', () => true, callback);
+
+      await vfs.writeFile('/watched.txt', 'hello');
+      expect(callback).toHaveBeenCalled();
+      const events = callback.mock.calls[0][0];
+      expect(events[0].type).toBe('create');
+      expect(events[0].path).toBe('/watched.txt');
+
+      vfs.setWatcher(null as any);
+    });
+
+    it('writeFile notifies watcher on modify', async () => {
+      const { FsWatcher } = await import('../../src/fs/fs-watcher.js');
+      await vfs.writeFile('/existing.txt', 'old');
+      const watcher = new FsWatcher();
+      vfs.setWatcher(watcher);
+      const callback = vi.fn();
+      watcher.watch('/', () => true, callback);
+
+      await vfs.writeFile('/existing.txt', 'new');
+      expect(callback).toHaveBeenCalled();
+      const events = callback.mock.calls[0][0];
+      expect(events[0].type).toBe('modify');
+
+      vfs.setWatcher(null as any);
+    });
+
+    it('rm notifies watcher', async () => {
+      const { FsWatcher } = await import('../../src/fs/fs-watcher.js');
+      await vfs.writeFile('/to-delete.txt', 'data');
+      const watcher = new FsWatcher();
+      vfs.setWatcher(watcher);
+      const callback = vi.fn();
+      watcher.watch('/', () => true, callback);
+
+      await vfs.rm('/to-delete.txt');
+      expect(callback).toHaveBeenCalled();
+      const events = callback.mock.calls[0][0];
+      expect(events[0].type).toBe('delete');
+
+      vfs.setWatcher(null as any);
+    });
+
+    it('mkdir notifies watcher', async () => {
+      const { FsWatcher } = await import('../../src/fs/fs-watcher.js');
+      const watcher = new FsWatcher();
+      vfs.setWatcher(watcher);
+      const callback = vi.fn();
+      watcher.watch('/', () => true, callback);
+
+      await vfs.mkdir('/watched-dir');
+      expect(callback).toHaveBeenCalled();
+      const events = callback.mock.calls[0][0];
+      expect(events[0].type).toBe('create');
+      expect(events[0].entryType).toBe('directory');
+
+      vfs.setWatcher(null as any);
     });
   });
 });

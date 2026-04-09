@@ -12,6 +12,7 @@
 import type { CDPTransport } from '../cdp/transport.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { VirtualFS } from '../fs/index.js';
+import type { FsWatcher } from '../fs/index.js';
 import { discoverBshScripts, findMatchingScripts, type BshEntry } from './bsh-discovery.js';
 import { createLogger } from '../core/logger.js';
 
@@ -30,6 +31,8 @@ export interface BshWatchdogOptions {
   fs: VirtualFS;
   /** How often (ms) to re-discover .bsh files. Default: 10000. */
   discoveryIntervalMs?: number;
+  /** Optional VFS watcher for event-driven .bsh discovery. */
+  watcher?: FsWatcher;
 }
 
 export class BshWatchdog {
@@ -37,6 +40,8 @@ export class BshWatchdog {
   private readonly browserAPI?: BrowserAPI;
   private readonly fs: VirtualFS;
   private readonly discoveryIntervalMs: number;
+  private readonly watcher?: FsWatcher;
+  private watcherUnsubs: (() => void)[] = [];
 
   private entries: BshEntry[] = [];
   private discoveryTimer: ReturnType<typeof setInterval> | null = null;
@@ -53,6 +58,7 @@ export class BshWatchdog {
     this.transport = options.transport ?? options.browserAPI!.getTransport();
     this.fs = options.fs;
     this.discoveryIntervalMs = options.discoveryIntervalMs ?? 10_000;
+    this.watcher = options.watcher;
   }
 
   /** Start watching for navigations. */
@@ -63,10 +69,19 @@ export class BshWatchdog {
     // Initial discovery
     await this.discover();
 
-    // Periodic re-discovery
-    this.discoveryTimer = setInterval(() => {
-      void this.discover();
-    }, this.discoveryIntervalMs);
+    // Event-driven or polling re-discovery
+    if (this.watcher) {
+      const bshFilter = (path: string) => path.endsWith('.bsh');
+      this.watcherUnsubs = [
+        this.watcher.watch('/workspace', bshFilter, () => void this.discover()),
+        this.watcher.watch('/shared', bshFilter, () => void this.discover()),
+      ];
+    } else {
+      // Fallback to polling
+      this.discoveryTimer = setInterval(() => {
+        void this.discover();
+      }, this.discoveryIntervalMs);
+    }
 
     // Subscribe to navigation events
     this.transport.on('Page.frameNavigated', this.onFrameNavigated);
@@ -100,6 +115,9 @@ export class BshWatchdog {
     if (this.browserAPI) {
       this.browserAPI.setSessionChangeCallback(undefined);
     }
+
+    for (const unsub of this.watcherUnsubs) unsub();
+    this.watcherUnsubs = [];
 
     this.entries = [];
     this.executing.clear();

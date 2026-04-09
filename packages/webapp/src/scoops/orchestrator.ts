@@ -14,7 +14,7 @@ import * as db from './db.js';
 import { createLogger } from '../core/logger.js';
 import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
 import { TaskScheduler } from './scheduler.js';
-import { VirtualFS } from '../fs/index.js';
+import { VirtualFS, FsWatcher } from '../fs/index.js';
 import { RestrictedFS } from '../fs/restricted-fs.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import { createDefaultSharedFiles, createDefaultSkills } from './skills.js';
@@ -71,6 +71,7 @@ export class Orchestrator {
   private scoopResponseBuffer: Map<string, string> = new Map();
   private lickManager: LickManager | null = null;
   private sessionStore: SessionStore | null = null;
+  private fsWatcher: FsWatcher | null = null;
 
   constructor(
     container: HTMLElement,
@@ -89,6 +90,11 @@ export class Orchestrator {
     // Create the single shared VirtualFS
     this.sharedFs = await VirtualFS.create({ dbName: 'slicc-fs' });
     this.sessionStore = new SessionStore();
+
+    // Create and attach file system watcher
+    this.fsWatcher = new FsWatcher();
+    this.sharedFs.setWatcher(this.fsWatcher);
+    (globalThis as any).__slicc_fs_watcher = this.fsWatcher;
     await this.ensureRootStructure();
 
     const savedScoops = await db.getAllScoops();
@@ -205,6 +211,9 @@ export class Orchestrator {
   /** Set the LickManager for guarding scoop removal against active licks */
   setLickManager(lickManager: LickManager): void {
     this.lickManager = lickManager;
+    (globalThis as any).__slicc_lick_handler = (event: any) => {
+      this.lickManager?.emitEvent(event);
+    };
   }
 
   /** Register a new scoop. Initialization is non-blocking — the scoop
@@ -266,6 +275,9 @@ export class Orchestrator {
     }
     // Re-create the VFS with wipe: true
     this.sharedFs = await VirtualFS.create({ dbName: 'slicc-fs', wipe: true });
+    if (this.fsWatcher) {
+      this.sharedFs.setWatcher(this.fsWatcher);
+    }
     await this.ensureRootStructure();
     await this.ensureGlobalMemory();
     await createDefaultSkills(this.sharedFs).catch((err) => {

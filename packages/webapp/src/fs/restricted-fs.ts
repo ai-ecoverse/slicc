@@ -22,6 +22,7 @@ import type {
 } from './types.js';
 import { FsError } from './types.js';
 import { normalizePath } from './path-utils.js';
+import type { FsWatchFilter, FsWatchCallback } from './fs-watcher.js';
 
 export class RestrictedFS {
   private vfs: VirtualFS;
@@ -192,6 +193,19 @@ export class RestrictedFS {
       throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
     }
     return this.vfs.lstat(path);
+  }
+
+  // ── Watcher operations ──────────────────────────────────────────────
+
+  watch(basePath: string, filter: FsWatchFilter, callback: FsWatchCallback): () => void {
+    if (!this.isAllowed(basePath)) {
+      throw new FsError('EACCES', 'permission denied', normalizePath(basePath));
+    }
+    const watcher = this.vfs.getWatcher();
+    if (!watcher) {
+      throw new FsError('EINVAL', 'no watcher configured');
+    }
+    return watcher.watch(normalizePath(basePath), filter, callback);
   }
 
   // ── Path utilities (no access control) ───────────────────────────────

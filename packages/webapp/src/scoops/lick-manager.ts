@@ -33,12 +33,16 @@ export interface CronTaskEntry {
 }
 
 export interface LickEvent {
-  type: 'webhook' | 'cron' | 'sprinkle';
+  type: 'webhook' | 'cron' | 'sprinkle' | 'fswatch';
   webhookId?: string;
   webhookName?: string;
   cronId?: string;
   cronName?: string;
   sprinkleName?: string;
+  /** For fswatch events */
+  fswatchId?: string;
+  fswatchName?: string;
+  changes?: Array<{ type: string; path: string }>;
   targetScoop?: string;
   timestamp: string;
   headers?: Record<string, string>;
@@ -90,6 +94,12 @@ export class LickManager {
   /** Set the handler for lick events */
   setEventHandler(handler: LickEventHandler): void {
     this.eventHandler = handler;
+  }
+
+  /** Emit an externally-generated lick event (e.g., from fswatch). */
+  emitEvent(event: LickEvent): void {
+    log.info('External lick event', { type: event.type, target: event.targetScoop });
+    this.eventHandler?.(event);
   }
 
   // ─── Webhooks ─────────────────────────────────────────────────────────────
@@ -337,13 +347,13 @@ export class LickManager {
         // Webhook filter: (event) => ...
         // User-authored webhook/cron filter expression — evaluated in extension sandbox context.
         // The filterCode string comes from the user's skill/webhook config, not from remote input.
-        // eslint-disable-next-line @typescript-eslint/no-implied-eval -- intentional: user-provided filter code
+         
         return new Function('event', `return (${filterCode})(event);`) as (
           event: unknown
         ) => boolean | unknown;
       } else {
         // Cron filter: () => ...
-        // eslint-disable-next-line @typescript-eslint/no-implied-eval -- intentional: user-provided filter code
+         
         return new Function(`return (${filterCode})();`) as () => boolean | unknown;
       }
     } catch (err) {

@@ -4,6 +4,7 @@
  */
 
 import type { VirtualFS } from '../fs/index.js';
+import type { FsWatcher } from '../fs/index.js';
 import { discoverSprinkles, type Sprinkle } from './sprinkle-discovery.js';
 import { SprinkleBridge } from './sprinkle-bridge.js';
 import { SprinkleRenderer } from './sprinkle-renderer.js';
@@ -27,6 +28,7 @@ export class SprinkleManager {
   private bridge: SprinkleBridge;
   private callbacks: SprinkleManagerCallbacks;
   private availableSprinkles = new Map<string, Sprinkle>();
+  private watcherUnsub?: () => void;
   private openSprinkles = new Map<
     string,
     {
@@ -167,6 +169,20 @@ export class SprinkleManager {
   /** List open sprinkle names. */
   opened(): string[] {
     return Array.from(this.openSprinkles.keys());
+  }
+
+  /** Set up a watcher for auto-refreshing when .shtml files change. */
+  setupWatcher(watcher: FsWatcher): void {
+    this.watcherUnsub = watcher.watch(
+      '/workspace',
+      (path) => path.endsWith('.shtml'),
+      () => void this.refresh()
+    );
+  }
+
+  /** Clean up watcher subscriptions. */
+  dispose(): void {
+    this.watcherUnsub?.();
   }
 
   /** Push data to an open sprinkle (agent → sprinkle). */
