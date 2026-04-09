@@ -202,8 +202,49 @@ export class BshWatchdog {
     const content = await this.fs.readFile(scriptPath);
     const scriptContent = typeof content === 'string' ? content : new TextDecoder().decode(content);
 
-    // Wrap in async IIFE with error handling and evaluate in target page
-    const wrappedScript = `(async () => { try {\n${scriptContent}\n} catch(e) { console.error('[bsh]', e); } })()`;
+    // Wrap in async IIFE with pre-scanned synchronous require() and error handling
+    const wrappedScript = `(async () => {
+  const __requireSpecifiers = (function() {
+    const re = /require\\s*\\(\\s*['"]([^'"]+)['"]\\s*\\)/g;
+    const code = ${JSON.stringify(scriptContent)};
+    const specs = [];
+    let m;
+    while ((m = re.exec(code)) !== null) specs.push(m[1]);
+    return [...new Set(specs)];
+  })();
+  const __NODE_BUILTINS_UNAVAILABLE = new Set([
+    'http', 'https', 'net', 'tls', 'dgram', 'dns', 'cluster',
+    'worker_threads', 'child_process', 'crypto', 'os', 'stream',
+    'zlib', 'vm', 'v8', 'perf_hooks', 'readline', 'repl', 'tty', 'inspector',
+    'fs'
+  ]);
+  const __requireCache = Object.create(null);
+  const __uncached = __requireSpecifiers.filter(id => {
+    const bare = id.startsWith('node:') ? id.slice(5) : id;
+    return !__NODE_BUILTINS_UNAVAILABLE.has(bare) && bare !== 'buffer';
+  });
+  await Promise.allSettled(__uncached.map(async (id) => {
+    try {
+      const mod = await import('https://esm.sh/' + id);
+      __requireCache[id] = mod.default !== undefined ? mod.default : mod;
+    } catch(e) { /* will throw at require() call time */ }
+  }));
+  const require = (id) => {
+    const bareId = id.startsWith('node:') ? id.slice(5) : id;
+    if (bareId === 'buffer' && typeof Buffer !== 'undefined') return { Buffer };
+    if (__NODE_BUILTINS_UNAVAILABLE.has(bareId)) {
+      const __suggestions = { http: ' Use fetch() instead.', https: ' Use fetch() instead.', crypto: ' Use globalThis.crypto (Web Crypto API) instead.' };
+      const __hint = __suggestions[bareId] || '';
+      throw new Error("require('" + id + "'): Node built-in '" + bareId + "' is not available in the browser environment." + __hint);
+    }
+    if (bareId in __requireCache) return __requireCache[bareId];
+    if (id in __requireCache) return __requireCache[id];
+    throw new Error("require('" + id + "'): module not pre-loaded. Use a string literal or await import('https://esm.sh/" + id + "') directly.");
+  };
+  try {
+    ${scriptContent}
+  } catch(e) { console.error('[bsh]', e); }
+})()`;
 
     await this.transport.send('Runtime.enable', {}, sessionId);
     const result = await this.transport.send(

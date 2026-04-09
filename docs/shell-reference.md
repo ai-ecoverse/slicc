@@ -216,8 +216,12 @@ console.log(ls.stdout);
 
 #### require / module / exports
 
+Scripts can import npm packages via `require('package-name')`. This fetches from esm.sh CDN and caches for the session. Version pinning is supported: `require('lodash@4')`.
+
 ```typescript
-require(id)               // ❌ Not supported (throws error)
+const _ = require('lodash');
+const { marked } = require('marked');
+const chalk = require('chalk@5');
 module.exports: {}        // Available for ES module pattern
 exports: module.exports   // Alias
 ```
@@ -485,10 +489,40 @@ For large-scale processing (1000+ files), batch operations and `.jsh` scripts ar
 
 ---
 
+## CDN-backed require()
+
+`node -e`, `.jsh`, and `.bsh` scripts can import npm packages at runtime via `require()`:
+
+```js
+const _ = require('lodash');
+const { marked } = require('marked');
+const chalk = require('chalk@5');
+```
+
+Packages are fetched from [esm.sh](https://esm.sh) and cached for the session. Version pinning via `@version` syntax is supported.
+
+**Note:** require() is synchronous. Modules referenced with string literals are automatically pre-fetched before script execution. For dynamic specifiers, use `await import('https://esm.sh/' + name)` directly.
+
+### Node Built-in Modules
+
+Some Node.js built-in modules are available via `require()`:
+
+| Module                                                  | Status                                                                |
+| ------------------------------------------------------- | --------------------------------------------------------------------- |
+| `fs`                                                    | ✅ VFS bridge (readFile, writeFile, readDir, exists, stat, mkdir, rm) |
+| `process`                                               | ✅ Shim (argv, env, cwd, exit, stdout, stderr)                        |
+| `buffer`                                                | ✅ Browser polyfill                                                   |
+| `path`                                                  | ✅ Via esm.sh (browser polyfill)                                      |
+| `url`, `querystring`, `util`, `events`, `assert`        | ✅ Via esm.sh                                                         |
+| `http`, `https`, `crypto`, `net`, `child_process`, etc. | ❌ Not available in browser                                           |
+
+The `node:` prefix is supported: `require('node:path')` works the same as `require('path')`.
+
+---
+
 ## Limitations
 
 - **Binary output in bash**: Commands producing binary output are limited to 100KB (just-bash constraint)
-- **require() not supported**: .jsh scripts cannot import modules
 - **Symlinks**: Not supported by LightningFS
 - **Large files**: Reading >100MB files in bash is slow; use `node -e` or `.jsh` scripts instead
 - **Network timeout**: curl/fetch timeout at 30 seconds (default)
