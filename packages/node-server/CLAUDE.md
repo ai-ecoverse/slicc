@@ -39,8 +39,8 @@ Use it for repeatable dev and QA flows without manual typing.
 - `5710` — default served UI port (`PORT` overrides it)
 - `9222` — default Chrome CDP port
 - `9223` — default Electron attach CDP port
-- `24679` — preferred Vite HMR port in dev mode
 
+Vite HMR shares the UI server via `/__vite_hmr` path (no separate port).
 The runtime auto-resolves port conflicts when needed.
 
 ## Parallel Instances
