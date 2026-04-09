@@ -238,6 +238,23 @@ export class SprinkleRenderer {
               '*'
             )
         );
+      } else if (msg.type === 'sprinkle-exec') {
+        this.bridge.exec(msg.command).then(
+          (result) =>
+            iframe.contentWindow?.postMessage(
+              { type: 'sprinkle-exec-response', id: msg.id, result },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-exec-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
       }
     };
     window.addEventListener('message', this.messageHandler);
@@ -348,6 +365,9 @@ export class SprinkleRenderer {
     },
     rm: function(path) {
       return _vfsCall('sprinkle-rm', { path: path });
+    },
+    exec: function(command) {
+      return _vfsCall('sprinkle-exec', { command: command }, function(m) { return m.result; });
     },
     screenshot: function(selector) {
       return new Promise(function(resolve, reject) {
@@ -574,6 +594,23 @@ export class SprinkleRenderer {
             iframe.contentWindow?.postMessage(
               {
                 type: 'sprinkle-rm-response',
+                id: msg.id,
+                error: err instanceof Error ? err.message : String(err),
+              },
+              '*'
+            )
+        );
+      } else if (msg.type === 'sprinkle-exec') {
+        this.bridge.exec(msg.command).then(
+          (result) =>
+            iframe.contentWindow?.postMessage(
+              { type: 'sprinkle-exec-response', id: msg.id, result },
+              '*'
+            ),
+          (err: unknown) =>
+            iframe.contentWindow?.postMessage(
+              {
+                type: 'sprinkle-exec-response',
                 id: msg.id,
                 error: err instanceof Error ? err.message : String(err),
               },

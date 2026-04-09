@@ -321,14 +321,15 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   });
 
   // Mount a terminal shell on the local VFS with BrowserAPI via CDP proxy
+  let panelShell: InstanceType<typeof import('../shell/index.js').WasmShell> | null = null;
   try {
     const { WasmShell } = await import('../shell/index.js');
     const { PanelCdpProxy, BrowserAPI: BrowserAPIClass } = await import('../cdp/index.js');
     const panelCdp = new PanelCdpProxy();
     await panelCdp.connect();
     const panelBrowser = new BrowserAPIClass(panelCdp);
-    const shell = new WasmShell({ fs: localFs, browserAPI: panelBrowser });
-    await layout.panels.terminal.mountShell(shell);
+    panelShell = new WasmShell({ fs: localFs, browserAPI: panelBrowser });
+    await layout.panels.terminal.mountShell(panelShell);
     log.info('Terminal mounted with shared VFS and BrowserAPI (CDP proxy)');
   } catch (e) {
     log.warn('Failed to mount shell to terminal', e);
@@ -574,6 +575,9 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       removeSprinkle: (name) => layout.removeSprinkle(name),
     }
   );
+  if (panelShell) {
+    sprinkleManager.setExecHandler((cmd) => panelShell!.executeCommand(cmd));
+  }
   (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
   (window as unknown as Record<string, unknown>).__slicc_reloadSkills = () => {
     chrome.runtime.sendMessage({
@@ -1042,6 +1046,9 @@ async function main(): Promise<void> {
   layout.setScoopSwitcherOrchestrator?.(orchestrator);
 
   // Wire shared FS to file browser and terminal
+  let standaloneShell: {
+    executeCommand: (cmd: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  } | null = null;
   const sharedFs = orchestrator.getSharedFS();
   if (sharedFs) {
     layout.panels.fileBrowser.setFs(sharedFs);
@@ -1086,6 +1093,7 @@ async function main(): Promise<void> {
     try {
       const { WasmShell } = await import('../shell/index.js');
       const shell = new WasmShell({ fs: sharedFs, browserAPI: browser });
+      standaloneShell = shell;
       await layout.panels.terminal.mountShell(shell);
       log.info('Terminal mounted with shared VFS');
 
@@ -1402,6 +1410,9 @@ async function main(): Promise<void> {
         layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined),
       removeSprinkle: (name) => layout.removeSprinkle(name),
     });
+    if (standaloneShell) {
+      sprinkleManager.setExecHandler((cmd) => standaloneShell!.executeCommand(cmd));
+    }
     // Expose for open command, sprinkle shell command, and E2E/demo scripts
     (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
     (window as unknown as Record<string, unknown>).__slicc_reloadSkills = () =>

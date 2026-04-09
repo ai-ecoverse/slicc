@@ -16,6 +16,7 @@ function makeBridge(name: string): SprinkleBridgeAPI {
     stat: vi.fn(),
     mkdir: vi.fn(),
     rm: vi.fn(),
+    exec: vi.fn(),
     screenshot: vi.fn(),
     setState: vi.fn(),
     getState: vi.fn(() => null),

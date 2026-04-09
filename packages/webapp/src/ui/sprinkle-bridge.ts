@@ -28,6 +28,8 @@ export interface SprinkleBridgeAPI {
   mkdir(path: string): Promise<void>;
   /** Remove a file */
   rm(path: string): Promise<void>;
+  /** Execute a shell command via the WASM shell. Returns {stdout, stderr, exitCode}. */
+  exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }>;
   /** Capture sprinkle DOM as base64 PNG data URL */
   screenshot(selector?: string): Promise<string>;
   /** @internal Container element set by the renderer for inline mode screenshots. */
@@ -51,6 +53,9 @@ export class SprinkleBridge {
   private lickHandler: (event: LickEvent) => void;
   private fs: VirtualFS;
   private closeHandler: (name: string) => void;
+  private execHandler:
+    | ((command: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>)
+    | null = null;
 
   constructor(
     fs: VirtualFS,
@@ -60,6 +65,13 @@ export class SprinkleBridge {
     this.fs = fs;
     this.lickHandler = lickHandler;
     this.closeHandler = closeHandler;
+  }
+
+  /** Set the handler for executing shell commands from sprinkles. */
+  setExecHandler(
+    handler: (command: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>
+  ): void {
+    this.execHandler = handler;
   }
 
   /** Create a bridge API for a specific sprinkle. */
@@ -110,6 +122,10 @@ export class SprinkleBridge {
       },
       rm: async (path: string) => {
         await this.fs.rm(path);
+      },
+      exec: async (command: string) => {
+        if (!this.execHandler) throw new Error('Shell not available');
+        return this.execHandler(command);
       },
       screenshot: async (selector?: string) => {
         const container = api._container;

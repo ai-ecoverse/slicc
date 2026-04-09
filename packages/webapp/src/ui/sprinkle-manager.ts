@@ -169,6 +169,13 @@ export class SprinkleManager {
     return Array.from(this.openSprinkles.keys());
   }
 
+  /** Set the shell exec handler for sprinkle bridge. */
+  setExecHandler(
+    handler: (command: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>
+  ): void {
+    this.bridge.setExecHandler(handler);
+  }
+
   /** Push data to an open sprinkle (agent → sprinkle). */
   sendToSprinkle(name: string, data: unknown): void {
     const entry = this.openSprinkles.get(name);

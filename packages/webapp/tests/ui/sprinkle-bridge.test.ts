@@ -170,4 +170,18 @@ describe('SprinkleBridge', () => {
     expect(() => bridge.pushUpdate('test-sprinkle', 'data')).not.toThrow();
     expect(good).toHaveBeenCalledWith('data');
   });
+
+  it('exec() delegates to the exec handler', async () => {
+    const execMock = vi.fn().mockResolvedValue({ stdout: 'hello', stderr: '', exitCode: 0 });
+    bridge.setExecHandler(execMock);
+    const api = bridge.createAPI('test-sprinkle');
+    const result = await api.exec('echo hello');
+    expect(execMock).toHaveBeenCalledWith('echo hello');
+    expect(result).toEqual({ stdout: 'hello', stderr: '', exitCode: 0 });
+  });
+
+  it('exec() throws when no handler is set', async () => {
+    const api = bridge.createAPI('test-sprinkle');
+    await expect(api.exec('echo hello')).rejects.toThrow('Shell not available');
+  });
 });

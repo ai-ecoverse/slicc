@@ -183,6 +183,20 @@ window.slicc = {
       parent.postMessage({ type: 'sprinkle-rm', id: id, path: path }, '*');
     });
   },
+  exec: function(command) {
+    return new Promise(function(resolve, reject) {
+      var id = 'ex-' + Math.random().toString(36).slice(2);
+      function handler(event) {
+        if (event.data && event.data.type === 'sprinkle-exec-response' && event.data.id === id) {
+          removeEventListener('message', handler);
+          if (event.data.error) reject(new Error(event.data.error));
+          else resolve(event.data.result);
+        }
+      }
+      addEventListener('message', handler);
+      parent.postMessage({ type: 'sprinkle-exec', id: id, command: command }, '*');
+    });
+  },
   screenshot: function(selector) {
     return new Promise(function(resolve, reject) {
       try {
@@ -294,6 +308,7 @@ function buildNestedBridgeScript(savedState, savedStorage, name) {
       'stat: function(path) { return _vfsCall("sprinkle-stat", { path: path }, function(m) { return m.stat; }); },' +
       'mkdir: function(path) { return _vfsCall("sprinkle-mkdir", { path: path }); },' +
       'rm: function(path) { return _vfsCall("sprinkle-rm", { path: path }); },' +
+      'exec: function(command) { return _vfsCall("sprinkle-exec", { command: command }, function(m) { return m.result; }); },' +
       'screenshot: function(selector) {' +
         'return new Promise(function(resolve, reject) {' +
           'try {' +
@@ -430,7 +445,8 @@ addEventListener('message', function(e) {
   var responseTypes = [
     'sprinkle-readfile-response', 'sprinkle-writefile-response',
     'sprinkle-readdir-response', 'sprinkle-exists-response',
-    'sprinkle-stat-response', 'sprinkle-mkdir-response', 'sprinkle-rm-response'
+    'sprinkle-stat-response', 'sprinkle-mkdir-response', 'sprinkle-rm-response',
+    'sprinkle-exec-response'
   ];
   if (responseTypes.indexOf(msg.type) !== -1) {
     if (window.__slicc_childIframe && window.__slicc_childIframe.contentWindow) {
@@ -456,7 +472,7 @@ addEventListener('message', function(e) {
       'sprinkle-lick', 'sprinkle-set-state', 'sprinkle-close',
       'sprinkle-open', 'sprinkle-readfile',
       'sprinkle-writefile', 'sprinkle-readdir', 'sprinkle-exists',
-      'sprinkle-stat', 'sprinkle-mkdir', 'sprinkle-rm',
+      'sprinkle-stat', 'sprinkle-mkdir', 'sprinkle-rm', 'sprinkle-exec',
       'sprinkle-storage-set', 'sprinkle-storage-remove', 'sprinkle-storage-clear',
       'inline-sprinkle-lick', 'inline-sprinkle-height'
     ];
