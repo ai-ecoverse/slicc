@@ -50,6 +50,7 @@ export interface Account {
   providerId: string;
   apiKey: string;
   baseUrl?: string;
+  modelId?: string;
   // OAuth fields (used by OAuth providers)
   accessToken?: string;
   refreshToken?: string;
@@ -123,7 +124,12 @@ export function getProviderModels(providerId: string): Model<Api>[] {
     // Bedrock CAMP uses Amazon Bedrock models with custom API
     if (providerId === 'bedrock-camp') {
       const bedrockModels = getModelsDynamic('amazon-bedrock');
-      return bedrockModels.map((m) => ({
+      // Filter to selected model if one is configured
+      const selectedModelId = getModelIdForProvider('bedrock-camp');
+      const filtered = selectedModelId
+        ? bedrockModels.filter((m) => m.id === selectedModelId)
+        : bedrockModels;
+      return (filtered.length > 0 ? filtered : bedrockModels).map((m) => ({
         ...m,
         api: 'bedrock-camp-converse' as Api,
         provider: 'bedrock-camp',
@@ -327,12 +333,22 @@ function saveAccounts(accounts: Account[]): void {
   localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
 }
 
-export function addAccount(providerId: string, apiKey: string, baseUrl?: string): void {
+export function addAccount(
+  providerId: string,
+  apiKey: string,
+  baseUrl?: string,
+  modelId?: string
+): void {
   const accounts = getAccounts().filter((a) => a.providerId !== providerId);
   const entry: Account = { providerId, apiKey };
   if (baseUrl) entry.baseUrl = baseUrl;
+  if (modelId) entry.modelId = modelId;
   accounts.push(entry);
   saveAccounts(accounts);
+}
+
+export function getModelIdForProvider(providerId: string): string | undefined {
+  return getAccounts().find((a) => a.providerId === providerId)?.modelId;
 }
 
 export function removeAccount(providerId: string): void {
@@ -1012,6 +1028,29 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
 
       dialog.appendChild(baseUrlSection);
 
+      // Model selector section (shown for providers with requiresModelSelection)
+      const modelSection = document.createElement('div');
+      modelSection.style.display = 'none';
+
+      const modelLabel = document.createElement('div');
+      modelLabel.className = 'dialog__desc';
+      modelLabel.textContent = 'Model:';
+      modelSection.appendChild(modelLabel);
+
+      const modelSelect = document.createElement('select');
+      modelSelect.className = 'dialog__input';
+      modelSelect.style.marginBottom = '16px';
+      modelSection.appendChild(modelSelect);
+
+      const modelDesc = document.createElement('div');
+      modelDesc.className = 'dialog__desc';
+      modelDesc.style.cssText =
+        'font-size: 11px; color: var(--s2-content-secondary); margin-top: -12px; margin-bottom: 16px;';
+      modelDesc.textContent = 'Select the model available in your deployment';
+      modelSection.appendChild(modelDesc);
+
+      dialog.appendChild(modelSection);
+
       // Error message area
       const errorEl = document.createElement('div');
       errorEl.style.cssText =
@@ -1051,6 +1090,32 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
           baseUrlSection.style.display = providerConfig.requiresBaseUrl ? '' : 'none';
           saveBtn.style.display = '';
         }
+
+        // Model selector (shown when requiresModelSelection is set)
+        if (providerConfig.requiresModelSelection) {
+          modelSection.style.display = '';
+          modelSelect.innerHTML = '';
+          const sourceProvider = pid === 'bedrock-camp' ? 'amazon-bedrock' : pid;
+          const models = getModelsDynamic(sourceProvider);
+          for (const m of models) {
+            const opt = document.createElement('option');
+            opt.value = m.id;
+            opt.textContent = m.name || m.id;
+            modelSelect.appendChild(opt);
+          }
+          // Pre-select if editing
+          if (isEdit && editing.modelId) {
+            modelSelect.value = editing.modelId;
+          } else if (providerConfig.defaultModelId) {
+            // Try to match the default model by substring
+            const defaultMatch = models.find((m) =>
+              m.id.toLowerCase().includes(providerConfig.defaultModelId!.toLowerCase())
+            );
+            if (defaultMatch) modelSelect.value = defaultMatch.id;
+          }
+        } else {
+          modelSection.style.display = 'none';
+        }
       }
 
       providerSelect.addEventListener('change', () => {
@@ -1078,7 +1143,15 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
           return;
         }
 
-        addAccount(pid, apiKeyInput.value.trim(), baseUrlInput.value.trim() || undefined);
+        const selectedModelId = config.requiresModelSelection
+          ? modelSelect.value || undefined
+          : undefined;
+        addAccount(
+          pid,
+          apiKeyInput.value.trim(),
+          baseUrlInput.value.trim() || undefined,
+          selectedModelId
+        );
 
         renderAccountsList();
       }

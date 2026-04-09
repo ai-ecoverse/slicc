@@ -334,6 +334,28 @@ async function mainExtension(app: HTMLElement): Promise<void> {
     log.warn('Failed to mount shell to terminal', e);
   }
 
+  // Register session costs provider for the panel's terminal shell.
+  // The offscreen document owns the orchestrator, so we request cost data via chrome.runtime.
+  {
+    const { registerSessionCostsProvider } =
+      await import('../shell/supplemental-commands/cost-command.js');
+    registerSessionCostsProvider(
+      () =>
+        new Promise((resolve) => {
+          chrome.runtime.sendMessage(
+            { source: 'panel' as const, payload: { type: 'get-session-costs' } },
+            (response: unknown) => {
+              if (chrome.runtime.lastError || !(response as { ok?: boolean })?.ok) {
+                resolve([]);
+                return;
+              }
+              resolve(((response as { costs?: unknown[] }).costs as []) ?? []);
+            }
+          );
+        })
+    );
+  }
+
   // Define selectScoop early so onReady can reference it.
   // Uses `client` which is assigned right after construction.
   let client!: InstanceType<typeof OffscreenClient>;
@@ -524,7 +546,9 @@ async function mainExtension(app: HTMLElement): Promise<void> {
           const body = event.body as Record<string, unknown> | null;
           const action = body?.action;
           if (action === 'onboarding-complete' || action === 'shortcut-migrate') {
-            localStorage.setItem('slicc-welcomed', '1');
+            void localFs
+              .writeFile('/shared/.welcomed', '1')
+              .catch((err) => log.warn('Failed to persist welcome completion marker', err));
           }
           if (action === 'shortcut-migrate') {
             sprinkleManager.close('welcome');
@@ -660,9 +684,15 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   layout.updateAddButtons();
   await sprinkleManager.restoreOpenSprinkles();
 
+  // Migrate legacy localStorage flag to VFS marker
+  if (!(await localFs.exists('/shared/.welcomed')) && localStorage.getItem('slicc-welcomed')) {
+    await localFs.writeFile('/shared/.welcomed', '1').catch(() => {});
+    localStorage.removeItem('slicc-welcomed');
+  }
+
   // Open welcome sprinkle on first run (extension mode)
   if (
-    !localStorage.getItem('slicc-welcomed') &&
+    !(await localFs.exists('/shared/.welcomed')) &&
     !hasStoredTrayJoinUrl(window.localStorage) &&
     sprinkleManager.available().some((p) => p.name === 'welcome')
   ) {
@@ -1271,7 +1301,9 @@ async function main(): Promise<void> {
       const body = event.body as Record<string, unknown> | null;
       const action = body?.action;
       if (action === 'onboarding-complete' || action === 'shortcut-migrate') {
-        localStorage.setItem('slicc-welcomed', '1');
+        void sharedFs
+          ?.writeFile('/shared/.welcomed', '1')
+          .catch((err) => log.warn('Failed to persist welcome marker', err));
       }
       if (action === 'shortcut-migrate') {
         sprinkleManager?.close('welcome');
@@ -1422,10 +1454,16 @@ async function main(): Promise<void> {
     layout.onOpenSprinkle = (name, zone) => sprinkleManager!.open(name, zone);
     layout.updateAddButtons();
 
+    // Migrate legacy localStorage flag to VFS marker
+    if (!(await sharedFs.exists('/shared/.welcomed')) && localStorage.getItem('slicc-welcomed')) {
+      await sharedFs.writeFile('/shared/.welcomed', '1').catch(() => {});
+      localStorage.removeItem('slicc-welcomed');
+    }
+
     // Open welcome sprinkle on first run (flag set when onboarding-complete lick fires)
     if (
-      !localStorage.getItem('slicc-welcomed') &&
-      !hasStoredTrayJoinUrl(window.localStorage) &&
+      !(await sharedFs.exists('/shared/.welcomed')) &&
+      !allowProviderlessTrayJoin &&
       sprinkleManager.available().some((p) => p.name === 'welcome')
     ) {
       try {

@@ -18,6 +18,15 @@ describe('SprinkleBridge', () => {
     closeHandler = closeHandlerMock as unknown as (name: string) => void;
     mockFs = {
       readFile: vi.fn().mockResolvedValue('file content'),
+      writeFile: vi.fn().mockResolvedValue(undefined),
+      readDir: vi.fn().mockResolvedValue([
+        { name: 'test.txt', type: 'file' },
+        { name: 'subdir', type: 'directory' },
+      ]),
+      exists: vi.fn().mockResolvedValue(true),
+      stat: vi.fn().mockResolvedValue({ type: 'file', size: 42, mtime: 1000, ctime: 1000 }),
+      mkdir: vi.fn().mockResolvedValue(undefined),
+      rm: vi.fn().mockResolvedValue(undefined),
     } as unknown as VirtualFS;
     bridge = new SprinkleBridge(mockFs, lickHandler, closeHandler);
   });
@@ -59,6 +68,56 @@ describe('SprinkleBridge', () => {
     const content = await api.readFile('/test.txt');
     expect(content).toBe('file content');
     expect(mockFs.readFile).toHaveBeenCalledWith('/test.txt', { encoding: 'utf-8' });
+  });
+
+  it('writeFile() delegates to VFS', async () => {
+    const api = bridge.createAPI('test-sprinkle');
+    await api.writeFile('/out.txt', 'hello');
+    expect(mockFs.writeFile).toHaveBeenCalledWith('/out.txt', 'hello');
+  });
+
+  it('readDir() delegates to VFS and returns mapped entries', async () => {
+    const api = bridge.createAPI('test-sprinkle');
+    const entries = await api.readDir('/workspace');
+    expect(entries).toEqual([
+      { name: 'test.txt', type: 'file' },
+      { name: 'subdir', type: 'directory' },
+    ]);
+    expect(mockFs.readDir).toHaveBeenCalledWith('/workspace');
+  });
+
+  it('exists() delegates to VFS', async () => {
+    const api = bridge.createAPI('test-sprinkle');
+    const result = await api.exists('/workspace/file.txt');
+    expect(result).toBe(true);
+    expect(mockFs.exists).toHaveBeenCalledWith('/workspace/file.txt');
+  });
+
+  it('stat() delegates to VFS and returns {type, size}', async () => {
+    const api = bridge.createAPI('test-sprinkle');
+    const result = await api.stat('/workspace/file.txt');
+    expect(result).toEqual({ type: 'file', size: 42 });
+    expect(mockFs.stat).toHaveBeenCalledWith('/workspace/file.txt');
+  });
+
+  it('mkdir() delegates to VFS with recursive: true', async () => {
+    const api = bridge.createAPI('test-sprinkle');
+    await api.mkdir('/workspace/deep/dir');
+    expect(mockFs.mkdir).toHaveBeenCalledWith('/workspace/deep/dir', { recursive: true });
+  });
+
+  it('rm() delegates to VFS', async () => {
+    const api = bridge.createAPI('test-sprinkle');
+    await api.rm('/workspace/old.txt');
+    expect(mockFs.rm).toHaveBeenCalledWith('/workspace/old.txt');
+  });
+
+  it('screenshot() returns empty string when no container is set', async () => {
+    const api = bridge.createAPI('test-sprinkle');
+    // Without _container set, the bridge implementation returns '' immediately
+    expect(api._container).toBeUndefined();
+    const result = await api.screenshot();
+    expect(result).toBe('');
   });
 
   it('on/off registers and removes update listeners', () => {

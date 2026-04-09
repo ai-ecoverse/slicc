@@ -40,6 +40,8 @@ export const config: ProviderConfig = {
   requiresBaseUrl: true,
   baseUrlPlaceholder: 'https://bedrock-runtime.us-west-2.amazonaws.com',
   baseUrlDescription: 'Bedrock runtime endpoint from CAMP portal',
+  requiresModelSelection: true,
+  defaultModelId: 'claude-sonnet-4-6',
 };
 
 // Extension detection
@@ -158,6 +160,14 @@ function convertMessages(context: Context, model: Model<Api>): any[] {
       }
     }
   }
+  // Add cache point to the last user message for supported Claude models
+  if (supportsPromptCaching(model) && result.length > 0) {
+    const lastMessage = result[result.length - 1];
+    if (lastMessage.role === 'user' && Array.isArray(lastMessage.content)) {
+      lastMessage.content.push({ cachePoint: { type: 'default' } });
+    }
+  }
+
   return result;
 }
 
@@ -265,11 +275,35 @@ function buildAdditionalModelRequestFields(
   return undefined;
 }
 
+// ── Prompt caching ─────────────────────────────────────────────────
+
+/**
+ * Check if the model supports prompt caching.
+ * Matches pi-ai's built-in Bedrock provider logic.
+ */
+function supportsPromptCaching(model: Model<Api>): boolean {
+  const id = model.id.toLowerCase();
+  if (!id.includes('claude')) {
+    return false;
+  }
+  // Claude 4.x models (opus-4, sonnet-4, haiku-4)
+  if (id.includes('-4-') || id.includes('-4.')) return true;
+  // Claude 3.7 Sonnet
+  if (id.includes('claude-3-7-sonnet')) return true;
+  // Claude 3.5 Haiku
+  if (id.includes('claude-3-5-haiku')) return true;
+  return false;
+}
+
 // ── System prompt ───────────────────────────────────────────────────
 
-function buildSystemPrompt(systemPrompt: string | undefined): any[] | undefined {
+function buildSystemPrompt(systemPrompt: string | undefined, model: Model<Api>): any[] | undefined {
   if (!systemPrompt) return undefined;
-  return [{ text: sanitize(systemPrompt) }];
+  const blocks: any[] = [{ text: sanitize(systemPrompt) }];
+  if (supportsPromptCaching(model)) {
+    blocks.push({ cachePoint: { type: 'default' } });
+  }
+  return blocks;
 }
 
 // ── Stop reason mapping ─────────────────────────────────────────────
@@ -404,7 +438,7 @@ export const streamBedrockCamp = (
       const body: any = {
         modelId: model.id,
         messages: convertMessages(context, model),
-        system: buildSystemPrompt(context.systemPrompt),
+        system: buildSystemPrompt(context.systemPrompt, model),
         inferenceConfig: {
           maxTokens: options.maxTokens,
           temperature: options.temperature,
