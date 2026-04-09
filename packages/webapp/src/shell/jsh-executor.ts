@@ -216,8 +216,14 @@ export async function executeJsCode(
       );
     }
     if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) {
+      const hints: Record<string, string> = {
+        http: ' Use fetch() instead.',
+        https: ' Use fetch() instead.',
+        child_process: ' Use exec() which is available as a shell bridge.',
+        crypto: ' Use globalThis.crypto (Web Crypto API) instead.',
+      };
       throw new Error(
-        `require('${id}'): Node built-in '${bareId}' is not available in the browser environment.`
+        `require('${id}'): Node built-in '${bareId}' is not available in the browser environment.${hints[bareId] || ''}`
       );
     }
     // Regular npm package cache lookup
@@ -307,7 +313,8 @@ export async function executeJsCode(
           if (bareId === 'process') return process;
           if (bareId === 'buffer') return { Buffer: globalThis.Buffer || (typeof Buffer !== 'undefined' ? Buffer : undefined) };
           if (__NODE_BUILTINS_UNAVAILABLE.has(bareId)) {
-            throw new Error("require('" + id + "'): Node built-in '" + bareId + "' is not available in the browser environment.");
+            const __hints = { http: ' Use fetch() instead.', https: ' Use fetch() instead.', child_process: ' Use exec() which is available as a shell bridge.', crypto: ' Use globalThis.crypto (Web Crypto API) instead.' };
+            throw new Error("require('" + id + "'): Node built-in '" + bareId + "' is not available in the browser environment." + (__hints[bareId] || ''));
           }
           if (bareId in __requireCache) return __requireCache[bareId];
           if (id in __requireCache) return __requireCache[id];
