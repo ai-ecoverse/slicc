@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { RestrictedFS } from '../../src/fs/restricted-fs.js';
 import { discoverJshCommands } from '../../src/shell/jsh-discovery.js';
@@ -13,10 +13,6 @@ describe('discoverJshCommands', () => {
       dbName: `test-jsh-discovery-${dbCounter++}`,
       wipe: true,
     });
-  });
-
-  afterEach(async () => {
-    await vfs.dispose();
   });
 
   it('returns empty map when no .jsh files exist', async () => {
@@ -101,10 +97,6 @@ describe('discoverJshCommands with RestrictedFS', () => {
       dbName: `test-jsh-restricted-${dbCounter++}`,
       wipe: true,
     });
-  });
-
-  afterEach(async () => {
-    await vfs.dispose();
   });
 
   it('discovers .jsh files in /shared/ via plain VFS', async () => {

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
 import { zipSync } from 'fflate';
 import { VirtualFS } from '../../src/fs/index.js';
@@ -35,10 +35,6 @@ describe('installSkillFromDrop', () => {
 
   beforeEach(async () => {
     fs = await VirtualFS.create({ dbName: `install-from-drop-${dbCounter++}`, wipe: true });
-  });
-
-  afterEach(async () => {
-    await fs.dispose();
   });
 
   it('installs a dropped .skill archive into /workspace/skills/{name}', async () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import * as isoGit from 'isomorphic-git';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
@@ -20,10 +20,6 @@ describe('GitCommands', () => {
       authorEmail: 'test@example.com',
       globalDbName,
     });
-  });
-
-  afterEach(async () => {
-    await vfs.dispose();
   });
 
   it('shows help', async () => {

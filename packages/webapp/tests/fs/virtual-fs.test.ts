@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { FsError } from '../../src/fs/types.js';
 
@@ -13,10 +13,6 @@ describe('VirtualFS', () => {
       dbName: `test-vfs-${dbCounter++}`,
       wipe: true,
     });
-  });
-
-  afterEach(async () => {
-    await vfs.dispose();
   });
 
   describe('file operations', () => {

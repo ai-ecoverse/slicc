@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import { VirtualFS } from '../../src/fs/index.js';
@@ -10,10 +10,6 @@ describe('discoverSkillCandidates', () => {
   beforeEach(async () => {
     globalThis.indexedDB = new IDBFactory();
     fs = await VirtualFS.create();
-  });
-
-  afterEach(async () => {
-    await fs.dispose();
   });
 
   it('finds native, .agents, and .claude skill directories with stable precedence order', async () => {

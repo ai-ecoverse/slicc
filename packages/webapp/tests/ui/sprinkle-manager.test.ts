@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { SprinkleManager } from '../../src/ui/sprinkle-manager.js';
 import type { LickEvent } from '../../src/scoops/lick-manager.js';
@@ -28,10 +28,6 @@ describe('SprinkleManager', () => {
       ) => void,
       removeSprinkle: removeSprinkle as unknown as (name: string) => void,
     });
-  });
-
-  afterEach(async () => {
-    await vfs.dispose();
   });
 
   it('refresh discovers available sprinkles', async () => {

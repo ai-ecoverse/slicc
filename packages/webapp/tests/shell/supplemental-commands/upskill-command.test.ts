@@ -46,8 +46,7 @@ describe('skill/upskill command compatibility discovery', () => {
     await initSkillsSystem(fs);
   });
 
-  afterEach(async () => {
-    await fs.dispose();
+  afterEach(() => {
     _resetGlobalFsCache();
   });
 
@@ -163,7 +162,6 @@ describe('upskill command GitHub flows', () => {
   });
 
   afterEach(async () => {
-    await fs.dispose();
     _resetGlobalFsCache();
     await Promise.allSettled(
       createdFileSystems.map((instance) =>
@@ -328,7 +326,6 @@ describe('upskill Tessl registry integration', () => {
   });
 
   afterEach(async () => {
-    await fs.dispose();
     _resetGlobalFsCache();
     await Promise.allSettled(
       createdFileSystems.map((instance) =>
@@ -711,7 +708,6 @@ describe('upskill recommendations subcommand', () => {
   });
 
   afterEach(async () => {
-    await fs.dispose();
     _resetGlobalFsCache();
     await Promise.allSettled(
       createdFileSystems.map((instance) =>

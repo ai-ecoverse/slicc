@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { VirtualFS } from '../../src/fs/index.js';
 import { WasmShell } from '../../src/shell/index.js';
 import { createBashTool } from '../../src/tools/bash-tool.js';
@@ -18,10 +18,6 @@ describe('Bash Tool', () => {
     });
     shell = new WasmShell({ fs });
     bash = createBashTool(shell);
-  });
-
-  afterEach(async () => {
-    await fs.dispose();
   });
 
   it('has correct name and description', () => {

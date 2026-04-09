@@ -1032,10 +1032,6 @@ describe('LeaderSyncManager', () => {
       vfs = await VirtualFS.create({ dbName: `test-leader-fs-${dbCounter++}`, wipe: true });
     });
 
-    afterEach(async () => {
-      await vfs.dispose();
-    });
-
     it('handles fs.request for leader — executes locally and returns response', async () => {
       const { manager } = createManager({ vfs });
       await vfs.writeFile('/hello.txt', 'world');

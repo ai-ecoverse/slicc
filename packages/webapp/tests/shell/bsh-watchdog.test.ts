@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { BshWatchdog } from '../../src/shell/bsh-watchdog.js';
 import type { CDPTransport } from '../../src/cdp/transport.js';
@@ -50,10 +50,6 @@ describe('BshWatchdog', () => {
       wipe: true,
     });
     transport = createMockTransport();
-  });
-
-  afterEach(async () => {
-    await vfs.dispose();
   });
 
   it('discovers .bsh files on start', async () => {

@@ -3,7 +3,7 @@
  */
 
 import 'fake-indexeddb/auto';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import type { BrowserAPI } from '../../src/cdp/index.js';
 import { VirtualFS } from '../../src/fs/index.js';
 import {
@@ -219,10 +219,6 @@ describe('WasmShell playwright command discoverability', () => {
       dbName: `test-wasm-shell-${dbCounter++}`,
       wipe: true,
     });
-  });
-
-  afterEach(async () => {
-    await fs.dispose();
   });
 
   it('exposes playwright aliases and host through which, commands, and /usr/bin when browserAPI is provided', async () => {

@@ -2,7 +2,7 @@
  * Tests for RestrictedFS path access control.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import 'fake-indexeddb/auto';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { RestrictedFS } from '../../src/fs/restricted-fs.js';
@@ -23,10 +23,6 @@ describe('RestrictedFS', () => {
     await vfs.writeFile('/root-file.txt', 'root');
 
     restricted = new RestrictedFS(vfs, ['/scoops/andy-scoop/', '/shared/']);
-  });
-
-  afterAll(async () => {
-    await vfs.dispose();
   });
 
   it('reads files within allowed dirs', async () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import { VirtualFS } from '../../src/fs/index.js';
@@ -15,10 +15,6 @@ describe('Manifest', () => {
   beforeEach(async () => {
     globalThis.indexedDB = new IDBFactory();
     fs = await VirtualFS.create();
-  });
-
-  afterEach(async () => {
-    await fs.dispose();
   });
 
   describe('parseManifestContent', () => {

@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
   discoverBshScripts,
@@ -205,10 +205,6 @@ describe('discoverBshScripts', () => {
       dbName: `test-bsh-discovery-${dbCounter++}`,
       wipe: true,
     });
-  });
-
-  afterEach(async () => {
-    await vfs.dispose();
   });
 
   it('returns empty array when no .bsh files exist', async () => {

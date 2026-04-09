@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import 'fake-indexeddb/auto';
 import { HarRecorder } from '../../src/cdp/har-recorder.js';
 import type { CDPTransport } from '../../src/cdp/transport.js';
@@ -91,10 +91,6 @@ describe('HarRecorder', () => {
       wipe: true,
     });
     recorder = new HarRecorder(transport, fs);
-  });
-
-  afterEach(async () => {
-    await fs.dispose();
   });
 
   describe('startRecording', () => {
