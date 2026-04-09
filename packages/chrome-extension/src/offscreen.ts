@@ -68,10 +68,35 @@ async function init(): Promise<void> {
   await orchestrator.init();
   console.log('[slicc-offscreen] Orchestrator initialized');
 
-  // Register session costs provider for the `cost` shell command
+  // Register session costs provider for the `cost` shell command (offscreen agent shell)
   const { registerSessionCostsProvider } =
     await import('../../../packages/webapp/src/shell/supplemental-commands/cost-command.js');
   registerSessionCostsProvider(() => orchestrator.getSessionCosts());
+
+  // Handle cost data requests from the side panel shell
+  chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
+    if (
+      typeof message === 'object' &&
+      message !== null &&
+      'source' in message &&
+      'payload' in message
+    ) {
+      const msg = message as { source: string; payload: { type: string } };
+      if (msg.source === 'panel' && msg.payload?.type === 'get-session-costs') {
+        try {
+          const costs = orchestrator.getSessionCosts();
+          sendResponse({ ok: true, costs });
+        } catch (error) {
+          sendResponse({
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        return true; // Keep message channel open for sendResponse
+      }
+    }
+    return false;
+  });
 
   // Initialize lick manager for cron tasks in extension mode
   const { getLickManager } = await import('../../../packages/webapp/src/scoops/lick-manager.js');

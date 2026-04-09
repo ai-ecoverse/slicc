@@ -22,10 +22,17 @@ export interface ScoopCostData {
   turns: number;
 }
 
-let sessionCostsProvider: (() => ScoopCostData[]) | null = null;
+let sessionCostsProvider: (() => ScoopCostData[] | Promise<ScoopCostData[]>) | null = null;
 
-export function registerSessionCostsProvider(fn: () => ScoopCostData[]): void {
+export function registerSessionCostsProvider(
+  fn: () => ScoopCostData[] | Promise<ScoopCostData[]>
+): void {
   sessionCostsProvider = fn;
+}
+
+/** @internal Reset provider — exposed for tests only. */
+export function _resetSessionCostsProvider(): void {
+  sessionCostsProvider = null;
 }
 
 function helpText(): string {
@@ -112,7 +119,7 @@ export function createCostCommand(): Command {
       return { stdout: '', stderr: 'Cost data not available.\n', exitCode: 1 };
     }
 
-    const data = sessionCostsProvider();
+    const data = await sessionCostsProvider();
 
     if (data.length === 0) {
       return { stdout: 'No session cost data yet.\n', stderr: '', exitCode: 0 };
