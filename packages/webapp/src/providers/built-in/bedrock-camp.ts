@@ -40,6 +40,8 @@ export const config: ProviderConfig = {
   requiresBaseUrl: true,
   baseUrlPlaceholder: 'https://bedrock-runtime.us-west-2.amazonaws.com',
   baseUrlDescription: 'Bedrock runtime endpoint from CAMP portal',
+  requiresModelSelection: true,
+  defaultModelId: 'claude-sonnet-4-6',
 };
 
 // Extension detection
