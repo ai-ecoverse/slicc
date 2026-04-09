@@ -179,6 +179,49 @@ describe('BrowserAPI', () => {
       const pages = await api.listPages();
       expect(pages).toHaveLength(0);
     });
+
+    it('queries local client even when attached to a remote target', async () => {
+      const remoteClient = createMockClient();
+
+      api.setTrayTargetProvider({
+        getTargets: () => [],
+        createRemoteTransport: () => remoteClient as unknown as CDPClient,
+      });
+
+      // Attach to a remote target (switches this.client to remoteClient)
+      (remoteClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ sessionId: 'remote-sess' })
+        .mockResolvedValueOnce({});
+      await api.attachToPage('follower-1:tab-1');
+
+      // listPages should still query the local client, not the remote one
+      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        targetInfos: [
+          {
+            targetId: 'local-tab',
+            type: 'page',
+            title: 'Local Chrome Tab',
+            url: 'https://local.example.com',
+            attached: false,
+          },
+        ],
+      });
+
+      const pages = await api.listPages();
+      expect(pages).toHaveLength(1);
+      expect(pages[0]).toEqual({
+        targetId: 'local-tab',
+        title: 'Local Chrome Tab',
+        url: 'https://local.example.com',
+      });
+      // Verify the remote client was NOT called for Target.getTargets
+      expect(remoteClient.send).not.toHaveBeenCalledWith(
+        'Target.getTargets',
+        expect.anything(),
+        expect.anything(),
+        expect.anything()
+      );
+    });
   });
 
   describe('listAllTargets', () => {
@@ -232,23 +275,28 @@ describe('BrowserAPI', () => {
 
       (remoteClient.send as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({ sessionId: 'remote-sess' })
-        .mockResolvedValueOnce({})
-        .mockResolvedValueOnce({
-          targetInfos: [
-            {
-              targetId: '1',
-              type: 'page',
-              title: 'Follower Page',
-              url: 'https://follower.example.com',
-              attached: false,
-            },
-          ],
-        });
+        .mockResolvedValueOnce({});
 
       await api.attachToPage('follower-1:1');
 
+      // listPages() always queries the local client, even when attached to a remote target.
+      // The local client returns local browser tabs.
+      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        targetInfos: [
+          {
+            targetId: 'local-tab',
+            type: 'page',
+            title: 'Local Page',
+            url: 'https://local.example.com',
+            attached: false,
+          },
+        ],
+      });
+
+      // When attached to a remote target, leader registry entries are NOT deduplicated
+      // (shouldDeduplicateLeaderTargets is false), so both local + leader entries appear.
       await expect(api.listAllTargets()).resolves.toEqual([
-        { targetId: '1', title: 'Follower Page', url: 'https://follower.example.com' },
+        { targetId: 'local-tab', title: 'Local Page', url: 'https://local.example.com' },
         { targetId: 'leader:1', title: 'Leader Page', url: 'https://leader.example.com' },
       ]);
     });

@@ -195,10 +195,11 @@ export class BrowserAPI {
    * Create a new browser tab/target.
    * Returns the targetId of the newly created tab.
    * The tab opens in the background by default.
+   * Always creates on the local browser, even when currently attached to a remote target.
    */
   async createPage(url?: string): Promise<string> {
     await this.ensureConnected();
-    const result = await this.client.send('Target.createTarget', {
+    const result = await this.localClient.send('Target.createTarget', {
       url: url ?? 'about:blank',
       background: true,
     });
@@ -277,10 +278,11 @@ export class BrowserAPI {
 
   /**
    * List all open pages (tabs).
+   * Always queries the local browser, even when currently attached to a remote target.
    */
   async listPages(): Promise<PageInfo[]> {
     await this.ensureConnected();
-    const result = await this.client.send('Target.getTargets');
+    const result = await this.localClient.send('Target.getTargets');
     const targets = (result['targetInfos'] as TargetInfo[]) ?? [];
     return targets
       .filter((t) => t.type === 'page')
