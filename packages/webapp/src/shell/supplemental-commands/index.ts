@@ -82,7 +82,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createSayCommand(),
     createAfplayCommand(),
     createChimeCommand(),
-    createModelsCommand(),
+    createModelsCommand(options.fs),
     createNukeCommand(),
   ];
 

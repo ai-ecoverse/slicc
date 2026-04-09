@@ -1,5 +1,123 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
+import type { VirtualFS } from '../../fs/index.js';
+
+const AA_CACHE_PATH = '/.cache/artificial-analysis.json';
+const AA_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const AA_API_URL = 'https://artificialanalysis.ai/api/v2/data/llms/models';
+
+interface AAModelData {
+  slug: string;
+  name: string;
+  creator_slug: string;
+  intelligence_index: number | null;
+  coding_index: number | null;
+  speed_tps: number | null;
+}
+
+interface AACacheData {
+  fetchedAt: number;
+  models: AAModelData[];
+}
+
+async function fetchAAData(vfs?: VirtualFS, forceRefresh = false): Promise<AAModelData[]> {
+  // Try reading from cache first
+  if (vfs && !forceRefresh) {
+    try {
+      const raw = (await vfs.readFile(AA_CACHE_PATH)) as string;
+      const cached: AACacheData = JSON.parse(raw);
+      if (Date.now() - cached.fetchedAt < AA_CACHE_TTL_MS) {
+        return cached.models;
+      }
+    } catch {
+      // Cache miss or invalid — fetch fresh
+    }
+  }
+
+  // Determine API key
+  let apiKey: string | null = null;
+  try {
+    apiKey = localStorage.getItem('aa_api_key');
+  } catch {
+    // localStorage may not be available
+  }
+
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (apiKey) headers['x-api-key'] = apiKey;
+
+  let resp: Response;
+  try {
+    resp = await fetch(AA_API_URL, { headers });
+  } catch {
+    return []; // Network error — silently degrade
+  }
+
+  if (resp.status === 401) {
+    // Needs API key
+    return [];
+  }
+  if (!resp.ok) return [];
+
+  let body: any;
+  try {
+    body = await resp.json();
+  } catch {
+    return [];
+  }
+
+  const items: any[] = Array.isArray(body) ? body : (body?.data ?? body?.models ?? []);
+  const models: AAModelData[] = items.map((m: any) => ({
+    slug: m.slug ?? '',
+    name: m.name ?? '',
+    creator_slug: m.model_creator?.slug ?? '',
+    intelligence_index: m.evaluations?.artificial_analysis_intelligence_index ?? null,
+    coding_index: m.evaluations?.artificial_analysis_coding_index ?? null,
+    speed_tps: m.median_output_tokens_per_second ?? null,
+  }));
+
+  // Save to cache
+  if (vfs && models.length > 0) {
+    const cacheData: AACacheData = { fetchedAt: Date.now(), models };
+    try {
+      await vfs.mkdir('/.cache', { recursive: true });
+      await vfs.writeFile(AA_CACHE_PATH, JSON.stringify(cacheData));
+    } catch {
+      // Cache write failure is non-fatal
+    }
+  }
+
+  return models;
+}
+
+function normalizeForMatch(id: string): string {
+  return id
+    .toLowerCase()
+    .replace(/\./g, '-')
+    .replace(/-\d{8}$/, '')
+    .replace(/-\d{4}$/, '');
+}
+
+function matchAAModel(piModelId: string, aaModels: AAModelData[]): AAModelData | undefined {
+  const lower = piModelId.toLowerCase();
+
+  // 1. Exact slug match
+  const exact = aaModels.find((m) => m.slug === lower);
+  if (exact) return exact;
+
+  // 2. Normalized match
+  const norm = normalizeForMatch(piModelId);
+  const normMatch = aaModels.find((m) => normalizeForMatch(m.slug) === norm);
+  if (normMatch) return normMatch;
+
+  // 3. Substring match — prefer longer slugs (more specific)
+  const substringMatches = aaModels.filter((m) => lower.includes(m.slug) || m.slug.includes(lower));
+  if (substringMatches.length > 0) {
+    substringMatches.sort((a, b) => b.slug.length - a.slug.length);
+    return substringMatches[0];
+  }
+
+  return undefined;
+}
 
 function helpText(): string {
   return `models - list available LLM models
@@ -11,6 +129,8 @@ Options:
   --all-versions     Show all model versions (default: latest only)
   --provider <id>    List models for a specific provider
   --json             Output as JSON (for programmatic use)
+  --refresh          Force re-fetch benchmark data from Artificial Analysis
+  --no-benchmarks    Skip benchmark data enrichment (faster, works offline)
   -h, --help         Show this help message
 `;
 }
@@ -21,7 +141,20 @@ function formatContextWindow(tokens: number): string {
   return `${tokens}`;
 }
 
-function classifyTier(id: string, name: string): { label: string; emoji: string } {
+function classifyTier(
+  id: string,
+  name: string,
+  intelligenceIndex?: number | null
+): { label: string; emoji: string } {
+  // Use AA intelligence index when available
+  if (intelligenceIndex != null) {
+    if (intelligenceIndex >= 45) return { label: 'frontier', emoji: '🧠' };
+    if (intelligenceIndex >= 30) return { label: 'balanced', emoji: '⚡' };
+    if (intelligenceIndex >= 15) return { label: 'fast', emoji: '💨' };
+    return { label: 'micro', emoji: '🔬' };
+  }
+
+  // Fall back to name-based heuristic
   const lower = (id + ' ' + name).toLowerCase();
 
   // Frontier: opus, pro variants, o1-pro, o3-pro, grok-4 (non-fast)
@@ -121,16 +254,21 @@ interface ModelInfo {
   tier: string;
   tierEmoji: string;
   selected: boolean;
+  intelligence?: number;
+  codingScore?: number;
+  speed?: number;
 }
 
 function toModelInfo(
   m: any,
   providerId: string,
   selectedModelId: string,
-  selectedProvider: string
+  selectedProvider: string,
+  aaModels?: AAModelData[]
 ): ModelInfo {
-  const tier = classifyTier(m.id, m.name);
-  return {
+  const aaMatch = aaModels ? matchAAModel(m.id, aaModels) : undefined;
+  const tier = classifyTier(m.id, m.name, aaMatch?.intelligence_index);
+  const info: ModelInfo = {
     id: m.id,
     name: m.name,
     provider: providerId,
@@ -143,12 +281,17 @@ function toModelInfo(
     tierEmoji: tier.emoji,
     selected: m.id === selectedModelId && providerId === selectedProvider,
   };
+  if (aaMatch?.intelligence_index != null) info.intelligence = aaMatch.intelligence_index;
+  if (aaMatch?.coding_index != null) info.codingScore = aaMatch.coding_index;
+  if (aaMatch?.speed_tps != null) info.speed = aaMatch.speed_tps;
+  return info;
 }
 
 function formatHumanReadable(
   providerName: string,
   providerId: string,
-  models: ModelInfo[]
+  models: ModelInfo[],
+  hasAAData: boolean
 ): string {
   const lines: string[] = [];
   lines.push(`Models for "${providerName}" (${providerId}):\n`);
@@ -158,9 +301,11 @@ function formatHumanReadable(
     const id = m.id.padEnd(30);
     const cost = `${formatCost(m.cost.input)} / ${formatCost(m.cost.output)}`;
     const ctx = `${formatContextWindow(m.contextWindow)} ctx`;
-    const reasoning = m.reasoning ? 'reasoning ✓' : '           ';
+    const iq = m.intelligence != null ? `IQ:${m.intelligence}` : '';
+    const spd = m.speed != null ? `${Math.round(m.speed)} t/s` : '';
+    const benchPart = iq || spd ? `${iq.padEnd(6)} ${spd.padEnd(8)}` : '               ';
     lines.push(
-      `${prefix}${id} ${cost.padEnd(16)} ${ctx.padEnd(10)} ${reasoning}   ${m.tierEmoji} ${m.tier}`
+      `${prefix}${id} ${cost.padEnd(16)} ${ctx.padEnd(10)} ${benchPart} ${m.tierEmoji} ${m.tier}`
     );
   }
 
@@ -168,10 +313,13 @@ function formatHumanReadable(
   lines.push(
     `\n  ${models.length} model${models.length !== 1 ? 's' : ''} available.${selected ? ` Currently using: ${selected.id}` : ''}`
   );
+  if (hasAAData) {
+    lines.push('  Intelligence data: artificialanalysis.ai');
+  }
   return lines.join('\n') + '\n';
 }
 
-export function createModelsCommand(): Command {
+export function createModelsCommand(vfs?: VirtualFS): Command {
   return defineCommand('models', async (args) => {
     const {
       getAccounts,
@@ -189,6 +337,8 @@ export function createModelsCommand(): Command {
     const jsonMode = args.includes('--json');
     const allMode = args.includes('--all');
     const allVersions = args.includes('--all-versions');
+    const forceRefresh = args.includes('--refresh');
+    const noBenchmarks = args.includes('--no-benchmarks');
     const providerIdx = args.indexOf('--provider');
     const explicitProvider = providerIdx >= 0 ? args[providerIdx + 1] : undefined;
 
@@ -199,6 +349,13 @@ export function createModelsCommand(): Command {
     if (accounts.length === 0) {
       const msg = 'No provider accounts configured. Run the provider settings to add one.\n';
       return { stdout: '', stderr: msg, exitCode: 1 };
+    }
+
+    // Fetch AA benchmark data unless skipped
+    let aaModels: AAModelData[] | undefined;
+    if (!noBenchmarks) {
+      aaModels = await fetchAAData(vfs, forceRefresh);
+      if (aaModels.length === 0) aaModels = undefined;
     }
 
     // Determine which providers to list
@@ -231,7 +388,7 @@ export function createModelsCommand(): Command {
         continue;
       }
       let models = rawModels
-        .map((m: any) => toModelInfo(m, pid, selectedModelId, selectedProvider))
+        .map((m: any) => toModelInfo(m, pid, selectedModelId, selectedProvider, aaModels))
         .sort((a: ModelInfo, b: ModelInfo) => b.cost.input - a.cost.input);
 
       if (!allVersions) {
@@ -241,7 +398,7 @@ export function createModelsCommand(): Command {
       allModels.push(...models);
       if (!jsonMode) {
         const config = getProviderConfig(pid);
-        outputParts.push(formatHumanReadable(config.name, pid, models));
+        outputParts.push(formatHumanReadable(config.name, pid, models, !!aaModels));
       }
     }
 
