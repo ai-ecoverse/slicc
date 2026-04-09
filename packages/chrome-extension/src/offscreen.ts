@@ -68,6 +68,11 @@ async function init(): Promise<void> {
   await orchestrator.init();
   console.log('[slicc-offscreen] Orchestrator initialized');
 
+  // Register session costs provider for the `cost` shell command
+  const { registerSessionCostsProvider } =
+    await import('../../../packages/webapp/src/shell/supplemental-commands/cost-command.js');
+  registerSessionCostsProvider(() => orchestrator.getSessionCosts());
+
   // Initialize lick manager for cron tasks in extension mode
   const { getLickManager } = await import('../../../packages/webapp/src/scoops/lick-manager.js');
   const lickManager = getLickManager();
