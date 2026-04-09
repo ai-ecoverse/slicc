@@ -5,12 +5,11 @@ import { FsError } from '../../src/fs/types.js';
 
 describe('VirtualFS', () => {
   let vfs: VirtualFS;
-  let dbCounter = 0;
-
   beforeEach(async () => {
-    // Create fresh VFS with unique DB name for test isolation
+    // Create fresh VFS with constant DB name — wipe: true ensures isolation
+    // while reusing a single in-memory IndexedDB store (prevents OOM)
     vfs = await VirtualFS.create({
-      dbName: `test-vfs-${dbCounter++}`,
+      dbName: 'test-vfs',
       wipe: true,
     });
   });
