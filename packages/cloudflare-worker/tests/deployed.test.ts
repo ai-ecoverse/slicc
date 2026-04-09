@@ -29,6 +29,8 @@ describeIfConfigured('deployed tray worker', () => {
       routes: [
         'POST /tray',
         'GET /handoff',
+        'POST /github/token',
+        'POST /github/revoke',
         'GET|POST /join/:token',
         'GET|POST /controller/:token',
         'POST /webhook/:token/:webhookId',

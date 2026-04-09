@@ -476,9 +476,10 @@ describe('GitCommands', () => {
       // Mock push to avoid real network call
       const pushSpy = vi.spyOn(isoGit, 'push').mockResolvedValue({
         ok: true,
+        error: null,
         refs: {},
         headers: {},
-      } as any);
+      });
       const setConfigSpy = vi.spyOn(isoGit, 'setConfig').mockResolvedValue();
 
       try {
@@ -512,9 +513,10 @@ describe('GitCommands', () => {
 
       const pushSpy = vi.spyOn(isoGit, 'push').mockResolvedValue({
         ok: true,
+        error: null,
         refs: {},
         headers: {},
-      } as any);
+      });
       const setConfigSpy = vi.spyOn(isoGit, 'setConfig').mockResolvedValue();
 
       try {
@@ -537,9 +539,10 @@ describe('GitCommands', () => {
 
       const pushSpy = vi.spyOn(isoGit, 'push').mockResolvedValue({
         ok: true,
+        error: null,
         refs: {},
         headers: {},
-      } as any);
+      });
       const setConfigSpy = vi.spyOn(isoGit, 'setConfig').mockResolvedValue();
 
       try {
@@ -2088,6 +2091,12 @@ describe('GitCommands', () => {
       const matrix = await isoGit.statusMatrix({ fs: vfs.getLightningFS(), dir: '/project' });
       const row = matrix.find((r) => r[0] === 'file.txt');
       expect(row?.slice(1)).toEqual([1, 0, 0]); // staged deletion
+    });
+  });
+
+  describe('resetTokenCache', () => {
+    it('is callable and does not throw', () => {
+      expect(() => GitCommands.resetTokenCache()).not.toThrow();
     });
   });
 });
