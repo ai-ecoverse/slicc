@@ -503,6 +503,21 @@ Packages are fetched from [esm.sh](https://esm.sh) and cached for the session. V
 
 **Note:** require() is synchronous. Modules referenced with string literals are automatically pre-fetched before script execution. For dynamic specifiers, use `await import('https://esm.sh/' + name)` directly.
 
+### Node Built-in Modules
+
+Some Node.js built-in modules are available via `require()`:
+
+| Module                                                  | Status                                                                |
+| ------------------------------------------------------- | --------------------------------------------------------------------- |
+| `fs`                                                    | ✅ VFS bridge (readFile, writeFile, readDir, exists, stat, mkdir, rm) |
+| `process`                                               | ✅ Shim (argv, env, cwd, exit, stdout, stderr)                        |
+| `buffer`                                                | ✅ Browser polyfill                                                   |
+| `path`                                                  | ✅ Via esm.sh (browser polyfill)                                      |
+| `url`, `querystring`, `util`, `events`, `assert`        | ✅ Via esm.sh                                                         |
+| `http`, `https`, `crypto`, `net`, `child_process`, etc. | ❌ Not available in browser                                           |
+
+The `node:` prefix is supported: `require('node:path')` works the same as `require('path')`.
+
 ---
 
 ## Limitations

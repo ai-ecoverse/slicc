@@ -335,6 +335,77 @@ describe('executeJshFile', () => {
     // Clean up
     delete nodeRuntimeState.__requireCache;
   });
+
+  it('require("fs") returns the fs bridge', async () => {
+    const ctx = createMockCtx({
+      '/workspace/req-fs.jsh': `
+        const myFs = require('fs');
+        console.log(typeof myFs.readFile);
+        console.log(typeof myFs.writeFile);
+        console.log(typeof myFs.exists);
+      `,
+    });
+    const result = await executeJshFile('/workspace/req-fs.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('function');
+  });
+
+  it('require("node:fs") strips prefix and returns fs bridge', async () => {
+    const ctx = createMockCtx({
+      '/workspace/req-nodefs.jsh': `
+        const myFs = require('node:fs');
+        console.log(typeof myFs.readFile);
+      `,
+    });
+    const result = await executeJshFile('/workspace/req-nodefs.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('function');
+  });
+
+  it('require("process") returns the process shim', async () => {
+    const ctx = createMockCtx({
+      '/workspace/req-process.jsh': `
+        const proc = require('process');
+        console.log(typeof proc.cwd);
+        console.log(typeof proc.env);
+      `,
+    });
+    const result = await executeJshFile('/workspace/req-process.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('function');
+    expect(result.stdout).toContain('object');
+  });
+
+  it('require("http") throws clear browser-unavailable error', async () => {
+    const ctx = createMockCtx({
+      '/workspace/req-http.jsh': `
+        try {
+          const http = require('http');
+        } catch(e) {
+          console.log(e.message);
+        }
+      `,
+    });
+    const result = await executeJshFile('/workspace/req-http.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('not available in the browser');
+  });
+
+  it('require("node:crypto") strips prefix and throws browser-unavailable error', async () => {
+    const ctx = createMockCtx({
+      '/workspace/req-crypto.jsh': `
+        try {
+          require('node:crypto');
+        } catch(e) {
+          console.log(e.message);
+        }
+      `,
+    });
+    const result = await executeJshFile('/workspace/req-crypto.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('not available in the browser');
+    expect(result.stdout).toContain('crypto');
+  });
 });
 
 describe('executeJsCode', () => {
