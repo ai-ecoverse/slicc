@@ -663,6 +663,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
   // Open welcome sprinkle on first run (extension mode)
   if (
     !localStorage.getItem('slicc-welcomed') &&
+    !hasStoredTrayJoinUrl(window.localStorage) &&
     sprinkleManager.available().some((p) => p.name === 'welcome')
   ) {
     try {
@@ -1424,6 +1425,7 @@ async function main(): Promise<void> {
     // Open welcome sprinkle on first run (flag set when onboarding-complete lick fires)
     if (
       !localStorage.getItem('slicc-welcomed') &&
+      !hasStoredTrayJoinUrl(window.localStorage) &&
       sprinkleManager.available().some((p) => p.name === 'welcome')
     ) {
       try {
