@@ -5,8 +5,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/s1ntoneli/AppUpdater.git",
       "state" : {
-        "revision" : "1991264a4045dd974217f4ca321a2480db9092d3",
-        "version" : "0.2.0"
+        "revision" : "0f280e4ecf2792f9be4bf4cbab76307d78024b3f",
+        "version" : "2.0.0"
       }
     },
     {
