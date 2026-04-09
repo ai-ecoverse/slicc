@@ -106,7 +106,7 @@ final class SliccProcess {
 
     // MARK: - Chrome Web Store
 
-    static let chromeWebStoreURL = "https://chromewebstore.google.com/detail/slicc/akggccfpkleihhemkkikggopnifgelbk"
+    static let chromeWebStoreURL = "https://chromewebstore.google.com/detail/slicc/akjjllgokmbgpbdbmafpiefnhidlmbgf"
 
     func openChromeWebStore() {
         guard let url = URL(string: Self.chromeWebStoreURL) else { return }
