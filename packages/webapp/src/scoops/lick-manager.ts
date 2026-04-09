@@ -347,13 +347,13 @@ export class LickManager {
         // Webhook filter: (event) => ...
         // User-authored webhook/cron filter expression — evaluated in extension sandbox context.
         // The filterCode string comes from the user's skill/webhook config, not from remote input.
-         
+
         return new Function('event', `return (${filterCode})(event);`) as (
           event: unknown
         ) => boolean | unknown;
       } else {
         // Cron filter: () => ...
-         
+
         return new Function(`return (${filterCode})();`) as () => boolean | unknown;
       }
     } catch (err) {
