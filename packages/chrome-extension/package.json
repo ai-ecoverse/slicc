@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@imagemagick/magick-wasm": "^0.0.39",
-    "@mariozechner/pi-ai": "^0.64.0",
-    "@mariozechner/pi-coding-agent": "^0.64.0"
+    "@mariozechner/pi-ai": "^0.66.0",
+    "@mariozechner/pi-coding-agent": "^0.66.0"
   }
 }

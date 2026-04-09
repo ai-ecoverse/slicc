@@ -505,6 +505,23 @@ describe('BrowserAPI', () => {
         { format: 'png', captureBeyondViewport: true },
         'sess-1'
       );
+      // bringToFront should NOT be called on success
+      expect(mockClient.send).not.toHaveBeenCalledWith(
+        'Page.bringToFront',
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it('retries with bringToFront when capture fails on background tab', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockRejectedValueOnce(new Error('Unable to capture screenshot')) // first attempt fails
+        .mockResolvedValueOnce({}) // Page.bringToFront
+        .mockResolvedValueOnce({ data: 'woken-shot' }); // retry captureScreenshot
+
+      const data = await api.screenshot();
+      expect(data).toBe('woken-shot');
+      expect(mockClient.send).toHaveBeenCalledWith('Page.bringToFront', {}, 'sess-1');
     });
 
     it('full page screenshot at DPR 1 uses CSS dimensions with scale 1', async () => {

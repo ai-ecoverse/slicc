@@ -323,7 +323,9 @@ export class ScoopContext {
 
   /** Clear the agent's in-memory conversation history (used by clear-chat). */
   clearMessages(): void {
-    this.agent?.clearMessages();
+    if (this.agent) {
+      this.agent.state.messages = [];
+    }
   }
 
   /** Get the agent's current in-memory messages (for diagnostics). */
@@ -350,7 +352,7 @@ export class ScoopContext {
   updateModel(): void {
     if (!this.agent) return;
     const model = resolveCurrentModel();
-    this.agent.setModel(model);
+    this.agent.state.model = model;
     log.info('Model updated on running agent', { folder: this.scoop.folder, model: model.id });
   }
 
@@ -376,7 +378,7 @@ export class ScoopContext {
     const globalMemory = await this.callbacks.getGlobalMemory();
 
     const newPrompt = this.buildSystemPrompt(globalMemory, scoopMemory, skills);
-    this.agent.setSystemPrompt(newPrompt);
+    this.agent.state.systemPrompt = newPrompt;
 
     log.info('Skills reloaded', {
       folder: this.scoop.folder,
@@ -596,7 +598,7 @@ export class ScoopContext {
       }
 
       // Replace the agent's message history with the trimmed version
-      this.agent.replaceMessages(trimmed);
+      this.agent.state.messages = trimmed;
 
       // Re-prompt with an explanation so the agent can adapt
       const explanation =
@@ -675,7 +677,7 @@ export class ScoopContext {
         stripped++;
       }
 
-      this.agent.replaceMessages(trimmed);
+      this.agent.state.messages = trimmed;
 
       const explanation = `[System: An image was rejected by the API and has been removed from the conversation (${stripped} message(s) affected). The conversation continues without the image.]`;
 
