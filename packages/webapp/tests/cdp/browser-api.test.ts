@@ -494,11 +494,9 @@ describe('BrowserAPI', () => {
     });
 
     it('captures a viewport screenshot (no clip, Chrome default)', async () => {
-      (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({}) // Page.bringToFront
-        .mockResolvedValueOnce({
-          data: 'viewport-shot',
-        }); // Page.captureScreenshot
+      (mockClient.send as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        data: 'viewport-shot',
+      }); // Page.captureScreenshot
 
       const data = await api.screenshot();
       expect(data).toBe('viewport-shot');
@@ -507,11 +505,27 @@ describe('BrowserAPI', () => {
         { format: 'png', captureBeyondViewport: true },
         'sess-1'
       );
+      // bringToFront should NOT be called on success
+      expect(mockClient.send).not.toHaveBeenCalledWith(
+        'Page.bringToFront',
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it('retries with bringToFront when capture fails on background tab', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockRejectedValueOnce(new Error('Unable to capture screenshot')) // first attempt fails
+        .mockResolvedValueOnce({}) // Page.bringToFront
+        .mockResolvedValueOnce({ data: 'woken-shot' }); // retry captureScreenshot
+
+      const data = await api.screenshot();
+      expect(data).toBe('woken-shot');
+      expect(mockClient.send).toHaveBeenCalledWith('Page.bringToFront', {}, 'sess-1');
     });
 
     it('full page screenshot at DPR 1 uses CSS dimensions with scale 1', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({}) // Page.bringToFront
         .mockResolvedValueOnce({}) // Runtime.enable
         .mockResolvedValueOnce({ result: { value: '{"dpr":1,"w":1280,"h":5000}' } }) // Runtime.evaluate
         .mockResolvedValueOnce({ data: 'fullpage' }); // captureScreenshot
@@ -531,7 +545,6 @@ describe('BrowserAPI', () => {
 
     it('full page screenshot uses CSS dimensions with scale 1', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({}) // Page.bringToFront
         .mockResolvedValueOnce({}) // Runtime.enable
         .mockResolvedValueOnce({ result: { value: '{"w":1440,"h":3130}' } }) // Runtime.evaluate
         .mockResolvedValueOnce({ data: 'hidpi' }); // captureScreenshot
@@ -551,7 +564,6 @@ describe('BrowserAPI', () => {
 
     it('passes through provided clip with scale 1', async () => {
       (mockClient.send as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({}) // Page.bringToFront
         .mockResolvedValueOnce({}) // Runtime.enable
         .mockResolvedValueOnce({ result: { value: '{"w":1280,"h":3000}' } }) // Runtime.evaluate
         .mockResolvedValueOnce({ data: 'clipped' }); // captureScreenshot
