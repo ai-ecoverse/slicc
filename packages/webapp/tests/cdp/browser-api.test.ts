@@ -395,6 +395,38 @@ describe('BrowserAPI', () => {
       );
     });
 
+    it('restores local client when attaching to a local target after a remote one', async () => {
+      const remoteClient = createMockClient();
+      api.setTrayTargetProvider({
+        getTargets: () => [],
+        createRemoteTransport: () => remoteClient as unknown as CDPClient,
+      });
+
+      // Attach to a remote target first
+      (remoteClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ sessionId: 'remote-sess' })
+        .mockResolvedValueOnce({});
+      await api.attachToPage('follower-1:tab-1');
+
+      // Now attach to a local target — should use localClient, not remoteClient
+      (mockClient.send as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ sessionId: 'local-sess' })
+        .mockResolvedValueOnce({});
+      const sessionId = await api.attachToPage('local-target-1');
+
+      expect(sessionId).toBe('local-sess');
+      expect(mockClient.send).toHaveBeenCalledWith('Target.attachToTarget', {
+        targetId: 'local-target-1',
+        flatten: true,
+      });
+      // Verify remote client was NOT used for the local attach
+      expect(
+        (remoteClient.send as ReturnType<typeof vi.fn>).mock.calls.some(
+          (call) => call[0] === 'Target.attachToTarget' && call[1]?.targetId === 'local-target-1'
+        )
+      ).toBe(false);
+    });
+
     it('keeps auto-dismiss handling after switching to a remote transport', async () => {
       const remoteClient = createMockClient();
       api.setTrayTargetProvider({

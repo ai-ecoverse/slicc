@@ -342,7 +342,20 @@ export class BrowserAPI {
       }
     }
 
-    const result = await this.client.send('Target.attachToTarget', {
+    // Restore local transport if we were previously attached to a remote target
+    if (this.remoteTargetInfo) {
+      if (this.trayTargetProvider?.removeRemoteTransport) {
+        this.trayTargetProvider.removeRemoteTransport(
+          this.remoteTargetInfo.runtimeId,
+          this.remoteTargetInfo.localTargetId
+        );
+      }
+      this.setClient(this.localClient);
+      this.remoteTargetInfo = null;
+    }
+    await this.ensureLocalConnected();
+
+    const result = await this.localClient.send('Target.attachToTarget', {
       targetId,
       flatten: true,
     });
@@ -350,8 +363,8 @@ export class BrowserAPI {
     this.attachedTargetId = targetId;
     // Keep Page events available so unexpected dialogs can be auto-dismissed
     // before they stall the current CDP command.
-    await this.client.send('Page.enable', {}, this.sessionId);
-    this._onSessionChange?.(this.sessionId, this.client);
+    await this.localClient.send('Page.enable', {}, this.sessionId);
+    this._onSessionChange?.(this.sessionId, this.localClient);
     return this.sessionId;
   }
 
