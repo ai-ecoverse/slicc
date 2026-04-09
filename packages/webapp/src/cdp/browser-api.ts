@@ -851,18 +851,16 @@ export class BrowserAPI {
     };
 
     const frames: FrameInfo[] = [];
-    const flatten = (
-      node: {
-        frame: {
-          id: string;
-          parentId?: string;
-          url: string;
-          name?: string;
-          securityOrigin?: string;
-        };
-        childFrames?: unknown[];
-      }
-    ): void => {
+    const flatten = (node: {
+      frame: {
+        id: string;
+        parentId?: string;
+        url: string;
+        name?: string;
+        securityOrigin?: string;
+      };
+      childFrames?: unknown[];
+    }): void => {
       frames.push({
         frameId: node.frame.id,
         parentFrameId: node.frame.parentId,
@@ -903,16 +901,29 @@ export class BrowserAPI {
     await this.ensureConnected();
     this.ensureAttached();
 
+    const isDestroyedContextError = (err: unknown): boolean => {
+      const message = err instanceof Error ? err.message : String(err);
+      return (
+        message.includes('Cannot find context with specified id') ||
+        message.includes('Execution context was destroyed')
+      );
+    };
+
+    const createIsolatedWorld = async (): Promise<number> => {
+      const worldResult = await this.client.send(
+        'Page.createIsolatedWorld',
+        { frameId, worldName: '__slicc_iframe' },
+        this.sessionId!
+      );
+      const id = worldResult['executionContextId'] as number;
+      this._frameContextCache.set(frameId, id);
+      return id;
+    };
+
     let contextId = this._frameContextCache.get(frameId);
     if (contextId === undefined) {
       try {
-        const worldResult = await this.client.send(
-          'Page.createIsolatedWorld',
-          { frameId, worldName: '__slicc_iframe', grantUniveralAccess: true },
-          this.sessionId!
-        );
-        contextId = worldResult['executionContextId'] as number;
-        this._frameContextCache.set(frameId, contextId);
+        contextId = await createIsolatedWorld();
       } catch (err) {
         throw new Error(
           `Failed to create isolated world for frame ${frameId}: ${err instanceof Error ? err.message : String(err)}`
@@ -922,24 +933,60 @@ export class BrowserAPI {
 
     await this.client.send('Runtime.enable', {}, this.sessionId!);
 
-    const result = await this.client.send(
-      'Runtime.evaluate',
-      {
-        expression,
-        contextId,
-        awaitPromise: options?.awaitPromise ?? true,
-        returnByValue: options?.returnByValue ?? true,
-      },
-      this.sessionId!
-    );
+    const evaluateParams = {
+      expression,
+      contextId,
+      awaitPromise: options?.awaitPromise ?? true,
+      returnByValue: options?.returnByValue ?? true,
+    };
+
+    let result: Record<string, unknown>;
+    try {
+      result = await this.client.send('Runtime.evaluate', evaluateParams, this.sessionId!);
+    } catch (err) {
+      if (isDestroyedContextError(err)) {
+        this._frameContextCache.delete(frameId);
+        contextId = await createIsolatedWorld();
+        result = await this.client.send(
+          'Runtime.evaluate',
+          { ...evaluateParams, contextId },
+          this.sessionId!
+        );
+      } else {
+        throw err;
+      }
+    }
 
     const exceptionDetails = result['exceptionDetails'] as
       | { text: string; exception?: { description?: string } }
       | undefined;
     if (exceptionDetails) {
+      const msg = exceptionDetails.exception?.description ?? exceptionDetails.text;
+      // Check if this is a destroyed context error — retry once
+      if (isDestroyedContextError(new Error(msg))) {
+        this._frameContextCache.delete(frameId);
+        contextId = await createIsolatedWorld();
+        const retryResult = await this.client.send(
+          'Runtime.evaluate',
+          { ...evaluateParams, contextId },
+          this.sessionId!
+        );
+        const retryException = retryResult['exceptionDetails'] as
+          | { text: string; exception?: { description?: string } }
+          | undefined;
+        if (retryException) {
+          const retryMsg = retryException.exception?.description ?? retryException.text;
+          throw new Error(`Evaluation in frame ${frameId} failed: ${retryMsg}`);
+        }
+        const retryObj = retryResult['result'] as {
+          type: string;
+          value?: unknown;
+          description?: string;
+        };
+        return retryObj.value;
+      }
       // Invalidate cache — the frame may have navigated
       this._frameContextCache.delete(frameId);
-      const msg = exceptionDetails.exception?.description ?? exceptionDetails.text;
       throw new Error(`Evaluation in frame ${frameId} failed: ${msg}`);
     }
 

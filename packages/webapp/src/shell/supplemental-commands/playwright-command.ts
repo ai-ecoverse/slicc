@@ -518,6 +518,7 @@ async function takeSnapshot(
         let frameIndex = 0;
         const outputLines = content.split('\n');
         const stitchedLines: string[] = [];
+        const matchedFrameIds = new Set<string>();
 
         for (const line of outputLines) {
           stitchedLines.push(line);
@@ -533,20 +534,23 @@ async function takeSnapshot(
 
           // Find matching child frame by URL
           const matchedFrame = childFrames.find((f) => {
+            if (matchedFrameIds.has(f.frameId)) return false;
             try {
-              // Compare normalized URLs (ignoring trailing slashes, fragments)
+              // Compare normalized URLs (ignoring trailing slashes, fragments, but including query strings)
               const frameUrl = new URL(f.url);
-              const srcUrl = new URL(iframeSrc);
-              return (
-                frameUrl.origin === srcUrl.origin &&
-                frameUrl.pathname.replace(/\/$/, '') === srcUrl.pathname.replace(/\/$/, '')
-              );
+              const srcUrl = new URL(iframeSrc, url);
+              const normalizedSrc =
+                srcUrl.origin + srcUrl.pathname.replace(/\/$/, '') + srcUrl.search;
+              const normalizedFrame =
+                frameUrl.origin + frameUrl.pathname.replace(/\/$/, '') + frameUrl.search;
+              return normalizedFrame === normalizedSrc;
             } catch {
               return f.url === iframeSrc;
             }
           });
 
           if (!matchedFrame) continue;
+          matchedFrameIds.add(matchedFrame.frameId);
 
           frameIndex++;
           const framePrefix = `f${frameIndex}`;
