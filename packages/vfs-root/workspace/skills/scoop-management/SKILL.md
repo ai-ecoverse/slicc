@@ -60,3 +60,21 @@ Rules:
 - The preview/serve tab for a delivered app can stay open.
 
 Remote targets (tray mode): `playwright-cli tab-list` shows remote tabs with composite targetIds (`runtimeId:localId`). Use `--tab=<compositeId>` to target. Use `--runtime=<id>` with `open`/`tab-new` to open on a specific remote runtime.
+
+## Model Selection for Scoops
+
+Use `models --json` to discover available models before creating scoops. The `scoop_scoop` tool accepts a `model` parameter.
+
+**Guidelines:**
+
+- **Simple tasks** (file renames, formatting, grep-and-replace): use fast-tier models (haiku, mini, nano, flash-lite)
+- **Standard coding** (implement a function, fix a bug, write tests): use balanced-tier models (sonnet, flash, gpt-5)
+- **Complex work** (architecture design, multi-file refactors, debugging subtle issues): use frontier-tier models (opus, pro)
+- **Default**: if unsure, use the same model as the cone (omit the model parameter)
+
+Example:
+
+```
+scoop_scoop({ name: "fix-typos", model: "claude-haiku-4-5-20251001", prompt: "Fix all typos in /workspace/docs/" })
+scoop_scoop({ name: "architect", model: "claude-opus-4-6", prompt: "Design the new plugin system..." })
+```

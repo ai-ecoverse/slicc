@@ -20,12 +20,22 @@ function formatContextWindow(tokens: number): string {
   return `${tokens}`;
 }
 
-function tierForCost(input: number): { emoji: string; label: string } {
-  if (input === 0) return { emoji: '❓', label: 'unknown' };
-  if (input >= 10) return { emoji: '🧠', label: 'frontier' };
-  if (input >= 2) return { emoji: '⚡', label: 'balanced' };
-  if (input >= 0.5) return { emoji: '💨', label: 'fast' };
-  return { emoji: '🔬', label: 'micro' };
+function classifyTier(id: string, name: string): { label: string; emoji: string } {
+  const lower = (id + ' ' + name).toLowerCase();
+
+  // Frontier: opus, pro variants, o1-pro, o3-pro, grok-4 (non-fast)
+  if (
+    /\b(opus|o[13]-pro|o3-pro|gpt-5[.\d]*-pro|grok-4(?!.*fast))/.test(lower) &&
+    !/mini|nano|lite|fast/.test(lower)
+  ) {
+    return { label: 'frontier', emoji: '🧠' };
+  }
+  // Fast: haiku, mini, nano, lite, flash-lite
+  if (/\b(haiku|mini|nano|lite)\b/.test(lower)) {
+    return { label: 'fast', emoji: '💨' };
+  }
+  // Balanced: everything else (sonnet, flash, gpt-5, standard models)
+  return { label: 'balanced', emoji: '⚡' };
 }
 
 function formatCost(n: number): string {
@@ -42,6 +52,7 @@ interface ModelInfo {
   reasoning: boolean;
   input: string[];
   tier: string;
+  tierEmoji: string;
   selected: boolean;
 }
 
@@ -51,7 +62,7 @@ function toModelInfo(
   selectedModelId: string,
   selectedProvider: string
 ): ModelInfo {
-  const tier = tierForCost(m.cost?.input ?? 0);
+  const tier = classifyTier(m.id, m.name);
   return {
     id: m.id,
     name: m.name,
@@ -62,6 +73,7 @@ function toModelInfo(
     reasoning: !!m.reasoning,
     input: m.input ?? ['text'],
     tier: tier.label,
+    tierEmoji: tier.emoji,
     selected: m.id === selectedModelId && providerId === selectedProvider,
   };
 }
@@ -80,9 +92,8 @@ function formatHumanReadable(
     const cost = `${formatCost(m.cost.input)} / ${formatCost(m.cost.output)}`;
     const ctx = `${formatContextWindow(m.contextWindow)} ctx`;
     const reasoning = m.reasoning ? 'reasoning ✓' : '           ';
-    const tier = tierForCost(m.cost.input);
     lines.push(
-      `${prefix}${id} ${cost.padEnd(16)} ${ctx.padEnd(10)} ${reasoning}   ${tier.emoji} ${tier.label}`
+      `${prefix}${id} ${cost.padEnd(16)} ${ctx.padEnd(10)} ${reasoning}   ${m.tierEmoji} ${m.tier}`
     );
   }
 
