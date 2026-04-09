@@ -524,7 +524,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
           const body = event.body as Record<string, unknown> | null;
           const action = body?.action;
           if (action === 'onboarding-complete' || action === 'shortcut-migrate') {
-            localStorage.setItem('slicc-welcomed', '1');
+            localFs.writeFile('/shared/.welcomed', '1').catch(() => {});
           }
           if (action === 'shortcut-migrate') {
             sprinkleManager.close('welcome');
@@ -662,7 +662,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 
   // Open welcome sprinkle on first run (extension mode)
   if (
-    !localStorage.getItem('slicc-welcomed') &&
+    !(await localFs.exists('/shared/.welcomed')) &&
     !hasStoredTrayJoinUrl(window.localStorage) &&
     sprinkleManager.available().some((p) => p.name === 'welcome')
   ) {
@@ -1271,7 +1271,7 @@ async function main(): Promise<void> {
       const body = event.body as Record<string, unknown> | null;
       const action = body?.action;
       if (action === 'onboarding-complete' || action === 'shortcut-migrate') {
-        localStorage.setItem('slicc-welcomed', '1');
+        sharedFs?.writeFile('/shared/.welcomed', '1').catch(() => {});
       }
       if (action === 'shortcut-migrate') {
         sprinkleManager?.close('welcome');
@@ -1424,7 +1424,7 @@ async function main(): Promise<void> {
 
     // Open welcome sprinkle on first run (flag set when onboarding-complete lick fires)
     if (
-      !localStorage.getItem('slicc-welcomed') &&
+      !(await sharedFs.exists('/shared/.welcomed')) &&
       !allowProviderlessTrayJoin &&
       sprinkleManager.available().some((p) => p.name === 'welcome')
     ) {
