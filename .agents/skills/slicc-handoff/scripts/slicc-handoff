@@ -150,6 +150,17 @@ async function main() {
 
   process.stdout.write(`${handoffUrl}\n`);
 
+  // Always try to notify a local standalone slicc instance (fire-and-forget).
+  const port = process.env['SLICC_PORT'] ?? '5710';
+  fetch(`http://localhost:${port}/api/handoff`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(normalizedPayload),
+    signal: AbortSignal.timeout(2000),
+  }).catch(() => {
+    // Not running standalone — ignore.
+  });
+
   if (openOnSuccess) {
     await openUrl(handoffUrl);
   }

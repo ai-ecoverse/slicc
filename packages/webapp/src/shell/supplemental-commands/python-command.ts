@@ -187,6 +187,17 @@ export function createPython3LikeCommand(name: 'python3' | 'python'): Command {
 
       pyodide.setStdout({ batched: (msg) => stdoutChunks.push(msg + '\n') });
       pyodide.setStderr({ batched: (msg) => stderrChunks.push(msg + '\n') });
+
+      // Wire piped data to Python's sys.stdin. Without this, Pyodide's
+      // default stdin falls back to window.prompt(), popping a browser dialog.
+      let stdinConsumed = false;
+      pyodide.setStdin({
+        stdin: () => {
+          if (stdinConsumed || !ctx.stdin) return null;
+          stdinConsumed = true;
+          return ctx.stdin;
+        },
+      });
       pyodide.globals.set('__slicc_code', code);
       pyodide.globals.set('__slicc_filename', filename);
       pyodide.globals.set('__slicc_argv', argv);

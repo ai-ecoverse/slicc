@@ -216,6 +216,8 @@ export class ScoopContext {
       const model = this.scoop.config?.modelId
         ? resolveModelById(this.scoop.config.modelId)
         : resolveCurrentModel();
+      const label = this.scoop.isCone ? 'Cone' : `Scoop "${this.scoop.name}"`;
+      console.log(`[model] ${label} using model: ${model.id} (provider: ${model.provider})`);
 
       const systemPrompt = this.buildSystemPrompt(globalMemory, scoopMemory, skills);
 

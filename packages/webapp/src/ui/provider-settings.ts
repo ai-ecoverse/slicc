@@ -550,9 +550,14 @@ export function resolveCurrentModel(): Model<Api> {
   const modelId = getSelectedModelId();
   const baseUrl = getBaseUrlForProvider(providerId);
 
-  // Get default model if none selected
+  // Get default model if none selected — check provider's defaultModelId preference
   const models = getProviderModels(providerId);
-  const effectiveModelId = modelId || models[0]?.id || 'claude-sonnet-4-0';
+  const providerConfig = getProviderConfig(providerId);
+  const preferredId = providerConfig.defaultModelId
+    ? models.find((m) => m.id.toLowerCase().includes(providerConfig.defaultModelId!.toLowerCase()))
+        ?.id
+    : undefined;
+  const effectiveModelId = modelId || preferredId || models[0]?.id || 'claude-sonnet-4-6';
 
   try {
     const providerConfig = getProviderConfig(providerId);

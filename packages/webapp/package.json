@@ -20,9 +20,9 @@
     "buffer": "6.0.3",
     "fflate": "^0.8.2",
     "isomorphic-dompurify": "^3.1.0",
-    "isomorphic-git": "1.37.4",
+    "isomorphic-git": "1.37.5",
     "just-bash": "2.14.0",
-    "marked": "^17.0.4",
+    "marked": "^18.0.0",
     "unpdf": "^1.4.0"
   },
   "devDependencies": {

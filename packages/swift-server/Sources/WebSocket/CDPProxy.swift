@@ -10,6 +10,7 @@ import WebSocketKit
 
 actor CDPProxy {
     static let defaultMaxMessageSize = 100 * 1024 * 1024
+    static let defaultChromeInboundMessageBufferLimit = 1_000
     static let defaultReconnectDelayNanoseconds: UInt64 = 1_000_000_000
 
     private let logger: Logger
@@ -425,6 +426,13 @@ actor CDPProxy {
         onMessage: @escaping @Sendable (ProxyMessage) async -> Void,
         onEvent: @escaping @Sendable (ChromeSocketEvent) async -> Void
     ) async throws -> ChromeSocketHandle {
+        let messagePump = ChromeInboundMessagePump(
+            maxBufferedMessages: Self.defaultChromeInboundMessageBufferLimit
+        )
+        let messagePumpTask = Task {
+            await Self.runChromeMessagePump(messagePump, onMessage: onMessage)
+        }
+        let terminationState = ChromeSocketTerminationState()
         let (socketStream, socketContinuation) = AsyncStream<WebSocket>.makeStream()
         let connectFuture = WebSocket.connect(
             to: url,
@@ -432,24 +440,37 @@ actor CDPProxy {
             on: HTTPClient.defaultEventLoopGroup
         ) { socket in
             socket.onText { _, text in
-                Task {
-                    await onMessage(.text(text))
+                let result = messagePump.enqueue(.text(text))
+                if case .overflow = result,
+                   terminationState.markOverflow(
+                       reason: "Inbound Chrome frame buffer overflowed (\(Self.defaultChromeInboundMessageBufferLimit) queued messages)"
+                   ) {
+                    Task {
+                        try? await socket.close(code: .messageTooLarge)
+                    }
                 }
             }
             socket.onBinary { _, buffer in
-                Task {
-                    await onMessage(.binary(buffer))
+                let result = messagePump.enqueue(.binary(buffer))
+                if case .overflow = result,
+                   terminationState.markOverflow(
+                       reason: "Inbound Chrome frame buffer overflowed (\(Self.defaultChromeInboundMessageBufferLimit) queued messages)"
+                   ) {
+                    Task {
+                        try? await socket.close(code: .messageTooLarge)
+                    }
                 }
             }
             socket.onClose.whenComplete { result in
                 Task {
-                    switch result {
-                    case .success:
-                        let description = "code=\(String(describing: socket.closeCode))"
-                        await onEvent(.closed(description))
-                    case .failure(let error):
-                        await onEvent(.error(String(describing: error)))
-                    }
+                    await Self.handleChromeSocketTermination(
+                        messagePump: messagePump,
+                        messagePumpTask: messagePumpTask,
+                        result: result,
+                        closeDescription: "code=\(String(describing: socket.closeCode))",
+                        overflowDescription: terminationState.overflowDescriptionSnapshot(),
+                        onEvent: onEvent
+                    )
                 }
             }
 
@@ -461,6 +482,8 @@ actor CDPProxy {
             try await connectFuture.get()
         } catch {
             socketContinuation.finish()
+            messagePump.finish()
+            _ = await messagePumpTask.value
             throw error
         }
 
@@ -479,12 +502,188 @@ actor CDPProxy {
                 }
             },
             close: {
+                messagePump.finish()
                 try? await socket.close(code: .goingAway)
+                _ = await messagePumpTask.value
             },
             isOpen: {
                 !socket.isClosed
             }
         )
+    }
+}
+
+extension CDPProxy {
+    static func runChromeMessagePump(
+        _ messagePump: ChromeInboundMessagePump,
+        onMessage: @escaping @Sendable (ProxyMessage) async -> Void
+    ) async {
+        while let message = await messagePump.next() {
+            await onMessage(message)
+        }
+    }
+
+    static func handleChromeSocketTermination(
+        messagePump: ChromeInboundMessagePump,
+        messagePumpTask: Task<Void, Never>,
+        result: Result<Void, Error>,
+        closeDescription: String,
+        overflowDescription: String?,
+        onEvent: @escaping @Sendable (ChromeSocketEvent) async -> Void
+    ) async {
+        messagePump.finish()
+        _ = await messagePumpTask.value
+
+        if let overflowDescription {
+            await onEvent(.error(overflowDescription))
+            return
+        }
+
+        switch result {
+        case .success:
+            await onEvent(.closed(closeDescription))
+        case .failure(let error):
+            await onEvent(.error(String(describing: error)))
+        }
+    }
+}
+
+final class ChromeInboundMessagePump: @unchecked Sendable {
+    enum EnqueueResult: Equatable {
+        case enqueued
+        case overflow
+        case terminated
+    }
+
+    private enum NextState {
+        case message(ProxyMessage)
+        case finished
+        case wait
+    }
+
+    private let maxBufferedMessages: Int
+    private let stateQueue = DispatchQueue(label: "slicc.cdp-proxy.chrome-inbound-pump")
+    private var buffer: [ProxyMessage] = []
+    private var pendingContinuation: CheckedContinuation<ProxyMessage?, Never>?
+    private var isFinished = false
+
+    init(maxBufferedMessages: Int = CDPProxy.defaultChromeInboundMessageBufferLimit) {
+        self.maxBufferedMessages = max(1, maxBufferedMessages)
+    }
+
+    func enqueue(_ message: ProxyMessage) -> EnqueueResult {
+        var continuation: CheckedContinuation<ProxyMessage?, Never>?
+        let result = self.stateQueue.sync { () -> EnqueueResult in
+            guard !self.isFinished else {
+                return .terminated
+            }
+
+            if let pendingContinuation = self.pendingContinuation {
+                self.pendingContinuation = nil
+                continuation = pendingContinuation
+                return .enqueued
+            }
+
+            guard self.buffer.count < self.maxBufferedMessages else {
+                self.isFinished = true
+                return .overflow
+            }
+
+            self.buffer.append(message)
+            return .enqueued
+        }
+
+        continuation?.resume(returning: message)
+        return result
+    }
+
+    func next() async -> ProxyMessage? {
+        switch self.nextState() {
+        case .message(let message):
+            return message
+        case .finished:
+            return nil
+        case .wait:
+            return await withCheckedContinuation { continuation in
+                var nextState: NextState?
+
+                self.stateQueue.sync {
+                    if !self.buffer.isEmpty {
+                        nextState = .message(self.buffer.removeFirst())
+                        return
+                    }
+
+                    if self.isFinished {
+                        nextState = .finished
+                        return
+                    }
+
+                    self.pendingContinuation = continuation
+                }
+
+                switch nextState {
+                case .message(let message):
+                    continuation.resume(returning: message)
+                case .finished:
+                    continuation.resume(returning: nil)
+                case .wait, .none:
+                    break
+                }
+            }
+        }
+    }
+
+    func finish() {
+        var continuation: CheckedContinuation<ProxyMessage?, Never>?
+
+        self.stateQueue.sync {
+            guard !self.isFinished else {
+                return
+            }
+
+            self.isFinished = true
+            continuation = self.pendingContinuation
+            self.pendingContinuation = nil
+        }
+
+        continuation?.resume(returning: nil)
+    }
+
+    private func nextState() -> NextState {
+        self.stateQueue.sync {
+            if !self.buffer.isEmpty {
+                return .message(self.buffer.removeFirst())
+            }
+
+            if self.isFinished {
+                return .finished
+            }
+
+            return .wait
+        }
+    }
+}
+
+final class ChromeSocketTerminationState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var overflowDescription: String?
+
+    func markOverflow(reason: String) -> Bool {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+
+        guard self.overflowDescription == nil else {
+            return false
+        }
+
+        self.overflowDescription = reason
+        return true
+    }
+
+    func overflowDescriptionSnapshot() -> String? {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return self.overflowDescription
     }
 }
 

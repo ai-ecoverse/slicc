@@ -232,7 +232,12 @@ export class Layout {
       const groups = getAllAvailableModels();
       for (const group of groups) {
         if (group.models.length > 0) {
-          setSelectedModelId(`${group.providerId}:${group.models[0].id}`);
+          const { defaultModelId } = getProviderConfig(group.providerId);
+          const preferred = defaultModelId
+            ? group.models.find((m) => m.id.toLowerCase().includes(defaultModelId.toLowerCase()))
+            : undefined;
+          const model = preferred ?? group.models[0];
+          setSelectedModelId(`${group.providerId}:${model.id}`);
           return;
         }
       }
