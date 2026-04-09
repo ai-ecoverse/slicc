@@ -233,7 +233,9 @@ export class BshWatchdog {
     const bareId = id.startsWith('node:') ? id.slice(5) : id;
     if (bareId === 'buffer' && typeof Buffer !== 'undefined') return { Buffer };
     if (__NODE_BUILTINS_UNAVAILABLE.has(bareId)) {
-      throw new Error("require('" + id + "'): Node built-in '" + bareId + "' is not available in the browser environment.");
+      const __suggestions = { http: ' Use fetch() instead.', https: ' Use fetch() instead.', crypto: ' Use globalThis.crypto (Web Crypto API) instead.' };
+      const __hint = __suggestions[bareId] || '';
+      throw new Error("require('" + id + "'): Node built-in '" + bareId + "' is not available in the browser environment." + __hint);
     }
     if (bareId in __requireCache) return __requireCache[bareId];
     if (id in __requireCache) return __requireCache[id];
