@@ -112,8 +112,10 @@ describe('SprinkleBridge', () => {
     expect(mockFs.rm).toHaveBeenCalledWith('/workspace/old.txt');
   });
 
-  it('screenshot() returns empty string (no-op at bridge level)', async () => {
+  it('screenshot() returns empty string when no container is set', async () => {
     const api = bridge.createAPI('test-sprinkle');
+    // Without _container set, the bridge implementation returns '' immediately
+    expect(api._container).toBeUndefined();
     const result = await api.screenshot();
     expect(result).toBe('');
   });

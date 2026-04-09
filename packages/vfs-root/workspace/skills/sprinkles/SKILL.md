@@ -57,7 +57,7 @@ The cone will send you a message with the lick action and your sprinkle name. On
 - `slicc.stat(path)` — get file metadata (returns `Promise<{type, size}>`)
 - `slicc.mkdir(path)` — create a directory (recursive)
 - `slicc.rm(path)` — remove a file
-- `slicc.screenshot(selector?)` — capture sprinkle DOM as base64 PNG data URL
+- `slicc.screenshot(selector?)` — capture sprinkle DOM as base64 PNG data URL. Note: The screenshot captures a DOM clone using SVG foreignObject. External stylesheets and some computed styles may not be fully reproduced. For best results, use inline styles on elements you intend to screenshot.
 
 **onclick attributes**: Always use `slicc` — e.g. `onclick="slicc.lick({action: 'add-year'})"`. The `slicc` variable is automatically resolved per-sprinkle, so multiple sprinkles won't collide. Do NOT use `bridge` or any other variable name in onclick.
 

@@ -291,8 +291,6 @@ export class SprinkleRenderer {
   var _cbId = 0;
   var _callbacks = {};
 
-  function _responseType(t) { return t + '-response'; }
-
   window.addEventListener('message', function(event) {
     var msg = event.data;
     if (!msg || !msg.type) return;
