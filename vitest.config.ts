@@ -45,12 +45,6 @@ export default defineConfig({
             'packages/webapp/tests/integration/**/*.test.ts',
             'packages/webapp/tests/e2e/**/*.test.ts',
           ],
-          pool: 'forks',
-          poolOptions: {
-            forks: {
-              memoryLimit: '2GB',
-            },
-          },
         },
       },
       {

@@ -121,6 +121,8 @@ jobs:
         run: tsc --noEmit -p tsconfig.json
       - name: Test
         run: npx vitest run --project webapp
+        env:
+          NODE_OPTIONS: '--max-old-space-size=6144'
       - name: Build
         run: npm run build -w @slicc/webapp
       - name: Check bundle for Node-only APIs
