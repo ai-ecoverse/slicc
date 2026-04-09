@@ -103,7 +103,7 @@ export const HANDOFF_PAGE_HTML = `<!DOCTYPE html>
     <div id="preview" class="preview" hidden></div>
     <div class="help">
       <p>If you do not see the approval prompt, open the SLICC side panel and look for the Chat tab badge.</p>
-      <a class="cta" href="https://chromewebstore.google.com/detail/slicc/akggccfpkleihhemkkikggopnifgelbk" target="_blank" rel="noreferrer">Install the SLICC extension</a>
+      <a class="cta" href="https://chromewebstore.google.com/detail/slicc/akjjllgokmbgpbdbmafpiefnhidlmbgf" target="_blank" rel="noreferrer">Install the SLICC extension</a>
       <p class="muted">This page does not submit the handoff anywhere. The URL fragment itself is the transport.</p>
     </div>
   </main>

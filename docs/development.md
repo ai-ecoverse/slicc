@@ -169,7 +169,7 @@ The worker also serves a lightweight handoff preview page at `GET /handoff` for 
 
 ## Extension Testing Steps
 
-> **End users** install the extension from the [Chrome Web Store](https://chromewebstore.google.com/detail/slicc/akggccfpkleihhemkkikggopnifgelbk). The steps below are for **development** only — loading a local build for testing.
+> **End users** install the extension from the [Chrome Web Store](https://chromewebstore.google.com/detail/slicc/akjjllgokmbgpbdbmafpiefnhidlmbgf). The steps below are for **development** only — loading a local build for testing.
 
 If you want a reusable browser profile instead of re-loading the unpacked extension by hand every time, use `npm run start:extension`.
 
