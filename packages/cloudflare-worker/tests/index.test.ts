@@ -1155,6 +1155,13 @@ describe('tray worker skeleton', () => {
     });
   });
 
+  it('redirects bare apex sliccy.ai directly to www.sliccy.com (no double hop)', async () => {
+    const { env } = createTestHarness();
+    const response = await handleWorkerRequest(new Request('https://sliccy.ai/'), env);
+    expect(response.status).toBe(301);
+    expect(response.headers.get('Location')).toBe('https://www.sliccy.com/');
+  });
+
   it('redirects apex sliccy.ai to www.sliccy.ai with 301 preserving path and query', async () => {
     const { env } = createTestHarness();
     const response = await handleWorkerRequest(new Request('https://sliccy.ai/some/path?q=1'), env);

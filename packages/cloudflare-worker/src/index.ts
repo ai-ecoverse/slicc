@@ -47,6 +47,9 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
   const url = new URL(request.url);
 
   if (url.hostname === 'sliccy.ai') {
+    if (url.pathname === '/' && url.search === '') {
+      return Response.redirect('https://www.sliccy.com/', 301);
+    }
     const target = new URL(url.toString());
     target.hostname = 'www.sliccy.ai';
     return Response.redirect(target.toString(), 301);
