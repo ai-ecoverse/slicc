@@ -97,8 +97,16 @@ interface TabSnapshot {
   title: string;
   refToSelector: Map<string, string>;
   refToBackendNodeId: Map<string, number>;
+  refToFrameId: Map<string, string>;
   content: string;
   timestamp: number;
+}
+
+/** Parse a ref like 'f1e5' into { framePrefix: 'f1', isIframe: true } or 'e5' into { framePrefix: '', isIframe: false } */
+function parseRef(ref: string): { framePrefix: string; isIframe: boolean } {
+  const match = ref.match(/^(f[0-9]+)(e[0-9]+)$/);
+  if (match) return { framePrefix: match[1], isIframe: true };
+  return { framePrefix: '', isIframe: false };
 }
 
 /** Decode base64 string to Uint8Array. */
@@ -369,7 +377,8 @@ function renderNode(
   refToSelector: Map<string, string>,
   refToBackendNodeId: Map<string, number>,
   counter: { value: number },
-  indent: string = ''
+  indent: string = '',
+  framePrefix: string = ''
 ): string[] {
   const lines: string[] = [];
   const role = normalizeAccessibilityText(node.role, 'unknown').toLowerCase();
@@ -388,7 +397,7 @@ function renderNode(
 
   let ref = '';
   if (needsRef) {
-    ref = `e${++counter.value}`;
+    ref = framePrefix + `e${++counter.value}`;
 
     // Store backendNodeId for reliable ref-based clicking
     if (node.backendNodeId) {
@@ -427,7 +436,9 @@ function renderNode(
 
   if (node.children) {
     for (const child of node.children) {
-      lines.push(...renderNode(child, refToSelector, refToBackendNodeId, counter, indent + '  '));
+      lines.push(
+        ...renderNode(child, refToSelector, refToBackendNodeId, counter, indent + '  ', framePrefix)
+      );
     }
   }
   return lines;
@@ -481,7 +492,8 @@ async function getActionablePages(
 async function takeSnapshot(
   browser: BrowserAPI,
   state: PlaywrightState,
-  targetId: string
+  targetId: string,
+  options?: { noIframes?: boolean }
 ): Promise<{ snapshot: TabSnapshot; output: string }> {
   await browser.attachToPage(targetId);
   const pageInfo = await browser.evaluate(
@@ -491,14 +503,102 @@ async function takeSnapshot(
   const tree = await browser.getAccessibilityTree();
   const refToSelector = new Map<string, string>();
   const refToBackendNodeId = new Map<string, number>();
+  const refToFrameId = new Map<string, string>();
   const counter = { value: 0 };
   const snapshotLines = renderNode(tree, refToSelector, refToBackendNodeId, counter);
-  const content = snapshotLines.join('\n');
+  let content = snapshotLines.join('\n');
+
+  // Stitch iframe content into the snapshot
+  if (!options?.noIframes && typeof browser.getFrameTree === 'function') {
+    try {
+      const frames = await browser.getFrameTree();
+      const childFrames = frames.filter((f) => f.parentFrameId);
+
+      if (childFrames.length > 0) {
+        let frameIndex = 0;
+        const outputLines = content.split('\n');
+        const stitchedLines: string[] = [];
+        const matchedFrameIds = new Set<string>();
+
+        for (const line of outputLines) {
+          stitchedLines.push(line);
+
+          // Match iframe placeholder lines like: - iframe "Title": "https://example.com/frame"
+          const iframeMatch = line.match(/^(\s*)- iframe\s/);
+          if (!iframeMatch) continue;
+
+          // Extract the src URL from the iframe placeholder value
+          const valueMatch = line.match(/:\s*"([^"]+)"\s*$/);
+          if (!valueMatch) continue;
+          const iframeSrc = valueMatch[1];
+
+          // Find matching child frame by URL
+          const matchedFrame = childFrames.find((f) => {
+            if (matchedFrameIds.has(f.frameId)) return false;
+            try {
+              // Compare normalized URLs (ignoring trailing slashes, fragments, but including query strings)
+              const frameUrl = new URL(f.url);
+              const srcUrl = new URL(iframeSrc, url);
+              const normalizedSrc =
+                srcUrl.origin + srcUrl.pathname.replace(/\/$/, '') + srcUrl.search;
+              const normalizedFrame =
+                frameUrl.origin + frameUrl.pathname.replace(/\/$/, '') + frameUrl.search;
+              return normalizedFrame === normalizedSrc;
+            } catch {
+              return f.url === iframeSrc;
+            }
+          });
+
+          if (!matchedFrame) continue;
+          matchedFrameIds.add(matchedFrame.frameId);
+
+          frameIndex++;
+          const framePrefix = `f${frameIndex}`;
+          const indent = iframeMatch[1] + '  ';
+
+          try {
+            const frameTree = await browser.getAccessibilityTreeForFrame(matchedFrame.frameId);
+            const frameRefToSelector = new Map<string, string>();
+            const frameRefToBackendNodeId = new Map<string, number>();
+            const frameCounter = { value: 0 };
+            const frameLines = renderNode(
+              frameTree,
+              frameRefToSelector,
+              frameRefToBackendNodeId,
+              frameCounter,
+              indent,
+              framePrefix
+            );
+
+            // Merge frame refs into main maps
+            for (const [ref, selector] of frameRefToSelector) {
+              refToSelector.set(ref, selector);
+              refToFrameId.set(ref, matchedFrame.frameId);
+            }
+            for (const [ref, nodeId] of frameRefToBackendNodeId) {
+              refToBackendNodeId.set(ref, nodeId);
+              refToFrameId.set(ref, matchedFrame.frameId);
+            }
+
+            stitchedLines.push(...frameLines);
+          } catch {
+            // Cross-origin frames or other failures — keep the placeholder
+          }
+        }
+
+        content = stitchedLines.join('\n');
+      }
+    } catch {
+      // getFrameTree failed — keep the snapshot without iframe content
+    }
+  }
+
   const snapshot: TabSnapshot = {
     url,
     title,
     refToSelector,
     refToBackendNodeId,
+    refToFrameId,
     content,
     timestamp: Date.now(),
   };
@@ -1398,7 +1498,8 @@ Commands:
   click <ref>            Click element by ref (e.g. e5)
   type <text>            Type text into focused element
   fill <ref> <text>      Fill an input by ref with text
-  snapshot               Print accessibility tree with refs
+  snapshot [--no-iframes] Print accessibility tree with refs
+  frames                 List all frames (iframes) in the current tab
   screenshot [--filename=path] [--max-width=N] [--fullPage=true]
                          Take screenshot. --max-width downscales the image
                          if wider than N pixels (e.g. --max-width=1024).
@@ -1808,8 +1909,11 @@ export function createPlaywrightCommand(
             result = { stdout: '', stderr: tab.error, exitCode: 1 };
             break;
           }
+          const noIframes = flags['no-iframes'] === 'true';
           const { output } = await browser.withTab(tab.targetId, async () => {
-            return await takeSnapshot(browser, state, tab.targetId);
+            return await takeSnapshot(browser, state, tab.targetId, {
+              noIframes,
+            });
           });
           if (flags['filename']) {
             await fs.writeFile(flags['filename'], output);
@@ -1820,6 +1924,25 @@ export function createPlaywrightCommand(
             };
             break;
           }
+          result = { stdout: output + '\n', stderr: '', exitCode: 0 };
+          break;
+        }
+
+        case 'frames': {
+          const tab = requireTab(flags);
+          if ('error' in tab) {
+            result = { stdout: '', stderr: tab.error, exitCode: 1 };
+            break;
+          }
+          const output = await browser.withTab(tab.targetId, async () => {
+            const frames = await browser.getFrameTree();
+            const lines = frames.map((f) => {
+              const type = f.parentFrameId ? 'child' : 'main';
+              const parent = f.parentFrameId ? ` (parent: ${f.parentFrameId})` : '';
+              return `  [${type}] ${f.frameId}${parent} - ${f.url}`;
+            });
+            return `Frames in current tab:\n${lines.join('\n')}`;
+          });
           result = { stdout: output + '\n', stderr: '', exitCode: 0 };
           break;
         }
@@ -1937,6 +2060,26 @@ export function createPlaywrightCommand(
               throw new Error('No snapshot available. Run "snapshot" first.');
             }
 
+            // Handle iframe-routed clicks
+            const { isIframe } = parseRef(ref);
+            const frameId = snapshot.refToFrameId?.get(ref);
+            if (isIframe && frameId) {
+              const selector = snapshot.refToSelector.get(ref);
+              if (!selector) throw new Error(`Unknown ref "${ref}" in iframe`);
+              const firstSelector = selector.split(',')[0].trim();
+              await browser.evaluateInFrame(
+                frameId,
+                `(function() {
+                  var el = document.querySelector(${JSON.stringify(firstSelector)});
+                  if (!el) throw new Error('Element not found in iframe for ref ${ref}');
+                  el.scrollIntoView({ block: 'center' });
+                  el.click();
+                })()`
+              );
+              state.snapshots.delete(tab.targetId);
+              return `Clicked ${ref} (in iframe)`;
+            }
+
             // Prefer backendNodeId for reliable clicking
             const backendNodeId = snapshot.refToBackendNodeId.get(ref);
             if (backendNodeId) {
@@ -1994,6 +2137,30 @@ export function createPlaywrightCommand(
             const snapshot = state.snapshots.get(tab.targetId);
             if (!snapshot) {
               throw new Error('No snapshot available. Run "snapshot" first.');
+            }
+
+            // Handle iframe-routed fill
+            const { isIframe: isFillIframe } = parseRef(ref);
+            const fillFrameId = snapshot.refToFrameId?.get(ref);
+            if (isFillIframe && fillFrameId) {
+              const selector = snapshot.refToSelector.get(ref);
+              if (!selector) throw new Error(`Unknown ref "${ref}" in iframe`);
+              const firstSelector = selector.split(',')[0].trim();
+              await browser.evaluateInFrame(
+                fillFrameId,
+                `(function() {
+                  var el = document.querySelector(${JSON.stringify(firstSelector)});
+                  if (!el) throw new Error('Element not found in iframe for ref ${ref}');
+                  el.scrollIntoView({ block: 'center' });
+                  el.focus();
+                  el.value = '';
+                  el.value = ${JSON.stringify(fillText)};
+                  el.dispatchEvent(new Event('input', { bubbles: true }));
+                  el.dispatchEvent(new Event('change', { bubbles: true }));
+                })()`
+              );
+              state.snapshots.delete(tab.targetId);
+              return `Filled ${ref} with: ${fillText} (in iframe)`;
             }
 
             // Prefer backendNodeId for reliable element targeting
@@ -2277,6 +2444,27 @@ export function createPlaywrightCommand(
             if (!snapshot) {
               throw new Error('No snapshot available. Run "snapshot" first.');
             }
+
+            // Handle iframe-routed dblclick
+            const { isIframe: isDblIframe } = parseRef(ref);
+            const dblFrameId = snapshot.refToFrameId?.get(ref);
+            if (isDblIframe && dblFrameId) {
+              const selector = snapshot.refToSelector.get(ref);
+              if (!selector) throw new Error(`Unknown ref "${ref}" in iframe`);
+              const firstSelector = selector.split(',')[0].trim();
+              await browser.evaluateInFrame(
+                dblFrameId,
+                `(function() {
+                  var el = document.querySelector(${JSON.stringify(firstSelector)});
+                  if (!el) throw new Error('Element not found in iframe for ref ${ref}');
+                  el.scrollIntoView({ block: 'center' });
+                  el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+                })()`
+              );
+              state.snapshots.delete(tab.targetId);
+              return `Double-clicked ${ref} (in iframe)`;
+            }
+
             const backendNodeId = snapshot.refToBackendNodeId.get(ref);
             if (!backendNodeId) {
               throw new Error(`Unknown ref "${ref}"`);
@@ -2305,6 +2493,26 @@ export function createPlaywrightCommand(
             if (!snapshot) {
               throw new Error('No snapshot available. Run "snapshot" first.');
             }
+
+            // Handle iframe-routed hover
+            const { isIframe: isHoverIframe } = parseRef(ref);
+            const hoverFrameId = snapshot.refToFrameId?.get(ref);
+            if (isHoverIframe && hoverFrameId) {
+              const selector = snapshot.refToSelector.get(ref);
+              if (!selector) throw new Error(`Unknown ref "${ref}" in iframe`);
+              const firstSelector = selector.split(',')[0].trim();
+              await browser.evaluateInFrame(
+                hoverFrameId,
+                `(function() {
+                  var el = document.querySelector(${JSON.stringify(firstSelector)});
+                  if (!el) throw new Error('Element not found in iframe for ref ${ref}');
+                  el.scrollIntoView({ block: 'center' });
+                  el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+                })()`
+              );
+              return `Hovered ${ref} (in iframe)`;
+            }
+
             const backendNodeId = snapshot.refToBackendNodeId.get(ref);
             if (!backendNodeId) {
               throw new Error(`Unknown ref "${ref}"`);
@@ -2333,6 +2541,27 @@ export function createPlaywrightCommand(
             if (!snapshot) {
               throw new Error('No snapshot available. Run "snapshot" first.');
             }
+
+            // Handle iframe-routed select
+            const { isIframe: isSelectIframe } = parseRef(ref);
+            const selectFrameId = snapshot.refToFrameId?.get(ref);
+            if (isSelectIframe && selectFrameId) {
+              const selector = snapshot.refToSelector.get(ref);
+              if (!selector) throw new Error(`Unknown ref "${ref}" in iframe`);
+              const firstSelector = selector.split(',')[0].trim();
+              await browser.evaluateInFrame(
+                selectFrameId,
+                `(function() {
+                  var el = document.querySelector(${JSON.stringify(firstSelector)});
+                  if (!el) throw new Error('Element not found in iframe for ref ${ref}');
+                  el.value = ${JSON.stringify(value)};
+                  el.dispatchEvent(new Event('change', { bubbles: true }));
+                })()`
+              );
+              state.snapshots.delete(tab.targetId);
+              return `Selected "${value}" on ${ref} (in iframe)`;
+            }
+
             const backendNodeId = snapshot.refToBackendNodeId.get(ref);
             if (!backendNodeId) {
               throw new Error(`Unknown ref "${ref}"`);
@@ -2361,6 +2590,30 @@ export function createPlaywrightCommand(
             if (!snapshot) {
               throw new Error('No snapshot available. Run "snapshot" first.');
             }
+
+            // Handle iframe-routed check
+            const { isIframe: isCheckIframe } = parseRef(ref);
+            const checkFrameId = snapshot.refToFrameId?.get(ref);
+            if (isCheckIframe && checkFrameId) {
+              const selector = snapshot.refToSelector.get(ref);
+              if (!selector) throw new Error(`Unknown ref "${ref}" in iframe`);
+              const firstSelector = selector.split(',')[0].trim();
+              await browser.evaluateInFrame(
+                checkFrameId,
+                `(function() {
+                  var el = document.querySelector(${JSON.stringify(firstSelector)});
+                  if (!el) throw new Error('Element not found in iframe for ref ${ref}');
+                  if (!el.checked) {
+                    el.checked = true;
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                  }
+                })()`
+              );
+              state.snapshots.delete(tab.targetId);
+              return `Checked ${ref} (in iframe)`;
+            }
+
             const backendNodeId = snapshot.refToBackendNodeId.get(ref);
             if (!backendNodeId) {
               throw new Error(`Unknown ref "${ref}"`);
@@ -2389,6 +2642,30 @@ export function createPlaywrightCommand(
             if (!snapshot) {
               throw new Error('No snapshot available. Run "snapshot" first.');
             }
+
+            // Handle iframe-routed uncheck
+            const { isIframe: isUncheckIframe } = parseRef(ref);
+            const uncheckFrameId = snapshot.refToFrameId?.get(ref);
+            if (isUncheckIframe && uncheckFrameId) {
+              const selector = snapshot.refToSelector.get(ref);
+              if (!selector) throw new Error(`Unknown ref "${ref}" in iframe`);
+              const firstSelector = selector.split(',')[0].trim();
+              await browser.evaluateInFrame(
+                uncheckFrameId,
+                `(function() {
+                  var el = document.querySelector(${JSON.stringify(firstSelector)});
+                  if (!el) throw new Error('Element not found in iframe for ref ${ref}');
+                  if (el.checked) {
+                    el.checked = false;
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                  }
+                })()`
+              );
+              state.snapshots.delete(tab.targetId);
+              return `Unchecked ${ref} (in iframe)`;
+            }
+
             const backendNodeId = snapshot.refToBackendNodeId.get(ref);
             if (!backendNodeId) {
               throw new Error(`Unknown ref "${ref}"`);
