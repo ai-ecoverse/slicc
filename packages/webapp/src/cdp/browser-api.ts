@@ -195,10 +195,12 @@ export class BrowserAPI {
    * Create a new browser tab/target.
    * Returns the targetId of the newly created tab.
    * The tab opens in the background by default.
+   * Always creates on the local browser, even when currently attached to a remote target.
    */
   async createPage(url?: string): Promise<string> {
     await this.ensureConnected();
-    const result = await this.client.send('Target.createTarget', {
+    await this.ensureLocalConnected();
+    const result = await this.localClient.send('Target.createTarget', {
       url: url ?? 'about:blank',
       background: true,
     });
@@ -277,10 +279,12 @@ export class BrowserAPI {
 
   /**
    * List all open pages (tabs).
+   * Always queries the local browser, even when currently attached to a remote target.
    */
   async listPages(): Promise<PageInfo[]> {
     await this.ensureConnected();
-    const result = await this.client.send('Target.getTargets');
+    await this.ensureLocalConnected();
+    const result = await this.localClient.send('Target.getTargets');
     const targets = (result['targetInfos'] as TargetInfo[]) ?? [];
     return targets
       .filter((t) => t.type === 'page')
@@ -338,7 +342,20 @@ export class BrowserAPI {
       }
     }
 
-    const result = await this.client.send('Target.attachToTarget', {
+    // Restore local transport if we were previously attached to a remote target
+    if (this.remoteTargetInfo) {
+      if (this.trayTargetProvider?.removeRemoteTransport) {
+        this.trayTargetProvider.removeRemoteTransport(
+          this.remoteTargetInfo.runtimeId,
+          this.remoteTargetInfo.localTargetId
+        );
+      }
+      this.setClient(this.localClient);
+      this.remoteTargetInfo = null;
+    }
+    await this.ensureLocalConnected();
+
+    const result = await this.localClient.send('Target.attachToTarget', {
       targetId,
       flatten: true,
     });
@@ -346,8 +363,8 @@ export class BrowserAPI {
     this.attachedTargetId = targetId;
     // Keep Page events available so unexpected dialogs can be auto-dismissed
     // before they stall the current CDP command.
-    await this.client.send('Page.enable', {}, this.sessionId);
-    this._onSessionChange?.(this.sessionId, this.client);
+    await this.localClient.send('Page.enable', {}, this.sessionId);
+    this._onSessionChange?.(this.sessionId, this.localClient);
     return this.sessionId;
   }
 
@@ -911,6 +928,12 @@ export class BrowserAPI {
    * Resets stale session/target state when reconnecting after a drop.
    * If the current client is a disconnected remote transport, restores the local transport.
    */
+  private async ensureLocalConnected(): Promise<void> {
+    if (this.localClient.state === 'disconnected') {
+      await this.localClient.connect({ url: getDefaultCdpUrl() });
+    }
+  }
+
   private async ensureConnected(): Promise<void> {
     if (this.client.state === 'disconnected') {
       // If we were using a remote transport that got disconnected (follower went away),

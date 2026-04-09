@@ -331,7 +331,6 @@ async function attachConsoleForwarder(cdpPort: number, pageUrl: string): Promise
 
 const PREFERRED_SERVE_PORT = parseInt(process.env['PORT'] ?? '5710', 10);
 const PREFERRED_CDP_PORT = RUNTIME_FLAGS.cdpPort;
-const PREFERRED_HMR_PORT = 24679;
 
 async function main() {
   // Resolve available ports before anything else — serve port must be known
@@ -358,16 +357,12 @@ async function main() {
     CDP_PORT = ELECTRON_MODE ? PREFERRED_CDP_PORT : 0;
   }
 
-  const HMR_PORT = DEV_MODE ? await findAvailablePort(PREFERRED_HMR_PORT) : PREFERRED_HMR_PORT;
   const SERVE_ORIGIN = `http://localhost:${SERVE_PORT}`;
 
   if (usingDynamicElectronPorts) {
     console.log(`Dynamic port allocation for Electron app: CDP=${CDP_PORT}, serve=${SERVE_PORT}`);
   } else if (SERVE_PORT !== PREFERRED_SERVE_PORT) {
     console.log(`Port ${PREFERRED_SERVE_PORT} in use, serving on port ${SERVE_PORT}`);
-  }
-  if (DEV_MODE && HMR_PORT !== PREFERRED_HMR_PORT) {
-    console.log(`HMR port ${PREFERRED_HMR_PORT} in use, using port ${HMR_PORT}`);
   }
 
   if (DEV_MODE) {
@@ -1053,7 +1048,8 @@ async function main() {
       server: {
         middlewareMode: true,
         hmr: {
-          port: HMR_PORT, // Use a separate port for HMR WebSocket to avoid conflicting with /cdp
+          server, // Share the HTTP server — our upgrade handler routes /cdp and /licks-ws separately
+          path: '/__vite_hmr', // Dedicated path avoids conflicts with /cdp upgrade handler
         },
       },
       appType: 'custom', // We handle index.html serving ourselves via the handler below
@@ -1082,7 +1078,7 @@ async function main() {
         next(err);
       }
     });
-    console.log(`Vite dev server middleware attached (HMR active on port ${HMR_PORT})`);
+    console.log(`Vite dev server middleware attached (HMR on ${SERVE_ORIGIN}/__vite_hmr)`);
   } else {
     // Production mode: serve built static files
     const uiDir = resolve(__dirname, '..', 'ui');
