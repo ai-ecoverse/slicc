@@ -82,16 +82,42 @@ export class VirtualFS {
   async dispose(): Promise<void> {
     this.watcher?.dispose();
     this.watcher = null;
-    // LightningFS PromisifiedFS stores the IDB backend internally.
-    // Trigger graceful shutdown via the internal backend API.
+
     const pfs = this.lfs as any;
+
+    // 1. Cancel any pending deactivation timeout
+    if (pfs._deactivationTimeout) {
+      clearTimeout(pfs._deactivationTimeout);
+      pfs._deactivationTimeout = null;
+    }
+
+    // 2. Wait for any pending operations to complete
+    if (pfs._operations?.size > 0) {
+      await pfs._gracefulShutdown?.();
+    }
+
+    // 3. Cancel the debounced saveSuperblock timer in DefaultBackend
+    if (pfs._backend?.saveSuperblock?.cancel) {
+      pfs._backend.saveSuperblock.cancel();
+    }
+
+    // 4. Flush pending writes then deactivate (closes IDB via IdbBackend.close())
     if (pfs._backend) {
-      if (pfs._backend.destroy) {
-        await pfs._backend.destroy();
-      } else if (pfs._backend.deactivate) {
+      try {
+        if (pfs._backend.flush) await pfs._backend.flush();
+      } catch {
+        /* may fail if not activated */
+      }
+      if (pfs._backend.deactivate) {
         await pfs._backend.deactivate();
       }
     }
+
+    // 5. Null out retained references so the entire LFS tree can be GC'd
+    pfs._backend = null;
+    pfs._activationPromise = null;
+    pfs._deactivationPromise = null;
+    pfs._initPromise = null;
   }
 
   // ---------------------------------------------------------------------------
