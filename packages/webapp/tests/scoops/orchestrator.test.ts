@@ -384,7 +384,7 @@ describe('Scoop idle detection', () => {
       chatJid: cone.jid,
       senderId: testScoop.folder,
       senderName: testScoop.assistantLabel,
-      content: `[@${testScoop.assistantLabel} idle]: Scoop "${testScoop.name}" has been ready for 2 minutes without receiving any work.`,
+      content: `[@${testScoop.assistantLabel} idle]: Scoop "${testScoop.name}" has been ready for 2 minutes without receiving any work. This is expected if the scoop is waiting for webhooks or cron tasks. If you intended to delegate work, use feed_scoop to send a prompt.`,
       fromAssistant: false,
       channel: 'scoop-idle',
     });
@@ -396,6 +396,9 @@ describe('Scoop idle detection', () => {
     expect(coneMessages[0].senderId).toBe(testScoop.folder);
     expect(coneMessages[0].senderName).toBe(testScoop.assistantLabel);
     expect(coneMessages[0].content).toContain(`[@${testScoop.assistantLabel} idle]`);
+    expect(coneMessages[0].content).toBe(
+      `[@${testScoop.assistantLabel} idle]: Scoop "${testScoop.name}" has been ready for 2 minutes without receiving any work. This is expected if the scoop is waiting for webhooks or cron tasks. If you intended to delegate work, use feed_scoop to send a prompt.`
+    );
     expect(coneMessages[0].fromAssistant).toBe(false);
   });
 
@@ -406,7 +409,7 @@ describe('Scoop idle detection', () => {
       chatJid: cone.jid,
       senderId: testScoop.folder,
       senderName: testScoop.assistantLabel,
-      content: `[@${testScoop.assistantLabel} idle]: Scoop "${testScoop.name}" has been ready for 2 minutes without receiving any work.`,
+      content: `[@${testScoop.assistantLabel} idle]: Scoop "${testScoop.name}" has been ready for 2 minutes without receiving any work. This is expected if the scoop is waiting for webhooks or cron tasks. If you intended to delegate work, use feed_scoop to send a prompt.`,
       fromAssistant: false,
       channel: 'scoop-idle',
     });

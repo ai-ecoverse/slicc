@@ -275,6 +275,7 @@ export class Orchestrator {
   async resetFilesystem(): Promise<void> {
     // Destroy all scoop contexts (they hold references to the old VFS)
     for (const [jid, ctx] of this.contexts.entries()) {
+      this.clearIdleTimer(jid);
       ctx.stop();
       this.contexts.delete(jid);
     }
@@ -911,6 +912,9 @@ export class Orchestrator {
    *  SCOOP_IDLE_TIMEOUT_MS, send a notification to the cone. */
   private startIdleTimer(jid: string): void {
     this.clearIdleTimer(jid);
+    // Guard: don't start if the scoop is already processing (e.g. auto-feed race)
+    const currentTab = this.tabs.get(jid);
+    if (currentTab?.status === 'processing') return;
     const timer = setTimeout(() => {
       this.idleTimers.delete(jid);
       const scoop = this.scoops.get(jid);
