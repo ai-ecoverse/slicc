@@ -301,12 +301,15 @@ export class VirtualFS {
       // Path doesn't exist yet — that's fine for new files, use the original path
       resolved = normalized;
     }
-    // Check existence before write to determine create vs modify
+    // Check existence before write to determine create vs modify.
+    // Use lfs.stat() directly instead of this.exists() to avoid extra
+    // symlink-resolution IDB round-trips that leave pending LFS background ops.
     let wasExisting = false;
     try {
-      wasExisting = await this.exists(normalized);
+      await this.lfs.stat(resolved);
+      wasExisting = true;
     } catch {
-      /* ignore */
+      /* file doesn't exist yet */
     }
     // Ensure parent directory exists
     const { dir } = splitPath(resolved);

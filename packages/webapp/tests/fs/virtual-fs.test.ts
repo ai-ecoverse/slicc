@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { FsError } from '../../src/fs/types.js';
 
@@ -12,6 +12,14 @@ describe('VirtualFS', () => {
       dbName: 'test-vfs',
       wipe: true,
     });
+  });
+
+  afterEach(async () => {
+    // Wait for LightningFS debounced saveSuperblock (500ms) and deactivation
+    // timeout to flush before the next test's beforeEach wipes the DB.
+    // Without this, fake-indexeddb aborts in-flight transactions, producing
+    // unhandled AbortError rejections at node:internal/locks.
+    await new Promise((r) => setTimeout(r, 600));
   });
 
   describe('file operations', () => {
