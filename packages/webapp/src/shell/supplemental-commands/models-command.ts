@@ -141,37 +141,6 @@ function formatContextWindow(tokens: number): string {
   return `${tokens}`;
 }
 
-function classifyTier(
-  id: string,
-  name: string,
-  intelligenceIndex?: number | null
-): { label: string; emoji: string } {
-  // Use AA intelligence index when available
-  if (intelligenceIndex != null) {
-    if (intelligenceIndex >= 45) return { label: 'frontier', emoji: '🧠' };
-    if (intelligenceIndex >= 30) return { label: 'balanced', emoji: '⚡' };
-    if (intelligenceIndex >= 15) return { label: 'fast', emoji: '💨' };
-    return { label: 'micro', emoji: '🔬' };
-  }
-
-  // Fall back to name-based heuristic
-  const lower = (id + ' ' + name).toLowerCase();
-
-  // Frontier: opus, pro variants, o1-pro, o3-pro, grok-4 (non-fast)
-  if (
-    /\b(opus|o[13]-pro|o3-pro|gpt-5[.\d]*-pro|grok-4(?!.*fast))/.test(lower) &&
-    !/mini|nano|lite|fast/.test(lower)
-  ) {
-    return { label: 'frontier', emoji: '🧠' };
-  }
-  // Fast: haiku, mini, nano, lite, flash-lite
-  if (/\b(haiku|mini|nano|lite)\b/.test(lower)) {
-    return { label: 'fast', emoji: '💨' };
-  }
-  // Balanced: everything else (sonnet, flash, gpt-5, standard models)
-  return { label: 'balanced', emoji: '⚡' };
-}
-
 function formatCost(n: number): string {
   return `$${n.toFixed(2)}`;
 }
@@ -251,8 +220,6 @@ interface ModelInfo {
   maxTokens: number;
   reasoning: boolean;
   input: string[];
-  tier: string;
-  tierEmoji: string;
   selected: boolean;
   intelligence?: number;
   codingScore?: number;
@@ -267,7 +234,6 @@ function toModelInfo(
   aaModels?: AAModelData[]
 ): ModelInfo {
   const aaMatch = aaModels ? matchAAModel(m.id, aaModels) : undefined;
-  const tier = classifyTier(m.id, m.name, aaMatch?.intelligence_index);
   const info: ModelInfo = {
     id: m.id,
     name: m.name,
@@ -277,8 +243,6 @@ function toModelInfo(
     maxTokens: m.maxTokens ?? 0,
     reasoning: !!m.reasoning,
     input: m.input ?? ['text'],
-    tier: tier.label,
-    tierEmoji: tier.emoji,
     selected: m.id === selectedModelId && providerId === selectedProvider,
   };
   if (aaMatch?.intelligence_index != null) info.intelligence = aaMatch.intelligence_index;
@@ -303,10 +267,9 @@ function formatHumanReadable(
     const ctx = `${formatContextWindow(m.contextWindow)} ctx`;
     const iq = m.intelligence != null ? `IQ:${m.intelligence}` : '';
     const spd = m.speed != null ? `${Math.round(m.speed)} t/s` : '';
-    const benchPart = iq || spd ? `${iq.padEnd(6)} ${spd.padEnd(8)}` : '               ';
-    lines.push(
-      `${prefix}${id} ${cost.padEnd(16)} ${ctx.padEnd(10)} ${benchPart} ${m.tierEmoji} ${m.tier}`
-    );
+    const reasoning = m.reasoning ? 'reasoning' : '';
+    const benchPart = iq || spd ? `${iq.padEnd(6)} ${spd.padEnd(8)}` : '';
+    lines.push(`${prefix}${id} ${cost.padEnd(16)} ${ctx.padEnd(10)} ${benchPart} ${reasoning}`);
   }
 
   const selected = models.find((m) => m.selected);

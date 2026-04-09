@@ -65,11 +65,11 @@ Remote targets (tray mode): `playwright-cli tab-list` shows remote tabs with com
 
 Use `models --json` to discover available models before creating scoops. The `scoop_scoop` tool accepts a `model` parameter.
 
-**Guidelines:**
+Intelligence, speed, and cost are independent dimensions. Use `models --json` to compare them and pick the best tradeoff for each task:
 
-- **Simple tasks** (file renames, formatting, grep-and-replace): use fast-tier models (haiku, mini, nano, flash-lite)
-- **Standard coding** (implement a function, fix a bug, write tests): use balanced-tier models (sonnet, flash, gpt-5)
-- **Complex work** (architecture design, multi-file refactors, debugging subtle issues): use frontier-tier models (opus, pro)
+- **Cost-sensitive tasks** (file renames, formatting, grep-and-replace): prefer low-cost models
+- **Complex tasks** (architecture design, multi-file refactors, debugging subtle issues): prefer high-intelligence models
+- **Latency-sensitive tasks** (interactive workflows, quick lookups): prefer high-speed models
 - **Default**: if unsure, use the same model as the cone (omit the model parameter)
 
 Example:
