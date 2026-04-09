@@ -595,6 +595,9 @@ export class SprinkleRenderer {
     if (!window.__slicc_sprinkles) window.__slicc_sprinkles = {};
     window.__slicc_sprinkles[sprinkleName] = this.bridge;
 
+    // Give the bridge a reference to the container so screenshot() works in inline mode.
+    this.bridge._container = this.container;
+
     // Parse HTML and set content (scripts won't execute via innerHTML).
     // Content is user/agent-authored .shtml — trusted, not external input.
     const wrapper = document.createElement('div');

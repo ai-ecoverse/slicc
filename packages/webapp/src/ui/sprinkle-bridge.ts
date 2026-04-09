@@ -30,6 +30,8 @@ export interface SprinkleBridgeAPI {
   rm(path: string): Promise<void>;
   /** Capture sprinkle DOM as base64 PNG data URL */
   screenshot(selector?: string): Promise<string>;
+  /** @internal Container element set by the renderer for inline mode screenshots. */
+  _container?: HTMLElement;
   /** Persist sprinkle state (survives side panel close/reopen). */
   setState(data: unknown): void;
   /** Read persisted sprinkle state (null if none saved). */
@@ -62,7 +64,7 @@ export class SprinkleBridge {
 
   /** Create a bridge API for a specific sprinkle. */
   createAPI(sprinkleName: string): SprinkleBridgeAPI {
-    return {
+    const api: SprinkleBridgeAPI = {
       name: sprinkleName,
       lick: (event: { action: string; data?: unknown } | string) => {
         const action = typeof event === 'string' ? event : event.action;
@@ -109,7 +111,33 @@ export class SprinkleBridge {
       rm: async (path: string) => {
         await this.fs.rm(path);
       },
-      screenshot: async () => '',
+      screenshot: async (selector?: string) => {
+        const container = api._container;
+        if (!container) return '';
+        const target = selector ? container.querySelector<HTMLElement>(selector) : container;
+        if (!target) throw new Error('Element not found: ' + (selector || 'container'));
+        const rect = target.getBoundingClientRect();
+        const w = Math.ceil(rect.width);
+        const h = Math.ceil(rect.height);
+        if (w === 0 || h === 0) throw new Error('Element has zero dimensions');
+        const canvas = document.createElement('canvas');
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
+        const ctx = canvas.getContext('2d')!;
+        ctx.scale(dpr, dpr);
+        const clone = (target as HTMLElement).cloneNode(true) as HTMLElement;
+        const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><foreignObject width="100%" height="100%">${new XMLSerializer().serializeToString(clone)}</foreignObject></svg>`;
+        return new Promise<string>((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => {
+            ctx.drawImage(img, 0, 0);
+            resolve(canvas.toDataURL('image/png'));
+          };
+          img.onerror = () => reject(new Error('Screenshot rendering failed'));
+          img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+        });
+      },
       setState: (data: unknown) => {
         try {
           localStorage.setItem(`slicc-sprinkle-state:${sprinkleName}`, JSON.stringify(data));
@@ -131,6 +159,7 @@ export class SprinkleBridge {
       },
       close: () => this.closeHandler(sprinkleName),
     };
+    return api;
   }
 
   /** Push data to a sprinkle's update listeners. */
