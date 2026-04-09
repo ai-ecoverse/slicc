@@ -31,6 +31,7 @@ import {
 import { createSayCommand } from './say-command.js';
 import { createAfplayCommand, createChimeCommand } from './afplay-command.js';
 import { createDebugCommand } from './debug-command.js';
+import { createModelsCommand } from './models-command.js';
 import { createNukeCommand } from './nuke-command.js';
 import type { BrowserAPI } from '../../cdp/index.js';
 export type {
@@ -81,6 +82,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createSayCommand(),
     createAfplayCommand(),
     createChimeCommand(),
+    createModelsCommand(),
     createNukeCommand(),
   ];
 
