@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { handleWorkerRequest } from '../src/index.js';
+import worker, { handleWorkerRequest } from '../src/index.js';
 import {
   FOLLOWER_ATTACH_RETRY_AFTER_MS,
   wantsJSON,
@@ -1155,11 +1155,11 @@ describe('tray worker skeleton', () => {
     });
   });
 
-  it('redirects bare apex sliccy.ai directly to www.sliccy.com (no double hop)', async () => {
+  it('redirects bare apex sliccy.ai to www.sliccy.ai at handleWorkerRequest level', async () => {
     const { env } = createTestHarness();
     const response = await handleWorkerRequest(new Request('https://sliccy.ai/'), env);
     expect(response.status).toBe(301);
-    expect(response.headers.get('Location')).toBe('https://www.sliccy.com/');
+    expect(response.headers.get('Location')).toBe('https://www.sliccy.ai/');
   });
 
   it('redirects apex sliccy.ai to www.sliccy.ai with 301 preserving path and query', async () => {
@@ -1167,13 +1167,6 @@ describe('tray worker skeleton', () => {
     const response = await handleWorkerRequest(new Request('https://sliccy.ai/some/path?q=1'), env);
     expect(response.status).toBe(301);
     expect(response.headers.get('Location')).toBe('https://www.sliccy.ai/some/path?q=1');
-  });
-
-  it('redirects bare www.sliccy.ai to www.sliccy.com with 301', async () => {
-    const { env } = createTestHarness();
-    const response = await handleWorkerRequest(new Request('https://www.sliccy.ai/'), env);
-    expect(response.status).toBe(301);
-    expect(response.headers.get('Location')).toBe('https://www.sliccy.com/');
   });
 
   it('does not redirect www.sliccy.ai with query params', async () => {
@@ -1302,5 +1295,91 @@ describe('API routes', () => {
     expect(res.status).toBe(404);
     const body = (await res.json()) as { error: string };
     expect(body.error).toContain('not available');
+  });
+});
+
+describe('X-Robots-Tag header', () => {
+  it('does NOT add x-robots-tag to root sliccy.ai redirect', async () => {
+    const { env } = createTestHarness();
+    const res = await worker.fetch(new Request('https://sliccy.ai/'), env);
+    expect(res.status).toBe(301);
+    expect(res.headers.get('Location')).toBe('https://www.sliccy.com/');
+    expect(res.headers.has('x-robots-tag')).toBe(false);
+  });
+
+  it('does NOT add x-robots-tag to root www.sliccy.ai redirect', async () => {
+    const { env } = createTestHarness();
+    const res = await worker.fetch(new Request('https://www.sliccy.ai/'), env);
+    expect(res.status).toBe(301);
+    expect(res.headers.get('Location')).toBe('https://www.sliccy.com/');
+    expect(res.headers.has('x-robots-tag')).toBe(false);
+  });
+
+  it('adds x-robots-tag: noindex to non-root sliccy.ai redirect', async () => {
+    const { env } = createTestHarness();
+    const res = await worker.fetch(new Request('https://sliccy.ai/some/path?q=1'), env);
+    expect(res.status).toBe(301);
+    expect(res.headers.get('Location')).toBe('https://www.sliccy.ai/some/path?q=1');
+    expect(res.headers.get('x-robots-tag')).toBe('noindex');
+  });
+
+  it('adds x-robots-tag: noindex to SPA fallback', async () => {
+    const { env } = createTestHarness();
+    const res = await worker.fetch(new Request('https://www.sliccy.ai/some/path'), env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-robots-tag')).toBe('noindex');
+  });
+
+  it('adds x-robots-tag: noindex to handoff page', async () => {
+    const { env } = createTestHarness();
+    const res = await worker.fetch(new Request('https://www.sliccy.ai/handoff'), env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-robots-tag')).toBe('noindex');
+  });
+
+  it('adds x-robots-tag: noindex to API routes', async () => {
+    const { env } = createTestHarness();
+    const res = await worker.fetch(new Request('https://www.sliccy.ai/api/runtime-config'), env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-robots-tag')).toBe('noindex');
+  });
+
+  it('adds x-robots-tag: noindex to tray POST', async () => {
+    const { env } = createTestHarness();
+    const res = await worker.fetch(
+      new Request('https://www.sliccy.ai/tray', { method: 'POST' }),
+      env
+    );
+    expect(res.status).toBe(201);
+    expect(res.headers.get('x-robots-tag')).toBe('noindex');
+  });
+
+  it('does NOT add x-robots-tag to WebSocket upgrade (101) responses', async () => {
+    const { env } = createTestHarness();
+    const created = await worker.fetch(
+      new Request('https://www.sliccy.ai/tray', { method: 'POST' }),
+      env
+    );
+    const session = (await created.json()) as {
+      capabilities: { controller: { url: string } };
+    };
+
+    const leaderAttach = await worker.fetch(
+      new Request(session.capabilities.controller.url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'cone-ws-test', runtime: 'cli' }),
+      }),
+      env
+    );
+    const leader = (await leaderAttach.json()) as { websocket: { url: string } };
+
+    const wsResponse = await worker.fetch(
+      new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }),
+      env
+    );
+    expect(wsResponse.status).toBe(101);
+    expect(wsResponse.headers.has('x-robots-tag')).toBe(false);
+    expect((wsResponse as unknown as { webSocket: unknown }).webSocket).toBeDefined();
   });
 });

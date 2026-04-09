@@ -47,16 +47,9 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
   const url = new URL(request.url);
 
   if (url.hostname === 'sliccy.ai') {
-    if (url.pathname === '/' && url.search === '') {
-      return Response.redirect('https://www.sliccy.com/', 301);
-    }
     const target = new URL(url.toString());
     target.hostname = 'www.sliccy.ai';
     return Response.redirect(target.toString(), 301);
-  }
-
-  if (url.hostname === 'www.sliccy.ai' && url.pathname === '/' && url.search === '') {
-    return Response.redirect('https://www.sliccy.com', 301);
   }
 
   if (url.pathname === '/tray' && request.method === 'POST') {
@@ -207,8 +200,26 @@ async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
 }
 
 const worker = {
-  fetch(request: Request, env: WorkerEnv): Promise<Response> {
-    return handleWorkerRequest(request, env);
+  async fetch(request: Request, env: WorkerEnv): Promise<Response> {
+    const url = new URL(request.url);
+
+    // Root redirects to www.sliccy.com — indexable, return as-is
+    if (url.pathname === '/' && url.search === '') {
+      if (url.hostname === 'sliccy.ai') {
+        return Response.redirect('https://www.sliccy.com/', 301);
+      }
+      if (url.hostname === 'www.sliccy.ai') {
+        return Response.redirect('https://www.sliccy.com/', 301);
+      }
+    }
+
+    const response = await handleWorkerRequest(request, env);
+    if (response.status === 101) {
+      return response;
+    }
+    const mutable = new Response(response.body, response);
+    mutable.headers.set('X-Robots-Tag', 'noindex');
+    return mutable;
   },
 };
 
