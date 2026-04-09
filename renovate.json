@@ -22,6 +22,10 @@
     {
       "matchPackagePrefixes": ["@xterm/"],
       "groupName": "xterm packages"
+    },
+    {
+      "matchPackageNames": ["s1ntoneli/AppUpdater"],
+      "allowedVersions": "<1.0.0"
     }
   ]
 }
