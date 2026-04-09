@@ -5,6 +5,29 @@ import {
   nodeRuntimeState,
 } from './supplemental-commands/shared.js';
 
+const NODE_BUILTINS_UNAVAILABLE = new Set([
+  'http',
+  'https',
+  'net',
+  'tls',
+  'dgram',
+  'dns',
+  'cluster',
+  'worker_threads',
+  'child_process',
+  'crypto',
+  'os',
+  'stream',
+  'zlib',
+  'vm',
+  'v8',
+  'perf_hooks',
+  'readline',
+  'repl',
+  'tty',
+  'inspector',
+]);
+
 /** Extract all require('...') specifiers from code via regex pre-scan. */
 function extractRequireSpecifiers(code: string): string[] {
   const re = /require\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
@@ -153,9 +176,14 @@ export async function executeJsCode(
     // Pre-scan code for require() calls and pre-fetch all modules before execution
     // (extension mode handles this inside the sandbox)
     const specifiers = extractRequireSpecifiers(code);
+    // Filter out Node built-ins we handle locally
+    const builtinsLocal = new Set(['fs', 'process', 'buffer']);
+    const filteredSpecifiers = specifiers
+      .map((s) => (s.startsWith('node:') ? s.slice(5) : s))
+      .filter((s) => !builtinsLocal.has(s) && !NODE_BUILTINS_UNAVAILABLE.has(s));
     const cache = (nodeRuntimeState.__requireCache ??
       (nodeRuntimeState.__requireCache = Object.create(null))) as Record<string, unknown>;
-    const uncached = specifiers.filter((id) => !(id in cache));
+    const uncached = filteredSpecifiers.filter((id) => !(id in cache));
     if (uncached.length > 0) {
       const results = await Promise.allSettled(
         uncached.map(async (id) => {
@@ -172,6 +200,27 @@ export async function executeJsCode(
   }
 
   const requireShim = (id: string): unknown => {
+    const bareId = id.startsWith('node:') ? id.slice(5) : id;
+    // Node built-in interception
+    if (bareId === 'fs') return fsBridge;
+    if (bareId === 'process') return processShim;
+    if (bareId === 'buffer') return { Buffer: globalThis.Buffer };
+    if (bareId === 'path') {
+      // Check cache first (path-browserify may have been pre-fetched)
+      const cache = nodeRuntimeState.__requireCache as Record<string, unknown> | undefined;
+      if (cache && 'path' in cache) return cache['path'];
+      if (cache && id in cache) return cache[id];
+      // Will be handled by esm.sh pre-fetch if statically referenced
+      throw new Error(
+        `require('${id}'): path module not pre-loaded. Add require('path') as a static import.`
+      );
+    }
+    if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) {
+      throw new Error(
+        `require('${id}'): Node built-in '${bareId}' is not available in the browser environment.`
+      );
+    }
+    // Regular npm package cache lookup
     const reqCache = nodeRuntimeState.__requireCache as Record<string, unknown> | undefined;
     if (reqCache && id in reqCache) return reqCache[id];
     throw new Error(
@@ -211,13 +260,21 @@ export async function executeJsCode(
           self.addEventListener('message', handler);
           parent.postMessage({ type: 'shell_exec', id, command }, '*');
         });
+        const __builtinsLocal = new Set(['fs', 'process', 'buffer']);
+        const __NODE_BUILTINS_UNAVAILABLE = new Set([
+          'http', 'https', 'net', 'tls', 'dgram', 'dns', 'cluster',
+          'worker_threads', 'child_process', 'crypto', 'os', 'stream',
+          'zlib', 'vm', 'v8', 'perf_hooks', 'readline', 'repl', 'tty', 'inspector'
+        ]);
         const __requireSpecifiers = (function() {
           const re = /require\\s*\\(\\s*['"]([^'"]+)['"]\\s*\\)/g;
           const code = ${JSON.stringify(code)};
           const specs = [];
           let m;
           while ((m = re.exec(code)) !== null) specs.push(m[1]);
-          return [...new Set(specs)];
+          return [...new Set(specs)]
+            .map(s => s.startsWith('node:') ? s.slice(5) : s)
+            .filter(s => !__builtinsLocal.has(s) && !__NODE_BUILTINS_UNAVAILABLE.has(s));
         })();
         const __requireCache = Object.create(null);
         async function __loadModule(id) {
@@ -245,6 +302,14 @@ export async function executeJsCode(
           } catch(e) { /* will throw when require() is called */ }
         }));
         const require = (id) => {
+          const bareId = id.startsWith('node:') ? id.slice(5) : id;
+          if (bareId === 'fs') return fs;
+          if (bareId === 'process') return process;
+          if (bareId === 'buffer') return { Buffer: globalThis.Buffer || (typeof Buffer !== 'undefined' ? Buffer : undefined) };
+          if (__NODE_BUILTINS_UNAVAILABLE.has(bareId)) {
+            throw new Error("require('" + id + "'): Node built-in '" + bareId + "' is not available in the browser environment.");
+          }
+          if (bareId in __requireCache) return __requireCache[bareId];
           if (id in __requireCache) return __requireCache[id];
           throw new Error("require('" + id + "'): module not pre-loaded. Use a string literal or await import('https://esm.sh/" + id + "') directly.");
         };
