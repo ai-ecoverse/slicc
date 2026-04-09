@@ -36,6 +36,7 @@ Type `commands` in the terminal for the full list. Key commands:
 - **webhook/crontask** — set up licks (external event triggers)
 - **sprinkle** — manage sprinkles: `list`, `open`, `close`, `send`, `chat`
 - **oauth-token** — get OAuth access token for a provider
+- **cost** — show session cost breakdown (tokens, cache, cost per cone/scoop)
 - **git** — full git support
 - **node -e / python3 -c** — execute JS or Python
 - **serve <dir>** — open VFS app directory in browser tab
