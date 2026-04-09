@@ -5,12 +5,9 @@ import { FsError } from '../../src/fs/types.js';
 
 describe('VirtualFS symlinks & watcher', () => {
   let vfs: VirtualFS;
-  let dbCounter = 0;
-
   beforeEach(async () => {
-    // Create fresh VFS with unique DB name for test isolation
     vfs = await VirtualFS.create({
-      dbName: `test-vfs-symlinks-${dbCounter++}`,
+      dbName: 'test-vfs-symlinks',
       wipe: true,
     });
   });
