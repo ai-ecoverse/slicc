@@ -78,12 +78,12 @@ When `WORKER_BASE_URL` is set for the CLI/Electron server, the standalone browse
 
 ## Ports (CLI Mode Only)
 
-| Port  | Service            | Mode                        |
-| ----- | ------------------ | --------------------------- |
-| 5710  | UI server          | CLI + Electron embedded app |
-| 9222  | Chrome CDP         | CLI only                    |
-| 9223  | Electron CDP       | Electron float only         |
-| 24679 | Vite HMR WebSocket | CLI/Electron dev mode       |
+| Port | Service            | Mode                                    |
+| ---- | ------------------ | --------------------------------------- |
+| 5710 | UI server          | CLI + Electron embedded app             |
+| 9222 | Chrome CDP         | CLI only                                |
+| 9223 | Electron CDP       | Electron float only                     |
+| —    | Vite HMR WebSocket | Shares UI server port via `/__vite_hmr` |
 
 ## Environment Variables
 
@@ -217,7 +217,7 @@ This launches:
 
 - Express server on port 5710
 - Chrome with remote debugging on port 9222
-- Vite HMR WebSocket on port 24679
+- Vite HMR WebSocket on the same server via `/__vite_hmr`
 
 ### Electron float debugging
 

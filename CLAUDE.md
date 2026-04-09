@@ -85,7 +85,7 @@ Use the ice cream terms in code review comments and docs when they match the dom
 - Auth uses `git config github.token <PAT>`.
 - Network behavior differs by runtime: CLI routes git/fetch traffic through `/api/fetch-proxy`; the extension uses direct fetch.
 
-**Requires Node >= 22** (LTS). Ports: 5710 (UI), 9222 (Chrome CDP), 9223 (Electron CDP), 24679 (Vite HMR)
+**Requires Node >= 22** (LTS). Ports: 5710 (UI), 9222 (Chrome CDP), 9223 (Electron CDP). Vite HMR shares the UI server via `/__vite_hmr`.
 
 ### Parallel Instances
 
@@ -96,7 +96,7 @@ PORT=5720 npm run dev   # Second instance on port 5720
 PORT=5730 npm run dev   # Third instance on port 5730
 ```
 
-Each instance gets an isolated Chrome profile (keyed by port), separate CDP port (auto-detected), and separate HMR port. No shared state between instances.
+Each instance gets an isolated Chrome profile (keyed by port) and separate CDP port (auto-detected). HMR shares the UI server. No shared state between instances.
 
 ## Philosophy
 
