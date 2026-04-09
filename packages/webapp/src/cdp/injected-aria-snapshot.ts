@@ -740,6 +740,18 @@ export const INJECTED_ARIA_SNAPSHOT_SCRIPT = `(function() {
       // If not visible for aria, skip entirely (including children)
       if (!visible) return;
 
+      // Emit placeholder for iframes/frames — don't recurse into their document
+      if (element.nodeName === 'IFRAME' || element.nodeName === 'FRAME') {
+        var iframeNode = {
+          role: 'iframe',
+          name: element.getAttribute('title') || element.getAttribute('name') || '',
+          children: [],
+          value: element.getAttribute('src') || ''
+        };
+        ariaNode.children.push(iframeNode);
+        return;
+      }
+
       var ariaChildren = [];
       if (element.hasAttribute('aria-owns')) {
         var ids = element.getAttribute('aria-owns').split(/\\s+/);
