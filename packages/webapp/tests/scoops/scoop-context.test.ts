@@ -421,13 +421,12 @@ describe('ScoopContext clearMessages', () => {
   });
 
   it('calls agent.clearMessages() when agent exists', () => {
-    const mockClearMessages = vi.fn();
     injectMockAgent(ctx, async () => {});
-    (ctx as any).agent.clearMessages = mockClearMessages;
+    (ctx as any).agent.state.messages = [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }];
 
     ctx.clearMessages();
 
-    expect(mockClearMessages).toHaveBeenCalled();
+    expect((ctx as any).agent.state.messages).toEqual([]);
   });
 
   it('handles null agent gracefully (no throw)', () => {
@@ -456,12 +455,19 @@ describe('ScoopContext context overflow recovery', () => {
   ): { replaceMessages: ReturnType<typeof vi.fn>; mockPrompt: ReturnType<typeof vi.fn> } {
     const replaceMessages = vi.fn();
     const promptFn = vi.fn(mockPrompt);
+    const stateData = { messages: [] as any[] };
+    const state = new Proxy(stateData, {
+      set(target, prop, value) {
+        if (prop === 'messages') replaceMessages(value);
+        (target as any)[prop] = value;
+        return true;
+      },
+    });
     const agent = {
       prompt: promptFn,
       abort: vi.fn(),
       subscribe: vi.fn(() => () => {}),
-      replaceMessages,
-      state: { messages: [] },
+      state,
     };
     (ctx as any).agent = agent;
     (ctx as any).status = 'ready';
@@ -1047,12 +1053,19 @@ describe('ScoopContext image error recovery', () => {
   ): { replaceMessages: ReturnType<typeof vi.fn>; mockPrompt: ReturnType<typeof vi.fn> } {
     const replaceMessages = vi.fn();
     const promptFn = vi.fn(mockPrompt);
+    const stateData = { messages: [] as any[] };
+    const state = new Proxy(stateData, {
+      set(target, prop, value) {
+        if (prop === 'messages') replaceMessages(value);
+        (target as any)[prop] = value;
+        return true;
+      },
+    });
     const agent = {
       prompt: promptFn,
       abort: vi.fn(),
       subscribe: vi.fn(() => () => {}),
-      replaceMessages,
-      state: { messages: [] },
+      state,
     };
     (ctx as any).agent = agent;
     (ctx as any).status = 'ready';
@@ -1410,15 +1423,13 @@ describe('ScoopContext.reloadSkills', () => {
     const callbacks = createMockCallbacks();
     const ctx = new ScoopContext(testScoop, callbacks, {} as VirtualFS);
 
-    // Inject mock agent with setSystemPrompt spy
-    const setSystemPrompt = vi.fn();
+    // Inject mock agent with state that tracks systemPrompt changes
     const agent = {
       prompt: vi.fn(),
       abort: vi.fn(),
       subscribe: vi.fn(() => () => {}),
       followUp: vi.fn(),
       clearAllQueues: vi.fn(),
-      setSystemPrompt,
       state: { isStreaming: false, systemPrompt: 'old prompt' },
     };
     (ctx as any).agent = agent;
@@ -1438,8 +1449,8 @@ describe('ScoopContext.reloadSkills', () => {
 
     await ctx.reloadSkills();
 
-    expect(setSystemPrompt).toHaveBeenCalledOnce();
-    const newPrompt = setSystemPrompt.mock.calls[0]![0] as string;
+    const newPrompt = agent.state.systemPrompt;
+    expect(newPrompt).not.toBe('old prompt');
     expect(newPrompt).toContain('test-skill');
     expect(newPrompt).toContain('A test skill');
   });

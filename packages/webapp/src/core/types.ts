@@ -151,9 +151,9 @@ export interface AgentState {
   tools: AgentTool[];
   messages: AgentMessage[];
   isStreaming: boolean;
-  streamMessage: AgentMessage | null;
-  pendingToolCalls: Set<string>;
-  error?: string;
+  streamingMessage: AgentMessage | null;
+  pendingToolCalls: ReadonlySet<string>;
+  errorMessage?: string;
 }
 
 // ─── Agent Events ───────────────────────────────────────────────────────────
