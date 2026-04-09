@@ -16,6 +16,20 @@ export interface SprinkleBridgeAPI {
   off(event: 'update', callback: (data: unknown) => void): void;
   /** Read a file from VFS */
   readFile(path: string): Promise<string>;
+  /** Write text content to a VFS file */
+  writeFile(path: string, content: string): Promise<void>;
+  /** List directory entries */
+  readDir(path: string): Promise<Array<{ name: string; type: string }>>;
+  /** Check if a path exists */
+  exists(path: string): Promise<boolean>;
+  /** Get file/directory metadata */
+  stat(path: string): Promise<{ type: string; size: number }>;
+  /** Create a directory (recursive) */
+  mkdir(path: string): Promise<void>;
+  /** Remove a file */
+  rm(path: string): Promise<void>;
+  /** Capture sprinkle DOM as base64 PNG data URL */
+  screenshot(selector?: string): Promise<string>;
   /** Persist sprinkle state (survives side panel close/reopen). */
   setState(data: unknown): void;
   /** Read persisted sprinkle state (null if none saved). */
@@ -77,6 +91,25 @@ export class SprinkleBridge {
       },
       readFile: async (path: string) =>
         (await this.fs.readFile(path, { encoding: 'utf-8' })) as string,
+      writeFile: async (path: string, content: string) => {
+        await this.fs.writeFile(path, content);
+      },
+      readDir: async (path: string) => {
+        const entries = await this.fs.readDir(path);
+        return entries.map((e) => ({ name: e.name, type: e.type }));
+      },
+      exists: async (path: string) => this.fs.exists(path),
+      stat: async (path: string) => {
+        const s = await this.fs.stat(path);
+        return { type: s.type, size: s.size };
+      },
+      mkdir: async (path: string) => {
+        await this.fs.mkdir(path, { recursive: true });
+      },
+      rm: async (path: string) => {
+        await this.fs.rm(path);
+      },
+      screenshot: async () => '',
       setState: (data: unknown) => {
         try {
           localStorage.setItem(`slicc-sprinkle-state:${sprinkleName}`, JSON.stringify(data));

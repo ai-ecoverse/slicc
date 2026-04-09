@@ -105,6 +105,111 @@ window.slicc = {
       parent.postMessage({ type: 'sprinkle-readfile', id: id, path: path }, '*');
     });
   },
+  writeFile: function(path, content) {
+    return new Promise(function(resolve, reject) {
+      var id = 'wf-' + Math.random().toString(36).slice(2);
+      function handler(event) {
+        if (event.data && event.data.type === 'sprinkle-writefile-response' && event.data.id === id) {
+          removeEventListener('message', handler);
+          if (event.data.error) reject(new Error(event.data.error)); else resolve();
+        }
+      }
+      addEventListener('message', handler);
+      parent.postMessage({ type: 'sprinkle-writefile', id: id, path: path, content: content }, '*');
+    });
+  },
+  readDir: function(path) {
+    return new Promise(function(resolve, reject) {
+      var id = 'rd-' + Math.random().toString(36).slice(2);
+      function handler(event) {
+        if (event.data && event.data.type === 'sprinkle-readdir-response' && event.data.id === id) {
+          removeEventListener('message', handler);
+          if (event.data.error) reject(new Error(event.data.error)); else resolve(event.data.entries);
+        }
+      }
+      addEventListener('message', handler);
+      parent.postMessage({ type: 'sprinkle-readdir', id: id, path: path }, '*');
+    });
+  },
+  exists: function(path) {
+    return new Promise(function(resolve, reject) {
+      var id = 'ex-' + Math.random().toString(36).slice(2);
+      function handler(event) {
+        if (event.data && event.data.type === 'sprinkle-exists-response' && event.data.id === id) {
+          removeEventListener('message', handler);
+          if (event.data.error) reject(new Error(event.data.error)); else resolve(event.data.exists);
+        }
+      }
+      addEventListener('message', handler);
+      parent.postMessage({ type: 'sprinkle-exists', id: id, path: path }, '*');
+    });
+  },
+  stat: function(path) {
+    return new Promise(function(resolve, reject) {
+      var id = 'st-' + Math.random().toString(36).slice(2);
+      function handler(event) {
+        if (event.data && event.data.type === 'sprinkle-stat-response' && event.data.id === id) {
+          removeEventListener('message', handler);
+          if (event.data.error) reject(new Error(event.data.error)); else resolve(event.data.stat);
+        }
+      }
+      addEventListener('message', handler);
+      parent.postMessage({ type: 'sprinkle-stat', id: id, path: path }, '*');
+    });
+  },
+  mkdir: function(path) {
+    return new Promise(function(resolve, reject) {
+      var id = 'mk-' + Math.random().toString(36).slice(2);
+      function handler(event) {
+        if (event.data && event.data.type === 'sprinkle-mkdir-response' && event.data.id === id) {
+          removeEventListener('message', handler);
+          if (event.data.error) reject(new Error(event.data.error)); else resolve();
+        }
+      }
+      addEventListener('message', handler);
+      parent.postMessage({ type: 'sprinkle-mkdir', id: id, path: path }, '*');
+    });
+  },
+  rm: function(path) {
+    return new Promise(function(resolve, reject) {
+      var id = 'rm-' + Math.random().toString(36).slice(2);
+      function handler(event) {
+        if (event.data && event.data.type === 'sprinkle-rm-response' && event.data.id === id) {
+          removeEventListener('message', handler);
+          if (event.data.error) reject(new Error(event.data.error)); else resolve();
+        }
+      }
+      addEventListener('message', handler);
+      parent.postMessage({ type: 'sprinkle-rm', id: id, path: path }, '*');
+    });
+  },
+  screenshot: function(selector) {
+    return new Promise(function(resolve, reject) {
+      try {
+        var target = selector ? document.querySelector(selector) : document.body;
+        if (!target) { reject(new Error('Element not found: ' + selector)); return; }
+        var rect = target.getBoundingClientRect();
+        var w = Math.ceil(rect.width);
+        var h = Math.ceil(rect.height);
+        if (w === 0 || h === 0) { reject(new Error('Element has zero dimensions')); return; }
+        var canvas = document.createElement('canvas');
+        var dpr = window.devicePixelRatio || 1;
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
+        var ctx = canvas.getContext('2d');
+        ctx.scale(dpr, dpr);
+        var clone = target.cloneNode(true);
+        var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '">' +
+          '<foreignObject width="100%" height="100%">' +
+          new XMLSerializer().serializeToString(clone) +
+          '</foreignObject></svg>';
+        var img = new Image();
+        img.onload = function() { ctx.drawImage(img, 0, 0); resolve(canvas.toDataURL('image/png')); };
+        img.onerror = function() { reject(new Error('Screenshot rendering failed')); };
+        img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+      } catch(e) { reject(e); }
+    });
+  },
   setState: function(data) {
     window.__slicc_state = data;
     parent.postMessage({ type: 'sprinkle-set-state', data: data }, '*');
@@ -163,6 +268,16 @@ function buildNestedBridgeScript(savedState, savedStorage, name) {
     'window.__slicc_listeners = new Set();' +
     'window.__slicc_name = ' + nameJson + ';' +
     'window.__slicc_state = ' + stateJson + ';' +
+    'var _cbId = 0, _cbs = {};' +
+    'function _vfsCall(type, params, extractResult) {' +
+      'return new Promise(function(resolve, reject) {' +
+        'var id = ++_cbId;' +
+        '_cbs[id] = function(msg) { if (msg.error) reject(new Error(msg.error)); else resolve(extractResult ? extractResult(msg) : undefined); };' +
+        'var m = { type: type, id: id };' +
+        'if (params) { for (var k in params) m[k] = params[k]; }' +
+        'parent.postMessage(m, "*");' +
+      '});' +
+    '}' +
     'window.slicc = {' +
       'get name() { return window.__slicc_name; },' +
       'lick: function(event) {' +
@@ -172,17 +287,35 @@ function buildNestedBridgeScript(savedState, savedStorage, name) {
       '},' +
       'on: function(event, callback) { if (event === "update") window.__slicc_listeners.add(callback); },' +
       'off: function(event, callback) { if (event === "update") window.__slicc_listeners.delete(callback); },' +
-      'readFile: function(path) {' +
+      'readFile: function(path) { return _vfsCall("sprinkle-readfile", { path: path }, function(m) { return m.content; }); },' +
+      'writeFile: function(path, content) { return _vfsCall("sprinkle-writefile", { path: path, content: content }); },' +
+      'readDir: function(path) { return _vfsCall("sprinkle-readdir", { path: path }, function(m) { return m.entries; }); },' +
+      'exists: function(path) { return _vfsCall("sprinkle-exists", { path: path }, function(m) { return m.exists; }); },' +
+      'stat: function(path) { return _vfsCall("sprinkle-stat", { path: path }, function(m) { return m.stat; }); },' +
+      'mkdir: function(path) { return _vfsCall("sprinkle-mkdir", { path: path }); },' +
+      'rm: function(path) { return _vfsCall("sprinkle-rm", { path: path }); },' +
+      'screenshot: function(selector) {' +
         'return new Promise(function(resolve, reject) {' +
-          'var id = "rf-" + Math.random().toString(36).slice(2);' +
-          'function handler(event) {' +
-            'if (event.data && event.data.type === "sprinkle-readfile-response" && event.data.id === id) {' +
-              'removeEventListener("message", handler);' +
-              'if (event.data.error) reject(new Error(event.data.error)); else resolve(event.data.content);' +
-            '}' +
-          '}' +
-          'addEventListener("message", handler);' +
-          'parent.postMessage({ type: "sprinkle-readfile", id: id, path: path }, "*");' +
+          'try {' +
+            'var target = selector ? document.querySelector(selector) : document.body;' +
+            'if (!target) { reject(new Error("Element not found: " + selector)); return; }' +
+            'var rect = target.getBoundingClientRect();' +
+            'var w = Math.ceil(rect.width); var h = Math.ceil(rect.height);' +
+            'if (w === 0 || h === 0) { reject(new Error("Element has zero dimensions")); return; }' +
+            'var canvas = document.createElement("canvas");' +
+            'var dpr = window.devicePixelRatio || 1;' +
+            'canvas.width = w * dpr; canvas.height = h * dpr;' +
+            'var ctx = canvas.getContext("2d"); ctx.scale(dpr, dpr);' +
+            'var clone = target.cloneNode(true);' +
+            'var svg = \'<svg xmlns="http://www.w3.org/2000/svg" width="\' + w + \'" height="\' + h + \'">\' +' +
+              '\'<foreignObject width="100%" height="100%">\' +' +
+              'new XMLSerializer().serializeToString(clone) +' +
+              '\'</foreignObject></svg>\';' +
+            'var img = new Image();' +
+            'img.onload = function() { ctx.drawImage(img, 0, 0); resolve(canvas.toDataURL("image/png")); };' +
+            'img.onerror = function() { reject(new Error("Screenshot rendering failed")); };' +
+            'img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);' +
+          '} catch(e) { reject(e); }' +
         '});' +
       '},' +
       'setState: function(data) { window.__slicc_state = data; parent.postMessage({ type: "sprinkle-set-state", data: data }, "*"); },' +
@@ -196,6 +329,8 @@ function buildNestedBridgeScript(savedState, savedStorage, name) {
       'if (!msg || !msg.type) return;' +
       'if (msg.type === "sprinkle-update") {' +
         'window.__slicc_listeners.forEach(function(cb) { try { cb(msg.data); } catch(err) {} });' +
+      '} else if (msg.id && _cbs[msg.id]) {' +
+        'var cb = _cbs[msg.id]; delete _cbs[msg.id]; cb(msg);' +
       '}' +
     '});' +
   '})();';
@@ -291,8 +426,13 @@ addEventListener('message', function(e) {
     });
   }
 
-  // Forward readfile responses to nested child iframe
-  if (msg.type === 'sprinkle-readfile-response') {
+  // Forward VFS responses to nested child iframe
+  var responseTypes = [
+    'sprinkle-readfile-response', 'sprinkle-writefile-response',
+    'sprinkle-readdir-response', 'sprinkle-exists-response',
+    'sprinkle-stat-response', 'sprinkle-mkdir-response', 'sprinkle-rm-response'
+  ];
+  if (responseTypes.indexOf(msg.type) !== -1) {
     if (window.__slicc_childIframe && window.__slicc_childIframe.contentWindow) {
       window.__slicc_childIframe.contentWindow.postMessage(msg, '*');
     }
@@ -315,6 +455,8 @@ addEventListener('message', function(e) {
     var bridgeTypes = [
       'sprinkle-lick', 'sprinkle-set-state', 'sprinkle-close',
       'sprinkle-open', 'sprinkle-readfile',
+      'sprinkle-writefile', 'sprinkle-readdir', 'sprinkle-exists',
+      'sprinkle-stat', 'sprinkle-mkdir', 'sprinkle-rm',
       'sprinkle-storage-set', 'sprinkle-storage-remove', 'sprinkle-storage-clear',
       'inline-sprinkle-lick', 'inline-sprinkle-height'
     ];

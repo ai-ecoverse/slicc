@@ -50,6 +50,14 @@ The cone will send you a message with the lick action and your sprinkle name. On
 - `slicc.on('update', function(data) {...})` — receive data sent via `sprinkle send`
 - `slicc.name` — the sprinkle's name
 - `slicc.close()` — close the sprinkle
+- `slicc.readFile(path)` — read a VFS file (returns `Promise<string>`)
+- `slicc.writeFile(path, content)` — write text content to a VFS file
+- `slicc.readDir(path)` — list directory entries (returns `Promise<Array<{name, type}>>`)
+- `slicc.exists(path)` — check if path exists (returns `Promise<boolean>`)
+- `slicc.stat(path)` — get file metadata (returns `Promise<{type, size}>`)
+- `slicc.mkdir(path)` — create a directory (recursive)
+- `slicc.rm(path)` — remove a file
+- `slicc.screenshot(selector?)` — capture sprinkle DOM as base64 PNG data URL
 
 **onclick attributes**: Always use `slicc` — e.g. `onclick="slicc.lick({action: 'add-year'})"`. The `slicc` variable is automatically resolved per-sprinkle, so multiple sprinkles won't collide. Do NOT use `bridge` or any other variable name in onclick.
 
