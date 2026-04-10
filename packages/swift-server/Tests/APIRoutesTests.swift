@@ -194,7 +194,9 @@ final class APIRoutesTests: XCTestCase {
             logDir: nil,
             logDirectoryURL: nil,
             prompt: nil,
-            staticRoot: nil
+            staticRoot: nil,
+            envFile: nil,
+            envFileURL: nil
         )
     }
 

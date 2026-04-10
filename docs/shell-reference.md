@@ -42,6 +42,7 @@ Custom commands implemented in TypeScript and registered in just-bash.
 | **debug**                                   | `debug-command.ts`         | Toggle Terminal/Memory tabs in extension mode                                                                                               | `debug on`, `debug off`, no args = show state; extension-only (not registered in CLI)                                                       |
 | **cost**                                    | `cost-command.ts`          | Show session cost breakdown per scoop/cone                                                                                                  | `--json`, `-h`                                                                                                                              |
 | **models**                                  | `models-command.ts`        | List available LLM models with pricing and benchmarks                                                                                       | `--all`, `--json`, `--provider <id>`, `--refresh`                                                                                           |
+| **secret**                                  | `secret-command.ts`        | Manage secrets (API keys, tokens) with domain-scoped injection                                                                              | `list`, `set <name>`, `delete <name>`, `test <name> <url>`                                                                                  |
 | **git**                                     | (isomorphic-git)           | Full git support                                                                                                                            | `git clone`, `git commit`, `git push`, etc.                                                                                                 |
 
 **Example usage**:
@@ -592,6 +593,15 @@ console.log(files);
 
 # Schedule a task
 crontask add "cleanup" "0 3 * * 0" cleaner-scoop "Remove old files from /tmp"
+
+# List configured secrets (names + domains, never values)
+secret list
+
+# Check if a secret would be injected for a URL
+secret test GITHUB_TOKEN https://api.github.com/repos/foo/bar
+
+# Show instructions for adding a new secret
+secret set API_KEY
 ```
 
 ---

@@ -405,6 +405,47 @@ Scoop removal / app clear
 | `agent-sessions`       | 1       | sessions                                                      | Core agent session history: persisted `SessionData` (`AgentMessage[]` + config + timestamps) per scoop, keyed by JID; loaded on scoop init, saved on agent_end |
 | `slicc-fs-global`      | 1       | config                                                        | Git global config storage                                                                                                                                      |
 
+## Secrets & Secret Injection
+
+SLICC prevents the agent from seeing or exfiltrating real secret values (API keys, tokens, credentials). Secrets are stored server-side and injected at the fetch-proxy boundary, scoped to authorized domains only.
+
+### Masking Engine
+
+Each secret is masked using `HMAC-SHA256(session_id + secret_name, secret_value)`. The result is format-preserving — known prefixes like `ghp_`, `sk-`, `AKIA` are kept, and the hash portion matches the original value's length and character set. Masks are deterministic within a session (the agent can compare values) but differ across sessions (no lookup-table attacks).
+
+### Scrubbing Pipeline
+
+Real secret values are scrubbed at every output boundary before reaching the agent:
+
+1. **Shell environment** — env vars contain masked values, not real ones
+2. **Tool output** — all `bash`, `read_file`, and other tool results are scanned for real values and replaced with masks
+3. **Fetch proxy (outbound)** — masked values in request headers are unmasked if the domain matches; 403 if not. Masked values in request bodies are unmasked for matching domains and passed through unchanged otherwise
+4. **Fetch proxy (inbound)** — response bodies and headers are scanned for real values and replaced with masks
+5. **Chat messages** — user-typed real values are scrubbed before entering the agent conversation
+
+### Storage Backends
+
+| Backend        | Runtime                     | Storage                                                        | Encryption                           |
+| -------------- | --------------------------- | -------------------------------------------------------------- | ------------------------------------ |
+| macOS Keychain | swift-server                | `SecItemAdd`/`SecItemCopyMatching`, service `ai.sliccy.slicc`  | Login keychain (encrypted at rest)   |
+| `.env` file    | node-server (all platforms) | `~/.slicc/secrets.env`, `KEY=VALUE` + `KEY_DOMAINS=...` format | Filesystem permissions (`chmod 600`) |
+
+Both implement the same `SecretStore` interface: `get(name)`, `set(name, value, config)`, `delete(name)`, `list()`.
+
+File path resolution: `--env-file <path>` CLI flag → `SLICC_SECRETS_FILE` env var → `~/.slicc/secrets.env`.
+
+### Key Source Files
+
+| File                                                                | Purpose                                                        |
+| ------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `packages/node-server/src/secrets/`                                 | Node `.env` SecretStore, masking engine, domain matching       |
+| `packages/swift-server/Sources/`                                    | Swift Keychain SecretStore, masking engine                     |
+| `packages/node-server/src/index.ts`                                 | Fetch proxy secret injection (node-server)                     |
+| `packages/webapp/src/shell/supplemental-commands/secret-command.ts` | `secret` shell command                                         |
+| `packages/webapp/src/scoops/scoop-context.ts`                       | Shell env population with masked values, tool output scrubbing |
+
+See [docs/secrets.md](secrets.md) for user-facing setup instructions.
+
 ## File-Finding Guide
 
 ### Virtual Filesystem Changes

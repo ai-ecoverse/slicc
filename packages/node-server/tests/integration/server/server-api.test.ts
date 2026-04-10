@@ -338,6 +338,33 @@ describe('shared server API conformance', () => {
     openSockets.add(socket);
   });
 
+  it('lists secrets via GET /api/secrets', async () => {
+    const list = await fetchFromServer('/api/secrets');
+    expect(list.status).toBe(200);
+    const entries = (await list.json()) as Array<{ name: string; domains: string[] }>;
+    expect(Array.isArray(entries)).toBe(true);
+    // Value must never be returned
+    for (const entry of entries) {
+      expect((entry as Record<string, unknown>)['value']).toBeUndefined();
+    }
+  });
+
+  it('rejects POST /api/secrets (write route removed)', async () => {
+    const res = await fetchFromServer('/api/secrets', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'INTTEST_BLOCKED', value: 'v', domains: ['d.com'] }),
+    });
+    // Express returns 404 for unmatched routes
+    expect(res.status).toBeGreaterThanOrEqual(400);
+  });
+
+  it('rejects DELETE /api/secrets/:name (write route removed)', async () => {
+    const res = await fetchFromServer('/api/secrets/INTTEST_BLOCKED', { method: 'DELETE' });
+    // Express returns 404 for unmatched routes
+    expect(res.status).toBeGreaterThanOrEqual(400);
+  });
+
   it('returns structured responses from lick-backed REST endpoints based on browser connectivity', async () => {
     const endpoints = [
       {

@@ -20,6 +20,7 @@ import { createCrontaskCommand } from './crontask-command.js';
 import { createFsWatchCommand } from './fswatch-command.js';
 import { createSprinkleCommand } from './sprinkle-command.js';
 import { createOAuthTokenCommand } from './oauth-token-command.js';
+import { createSecretCommand } from './secret-command.js';
 import { createRsyncCommand } from './rsync-command.js';
 import { createWhichCommand } from './which-command.js';
 import { createZipCommand } from './zip-command.js';
@@ -76,6 +77,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createUnameCommand(),
     createManCommand(),
     createOAuthTokenCommand(),
+    createSecretCommand(),
     createRsyncCommand({ fs: options.fs }),
     createScreencaptureCommand(),
     createPbcopyCommand(),
