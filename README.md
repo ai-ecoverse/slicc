@@ -155,6 +155,12 @@ To use SLICC, you need an LLM provider. SLICC is very much a BYOT (bring your ow
 
 The other providers are in YMMV territory. Please file an issue if you find them working or broken.
 
+## Secrets
+
+SLICC can safely manage API keys, tokens, and credentials with domain-scoped injection. The agent never sees real secret values — only masked placeholders — and secrets are only injected into requests destined for authorized domains. This protects against prompt-injection attacks that try to exfiltrate credentials.
+
+See [docs/secrets.md](docs/secrets.md) for setup instructions.
+
 ## Related projects and lineage
 
 SLICC is part of the [AI Ecoverse](https://github.com/ai-ecoverse), a growing set of AI-native tools and workflows. Its distinctive angle is simple: browser-native, practical, and job-oriented.
@@ -173,5 +179,6 @@ If you want to go deeper, the detailed docs live here:
 - [Architecture](docs/architecture.md)
 - [Testing](docs/testing.md)
 - [Shell reference](docs/shell-reference.md)
+- [Secrets](docs/secrets.md)
 - [Adding features](docs/adding-features.md)
 - [Electron notes](docs/electron.md)
