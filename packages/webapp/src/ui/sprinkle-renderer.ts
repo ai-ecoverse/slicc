@@ -105,6 +105,8 @@ export class SprinkleRenderer {
         this.bridge.setState(msg.data);
       } else if (msg.type === 'sprinkle-close') {
         this.bridge.close();
+      } else if (msg.type === 'sprinkle-stop-cone') {
+        this.bridge.stopCone();
       } else if (msg.type === 'sprinkle-storage-set') {
         try {
           localStorage.setItem(`slicc-sprinkle-ls:${sprinkleName}:${msg.key}`, msg.value);
@@ -379,6 +381,7 @@ export class SprinkleRenderer {
     setState: function(data) { _state = data; parent.postMessage({ type: 'sprinkle-set-state', data: data }, '*'); },
     getState: function() { return _state; },
     close: function() { parent.postMessage({ type: 'sprinkle-close' }, '*'); },
+    stopCone: function() { parent.postMessage({ type: 'sprinkle-stop-cone' }, '*'); },
     name: ''
   };
   window.slicc = api;
@@ -467,6 +470,8 @@ export class SprinkleRenderer {
         this.bridge.setState(msg.data);
       } else if (msg.type === 'sprinkle-close') {
         this.bridge.close();
+      } else if (msg.type === 'sprinkle-stop-cone') {
+        this.bridge.stopCone();
       } else if (msg.type === 'sprinkle-readfile') {
         this.bridge.readFile(msg.path).then(
           (fileContent) =>
