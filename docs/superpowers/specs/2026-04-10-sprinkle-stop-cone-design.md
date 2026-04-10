@@ -42,10 +42,12 @@ New fire-and-forget message type: `sprinkle-stop-cone` (no payload).
 Two `SprinkleManager` creation sites, one per mode:
 
 **CLI/standalone mode** (~line 1432):
+
 - `stopConeHandler` finds the cone via `orchestrator.getScoops().find(s => s.isCone)`.
 - Calls `orchestrator.stopScoop(cone.jid)` and `orchestrator.clearQueuedMessages(cone.jid)`.
 
 **Extension mode** (~line 539):
+
 - `stopConeHandler` finds the cone via `client.getScoops().find(s => s.isCone)`.
 - Calls `client.stopScoop(cone.jid)` which sends `{ type: 'abort', scoopJid }` to offscreen (handles stop + clear in one shot).
 

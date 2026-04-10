@@ -12,21 +12,22 @@
 
 ## File Map
 
-| Action | File | Responsibility |
-|--------|------|----------------|
-| Modify | `packages/webapp/src/ui/sprinkle-bridge.ts` | Add `stopCone` to interface, constructor, and `createAPI()` |
-| Modify | `packages/webapp/tests/ui/sprinkle-bridge.test.ts` | Test `stopCone()` calls handler |
-| Modify | `packages/webapp/src/ui/sprinkle-manager.ts` | Accept and forward `stopConeHandler` |
-| Modify | `packages/webapp/src/ui/sprinkle-renderer.ts` | Handle `sprinkle-stop-cone` postMessage + bridge script |
-| Modify | `packages/chrome-extension/sprinkle-sandbox.html` | Add `stopCone` to bridge proxy + nested bridge + relay |
-| Modify | `packages/webapp/src/ui/main.ts` | Wire handler at both creation sites |
-| Modify | `packages/vfs-root/workspace/skills/sprinkles/SKILL.md` | Document `slicc.stopCone()` |
+| Action | File                                                    | Responsibility                                              |
+| ------ | ------------------------------------------------------- | ----------------------------------------------------------- |
+| Modify | `packages/webapp/src/ui/sprinkle-bridge.ts`             | Add `stopCone` to interface, constructor, and `createAPI()` |
+| Modify | `packages/webapp/tests/ui/sprinkle-bridge.test.ts`      | Test `stopCone()` calls handler                             |
+| Modify | `packages/webapp/src/ui/sprinkle-manager.ts`            | Accept and forward `stopConeHandler`                        |
+| Modify | `packages/webapp/src/ui/sprinkle-renderer.ts`           | Handle `sprinkle-stop-cone` postMessage + bridge script     |
+| Modify | `packages/chrome-extension/sprinkle-sandbox.html`       | Add `stopCone` to bridge proxy + nested bridge + relay      |
+| Modify | `packages/webapp/src/ui/main.ts`                        | Wire handler at both creation sites                         |
+| Modify | `packages/vfs-root/workspace/skills/sprinkles/SKILL.md` | Document `slicc.stopCone()`                                 |
 
 ---
 
 ### Task 1: Bridge API — test and implementation
 
 **Files:**
+
 - Modify: `packages/webapp/tests/ui/sprinkle-bridge.test.ts`
 - Modify: `packages/webapp/src/ui/sprinkle-bridge.ts`
 
@@ -140,6 +141,7 @@ git commit -m "feat(sprinkle-bridge): add stopCone() to bridge API and interface
 ### Task 2: Sprinkle Manager — forward the handler
 
 **Files:**
+
 - Modify: `packages/webapp/src/ui/sprinkle-manager.ts`
 
 - [ ] **Step 1: Add `stopConeHandler` parameter to `SprinkleManager` constructor**
@@ -180,6 +182,7 @@ git commit -m "feat(sprinkle-manager): accept and forward stopConeHandler"
 ### Task 3: postMessage protocol — renderer message handlers and bridge script
 
 **Files:**
+
 - Modify: `packages/webapp/src/ui/sprinkle-renderer.ts`
 
 - [ ] **Step 1: Add `sprinkle-stop-cone` to the sandbox mode message handler**
@@ -243,6 +246,7 @@ git commit -m "feat(sprinkle-renderer): handle sprinkle-stop-cone postMessage"
 ### Task 4: Extension sandbox — bridge proxy, nested bridge, and relay
 
 **Files:**
+
 - Modify: `packages/chrome-extension/sprinkle-sandbox.html`
 
 - [ ] **Step 1: Add `stopCone` to the `window.slicc` bridge proxy**
@@ -276,12 +280,23 @@ In the message handler at the bottom (around line 455-462), find the `bridgeType
 
 ```javascript
 var bridgeTypes = [
-  'sprinkle-lick', 'sprinkle-set-state', 'sprinkle-close', 'sprinkle-stop-cone',
-  'sprinkle-open', 'sprinkle-readfile',
-  'sprinkle-writefile', 'sprinkle-readdir', 'sprinkle-exists',
-  'sprinkle-stat', 'sprinkle-mkdir', 'sprinkle-rm',
-  'sprinkle-storage-set', 'sprinkle-storage-remove', 'sprinkle-storage-clear',
-  'inline-sprinkle-lick', 'inline-sprinkle-height'
+  'sprinkle-lick',
+  'sprinkle-set-state',
+  'sprinkle-close',
+  'sprinkle-stop-cone',
+  'sprinkle-open',
+  'sprinkle-readfile',
+  'sprinkle-writefile',
+  'sprinkle-readdir',
+  'sprinkle-exists',
+  'sprinkle-stat',
+  'sprinkle-mkdir',
+  'sprinkle-rm',
+  'sprinkle-storage-set',
+  'sprinkle-storage-remove',
+  'sprinkle-storage-clear',
+  'inline-sprinkle-lick',
+  'inline-sprinkle-height',
 ];
 ```
 
@@ -298,6 +313,7 @@ git commit -m "feat(extension): add stopCone to sprinkle sandbox bridge and rela
 ### Task 5: Wire stopConeHandler in `main.ts`
 
 **Files:**
+
 - Modify: `packages/webapp/src/ui/main.ts`
 
 - [ ] **Step 1: Wire handler for the extension mode SprinkleManager**
@@ -329,21 +345,26 @@ const sprinkleManager = new SprinkleManager(
 Find the CLI-mode `SprinkleManager` creation (around line 1430-1436). It currently has 3 arguments: `sharedFs`, `routeLickToScoop`, `callbacks`. Add the 4th argument:
 
 ```typescript
-sprinkleManager = new SprinkleManager(sharedFs, routeLickToScoop, {
-  addSprinkle: (name, title, element, zone) =>
-    layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined),
-  removeSprinkle: (name) => layout.removeSprinkle(name),
-}, () => {
-  const cone = orchestrator.getScoops().find((s) => s.isCone);
-  if (cone) {
-    orchestrator.stopScoop(cone.jid);
-    orchestrator.clearQueuedMessages(cone.jid).catch((err) => {
-      log.error('Failed to clear queued messages on sprinkle stopCone', {
-        error: err instanceof Error ? err.message : String(err),
+sprinkleManager = new SprinkleManager(
+  sharedFs,
+  routeLickToScoop,
+  {
+    addSprinkle: (name, title, element, zone) =>
+      layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined),
+    removeSprinkle: (name) => layout.removeSprinkle(name),
+  },
+  () => {
+    const cone = orchestrator.getScoops().find((s) => s.isCone);
+    if (cone) {
+      orchestrator.stopScoop(cone.jid);
+      orchestrator.clearQueuedMessages(cone.jid).catch((err) => {
+        log.error('Failed to clear queued messages on sprinkle stopCone', {
+          error: err instanceof Error ? err.message : String(err),
+        });
       });
-    });
+    }
   }
-});
+);
 ```
 
 Note: the CLI handler calls both `stopScoop` and `clearQueuedMessages` (matching `coneAgentHandle.stop()` at line 1215). The extension handler only calls `client.stopScoop()` because the offscreen bridge's `abort` handler already clears queued messages.
@@ -367,6 +388,7 @@ git commit -m "feat(main): wire stopConeHandler for CLI and extension sprinkle m
 ### Task 6: Documentation
 
 **Files:**
+
 - Modify: `packages/vfs-root/workspace/skills/sprinkles/SKILL.md`
 
 - [ ] **Step 1: Add `slicc.stopCone()` to the Bridge API list**
