@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import 'fake-indexeddb/auto';
 import { initDB, saveScoop, getMessagesForScoop, clearAllMessages } from '../../src/scoops/db.js';
+import { SCOOP_IDLE_TIMEOUT_MS } from '../../src/scoops/orchestrator.js';
 import type { RegisteredScoop, ChannelMessage } from '../../src/scoops/types.js';
 
 // Test helpers — we can't instantiate a full Orchestrator (needs VirtualFS, DOM, etc.)
@@ -349,5 +350,73 @@ describe('Orchestrator SessionStore integration', () => {
     });
 
     await expect(clearResult).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * Tests for scoop idle detection.
+ *
+ * Validates the idle notification message format and routing
+ * that the orchestrator uses when a scoop sits in ready state
+ * without receiving work.
+ */
+describe('Scoop idle detection', () => {
+  beforeAll(async () => {
+    await initDB();
+    await saveScoop(cone);
+    await saveScoop(testScoop);
+    await saveScoop(otherScoop);
+  });
+
+  beforeEach(async () => {
+    await clearAllMessages();
+  });
+
+  it('SCOOP_IDLE_TIMEOUT_MS is exported and equals 120000', () => {
+    expect(SCOOP_IDLE_TIMEOUT_MS).toBe(120000);
+  });
+
+  it('idle notification message has correct format', async () => {
+    const { saveMessage } = await import('../../src/scoops/db.js');
+    // Simulate what the idle timer does — build and save the notification
+    const idleMsg = makeMessage({
+      id: `scoop-idle-${testScoop.jid}-${Date.now()}`,
+      chatJid: cone.jid,
+      senderId: testScoop.folder,
+      senderName: testScoop.assistantLabel,
+      content: `[@${testScoop.assistantLabel} idle]: Scoop "${testScoop.name}" has been ready for 2 minutes without receiving any work. This is expected if the scoop is waiting for webhooks or cron tasks. If you intended to delegate work, use feed_scoop to send a prompt.`,
+      fromAssistant: false,
+      channel: 'scoop-idle',
+    });
+    await saveMessage(idleMsg);
+
+    const coneMessages = await getMessagesForScoop(cone.jid);
+    expect(coneMessages).toHaveLength(1);
+    expect(coneMessages[0].channel).toBe('scoop-idle');
+    expect(coneMessages[0].senderId).toBe(testScoop.folder);
+    expect(coneMessages[0].senderName).toBe(testScoop.assistantLabel);
+    expect(coneMessages[0].content).toContain(`[@${testScoop.assistantLabel} idle]`);
+    expect(coneMessages[0].content).toBe(
+      `[@${testScoop.assistantLabel} idle]: Scoop "${testScoop.name}" has been ready for 2 minutes without receiving any work. This is expected if the scoop is waiting for webhooks or cron tasks. If you intended to delegate work, use feed_scoop to send a prompt.`
+    );
+    expect(coneMessages[0].fromAssistant).toBe(false);
+  });
+
+  it('idle notification does not appear in scoop messages', async () => {
+    const { saveMessage } = await import('../../src/scoops/db.js');
+    // Save an idle notification to the cone
+    const idleMsg = makeMessage({
+      chatJid: cone.jid,
+      senderId: testScoop.folder,
+      senderName: testScoop.assistantLabel,
+      content: `[@${testScoop.assistantLabel} idle]: Scoop "${testScoop.name}" has been ready for 2 minutes without receiving any work. This is expected if the scoop is waiting for webhooks or cron tasks. If you intended to delegate work, use feed_scoop to send a prompt.`,
+      fromAssistant: false,
+      channel: 'scoop-idle',
+    });
+    await saveMessage(idleMsg);
+
+    // Verify it does NOT show up in the scoop's messages
+    const scoopMessages = await getMessagesForScoop(testScoop.jid);
+    expect(scoopMessages).toHaveLength(0);
   });
 });

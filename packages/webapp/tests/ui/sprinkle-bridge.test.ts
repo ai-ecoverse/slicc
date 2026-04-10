@@ -9,6 +9,7 @@ describe('SprinkleBridge', () => {
   let lickHandlerMock: ReturnType<typeof vi.fn>;
   let closeHandler: (name: string) => void;
   let closeHandlerMock: ReturnType<typeof vi.fn>;
+  let stopConeHandlerMock: ReturnType<typeof vi.fn>;
   let mockFs: VirtualFS;
 
   beforeEach(() => {
@@ -16,6 +17,7 @@ describe('SprinkleBridge', () => {
     lickHandler = lickHandlerMock as unknown as (event: LickEvent) => void;
     closeHandlerMock = vi.fn();
     closeHandler = closeHandlerMock as unknown as (name: string) => void;
+    stopConeHandlerMock = vi.fn();
     mockFs = {
       readFile: vi.fn().mockResolvedValue('file content'),
       writeFile: vi.fn().mockResolvedValue(undefined),
@@ -28,7 +30,7 @@ describe('SprinkleBridge', () => {
       mkdir: vi.fn().mockResolvedValue(undefined),
       rm: vi.fn().mockResolvedValue(undefined),
     } as unknown as VirtualFS;
-    bridge = new SprinkleBridge(mockFs, lickHandler, closeHandler);
+    bridge = new SprinkleBridge(mockFs, lickHandler, closeHandler, stopConeHandlerMock);
   });
 
   it('creates an API with the sprinkle name', () => {
@@ -169,5 +171,11 @@ describe('SprinkleBridge', () => {
 
     expect(() => bridge.pushUpdate('test-sprinkle', 'data')).not.toThrow();
     expect(good).toHaveBeenCalledWith('data');
+  });
+
+  it('stopCone() calls the stop-cone handler', () => {
+    const api = bridge.createAPI('test-sprinkle');
+    api.stopCone();
+    expect(stopConeHandlerMock).toHaveBeenCalledTimes(1);
   });
 });

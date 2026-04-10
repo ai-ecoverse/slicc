@@ -40,6 +40,8 @@ export interface SprinkleBridgeAPI {
   open(path: string, opts?: { projectRoot?: string }): void;
   /** Close this sprinkle */
   close(): void;
+  /** Stop the cone agent */
+  stopCone(): void;
   /** Sprinkle name */
   readonly name: string;
 }
@@ -51,15 +53,18 @@ export class SprinkleBridge {
   private lickHandler: (event: LickEvent) => void;
   private fs: VirtualFS;
   private closeHandler: (name: string) => void;
+  private stopConeHandler: () => void;
 
   constructor(
     fs: VirtualFS,
     lickHandler: (event: LickEvent) => void,
-    closeHandler: (name: string) => void
+    closeHandler: (name: string) => void,
+    stopConeHandler: () => void
   ) {
     this.fs = fs;
     this.lickHandler = lickHandler;
     this.closeHandler = closeHandler;
+    this.stopConeHandler = stopConeHandler;
   }
 
   /** Create a bridge API for a specific sprinkle. */
@@ -158,6 +163,7 @@ export class SprinkleBridge {
         window.open(url, '_blank');
       },
       close: () => this.closeHandler(sprinkleName),
+      stopCone: () => this.stopConeHandler(),
     };
     return api;
   }

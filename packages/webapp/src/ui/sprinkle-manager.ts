@@ -40,10 +40,11 @@ export class SprinkleManager {
   constructor(
     fs: VirtualFS,
     lickHandler: (event: LickEvent) => void,
-    callbacks: SprinkleManagerCallbacks
+    callbacks: SprinkleManagerCallbacks,
+    stopConeHandler: () => void
   ) {
     this.fs = fs;
-    this.bridge = new SprinkleBridge(fs, lickHandler, (name) => this.close(name));
+    this.bridge = new SprinkleBridge(fs, lickHandler, (name) => this.close(name), stopConeHandler);
     this.callbacks = callbacks;
   }
 

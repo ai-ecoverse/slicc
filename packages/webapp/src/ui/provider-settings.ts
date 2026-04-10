@@ -51,6 +51,8 @@ export interface Account {
   apiKey: string;
   baseUrl?: string;
   modelId?: string;
+  deployment?: string;
+  apiVersion?: string;
   // OAuth fields (used by OAuth providers)
   accessToken?: string;
   refreshToken?: string;
@@ -337,12 +339,16 @@ export function addAccount(
   providerId: string,
   apiKey: string,
   baseUrl?: string,
-  modelId?: string
+  modelId?: string,
+  deployment?: string,
+  apiVersion?: string
 ): void {
   const accounts = getAccounts().filter((a) => a.providerId !== providerId);
   const entry: Account = { providerId, apiKey };
   if (baseUrl) entry.baseUrl = baseUrl;
   if (modelId) entry.modelId = modelId;
+  if (deployment) entry.deployment = deployment;
+  if (apiVersion) entry.apiVersion = apiVersion;
   accounts.push(entry);
   saveAccounts(accounts);
 }
@@ -389,6 +395,14 @@ export function getApiKeyForProvider(providerId: string): string | null {
 
 export function getBaseUrlForProvider(providerId: string): string | null {
   return getAccounts().find((a) => a.providerId === providerId)?.baseUrl ?? null;
+}
+
+export function getDeploymentForProvider(providerId: string): string | null {
+  return getAccounts().find((a) => a.providerId === providerId)?.deployment ?? null;
+}
+
+export function getApiVersionForProvider(providerId: string): string | null {
+  return getAccounts().find((a) => a.providerId === providerId)?.apiVersion ?? null;
 }
 
 // --- Selected model (format: "providerId:modelId") ---
@@ -1028,6 +1042,56 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
 
       dialog.appendChild(baseUrlSection);
 
+      // Deployment section (shown for providers with requiresDeployment)
+      const deploymentSection = document.createElement('div');
+      deploymentSection.style.display = 'none';
+
+      const deploymentLabel = document.createElement('div');
+      deploymentLabel.className = 'dialog__desc';
+      deploymentLabel.textContent = 'Deployment:';
+      deploymentSection.appendChild(deploymentLabel);
+
+      const deploymentInput = document.createElement('input');
+      deploymentInput.className = 'dialog__input';
+      deploymentInput.type = 'text';
+      deploymentInput.autocomplete = 'off';
+      deploymentInput.spellcheck = false;
+      if (isEdit && editing.deployment) deploymentInput.value = editing.deployment;
+      deploymentSection.appendChild(deploymentInput);
+
+      const deploymentDesc = document.createElement('div');
+      deploymentDesc.className = 'dialog__desc';
+      deploymentDesc.style.cssText =
+        'font-size: 11px; color: var(--s2-content-secondary); margin-top: -12px; margin-bottom: 16px;';
+      deploymentSection.appendChild(deploymentDesc);
+
+      dialog.appendChild(deploymentSection);
+
+      // API version section (shown for providers with requiresApiVersion)
+      const apiVersionSection = document.createElement('div');
+      apiVersionSection.style.display = 'none';
+
+      const apiVersionLabel = document.createElement('div');
+      apiVersionLabel.className = 'dialog__desc';
+      apiVersionLabel.textContent = 'API Version:';
+      apiVersionSection.appendChild(apiVersionLabel);
+
+      const apiVersionInput = document.createElement('input');
+      apiVersionInput.className = 'dialog__input';
+      apiVersionInput.type = 'text';
+      apiVersionInput.autocomplete = 'off';
+      apiVersionInput.spellcheck = false;
+      if (isEdit && editing.apiVersion) apiVersionInput.value = editing.apiVersion;
+      apiVersionSection.appendChild(apiVersionInput);
+
+      const apiVersionDesc = document.createElement('div');
+      apiVersionDesc.className = 'dialog__desc';
+      apiVersionDesc.style.cssText =
+        'font-size: 11px; color: var(--s2-content-secondary); margin-top: -12px; margin-bottom: 16px;';
+      apiVersionSection.appendChild(apiVersionDesc);
+
+      dialog.appendChild(apiVersionSection);
+
       // Model selector section (shown for providers with requiresModelSelection)
       const modelSection = document.createElement('div');
       modelSection.style.display = 'none';
@@ -1091,6 +1155,27 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
           saveBtn.style.display = '';
         }
 
+        // Deployment field
+        if (providerConfig.requiresDeployment) {
+          deploymentSection.style.display = '';
+          deploymentInput.placeholder = providerConfig.deploymentPlaceholder || 'deployment-name';
+          deploymentDesc.textContent = providerConfig.deploymentDescription || '';
+        } else {
+          deploymentSection.style.display = 'none';
+        }
+
+        // API version field
+        if (providerConfig.requiresApiVersion) {
+          apiVersionSection.style.display = '';
+          if (!apiVersionInput.value && providerConfig.apiVersionDefault) {
+            apiVersionInput.value = providerConfig.apiVersionDefault;
+          }
+          apiVersionInput.placeholder = providerConfig.apiVersionDefault || 'api-version';
+          apiVersionDesc.textContent = providerConfig.apiVersionDescription || '';
+        } else {
+          apiVersionSection.style.display = 'none';
+        }
+
         // Model selector (shown when requiresModelSelection is set)
         if (providerConfig.requiresModelSelection) {
           modelSection.style.display = '';
@@ -1143,6 +1228,13 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
           return;
         }
 
+        if (config.requiresDeployment && !deploymentInput.value.trim()) {
+          errorEl.textContent = 'Deployment name is required for this provider.';
+          errorEl.style.display = '';
+          deploymentInput.focus();
+          return;
+        }
+
         const selectedModelId = config.requiresModelSelection
           ? modelSelect.value || undefined
           : undefined;
@@ -1150,7 +1242,9 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
           pid,
           apiKeyInput.value.trim(),
           baseUrlInput.value.trim() || undefined,
-          selectedModelId
+          selectedModelId,
+          deploymentInput.value.trim() || undefined,
+          apiVersionInput.value.trim() || undefined
         );
 
         renderAccountsList();
@@ -1163,6 +1257,8 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
       };
       apiKeyInput.addEventListener('keydown', handleEnter);
       baseUrlInput.addEventListener('keydown', handleEnter);
+      deploymentInput.addEventListener('keydown', handleEnter);
+      apiVersionInput.addEventListener('keydown', handleEnter);
 
       dialog.appendChild(saveBtn);
 
