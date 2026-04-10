@@ -28,7 +28,12 @@
     slicc.stopCone();
     setTimeout(function () {
       document.getElementById('status').textContent = 'Cleaning up scoops...';
-      slicc.lick({ action: 'stop-and-close-all-scoops' });
+      slicc.lick({
+        action: 'stop-and-close-all-scoops',
+        data: {
+          instruction: 'List all scoops with list_scoops. For each non-cone scoop, call drop_scoop to stop and remove it. Do not drop the cone itself.'
+        }
+      });
     }, 500);
   }
 </script>
