@@ -1462,3 +1462,77 @@ describe('ScoopContext.reloadSkills', () => {
     await expect(ctx.reloadSkills()).resolves.toBeUndefined();
   });
 });
+
+describe('ScoopContext dispose', () => {
+  let ctx: ScoopContext;
+  let callbacks: ScoopContextCallbacks;
+
+  beforeEach(() => {
+    callbacks = createMockCallbacks();
+    ctx = new ScoopContext(testScoop, callbacks, {} as any);
+  });
+
+  it('aborts agent and clears queues on dispose', () => {
+    injectMockAgent(ctx, async () => {});
+    const agent = (ctx as any).agent;
+
+    ctx.dispose();
+
+    expect(agent.abort).toHaveBeenCalled();
+    expect(agent.clearAllQueues).toHaveBeenCalled();
+    expect((ctx as any).agent).toBeNull();
+  });
+
+  it('suppresses status callbacks after dispose', async () => {
+    let resolvePrompt!: () => void;
+    const promptStarted = new Promise<void>((r) => {
+      resolvePrompt = r;
+    });
+    let resolveBlock!: () => void;
+    const blockPrompt = new Promise<void>((r) => {
+      resolveBlock = r;
+    });
+
+    injectMockAgent(ctx, async () => {
+      resolvePrompt();
+      await blockPrompt;
+    });
+
+    const promptPromise = ctx.prompt('hello');
+    await promptStarted;
+
+    ctx.dispose();
+
+    resolveBlock();
+    await promptPromise;
+
+    const statusCalls = (callbacks.onStatusChange as ReturnType<typeof vi.fn>).mock.calls.map(
+      (c) => c[0]
+    );
+    expect(statusCalls).toContain('processing');
+    const afterProcessing = statusCalls.slice(statusCalls.indexOf('processing') + 1);
+    expect(afterProcessing).not.toContain('ready');
+  });
+
+  it('suppresses error callbacks from aborted prompt', async () => {
+    let resolvePrompt!: () => void;
+    const promptStarted = new Promise<void>((r) => {
+      resolvePrompt = r;
+    });
+
+    injectMockAgent(ctx, async () => {
+      resolvePrompt();
+      throw new Error('aborted');
+    });
+
+    const promptPromise = ctx.prompt('hello');
+    await promptStarted;
+
+    (callbacks.onError as ReturnType<typeof vi.fn>).mockClear();
+
+    ctx.dispose();
+    await promptPromise;
+
+    expect(callbacks.onError).not.toHaveBeenCalled();
+  });
+});
