@@ -267,6 +267,7 @@ export class Orchestrator {
     this.scoops.delete(jid);
     this.messageQueues.delete(jid);
     this.lastAgentTimestamp.delete(jid);
+    this.scoopResponseBuffer.delete(jid);
     log.info('Scoop unregistered', { jid });
   }
 
@@ -466,6 +467,8 @@ export class Orchestrator {
     // Create the scoop context with full callbacks
     const contextCallbacks: ScoopContextCallbacks = {
       onResponse: (text, isPartial) => {
+        if (!this.scoops.has(jid)) return;
+
         this.callbacks.onResponse(jid, text, isPartial);
         // Accumulate response text for routing back to cone.
         // Accumulate both partial (streaming deltas) and full (non-streaming) responses,
@@ -481,6 +484,8 @@ export class Orchestrator {
         }
       },
       onResponseDone: () => {
+        if (!this.scoops.has(jid)) return;
+
         // Per-turn callback — DON'T set tab to 'ready' here.
         // The tab stays 'processing' until prompt() resolves (setStatus('ready') in finally).
         // This prevents the message queue from dequeuing during multi-turn.
@@ -492,6 +497,8 @@ export class Orchestrator {
         this.callbacks.onResponseDone(jid);
       },
       onError: (error) => {
+        if (!this.scoops.has(jid)) return;
+
         const tab = this.tabs.get(jid);
         if (tab) {
           tab.status = 'error';
@@ -502,6 +509,8 @@ export class Orchestrator {
         this.callbacks.onStatusChange(jid, 'error');
       },
       onStatusChange: (status) => {
+        if (!this.scoops.has(jid)) return;
+
         const tab = this.tabs.get(jid);
         if (tab) {
           tab.status = status;
