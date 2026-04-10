@@ -74,9 +74,9 @@ describe('ScoopContext session persistence', () => {
 
   it('accepts a sessionStore parameter', () => {
     const mockStore = { load: vi.fn(), save: vi.fn(), delete: vi.fn() } as any;
-    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
+    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore, undefined, 'cone_1');
     expect((ctx as any).sessionStore).toBe(mockStore);
-    expect((ctx as any).sessionId).toBe(testScoop.jid);
+    expect((ctx as any).sessionId).toBe('cone_1/test-scoop');
   });
 
   it('works without sessionStore (backwards compatible)', () => {
@@ -86,7 +86,7 @@ describe('ScoopContext session persistence', () => {
 
   it('saves session on agent_end with messages', () => {
     const mockStore = { load: vi.fn(), save: vi.fn().mockResolvedValue(undefined) } as any;
-    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore);
+    ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore, undefined, 'cone_1');
     injectMockAgent(ctx, async () => {});
 
     const handler = (ctx as any).handleAgentEvent.bind(ctx);
@@ -95,7 +95,7 @@ describe('ScoopContext session persistence', () => {
 
     expect(mockStore.save).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: testScoop.jid,
+        id: 'cone_1/test-scoop',
         messages,
       })
     );

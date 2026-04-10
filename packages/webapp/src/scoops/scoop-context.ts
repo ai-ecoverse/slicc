@@ -24,7 +24,7 @@ import type {
   TextContent,
   Model,
 } from '../core/index.js';
-import { isContextOverflow } from '@mariozechner/pi-ai';
+import { isContextOverflow, streamSimple } from '@mariozechner/pi-ai';
 import type { AssistantMessage as PiAssistantMessage } from '@mariozechner/pi-ai';
 import type { SessionStore } from '../core/session.js';
 import { createFileTools, createBashTool } from '../tools/index.js';
@@ -110,14 +110,18 @@ export class ScoopContext {
     callbacks: ScoopContextCallbacks,
     fs: VirtualFS | RestrictedFS,
     sessionStore?: SessionStore,
-    skillsFs?: VirtualFS
+    skillsFs?: VirtualFS,
+    coneJid?: string
   ) {
     this.scoop = scoop;
     this.callbacks = callbacks;
     this.fs = fs;
     this.sessionStore = sessionStore ?? null;
     this.skillsFs = skillsFs ?? null;
-    this.sessionId = scoop.jid;
+    // Session ID encodes the cone→scoop relationship:
+    //   cone:  "cone_17126…"
+    //   scoop: "cone_17126…/my-task-scoop"
+    this.sessionId = scoop.isCone ? scoop.jid : `${coneJid ?? 'unknown'}/${scoop.folder}`;
   }
 
   /** Initialize the scoop's environment */
@@ -251,6 +255,16 @@ export class ScoopContext {
         getApiKey: () => getApiKey() ?? undefined,
       });
 
+      // Wrap the default stream function to inject X-Session-Id on every LLM request.
+      // All pi-ai providers merge options.headers into their HTTP client headers,
+      // so this single wrapper covers Anthropic, OpenAI, Google, Mistral, Bedrock, etc.
+      const sessionId = this.sessionId;
+      const streamWithSessionId: typeof streamSimple = (m, ctx, opts) =>
+        streamSimple(m, ctx, {
+          ...opts,
+          headers: { ...opts?.headers, 'X-Session-Id': sessionId },
+        });
+
       this.agent = new Agent({
         initialState: {
           model,
@@ -260,6 +274,8 @@ export class ScoopContext {
         },
         getApiKey: () => getApiKey() ?? undefined,
         transformContext: compactFn,
+        streamFn: streamWithSessionId,
+        sessionId,
       });
 
       // Subscribe to agent events
