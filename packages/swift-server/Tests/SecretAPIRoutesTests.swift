@@ -51,76 +51,28 @@ final class SecretAPIRoutesTests: XCTestCase {
         }
     }
 
-    func testCreateSecret() async throws {
-        let name = secretName("CREATE_TOK")
+    func testPostSecretRouteIsRemoved() async throws {
         try await withHTTPClient { httpClient in
             let router = Router()
             registerAPIRoutes(router: router, lickSystem: LickSystem(), config: self.makeConfig(), httpClient: httpClient)
 
             let app = Application(responder: router.buildResponder())
             try await app.test(.router) { client in
-                let body = #"{"name":"\#(name)","value":"ghp_test123","domains":["api.github.com"]}"#
+                let body = #"{"name":"SHOULD_FAIL","value":"v","domains":["d.com"]}"#
                 try await client.execute(
                     uri: "/api/secrets",
                     method: .post,
                     headers: [.contentType: "application/json"],
                     body: ByteBuffer(string: body)
                 ) { response in
-                    XCTAssertEqual(response.status, .ok)
-                    let result = try self.decodeJSONObject(from: response.body)
-                    XCTAssertEqual(result["ok"], .bool(true))
-                    XCTAssertEqual(result["name"], .string(name))
-                }
-            }
-        }
-        // Verify it was actually stored
-        let stored = SecretStore.get(name: name)
-        XCTAssertNotNil(stored)
-        XCTAssertEqual(stored?.value, "ghp_test123")
-        XCTAssertEqual(stored?.domains, ["api.github.com"])
-    }
-
-    func testCreateSecretRejectsMissingName() async throws {
-        try await withHTTPClient { httpClient in
-            let router = Router()
-            registerAPIRoutes(router: router, lickSystem: LickSystem(), config: self.makeConfig(), httpClient: httpClient)
-
-            let app = Application(responder: router.buildResponder())
-            try await app.test(.router) { client in
-                try await client.execute(
-                    uri: "/api/secrets",
-                    method: .post,
-                    headers: [.contentType: "application/json"],
-                    body: ByteBuffer(string: #"{"value":"v","domains":["d.com"]}"#)
-                ) { response in
-                    XCTAssertEqual(response.status, .badRequest)
+                    // Route no longer exists — expect 404
+                    XCTAssertEqual(response.status, .notFound)
                 }
             }
         }
     }
 
-    func testCreateSecretRejectsEmptyDomains() async throws {
-        let name = secretName("NO_DOMAIN")
-        try await withHTTPClient { httpClient in
-            let router = Router()
-            registerAPIRoutes(router: router, lickSystem: LickSystem(), config: self.makeConfig(), httpClient: httpClient)
-
-            let app = Application(responder: router.buildResponder())
-            try await app.test(.router) { client in
-                let body = #"{"name":"\#(name)","value":"v","domains":[]}"#
-                try await client.execute(
-                    uri: "/api/secrets",
-                    method: .post,
-                    headers: [.contentType: "application/json"],
-                    body: ByteBuffer(string: body)
-                ) { response in
-                    XCTAssertEqual(response.status, .badRequest)
-                }
-            }
-        }
-    }
-
-    func testDeleteSecret() async throws {
+    func testDeleteSecretRouteIsRemoved() async throws {
         let name = secretName("DEL_TOK")
         try SecretStore.set(name: name, value: "val", domains: ["x.com"])
 
@@ -131,14 +83,11 @@ final class SecretAPIRoutesTests: XCTestCase {
             let app = Application(responder: router.buildResponder())
             try await app.test(.router) { client in
                 try await client.execute(uri: "/api/secrets/\(name)", method: .delete) { response in
-                    XCTAssertEqual(response.status, .ok)
-                    let result = try self.decodeJSONObject(from: response.body)
-                    XCTAssertEqual(result["ok"], .bool(true))
-                    XCTAssertEqual(result["name"], .string(name))
+                    // Route no longer exists — expect 404
+                    XCTAssertEqual(response.status, .notFound)
                 }
             }
         }
-        XCTAssertNil(SecretStore.get(name: name))
     }
 
     // MARK: - Helpers

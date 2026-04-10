@@ -919,46 +919,6 @@ async function main() {
     }
   });
 
-  app.post('/api/secrets', async (req, res) => {
-    const { name, value, domains } = req.body as {
-      name?: string;
-      value?: string;
-      domains?: string[];
-    };
-    if (!name || typeof name !== 'string') {
-      res.status(400).json({ error: 'Missing required field: name' });
-      return;
-    }
-    if (value === undefined || value === null || typeof value !== 'string') {
-      res.status(400).json({ error: 'Missing required field: value' });
-      return;
-    }
-    if (value.trim().length === 0) {
-      res.status(400).json({ error: 'Secret value must not be empty' });
-      return;
-    }
-    try {
-      secretStore.set(name, value, Array.isArray(domains) ? domains : []);
-      await secretProxy.reload();
-      res.json({ ok: true, name });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      res.status(msg.includes('at least one') ? 400 : 500).json({ error: msg });
-    }
-  });
-
-  app.delete('/api/secrets/:name', async (req, res) => {
-    try {
-      secretStore.delete(req.params.name);
-      await secretProxy.reload();
-      res.json({ ok: true, name: req.params.name });
-    } catch (err) {
-      res
-        .status(500)
-        .json({ error: err instanceof Error ? err.message : 'Failed to delete secret' });
-    }
-  });
-
   // Masked secrets endpoint — returns name + maskedValue pairs for shell env population.
   // The browser fetches this at shell init to populate env vars with masked values.
   // Real values are never exposed; only deterministic session-scoped masks.

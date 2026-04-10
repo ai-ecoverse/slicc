@@ -205,42 +205,6 @@ func registerAPIRoutes(
         return try jsonResponse(.array(items))
     }
 
-    router.post("/api/secrets") { request, context in
-        let payload = try await decodeJSONObjectBody(from: request, context: context)
-        guard let name = payload["name"]?.stringValue, !name.isEmpty else {
-            return try jsonErrorResponse(status: .badRequest, message: "Missing required field: name")
-        }
-        guard let value = payload["value"]?.stringValue, !value.isEmpty else {
-            return try jsonErrorResponse(status: .badRequest, message: "Missing required field: value")
-        }
-        let domains: [String]
-        if case .array(let arr) = payload["domains"] {
-            domains = arr.compactMap(\.stringValue)
-        } else {
-            domains = []
-        }
-        do {
-            try SecretStore.set(name: name, value: value, domains: domains)
-            secretInjector.reload()
-            return try jsonResponse(.object(["ok": .bool(true), "name": .string(name)]))
-        } catch SecretStoreError.emptyDomains {
-            return try jsonErrorResponse(status: .badRequest, message: "Secret must have at least one authorized domain")
-        } catch {
-            return try jsonErrorResponse(status: .internalServerError, message: errorMessage(error))
-        }
-    }
-
-    router.delete("/api/secrets/:name") { _, context in
-        let name = context.parameters.get("name") ?? ""
-        do {
-            try SecretStore.delete(name: name)
-            secretInjector.reload()
-            return try jsonResponse(.object(["ok": .bool(true), "name": .string(name)]))
-        } catch {
-            return try jsonErrorResponse(status: .internalServerError, message: errorMessage(error))
-        }
-    }
-
     // Masked secrets endpoint — returns name + maskedValue + domains for shell env population.
     // The browser fetches this at shell init to populate env vars with masked values.
     // Real values are never exposed; only deterministic session-scoped masks.
