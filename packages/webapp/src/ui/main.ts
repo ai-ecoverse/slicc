@@ -1292,12 +1292,21 @@ async function main(): Promise<void> {
   const routeLickToScoop = (event: LickEvent) => {
     const isWebhook = event.type === 'webhook';
     const isSprinkle = event.type === 'sprinkle';
+    const isFsWatch = event.type === 'fswatch';
     const eventName = isWebhook
       ? event.webhookName
       : isSprinkle
         ? event.sprinkleName
-        : event.cronName;
-    const eventId = isWebhook ? event.webhookId : isSprinkle ? event.sprinkleName : event.cronId;
+        : isFsWatch
+          ? event.fswatchName
+          : event.cronName;
+    const eventId = isWebhook
+      ? event.webhookId
+      : isSprinkle
+        ? event.sprinkleName
+        : isFsWatch
+          ? event.fswatchId
+          : event.cronId;
     const channel = event.type;
 
     log.debug('Lick event', { type: event.type, name: eventName, targetScoop: event.targetScoop });
@@ -1376,7 +1385,13 @@ async function main(): Promise<void> {
 
     if (resolvedTarget) {
       const msgId = `${channel}-${eventId}-${Date.now()}`;
-      const eventLabel = isWebhook ? 'Webhook Event' : isSprinkle ? 'Sprinkle Event' : 'Cron Event';
+      const eventLabel = isWebhook
+        ? 'Webhook Event'
+        : isSprinkle
+          ? 'Sprinkle Event'
+          : isFsWatch
+            ? 'File Watch Event'
+            : 'Cron Event';
       const content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
 
       const msg: ChannelMessage = {
@@ -1403,7 +1418,7 @@ async function main(): Promise<void> {
         layout.panels.chat.addLickMessage(
           msgId,
           content,
-          channel as 'webhook' | 'cron' | 'sprinkle'
+          channel as 'webhook' | 'cron' | 'sprinkle' | 'fswatch'
         );
       }
 

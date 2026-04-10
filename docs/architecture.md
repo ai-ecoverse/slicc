@@ -359,7 +359,7 @@ Cone executes feed_scoop tool
 ### Lick (Event) Flow
 
 ```
-External webhook POST / scheduled cron task fires
+External webhook POST / scheduled cron task / fswatch change fires
   → LickManager receives event in IndexedDB
     → dispatch() routes to target scoop
       → ScoopContext processes lick

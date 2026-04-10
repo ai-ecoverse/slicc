@@ -61,7 +61,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
   ['Languages', ['node', 'python', 'python3', 'sqlite3']],
   ['Skills', ['skill', 'upskill']],
   ['Browser & UI', ['serve', 'open', 'imgcat', ...PLAYWRIGHT_COMMAND_NAMES, 'webhook']],
-  ['Filesystem', ['mount']],
+  ['Filesystem', ['mount', 'fswatch']],
 ]);
 
 function formatHelp(commands: string[], jshCommands: string[] = []): string {
