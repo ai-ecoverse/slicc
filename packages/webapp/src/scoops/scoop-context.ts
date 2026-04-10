@@ -411,6 +411,7 @@ export class ScoopContext {
   }
 
   private handleAgentEvent(event: CoreAgentEvent): void {
+    if (this.disposed) return;
     switch (event.type) {
       case 'message_update': {
         const ame = event.assistantMessageEvent as AssistantMessageEvent;

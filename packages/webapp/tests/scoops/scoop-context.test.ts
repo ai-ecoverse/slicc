@@ -1535,4 +1535,36 @@ describe('ScoopContext dispose', () => {
 
     expect(callbacks.onError).not.toHaveBeenCalled();
   });
+
+  it('suppresses agent event callbacks after dispose', () => {
+    // Add optional tool callbacks so we can assert they're not called
+    callbacks.onToolStart = vi.fn();
+    callbacks.onToolEnd = vi.fn();
+    ctx = new ScoopContext(testScoop, callbacks, {} as never);
+    injectMockAgent(ctx, async () => {});
+
+    ctx.dispose();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accessing private method for testing
+    const handler = (ctx as any).handleAgentEvent.bind(ctx);
+
+    handler({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'hi' } });
+    handler({ type: 'tool_execution_start', toolName: 'bash', args: {} });
+    handler({
+      type: 'tool_execution_end',
+      toolName: 'bash',
+      result: { content: [] },
+      isError: false,
+    });
+    handler({ type: 'turn_end' });
+    handler({
+      type: 'agent_end',
+      messages: [{ role: 'user', content: 'hello', timestamp: Date.now() }],
+    });
+
+    expect(callbacks.onResponse).not.toHaveBeenCalled();
+    expect(callbacks.onToolStart).not.toHaveBeenCalled();
+    expect(callbacks.onToolEnd).not.toHaveBeenCalled();
+    expect(callbacks.onResponseDone).not.toHaveBeenCalled();
+  });
 });
