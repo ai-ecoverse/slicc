@@ -258,6 +258,9 @@ export class ScoopContext {
         getApiKey: () => getApiKey() ?? undefined,
       });
 
+      // Guard: dispose() may have run while init() was awaiting above.
+      if (this.disposed) return;
+
       this.agent = new Agent({
         initialState: {
           model,
@@ -275,6 +278,7 @@ export class ScoopContext {
       this.setStatus('ready');
       log.info('ScoopContext initialized', { folder: this.scoop.folder, toolCount: tools.length });
     } catch (err) {
+      if (this.disposed) return;
       const message = err instanceof Error ? err.message : String(err);
       log.error('ScoopContext init failed', { folder: this.scoop.folder, error: message });
       this.setStatus('error');
