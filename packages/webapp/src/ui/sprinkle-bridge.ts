@@ -3,7 +3,7 @@
  * communicating with the agent via lick events.
  */
 
-import type { VirtualFS } from '../fs/index.js';
+import type { VirtualFS, EntryType } from '../fs/index.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import { toPreviewUrl } from '../shell/supplemental-commands/shared.js';
 
@@ -19,11 +19,11 @@ export interface SprinkleBridgeAPI {
   /** Write text content to a VFS file */
   writeFile(path: string, content: string): Promise<void>;
   /** List directory entries */
-  readDir(path: string): Promise<Array<{ name: string; type: 'file' | 'directory' }>>;
+  readDir(path: string): Promise<Array<{ name: string; type: EntryType }>>;
   /** Check if a path exists */
   exists(path: string): Promise<boolean>;
   /** Get file/directory metadata */
-  stat(path: string): Promise<{ type: 'file' | 'directory'; size: number }>;
+  stat(path: string): Promise<{ type: EntryType; size: number }>;
   /** Create a directory (recursive) */
   mkdir(path: string): Promise<void>;
   /** Remove a file */

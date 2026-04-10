@@ -9,7 +9,7 @@ export type FileContent = string | Uint8Array;
 export type Encoding = 'utf-8' | 'binary';
 
 /** Type of a filesystem entry. */
-export type EntryType = 'file' | 'directory';
+export type EntryType = 'file' | 'directory' | 'symlink';
 
 /** Metadata about a filesystem entry. */
 export interface Stats {
@@ -19,6 +19,10 @@ export interface Stats {
   mtime: number;
   /** Creation time (ms since epoch). */
   ctime: number;
+  /** True if this entry is a symlink (only set by lstat). */
+  isSymlink?: boolean;
+  /** Raw symlink target path (only set when isSymlink is true). */
+  symlinkTarget?: string;
 }
 
 /** A single entry returned by readDir. */
@@ -58,7 +62,8 @@ export type FsErrorCode =
   | 'EISDIR' // Is a directory (when file expected)
   | 'ENOTEMPTY' // Directory not empty
   | 'EINVAL' // Invalid argument
-  | 'EACCES'; // Permission denied
+  | 'EACCES' // Permission denied
+  | 'ELOOP'; // Too many levels of symbolic links
 
 /** Custom error class for filesystem operations. */
 export class FsError extends Error {

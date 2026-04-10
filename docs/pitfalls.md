@@ -120,12 +120,12 @@ private checkWrite(path: string): void {
 
 All paths in VirtualFS must follow these rules:
 
-| Rule                   | Example         | Violation                                        |
-| ---------------------- | --------------- | ------------------------------------------------ |
-| **Absolute**           | `/foo/bar`, `/` | `foo/bar` (relative), `./foo`                    |
-| **Forward-slash only** | `/path/to/file` | `\path\to\file` (backslash)                      |
-| **Normalized**         | `/a/b/c`        | `/a//b/c` (double slash), `/a/b/./c` (dot-slash) |
-| **No symlinks**        | All paths real  | Symlinks not supported; read underlying target   |
+| Rule                   | Example             | Violation                                                                   |
+| ---------------------- | ------------------- | --------------------------------------------------------------------------- |
+| **Absolute**           | `/foo/bar`, `/`     | `foo/bar` (relative), `./foo`                                               |
+| **Forward-slash only** | `/path/to/file`     | `\path\to\file` (backslash)                                                 |
+| **Normalized**         | `/a/b/c`            | `/a//b/c` (double slash), `/a/b/./c` (dot-slash)                            |
+| **Symlinks supported** | `/link` → `/target` | Use `symlink()`, `readlink()`, `lstat()`, `realpath()`; max 40 hops (ELOOP) |
 
 **Normalization**: Use `normalizePath(path)` from `packages/webapp/src/fs/path-utils.ts` before any VFS operation.
 

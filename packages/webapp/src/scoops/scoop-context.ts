@@ -40,6 +40,7 @@ import {
   createScoopManagementTools,
   type ScoopManagementToolsConfig,
 } from './scoop-management-tools.js';
+import { fetchSecretEnvVars } from '../core/secret-env.js';
 
 const log = createLogger('scoop-context');
 
@@ -149,10 +150,15 @@ export class ScoopContext {
 
       const effectiveSkillsFs = (this.skillsFs ?? this.fs) as VirtualFS;
 
+      // Fetch masked secret values from the server to populate shell environment.
+      // Real values never leave the server — only deterministic masked values are used.
+      const secretEnv = await fetchSecretEnvVars();
+
       // Pass effectiveSkillsFs for JSH discovery so scoops can find .jsh files from all loaded skills
       this.shell = new WasmShell({
         fs: this.fs as VirtualFS,
         cwd,
+        env: Object.keys(secretEnv).length > 0 ? secretEnv : undefined,
         browserAPI: browser,
         jshDiscoveryFs: this.skillsFs ? effectiveSkillsFs : undefined,
       });

@@ -22,6 +22,7 @@ import type {
 } from './types.js';
 import { FsError } from './types.js';
 import { normalizePath } from './path-utils.js';
+import type { FsWatchFilter, FsWatchCallback } from './fs-watcher.js';
 
 export class RestrictedFS {
   private vfs: VirtualFS;
@@ -173,6 +174,40 @@ export class RestrictedFS {
     return this.vfs.copyFile(src, dest);
   }
 
+  // ── Symlink operations ───────────────────────────────────────────────
+
+  async symlink(target: string, linkPath: string): Promise<void> {
+    this.checkWrite(linkPath);
+    return this.vfs.symlink(target, linkPath);
+  }
+
+  async readlink(path: string): Promise<string> {
+    if (!this.isAllowedStrict(path)) {
+      throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
+    }
+    return this.vfs.readlink(path);
+  }
+
+  async lstat(path: string): Promise<Stats> {
+    if (!this.isAllowed(path)) {
+      throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
+    }
+    return this.vfs.lstat(path);
+  }
+
+  // ── Watcher operations ──────────────────────────────────────────────
+
+  watch(basePath: string, filter: FsWatchFilter, callback: FsWatchCallback): () => void {
+    if (!this.isAllowed(basePath)) {
+      throw new FsError('EACCES', 'permission denied', normalizePath(basePath));
+    }
+    const watcher = this.vfs.getWatcher();
+    if (!watcher) {
+      throw new FsError('EINVAL', 'no watcher configured');
+    }
+    return watcher.watch(normalizePath(basePath), filter, callback);
+  }
+
   // ── Path utilities (no access control) ───────────────────────────────
 
   dirname(path: string): string {
@@ -181,5 +216,12 @@ export class RestrictedFS {
 
   basename(path: string): string {
     return this.vfs.basename(path);
+  }
+
+  /**
+   * Dispose the underlying VirtualFS, closing IndexedDB connections.
+   */
+  async dispose(): Promise<void> {
+    await this.vfs.dispose();
   }
 }
