@@ -18,6 +18,10 @@ export default defineConfig({
         resolve: {
           alias: {
             buffer: 'buffer/',
+            // isomorphic-git >=1.37.5 exports map points "." to index.cjs which
+            // calls require('crypto').createHash — Node-only, breaks in browsers.
+            // Force the ESM entry which uses sha.js (pure JS, browser-safe).
+            'isomorphic-git': resolve(workspaceRoot, 'node_modules/isomorphic-git/index.js'),
             'node:zlib': resolve(webappDir, 'src/shims/empty.ts'),
             'node:module': resolve(webappDir, 'src/shims/empty.ts'),
             stream: resolve(webappDir, 'src/shims/stream.ts'),
