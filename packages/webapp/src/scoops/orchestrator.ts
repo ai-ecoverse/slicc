@@ -258,6 +258,7 @@ export class Orchestrator {
     this.scoops.delete(jid);
     this.messageQueues.delete(jid);
     this.lastAgentTimestamp.delete(jid);
+    this.scoopResponseBuffer.delete(jid);
     log.info('Scoop unregistered', { jid });
   }
 
@@ -489,6 +490,8 @@ export class Orchestrator {
         this.callbacks.onStatusChange(jid, 'error');
       },
       onStatusChange: (status) => {
+        if (!this.scoops.has(jid)) return;
+
         const tab = this.tabs.get(jid);
         if (tab) {
           tab.status = status;
