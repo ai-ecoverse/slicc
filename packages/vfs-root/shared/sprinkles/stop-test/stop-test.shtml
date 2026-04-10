@@ -23,17 +23,32 @@
     document.getElementById('status').textContent = 'Sent count request...';
     slicc.lick({ action: 'count', data: { to: 100 } });
   }
+  function log(msg) {
+    var el = document.getElementById('status');
+    el.textContent = msg;
+    console.log('[stop-test] ' + msg);
+  }
   function cancel() {
-    document.getElementById('status').textContent = 'Stopping cone...';
-    slicc.stopCone();
-    setTimeout(function () {
-      document.getElementById('status').textContent = 'Cleaning up scoops...';
-      slicc.lick({
-        action: 'stop-and-close-all-scoops',
-        data: {
-          instruction: 'List all scoops with list_scoops. For each non-cone scoop, call drop_scoop to stop and remove it. Do not drop the cone itself.'
+    try {
+      log('1. Calling stopCone...');
+      slicc.stopCone();
+      log('2. stopCone called, scheduling lick in 500ms...');
+      setTimeout(function () {
+        try {
+          log('3. Timeout fired, calling slicc.lick...');
+          slicc.lick({
+            action: 'stop-and-close-all-scoops',
+            data: {
+              instruction: 'List all scoops with list_scoops. For each non-cone scoop, call drop_scoop to stop and remove it. Do not drop the cone itself.'
+            }
+          });
+          log('4. slicc.lick() returned OK');
+        } catch (e) {
+          log('ERR in timeout: ' + e.message);
         }
-      });
-    }, 500);
+      }, 500);
+    } catch (e) {
+      log('ERR in cancel: ' + e.message);
+    }
   }
 </script>
