@@ -27,7 +27,8 @@
     document.getElementById('status').textContent = 'Stopping cone...';
     slicc.stopCone();
     setTimeout(function () {
-      document.getElementById('status').textContent = 'Stop sent!';
-    }, 300);
+      document.getElementById('status').textContent = 'Cleaning up scoops...';
+      slicc.lick({ action: 'stop-and-close-all-scoops' });
+    }, 500);
   }
 </script>
