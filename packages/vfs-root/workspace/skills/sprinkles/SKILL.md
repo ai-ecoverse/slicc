@@ -50,6 +50,7 @@ The cone will send you a message with the lick action and your sprinkle name. On
 - `slicc.on('update', function(data) {...})` — receive data sent via `sprinkle send`
 - `slicc.name` — the sprinkle's name
 - `slicc.close()` — close the sprinkle
+- `slicc.stopCone()` — stop the cone agent
 - `slicc.readFile(path)` — read a VFS file (returns `Promise<string>`)
 - `slicc.writeFile(path, content)` — write text content to a VFS file
 - `slicc.readDir(path)` — list directory entries (returns `Promise<Array<{name, type}>>`)

@@ -596,6 +596,12 @@ async function mainExtension(app: HTMLElement): Promise<void> {
       addSprinkle: (name, title, element, zone) =>
         layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined),
       removeSprinkle: (name) => layout.removeSprinkle(name),
+    },
+    () => {
+      const cone = client.getScoops().find((s) => s.isCone);
+      if (cone) {
+        client.stopScoop(cone.jid);
+      }
     }
   );
   (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
@@ -1429,11 +1435,26 @@ async function main(): Promise<void> {
   // ── Sprinkle Manager (SHTML sprinkle panels) ────────────────────────
   let sprinkleManager: SprinkleManager | null = null;
   if (sharedFs) {
-    sprinkleManager = new SprinkleManager(sharedFs, routeLickToScoop, {
-      addSprinkle: (name, title, element, zone) =>
-        layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined),
-      removeSprinkle: (name) => layout.removeSprinkle(name),
-    });
+    sprinkleManager = new SprinkleManager(
+      sharedFs,
+      routeLickToScoop,
+      {
+        addSprinkle: (name, title, element, zone) =>
+          layout.addSprinkle(name, title, element, zone as 'primary' | 'drawer' | undefined),
+        removeSprinkle: (name) => layout.removeSprinkle(name),
+      },
+      () => {
+        const cone = orchestrator.getScoops().find((s) => s.isCone);
+        if (cone) {
+          orchestrator.stopScoop(cone.jid);
+          orchestrator.clearQueuedMessages(cone.jid).catch((err) => {
+            log.error('Failed to clear queued messages on sprinkle stopCone', {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+        }
+      }
+    );
     // Expose for open command, sprinkle shell command, and E2E/demo scripts
     (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = sprinkleManager;
     (window as unknown as Record<string, unknown>).__slicc_reloadSkills = () =>

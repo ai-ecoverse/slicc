@@ -20,14 +20,19 @@ describe('SprinkleManager', () => {
     lickHandler = vi.fn() as unknown as (event: LickEvent) => void;
     addSprinkle = vi.fn();
     removeSprinkle = vi.fn();
-    mgr = new SprinkleManager(vfs, lickHandler, {
-      addSprinkle: addSprinkle as unknown as (
-        name: string,
-        title: string,
-        element: HTMLElement
-      ) => void,
-      removeSprinkle: removeSprinkle as unknown as (name: string) => void,
-    });
+    mgr = new SprinkleManager(
+      vfs,
+      lickHandler,
+      {
+        addSprinkle: addSprinkle as unknown as (
+          name: string,
+          title: string,
+          element: HTMLElement
+        ) => void,
+        removeSprinkle: removeSprinkle as unknown as (name: string) => void,
+      },
+      vi.fn()
+    );
   });
 
   it('refresh discovers available sprinkles', async () => {

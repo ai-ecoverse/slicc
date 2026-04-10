@@ -21,6 +21,7 @@ function makeBridge(name: string): SprinkleBridgeAPI {
     getState: vi.fn(() => null),
     open: vi.fn(),
     close: vi.fn(),
+    stopCone: vi.fn(),
   };
 }
 
