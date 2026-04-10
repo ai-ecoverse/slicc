@@ -18,6 +18,8 @@ export interface CliRuntimeFlags {
   logDir: string | null;
   /** Initial prompt to auto-submit when the UI loads */
   prompt: string | null;
+  /** Path to a .env file for secrets */
+  envFile: string | null;
   version: boolean;
 }
 
@@ -46,6 +48,7 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
   let logLevel: LogLevel = 'info';
   let logDir: string | null = null;
   let prompt: string | null = null;
+  let envFile: string | null = null;
   let version = false;
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -90,6 +93,18 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
       const nextArg = argv[index + 1];
       if (nextArg && !nextArg.startsWith('--')) {
         prompt = nextArg;
+        index += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith('--env-file=')) {
+      envFile = arg.slice('--env-file='.length) || null;
+      continue;
+    }
+    if (arg === '--env-file') {
+      const nextArg = argv[index + 1];
+      if (nextArg && !nextArg.startsWith('--')) {
+        envFile = nextArg;
         index += 1;
       }
       continue;
@@ -186,6 +201,7 @@ export function parseCliRuntimeFlags(argv: string[]): CliRuntimeFlags {
     logLevel,
     logDir,
     prompt,
+    envFile,
     version,
   };
 }

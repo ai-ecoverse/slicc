@@ -31,6 +31,9 @@ public final class SecretInjector: Sendable {
     /// The session ID used for masking. Kept stable across reloads.
     private let sessionId: String?
 
+    /// Secrets loaded from an env file that override/supplement Keychain secrets.
+    private let _envFileSecrets: [Secret]
+
     private let lock = NSLock()
     private nonisolated(unsafe) var _secrets: [LoadedSecret]
     private nonisolated(unsafe) var _responseScrubber: @Sendable (String) -> String
@@ -57,31 +60,35 @@ public final class SecretInjector: Sendable {
     /// Initialize with an explicit list of loaded secrets (for testing).
     init(secrets: [LoadedSecret]) {
         self.sessionId = nil
+        self._envFileSecrets = []
         self._secrets = secrets
         let pairs = secrets.map { SecretPair(realValue: $0.realValue, maskedValue: $0.maskedValue) }
         self._responseScrubber = buildScrubber(secrets: pairs)
     }
 
     /// Initialize by loading all secrets from the Keychain and masking them
-    /// with the given session ID.
-    init(sessionId: String) {
+    /// with the given session ID. Optional `envFileSecrets` are merged in
+    /// and override Keychain entries with the same name.
+    init(sessionId: String, envFileSecrets: [Secret] = []) {
         self.sessionId = sessionId
+        self._envFileSecrets = envFileSecrets
         self._secrets = []
         self._responseScrubber = { $0 }
-        loadFromKeychain()
+        loadSecrets()
     }
 
-    /// Reload secrets from the Keychain, keeping the same session ID.
-    /// Call this after secret mutations (POST/DELETE) so the injector
-    /// picks up added/removed secrets.
+    /// Reload secrets from the Keychain (and env file overrides), keeping
+    /// the same session ID. Call this after secret mutations (POST/DELETE)
+    /// so the injector picks up added/removed secrets.
     func reload() {
-        loadFromKeychain()
+        loadSecrets()
     }
 
-    private func loadFromKeychain() {
+    private func loadSecrets() {
         guard let sessionId else { return }
         let entries = SecretStore.list()
         var loaded: [LoadedSecret] = []
+        var loadedNames: Set<String> = []
         for entry in entries {
             guard let secret = SecretStore.get(name: entry.name) else { continue }
             let masked = mask(sessionId: sessionId, secretName: secret.name, realValue: secret.value)
@@ -91,7 +98,25 @@ public final class SecretInjector: Sendable {
                 maskedValue: masked,
                 domains: secret.domains
             ))
+            loadedNames.insert(secret.name)
         }
+
+        // Merge env-file secrets: override existing by name, append new ones
+        for secret in _envFileSecrets {
+            let masked = mask(sessionId: sessionId, secretName: secret.name, realValue: secret.value)
+            let entry = LoadedSecret(
+                name: secret.name,
+                realValue: secret.value,
+                maskedValue: masked,
+                domains: secret.domains
+            )
+            if let idx = loaded.firstIndex(where: { $0.name == secret.name }) {
+                loaded[idx] = entry
+            } else {
+                loaded.append(entry)
+            }
+        }
+
         let pairs = loaded.map { SecretPair(realValue: $0.realValue, maskedValue: $0.maskedValue) }
         setSecretsAndScrubber(secrets: loaded, scrubber: buildScrubber(secrets: pairs))
     }

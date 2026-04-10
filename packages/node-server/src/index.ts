@@ -906,7 +906,7 @@ async function main() {
   });
 
   // Secret management API — direct .env file access (no browser needed)
-  const secretStore = new EnvSecretStore();
+  const secretStore = new EnvSecretStore(RUNTIME_FLAGS.envFile ?? undefined);
 
   app.get('/api/secrets', (_req, res) => {
     try {
