@@ -114,7 +114,7 @@ public final class SecretInjector: Sendable {
         secrets.map { (name: $0.name, maskedValue: $0.maskedValue, domains: $0.domains) }
     }
 
-    /// Inject real values into text destined for an upstream request.
+    /// Inject real values into text destined for an upstream request (headers).
     ///
     /// Scans `text` for any known masked values. For each match:
     /// - Validates the target `hostname` against the secret's domain allowlist.
@@ -130,6 +130,25 @@ public final class SecretInjector: Sendable {
             result = result.replacingOccurrences(of: secret.maskedValue, with: secret.realValue)
         }
         return .success(text: result)
+    }
+
+    /// Inject real values into request body text.
+    ///
+    /// Unlike `inject(text:hostname:)`, when the domain does NOT match,
+    /// the masked value is left as-is (not rejected). This is safe because
+    /// the masked value is meaningless — it's typically conversation context
+    /// sent to an LLM API like Bedrock.
+    func injectBody(text: String, hostname: String) -> String {
+        var result = text
+        for secret in secrets {
+            guard result.contains(secret.maskedValue) else { continue }
+            guard isAllowedDomain(patterns: secret.domains, hostname: hostname) else {
+                // Leave the masked value as-is — do not reject, do not unmask
+                continue
+            }
+            result = result.replacingOccurrences(of: secret.maskedValue, with: secret.realValue)
+        }
+        return result
     }
 
     /// Scrub real secret values from response text, replacing with masked equivalents.

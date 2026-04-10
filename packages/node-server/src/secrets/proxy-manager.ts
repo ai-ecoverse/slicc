@@ -110,6 +110,30 @@ export class SecretProxyManager {
   }
 
   /**
+   * Unmask body text: replace masked values with real values when domain matches.
+   * When domain does NOT match, the masked value is left as-is (not rejected).
+   * This is safe because the masked value is meaningless to the remote service —
+   * it's typically just conversation context sent to an LLM API.
+   */
+  unmaskBody(text: string, targetHostname: string): { text: string } {
+    let result = text;
+
+    for (const [maskedValue, ms] of this.maskedToSecret) {
+      if (!result.includes(maskedValue)) continue;
+
+      if (!matchesDomains(targetHostname, ms.domains)) {
+        // Leave the masked value as-is — do not reject, do not unmask
+        continue;
+      }
+
+      // Replace all occurrences
+      result = result.split(maskedValue).join(ms.realValue);
+    }
+
+    return { text: result };
+  }
+
+  /**
    * Unmask headers in-place. Returns forbidden info if blocked.
    */
   unmaskHeaders(

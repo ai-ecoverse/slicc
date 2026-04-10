@@ -72,6 +72,35 @@ final class SecretInjectorTests: XCTestCase {
         XCTAssertEqual(secretName, "AI")
     }
 
+    // MARK: - injectBody()
+
+    func testInjectBodyLeavesMaskedValueWhenDomainDoesNotMatch() {
+        let injector = makeInjector(secrets: [makeSecret()])
+        // Body contains masked value but domain doesn't match — should leave as-is
+        let result = injector.injectBody(text: "conversation: ghp_masked999abc was used", hostname: "bedrock-runtime.us-west-2.amazonaws.com")
+        XCTAssertTrue(result.contains("ghp_masked999abc"))
+        XCTAssertFalse(result.contains("ghp_realSecret123"))
+    }
+
+    func testInjectBodyUnmasksWhenDomainMatches() {
+        let injector = makeInjector(secrets: [makeSecret()])
+        let result = injector.injectBody(text: "token=ghp_masked999abc", hostname: "api.github.com")
+        XCTAssertFalse(result.contains("ghp_masked999abc"))
+        XCTAssertTrue(result.contains("ghp_realSecret123"))
+    }
+
+    func testInjectBodyPartiallyUnmasksWhenSomeDomainsMatch() {
+        let injector = makeInjector(secrets: [
+            makeSecret(name: "GH", realValue: "ghp_real1", maskedValue: "ghp_mask1", domains: ["api.github.com"]),
+            makeSecret(name: "AI", realValue: "sk-real2", maskedValue: "sk-mask2", domains: ["api.openai.com"]),
+        ])
+        // Send to api.github.com — GH should unmask, AI should stay masked
+        let result = injector.injectBody(text: "ghp_mask1 sk-mask2", hostname: "api.github.com")
+        XCTAssertTrue(result.contains("ghp_real1"))
+        XCTAssertTrue(result.contains("sk-mask2"))
+        XCTAssertFalse(result.contains("sk-real2"))
+    }
+
     // MARK: - scrub()
 
     func testScrubReplacesRealValuesWithMasked() {

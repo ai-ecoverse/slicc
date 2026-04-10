@@ -284,19 +284,14 @@ func registerAPIRoutes(
                     }
                 }
 
-                // Inject secrets into request body
+                // Inject secrets into request body — uses injectBody which leaves
+                // masked values as-is on domain mismatch (safe/meaningless) rather
+                // than rejecting. Avoids false 403s from LLM conversation context.
                 if rawBody.readableBytes > 0,
                    let bodyString = rawBody.getString(at: rawBody.readerIndex, length: rawBody.readableBytes) {
-                    switch secretInjector.inject(text: bodyString, hostname: targetHostname) {
-                    case .success(let replaced):
-                        if replaced != bodyString {
-                            rawBody = ByteBuffer(string: replaced)
-                        }
-                    case .domainBlocked(let secretName, let hostname):
-                        return try jsonErrorResponse(
-                            status: .forbidden,
-                            message: "Secret \(secretName) is not allowed for domain \(hostname)"
-                        )
+                    let replaced = secretInjector.injectBody(text: bodyString, hostname: targetHostname)
+                    if replaced != bodyString {
+                        rawBody = ByteBuffer(string: replaced)
                     }
                 }
 

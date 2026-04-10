@@ -138,6 +138,43 @@ describe('SecretProxyManager', () => {
     expect(emptyManager.scrubResponse('text')).toBe('text');
   });
 
+  it('unmaskBody leaves masked value intact when domain does not match', async () => {
+    await manager.reload();
+    const gh = manager.getMaskedEntries().find((e) => e.name === 'GITHUB_TOKEN')!;
+
+    // Body contains masked value but domain doesn't match — should NOT reject,
+    // should leave the masked value as-is
+    const body = JSON.stringify({
+      messages: [{ role: 'assistant', content: `Used token ${gh.maskedValue} to call API` }],
+    });
+    const result = manager.unmaskBody(body, 'bedrock-runtime.us-west-2.amazonaws.com');
+    expect(result.text).toContain(gh.maskedValue);
+    expect(result.text).not.toContain('ghp_realtoken123456789abcdef');
+  });
+
+  it('unmaskBody replaces masked value when domain matches', async () => {
+    await manager.reload();
+    const gh = manager.getMaskedEntries().find((e) => e.name === 'GITHUB_TOKEN')!;
+
+    const body = JSON.stringify({ token: gh.maskedValue });
+    const result = manager.unmaskBody(body, 'api.github.com');
+    expect(result.text).not.toContain(gh.maskedValue);
+    expect(result.text).toContain('ghp_realtoken123456789abcdef');
+  });
+
+  it('unmaskBody partially unmasks when some domains match and some do not', async () => {
+    await manager.reload();
+    const gh = manager.getMaskedEntries().find((e) => e.name === 'GITHUB_TOKEN')!;
+    const oai = manager.getMaskedEntries().find((e) => e.name === 'OPENAI_KEY')!;
+
+    // Send to api.github.com — GITHUB_TOKEN should unmask, OPENAI_KEY should stay masked
+    const body = `gh=${gh.maskedValue} oai=${oai.maskedValue}`;
+    const result = manager.unmaskBody(body, 'api.github.com');
+    expect(result.text).toContain('ghp_realtoken123456789abcdef');
+    expect(result.text).toContain(oai.maskedValue);
+    expect(result.text).not.toContain('sk-realopenaikey999888777');
+  });
+
   it('produces deterministic masked values for same session', async () => {
     await manager.reload();
     const entries1 = manager.getMaskedEntries();

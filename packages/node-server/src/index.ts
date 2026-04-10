@@ -1094,15 +1094,13 @@ async function main() {
       if (Object.keys(headers).length > 0) fetchInit.headers = headers;
       if (rawBody.length > 0 && !['GET', 'HEAD'].includes(req.method)) {
         // --- Secret injection: unmask request body ---
+        // Body uses unmaskBody: domain mismatches leave the masked value as-is
+        // (safe/meaningless) rather than rejecting. This avoids false 403s when
+        // LLM conversation context contains masked secrets sent to non-matching
+        // domains like Bedrock.
         if (secretProxy.hasSecrets()) {
           const bodyStr = rawBody.toString('utf-8');
-          const bodyResult = secretProxy.unmask(bodyStr, targetHostname);
-          if (bodyResult.forbidden) {
-            res.status(403).json({
-              error: `Secret "${bodyResult.forbidden.secretName}" is not allowed for domain "${bodyResult.forbidden.hostname}"`,
-            });
-            return;
-          }
+          const bodyResult = secretProxy.unmaskBody(bodyStr, targetHostname);
           rawBody = Buffer.from(bodyResult.text, 'utf-8');
         }
         // Buffer extends Uint8Array which is a valid fetch body at runtime.
