@@ -1,0 +1,33 @@
+<div class="sprinkle-card" style="padding: 16px;">
+  <h3 style="margin: 0 0 12px;">Stop Cone Test</h3>
+  <p id="status" style="margin: 0 0 12px; opacity: 0.7;">Ready</p>
+  <div style="display: flex; gap: 8px;">
+    <button
+      class="sprinkle-btn sprinkle-btn--primary"
+      id="go-btn"
+      onclick="go()"
+    >
+      GO
+    </button>
+    <button
+      class="sprinkle-btn sprinkle-btn--secondary"
+      id="cancel-btn"
+      onclick="cancel()"
+    >
+      CANCEL
+    </button>
+  </div>
+</div>
+<script>
+  function go() {
+    document.getElementById('status').textContent = 'Sent count request...';
+    slicc.lick({ action: 'count', data: { to: 100 } });
+  }
+  function cancel() {
+    document.getElementById('status').textContent = 'Stopping cone...';
+    slicc.stopCone();
+    setTimeout(function () {
+      document.getElementById('status').textContent = 'Stop sent!';
+    }, 300);
+  }
+</script>
