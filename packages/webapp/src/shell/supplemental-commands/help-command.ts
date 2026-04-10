@@ -50,6 +50,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
       'man',
       'host',
       'oauth-token',
+      'secret',
       'nuke',
       'models',
       'cost',
