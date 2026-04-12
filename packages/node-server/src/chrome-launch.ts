@@ -140,6 +140,7 @@ export function buildChromeLaunchArgs(options: {
   cdpPort: number;
   launchUrl: string;
   profile: ChromeLaunchProfile;
+  windowSize?: string;
 }): string[] {
   const args = [
     `--remote-debugging-port=${options.cdpPort}`,
@@ -149,6 +150,10 @@ export function buildChromeLaunchArgs(options: {
     '--disable-background-tracing',
     `--user-data-dir=${options.profile.userDataDir}`,
   ];
+
+  if (options.windowSize) {
+    args.push(`--window-size=${options.windowSize}`);
+  }
 
   if (options.profile.extensionPath) {
     args.push(`--disable-extensions-except=${options.profile.extensionPath}`);

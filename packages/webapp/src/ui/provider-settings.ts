@@ -16,6 +16,7 @@ import {
   shouldIncludeProvider,
 } from '../providers/index.js';
 import type { ProviderConfig } from '../providers/index.js';
+import type { ModelMetadata } from '../providers/types.js';
 
 export type { ProviderConfig } from '../providers/index.js';
 
@@ -141,7 +142,7 @@ export function getProviderModels(providerId: string): Model<Api>[] {
     const providerConfig = getProviderConfig(providerId);
     if (providerConfig.getModelIds) {
       // Provider specifies its own model list — resolve against all pi-ai registries
-      let modelIds: Array<{ id: string; name?: string }>;
+      let modelIds: Array<{ id: string; name?: string } & ModelMetadata>;
       try {
         modelIds = providerConfig.getModelIds();
       } catch (err) {
@@ -163,7 +164,7 @@ export function getProviderModels(providerId: string): Model<Api>[] {
       }
       return modelIds.map((pm) => {
         // Determine API type from metadata: 'openai' or 'anthropic' (default)
-        const apiType = (pm as any).api === 'openai' ? 'openai' : 'anthropic';
+        const apiType = pm.api === 'openai' ? 'openai' : 'anthropic';
         const customApi = `${providerId}-${apiType}` as Api;
         const base = modelMap.get(pm.id);
         const model: Record<string, any> = base
@@ -188,7 +189,7 @@ export function getProviderModels(providerId: string): Model<Api>[] {
         // Apply modelOverrides (layer 2) then getModelIds metadata (layer 3)
         const overrides = providerConfig.modelOverrides?.[pm.id];
         if (overrides) applyModelMetadata(model, overrides);
-        applyModelMetadata(model, pm as any);
+        applyModelMetadata(model, pm);
 
         return model as unknown as Model<Api>;
       });
@@ -1106,6 +1107,15 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
       modelSelect.style.marginBottom = '16px';
       modelSection.appendChild(modelSelect);
 
+      const modelInput = document.createElement('input');
+      modelInput.className = 'dialog__input';
+      modelInput.type = 'text';
+      modelInput.autocomplete = 'off';
+      modelInput.spellcheck = false;
+      modelInput.placeholder = 'e.g. global.anthropic.claude-sonnet-4-6';
+      modelInput.style.display = 'none';
+      modelSection.appendChild(modelInput);
+
       const modelDesc = document.createElement('div');
       modelDesc.className = 'dialog__desc';
       modelDesc.style.cssText =
@@ -1179,24 +1189,36 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
         // Model selector (shown when requiresModelSelection is set)
         if (providerConfig.requiresModelSelection) {
           modelSection.style.display = '';
-          modelSelect.innerHTML = '';
-          const sourceProvider = pid === 'bedrock-camp' ? 'amazon-bedrock' : pid;
-          const models = getModelsDynamic(sourceProvider);
-          for (const m of models) {
-            const opt = document.createElement('option');
-            opt.value = m.id;
-            opt.textContent = m.name || m.id;
-            modelSelect.appendChild(opt);
-          }
-          // Pre-select if editing
-          if (isEdit && editing.modelId) {
-            modelSelect.value = editing.modelId;
-          } else if (providerConfig.defaultModelId) {
-            // Try to match the default model by substring
-            const defaultMatch = models.find((m) =>
-              m.id.toLowerCase().includes(providerConfig.defaultModelId!.toLowerCase())
-            );
-            if (defaultMatch) modelSelect.value = defaultMatch.id;
+          if (providerConfig.freeTextModelId) {
+            modelSelect.style.display = 'none';
+            modelInput.style.display = '';
+            modelDesc.textContent = 'Enter the exact model ID';
+            if (isEdit && editing.modelId) {
+              modelInput.value = editing.modelId;
+            } else if (providerConfig.defaultModelId) {
+              modelInput.value = providerConfig.defaultModelId;
+            }
+          } else {
+            modelSelect.style.display = '';
+            modelInput.style.display = 'none';
+            modelSelect.innerHTML = '';
+            modelDesc.textContent = 'Select the model available in your deployment';
+            const sourceProvider = pid === 'bedrock-camp' ? 'amazon-bedrock' : pid;
+            const models = getModelsDynamic(sourceProvider);
+            for (const m of models) {
+              const opt = document.createElement('option');
+              opt.value = m.id;
+              opt.textContent = m.name || m.id;
+              modelSelect.appendChild(opt);
+            }
+            if (isEdit && editing.modelId) {
+              modelSelect.value = editing.modelId;
+            } else if (providerConfig.defaultModelId) {
+              const defaultMatch = models.find((m) =>
+                m.id.toLowerCase().includes(providerConfig.defaultModelId!.toLowerCase())
+              );
+              if (defaultMatch) modelSelect.value = defaultMatch.id;
+            }
           }
         } else {
           modelSection.style.display = 'none';
@@ -1236,7 +1258,7 @@ export function showProviderSettings(options?: ShowProviderSettingsOptions): Pro
         }
 
         const selectedModelId = config.requiresModelSelection
-          ? modelSelect.value || undefined
+          ? (config.freeTextModelId ? modelInput.value.trim() : modelSelect.value) || undefined
           : undefined;
         addAccount(
           pid,

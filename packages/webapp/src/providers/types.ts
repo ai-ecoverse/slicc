@@ -63,6 +63,8 @@ export interface ProviderConfig {
   defaultModelId?: string;
   /** When true, the setup dialog shows a model selector dropdown. */
   requiresModelSelection?: boolean;
+  /** When true, the model field is a free text input instead of a dropdown. */
+  freeTextModelId?: boolean;
   /** When true, the setup dialog shows a deployment name text input. */
   requiresDeployment?: boolean;
   deploymentPlaceholder?: string;

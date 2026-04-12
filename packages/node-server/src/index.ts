@@ -563,6 +563,7 @@ async function main() {
       cdpPort: REQUESTED_CDP_PORT,
       launchUrl: browserLaunchUrl,
       profile: chromeProfile,
+      windowSize: process.env['CHROME_WINDOW_SIZE'] ?? undefined,
     });
 
     launchedBrowserProcess = spawn(chromePath, chromeArgs, {

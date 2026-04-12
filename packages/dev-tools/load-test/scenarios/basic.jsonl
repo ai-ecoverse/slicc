@@ -1,0 +1,5 @@
+{"prompt": "Create a file /workspace/hello.txt containing 'Hello World'", "expectFile": "/workspace/hello.txt", "expectContains": "Hello World"}
+{"prompt": "Write a Python script at /workspace/fizzbuzz.py that prints fizzbuzz from 1 to 20", "expectFile": "/workspace/fizzbuzz.py", "expectContains": "fizz"}
+{"prompt": "Create /workspace/greeting.sh with a bash script that prints 'Good morning'", "expectFile": "/workspace/greeting.sh", "expectContains": "Good morning"}
+{"prompt": "Write a JSON file at /workspace/config.json with keys: name='test', version='1.0'", "expectFile": "/workspace/config.json", "expectContains": "version"}
+{"prompt": "Create /workspace/index.html with a basic HTML page that says 'Welcome'", "expectFile": "/workspace/index.html", "expectContains": "Welcome"}
