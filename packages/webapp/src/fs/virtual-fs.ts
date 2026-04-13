@@ -40,6 +40,8 @@ export class VirtualFS {
   private mountPoints = new Map<string, FileSystemDirectoryHandle>();
   private watcher: FsWatcher | null = null;
   private readonly dbName: string;
+  /** BroadcastChannel for syncing mount registrations across VFS instances with the same dbName. */
+  private mountSyncChannel: BroadcastChannel | null = null;
 
   private constructor(dbName: string, wipe: boolean) {
     this.dbName = dbName;
@@ -51,6 +53,23 @@ export class VirtualFS {
       .stat('/')
       .then(() => {})
       .catch(() => {});
+
+    // Set up BroadcastChannel for mount point synchronization
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        this.mountSyncChannel = new BroadcastChannel(`vfs-mount-sync:${dbName}`);
+        this.mountSyncChannel.onmessage = (event: MessageEvent) => {
+          const { type, path, handle } = event.data ?? {};
+          if (type === 'mount' && typeof path === 'string' && handle) {
+            this.mountPoints.set(path, handle);
+          } else if (type === 'unmount' && typeof path === 'string') {
+            this.mountPoints.delete(path);
+          }
+        };
+      } catch {
+        // BroadcastChannel may fail in some contexts — mount sync is best-effort
+      }
+    }
   }
 
   /** Create a VirtualFS instance. */
@@ -82,6 +101,8 @@ export class VirtualFS {
    * Must be called when the VirtualFS instance is no longer needed (e.g., in test cleanup).
    */
   async dispose(): Promise<void> {
+    this.mountSyncChannel?.close();
+    this.mountSyncChannel = null;
     this.watcher?.dispose();
     this.watcher = null;
 
@@ -158,11 +179,22 @@ export class VirtualFS {
       /* EEXIST is fine */
     }
     this.mountPoints.set(normalized, handle);
+    try {
+      this.mountSyncChannel?.postMessage({ type: 'mount', path: normalized, handle });
+    } catch {
+      /* Best-effort sync: local mount is already registered */
+    }
   }
 
   /** Remove a mount point (the LFS placeholder directory is left in place). */
   unmount(absolutePath: string): void {
-    this.mountPoints.delete(normalizePath(absolutePath));
+    const normalized = normalizePath(absolutePath);
+    this.mountPoints.delete(normalized);
+    try {
+      this.mountSyncChannel?.postMessage({ type: 'unmount', path: normalized });
+    } catch {
+      /* best-effort sync */
+    }
   }
 
   /** Return the list of currently active mount paths. */
