@@ -1464,7 +1464,15 @@ async function main(): Promise<void> {
         const needsRemount: Array<{ path: string; dirName: string }> = [];
         for (const { path, handle } of entries) {
           try {
-            const perm = await (handle as any).queryPermission({ mode: 'readwrite' });
+            if (!('queryPermission' in handle)) {
+              needsRemount.push({ path, dirName: handle.name });
+              continue;
+            }
+            const perm = await (
+              handle as unknown as {
+                queryPermission: (desc: { mode: string }) => Promise<string>;
+              }
+            ).queryPermission({ mode: 'readwrite' });
             if (perm === 'granted') {
               await sharedFs.mount(path, handle);
               log.info('Restored mount from previous session', { path, name: handle.name });

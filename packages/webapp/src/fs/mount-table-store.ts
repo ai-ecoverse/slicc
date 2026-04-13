@@ -43,6 +43,8 @@ export async function saveMountEntry(
     await new Promise<void>((resolve, reject) => {
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
+      tx.onabort = () =>
+        reject(tx.error ?? new DOMException('IndexedDB transaction aborted', 'AbortError'));
     });
   } finally {
     db.close();
@@ -58,6 +60,8 @@ export async function removeMountEntry(path: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
+      tx.onabort = () =>
+        reject(tx.error ?? new DOMException('IndexedDB transaction aborted', 'AbortError'));
     });
   } finally {
     db.close();
@@ -70,15 +74,19 @@ export async function getAllMountEntries(): Promise<MountEntry[]> {
   try {
     const tx = db.transaction(STORE_NAME, 'readonly');
     const store = tx.objectStore(STORE_NAME);
+    const abortError = () =>
+      tx.error ?? new DOMException('IndexedDB transaction aborted', 'AbortError');
     const keys = await new Promise<IDBValidKey[]>((resolve, reject) => {
       const req = store.getAllKeys();
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
+      tx.onabort = () => reject(abortError());
     });
     const values = await new Promise<FileSystemDirectoryHandle[]>((resolve, reject) => {
       const req = store.getAll();
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
+      tx.onabort = () => reject(abortError());
     });
     return keys.map((key, i) => ({ path: key as string, handle: values[i] }));
   } finally {
@@ -95,6 +103,8 @@ export async function clearMountEntries(): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
+      tx.onabort = () =>
+        reject(tx.error ?? new DOMException('IndexedDB transaction aborted', 'AbortError'));
     });
   } finally {
     db.close();
