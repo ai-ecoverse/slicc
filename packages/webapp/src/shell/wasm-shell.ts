@@ -72,42 +72,38 @@ export function isTextContentType(contentType: string): boolean {
 }
 
 /**
- * Read a fetch Response body as a string, preserving binary data.
+ * Read a fetch Response body as raw bytes.
  *
- * For text content types, uses resp.text() (proper UTF-8 decoding).
- * For binary content types, reads as arrayBuffer and decodes as latin1
- * (ISO-8859-1) so every byte maps 1:1 to a codepoint 0-255. This
- * preserves binary data through just-bash's string-typed FetchResult.body.
+ * For binary content types, also cache a latin1-keyed copy so older
+ * string-based write paths can still recover the original bytes without
+ * corruption.
  */
-async function readResponseBody(resp: Response, url?: string): Promise<string> {
+async function readResponseBody(resp: Response, url?: string): Promise<Uint8Array> {
   const contentType = resp.headers.get('content-type') ?? '';
-  const isText = isTextContentType(contentType);
-  if (isText) {
-    return resp.text();
-  }
-  // Binary: read raw bytes and encode as latin1 string for just-bash's
-  // string-typed FetchResult.body. Also cache the original bytes so
-  // VfsAdapter.writeFile can bypass string encoding entirely.
   const buf = await resp.arrayBuffer();
   const bytes = new Uint8Array(buf);
-  const latin1 = new TextDecoder('iso-8859-1').decode(buf);
-  cacheBinaryBody(latin1, bytes);
-  // Also cache by URL so commands like upskill can retrieve by URL
-  if (url) {
-    cacheBinaryByUrl(url, bytes);
+  if (!isTextContentType(contentType)) {
+    const chunkSize = 0x8000;
+    let latin1 = '';
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      latin1 += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    }
+    cacheBinaryBody(latin1, bytes);
+    if (url) {
+      cacheBinaryByUrl(url, bytes);
+    }
   }
-  return latin1;
+  return bytes;
 }
 
 /**
  * Create a SecureFetch that routes requests through the CLI server's
  * /api/fetch-proxy endpoint, bypassing browser CORS restrictions.
  * In extension mode, uses direct fetch (CORS bypass via host_permissions).
- * Uses just-bash 2.11.7's custom `fetch` option so curl gets a fresh,
+ * Uses just-bash's custom `fetch` option so curl gets a fresh,
  * stateless fetch per invocation (fixes the multi-curl-in-loop bug).
  *
- * Binary responses (images, archives, etc.) are encoded as latin1 strings
- * to preserve byte fidelity through just-bash's string-typed FetchResult.
+ * Binary responses are preserved as raw bytes.
  */
 // Convert Headers or Record<string, string> to a plain Record<string, string>.
 function headersToRecord(

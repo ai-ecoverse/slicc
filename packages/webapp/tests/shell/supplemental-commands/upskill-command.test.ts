@@ -26,11 +26,17 @@ function createMockCtx() {
 
 function response(
   status: number,
-  body: string,
+  body: string | Uint8Array,
   headers: Record<string, string> = {},
   statusText = ''
 ) {
-  return { status, statusText, headers, body, url: 'https://example.test' };
+  return {
+    status,
+    statusText,
+    headers,
+    body: typeof body === 'string' ? new TextEncoder().encode(body) : body,
+    url: 'https://example.test',
+  };
 }
 
 let dbCounter = 0;
@@ -509,11 +515,9 @@ describe('upskill Tessl registry integration', () => {
       'skills-main/my-skill/helper.js': encoder.encode('console.log("hi");\n'),
       'skills-main/other/README.md': encoder.encode('# Not a skill\n'),
     });
-    const zipBody = String.fromCharCode(...zipBytes);
-
     const fetchMock = vi.fn(async (url: string) => {
       if (url.includes('codeload.github.com')) {
-        return response(200, zipBody);
+        return response(200, zipBytes);
       }
       // GitHub API should NOT be called — fail if it is
       if (url.includes('api.github.com')) {
@@ -566,11 +570,9 @@ describe('upskill Tessl registry integration', () => {
         '---\nname: reload-skill\n---\n# Reload Skill\n'
       ),
     });
-    const zipBody = String.fromCharCode(...zipBytes);
-
     const fetchMock = vi.fn(async (url: string) => {
       if (url.includes('codeload.github.com')) {
-        return response(200, zipBody);
+        return response(200, zipBytes);
       }
       throw new Error(`unexpected url: ${url}`);
     });
