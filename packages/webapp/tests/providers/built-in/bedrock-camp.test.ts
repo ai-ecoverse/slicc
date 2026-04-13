@@ -13,6 +13,7 @@ register();
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe('bedrock-camp built-in provider', () => {

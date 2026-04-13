@@ -240,6 +240,10 @@ export interface WasmShellOptions {
   jshDiscoveryFs?: JshDiscoveryFS;
 }
 
+type BashExecOptionsWithSignal = NonNullable<Parameters<Bash['exec']>[1]> & {
+  signal?: AbortSignal;
+};
+
 export class WasmShell {
   private bash: Bash;
   private vfsAdapter: VfsAdapter;
@@ -442,17 +446,20 @@ export class WasmShell {
   }
 
   /** Run a command through just-bash, carrying forward env/cwd state. */
-  private async runCommand(command: string, _signal?: AbortSignal): Promise<BashExecResult> {
+  private async runCommand(command: string, signal?: AbortSignal): Promise<BashExecResult> {
     // Track shell command for telemetry (extract first word as command name)
     const commandName = command.trim().split(/\s+/)[0] || 'unknown';
     trackShellCommand(commandName);
 
-    // just-bash does not currently accept AbortSignal in ExecOptions; terminal
-    // interruption is handled by WasmShell's own execAbort controller.
-    const result = await this.bash.exec(command, {
+    // just-bash's published ExecOptions type does not yet expose AbortSignal,
+    // but WasmShell still forwards it so external callers and terminal Ctrl+C
+    // keep a consistent cancellation path as the shell runtime evolves.
+    const execOptions: BashExecOptionsWithSignal = {
       env: this.lastEnv,
       cwd: this.cwd,
-    });
+      signal: signal ?? this.execAbort?.signal,
+    };
+    const result = await this.bash.exec(command, execOptions);
     // Persist state for next call
     if (result.env) {
       this.lastEnv = { ...result.env };
