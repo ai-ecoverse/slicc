@@ -1,4 +1,4 @@
-import type { Command } from 'just-bash';
+import type { Command, SecureFetch } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import { createCommandsCommand } from './help-command.js';
 import { createConvertCommand } from './convert-command.js';
@@ -49,6 +49,8 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   fs?: VirtualFS;
   /** Browser automation backend for playwright-cli aliases. Optional so aliases stay discoverable even without browser support. */
   browserAPI?: BrowserAPI;
+  /** Fetch function that routes through the CLI proxy when available. */
+  fetchFn?: SecureFetch;
 }
 
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
@@ -75,7 +77,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createConvertCommand('magick'),
     createWhichCommand(options.fs),
     createUnameCommand(),
-    createManCommand(),
+    createManCommand(options.fetchFn),
     createOAuthTokenCommand(),
     createSecretCommand(),
     createRsyncCommand({ fs: options.fs }),
