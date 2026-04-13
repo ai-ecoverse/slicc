@@ -1,5 +1,5 @@
 import { defineCommand } from 'just-bash';
-import type { Command, SecureFetch } from 'just-bash';
+import type { Command } from 'just-bash';
 
 function manHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
@@ -21,7 +21,7 @@ function stripHtml(html: string): string {
     .trimEnd();
 }
 
-export function createManCommand(fetchFn?: SecureFetch): Command {
+export function createManCommand(): Command {
   return defineCommand('man', async (args) => {
     if (args.includes('--help') || args.includes('-h')) {
       return manHelp();
@@ -39,23 +39,9 @@ export function createManCommand(fetchFn?: SecureFetch): Command {
     const url = `https://www.sliccy.com/man/${topic}.plain.html`;
 
     try {
-      let status: number;
-      let statusText: string;
-      let html: string;
+      const response = await fetch(url);
 
-      if (fetchFn) {
-        const result = await fetchFn(url);
-        status = result.status;
-        statusText = result.statusText;
-        html = result.body;
-      } else {
-        const result = await fetch(url);
-        status = result.status;
-        statusText = result.statusText;
-        html = await result.text();
-      }
-
-      if (status === 404) {
+      if (response.status === 404) {
         return {
           stdout: '',
           stderr: `No manual entry for ${topic}\n`,
@@ -63,14 +49,15 @@ export function createManCommand(fetchFn?: SecureFetch): Command {
         };
       }
 
-      if (status < 200 || status >= 300) {
+      if (!response.ok) {
         return {
           stdout: '',
-          stderr: `man: failed to fetch manual page for ${topic}: ${status} ${statusText}\n`,
+          stderr: `man: failed to fetch manual page for ${topic}: ${response.status} ${response.statusText}\n`,
           exitCode: 1,
         };
       }
 
+      const html = await response.text();
       const plainText = stripHtml(html);
 
       return {

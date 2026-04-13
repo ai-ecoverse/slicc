@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // BroadcastChannel mock — Node doesn't provide one.
@@ -37,6 +37,7 @@ class MockBroadcastChannel {
 
 // Dynamic import so the module sees the global BroadcastChannel
 const { VirtualFS } = await import('../../src/fs/virtual-fs.js');
+const { FsWatcher } = await import('../../src/fs/fs-watcher.js');
 
 describe('VirtualFS mount-point sync via BroadcastChannel', () => {
   let vfsA: InstanceType<typeof VirtualFS>;
@@ -71,6 +72,25 @@ describe('VirtualFS mount-point sync via BroadcastChannel', () => {
     vfsA.unmount('/mnt/real');
     expect(vfsA.listMounts()).not.toContain('/mnt/real');
     expect(vfsB.listMounts()).not.toContain('/mnt/real');
+  });
+
+  it('notifies watchers on peers when mount sync updates arrive', async () => {
+    const watcher = new FsWatcher();
+    const callback = vi.fn();
+    vfsB.setWatcher(watcher);
+    watcher.watch('/mnt', () => true, callback);
+
+    const fakeHandle = { kind: 'directory', name: 'fake' } as unknown as FileSystemDirectoryHandle;
+    await vfsA.mount('/mnt/real', fakeHandle);
+    expect(callback).toHaveBeenCalledWith([
+      { type: 'modify', path: '/mnt/real', entryType: 'directory' },
+    ]);
+
+    callback.mockClear();
+    vfsA.unmount('/mnt/real');
+    expect(callback).toHaveBeenCalledWith([
+      { type: 'modify', path: '/mnt/real', entryType: 'directory' },
+    ]);
   });
 
   it('does not sync between different dbNames', async () => {

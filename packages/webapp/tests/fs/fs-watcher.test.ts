@@ -95,4 +95,14 @@ describe('FsWatcher', () => {
     expect(wsCb).toHaveBeenCalled();
     expect(sharedCb).not.toHaveBeenCalled();
   });
+
+  it('does not match sibling prefixes outside the watched subtree', () => {
+    const watcher = new FsWatcher();
+    const callback = vi.fn();
+    watcher.watch('/workspace', () => true, callback);
+
+    watcher.notify([{ type: 'create', path: '/workspace-tools/foo.txt' }]);
+
+    expect(callback).not.toHaveBeenCalled();
+  });
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IFileSystem } from 'just-bash';
 import { createManCommand } from '../../../src/shell/supplemental-commands/man-command.js';
 
@@ -16,6 +16,10 @@ function createMockCtx() {
 }
 
 describe('man command', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('has correct name', () => {
     const cmd = createManCommand();
     expect(cmd.name).toBe('man');
@@ -46,15 +50,16 @@ describe('man command', () => {
   });
 
   it('fetches and returns plain text for valid topic', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      status: 200,
-      statusText: 'OK',
-      body: '<h1>Commands</h1><p>List of commands</p>',
-      headers: {},
-      url: '',
-    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => '<h1>Commands</h1><p>List of commands</p>',
+      })
+    );
 
-    const cmd = createManCommand(mockFetch);
+    const cmd = createManCommand();
     const result = await cmd.execute(['bash'], createMockCtx());
 
     expect(result.exitCode).toBe(0);
@@ -67,15 +72,16 @@ describe('man command', () => {
   });
 
   it('returns error for 404 response', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      status: 404,
-      statusText: 'Not Found',
-      body: 'Not found',
-      headers: {},
-      url: '',
-    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        text: async () => 'Not found',
+      })
+    );
 
-    const cmd = createManCommand(mockFetch);
+    const cmd = createManCommand();
     const result = await cmd.execute(['nonexistent'], createMockCtx());
 
     expect(result.exitCode).toBe(1);
@@ -83,9 +89,9 @@ describe('man command', () => {
   });
 
   it('handles network errors gracefully', async () => {
-    const mockFetch = vi.fn().mockRejectedValue(new Error('Network failure'));
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network failure')));
 
-    const cmd = createManCommand(mockFetch);
+    const cmd = createManCommand();
     const result = await cmd.execute(['bash'], createMockCtx());
 
     expect(result.exitCode).toBe(1);
@@ -93,15 +99,16 @@ describe('man command', () => {
   });
 
   it('strips HTML entities', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      status: 200,
-      statusText: 'OK',
-      body: '<p>A &amp; B &lt; C &gt; D &quot;E&quot; &#39;F&#39;</p>',
-      headers: {},
-      url: '',
-    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => '<p>A &amp; B &lt; C &gt; D &quot;E&quot; &#39;F&#39;</p>',
+      })
+    );
 
-    const cmd = createManCommand(mockFetch);
+    const cmd = createManCommand();
     const result = await cmd.execute(['test'], createMockCtx());
 
     expect(result.exitCode).toBe(0);
