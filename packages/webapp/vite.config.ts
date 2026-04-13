@@ -182,9 +182,9 @@ export default defineConfig(({ mode }) => ({
     alias: {
       // Buffer polyfill for isomorphic-git (browser compatibility)
       buffer: 'buffer/',
-      // isomorphic-git >=1.37.5 exports map points "." to index.cjs which
-      // calls require('crypto').createHash — Node-only, breaks in browsers.
-      // Force the ESM entry which uses sha.js (pure JS, browser-safe).
+      // The pinned isomorphic-git package resolves "." to index.cjs, and that
+      // CJS entry imports Node crypto. Force the browser-safe ESM entry
+      // instead.
       'isomorphic-git': resolve(workspaceRoot, 'node_modules/isomorphic-git/index.js'),
       // just-bash's browser bundle references node:zlib and node:module for
       // gzip/gunzip commands that aren't functional in browsers anyway.

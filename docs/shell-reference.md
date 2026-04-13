@@ -157,6 +157,8 @@ Then: / (full filesystem scan)
 Rule: First basename wins (no conflicts)
 ```
 
+`script-catalog.ts` is the shared lookup layer used by `WasmShell`, `which`, and browser-script matching. When an `FsWatcher` is present it caches discovery results and clears them on filesystem changes; mounted directories bypass the cache because external edits inside File System Access mounts are not observable through the watcher.
+
 **Execution**: Via `jsh-executor.ts` (dual-mode):
 
 - CLI: `AsyncFunction` constructor with Node-like globals
@@ -613,4 +615,4 @@ secret set API_KEY
 - **JSH executor**: `packages/webapp/src/shell/jsh-executor.ts`
 - **Binary cache**: `packages/webapp/src/shell/binary-cache.ts`
 - **Argument parser**: `packages/webapp/src/shell/parse-shell-args.ts`
-- **Discovery**: `packages/webapp/src/shell/jsh-discovery.ts`
+- **Discovery**: `packages/webapp/src/shell/script-catalog.ts`, `packages/webapp/src/shell/jsh-discovery.ts`

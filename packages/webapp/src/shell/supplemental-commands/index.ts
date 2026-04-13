@@ -1,4 +1,4 @@
-import type { Command, SecureFetch } from 'just-bash';
+import type { Command } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import { createCommandsCommand } from './help-command.js';
 import { createConvertCommand } from './convert-command.js';
@@ -37,6 +37,7 @@ import { createModelsCommand } from './models-command.js';
 import { createCostCommand } from './cost-command.js';
 import { createNukeCommand } from './nuke-command.js';
 import type { BrowserAPI } from '../../cdp/index.js';
+import type { ScriptCatalog } from '../script-catalog.js';
 export type {
   ImgcatCommandOptions as SupplementalCommandOptions,
   MediaPreviewItem,
@@ -47,10 +48,10 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   getJshCommands?: () => Promise<string[]>;
   /** VirtualFS instance for .jsh discovery, `which`, and playwright-cli session files. */
   fs?: VirtualFS;
+  /** Shared script discovery service for `.jsh`/`.bsh` lookup. */
+  scriptCatalog?: ScriptCatalog;
   /** Browser automation backend for playwright-cli aliases. Optional so aliases stay discoverable even without browser support. */
   browserAPI?: BrowserAPI;
-  /** Fetch function that routes through the CLI proxy when available. */
-  fetchFn?: SecureFetch;
 }
 
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {
@@ -75,9 +76,9 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createPdftkCommand('pdf'),
     createConvertCommand('convert'),
     createConvertCommand('magick'),
-    createWhichCommand(options.fs),
+    createWhichCommand({ fs: options.fs, scriptCatalog: options.scriptCatalog }),
     createUnameCommand(),
-    createManCommand(options.fetchFn),
+    createManCommand(),
     createOAuthTokenCommand(),
     createSecretCommand(),
     createRsyncCommand({ fs: options.fs }),

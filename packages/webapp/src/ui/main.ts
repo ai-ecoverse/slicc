@@ -1142,6 +1142,7 @@ async function main(): Promise<void> {
         const { BshWatchdog } = await import('../shell/bsh-watchdog.js');
         const bshWatchdog = new BshWatchdog({
           browserAPI: browser,
+          scriptCatalog: shell.getScriptCatalog(),
           fs: sharedFs,
         });
         void bshWatchdog.start();

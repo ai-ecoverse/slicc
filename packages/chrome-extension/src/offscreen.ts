@@ -317,12 +317,27 @@ async function init(): Promise<void> {
   if (sharedFs) {
     try {
       const { BshWatchdog } = await import('../../../packages/webapp/src/shell/bsh-watchdog.js');
+      const { ScriptCatalog } =
+        await import('../../../packages/webapp/src/shell/script-catalog.js');
+      const scriptCatalog = new ScriptCatalog({
+        jshFs: sharedFs,
+        bshFs: sharedFs,
+        watcher: sharedFs.getWatcher(),
+      });
       const bshWatchdog = new BshWatchdog({
         browserAPI: browser,
+        scriptCatalog,
         fs: sharedFs,
       });
       void bshWatchdog.start();
-      window.addEventListener('beforeunload', () => bshWatchdog.stop(), { once: true });
+      window.addEventListener(
+        'beforeunload',
+        () => {
+          bshWatchdog.stop();
+          scriptCatalog.dispose();
+        },
+        { once: true }
+      );
       console.log('[slicc-offscreen] BSH navigation watchdog started');
     } catch (e) {
       log.warn('Failed to start BSH watchdog in offscreen', e);

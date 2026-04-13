@@ -2,8 +2,23 @@ import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import { discoverJshCommands } from '../jsh-discovery.js';
+import type { ScriptCatalog } from '../script-catalog.js';
 
-export function createWhichCommand(fs?: VirtualFS): Command {
+export interface WhichCommandOptions {
+  fs?: VirtualFS;
+  scriptCatalog?: ScriptCatalog;
+}
+
+export function createWhichCommand(options: WhichCommandOptions | VirtualFS = {}): Command {
+  const resolvedOptions: WhichCommandOptions =
+    typeof (options as WhichCommandOptions).scriptCatalog !== 'undefined' ||
+    typeof (options as WhichCommandOptions).fs !== 'undefined'
+      ? (options as WhichCommandOptions)
+      : typeof (options as Partial<VirtualFS>).walk === 'function' &&
+          typeof (options as Partial<VirtualFS>).exists === 'function'
+        ? ({ fs: options as VirtualFS } satisfies WhichCommandOptions)
+        : {};
+
   return defineCommand('which', async (args, ctx) => {
     if (args.includes('--help') || args.includes('-h')) {
       return {
@@ -34,7 +49,11 @@ Exit code 0 if all commands found, 1 if any not found.
     const builtinSet = new Set(registeredCommands);
 
     // Discover .jsh commands via the shared discovery module
-    const jshCommands = fs ? await discoverJshCommands(fs) : new Map<string, string>();
+    const jshCommands = resolvedOptions.scriptCatalog
+      ? await resolvedOptions.scriptCatalog.getJshCommands()
+      : resolvedOptions.fs
+        ? await discoverJshCommands(resolvedOptions.fs)
+        : new Map<string, string>();
 
     const stdoutLines: string[] = [];
     let allFound = true;

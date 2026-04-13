@@ -8,7 +8,7 @@
 
 import type { Terminal } from '@xterm/xterm';
 import type { FitAddon } from '@xterm/addon-fit';
-import type { VirtualFS } from '../fs/index.js';
+import type { FsWatcher, VirtualFS } from '../fs/index.js';
 import { Bash, defineCommand, getCommandNames, getNetworkCommandNames } from 'just-bash';
 import type { BashExecResult, SecureFetch, Command } from 'just-bash';
 import { VfsAdapter } from './vfs-adapter.js';
@@ -22,15 +22,37 @@ import {
   createUpskillCommand,
 } from './supplemental-commands/upskill-command.js';
 import { MountCommands } from '../fs/mount-commands.js';
-import { discoverJshCommands, type JshDiscoveryFS } from './jsh-discovery.js';
+import type { BshDiscoveryFS } from './bsh-discovery.js';
+import type { JshDiscoveryFS } from './jsh-discovery.js';
 import { executeJshFile, executeJsCode } from './jsh-executor.js';
 import { parseShellArgs } from './parse-shell-args.js';
+import { ScriptCatalog } from './script-catalog.js';
 import { trackShellCommand } from '../ui/telemetry.js';
 
 function basename(path: string): string {
   const trimmed = path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
   const slash = trimmed.lastIndexOf('/');
   return slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
+}
+
+interface WatcherAwareFs {
+  getWatcher?(): FsWatcher | null;
+}
+
+interface UnderlyingFsProvider {
+  getUnderlyingFS?(): unknown;
+}
+
+function getFsWatcher(fs: unknown): FsWatcher | null {
+  if (fs && typeof (fs as WatcherAwareFs).getWatcher === 'function') {
+    return (fs as WatcherAwareFs).getWatcher?.() ?? null;
+  }
+
+  if (fs && typeof (fs as UnderlyingFsProvider).getUnderlyingFS === 'function') {
+    return getFsWatcher((fs as UnderlyingFsProvider).getUnderlyingFS?.());
+  }
+
+  return null;
 }
 
 /** Check if a content-type header indicates text (safe for UTF-8 decoding). */
@@ -238,6 +260,10 @@ export interface WasmShellOptions {
   browserAPI?: BrowserAPI;
   /** Optional: FS to use for .jsh discovery (defaults to fs). Useful for scoops where skill loading uses unrestricted VFS but the shell uses RestrictedFS. */
   jshDiscoveryFs?: JshDiscoveryFS;
+  /** Optional: FS to use for .bsh discovery (defaults to fs). */
+  bshDiscoveryFs?: BshDiscoveryFS;
+  /** Optional shared script catalog. When omitted, WasmShell creates and owns one. */
+  scriptCatalog?: ScriptCatalog;
 }
 
 type BashExecOptionsWithSignal = NonNullable<Parameters<Bash['exec']>[1]> & {
@@ -270,6 +296,8 @@ export class WasmShell {
   private cwd: string;
   /** Set of all built-in + custom command names (for shadowing protection). */
   private builtinCommandNames: Set<string>;
+  private readonly scriptCatalog: ScriptCatalog;
+  private readonly ownsScriptCatalog: boolean;
 
   constructor(private options: WasmShellOptions) {
     this.vfsAdapter = new VfsAdapter(options.fs);
@@ -293,17 +321,29 @@ export class WasmShell {
     // Initialize mount commands with VirtualFS
     this.mountCommands = new MountCommands({ fs: options.fs });
 
+    const scriptDiscoveryFs = options.jshDiscoveryFs ?? options.fs;
+    const bshDiscoveryFs = options.bshDiscoveryFs ?? options.fs;
+    const scriptWatcher = getFsWatcher(scriptDiscoveryFs) ?? getFsWatcher(bshDiscoveryFs);
+    this.scriptCatalog =
+      options.scriptCatalog ??
+      new ScriptCatalog({
+        jshFs: scriptDiscoveryFs,
+        bshFs: bshDiscoveryFs,
+        watcher: scriptWatcher,
+      });
+    this.ownsScriptCatalog = !options.scriptCatalog;
+
     // Create custom commands for just-bash
     const gitCommand = this.createGitCustomCommand();
-    const fetchFn = createProxiedFetch();
     const supplementalCommands = createSupplementalCommands({
       onMediaPreview: async (items) => this.renderMediaPreview(items),
       getJshCommands: () => this.getJshCommandNames(),
       fs: options.fs,
+      scriptCatalog: this.scriptCatalog,
       browserAPI: options.browserAPI,
-      fetchFn,
     });
     const mountCommand = this.createMountCustomCommand();
+    const fetchFn = createProxiedFetch();
 
     const customCommands = [
       gitCommand,
@@ -372,15 +412,19 @@ export class WasmShell {
     return this.cwd;
   }
 
+  /** Get the shared script catalog used for `.jsh`/`.bsh` discovery. */
+  getScriptCatalog(): ScriptCatalog {
+    return this.scriptCatalog;
+  }
+
   /** Get a copy of the environment. */
   getEnv(): Record<string, string> {
     return { ...this.lastEnv };
   }
 
-  /** Discover .jsh commands from VFS (fresh scan each call, no caching), filtering out built-in command names. */
+  /** Get discovered .jsh commands from the shared script catalog, filtering out built-in names. */
   private async getFilteredJshCommands(): Promise<Map<string, string>> {
-    const discoveryFs = this.options.jshDiscoveryFs ?? this.options.fs;
-    const all = await discoverJshCommands(discoveryFs);
+    const all = await this.scriptCatalog.getJshCommands();
     const filtered = new Map<string, string>();
     for (const [name, path] of all) {
       if (!this.builtinCommandNames.has(name)) {
@@ -392,8 +436,7 @@ export class WasmShell {
 
   /** Get currently discovered .jsh command names. */
   async getJshCommandNames(): Promise<string[]> {
-    const jshMap = await this.getFilteredJshCommands();
-    return [...jshMap.keys()];
+    return [...(await this.getFilteredJshCommands()).keys()];
   }
 
   /**
@@ -712,6 +755,9 @@ export class WasmShell {
     this.fitAddon = null;
     this.terminalHost = null;
     this.previewHost = null;
+    if (this.ownsScriptCatalog) {
+      this.scriptCatalog.dispose();
+    }
   }
 
   private showPrompt(): void {

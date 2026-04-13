@@ -23,6 +23,10 @@ interface WatchRegistration {
 
 let nextId = 0;
 
+function isWithinBasePath(path: string, basePath: string): boolean {
+  return basePath === '/' || path === basePath || path.startsWith(basePath + '/');
+}
+
 export class FsWatcher {
   private registrations = new Map<string, WatchRegistration>();
 
@@ -47,7 +51,9 @@ export class FsWatcher {
   notify(events: FsChangeEvent[]): void {
     if (events.length === 0) return;
     for (const [, reg] of this.registrations) {
-      const matched = events.filter((e) => e.path.startsWith(reg.basePath) && reg.filter(e.path));
+      const matched = events.filter(
+        (e) => isWithinBasePath(e.path, reg.basePath) && reg.filter(e.path)
+      );
       if (matched.length > 0) {
         try {
           reg.callback(matched);
