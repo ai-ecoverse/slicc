@@ -22,6 +22,7 @@ import type {
 import { FsError } from './types.js';
 import { normalizePath, splitPath, joinPath } from './path-utils.js';
 import type { FsWatcher } from './fs-watcher.js';
+import { saveMountEntry, removeMountEntry } from './mount-table-store.js';
 
 /** Maximum number of symlink hops before throwing ELOOP. */
 const MAX_SYMLINK_DEPTH = 10;
@@ -211,6 +212,8 @@ export class VirtualFS {
       /* Best-effort sync: local mount is already registered */
     }
     this.watcher?.notify([{ type: 'modify', path: normalized, entryType: 'directory' }]);
+    // Persist to IndexedDB (best-effort — don't block on it)
+    saveMountEntry(normalized, handle).catch(() => {});
   }
 
   /** Remove a mount point (the LFS placeholder directory is left in place). */
@@ -223,6 +226,8 @@ export class VirtualFS {
       /* best-effort sync */
     }
     this.watcher?.notify([{ type: 'modify', path: normalized, entryType: 'directory' }]);
+    // Remove from IndexedDB (best-effort)
+    removeMountEntry(normalized).catch(() => {});
   }
 
   /** Return the list of currently active mount paths. */

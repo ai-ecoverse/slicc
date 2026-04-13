@@ -227,7 +227,7 @@ export class ChatPanel {
   addLickMessage(
     id: string,
     content: string,
-    channel: 'webhook' | 'cron' | 'sprinkle' | 'fswatch'
+    channel: 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload'
   ): void {
     const msg: ChatMessage = {
       id,
