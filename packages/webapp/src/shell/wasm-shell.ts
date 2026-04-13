@@ -295,14 +295,15 @@ export class WasmShell {
 
     // Create custom commands for just-bash
     const gitCommand = this.createGitCustomCommand();
+    const fetchFn = createProxiedFetch();
     const supplementalCommands = createSupplementalCommands({
       onMediaPreview: async (items) => this.renderMediaPreview(items),
       getJshCommands: () => this.getJshCommandNames(),
       fs: options.fs,
       browserAPI: options.browserAPI,
+      fetchFn,
     });
     const mountCommand = this.createMountCustomCommand();
-    const fetchFn = createProxiedFetch();
 
     const customCommands = [
       gitCommand,
