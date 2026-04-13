@@ -47,6 +47,20 @@ export class ScoopsPanel {
     this.render();
   }
 
+  /** Clean up listeners and DOM elements */
+  dispose(): void {
+    if (this.mouseMoveBound) {
+      document.removeEventListener('mousemove', this.mouseMoveBound);
+      this.mouseMoveBound = null;
+    }
+    this.eyesEl?.remove();
+    this.eyesEl = null;
+    this.eyesSvg = null;
+    this.leftPupilGroup = null;
+    this.rightPupilGroup = null;
+    document.querySelectorAll('.scoop-fixed-tooltip').forEach((t) => t.remove());
+  }
+
   /** Toggle the nav rail expanded/collapsed state */
   toggleExpanded(): void {
     this.expanded = !this.expanded;
@@ -161,22 +175,28 @@ export class ScoopsPanel {
 
   /** Determine which jid should currently have the eyes */
   private resolveEyesOwner(): string | null {
-    // Priority 1: hover
-    if (this.hoveredJid) return this.hoveredJid;
+    // Priority 1: hover (verify element still exists in DOM)
+    if (this.hoveredJid && this.hasScoopItem(this.hoveredJid)) return this.hoveredJid;
     // Priority 2: most recently processing scoop/cone
     if (this.lastProcessingJid) {
       const status = this.scoopStatuses.get(this.lastProcessingJid);
-      if (status === 'processing') return this.lastProcessingJid;
+      if (status === 'processing' && this.hasScoopItem(this.lastProcessingJid))
+        return this.lastProcessingJid;
     }
     // Priority 3: any currently processing
     for (const [jid, status] of this.scoopStatuses) {
-      if (status === 'processing') {
+      if (status === 'processing' && this.hasScoopItem(jid)) {
         this.lastProcessingJid = jid;
         return jid;
       }
     }
     // Default: cone
     return this.coneJid;
+  }
+
+  /** Check if a scoop-item element exists for the given jid */
+  private hasScoopItem(jid: string): boolean {
+    return !!this.container.querySelector(`.scoop-item[data-jid="${CSS.escape(jid)}"]`);
   }
 
   /** Move the eyes element to the icon-wrap of the given jid */
@@ -187,7 +207,7 @@ export class ScoopsPanel {
     const targetJid = this.resolveEyesOwner();
     if (!targetJid) return;
 
-    const item = this.container.querySelector(`.scoop-item[data-jid="${targetJid}"]`);
+    const item = this.container.querySelector(`.scoop-item[data-jid="${CSS.escape(targetJid)}"]`);
     if (!item) return;
     const iconWrap = item.querySelector('.scoop-icon-wrap');
     if (!iconWrap) return;
