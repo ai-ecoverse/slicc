@@ -223,6 +223,16 @@ export class RestrictedFS {
       if (err instanceof FsError && err.code === 'EACCES') throw err;
       // Parent doesn't exist yet — will be created by recursive, original check suffices
     }
+    // Also check if destination itself is a symlink pointing outside sandbox
+    try {
+      const destStat = await this.vfs.lstat(path);
+      if (destStat.type === 'symlink') {
+        await this.resolveAndCheckWrite(path);
+      }
+    } catch (err) {
+      if (err instanceof FsError && err.code === 'EACCES') throw err;
+      // File doesn't exist yet — that's fine, no symlink to follow
+    }
     return this.vfs.writeFile(path, content, options);
   }
 
@@ -245,11 +255,18 @@ export class RestrictedFS {
 
   async rm(path: string, options?: RmOptions): Promise<void> {
     this.checkWrite(path);
+    // For symlinks, check only the link path (not target) — we're removing the link node
     try {
-      await this.resolveAndCheckWrite(path);
+      const st = await this.vfs.lstat(path);
+      if (st.type === 'symlink') {
+        // Link itself is in a writable area (already confirmed by checkWrite above)
+        // Don't resolve target — we're deleting the link, not the target
+      } else {
+        await this.resolveAndCheckWrite(path);
+      }
     } catch (err) {
       if (err instanceof FsError && err.code === 'EACCES') throw err;
-      // Path doesn't exist — let vfs.rm handle the error
+      // Path doesn't exist — let VFS handle the error
     }
     return this.vfs.rm(path, options);
   }
@@ -290,6 +307,16 @@ export class RestrictedFS {
       }
     } catch (err) {
       if (err instanceof FsError && err.code === 'EACCES') throw err;
+    }
+    // Also check if destination itself is a symlink pointing outside sandbox
+    try {
+      const destStat = await this.vfs.lstat(dest);
+      if (destStat.type === 'symlink') {
+        await this.resolveAndCheckWrite(dest);
+      }
+    } catch (err) {
+      if (err instanceof FsError && err.code === 'EACCES') throw err;
+      // File doesn't exist yet — that's fine, no symlink to follow
     }
     return this.vfs.copyFile(resolvedSrc, dest);
   }

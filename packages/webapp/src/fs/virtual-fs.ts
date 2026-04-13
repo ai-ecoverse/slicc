@@ -179,14 +179,22 @@ export class VirtualFS {
       /* EEXIST is fine */
     }
     this.mountPoints.set(normalized, handle);
-    this.mountSyncChannel?.postMessage({ type: 'mount', path: normalized, handle });
+    try {
+      this.mountSyncChannel?.postMessage({ type: 'mount', path: normalized, handle });
+    } catch {
+      /* Best-effort sync: local mount is already registered */
+    }
   }
 
   /** Remove a mount point (the LFS placeholder directory is left in place). */
   unmount(absolutePath: string): void {
     const normalized = normalizePath(absolutePath);
     this.mountPoints.delete(normalized);
-    this.mountSyncChannel?.postMessage({ type: 'unmount', path: normalized });
+    try {
+      this.mountSyncChannel?.postMessage({ type: 'unmount', path: normalized });
+    } catch {
+      /* best-effort sync */
+    }
   }
 
   /** Return the list of currently active mount paths. */

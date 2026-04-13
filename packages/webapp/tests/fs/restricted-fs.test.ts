@@ -337,6 +337,44 @@ describe('RestrictedFS', () => {
     });
   });
 
+  // ── Destination symlink escape and rm symlink tests ─────────────────
+
+  describe('destination symlink escape', () => {
+    let escVfs: VirtualFS;
+    let escRestricted: RestrictedFS;
+
+    beforeAll(async () => {
+      escVfs = await VirtualFS.create({ dbName: 'test-restricted-fs-dest-symlink', wipe: true });
+      await escVfs.mkdir('/scoops/my-scoop', { recursive: true });
+      await escVfs.mkdir('/outside', { recursive: true });
+      await escVfs.writeFile('/outside/secret', 'top secret');
+
+      escRestricted = new RestrictedFS(escVfs, ['/scoops/my-scoop/']);
+    });
+
+    it('writeFile through existing symlink pointing outside sandbox is blocked', async () => {
+      await escVfs.symlink('/outside/secret', '/scoops/my-scoop/escape-write');
+      await expect(
+        escRestricted.writeFile('/scoops/my-scoop/escape-write', 'hacked')
+      ).rejects.toThrow('EACCES');
+    });
+
+    it('copyFile to existing symlink pointing outside sandbox is blocked', async () => {
+      await escVfs.writeFile('/scoops/my-scoop/src.txt', 'source');
+      await escVfs.symlink('/outside/secret', '/scoops/my-scoop/escape-copy');
+      await expect(
+        escRestricted.copyFile('/scoops/my-scoop/src.txt', '/scoops/my-scoop/escape-copy')
+      ).rejects.toThrow('EACCES');
+    });
+
+    it('rm can delete a symlink whose target is outside writable prefixes', async () => {
+      await escVfs.symlink('/outside/data', '/scoops/my-scoop/rm-link');
+      // Should succeed — we're removing the link node, not the target
+      await escRestricted.rm('/scoops/my-scoop/rm-link');
+      expect(await escVfs.exists('/scoops/my-scoop/rm-link')).toBe(false);
+    });
+  });
+
   it('rename checks both paths', async () => {
     await restricted.writeFile('/scoops/andy-scoop/rename-src.txt', 'src');
     // Rename within allowed - should work
