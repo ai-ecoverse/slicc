@@ -452,7 +452,7 @@ export const streamBedrockCamp = (
       if (!body.toolConfig) delete body.toolConfig;
       if (!body.additionalModelRequestFields) delete body.additionalModelRequestFields;
 
-      options?.onPayload?.(body, model);
+      options?.onPayload?.(body);
 
       // Build URL: POST {baseUrl}/model/{modelId}/converse
       const targetUrl = `${baseUrl.replace(/\/$/, '')}/model/${encodeURIComponent(model.id)}/converse`;

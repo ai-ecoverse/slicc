@@ -277,4 +277,14 @@ describe('WasmShell playwright command discoverability', () => {
     expect(openResult.exitCode).toBe(1);
     expect(openResult.stderr).toContain('browser APIs are unavailable');
   });
+
+  it('accepts an external AbortSignal when executing commands programmatically', async () => {
+    const shell = new WasmShell({ fs });
+    const controller = new AbortController();
+
+    const result = await shell.executeCommand('pwd', controller.signal);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('/');
+  });
 });
