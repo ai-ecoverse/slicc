@@ -240,6 +240,10 @@ export interface WasmShellOptions {
   jshDiscoveryFs?: JshDiscoveryFS;
 }
 
+type BashExecOptionsWithSignal = NonNullable<Parameters<Bash['exec']>[1]> & {
+  signal?: AbortSignal;
+};
+
 export class WasmShell {
   private bash: Bash;
   private vfsAdapter: VfsAdapter;
@@ -447,11 +451,15 @@ export class WasmShell {
     const commandName = command.trim().split(/\s+/)[0] || 'unknown';
     trackShellCommand(commandName);
 
-    const result = await this.bash.exec(command, {
+    // just-bash's published ExecOptions type does not yet expose AbortSignal,
+    // but WasmShell still forwards it so external callers and terminal Ctrl+C
+    // keep a consistent cancellation path as the shell runtime evolves.
+    const execOptions: BashExecOptionsWithSignal = {
       env: this.lastEnv,
       cwd: this.cwd,
       signal: signal ?? this.execAbort?.signal,
-    });
+    };
+    const result = await this.bash.exec(command, execOptions);
     // Persist state for next call
     if (result.env) {
       this.lastEnv = { ...result.env };
