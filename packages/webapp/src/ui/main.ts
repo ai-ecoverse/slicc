@@ -79,6 +79,7 @@ import {
 } from '../shell/supplemental-commands/playwright-command.js';
 import { SprinkleManager } from './sprinkle-manager.js';
 import { initTelemetry } from './telemetry.js';
+import { getAllMountEntries } from '../fs/mount-table-store.js';
 import { formatAcceptedHandoffMessage } from './accepted-handoff-message.js';
 import { StandaloneHandoffWatcher } from './standalone-handoff-watcher.js';
 import type { PendingHandoff } from '../../../chrome-extension/src/messages.js';
@@ -1306,20 +1307,25 @@ async function main(): Promise<void> {
     const isWebhook = event.type === 'webhook';
     const isSprinkle = event.type === 'sprinkle';
     const isFsWatch = event.type === 'fswatch';
+    const isSessionReload = event.type === 'session-reload';
     const eventName = isWebhook
       ? event.webhookName
       : isSprinkle
         ? event.sprinkleName
         : isFsWatch
           ? event.fswatchName
-          : event.cronName;
+          : isSessionReload
+            ? 'session-reload'
+            : event.cronName;
     const eventId = isWebhook
       ? event.webhookId
       : isSprinkle
         ? event.sprinkleName
         : isFsWatch
           ? event.fswatchId
-          : event.cronId;
+          : isSessionReload
+            ? 'session-reload'
+            : event.cronId;
     const channel = event.type;
 
     log.debug('Lick event', { type: event.type, name: eventName, targetScoop: event.targetScoop });
@@ -1404,7 +1410,9 @@ async function main(): Promise<void> {
           ? 'Sprinkle Event'
           : isFsWatch
             ? 'File Watch Event'
-            : 'Cron Event';
+            : isSessionReload
+              ? 'Session Reload'
+              : 'Cron Event';
       const content = `[${eventLabel}: ${eventName}]\n\`\`\`json\n${JSON.stringify(event.body, null, 2)}\n\`\`\``;
 
       const msg: ChannelMessage = {
@@ -1431,7 +1439,7 @@ async function main(): Promise<void> {
         layout.panels.chat.addLickMessage(
           msgId,
           content,
-          channel as 'webhook' | 'cron' | 'sprinkle' | 'fswatch'
+          channel as 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload'
         );
       }
 
@@ -1447,6 +1455,46 @@ async function main(): Promise<void> {
   };
 
   lickManager.setEventHandler(routeLickToScoop);
+
+  // ── Restore persisted mounts from IndexedDB ──────────────────────────
+  if (sharedFs) {
+    getAllMountEntries()
+      .then(async (entries) => {
+        if (entries.length === 0) return;
+        const needsRemount: Array<{ path: string; dirName: string }> = [];
+        for (const { path, handle } of entries) {
+          try {
+            if (!('queryPermission' in handle)) {
+              needsRemount.push({ path, dirName: handle.name });
+              continue;
+            }
+            const perm = await (
+              handle as unknown as {
+                queryPermission: (desc: { mode: string }) => Promise<string>;
+              }
+            ).queryPermission({ mode: 'readwrite' });
+            if (perm === 'granted') {
+              await sharedFs.mount(path, handle);
+              log.info('Restored mount from previous session', { path, name: handle.name });
+            } else {
+              needsRemount.push({ path, dirName: handle.name });
+            }
+          } catch {
+            needsRemount.push({ path, dirName: handle.name });
+          }
+        }
+        if (needsRemount.length > 0) {
+          const event: LickEvent = {
+            type: 'session-reload',
+            targetScoop: undefined,
+            timestamp: new Date().toISOString(),
+            body: { reason: 'mount-recovery', mounts: needsRemount },
+          };
+          routeLickToScoop(event);
+        }
+      })
+      .catch((err) => log.warn('Failed to restore persisted mounts', err));
+  }
 
   // Wire inline sprinkle lick callback — routes to cone as a sprinkle lick event
   layout.panels.chat.onInlineSprinkleLick = (action: string, data: unknown) => {
