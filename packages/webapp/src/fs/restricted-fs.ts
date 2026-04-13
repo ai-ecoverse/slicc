@@ -39,10 +39,16 @@ export class RestrictedFS {
     this.readOnlyPrefixes = readOnlyPaths.map(normalize);
   }
 
+  /** Get all prefixes including dynamic mount paths (as read-only). */
+  private getAllPrefixes(): string[] {
+    const mountPrefixes = this.vfs.listMounts().map((p) => (p.endsWith('/') ? p : p + '/'));
+    return [...this.allowedPrefixes, ...this.readOnlyPrefixes, ...mountPrefixes];
+  }
+
   /** Check if a path is within or is a parent of allowed or read-only prefixes. */
   private isAllowed(path: string): boolean {
     const normalized = normalizePath(path);
-    const allPrefixes = [...this.allowedPrefixes, ...this.readOnlyPrefixes];
+    const allPrefixes = this.getAllPrefixes();
     return allPrefixes.some(
       (prefix) =>
         normalized === prefix.slice(0, -1) ||
@@ -55,7 +61,7 @@ export class RestrictedFS {
   /** Check if a path is within allowed or read-only prefixes (strict — no parent access). */
   private isAllowedStrict(path: string): boolean {
     const normalized = normalizePath(path);
-    const allPrefixes = [...this.allowedPrefixes, ...this.readOnlyPrefixes];
+    const allPrefixes = this.getAllPrefixes();
     return allPrefixes.some(
       (prefix) => normalized === prefix.slice(0, -1) || normalized.startsWith(prefix)
     );
@@ -76,6 +82,34 @@ export class RestrictedFS {
     }
   }
 
+  /** Resolve symlinks and verify the resolved path is still within allowed read areas. */
+  private async resolveAndCheckRead(path: string): Promise<string> {
+    try {
+      const resolved = await this.vfs.realpath(path);
+      if (!this.isAllowedStrict(resolved)) {
+        throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
+      }
+      return resolved;
+    } catch (err) {
+      if (err instanceof FsError) throw err;
+      throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
+    }
+  }
+
+  /** Resolve symlinks and verify the resolved path is still within writable areas. */
+  private async resolveAndCheckWrite(path: string): Promise<string> {
+    try {
+      const resolved = await this.vfs.realpath(path);
+      if (!this.isWritable(resolved)) {
+        throw new FsError('EACCES', 'permission denied', normalizePath(path));
+      }
+      return resolved;
+    } catch (err) {
+      if (err instanceof FsError) throw err;
+      throw new FsError('EACCES', 'permission denied', normalizePath(path));
+    }
+  }
+
   /** Get the underlying unrestricted VirtualFS (cone-only escape hatch). */
   getUnderlyingFS(): VirtualFS {
     return this.vfs;
@@ -92,12 +126,22 @@ export class RestrictedFS {
     if (!this.isAllowedStrict(path)) {
       throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
     }
-    return this.vfs.readFile(path, options);
+    const resolved = await this.resolveAndCheckRead(path);
+    return this.vfs.readFile(resolved, options);
   }
 
   async readDir(path: string): Promise<DirEntry[]> {
     if (!this.isAllowed(path)) return [];
-    const entries = await this.vfs.readDir(path);
+    // Resolve symlinks on the directory path itself when strictly allowed
+    let resolvedPath = path;
+    if (this.isAllowedStrict(path)) {
+      try {
+        resolvedPath = await this.resolveAndCheckRead(path);
+      } catch {
+        return [];
+      }
+    }
+    const entries = await this.vfs.readDir(resolvedPath);
     // If this is a parent dir (not strictly allowed), filter to only entries
     // that lead toward allowed paths
     if (!this.isAllowedStrict(path)) {
@@ -114,11 +158,22 @@ export class RestrictedFS {
     if (!this.isAllowed(path)) {
       throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
     }
+    if (this.isAllowedStrict(path)) {
+      const resolved = await this.resolveAndCheckRead(path);
+      return this.vfs.stat(resolved);
+    }
     return this.vfs.stat(path);
   }
 
   async exists(path: string): Promise<boolean> {
     if (!this.isAllowed(path)) return false;
+    if (this.isAllowedStrict(path)) {
+      try {
+        await this.resolveAndCheckRead(path);
+      } catch {
+        return false;
+      }
+    }
     return this.vfs.exists(path);
   }
 
@@ -126,12 +181,21 @@ export class RestrictedFS {
     if (!this.isAllowedStrict(path)) {
       throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
     }
-    return this.vfs.readTextFile(path);
+    const resolved = await this.resolveAndCheckRead(path);
+    return this.vfs.readTextFile(resolved);
   }
 
   async *walk(path: string): AsyncGenerator<string> {
     if (!this.isAllowed(path)) return;
-    for await (const filePath of this.vfs.walk(path)) {
+    let resolvedBase = path;
+    if (this.isAllowedStrict(path)) {
+      try {
+        resolvedBase = await this.resolveAndCheckRead(path);
+      } catch {
+        return;
+      }
+    }
+    for await (const filePath of this.vfs.walk(resolvedBase)) {
       if (this.isAllowed(filePath)) {
         yield filePath;
       }
@@ -146,22 +210,65 @@ export class RestrictedFS {
     options?: { recursive?: boolean }
   ): Promise<void> {
     this.checkWrite(path);
+    // Resolve symlinks in parent path to prevent escape via symlinked directories.
+    // The file itself may not exist yet, so resolve the parent directory.
+    const dir = this.vfs.dirname(path);
+    const base = this.vfs.basename(path);
+    try {
+      const resolvedDir = await this.vfs.realpath(dir);
+      if (!this.isWritable(resolvedDir + '/' + base)) {
+        throw new FsError('EACCES', 'permission denied', normalizePath(path));
+      }
+    } catch (err) {
+      if (err instanceof FsError && err.code === 'EACCES') throw err;
+      // Parent doesn't exist yet — will be created by recursive, original check suffices
+    }
     return this.vfs.writeFile(path, content, options);
   }
 
   async mkdir(path: string, options?: MkdirOptions): Promise<void> {
     this.checkWrite(path);
+    // Resolve symlinks in parent to prevent escape
+    const dir = this.vfs.dirname(path);
+    const base = this.vfs.basename(path);
+    try {
+      const resolvedDir = await this.vfs.realpath(dir);
+      if (!this.isWritable(resolvedDir + '/' + base)) {
+        throw new FsError('EACCES', 'permission denied', normalizePath(path));
+      }
+    } catch (err) {
+      if (err instanceof FsError && err.code === 'EACCES') throw err;
+      // Parent doesn't exist — recursive mkdir will handle, original check suffices
+    }
     return this.vfs.mkdir(path, options);
   }
 
   async rm(path: string, options?: RmOptions): Promise<void> {
     this.checkWrite(path);
+    try {
+      await this.resolveAndCheckWrite(path);
+    } catch (err) {
+      if (err instanceof FsError && err.code === 'EACCES') throw err;
+      // Path doesn't exist — let vfs.rm handle the error
+    }
     return this.vfs.rm(path, options);
   }
 
   async rename(oldPath: string, newPath: string): Promise<void> {
     this.checkWrite(oldPath);
     this.checkWrite(newPath);
+    // Resolve symlinks in both paths to prevent escape
+    await this.resolveAndCheckWrite(oldPath);
+    const destDir = this.vfs.dirname(newPath);
+    const destBase = this.vfs.basename(newPath);
+    try {
+      const resolvedDir = await this.vfs.realpath(destDir);
+      if (!this.isWritable(resolvedDir + '/' + destBase)) {
+        throw new FsError('EACCES', 'permission denied', normalizePath(newPath));
+      }
+    } catch (err) {
+      if (err instanceof FsError && err.code === 'EACCES') throw err;
+    }
     return this.vfs.rename(oldPath, newPath);
   }
 
@@ -171,13 +278,37 @@ export class RestrictedFS {
       throw new FsError('ENOENT', 'no such file or directory', normalizePath(src));
     }
     this.checkWrite(dest);
-    return this.vfs.copyFile(src, dest);
+    // Resolve symlinks in source path
+    const resolvedSrc = await this.resolveAndCheckRead(src);
+    // Resolve symlinks in dest parent
+    const destDir = this.vfs.dirname(dest);
+    const destBase = this.vfs.basename(dest);
+    try {
+      const resolvedDir = await this.vfs.realpath(destDir);
+      if (!this.isWritable(resolvedDir + '/' + destBase)) {
+        throw new FsError('EACCES', 'permission denied', normalizePath(dest));
+      }
+    } catch (err) {
+      if (err instanceof FsError && err.code === 'EACCES') throw err;
+    }
+    return this.vfs.copyFile(resolvedSrc, dest);
   }
 
   // ── Symlink operations ───────────────────────────────────────────────
 
   async symlink(target: string, linkPath: string): Promise<void> {
     this.checkWrite(linkPath);
+    // Resolve symlinks in the link path's parent to prevent escape
+    const linkDir = this.vfs.dirname(linkPath);
+    const linkBase = this.vfs.basename(linkPath);
+    try {
+      const resolvedDir = await this.vfs.realpath(linkDir);
+      if (!this.isWritable(resolvedDir + '/' + linkBase)) {
+        throw new FsError('EACCES', 'permission denied', normalizePath(linkPath));
+      }
+    } catch (err) {
+      if (err instanceof FsError && err.code === 'EACCES') throw err;
+    }
     return this.vfs.symlink(target, linkPath);
   }
 
@@ -185,7 +316,19 @@ export class RestrictedFS {
     if (!this.isAllowedStrict(path)) {
       throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
     }
-    return this.vfs.readlink(path);
+    const target = await this.vfs.readlink(path);
+    // Resolve the target relative to the link's parent to get the absolute path
+    let absoluteTarget: string;
+    if (target.startsWith('/')) {
+      absoluteTarget = normalizePath(target);
+    } else {
+      const linkDir = this.vfs.dirname(path);
+      absoluteTarget = normalizePath(linkDir + '/' + target);
+    }
+    if (!this.isAllowedStrict(absoluteTarget)) {
+      throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
+    }
+    return target;
   }
 
   async lstat(path: string): Promise<Stats> {
