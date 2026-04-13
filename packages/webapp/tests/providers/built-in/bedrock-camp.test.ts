@@ -5,7 +5,7 @@ import { getApiProvider } from '@mariozechner/pi-ai';
 import {
   register,
   config,
-  streamBedrockCamp,
+  streamSimpleBedrockCamp,
 } from '../../../src/providers/built-in/bedrock-camp.js';
 
 // Call register manually since built-in modules use explicit registration
@@ -36,7 +36,7 @@ describe('bedrock-camp built-in provider', () => {
     expect(typeof provider!.streamSimple).toBe('function');
   });
 
-  it('passes only the request payload to onPayload before sending the converse request', async () => {
+  it('passes the request payload and resolved model to onPayload before sending the converse request', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -52,12 +52,14 @@ describe('bedrock-camp built-in provider', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const payloads: unknown[] = [];
-    const stream = streamBedrockCamp(
+    const models: unknown[] = [];
+    const stream = streamSimpleBedrockCamp(
       {
         id: 'anthropic.claude-sonnet-4-6',
         provider: 'bedrock-camp',
         api: 'bedrock-camp-converse',
         baseUrl: 'https://bedrock-runtime.us-west-2.amazonaws.com',
+        maxTokens: 200000,
         cost: {
           input: 0,
           output: 0,
@@ -70,9 +72,10 @@ describe('bedrock-camp built-in provider', () => {
       } as any,
       {
         apiKey: 'ABSK-test',
-        onPayload(payload) {
-          expect(arguments).toHaveLength(1);
+        onPayload(payload, model) {
+          expect(arguments).toHaveLength(2);
           payloads.push(payload);
+          models.push(model);
         },
       }
     );
@@ -94,6 +97,11 @@ describe('bedrock-camp built-in provider', () => {
       })
     );
     expect(payloads).toHaveLength(1);
+    expect(models).toHaveLength(1);
+    expect(models[0]).toMatchObject({
+      id: 'anthropic.claude-sonnet-4-6',
+      api: 'bedrock-camp-converse',
+    });
     expect(payloads[0]).toEqual(
       expect.objectContaining({
         modelId: 'anthropic.claude-sonnet-4-6',

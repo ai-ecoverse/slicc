@@ -47,10 +47,31 @@ export const config: ProviderConfig = {
 // Extension detection
 const isExtension = typeof chrome !== 'undefined' && !!(chrome as any)?.runtime?.id;
 
-interface BedrockCampOptions extends StreamOptions {
+type BedrockCampOnPayload =
+  | ((payload: unknown) => void)
+  | ((payload: unknown, model: Model<Api>) => void);
+
+interface BedrockCampOptions extends Omit<StreamOptions, 'onPayload'> {
+  onPayload?: BedrockCampOnPayload;
   toolChoice?: 'auto' | 'any' | 'none' | { type: 'tool'; name: string };
   reasoning?: ThinkingLevel;
   thinkingBudgets?: ThinkingBudgets;
+}
+
+type BedrockCampSimpleOptions = Omit<SimpleStreamOptions, 'onPayload'> & {
+  onPayload?: BedrockCampOnPayload;
+};
+
+function notifyPayload(
+  onPayload: BedrockCampOnPayload | undefined,
+  payload: unknown,
+  model: Model<Api>
+): void {
+  if (!onPayload) return;
+  // Bedrock CAMP callers inspect both the serialized payload and the resolved
+  // model. Plain StreamOptions callbacks remain valid because extra arguments
+  // are ignored in JavaScript.
+  (onPayload as (payload: unknown, model: Model<Api>) => void)(payload, model);
 }
 
 // ── Message conversion ──────────────────────────────────────────────
@@ -452,7 +473,7 @@ export const streamBedrockCamp = (
       if (!body.toolConfig) delete body.toolConfig;
       if (!body.additionalModelRequestFields) delete body.additionalModelRequestFields;
 
-      options?.onPayload?.(body);
+      notifyPayload(options.onPayload, body, model);
 
       // Build URL: POST {baseUrl}/model/{modelId}/converse
       const targetUrl = `${baseUrl.replace(/\/$/, '')}/model/${encodeURIComponent(model.id)}/converse`;
@@ -507,9 +528,18 @@ export const streamBedrockCamp = (
 export const streamSimpleBedrockCamp = (
   model: Model<Api>,
   context: Context,
-  options?: SimpleStreamOptions
+  options?: BedrockCampSimpleOptions
 ): AssistantMessageEventStream => {
-  const base = buildBaseOptions(model, options, undefined);
+  const base = buildBaseOptions(
+    model,
+    options && {
+      ...options,
+      onPayload: options.onPayload
+        ? (payload) => notifyPayload(options.onPayload, payload, model)
+        : undefined,
+    },
+    undefined
+  );
   if (!options?.reasoning) {
     return streamBedrockCamp(model, context, { ...base, reasoning: undefined });
   }
