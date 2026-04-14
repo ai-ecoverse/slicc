@@ -33,10 +33,10 @@ Releases are automated with semantic-release. Maintainers do not cut version tag
 ### End-to-end flow
 
 1. Merge or push conventional-commit changes onto `main`, or manually dispatch `.github/workflows/release.yml` against `main`.
-2. The release workflow runs `npm ci`, `npm run typecheck`, `npm run test`, `npm run build`, and `npm run build:extension` before calling `npx semantic-release`.
+2. The release workflow runs `npm ci`, `npm run typecheck`, `npm run test`, and `npm run build` before calling `npx semantic-release`.
 3. `.releaserc.json` limits publishing to `main`, so the semantic-release run exits without publishing when invoked from other refs.
-4. During the semantic-release `prepare` step, `@semantic-release/npm` updates `package.json` to the computed release version, `node dist/node-server/sync-release-version.js <version>` updates the root `manifest.json`, and `npm run build:extension && npm run package:release` regenerate versioned release assets in `artifacts/release/`.
-5. During publish, semantic-release publishes the `sliccy` npm package via GitHub Actions OIDC trusted publishing and creates a GitHub Release with generated release notes plus the packaged assets from `artifacts/release/`.
+4. During the semantic-release `prepare` step, `@semantic-release/npm` updates `package.json` to the computed release version, `node dist/node-server/sync-release-version.js <version>` updates the extension `manifest.json`, and `npm run build -w @slicc/chrome-extension && npm run package:release` regenerate versioned release assets in `artifacts/release/`.
+5. During publish, semantic-release publishes the `sliccy` npm package via GitHub Actions OIDC trusted publishing, runs `npm run publish:worker` and `npm run publish:chrome`, and then creates a GitHub Release with generated release notes plus the packaged assets from `artifacts/release/`.
 
 ### GitHub Release outputs
 
@@ -60,6 +60,11 @@ Each published GitHub Release includes semantic-release generated release notes 
 - Commit format: merges intended to trigger releases must use conventional commits so semantic-release can determine the next version.
 - npm trusted publisher: configure the `sliccy` package on npm to trust this repository's GitHub Actions release workflow. npm exposes trusted publishers per package in the package settings UI, and each package can only have one trusted publisher configured at a time.
 - First publish bootstrap: npm trusted publishing cannot do the very first publish for a brand-new package. A maintainer must publish the initial `sliccy` version manually/bootstrap it once so the package exists on npm, then attach the trusted publisher for subsequent GitHub Actions OIDC releases from `main`.
+- Chrome Web Store service account: enable the Chrome Web Store API in Google Cloud, create a service account, and add that service-account email in the Chrome Web Store Developer Dashboard for this publisher.
+- GitHub Actions release env for Chrome Web Store:
+  - repo secret `CHROME_WEB_STORE_SERVICE_ACCOUNT_JSON` containing the service-account JSON key
+  - repo variables `CHROME_WEB_STORE_PUBLISHER_ID` and `CHROME_WEB_STORE_ITEM_ID`
+  - optional repo variables `CHROME_WEB_STORE_PUBLISH_TYPE`, `CHROME_WEB_STORE_DEPLOY_PERCENTAGE`, and `CHROME_WEB_STORE_SKIP_REVIEW`
 - GitHub permissions: the release workflow must keep GitHub Actions `contents: write` access so semantic-release can create tags/releases and upload release assets, plus `id-token: write` so npm trusted publishing can mint the OIDC token. If you replace the default `GITHUB_TOKEN`, use a token with equivalent release/asset write access.
 
 ### Local packaging and dry-run checks
@@ -68,11 +73,18 @@ Run the packaging flow after the normal production builds:
 
 ```bash
 npm run build
-npm run build:extension
 npm run package:release
 ```
 
 For a local semantic-release config check, run `npx semantic-release --dry-run --no-ci` from a clone of `main` with full git history. This validates branch/configuration and GitHub release wiring, but local runs do not receive the GitHub Actions OIDC token that npm trusted publishing uses in CI.
+
+To validate the Chrome Web Store publisher locally after `npm run package:release`, export the Chrome Web Store env vars above and run:
+
+```bash
+npm run publish:chrome
+```
+
+If the Chrome Web Store env vars are all unset, `npm run publish:chrome` exits without publishing. If the configuration is partial, it fails fast with the missing variable names.
 
 When `WORKER_BASE_URL` is set for the CLI/Electron server, the standalone browser runtime now exposes it at `/api/runtime-config` and the cone runtime will automatically create/attach a tray leader session on startup. Passing `--lead` to the CLI launches Chrome with the canonical `?tray=<worker-base-url>` query, and successful leader attach rewrites the visible URL to `?tray=<worker-base-url>/tray/<trayId>`. Passing `--join <join-url>` launches Chrome with the canonical `?tray=<join-url>` follower capability instead; the CLI validates that the value parses as a tray `.../join/<trayId>.<secret>` URL and strips any hash/query suffixes before launch. In standalone/Electron startup, if there is no query override, stored join/base URL, server runtime config, or `VITE_WORKER_BASE_URL`, the browser falls back to the staging worker in dev builds and the production worker in normal builds. Extension/offscreen builds can still use `VITE_WORKER_BASE_URL`, persisted runtime storage, or URL overrides via `tray` (canonical) plus legacy `lead` / `trayWorkerUrl` for the same leader-join path. `GET /join/:token` now reports readiness plus the supported bootstrap transport (`409 FOLLOWER_JOIN_NOT_READY` before a live leader, `200` with `signaling.transport = 'http-poll'` once the leader WebSocket is live), while **`POST /join/:token` remains the follower HTTP contract**: initial attach returns `result.action = wait|signal|fail`, and subsequent `poll` / `answer` / `ice-candidate` / `retry` actions drive the offer/answer/ICE bootstrap without requiring follower-owned tray WebSockets.
 

@@ -13,6 +13,7 @@ import { Bash, defineCommand, getCommandNames, getNetworkCommandNames } from 'ju
 import type { BashExecResult, SecureFetch, Command } from 'just-bash';
 import { VfsAdapter } from './vfs-adapter.js';
 import { cacheBinaryBody, cacheBinaryByUrl } from './binary-cache.js';
+import { getFetchBodyBytes } from './fetch-body.js';
 import { GitCommands } from '../git/git-commands.js';
 import { createSupplementalCommands } from './supplemental-commands.js';
 import type { MediaPreviewItem } from './supplemental-commands.js';
@@ -129,9 +130,8 @@ function prepareRequestBody(
   if (!body) return undefined;
   const ct = headers?.['Content-Type'] ?? headers?.['content-type'] ?? '';
   if (ct.includes('multipart/form-data')) {
-    const bytes = new Uint8Array(body.length);
-    for (let i = 0; i < body.length; i++) bytes[i] = body.charCodeAt(i);
-    return bytes;
+    const bytes = Uint8Array.from(getFetchBodyBytes(body));
+    return new Blob([bytes.buffer]);
   }
   return body;
 }

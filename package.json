@@ -44,6 +44,8 @@
     "start:extension": "npm run build -w @slicc/chrome-extension && npm run dev -- --profile=extension",
     "lint": "prettier --write . && eslint . --fix",
     "package:release": "node dist/node-server/release-package.js",
+    "publish:chrome": "node dist/node-server/publish-chrome-web-store.js",
+    "publish:worker": "echo \"$CLOUDFLARE_TURN_API_TOKEN\" | npx wrangler secret put CLOUDFLARE_TURN_API_TOKEN --config packages/cloudflare-worker/wrangler.jsonc && npx wrangler deploy --config packages/cloudflare-worker/wrangler.jsonc && MAX_ATTEMPTS=6; for attempt in $(seq 1 \"$MAX_ATTEMPTS\"); do if npx vitest run --project cloudflare-worker packages/cloudflare-worker/tests/deployed.test.ts; then exit 0; fi; if [ \"$attempt\" -eq \"$MAX_ATTEMPTS\" ]; then echo \"Deployed smoke test failed after $MAX_ATTEMPTS attempts\"; exit 1; fi; echo \"Deployed smoke test failed on attempt $attempt; waiting for edge propagation before retrying...\"; sleep 15; done",
     "prepare": "husky"
   },
   "dependencies": {
