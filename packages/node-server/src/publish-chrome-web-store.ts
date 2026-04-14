@@ -39,6 +39,7 @@ export interface ChromeWebStoreConfig {
   itemId: string;
   publishType?: 'DEFAULT_PUBLISH' | 'STAGED_PUBLISH';
   deployPercentage?: number;
+  dryRun?: boolean;
   forceCancelPendingReview?: boolean;
   skipReview?: boolean;
   serviceAccount: ServiceAccountCredentials;
@@ -168,6 +169,7 @@ export function readChromeWebStoreConfig(
   const base64Credentials = getEnvValue(env, 'CHROME_WEB_STORE_SERVICE_ACCOUNT_JSON_BASE64');
   const publishType = getEnvValue(env, 'CHROME_WEB_STORE_PUBLISH_TYPE');
   const deployPercentage = getEnvValue(env, 'CHROME_WEB_STORE_DEPLOY_PERCENTAGE');
+  const dryRun = getEnvValue(env, 'CHROME_WEB_STORE_DRY_RUN');
   const forceCancelPendingReview = getEnvValue(env, 'CHROME_WEB_STORE_FORCE_CANCEL_PENDING');
   const skipReview = getEnvValue(env, 'CHROME_WEB_STORE_SKIP_REVIEW');
 
@@ -178,6 +180,7 @@ export function readChromeWebStoreConfig(
     base64Credentials,
     publishType,
     deployPercentage,
+    dryRun,
     forceCancelPendingReview,
     skipReview,
   ].some(Boolean);
@@ -203,6 +206,7 @@ export function readChromeWebStoreConfig(
     itemId: itemId!,
     publishType: parseOptionalPublishType(publishType),
     deployPercentage: parseOptionalPercentage(deployPercentage),
+    dryRun: parseOptionalBoolean(dryRun, 'CHROME_WEB_STORE_DRY_RUN'),
     forceCancelPendingReview: parseOptionalBoolean(
       forceCancelPendingReview,
       'CHROME_WEB_STORE_FORCE_CANCEL_PENDING'
@@ -441,6 +445,16 @@ async function ensureSubmissionCanProceed(
     return { skipped: false, status };
   }
 
+  if (config.dryRun) {
+    const outcome = config.forceCancelPendingReview
+      ? 'would cancel the pending review and resubmit'
+      : 'would skip Chrome publish';
+    log.warn(
+      `Dry run: Chrome Web Store item ${config.itemId} already has a revision pending review, so the release ${outcome}.`
+    );
+    return { skipped: true, status };
+  }
+
   if (!config.forceCancelPendingReview) {
     log.warn(
       `Skipping Chrome Web Store publish for item ${config.itemId} because a revision is already pending review. Set CHROME_WEB_STORE_FORCE_CANCEL_PENDING=true to cancel the pending review and resubmit automatically.`
@@ -461,6 +475,23 @@ async function ensureSubmissionCanProceed(
     maxAttempts
   );
   return { skipped: false, status: updatedStatus };
+}
+
+function logChromeWebStoreItemWarnings(
+  config: ChromeWebStoreConfig,
+  status: FetchStatusResponse,
+  log: Pick<Console, 'warn'>
+): void {
+  if (status.warned) {
+    log.warn(
+      `Chrome Web Store item ${config.itemId} is currently warned in the developer dashboard.`
+    );
+  }
+  if (status.takenDown) {
+    log.warn(
+      `Chrome Web Store item ${config.itemId} is currently taken down in the developer dashboard.`
+    );
+  }
 }
 
 async function publishItem(
@@ -540,6 +571,15 @@ export async function publishChromeWebStoreRelease(
   if (submissionGuard.skipped) {
     return null;
   }
+  logChromeWebStoreItemWarnings(config, submissionGuard.status, log);
+
+  if (config.dryRun) {
+    log.log(
+      `Dry run: verified Chrome Web Store access for item ${config.itemId}; would upload ${toProjectRelative(projectRoot, archivePath)} and publish version ${releaseManifest.version}.`
+    );
+    return null;
+  }
+
   const uploadResponse = await uploadExtensionArchive(config, accessToken, archiveBytes, fetchImpl);
 
   if (uploadResponse.uploadState === 'FAILED' || uploadResponse.uploadState === 'NOT_FOUND') {
@@ -571,15 +611,8 @@ export async function publishChromeWebStoreRelease(
         )
       : undefined;
 
-  if (status?.warned) {
-    log.warn(
-      `Chrome Web Store item ${config.itemId} is currently warned in the developer dashboard.`
-    );
-  }
-  if (status?.takenDown) {
-    log.warn(
-      `Chrome Web Store item ${config.itemId} is currently taken down in the developer dashboard.`
-    );
+  if (status) {
+    logChromeWebStoreItemWarnings(config, status, log);
   }
 
   const publishResponse = await publishItem(config, accessToken, fetchImpl);

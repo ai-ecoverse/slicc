@@ -87,6 +87,7 @@ describe('publish-chrome-web-store', () => {
         Buffer.from(serviceAccountJson).toString('base64'),
       CHROME_WEB_STORE_PUBLISH_TYPE: 'STAGED_PUBLISH',
       CHROME_WEB_STORE_DEPLOY_PERCENTAGE: '25',
+      CHROME_WEB_STORE_DRY_RUN: 'true',
       CHROME_WEB_STORE_FORCE_CANCEL_PENDING: 'true',
       CHROME_WEB_STORE_SKIP_REVIEW: 'true',
     });
@@ -96,6 +97,7 @@ describe('publish-chrome-web-store', () => {
       itemId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
       publishType: 'STAGED_PUBLISH',
       deployPercentage: 25,
+      dryRun: true,
       forceCancelPendingReview: true,
       skipReview: true,
     });
@@ -305,6 +307,49 @@ describe('publish-chrome-web-store', () => {
     }
   });
 
+  it('supports a local dry run that verifies auth and preflight status without uploading', async () => {
+    const fixture = createFixture();
+    const logs: string[] = [];
+    const warnings: string[] = [];
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ access_token: 'access-token' }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          name: 'publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          itemId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          warned: true,
+        })
+      );
+
+    try {
+      await expect(
+        publishChromeWebStoreRelease({
+          env: {
+            CHROME_WEB_STORE_PUBLISHER_ID: 'publisher-123',
+            CHROME_WEB_STORE_ITEM_ID: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+            CHROME_WEB_STORE_SERVICE_ACCOUNT_JSON: createServiceAccountJson(),
+            CHROME_WEB_STORE_DRY_RUN: 'true',
+          },
+          fetchImpl: fetchMock as unknown as typeof fetch,
+          log: {
+            log: (message: string) => logs.push(message),
+            warn: (message: string) => warnings.push(message),
+          },
+          manifestPath: fixture.manifestPath,
+          projectRoot: fixture.root,
+        })
+      ).resolves.toBeNull();
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(logs[0]).toContain('Dry run: verified Chrome Web Store access');
+      expect(logs[0]).toContain('would upload artifacts/release/slicc-extension-v1.2.3.zip');
+      expect(warnings[0]).toContain('currently warned');
+    } finally {
+      destroyFixture(fixture);
+    }
+  });
+
   it('skips Chrome publish when a revision is already pending review', async () => {
     const fixture = createFixture();
     const warnings: string[] = [];
@@ -342,6 +387,93 @@ describe('publish-chrome-web-store', () => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(warnings[0]).toContain('already pending review');
       expect(warnings[0]).toContain('CHROME_WEB_STORE_FORCE_CANCEL_PENDING=true');
+    } finally {
+      destroyFixture(fixture);
+    }
+  });
+
+  it('dry-runs a pending review without cancelling when force-cancel is disabled', async () => {
+    const fixture = createFixture();
+    const warnings: string[] = [];
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ access_token: 'access-token' }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          name: 'publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          itemId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          submittedItemRevisionStatus: {
+            state: 'PENDING_REVIEW',
+          },
+        })
+      );
+
+    try {
+      await expect(
+        publishChromeWebStoreRelease({
+          env: {
+            CHROME_WEB_STORE_PUBLISHER_ID: 'publisher-123',
+            CHROME_WEB_STORE_ITEM_ID: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+            CHROME_WEB_STORE_SERVICE_ACCOUNT_JSON: createServiceAccountJson(),
+            CHROME_WEB_STORE_DRY_RUN: 'true',
+          },
+          fetchImpl: fetchMock as unknown as typeof fetch,
+          log: {
+            log: vi.fn(),
+            warn: (message: string) => warnings.push(message),
+          },
+          manifestPath: fixture.manifestPath,
+          projectRoot: fixture.root,
+        })
+      ).resolves.toBeNull();
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(warnings[0]).toContain('already has a revision pending review');
+      expect(warnings[0]).toContain('would skip Chrome publish');
+    } finally {
+      destroyFixture(fixture);
+    }
+  });
+
+  it('dry-runs a pending review with force-cancel enabled without mutating the item', async () => {
+    const fixture = createFixture();
+    const warnings: string[] = [];
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ access_token: 'access-token' }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          name: 'publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          itemId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          submittedItemRevisionStatus: {
+            state: 'PENDING_REVIEW',
+          },
+        })
+      );
+
+    try {
+      await expect(
+        publishChromeWebStoreRelease({
+          env: {
+            CHROME_WEB_STORE_PUBLISHER_ID: 'publisher-123',
+            CHROME_WEB_STORE_ITEM_ID: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+            CHROME_WEB_STORE_SERVICE_ACCOUNT_JSON: createServiceAccountJson(),
+            CHROME_WEB_STORE_DRY_RUN: 'true',
+            CHROME_WEB_STORE_FORCE_CANCEL_PENDING: 'true',
+          },
+          fetchImpl: fetchMock as unknown as typeof fetch,
+          log: {
+            log: vi.fn(),
+            warn: (message: string) => warnings.push(message),
+          },
+          manifestPath: fixture.manifestPath,
+          projectRoot: fixture.root,
+        })
+      ).resolves.toBeNull();
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(warnings[0]).toContain('already has a revision pending review');
+      expect(warnings[0]).toContain('would cancel the pending review and resubmit');
     } finally {
       destroyFixture(fixture);
     }

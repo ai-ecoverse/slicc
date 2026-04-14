@@ -84,6 +84,14 @@ To validate the Chrome Web Store publisher locally after `npm run package:releas
 npm run publish:chrome
 ```
 
+For a side-effect-free local verification, set `CHROME_WEB_STORE_DRY_RUN=true`:
+
+```bash
+CHROME_WEB_STORE_DRY_RUN=true npm run publish:chrome
+```
+
+That dry run checks release packaging, exchanges the service-account token, and fetches the current item status, but it does not cancel pending reviews, upload a ZIP, or publish a new revision.
+
 If the Chrome Web Store env vars are all unset, `npm run publish:chrome` exits without publishing. If the configuration is partial, it fails fast with the missing variable names.
 If a Chrome Web Store revision is already pending review, `npm run publish:chrome` warns and skips the Chrome publish step by default so the rest of the release can continue. Set `CHROME_WEB_STORE_FORCE_CANCEL_PENDING=true` to cancel the pending review and re-submit automatically instead.
 
