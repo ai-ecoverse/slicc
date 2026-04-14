@@ -100,6 +100,26 @@ describe('publish-chrome-web-store', () => {
     expect(config?.serviceAccount.client_email).toContain('@');
   });
 
+  it('rejects malformed deploy percentage values instead of truncating them', () => {
+    expect(() =>
+      readChromeWebStoreConfig({
+        CHROME_WEB_STORE_PUBLISHER_ID: 'publisher-123',
+        CHROME_WEB_STORE_ITEM_ID: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+        CHROME_WEB_STORE_SERVICE_ACCOUNT_JSON: createServiceAccountJson(),
+        CHROME_WEB_STORE_DEPLOY_PERCENTAGE: '25%',
+      })
+    ).toThrow('CHROME_WEB_STORE_DEPLOY_PERCENTAGE must be an integer between 0 and 100.');
+
+    expect(() =>
+      readChromeWebStoreConfig({
+        CHROME_WEB_STORE_PUBLISHER_ID: 'publisher-123',
+        CHROME_WEB_STORE_ITEM_ID: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+        CHROME_WEB_STORE_SERVICE_ACCOUNT_JSON: createServiceAccountJson(),
+        CHROME_WEB_STORE_DEPLOY_PERCENTAGE: '7.5',
+      })
+    ).toThrow('CHROME_WEB_STORE_DEPLOY_PERCENTAGE must be an integer between 0 and 100.');
+  });
+
   it('creates a signed service account assertion with the expected claims', () => {
     const credentials = parseServiceAccountCredentials(createServiceAccountJson(), undefined)!;
     const assertion = createServiceAccountAssertion(credentials, 1_700_000_000);
@@ -204,6 +224,68 @@ describe('publish-chrome-web-store', () => {
       );
       expect(JSON.parse((publishRequest[1] as RequestInit).body as string)).toEqual({});
       expect(logs[0]).toContain('Published artifacts/release/slicc-extension-v1.2.3.zip');
+    } finally {
+      destroyFixture(fixture);
+    }
+  });
+
+  it('keeps polling when async upload status has not propagated yet', async () => {
+    const fixture = createFixture();
+    const waits: number[] = [];
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ access_token: 'access-token' }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          name: 'publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          itemId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          uploadState: 'IN_PROGRESS',
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          name: 'publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          itemId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          name: 'publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          itemId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          lastAsyncUploadState: 'SUCCEEDED',
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          name: 'publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          itemId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          state: 'PENDING_REVIEW',
+        })
+      );
+
+    try {
+      const result = await publishChromeWebStoreRelease({
+        env: {
+          CHROME_WEB_STORE_PUBLISHER_ID: 'publisher-123',
+          CHROME_WEB_STORE_ITEM_ID: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          CHROME_WEB_STORE_SERVICE_ACCOUNT_JSON: createServiceAccountJson(),
+        },
+        fetchImpl: fetchMock as unknown as typeof fetch,
+        log: { log: vi.fn(), warn: vi.fn() },
+        manifestPath: fixture.manifestPath,
+        projectRoot: fixture.root,
+        pollIntervalMs: 321,
+        waitMs: async (ms: number) => {
+          waits.push(ms);
+        },
+      });
+
+      expect(result).toMatchObject({
+        uploadState: 'SUCCEEDED',
+        publishState: 'PENDING_REVIEW',
+      });
+      expect(waits).toEqual([321]);
+      expect(fetchMock).toHaveBeenCalledTimes(5);
     } finally {
       destroyFixture(fixture);
     }

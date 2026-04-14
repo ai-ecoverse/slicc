@@ -84,12 +84,11 @@ async function readResponseBody(resp: Response, url?: string): Promise<Uint8Arra
   const buf = await resp.arrayBuffer();
   const bytes = new Uint8Array(buf);
   if (!isTextContentType(contentType)) {
-    const chunkSize = 0x8000;
-    let latin1 = '';
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      latin1 += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    let byteKey = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      byteKey += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
     }
-    cacheBinaryBody(latin1, bytes);
+    cacheBinaryBody(byteKey, bytes);
     if (url) {
       cacheBinaryByUrl(url, bytes);
     }
@@ -130,8 +129,8 @@ function prepareRequestBody(
   if (!body) return undefined;
   const ct = headers?.['Content-Type'] ?? headers?.['content-type'] ?? '';
   if (ct.includes('multipart/form-data')) {
-    const bytes = Uint8Array.from(getFetchBodyBytes(body));
-    return new Blob([bytes.buffer]);
+    const bytes = getFetchBodyBytes(body) as Uint8Array<ArrayBuffer>;
+    return new Blob([bytes]);
   }
   return body;
 }

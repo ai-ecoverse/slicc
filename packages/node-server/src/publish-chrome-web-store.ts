@@ -101,6 +101,9 @@ function parseOptionalBoolean(value: string | undefined, envName: string): boole
 
 function parseOptionalPercentage(value: string | undefined): number | undefined {
   if (value === undefined) return undefined;
+  if (!/^\d+$/.test(value)) {
+    throw new Error('CHROME_WEB_STORE_DEPLOY_PERCENTAGE must be an integer between 0 and 100.');
+  }
   const parsed = Number.parseInt(value, 10);
   if (!Number.isInteger(parsed) || parsed < 0 || parsed > 100) {
     throw new Error('CHROME_WEB_STORE_DEPLOY_PERCENTAGE must be an integer between 0 and 100.');
@@ -340,12 +343,12 @@ export async function waitForUploadCompletion(
     const status = await fetchUploadStatus(config, accessToken, fetchImpl);
     const uploadState = status.lastAsyncUploadState;
 
-    if (!uploadState || uploadState === 'SUCCEEDED') return status;
+    if (uploadState === 'SUCCEEDED') return status;
     if (uploadState === 'FAILED' || uploadState === 'NOT_FOUND') {
       throw new Error(`Chrome Web Store async upload finished in state ${uploadState}.`);
     }
 
-    if (uploadState !== 'IN_PROGRESS') {
+    if (uploadState !== undefined && uploadState !== 'IN_PROGRESS') {
       throw new Error(`Chrome Web Store async upload returned unknown state ${uploadState}.`);
     }
 
