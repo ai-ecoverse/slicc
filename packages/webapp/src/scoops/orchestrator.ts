@@ -306,6 +306,7 @@ export class Orchestrator {
         error: err instanceof Error ? err.message : String(err),
       });
     });
+    this.droppedScoopCosts = [];
     log.info('Filesystem reset and defaults re-seeded');
   }
 
@@ -327,6 +328,7 @@ export class Orchestrator {
     for (const jid of this.scoops.keys()) {
       this.messageQueues.set(jid, []);
     }
+    this.droppedScoopCosts = [];
     log.info('All messages cleared');
   }
 
