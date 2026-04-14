@@ -67,18 +67,18 @@ async function readPendingHandoffs(): Promise<PendingHandoff[]> {
     .filter((value): value is PendingHandoff => value !== null);
 }
 
-async function readDismissedIds(): Promise<Set<string>> {
+async function readDismissedIds(): Promise<string[]> {
   const stored = await chrome.storage.local.get(DISMISSED_HANDOFFS_KEY);
   const raw = stored[DISMISSED_HANDOFFS_KEY];
-  if (!Array.isArray(raw)) return new Set();
-  return new Set(raw.filter((v): v is string => typeof v === 'string'));
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((v): v is string => typeof v === 'string');
 }
 
 async function addDismissedId(handoffId: string): Promise<void> {
   const dismissed = await readDismissedIds();
-  dismissed.add(handoffId);
+  const entries = dismissed.filter((id) => id !== handoffId);
+  entries.push(handoffId);
   // Keep only the most recent 200 entries to avoid unbounded growth
-  const entries = [...dismissed];
   const trimmed = entries.length > 200 ? entries.slice(entries.length - 200) : entries;
   await chrome.storage.local.set({ [DISMISSED_HANDOFFS_KEY]: trimmed });
 }
@@ -120,14 +120,17 @@ function runPendingHandoffMutation<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-async function queueHandoffFromUrl(urlString: string, sourceTabId?: number): Promise<void> {
+async function queueHandoffFromUrl(
+  urlString: string,
+  sourceTabId?: number,
+  dismissedIds?: Set<string>
+): Promise<void> {
   const handoff = parseHandoffFromUrl(urlString, sourceTabId);
   if (!handoff) return;
 
   await runPendingHandoffMutation(async () => {
-    // Don't re-queue handoffs that were already accepted or dismissed
-    const dismissed = await readDismissedIds();
-    if (dismissed.has(handoff.handoffId)) return;
+    // When called from scanOpenHandoffTabs, skip previously dismissed handoffs
+    if (dismissedIds?.has(handoff.handoffId)) return;
 
     const current = await readPendingHandoffs();
     if (current.some((item) => item.handoffId === handoff.handoffId)) return;
@@ -165,10 +168,12 @@ async function closeHandoffTab(handoff: PendingHandoff | null): Promise<void> {
 }
 
 async function scanOpenHandoffTabs(): Promise<void> {
+  // Read dismissed IDs once and reuse for the entire scan
+  const dismissedIds = new Set(await readDismissedIds());
   const tabs = await chrome.tabs.query({});
   for (const tab of tabs) {
     if (tab.url) {
-      await queueHandoffFromUrl(tab.url, tab.id);
+      await queueHandoffFromUrl(tab.url, tab.id, dismissedIds);
     }
   }
 }
