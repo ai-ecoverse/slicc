@@ -103,13 +103,14 @@ function parseArgs(argv: string[]): LoadTestConfig {
     }
   }
 
-  // Fall back to env vars for Bedrock, then try .env in repo root
-  if (!config.bedrockApiKey && process.env['BEDROCK_API_KEY']) {
+  // Fall back to env vars for Bedrock, then try .env in repo root.
+  // Skip if Adobe token is already set — Adobe takes priority.
+  if (!config.adobeToken && !config.bedrockApiKey && process.env['BEDROCK_API_KEY']) {
     config.bedrockApiKey = process.env['BEDROCK_API_KEY'];
     config.bedrockBaseUrl = process.env['BEDROCK_BASE_URL'];
     config.bedrockModelId = process.env['BEDROCK_MODEL'];
   }
-  if (!config.bedrockApiKey) {
+  if (!config.adobeToken && !config.bedrockApiKey) {
     try {
       const envContent = readFileSync(resolve(REPO_ROOT, '.env'), 'utf-8');
       for (const line of envContent.split('\n')) {
