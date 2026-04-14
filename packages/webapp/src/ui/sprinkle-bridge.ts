@@ -174,7 +174,11 @@ export class SprinkleBridge {
     const set = this.listeners.get(key);
     if (set) {
       for (const cb of set) {
+        // Capture the set reference so the setTimeout callback can verify
+        // the listener hasn't been removed via off() or removeSprinkle().
+        const currentSet = set;
         setTimeout(() => {
+          if (!currentSet.has(cb)) return;
           try {
             cb(data);
           } catch {

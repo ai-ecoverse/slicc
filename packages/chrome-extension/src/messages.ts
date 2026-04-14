@@ -105,6 +105,8 @@ export interface SprinkleLickMsg {
   type: 'sprinkle-lick';
   sprinkleName: string;
   body: unknown;
+  /** Optional target scoop for routed sprinkle lick events. */
+  targetScoop?: string;
 }
 
 /** Request skill reload after upskill install. */

@@ -229,8 +229,8 @@ export class OffscreenClient {
   private sprinkleOpHandler: ((payload: any) => void) | null = null;
 
   /** Send a sprinkle lick event to the offscreen orchestrator. */
-  sendSprinkleLick(sprinkleName: string, body: unknown): void {
-    this.send({ type: 'sprinkle-lick', sprinkleName, body } as any);
+  sendSprinkleLick(sprinkleName: string, body: unknown, targetScoop?: string): void {
+    this.send({ type: 'sprinkle-lick', sprinkleName, body, targetScoop } as any);
   }
 
   /** Register a handler for sprinkle-op messages from the offscreen proxy. */

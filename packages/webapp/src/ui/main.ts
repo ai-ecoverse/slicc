@@ -596,7 +596,7 @@ async function mainExtension(app: HTMLElement): Promise<void> {
           }
           return; // Don't forward to orchestrator
         }
-        client.sendSprinkleLick(event.sprinkleName!, event.body);
+        client.sendSprinkleLick(event.sprinkleName!, event.body, event.targetScoop);
       }
     },
     {
@@ -736,6 +736,11 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 // doesn't pong within 5s, the worker logs a warning. When the main thread
 // recovers, it captures a performance timeline and console.trace().
 function startFreezeWatchdog(): void {
+  // Extension CSP blocks blob: workers; skip in extension mode.
+  // The extension offscreen document is a separate process anyway,
+  // so a frozen sprinkle in the panel won't block the agent.
+  if (typeof chrome !== 'undefined' && !!chrome?.runtime?.id) return;
+
   const workerCode = `
     let lastPong = Date.now();
     let frozen = false;
@@ -758,13 +763,15 @@ function startFreezeWatchdog(): void {
     };
   `;
   const blob = new Blob([workerCode], { type: 'application/javascript' });
-  const worker = new Worker(URL.createObjectURL(blob));
+  const blobUrl = URL.createObjectURL(blob);
+  const worker = new Worker(blobUrl);
+  URL.revokeObjectURL(blobUrl);
 
   worker.onmessage = (e) => {
     if (e.data.type === 'ping') {
       worker.postMessage({ type: 'pong' });
     } else if (e.data.type === 'freeze-detected') {
-      // This won't fire until main thread unblocks, but the worker logged it
+      // This won't fire until the main thread unblocks, but the worker detected it via postMessage
       console.error(
         `[freeze-watchdog] Main thread blocked for ${e.data.elapsed}ms — capturing trace on recovery`
       );
@@ -781,6 +788,14 @@ function startFreezeWatchdog(): void {
       }
     }
   };
+
+  window.addEventListener(
+    'beforeunload',
+    () => {
+      worker.terminate();
+    },
+    { once: true }
+  );
 }
 
 async function main(): Promise<void> {
