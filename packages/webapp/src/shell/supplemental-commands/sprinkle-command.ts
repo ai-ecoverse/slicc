@@ -15,6 +15,12 @@ import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
 import { showToolUIFromContext } from '../../tools/tool-ui.js';
 import type { SprinkleManager } from '../../ui/sprinkle-manager.js';
+import {
+  getSprinkleRoute,
+  setSprinkleRoute,
+  clearSprinkleRoute,
+  getAllSprinkleRoutes,
+} from '../../ui/sprinkle-bridge.js';
 
 function sprinkleHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
@@ -25,6 +31,9 @@ function sprinkleHelp(): { stdout: string; stderr: string; exitCode: number } {
       '  close <name>          Close an open sprinkle\n' +
       '  refresh               Re-scan VFS for .shtml files\n' +
       '  send <name> <json>    Push data to a sprinkle\n' +
+      '  route <name> --scoop <scoop>  Route lick events to a scoop instead of cone\n' +
+      '  route <name> --clear          Clear routing (revert to cone)\n' +
+      '  route                         List all sprinkle routes\n' +
       '  chat <html>           Show inline HTML in chat (Tool UI)\n' +
       '                        Use data-action="name" on buttons for callbacks\n' +
       '                        Pipe HTML: echo "<div>...</div>" | sprinkle chat\n',
@@ -132,6 +141,55 @@ export function createSprinkleCommand(): Command {
         const count = mgr.available().length;
         return {
           stdout: `Found ${count} sprinkle${count !== 1 ? 's' : ''}.\n`,
+          stderr: '',
+          exitCode: 0,
+        };
+      }
+
+      case 'route': {
+        const name = args[1];
+        if (!name) {
+          // List all routes
+          const routes = getAllSprinkleRoutes();
+          const entries = Object.entries(routes);
+          if (entries.length === 0) {
+            return {
+              stdout: 'No sprinkle routes configured (all licks go to cone).\n',
+              stderr: '',
+              exitCode: 0,
+            };
+          }
+          const lines = entries.map(([s, scoop]) => `  ${s} -> ${scoop}`);
+          return {
+            stdout: 'Sprinkle routes:\n' + lines.join('\n') + '\n',
+            stderr: '',
+            exitCode: 0,
+          };
+        }
+
+        if (args.includes('--clear')) {
+          clearSprinkleRoute(name);
+          return {
+            stdout: `Route cleared for sprinkle "${name}" (licks will go to cone).\n`,
+            stderr: '',
+            exitCode: 0,
+          };
+        }
+
+        const scoopIdx = args.indexOf('--scoop');
+        const scoop = scoopIdx !== -1 ? args[scoopIdx + 1] : undefined;
+        if (!scoop) {
+          // Show current route for this sprinkle
+          const current = getSprinkleRoute(name);
+          if (current) {
+            return { stdout: `${name} -> ${current}\n`, stderr: '', exitCode: 0 };
+          }
+          return { stdout: `${name} -> cone (default)\n`, stderr: '', exitCode: 0 };
+        }
+
+        setSprinkleRoute(name, scoop);
+        return {
+          stdout: `Sprinkle "${name}" lick events will route to scoop "${scoop}".\n`,
           stderr: '',
           exitCode: 0,
         };

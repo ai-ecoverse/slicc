@@ -731,7 +731,60 @@ async function mainExtension(app: HTMLElement): Promise<void> {
 // CLI mode — direct Orchestrator in this page (unchanged)
 // ---------------------------------------------------------------------------
 
+// ── Main-thread freeze watchdog ──────────────────────────────────────
+// Uses a Worker that pings the main thread every 2s. If the main thread
+// doesn't pong within 5s, the worker logs a warning. When the main thread
+// recovers, it captures a performance timeline and console.trace().
+function startFreezeWatchdog(): void {
+  const workerCode = `
+    let lastPong = Date.now();
+    let frozen = false;
+    setInterval(() => {
+      postMessage({ type: 'ping' });
+      const elapsed = Date.now() - lastPong;
+      if (elapsed > 5000 && !frozen) {
+        frozen = true;
+        postMessage({ type: 'freeze-detected', elapsed });
+      }
+    }, 2000);
+    self.onmessage = (e) => {
+      if (e.data.type === 'pong') {
+        lastPong = Date.now();
+        if (frozen) {
+          frozen = false;
+          postMessage({ type: 'freeze-recovered' });
+        }
+      }
+    };
+  `;
+  const blob = new Blob([workerCode], { type: 'application/javascript' });
+  const worker = new Worker(URL.createObjectURL(blob));
+
+  worker.onmessage = (e) => {
+    if (e.data.type === 'ping') {
+      worker.postMessage({ type: 'pong' });
+    } else if (e.data.type === 'freeze-detected') {
+      // This won't fire until main thread unblocks, but the worker logged it
+      console.error(
+        `[freeze-watchdog] Main thread blocked for ${e.data.elapsed}ms — capturing trace on recovery`
+      );
+    } else if (e.data.type === 'freeze-recovered') {
+      console.error('[freeze-watchdog] Main thread recovered. Stack trace at recovery point:');
+      console.trace('[freeze-watchdog] recovery stack');
+      // Also dump long-task entries
+      const longTasks = performance.getEntriesByType('longtask');
+      if (longTasks.length > 0) {
+        console.error(
+          '[freeze-watchdog] Long tasks:',
+          longTasks.map((t) => ({ duration: t.duration, startTime: t.startTime, name: t.name }))
+        );
+      }
+    }
+  };
+}
+
 async function main(): Promise<void> {
+  startFreezeWatchdog();
   initTheme();
   initTooltips();
 
@@ -1385,13 +1438,13 @@ async function main(): Promise<void> {
     }
 
     // Determine the target:
-    // - Sprinkle licks and untargeted events default to cone
-    // - Webhook/cron licks use explicit targetScoop if set
+    // - Events with explicit targetScoop route to that scoop
+    // - Untargeted events default to cone
     const scoops = orchestrator.getScoops();
     let resolvedTarget: RegisteredScoop | undefined;
 
-    if (isSprinkle || !event.targetScoop) {
-      // Sprinkle licks + untargeted cron/webhook events → cone
+    if (!event.targetScoop) {
+      // Untargeted events → cone
       resolvedTarget = scoops.find((s) => s.isCone);
     } else {
       resolvedTarget = scoops.find(
