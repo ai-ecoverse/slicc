@@ -1,7 +1,9 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { FsWatcher } from '../../src/fs/index.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { BshWatchdog } from '../../src/shell/bsh-watchdog.js';
+import { ScriptCatalog } from '../../src/shell/script-catalog.js';
 import type { CDPTransport } from '../../src/cdp/transport.js';
 
 let dbCounter = 0;
@@ -44,11 +46,20 @@ describe('BshWatchdog', () => {
   let vfs: VirtualFS;
   let transport: ReturnType<typeof createMockTransport>;
 
+  function createScriptCatalog(): ScriptCatalog {
+    return new ScriptCatalog({
+      jshFs: vfs,
+      bshFs: vfs,
+      watcher: vfs.getWatcher(),
+    });
+  }
+
   beforeEach(async () => {
     vfs = await VirtualFS.create({
       dbName: `test-bsh-watchdog-${dbCounter++}`,
       wipe: true,
     });
+    vfs.setWatcher(new FsWatcher());
     transport = createMockTransport();
   });
 
@@ -57,12 +68,41 @@ describe('BshWatchdog', () => {
 
     const watchdog = new BshWatchdog({
       transport,
+      scriptCatalog: createScriptCatalog(),
       fs: vfs,
-      discoveryIntervalMs: 60_000,
     });
 
     await watchdog.start();
-    expect(watchdog.getEntries()).toHaveLength(1);
+    expect(await watchdog.getEntries()).toHaveLength(1);
+    watchdog.stop();
+  });
+
+  it('contains initial discovery failures during startup', async () => {
+    const failingCatalog = {
+      getBshEntries: vi.fn().mockRejectedValue(new Error('boom')),
+      findMatchingBshScripts: vi.fn().mockResolvedValue([]),
+      invalidateBsh: vi.fn(),
+    } as unknown as ScriptCatalog;
+
+    const watchdog = new BshWatchdog({
+      transport,
+      scriptCatalog: failingCatalog,
+      fs: vfs,
+    });
+
+    await expect(watchdog.start()).resolves.toBeUndefined();
+
+    transport.emit('Page.frameNavigated', {
+      frame: { url: 'https://login.okta.com/home' },
+      sessionId: 'test-session',
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        (failingCatalog.findMatchingBshScripts as ReturnType<typeof vi.fn>).mock.calls
+      ).toEqual([['https://login.okta.com/home']]);
+    });
+
     watchdog.stop();
   });
 
@@ -71,8 +111,8 @@ describe('BshWatchdog', () => {
 
     const watchdog = new BshWatchdog({
       transport,
+      scriptCatalog: createScriptCatalog(),
       fs: vfs,
-      discoveryIntervalMs: 60_000,
     });
 
     await watchdog.start();
@@ -104,8 +144,8 @@ describe('BshWatchdog', () => {
 
     const watchdog = new BshWatchdog({
       transport,
+      scriptCatalog: createScriptCatalog(),
       fs: vfs,
-      discoveryIntervalMs: 60_000,
     });
 
     await watchdog.start();
@@ -128,8 +168,8 @@ describe('BshWatchdog', () => {
 
     const watchdog = new BshWatchdog({
       transport,
+      scriptCatalog: createScriptCatalog(),
       fs: vfs,
-      discoveryIntervalMs: 60_000,
     });
 
     await watchdog.start();
@@ -154,8 +194,8 @@ describe('BshWatchdog', () => {
 
     const watchdog = new BshWatchdog({
       transport,
+      scriptCatalog: createScriptCatalog(),
       fs: vfs,
-      discoveryIntervalMs: 60_000,
     });
 
     await watchdog.start();
@@ -179,8 +219,8 @@ describe('BshWatchdog', () => {
 
     const watchdog = new BshWatchdog({
       transport,
+      scriptCatalog: createScriptCatalog(),
       fs: vfs,
-      discoveryIntervalMs: 60_000,
     });
 
     await watchdog.start();
@@ -229,8 +269,8 @@ describe('BshWatchdog', () => {
 
     const watchdog = new BshWatchdog({
       transport: slowTransport,
+      scriptCatalog: createScriptCatalog(),
       fs: vfs,
-      discoveryIntervalMs: 60_000,
     });
 
     await watchdog.start();
@@ -283,8 +323,8 @@ describe('BshWatchdog', () => {
 
     const watchdog = new BshWatchdog({
       transport,
+      scriptCatalog: createScriptCatalog(),
       fs: vfs,
-      discoveryIntervalMs: 60_000,
     });
 
     await watchdog.start();
@@ -309,8 +349,8 @@ describe('BshWatchdog', () => {
 
     const watchdog = new BshWatchdog({
       browserAPI: mockBrowserAPI,
+      scriptCatalog: createScriptCatalog(),
       fs: vfs,
-      discoveryIntervalMs: 60_000,
     });
 
     await watchdog.start();
@@ -346,8 +386,8 @@ describe('BshWatchdog', () => {
 
     const watchdog = new BshWatchdog({
       transport: transportA,
+      scriptCatalog: createScriptCatalog(),
       fs: vfs,
-      discoveryIntervalMs: 60_000,
     });
 
     await watchdog.start();
@@ -393,8 +433,8 @@ describe('BshWatchdog', () => {
 
     const watchdog = new BshWatchdog({
       browserAPI: mockBrowserAPI,
+      scriptCatalog: createScriptCatalog(),
       fs: vfs,
-      discoveryIntervalMs: 60_000,
     });
 
     await watchdog.start();
@@ -430,14 +470,14 @@ describe('BshWatchdog', () => {
   it('re-discovery picks up new scripts', async () => {
     const watchdog = new BshWatchdog({
       transport,
+      scriptCatalog: createScriptCatalog(),
       fs: vfs,
-      discoveryIntervalMs: 60_000,
     });
 
     await watchdog.start();
 
     // No scripts initially
-    expect(watchdog.getEntries()).toHaveLength(0);
+    expect(await watchdog.getEntries()).toHaveLength(0);
 
     // Navigation should do nothing
     transport.emit('Page.frameNavigated', {
@@ -452,7 +492,7 @@ describe('BshWatchdog', () => {
     await vfs.writeFile('/workspace/-.okta.com.bsh', 'console.log("ok");');
     await watchdog.discover();
 
-    expect(watchdog.getEntries()).toHaveLength(1);
+    expect(await watchdog.getEntries()).toHaveLength(1);
 
     // Now navigation should execute the script
     transport.emit('Page.frameNavigated', {
@@ -468,10 +508,36 @@ describe('BshWatchdog', () => {
     watchdog.stop();
   });
 
+  it('picks up watcher-invalidated catalog updates without polling', async () => {
+    const watchdog = new BshWatchdog({
+      transport,
+      scriptCatalog: createScriptCatalog(),
+      fs: vfs,
+    });
+
+    await watchdog.start();
+    expect(await watchdog.getEntries()).toHaveLength(0);
+
+    await vfs.writeFile('/workspace/-.okta.com.bsh', 'console.log("ok");');
+    transport.emit('Page.frameNavigated', {
+      frame: { url: 'https://login.okta.com/home' },
+      sessionId: 'test-session',
+    });
+
+    await vi.waitFor(() => {
+      expect(transport.sendCalls.filter((c) => c.method === 'Runtime.evaluate')).toHaveLength(1);
+    });
+
+    expect(await watchdog.getEntries()).toHaveLength(1);
+
+    watchdog.stop();
+  });
+
   it('throws when constructed with neither transport nor browserAPI', () => {
     expect(
       () =>
         new BshWatchdog({
+          scriptCatalog: createScriptCatalog(),
           fs: vfs,
         })
     ).toThrow('BshWatchdog requires either transport or browserAPI');
@@ -499,8 +565,8 @@ describe('BshWatchdog', () => {
 
     const watchdog = new BshWatchdog({
       transport: errorTransport,
+      scriptCatalog: createScriptCatalog(),
       fs: vfs,
-      discoveryIntervalMs: 60_000,
     });
 
     await watchdog.start();
@@ -525,8 +591,8 @@ describe('BshWatchdog', () => {
 
     const watchdog = new BshWatchdog({
       transport,
+      scriptCatalog: createScriptCatalog(),
       fs: vfs,
-      discoveryIntervalMs: 60_000,
     });
 
     await watchdog.start();

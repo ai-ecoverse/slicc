@@ -3,9 +3,9 @@
  */
 
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserAPI } from '../../src/cdp/index.js';
-import { VirtualFS } from '../../src/fs/index.js';
+import { FsWatcher, VirtualFS } from '../../src/fs/index.js';
 import {
   decodeForbiddenResponseHeaders,
   encodeForbiddenRequestHeaders,
@@ -276,5 +276,32 @@ describe('WasmShell playwright command discoverability', () => {
     const openResult = await shell.executeCommand('playwright-cli open https://example.com');
     expect(openResult.exitCode).toBe(1);
     expect(openResult.stderr).toContain('browser APIs are unavailable');
+  });
+  it('accepts an external AbortSignal when executing commands programmatically', async () => {
+    const shell = new WasmShell({ fs });
+    const controller = new AbortController();
+    const execSpy = vi.spyOn((shell as any).bash, 'exec');
+
+    const result = await shell.executeCommand('pwd', controller.signal);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('/');
+    expect(execSpy).toHaveBeenCalledWith(
+      'pwd',
+      expect.objectContaining({
+        signal: controller.signal,
+      })
+    );
+  });
+
+  it('shares BSH discovery through the shell-owned script catalog', async () => {
+    fs.setWatcher(new FsWatcher());
+    await fs.writeFile('/workspace/login.example.com.bsh', 'console.log("login");');
+
+    const shell = new WasmShell({ fs });
+
+    expect((await shell.getScriptCatalog().getBshEntries()).map((entry) => entry.path)).toEqual([
+      '/workspace/login.example.com.bsh',
+    ]);
   });
 });

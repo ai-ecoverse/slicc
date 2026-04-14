@@ -33,7 +33,7 @@ export interface CronTaskEntry {
 }
 
 export interface LickEvent {
-  type: 'webhook' | 'cron' | 'sprinkle' | 'fswatch';
+  type: 'webhook' | 'cron' | 'sprinkle' | 'fswatch' | 'session-reload';
   webhookId?: string;
   webhookName?: string;
   cronId?: string;

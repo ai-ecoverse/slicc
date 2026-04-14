@@ -8,7 +8,7 @@
 
 import type { Terminal } from '@xterm/xterm';
 import type { FitAddon } from '@xterm/addon-fit';
-import type { VirtualFS } from '../fs/index.js';
+import type { FsWatcher, VirtualFS } from '../fs/index.js';
 import { Bash, defineCommand, getCommandNames, getNetworkCommandNames } from 'just-bash';
 import type { BashExecResult, SecureFetch, Command } from 'just-bash';
 import { VfsAdapter } from './vfs-adapter.js';
@@ -22,15 +22,37 @@ import {
   createUpskillCommand,
 } from './supplemental-commands/upskill-command.js';
 import { MountCommands } from '../fs/mount-commands.js';
-import { discoverJshCommands, type JshDiscoveryFS } from './jsh-discovery.js';
+import type { BshDiscoveryFS } from './bsh-discovery.js';
+import type { JshDiscoveryFS } from './jsh-discovery.js';
 import { executeJshFile, executeJsCode } from './jsh-executor.js';
 import { parseShellArgs } from './parse-shell-args.js';
+import { ScriptCatalog } from './script-catalog.js';
 import { trackShellCommand } from '../ui/telemetry.js';
 
 function basename(path: string): string {
   const trimmed = path.length > 1 && path.endsWith('/') ? path.slice(0, -1) : path;
   const slash = trimmed.lastIndexOf('/');
   return slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
+}
+
+interface WatcherAwareFs {
+  getWatcher?(): FsWatcher | null;
+}
+
+interface UnderlyingFsProvider {
+  getUnderlyingFS?(): unknown;
+}
+
+function getFsWatcher(fs: unknown): FsWatcher | null {
+  if (fs && typeof (fs as WatcherAwareFs).getWatcher === 'function') {
+    return (fs as WatcherAwareFs).getWatcher?.() ?? null;
+  }
+
+  if (fs && typeof (fs as UnderlyingFsProvider).getUnderlyingFS === 'function') {
+    return getFsWatcher((fs as UnderlyingFsProvider).getUnderlyingFS?.());
+  }
+
+  return null;
 }
 
 /** Check if a content-type header indicates text (safe for UTF-8 decoding). */
@@ -50,42 +72,38 @@ export function isTextContentType(contentType: string): boolean {
 }
 
 /**
- * Read a fetch Response body as a string, preserving binary data.
+ * Read a fetch Response body as raw bytes.
  *
- * For text content types, uses resp.text() (proper UTF-8 decoding).
- * For binary content types, reads as arrayBuffer and decodes as latin1
- * (ISO-8859-1) so every byte maps 1:1 to a codepoint 0-255. This
- * preserves binary data through just-bash's string-typed FetchResult.body.
+ * For binary content types, also cache a latin1-keyed copy so older
+ * string-based write paths can still recover the original bytes without
+ * corruption.
  */
-async function readResponseBody(resp: Response, url?: string): Promise<string> {
+async function readResponseBody(resp: Response, url?: string): Promise<Uint8Array> {
   const contentType = resp.headers.get('content-type') ?? '';
-  const isText = isTextContentType(contentType);
-  if (isText) {
-    return resp.text();
-  }
-  // Binary: read raw bytes and encode as latin1 string for just-bash's
-  // string-typed FetchResult.body. Also cache the original bytes so
-  // VfsAdapter.writeFile can bypass string encoding entirely.
   const buf = await resp.arrayBuffer();
   const bytes = new Uint8Array(buf);
-  const latin1 = new TextDecoder('iso-8859-1').decode(buf);
-  cacheBinaryBody(latin1, bytes);
-  // Also cache by URL so commands like upskill can retrieve by URL
-  if (url) {
-    cacheBinaryByUrl(url, bytes);
+  if (!isTextContentType(contentType)) {
+    const chunkSize = 0x8000;
+    let latin1 = '';
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      latin1 += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    }
+    cacheBinaryBody(latin1, bytes);
+    if (url) {
+      cacheBinaryByUrl(url, bytes);
+    }
   }
-  return latin1;
+  return bytes;
 }
 
 /**
  * Create a SecureFetch that routes requests through the CLI server's
  * /api/fetch-proxy endpoint, bypassing browser CORS restrictions.
  * In extension mode, uses direct fetch (CORS bypass via host_permissions).
- * Uses just-bash 2.11.7's custom `fetch` option so curl gets a fresh,
+ * Uses just-bash's custom `fetch` option so curl gets a fresh,
  * stateless fetch per invocation (fixes the multi-curl-in-loop bug).
  *
- * Binary responses (images, archives, etc.) are encoded as latin1 strings
- * to preserve byte fidelity through just-bash's string-typed FetchResult.
+ * Binary responses are preserved as raw bytes.
  */
 // Convert Headers or Record<string, string> to a plain Record<string, string>.
 function headersToRecord(
@@ -238,7 +256,15 @@ export interface WasmShellOptions {
   browserAPI?: BrowserAPI;
   /** Optional: FS to use for .jsh discovery (defaults to fs). Useful for scoops where skill loading uses unrestricted VFS but the shell uses RestrictedFS. */
   jshDiscoveryFs?: JshDiscoveryFS;
+  /** Optional: FS to use for .bsh discovery (defaults to fs). */
+  bshDiscoveryFs?: BshDiscoveryFS;
+  /** Optional shared script catalog. When omitted, WasmShell creates and owns one. */
+  scriptCatalog?: ScriptCatalog;
 }
+
+type BashExecOptionsWithSignal = NonNullable<Parameters<Bash['exec']>[1]> & {
+  signal?: AbortSignal;
+};
 
 export class WasmShell {
   private bash: Bash;
@@ -266,6 +292,8 @@ export class WasmShell {
   private cwd: string;
   /** Set of all built-in + custom command names (for shadowing protection). */
   private builtinCommandNames: Set<string>;
+  private readonly scriptCatalog: ScriptCatalog;
+  private readonly ownsScriptCatalog: boolean;
 
   constructor(private options: WasmShellOptions) {
     this.vfsAdapter = new VfsAdapter(options.fs);
@@ -289,12 +317,25 @@ export class WasmShell {
     // Initialize mount commands with VirtualFS
     this.mountCommands = new MountCommands({ fs: options.fs });
 
+    const scriptDiscoveryFs = options.jshDiscoveryFs ?? options.fs;
+    const bshDiscoveryFs = options.bshDiscoveryFs ?? options.fs;
+    const scriptWatcher = getFsWatcher(scriptDiscoveryFs) ?? getFsWatcher(bshDiscoveryFs);
+    this.scriptCatalog =
+      options.scriptCatalog ??
+      new ScriptCatalog({
+        jshFs: scriptDiscoveryFs,
+        bshFs: bshDiscoveryFs,
+        watcher: scriptWatcher,
+      });
+    this.ownsScriptCatalog = !options.scriptCatalog;
+
     // Create custom commands for just-bash
     const gitCommand = this.createGitCustomCommand();
     const supplementalCommands = createSupplementalCommands({
       onMediaPreview: async (items) => this.renderMediaPreview(items),
       getJshCommands: () => this.getJshCommandNames(),
       fs: options.fs,
+      scriptCatalog: this.scriptCatalog,
       browserAPI: options.browserAPI,
     });
     const mountCommand = this.createMountCustomCommand();
@@ -367,15 +408,19 @@ export class WasmShell {
     return this.cwd;
   }
 
+  /** Get the shared script catalog used for `.jsh`/`.bsh` discovery. */
+  getScriptCatalog(): ScriptCatalog {
+    return this.scriptCatalog;
+  }
+
   /** Get a copy of the environment. */
   getEnv(): Record<string, string> {
     return { ...this.lastEnv };
   }
 
-  /** Discover .jsh commands from VFS (fresh scan each call, no caching), filtering out built-in command names. */
+  /** Get discovered .jsh commands from the shared script catalog, filtering out built-in names. */
   private async getFilteredJshCommands(): Promise<Map<string, string>> {
-    const discoveryFs = this.options.jshDiscoveryFs ?? this.options.fs;
-    const all = await discoverJshCommands(discoveryFs);
+    const all = await this.scriptCatalog.getJshCommands();
     const filtered = new Map<string, string>();
     for (const [name, path] of all) {
       if (!this.builtinCommandNames.has(name)) {
@@ -387,8 +432,7 @@ export class WasmShell {
 
   /** Get currently discovered .jsh command names. */
   async getJshCommandNames(): Promise<string[]> {
-    const jshMap = await this.getFilteredJshCommands();
-    return [...jshMap.keys()];
+    return [...(await this.getFilteredJshCommands()).keys()];
   }
 
   /**
@@ -447,11 +491,15 @@ export class WasmShell {
     const commandName = command.trim().split(/\s+/)[0] || 'unknown';
     trackShellCommand(commandName);
 
-    const result = await this.bash.exec(command, {
+    // just-bash's published ExecOptions type does not yet expose AbortSignal,
+    // but WasmShell still forwards it so external callers and terminal Ctrl+C
+    // keep a consistent cancellation path as the shell runtime evolves.
+    const execOptions: BashExecOptionsWithSignal = {
       env: this.lastEnv,
       cwd: this.cwd,
       signal: signal ?? this.execAbort?.signal,
-    });
+    };
+    const result = await this.bash.exec(command, execOptions);
     // Persist state for next call
     if (result.env) {
       this.lastEnv = { ...result.env };
@@ -703,6 +751,9 @@ export class WasmShell {
     this.fitAddon = null;
     this.terminalHost = null;
     this.previewHost = null;
+    if (this.ownsScriptCatalog) {
+      this.scriptCatalog.dispose();
+    }
   }
 
   private showPrompt(): void {

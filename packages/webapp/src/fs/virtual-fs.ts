@@ -12,6 +12,7 @@ import FS from '@isomorphic-git/lightning-fs';
 import type {
   DirEntry,
   Encoding,
+  EntryType,
   FileContent,
   MkdirOptions,
   ReadFileOptions,
@@ -20,7 +21,8 @@ import type {
 } from './types.js';
 import { FsError } from './types.js';
 import { normalizePath, splitPath, joinPath } from './path-utils.js';
-import type { FsWatcher, FsChangeEvent } from './fs-watcher.js';
+import type { FsWatcher } from './fs-watcher.js';
+import { saveMountEntry, removeMountEntry, clearMountEntries } from './mount-table-store.js';
 
 /** Maximum number of symlink hops before throwing ELOOP. */
 const MAX_SYMLINK_DEPTH = 10;
@@ -40,6 +42,8 @@ export class VirtualFS {
   private mountPoints = new Map<string, FileSystemDirectoryHandle>();
   private watcher: FsWatcher | null = null;
   private readonly dbName: string;
+  /** BroadcastChannel for syncing mount registrations across VFS instances with the same dbName. */
+  private mountSyncChannel: BroadcastChannel | null = null;
 
   private constructor(dbName: string, wipe: boolean) {
     this.dbName = dbName;
@@ -51,6 +55,25 @@ export class VirtualFS {
       .stat('/')
       .then(() => {})
       .catch(() => {});
+
+    // Set up BroadcastChannel for mount point synchronization
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        this.mountSyncChannel = new BroadcastChannel(`vfs-mount-sync:${dbName}`);
+        this.mountSyncChannel.onmessage = (event: MessageEvent) => {
+          const { type, path, handle } = event.data ?? {};
+          if (type === 'mount' && typeof path === 'string' && handle) {
+            this.mountPoints.set(path, handle);
+            this.watcher?.notify([{ type: 'modify', path, entryType: 'directory' }]);
+          } else if (type === 'unmount' && typeof path === 'string') {
+            this.mountPoints.delete(path);
+            this.watcher?.notify([{ type: 'modify', path, entryType: 'directory' }]);
+          }
+        };
+      } catch {
+        // BroadcastChannel may fail in some contexts — mount sync is best-effort
+      }
+    }
   }
 
   /** Create a VirtualFS instance. */
@@ -59,6 +82,9 @@ export class VirtualFS {
     const wipe = options?.wipe ?? false;
     const vfs = new VirtualFS(dbName, wipe);
     await vfs._ready;
+    if (wipe) {
+      await clearMountEntries().catch(() => {});
+    }
     return vfs;
   }
 
@@ -68,7 +94,7 @@ export class VirtualFS {
   }
 
   /** Attach a file system watcher for change notifications. */
-  setWatcher(watcher: FsWatcher): void {
+  setWatcher(watcher: FsWatcher | null): void {
     this.watcher = watcher;
   }
 
@@ -82,6 +108,8 @@ export class VirtualFS {
    * Must be called when the VirtualFS instance is no longer needed (e.g., in test cleanup).
    */
   async dispose(): Promise<void> {
+    this.mountSyncChannel?.close();
+    this.mountSyncChannel = null;
     this.watcher?.dispose();
     this.watcher = null;
 
@@ -149,6 +177,29 @@ export class VirtualFS {
    */
   async mount(absolutePath: string, handle: FileSystemDirectoryHandle): Promise<void> {
     const normalized = normalizePath(absolutePath);
+    if (this.mountPoints.has(normalized)) {
+      throw new FsError('EEXIST', 'mount point is already mounted', normalized);
+    }
+
+    try {
+      const existing = await this.lstat(normalized);
+      if (existing.type !== 'directory') {
+        throw new FsError('ENOTDIR', 'mount point must be a directory', normalized);
+      }
+      const entries = await this.readDir(normalized);
+      if (entries.length > 0) {
+        throw new FsError(
+          'ENOTEMPTY',
+          'mount point must be empty to avoid shadowing existing files',
+          normalized
+        );
+      }
+    } catch (err) {
+      if (!(err instanceof FsError) || err.code !== 'ENOENT') {
+        throw err;
+      }
+    }
+
     // Ensure parent dirs exist in LFS, then create placeholder for mount root
     const { dir } = splitPath(normalized);
     if (dir !== '/') await this.mkdir(dir, { recursive: true });
@@ -158,11 +209,36 @@ export class VirtualFS {
       /* EEXIST is fine */
     }
     this.mountPoints.set(normalized, handle);
+    try {
+      this.mountSyncChannel?.postMessage({ type: 'mount', path: normalized, handle });
+    } catch {
+      /* Best-effort sync: local mount is already registered */
+    }
+    this.watcher?.notify([{ type: 'modify', path: normalized, entryType: 'directory' }]);
+    // Persist to IndexedDB (best-effort)
+    try {
+      await saveMountEntry(normalized, handle);
+    } catch {
+      /* best-effort persistence */
+    }
   }
 
   /** Remove a mount point (the LFS placeholder directory is left in place). */
-  unmount(absolutePath: string): void {
-    this.mountPoints.delete(normalizePath(absolutePath));
+  async unmount(absolutePath: string): Promise<void> {
+    const normalized = normalizePath(absolutePath);
+    this.mountPoints.delete(normalized);
+    try {
+      this.mountSyncChannel?.postMessage({ type: 'unmount', path: normalized });
+    } catch {
+      /* best-effort sync */
+    }
+    this.watcher?.notify([{ type: 'modify', path: normalized, entryType: 'directory' }]);
+    // Remove from IndexedDB (best-effort)
+    try {
+      await removeMountEntry(normalized);
+    } catch {
+      /* best-effort persistence */
+    }
   }
 
   /** Return the list of currently active mount paths. */
@@ -178,19 +254,29 @@ export class VirtualFS {
   private findMount(
     path: string
   ): { handle: FileSystemDirectoryHandle; relParts: string[] } | null {
+    let bestMatch: { mountPath: string; handle: FileSystemDirectoryHandle } | null = null;
+
     for (const [mountPath, handle] of this.mountPoints) {
-      if (path === mountPath) return { handle, relParts: [] };
-      if (path.startsWith(mountPath + '/')) {
-        return {
-          handle,
-          relParts: path
-            .slice(mountPath.length + 1)
-            .split('/')
-            .filter(Boolean),
-        };
+      const isMatch = path === mountPath || path.startsWith(mountPath + '/');
+      if (!isMatch) continue;
+      if (!bestMatch || mountPath.length > bestMatch.mountPath.length) {
+        bestMatch = { mountPath, handle };
       }
     }
-    return null;
+
+    if (!bestMatch) return null;
+
+    if (path === bestMatch.mountPath) {
+      return { handle: bestMatch.handle, relParts: [] };
+    }
+
+    return {
+      handle: bestMatch.handle,
+      relParts: path
+        .slice(bestMatch.mountPath.length + 1)
+        .split('/')
+        .filter(Boolean),
+    };
   }
 
   /** Navigate to a nested sub-directory within a FileSystemDirectoryHandle. */
@@ -275,6 +361,13 @@ export class VirtualFS {
     const mount = this.findMount(normalized);
     if (mount) {
       if (mount.relParts.length === 0) throw new FsError('EISDIR', 'is a directory', normalized);
+      let wasExisting = false;
+      try {
+        await this.stat(normalized);
+        wasExisting = true;
+      } catch {
+        /* file doesn't exist yet */
+      }
       try {
         const fh = await VirtualFS.fsaGetFile(mount.handle, mount.relParts, true);
         const writable = await fh.createWritable();
@@ -291,6 +384,13 @@ export class VirtualFS {
       } catch (err) {
         throw this.convertFsaError(err, normalized);
       }
+      this.watcher?.notify([
+        {
+          type: wasExisting ? 'modify' : 'create',
+          path: normalized,
+          entryType: 'file',
+        },
+      ]);
       return;
     }
     // Resolve symlinks before writing
@@ -343,13 +443,23 @@ export class VirtualFS {
           mount.relParts.length === 0
             ? mount.handle
             : await VirtualFS.fsaNavDir(mount.handle, mount.relParts);
-        const entries: DirEntry[] = [];
+        const entries = new Map<string, DirEntry>();
         for await (const [name, handle] of dirHandle as unknown as AsyncIterable<
           [string, FileSystemHandle]
         >) {
-          entries.push({ name, type: handle.kind === 'directory' ? 'directory' : 'file' });
+          entries.set(name, { name, type: handle.kind === 'directory' ? 'directory' : 'file' });
         }
-        return entries;
+
+        const childPrefix = normalized === '/' ? '/' : `${normalized}/`;
+        for (const mountPath of this.mountPoints.keys()) {
+          if (mountPath === normalized || !mountPath.startsWith(childPrefix)) continue;
+          const relPath = mountPath.slice(childPrefix.length);
+          if (!relPath || relPath.includes('/')) continue;
+          if (!entries.has(relPath)) {
+            entries.set(relPath, { name: relPath, type: 'directory' });
+          }
+        }
+        return [...entries.values()];
       } catch (err) {
         throw this.convertFsaError(err, normalized);
       }
@@ -394,7 +504,11 @@ export class VirtualFS {
     if (mount) {
       if (mount.relParts.length === 0) return; // mount root placeholder already exists
       try {
+        const existed = await this.exists(normalized);
         await VirtualFS.fsaNavDir(mount.handle, mount.relParts, true);
+        if (!existed) {
+          this.watcher?.notify([{ type: 'create', path: normalized, entryType: 'directory' }]);
+        }
       } catch (err) {
         throw this.convertFsaError(err, normalized);
       }
@@ -438,6 +552,12 @@ export class VirtualFS {
       if (mount.relParts.length === 0) {
         throw new FsError('EINVAL', 'cannot remove a mount point — use unmount', normalized);
       }
+      let entryType: EntryType | undefined;
+      try {
+        entryType = (await this.stat(normalized)).type;
+      } catch {
+        /* best effort */
+      }
       try {
         const parentParts = mount.relParts.slice(0, -1);
         const name = mount.relParts[mount.relParts.length - 1];
@@ -449,6 +569,7 @@ export class VirtualFS {
       } catch (err) {
         throw this.convertFsaError(err, normalized);
       }
+      this.watcher?.notify([{ type: 'delete', path: normalized, entryType }]);
       return;
     }
     try {
@@ -573,11 +694,21 @@ export class VirtualFS {
   async rename(oldPath: string, newPath: string): Promise<void> {
     const normalizedOld = normalizePath(oldPath);
     const normalizedNew = normalizePath(newPath);
+    let entryType: EntryType | undefined;
+    try {
+      entryType = (await this.lstat(normalizedOld)).type;
+    } catch {
+      /* best effort */
+    }
     try {
       await this.lfs.rename(normalizedOld, normalizedNew);
     } catch (err) {
       throw this.convertError(err, normalizedOld);
     }
+    this.watcher?.notify([
+      { type: 'delete', path: normalizedOld, entryType },
+      { type: 'create', path: normalizedNew, entryType },
+    ]);
   }
 
   /**

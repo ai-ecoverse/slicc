@@ -2,9 +2,33 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatPanel } from '../../src/ui/chat-panel.js';
 
+function installMockLocalStorage(): void {
+  const store = new Map<string, string>();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, value);
+      },
+      removeItem: (key: string) => {
+        store.delete(key);
+      },
+      clear: () => {
+        store.clear();
+      },
+      key: (index: number) => [...store.keys()][index] ?? null,
+      get length() {
+        return store.size;
+      },
+    } satisfies Storage,
+  });
+}
+
 describe('ChatPanel pending handoffs', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
+    installMockLocalStorage();
     localStorage.clear();
     vi.restoreAllMocks();
   });
