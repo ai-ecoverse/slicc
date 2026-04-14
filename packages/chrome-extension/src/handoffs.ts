@@ -8,6 +8,7 @@ import type {
 import { normalizePendingHandoff, parseHandoffFromUrl } from './handoff-shared.js';
 
 const HANDOFFS_STORAGE_KEY = 'slicc.pendingHandoffs';
+const DISMISSED_HANDOFFS_KEY = 'slicc.dismissedHandoffIds';
 
 let pendingHandoffMutation: Promise<unknown> = Promise.resolve();
 
@@ -66,6 +67,22 @@ async function readPendingHandoffs(): Promise<PendingHandoff[]> {
     .filter((value): value is PendingHandoff => value !== null);
 }
 
+async function readDismissedIds(): Promise<Set<string>> {
+  const stored = await chrome.storage.local.get(DISMISSED_HANDOFFS_KEY);
+  const raw = stored[DISMISSED_HANDOFFS_KEY];
+  if (!Array.isArray(raw)) return new Set();
+  return new Set(raw.filter((v): v is string => typeof v === 'string'));
+}
+
+async function addDismissedId(handoffId: string): Promise<void> {
+  const dismissed = await readDismissedIds();
+  dismissed.add(handoffId);
+  // Keep only the most recent 200 entries to avoid unbounded growth
+  const entries = [...dismissed];
+  const trimmed = entries.length > 200 ? entries.slice(entries.length - 200) : entries;
+  await chrome.storage.local.set({ [DISMISSED_HANDOFFS_KEY]: trimmed });
+}
+
 async function sendHandoffMessage(payload: HandoffPendingListMsg): Promise<void> {
   await chrome.runtime.sendMessage({
     source: 'service-worker',
@@ -108,6 +125,10 @@ async function queueHandoffFromUrl(urlString: string, sourceTabId?: number): Pro
   if (!handoff) return;
 
   await runPendingHandoffMutation(async () => {
+    // Don't re-queue handoffs that were already accepted or dismissed
+    const dismissed = await readDismissedIds();
+    if (dismissed.has(handoff.handoffId)) return;
+
     const current = await readPendingHandoffs();
     if (current.some((item) => item.handoffId === handoff.handoffId)) return;
     await storePendingHandoffs([...current, handoff]);
@@ -123,6 +144,8 @@ async function clearPendingHandoff(handoffId: string): Promise<PendingHandoff | 
       await publishPendingHandoffs(current);
       return null;
     }
+    // Remember this ID so scanOpenHandoffTabs won't re-queue it
+    await addDismissedId(handoffId);
     await storePendingHandoffs(next);
     return removed;
   });
