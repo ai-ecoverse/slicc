@@ -45,8 +45,9 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 
 - Path: `packages/webapp/src/shell/`
 - `wasm-shell.ts` hosts the just-bash runtime.
+- `script-catalog.ts` is the shared `.jsh`/`.bsh` discovery service; it caches behind `FsWatcher` invalidation and bypasses cache for mounted trees where external changes are invisible to the watcher.
 - `supplemental-commands/` contains built-in commands.
-- `jsh-discovery.ts` and `bsh-discovery.ts` auto-register VFS scripts.
+- `jsh-discovery.ts` and `bsh-discovery.ts` provide the raw scans used by the shared catalog.
 - `vfs-adapter.ts` bridges shell calls into the virtual filesystem.
 
 ### CDP
@@ -124,7 +125,7 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
 
 - `.jsh` files are JavaScript shell scripts discovered anywhere on the VFS.
 - Command name is the basename without `.jsh`.
-- `packages/webapp/src/shell/jsh-discovery.ts` scans `/workspace/skills` first, then the wider VFS.
+- `packages/webapp/src/shell/script-catalog.ts` shares discovery across `WasmShell`, `which`, and other lookup paths. Raw scanning still comes from `jsh-discovery.ts`, which scans `/workspace/skills` first, then the wider VFS.
 - Scripts run in an async wrapper: prefer top-level `await` and always `await fs.*` operations.
 
 ### `.bsh` browser scripts
@@ -136,7 +137,7 @@ User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core 
   - `-.okta.com.bsh` → `*.okta.com`
   - `login.okta.com.bsh` → exact host match
 - Optional `// @match` directives in the first 10 lines narrow matching further.
-- `BshWatchdog` reads scripts from VFS and evaluates them in the target page via `BrowserAPI.evaluate()`.
+- `BshWatchdog` uses `ScriptCatalog` for matching and reads script content from VFS before evaluating it in the target page via CDP.
 
 ## Related Guides
 

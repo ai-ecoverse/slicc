@@ -21,7 +21,7 @@
 .header__brand {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
 }
 .header__spacer {
   flex: 1;
@@ -32,6 +32,28 @@
   margin-right: 12px;
   flex-shrink: 0;
   transition: viewBox 300ms ease;
+}
+
+/* Hamburger toggle in header (replaces logo) */
+.header__brand .scoops-hamburger {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--s2-content-secondary);
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition:
+    background 130ms ease,
+    color 130ms ease;
+}
+.header__brand .scoops-hamburger:hover {
+  background: var(--s2-bg-elevated);
+  color: var(--s2-content-default);
 }
 
 /* Logo scoop entrance animation — drops in from above with bounce */

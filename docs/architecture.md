@@ -110,16 +110,18 @@
 
 ### packages/webapp/src/shell/ — Shell & Terminal
 
-| File                       | Purpose                                                                                                                             |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `wasm-shell.ts`            | WasmShell class; just-bash interpreter + xterm.js terminal + command registration (VfsAdapter bridges to VirtualFS)                 |
-| `index.ts`                 | Re-exports                                                                                                                          |
-| `vfs-adapter.ts`           | Implements just-bash IFileSystem interface, bridges just-bash ↔ VirtualFS                                                           |
-| `binary-cache.ts`          | Caches binary responses (Uint8Array) to preserve byte fidelity through VFS writes                                                   |
-| `jsh-discovery.ts`         | Scans VFS for `*.jsh` files; returns `Map<name, path>` with priority roots (`/workspace/skills/`) scanned first                     |
-| `jsh-executor.ts`          | Executes `.jsh` files with Node-like globals (process, console, fs bridge); dual-mode (AsyncFunction CLI, sandbox iframe extension) |
-| `parse-shell-args.ts`      | Shell-like argument parser (double/single quotes, backslash escapes)                                                                |
-| `supplemental-commands.ts` | Re-exports all supplemental command factories                                                                                       |
+| File                       | Purpose                                                                                                                               |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `wasm-shell.ts`            | WasmShell class; just-bash interpreter + xterm.js terminal + command registration (VfsAdapter bridges to VirtualFS)                   |
+| `index.ts`                 | Re-exports                                                                                                                            |
+| `vfs-adapter.ts`           | Implements just-bash IFileSystem interface, bridges just-bash ↔ VirtualFS                                                             |
+| `binary-cache.ts`          | Caches binary responses (Uint8Array) to preserve byte fidelity through VFS writes                                                     |
+| `script-catalog.ts`        | Shared `.jsh`/`.bsh` discovery cache; invalidated by `FsWatcher`, bypasses cache for mounted roots where external edits are invisible |
+| `jsh-discovery.ts`         | Scans VFS for `*.jsh` files; returns `Map<name, path>` with priority roots (`/workspace/skills/`) scanned first                       |
+| `bsh-discovery.ts`         | Scans `/workspace` and `/shared` for `*.bsh` browser helpers and parses hostname / `@match` metadata                                  |
+| `jsh-executor.ts`          | Executes `.jsh` files with Node-like globals (process, console, fs bridge); dual-mode (AsyncFunction CLI, sandbox iframe extension)   |
+| `parse-shell-args.ts`      | Shell-like argument parser (double/single quotes, backslash escapes)                                                                  |
+| `supplemental-commands.ts` | Re-exports all supplemental command factories                                                                                         |
 
 ### packages/webapp/src/shell/supplemental-commands/ — Custom Shell Commands
 

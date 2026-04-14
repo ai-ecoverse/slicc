@@ -1,12 +1,10 @@
 /**
  * Guards against isomorphic-git CJS/ESM resolution regression.
  *
- * isomorphic-git >=1.37.5 added `require('crypto').createHash('sha1')` to
- * the CJS bundle (index.cjs) via a new `shasumRange` function. The ESM
- * bundle (index.js) uses sha.js instead — browser-safe. The package's
- * exports map only has a "default" condition (no "import"), so bundlers
- * resolve to the broken CJS entry unless overridden via resolve.alias
- * in vite.config.ts, the extension vite.config.ts, and vitest.config.ts.
+ * The pinned dependency resolves "." to index.cjs via its exports map, and
+ * that CJS entry imports Node's `crypto` module. The ESM bundle (index.js)
+ * uses sha.js instead, so the browser builds and Vitest alias
+ * `isomorphic-git` to the ESM entry on purpose.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -24,10 +22,8 @@ describe('isomorphic-git browser compatibility', () => {
     expect(esm).not.toMatch(nodeCryptoRequirePattern);
   });
 
-  it('CJS entry has the Node crypto dependency (documents the upstream bug)', () => {
+  it('CJS entry still imports Node crypto, which is why we alias to ESM', () => {
     const cjs = readFileSync(resolve(isoGitDir, 'index.cjs'), 'utf-8');
-    // If this assertion fails, the upstream bug may be fixed and the
-    // resolve.alias workaround in vite configs can be removed.
     expect(cjs).toMatch(nodeCryptoRequirePattern);
   });
 

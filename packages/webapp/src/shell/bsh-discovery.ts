@@ -12,7 +12,13 @@
  * using glob-style patterns (like Greasemonkey userscripts).
  */
 
-import type { VirtualFS } from '../fs/index.js';
+import type { FileContent, ReadFileOptions } from '../fs/types.js';
+
+export interface BshDiscoveryFS {
+  exists(path: string): Promise<boolean>;
+  walk(path: string): AsyncGenerator<string>;
+  readFile(path: string, options?: ReadFileOptions): Promise<FileContent>;
+}
 
 /** A discovered .bsh script with its hostname pattern and optional URL match patterns. */
 export interface BshEntry {
@@ -31,7 +37,7 @@ const SCAN_ROOTS = ['/workspace', '/shared'];
  * Discover all `.bsh` files on the VFS and return an array of BshEntry objects.
  * Scans `/workspace` and `/shared` directories.
  */
-export async function discoverBshScripts(fs: VirtualFS): Promise<BshEntry[]> {
+export async function discoverBshScripts(fs: BshDiscoveryFS): Promise<BshEntry[]> {
   const entries: BshEntry[] = [];
   const seen = new Set<string>();
 
@@ -46,7 +52,7 @@ export async function discoverBshScripts(fs: VirtualFS): Promise<BshEntry[]> {
 
 /** Walk a directory tree and collect .bsh files. */
 async function scanDir(
-  fs: VirtualFS,
+  fs: BshDiscoveryFS,
   root: string,
   entries: BshEntry[],
   seen: Set<string>

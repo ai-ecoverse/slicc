@@ -11,7 +11,7 @@ If this scares, confuses, or excites you, keep reading.
 
 # slicc — Self-Licking Ice Cream Cone
 
-[![71% Vibe_Coded](https://img.shields.io/badge/71%25-Vibe_Coded-ff69b4?style=for-the-badge&logo=claude&logoColor=white)](https://github.com/ai-ecoverse/vibe-coded-badge-action)
+[![69% Vibe_Coded](https://img.shields.io/badge/69%25-Vibe_Coded-ff69b4?style=for-the-badge&logo=claude&logoColor=white)](https://github.com/ai-ecoverse/vibe-coded-badge-action)
 
 [![npm](https://img.shields.io/npm/v/sliccy)](https://www.npmjs.com/package/sliccy)
 
@@ -56,7 +56,7 @@ SLICC is for you if:
 - **Solve technical tasks with practical tools.** Reach for `bash`, `git`, `grep`, `node`, `python`, previews, and browser automation when the job is bigger than text generation.
 - **Delegate parallel work to scoops.** Split tasks into isolated sub-agents with their own sandboxes and context, then let the main agent coordinate the results.
 - **Turn one-off wins into reusable workflows.** Package behavior as skills, build interactive sprinkles, and react to external events with webhooks and cron-driven licks.
-- **Mount your local file system.** By default, SLICC is confined to your browser. But you can ask it to mount folders from your local file system, so it can read and write from there.
+- **Mount your local file system.** By default, SLICC is confined to your browser. But you can ask it to mount folders from your local file system, so it can read and write from there. Mount into an empty path such as `/mnt/myproject` so you do not hide existing skills or scripts.
 
 ## Getting started
 

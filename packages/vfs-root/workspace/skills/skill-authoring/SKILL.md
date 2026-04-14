@@ -55,8 +55,10 @@ Type `commands` in the terminal for the full list. Key commands:
 Virtual filesystem stored in IndexedDB, survives tab closes and refreshes. Mount local directories:
 
 ```
-mount /workspace/myproject
+mount /mnt/myproject
 ```
+
+Use an empty mount point. Mounting over existing files is blocked so built-in skills and scripts stay discoverable. `ln -s` the mounted files into the place where you need them.
 
 ## Capabilities
 
