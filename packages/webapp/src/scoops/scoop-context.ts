@@ -95,6 +95,7 @@ export class ScoopContext {
   private agent: Agent | null = null;
   private status: 'initializing' | 'ready' | 'processing' | 'error' = 'initializing';
   private isProcessing = false;
+  private disposed = false;
   private didStreamDeltas = false;
   private unsubscribe: (() => void) | null = null;
 
@@ -257,6 +258,9 @@ export class ScoopContext {
         getApiKey: () => getApiKey() ?? undefined,
       });
 
+      // Guard: dispose() may have run while init() was awaiting above.
+      if (this.disposed) return;
+
       this.agent = new Agent({
         initialState: {
           model,
@@ -274,6 +278,7 @@ export class ScoopContext {
       this.setStatus('ready');
       log.info('ScoopContext initialized', { folder: this.scoop.folder, toolCount: tools.length });
     } catch (err) {
+      if (this.disposed) return;
       const message = err instanceof Error ? err.message : String(err);
       log.error('ScoopContext init failed', { folder: this.scoop.folder, error: message });
       this.setStatus('error');
@@ -313,9 +318,11 @@ export class ScoopContext {
     try {
       await this.agent.prompt(text);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.error('Agent error', { folder: this.scoop.folder, error: message });
-      this.callbacks.onError(message);
+      if (!this.disposed) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.error('Agent error', { folder: this.scoop.folder, error: message });
+        this.callbacks.onError(message);
+      }
     } finally {
       this.isProcessing = false;
       this.setStatus('ready');
@@ -397,6 +404,9 @@ export class ScoopContext {
 
   /** Cleanup */
   dispose(): void {
+    this.disposed = true;
+    this.agent?.clearAllQueues?.();
+    this.agent?.abort?.();
     this.unsubscribe?.();
     this.shell?.dispose();
     this.agent = null;
@@ -405,11 +415,13 @@ export class ScoopContext {
   }
 
   private setStatus(status: 'initializing' | 'ready' | 'processing' | 'error'): void {
+    if (this.disposed) return;
     this.status = status;
     this.callbacks.onStatusChange(status);
   }
 
   private handleAgentEvent(event: CoreAgentEvent): void {
+    if (this.disposed) return;
     switch (event.type) {
       case 'message_update': {
         const ame = event.assistantMessageEvent as AssistantMessageEvent;
