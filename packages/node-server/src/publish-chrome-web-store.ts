@@ -39,6 +39,7 @@ export interface ChromeWebStoreConfig {
   itemId: string;
   publishType?: 'DEFAULT_PUBLISH' | 'STAGED_PUBLISH';
   deployPercentage?: number;
+  forceCancelPendingReview?: boolean;
   skipReview?: boolean;
   serviceAccount: ServiceAccountCredentials;
 }
@@ -57,9 +58,15 @@ interface UploadResponse {
 interface FetchStatusResponse {
   name: string;
   itemId: string;
+  publishedItemRevisionStatus?: ItemRevisionStatus;
+  submittedItemRevisionStatus?: ItemRevisionStatus;
   lastAsyncUploadState?: string;
   takenDown?: boolean;
   warned?: boolean;
+}
+
+interface ItemRevisionStatus {
+  state?: string;
 }
 
 interface PublishResponse {
@@ -161,6 +168,7 @@ export function readChromeWebStoreConfig(
   const base64Credentials = getEnvValue(env, 'CHROME_WEB_STORE_SERVICE_ACCOUNT_JSON_BASE64');
   const publishType = getEnvValue(env, 'CHROME_WEB_STORE_PUBLISH_TYPE');
   const deployPercentage = getEnvValue(env, 'CHROME_WEB_STORE_DEPLOY_PERCENTAGE');
+  const forceCancelPendingReview = getEnvValue(env, 'CHROME_WEB_STORE_FORCE_CANCEL_PENDING');
   const skipReview = getEnvValue(env, 'CHROME_WEB_STORE_SKIP_REVIEW');
 
   const hasAnyChromeWebStoreSetting = [
@@ -170,6 +178,7 @@ export function readChromeWebStoreConfig(
     base64Credentials,
     publishType,
     deployPercentage,
+    forceCancelPendingReview,
     skipReview,
   ].some(Boolean);
   if (!hasAnyChromeWebStoreSetting) return null;
@@ -194,6 +203,10 @@ export function readChromeWebStoreConfig(
     itemId: itemId!,
     publishType: parseOptionalPublishType(publishType),
     deployPercentage: parseOptionalPercentage(deployPercentage),
+    forceCancelPendingReview: parseOptionalBoolean(
+      forceCancelPendingReview,
+      'CHROME_WEB_STORE_FORCE_CANCEL_PENDING'
+    ),
     skipReview: parseOptionalBoolean(skipReview, 'CHROME_WEB_STORE_SKIP_REVIEW'),
     serviceAccount: parseServiceAccountCredentials(jsonCredentials, base64Credentials)!,
   };
@@ -331,6 +344,56 @@ async function fetchUploadStatus(
   return expectJsonResponse<FetchStatusResponse>(response, 'Chrome Web Store upload status');
 }
 
+async function cancelPendingSubmission(
+  config: ChromeWebStoreConfig,
+  accessToken: string,
+  fetchImpl: typeof fetch
+): Promise<void> {
+  const itemName = createPublisherItemName(config);
+  const response = await fetchImpl(
+    `https://chromewebstore.googleapis.com/v2/${itemName}:cancelSubmission`,
+    {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+      },
+    }
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      `Chrome Web Store cancel submission failed with ${response.status} ${response.statusText}.${text ? ` ${text}` : ''}`
+    );
+  }
+}
+
+async function waitForPendingReviewCancellation(
+  config: ChromeWebStoreConfig,
+  accessToken: string,
+  fetchImpl: typeof fetch,
+  waitMs: (ms: number) => Promise<void>,
+  pollIntervalMs: number,
+  maxAttempts: number
+): Promise<FetchStatusResponse> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const status = await fetchUploadStatus(config, accessToken, fetchImpl);
+    if (status.submittedItemRevisionStatus?.state !== 'PENDING_REVIEW') {
+      return status;
+    }
+
+    if (attempt === maxAttempts) {
+      throw new Error(
+        `Chrome Web Store pending review cancellation did not complete after ${maxAttempts} status checks.`
+      );
+    }
+
+    await waitMs(pollIntervalMs);
+  }
+
+  throw new Error('Chrome Web Store pending review cancellation polling failed unexpectedly.');
+}
+
 export async function waitForUploadCompletion(
   config: ChromeWebStoreConfig,
   accessToken: string,
@@ -362,6 +425,42 @@ export async function waitForUploadCompletion(
   }
 
   throw new Error('Chrome Web Store async upload polling failed unexpectedly.');
+}
+
+async function ensureSubmissionCanProceed(
+  config: ChromeWebStoreConfig,
+  accessToken: string,
+  fetchImpl: typeof fetch,
+  log: Pick<Console, 'log' | 'warn'>,
+  waitMs: (ms: number) => Promise<void>,
+  pollIntervalMs: number,
+  maxAttempts: number
+): Promise<{ skipped: boolean; status: FetchStatusResponse }> {
+  const status = await fetchUploadStatus(config, accessToken, fetchImpl);
+  if (status.submittedItemRevisionStatus?.state !== 'PENDING_REVIEW') {
+    return { skipped: false, status };
+  }
+
+  if (!config.forceCancelPendingReview) {
+    log.warn(
+      `Skipping Chrome Web Store publish for item ${config.itemId} because a revision is already pending review. Set CHROME_WEB_STORE_FORCE_CANCEL_PENDING=true to cancel the pending review and resubmit automatically.`
+    );
+    return { skipped: true, status };
+  }
+
+  log.warn(
+    `Cancelling the pending Chrome Web Store review for item ${config.itemId} before uploading a new revision.`
+  );
+  await cancelPendingSubmission(config, accessToken, fetchImpl);
+  const updatedStatus = await waitForPendingReviewCancellation(
+    config,
+    accessToken,
+    fetchImpl,
+    waitMs,
+    pollIntervalMs,
+    maxAttempts
+  );
+  return { skipped: false, status: updatedStatus };
 }
 
 async function publishItem(
@@ -429,6 +528,18 @@ export async function publishChromeWebStoreRelease(
     fetchImpl,
     nowSeconds
   );
+  const submissionGuard = await ensureSubmissionCanProceed(
+    config,
+    accessToken,
+    fetchImpl,
+    log,
+    waitMs,
+    pollIntervalMs,
+    maxUploadPollAttempts
+  );
+  if (submissionGuard.skipped) {
+    return null;
+  }
   const uploadResponse = await uploadExtensionArchive(config, accessToken, archiveBytes, fetchImpl);
 
   if (uploadResponse.uploadState === 'FAILED' || uploadResponse.uploadState === 'NOT_FOUND') {

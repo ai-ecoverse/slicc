@@ -64,7 +64,7 @@ Each published GitHub Release includes semantic-release generated release notes 
 - GitHub Actions release env for Chrome Web Store:
   - repo secret `CHROME_WEB_STORE_SERVICE_ACCOUNT_JSON` containing the service-account JSON key
   - repo variables `CHROME_WEB_STORE_PUBLISHER_ID` and `CHROME_WEB_STORE_ITEM_ID`
-  - optional repo variables `CHROME_WEB_STORE_PUBLISH_TYPE`, `CHROME_WEB_STORE_DEPLOY_PERCENTAGE`, and `CHROME_WEB_STORE_SKIP_REVIEW`
+  - optional repo variables `CHROME_WEB_STORE_PUBLISH_TYPE`, `CHROME_WEB_STORE_DEPLOY_PERCENTAGE`, `CHROME_WEB_STORE_FORCE_CANCEL_PENDING`, and `CHROME_WEB_STORE_SKIP_REVIEW`
 - GitHub permissions: the release workflow must keep GitHub Actions `contents: write` access so semantic-release can create tags/releases and upload release assets, plus `id-token: write` so npm trusted publishing can mint the OIDC token. If you replace the default `GITHUB_TOKEN`, use a token with equivalent release/asset write access.
 
 ### Local packaging and dry-run checks
@@ -85,6 +85,7 @@ npm run publish:chrome
 ```
 
 If the Chrome Web Store env vars are all unset, `npm run publish:chrome` exits without publishing. If the configuration is partial, it fails fast with the missing variable names.
+If a Chrome Web Store revision is already pending review, `npm run publish:chrome` warns and skips the Chrome publish step by default so the rest of the release can continue. Set `CHROME_WEB_STORE_FORCE_CANCEL_PENDING=true` to cancel the pending review and re-submit automatically instead.
 
 When `WORKER_BASE_URL` is set for the CLI/Electron server, the standalone browser runtime now exposes it at `/api/runtime-config` and the cone runtime will automatically create/attach a tray leader session on startup. Passing `--lead` to the CLI launches Chrome with the canonical `?tray=<worker-base-url>` query, and successful leader attach rewrites the visible URL to `?tray=<worker-base-url>/tray/<trayId>`. Passing `--join <join-url>` launches Chrome with the canonical `?tray=<join-url>` follower capability instead; the CLI validates that the value parses as a tray `.../join/<trayId>.<secret>` URL and strips any hash/query suffixes before launch. In standalone/Electron startup, if there is no query override, stored join/base URL, server runtime config, or `VITE_WORKER_BASE_URL`, the browser falls back to the staging worker in dev builds and the production worker in normal builds. Extension/offscreen builds can still use `VITE_WORKER_BASE_URL`, persisted runtime storage, or URL overrides via `tray` (canonical) plus legacy `lead` / `trayWorkerUrl` for the same leader-join path. `GET /join/:token` now reports readiness plus the supported bootstrap transport (`409 FOLLOWER_JOIN_NOT_READY` before a live leader, `200` with `signaling.transport = 'http-poll'` once the leader WebSocket is live), while **`POST /join/:token` remains the follower HTTP contract**: initial attach returns `result.action = wait|signal|fail`, and subsequent `poll` / `answer` / `ice-candidate` / `retry` actions drive the offer/answer/ICE bootstrap without requiring follower-owned tray WebSockets.
 

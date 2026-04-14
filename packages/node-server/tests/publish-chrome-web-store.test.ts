@@ -87,6 +87,7 @@ describe('publish-chrome-web-store', () => {
         Buffer.from(serviceAccountJson).toString('base64'),
       CHROME_WEB_STORE_PUBLISH_TYPE: 'STAGED_PUBLISH',
       CHROME_WEB_STORE_DEPLOY_PERCENTAGE: '25',
+      CHROME_WEB_STORE_FORCE_CANCEL_PENDING: 'true',
       CHROME_WEB_STORE_SKIP_REVIEW: 'true',
     });
 
@@ -95,6 +96,7 @@ describe('publish-chrome-web-store', () => {
       itemId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
       publishType: 'STAGED_PUBLISH',
       deployPercentage: 25,
+      forceCancelPendingReview: true,
       skipReview: true,
     });
     expect(config?.serviceAccount.client_email).toContain('@');
@@ -150,6 +152,12 @@ describe('publish-chrome-web-store', () => {
         jsonResponse({
           name: 'publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf',
           itemId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          name: 'publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          itemId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
           uploadState: 'IN_PROGRESS',
         })
       )
@@ -196,13 +204,13 @@ describe('publish-chrome-web-store', () => {
         publishState: 'PENDING_REVIEW',
       });
       expect(waits).toEqual([]);
-      expect(fetchMock).toHaveBeenCalledTimes(4);
+      expect(fetchMock).toHaveBeenCalledTimes(5);
 
       const tokenRequest = fetchMock.mock.calls[0]!;
       expect(tokenRequest[0]).toBe('https://oauth2.googleapis.com/token');
       expect((tokenRequest[1] as RequestInit).method).toBe('POST');
 
-      const uploadRequest = fetchMock.mock.calls[1]!;
+      const uploadRequest = fetchMock.mock.calls[2]!;
       expect(uploadRequest[0]).toBe(
         'https://chromewebstore.googleapis.com/upload/v2/publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf:upload'
       );
@@ -218,7 +226,7 @@ describe('publish-chrome-web-store', () => {
         )
       ).toBe(0);
 
-      const publishRequest = fetchMock.mock.calls[3]!;
+      const publishRequest = fetchMock.mock.calls[4]!;
       expect(publishRequest[0]).toBe(
         'https://chromewebstore.googleapis.com/v2/publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf:publish'
       );
@@ -235,6 +243,12 @@ describe('publish-chrome-web-store', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({ access_token: 'access-token' }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          name: 'publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          itemId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+        })
+      )
       .mockResolvedValueOnce(
         jsonResponse({
           name: 'publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf',
@@ -285,7 +299,136 @@ describe('publish-chrome-web-store', () => {
         publishState: 'PENDING_REVIEW',
       });
       expect(waits).toEqual([321]);
-      expect(fetchMock).toHaveBeenCalledTimes(5);
+      expect(fetchMock).toHaveBeenCalledTimes(6);
+    } finally {
+      destroyFixture(fixture);
+    }
+  });
+
+  it('skips Chrome publish when a revision is already pending review', async () => {
+    const fixture = createFixture();
+    const warnings: string[] = [];
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ access_token: 'access-token' }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          name: 'publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          itemId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          submittedItemRevisionStatus: {
+            state: 'PENDING_REVIEW',
+          },
+        })
+      );
+
+    try {
+      await expect(
+        publishChromeWebStoreRelease({
+          env: {
+            CHROME_WEB_STORE_PUBLISHER_ID: 'publisher-123',
+            CHROME_WEB_STORE_ITEM_ID: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+            CHROME_WEB_STORE_SERVICE_ACCOUNT_JSON: createServiceAccountJson(),
+          },
+          fetchImpl: fetchMock as unknown as typeof fetch,
+          log: {
+            log: vi.fn(),
+            warn: (message: string) => warnings.push(message),
+          },
+          manifestPath: fixture.manifestPath,
+          projectRoot: fixture.root,
+        })
+      ).resolves.toBeNull();
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(warnings[0]).toContain('already pending review');
+      expect(warnings[0]).toContain('CHROME_WEB_STORE_FORCE_CANCEL_PENDING=true');
+    } finally {
+      destroyFixture(fixture);
+    }
+  });
+
+  it('cancels a pending review and resubmits when force-cancel is enabled', async () => {
+    const fixture = createFixture();
+    const warnings: string[] = [];
+    const waits: number[] = [];
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ access_token: 'access-token' }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          name: 'publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          itemId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          submittedItemRevisionStatus: {
+            state: 'PENDING_REVIEW',
+          },
+        })
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          name: 'publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          itemId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          submittedItemRevisionStatus: {
+            state: 'PENDING_REVIEW',
+          },
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          name: 'publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          itemId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          submittedItemRevisionStatus: {
+            state: 'CANCELLED',
+          },
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          name: 'publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          itemId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          uploadState: 'SUCCEEDED',
+          crxVersion: '1.2.3',
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          name: 'publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          itemId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          state: 'PENDING_REVIEW',
+        })
+      );
+
+    try {
+      const result = await publishChromeWebStoreRelease({
+        env: {
+          CHROME_WEB_STORE_PUBLISHER_ID: 'publisher-123',
+          CHROME_WEB_STORE_ITEM_ID: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          CHROME_WEB_STORE_SERVICE_ACCOUNT_JSON: createServiceAccountJson(),
+          CHROME_WEB_STORE_FORCE_CANCEL_PENDING: 'true',
+        },
+        fetchImpl: fetchMock as unknown as typeof fetch,
+        log: {
+          log: vi.fn(),
+          warn: (message: string) => warnings.push(message),
+        },
+        manifestPath: fixture.manifestPath,
+        projectRoot: fixture.root,
+        pollIntervalMs: 222,
+        waitMs: async (ms: number) => {
+          waits.push(ms);
+        },
+      });
+
+      expect(result).toMatchObject({
+        uploadState: 'SUCCEEDED',
+        publishState: 'PENDING_REVIEW',
+      });
+      expect(warnings[0]).toContain('Cancelling the pending Chrome Web Store review');
+      expect(waits).toEqual([222]);
+      expect(fetchMock).toHaveBeenCalledTimes(7);
+      expect(fetchMock.mock.calls[2]?.[0]).toBe(
+        'https://chromewebstore.googleapis.com/v2/publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf:cancelSubmission'
+      );
     } finally {
       destroyFixture(fixture);
     }
@@ -309,6 +452,12 @@ describe('publish-chrome-web-store', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({ access_token: 'access-token' }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          name: 'publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          itemId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+        })
+      )
       .mockResolvedValueOnce(
         jsonResponse({
           name: 'publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf',
@@ -353,6 +502,12 @@ describe('publish-chrome-web-store', () => {
         jsonResponse({
           name: 'publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf',
           itemId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          name: 'publishers/publisher-123/items/akjjllgokmbgpbdbmafpiefnhidlmbgf',
+          itemId: 'akjjllgokmbgpbdbmafpiefnhidlmbgf',
           uploadState: 'FAILED',
         })
       );
@@ -371,7 +526,7 @@ describe('publish-chrome-web-store', () => {
           projectRoot: fixture.root,
         })
       ).rejects.toThrow('Chrome Web Store upload finished immediately in state FAILED.');
-      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
     } finally {
       destroyFixture(fixture);
     }
