@@ -78,11 +78,13 @@ export function isTextContentType(contentType: string): boolean {
  * string-based write paths can still recover the original bytes without
  * corruption.
  */
-async function readResponseBody(resp: Response, url?: string): Promise<Uint8Array> {
+async function readResponseBody(resp: Response, url?: string): Promise<string> {
   const contentType = resp.headers.get('content-type') ?? '';
   const buf = await resp.arrayBuffer();
   const bytes = new Uint8Array(buf);
   if (!isTextContentType(contentType)) {
+    // Binary: encode as latin1 string to preserve byte fidelity
+    // through just-bash's string-typed FetchResult.body
     const chunkSize = 0x8000;
     let latin1 = '';
     for (let i = 0; i < bytes.length; i += chunkSize) {
@@ -92,8 +94,10 @@ async function readResponseBody(resp: Response, url?: string): Promise<Uint8Arra
     if (url) {
       cacheBinaryByUrl(url, bytes);
     }
+    return latin1;
   }
-  return bytes;
+  // Text: decode as UTF-8
+  return new TextDecoder().decode(bytes);
 }
 
 /**
