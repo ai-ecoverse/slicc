@@ -594,9 +594,10 @@ export async function executeJsCode(
  * 4. Clean up the temp file, import map element, and globalThis shims.
  *
  * **Extension mode:**
- * Posts an `esm_exec` message to the sandbox iframe (handler TBD in a later
- * task). Falls back gracefully with a descriptive error until that handler
- * is wired up.
+ * Posts an `esm_exec` message to the CSP-exempt sandbox iframe. The sandbox
+ * handler sets up globalThis shims, injects the import map, creates a blob
+ * URL from the code, and executes it via `await import(blobUrl)`. VFS, shell
+ * exec, and fetch proxy are bridged back to the host via postMessage handlers.
  *
  * **Test / Node environment (no document, no preview SW):**
  * Returns a clear error instead of falling through to the AsyncFunction
@@ -655,13 +656,186 @@ async function executeEsmModule(
 
   // ── Extension mode: post esm_exec to sandbox ──────────────────────
   if (isExtensionMode) {
-    // The sandbox handler for esm_exec will be added in a later task.
-    // For now, return a descriptive error.
-    return {
-      stdout: '',
-      stderr: 'ESM import execution in extension mode is not yet supported.\n',
-      exitCode: 1,
+    // Build import map so the sandbox can inject it for bare specifier resolution
+    const specifiers = extractImportSpecifiers(code);
+    const importMap = buildImportMap(specifiers);
+
+    let sandbox = document.querySelector('iframe[data-js-tool]') as HTMLIFrameElement | null;
+    if (!sandbox) {
+      sandbox = document.createElement('iframe');
+      sandbox.style.display = 'none';
+      sandbox.dataset.jsTool = 'true';
+      sandbox.src = chrome.runtime.getURL('sandbox.html');
+      document.body.appendChild(sandbox);
+      await new Promise<void>((resolve) => {
+        sandbox!.addEventListener('load', () => resolve(), { once: true });
+      });
+    }
+
+    const execId = `esm-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+    // Register VFS handler so fs.* calls from the sandbox resolve against the real VFS
+    const vfsHandler = (event: MessageEvent) => {
+      const msg = event.data;
+      if (!msg || msg.type !== 'vfs') return;
+      (async () => {
+        try {
+          let result: unknown;
+          switch (msg.op) {
+            case 'readFile':
+              result = await fsBridge.readFile(msg.args[0]);
+              break;
+            case 'readFileBinary':
+              result = await fsBridge.readFileBinary(msg.args[0]);
+              break;
+            case 'writeFile':
+              await fsBridge.writeFile(msg.args[0], msg.args[1]);
+              result = true;
+              break;
+            case 'writeFileBinary':
+              await fsBridge.writeFileBinary(msg.args[0], msg.binaryData ?? new Uint8Array());
+              result = true;
+              break;
+            case 'readDir':
+              result = await fsBridge.readDir(msg.args[0]);
+              break;
+            case 'exists':
+              result = await fsBridge.exists(msg.args[0]);
+              break;
+            case 'stat':
+              result = await fsBridge.stat(msg.args[0]);
+              break;
+            case 'mkdir':
+              await fsBridge.mkdir(msg.args[0]);
+              result = true;
+              break;
+            case 'rm':
+              await fsBridge.rm(msg.args[0]);
+              result = true;
+              break;
+          }
+          sandbox!.contentWindow!.postMessage({ type: 'vfs_response', id: msg.id, result }, '*');
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          sandbox!.contentWindow!.postMessage(
+            { type: 'vfs_response', id: msg.id, error: errMsg },
+            '*'
+          );
+        }
+      })();
     };
+    window.addEventListener('message', vfsHandler);
+
+    // Register shell exec handler so exec() calls route to the host's just-bash
+    const shellExecHandler = (event: MessageEvent) => {
+      const msg = event.data;
+      if (!msg || msg.type !== 'shell_exec') return;
+      (async () => {
+        try {
+          const result = await execBridge(msg.command);
+          sandbox!.contentWindow!.postMessage(
+            { type: 'shell_exec_response', id: msg.id, result },
+            '*'
+          );
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          sandbox!.contentWindow!.postMessage(
+            { type: 'shell_exec_response', id: msg.id, error: errMsg },
+            '*'
+          );
+        }
+      })();
+    };
+    window.addEventListener('message', shellExecHandler);
+
+    // Register fetch proxy handler so cross-origin fetch() calls from the sandbox
+    // route through the host page (which has host_permissions)
+    const fetchProxyHandler = (event: MessageEvent) => {
+      const msg = event.data;
+      if (!msg || msg.type !== 'fetch_proxy') return;
+      (async () => {
+        try {
+          const init: RequestInit = { method: msg.init?.method ?? 'GET', cache: 'no-store' };
+          if (msg.init?.headers) init.headers = msg.init.headers;
+          if (msg.init?.body && !['GET', 'HEAD'].includes(init.method as string)) {
+            init.body = msg.init.body;
+          }
+          const resp = await fetch(msg.url, init);
+          const buf = await resp.arrayBuffer();
+          const headers: Record<string, string> = {};
+          resp.headers.forEach((v, k) => {
+            headers[k] = v;
+          });
+          sandbox!.contentWindow!.postMessage(
+            {
+              type: 'fetch_proxy_response',
+              id: msg.id,
+              status: resp.status,
+              statusText: resp.statusText,
+              headers,
+              body: new Uint8Array(buf),
+            },
+            '*'
+          );
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          sandbox!.contentWindow!.postMessage(
+            { type: 'fetch_proxy_response', id: msg.id, error: errMsg },
+            '*'
+          );
+        }
+      })();
+    };
+    window.addEventListener('message', fetchProxyHandler);
+
+    try {
+      const result = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+        let timeout: ReturnType<typeof setTimeout>;
+        const handler = (event: MessageEvent) => {
+          if (event.data?.type === 'exec_result' && event.data.id === execId) {
+            window.removeEventListener('message', handler);
+            clearTimeout(timeout);
+            if (event.data.error) {
+              resolve({ stdout: '', stderr: event.data.error + '\n' });
+            } else {
+              try {
+                const parsed = JSON.parse(event.data.result);
+                resolve({ stdout: parsed.stdout || '', stderr: parsed.stderr || '' });
+              } catch {
+                resolve({ stdout: event.data.result || '', stderr: '' });
+              }
+            }
+          }
+        };
+        timeout = setTimeout(() => {
+          window.removeEventListener('message', handler);
+          reject(new Error('ESM eval timed out (30s)'));
+        }, 30000);
+        window.addEventListener('message', handler);
+        sandbox!.contentWindow!.postMessage(
+          {
+            type: 'esm_exec',
+            id: execId,
+            code,
+            importMap,
+            argv,
+            env: processShim.env,
+            cwd: processShim.cwd(),
+          },
+          '*'
+        );
+      });
+
+      return {
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.stderr ? 1 : 0,
+      };
+    } finally {
+      window.removeEventListener('message', vfsHandler);
+      window.removeEventListener('message', shellExecHandler);
+      window.removeEventListener('message', fetchProxyHandler);
+    }
   }
 
   // ── CLI mode: import via preview SW ───────────────────────────────
