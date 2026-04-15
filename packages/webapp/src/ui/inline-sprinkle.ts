@@ -95,6 +95,7 @@ mark{background:color-mix(in srgb,var(--s2-accent) 25%,transparent);color:inheri
 </style>
 <script>${BRIDGE_SCRIPT}</script>
 ${content.includes('<slicc-editor') ? '<script src="/slicc-editor.js"></script>' : ''}
+${content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : ''}
 </head>
 <body class="sprinkle-inline">${content}</body></html>`;
 

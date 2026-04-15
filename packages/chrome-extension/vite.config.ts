@@ -142,6 +142,21 @@ export default defineConfig(({ mode }) => ({
       },
     },
     {
+      name: 'build-slicc-diff',
+      async closeBundle() {
+        const esbuild = await import('esbuild');
+        await esbuild.build({
+          entryPoints: [resolve(__dirname, '../webapp/src/ui/slicc-diff-entry.ts')],
+          bundle: true,
+          outfile: resolve(repoRoot, 'dist/extension/slicc-diff.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
+        });
+      },
+    },
+    {
       name: 'copy-extension-assets',
       closeBundle() {
         const outDir = resolve(repoRoot, 'dist/extension');

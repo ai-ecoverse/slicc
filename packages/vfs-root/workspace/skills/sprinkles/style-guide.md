@@ -208,6 +208,59 @@ editor.setGutterMarkers({
 | `.setGutterMarkers(markers)` | Set line markers: `{ lineNo: { color, tooltip? } }`                 |
 | `change` event               | Fires on edit. `e.detail.value` has new content                     |
 
+## Diff Viewer
+
+`<slicc-diff>` — Pre-bundled diff viewer custom element ([@pierre/diffs](https://diffs.com)). Use for showing code changes, migration previews, before/after comparisons. Includes Shiki syntax highlighting and auto dark/light theming.
+
+**Two-file mode** (compare old vs new):
+
+```html
+<slicc-diff
+  old-name="config.json"
+  old-contents='{"debug": false}'
+  new-name="config.json"
+  new-contents='{"debug": true, "verbose": true}'
+  diff-style="split"
+></slicc-diff>
+```
+
+**Patch mode** (unified diff string):
+
+```html
+<slicc-diff id="mydiff"></slicc-diff>
+<script>
+  document.getElementById('mydiff').patch =
+    '--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old line\n+new line';
+</script>
+```
+
+**JS property API** (for dynamic content):
+
+```html
+<slicc-diff id="preview"></slicc-diff>
+<script>
+  var diff = document.getElementById('preview');
+  diff.oldFile = { name: 'app.ts', contents: oldCode };
+  diff.newFile = { name: 'app.ts', contents: newCode };
+  diff.options = { diffStyle: 'unified', overflow: 'wrap' };
+</script>
+```
+
+**Attributes:**
+
+| Attribute        | Default  | Description                                  |
+| ---------------- | -------- | -------------------------------------------- |
+| `old-name`       | —        | Old filename                                 |
+| `old-contents`   | —        | Old file contents                            |
+| `new-name`       | —        | New filename                                 |
+| `new-contents`   | —        | New file contents                            |
+| `patch`          | —        | Unified diff string (alternative to old/new) |
+| `diff-style`     | `split`  | `split` (side-by-side) or `unified` (single) |
+| `overflow`       | `scroll` | `scroll` or `wrap` for long lines            |
+| `disable-header` | —        | Boolean: hide the file header bar            |
+
+**JS Properties:** `.oldFile`, `.newFile` (objects with `name` + `contents`), `.patch` (string), `.options` (object).
+
 ## Layout — Basic
 
 `.sprinkle-grid` — Auto-fit responsive grid.

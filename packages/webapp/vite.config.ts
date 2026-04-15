@@ -8,6 +8,7 @@ const uiOutDir = resolve(workspaceRoot, 'dist/ui');
 const previewSwEntry = resolve(__dirname, 'src/ui/preview-sw.ts');
 const electronOverlayEntry = resolve(__dirname, 'src/ui/electron-overlay-entry.ts');
 const sliccEditorEntry = resolve(__dirname, 'src/ui/slicc-editor-entry.ts');
+const sliccDiffEntry = resolve(__dirname, 'src/ui/slicc-diff-entry.ts');
 
 export default defineConfig(({ mode }) => ({
   root: workspaceRoot,
@@ -42,6 +43,8 @@ export default defineConfig(({ mode }) => ({
         let cachedOverlayMtime = 0;
         let cachedEditorCode: string | null = null;
         let cachedEditorMtime = 0;
+        let cachedDiffCode: string | null = null;
+        let cachedDiffMtime = 0;
 
         server.middlewares.use('/preview-sw.js', async (_req, res) => {
           try {
@@ -149,6 +152,36 @@ export default defineConfig(({ mode }) => ({
             res.end(`console.error('[slicc-editor] Build failed: ${msg.replace(/'/g, "\\'")}');`);
           }
         });
+
+        server.middlewares.use('/slicc-diff.js', async (_req, res) => {
+          try {
+            const { statSync } = await import('fs');
+            const mtime = statSync(sliccDiffEntry).mtimeMs;
+
+            if (!cachedDiffCode || mtime > cachedDiffMtime) {
+              const esbuild = await import('esbuild');
+              const result = await esbuild.build({
+                entryPoints: [sliccDiffEntry],
+                bundle: true,
+                write: false,
+                format: 'iife',
+                target: 'esnext',
+                define: { __DEV__: 'true', global: 'globalThis' },
+              });
+              cachedDiffCode = result.outputFiles![0].text;
+              cachedDiffMtime = mtime;
+            }
+
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(cachedDiffCode);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error('[slicc-diff] Failed to build:', msg);
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(`console.error('[slicc-diff] Build failed: ${msg.replace(/'/g, "\\'")}');`);
+          }
+        });
       },
       async closeBundle() {
         // Keep this config focused on production build artifacts; node-server owns dev serving.
@@ -197,6 +230,17 @@ export default defineConfig(({ mode }) => ({
           entryPoints: [sliccEditorEntry],
           bundle: true,
           outfile: resolve(uiOutDir, 'slicc-editor.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
+        });
+
+        // <slicc-diff> custom element bundle for sprinkle iframes.
+        await esbuild.build({
+          entryPoints: [sliccDiffEntry],
+          bundle: true,
+          outfile: resolve(uiOutDir, 'slicc-diff.js'),
           format: 'iife',
           target: 'esnext',
           minify: true,
