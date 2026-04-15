@@ -28,6 +28,7 @@ describeIfConfigured('deployed tray worker', () => {
     await expect(rootResponse.json()).resolves.toMatchObject({
       routes: [
         'POST /tray',
+        'GET /download/slicc.dmg',
         'GET /handoff',
         'GET|POST /join/:token',
         'GET|POST /controller/:token',

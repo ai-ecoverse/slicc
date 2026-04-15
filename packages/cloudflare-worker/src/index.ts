@@ -87,6 +87,13 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
     return jsonResponse({ error: 'Fetch proxy not available in worker mode' }, 404);
   }
 
+  if (
+    url.pathname === '/download/slicc.dmg' &&
+    (request.method === 'GET' || request.method === 'HEAD')
+  ) {
+    return handleDmgDownload();
+  }
+
   if (url.pathname === '/handoff' && request.method === 'GET') {
     return new Response(HANDOFF_PAGE_HTML, {
       status: 200,
@@ -139,6 +146,7 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
       phase: 1,
       routes: [
         'POST /tray',
+        'GET /download/slicc.dmg',
         'GET /handoff',
         'GET|POST /join/:token',
         'GET|POST /controller/:token',
@@ -150,6 +158,25 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
     },
     200
   );
+}
+
+async function handleDmgDownload(): Promise<Response> {
+  const res = await fetch('https://github.com/ai-ecoverse/slicc/releases/latest', {
+    redirect: 'manual',
+  });
+  const location = res.headers.get('Location');
+  if (!location) {
+    return jsonResponse({ error: 'Could not determine latest release' }, 502);
+  }
+  // Location is like https://github.com/ai-ecoverse/slicc/releases/tag/v1.59.1
+  const tag = location.split('/tag/')[1];
+  if (!tag) {
+    return jsonResponse({ error: 'Unexpected redirect location', location }, 502);
+  }
+  // Strip leading 'v' for the filename: v1.59.1 → 1.59.1
+  const version = tag.startsWith('v') ? tag.slice(1) : tag;
+  const dmgUrl = `https://github.com/ai-ecoverse/slicc/releases/download/${tag}/sliccstart-v${version}.dmg`;
+  return Response.redirect(dmgUrl, 302);
 }
 
 async function createTray(request: Request, env: WorkerEnv): Promise<Response> {
