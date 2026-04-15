@@ -510,16 +510,26 @@ export class OffscreenBridge {
       }
 
       case 'sprinkle-lick': {
-        // Sprinkle click event from the side panel — route to the cone
+        // Sprinkle lick event from the side panel — route to targetScoop or fall back to cone
         const scoops = this.orchestrator.getScoops();
-        const cone = scoops.find((s) => s.isCone);
-        if (cone) {
-          const lickMsg = msg as any;
+        const lickMsg = msg as any;
+        let target = lickMsg.targetScoop
+          ? scoops.find(
+              (s) =>
+                s.name === lickMsg.targetScoop ||
+                s.folder === lickMsg.targetScoop ||
+                s.folder === `${lickMsg.targetScoop}-scoop`
+            )
+          : undefined;
+        if (!target) {
+          target = scoops.find((s) => s.isCone);
+        }
+        if (target) {
           const msgId = `sprinkle-${lickMsg.sprinkleName}-${Date.now()}`;
           const content = `[Sprinkle Event: ${lickMsg.sprinkleName}]\n\`\`\`json\n${JSON.stringify(lickMsg.body, null, 2)}\n\`\`\``;
           const channelMsg: ChannelMessage = {
             id: msgId,
-            chatJid: cone.jid,
+            chatJid: target.jid,
             senderId: 'sprinkle',
             senderName: `sprinkle:${lickMsg.sprinkleName}`,
             content,
@@ -527,7 +537,7 @@ export class OffscreenBridge {
             fromAssistant: false,
             channel: 'sprinkle',
           };
-          this.getBuffer(cone.jid).push({
+          this.getBuffer(target.jid).push({
             id: msgId,
             role: 'user',
             content,
@@ -535,7 +545,7 @@ export class OffscreenBridge {
             source: 'lick',
             channel: 'sprinkle',
           } as any);
-          this.persistScoop(cone.jid);
+          this.persistScoop(target.jid);
           await this.orchestrator.handleMessage(channelMsg);
         }
         break;

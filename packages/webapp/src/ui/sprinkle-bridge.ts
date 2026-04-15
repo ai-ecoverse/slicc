@@ -77,7 +77,7 @@ export class SprinkleBridge {
         const lickEvent: LickEvent = {
           type: 'sprinkle',
           sprinkleName,
-          targetScoop: undefined,
+          targetScoop: getSprinkleRoute(sprinkleName),
           timestamp: new Date().toISOString(),
           body: { action, data },
         };
@@ -168,17 +168,23 @@ export class SprinkleBridge {
     return api;
   }
 
-  /** Push data to a sprinkle's update listeners. */
+  /** Push data to a sprinkle's update listeners (async to prevent runaway callbacks from freezing the main thread). */
   pushUpdate(sprinkleName: string, data: unknown): void {
     const key = `${sprinkleName}:update`;
     const set = this.listeners.get(key);
     if (set) {
       for (const cb of set) {
-        try {
-          cb(data);
-        } catch {
-          /* ignore listener errors */
-        }
+        // Capture the set reference so the setTimeout callback can verify
+        // the listener hasn't been removed via off() or removeSprinkle().
+        const currentSet = set;
+        setTimeout(() => {
+          if (!currentSet.has(cb)) return;
+          try {
+            cb(data);
+          } catch {
+            /* ignore listener errors */
+          }
+        }, 0);
       }
     }
   }
@@ -191,4 +197,49 @@ export class SprinkleBridge {
       }
     }
   }
+}
+
+// ── Sprinkle → scoop routing config (localStorage-backed) ──
+
+const SPRINKLE_ROUTES_KEY = 'slicc-sprinkle-routes';
+
+function loadRoutes(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(SPRINKLE_ROUTES_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveRoutes(routes: Record<string, string>): void {
+  try {
+    localStorage.setItem(SPRINKLE_ROUTES_KEY, JSON.stringify(routes));
+  } catch {
+    /* localStorage full */
+  }
+}
+
+/** Get the target scoop for a sprinkle, or undefined (→ cone). */
+export function getSprinkleRoute(sprinkleName: string): string | undefined {
+  return loadRoutes()[sprinkleName];
+}
+
+/** Set the target scoop for a sprinkle's lick events. */
+export function setSprinkleRoute(sprinkleName: string, scoop: string): void {
+  const routes = loadRoutes();
+  routes[sprinkleName] = scoop;
+  saveRoutes(routes);
+}
+
+/** Clear the target scoop for a sprinkle (reverts to cone). */
+export function clearSprinkleRoute(sprinkleName: string): void {
+  const routes = loadRoutes();
+  delete routes[sprinkleName];
+  saveRoutes(routes);
+}
+
+/** Get all sprinkle → scoop routes. */
+export function getAllSprinkleRoutes(): Record<string, string> {
+  return loadRoutes();
 }
