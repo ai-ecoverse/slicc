@@ -90,13 +90,22 @@ Local relative imports resolve to absolute preview SW URLs during the rewrite st
 
 ## Files Changed
 
-| File                                                              | Change                                              |
-| ----------------------------------------------------------------- | --------------------------------------------------- |
-| `packages/webapp/src/shell/supplemental-commands/node-command.ts` | Add ESM detection, fork to ESM execution path       |
-| `packages/webapp/src/shell/jsh-executor.ts`                       | Add ESM detection, fork to ESM execution path       |
-| `packages/webapp/src/shell/supplemental-commands/shared.ts`       | Add `hasESMImports()` regex scanner                 |
-| `packages/webapp/src/ui/preview-sw.ts`                            | Add `/__shims/*` synthetic route                    |
-| `packages/chrome-extension/src/sandbox.html`                      | Support import map injection + `import()` execution |
+| File                                                              | Change                                                        |
+| ----------------------------------------------------------------- | ------------------------------------------------------------- |
+| `packages/webapp/src/shell/supplemental-commands/node-command.ts` | Add ESM detection, fork to ESM execution path                 |
+| `packages/webapp/src/shell/jsh-executor.ts`                       | Add ESM detection + `executeEsmModule` (CLI blob URL path)    |
+| `packages/webapp/src/shell/supplemental-commands/shared.ts`       | Add `hasESMImports()` + `extractImportSpecifiers()`           |
+| `packages/webapp/src/shell/esm-import-map.ts`                     | New: `buildImportMap` + `rewriteImportSpecifiers`             |
+| `packages/webapp/src/ui/preview-sw.ts`                            | Add `/__shims/*` synthetic route                              |
+| `packages/webapp/src/ui/preview-sw-shims.ts`                      | New: shim code generator for built-in modules                 |
+| `packages/webapp/vite.config.ts`                                  | Add middleware for `/preview/__shims/*` (serves main page)    |
+| `packages/chrome-extension/sandbox.html`                          | Add `esm_exec` handler for ESM execution in extension sandbox |
+
+## Known Gaps (follow-up work)
+
+### Extension mode ESM not wired in jsh-executor
+
+`sandbox.html` has the `esm_exec` handler implemented, but `executeEsmModule` in `jsh-executor.ts` still returns "not yet supported" for extension mode. The handler and the caller need to be connected using the rewritten-code blob approach (same as CLI mode, sent via postMessage).
 
 ## What Doesn't Change
 
