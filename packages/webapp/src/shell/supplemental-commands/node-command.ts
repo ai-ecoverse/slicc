@@ -1,6 +1,12 @@
 import { defineCommand } from 'just-bash';
 import type { Command } from 'just-bash';
-import { NODE_VERSION, NodeExitError, formatConsoleArg, nodeRuntimeState } from './shared.js';
+import {
+  NODE_VERSION,
+  NodeExitError,
+  formatConsoleArg,
+  hasESMImports,
+  nodeRuntimeState,
+} from './shared.js';
 
 const NODE_BUILTINS_UNAVAILABLE = new Set([
   'http',
@@ -104,6 +110,12 @@ export function createNodeCommand(): Command {
         stderr: 'node: REPL mode is not supported in this environment; use node -e "code"\n',
         exitCode: 9,
       };
+    }
+
+    // Fork to ESM path if static import statements are detected
+    if (hasESMImports(code)) {
+      const { executeJsCode } = await import('../jsh-executor.js');
+      return executeJsCode(code, argv, ctx);
     }
 
     const stdoutChunks: string[] = [];
