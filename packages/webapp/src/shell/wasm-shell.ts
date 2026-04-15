@@ -293,6 +293,12 @@ export class WasmShell {
   private builtinCommandNames: Set<string>;
   private readonly scriptCatalog: ScriptCatalog;
   private readonly ownsScriptCatalog: boolean;
+  /** Maps .jsh command names to their registered script paths (for staleness detection). */
+  private registeredJshCommands = new Map<string, string>();
+  /** Promise for the currently in-flight jsh sync, so callers can await it. */
+  private jshSyncInflight: Promise<void> | null = null;
+  /** Set when a sync is requested while one is already in-flight. */
+  private jshSyncDirty = false;
 
   constructor(private options: WasmShellOptions) {
     this.vfsAdapter = new VfsAdapter(options.fs);
@@ -327,6 +333,17 @@ export class WasmShell {
         watcher: scriptWatcher,
       });
     this.ownsScriptCatalog = !options.scriptCatalog;
+
+    // When .jsh files change on disk, re-sync registered commands
+    if (scriptWatcher) {
+      scriptWatcher.watch(
+        '/',
+        (path) => path.endsWith('.jsh'),
+        () => {
+          void this.syncJshCommands().catch(() => undefined);
+        }
+      );
+    }
 
     // Create custom commands for just-bash
     const gitCommand = this.createGitCustomCommand();
@@ -367,6 +384,106 @@ export class WasmShell {
 
     this.lastEnv = { ...initialEnv };
     this.cwd = initialCwd;
+
+    // Kick off initial .jsh registration (async, non-blocking)
+    void this.syncJshCommands().catch(() => undefined);
+  }
+
+  /**
+   * Discover .jsh commands and register any new ones as just-bash custom commands.
+   * This makes .jsh scripts work inside pipelines, subshells, and command substitution —
+   * not just as top-level commands caught by the exit-code-127 fallback.
+   */
+  async syncJshCommands(): Promise<void> {
+    if (this.jshSyncInflight) {
+      // Another sync is running — mark dirty so it re-runs when done.
+      this.jshSyncDirty = true;
+      return this.jshSyncInflight;
+    }
+    this.jshSyncInflight = this.doSyncJshCommands();
+    return this.jshSyncInflight;
+  }
+
+  private async doSyncJshCommands(): Promise<void> {
+    try {
+      const jshMap = await this.scriptCatalog.getJshCommands();
+      const discoveryFs = this.options.jshDiscoveryFs ?? this.options.fs;
+
+      for (const [name, scriptPath] of jshMap) {
+        // Never shadow built-in or custom commands
+        if (this.builtinCommandNames.has(name) && !this.registeredJshCommands.has(name)) {
+          continue;
+        }
+
+        // Skip if already registered with the same path (no change)
+        if (this.registeredJshCommands.get(name) === scriptPath) continue;
+
+        // Register (or re-register if the path changed) as a just-bash custom
+        // command. The execute closure resolves the script path at call-time via
+        // the catalog so it stays current even if a later sync hasn't fired yet.
+        const catalog = this.scriptCatalog;
+        const shell = this;
+        const cmdName = name;
+
+        const command: Command = {
+          name,
+          async execute(args: string[], ctx) {
+            // Resolve the current script path from the catalog at call-time
+            // so we always read the latest version, even if the file moved.
+            const currentMap = await catalog.getJshCommands();
+            const currentPath = currentMap.get(cmdName);
+            if (!currentPath) {
+              return {
+                stdout: '',
+                stderr: `jsh: command '${cmdName}' no longer exists\n`,
+                exitCode: 127,
+              };
+            }
+
+            let code: string;
+            try {
+              const raw = await discoveryFs.readFile(currentPath, { encoding: 'utf-8' });
+              code = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+            } catch {
+              return {
+                stdout: '',
+                stderr: `jsh: cannot read script '${currentPath}'\n`,
+                exitCode: 127,
+              };
+            }
+
+            const argv = ['node', currentPath, ...args];
+            // When running as a custom command inside just-bash, ctx.exec is always
+            // provided by the interpreter. Fall back to bash.exec for safety.
+            const execFn: typeof ctx.exec =
+              ctx.exec ??
+              ((cmd, opts) =>
+                shell.bash.exec(cmd, {
+                  env: Object.fromEntries(ctx.env),
+                  cwd: opts?.cwd ?? ctx.cwd,
+                }));
+            return executeJsCode(code, argv, {
+              fs: ctx.fs,
+              cwd: ctx.cwd,
+              env: ctx.env,
+              stdin: ctx.stdin,
+              exec: execFn,
+            });
+          },
+        };
+
+        this.bash.registerCommand(command);
+        this.registeredJshCommands.set(name, scriptPath);
+        this.builtinCommandNames.add(name);
+      }
+    } finally {
+      this.jshSyncInflight = null;
+      // If another sync was requested while we were running, re-run.
+      if (this.jshSyncDirty) {
+        this.jshSyncDirty = false;
+        void this.syncJshCommands().catch(() => undefined);
+      }
+    }
   }
 
   /** Create a custom git command for just-bash. */
@@ -510,7 +627,12 @@ export class WasmShell {
     // If bash returned 127 (command not found), try .jsh fallback
     if (result.exitCode === 127) {
       const jshResult = await this.tryJshFallback(command);
-      if (jshResult) return jshResult;
+      if (jshResult) {
+        // A .jsh command was found but wasn't registered — re-sync so it's
+        // available as a first-class bash command for future pipelines/subshells.
+        void this.syncJshCommands().catch(() => undefined);
+        return jshResult;
+      }
     }
 
     return result;
