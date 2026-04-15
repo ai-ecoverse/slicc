@@ -306,11 +306,16 @@ describe('WasmShell playwright command discoverability', () => {
   });
 });
 
+let jshRegistrationDbCounter = 0;
+
 describe('WasmShell .jsh command registration', () => {
   let fs: VirtualFS;
 
   beforeEach(async () => {
-    fs = await VirtualFS.create({ dbName: `test-jsh-reg-${Date.now()}`, wipe: true });
+    fs = await VirtualFS.create({
+      dbName: `test-jsh-reg-${jshRegistrationDbCounter++}`,
+      wipe: true,
+    });
     await fs.mkdir('/workspace/skills/test-cmd/scripts', { recursive: true });
   });
 
