@@ -40,6 +40,71 @@ export default defineConfig(({ mode }) => ({
         let cachedOverlayCode: string | null = null;
         let cachedOverlayMtime = 0;
 
+        // Serve ESM shim modules for ESM script execution.
+        // These are also served by the preview SW for /preview/__shims/* requests,
+        // but the SW only controls pages scoped to /preview/. This middleware
+        // makes shims available to the main page (scope /) via direct Node serving,
+        // so blob-URL ESM modules can import them without SW interception.
+        server.middlewares.use('/preview/__shims/', (req, res) => {
+          const shimName = (req.url ?? '').replace(/^\//, '').replace(/\.m?js$/, '');
+          const SHIMMED = new Set(['fs', 'process', 'buffer']);
+          const UNAVAILABLE = new Set([
+            'http',
+            'https',
+            'net',
+            'tls',
+            'dgram',
+            'dns',
+            'cluster',
+            'worker_threads',
+            'child_process',
+            'crypto',
+            'os',
+            'stream',
+            'zlib',
+            'vm',
+            'v8',
+            'perf_hooks',
+            'readline',
+            'repl',
+            'tty',
+            'inspector',
+          ]);
+          const HINTS: Record<string, string> = {
+            http: ' Use fetch() instead.',
+            https: ' Use fetch() instead.',
+            child_process: ' Use exec() which is available as a shell bridge.',
+            crypto: ' Use globalThis.crypto (Web Crypto API) instead.',
+          };
+
+          let code: string | null = null;
+          if (shimName === 'fs') {
+            code = `const s=globalThis.__slicc_fs;
+export const readFile=s.readFile,readFileBinary=s.readFileBinary,writeFile=s.writeFile,
+writeFileBinary=s.writeFileBinary,readDir=s.readDir,exists=s.exists,stat=s.stat,
+mkdir=s.mkdir,rm=s.rm,fetchToFile=s.fetchToFile;
+export default s;`;
+          } else if (shimName === 'process') {
+            code = `const s=globalThis.__slicc_process;
+export const argv=s.argv,env=s.env,cwd=s.cwd,exit=s.exit,stdout=s.stdout,stderr=s.stderr;
+export default s;`;
+          } else if (shimName === 'buffer') {
+            code = `export const Buffer=globalThis.Buffer;export default{Buffer:globalThis.Buffer};`;
+          } else if (UNAVAILABLE.has(shimName)) {
+            const hint = HINTS[shimName] ?? '';
+            code = `throw new Error("Node built-in '${shimName}' is not available in the browser environment.${hint}");`;
+          }
+
+          if (code) {
+            res.setHeader('Content-Type', 'application/javascript');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.end(code);
+          } else {
+            res.statusCode = 404;
+            res.end('Not found');
+          }
+        });
+
         server.middlewares.use('/preview-sw.js', async (_req, res) => {
           try {
             const { statSync } = await import('fs');
