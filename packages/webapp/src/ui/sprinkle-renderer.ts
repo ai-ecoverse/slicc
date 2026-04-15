@@ -258,6 +258,19 @@ export class SprinkleRenderer {
 
     // Send content to the sandbox for rendering, including saved state + localStorage
     const savedState = this.bridge.getState();
+
+    // For full-doc sprinkles in extension mode, the nested iframe can't load external
+    // scripts (no allow-same-origin). Fetch the editor bundle and pass it inline.
+    let editorScript = '';
+    if (fullDoc && content.includes('<slicc-editor')) {
+      try {
+        const resp = await fetch(chrome.runtime.getURL('slicc-editor.js'));
+        if (resp.ok) editorScript = await resp.text();
+      } catch {
+        // Editor unavailable — sprinkle will render without it
+      }
+    }
+
     iframe.contentWindow!.postMessage(
       {
         type: 'sprinkle-render',
@@ -267,6 +280,7 @@ export class SprinkleRenderer {
         savedState,
         savedStorage,
         fullDoc,
+        editorScript,
       },
       '*'
     );
@@ -397,7 +411,11 @@ export class SprinkleRenderer {
     const bridgeScript = `<script>${this.generateBridgeScript()}</script>`;
     const themeCSS = this.collectThemeCSS();
     const themeTag = themeCSS ? `<style>${themeCSS}</style>` : '';
-    const injection = bridgeScript + themeTag;
+    // Inject the <slicc-editor> bundle only when the sprinkle uses it
+    const editorTag = content.includes('<slicc-editor')
+      ? '<script src="/slicc-editor.js"></script>'
+      : '';
+    const injection = bridgeScript + themeTag + editorTag;
 
     // Inject bridge script + theme CSS after <head> tag, or before first <script> if no <head>
     let modified: string;
@@ -594,6 +612,11 @@ export class SprinkleRenderer {
    * CLI mode: render directly in the page DOM (no CSP restrictions).
    */
   private renderInline(content: string, sprinkleName: string): void {
+    // Lazy-load the <slicc-editor> custom element when a sprinkle uses it
+    if (content.includes('<slicc-editor') && !customElements.get('slicc-editor')) {
+      void import('./slicc-editor.js');
+    }
+
     // Ensure the global sprinkle registry exists
     if (!window.__slicc_sprinkles) window.__slicc_sprinkles = {};
     window.__slicc_sprinkles[sprinkleName] = this.bridge;

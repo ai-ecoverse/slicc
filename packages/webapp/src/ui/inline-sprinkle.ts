@@ -94,6 +94,7 @@ mark{background:color-mix(in srgb,var(--s2-accent) 25%,transparent);color:inheri
 .c-green{background:#27500A;color:#EAF3DE}
 </style>
 <script>${BRIDGE_SCRIPT}</script>
+${content.includes('<slicc-editor') ? '<script src="/slicc-editor.js"></script>' : ''}
 </head>
 <body class="sprinkle-inline">${content}</body></html>`;
 

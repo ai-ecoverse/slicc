@@ -147,6 +147,67 @@ Accepts `--value` or `--progress` for fill width.
 
 **Variants**: `--positive`/`--notice`/`--negative` on container. Default color: informative (blue).
 
+## Code Editor
+
+`<slicc-editor>` — Pre-bundled CodeMirror 6 editor custom element. Use for code editing, config editing, or any domain-specific text with syntax highlighting. The editor auto-themes to S2 tokens (dark/light).
+
+**Attributes:**
+
+- `language` — Built-in: `json`, `markdown`, `html`. Omit for plain text.
+- `line-numbers` — Show line numbers gutter (boolean attribute).
+- `readonly` — Disable editing (boolean attribute).
+
+**Inner text** is used as placeholder (shown when editor is empty).
+
+**Basic usage:**
+
+```html
+<slicc-editor id="config" language="json" line-numbers>{"key": "value"}</slicc-editor>
+<script>
+  var editor = document.getElementById('config');
+  editor.value = '{\n  "name": "example"\n}';
+  editor.addEventListener('change', function (e) {
+    slicc.lick({ action: 'config-changed', data: { value: e.detail.value } });
+  });
+</script>
+```
+
+**Custom syntax highlighter** for domain-specific languages:
+
+```html
+<slicc-editor id="lyrics" line-numbers>[Intro] Write your lyrics here...</slicc-editor>
+<script>
+  var editor = document.getElementById('lyrics');
+  var CM6 = window.__SLICC_CM6__;
+  editor.setHighlighter({
+    token: function (stream) {
+      if (stream.match(/^\[.*?\]/)) return 'keyword';
+      if (stream.match(/^\(.*?\)/)) return 'comment';
+      stream.next();
+      return null;
+    },
+  });
+</script>
+```
+
+**Gutter markers** (colored dots on specific lines):
+
+```javascript
+editor.setGutterMarkers({
+  3: { color: 'var(--s2-notice)', tooltip: 'Check meter' },
+  7: { color: 'var(--s2-negative)', tooltip: 'Error here' },
+});
+```
+
+**Properties & Methods:**
+
+| API                          | Description                                                         |
+| ---------------------------- | ------------------------------------------------------------------- |
+| `.value`                     | Get/set editor content (string)                                     |
+| `.setHighlighter(parser)`    | Set custom StreamLanguage parser with `token(stream, state)` method |
+| `.setGutterMarkers(markers)` | Set line markers: `{ lineNo: { color, tooltip? } }`                 |
+| `change` event               | Fires on edit. `e.detail.value` has new content                     |
+
 ## Layout — Basic
 
 `.sprinkle-grid` — Auto-fit responsive grid.

@@ -5,6 +5,7 @@
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: auto; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 </style>
+<script src="slicc-editor.js"></script>
 <script>
 /**
  * Sprinkle Sandbox — CSP-exempt page for rendering .shtml sprinkles
@@ -366,7 +367,8 @@ addEventListener('message', function(e) {
       // the full document HTML, then relay messages between parent and child.
       var bridgeScript = buildNestedBridgeScript(msg.savedState, msg.savedStorage, msg.name || '');
       var themeTag = msg.themeCSS ? '<style>' + msg.themeCSS + '</style>' : '';
-      var injection = '<script>' + bridgeScript + '<\/script>' + themeTag;
+      var editorTag = msg.editorScript ? '<script>' + msg.editorScript + '<\/script>' : '';
+      var injection = '<script>' + bridgeScript + '<\/script>' + themeTag + editorTag;
       var modifiedHtml = injectIntoHead(msg.content, injection);
 
       while (document.body.firstChild) document.body.removeChild(document.body.firstChild);

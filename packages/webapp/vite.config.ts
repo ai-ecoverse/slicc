@@ -7,6 +7,7 @@ const workspaceRoot = resolve(__dirname, '../..');
 const uiOutDir = resolve(workspaceRoot, 'dist/ui');
 const previewSwEntry = resolve(__dirname, 'src/ui/preview-sw.ts');
 const electronOverlayEntry = resolve(__dirname, 'src/ui/electron-overlay-entry.ts');
+const sliccEditorEntry = resolve(__dirname, 'src/ui/slicc-editor-entry.ts');
 
 export default defineConfig(({ mode }) => ({
   root: workspaceRoot,
@@ -39,6 +40,8 @@ export default defineConfig(({ mode }) => ({
         let cachedSwMtime = 0;
         let cachedOverlayCode: string | null = null;
         let cachedOverlayMtime = 0;
+        let cachedEditorCode: string | null = null;
+        let cachedEditorMtime = 0;
 
         server.middlewares.use('/preview-sw.js', async (_req, res) => {
           try {
@@ -116,6 +119,36 @@ export default defineConfig(({ mode }) => ({
             );
           }
         });
+
+        server.middlewares.use('/slicc-editor.js', async (_req, res) => {
+          try {
+            const { statSync } = await import('fs');
+            const mtime = statSync(sliccEditorEntry).mtimeMs;
+
+            if (!cachedEditorCode || mtime > cachedEditorMtime) {
+              const esbuild = await import('esbuild');
+              const result = await esbuild.build({
+                entryPoints: [sliccEditorEntry],
+                bundle: true,
+                write: false,
+                format: 'iife',
+                target: 'esnext',
+                define: { __DEV__: 'true', global: 'globalThis' },
+              });
+              cachedEditorCode = result.outputFiles![0].text;
+              cachedEditorMtime = mtime;
+            }
+
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(cachedEditorCode);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error('[slicc-editor] Failed to build:', msg);
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(`console.error('[slicc-editor] Build failed: ${msg.replace(/'/g, "\\'")}');`);
+          }
+        });
       },
       async closeBundle() {
         // Keep this config focused on production build artifacts; node-server owns dev serving.
@@ -157,6 +190,17 @@ export default defineConfig(({ mode }) => ({
               },
             },
           ],
+        });
+
+        // <slicc-editor> custom element bundle for sprinkle iframes.
+        await esbuild.build({
+          entryPoints: [sliccEditorEntry],
+          bundle: true,
+          outfile: resolve(uiOutDir, 'slicc-editor.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
         });
 
         copyFileSync(
