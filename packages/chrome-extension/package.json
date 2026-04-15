@@ -8,7 +8,7 @@
     "typecheck": "tsc --noEmit -p ../../tsconfig.json"
   },
   "dependencies": {
-    "@imagemagick/magick-wasm": "^0.0.39",
+    "@imagemagick/magick-wasm": "^0.0.40",
     "@mariozechner/pi-ai": "^0.67.0",
     "@mariozechner/pi-coding-agent": "^0.67.0"
   }
