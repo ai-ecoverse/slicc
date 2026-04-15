@@ -19,6 +19,7 @@
 /// <reference lib="webworker" />
 
 import FS from '@isomorphic-git/lightning-fs';
+import { generateShimCode } from './preview-sw-shims.js';
 
 const DB_NAME = 'slicc-fs';
 let lfs: FS.PromisifiedFS | null = null;
@@ -123,6 +124,18 @@ async function readViaMainPage(
 }
 
 async function handlePreviewRequest(vfsPath: string): Promise<Response> {
+  // Synthetic shim modules for ESM execution
+  if (vfsPath.startsWith('/__shims/')) {
+    const shimName = vfsPath.slice('/__shims/'.length).replace(/\.m?js$/, '');
+    const code = generateShimCode(shimName);
+    if (code) {
+      return new Response(code, {
+        status: 200,
+        headers: { 'Content-Type': 'application/javascript', 'Cache-Control': 'no-cache' },
+      });
+    }
+  }
+
   const mimeType = getMimeType(vfsPath);
   const isText = TEXT_TYPES.has(mimeType);
 
