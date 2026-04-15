@@ -260,7 +260,7 @@ export class VfsAdapter implements IFileSystem {
     if (normalized === '/usr/bin') return this.getVirtualBinCommands().slice().sort();
     // Fast path: synchronous CacheFS read for non-mounted paths
     const fast = this.vfs.readDirSync(normalized);
-    if (fast) return fast.map((e) => e.name);
+    if (fast !== null) return fast.map((e) => e.name);
     const entries = await this.vfs.readDir(normalized);
     return entries.map((e) => e.name);
   }
@@ -286,7 +286,7 @@ export class VfsAdapter implements IFileSystem {
     // readDirSync returns null when the path is under a mount or
     // the CacheFS internal isn't available.
     const fastEntries = this.vfs.readDirSync(normalized);
-    if (fastEntries) {
+    if (fastEntries !== null) {
       const result: DirentEntry[] = [];
       for (const e of fastEntries) {
         if (e.type === 'symlink') {

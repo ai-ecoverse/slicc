@@ -19,6 +19,7 @@ describe('VirtualFS sync fast-path', () => {
   });
 
   afterEach(async () => {
+    await vfs.dispose();
     await new Promise((r) => setTimeout(r, 600));
   });
 
@@ -131,6 +132,41 @@ describe('VirtualFS sync fast-path', () => {
       await vfs.symlink('/nonexistent', '/dangling');
       const s = vfs.statSync('/dangling');
       expect(s).toBeNull();
+    });
+
+    it('returns null for circular symlinks (ELOOP parity)', async () => {
+      await vfs.symlink('/b', '/a');
+      await vfs.symlink('/a', '/b');
+      // Async stat throws ELOOP
+      await expect(vfs.stat('/a')).rejects.toMatchObject({ code: 'ELOOP' });
+      // Sync stat returns null (signals fallback) rather than infinite recursion
+      expect(vfs.statSync('/a')).toBeNull();
+    });
+
+    it('returns null for long symlink chains exceeding depth limit', async () => {
+      // Create a chain: /s0 -> /s1 -> /s2 -> ... -> /s11 -> /target
+      await vfs.writeFile('/target', 'data');
+      for (let i = 11; i >= 0; i--) {
+        const next = i === 11 ? '/target' : `/s${i + 1}`;
+        await vfs.symlink(next, `/s${i}`);
+      }
+      // 12 hops exceeds MAX_SYMLINK_DEPTH (10) — async throws ELOOP
+      await expect(vfs.stat('/s0')).rejects.toMatchObject({ code: 'ELOOP' });
+      // Sync should also reject by returning null
+      expect(vfs.statSync('/s0')).toBeNull();
+    });
+
+    it('resolves symlink chains within depth limit', async () => {
+      // Create a chain of 5 hops (within limit of 10)
+      await vfs.writeFile('/end', 'found');
+      for (let i = 4; i >= 0; i--) {
+        const next = i === 4 ? '/end' : `/c${i + 1}`;
+        await vfs.symlink(next, `/c${i}`);
+      }
+      const s = vfs.statSync('/c0');
+      expect(s).not.toBeNull();
+      expect(s!.type).toBe('file');
+      expect(s!.size).toBe(5);
     });
 
     it('matches async stat results for files', async () => {

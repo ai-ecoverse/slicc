@@ -226,6 +226,10 @@ export class VirtualFS {
    * Synchronous stat (follows symlinks) for non-mounted LightningFS paths.
    * Returns null if the path is under a mount, the CacheFS fast path is
    * unavailable, or the symlink target is in a mounted tree.
+   *
+   * Enforces MAX_SYMLINK_DEPTH to stay consistent with the async realpath().
+   * CacheFS._lookup follows symlinks internally without a depth limit, so we
+   * manually resolve symlinks with a hop counter before calling stat.
    */
   statSync(path: string): Stats | null {
     const normalized = normalizePath(path);
@@ -233,12 +237,13 @@ export class VirtualFS {
     const cache = this.getCacheFS();
     if (!cache) return null;
     try {
-      // CacheFS.stat follows symlinks — if the target is outside the CacheFS
-      // tree (e.g. pointing into a mount), _lookup throws ENOENT and we
-      // return null so the caller falls back to the async path.
-      const s = cache.stat(normalized);
+      // Manually resolve symlinks with a depth limit matching the async path.
+      const resolved = this.resolveSymlinksSync(cache, normalized);
+      if (resolved === null) return null;
+      const s = cache.lstat(resolved);
+      // After full resolution, result should be file or dir, not symlink.
       return {
-        type: s.type === 'dir' ? 'directory' : s.type === 'file' ? 'file' : 'symlink',
+        type: s.type === 'dir' ? 'directory' : 'file',
         size: s.size ?? 0,
         mtime: s.mtimeMs ?? Date.now(),
         ctime: s.mtimeMs ?? Date.now(),
@@ -246,6 +251,46 @@ export class VirtualFS {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Synchronously resolve all symlinks in a path using CacheFS, with a hop
+   * limit matching MAX_SYMLINK_DEPTH. Returns null if the limit is exceeded
+   * or the target is unresolvable (e.g. in a mount).
+   *
+   * Uses a shared mutable counter so that hops accumulate across recursive
+   * calls (matching the async realpath behavior).
+   */
+  private resolveSymlinksSync(
+    cache: any,
+    path: string,
+    hops: { count: number } = { count: 0 }
+  ): string | null {
+    const parts = path.split('/').filter(Boolean);
+    let resolved = '/';
+    for (const part of parts) {
+      resolved = resolved === '/' ? `/${part}` : `${resolved}/${part}`;
+      try {
+        const s = cache.lstat(resolved);
+        if (s.type === 'symlink') {
+          if (++hops.count > MAX_SYMLINK_DEPTH) return null;
+          const target = s.target;
+          if (target.startsWith('/')) {
+            resolved = normalizePath(target);
+          } else {
+            const { dir } = splitPath(resolved);
+            resolved = normalizePath(joinPath(dir, target));
+          }
+          // Recursively resolve — shared hops object accumulates across calls
+          const full = this.resolveSymlinksSync(cache, resolved, hops);
+          if (full === null) return null;
+          resolved = full;
+        }
+      } catch {
+        return null;
+      }
+    }
+    return resolved;
   }
 
   /**

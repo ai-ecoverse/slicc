@@ -25,6 +25,7 @@ describe('CacheFS internal structure', () => {
   });
 
   afterEach(async () => {
+    await vfs.dispose();
     await new Promise((r) => setTimeout(r, 600));
   });
 
