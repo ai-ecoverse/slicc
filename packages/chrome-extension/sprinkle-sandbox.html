@@ -5,8 +5,6 @@
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: auto; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 </style>
-<script src="slicc-editor.js"></script>
-<script src="slicc-diff.js"></script>
 <script>
 /**
  * Sprinkle Sandbox — CSP-exempt page for rendering .shtml sprinkles
@@ -368,8 +366,10 @@ addEventListener('message', function(e) {
       // the full document HTML, then relay messages between parent and child.
       var bridgeScript = buildNestedBridgeScript(msg.savedState, msg.savedStorage, msg.name || '');
       var themeTag = msg.themeCSS ? '<style>' + msg.themeCSS + '</style>' : '';
-      var editorTag = msg.editorScript ? '<script>' + msg.editorScript + '<\/script>' : '';
-      var diffTag = msg.diffScript ? '<script>' + msg.diffScript + '<\/script>' : '';
+      // Escape </script> sequences in inlined bundles to prevent premature tag termination
+      function escapeForScript(code) { return code.replace(/<\/script/gi, '<\\/script'); }
+      var editorTag = msg.editorScript ? '<script>' + escapeForScript(msg.editorScript) + '<\/script>' : '';
+      var diffTag = msg.diffScript ? '<script>' + escapeForScript(msg.diffScript) + '<\/script>' : '';
       var injection = '<script>' + bridgeScript + '<\/script>' + themeTag + editorTag + diffTag;
       var modifiedHtml = injectIntoHead(msg.content, injection);
 
@@ -402,6 +402,22 @@ addEventListener('message', function(e) {
       for (var i = 0; i < fills.length; i++) {
         var v = parseFloat(fills[i].getAttribute('data-value') || '0');
         if (v >= 0 && v <= 100) fills[i].style.width = v + '%';
+      }
+
+      // Lazy-load custom element bundles before executing sprinkle scripts.
+      // Uses synchronous script injection so elements are registered before use.
+      var contentStr = msg.content || '';
+      if (contentStr.indexOf('<slicc-editor') !== -1 && !customElements.get('slicc-editor')) {
+        var edScript = document.createElement('script');
+        edScript.src = 'slicc-editor.js';
+        edScript.async = false;
+        document.head.appendChild(edScript);
+      }
+      if (contentStr.indexOf('<slicc-diff') !== -1 && !customElements.get('slicc-diff')) {
+        var dfScript = document.createElement('script');
+        dfScript.src = 'slicc-diff.js';
+        dfScript.async = false;
+        document.head.appendChild(dfScript);
       }
 
       // Execute scripts (sandbox is CSP-exempt)

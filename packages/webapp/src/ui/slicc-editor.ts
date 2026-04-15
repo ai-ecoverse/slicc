@@ -194,6 +194,7 @@ export class SliccEditorElement extends HTMLElement {
   private shadowRoot_: ShadowRoot;
   private placeholderText = '';
   private connected = false;
+  private langRequestId = 0;
 
   static get observedAttributes() {
     return ['language', 'line-numbers', 'readonly'];
@@ -344,20 +345,28 @@ export class SliccEditorElement extends HTMLElement {
   }
 
   private async loadLanguage(name: string): Promise<void> {
+    const requestId = ++this.langRequestId;
     const loader = LANG_LOADERS[name.toLowerCase()];
     if (!loader) {
       // Unknown language — clear the language extension
-      this.view?.dispatch({
-        effects: this.langCompartment.reconfigure([]),
-      });
+      if (this.langRequestId === requestId) {
+        this.view?.dispatch({
+          effects: this.langCompartment.reconfigure([]),
+        });
+      }
       return;
     }
 
     const ext = await loader();
-    this.view?.dispatch({
-      effects: this.langCompartment.reconfigure(ext),
-    });
+    // Only apply if this is still the latest request (avoids race conditions)
+    if (this.langRequestId === requestId) {
+      this.view?.dispatch({
+        effects: this.langCompartment.reconfigure(ext),
+      });
+    }
   }
 }
 
-customElements.define('slicc-editor', SliccEditorElement);
+if (!customElements.get('slicc-editor')) {
+  customElements.define('slicc-editor', SliccEditorElement);
+}

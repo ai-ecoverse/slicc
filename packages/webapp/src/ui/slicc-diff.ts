@@ -212,4 +212,6 @@ export class SliccDiffElement extends HTMLElement {
   }
 }
 
-customElements.define('slicc-diff', SliccDiffElement);
+if (!customElements.get('slicc-diff')) {
+  customElements.define('slicc-diff', SliccDiffElement);
+}
