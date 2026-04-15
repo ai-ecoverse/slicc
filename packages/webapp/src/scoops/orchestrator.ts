@@ -82,6 +82,8 @@ export class Orchestrator {
   private fsWatcher: FsWatcher | null = null;
   /** Tracks idle timers for scoops that haven't started work after becoming ready. */
   private idleTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  /** Preserves cost data for scoops that have been dropped. */
+  private droppedScoopCosts: ScoopCostData[] = [];
 
   constructor(
     container: HTMLElement,
@@ -255,6 +257,9 @@ export class Orchestrator {
       if (err) throw err;
     }
 
+    // Snapshot cost data before destroying context
+    this.snapshotScoopCost(jid);
+
     this.clearIdleTimer(jid);
     await this.destroyScoopTab(jid);
     this.sessionStore?.delete(jid).catch((err) => {
@@ -301,6 +306,7 @@ export class Orchestrator {
         error: err instanceof Error ? err.message : String(err),
       });
     });
+    this.droppedScoopCosts = [];
     log.info('Filesystem reset and defaults re-seeded');
   }
 
@@ -322,6 +328,7 @@ export class Orchestrator {
     for (const jid of this.scoops.keys()) {
       this.messageQueues.set(jid, []);
     }
+    this.droppedScoopCosts = [];
     log.info('All messages cleared');
   }
 
@@ -877,56 +884,75 @@ export class Orchestrator {
     }
   }
 
-  /** Collect cost data from all scoops for the `cost` shell command. */
+  /** Build cost data for a single scoop from its context's messages. Returns null if no usage. */
+  private buildScoopCost(scoop: RegisteredScoop, context: ScoopContext): ScoopCostData | null {
+    const messages = context.getAgentMessages();
+    const assistantMsgs = messages.filter((m): m is AssistantMessage => m.role === 'assistant');
+    if (assistantMsgs.length === 0) return null;
+
+    const aggregated = {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    const modelCounts = new Map<string, number>();
+    for (const msg of assistantMsgs) {
+      aggregated.input += msg.usage.input;
+      aggregated.output += msg.usage.output;
+      aggregated.cacheRead += msg.usage.cacheRead;
+      aggregated.cacheWrite += msg.usage.cacheWrite;
+      aggregated.totalTokens += msg.usage.totalTokens;
+      aggregated.cost.input += msg.usage.cost.input;
+      aggregated.cost.output += msg.usage.cost.output;
+      aggregated.cost.cacheRead += msg.usage.cost.cacheRead;
+      aggregated.cost.cacheWrite += msg.usage.cost.cacheWrite;
+      aggregated.cost.total += msg.usage.cost.total;
+      modelCounts.set(msg.model, (modelCounts.get(msg.model) ?? 0) + 1);
+    }
+
+    let topModel = '';
+    let topCount = 0;
+    for (const [model, count] of modelCounts) {
+      if (count > topCount) {
+        topModel = model;
+        topCount = count;
+      }
+    }
+
+    return {
+      name: scoop.assistantLabel,
+      type: scoop.isCone ? 'cone' : 'scoop',
+      model: topModel,
+      usage: aggregated,
+      turns: assistantMsgs.length,
+    };
+  }
+
+  /** Snapshot a scoop's cost data before it is destroyed. */
+  private snapshotScoopCost(jid: string): void {
+    const scoop = this.scoops.get(jid);
+    const context = this.contexts.get(jid);
+    if (!scoop || !context) return;
+    const costData = this.buildScoopCost(scoop, context);
+    if (costData) {
+      this.droppedScoopCosts.push(costData);
+    }
+  }
+
+  /** Collect cost data from all active and dropped scoops for the `cost` shell command. */
   getSessionCosts(): ScoopCostData[] {
     const results: ScoopCostData[] = [];
     for (const scoop of this.scoops.values()) {
       const context = this.contexts.get(scoop.jid);
       if (!context) continue;
-      const messages = context.getAgentMessages();
-      const assistantMsgs = messages.filter((m): m is AssistantMessage => m.role === 'assistant');
-      if (assistantMsgs.length === 0) continue;
-
-      const aggregated = {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      };
-      const modelCounts = new Map<string, number>();
-      for (const msg of assistantMsgs) {
-        aggregated.input += msg.usage.input;
-        aggregated.output += msg.usage.output;
-        aggregated.cacheRead += msg.usage.cacheRead;
-        aggregated.cacheWrite += msg.usage.cacheWrite;
-        aggregated.totalTokens += msg.usage.totalTokens;
-        aggregated.cost.input += msg.usage.cost.input;
-        aggregated.cost.output += msg.usage.cost.output;
-        aggregated.cost.cacheRead += msg.usage.cost.cacheRead;
-        aggregated.cost.cacheWrite += msg.usage.cost.cacheWrite;
-        aggregated.cost.total += msg.usage.cost.total;
-        modelCounts.set(msg.model, (modelCounts.get(msg.model) ?? 0) + 1);
-      }
-
-      let topModel = '';
-      let topCount = 0;
-      for (const [model, count] of modelCounts) {
-        if (count > topCount) {
-          topModel = model;
-          topCount = count;
-        }
-      }
-
-      results.push({
-        name: scoop.assistantLabel,
-        type: scoop.isCone ? 'cone' : 'scoop',
-        model: topModel,
-        usage: aggregated,
-        turns: assistantMsgs.length,
-      });
+      const costData = this.buildScoopCost(scoop, context);
+      if (costData) results.push(costData);
     }
+    // Include costs from scoops that were dropped during this session
+    results.push(...this.droppedScoopCosts);
     return results;
   }
 
