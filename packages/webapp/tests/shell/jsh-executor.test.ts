@@ -434,6 +434,46 @@ describe('executeJsCode', () => {
   });
 });
 
+describe('executeJsCode ESM path', () => {
+  it('detects ESM imports and does not produce SyntaxError', async () => {
+    // In test/Node environment, real import() via preview SW is not available.
+    // This test verifies the detection fork happens — the ESM path should NOT
+    // fall through to the AsyncFunction path which would throw SyntaxError.
+    const code = `import chalk from 'chalk';\nconsole.log('hello');`;
+    const ctx = createMockCtx();
+    const result = await executeJsCode(code, ['node'], ctx);
+    // Should NOT get a SyntaxError about import statements
+    expect(result.stderr).not.toContain('SyntaxError');
+  });
+
+  it('returns a clear error about missing browser document in test env', async () => {
+    const code = `import { readFile } from 'fs';\nconsole.log('test');`;
+    const ctx = createMockCtx();
+    const result = await executeJsCode(code, ['node'], ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('ESM imports detected');
+    expect(result.stderr).toContain('browser document');
+  });
+
+  it('does not trigger ESM path for dynamic import()', async () => {
+    // Dynamic import() should NOT trigger the ESM path
+    const code = `const mod = await import('https://esm.sh/chalk');\nconsole.log(typeof mod);`;
+    const ctx = createMockCtx();
+    const result = await executeJsCode(code, ['node'], ctx);
+    // Should go through normal AsyncFunction path (may fail fetching, but NOT the ESM error)
+    expect(result.stderr).not.toContain('ESM imports detected');
+  });
+
+  it('does not trigger ESM path for require()', async () => {
+    const code = `const myFs = require('fs');\nconsole.log(typeof myFs);`;
+    const ctx = createMockCtx();
+    const result = await executeJsCode(code, ['node'], ctx);
+    // Should go through normal CJS path
+    expect(result.stderr).not.toContain('ESM imports detected');
+    expect(result.exitCode).toBe(0);
+  });
+});
+
 describe('exec bridge', () => {
   it('runs a shell command and returns the result', async () => {
     const mockExec = async (cmd: string) => ({

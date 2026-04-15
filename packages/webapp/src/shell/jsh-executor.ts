@@ -2,8 +2,12 @@ import type { CommandContext } from 'just-bash';
 import {
   NodeExitError,
   formatConsoleArg,
+  hasESMImports,
+  extractImportSpecifiers,
   nodeRuntimeState,
+  toPreviewUrl,
 } from './supplemental-commands/shared.js';
+import { buildImportMap } from './esm-import-map.js';
 
 const NODE_BUILTINS_UNAVAILABLE = new Set([
   'http',
@@ -235,6 +239,11 @@ export async function executeJsCode(
   };
 
   const moduleShim = { exports: {} as Record<string, unknown>, filename: argv[1] || '<script>' };
+
+  // ── ESM execution path ──────────────────────────────────────────────
+  if (hasESMImports(code)) {
+    return executeEsmModule(code, argv, fsBridge, processShim, nodeConsole, execBridge);
+  }
 
   try {
     if (isExtensionMode) {
@@ -567,5 +576,192 @@ export async function executeJsCode(
       stderr: `${stderrChunks.join('')}${message}\n`,
       exitCode: 1,
     };
+  }
+}
+
+// ── ESM module execution ──────────────────────────────────────────────
+
+/**
+ * Execute code that contains static ESM `import` statements.
+ *
+ * **CLI mode (document exists):**
+ * 1. Set up `globalThis.__slicc_*` shim objects so that synthetic `/__shims/*`
+ *    modules resolved by the preview service worker can re-export them.
+ * 2. Inject a `<script type="importmap">` into the document so the browser
+ *    knows where to fetch each bare specifier.
+ * 3. Write the code to a temporary VFS file and `await import()` via the
+ *    preview URL so the browser treats it as a real ES module.
+ * 4. Clean up the temp file, import map element, and globalThis shims.
+ *
+ * **Extension mode:**
+ * Posts an `esm_exec` message to the sandbox iframe (handler TBD in a later
+ * task). Falls back gracefully with a descriptive error until that handler
+ * is wired up.
+ *
+ * **Test / Node environment (no document, no preview SW):**
+ * Returns a clear error instead of falling through to the AsyncFunction
+ * path which would throw a SyntaxError on static `import` statements.
+ */
+async function executeEsmModule(
+  code: string,
+  argv: string[],
+  fsBridge: {
+    readFile: (path: string) => Promise<string>;
+    readFileBinary: (path: string) => Promise<Uint8Array>;
+    writeFile: (path: string, content: string) => Promise<void>;
+    writeFileBinary: (path: string, bytes: Uint8Array) => Promise<void>;
+    readDir: (path: string) => Promise<string[]>;
+    exists: (path: string) => Promise<boolean>;
+    stat: (path: string) => Promise<{ isDirectory: boolean; isFile: boolean; size: number }>;
+    mkdir: (path: string) => Promise<void>;
+    rm: (path: string) => Promise<void>;
+    fetchToFile: (url: string, path: string) => Promise<number>;
+  },
+  processShim: {
+    argv: string[];
+    env: Record<string, string>;
+    cwd: () => string;
+    exit: (code?: number) => never;
+    stdout: { write: (value: unknown) => void };
+    stderr: { write: (value: unknown) => void };
+  },
+  nodeConsole: {
+    log: (...parts: unknown[]) => void;
+    info: (...parts: unknown[]) => void;
+    warn: (...parts: unknown[]) => void;
+    error: (...parts: unknown[]) => void;
+  },
+  execBridge: (command: string) => Promise<{ stdout: string; stderr: string; exitCode: number }>
+): Promise<JshResult> {
+  const stdoutChunks: string[] = [];
+  const stderrChunks: string[] = [];
+
+  const writeStdout = (value: unknown): void => {
+    stdoutChunks.push(typeof value === 'string' ? value : String(value));
+  };
+  const writeStderr = (value: unknown): void => {
+    stderrChunks.push(typeof value === 'string' ? value : String(value));
+  };
+
+  // Rebuild local console capturer so ESM path has its own stdout/stderr buffers
+  const esmConsole = {
+    log: (...parts: unknown[]) => writeStdout(`${parts.map(formatConsoleArg).join(' ')}\n`),
+    info: (...parts: unknown[]) => writeStdout(`${parts.map(formatConsoleArg).join(' ')}\n`),
+    warn: (...parts: unknown[]) => writeStderr(`${parts.map(formatConsoleArg).join(' ')}\n`),
+    error: (...parts: unknown[]) => writeStderr(`${parts.map(formatConsoleArg).join(' ')}\n`),
+  };
+
+  const isExtensionMode = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
+
+  // ── Extension mode: post esm_exec to sandbox ──────────────────────
+  if (isExtensionMode) {
+    // The sandbox handler for esm_exec will be added in a later task.
+    // For now, return a descriptive error.
+    return {
+      stdout: '',
+      stderr: 'ESM import execution in extension mode is not yet supported.\n',
+      exitCode: 1,
+    };
+  }
+
+  // ── CLI mode: import via preview SW ───────────────────────────────
+  if (typeof document === 'undefined') {
+    // Test / Node environment — no document or preview SW available.
+    return {
+      stdout: '',
+      stderr:
+        'ESM imports detected but no browser document is available for module execution.\n' +
+        'ESM execution requires the preview service worker (CLI/browser mode).\n',
+      exitCode: 1,
+    };
+  }
+
+  // Build the import map from extracted specifiers
+  const specifiers = extractImportSpecifiers(code);
+  const importMap = buildImportMap(specifiers);
+
+  // Generate a unique temp file path
+  const tempId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const tempDir = '/workspace/.slicc/esm-temp';
+  const tempPath = `${tempDir}/${tempId}.mjs`;
+
+  // Save/restore originals for console monkey-patching
+  const origConsole = {
+    log: console.log,
+    info: console.info,
+    warn: console.warn,
+    error: console.error,
+  };
+
+  let importMapScript: HTMLScriptElement | null = null;
+
+  try {
+    // 1. Set globalThis shims so __shims/* modules can re-export them
+    (globalThis as Record<string, unknown>).__slicc_fs = fsBridge;
+    (globalThis as Record<string, unknown>).__slicc_process = processShim;
+    (globalThis as Record<string, unknown>).__slicc_exec = execBridge;
+
+    // 2. Monkey-patch console to capture stdout/stderr
+    console.log = esmConsole.log;
+    console.info = esmConsole.info;
+    console.warn = esmConsole.warn;
+    console.error = esmConsole.error;
+
+    // 3. Inject import map into document
+    importMapScript = document.createElement('script');
+    importMapScript.type = 'importmap';
+    importMapScript.textContent = JSON.stringify(importMap);
+    document.head.appendChild(importMapScript);
+
+    // 4. Write code to temp VFS file
+    await fsBridge.mkdir(tempDir);
+    await fsBridge.writeFile(tempPath, code);
+
+    // 5. Import the module via preview URL
+    const previewUrl = toPreviewUrl(tempPath);
+    await import(/* @vite-ignore */ previewUrl);
+
+    return {
+      stdout: stdoutChunks.join(''),
+      stderr: stderrChunks.join(''),
+      exitCode: 0,
+    };
+  } catch (err) {
+    if (err instanceof NodeExitError) {
+      return {
+        stdout: stdoutChunks.join(''),
+        stderr: stderrChunks.join(''),
+        exitCode: err.code,
+      };
+    }
+    const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    return {
+      stdout: stdoutChunks.join(''),
+      stderr: `${stderrChunks.join('')}${message}\n`,
+      exitCode: 1,
+    };
+  } finally {
+    // Restore console
+    console.log = origConsole.log;
+    console.info = origConsole.info;
+    console.warn = origConsole.warn;
+    console.error = origConsole.error;
+
+    // Remove globalThis shims
+    delete (globalThis as Record<string, unknown>).__slicc_fs;
+    delete (globalThis as Record<string, unknown>).__slicc_process;
+    delete (globalThis as Record<string, unknown>).__slicc_exec;
+
+    // Remove import map script element
+    if (importMapScript && importMapScript.parentNode) {
+      importMapScript.parentNode.removeChild(importMapScript);
+    }
+
+    // Clean up temp VFS file (best-effort)
+    try {
+      await fsBridge.rm(tempPath);
+    } catch {
+      // Ignore cleanup failures
+    }
   }
 }
