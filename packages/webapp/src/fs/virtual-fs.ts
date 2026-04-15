@@ -164,6 +164,167 @@ export class VirtualFS {
   }
 
   // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Synchronous fast-path: direct CacheFS access for non-mounted paths
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Access the LightningFS in-memory CacheFS tree directly.
+   * Returns null if the cache is not activated or the internal structure
+   * doesn't match expectations (e.g. after a LightningFS upgrade).
+   *
+   * The CacheFS tree is a nested Map where:
+   * - Key 0 (STAT) holds { mode, type, size, ino, mtimeMs }
+   * - String keys are child entry names mapping to sub-Maps
+   *
+   * This is a private LightningFS internal. The `cachefs-internals` test
+   * suite validates the structure so upgrades that break it are caught.
+   */
+  private getCacheFS(): any | null {
+    try {
+      const cache = (this.lfs as any)._backend?._cache;
+      if (cache?.activated && cache._root instanceof Map) return cache;
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Synchronous readDir for non-mounted LightningFS paths.
+   * Returns null if the path is under a mount or the CacheFS fast path is
+   * unavailable — callers must fall back to the async `readDir()`.
+   */
+  readDirSync(path: string): DirEntry[] | null {
+    const normalized = normalizePath(path);
+    if (this.findMount(normalized)) return null;
+    const cache = this.getCacheFS();
+    if (!cache) return null;
+    try {
+      // CacheFS.readdir follows symlinks in the path (via _lookup with follow=true)
+      const names: string[] = cache.readdir(normalized);
+      const entries: DirEntry[] = [];
+      for (const name of names) {
+        const childPath = normalized === '/' ? `/${name}` : `${normalized}/${name}`;
+        try {
+          // lstat does NOT follow the leaf symlink — gives us the entry's own type
+          const stat = cache.lstat(childPath);
+          const type: EntryType =
+            stat.type === 'symlink' ? 'symlink' : stat.type === 'dir' ? 'directory' : 'file';
+          entries.push({ name, type });
+        } catch {
+          // Skip entries we can't stat (shouldn't happen in CacheFS)
+        }
+      }
+      return entries;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Synchronous stat (follows symlinks) for non-mounted LightningFS paths.
+   * Returns null if the path is under a mount, the CacheFS fast path is
+   * unavailable, or the symlink target is in a mounted tree.
+   *
+   * Enforces MAX_SYMLINK_DEPTH to stay consistent with the async realpath().
+   * CacheFS._lookup follows symlinks internally without a depth limit, so we
+   * manually resolve symlinks with a hop counter before calling stat.
+   */
+  statSync(path: string): Stats | null {
+    const normalized = normalizePath(path);
+    if (this.findMount(normalized)) return null;
+    const cache = this.getCacheFS();
+    if (!cache) return null;
+    try {
+      // Manually resolve symlinks with a depth limit matching the async path.
+      const resolved = this.resolveSymlinksSync(cache, normalized);
+      if (resolved === null) return null;
+      const s = cache.lstat(resolved);
+      // After full resolution, result should be file or dir, not symlink.
+      return {
+        type: s.type === 'dir' ? 'directory' : 'file',
+        size: s.size ?? 0,
+        mtime: s.mtimeMs ?? Date.now(),
+        ctime: s.mtimeMs ?? Date.now(),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Synchronously resolve all symlinks in a path using CacheFS, with a hop
+   * limit matching MAX_SYMLINK_DEPTH. Returns null if the limit is exceeded
+   * or the target is unresolvable (e.g. in a mount).
+   *
+   * Uses a shared mutable counter so that hops accumulate across recursive
+   * calls (matching the async realpath behavior).
+   */
+  private resolveSymlinksSync(
+    cache: any,
+    path: string,
+    hops: { count: number } = { count: 0 }
+  ): string | null {
+    const parts = path.split('/').filter(Boolean);
+    let resolved = '/';
+    for (const part of parts) {
+      resolved = resolved === '/' ? `/${part}` : `${resolved}/${part}`;
+      try {
+        const s = cache.lstat(resolved);
+        if (s.type === 'symlink') {
+          if (++hops.count > MAX_SYMLINK_DEPTH) return null;
+          const target = s.target;
+          if (target.startsWith('/')) {
+            resolved = normalizePath(target);
+          } else {
+            const { dir } = splitPath(resolved);
+            resolved = normalizePath(joinPath(dir, target));
+          }
+          // Recursively resolve — shared hops object accumulates across calls
+          const full = this.resolveSymlinksSync(cache, resolved, hops);
+          if (full === null) return null;
+          resolved = full;
+        }
+      } catch {
+        return null;
+      }
+    }
+    return resolved;
+  }
+
+  /**
+   * Synchronous lstat (does NOT follow symlinks) for non-mounted paths.
+   * Returns null if the fast path is unavailable.
+   */
+  lstatSync(path: string): Stats | null {
+    const normalized = normalizePath(path);
+    if (this.findMount(normalized)) return null;
+    const cache = this.getCacheFS();
+    if (!cache) return null;
+    try {
+      const s = cache.lstat(normalized);
+      if (s.type === 'symlink') {
+        return {
+          type: 'symlink',
+          size: s.size ?? 0,
+          mtime: s.mtimeMs ?? Date.now(),
+          ctime: s.mtimeMs ?? Date.now(),
+          isSymlink: true,
+          symlinkTarget: s.target,
+        };
+      }
+      return {
+        type: s.type === 'dir' ? 'directory' : 'file',
+        size: s.size ?? 0,
+        mtime: s.mtimeMs ?? Date.now(),
+        ctime: s.mtimeMs ?? Date.now(),
+      };
+    } catch {
+      return null;
+    }
+  }
+
   // File System Access API mount support
   // ---------------------------------------------------------------------------
 
