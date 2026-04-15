@@ -1144,6 +1144,7 @@ describe('tray worker skeleton', () => {
     await expect(response.json()).resolves.toMatchObject({
       routes: [
         'POST /tray',
+        'GET /download/slicc.dmg',
         'GET /handoff',
         'GET|POST /join/:token',
         'GET|POST /controller/:token',
