@@ -164,6 +164,122 @@ export class VirtualFS {
   }
 
   // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Synchronous fast-path: direct CacheFS access for non-mounted paths
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Access the LightningFS in-memory CacheFS tree directly.
+   * Returns null if the cache is not activated or the internal structure
+   * doesn't match expectations (e.g. after a LightningFS upgrade).
+   *
+   * The CacheFS tree is a nested Map where:
+   * - Key 0 (STAT) holds { mode, type, size, ino, mtimeMs }
+   * - String keys are child entry names mapping to sub-Maps
+   *
+   * This is a private LightningFS internal. The `cachefs-internals` test
+   * suite validates the structure so upgrades that break it are caught.
+   */
+  private getCacheFS(): any | null {
+    try {
+      const cache = (this.lfs as any)._backend?._cache;
+      if (cache?.activated && cache._root instanceof Map) return cache;
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Synchronous readDir for non-mounted LightningFS paths.
+   * Returns null if the path is under a mount or the CacheFS fast path is
+   * unavailable — callers must fall back to the async `readDir()`.
+   */
+  readDirSync(path: string): DirEntry[] | null {
+    const normalized = normalizePath(path);
+    if (this.findMount(normalized)) return null;
+    const cache = this.getCacheFS();
+    if (!cache) return null;
+    try {
+      // CacheFS.readdir follows symlinks in the path (via _lookup with follow=true)
+      const names: string[] = cache.readdir(normalized);
+      const entries: DirEntry[] = [];
+      for (const name of names) {
+        const childPath = normalized === '/' ? `/${name}` : `${normalized}/${name}`;
+        try {
+          // lstat does NOT follow the leaf symlink — gives us the entry's own type
+          const stat = cache.lstat(childPath);
+          const type: EntryType =
+            stat.type === 'symlink' ? 'symlink' : stat.type === 'dir' ? 'directory' : 'file';
+          entries.push({ name, type });
+        } catch {
+          // Skip entries we can't stat (shouldn't happen in CacheFS)
+        }
+      }
+      return entries;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Synchronous stat (follows symlinks) for non-mounted LightningFS paths.
+   * Returns null if the path is under a mount, the CacheFS fast path is
+   * unavailable, or the symlink target is in a mounted tree.
+   */
+  statSync(path: string): Stats | null {
+    const normalized = normalizePath(path);
+    if (this.findMount(normalized)) return null;
+    const cache = this.getCacheFS();
+    if (!cache) return null;
+    try {
+      // CacheFS.stat follows symlinks — if the target is outside the CacheFS
+      // tree (e.g. pointing into a mount), _lookup throws ENOENT and we
+      // return null so the caller falls back to the async path.
+      const s = cache.stat(normalized);
+      return {
+        type: s.type === 'dir' ? 'directory' : s.type === 'file' ? 'file' : 'symlink',
+        size: s.size ?? 0,
+        mtime: s.mtimeMs ?? Date.now(),
+        ctime: s.mtimeMs ?? Date.now(),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Synchronous lstat (does NOT follow symlinks) for non-mounted paths.
+   * Returns null if the fast path is unavailable.
+   */
+  lstatSync(path: string): Stats | null {
+    const normalized = normalizePath(path);
+    if (this.findMount(normalized)) return null;
+    const cache = this.getCacheFS();
+    if (!cache) return null;
+    try {
+      const s = cache.lstat(normalized);
+      if (s.type === 'symlink') {
+        return {
+          type: 'symlink',
+          size: s.size ?? 0,
+          mtime: s.mtimeMs ?? Date.now(),
+          ctime: s.mtimeMs ?? Date.now(),
+          isSymlink: true,
+          symlinkTarget: s.target,
+        };
+      }
+      return {
+        type: s.type === 'dir' ? 'directory' : 'file',
+        size: s.size ?? 0,
+        mtime: s.mtimeMs ?? Date.now(),
+        ctime: s.mtimeMs ?? Date.now(),
+      };
+    } catch {
+      return null;
+    }
+  }
+
   // File System Access API mount support
   // ---------------------------------------------------------------------------
 

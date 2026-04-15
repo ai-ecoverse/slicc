@@ -202,6 +202,18 @@ export class VfsAdapter implements IFileSystem {
         };
       }
     }
+    // Fast path: synchronous CacheFS stat for non-mounted paths
+    const fast = this.vfs.statSync(normalized);
+    if (fast) {
+      return {
+        isFile: fast.type === 'file',
+        isDirectory: fast.type === 'directory',
+        isSymbolicLink: !!fast.isSymlink,
+        mode: fast.type === 'directory' ? 0o755 : 0o644,
+        size: fast.size,
+        mtime: new Date(fast.mtime),
+      };
+    }
     const s = await this.vfs.stat(normalized);
     return {
       isFile: s.type === 'file',
@@ -215,6 +227,18 @@ export class VfsAdapter implements IFileSystem {
 
   async lstat(path: string): Promise<FsStat> {
     const normalized = normalizePath(path);
+    // Fast path: synchronous CacheFS lstat for non-mounted paths
+    const fast = this.vfs.lstatSync(normalized);
+    if (fast) {
+      return {
+        isFile: fast.type === 'file',
+        isDirectory: fast.type === 'directory',
+        isSymbolicLink: fast.type === 'symlink',
+        mode: fast.type === 'directory' ? 0o755 : fast.type === 'symlink' ? 0o777 : 0o644,
+        size: fast.size,
+        mtime: new Date(fast.mtime),
+      };
+    }
     const s = await this.vfs.lstat(normalized);
     return {
       isFile: s.type === 'file',
@@ -234,6 +258,9 @@ export class VfsAdapter implements IFileSystem {
     const normalized = normalizePath(path);
     if (normalized === '/usr') return ['bin'];
     if (normalized === '/usr/bin') return this.getVirtualBinCommands().slice().sort();
+    // Fast path: synchronous CacheFS read for non-mounted paths
+    const fast = this.vfs.readDirSync(normalized);
+    if (fast) return fast.map((e) => e.name);
     const entries = await this.vfs.readDir(normalized);
     return entries.map((e) => e.name);
   }
@@ -254,6 +281,51 @@ export class VfsAdapter implements IFileSystem {
           isSymbolicLink: false,
         }));
     }
+
+    // Fast path: synchronous CacheFS read for non-mounted paths.
+    // readDirSync returns null when the path is under a mount or
+    // the CacheFS internal isn't available.
+    const fastEntries = this.vfs.readDirSync(normalized);
+    if (fastEntries) {
+      const result: DirentEntry[] = [];
+      for (const e of fastEntries) {
+        if (e.type === 'symlink') {
+          const childPath = normalized === '/' ? `/${e.name}` : `${normalized}/${e.name}`;
+          // Try synchronous stat first (follows symlinks via CacheFS)
+          const targetStat = this.vfs.statSync(childPath);
+          if (targetStat) {
+            result.push({
+              name: e.name,
+              isFile: targetStat.type === 'file',
+              isDirectory: targetStat.type === 'directory',
+              isSymbolicLink: true,
+            });
+          } else {
+            // Symlink target is in a mount or unresolvable — fall back to async
+            let isFile = false;
+            let isDir = false;
+            try {
+              const asyncStat = await this.vfs.stat(childPath);
+              isFile = asyncStat.type === 'file';
+              isDir = asyncStat.type === 'directory';
+            } catch {
+              // Dangling symlink
+            }
+            result.push({ name: e.name, isFile, isDirectory: isDir, isSymbolicLink: true });
+          }
+        } else {
+          result.push({
+            name: e.name,
+            isFile: e.type === 'file',
+            isDirectory: e.type === 'directory',
+            isSymbolicLink: false,
+          });
+        }
+      }
+      return result;
+    }
+
+    // Slow path: async VirtualFS readDir for mounted paths.
     const entries = await this.vfs.readDir(normalized);
     const result: DirentEntry[] = [];
     for (const e of entries) {
