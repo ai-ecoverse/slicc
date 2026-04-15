@@ -2,6 +2,60 @@
 
 Use these CSS classes in `.shtml` sprinkles. Do NOT write custom CSS — these components cover all common UI patterns.
 
+## Icons (Lucide)
+
+Lucide icons are available globally via the `LucideIcons` object. Use declarative `data-lucide` attributes for automatic rendering, or create icons programmatically.
+
+**Declarative usage** (recommended):
+
+```html
+<!-- Icon renders automatically on page load -->
+<i data-lucide="check"></i>
+<i data-lucide="alert-circle"></i>
+<i data-lucide="settings" class="sprinkle-icon--l"></i>
+
+<!-- In buttons -->
+<button class="sprinkle-btn sprinkle-btn--primary">
+  <i data-lucide="save"></i> Save
+</button>
+
+<!-- In action card headers -->
+<div class="sprinkle-action-card">
+  <div class="sprinkle-action-card__header">
+    <i data-lucide="check-circle" style="color: var(--uxc-positive-text)"></i>
+    Success
+  </div>
+</div>
+```
+
+**Programmatic usage**:
+
+```javascript
+// Create an icon element
+const icon = LucideIcons.createElement('alert-triangle', {
+  size: 20,
+  color: 'var(--uxc-notice-text)',
+  strokeWidth: 2,
+  class: 'sprinkle-icon',
+});
+container.appendChild(icon);
+
+// Re-render all icons after dynamic content changes
+LucideIcons.render();
+```
+
+**Icon sizes**:
+
+- `.sprinkle-icon--xs` — 12px (small badges)
+- `.sprinkle-icon--s` — 14px (inline text)
+- `.sprinkle-icon--m` — 16px (default, buttons)
+- `.sprinkle-icon--l` — 20px (headings)
+- `.sprinkle-icon--xl` — 24px (large cards)
+
+**Icon names**: Use kebab-case from [lucide.dev/icons](https://lucide.dev/icons) — e.g., `check`, `alert-circle`, `arrow-right`, `file-text`.
+
+**NO EMOJIS** — Always use Lucide icons instead of emoji for a professional, consistent look.
+
 ## Cards
 
 `.sprinkle-card` — Card with shadow (hover elevates).

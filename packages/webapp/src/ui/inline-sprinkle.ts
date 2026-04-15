@@ -102,6 +102,7 @@ ${
   content.includes('<slicc-editor') ? '<script src="/slicc-editor.js"></script>' : ''
 }
 ${content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : ''}
+<script src="/lucide-icons.js"></script>
 </head>
 <body class="sprinkle-inline">${content}</body></html>`;
 

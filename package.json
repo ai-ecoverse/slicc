@@ -50,6 +50,7 @@
   },
   "dependencies": {
     "express": "^5.0.0",
+    "lucide": "^1.8.0",
     "pyodide": "0.29.3",
     "ws": "^8.18.0"
   },

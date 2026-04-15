@@ -5,6 +5,9 @@
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: auto; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 </style>
+<script src="slicc-editor.js"></script>
+<script src="slicc-diff.js"></script>
+<script src="lucide-icons.js"></script>
 <script>
 /**
  * Sprinkle Sandbox — CSP-exempt page for rendering .shtml sprinkles
@@ -370,7 +373,8 @@ addEventListener('message', function(e) {
       function escapeForScript(code) { return code.replace(/<\/script/gi, '<\\/script'); }
       var editorTag = msg.editorScript ? '<script>' + escapeForScript(msg.editorScript) + '<\/script>' : '';
       var diffTag = msg.diffScript ? '<script>' + escapeForScript(msg.diffScript) + '<\/script>' : '';
-      var injection = '<script>' + bridgeScript + '<\/script>' + themeTag + editorTag + diffTag;
+      var lucideTag = msg.lucideScript ? '<script>' + escapeForScript(msg.lucideScript) + '<\/script>' : '';
+      var injection = '<script>' + bridgeScript + '<\/script>' + themeTag + editorTag + diffTag + lucideTag;
       var modifiedHtml = injectIntoHead(msg.content, injection);
 
       while (document.body.firstChild) document.body.removeChild(document.body.firstChild);

@@ -9,6 +9,7 @@ const previewSwEntry = resolve(__dirname, 'src/ui/preview-sw.ts');
 const electronOverlayEntry = resolve(__dirname, 'src/ui/electron-overlay-entry.ts');
 const sliccEditorEntry = resolve(__dirname, 'src/ui/slicc-editor-entry.ts');
 const sliccDiffEntry = resolve(__dirname, 'src/ui/slicc-diff-entry.ts');
+const lucideIconsEntry = resolve(__dirname, 'src/ui/lucide-icons.ts');
 
 /** esbuild plugin: resolve @pierre/diffs internal imports that aren't in the exports map. */
 function pierreDiffsPlugin() {
@@ -243,6 +244,16 @@ export default defineConfig(({ mode }) => ({
           plugins: [pierreDiffsPlugin()],
         });
 
+        // Lucide icons bundle for sprinkle iframes.
+        await esbuild.build({
+          entryPoints: [lucideIconsEntry],
+          bundle: true,
+          outfile: resolve(uiOutDir, 'lucide-icons.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
+        });
         copyFileSync(
           resolve(__dirname, '../assets/logos/favicon.png'),
           resolve(uiOutDir, 'favicon.png')

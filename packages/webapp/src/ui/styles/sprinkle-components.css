@@ -42,6 +42,41 @@
   line-height: 1.3;
 }
 
+/* ── Icons (Lucide) ── */
+.sprinkle-icon {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  stroke-width: 2;
+  vertical-align: middle;
+}
+.sprinkle-icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+/* Icon sizes */
+.sprinkle-icon--xs {
+  width: 12px;
+  height: 12px;
+}
+.sprinkle-icon--s {
+  width: 14px;
+  height: 14px;
+}
+.sprinkle-icon--m {
+  width: 16px;
+  height: 16px;
+}
+.sprinkle-icon--l {
+  width: 20px;
+  height: 20px;
+}
+.sprinkle-icon--xl {
+  width: 24px;
+  height: 24px;
+}
+
 /* ── Buttons (Figma: 16px radius, translucent white bg, container shadow) ── */
 .sprinkle-btn {
   display: inline-flex;

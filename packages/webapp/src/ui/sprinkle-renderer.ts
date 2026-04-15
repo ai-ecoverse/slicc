@@ -288,6 +288,15 @@ export class SprinkleRenderer {
       await Promise.all(fetches);
     }
 
+    // Always fetch lucide-icons.js for sprinkles (icons are used in most sprinkles)
+    let lucideScript = '';
+    try {
+      const resp = await fetch(chrome.runtime.getURL('lucide-icons.js'));
+      if (resp.ok) lucideScript = await resp.text();
+    } catch {
+      // Lucide unavailable — sprinkle will render without icons
+    }
+
     iframe.contentWindow!.postMessage(
       {
         type: 'sprinkle-render',
@@ -299,6 +308,7 @@ export class SprinkleRenderer {
         fullDoc,
         editorScript,
         diffScript,
+        lucideScript,
       },
       '*'
     );
@@ -434,7 +444,9 @@ export class SprinkleRenderer {
       ? '<script src="/slicc-editor.js"></script>'
       : '';
     const diffTag = content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : '';
-    const injection = bridgeScript + themeTag + editorTag + diffTag;
+    // Always inject Lucide icons for sprinkles
+    const lucideTag = '<script src="/lucide-icons.js"></script>';
+    const injection = bridgeScript + themeTag + editorTag + diffTag + lucideTag;
 
     // Inject bridge script + theme CSS after <head> tag, or before first <script> if no <head>
     let modified: string;
