@@ -305,3 +305,76 @@ describe('WasmShell playwright command discoverability', () => {
     ]);
   });
 });
+
+describe('WasmShell .jsh command registration', () => {
+  let fs: VirtualFS;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({ dbName: `test-jsh-reg-${Date.now()}`, wipe: true });
+    await fs.mkdir('/workspace/skills/test-cmd/scripts', { recursive: true });
+  });
+
+  it('registers .jsh commands as first-class bash commands available in pipelines', async () => {
+    // Create a .jsh script that outputs text
+    await fs.writeFile(
+      '/workspace/skills/test-cmd/scripts/hello.jsh',
+      'console.log("hello from jsh");'
+    );
+
+    const shell = new WasmShell({ fs });
+    // Wait for async syncJshCommands to complete
+    await shell.syncJshCommands();
+
+    // Direct invocation should work
+    const direct = await shell.executeCommand('hello');
+    expect(direct.exitCode).toBe(0);
+    expect(direct.stdout).toContain('hello from jsh');
+
+    // Pipeline should also work (this was the bug — before registration,
+    // jsh commands in pipes would fail because exit code 127 from the pipe
+    // component doesn't propagate to the top-level runCommand fallback)
+    const piped = await shell.executeCommand('hello | cat');
+    expect(piped.exitCode).toBe(0);
+    expect(piped.stdout).toContain('hello from jsh');
+  });
+
+  it('makes .jsh commands visible via which and /usr/bin', async () => {
+    await fs.writeFile('/workspace/skills/test-cmd/scripts/mycmd.jsh', 'console.log("ok");');
+
+    const shell = new WasmShell({ fs });
+    await shell.syncJshCommands();
+
+    const whichResult = await shell.executeCommand('which mycmd');
+    expect(whichResult.exitCode).toBe(0);
+
+    const lsResult = await shell.executeCommand('ls /usr/bin | grep mycmd');
+    expect(lsResult.exitCode).toBe(0);
+    expect(lsResult.stdout).toContain('mycmd');
+  });
+
+  it('passes arguments to registered .jsh commands', async () => {
+    await fs.writeFile(
+      '/workspace/skills/test-cmd/scripts/greet.jsh',
+      'console.log("hello " + process.argv.slice(2).join(" "));'
+    );
+
+    const shell = new WasmShell({ fs });
+    await shell.syncJshCommands();
+
+    const result = await shell.executeCommand('greet world');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('hello world');
+  });
+
+  it('does not shadow built-in commands with .jsh files of the same name', async () => {
+    // Create a .jsh file named "echo" — should NOT override the built-in
+    await fs.writeFile('/workspace/skills/test-cmd/scripts/echo.jsh', 'console.log("fake echo");');
+
+    const shell = new WasmShell({ fs });
+    await shell.syncJshCommands();
+
+    const result = await shell.executeCommand('echo real');
+    expect(result.stdout).toContain('real');
+    expect(result.stdout).not.toContain('fake echo');
+  });
+});
