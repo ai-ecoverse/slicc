@@ -169,6 +169,95 @@ export async function getSqlJs(): Promise<SqlJsModule> {
 
 const isExtension = typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
+/**
+ * Replace comments and string literals in source code with whitespace so that
+ * regex-based scanners don't produce false positives on code inside strings or
+ * comments.  Block comments, line comments, template literals, and single/double
+ * quoted strings are all handled.  Newlines inside replaced regions are
+ * preserved so line-based position information stays roughly correct.
+ */
+export function stripCommentsAndStrings(code: string): string {
+  return code.replace(
+    /\/\*[\s\S]*?\*\/|\/\/[^\n]*|`(?:[^`\\]|\\.)*`|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g,
+    (match) => match.replace(/[^\n]/g, ' ')
+  );
+}
+
+/**
+ * Strip only comments (block and line) while leaving string literals intact.
+ * This is the right pre-processing step for import detection because the import
+ * specifier itself lives inside a string literal that we need to match.
+ */
+function stripComments(code: string): string {
+  // Process the code character-by-character to correctly distinguish comments
+  // from string literals containing // or /*.  We walk through strings without
+  // touching them, and blank out comments while preserving newlines.
+  return code.replace(
+    /\/\*[\s\S]*?\*\/|\/\/[^\n]*|`(?:[^`\\]|\\.)*`|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g,
+    (match) => {
+      // If the match starts with a quote character it's a string literal — keep it.
+      if (match[0] === '"' || match[0] === "'" || match[0] === '`') return match;
+      // Otherwise it's a comment — replace non-newline chars with spaces.
+      return match.replace(/[^\n]/g, ' ');
+    }
+  );
+}
+
+/**
+ * Returns true when `code` contains at least one static ESM `import` statement.
+ *
+ * Detects:
+ * - `import foo from 'bar'`
+ * - `import { a, b } from 'bar'`
+ * - `import * as foo from 'bar'`
+ * - `import 'bar'` (side-effect import)
+ *
+ * Does NOT match:
+ * - `await import('bar')` (dynamic import)
+ * - `require('bar')`
+ * - Imports that appear only inside comments or string literals
+ */
+export function hasESMImports(code: string): boolean {
+  const cleaned = stripComments(code);
+  // Match static import statements using multiline mode so ^ matches each line.
+  // Two patterns:
+  //   1. import <bindings> from '<specifier>'
+  //   2. import '<specifier>'  (side-effect)
+  // The (?:^|;) prefix ensures we're at a statement boundary, not inside
+  // `await import(...)`.
+  const bindingImportRe = /(?:^|;)\s*import\s+(?:[\w$*{][^'"]*)\s+from\s+['"]/m;
+  const sideEffectImportRe = /(?:^|;)\s*import\s+['"]/m;
+  return bindingImportRe.test(cleaned) || sideEffectImportRe.test(cleaned);
+}
+
+/**
+ * Extracts and deduplicates the module specifier strings from all static ESM
+ * `import` statements in `code`.  Returns an empty array when no imports are
+ * found.
+ */
+export function extractImportSpecifiers(code: string): string[] {
+  const cleaned = stripComments(code);
+  const specifiers: string[] = [];
+  // Two global regexes: one for binding imports, one for side-effect imports.
+  // Both use multiline mode so ^ anchors to line starts.
+  const bindingRe = /(?:^|;)\s*import\s+(?:[\w$*{][^'"]*)\s+from\s+['"]([^'"]+)['"]/gm;
+  const sideEffectRe = /(?:^|;)\s*import\s+['"]([^'"]+)['"]/gm;
+  let m: RegExpExecArray | null;
+  while ((m = bindingRe.exec(cleaned)) !== null) {
+    const spec = m[1];
+    if (spec && !specifiers.includes(spec)) {
+      specifiers.push(spec);
+    }
+  }
+  while ((m = sideEffectRe.exec(cleaned)) !== null) {
+    const spec = m[1];
+    if (spec && !specifiers.includes(spec)) {
+      specifiers.push(spec);
+    }
+  }
+  return specifiers;
+}
+
 export async function getPyodide(): Promise<PyodideInterface> {
   if (!pyodidePromise) {
     pyodidePromise = (async () => {
