@@ -160,18 +160,23 @@ export async function handleWorkerRequest(request: Request, env: WorkerEnv): Pro
   );
 }
 
+const RELEASES_FALLBACK = 'https://github.com/ai-ecoverse/slicc/releases/latest';
+
 async function handleDmgDownload(): Promise<Response> {
-  const res = await fetch('https://github.com/ai-ecoverse/slicc/releases/latest', {
-    redirect: 'manual',
-  });
+  let res: Response;
+  try {
+    res = await fetch(RELEASES_FALLBACK, { redirect: 'manual' });
+  } catch {
+    return Response.redirect(RELEASES_FALLBACK, 302);
+  }
   const location = res.headers.get('Location');
   if (!location) {
-    return jsonResponse({ error: 'Could not determine latest release' }, 502);
+    return Response.redirect(RELEASES_FALLBACK, 302);
   }
   // Location is like https://github.com/ai-ecoverse/slicc/releases/tag/v1.59.1
   const tag = location.split('/tag/')[1];
   if (!tag) {
-    return jsonResponse({ error: 'Unexpected redirect location', location }, 502);
+    return Response.redirect(RELEASES_FALLBACK, 302);
   }
   // Strip leading 'v' for the filename: v1.59.1 → 1.59.1
   const version = tag.startsWith('v') ? tag.slice(1) : tag;
