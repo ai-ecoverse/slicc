@@ -4,7 +4,9 @@
 
 **Goal:** Enable `.jsh` and `node -e` scripts to use ESM `import` syntax for npm packages, Node built-ins, and local VFS files.
 
-**Architecture:** Pre-scan source for `import` statements; if found, fork to a new ESM execution path that injects a dynamic import map (npm → esm.sh, built-ins → synthetic shim URLs), sets up `globalThis.__slicc_*` shims, and executes the entry file as a real ES module via `await import('/preview/...')`. The preview SW synthesizes shim module responses for `/__shims/*` paths. The existing CJS `require()` path is untouched.
+**Architecture:** Pre-scan source for `import` statements; if found, rewrite all import specifiers to absolute URLs (npm → esm.sh, built-ins → `<origin>/preview/__shims/<name>.js`, relative → absolute preview SW URLs), bundle the rewritten source into a `Blob`, and execute via `await import(blobUrl)`. Shims are served by a Vite dev middleware and the preview SW. The existing CJS `require()` path is untouched.
+
+> **Note:** The original plan used browser import maps + preview SW URL execution. This was abandoned during smoke testing — the preview SW scope `/preview/` does not control the main page at `/`, so SW interception never fired. See the spec for the full "Alternative considered" explanation.
 
 **Tech Stack:** TypeScript, Vitest, Vite, preview service worker, Chrome extension sandbox
 
@@ -1024,3 +1026,71 @@ git commit -m "fix: address smoke test issues in ESM execution path"
 ```
 
 (Skip this step if no fixups needed.)
+
+---
+
+### Task 8: Follow-up — wire extension mode ESM in jsh-executor
+
+> **Status:** Not yet implemented. `sandbox.html` has the `esm_exec` handler; jsh-executor returns "not yet supported" for extension mode.
+
+**Files:**
+
+- Modify: `packages/webapp/src/shell/jsh-executor.ts`
+
+- [ ] **Step 1: Replace the "not yet supported" stub in `executeEsmModule`**
+
+In the `isExtensionMode` branch of `executeEsmModule`, replace the error return with the full sandbox postMessage flow:
+
+1. Find or create the sandbox iframe (`document.querySelector('iframe[data-js-tool]')`)
+2. Register VFS, shell exec, and fetch proxy message handlers (same pattern as the CJS extension path in `executeJsCode`)
+3. Post `{ type: 'esm_exec', id: execId, code: rewritten, argv, env: processShim.env, cwd: processShim.cwd() }` to the sandbox
+4. Wait for `exec_result` with 30s timeout
+5. Clean up listeners in finally
+
+Note: `rewritten` is the specifier-rewritten code (already computed before the extension mode branch). Pass that, not the original `code`.
+
+- [ ] **Step 2: Run typecheck and full test suite**
+
+```bash
+npm run typecheck
+npm run test
+npm run build -w @slicc/chrome-extension
+```
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add packages/webapp/src/shell/jsh-executor.ts
+git commit -m "feat(extension): wire ESM execution through sandbox esm_exec in jsh-executor"
+```
+
+---
+
+### Task 9: Follow-up — smoke test local file imports
+
+> **Status:** Implemented but unverified. Local relative imports are rewritten to absolute preview SW URLs; whether the SW actually intercepts them from blob module context is untested.
+
+**Files:** None (testing only, fix depends on findings)
+
+- [ ] **Step 1: Test local file imports in SLICC terminal**
+
+Create a helper file on VFS and import it:
+
+```bash
+# Write a helper file
+node -e "const { writeFile, mkdir } = require('fs'); await mkdir('/workspace/esm-test'); await writeFile('/workspace/esm-test/greet.js', 'export function greet(name) { return \"Hello \" + name; }');"
+
+# Import it from ESM script
+node -e "import { greet } from './esm-test/greet.js'; console.log(greet('world'));"
+```
+
+- [ ] **Step 2: If local imports fail — add Vite middleware for VFS file serving**
+
+If the SW scope issue affects blob module sub-requests, add a middleware in `packages/webapp/vite.config.ts` that intercepts `/preview/*` requests (excluding `/__shims/`) and serves them from VFS via the Node server's IndexedDB access or a postMessage bridge to the main page.
+
+- [ ] **Step 3: Commit fix if needed**
+
+```bash
+git add packages/webapp/vite.config.ts
+git commit -m "fix(dev): serve VFS files from Vite middleware for local ESM imports"
+```
