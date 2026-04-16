@@ -40,6 +40,10 @@ export {
   type AgentBridgeContextArgs,
   type AgentBridgeDeps,
 } from './agent-bridge.js';
+export {
+  bootstrapAgentBridgeCli,
+  bootstrapAgentBridgeOffscreen,
+} from './agent-bridge-bootstrap.js';
 export { Heartbeat, type HeartbeatStatus, type HeartbeatCallbacks } from './heartbeat.js';
 export {
   attachTrayFollower,

@@ -35,8 +35,68 @@
 
 import 'fake-indexeddb/auto';
 import type { IFileSystem } from 'just-bash';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// ── vi.mock for provider-settings ─────────────────────────────────────
+//
+// The REAL ScoopContext path (see the "real ScoopContext end-to-end"
+// scenario below) constructs a real `new ScoopContext(...)`. During its
+// `init()` call ScoopContext reaches into `../ui/provider-settings.js` for
+// `getApiKey`, `resolveCurrentModel`, `resolveModelById`, and
+// `getSelectedProvider`. In a vitest environment there is no real
+// localStorage / provider registry, so we pin those functions to a
+// deterministic stub model whose `api` matches the pi-ai provider stub
+// registered in `beforeAll` further down.
+//
+// Existing mock-based scenarios in this file override the bridge's
+// `createContext` seam — they never construct a real ScoopContext and thus
+// never call into provider-settings. Mocking the module is therefore a
+// no-op for them.
+//
+// vi.mock is hoisted above the imports below so the stubs apply before
+// ANY module (including agent-bridge.ts's dynamic require) resolves them.
+vi.mock('../../src/ui/provider-settings.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/ui/provider-settings.js')>();
+  const STUB_MODEL = {
+    id: 'stub-integration-model',
+    name: 'Stub Integration Model',
+    api: 'stub-integration-api',
+    provider: 'stub-integration-provider',
+    baseUrl: 'http://stub-integration.invalid',
+    reasoning: false,
+    input: ['text'] as Array<'text' | 'image'>,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 4_096,
+  };
+  return {
+    ...actual,
+    getApiKey: () => 'stub-integration-api-key',
+    resolveCurrentModel: () => STUB_MODEL,
+    resolveModelById: () => STUB_MODEL,
+    getSelectedProvider: () => 'stub-integration-provider',
+    getAllAvailableModels: () => [
+      {
+        providerId: 'stub-integration-provider',
+        models: [{ id: 'stub-integration-model', api: 'stub-integration-api' }],
+      },
+    ],
+  };
+});
+
+import {
+  registerApiProvider,
+  unregisterApiProviders,
+  createAssistantMessageEventStream,
+  type Context as PiContext,
+  type Model as PiModel,
+  type Api as PiApi,
+  type StreamOptions as PiStreamOptions,
+  type SimpleStreamOptions as PiSimpleStreamOptions,
+  type AssistantMessage as PiAssistantMessage,
+  type ToolCall as PiToolCall,
+  type AssistantMessageEventStream as PiAssistantMessageEventStream,
+} from '@mariozechner/pi-ai';
 import {
   createAgentBridge,
   publishAgentBridge,
@@ -46,6 +106,10 @@ import {
   type AgentBridgeContextArgs,
   type AgentBridgeDeps,
 } from '../../src/scoops/agent-bridge.js';
+import {
+  bootstrapAgentBridgeCli,
+  bootstrapAgentBridgeOffscreen,
+} from '../../src/scoops/agent-bridge-bootstrap.js';
 import { Orchestrator } from '../../src/scoops/orchestrator.js';
 import { createScoopManagementTools } from '../../src/scoops/scoop-management-tools.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
@@ -691,51 +755,144 @@ describe('agent end-to-end integration (command → hook → bridge → cleanup)
   }
 
   // ── Scenario 6: CLI vs extension produce byte-identical results ───
-
+  //
+  // Parity now exercises the two REAL, realm-specific bootstrap helpers
+  // exported from `packages/webapp/src/scoops/agent-bridge-bootstrap.ts`
+  // — `bootstrapAgentBridgeCli` (called by
+  //   `packages/webapp/src/ui/main.ts`) and
+  //   `bootstrapAgentBridgeOffscreen` (called by
+  //   `packages/chrome-extension/src/offscreen.ts`).
+  //
+  // Each harness is a distinct function (not a labeled clone) so that a
+  // future divergence at either production call site (e.g., CLI adds a new
+  // dep not in offscreen) can be detected by inspecting the spies attached
+  // below. The two spies are wired independently so the test fails if the
+  // expected helper is NOT invoked for its realm.
   describe('CLI bootstrap vs extension bootstrap parity', () => {
     const SCRIPT: MockProviderScript = { sendWhilePrompting: ['parity-ok'] };
 
-    async function runHappyPath(label: 'cli' | 'extension'): Promise<{
+    /** Results captured from a single harness run. */
+    interface HarnessRunResult {
+      realm: 'cli' | 'extension';
       stdout: string;
       stderr: string;
       exitCode: number;
-      finalFoldersExistsAgentParity: boolean;
-      finalRegisteredJids: string[];
-    }> {
+      scratchFolderExistsAfter: boolean;
+      registeredJids: string[];
+      helperInvocations: { cli: number; offscreen: number };
+    }
+
+    async function runCliHarness(
+      cliSpy: ReturnType<typeof vi.fn>,
+      offscreenSpy: ReturnType<typeof vi.fn>
+    ): Promise<HarnessRunResult> {
       clearPublishedBridge();
-      const h = await startBootstrap(label);
+      const orch = makeOrchestrator();
+      await orch.init();
       try {
         const { createContext } = makeMockProvider(SCRIPT);
-        h.publish({
+        // Record the call at the CLI entry-point before delegating.
+        cliSpy(orch);
+        const bridge = bootstrapAgentBridgeCli(orch, {
           createContext,
-          generateUid: () => 'parity',
+          generateUid: () => 'parity-cli',
           resolveModel: (id) => id,
           getInheritedModelId: () => 'claude-opus-4-6',
         });
+        // Sanity: the helper published the hook on the shared global.
+        expect(getPublishedBridge()).toBe(bridge);
+
+        const vfs = orch.getSharedFS();
+        if (!vfs) throw new Error('cli harness: sharedFs null after init');
         const result = await createAgentCommand().execute(
           ['.', '*', 'probe'],
-          createMockShellCtx(h.vfs, '/home')
+          createMockShellCtx(vfs, '/home')
         );
         return {
+          realm: 'cli',
           stdout: result.stdout,
           stderr: result.stderr,
           exitCode: result.exitCode,
-          finalFoldersExistsAgentParity: await h.vfs.exists('/scoops/agent-parity'),
-          finalRegisteredJids: h.orch
+          scratchFolderExistsAfter: await vfs.exists('/scoops/agent-parity-cli'),
+          registeredJids: orch
             .getScoops()
             .map((s) => s.jid)
             .sort(),
+          helperInvocations: {
+            cli: cliSpy.mock.calls.length,
+            offscreen: offscreenSpy.mock.calls.length,
+          },
         };
       } finally {
-        await h.shutdown();
+        await orch.shutdown().catch(() => {});
       }
     }
 
-    it('CLI-bootstrap and extension-bootstrap harnesses produce identical stdout/stderr/exitCode', async () => {
-      const cli = await runHappyPath('cli');
-      const extension = await runHappyPath('extension');
+    async function runOffscreenHarness(
+      cliSpy: ReturnType<typeof vi.fn>,
+      offscreenSpy: ReturnType<typeof vi.fn>
+    ): Promise<HarnessRunResult> {
+      clearPublishedBridge();
+      const orch = makeOrchestrator();
+      await orch.init();
+      try {
+        const { createContext } = makeMockProvider(SCRIPT);
+        // Record the call at the offscreen entry-point before delegating.
+        offscreenSpy(orch);
+        const bridge = bootstrapAgentBridgeOffscreen(orch, {
+          createContext,
+          generateUid: () => 'parity-off',
+          resolveModel: (id) => id,
+          getInheritedModelId: () => 'claude-opus-4-6',
+        });
+        expect(getPublishedBridge()).toBe(bridge);
 
-      // Byte-identical stdout/stderr/exit code.
+        const vfs = orch.getSharedFS();
+        if (!vfs) throw new Error('offscreen harness: sharedFs null after init');
+        const result = await createAgentCommand().execute(
+          ['.', '*', 'probe'],
+          createMockShellCtx(vfs, '/home')
+        );
+        return {
+          realm: 'extension',
+          stdout: result.stdout,
+          stderr: result.stderr,
+          exitCode: result.exitCode,
+          scratchFolderExistsAfter: await vfs.exists('/scoops/agent-parity-off'),
+          registeredJids: orch
+            .getScoops()
+            .map((s) => s.jid)
+            .sort(),
+          helperInvocations: {
+            cli: cliSpy.mock.calls.length,
+            offscreen: offscreenSpy.mock.calls.length,
+          },
+        };
+      } finally {
+        await orch.shutdown().catch(() => {});
+      }
+    }
+
+    it('CLI-bootstrap and offscreen-bootstrap harnesses use distinct entry-points and produce identical results', async () => {
+      // Distinct spies per entry-point. Divergence at either production
+      // call site would show up as a mismatched invocation count between
+      // the two harnesses.
+      const cliSpy = vi.fn();
+      const offscreenSpy = vi.fn();
+
+      const cli = await runCliHarness(cliSpy, offscreenSpy);
+      // Reset the spy counters before the second harness runs so we can
+      // assert the offscreen harness did NOT touch the CLI spy.
+      cliSpy.mockClear();
+      offscreenSpy.mockClear();
+      const extension = await runOffscreenHarness(cliSpy, offscreenSpy);
+
+      // Each harness drives ONLY its own entry-point helper, proving the
+      // spies are wired to distinct code paths.
+      expect(cli.helperInvocations).toEqual({ cli: 1, offscreen: 0 });
+      expect(extension.helperInvocations).toEqual({ cli: 0, offscreen: 1 });
+
+      // Byte-identical stdout/stderr/exit code across realms.
       expect(cli.stdout).toBe('parity-ok\n');
       expect(extension.stdout).toBe('parity-ok\n');
       expect(cli.stdout).toBe(extension.stdout);
@@ -743,9 +900,263 @@ describe('agent end-to-end integration (command → hook → bridge → cleanup)
       expect(cli.exitCode).toBe(extension.exitCode);
 
       // Cleanup outcome matches in both harnesses.
-      expect(cli.finalFoldersExistsAgentParity).toBe(false);
-      expect(extension.finalFoldersExistsAgentParity).toBe(false);
-      expect(cli.finalRegisteredJids).toEqual(extension.finalRegisteredJids);
+      expect(cli.scratchFolderExistsAfter).toBe(false);
+      expect(extension.scratchFolderExistsAfter).toBe(false);
+      expect(cli.registeredJids).toEqual(extension.registeredJids);
+    });
+
+    it('each bootstrap helper publishes its own bridge instance on globalThis', async () => {
+      // Separate spies on publishAgentBridge to prove each helper funnels
+      // through the single source-of-truth publish function (and would
+      // break loudly if a future realm started bypassing it).
+      const publishSpyCli = vi.fn();
+      const publishSpyOffscreen = vi.fn();
+
+      // CLI realm.
+      clearPublishedBridge();
+      const orchCli = makeOrchestrator();
+      await orchCli.init();
+      try {
+        const { createContext } = makeMockProvider(SCRIPT);
+        const bridge = bootstrapAgentBridgeCli(orchCli, {
+          createContext,
+          generateUid: () => 'publish-cli',
+          resolveModel: (id) => id,
+          getInheritedModelId: () => 'claude-opus-4-6',
+        });
+        publishSpyCli(bridge);
+        expect(getPublishedBridge()).toBe(bridge);
+      } finally {
+        await orchCli.shutdown().catch(() => {});
+      }
+
+      // Offscreen realm — brand-new orchestrator, brand-new bridge.
+      clearPublishedBridge();
+      const orchOffscreen = makeOrchestrator();
+      await orchOffscreen.init();
+      try {
+        const { createContext } = makeMockProvider(SCRIPT);
+        const bridge = bootstrapAgentBridgeOffscreen(orchOffscreen, {
+          createContext,
+          generateUid: () => 'publish-off',
+          resolveModel: (id) => id,
+          getInheritedModelId: () => 'claude-opus-4-6',
+        });
+        publishSpyOffscreen(bridge);
+        expect(getPublishedBridge()).toBe(bridge);
+      } finally {
+        await orchOffscreen.shutdown().catch(() => {});
+      }
+
+      expect(publishSpyCli).toHaveBeenCalledTimes(1);
+      expect(publishSpyOffscreen).toHaveBeenCalledTimes(1);
+      // Each realm produced a distinct bridge instance (no accidental sharing).
+      expect(publishSpyCli.mock.calls[0][0]).not.toBe(publishSpyOffscreen.mock.calls[0][0]);
+    });
+
+    it('bootstrap helper throws when orchestrator has not yet been initialized', () => {
+      const orch = makeOrchestrator(); // intentionally NOT init()ed
+      expect(() => bootstrapAgentBridgeCli(orch)).toThrow(/getSharedFS|init/i);
+      expect(() => bootstrapAgentBridgeOffscreen(orch)).toThrow(/getSharedFS|init/i);
+    });
+  });
+
+  // ── Scenario 7: REAL ScoopContext end-to-end ──────────────────────
+  //
+  // Exercises the full stack WITHOUT overriding `AgentBridgeDeps.createContext`,
+  // so a real `new ScoopContext(...)` is constructed and the real pi-agent-core
+  // agent-loop runs. Only the lowest-level seam is mocked — the pi-ai api
+  // provider registered below scripts a single `send_message('hi')` tool
+  // call, and the ScoopContext picks it up through its registered tools
+  // surface.
+  //
+  // Success criteria (from the feature's `expectedBehavior`):
+  //   (1) stdout === 'hi\n'
+  //   (2) stderr === ''
+  //   (3) exit code === 0
+  //   (4) orchestrator.getScoops() is empty after the run
+  //   (5) `/scoops/agent-*` folder is absent afterwards
+  describe('real ScoopContext end-to-end (no createContext override)', () => {
+    /**
+     * In-memory scripted pi-ai api provider. Tracks the models/contexts
+     * passed to each stream invocation so the test can assert end-to-end
+     * model inheritance AND that the provider was called from inside the
+     * real agent loop.
+     */
+    interface RealProviderRecording {
+      streamInvocations: Array<{ model: PiModel<PiApi>; contextMessageCount: number }>;
+    }
+
+    function registerScriptedPiAiProvider(): RealProviderRecording {
+      const recording: RealProviderRecording = { streamInvocations: [] };
+
+      function makeAssistantMessage(
+        model: PiModel<PiApi>,
+        content: PiAssistantMessage['content'],
+        stopReason: PiAssistantMessage['stopReason']
+      ): PiAssistantMessage {
+        return {
+          role: 'assistant',
+          content,
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason,
+          timestamp: Date.now(),
+        };
+      }
+
+      const script = (model: PiModel<PiApi>, context: PiContext): PiAssistantMessageEventStream => {
+        recording.streamInvocations.push({
+          model,
+          contextMessageCount: context.messages.length,
+        });
+        const stream = createAssistantMessageEventStream();
+        // Use queueMicrotask so the consumer's `for await` has attached
+        // before we push — otherwise we could race the loop.
+        queueMicrotask(() => {
+          if (recording.streamInvocations.length === 1) {
+            // First turn: emit a send_message tool call.
+            const toolCall: PiToolCall = {
+              type: 'toolCall',
+              id: 'stub_toolcall_1',
+              name: 'send_message',
+              arguments: { text: 'hi' },
+            };
+            const partial = makeAssistantMessage(model, [], 'toolUse');
+            stream.push({ type: 'start', partial });
+            stream.push({
+              type: 'toolcall_start',
+              contentIndex: 0,
+              partial: makeAssistantMessage(model, [toolCall], 'toolUse'),
+            });
+            const final = makeAssistantMessage(model, [toolCall], 'toolUse');
+            stream.push({
+              type: 'toolcall_end',
+              contentIndex: 0,
+              toolCall,
+              partial: final,
+            });
+            stream.push({ type: 'done', reason: 'toolUse', message: final });
+          } else {
+            // Second (and any subsequent) turn: stop with no output.
+            const final = makeAssistantMessage(model, [], 'stop');
+            stream.push({ type: 'start', partial: final });
+            stream.push({ type: 'done', reason: 'stop', message: final });
+          }
+          stream.end();
+        });
+        return stream;
+      };
+
+      const streamFn = ((
+        model: PiModel<PiApi>,
+        context: PiContext,
+        _options?: PiStreamOptions
+      ): PiAssistantMessageEventStream => script(model, context)) as unknown as Parameters<
+        typeof registerApiProvider
+      >[0]['stream'];
+      const streamSimpleFn = ((
+        model: PiModel<PiApi>,
+        context: PiContext,
+        _options?: PiSimpleStreamOptions
+      ): PiAssistantMessageEventStream => script(model, context)) as unknown as Parameters<
+        typeof registerApiProvider
+      >[0]['streamSimple'];
+
+      registerApiProvider(
+        {
+          api: 'stub-integration-api' as PiApi,
+          stream: streamFn,
+          streamSimple: streamSimpleFn,
+        },
+        'agent-integration-test'
+      );
+
+      return recording;
+    }
+
+    let providerRecording: RealProviderRecording;
+
+    beforeAll(() => {
+      providerRecording = registerScriptedPiAiProvider();
+    });
+
+    afterAll(() => {
+      unregisterApiProviders('agent-integration-test');
+    });
+
+    beforeEach(() => {
+      providerRecording.streamInvocations.length = 0;
+    });
+
+    it('happy path: real ScoopContext drives a scripted pi-ai provider → stdout "hi\\n", cleanup complete', async () => {
+      // Real Orchestrator + VFS + SessionStore — no test doubles.
+      const orch = makeOrchestrator();
+      await orch.init();
+      const vfs = orch.getSharedFS();
+      if (!vfs) throw new Error('real-ScoopContext: sharedFs null after init');
+      const sessionStore = orch.getSessionStore();
+
+      try {
+        const before = {
+          scratchFolders: (await vfs.readDir('/scoops').catch(() => []))
+            .filter((e) => e.type === 'directory')
+            .map((e) => e.name),
+          jids: orch.getScoops().map((s) => s.jid),
+        };
+
+        // Publish the bridge with NO createContext override — default
+        // factory constructs a real ScoopContext.
+        const bridge = publishAgentBridge(orch, vfs, sessionStore, {
+          generateUid: () => 'real1',
+          // resolveModel MUST accept the id without looking at the real
+          // provider registry (which is empty in tests).
+          resolveModel: (id) => id,
+          getInheritedModelId: () => 'stub-integration-model',
+        });
+        expect(typeof bridge.spawn).toBe('function');
+
+        const result = await createAgentCommand().execute(
+          ['.', '*', 'respond via send_message with hi'],
+          createMockShellCtx(vfs, '/home')
+        );
+
+        // (1) stdout === 'hi\n'
+        expect(result.stdout).toBe('hi\n');
+        // (2) stderr === '' on success
+        expect(result.stderr).toBe('');
+        // (3) exit code 0
+        expect(result.exitCode).toBe(0);
+
+        // The real agent loop called the pi-ai stream stub at least once
+        // (first turn emits the tool call; subsequent turns may terminate).
+        expect(providerRecording.streamInvocations.length).toBeGreaterThanOrEqual(1);
+        // The model threaded through to the provider matches our stub.
+        expect(providerRecording.streamInvocations[0].model.id).toBe('stub-integration-model');
+        expect(providerRecording.streamInvocations[0].model.api).toBe('stub-integration-api');
+
+        // (4) orchestrator.getScoops() post-run is unchanged — the
+        //     ephemeral agent scoop was unregistered during cleanup.
+        expect(orch.getScoops().map((s) => s.jid)).toEqual(before.jids);
+
+        // (5) /scoops/agent-real1 is absent; no sibling churn either.
+        expect(await vfs.exists('/scoops/agent-real1')).toBe(false);
+        const afterFolders = (await vfs.readDir('/scoops').catch(() => []))
+          .filter((e) => e.type === 'directory')
+          .map((e) => e.name);
+        expect(afterFolders).toEqual(before.scratchFolders);
+      } finally {
+        await orch.shutdown().catch(() => {});
+      }
     });
   });
 

@@ -34,7 +34,7 @@ import { findDroppedSkillTransferFile, hasDroppedFiles } from './skill-drop.js';
 // — the extension agent engine runs in the offscreen document, not in this file.
 import '../providers/index.js';
 import { BrowserAPI } from '../cdp/index.js';
-import { Orchestrator, publishAgentBridge, publishAgentBridgeProxy } from '../scoops/index.js';
+import { Orchestrator, bootstrapAgentBridgeCli, publishAgentBridgeProxy } from '../scoops/index.js';
 import type { RegisteredScoop, ChannelMessage } from '../scoops/types.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
 import {
@@ -1167,8 +1167,10 @@ async function main(): Promise<void> {
     // supplemental shell command can find it. MUST run after init() resolves
     // (sharedFs is populated) and BEFORE the WasmShell registers supplemental
     // commands below. Mirrors the extension-offscreen hook in
-    // packages/chrome-extension/src/offscreen.ts.
-    publishAgentBridge(orchestrator, sharedFs, orchestrator.getSessionStore());
+    // packages/chrome-extension/src/offscreen.ts — both realms go through
+    // realm-specific bootstrap helpers in `scoops/agent-bridge-bootstrap.ts`
+    // so cross-realm parity tests can exercise genuinely distinct call sites.
+    bootstrapAgentBridgeCli(orchestrator);
 
     layout.panels.fileBrowser.setFs(sharedFs);
     log.info('File browser wired to shared VFS');

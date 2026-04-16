@@ -10,7 +10,7 @@
 import { BrowserAPI, OffscreenCdpProxy } from '../../../packages/webapp/src/cdp/index.js';
 import {
   Orchestrator,
-  publishAgentBridge,
+  bootstrapAgentBridgeOffscreen,
   AGENT_BRIDGE_GLOBAL_KEY,
   AGENT_SPAWN_REQUEST_TYPE,
   type AgentBridge,
@@ -79,10 +79,12 @@ async function init(): Promise<void> {
   // supplemental shell command running inside the offscreen WasmShell can
   // find it. MUST run after init() resolves (sharedFs is populated) and
   // BEFORE the WasmShell registers supplemental commands below. Mirrors the
-  // CLI hook in packages/webapp/src/ui/main.ts.
-  const offscreenSharedFs = orchestrator.getSharedFS();
-  if (offscreenSharedFs) {
-    publishAgentBridge(orchestrator, offscreenSharedFs, orchestrator.getSessionStore());
+  // CLI hook in packages/webapp/src/ui/main.ts — both realms route through
+  // realm-specific bootstrap helpers in
+  // `packages/webapp/src/scoops/agent-bridge-bootstrap.ts` so cross-realm
+  // parity tests can exercise genuinely distinct call sites.
+  if (orchestrator.getSharedFS()) {
+    bootstrapAgentBridgeOffscreen(orchestrator);
   } else {
     log.warn('offscreen: sharedFs unavailable after init(); skipping __slicc_agent publish');
   }
