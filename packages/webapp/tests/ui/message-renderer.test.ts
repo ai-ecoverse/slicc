@@ -91,6 +91,25 @@ describe('renderMessageContent', () => {
     expect(html).toContain('tok-keyword');
   });
 
+  it('does not corrupt syntax highlighting HTML when JS includes export-from statements', () => {
+    const content = [
+      '```js',
+      '// index.js',
+      "export { DataChunks } from './distiller.js';",
+      "export { pageViews, lcp } from './series.js';",
+      "export { url, userAgent } from './facets.js';",
+      '```',
+    ].join('\n');
+
+    const html = renderMessageContent(content);
+
+    expect(html).toContain('<span class="tok-comment">// index.js</span>');
+    expect(html).toContain('<span class="tok-string">\'./distiller.js\'</span>');
+    expect(html).not.toContain('<span <span class="tok-keyword">class</span>=');
+    expect(html).not.toContain('<span class="tok-keyword">class</span>="tok-comment"&gt;');
+    expect(html).not.toContain('<span class="tok-keyword">from</span> class="tok-string"&gt;');
+  });
+
   it('renders code blocks without a language', () => {
     const content = '```\nplain text\n```';
     const html = renderMessageContent(content);
