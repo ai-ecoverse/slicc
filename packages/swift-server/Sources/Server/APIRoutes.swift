@@ -193,6 +193,28 @@ func registerAPIRoutes(
         )
     }
 
+    // Handoff injection — accepts a handoff payload and broadcasts it to the webapp.
+    // Mirrors node-server's POST /api/handoff so the slicc-handoff helper script
+    // works regardless of which backend (Node or Swift) is running behind SLICC.
+    router.post("/api/handoff") { request, context in
+        let payload: LickSystem.JSONObject
+        do {
+            payload = try await decodeJSONObjectBody(from: request, context: context)
+        } catch {
+            return try jsonErrorResponse(status: .badRequest, message: "Invalid JSON body")
+        }
+
+        guard case .string(let instruction) = payload["instruction"], !instruction.isEmpty else {
+            return try jsonErrorResponse(status: .badRequest, message: "instruction is required")
+        }
+
+        await lickSystem.broadcastEvent([
+            "type": .string("handoff_event"),
+            "payload": .object(payload),
+        ])
+        return try jsonResponse(.object(["ok": .bool(true)]))
+    }
+
     // Secret management API — direct Keychain access (no browser needed)
     router.get("/api/secrets") { _, _ in
         let entries = SecretStore.list()

@@ -40,6 +40,19 @@ Example:
 }
 ```
 
+## Local server endpoint
+
+When a SLICC local server is running (Node or Swift backend), agents can POST the payload directly to it to inject the handoff into any running SLICC browser/Electron attached to that server:
+
+```text
+POST http://localhost:${SLICC_PORT:-5710}/api/handoff
+content-type: application/json
+
+{ "instruction": "...", "title": "...", ... }
+```
+
+The server validates that `instruction` is a non-empty string (returning `400 { "error": "instruction is required" }` otherwise), then broadcasts a `handoff_event` over the lick WebSocket. Both Node and Swift backends implement this identically — the helper script fires off this POST in addition to printing the handoff URL, so agents do not need to care which backend is running.
+
 ## Helper
 
 Use the helper bundled with the `slicc-handoff` skill:

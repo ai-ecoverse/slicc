@@ -338,6 +338,51 @@ describe('shared server API conformance', () => {
     openSockets.add(socket);
   });
 
+  it('accepts handoff POSTs, rejects invalid instructions, and broadcasts handoff_event over the lick WebSocket', async () => {
+    const { socket, nextMessage } = await openWebSocket('/licks-ws');
+    openSockets.add(socket);
+
+    const missingInstruction = await fetchFromServer('/api/handoff', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'Task' }),
+    });
+    expect(missingInstruction.status).toBe(400);
+    const missingBody = (await missingInstruction.json()) as Record<string, unknown>;
+    expect(typeof missingBody['error']).toBe('string');
+
+    const emptyInstruction = await fetchFromServer('/api/handoff', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ instruction: '' }),
+    });
+    expect(emptyInstruction.status).toBe(400);
+
+    const wrongTypeInstruction = await fetchFromServer('/api/handoff', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ instruction: 42 }),
+    });
+    expect(wrongTypeInstruction.status).toBe(400);
+
+    const payload = {
+      instruction: 'do the thing',
+      title: 'Integration Handoff',
+      context: 'shared conformance test',
+    };
+    const ok = await fetchFromServer('/api/handoff', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    expect(ok.status).toBe(200);
+    await expect(ok.json()).resolves.toEqual({ ok: true });
+
+    const broadcast = await nextMessage();
+    expect(broadcast['type']).toBe('handoff_event');
+    expect(broadcast['payload']).toMatchObject(payload);
+  });
+
   it('lists secrets via GET /api/secrets', async () => {
     const list = await fetchFromServer('/api/secrets');
     expect(list.status).toBe(200);

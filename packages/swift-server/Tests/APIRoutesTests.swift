@@ -135,6 +135,86 @@ final class APIRoutesTests: XCTestCase {
         }
     }
 
+    func testHandoffBroadcastsEventOnValidPayload() async throws {
+        try await self.withHTTPClient { httpClient in
+            let lickSystem = LickSystem()
+            let recorder = MessageRecorder()
+            let wsClient = WebSocketClient { text in
+                await recorder.append(text)
+            }
+            await lickSystem.addClient(wsClient)
+
+            let router = Router()
+            registerAPIRoutes(router: router, lickSystem: lickSystem, config: self.makeConfig(), httpClient: httpClient)
+
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                try await client.execute(
+                    uri: "/api/handoff",
+                    method: .post,
+                    headers: [.contentType: "application/json"],
+                    body: ByteBuffer(string: #"{"instruction":"do the thing","title":"Task","context":"ctx"}"#)
+                ) { response in
+                    XCTAssertEqual(response.status, .ok)
+                    XCTAssertEqual(try self.decodeJSONObject(from: response.body), ["ok": .bool(true)])
+                }
+
+                let broadcast = try await recorder.waitForMessage(timeout: 2)
+                let decoded = try LickSystem.decode(broadcast)
+                XCTAssertEqual(decoded["type"], .string("handoff_event"))
+                guard case .object(let payload) = decoded["payload"] else {
+                    XCTFail("handoff_event broadcast missing payload object")
+                    return
+                }
+                XCTAssertEqual(payload["instruction"], .string("do the thing"))
+                XCTAssertEqual(payload["title"], .string("Task"))
+                XCTAssertEqual(payload["context"], .string("ctx"))
+            }
+        }
+    }
+
+    func testHandoffRejectsMissingInstruction() async throws {
+        try await self.withHTTPClient { httpClient in
+            let lickSystem = LickSystem()
+            let router = Router()
+            registerAPIRoutes(router: router, lickSystem: lickSystem, config: self.makeConfig(), httpClient: httpClient)
+
+            let app = Application(responder: router.buildResponder())
+            try await app.test(.router) { client in
+                try await client.execute(
+                    uri: "/api/handoff",
+                    method: .post,
+                    headers: [.contentType: "application/json"],
+                    body: ByteBuffer(string: #"{"title":"Task"}"#)
+                ) { response in
+                    XCTAssertEqual(response.status, .badRequest)
+                    XCTAssertEqual(
+                        try self.decodeJSONObject(from: response.body)["error"],
+                        .string("instruction is required")
+                    )
+                }
+
+                try await client.execute(
+                    uri: "/api/handoff",
+                    method: .post,
+                    headers: [.contentType: "application/json"],
+                    body: ByteBuffer(string: #"{"instruction":""}"#)
+                ) { response in
+                    XCTAssertEqual(response.status, .badRequest)
+                }
+
+                try await client.execute(
+                    uri: "/api/handoff",
+                    method: .post,
+                    headers: [.contentType: "application/json"],
+                    body: ByteBuffer(string: #"{"instruction":42}"#)
+                ) { response in
+                    XCTAssertEqual(response.status, .badRequest)
+                }
+            }
+        }
+    }
+
     func testOAuthResultRoundTripsAndClears() async throws {
         try await self.withHTTPClient { httpClient in
             let router = Router()
