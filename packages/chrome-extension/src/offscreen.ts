@@ -128,8 +128,8 @@ async function init(): Promise<void> {
     const scoops = orchestrator.getScoops();
     let resolvedTarget: (typeof scoops)[number] | undefined;
 
-    if (isSprinkle || !event.targetScoop) {
-      // Sprinkle licks and untargeted cron/webhook events → cone
+    if (!event.targetScoop) {
+      // Untargeted events → cone
       resolvedTarget = scoops.find((s) => s.isCone);
     } else {
       resolvedTarget = scoops.find(

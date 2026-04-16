@@ -7,6 +7,20 @@ const workspaceRoot = resolve(__dirname, '../..');
 const uiOutDir = resolve(workspaceRoot, 'dist/ui');
 const previewSwEntry = resolve(__dirname, 'src/ui/preview-sw.ts');
 const electronOverlayEntry = resolve(__dirname, 'src/ui/electron-overlay-entry.ts');
+const sliccEditorEntry = resolve(__dirname, 'src/ui/slicc-editor-entry.ts');
+const sliccDiffEntry = resolve(__dirname, 'src/ui/slicc-diff-entry.ts');
+
+/** esbuild plugin: resolve @pierre/diffs internal imports that aren't in the exports map. */
+function pierreDiffsPlugin() {
+  return {
+    name: 'resolve-pierre-diffs-internals',
+    setup(build: { onResolve: Function }) {
+      build.onResolve({ filter: /^@pierre\/diffs\/dist\// }, (args: { path: string }) => ({
+        path: resolve(workspaceRoot, 'node_modules', args.path.replace(/\.js$/, '') + '.js'),
+      }));
+    },
+  };
+}
 
 export default defineConfig(({ mode }) => ({
   root: workspaceRoot,
@@ -39,6 +53,8 @@ export default defineConfig(({ mode }) => ({
         let cachedSwMtime = 0;
         let cachedOverlayCode: string | null = null;
         let cachedOverlayMtime = 0;
+        // Editor/diff IIFE bundles are always rebuilt in dev (no mtime cache)
+        // because transitive imports wouldn't invalidate the entry file's mtime.
 
         server.middlewares.use('/preview-sw.js', async (_req, res) => {
           try {
@@ -116,6 +132,51 @@ export default defineConfig(({ mode }) => ({
             );
           }
         });
+
+        server.middlewares.use('/slicc-editor.js', async (_req, res) => {
+          try {
+            const esbuild = await import('esbuild');
+            const result = await esbuild.build({
+              entryPoints: [sliccEditorEntry],
+              bundle: true,
+              write: false,
+              format: 'iife',
+              target: 'esnext',
+              define: { __DEV__: 'true', global: 'globalThis' },
+            });
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(result.outputFiles![0].text);
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            console.error('[slicc-editor] Failed to build:', errMsg);
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(`console.error('[slicc-editor] Build failed:', ${JSON.stringify(errMsg)});`);
+          }
+        });
+
+        server.middlewares.use('/slicc-diff.js', async (_req, res) => {
+          try {
+            const esbuild = await import('esbuild');
+            const result = await esbuild.build({
+              entryPoints: [sliccDiffEntry],
+              bundle: true,
+              write: false,
+              format: 'iife',
+              target: 'esnext',
+              define: { __DEV__: 'true', global: 'globalThis' },
+              plugins: [pierreDiffsPlugin()],
+            });
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(result.outputFiles![0].text);
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            console.error('[slicc-diff] Failed to build:', errMsg);
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'application/javascript');
+            res.end(`console.error('[slicc-diff] Build failed:', ${JSON.stringify(errMsg)});`);
+          }
+        });
       },
       async closeBundle() {
         // Keep this config focused on production build artifacts; node-server owns dev serving.
@@ -157,6 +218,29 @@ export default defineConfig(({ mode }) => ({
               },
             },
           ],
+        });
+
+        // <slicc-editor> custom element bundle for sprinkle iframes.
+        await esbuild.build({
+          entryPoints: [sliccEditorEntry],
+          bundle: true,
+          outfile: resolve(uiOutDir, 'slicc-editor.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
+        });
+
+        // <slicc-diff> custom element bundle for sprinkle iframes.
+        await esbuild.build({
+          entryPoints: [sliccDiffEntry],
+          bundle: true,
+          outfile: resolve(uiOutDir, 'slicc-diff.js'),
+          format: 'iife',
+          target: 'esnext',
+          minify: true,
+          define: { __DEV__: 'false', global: 'globalThis' },
+          plugins: [pierreDiffsPlugin()],
         });
 
         copyFileSync(
@@ -223,6 +307,11 @@ export default defineConfig(({ mode }) => ({
     exclude: ['@mariozechner/pi-coding-agent'],
     esbuildOptions: {
       target: 'esnext',
+    },
+  },
+  server: {
+    watch: {
+      ignored: ['**/.yolo/**', '**/.intent/**'],
     },
   },
   build: {

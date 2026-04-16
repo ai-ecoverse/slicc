@@ -94,6 +94,14 @@ mark{background:color-mix(in srgb,var(--s2-accent) 25%,transparent);color:inheri
 .c-green{background:#27500A;color:#EAF3DE}
 </style>
 <script>${BRIDGE_SCRIPT}</script>
+${
+  // Custom element bundles are loaded via src in CLI mode (same-origin).
+  // In extension mode, inline sprinkles route through sprinkle-sandbox.html
+  // which handles lazy-loading for fragment content. Full custom element
+  // support in extension inline sprinkles requires the full-doc inlining path.
+  content.includes('<slicc-editor') ? '<script src="/slicc-editor.js"></script>' : ''
+}
+${content.includes('<slicc-diff') ? '<script src="/slicc-diff.js"></script>' : ''}
 </head>
 <body class="sprinkle-inline">${content}</body></html>`;
 
