@@ -27,6 +27,10 @@ import {
   type FileContents,
   type ThemeTypes,
 } from '@pierre/diffs';
+// Register the <diffs-container> web component that provides the core CSS
+// via adoptedStyleSheets in its Shadow DOM. FileDiff renders into this element.
+// @ts-expect-error — not in package exports map but needed for core CSS injection
+import '@pierre/diffs/dist/components/web-components.js';
 
 /** Detect dark/light theme from inherited CSS or class. */
 function detectThemeType(): ThemeTypes {
@@ -107,9 +111,9 @@ export class SliccDiffElement extends HTMLElement {
       this.style.display = 'block';
     }
 
-    // Create a container div — FileDiff renders into it with its own Shadow DOM
-    this.container = document.createElement('div');
-    this.container.style.cssText = 'width:100%;min-height:0;';
+    // Use <diffs-container> which provides the core CSS via adoptedStyleSheets
+    this.container = document.createElement('diffs-container');
+    this.container.style.cssText = 'display:block;width:100%;min-height:0;';
     this.appendChild(this.container);
 
     // Read initial attributes into properties
