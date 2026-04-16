@@ -28,6 +28,7 @@ import { isContextOverflow } from '@mariozechner/pi-ai';
 import type { AssistantMessage as PiAssistantMessage } from '@mariozechner/pi-ai';
 import type { SessionStore } from '../core/session.js';
 import { createFileTools, createBashTool } from '../tools/index.js';
+import { wrapBashToolWithAllowlist } from '../tools/bash-tool-allowlist.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import {
   getApiKey,
@@ -185,7 +186,19 @@ export class ScoopContext {
         createBashTool(this.shell),
         ...scoopManagementTools,
       ];
-      const tools = adaptTools(legacyTools);
+      let tools = adaptTools(legacyTools);
+
+      // Apply the bash-command allow-list wrapper when the scoop was spawned
+      // with a restricted list (see `AgentBridge.spawn` / the `agent` shell
+      // command). Wildcard `'*'` is a passthrough — the wrapper returns the
+      // original tool unchanged in that case. Other scoops/cones never set
+      // `allowedCommands`, so this is a no-op for them.
+      const allowedCommands = this.scoop.config?.allowedCommands;
+      if (allowedCommands) {
+        tools = tools.map((tool) =>
+          tool.name === 'bash' ? wrapBashToolWithAllowlist(tool, allowedCommands) : tool
+        );
+      }
 
       // Load scoop memory
       const memoryPath = this.scoop.isCone

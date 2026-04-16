@@ -171,7 +171,15 @@ export function createAgentBridge(
     // because that spins up a full ScoopContext via `createScoopTab`. We own
     // the context directly. `unregisterScoop` is still called during cleanup
     // as a defensive no-op in case anything upstream tracks the jid.
+    //
+    // The bash allow-list is forwarded into `config.allowedCommands`. The
+    // ScoopContext picks it up during `init()` and wraps its bash tool with
+    // `wrapBashToolWithAllowlist` (wildcard `*` remains a passthrough — the
+    // wrapper returns the original tool unchanged in that case).
     const now = new Date().toISOString();
+    const scoopConfig: RegisteredScoop['config'] = {};
+    if (requestedModelId !== undefined) scoopConfig.modelId = requestedModelId;
+    scoopConfig.allowedCommands = options.allowedCommands;
     const scoop: RegisteredScoop = {
       jid,
       name: folder,
@@ -181,7 +189,7 @@ export function createAgentBridge(
       requiresTrigger: false,
       assistantLabel: folder,
       addedAt: now,
-      config: requestedModelId !== undefined ? { modelId: requestedModelId } : undefined,
+      config: scoopConfig,
     };
 
     // Build the sandboxed FS.
