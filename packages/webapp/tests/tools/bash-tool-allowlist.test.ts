@@ -541,4 +541,173 @@ describe('wrapBashToolWithAllowlist', () => {
     expect(textBlocks.length).toBeGreaterThan(0);
     expect(textBlocks[0].text.length).toBeGreaterThan(0);
   });
+
+  // ── AST-backed parser tests: new cases the hand-rolled scanner could not
+  //    reliably express. These rely on the just-bash parser (parse()) to
+  //    classify syntax rather than manually scanning characters.
+
+  it('parser-throws on unterminated quote → wrapper returns rejection, does NOT throw', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['echo']);
+    // LexerError in just-bash: `"unterminated` has no matching close quote.
+    await expect(run(wrapped, '"unterminated')).resolves.toBeTruthy();
+    const result = await run(wrapped, '"unterminated');
+    expect(isErrorResult(result)).toBe(true);
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('parser-throws on EOF-mid-`$(` → wrapper returns rejection', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls $(');
+    expect(isErrorResult(result)).toBe(true);
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects non-literal head via `$CMD foo` with a message mentioning non-literal head', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, '$CMD foo');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toContain('non-literal');
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects non-literal head via backtick command substitution at head position', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, '`echo ls` bar');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toContain('non-literal');
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects `$(...)` at head position', async () => {
+    // The AST path can identify non-literal heads produced by $(...),
+    // which a substring scanner could not cleanly distinguish from the
+    // general subshell-rejection path.
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, '$(which ls) -la');
+    expect(isErrorResult(result)).toBe(true);
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects deeply nested substitution in quoted args', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['echo']);
+    const result = await run(wrapped, 'echo "$(cat $(curl x))"');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toContain('subshell');
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects arithmetic expansion $((...)) in args even when head is allowed', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['echo']);
+    const result = await run(wrapped, 'echo $((1+1))');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toMatch(/arithmetic|subshell|expansion/);
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects compound `if ... fi` even when inner command is allow-listed', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls', 'true']);
+    const result = await run(wrapped, 'if true; then ls; fi');
+    expect(isErrorResult(result)).toBe(true);
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects compound `while ... done` even when inner command is allow-listed', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls', 'true']);
+    const result = await run(wrapped, 'while true; do ls; done');
+    expect(isErrorResult(result)).toBe(true);
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects compound `for ... done` even when inner command is allow-listed', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls', 'echo']);
+    const result = await run(wrapped, 'for i in 1 2 3; do ls; done');
+    expect(isErrorResult(result)).toBe(true);
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects braced group `{ cmd; }` even when inner command is allow-listed', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, '{ ls; }');
+    expect(isErrorResult(result)).toBe(true);
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects arithmetic command `(( ... ))`', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, '(( 1 + 1 ))');
+    expect(isErrorResult(result)).toBe(true);
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects conditional command `[[ ... ]]`', async () => {
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, '[[ -e /tmp ]]');
+    expect(isErrorResult(result)).toBe(true);
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects process substitution `<(cmd)` (parse rejects it)', async () => {
+    // just-bash's parser throws ParseException for process substitution;
+    // the wrapper must surface that as a rejection, not a thrown error.
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['cat']);
+    const result = await run(wrapped, 'cat <(curl x)');
+    expect(isErrorResult(result)).toBe(true);
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('rejects command substitution inside a redirection target', async () => {
+    // `ls > /tmp/$(whoami)` — the head `ls` is allowed, but the redirect
+    // target word contains `$(...)`. AST walking of redirections[].target
+    // catches this where a line-by-line scanner could not.
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls > /tmp/$(whoami)');
+    expect(isErrorResult(result)).toBe(true);
+    expect(resultText(result).toLowerCase()).toContain('subshell');
+    expect(bash._calls).toHaveLength(0);
+  });
+
+  it('allows `$VAR` inside an argument when head is allow-listed', async () => {
+    // Parameter expansion in args is NOT grounds for rejection (only in the
+    // head); confirm args-level ParameterExpansion passes cleanly.
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['echo']);
+    const result = await run(wrapped, 'echo $HOME');
+    expect(isErrorResult(result)).toBe(false);
+    expect(bash._calls).toHaveLength(1);
+  });
+
+  it('allows double-quoted-with-only-literal head such as `"ls" -la`', async () => {
+    // A DoubleQuoted head consisting solely of a Literal part is still a
+    // literal head ("ls"). The AST walker should handle this.
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, '"ls" -la');
+    expect(isErrorResult(result)).toBe(false);
+    expect(bash._calls).toHaveLength(1);
+  });
+
+  it('allows background `&` when every pipeline head is allow-listed', async () => {
+    // StatementNode.background === true is not itself grounds to reject;
+    // each pipeline head is still checked.
+    const bash = makeBashTool();
+    const wrapped = wrapBashToolWithAllowlist(bash, ['ls']);
+    const result = await run(wrapped, 'ls &');
+    expect(isErrorResult(result)).toBe(false);
+    expect(bash._calls).toHaveLength(1);
+  });
 });

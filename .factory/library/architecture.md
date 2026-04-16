@@ -55,9 +55,15 @@ Location: `packages/webapp/src/tools/bash-tool-allowlist.ts` (new helper)
 
 - `wrapBashToolWithAllowlist(bashTool, allowedCommands)` returns a wrapped tool
 - If `allowedCommands` contains `*`, returns the original tool unchanged
-- Otherwise, intercepts each bash invocation, parses the command string into pipeline segments (`|`, `&&`, `||`, `;`), extracts the first token of each segment (respecting quotes via `parse-shell-args.ts`), and rejects the invocation with a clear error if any segment's head is not in the allow-list
-- Also rejects commands containing subshell syntax (`$(...)`, backticks) to prevent trivial bypass — this is a conscious limitation
-- Because the bash tool executes a full shell, wrappers must also account for background `&`, newline-separated commands, and command substitution inside double quotes/backticks, or reject those forms conservatively.
+- Otherwise, enforcement is **AST-backed**: each bash invocation is parsed with `just-bash`'s `parse()` function (exposed via the vendored browser bundle) and the resulting `ScriptNode` is walked to validate the command. The hand-rolled character-level scanner (quote-state tracker + segment splitter + head extractor + grouped-subshell detector) has been deleted in favor of this AST walker.
+- The walker:
+  - Calls `parse()` in a try/catch — any `ParseException` / `LexerError` / unexpected error becomes a clean `AgentToolResult` rejection, never a thrown exception.
+  - Iterates `ScriptNode.statements` → `pipelines` → `commands`.
+  - Rejects any compound command (`Subshell`, `Group`, `If`, `For`, `CStyleFor`, `While`, `Until`, `Case`, `ArithmeticCommand`, `ConditionalCommand`, `FunctionDef`) — the allow-list cannot reason about their inner heads.
+  - For each `SimpleCommand`: extracts the literal head by walking `WordNode.parts` and joining only `Literal` / `SingleQuoted` / `Escaped` / nested-literal `DoubleQuoted` parts. Any `ParameterExpansion`, `CommandSubstitution`, `ArithmeticExpansion`, or `ProcessSubstitution` part at the head position triggers a non-literal-head rejection.
+  - Walks `args` and `redirections[].target` (including inside `DoubleQuoted` nesting) and rejects any `CommandSubstitutionPart` / `ArithmeticExpansionPart` / `ProcessSubstitutionPart` at any nesting depth. `ParameterExpansionPart` in args is allowed (bash substitutes its value as a string, it does not change the allow-listed head).
+  - `StatementNode.background === true` (bare `&`) is NOT grounds to reject — every pipeline head has already been checked.
+- Preserves wildcard `*` passthrough, case-sensitive matching, duplicate-entry tolerance, and atomic rejection (no partial run) from the original design.
 
 ### 5. RestrictedFS extension (MODIFICATION)
 
