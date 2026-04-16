@@ -15,9 +15,7 @@ Lucide icons are available globally via the `LucideIcons` object. Use declarativ
 <i data-lucide="settings" class="sprinkle-icon--l"></i>
 
 <!-- In buttons -->
-<button class="sprinkle-btn sprinkle-btn--primary">
-  <i data-lucide="save"></i> Save
-</button>
+<button class="sprinkle-btn sprinkle-btn--primary"><i data-lucide="save"></i> Save</button>
 
 <!-- In action card headers -->
 <div class="sprinkle-action-card">

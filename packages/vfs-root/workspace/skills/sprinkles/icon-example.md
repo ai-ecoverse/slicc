@@ -4,7 +4,7 @@ This shows how to use Lucide icons in inline sprinkles instead of emojis.
 
 ## Simple confirmation card with icons
 
-````shtml
+```shtml
 <div class="sprinkle-action-card">
   <div class="sprinkle-action-card__header">
     <i data-lucide="check-circle" style="color: var(--uxc-positive-text)"></i>
@@ -19,11 +19,11 @@ This shows how to use Lucide icons in inline sprinkles instead of emojis.
     </button>
   </div>
 </div>
-````
+```
 
 ## Status options with icons
 
-````shtml
+```shtml
 <div class="sprinkle-action-card">
   <div class="sprinkle-action-card__header">Select Status</div>
   <div class="sprinkle-action-card__body">
@@ -43,11 +43,11 @@ This shows how to use Lucide icons in inline sprinkles instead of emojis.
     </div>
   </div>
 </div>
-````
+```
 
 ## Action menu with icons
 
-````shtml
+```shtml
 <div class="sprinkle-action-card">
   <div class="sprinkle-action-card__header">
     <i data-lucide="file-text"></i> Document Actions
@@ -69,7 +69,7 @@ This shows how to use Lucide icons in inline sprinkles instead of emojis.
     </div>
   </div>
 </div>
-````
+```
 
 ## Common icon names
 

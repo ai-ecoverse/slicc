@@ -1,6 +1,6 @@
 /**
  * Lucide Icons Bundle
- * 
+ *
  * This file is bundled separately for use in sprinkle iframes.
  * It provides a global `LucideIcons` object with icon rendering utilities.
  */
@@ -11,7 +11,7 @@ import { createIcons, icons } from 'lucide';
 (window as any).LucideIcons = {
   createIcons,
   icons,
-  
+
   /**
    * Render all icons in the current document.
    * Call this after DOM is ready or after dynamically adding icon elements.
@@ -19,25 +19,28 @@ import { createIcons, icons } from 'lucide';
   render() {
     createIcons({ icons });
   },
-  
+
   /**
    * Create a single icon element programmatically.
    * @param name - Icon name (e.g., 'check', 'alert-circle')
    * @param options - Options: size, color, strokeWidth, class, etc.
    * @returns SVG element
    */
-  createElement(name: string, options: {
-    size?: number | string;
-    color?: string;
-    strokeWidth?: number | string;
-    class?: string;
-  } = {}) {
+  createElement(
+    name: string,
+    options: {
+      size?: number | string;
+      color?: string;
+      strokeWidth?: number | string;
+      class?: string;
+    } = {}
+  ) {
     const iconData = (icons as any)[this.toCamelCase(name)];
     if (!iconData) {
       console.warn(`Lucide icon not found: ${name}`);
       return document.createElement('div');
     }
-    
+
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
     svg.setAttribute('width', String(options.size || 24));
@@ -48,15 +51,15 @@ import { createIcons, icons } from 'lucide';
     svg.setAttribute('stroke-width', String(options.strokeWidth || 2));
     svg.setAttribute('stroke-linecap', 'round');
     svg.setAttribute('stroke-linejoin', 'round');
-    
+
     if (options.class) {
       svg.setAttribute('class', options.class);
     }
-    
+
     svg.innerHTML = iconData[0];
     return svg;
   },
-  
+
   /**
    * Convert kebab-case to camelCase for icon lookup.
    * e.g., 'alert-circle' -> 'AlertCircle'
@@ -64,9 +67,9 @@ import { createIcons, icons } from 'lucide';
   toCamelCase(str: string): string {
     return str
       .split('-')
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
       .join('');
-  }
+  },
 };
 
 // Auto-render on DOMContentLoaded if icons are already in the DOM

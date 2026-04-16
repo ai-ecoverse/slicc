@@ -5,12 +5,15 @@ The welcome sprinkle has been updated to use Lucide icons instead of custom SVG 
 ## Changes Made
 
 ### Back Button
+
 **Before:**
+
 ```html
 <button class="header-back" id="globalBack" onclick="goBack()">&larr; Back</button>
 ```
 
 **After:**
+
 ```html
 <button class="header-back" id="globalBack" onclick="goBack()">
   <i data-lucide="arrow-left" style="width: 14px; height: 14px;"></i> Back
@@ -18,16 +21,21 @@ The welcome sprinkle has been updated to use Lucide icons instead of custom SVG 
 ```
 
 ### Send/Continue Buttons
+
 **Before:**
+
 ```html
 <button class="send-btn" onclick="goStep(5)" aria-label="Continue">
   <svg viewBox="0 0 20 20" fill="currentColor">
-    <path d="M3.1 17.4a.75.75 0 01-.96-1.05L5.68 10 2.14 3.65a.75.75 0 01.96-1.05l14.5 6.75a.75.75 0 010 1.3l-14.5 6.75z"/>
+    <path
+      d="M3.1 17.4a.75.75 0 01-.96-1.05L5.68 10 2.14 3.65a.75.75 0 01.96-1.05l14.5 6.75a.75.75 0 010 1.3l-14.5 6.75z"
+    />
   </svg>
 </button>
 ```
 
 **After:**
+
 ```html
 <button class="send-btn" onclick="goStep(5)" aria-label="Continue">
   <i data-lucide="arrow-right" style="width: 16px; height: 16px;"></i>
@@ -45,6 +53,7 @@ The welcome sprinkle has been updated to use Lucide icons instead of custom SVG 
 ## Testing
 
 All sprinkle tests continue to pass:
+
 - ✅ sprinkle-bridge.test.ts
 - ✅ sprinkle-renderer.test.ts
 - ✅ inline-sprinkle.test.ts
