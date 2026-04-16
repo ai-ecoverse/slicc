@@ -153,6 +153,16 @@ export default defineConfig(({ mode }) => ({
           target: 'esnext',
           minify: true,
           define: { __DEV__: 'false', global: 'globalThis' },
+          plugins: [
+            {
+              name: 'resolve-pierre-diffs-internals',
+              setup(build) {
+                build.onResolve({ filter: /^@pierre\/diffs\/dist\// }, (args) => ({
+                  path: resolve(repoRoot, 'node_modules', args.path.replace(/\.js$/, '') + '.js'),
+                }));
+              },
+            },
+          ],
         });
       },
     },

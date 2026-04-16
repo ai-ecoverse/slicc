@@ -10,6 +10,18 @@ const electronOverlayEntry = resolve(__dirname, 'src/ui/electron-overlay-entry.t
 const sliccEditorEntry = resolve(__dirname, 'src/ui/slicc-editor-entry.ts');
 const sliccDiffEntry = resolve(__dirname, 'src/ui/slicc-diff-entry.ts');
 
+/** esbuild plugin: resolve @pierre/diffs internal imports that aren't in the exports map. */
+function pierreDiffsPlugin() {
+  return {
+    name: 'resolve-pierre-diffs-internals',
+    setup(build: { onResolve: Function }) {
+      build.onResolve({ filter: /^@pierre\/diffs\/dist\// }, (args: { path: string }) => ({
+        path: resolve(workspaceRoot, 'node_modules', args.path.replace(/\.js$/, '') + '.js'),
+      }));
+    },
+  };
+}
+
 export default defineConfig(({ mode }) => ({
   root: workspaceRoot,
   publicDir: resolve(workspaceRoot, 'packages/assets'),
@@ -153,6 +165,7 @@ export default defineConfig(({ mode }) => ({
               format: 'iife',
               target: 'esnext',
               define: { __DEV__: 'true', global: 'globalThis' },
+              plugins: [pierreDiffsPlugin()],
             });
             res.setHeader('Content-Type', 'application/javascript');
             res.end(result.outputFiles![0].text);
@@ -227,6 +240,7 @@ export default defineConfig(({ mode }) => ({
           target: 'esnext',
           minify: true,
           define: { __DEV__: 'false', global: 'globalThis' },
+          plugins: [pierreDiffsPlugin()],
         });
 
         copyFileSync(
