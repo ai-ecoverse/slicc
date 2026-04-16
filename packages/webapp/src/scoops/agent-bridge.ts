@@ -215,9 +215,20 @@ export function createAgentBridge(
     // ScoopContext picks it up during `init()` and wraps its bash tool with
     // `wrapBashToolWithAllowlist` (wildcard `*` remains a passthrough — the
     // wrapper returns the original tool unchanged in that case).
+    //
+    // Persist `effectiveModelId` (NOT just the explicit request) onto
+    // `config.modelId` so the REAL `ScoopContext.init()` path — which reads
+    // from `this.scoop.config?.modelId` to choose `resolveModelById()` vs
+    // `resolveCurrentModel()` — honors the parent-inherited model. Without
+    // this copy, the bridge-computed `effectiveModelId` was only observable
+    // through the `AgentBridgeContextArgs.modelId` seam (which only mocked
+    // tests inspect), and production always fell back to the global UI
+    // selection. Leave `modelId` UNSET when `effectiveModelId` is empty so
+    // the cone-no-model path still falls back through ScoopContext's
+    // existing `resolveCurrentModel()` branch.
     const now = new Date().toISOString();
     const scoopConfig: RegisteredScoop['config'] = {};
-    if (requestedModelId !== undefined) scoopConfig.modelId = requestedModelId;
+    if (effectiveModelId) scoopConfig.modelId = effectiveModelId;
     scoopConfig.allowedCommands = options.allowedCommands;
     const scoop: RegisteredScoop = {
       jid,

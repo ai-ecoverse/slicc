@@ -73,7 +73,16 @@ vi.mock('../../src/ui/provider-settings.js', async (importOriginal) => {
     ...actual,
     getApiKey: () => 'stub-integration-api-key',
     resolveCurrentModel: () => STUB_MODEL,
-    resolveModelById: () => STUB_MODEL,
+    // IMPORTANT: `resolveModelById` returns a model whose `id` matches the
+    // input so the REAL ScoopContext path threads the bridge-computed model
+    // id through to the pi-ai stream. When the bridge correctly copies
+    // `effectiveModelId` onto `scoop.config.modelId` before `ctx.init()`,
+    // the real ScoopContext reads that id, calls `resolveModelById(id)`, and
+    // the scripted pi-ai provider sees the exact inherited model id.
+    // Without the fix, `scoop.config.modelId` stays `undefined` and
+    // ScoopContext falls back to `resolveCurrentModel()` (the STUB above),
+    // which is why earlier integration coverage missed the real-path bug.
+    resolveModelById: (id?: string) => (id ? { ...STUB_MODEL, id } : STUB_MODEL),
     getSelectedProvider: () => 'stub-integration-provider',
     getAllAvailableModels: () => [
       {
@@ -1154,6 +1163,137 @@ describe('agent end-to-end integration (command → hook → bridge → cleanup)
           .filter((e) => e.type === 'directory')
           .map((e) => e.name);
         expect(afterFolders).toEqual(before.scratchFolders);
+      } finally {
+        await orch.shutdown().catch(() => {});
+      }
+    });
+
+    // ── Regression: REAL ScoopContext must pick up the parent-inherited
+    //    model id via `scoop.config.modelId`, NOT by falling back to
+    //    `resolveCurrentModel()` (the global UI default). ────────────
+    //
+    // Round-1 mocked-createContext integration coverage masked this: the
+    // bridge threaded `effectiveModelId` through its own `AgentBridgeContextArgs`
+    // argument, but never copied it onto `scoop.config.modelId`. The REAL
+    // ScoopContext reads its own config during init() and, finding no
+    // modelId, fell back to the global UI model — regardless of what the
+    // bridge had just computed. This test exercises the production path.
+
+    it('REAL ScoopContext: inherits parent scoop modelId via scoop.config.modelId (no createContext override)', async () => {
+      // Real Orchestrator + VFS + SessionStore — production path, no test doubles.
+      const orch = makeOrchestrator();
+      await orch.init();
+      const vfs = orch.getSharedFS();
+      if (!vfs) throw new Error('real-ScoopContext parent-inherit: sharedFs null after init');
+      const sessionStore = orch.getSessionStore();
+
+      try {
+        // Register a parent scoop whose config.modelId MUST be inherited
+        // through `scoop.config.modelId` by the spawned agent-scoop.
+        const parentScoop: RegisteredScoop = {
+          jid: 'parent-real-jid',
+          name: 'parent-real',
+          folder: 'parent-real',
+          isCone: false,
+          type: 'scoop',
+          requiresTrigger: false,
+          assistantLabel: 'parent-real',
+          addedAt: new Date().toISOString(),
+          config: { modelId: 'claude-opus-4-6' },
+        };
+        orch.registerExistingScoop(parentScoop);
+
+        // Publish bridge with NO createContext override — the default
+        // factory constructs a real ScoopContext. `getInheritedModelId`
+        // is intentionally set to a value that MUST NOT be used: if the
+        // bridge fails to set `scoop.config.modelId`, ScoopContext's
+        // init() would fall back to `resolveCurrentModel()` (STUB_MODEL
+        // from vi.mock) — either way, NOT the parent's 'claude-opus-4-6'.
+        publishAgentBridge(orch, vfs, sessionStore, {
+          generateUid: () => 'real-parent',
+          resolveModel: (id) => id,
+          getInheritedModelId: () => 'GLOBAL-DEFAULT-SHOULD-NOT-BE-USED',
+        });
+
+        // Simulate the WasmShell plumbing: when `agent` is invoked from
+        // inside the parent scoop's bash, `getParentJid` returns the
+        // parent scoop's jid. The command forwards it to the bridge
+        // via `spawnOptions.parentJid`.
+        const result = await createAgentCommand({
+          getParentJid: () => 'parent-real-jid',
+        }).execute(['.', '*', 'hi'], createMockShellCtx(vfs, '/home'));
+
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toBe('hi\n');
+        expect(result.stderr).toBe('');
+
+        // REAL ScoopContext called `resolveModelById('claude-opus-4-6')`
+        // via its own config, which mapped through the pi-ai provider
+        // with the parent's model id — NOT the global fallback.
+        expect(providerRecording.streamInvocations.length).toBeGreaterThanOrEqual(1);
+        expect(providerRecording.streamInvocations[0].model.id).toBe('claude-opus-4-6');
+        expect(providerRecording.streamInvocations[0].model.api).toBe('stub-integration-api');
+
+        // Parent scoop's config.modelId is untouched after the spawn.
+        const parent = orch.getScoops().find((s) => s.jid === 'parent-real-jid');
+        expect(parent?.config?.modelId).toBe('claude-opus-4-6');
+
+        // Cleanup invariants.
+        expect(await vfs.exists('/scoops/agent-real-parent')).toBe(false);
+      } finally {
+        await orch.shutdown().catch(() => {});
+      }
+    });
+
+    // ── Inverse regression: cone parent with NO configured modelId falls
+    //    back to `getInheritedModelId()` (the global UI default). This
+    //    guards the cone-no-model path from regressing after the fix:
+    //    an overly-eager `scoop.config.modelId = effectiveModelId` write
+    //    that forwards an empty string would break the cone's
+    //    resolveCurrentModel fallback semantics. ──────────────────────
+
+    it('REAL ScoopContext: cone parent with no modelId falls back to global default (no-regression guard)', async () => {
+      const orch = makeOrchestrator();
+      await orch.init();
+      const vfs = orch.getSharedFS();
+      if (!vfs) throw new Error('real-ScoopContext cone-fallback: sharedFs null after init');
+      const sessionStore = orch.getSessionStore();
+
+      try {
+        // Cone parent has NO config.modelId — it tracks the global UI model.
+        const coneScoop: RegisteredScoop = {
+          jid: 'cone-real-jid',
+          name: 'sliccy',
+          folder: 'cone',
+          isCone: true,
+          type: 'cone',
+          requiresTrigger: false,
+          assistantLabel: 'sliccy',
+          addedAt: new Date().toISOString(),
+          // No `config` — parent resolution falls through to getInheritedModelId.
+        };
+        orch.registerExistingScoop(coneScoop);
+
+        publishAgentBridge(orch, vfs, sessionStore, {
+          generateUid: () => 'real-cone',
+          resolveModel: (id) => id,
+          // When the cone has no configured model, the bridge must fall
+          // through here — the scripted provider below must see this id.
+          getInheritedModelId: () => 'stub-integration-model',
+        });
+
+        const result = await createAgentCommand({
+          getParentJid: () => 'cone-real-jid',
+        }).execute(['.', '*', 'hi'], createMockShellCtx(vfs, '/home'));
+
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toBe('hi\n');
+        expect(result.stderr).toBe('');
+        expect(providerRecording.streamInvocations.length).toBeGreaterThanOrEqual(1);
+        // Global default flowed through: NOT the parent's model (cone has none).
+        expect(providerRecording.streamInvocations[0].model.id).toBe('stub-integration-model');
+
+        expect(await vfs.exists('/scoops/agent-real-cone')).toBe(false);
       } finally {
         await orch.shutdown().catch(() => {});
       }
