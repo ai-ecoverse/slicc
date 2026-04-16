@@ -1495,36 +1495,66 @@ async function handleRecommendations(
           let skillPath: string;
           let skillName: string;
 
-          // Determine which skill identifier to use: explicit skill field or fallback to name
-          const skillIdentifier = src.skill || rec.entry.name;
+          // Resolution strategy:
+          // 1. If src.skill is provided, use it to look up in index
+          // 2. If src.skill is missing but src.path is provided, use path directly (explicit path takes precedence)
+          // 3. If neither src.skill nor src.path, fall back to looking up rec.entry.name in index
+          // 4. If none of the above work, error
 
-          // Look up skill in precomputed index
-          const indexedPath = skillIndex.get(skillIdentifier);
-          if (indexedPath) {
-            // Found in index - use the indexed path
-            skillPath = indexedPath;
-            skillName = skillIdentifier;
+          if (src.skill) {
+            // Explicit skill field - look up in index
+            const indexedPath = skillIndex.get(src.skill);
+            if (indexedPath) {
+              skillPath = indexedPath;
+              skillName = src.skill;
+            } else if (src.path) {
+              // Skill not found in index, but explicit path provided
+              const normalizedPath = src.path.replace(/^\/|\/$/g, '');
+              skillPath = normalizedPath;
+              skillName = src.skill;
+            } else {
+              // Explicit skill field but not found and no path
+              const error = `skill "${src.skill}" not found in ${repoKey}`;
+              results.push({
+                ok: false,
+                name: rec.entry.name,
+                error,
+              });
+              completedSkills++;
+              const eta =
+                completedSkills < totalSkills
+                  ? ` (~${Math.round(((totalSkills - completedSkills) * (Date.now() - startTime)) / completedSkills / 1000)}s remaining)`
+                  : '';
+              output += `[${completedSkills}/${totalSkills}] Failed "${rec.entry.name}" from ${repoKey}: ${error}${eta}\n`;
+              continue;
+            }
           } else if (src.path) {
-            // Not found in index, but we have an explicit path - use path directly
+            // No explicit skill field, but explicit path provided - use path directly
             const normalizedPath = src.path.replace(/^\/|\/$/g, '');
             skillPath = normalizedPath;
-            skillName = skillIdentifier;
+            skillName = rec.entry.name;
           } else {
-            // Neither found in index nor explicit path provided
-            const error = `skill "${skillIdentifier}" not found in ${repoKey} and no explicit path provided`;
-            results.push({
-              ok: false,
-              name: rec.entry.name,
-              error,
-            });
-            completedSkills++;
-            const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-            const eta =
-              completedSkills < totalSkills
-                ? ` (~${Math.round(((totalSkills - completedSkills) * (Date.now() - startTime)) / completedSkills / 1000)}s remaining)`
-                : '';
-            output += `[${completedSkills}/${totalSkills}] Failed "${rec.entry.name}" from ${repoKey}: ${error}${eta}\n`;
-            continue;
+            // No skill field and no path - try looking up name in index as fallback
+            const indexedPath = skillIndex.get(rec.entry.name);
+            if (indexedPath) {
+              skillPath = indexedPath;
+              skillName = rec.entry.name;
+            } else {
+              // Fallback failed - no way to resolve
+              const error = `skill "${rec.entry.name}" not found in ${repoKey} and no explicit path provided`;
+              results.push({
+                ok: false,
+                name: rec.entry.name,
+                error,
+              });
+              completedSkills++;
+              const eta =
+                completedSkills < totalSkills
+                  ? ` (~${Math.round(((totalSkills - completedSkills) * (Date.now() - startTime)) / completedSkills / 1000)}s remaining)`
+                  : '';
+              output += `[${completedSkills}/${totalSkills}] Failed "${rec.entry.name}" from ${repoKey}: ${error}${eta}\n`;
+              continue;
+            }
           }
 
           const skillStart = Date.now();
